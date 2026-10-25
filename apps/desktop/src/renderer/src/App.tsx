@@ -54,7 +54,8 @@ import { GitConfirmDialog } from "./components/GitConfirmDialog.js";
 import { ConfirmDialog } from "./components/ConfirmDialog.js";
 import { LspPanel } from "./components/LspPanel.js";
 import { HooksPanel } from "./components/HooksPanel.js";
-import { TimelinePanel } from "./components/TimelinePanel.js";
+import { buildRewindRequest } from "./components/checkpoint-model.js";
+import { countUserTurns } from "./components/TranscriptMinimap.js";
 import { BackgroundTasksPanel } from "./components/BackgroundTasksPanel.js";
 import { NoticeStack, TabNoticeCapture } from "./components/NoticeToast.js";
 import { WorkspaceTrustPrompt } from "./components/WorkspaceTrustDialog.js";
@@ -373,6 +374,40 @@ export function SessionSurface({ tabId, onToast }: SessionSurfaceProps) {
   const sendToHost = useTabSend();
   const handleTryAgain = useCallback(() => dispatchTryAgain(tabStoreApi, sendToHost), [tabStoreApi, sendToHost]);
   const handleContinue = useCallback(() => dispatchContinue(tabStoreApi, sendToHost), [tabStoreApi, sendToHost]);
+  // Taskana 4742 §2.5: rewind plumbing for the tick rail's popover action.
+  // `supportsRewind` gates the prop (absent -> no Rewind buttons at all,
+  // same expression the old TimelinePanel mount used); `onRewind` sends the
+  // SAME rewind_request the removed dock panel sent (buildRewindRequest,
+  // moved verbatim to checkpoint-model.ts — no new wire message). This
+  // surface serves the root tab AND live child panes (each mounted inside
+  // its own TabContext.Provider, so `checkpoints` resolves against that
+  // pane's own session); read-only history panes render MessageList
+  // directly with no `rewind` prop and never see a button.
+  const engine = useTabStore((state) => state.engine);
+  const supportsRewind = engine?.capabilities.supportsRewind ?? true;
+  const checkpoints = useTabStore((state) => state.checkpoints);
+  const lastRewindResult = useTabStore((state) => state.lastRewindResult);
+  const handleRewind = useCallback(
+    (checkpointId: string) => sendToHost(buildRewindRequest(checkpointId, crypto.randomUUID())),
+    [sendToHost],
+  );
+  const rewindProp = supportsRewind ? { checkpoints, onRewind: handleRewind } : undefined;
+  // Taskana 4742 §2.5: checkpoint-list refresh — the store's `checkpoints`
+  // field is filled ONLY on demand (host replies to checkpoint_list_request),
+  // so the rail asks (a) once when it first appears (>=2 user turns), (b)
+  // every time the turn goes running -> idle (the finished turn's checkpoint
+  // exists by then), (c) after a rewind_result lands (the list is now
+  // stale). Fire-and-forget: the host already replies {checkpoints:[]} when
+  // the seam is disabled. No polling.
+  const turnStatus = turn.status;
+  const userTurnCount = useMemo(() => countUserTurns(transcript), [transcript]);
+  const railVisible = userTurnCount >= 2;
+  useEffect(() => {
+    if (!railVisible || !supportsRewind) {
+      return;
+    }
+    sendToHost({ type: "checkpoint_list_request" });
+  }, [railVisible, supportsRewind, turnStatus, lastRewindResult, sendToHost]);
 
   // TASK.188 S12: this mount IS the replay's definition of "the root is in
   // frame". Every way the root transcript can leave the screen — another tab
@@ -419,6 +454,7 @@ export function SessionSurface({ tabId, onToast }: SessionSurfaceProps) {
           continueOffer={continueOffer}
           onContinue={handleContinue}
           promptQueueLength={promptQueueLength}
+          {...(rewindProp !== undefined ? { rewind: rewindProp } : {})}
         />
 
         <Composer />
@@ -455,7 +491,6 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
   // (that flag now describes only the agent's OWN tool-mutation capability).
   const gitPanelOpen = computeGitPanelOpen(gitPanelOpenRequested, shell?.gitReadOnly);
   const supportsCorePanels = engine === null;
-  const supportsRewind = engine?.capabilities.supportsRewind ?? true;
   // TASK.91: the background-tasks drawer mounts for the native engine only —
   // `engine` is null before host_ready (core default), and claude/codex keep
   // supportsTasks:false.
@@ -886,7 +921,8 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
 
       {supportsCorePanels && <LspPanel />}
       {supportsCorePanels && <HooksPanel />}
-      {supportsRewind && <TimelinePanel />}
+      {/* Taskana 4742: the Timeline dock panel is gone — rewind moved into the
+          tick rail's popover (SessionSurface's MessageList `rewind` prop). */}
       {/* keyed: the panel's local selected-row state must not leak into another tab */}
       {supportsTasks && <BackgroundTasksPanel key={tabId} />}
     </>

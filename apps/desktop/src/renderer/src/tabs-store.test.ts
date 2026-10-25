@@ -113,12 +113,6 @@ describe("tabs-store", () => {
     expect(store.getState().tabs[0]?.hooksPanelOpen).toBe(false);
   });
 
-  it("timelinePanelOpen defaults to false — the checkpoint timeline drawer is user-opened chrome state (slice P7.26/R2)", () => {
-    const store = createTabsStore();
-    store.getState().addTab({ tabId: "a", workspace: "/ws/a" });
-    expect(store.getState().tabs[0]?.timelinePanelOpen).toBe(false);
-  });
-
   it("tasksPanelOpen defaults to false — the background-tasks drawer is user-opened chrome state (TASK.91)", () => {
     const store = createTabsStore();
     store.getState().addTab({ tabId: "a", workspace: "/ws/a" });
@@ -184,33 +178,13 @@ describe("tabs-store", () => {
     expect(store.getState().tabs[0]?.lspPanelOpen).toBe(false);
   });
 
-  it("setTimelinePanelOpen flips only its own tab's flag (slice P7.26/R2)", () => {
+  it("opening one right drawer closes the others on the same tab after the Timeline panel's removal (Taskana 4742: lsp/hooks/tasks remain mutually exclusive)", () => {
     const store = createTabsStore();
     store.getState().addTab({ tabId: "a", workspace: "/ws/a" });
-    store.getState().addTab({ tabId: "b", workspace: "/ws/b" });
-
-    store.getState().setTimelinePanelOpen("b", true);
-
-    const [a, b] = store.getState().tabs;
-    expect(a?.timelinePanelOpen).toBe(false);
-    expect(b?.timelinePanelOpen).toBe(true);
-  });
-
-  it("the timeline drawer joins the same one-of-three group as LSP/hooks (slice P7.26/R2)", () => {
-    const store = createTabsStore();
-    store.getState().addTab({ tabId: "a", workspace: "/ws/a" });
-
-    store.getState().setLspPanelOpen("a", true);
-    store.getState().setTimelinePanelOpen("a", true);
-    expect(store.getState().tabs[0]?.timelinePanelOpen).toBe(true);
-    expect(store.getState().tabs[0]?.lspPanelOpen).toBe(false);
 
     store.getState().setHooksPanelOpen("a", true);
-    expect(store.getState().tabs[0]?.hooksPanelOpen).toBe(true);
-    expect(store.getState().tabs[0]?.timelinePanelOpen).toBe(false);
-
-    store.getState().setTimelinePanelOpen("a", true);
-    expect(store.getState().tabs[0]?.timelinePanelOpen).toBe(true);
+    store.getState().setLspPanelOpen("a", true);
+    expect(store.getState().tabs[0]?.lspPanelOpen).toBe(true);
     expect(store.getState().tabs[0]?.hooksPanelOpen).toBe(false);
   });
 
@@ -226,19 +200,17 @@ describe("tabs-store", () => {
     expect(b?.tasksPanelOpen).toBe(true);
   });
 
-  it("opening the tasks drawer closes the other three drawers on the same tab (TASK.91)", () => {
+  it("opening the tasks drawer closes the other drawers on the same tab (TASK.91)", () => {
     const store = createTabsStore();
     store.getState().addTab({ tabId: "a", workspace: "/ws/a" });
 
     store.getState().setLspPanelOpen("a", true);
     store.getState().setHooksPanelOpen("a", true);
-    store.getState().setTimelinePanelOpen("a", true);
     store.getState().setTasksPanelOpen("a", true);
     const tab = store.getState().tabs[0];
     expect(tab?.tasksPanelOpen).toBe(true);
     expect(tab?.lspPanelOpen).toBe(false);
     expect(tab?.hooksPanelOpen).toBe(false);
-    expect(tab?.timelinePanelOpen).toBe(false);
   });
 
   it("opening any of the other drawers closes the tasks drawer (TASK.91)", () => {
@@ -255,11 +227,6 @@ describe("tabs-store", () => {
     store.getState().setTasksPanelOpen("a", true);
     store.getState().setHooksPanelOpen("a", true);
     expect(store.getState().tabs[0]?.hooksPanelOpen).toBe(true);
-    expect(store.getState().tabs[0]?.tasksPanelOpen).toBe(false);
-
-    store.getState().setTasksPanelOpen("a", true);
-    store.getState().setTimelinePanelOpen("a", true);
-    expect(store.getState().tabs[0]?.timelinePanelOpen).toBe(true);
     expect(store.getState().tabs[0]?.tasksPanelOpen).toBe(false);
   });
 });

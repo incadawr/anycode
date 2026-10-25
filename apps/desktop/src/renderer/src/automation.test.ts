@@ -51,7 +51,6 @@ import {
   type SettingsLayoutDom,
   type LspPanelDom,
   type HooksPanelDom,
-  type CheckpointPanelDom,
   type TranscriptBlockDom,
   type TryAgainButtonDom,
   type WorkflowStepsDom,
@@ -926,33 +925,32 @@ describe("automation facade — childCloseClick (TASK.188 S8.3, CUT-S3 §6.1 'ev
       undefined, // 7  modelPillDom
       undefined, // 8  settingsStore
       undefined, // 9  settingsDom
-      undefined, // 10 ctxPopoverDom
-      undefined, // 11 agentCardDom
-      undefined, // 12 mcpPaneDom
-      undefined, // 13 skillsPaneDom
-      undefined, // 14 subagentsPaneDom
-      undefined, // 15 profilePaneDom
-      undefined, // 16 composerSlashDom
-      undefined, // 17 shortcutsPaneDom
-      undefined, // 18 lspPanelDom
-      undefined, // 19 hooksPanelDom
-      undefined, // 20 checkpointPanelDom
-      undefined, // 21 transcriptBlockDom
-      undefined, // 22 tryAgainButtonDom
-      undefined, // 23 providerPaneDom
-      undefined, // 24 codexPaneDom
-      undefined, // 25 codexProfileChipDom
-      undefined, // 26 codexImportDom
-      undefined, // 27 binaryTrustDialogDom
-      undefined, // 28 trustedBinariesSectionDom
+      undefined, // 9 ctxPopoverDom
+      undefined, // 10 agentCardDom
+      undefined, // 11 mcpPaneDom
+      undefined, // 12 skillsPaneDom
+      undefined, // 13 subagentsPaneDom
+      undefined, // 14 profilePaneDom
+      undefined, // 15 composerSlashDom
+      undefined, // 16 shortcutsPaneDom
+      undefined, // 17 lspPanelDom
+      undefined, // 18 hooksPanelDom
+      undefined, // 20 transcriptBlockDom
+      undefined, // 21 tryAgainButtonDom
+      undefined, // 22 providerPaneDom
+      undefined, // 23 codexPaneDom
+      undefined, // 24 codexProfileChipDom
+      undefined, // 25 codexImportDom
+      undefined, // 26 binaryTrustDialogDom
+      undefined, // 27 trustedBinariesSectionDom
       layout, // 29 childLayoutStore
-      undefined, // 30 sidebarDom
-      undefined, // 31 settingsLayoutDom
-      undefined, // 32 dockDom
-      undefined, // 33 workflowStepsDom
-      undefined, // 34 visionPaneDom
-      undefined, // 35 replayStore
-      undefined, // 36 replayTimer
+      undefined, // 29 sidebarDom
+      undefined, // 30 settingsLayoutDom
+      undefined, // 31 dockDom
+      undefined, // 32 workflowStepsDom
+      undefined, // 33 visionPaneDom
+      undefined, // 34 replayStore
+      undefined, // 35 replayTimer
       childCloseDom, // 37
     );
     return { facade, tabsStore, registry };
@@ -1037,34 +1035,33 @@ describe("automation facade — childSplitClick (TASK.188 S9.4, the entry-side t
       undefined, // 7  modelPillDom
       undefined, // 8  settingsStore
       undefined, // 9  settingsDom
-      undefined, // 10 ctxPopoverDom
-      undefined, // 11 agentCardDom
-      undefined, // 12 mcpPaneDom
-      undefined, // 13 skillsPaneDom
-      undefined, // 14 subagentsPaneDom
-      undefined, // 15 profilePaneDom
-      undefined, // 16 composerSlashDom
-      undefined, // 17 shortcutsPaneDom
-      undefined, // 18 lspPanelDom
-      undefined, // 19 hooksPanelDom
-      undefined, // 20 checkpointPanelDom
-      undefined, // 21 transcriptBlockDom
-      undefined, // 22 tryAgainButtonDom
-      undefined, // 23 providerPaneDom
-      undefined, // 24 codexPaneDom
-      undefined, // 25 codexProfileChipDom
-      undefined, // 26 codexImportDom
-      undefined, // 27 binaryTrustDialogDom
-      undefined, // 28 trustedBinariesSectionDom
+      undefined, // 9 ctxPopoverDom
+      undefined, // 10 agentCardDom
+      undefined, // 11 mcpPaneDom
+      undefined, // 12 skillsPaneDom
+      undefined, // 13 subagentsPaneDom
+      undefined, // 14 profilePaneDom
+      undefined, // 15 composerSlashDom
+      undefined, // 16 shortcutsPaneDom
+      undefined, // 17 lspPanelDom
+      undefined, // 18 hooksPanelDom
+      undefined, // 20 transcriptBlockDom
+      undefined, // 21 tryAgainButtonDom
+      undefined, // 22 providerPaneDom
+      undefined, // 23 codexPaneDom
+      undefined, // 24 codexProfileChipDom
+      undefined, // 25 codexImportDom
+      undefined, // 26 binaryTrustDialogDom
+      undefined, // 27 trustedBinariesSectionDom
       layout, // 29 childLayoutStore
-      undefined, // 30 sidebarDom
-      undefined, // 31 settingsLayoutDom
-      undefined, // 32 dockDom
-      undefined, // 33 workflowStepsDom
-      undefined, // 34 visionPaneDom
-      undefined, // 35 replayStore
-      undefined, // 36 replayTimer
-      undefined, // 37 childCloseDom
+      undefined, // 29 sidebarDom
+      undefined, // 30 settingsLayoutDom
+      undefined, // 31 dockDom
+      undefined, // 32 workflowStepsDom
+      undefined, // 33 visionPaneDom
+      undefined, // 34 replayStore
+      undefined, // 35 replayTimer
+      undefined, // 36 childCloseDom
       childSplitDom, // 38
     );
     return { facade, tabsStore, registry };
@@ -2609,12 +2606,12 @@ describe("automation facade — composerQueueState (Taskana 4087 / TASK.55)", ()
       undefined, // 7  modelPillDom
       undefined, // 8  settingsStore
       undefined, // 9  settingsDom
-      undefined, // 10 ctxPopoverDom
-      undefined, // 11 agentCardDom
-      undefined, // 12 mcpPaneDom
-      undefined, // 13 skillsPaneDom
-      undefined, // 14 subagentsPaneDom
-      undefined, // 15 profilePaneDom
+      undefined, // 9 ctxPopoverDom
+      undefined, // 10 agentCardDom
+      undefined, // 11 mcpPaneDom
+      undefined, // 12 skillsPaneDom
+      undefined, // 13 subagentsPaneDom
+      undefined, // 14 profilePaneDom
       fakeComposerDom(over), // 16 composerSlashDom
     );
     return { ...fixture, facade };
@@ -6621,30 +6618,29 @@ describe("automation facade — Vision pane probe/driver (TASK.198 срез E2c)
       undefined, // 7  modelPillDom
       undefined, // 8  settingsStore
       undefined, // 9  settingsDom
-      undefined, // 10 ctxPopoverDom
-      undefined, // 11 agentCardDom
-      undefined, // 12 mcpPaneDom
-      undefined, // 13 skillsPaneDom
-      undefined, // 14 subagentsPaneDom
-      undefined, // 15 profilePaneDom
-      undefined, // 16 composerSlashDom
-      undefined, // 17 shortcutsPaneDom
-      undefined, // 18 lspPanelDom
-      undefined, // 19 hooksPanelDom
-      undefined, // 20 checkpointPanelDom
-      undefined, // 21 transcriptBlockDom
-      undefined, // 22 tryAgainButtonDom
-      undefined, // 23 providerPaneDom
-      undefined, // 24 codexPaneDom
-      undefined, // 25 codexProfileChipDom
-      undefined, // 26 codexImportDom
-      undefined, // 27 binaryTrustDialogDom
-      undefined, // 28 trustedBinariesSectionDom
-      undefined, // 29 childLayoutStore
-      undefined, // 30 sidebarDom
-      undefined, // 31 settingsLayoutDom
-      undefined, // 32 dockDom
-      undefined, // 33 workflowStepsDom
+      undefined, // 9 ctxPopoverDom
+      undefined, // 10 agentCardDom
+      undefined, // 11 mcpPaneDom
+      undefined, // 12 skillsPaneDom
+      undefined, // 13 subagentsPaneDom
+      undefined, // 14 profilePaneDom
+      undefined, // 15 composerSlashDom
+      undefined, // 16 shortcutsPaneDom
+      undefined, // 17 lspPanelDom
+      undefined, // 18 hooksPanelDom
+      undefined, // 20 transcriptBlockDom
+      undefined, // 21 tryAgainButtonDom
+      undefined, // 22 providerPaneDom
+      undefined, // 23 codexPaneDom
+      undefined, // 24 codexProfileChipDom
+      undefined, // 25 codexImportDom
+      undefined, // 26 binaryTrustDialogDom
+      undefined, // 27 trustedBinariesSectionDom
+      undefined, // 28 childLayoutStore
+      undefined, // 29 sidebarDom
+      undefined, // 30 settingsLayoutDom
+      undefined, // 31 dockDom
+      undefined, // 32 workflowStepsDom
       dom, // 34 visionPaneDom
     );
   }
@@ -7108,14 +7104,16 @@ describe("automation facade — settings geometry probe (TASK.187 S5, defect 1)"
       registry,
       tabsStore,
       stubBridge(),
-      // positions 4-30: transcript/todo/start/pill/settings-store/settings/
+      // positions 4-29: transcript/todo/start/pill/settings-store/settings/
       // ctx/agent-card/mcp/skills/subagents/profile/slash/shortcuts/lsp/hooks/
-      // checkpoint/block/try-again/provider/codex/chip/import/trust-dialog/
+      // block/try-again/provider/codex/chip/import/trust-dialog/
       // trusted-binaries/child-layout/sidebar
       undefined, undefined, undefined, undefined, undefined, undefined, undefined,
       undefined, undefined, undefined, undefined, undefined, undefined, undefined,
       undefined, undefined, undefined, undefined, undefined, undefined, undefined,
-      undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined,
+      undefined, undefined, undefined, undefined,
+
       settingsLayoutDom,
     );
   }
@@ -7352,7 +7350,6 @@ describe("automation facade — checkpoint timeline / rewind probes+driver (desi
   function buildFacade(
     registry: TabRegistry,
     tabsStore: TabsStoreApi,
-    checkpointPanelDom?: CheckpointPanelDom,
     transcriptBlockDom?: TranscriptBlockDom,
     dom?: TranscriptDom,
   ) {
@@ -7376,7 +7373,6 @@ describe("automation facade — checkpoint timeline / rewind probes+driver (desi
       undefined,
       undefined,
       undefined,
-      checkpointPanelDom,
       transcriptBlockDom,
     );
   }
@@ -7386,52 +7382,105 @@ describe("automation facade — checkpoint timeline / rewind probes+driver (desi
       const { registry, tabsStore, tabId } = setupReadyTab("tab-a");
       registry.registerPort("tab-b", "/ws/b", asPort(new FakeMessagePort()));
       tabsStore.getState().setActiveTab("tab-b");
-      const checkpointPanelDom: CheckpointPanelDom = { panel: () => null, toggle: vi.fn(), refresh: vi.fn() };
-      const facade = buildFacade(registry, tabsStore, checkpointPanelDom);
+      const facade = buildFacade(registry, tabsStore);
       await expect(facade.checkpointPanelState(tabId)).resolves.toEqual({ ok: false, reason: "tab_not_active" });
-      expect(checkpointPanelDom.toggle).not.toHaveBeenCalled();
     });
 
-    it("opens the closed panel (toggle, not refresh) and returns the rows once the list lands", async () => {
-      const { registry, tabsStore, tabId } = setupReadyTab();
+    it("sends checkpoint_list_request over the tab's port and returns the store's list once it lands (Taskana 4742: no DOM panel anymore)", async () => {
+      const { registry, tabsStore, tabId, port } = setupReadyTab();
       tabsStore.getState().setActiveTab(tabId);
-      let rows: { items: Array<{ id: string; label: string; age: string; reason: string }> } | null = null;
-      const checkpointPanelDom: CheckpointPanelDom = {
-        panel: () => rows,
-        toggle: vi.fn(() => {
-          rows = { items: [{ id: "cp-1", label: "Write file A", age: "2m", reason: "Auto" }] };
+      // The host's checkpoint_list reply replaces the store's array. The fake
+      // port records sends; answer the request by emitting the reply.
+      const requestSeen = new Promise<void>((resolve) => {
+        const check = (): void => {
+          if (port.sent.some((m) => (m as { type: string }).type === "checkpoint_list_request")) {
+            resolve();
+          } else {
+            queueMicrotask(check);
+          }
+        };
+        check();
+      });
+      void requestSeen.then(() =>
+        port.emit({
+          type: "checkpoint_list",
+          checkpoints: [checkpointMeta({ id: "cp-1", label: "Write file A", createdAt: Date.now() - 120_000 })],
         }),
-        refresh: vi.fn(),
-      };
-      const facade = buildFacade(registry, tabsStore, checkpointPanelDom);
-      await expect(facade.checkpointPanelState(tabId)).resolves.toEqual({
+      );
+      const facade = buildFacade(registry, tabsStore);
+      const result = await facade.checkpointPanelState(tabId);
+      expect(result).toEqual({
         ok: true,
         visible: true,
         items: [{ id: "cp-1", label: "Write file A", age: "2m", reason: "Auto" }],
       });
-      expect(checkpointPanelDom.toggle).toHaveBeenCalledTimes(1);
-      expect(checkpointPanelDom.refresh).not.toHaveBeenCalled();
     });
 
-    it("refreshes an already-open panel (refresh, not toggle) to force a fresh list", async () => {
-      const { registry, tabsStore, tabId } = setupReadyTab();
+    it("returns the store's newest-first rows with the same human reason text the old panel showed", async () => {
+      const { registry, tabsStore, tabId, port } = setupReadyTab();
       tabsStore.getState().setActiveTab(tabId);
-      let rows: { items: Array<{ id: string; label: string; age: string; reason: string }> } = { items: [] };
-      const checkpointPanelDom: CheckpointPanelDom = {
-        panel: () => rows,
-        toggle: vi.fn(),
-        refresh: vi.fn(() => {
-          rows = { items: [{ id: "cp-2", label: "Write file B", age: "0m", reason: "Auto" }] };
+      const requestSeen2 = new Promise<void>((resolve) => {
+        const check = (): void => {
+          if (port.sent.some((m) => (m as { type: string }).type === "checkpoint_list_request")) {
+            resolve();
+          } else {
+            queueMicrotask(check);
+          }
+        };
+        check();
+      });
+      void requestSeen2.then(() =>
+        port.emit({
+          type: "checkpoint_list",
+          checkpoints: [
+            checkpointMeta({ id: "cp-old", label: "Write file A", createdAt: Date.now() - 3_600_000 }),
+            checkpointMeta({ id: "cp-new", label: "Write file B", createdAt: Date.now() - 60_000, reason: "pre-rewind" }),
+          ],
         }),
-      };
-      const facade = buildFacade(registry, tabsStore, checkpointPanelDom);
-      await expect(facade.checkpointPanelState(tabId)).resolves.toEqual({
+      );
+      const facade = buildFacade(registry, tabsStore);
+      const result = await facade.checkpointPanelState(tabId);
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.items.map((item) => item.id)).toEqual(["cp-new", "cp-old"]);
+      expect(result.items.map((item) => item.reason)).toEqual(["Pre-rewind", "Auto"]);
+      expect(result.items.map((item) => item.age)).toEqual(["1m", "1h"]);
+    });
+
+    it("an identical-content resend still settles (the store replaces the array wholesale — identity, not content, is the edge)", async () => {
+      const { registry, tabsStore, tabId, port } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const reply = (): void =>
+        port.emit({
+          type: "checkpoint_list",
+          checkpoints: [checkpointMeta({ id: "cp-1", label: "Write file A" })],
+        });
+      const requestSeen3 = new Promise<void>((resolve) => {
+        const check = (): void => {
+          if (port.sent.some((m) => (m as { type: string }).type === "checkpoint_list_request")) {
+            resolve();
+          } else {
+            queueMicrotask(check);
+          }
+        };
+        check();
+      });
+      void requestSeen3.then(reply);
+      const facade = buildFacade(registry, tabsStore);
+      const first = await facade.checkpointPanelState(tabId);
+      expect(first).toEqual({
         ok: true,
         visible: true,
-        items: [{ id: "cp-2", label: "Write file B", age: "0m", reason: "Auto" }],
+        items: [{ id: "cp-1", label: "Write file A", age: expect.any(String), reason: "Auto" }],
       });
-      expect(checkpointPanelDom.refresh).toHaveBeenCalledTimes(1);
-      expect(checkpointPanelDom.toggle).not.toHaveBeenCalled();
+      const second = await facade.checkpointPanelState(tabId);
+      expect(second).toEqual({
+        ok: true,
+        visible: true,
+        items: [{ id: "cp-1", label: "Write file A", age: expect.any(String), reason: "Auto" }],
+      });
     });
   });
 
@@ -7440,14 +7489,14 @@ describe("automation facade — checkpoint timeline / rewind probes+driver (desi
       const { registry, tabsStore, tabId } = setupReadyTab("tab-a");
       registry.registerPort("tab-b", "/ws/b", asPort(new FakeMessagePort()));
       tabsStore.getState().setActiveTab("tab-b");
-      const facade = buildFacade(registry, tabsStore, undefined, undefined, { container: () => null, jumpButtonVisible: () => false });
+      const facade = buildFacade(registry, tabsStore, undefined, { container: () => null, jumpButtonVisible: () => false });
       expect(facade.rewindState(tabId)).toEqual({ ok: false, reason: "tab_not_active" });
     });
 
     it("refuses when no transcript element is mounted (no_transcript)", () => {
       const { registry, tabsStore, tabId } = setupReadyTab();
       tabsStore.getState().setActiveTab(tabId);
-      const facade = buildFacade(registry, tabsStore, undefined, undefined, { container: () => null, jumpButtonVisible: () => false });
+      const facade = buildFacade(registry, tabsStore, undefined, { container: () => null, jumpButtonVisible: () => false });
       expect(facade.rewindState(tabId)).toEqual({ ok: false, reason: "no_transcript" });
     });
 
@@ -7459,7 +7508,7 @@ describe("automation facade — checkpoint timeline / rewind probes+driver (desi
         jumpButtonVisible: () => false,
       };
       const transcriptBlockDom: TranscriptBlockDom = { count: () => 3 };
-      const facade = buildFacade(registry, tabsStore, undefined, transcriptBlockDom, transcriptDom);
+      const facade = buildFacade(registry, tabsStore, transcriptBlockDom, transcriptDom);
       expect(facade.rewindState(tabId)).toEqual({ ok: true, lastResult: null, transcriptBlockCount: 3 });
     });
 
@@ -7479,7 +7528,7 @@ describe("automation facade — checkpoint timeline / rewind probes+driver (desi
         jumpButtonVisible: () => false,
       };
       const transcriptBlockDom: TranscriptBlockDom = { count: () => 1 };
-      const facade = buildFacade(registry, tabsStore, undefined, transcriptBlockDom, transcriptDom);
+      const facade = buildFacade(registry, tabsStore, transcriptBlockDom, transcriptDom);
       expect(facade.rewindState(tabId)).toEqual({
         ok: true,
         lastResult: { ok: true, reason: null, conversationRestored: true, restoredPaths: 2, safetyId: "cp-safety-1" },
@@ -7530,7 +7579,7 @@ describe("automation facade — checkpoint timeline / rewind probes+driver (desi
         jumpButtonVisible: () => false,
       };
       const transcriptBlockDom: TranscriptBlockDom = { count: () => 0 };
-      const facade = buildFacade(registry, tabsStore, undefined, transcriptBlockDom, transcriptDom);
+      const facade = buildFacade(registry, tabsStore, transcriptBlockDom, transcriptDom);
 
       const resultPromise = facade.checkpointRewind(tabId, { index: 0, scope: "both" });
       // The facade generates+sends its own requestId synchronously before its
@@ -7565,7 +7614,7 @@ describe("automation facade — checkpoint timeline / rewind probes+driver (desi
         jumpButtonVisible: () => false,
       };
       const transcriptBlockDom: TranscriptBlockDom = { count: () => 0 };
-      const facade = buildFacade(registry, tabsStore, undefined, transcriptBlockDom, transcriptDom);
+      const facade = buildFacade(registry, tabsStore, transcriptBlockDom, transcriptDom);
 
       const resultPromise = facade.checkpointRewind(tabId, { checkpointId: "explicit-id", scope: "files" });
       const sentRequestId = (port.sent.at(-1) as { requestId: string }).requestId;
@@ -7613,7 +7662,7 @@ describe("automation facade — tryAgainButtonState/tryAgainButtonClick (TASK.33
       undefined,
       undefined,
       undefined,
-      undefined,
+
       tryAgainButtonDom,
     );
   }
@@ -7791,29 +7840,28 @@ describe("automation facade — workflowStepsState/workflowStepClick (TASK.191 s
       undefined, // 7  modelPillDom
       undefined, // 8  settingsStore
       undefined, // 9  settingsDom
-      undefined, // 10 ctxPopoverDom
-      undefined, // 11 agentCardDom
-      undefined, // 12 mcpPaneDom
-      undefined, // 13 skillsPaneDom
-      undefined, // 14 subagentsPaneDom
-      undefined, // 15 profilePaneDom
-      undefined, // 16 composerSlashDom
-      undefined, // 17 shortcutsPaneDom
-      undefined, // 18 lspPanelDom
-      undefined, // 19 hooksPanelDom
-      undefined, // 20 checkpointPanelDom
-      undefined, // 21 transcriptBlockDom
-      undefined, // 22 tryAgainButtonDom
-      undefined, // 23 providerPaneDom
-      undefined, // 24 codexPaneDom
-      undefined, // 25 codexProfileChipDom
-      undefined, // 26 codexImportDom
-      undefined, // 27 binaryTrustDialogDom
-      undefined, // 28 trustedBinariesSectionDom
-      undefined, // 29 childLayoutStore
-      undefined, // 30 sidebarDom
-      undefined, // 31 settingsLayoutDom
-      undefined, // 32 dockDom
+      undefined, // 9 ctxPopoverDom
+      undefined, // 10 agentCardDom
+      undefined, // 11 mcpPaneDom
+      undefined, // 12 skillsPaneDom
+      undefined, // 13 subagentsPaneDom
+      undefined, // 14 profilePaneDom
+      undefined, // 15 composerSlashDom
+      undefined, // 16 shortcutsPaneDom
+      undefined, // 17 lspPanelDom
+      undefined, // 18 hooksPanelDom
+      undefined, // 20 transcriptBlockDom
+      undefined, // 21 tryAgainButtonDom
+      undefined, // 22 providerPaneDom
+      undefined, // 23 codexPaneDom
+      undefined, // 24 codexProfileChipDom
+      undefined, // 25 codexImportDom
+      undefined, // 26 binaryTrustDialogDom
+      undefined, // 27 trustedBinariesSectionDom
+      undefined, // 28 childLayoutStore
+      undefined, // 29 sidebarDom
+      undefined, // 30 settingsLayoutDom
+      undefined, // 31 dockDom
       workflowStepsDom, // 33
     );
   }
@@ -8098,35 +8146,34 @@ describe("automation facade — workflowMapState/workflowMapToggle/workflowTicks
       undefined, // 7  modelPillDom
       undefined, // 8  settingsStore
       undefined, // 9  settingsDom
-      undefined, // 10 ctxPopoverDom
+      undefined, // 9 ctxPopoverDom
       agentCardDom, // 11 agentCardDom
-      undefined, // 12 mcpPaneDom
-      undefined, // 13 skillsPaneDom
-      undefined, // 14 subagentsPaneDom
-      undefined, // 15 profilePaneDom
-      undefined, // 16 composerSlashDom
-      undefined, // 17 shortcutsPaneDom
-      undefined, // 18 lspPanelDom
-      undefined, // 19 hooksPanelDom
-      undefined, // 20 checkpointPanelDom
-      undefined, // 21 transcriptBlockDom
-      undefined, // 22 tryAgainButtonDom
-      undefined, // 23 providerPaneDom
-      undefined, // 24 codexPaneDom
-      undefined, // 25 codexProfileChipDom
-      undefined, // 26 codexImportDom
-      undefined, // 27 binaryTrustDialogDom
-      undefined, // 28 trustedBinariesSectionDom
-      undefined, // 29 childLayoutStore
-      undefined, // 30 sidebarDom
-      undefined, // 31 settingsLayoutDom
-      undefined, // 32 dockDom
-      undefined, // 33 workflowStepsDom
-      undefined, // 34 visionPaneDom
-      undefined, // 35 replayStore
-      undefined, // 36 replayTimer
-      undefined, // 37 childCloseDom
-      undefined, // 38 childSplitDom
+      undefined, // 11 mcpPaneDom
+      undefined, // 12 skillsPaneDom
+      undefined, // 13 subagentsPaneDom
+      undefined, // 14 profilePaneDom
+      undefined, // 15 composerSlashDom
+      undefined, // 16 shortcutsPaneDom
+      undefined, // 17 lspPanelDom
+      undefined, // 18 hooksPanelDom
+      undefined, // 20 transcriptBlockDom
+      undefined, // 21 tryAgainButtonDom
+      undefined, // 22 providerPaneDom
+      undefined, // 23 codexPaneDom
+      undefined, // 24 codexProfileChipDom
+      undefined, // 25 codexImportDom
+      undefined, // 26 binaryTrustDialogDom
+      undefined, // 27 trustedBinariesSectionDom
+      undefined, // 28 childLayoutStore
+      undefined, // 29 sidebarDom
+      undefined, // 30 settingsLayoutDom
+      undefined, // 31 dockDom
+      undefined, // 32 workflowStepsDom
+      undefined, // 33 visionPaneDom
+      undefined, // 34 replayStore
+      undefined, // 35 replayTimer
+      undefined, // 36 childCloseDom
+      undefined, // 37 childSplitDom
       workflowMapDom, // 39
       workflowTicksDom, // 40
     );
@@ -8505,7 +8552,7 @@ describe("automation facade — provider connections grid/drawer probe/driver (T
       undefined,
       undefined,
       undefined,
-      undefined,
+
       providerPaneDom,
     );
   }
@@ -9202,7 +9249,7 @@ describe("automation facade — codexPaneState / drivers (W4-F0, findings S1-1 p
       undefined,
       undefined,
       undefined,
-      undefined,
+
       codexPaneDom,
     );
   }
@@ -9345,23 +9392,22 @@ describe("automation facade — binaryTrustDialogState / Resolve, trustedBinarie
       undefined, // 7  modelPillDom
       createSettingsStore(), // 8  settingsStore
       undefined, // 9  settingsDom
-      undefined, // 10 ctxPopoverDom
-      undefined, // 11 agentCardDom
-      undefined, // 12 mcpPaneDom
-      undefined, // 13 skillsPaneDom
-      undefined, // 14 subagentsPaneDom
-      undefined, // 15 profilePaneDom
-      undefined, // 16 composerSlashDom
-      undefined, // 17 shortcutsPaneDom
-      undefined, // 18 lspPanelDom
-      undefined, // 19 hooksPanelDom
-      undefined, // 20 checkpointPanelDom
-      undefined, // 21 transcriptBlockDom
-      undefined, // 22 tryAgainButtonDom
-      undefined, // 23 providerPaneDom
-      undefined, // 24 codexPaneDom
-      undefined, // 25 codexProfileChipDom
-      undefined, // 26 codexImportDom
+      undefined, // 9 ctxPopoverDom
+      undefined, // 10 agentCardDom
+      undefined, // 11 mcpPaneDom
+      undefined, // 12 skillsPaneDom
+      undefined, // 13 subagentsPaneDom
+      undefined, // 14 profilePaneDom
+      undefined, // 15 composerSlashDom
+      undefined, // 16 shortcutsPaneDom
+      undefined, // 17 lspPanelDom
+      undefined, // 18 hooksPanelDom
+      undefined, // 20 transcriptBlockDom
+      undefined, // 21 tryAgainButtonDom
+      undefined, // 22 providerPaneDom
+      undefined, // 23 codexPaneDom
+      undefined, // 24 codexProfileChipDom
+      undefined, // 25 codexImportDom
       overrides.binaryTrustDialogDom, // 27
       overrides.trustedBinariesSectionDom, // 28
     );
@@ -9524,7 +9570,7 @@ describe("automation facade — codexProfileChipState / open / pick (W4-F0, find
       undefined,
       undefined,
       undefined,
-      undefined,
+
       dom,
     );
     return { facade, tabsStore };
@@ -9744,7 +9790,7 @@ describe("automation facade — codexImport* (W4-F0, findings S1-1 probe (c))", 
       undefined,
       undefined,
       undefined,
-      undefined,
+
       paneDom,
       undefined,
       importDom,
@@ -10204,7 +10250,7 @@ describe("automation facade — sidebar row-cut probe/driver (TASK.125)", () => 
       undefined,
       undefined,
       undefined,
-      undefined,
+
       sidebarDom,
     );
   }
@@ -10405,31 +10451,30 @@ describe("automation facade — replay* (TASK.188 S2)", () => {
       undefined, // 7  modelPillDom
       undefined, // 8  settingsStore
       undefined, // 9  settingsDom
-      undefined, // 10 ctxPopoverDom
-      undefined, // 11 agentCardDom
-      undefined, // 12 mcpPaneDom
-      undefined, // 13 skillsPaneDom
-      undefined, // 14 subagentsPaneDom
-      undefined, // 15 profilePaneDom
-      undefined, // 16 composerSlashDom
-      undefined, // 17 shortcutsPaneDom
-      undefined, // 18 lspPanelDom
-      undefined, // 19 hooksPanelDom
-      undefined, // 20 checkpointPanelDom
-      undefined, // 21 transcriptBlockDom
-      undefined, // 22 tryAgainButtonDom
-      undefined, // 23 providerPaneDom
-      undefined, // 24 codexPaneDom
-      undefined, // 25 codexProfileChipDom
-      undefined, // 26 codexImportDom
-      undefined, // 27 binaryTrustDialogDom
-      undefined, // 28 trustedBinariesSectionDom
+      undefined, // 9 ctxPopoverDom
+      undefined, // 10 agentCardDom
+      undefined, // 11 mcpPaneDom
+      undefined, // 12 skillsPaneDom
+      undefined, // 13 subagentsPaneDom
+      undefined, // 14 profilePaneDom
+      undefined, // 15 composerSlashDom
+      undefined, // 16 shortcutsPaneDom
+      undefined, // 17 lspPanelDom
+      undefined, // 18 hooksPanelDom
+      undefined, // 20 transcriptBlockDom
+      undefined, // 21 tryAgainButtonDom
+      undefined, // 22 providerPaneDom
+      undefined, // 23 codexPaneDom
+      undefined, // 24 codexProfileChipDom
+      undefined, // 25 codexImportDom
+      undefined, // 26 binaryTrustDialogDom
+      undefined, // 27 trustedBinariesSectionDom
       layoutStore, // 29 childLayoutStore
-      undefined, // 30 sidebarDom
-      undefined, // 31 settingsLayoutDom
-      undefined, // 32 dockDom
-      undefined, // 33 workflowStepsDom
-      undefined, // 34 visionPaneDom
+      undefined, // 29 sidebarDom
+      undefined, // 30 settingsLayoutDom
+      undefined, // 31 dockDom
+      undefined, // 32 workflowStepsDom
+      undefined, // 33 visionPaneDom
       replayStore, // 35
       replayTimer, // 36
       childCloseDom, // 37
@@ -12695,33 +12740,32 @@ describe("automation facade — dockTabSplit honest refusal (Taskana 4703 cross-
       undefined, // 7  modelPillDom
       undefined, // 8  settingsStore
       undefined, // 9  settingsDom
-      undefined, // 10 ctxPopoverDom
-      undefined, // 11 agentCardDom
-      undefined, // 12 mcpPaneDom
-      undefined, // 13 skillsPaneDom
-      undefined, // 14 subagentsPaneDom
-      undefined, // 15 profilePaneDom
-      undefined, // 16 composerSlashDom
-      undefined, // 17 shortcutsPaneDom
-      undefined, // 18 lspPanelDom
-      undefined, // 19 hooksPanelDom
-      undefined, // 20 checkpointPanelDom
-      undefined, // 21 transcriptBlockDom
-      undefined, // 22 tryAgainButtonDom
-      undefined, // 23 providerPaneDom
-      undefined, // 24 codexPaneDom
-      undefined, // 25 codexProfileChipDom
-      undefined, // 26 codexImportDom
-      undefined, // 27 binaryTrustDialogDom
-      undefined, // 28 trustedBinariesSectionDom
-      undefined, // 29 childLayoutStore
-      undefined, // 30 sidebarDom
-      undefined, // 31 settingsLayoutDom
+      undefined, // 9 ctxPopoverDom
+      undefined, // 10 agentCardDom
+      undefined, // 11 mcpPaneDom
+      undefined, // 12 skillsPaneDom
+      undefined, // 13 subagentsPaneDom
+      undefined, // 14 profilePaneDom
+      undefined, // 15 composerSlashDom
+      undefined, // 16 shortcutsPaneDom
+      undefined, // 17 lspPanelDom
+      undefined, // 18 hooksPanelDom
+      undefined, // 20 transcriptBlockDom
+      undefined, // 21 tryAgainButtonDom
+      undefined, // 22 providerPaneDom
+      undefined, // 23 codexPaneDom
+      undefined, // 24 codexProfileChipDom
+      undefined, // 25 codexImportDom
+      undefined, // 26 binaryTrustDialogDom
+      undefined, // 27 trustedBinariesSectionDom
+      undefined, // 28 childLayoutStore
+      undefined, // 29 sidebarDom
+      undefined, // 30 settingsLayoutDom
       dockDom, // 32 dockDom
-      undefined, // 33 workflowStepsDom
-      undefined, // 34 visionPaneDom
-      undefined, // 35 replayStore
-      undefined, // 36 replayTimer
+      undefined, // 32 workflowStepsDom
+      undefined, // 33 visionPaneDom
+      undefined, // 34 replayStore
+      undefined, // 35 replayTimer
     );
     return facade;
   }

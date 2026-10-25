@@ -850,8 +850,10 @@ async function route(
   if (method === "GET" && parts[0] === "tabs" && parts.length === 3 && parts[2] === "composer-queue") {
     return composerQueueState(deps, decodeURIComponent(parts[1]!));
   }
-  // Checkpoint timeline probe (design slice-P7.26-R2-ratification.md §1 W3):
-  // same `/tabs/:tabId/<probe>` shape as the model-pill/ctx-popover/
+  // Checkpoint timeline probe (design slice-P7.26-R2-ratification.md §1 W3;
+  // Taskana 4742 rework — no DOM panel anymore, the facade requests a fresh
+  // checkpoint list over the tab's send port): same
+  // `/tabs/:tabId/<probe>` shape as the model-pill/ctx-popover/
   // slash-menu GET routes above.
   if (method === "GET" && parts[0] === "tabs" && parts.length === 3 && parts[2] === "checkpoints") {
     return checkpointPanelState(deps, decodeURIComponent(parts[1]!));

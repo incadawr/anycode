@@ -1,71 +1,53 @@
 /**
- * Transcript history minimap (TASK.48 / Taskana 4086): a vertical scrubber
- * marking the USER turns of a long session. Hover shows a preview card
- * (question excerpt, short answer, touched files, tool-call count); click
- * scrolls the transcript to that turn via the same `data-block-id` jump path
- * TodoPanel uses. Pure renderer projection over `TranscriptBlock[]` — no new
- * store state (same posture as TodoPanel), so resumed/hydrated sessions get
- * it for free. System-origin `user_text` blocks are host-injected reports,
- * not user moves, and never open a turn.
+ * Transcript tick rail (TASK.48 / Taskana 4086 + 4742): a bare vertical
+ * strip of short horizontal ticks at the LEFT edge of the conversation, one
+ * per user turn, marking the turn structure of a long session like Codex's
+ * message rail. Hover/focus opens a popover with the user's query (plain
+ * text, CSS-clamped to 3 lines); click/Enter scrolls the transcript to that
+ * turn via the same `data-block-id` jump path TodoPanel uses. A turn with a
+ * matched checkpoint (see checkpoint-model.ts's matchCheckpointsToTurns)
+ * additionally offers "Rewind to before this message" with an inline
+ * confirm, sending the same rewind_request the old Timeline dock panel
+ * (removed by 4742) used to send. Pure renderer projection over
+ * `TranscriptBlock[]` — no new store state (same posture as TodoPanel), so
+ * resumed/hydrated sessions get it for free. System-origin `user_text`
+ * blocks are host-injected reports, not user moves, and never open a turn.
  *
- * 4086 follow-up — cheap on long sessions. The projection used to rebuild
- * the FULL answer text of every turn (uncapped concatenation) on every block
- * change, and every streaming delta is a block change: O(total transcript
- * chars) of string work per rAF flush. Two fixes, both pure so they stay
- * testable without a DOM:
- *  - `summarizeTurn` walks with a length cap (ANSWER_SCAN_CHARS): once a
- *    turn's answer holds that many raw chars the remaining `assistant_text`
- *    bodies of the turn are skipped, so the full answer string is never
- *    built (ids, files and tool counts still accrue — the cap bounds only
- *    the string).
- *  - `createUserTurnsSelector` memoizes per-turn summaries by the identity
- *    of the turn's block objects (the store updates immutably), so a streaming update to the LAST turn reuses every
- *    earlier turn's cached summary and only the turn being streamed is
- *    recomputed. The per-call scan itself stays a light O(N) index walk —
- *    same cost class as MessageList's own `groupTranscriptBlocks`, and the
- *    expensive part (per-turn folding) touches one turn.
+ * 4086 follow-up — cheap on long sessions. The projection never builds the
+ * full answer text of any turn (4742 dropped the answer/files/tool preview
+ * from the popover entirely, so `summarizeTurn` now folds ONLY the turn's
+ * question), and `createUserTurnsSelector` memoizes per-turn summaries by
+ * the identity of the turn's block objects (the store updates immutably),
+ * so a streaming update to the LAST turn reuses every earlier turn's cached
+ * summary and only the turn being streamed is recomputed. The per-call scan
+ * itself stays a light O(N) index walk — same cost class as MessageList's
+ * own `groupTranscriptBlocks`.
+ *
+ * 4742 — evolved from the right-edge dot pill into the left-edge tick rail
+ * (same file, same selector/memoization, same scroll-spy/jump wiring in
+ * MessageList). Visual language: one short horizontal tick per turn (10px),
+ * the active tick longer (18px) and accent-colored; no pill chrome. The
+ * popover keeps `role="tooltip"` for the query text; when a rewind action
+ * exists the popover container is a `role="group"` with an accessible name
+ * so the buttons live in a real labeled container.
  */
-import { useCallback, useId, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, ReactElement } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactElement, ReactNode } from "react";
 import type { TranscriptBlock } from "../store.js";
+import { railActionsFor } from "./checkpoint-model.js";
 
 export interface UserTurnMark {
   /** `user_text` block id — the jump target. */
   id: string;
   /** Index of the user block in the source array (for ordering/counting). */
   index: number;
-  /** First ~120 chars of the question, whitespace-collapsed (preview card + aria-label). */
+  /** First ~240 chars of the question, whitespace-collapsed (popover text + aria-label source). */
   questionExcerpt: string;
-  /** Answer excerpt (<= PREVIEW_ANSWER_MAX chars, whitespace-collapsed) — built capped, see ANSWER_SCAN_CHARS. */
-  answerExcerpt: string;
-  /** Distinct basename(file_path) of Read/Write/Edit tool_calls inside the turn, first-appearance order, cap 6. */
-  files: string[];
-  /** tool_call count inside the turn (any tool). */
-  toolCallCount: number;
 }
 
-export const PREVIEW_QUESTION_MAX = 120;
-export const PREVIEW_ANSWER_MAX = 200;
-export const PREVIEW_FILES_MAX = 6;
-
-/**
- * Raw per-turn budget the answer walk may examine while building the excerpt
- * — the length cap demanded by the 4086 brief. 4× the 200-char excerpt
- * budget: generous headroom for whitespace collapse, multi-block joins and
- * the word-boundary cut, while bounding per-turn string work to a constant
- * no matter how long the answer grows. (Only a turn whose first 200
- * COLLAPSED chars span more than this many raw chars — i.e. hundreds of
- * chars of pure whitespace inside the visible window — could excerpt
- * differently than an uncapped walk; that is pathological by construction.)
- */
-export const ANSWER_SCAN_CHARS = 4 * PREVIEW_ANSWER_MAX;
-
-/** Basename of a workspace path — same rule as MessageList's private twin. */
-export function basenameOf(path: string): string {
-  const trimmed = path.replace(/[/\\]+$/, "");
-  const segments = trimmed.split(/[/\\]/);
-  return segments[segments.length - 1] || path;
-}
+export const PREVIEW_QUESTION_MAX = 240;
+/** aria-label budget: a screen-reader label stays short even when the popover shows 3 lines. */
+export const ARIA_LABEL_MAX = 80;
 
 /**
  * Collapse whitespace to single spaces and trim to <= `max` chars, cutting on
@@ -90,65 +72,18 @@ export function excerpt(text: string, max: number): string {
 }
 
 /**
- * Summarize ONE turn: the eligible `user_text` block at `userIndex` plus
- * every block after it up to `endExclusive` (the next eligible user block's
- * index, or blocks.length for the open tail turn). Answer text accrues into
- * `answerExcerpt` with the ANSWER_SCAN_CHARS cap applied DURING the walk —
- * once the budget is spent the turn's remaining `assistant_text` bodies are
- * skipped (a `slice` of at most the remaining budget is taken from a block
- * that would overflow it) — then the accumulator is excerpted once at the
- * end. Tool calls keep counting past the cap: the cap bounds the string,
- * not the turn's metadata.
+ * Summarize ONE turn: just the eligible `user_text` block's question excerpt
+ * (4742 dropped the answer/files/tool preview — the popover shows the query
+ * only, so the fold stops at the question and the answer-side scanning cost
+ * of the 4086-era preview is gone outright).
  */
 export function summarizeTurn(blocks: TranscriptBlock[], userIndex: number, endExclusive: number): UserTurnMark {
   const userBlock = blocks[userIndex] as Extract<TranscriptBlock, { kind: "user_text" }>;
-  const mark: UserTurnMark = {
+  return {
     id: userBlock.id,
     index: userIndex,
     questionExcerpt: excerpt(userBlock.text, PREVIEW_QUESTION_MAX),
-    answerExcerpt: "",
-    files: [],
-    toolCallCount: 0,
   };
-  let scanRemaining = ANSWER_SCAN_CHARS;
-  for (let i = userIndex + 1; i < endExclusive; i += 1) {
-    const block = blocks[i]!;
-    switch (block.kind) {
-      case "assistant_text": {
-        if (scanRemaining <= 0) {
-          break; // Cap spent — this turn's excerpt is final; skip the body.
-        }
-        // Take at most the remaining budget, even from one huge block (a
-        // hydrated history part can hold a whole message in one block).
-        const piece = block.text.length > scanRemaining ? block.text.slice(0, scanRemaining) : block.text;
-        mark.answerExcerpt = mark.answerExcerpt === "" ? piece : `${mark.answerExcerpt}\n${piece}`;
-        scanRemaining -= piece.length;
-        break;
-      }
-      case "tool_call": {
-        mark.toolCallCount += 1;
-        if (
-          (block.toolName === "Read" || block.toolName === "Write" || block.toolName === "Edit") &&
-          mark.files.length < PREVIEW_FILES_MAX
-        ) {
-          const input =
-            block.input !== null && typeof block.input === "object" ? (block.input as Record<string, unknown>) : null;
-          const path = input !== null && typeof input.file_path === "string" ? input.file_path : null;
-          if (path !== null) {
-            const base = basenameOf(path);
-            if (!mark.files.includes(base)) {
-              mark.files.push(base);
-            }
-          }
-        }
-        break;
-      }
-      default:
-        break;
-    }
-  }
-  mark.answerExcerpt = excerpt(mark.answerExcerpt, PREVIEW_ANSWER_MAX);
-  return mark;
 }
 
 /** Indices of blocks that OPEN a turn: `user_text` without system origin, in order. */
@@ -184,6 +119,26 @@ export interface UserTurnsSelector {
   (blocks: TranscriptBlock[]): UserTurnMark[];
   /** Indices whose summary the LAST call actually recomputed (test hook, 4086 brief §1). */
   readonly recomputed: readonly number[];
+}
+
+/**
+ * Taskana 4742: the raw user-turn texts in mark order (the SAME turn split
+ * `selectUserTurns` uses — system-origin blocks excluded) for
+ * `matchCheckpointsToTurns`, which derives each turn's checkpoint label
+ * from its full prompt text (checkpoint-model.ts mirrors core's
+ * `deriveCheckpointLabel`, which slices the label out of the first line of
+ * the RAW prompt — an excerpt would truncate differently and break the
+ * match). Order-aligned with the marks array by construction.
+ */
+export function rewindUserTurnTexts(blocks: TranscriptBlock[]): string[] {
+  const starts = userTurnStarts(blocks);
+  const texts: string[] = [];
+  for (let t = 0; t < starts.length; t += 1) {
+    const start = starts[t]!;
+    const block = blocks[start] as Extract<TranscriptBlock, { kind: "user_text" }>;
+    texts.push(block.text);
+  }
+  return texts;
 }
 
 interface CachedTurn {
@@ -254,9 +209,24 @@ export function createUserTurnsSelector(): UserTurnsSelector {
   return withHook;
 }
 
-/** The minimap only earns its chrome on real conversations: 3+ user turns. */
+/**
+ * The rail earns its gutter from the second user turn on (Taskana 4742: a
+ * single-question session is still "the conversation so far" — the first
+ * jump target is the top of the feed, so no rail is drawn and no gutter is
+ * reserved).
+ */
 export function shouldShowMinimap(turnCount: number): boolean {
-  return turnCount >= 3;
+  return turnCount >= 2;
+}
+
+/**
+ * Taskana 4742: number of eligible user turns (same rule as
+ * `selectUserTurns` — system-origin `user_text` blocks excluded). A cheap
+ * counting variant for owners that only need the rail's visibility gate /
+ * refresh trigger, without building mark objects.
+ */
+export function countUserTurns(blocks: TranscriptBlock[]): number {
+  return userTurnStarts(blocks).length;
 }
 
 /** Clamp a candidate mark index into range; `null` (nothing visible yet) stays `null`. */
@@ -272,11 +242,74 @@ export function activeMarkIndex(marks: UserTurnMark[], topmostVisibleUserIndex: 
 }
 
 /**
- * Roving-tabindex key handler (4086 brief §3) — pure for unit tests. Up/Down
- * move the minimap's single tab stop between dots (clamped at the edges),
- * Home/End jump to the first/last dot; every other key (Tab included) is a
- * no-op so the browser keeps ownership of focus traversal into/out of the
- * minimap. Returns the next roving index.
+ * Tick length class (Taskana 4742 §2.2): the ACTIVE tick renders longer and
+ * brighter than its neighbors — `"active"` vs `"normal"` class suffix for
+ * the CSS width/color pair. Pure so the rail's visual contract is pinnable
+ * without a DOM.
+ */
+export function tickLengthFor(index: number, activeIndex: number | null): "active" | "normal" {
+  return index === activeIndex ? "active" : "normal";
+}
+
+/**
+ * Popover open-state reducer (Taskana 4742 §2.2) — pure, testable without a
+ * DOM. The popover must stay open while the pointer moves from the tick into
+ * the popover itself (the Rewind button lives there), so "open" is
+ * "hovered tick OR pointer inside popover OR focus within the rail/popover"
+ * with a short close delay that a re-enter cancels. Inputs:
+ *  - `enterTick(i)` / `leaveTick` — pointer over a tick button;
+ *  - `enterPopover` / `leavePopover` — pointer inside the popover card;
+ *  - `focusTick(i)` / `blurTick` — keyboard focus moves (focus also opens
+ *    its own popover);
+ *  - `closeNow` — Esc: immediate close, no delay.
+ */
+export type PopoverEvent =
+  | { kind: "enterTick"; index: number }
+  | { kind: "leaveTick" }
+  | { kind: "enterPopover" }
+  | { kind: "leavePopover" }
+  | { kind: "focusTick"; index: number }
+  | { kind: "blurTick" }
+  | { kind: "closeNow" };
+
+export interface PopoverState {
+  /** Index of the tick whose popover is open, or null (closed). */
+  openIndex: number | null;
+  /** True when the pending-close timer is armed and a re-enter must cancel it. */
+  closing: boolean;
+}
+
+export function nextOpenState(state: PopoverState, event: PopoverEvent, markCount: number): PopoverState {
+  const inRange = (index: number): boolean => index >= 0 && index < markCount;
+  switch (event.kind) {
+    case "enterTick":
+      return { openIndex: inRange(event.index) ? event.index : state.openIndex, closing: false };
+    case "focusTick":
+      return { openIndex: inRange(event.index) ? event.index : state.openIndex, closing: false };
+    case "enterPopover":
+      return { openIndex: state.openIndex, closing: false };
+    case "leaveTick":
+      // Arm the close delay: the pointer may be headed for the popover.
+      return { openIndex: state.openIndex, closing: true };
+    case "leavePopover":
+      return { openIndex: state.openIndex, closing: true };
+    case "blurTick":
+      // Focus left the tick — if it moved into the popover the subsequent
+      // focus event keeps it open; otherwise the delay closes it.
+      return { openIndex: state.openIndex, closing: true };
+    case "closeNow":
+      return { openIndex: null, closing: false };
+  }
+}
+
+/**
+ * Roving-tabindex key handler (4086 brief §3, unchanged by 4742) — pure for
+ * unit tests. Up/Down move the rail's single tab stop between ticks
+ * (clamped at the edges), Home/End jump to the first/last tick; every other
+ * key (Tab included) is a no-op so the browser keeps ownership of focus
+ * traversal into/out of the rail (Tab from a tick lands on the popover's
+ * buttons when a popover with actions is open — DOM order below guarantees
+ * that). Returns the next roving index.
  */
 export function rovingIndexFromKey(key: string, current: number, count: number): number {
   if (count <= 1) {
@@ -297,38 +330,110 @@ export function rovingIndexFromKey(key: string, current: number, count: number):
 }
 
 /**
- * `aria-describedby` value linking a dot to the preview card (4086 §3): the
- * hovered/focused dot references the live preview, every other dot gets
- * `undefined` (React omits the attribute). Pure so the link is pinnable
- * without a DOM.
+ * `aria-describedby` value linking a tick to the popover's query text
+ * (4086 §3): the hovered/focused tick references the live popover, every
+ * other tick gets `undefined` (React omits the attribute). Pure so the link
+ * is pinnable without a DOM.
  */
 export function markDescribedBy(hovered: number | null, index: number, previewId: string): string | undefined {
   return hovered === index ? previewId : undefined;
+}
+
+/** The popover's "Message N of M" small-label text (4742 §2.2). */
+export function popoverCounterText(index: number, total: number): string {
+  return `Message ${index + 1} of ${total}`;
+}
+
+export interface RailRewindProps {
+  /** Matched checkpoint id per mark index (null = no checkpoint for that turn). */
+  checkpointIds: readonly (string | null)[];
+  /** Sends the rewind_request (App wires send(buildRewindRequest(...))). */
+  onRewind(checkpointId: string): void;
 }
 
 export function TranscriptMinimap({
   marks,
   activeIndex,
   onJump,
+  rewind,
 }: {
   marks: UserTurnMark[];
   activeIndex: number | null;
   onJump: (blockId: string) => void;
+  /**
+   * Taskana 4742 §2.5: optional rewind plumbing. Absent (child panes,
+   * existing tests, engines without supportsRewind) -> no Rewind buttons at
+   * all, popover stays a pure tooltip.
+   */
+  rewind?: RailRewindProps;
 }): ReactElement | null {
   // App gates visibility with shouldShowMinimap; stay defensive anyway.
-  const [hovered, setHovered] = useState<number | null>(null);
-  // Roving tabindex (4086 §3): exactly ONE tab stop for the whole minimap
-  // (the pill is one navigation landmark, not a dot-per-Tab ladder). The dot
-  // holding the stop moves with Up/Down/Home/End (see handleMinimapKeys);
-  // dots off the stop keep tabIndex={-1} but stay clickable and focusable by
-  // script. Clamped defensively — marks only grow in practice, but a rewind
-  // can shrink the list under a stale roving index.
+  const [popover, setPopover] = useState<PopoverState>({ openIndex: null, closing: false });
+  const [pendingConfirm, setPendingConfirm] = useState(false);
+  const closeTimerRef = useRef<number | null>(null);
+  // Roving tabindex (4086 §3): exactly ONE tab stop for the whole rail.
+  // The tick holding the stop moves with Up/Down/Home/End (see
+  // handleRailKeys); ticks off the stop keep tabIndex={-1} but stay clickable
+  // and focusable by script. Clamped defensively — marks only grow in
+  // practice, but a rewind can shrink the list under a stale roving index.
   const [roving, setRoving] = useState(0);
   const rovingIndex = Math.min(roving, marks.length - 1);
   const listRef = useRef<HTMLDivElement | null>(null);
-  // Preview-card id for the aria-describedby link. useId (not the mark index)
-  // so the link is stable across reordering/compaction of marks.
+  // Popover-text id for the aria-describedby link. useId (not the mark
+  // index) so the link is stable across reordering/compaction of marks.
   const previewId = `minimap-preview-${useId()}`;
+  const openIndex = popover.openIndex !== null && marks[popover.openIndex] !== undefined ? popover.openIndex : null;
+  const openMark = openIndex !== null ? marks[openIndex]! : null;
+  // railActionsFor (checkpoint-model.ts) gates the Rewind button: engine
+  // capability + matched checkpoint + non-read-only list.
+  const openCheckpointId = rewind !== undefined && openIndex !== null ? rewind.checkpointIds[openIndex] ?? null : null;
+  const actions = railActionsFor(openCheckpointId, rewind !== undefined);
+  const canRewind = actions.canRewind;
+
+  const clearCloseTimer = useCallback((): void => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  const applyPopoverEvent = useCallback(
+    (event: PopoverEvent): void => {
+      setPopover((prev) => {
+        const next = nextOpenState(prev, event, marks.length);
+        if (next.closing && !prev.closing) {
+          // Arm the close delay: a re-enter (tick or popover) cancels it; if
+          // it fires, the popover closes.
+          clearCloseTimer();
+          closeTimerRef.current = window.setTimeout(() => {
+            closeTimerRef.current = null;
+            setPopover((still) => (still.closing ? { openIndex: null, closing: false } : still));
+          }, POPOVER_CLOSE_DELAY_MS);
+        } else if (!next.closing && prev.closing) {
+          clearCloseTimer();
+        }
+        return next;
+      });
+    },
+    [clearCloseTimer, marks.length],
+  );
+
+  // Reset a half-confirmed rewind when the popover closes or the marks list
+  // shrinks under it (a rewind truncates the transcript) — a stale confirm
+  // must never resurrect onto a different turn's popover (4742 §2.4).
+  useEffect(() => {
+    if (openIndex === null) {
+      setPendingConfirm(false);
+    }
+  }, [openIndex]);
+  useEffect(() => {
+    if (popover.openIndex !== null && popover.openIndex >= marks.length) {
+      setPendingConfirm(false);
+    }
+  }, [marks.length, popover.openIndex]);
+  // Unmount: clear the pending close timer so it can never fire into a
+  // dead component.
+  useEffect(() => clearCloseTimer, [clearCloseTimer]);
 
   const focusMark = useCallback((index: number): void => {
     const list = listRef.current;
@@ -338,8 +443,17 @@ export function TranscriptMinimap({
     list.querySelector<HTMLButtonElement>(`[data-mark-index="${index}"]`)?.focus();
   }, []);
 
-  const handleMinimapKeys = useCallback(
+  const handleRailKeys = useCallback(
     (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+      if (event.key === "Escape" && openIndex !== null) {
+        // Esc closes the popover and returns focus to its tick.
+        event.preventDefault();
+        applyPopoverEvent({ kind: "closeNow" });
+        if (openIndex !== null) {
+          focusMark(openIndex);
+        }
+        return;
+      }
       const next = rovingIndexFromKey(event.key, rovingIndex, marks.length);
       // Home/End are claimed even when they'd be a no-move, so their default
       // (page scroll) never fires while the roving stop is held; a no-move
@@ -351,65 +465,115 @@ export function TranscriptMinimap({
       setRoving(next);
       focusMark(next);
     },
-    [focusMark, marks.length, rovingIndex],
+    [applyPopoverEvent, focusMark, marks.length, openIndex, rovingIndex],
   );
+
+  const handleRewindConfirm = useCallback((): void => {
+    if (openCheckpointId === null) {
+      return;
+    }
+    rewind?.onRewind(openCheckpointId);
+    setPendingConfirm(false);
+    applyPopoverEvent({ kind: "closeNow" });
+  }, [applyPopoverEvent, openCheckpointId, rewind]);
 
   if (marks.length === 0) {
     return null;
   }
+
+  // The popover renders as the NEXT DOM sibling AFTER the tick column's
+  // buttons (4742 §2.2 keyboard): Tab from the focused tick lands on the
+  // Rewind button first, then leaves the rail — no explicit focus
+  // management needed for the common order.
+  let popoverNode: ReactNode = null;
+  if (openMark !== null) {
+    popoverNode = (
+      <div
+        className="minimap-preview"
+        // 4742 §2.2: role=tooltip ONLY for the query text; when actions
+        // exist the popover container is a labeled group so its buttons sit
+        // in a real named container. A tooltip role must not own focusable
+        // buttons.
+        {...(canRewind ? { role: "group" as const, "aria-label": popoverCounterText(openIndex!, marks.length) + " actions" } : { role: "tooltip" as const, id: previewId })}
+        onMouseEnter={() => applyPopoverEvent({ kind: "enterPopover" })}
+        onMouseLeave={() => applyPopoverEvent({ kind: "leavePopover" })}
+      >
+        <div className="minimap-preview-counter">{popoverCounterText(openIndex!, marks.length)}</div>
+        {/* The query text: plain text node only (no markup from user text).
+            aria-describedby points here — via the outer tooltip's id in the
+            no-action case, or this element's own id when actions exist and
+            the outer container is a labeled group. */}
+        <div className="minimap-preview-question" id={canRewind ? previewId : undefined}>
+          {openMark.questionExcerpt === "" ? "…" : openMark.questionExcerpt}
+        </div>
+        {canRewind && (
+          <div className="minimap-preview-actions">
+            {pendingConfirm ? (
+              <>
+                <span className="minimap-preview-confirm-text">
+                  Rewind to this checkpoint? Files and conversation after it are discarded.
+                </span>
+                <div className="minimap-preview-confirm-buttons">
+                  <button type="button" className="minimap-preview-confirm-cancel" onClick={() => setPendingConfirm(false)}>
+                    Cancel
+                  </button>
+                  <button type="button" className="minimap-preview-confirm-confirm" onClick={handleRewindConfirm}>
+                    Rewind
+                  </button>
+                </div>
+              </>
+            ) : (
+              <button type="button" className="minimap-preview-rewind" onClick={() => setPendingConfirm(true)}>
+                Rewind to before this message
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
-    // Two layers on purpose: the outer pill never clips (the hover preview is
-    // an absolutely-positioned child and an overflow box would hide it), and
-    // only the inner dot list scrolls once the pill hits its max-height.
     <div
       className="minimap"
       role="navigation"
       aria-label="Conversation turns"
       ref={listRef}
-      onKeyDown={handleMinimapKeys}
+      onKeyDown={handleRailKeys}
     >
+      {/* Two layers on purpose: the outer rail never clips (the popover is an
+          absolutely-positioned child and an overflow box would hide it), and
+          only this inner tick list scrolls once it hits its max-height. */}
       <div className="minimap-marks">
       {marks.map((mark, i) => (
         <button
           type="button"
           key={mark.id}
-          className={"minimap-mark" + (i === activeIndex ? " minimap-mark-active" : "")}
+          className={"minimap-mark" + (tickLengthFor(i, activeIndex) === "active" ? " minimap-mark-active" : "")}
           data-mark-index={i}
           data-mark-block-id={mark.id}
-          aria-label={`Turn ${i + 1}: ${mark.questionExcerpt}`}
-          aria-describedby={markDescribedBy(hovered, i, previewId)}
+          aria-label={`Turn ${i + 1}: ${excerpt(mark.questionExcerpt, ARIA_LABEL_MAX)}`}
+          aria-describedby={markDescribedBy(openIndex, i, previewId)}
           tabIndex={i === rovingIndex ? 0 : -1}
-          onMouseEnter={() => setHovered(i)}
-          onMouseLeave={() => setHovered(null)}
+          onMouseEnter={() => applyPopoverEvent({ kind: "enterTick", index: i })}
+          onMouseLeave={() => applyPopoverEvent({ kind: "leaveTick" })}
           onFocus={() => {
-            setHovered(i);
+            applyPopoverEvent({ kind: "focusTick", index: i });
             // Keep the roving stop in sync with script/causal focus (a click
-            // focuses the clicked dot; Tab re-entry resumes from it).
+            // focuses the clicked tick; Tab re-entry resumes from it).
             setRoving((prev) => (prev === i ? prev : i));
           }}
-          onBlur={() => setHovered(null)}
+          onBlur={() => applyPopoverEvent({ kind: "blurTick" })}
           onClick={() => onJump(mark.id)}
         >
           <span className="minimap-mark-dot" aria-hidden="true" />
         </button>
       ))}
       </div>
-      {hovered !== null && marks[hovered] !== undefined && (
-        <div className="minimap-preview" role="tooltip" id={previewId}>
-          <div className="minimap-preview-question">
-            {marks[hovered]!.questionExcerpt === "" ? "…" : marks[hovered]!.questionExcerpt}
-          </div>
-          <div className="minimap-preview-answer">
-            {marks[hovered]!.answerExcerpt === "" ? "No answer yet" : marks[hovered]!.answerExcerpt}
-          </div>
-          {marks[hovered]!.files.length > 0 && (
-            <div className="minimap-preview-files">{`Files: ${marks[hovered]!.files.join(" · ")}`}</div>
-          )}
-          <div className="minimap-preview-meta">{`${marks[hovered]!.toolCallCount} tool call${
-            marks[hovered]!.toolCallCount === 1 ? "" : "s"
-          }`}</div>
-        </div>
-      )}
+      {popoverNode}
     </div>
   );
 }
+
+/** Close delay for the popover (4742 §2.2): long enough to cross the gap into the popover, short enough to feel snappy. */
+export const POPOVER_CLOSE_DELAY_MS = 120;

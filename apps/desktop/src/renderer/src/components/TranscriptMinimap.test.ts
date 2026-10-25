@@ -1,36 +1,45 @@
 /**
- * TASK.48 / Taskana 4086 — tests for the transcript minimap. Same jsdom-free
- * discipline as ToolCallStack.test.ts: pure-logic units for the projection
- * (`selectUserTurns`/`summarizeTurn`/`excerpt`/`basenameOf`/
- * `shouldShowMinimap`/`activeMarkIndex`, the memoized
- * `createUserTurnsSelector`, the roving-index handler) plus
- * `renderToStaticMarkup` (react-dom/server) renders that pin the component's
- * DOM contract (mark buttons, active class, preview rows,
- * aria-describedby/roving-tabindex wiring) without touching any DOM API —
- * works under this package's plain "node" vitest environment.
+ * TASK.48 / Taskana 4086 + 4742 — tests for the transcript tick rail (the
+ * evolved TranscriptMinimap). Same jsdom-free discipline as
+ * ToolCallStack.test.ts: pure-logic units for the projection
+ * (`selectUserTurns`/`summarizeTurn`/`excerpt`, the memoized
+ * `createUserTurnsSelector`, the roving-index handler, the 4742 popover
+ * open-state reducer and tick-length/aria helpers) plus
+ * `renderToStaticMarkup` (react-dom/server) renders that pin the
+ * component's DOM contract (tick buttons, active class, popover plain-text
+ * query, rewind gating) without touching any DOM API — works under this
+ * package's plain "node" vitest environment.
  *
- * 4086 follow-up coverage (brief §4): incremental memoization (a streaming
- * update to the last turn must not recompute earlier turns — counted),
- * excerpt caps during the walk, and the roving-index key handler.
+ * 4086 follow-up coverage: incremental memoization (a streaming update to
+ * the last turn must not recompute earlier turns — counted), excerpt caps.
+ * 4742 coverage: threshold 2, question budget 240, short aria labels, and
+ * the hover/focus/close-delay popover state machine. The stateFUL wiring
+ * (hover -> popover -> rewind confirm -> onRewind) lives in
+ * TranscriptMinimap.harness.test.ts, the SettingsScreen.test.ts-style
+ * slot-backed-hooks harness — a separate file because its vi.mock("react")
+ * must be module-level, which would break this file's real-hook SSR renders.
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
-  ANSWER_SCAN_CHARS,
-  PREVIEW_ANSWER_MAX,
-  PREVIEW_FILES_MAX,
+  ARIA_LABEL_MAX,
+  POPOVER_CLOSE_DELAY_MS,
+  PREVIEW_QUESTION_MAX,
   TranscriptMinimap,
   activeMarkIndex,
-  basenameOf,
   createUserTurnsSelector,
   excerpt,
   markDescribedBy,
+  nextOpenState,
+  popoverCounterText,
   rovingIndexFromKey,
   selectUserTurns,
   shouldShowMinimap,
   summarizeTurn,
+  tickLengthFor,
+  type PopoverState,
   type UserTurnMark,
 } from "./TranscriptMinimap.js";
 import type { ToolCallBlock, TranscriptBlock } from "../store.js";
@@ -80,30 +89,12 @@ describe("excerpt", () => {
   });
 });
 
-describe("basenameOf", () => {
-  it("takes the last posix segment", () => {
-    expect(basenameOf("a/b/c.ts")).toBe("c.ts");
-  });
-
-  it("returns a bare filename as-is", () => {
-    expect(basenameOf("c.ts")).toBe("c.ts");
-  });
-
-  it("trims a trailing slash before splitting", () => {
-    expect(basenameOf("a/b/")).toBe("b");
-  });
-
-  it("splits windows separators too", () => {
-    expect(basenameOf("a\\b\\c.ts")).toBe("c.ts");
-  });
-});
-
 describe("selectUserTurns", () => {
   it("returns [] for an empty transcript", () => {
     expect(selectUserTurns([])).toEqual([]);
   });
 
-  it("splits turns at eligible user blocks and accrues answers/tools per turn", () => {
+  it("splits turns at eligible user blocks; the mark carries id/index/question only (4742 dropped the answer/files/tool preview)", () => {
     const blocks: TranscriptBlock[] = [
       mkUser("u1", "first question"),
       mkAssistant("a1", "first answer"),
@@ -113,13 +104,8 @@ describe("selectUserTurns", () => {
     ];
     const marks = selectUserTurns(blocks);
     expect(marks).toHaveLength(2);
-    expect(marks[0]!.id).toBe("u1");
-    expect(marks[0]!.files).toEqual(["a.ts"]);
-    expect(marks[0]!.answerExcerpt).toBe("first answer");
-    expect(marks[0]!.toolCallCount).toBe(1);
-    expect(marks[1]!.id).toBe("u2");
-    expect(marks[1]!.answerExcerpt).toBe("second answer");
-    expect(marks[1]!.files).toEqual([]);
+    expect(marks[0]).toEqual({ id: "u1", index: 0, questionExcerpt: "first question" });
+    expect(marks[1]).toEqual({ id: "u2", index: 3, questionExcerpt: "second question" });
   });
 
   it("system-origin user blocks do not open (nor close) a turn", () => {
@@ -132,55 +118,7 @@ describe("selectUserTurns", () => {
     ];
     const marks = selectUserTurns(blocks);
     expect(marks).toHaveLength(2);
-    // The system block's following assistant text accrues to the OPEN turn.
-    // (answerExcerpt is the whitespace-collapsed excerpt, so the "\n" join
-    // renders as a single space.)
-    expect(marks[0]!.answerExcerpt).toBe("part one part two");
-    expect(marks[1]!.answerExcerpt).toBe("");
-  });
-
-  it("a turn with no answer yet has answerExcerpt === ''", () => {
-    const marks = selectUserTurns([mkUser("u1", "q"), mkUser("u2", "q2"), mkAssistant("a", "late")]);
-    expect(marks[0]!.answerExcerpt).toBe("");
-    expect(marks[1]!.answerExcerpt).toBe("late");
-  });
-
-  it("files: distinct basenames, first-appearance order, capped at PREVIEW_FILES_MAX", () => {
-    const paths = ["p/1.ts", "p/2.ts", "p/3.ts", "p/4.ts", "p/5.ts", "p/6.ts", "p/7.ts", "p/8.ts"];
-    const blocks: TranscriptBlock[] = [
-      mkUser("u1", "q"),
-      ...paths.map((file_path, i) =>
-        mkTool({ id: `t${i}`, toolCallId: `t${i}`, toolName: "Read", input: { file_path } }),
-      ),
-    ];
-    const marks = selectUserTurns(blocks);
-    expect(marks[0]!.files).toHaveLength(PREVIEW_FILES_MAX);
-    expect(marks[0]!.files).toEqual(["1.ts", "2.ts", "3.ts", "4.ts", "5.ts", "6.ts"]);
-    // toolCallCount still counts the tools the file cap stopped tracking.
-    expect(marks[0]!.toolCallCount).toBe(8);
-  });
-
-  it("files: Write/Edit recognized, Grep/Bash ignored, duplicates and non-string file_path ignored", () => {
-    const blocks: TranscriptBlock[] = [
-      mkUser("u1", "q"),
-      mkTool({ id: "w1", toolCallId: "w1", toolName: "Write", input: { file_path: "src/x.ts", content: "" } }),
-      mkTool({ id: "e1", toolCallId: "e1", toolName: "Edit", input: { file_path: "src/x.ts", old_string: "a", new_string: "b" } }),
-      mkTool({ id: "g1", toolCallId: "g1", toolName: "Grep", input: { pattern: "x", path: "src" } }),
-      mkTool({ id: "b1", toolCallId: "b1", toolName: "Bash", input: { command: "ls" } }),
-      mkTool({ id: "r1", toolCallId: "r1", toolName: "Read", input: { file_path: 42 } }),
-    ];
-    const marks = selectUserTurns(blocks);
-    expect(marks[0]!.files).toEqual(["x.ts"]);
-    expect(marks[0]!.toolCallCount).toBe(5);
-  });
-
-  it("toolCallCount counts proposed/running calls too (a live turn's tools are part of its story)", () => {
-    const blocks: TranscriptBlock[] = [
-      mkUser("u1", "q"),
-      mkTool({ id: "p1", toolCallId: "p1", status: "proposed" }),
-      mkTool({ id: "r1", toolCallId: "r1", status: "running" }),
-    ];
-    expect(selectUserTurns(blocks)[0]!.toolCallCount).toBe(2);
+    expect(marks.map((m) => m.id)).toEqual(["u1", "u2"]);
   });
 
   it("marks preserve source order and carry the user block's id verbatim", () => {
@@ -195,63 +133,16 @@ describe("selectUserTurns", () => {
     expect(marks.map((m) => m.index)).toEqual([1, 3]);
   });
 
-  it("answer excerpts are capped at PREVIEW_ANSWER_MAX even for a huge answer", () => {
-    const paragraph = "word ".repeat(50); // 250 chars
-    const blocks: TranscriptBlock[] = [
-      mkUser("u1", "q"),
-      ...Array.from({ length: 40 }, (_, i) => mkAssistant(`a${i}`, paragraph)), // 10k chars
-    ];
-    const mark = selectUserTurns(blocks)[0]!;
-    expect(mark.answerExcerpt.length).toBeLessThanOrEqual(PREVIEW_ANSWER_MAX);
-    expect(mark.answerExcerpt.endsWith("…")).toBe(true);
+  it("question excerpts are capped at PREVIEW_QUESTION_MAX (240) even for a huge prompt", () => {
+    const huge = "word ".repeat(100); // 500 chars
+    const mark = selectUserTurns([mkUser("u1", huge)])[0]!;
+    expect(mark.questionExcerpt.length).toBeLessThanOrEqual(PREVIEW_QUESTION_MAX);
+    expect(mark.questionExcerpt.endsWith("…")).toBe(true);
   });
 
-  it("tool metadata past the answer-text cap is still tracked (the cap bounds the string, not the turn)", () => {
-    const big = "x".repeat(ANSWER_SCAN_CHARS); // exhausts the scan budget in one block
-    const blocks: TranscriptBlock[] = [
-      mkUser("u1", "q"),
-      mkAssistant("a1", big),
-      mkTool({ id: "t1", toolCallId: "t1", toolName: "Read", input: { file_path: "src/late.ts" } }),
-      mkAssistant("a2", "never scanned"),
-    ];
-    const mark = selectUserTurns(blocks)[0]!;
-    expect(mark.toolCallCount).toBe(1);
-    expect(mark.files).toEqual(["late.ts"]);
-    expect(mark.answerExcerpt.length).toBeLessThanOrEqual(PREVIEW_ANSWER_MAX);
-  });
-});
-
-describe("summarizeTurn (excerpt caps during the walk)", () => {
-  it("stops scanning assistant text after ANSWER_SCAN_CHARS raw chars but keeps counting tool calls", () => {
-    // 100 blocks x 10 chars = 1000 raw chars > ANSWER_SCAN_CHARS (800): the
-    // walk stops scanning after the budget, but the collapsed remainder is
-    // still far past the excerpt cap, so the final excerpt is identical to
-    // an uncapped walk's.
-    const ten = "0123456789";
-    const scannedAll = summarizeTurn(
-      [mkUser("u1", "q"), ...Array.from({ length: 100 }, (_, i) => mkAssistant(`a${i}`, ten))],
-      0,
-      101,
-    );
-    // The accumulator holds 1000 raw chars; the final excerpt is the capped,
-    // ellipsis-terminated prefix: 18 whole "0123456789" groups + "…" (the
-    // word-boundary cut trims the partial 19th group to the last full word).
-    expect(scannedAll.answerExcerpt.length).toBeLessThanOrEqual(PREVIEW_ANSWER_MAX);
-    expect(scannedAll.answerExcerpt.endsWith("…")).toBe(true);
-    expect(scannedAll.answerExcerpt.startsWith("0123456789")).toBe(true);
-    expect(scannedAll.answerExcerpt).toBe(`${Array.from({ length: 18 }, () => "0123456789").join(" ")}…`);
-
-    // Now ONE block larger than the budget: the walk must take at most
-    // ANSWER_SCAN_CHARS from it (slice, never the whole body).
-    const huge = "y".repeat(ANSWER_SCAN_CHARS * 3);
-    const capped = summarizeTurn([mkUser("u1", "q"), mkAssistant("a1", huge)], 0, 2);
-    expect(capped.answerExcerpt).toBe("y".repeat(PREVIEW_ANSWER_MAX - 1) + "…");
-  });
-
-  it("a single huge hydrated block is sliced to the budget, not copied whole", () => {
-    const huge = "z".repeat(50_000);
-    const mark = summarizeTurn([mkUser("u1", "q"), mkAssistant("a1", huge)], 0, 2);
-    expect(mark.answerExcerpt.length).toBe(PREVIEW_ANSWER_MAX);
+  it("summarizeTurn folds ONLY the question (no answer scan — 4742 popover is query-only)", () => {
+    const mark = summarizeTurn([mkUser("u1", "q"), mkAssistant("a1", "answer body"), mkTool({})], 0, 3);
+    expect(mark).toEqual({ id: "u1", index: 0, questionExcerpt: "q" });
   });
 });
 
@@ -288,10 +179,9 @@ describe("createUserTurnsSelector (incremental memoization)", () => {
     );
     const marks = selector(streamed);
     expect(selector.recomputed).toEqual([2]);
-    // The reprojection is visible in the output, the earlier turns are reused verbatim.
-    expect(marks[2]!.answerExcerpt).toContain("more streamed text");
-    expect(marks[0]!.answerExcerpt).toBe("first answer");
-    expect(marks[1]!.answerExcerpt).toBe("second answer");
+    // The earlier turns are reused verbatim.
+    expect(marks[0]!.questionExcerpt).toBe("first question");
+    expect(marks[1]!.questionExcerpt).toBe("second question");
 
     // Another delta to the same tail: still only the streamed turn.
     const streamed2 = streamed.map((block) =>
@@ -299,17 +189,6 @@ describe("createUserTurnsSelector (incremental memoization)", () => {
     );
     selector(streamed2);
     expect(selector.recomputed).toEqual([2]);
-  });
-
-  it("a newly appended block to the open turn invalidates only that turn", () => {
-    const selector = createUserTurnsSelector();
-    const blocks = threeTurnBlocks();
-    selector(blocks);
-    const appended = [...blocks, mkTool({ id: "t9", toolCallId: "t9", toolName: "Read", input: { file_path: "x.ts" } })];
-    const marks = selector(appended);
-    expect(selector.recomputed).toEqual([2]);
-    expect(marks[2]!.toolCallCount).toBe(1);
-    expect(marks[2]!.files).toEqual(["x.ts"]);
   });
 
   it("a NEW user turn reuses every earlier turn's summary", () => {
@@ -336,16 +215,28 @@ describe("createUserTurnsSelector (incremental memoization)", () => {
     );
     const marks = selector(edited);
     expect(selector.recomputed).toEqual([0]);
-    expect(marks[0]!.answerExcerpt).toBe("edited first answer");
+    expect(marks[0]!.questionExcerpt).toBe("first question");
   });
 
-  it("an identical-repeat input reuses marks without recomputing anything", () => {
+  it("never serves a stale preview: question edits, rewinds", () => {
     const selector = createUserTurnsSelector();
-    const blocks = threeTurnBlocks();
-    const first = selector(blocks);
-    const second = selector(blocks);
-    expect(selector.recomputed).toEqual([]);
-    expect(second).toEqual(first);
+    const blocks: TranscriptBlock[] = [
+      mkUser("u1", "first question"),
+      mkAssistant("a1", "first answer"),
+      mkUser("u2", "second question"),
+      mkUser("u3", "third question"),
+    ];
+    selector(blocks);
+    // The open tail turn's QUESTION is edited in place (the turn has no answer, so the
+    // user block itself closes the range).
+    const questionEdited = blocks.map((b) => (b.id === "u3" ? { ...b, text: "edited third" } : b)) as TranscriptBlock[];
+    expect(selector(questionEdited)[2]!.questionExcerpt).toBe("edited third");
+    // Rewind to before turn 2 and ask again: the dropped turn's summary is gone.
+    const rewound = [...questionEdited.slice(0, 2), mkUser("u2b", "second, rephrased")];
+    const marks = selector(rewound);
+    expect(marks.map((m) => m.id)).toEqual(["u1", "u2b"]);
+    expect(marks[1]!.questionExcerpt).toBe("second, rephrased");
+    expect(selector(rewound)).toEqual(selectUserTurns(rewound));
   });
 
   it("independent selectors do not share a memo (two tabs)", () => {
@@ -359,35 +250,6 @@ describe("createUserTurnsSelector (incremental memoization)", () => {
     // a's cache is untouched by b's call — its last run recomputed nothing.
     a(blocks);
     expect(a.recomputed).toEqual([]);
-  });
-
-  it("never serves a stale preview: non-closing edits, same-length replacements, question edits, rewinds", () => {
-    const selector = createUserTurnsSelector();
-    const blocks: TranscriptBlock[] = [
-      mkUser("u1", "first question"),
-      mkTool({ id: "t1", toolCallId: "t1", toolName: "Read", input: { file_path: "old.ts" } }),
-      mkAssistant("a1", "first answer"),
-      mkUser("u2", "second question"),
-      mkAssistant("a2", "abcd"),
-      mkUser("u3", "third question"),
-    ];
-    selector(blocks);
-    // A NON-closing block of turn 0 changes (its tool input): turn 0 must reproject.
-    const toolEdited = blocks.map((b) => (b.id === "t1" ? { ...b, input: { file_path: "new.ts" } } : b)) as TranscriptBlock[];
-    expect(selector(toolEdited)[0]!.files).toEqual(["new.ts"]);
-    // A same-length replacement of the closing text (no length change to key on).
-    const sameLength = toolEdited.map((b) => (b.id === "a2" ? { ...b, text: "wxyz" } : b)) as TranscriptBlock[];
-    expect(selector(sameLength)[1]!.answerExcerpt).toBe("wxyz");
-    // The open tail turn's QUESTION is edited in place (the turn has no answer, so the
-    // user block itself closes the range).
-    const questionEdited = sameLength.map((b) => (b.id === "u3" ? { ...b, text: "edited third" } : b)) as TranscriptBlock[];
-    expect(selector(questionEdited)[2]!.questionExcerpt).toBe("edited third");
-    // Rewind to turn 2 and ask again: the dropped turn's summary is gone.
-    const rewound = [...questionEdited.slice(0, 3), mkUser("u2b", "second, rephrased")];
-    const marks = selector(rewound);
-    expect(marks.map((m) => m.id)).toEqual(["u1", "u2b"]);
-    expect(marks[1]!.questionExcerpt).toBe("second, rephrased");
-    expect(selector(rewound)).toEqual(selectUserTurns(rewound));
   });
 
   it("agrees with selectUserTurns on a mixed transcript (memoization is unobservable)", () => {
@@ -412,15 +274,14 @@ describe("createUserTurnsSelector (incremental memoization)", () => {
   });
 });
 
-describe("shouldShowMinimap", () => {
-  it("hides below 3 turns", () => {
+describe("shouldShowMinimap (4742: threshold lowered 3 -> 2)", () => {
+  it("hides below 2 turns", () => {
     expect(shouldShowMinimap(0)).toBe(false);
     expect(shouldShowMinimap(1)).toBe(false);
-    expect(shouldShowMinimap(2)).toBe(false);
   });
 
-  it("shows from 3 turns up", () => {
-    expect(shouldShowMinimap(3)).toBe(true);
+  it("shows from 2 turns up", () => {
+    expect(shouldShowMinimap(2)).toBe(true);
     expect(shouldShowMinimap(10)).toBe(true);
   });
 });
@@ -445,18 +306,69 @@ describe("activeMarkIndex", () => {
   });
 });
 
+describe("tickLengthFor (4742: the active tick renders longer)", () => {
+  it("the active index gets 'active', everything else 'normal'", () => {
+    expect(tickLengthFor(1, 1)).toBe("active");
+    expect(tickLengthFor(0, 1)).toBe("normal");
+    expect(tickLengthFor(2, null)).toBe("normal");
+  });
+});
+
+describe("nextOpenState (4742 popover open-state machine)", () => {
+  const closed: PopoverState = { openIndex: null, closing: false };
+
+  it("hovering a tick opens its popover and cancels any pending close", () => {
+    const pending: PopoverState = { openIndex: 0, closing: true };
+    expect(nextOpenState(pending, { kind: "enterTick", index: 2 }, 3)).toEqual({ openIndex: 2, closing: false });
+    expect(nextOpenState(closed, { kind: "enterTick", index: 0 }, 3)).toEqual({ openIndex: 0, closing: false });
+  });
+
+  it("focusing a tick opens its popover (keyboard parity with hover)", () => {
+    expect(nextOpenState(closed, { kind: "focusTick", index: 1 }, 3)).toEqual({ openIndex: 1, closing: false });
+  });
+
+  it("leaving the tick arms the close delay but keeps the popover open (pointer may be headed for it)", () => {
+    expect(nextOpenState({ openIndex: 1, closing: false }, { kind: "leaveTick" }, 3)).toEqual({ openIndex: 1, closing: true });
+  });
+
+  it("entering the popover cancels the pending close (Rewind button is clickable)", () => {
+    expect(nextOpenState({ openIndex: 1, closing: true }, { kind: "enterPopover" }, 3)).toEqual({ openIndex: 1, closing: false });
+  });
+
+  it("leaving the popover re-arms the close delay", () => {
+    expect(nextOpenState({ openIndex: 1, closing: false }, { kind: "leavePopover" }, 3)).toEqual({ openIndex: 1, closing: true });
+  });
+
+  it("blurring a tick arms the delay (focus may be moving into the popover's buttons)", () => {
+    expect(nextOpenState({ openIndex: 1, closing: false }, { kind: "blurTick" }, 3)).toEqual({ openIndex: 1, closing: true });
+  });
+
+  it("closeNow (Esc) closes immediately with no delay", () => {
+    expect(nextOpenState({ openIndex: 1, closing: true }, { kind: "closeNow" }, 3)).toEqual({ openIndex: null, closing: false });
+  });
+
+  it("an out-of-range tick index cannot open a popover", () => {
+    expect(nextOpenState(closed, { kind: "enterTick", index: 5 }, 3)).toEqual({ openIndex: null, closing: false });
+    expect(nextOpenState(closed, { kind: "enterTick", index: -1 }, 3)).toEqual({ openIndex: null, closing: false });
+  });
+
+  it("POPOVER_CLOSE_DELAY_MS is the ~120ms brief value", () => {
+    expect(POPOVER_CLOSE_DELAY_MS).toBe(120);
+  });
+});
+
 describe("rovingIndexFromKey (roving-tabindex key handler)", () => {
-  it("ArrowDown moves down one, clamped at the last dot", () => {
+  it("ArrowDown moves down one, clamped at the last tick", () => {
     expect(rovingIndexFromKey("ArrowDown", 0, 5)).toBe(1);
     expect(rovingIndexFromKey("ArrowDown", 4, 5)).toBe(4);
   });
 
-  it("ArrowUp moves up one, clamped at the first dot", () => {
+  it("ArrowUp moves up one, clamped at the first tick", () => {
     expect(rovingIndexFromKey("ArrowUp", 3, 5)).toBe(2);
     expect(rovingIndexFromKey("ArrowUp", 0, 5)).toBe(0);
   });
 
-  it("Home/End jump to the first/last dot", () => {
+  it("Home/End jump to the first/last tick", () => {
     expect(rovingIndexFromKey("Home", 3, 5)).toBe(0);
     expect(rovingIndexFromKey("End", 0, 5)).toBe(4);
   });
@@ -468,40 +380,56 @@ describe("rovingIndexFromKey (roving-tabindex key handler)", () => {
     expect(rovingIndexFromKey("a", 2, 5)).toBe(2);
   });
 
-  it("a single-dot minimap pins the roving index at 0", () => {
+  it("a single-tick rail pins the roving index at 0", () => {
     expect(rovingIndexFromKey("ArrowDown", 0, 1)).toBe(0);
     expect(rovingIndexFromKey("End", 0, 1)).toBe(0);
   });
 });
 
 describe("markDescribedBy (aria-describedby link)", () => {
-  it("the hovered/focused dot references the preview; every other dot gets undefined", () => {
+  it("the open tick references the popover text; every other tick gets undefined", () => {
     expect(markDescribedBy(1, 1, "minimap-preview-r1")).toBe("minimap-preview-r1");
     expect(markDescribedBy(1, 0, "minimap-preview-r1")).toBeUndefined();
     expect(markDescribedBy(null, 0, "minimap-preview-r1")).toBeUndefined();
   });
 });
 
+describe("popoverCounterText (4742 'Message N of M' label)", () => {
+  it("is 1-based and names the total", () => {
+    expect(popoverCounterText(0, 3)).toBe("Message 1 of 3");
+    expect(popoverCounterText(2, 3)).toBe("Message 3 of 3");
+  });
+});
+
 describe("TranscriptMinimap (SSR component render)", () => {
-  function renderMinimap(props: { marks: UserTurnMark[]; activeIndex?: number | null }): string {
+  function renderMinimap(props: {
+    marks: UserTurnMark[];
+    activeIndex?: number | null;
+    rewind?: { checkpointIds: (string | null)[]; onRewind: (checkpointId: string) => void };
+  }): string {
     return renderToStaticMarkup(
-      createElement(TranscriptMinimap, { marks: props.marks, activeIndex: props.activeIndex ?? null, onJump: () => {} }),
+      createElement(TranscriptMinimap, {
+        marks: props.marks,
+        activeIndex: props.activeIndex ?? null,
+        onJump: () => {},
+        ...(props.rewind !== undefined ? { rewind: props.rewind } : {}),
+      }),
     );
   }
 
   const marks: UserTurnMark[] = [
-    { id: "u1", index: 0, questionExcerpt: "first question", answerExcerpt: "first answer", files: ["a.ts"], toolCallCount: 1 },
-    { id: "u2", index: 3, questionExcerpt: "second question", answerExcerpt: "", files: [], toolCallCount: 0 },
+    { id: "u1", index: 0, questionExcerpt: "first question" },
+    { id: "u2", index: 3, questionExcerpt: "second question" },
   ];
 
-  it("renders one .minimap-mark per mark with data-mark-index, data-mark-block-id and Turn aria-label", () => {
+  it("renders one .minimap-mark per mark with data-mark-index, data-mark-block-id and a Turn aria-label", () => {
     const html = renderMinimap({ marks });
-    expect((html.match(/class="minimap-mark(?:\s[^"]*)?"/g) ?? []).length).toBe(2);
+    expect((html.match(/class="minimap-mark(?:\s[^\"]*)?"/g) ?? []).length).toBe(2);
     expect(html).toContain('data-mark-index="0"');
     expect(html).toContain('data-mark-index="1"');
     expect(html).toContain('data-mark-block-id="u1"');
     expect(html).toContain('data-mark-block-id="u2"');
-    // A minimap button must never carry `data-block-id`: jumpToBlock and the
+    // A rail button must never carry `data-block-id`: jumpToBlock and the
     // automation block-count probe query that attribute across .message-list.
     expect(html).not.toMatch(/\sdata-block-id=/);
     expect(html).toContain('aria-label="Turn 1: first question"');
@@ -509,15 +437,23 @@ describe("TranscriptMinimap (SSR component render)", () => {
     expect(html).toContain('role="navigation"');
   });
 
-  it("roving tabindex: exactly ONE dot carries tabIndex=0, the rest -1", () => {
+  it("the aria label stays short (first ~80 chars) even for a 240-char question", () => {
+    const long = "w".repeat(300);
+    const html = renderMinimap({ marks: [{ id: "u1", index: 0, questionExcerpt: long }] });
+    const label = /aria-label="Turn 1: ([^"]*)"/.exec(html)![1]!;
+    expect(label.length).toBeLessThanOrEqual(ARIA_LABEL_MAX + "Turn 1: ".length + 1);
+    expect(label.length).toBeLessThanOrEqual(96);
+  });
+
+  it("roving tabindex: exactly ONE tick carries tabIndex=0, the rest -1", () => {
     const html = renderMinimap({ marks });
     expect((html.match(/tabindex="0"/g) ?? []).length).toBe(1);
     expect((html.match(/tabindex="-1"/g) ?? []).length).toBe(1);
-    // The first dot holds the stop initially.
+    // The first tick holds the stop initially.
     expect(html).toContain('tabindex="0"');
   });
 
-  it("the active mark carries minimap-mark-active", () => {
+  it("the active mark carries minimap-mark-active (the longer/brighter tick)", () => {
     const html = renderMinimap({ marks, activeIndex: 1 });
     expect(html).toContain('class="minimap-mark minimap-mark-active" data-mark-index="1"');
     expect(html).not.toContain('minimap-mark-active" data-mark-index="0"');
@@ -528,10 +464,11 @@ describe("TranscriptMinimap (SSR component render)", () => {
     expect(html.includes("minimap-mark")).toBe(false);
   });
 
-  it("no hover in static markup: no preview card, no aria-describedby", () => {
+  it("no hover in static markup: no popover, no aria-describedby, no rewind button", () => {
     const html = renderMinimap({ marks });
     expect(html).not.toContain("minimap-preview");
     expect(html).not.toContain("aria-describedby");
+    expect(html).not.toContain("Rewind");
   });
 
   it("dots live in a .minimap-marks scroll list inside the non-clipping .minimap shell", () => {

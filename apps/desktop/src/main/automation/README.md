@@ -1605,21 +1605,24 @@ See `apps/desktop/scripts/lsp-hooks-ui-smoke.mjs` for the reference wiring,
 including the live-push proof (polling `GET /panels/lsp` for an unsolicited
 server-state transition with no Refresh/driver action in between).
 
-### Checkpoint timeline / rewind probe+driver (slice P7.26/R2, W3)
+### Checkpoint timeline / rewind probe+driver (slice P7.26/R2, W3; Taskana 4742 rework)
 
-Mirrors `TimelinePanel.tsx` (`design/slice-P7.26-R2-ratification.md` §1 W3),
-same "no mirrored state" discipline as the LSP/hooks panel probes above — a
-closed panel reads as `visible:false, items:[]`, not an error; `ok:false` is
-reserved for the shared `tab_not_active` refusal. Unlike the LSP/hooks
-panels, the checkpoint list is fetched ON DEMAND only (no live push), so `GET
-/tabs/:tabId/checkpoints` — alone among the panel probes — actively opens the
-panel (or clicks its Refresh button if already open) and waits for the
-resulting `checkpoint_list` reply to land before returning, rather than
-reading whatever happens to already be there. `POST /tabs/:tabId/rewind`
-resolves its target checkpoint by an explicit `checkpointId`, OR by `index`
-into the CURRENT newest-first list (same order the panel itself renders in) —
+Reads the tab store's checkpoint slice (`design/slice-P7.26-R2-ratification.md`
+§1 W3), same "no mirrored state" discipline as the LSP/hooks panel probes
+above; `ok:false` is reserved for the shared `tab_not_active` refusal. The
+old TimelinePanel DOM panel is gone (Taskana 4742: rewind moved into the
+transcript tick rail's popover), so unlike the LSP/hooks panels — whose data
+streams in continuously — the checkpoint list is fetched ON DEMAND only (no
+live push): `GET /tabs/:tabId/checkpoints` requests a fresh checkpoint list
+(sends `checkpoint_list_request` over the tab's real send port, the same
+message the rail's refresh effect sends) and waits for the resulting
+`checkpoint_list` reply to replace the store's array before returning,
+rather than reading whatever happens to already be there. `POST
+/tabs/:tabId/rewind` resolves its target checkpoint by an explicit
+`checkpointId`, OR by `index` into the CURRENT newest-first list (the same
+order the removed panel's rows — and the tick rail's matching — use) —
 exactly one of the two must be given; dispatches the same `rewind_request`
-wire message the panel's own confirm button sends, waits for the `ok`/`err`
+wire message the rail's confirm button sends, waits for the `ok`/`err`
 reply to land, and returns the resulting `rewindState` (the tab's
 `lastRewindResult` plus the live rendered transcript-block count — the
 deterministic proof a conversation-restoring rewind actually truncated the

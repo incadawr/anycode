@@ -1599,10 +1599,11 @@ export function hooksPanelToggle(deps: HandlerDeps, tabId: string): Promise<unkn
 }
 
 // --- Checkpoint timeline / rewind probe+driver (design
-// slice-P7.26-R2-ratification.md §1 W3): thin wrappers over the frozen
-// facade contract, same discipline as the LSP/Hooks panel probes above — the
-// facade owns every guard (tab_not_active, checkpoint resolution), this
-// layer only forwards method + args. ---
+// slice-P7.26-R2-ratification.md §1 W3; Taskana 4742 rework — the DOM panel
+// is gone, the facade requests the fresh list itself): thin wrappers over
+// the frozen facade contract, same discipline as the LSP/Hooks panel probes
+// above — the facade owns every guard (tab_not_active, checkpoint
+// resolution), this layer only forwards method + args. ---
 
 export function checkpointPanelState(deps: HandlerDeps, tabId: string): Promise<unknown> {
   return deps.callFacade("checkpointPanelState", [tabId]);

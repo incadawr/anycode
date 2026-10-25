@@ -32,7 +32,7 @@ import { useContext, useEffect, useRef, useState } from "react";
 import { TabContext, useTabSend, useTabStore } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
 import type { ConnectionPhase, TurnState } from "../store.js";
-import { Collapse, Dot, Globe, History, Terminal } from "./icons.js";
+import { Collapse, Dot, Globe, Terminal } from "./icons.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
 import { browserAccessChipVisible, useBrowserAccessState } from "./BrowserAccessRow.js";
 import { usePreviewStore } from "../preview/preview-store.js";
@@ -133,15 +133,13 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
 
   const tab = useTabsStore((state) => state.tabs.find((t) => t.tabId === tabId));
   const terminalOpen = tab?.terminalOpen ?? false;
-  const timelinePanelOpen = tab?.timelinePanelOpen ?? false;
   const tasksPanelOpen = tab?.tasksPanelOpen ?? false;
   const title = tab?.title ?? (workspace ? basename(workspace) : "—");
   const worktree = tab?.worktree;
   const externalEngine = engine !== null;
-  const supportsRewind = engine?.capabilities.supportsRewind ?? true;
   // TASK.91: core-only drawer gate — `engine` is null before host_ready ⇒
   // default true; claude/codex advertise supportsTasks:false so the toggle
-  // disappears for them (mirrors supportsRewind's `?? true` posture).
+  // disappears for them.
   const supportsTasks = engine?.capabilities.supportsTasks ?? true;
   // TASK.91: third subscription — `data-running` badge on the toggle while
   // any background task of this tab is still live.
@@ -232,10 +230,6 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
     useTabsStore.getState().setTerminalOpen(tabId, !terminalOpen);
   }
 
-  function toggleTimelinePanel(): void {
-    useTabsStore.getState().setTimelinePanelOpen(tabId, !timelinePanelOpen);
-  }
-
   function toggleTasksPanel(): void {
     useTabsStore.getState().setTasksPanelOpen(tabId, !tasksPanelOpen);
   }
@@ -309,16 +303,6 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
         <Terminal />
       </button>}
 
-      <>{supportsRewind && <button
-        type="button"
-        className={`session-header-panel-toggle${timelinePanelOpen ? " session-header-panel-toggle-active" : ""}`}
-        aria-label="Toggle checkpoint timeline"
-        aria-pressed={timelinePanelOpen}
-        title="Timeline"
-        onClick={toggleTimelinePanel}
-      >
-        <History />
-      </button>}</>
 
       {previewMenuVisible && (
         <div ref={previewMenuRootRef} className="session-header-previews">

@@ -87,7 +87,8 @@ import { useDockStore as dockStore } from "./dock/dock-store.js";
 import { groupAlwaysAllowRules } from "./permission-rules.js";
 import { ruleDisplayPattern, ruleHasPattern, ruleRemoveAriaLabel } from "./components/PermissionsEditor.js";
 import { slashQueryAt } from "./slash-menu.js";
-import { sortCheckpointsNewestFirst } from "./components/TimelinePanel.js";
+import { formatCheckpointReason, sortCheckpointsNewestFirst } from "./components/checkpoint-model.js";
+import { formatAge } from "./components/Sidebar.js";
 import type { GitCommand, RewindScopeWire, UiToHostMessage, WireEnvStatus } from "../../shared/protocol.js";
 import type { CreateTabRequest, CreateTabResult, CloseTabResult, SessionSummary } from "../../shared/tabs.js";
 import { ENGINE_IDS, isEngineId, type EngineId } from "../../shared/engines.js";
@@ -2124,30 +2125,29 @@ export interface HooksPanelDom {
 
 /**
  * `checkpointPanelState`'s ok-shape (design slice-P7.26-R2-ratification.md §1
- * W3): a live DOM read of the mounted `TimelinePanel.tsx`, same "no mirrored
- * state" discipline as `LspPanelState`/`HooksPanelState` — `visible: false`
- * (with `items: []`) is a normal reading (the panel isn't toggled open for
- * this tab), NOT an error; `ok: false` is reserved for the one structural
- * refusal shared with `lspPanelState`/`hooksPanelState` (`tab_not_active` —
- * `TimelinePanel` only ever renders for the active tab, App.tsx). Unlike the
- * LSP/hooks panels (whose data streams in continuously via live wire events,
- * already resident in the session slice before the panel ever opens), the
- * checkpoint list is fetched ON DEMAND only (`checkpoint_list_request`, sent
- * from `TimelinePanel`'s own mount effect / Refresh button — ratification
- * §2.4; `checkpoint_created` events are deliberately snapshot-inert). So this
- * probe — alone among the panel-state probes — actively drives the SAME real
- * action a user would take (open the panel, or click Refresh if already
- * open) and waits for the resulting re-render to land, rather than reading
- * whatever happens to already be there.
+ * W3; Taskana 4742 rework): a live STORE read of the tab's `checkpoints`
+ * slice — same "no mirrored state" discipline as
+ * `LspPanelState`/`HooksPanelState`. The TimelinePanel DOM panel is gone
+ * (4742: rewind moved into the transcript tick rail's popover), so this
+ * probe no longer opens/clicks anything: it asks the host for a fresh list
+ * (`checkpoint_list_request` over the tab's real send port — the SAME
+ * message the rail's refresh effect sends) and waits for the resulting
+ * `checkpoint_list` to replace the store's array (a NEW array identity
+ * arrives even when the content is unchanged — the store replaces
+ * wholesale). The items keep the EXACT shape the old panel's DOM rows
+ * yielded (`{id,label,reason,age}`, newest-first, reason as the same
+ * human text, age via the same formatAge), so the automation wire contract
+ * (`GET /tabs/:id/checkpoints`) is byte-identical and `rewind-ui-smoke.mjs`
+ * needs no edits. `ok: false` stays reserved for the one structural refusal
+ * (`tab_not_active`).
  */
 export interface CheckpointTimelineRow {
   /**
-   * The checkpoint's own stable id (W3-FIX: `data-checkpoint-id`,
-   * TimelinePanel.tsx), the ONLY reliable row identity — every Write-triggered
-   * checkpoint's `label` is `deriveCheckpointLabel`'s first-64-chars-of-prompt
-   * truncation (core), so two rows commonly COLLIDE on an identical label; a
-   * caller diffing "which checkpoint is new" (e.g. a live smoke, post-rewind)
-   * must key on `id`, never `label`.
+   * The checkpoint's own stable id (W3-FIX), the ONLY reliable row identity —
+   * every Write-triggered checkpoint's `label` is `deriveCheckpointLabel`'s
+   * first-64-chars-of-prompt truncation (core), so two rows commonly COLLIDE
+   * on an identical label; a caller diffing "which checkpoint is new" (e.g. a
+   * live smoke, post-rewind) must key on `id`, never `label`.
    */
   id: string;
   label: string;
@@ -2159,22 +2159,6 @@ export interface CheckpointPanelState {
   ok: true;
   visible: boolean;
   items: CheckpointTimelineRow[];
-}
-
-/**
- * DOM accessor DI for the checkpoint-timeline panel probe (design §1 W3),
- * same injectable-for-tests discipline as `LspPanelDom`/`HooksPanelDom`.
- * `panel()` returns `null` when `<aside class="timeline-panel">` isn't in the
- * DOM at all (closed). `toggle()`/`refresh()` fire real `.click()`s on the
- * SessionHeader toggle button / the panel's own Refresh button — the exact
- * two controls that can make `TimelinePanel` (re)send a
- * `checkpoint_list_request` (its mount effect / its Refresh button — see that
- * file).
- */
-export interface CheckpointPanelDom {
-  panel(): { items: CheckpointTimelineRow[] } | null;
-  toggle(): void;
-  refresh(): void;
 }
 
 /**
@@ -2229,7 +2213,7 @@ export interface CheckpointRewindResult {
  * Deliberately its own tiny interface rather than extending `TranscriptDom`
  * (whose `ScrollContainer` return type exposes only scroll geometry, not
  * queryable DOM children) — same "one dedicated DI per probe" discipline as
- * `CheckpointPanelDom` above.
+ * the panel DOM accessors above.
  */
 export interface TranscriptBlockDom {
   count(tabId: string): number;
@@ -3150,14 +3134,15 @@ export interface AutomationFacade {
   hooksPanelState(tabId: string): HooksPanelState | FacadeErr;
   hooksPanelToggle(tabId: string): FacadeResult;
   // ── Checkpoint timeline / rewind probes+driver (design
-  // slice-P7.26-R2-ratification.md §1 W3) — `checkpointPanelState` actively
-  // drives the panel open/refreshed (see its doc comment above: unlike every
-  // other panel-state probe, the checkpoint list is on-demand-only, nothing
-  // to read until asked). `checkpointRewind` resolves its target checkpoint
-  // by explicit id or by newest-first index (mirrors TimelinePanel's own
-  // `sortCheckpointsNewestFirst`), dispatches the SAME `rewind_request`
-  // shape `TimelinePanel.confirmRewind` sends, and returns `rewindState`
-  // once the result lands. ──
+  // slice-P7.26-R2-ratification.md §1 W3; Taskana 4742 rework) —
+  // `checkpointPanelState` requests a fresh checkpoint list over the tab's
+  // real send port (see its doc comment above: the checkpoint list is
+  // on-demand-only, nothing to read until asked; the old TimelinePanel DOM
+  // panel is gone). `checkpointRewind` resolves its target checkpoint
+  // by explicit id or by newest-first index (the same
+  // `sortCheckpointsNewestFirst` order the removed panel's rows rendered),
+  // dispatches the SAME `rewind_request` shape the tick rail's confirm
+  // sends, and returns `rewindState` once the result lands. ──
   checkpointPanelState(tabId: string): Promise<CheckpointPanelState | FacadeErr>;
   rewindState(tabId: string): RewindStateResult | FacadeErr;
   checkpointRewind(
@@ -5296,43 +5281,6 @@ export function realHooksPanelDom(): HooksPanelDom {
 }
 
 /**
- * The real checkpoint-timeline-panel DOM accessor (design
- * slice-P7.26-R2-ratification.md §1 W3), same laziness/document-query
- * posture as `realLspPanelDom`/`realHooksPanelDom` above. `TimelinePanel.tsx`
- * mounts `<aside class="timeline-panel lsp-panel">` — queried by the
- * `timeline-panel` class alone (unlike `realLspPanelDom`'s `:not(...)`
- * exclusion, no other panel carries this class).
- */
-function realCheckpointPanelDom(): CheckpointPanelDom {
-  function aside(): HTMLElement | null {
-    return document.querySelector<HTMLElement>("aside.timeline-panel");
-  }
-  return {
-    panel() {
-      const el = aside();
-      if (!el) {
-        return null;
-      }
-      const items = Array.from(el.querySelectorAll(".timeline-row")).map((row) => ({
-        id: row.getAttribute("data-checkpoint-id") ?? "",
-        label: row.querySelector(".timeline-label")?.textContent ?? "",
-        reason: row.querySelector(".timeline-reason")?.textContent ?? "",
-        age: row.querySelector(".timeline-age")?.textContent ?? "",
-      }));
-      return { items };
-    },
-    toggle() {
-      document
-        .querySelector<HTMLButtonElement>('.session-header-panel-toggle[aria-label="Toggle checkpoint timeline"]')
-        ?.click();
-    },
-    refresh() {
-      document.querySelector<HTMLButtonElement>("aside.timeline-panel .lsp-panel-refresh")?.click();
-    },
-  };
-}
-
-/**
  * The real transcript-block-count DOM accessor for `rewindState` (design §1
  * W3), same exact-tabId match discipline as `realTranscriptDom` above (a
  * stray duplicate `.message-list[data-tab-id]` must refuse — count as 0 —
@@ -6152,7 +6100,7 @@ const SHORTCUTS_PANE_COMMIT_DEADLINE_MS = 500;
 /** Deadline for `shortcutsRemoveBinding`/`shortcutsReset`'s post-click settle polls (design §4 W4) — same rationale as `SKILLS_PANE_APPLY_DEADLINE_MS`: a real `setPatch` settings.json write round-tripped over IPC. */
 const SHORTCUTS_PANE_APPLY_DEADLINE_MS = 10_000;
 
-/** Deadline for `checkpointPanelState`'s post-open/refresh settle poll (design slice-P7.26-R2-ratification.md §1 W3) — same rationale as `MCP_PANE_SCAN_DEADLINE_MS`: a real host round-trip (`checkpoint_list_request` -> store read -> `checkpoint_list` reply), not a synchronous React click commit. */
+/** Deadline for `checkpointPanelState`'s post-request settle poll (design slice-P7.26-R2-ratification.md §1 W3; Taskana 4742 rework) — same rationale as `MCP_PANE_SCAN_DEADLINE_MS`: a real host round-trip (`checkpoint_list_request` -> store array replacement -> `checkpoint_list` reply), not a synchronous commit. */
 const CHECKPOINT_PANEL_LOAD_DEADLINE_MS = 3_000;
 
 /** Deadline for `checkpointRewind`'s post-send settle poll (design §1 W3) — longer than the other host-round-trip deadlines above: a rewind writes a mandatory safety checkpoint (shadow-git commit) AND restores files across a two-tree diff before the host ever replies. */
@@ -6753,7 +6701,6 @@ export function createAutomationFacade(
   shortcutsPaneDom: ShortcutsPaneDom = realShortcutsPaneDom(),
   lspPanelDom: LspPanelDom = realLspPanelDom(),
   hooksPanelDom: HooksPanelDom = realHooksPanelDom(),
-  checkpointPanelDom: CheckpointPanelDom = realCheckpointPanelDom(),
   transcriptBlockDom: TranscriptBlockDom = realTranscriptBlockDom(),
   tryAgainButtonDom: TryAgainButtonDom = realTryAgainButtonDom(),
   providerPaneDom: ProviderPaneDom = realProviderPaneDom(),
@@ -9867,29 +9814,36 @@ export function createAutomationFacade(
 
     async checkpointPanelState(tabId: string): Promise<CheckpointPanelState | FacadeErr> {
       // Same structural refusal as lspPanelState/hooksPanelState (design §1
-      // W3): TimelinePanel only ever renders for the active tab.
+      // W3): the checkpoint list is only readable for the active tab.
       if (tabsStore.getState().activeTabId !== tabId) {
         return { ok: false, reason: "tab_not_active" };
       }
-      const before = JSON.stringify(checkpointPanelDom.panel());
-      // The checkpoint list is on-demand-only (this method's own doc comment
-      // above) — open the panel if it's closed (its mount effect sends
-      // checkpoint_list_request), or click Refresh if it's already open
-      // (same request, forced fresh), then wait for the reply to land.
-      if (checkpointPanelDom.panel() === null) {
-        checkpointPanelDom.toggle();
-      } else {
-        checkpointPanelDom.refresh();
+      const store = registry.getStore(tabId);
+      if (!store) {
+        return { ok: false, reason: "unknown_tab" };
       }
-      await waitUntil(() => JSON.stringify(checkpointPanelDom.panel()) !== before, CHECKPOINT_PANEL_LOAD_DEADLINE_MS);
-      const panel = checkpointPanelDom.panel();
-      if (panel === null) {
-        // A valid reading, not an error: the toggle click somehow failed to
-        // mount the panel (should not happen — defensive parity with the
-        // other panel probes' "closed" reading).
-        return { ok: true, visible: false, items: [] };
-      }
-      return { ok: true, visible: true, items: panel.items };
+      // Taskana 4742: the TimelinePanel DOM panel is gone — request a fresh
+      // list directly (the SAME checkpoint_list_request the rail's refresh
+      // effect sends, over the tab's real send port) and wait for the
+      // store's `checkpoints` array to be REPLACED. The store replaces the
+      // array wholesale on every checkpoint_list (store.ts), so a new array
+      // identity arrives even when the content is unchanged — no
+      // content-compare needed, and no panel to click.
+      const before = store.getState().checkpoints;
+      registry.sendToTab(tabId, { type: "checkpoint_list_request" });
+      await waitUntil(() => store.getState().checkpoints !== before, CHECKPOINT_PANEL_LOAD_DEADLINE_MS);
+      // Same newest-first order the panel's rows (and rewind-ui-smoke's
+      // label matching) have always seen; same human reason text and the
+      // same formatAge the old rows rendered, so the wire contract is
+      // byte-identical.
+      const now = Date.now();
+      const items: CheckpointTimelineRow[] = sortCheckpointsNewestFirst(store.getState().checkpoints).map((checkpoint) => ({
+        id: checkpoint.id,
+        label: checkpoint.label,
+        reason: formatCheckpointReason(checkpoint.reason),
+        age: formatAge(checkpoint.createdAt, now),
+      }));
+      return { ok: true, visible: true, items };
     },
 
     rewindState(tabId: string): RewindStateResult | FacadeErr {
@@ -9912,8 +9866,9 @@ export function createAutomationFacade(
         if (args.index === undefined) {
           return { ok: false, reason: "checkpoint_not_specified" };
         }
-        // Same newest-first order TimelinePanel itself renders in (design §7
-        // — a TIMELINE, not wire/creation order).
+        // Same newest-first order the removed timeline panel's rows (and
+        // rewind-ui-smoke's label matching) have always seen (design §7 — a
+        // TIMELINE, not wire/creation order).
         const ordered = sortCheckpointsNewestFirst(store.getState().checkpoints);
         const target = ordered[args.index];
         if (!target) {
@@ -9926,9 +9881,10 @@ export function createAutomationFacade(
       // fires a rewind_result (design §1: "a non-silent refusal"), and two
       // concurrent rewinds must not satisfy each other's wait.
       const requestId = crypto.randomUUID();
-      // The SAME wire message TimelinePanel.confirmRewind sends (design §1
-      // W3) — buildRewindRequest is not reused directly since it hardcodes
-      // v1's `scope: "both"`, while this driver must exercise every scope.
+      // The SAME wire message the tick rail's rewind confirm sends (Taskana
+      // 4742; formerly TimelinePanel.confirmRewind) — built inline rather
+      // than via buildRewindRequest since that hardcodes v1's `scope:
+      // "both"`, while this driver must exercise every scope.
       const message: UiToHostMessage = { type: "rewind_request", requestId, checkpointId, scope: args.scope };
       registry.sendToTab(tabId, message);
       const settled = await waitUntil(() => store.getState().lastRewindResult?.requestId === requestId, REWIND_SETTLE_DEADLINE_MS);

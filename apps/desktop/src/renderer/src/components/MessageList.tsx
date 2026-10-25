@@ -25,8 +25,10 @@ import type {
   TranscriptBlock,
   TurnState,
 } from "../store.js";
+import type { WireCheckpointMeta } from "../../../shared/protocol.js";
 import { TabContext } from "../tab-context.js";
 import { isReplaySurface, replayStore } from "../replay.js";
+import { matchCheckpointsToTurns } from "./checkpoint-model.js";
 import { ChildReportBlock } from "./ChildReportBlock.js";
 import { COMPOSER_INSERT_EVENT } from "./Composer.js";
 import { ImageViewer } from "./ImageViewer.js";
@@ -37,6 +39,7 @@ import {
   TranscriptMinimap,
   activeMarkIndex,
   createUserTurnsSelector,
+  rewindUserTurnTexts,
   shouldShowMinimap,
   type UserTurnsSelector,
 } from "./TranscriptMinimap.js";
@@ -476,6 +479,7 @@ export function MessageList({
   onContinue,
   promptQueueLength,
   readOnly = false,
+  rewind,
 }: {
   blocks: TranscriptBlock[];
   turn: TurnState;
@@ -494,6 +498,17 @@ export function MessageList({
   promptQueueLength: number;
   /** Read-only transcript surface (e.g. child history): suppresses the transcript-empty onboarding. */
   readOnly?: boolean;
+  /**
+   * Taskana 4742 §2.5: optional rewind plumbing for the tick rail's popover
+   * action. Absent (child panes, existing tests, engines without
+   * supportsRewind) -> no Rewind buttons at all. The checkpoint list is the
+   * tab store's on-demand `checkpoints`; `onRewind` sends the existing
+   * `rewind_request` (App wires send(buildRewindRequest(...))).
+   */
+  rewind?: {
+    checkpoints: readonly WireCheckpointMeta[];
+    onRewind(checkpointId: string): void;
+  };
 }) {
   // codex P7.3-F2 finding 2: the automation transcript-scroll probe
   // (automation.ts's transcriptScrollState/transcriptScrollTo) must be able to
@@ -557,6 +572,17 @@ export function MessageList({
     turnsSelectorRef.current = createUserTurnsSelector();
   }
   const minimapMarks = useMemo(() => turnsSelectorRef.current!(blocks), [blocks]);
+  // Taskana 4742: per-mark checkpoint ids for the rail popover's Rewind
+  // action (label + chronological matching, checkpoint-model.ts). Memoized on
+  // [blocks, rewind?.checkpoints] — the checkpoints array is store-stable
+  // between renders (replaced only on checkpoint_list), and blocks identity
+  // changes only on real transcript updates. Absent rewind prop -> no ids,
+  // no buttons.
+  const rewindCheckpoints = rewind?.checkpoints;
+  const rewindCheckpointIds = useMemo(
+    () => (rewindCheckpoints !== undefined ? matchCheckpointsToTurns(rewindUserTurnTexts(blocks), rewindCheckpoints) : []),
+    [rewindCheckpoints, blocks],
+  );
   const [minimapActive, setMinimapActive] = useState<number | null>(null);
 
   // Finding 1 (codex P7.3-F): a jump-to-latest smooth scroll must not get
@@ -823,17 +849,32 @@ export function MessageList({
   const startedAt = running && turn.turnId !== null ? getTurnStartedAt(turn.turnId) : null;
 
   return (
-    <div className="message-list" ref={containerRef} onScroll={handleScroll} tabIndex={-1} data-tab-id={tabId ?? undefined}>
+    <div
+      className={"message-list" + (shouldShowMinimap(minimapMarks.length) ? " message-list-has-rail" : "")}
+      ref={containerRef}
+      onScroll={handleScroll}
+      tabIndex={-1}
+      data-tab-id={tabId ?? undefined}
+    >
       <TodoPanel transcript={blocks} onJumpToBlock={jumpToBlock} />
-      {/* TASK.48 / Taskana 4086: vertical user-turn scrubber. FIRST-child
-          position (beside TodoPanel) on purpose: a `top`-sticky box only gets
-          pushed DOWN to its inset, so as the last child it sat at the content
-          end — off-screen unless scrolled to the bottom, and it grew the
-          scroll height. height:0 + pointer-events:none keep it out of
-          .message-column's layout. */}
+      {/* TASK.48 / Taskana 4086 + 4742: LEFT-edge tick rail (evolved from
+          the right-edge dot pill). FIRST-child position (beside TodoPanel)
+          on purpose: a `top`-sticky box only gets pushed DOWN to its inset,
+          so as the last child it sat at the content end — off-screen unless
+          scrolled to the bottom, and it grew the scroll height. height:0 +
+          pointer-events:none keep it out of .message-column's layout; the
+          message-list-has-rail modifier above reserves the left gutter so
+          the centred column never slides under the rail. */}
       {shouldShowMinimap(minimapMarks.length) && (
         <div className="minimap-slot">
-          <TranscriptMinimap marks={minimapMarks} activeIndex={minimapActive} onJump={jumpToBlock} />
+          <TranscriptMinimap
+            marks={minimapMarks}
+            activeIndex={minimapActive}
+            onJump={jumpToBlock}
+            {...(rewind !== undefined
+              ? { rewind: { checkpointIds: rewindCheckpointIds, onRewind: rewind.onRewind } }
+              : {})}
+          />
         </div>
       )}
       {/* Turn announcements (§4-R3(e)) live OUTSIDE the aria-live column: a

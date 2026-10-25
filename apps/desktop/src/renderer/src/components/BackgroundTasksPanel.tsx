@@ -142,7 +142,7 @@ export function BackgroundTasksPanel() {
 
   useEffect(() => {
     if (open) {
-      // Refresh-on-open parity with TimelinePanel: the drawer never mounts
+      // Refresh-on-open parity with the retired TimelinePanel: the drawer never mounts
       // stale — the host re-serves the manager snapshot on demand.
       send({ type: "task_list_request" });
     } else {

@@ -9,7 +9,7 @@
  *
  * Exhaustive wiring list (D8): App's paletteOpen/settingsOpen (one combined
  * flag), ConnectedPermissionModal, GitConfirmDialog, LspPanel, HooksPanel,
- * TimelinePanel, ConsentDialog, and the four local-state dropdowns ModeMenu/
+ * ConsentDialog, and the four local-state dropdowns ModeMenu/
  * ModelPill/EnvironmentMenu/SlashMenu (each wires its own open state).
  * TerminalPanel and GitPanel are deliberately EXCLUDED (in-flow layout, not
  * overlays) — see D8's rationale in the cut.
