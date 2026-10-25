@@ -110,3 +110,7 @@ reach a non-localhost origin (a remote url, or a click or type the agent marks
 `remote: true`). `BrowserEval` always asks. Snapshot, wait and console calls,
 and anything on a localhost page or a local file, do not prompt. See
 [browser.md](browser.md).
+
+A session's **Full browser access** switch (off by default) removes these
+prompts for that session only, while it is on. Folders you have not trusted
+never get it. See [browser.md](browser.md#full-browser-access-per-session).
