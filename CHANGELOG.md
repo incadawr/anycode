@@ -9,6 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `pnpm test` no longer depends on the developer's own `~/.anycode/config.json`: the core CLI e2e suite now runs every `runCli` drive against an isolated home, so user-scope LSP servers (or any other user config) can't leak into the results (Taskana 4850).
 - A markdown preview in the right-side dock fills the panel again; it had collapsed to a thin strip (most visible in Source mode).
 
 ## [0.0.41] — 2026-10-25

@@ -16,6 +16,15 @@ import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+// Hoisted BEFORE the ./main.js import below: the Taskana 4850 owner-home leak
+// pin needs os.homedir() stubbed at the moment main.ts binds it, so a module
+// factory is the only seam that stubs in time (vi.spyOn on a non-configurable
+// ESM namespace throws).
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: vi.fn(actual.homedir) };
+});
+import * as os from "node:os";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
@@ -1062,11 +1071,27 @@ describe("CLI workflow wiring order (design slice-3.4-cut.md §2.10/§6): withWo
 const titleTestTempDirs: string[] = [];
 
 /** Fresh workspace dir + fresh sqlite db path, isolated per test (mirrors integration.test.ts's setupTempDirs). */
-function setupTitleTestDirs(): { workspace: string; dbPath: string } {
+function setupTitleTestDirs(): { workspace: string; dbPath: string; home: string } {
   const workspace = mkdtempSync(join(tmpdir(), "anycode-cli-title-ws-"));
   const dbDir = mkdtempSync(join(tmpdir(), "anycode-cli-title-db-"));
   titleTestTempDirs.push(workspace, dbDir);
-  return { workspace, dbPath: join(dbDir, "anycode.sqlite") };
+  return { workspace, dbPath: join(dbDir, "anycode.sqlite"), home: setupIsolatedHome() };
+}
+
+/**
+ * Fresh empty home dir registered for this suite's afterEach cleanup (Taskana
+ * 4850): runCli()'s config discovery reads user-scope `<home>/.anycode/…`
+ * (config.json#lspServers, skills inventory, …) when no `home` option is
+ * passed, so a suite drive without one inherits the OWNER's real ~/.anycode —
+ * with LSP enabled there, "[lsp] no language servers configured" (design
+ * slice-6.1-cut.md §6#6c) fails and the real inventory prints. Every drive in
+ * this file now hands runCli() an isolated home; tests that need a HOME-side
+ * fixture write it under `setupIsolatedHome()` explicitly.
+ */
+function setupIsolatedHome(): string {
+  const home = mkdtempSync(join(tmpdir(), "anycode-cli-home-"));
+  titleTestTempDirs.push(home);
+  return home;
 }
 
 /**
@@ -1074,8 +1099,11 @@ function setupTitleTestDirs(): { workspace: string; dbPath: string } {
  * (and any fire-and-forget persist a scripted "a"/`/allow` answer triggers,
  * design slice-P7.5-cut.md §3.2) off the owner's real `~/.anycode/settings.json`
  * — sibling to dbPath's own tmpdir, so it needs no separate cleanup entry.
+ * The `home` argument (Taskana 4850) is only read by the CALLER to pass
+ * `home:` into runCli(); the env object itself carries no home override.
  */
-function makeTitleTestEnv(dbPath: string): NodeJS.ProcessEnv {
+function makeTitleTestEnv(dbPath: string, home?: string): NodeJS.ProcessEnv {
+  void home; // see above — the env object itself needs no home; the runCli drive does
   return {
     ANYCODE_API_KEY: "test-key",
     ANYCODE_MODEL: "test-model",
@@ -1089,8 +1117,8 @@ function makeTitleTestEnv(dbPath: string): NodeJS.ProcessEnv {
  * only load for a trusted workspace. `ANYCODE_TRUST_WORKSPACE=1` trusts this
  * process only, so no trust store is written.
  */
-function trustedWorkspaceEnv(dbPath: string): NodeJS.ProcessEnv {
-  return { ...makeTitleTestEnv(dbPath), ANYCODE_TRUST_WORKSPACE: "1" } as NodeJS.ProcessEnv;
+function trustedWorkspaceEnv(dbPath: string, home?: string): NodeJS.ProcessEnv {
+  return { ...makeTitleTestEnv(dbPath, home), ANYCODE_TRUST_WORKSPACE: "1" } as NodeJS.ProcessEnv;
 }
 
 /**
@@ -1123,14 +1151,15 @@ afterEach(() => {
 
 describe("CLI session titling (design feature-session-titles.md §3, slice-4.4-T-cut.md §5)", () => {
   it("derives a title from the first prompt's raw first line and persists it to sqlite", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const modelPort = new CountingModelPort();
     const input = new PassThrough();
     const output = new PassThrough();
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort,
@@ -1152,11 +1181,12 @@ describe("CLI session titling (design feature-session-titles.md §3, slice-4.4-T
   });
 
   it("never re-derives the title of a --resume'd session that already has one", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
 
     const firstRun = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input: (() => {
         const input = new PassThrough();
         input.write("Original heuristic title\n");
@@ -1176,7 +1206,8 @@ describe("CLI session titling (design feature-session-titles.md §3, slice-4.4-T
     const output2 = new PassThrough();
     const resumedRun = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input: input2,
       output: output2,
       modelPort: new CountingModelPort(),
@@ -1193,14 +1224,15 @@ describe("CLI session titling (design feature-session-titles.md §3, slice-4.4-T
   });
 
   it("in plan mode, the title comes from the raw trimmed line — never the <plan-mode-reminder> tag", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const modelPort = new CountingModelPort();
     const input = new PassThrough();
     const output = new PassThrough();
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort,
@@ -1220,7 +1252,7 @@ describe("CLI session titling (design feature-session-titles.md §3, slice-4.4-T
   });
 
   it("sessionTitleRefinement:true runs the tier-2 one-shot, and the exit path awaits it before persistence.close()", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     // Call 0: the turn itself (immediate finish, no tool calls).
     // Call 1: the tier-2 refinement one-shot, replying with a title.
     const modelPort = new SequencedModelPort([
@@ -1236,7 +1268,8 @@ describe("CLI session titling (design feature-session-titles.md §3, slice-4.4-T
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort,
@@ -1281,12 +1314,14 @@ async function listWorkspaceSessions(dbPath: string, workspace: string) {
 
 /** Runs one non-interactive session that writes a single line then ends, and asserts exit 0. */
 async function seedSession(dbPath: string, workspace: string, firstLine: string): Promise<void> {
+  const home = setupIsolatedHome();
   const input = new PassThrough();
   input.write(`${firstLine}\n`);
   input.end();
   const exitCode = await runCli({
     argv: [],
-    env: makeTitleTestEnv(dbPath),
+    env: makeTitleTestEnv(dbPath, home),
+    home,
     input,
     output: new PassThrough(),
     modelPort: new CountingModelPort(),
@@ -1297,7 +1332,7 @@ async function seedSession(dbPath: string, workspace: string, firstLine: string)
 
 describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
   it("scenario 1: run 2 --continue resumes run 1's session (no new row) with a Continuing notice", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     await seedSession(dbPath, workspace, "Fix the flaky test");
     const { id: firstId } = await readSessionTitle(dbPath, workspace);
 
@@ -1306,7 +1341,8 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
     const getText = collectOutput(output);
     const runPromise = runCli({
       argv: ["--continue"],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: new CountingModelPort(),
@@ -1325,7 +1361,7 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
   });
 
   it("a fresher CHILD session row never hijacks --continue — workspace resume is wired root-only (TASK.102 S2a A2)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     await seedSession(dbPath, workspace, "Fix the flaky test");
     const { id: rootId } = await readSessionTitle(dbPath, workspace);
 
@@ -1358,7 +1394,8 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
     const getText = collectOutput(output);
     const runPromise = runCli({
       argv: ["--continue"],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: new CountingModelPort(),
@@ -1378,13 +1415,14 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
   });
 
   it("scenario 2: --continue with no prior session for this workspace warns and starts fresh (exit 0)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
     const getText = collectOutput(output);
     const runPromise = runCli({
       argv: ["--continue"],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: new CountingModelPort(),
@@ -1401,7 +1439,7 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
   });
 
   it("scenario 3: --resume <id> together with --continue — the id wins, --continue is ignored with a warn (R1)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     await seedSession(dbPath, workspace, "Seed session");
     const { id } = await readSessionTitle(dbPath, workspace);
 
@@ -1410,7 +1448,8 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
     const getText = collectOutput(output);
     const runPromise = runCli({
       argv: ["--resume", id, "--continue"],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: new CountingModelPort(),
@@ -1429,12 +1468,13 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
   });
 
   it("scenario 4: a bare --resume in a non-interactive session exits 1 WITHOUT creating the database (R4)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const output = new PassThrough();
     const getText = collectOutput(output);
     const exitCode = await runCli({
       argv: ["--resume"],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input: new PassThrough(),
       output,
       modelPort: new CountingModelPort(),
@@ -1450,7 +1490,7 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
   });
 
   it("scenario 5a: a bare --resume in an interactive session opens the picker; '1' resumes the listed session", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     await seedSession(dbPath, workspace, "Picker seed session");
     const { id } = await readSessionTitle(dbPath, workspace);
 
@@ -1459,7 +1499,8 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
     const getText = collectOutput(output);
     const runPromise = runCli({
       argv: ["--resume"],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: new CountingModelPort(),
@@ -1494,7 +1535,7 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
   });
 
   it("scenario 5b: the picker answered 'q' aborts through the clean shutdown path (dispose → exit 130, R5)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     await seedSession(dbPath, workspace, "Abort seed session");
 
     const input = new PassThrough();
@@ -1502,7 +1543,8 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
     const getText = collectOutput(output);
     const runPromise = runCli({
       argv: ["--resume"],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: new CountingModelPort(),
@@ -1526,7 +1568,7 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
   });
 
   it("scenario 6: --continue of a titled session never re-derives its title (A23 mirror)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     await seedSession(dbPath, workspace, "Original heuristic title");
     const { id, title: firstTitle } = await readSessionTitle(dbPath, workspace);
     expect(firstTitle).toBe("Original heuristic title");
@@ -1535,7 +1577,8 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
     const output = new PassThrough();
     const runPromise = runCli({
       argv: ["--continue"],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output: output,
       modelPort: new CountingModelPort(),
@@ -1551,7 +1594,7 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
   });
 
   it("scenario 7: -p <prompt> --continue resumes the most recent session headlessly (exit 0)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     await seedSession(dbPath, workspace, "Headless seed session");
     const { id } = await readSessionTitle(dbPath, workspace);
 
@@ -1561,7 +1604,8 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
     const getErr = collectOutput(errorOutput);
     const exitCode = await runCli({
       argv: ["-p", "continue this headlessly", "--continue"],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input: new PassThrough(),
       output,
       errorOutput,
@@ -1585,13 +1629,14 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
   });
 
   it("scenario 8: /sessions in a live session prints a table with the derived title and a '*' on the current session", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
     const getText = collectOutput(output);
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: new CountingModelPort(),
@@ -1626,14 +1671,15 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
 // ─────────────────────────────────────────────────────────────────────────
 describe("CLI headless-v1 persisted-state e2e (design slice-4.5-cut.md §7)", () => {
   it("scenario 2: bare -p with an empty piped prompt exits 2 and never creates the DB", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const errorOutput = new PassThrough();
     const getErr = collectOutput(errorOutput);
 
     const runPromise = runCli({
       argv: ["-p"],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output: new PassThrough(),
       errorOutput,
@@ -1650,14 +1696,15 @@ describe("CLI headless-v1 persisted-state e2e (design slice-4.5-cut.md §7)", ()
   });
 
   it("scenario 5: -p x --output-format json emits one envelope line whose sessionId matches the sole DB row", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const output = new PassThrough();
     const errorOutput = new PassThrough();
     const getOut = collectOutput(output);
 
     const exitCode = await runCli({
       argv: ["-p", "compute six times seven", "--output-format", "json"],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input: new PassThrough(),
       output,
       errorOutput,
@@ -1682,13 +1729,14 @@ describe("CLI headless-v1 persisted-state e2e (design slice-4.5-cut.md §7)", ()
   });
 
   it("scenario 9: a fresh headless run derives the tier-1 title with NO LLM refinement (R8)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const prompt = "Investigate the auth bug in the login flow";
     const modelPort = new CountingModelPort();
 
     const exitCode = await runCli({
       argv: ["-p", prompt],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input: new PassThrough(),
       output: new PassThrough(),
       errorOutput: new PassThrough(),
@@ -1705,13 +1753,14 @@ describe("CLI headless-v1 persisted-state e2e (design slice-4.5-cut.md §7)", ()
   });
 
   it("scenario 9b: -p --continue of a titled session leaves the persisted title untouched (L8)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     await seedSession(dbPath, workspace, "Seed heuristic title");
     const { id, title: seeded } = await readSessionTitle(dbPath, workspace);
 
     const exitCode = await runCli({
       argv: ["-p", "a brand new headless prompt", "--continue"],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input: new PassThrough(),
       output: new PassThrough(),
       errorOutput: new PassThrough(),
@@ -1766,7 +1815,7 @@ async function readSessionModel(dbPath: string, workspace: string): Promise<stri
 
 describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)", () => {
   it("scenario 1: --model overrides ANYCODE_MODEL for the created session's persisted model", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const runPromise = runCli({
       argv: ["--model", "over-x"],
@@ -1790,7 +1839,7 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
   });
 
   it("scenario 1b: --model flows into the -p --output-format json envelope's model field", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const output = new PassThrough();
     const getOut = collectOutput(output);
 
@@ -1819,7 +1868,7 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
   });
 
   it("scenario 2: --model with NO ANYCODE_MODEL in env still boots (the flag satisfies the required-model contract A1)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const runPromise = runCli({
       // Deliberately no ANYCODE_MODEL: loadEnvConfig would throw, but the
@@ -1843,12 +1892,13 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
   });
 
   it("scenario 3a: --model \"\" exits 2 without creating the database", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const errorOutput = new PassThrough();
     const getErr = collectOutput(errorOutput);
     const exitCode = await runCli({
       argv: ["--model", ""],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input: new PassThrough(),
       output: new PassThrough(),
       errorOutput,
@@ -1863,12 +1913,13 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
   });
 
   it("scenario 3b: a trailing bare --model exits 2 without creating the database", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const errorOutput = new PassThrough();
     const getErr = collectOutput(errorOutput);
     const exitCode = await runCli({
       argv: ["--model"],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input: new PassThrough(),
       output: new PassThrough(),
       errorOutput,
@@ -1917,14 +1968,15 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
   });
 
   it("scenario 5: /model glm-4.5 with a factory routes the next turn through the new port and persists session.model", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
     const getText = collectOutput(output);
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       // Base port never streams (we switch before the turn); the factory yields
@@ -1948,14 +2000,15 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
   });
 
   it("scenario 6: /model glm-4.5 with an injected port but NO factory refuses; the model is unchanged", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
     const getText = collectOutput(output);
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       // Injected port, no factory ⇒ modelPortFactory is undefined ⇒ /model refuses.
@@ -1977,7 +2030,7 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
   });
 
   it("scenario 7: resume restores the persisted mode; an explicit --mode on the resume wins (4.4-R1)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
 
     // Run 1: create a session in plan mode, then exit.
     const input1 = new PassThrough();
@@ -1986,7 +2039,8 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
     expect(
       await runCli({
         argv: ["--mode", "plan"],
-        env: makeTitleTestEnv(dbPath),
+        env: makeTitleTestEnv(dbPath, home),
+        home,
         input: input1,
         output: new PassThrough(),
         modelPort: new CountingModelPort(),
@@ -2001,7 +2055,8 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
     const input2 = new PassThrough();
     const run2 = runCli({
       argv: ["--resume", id],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input: input2,
       output: output2,
       modelPort: new CountingModelPort(),
@@ -2017,7 +2072,8 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
     const input3 = new PassThrough();
     const run3 = runCli({
       argv: ["--resume", id, "--mode", "edit"],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input: input3,
       output: output3,
       modelPort: new CountingModelPort(),
@@ -2029,7 +2085,7 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
   });
 
   it("scenario 8: a resumed yolo session warns and starts in build (never silently re-escalates, R7)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
 
     // Seed a yolo session directly through the adapter.
     const seed = new SqlitePersistenceAdapter(dbPath);
@@ -2042,7 +2098,8 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
     const input = new PassThrough();
     const runPromise = runCli({
       argv: ["--resume", id],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: new CountingModelPort(),
@@ -2332,7 +2389,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
   });
 
   it("scenario 2: /model glm-4.5 on a z-ai boot re-budgets between turns — 200k (176000) becomes 128k (104000); /context shows both windows before/after", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
     const getText = collectOutput(output);
@@ -2388,7 +2445,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
   });
 
   it("scenario 3: ANYCODE_CONTEXT_WINDOW overrides the catalog window at boot AND survives a /model switch — the denominator never moves (R7 floor math: 50000 ⇒ 26000)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
     const getText = collectOutput(output);
@@ -2445,14 +2502,15 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
   });
 
   it("scenario 4: a non-catalog model resolves the ASSUMED 8192 window at boot (TASK.142) — loopConfig.context carries it and /context reflects the degraded budget (8192/2048/1884) instead of the DEFAULT 200000", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
     const getText = collectOutput(output);
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: new CountingModelPort(),
@@ -2477,7 +2535,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
   });
 
   it("scenario 5: an A-bound override (TASK.142) governs A at boot but NOT an UNKNOWN model B after /model — B re-resolves the assumed 8192", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
     const getText = collectOutput(output);
@@ -2521,7 +2579,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
   });
 
   it("scenario 6: the same A-bound override is also inert on a CATALOGUED model B after /model — B re-resolves its catalog window (128000)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
     const getText = collectOutput(output);
@@ -2562,7 +2620,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
   });
 
   it("scenario 7: /model A -> B -> A re-resolves each model's own window — switching back to A reuses the boot pair (TASK.142)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
     const getText = collectOutput(output);
@@ -2761,7 +2819,7 @@ function initGitRepoWithCommit(workspace: string): void {
 
 describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
   it("scenario 1: a Write turn captures exactly one checkpoint; the shadow gitDir sits under the db dir, never in the workspace", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const f = join(workspace, "f.txt");
     const port = new SequencedModelPort([writeCall("w1", f, "v1"), STOP_SCRIPT]);
     const input = new PassThrough();
@@ -2770,7 +2828,8 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: port,
@@ -2798,7 +2857,7 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
   }, 20000);
 
   it("scenario 3: a read-only turn spawns no git, creates no checkpoints dir, emits no checkpoint event (L2)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const port = new SequencedModelPort([
       [
         { type: "text_delta", id: "t", text: "just talking" } as ModelStreamEvent,
@@ -2811,7 +2870,8 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: port,
@@ -2831,7 +2891,7 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
   }, 20000);
 
   it("scenario 4: /rewind restores files AND the conversation to before a turn (rewind-surgery = replaceAll, R9)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const f = join(workspace, "f.txt");
     const g = join(workspace, "g.txt");
     const port = new SequencedModelPort([
@@ -2851,7 +2911,8 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: port,
@@ -2915,7 +2976,7 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
   }, 30000);
 
   it("scenario 5: a second /rewind onto the pre-rewind safety redoes the undo (bidirectional, R9)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const f = join(workspace, "f.txt");
     const g = join(workspace, "g.txt");
     const port = new SequencedModelPort([
@@ -2934,7 +2995,8 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: port,
@@ -2990,7 +3052,7 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
   it("scenario 6: /rewind <#> files rewinds only files; /rewind <#> conversation rewinds only the conversation", async () => {
     // files-only: g removed, but the conversation still carries turn 2.
     {
-      const { workspace, dbPath } = setupTitleTestDirs();
+      const { workspace, dbPath, home } = setupTitleTestDirs();
       const f = join(workspace, "f.txt");
       const g = join(workspace, "g.txt");
       const port = new SequencedModelPort([
@@ -3003,7 +3065,7 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
       const output = new PassThrough();
       const getText = collectOutput(output);
       const runPromise = runCli({
-        argv: [], env: makeTitleTestEnv(dbPath), input, output,
+        argv: [], env: makeTitleTestEnv(dbPath, home), home, input, output,
         modelPort: port, cwd: workspace, yolo: true, checkpoints: true,
       });
       input.write("write f\n");
@@ -3032,7 +3094,7 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
 
     // conversation-only: turn 2 gone from history, but g stays on disk.
     {
-      const { workspace, dbPath } = setupTitleTestDirs();
+      const { workspace, dbPath, home } = setupTitleTestDirs();
       const f = join(workspace, "f.txt");
       const g = join(workspace, "g.txt");
       const port = new SequencedModelPort([
@@ -3045,7 +3107,7 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
       const output = new PassThrough();
       const getText = collectOutput(output);
       const runPromise = runCli({
-        argv: [], env: makeTitleTestEnv(dbPath), input, output,
+        argv: [], env: makeTitleTestEnv(dbPath, home), home, input, output,
         modelPort: port, cwd: workspace, yolo: true, checkpoints: true,
       });
       input.write("write f\n");
@@ -3074,7 +3136,7 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
   }, 30000);
 
   it("scenario 7: answering the confirmation with 'n' cancels the rewind and captures no safety checkpoint", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const f = join(workspace, "f.txt");
     const g = join(workspace, "g.txt");
     const port = new SequencedModelPort([
@@ -3087,7 +3149,7 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
     const output = new PassThrough();
     const getText = collectOutput(output);
     const runPromise = runCli({
-      argv: [], env: makeTitleTestEnv(dbPath), input, output,
+      argv: [], env: makeTitleTestEnv(dbPath, home), home, input, output,
       modelPort: port, cwd: workspace, yolo: true, checkpoints: true,
     });
     input.write("write f\n");
@@ -3144,12 +3206,12 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
     }
     // (b) enabled but empty: bare /rewind -> notice; /rewind 99 -> no match.
     {
-      const { workspace, dbPath } = setupTitleTestDirs();
+      const { workspace, dbPath, home } = setupTitleTestDirs();
       const input = new PassThrough();
       const output = new PassThrough();
       const getText = collectOutput(output);
       const runPromise = runCli({
-        argv: [], env: makeTitleTestEnv(dbPath), input, output,
+        argv: [], env: makeTitleTestEnv(dbPath, home), home, input, output,
         modelPort: new CountingModelPort(), cwd: workspace, checkpoints: true,
       });
       input.write("/rewind\n");
@@ -3165,7 +3227,7 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
   it("scenario 9: options.checkpoints wins over the --no-checkpoints flag (R11 precedence)", async () => {
     // options.checkpoints:true beats --no-checkpoints => checkpoints ON.
     {
-      const { workspace, dbPath } = setupTitleTestDirs();
+      const { workspace, dbPath, home } = setupTitleTestDirs();
       const f = join(workspace, "f.txt");
       const port = new SequencedModelPort([writeCall("w1", f, "v1"), STOP_SCRIPT]);
       const input = new PassThrough();
@@ -3173,7 +3235,8 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
       const getText = collectOutput(output);
       const runPromise = runCli({
         argv: ["--no-checkpoints"],
-        env: makeTitleTestEnv(dbPath),
+        env: makeTitleTestEnv(dbPath, home),
+        home,
         input,
         output,
         modelPort: port,
@@ -3190,7 +3253,7 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
     }
     // options.checkpoints:false forces OFF even in an otherwise-eligible session.
     {
-      const { workspace, dbPath } = setupTitleTestDirs();
+      const { workspace, dbPath, home } = setupTitleTestDirs();
       const f = join(workspace, "f.txt");
       const port = new SequencedModelPort([writeCall("w1", f, "v1"), STOP_SCRIPT]);
       const input = new PassThrough();
@@ -3198,7 +3261,8 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
       const getText = collectOutput(output);
       const runPromise = runCli({
         argv: [],
-        env: makeTitleTestEnv(dbPath),
+        env: makeTitleTestEnv(dbPath, home),
+        home,
         input,
         output,
         modelPort: port,
@@ -3220,7 +3284,7 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
   }, 30000);
 
   it("scenario 10: -p print mode never checkpoints and never creates the checkpoints dir (A19/R11)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const f = join(workspace, "f.txt");
     const port = new SequencedModelPort([writeCall("w1", f, "v1"), STOP_SCRIPT]);
     const output = new PassThrough();
@@ -3229,7 +3293,8 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
 
     const exitCode = await runCli({
       argv: ["-p", "please write f"],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input: new PassThrough(),
       output,
       errorOutput,
@@ -3244,7 +3309,7 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
   }, 20000);
 
   it("scenario 11: a checkpoint on a git workspace leaves the user's .git byte-unchanged (L6)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     initGitRepoWithCommit(workspace);
     // Dirty the tracked file so the shadow snapshot captures a non-clean tree.
     writeFileSync(join(workspace, "tracked.txt"), "locally modified\n");
@@ -3258,7 +3323,7 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
     const getText = collectOutput(output);
 
     const runPromise = runCli({
-      argv: [], env: makeTitleTestEnv(dbPath), input, output,
+      argv: [], env: makeTitleTestEnv(dbPath, home), home, input, output,
       modelPort: port, cwd: workspace, yolo: true, checkpoints: true,
     });
     input.write("agent writes a new file\n");
@@ -3278,13 +3343,13 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
   }, 20000);
 
   it("scenario 12: a checkpoint survives --resume; /rewind sees it and a new capture chains onto it", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const f = join(workspace, "f.txt");
     // Run 1: one write turn => checkpoint #1.
     {
       const input = new PassThrough();
       const runPromise = runCli({
-        argv: [], env: makeTitleTestEnv(dbPath), input, output: new PassThrough(),
+        argv: [], env: makeTitleTestEnv(dbPath, home), home, input, output: new PassThrough(),
         modelPort: new SequencedModelPort([writeCall("w1", f, "v1"), STOP_SCRIPT]),
         cwd: workspace, yolo: true, checkpoints: true,
       });
@@ -3303,7 +3368,7 @@ describe("CLI checkpoint/rewind e2e (design slice-4.7-cut.md §7)", () => {
     const output2 = new PassThrough();
     const getText2 = collectOutput(output2);
     const runPromise2 = runCli({
-      argv: [], env: makeTitleTestEnv(dbPath), input: input2, output: output2,
+      argv: [], env: makeTitleTestEnv(dbPath, home), home, input: input2, output: output2,
       modelPort: new SequencedModelPort([writeCall("w2", g, "gee"), STOP_SCRIPT]),
       cwd: workspace, yolo: true, checkpoints: true, resumeSessionId: id,
     });
@@ -3387,7 +3452,7 @@ function lastUserMessageText(request: ModelRequest | undefined): string {
 
 describe("CLI background tasks e2e (design slice-5.5-cut.md §6#5): notices injected exactly once", () => {
   it("a completed bg task's notice appears in the <system-reminder> block of the VERY NEXT turn, then never again", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const port = new SequencedRecordingModelPort([
       bashBackgroundCall("b1", "true"), // turn 1: starts a bg task that exits almost immediately
       STOP_SCRIPT, // ends turn 1
@@ -3400,7 +3465,8 @@ describe("CLI background tasks e2e (design slice-5.5-cut.md §6#5): notices inje
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: port,
@@ -3475,7 +3541,7 @@ describe("CLI background tasks e2e (design slice-5.5-cut.md §6#5): notices inje
 
 describe("CLI background tasks e2e (design slice-5.5-cut.md §6#4): exit-path reap", () => {
   it("a live background task never survives runCli()'s own exit (/exit reaps it — no orphan, bounded)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const pidFile = join(workspace, "bg.pid");
     const port = new SequencedRecordingModelPort([
       bashBackgroundCall("b1", `sh -c 'echo $$ > ${pidFile}; sleep 30'`),
@@ -3487,7 +3553,8 @@ describe("CLI background tasks e2e (design slice-5.5-cut.md §6#4): exit-path re
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: port,
@@ -3598,7 +3665,7 @@ function extractReadyPid(text: string, serverName: string): number {
 
 describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#4): diagnostics round-trip", () => {
   it("a Write to a matching file returns real diagnostics from the spawned fixture server", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     writeLspConfig(workspace);
     const f = join(workspace, "f.ts");
     const port = new SequencedModelPort([
@@ -3611,7 +3678,8 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#4): diagno
 
     const runPromise = runCli({
       argv: [],
-      env: trustedWorkspaceEnv(dbPath),
+      env: trustedWorkspaceEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: port,
@@ -3630,7 +3698,7 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#4): diagno
   }, 15000);
 
   it("a clean file (no DIAG: marker) reports \"none reported\" — a clean-file signal, not silence", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     writeLspConfig(workspace);
     const f = join(workspace, "clean.ts");
     const port = new SequencedModelPort([writeCall("w1", f, "const x = 1;\n"), STOP_SCRIPT]);
@@ -3640,7 +3708,8 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#4): diagno
 
     const runPromise = runCli({
       argv: [],
-      env: trustedWorkspaceEnv(dbPath),
+      env: trustedWorkspaceEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: port,
@@ -3656,7 +3725,7 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#4): diagno
   }, 15000);
 
   it("an Edit (not just Write) to a matching file also gets diagnostics — both wrapped tools work", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     writeLspConfig(workspace);
     const f = join(workspace, "f.ts");
     writeFileSync(f, "const y = 1;\n");
@@ -3670,7 +3739,8 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#4): diagno
 
     const runPromise = runCli({
       argv: [],
-      env: trustedWorkspaceEnv(dbPath),
+      env: trustedWorkspaceEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: port,
@@ -3688,7 +3758,7 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#4): diagno
 
 describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#6b): deny path never spawns", () => {
   it("a denied Edit leaves the file unchanged and spawns no server (status stays not_started)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     writeLspConfig(workspace);
     const f = join(workspace, "f.ts");
     writeFileSync(f, "line1\n");
@@ -3702,7 +3772,8 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#6b): deny 
     // (Edit is "ask" in the default "build" mode) auto-denies, no prompter needed.
     const runPromise = runCli({
       argv: [],
-      env: trustedWorkspaceEnv(dbPath),
+      env: trustedWorkspaceEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: port,
@@ -3729,7 +3800,7 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#6b): deny 
 
 describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#6c/L8): no lspServers config is byte-identical", () => {
   it("a session with NO .anycode/config.json#lspServers never attaches a diagnostics field to a Write result", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     // Deliberately NOT calling writeLspConfig — this workspace carries no
     // .anycode/config.json at all (mirrors the pre-6.1 world, L8).
     const f = join(workspace, "f.ts");
@@ -3740,7 +3811,8 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#6c/L8): no
 
     const runPromise = runCli({
       argv: [],
-      env: trustedWorkspaceEnv(dbPath),
+      env: trustedWorkspaceEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: port,
@@ -3758,11 +3830,66 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#6c/L8): no
     expect(text).toContain("[lsp] no language servers configured\n");
     expect(readFileSync(f, "utf8")).toBe("const x = 1; // DIAG: should be invisible\n");
   }, 15000);
+
+  // Taskana 4850: the 6#6c guarantee above only holds because this suite's
+  // runCli() drives pass an isolated `home` — without one, runCli falls back to
+  // os.homedir() and the OWNER's user-scope ~/.anycode/config.json#lspServers
+  // falls into the spec load (loadLspServerSpecs reads <home>/.anycode/
+  // config.json after the project scope), so the table prints a server the
+  // test never configured. This pin simulates exactly such an owner home via a
+  // stubbed homedir() and asserts the drive's explicit `home` keeps it OUT —
+  // red the moment a future drive drops its isolation.
+  it("an owner homedir() carrying lspServers never leaks into a drive with an isolated home (Taskana 4850)", async () => {
+    const { workspace, dbPath, home } = setupTitleTestDirs();
+    const ownerHome = setupIsolatedHome();
+    mkdirSync(join(ownerHome, ".anycode"), { recursive: true });
+    writeFileSync(
+      join(ownerHome, ".anycode", "config.json"),
+      JSON.stringify({
+        lspServers: [
+          { name: "owner-lsp-leak", command: process.execPath, args: [LSP_FIXTURE], extensions: [".ts"] },
+        ],
+      }),
+    );
+    const homedirSpy = vi.mocked(os.homedir).mockReturnValue(ownerHome);
+    try {
+      const f = join(workspace, "f.ts");
+      const port = new SequencedModelPort([
+        writeCall("w1", f, "const x = 1; // DIAG: should be invisible\n"),
+        STOP_SCRIPT,
+      ]);
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const getText = collectOutput(output);
+
+      const runPromise = runCli({
+        argv: [],
+        env: trustedWorkspaceEnv(dbPath, home),
+        home,
+        input,
+        output,
+        modelPort: port,
+        cwd: workspace,
+        yolo: true,
+      });
+
+      input.write("write f\n");
+      input.write("/lsp\n");
+      input.end();
+
+      expect(await runPromise).toBe(0);
+      const text = getText();
+      expect(text).toContain("[lsp] no language servers configured\n");
+      expect(text).not.toContain("owner-lsp-leak");
+    } finally {
+      homedirSpy.mockRestore();
+    }
+  }, 15000);
 });
 
 describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#5): exit-path reap", () => {
   it("a spawned fixture server never survives runCli()'s own exit (/exit reaps it — no orphan, bounded)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     writeLspConfig(workspace);
     const f = join(workspace, "f.ts");
     const port = new SequencedModelPort([writeCall("w1", f, "const x = 1; // DIAG: spawn me\n"), STOP_SCRIPT]);
@@ -3772,7 +3899,8 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#5): exit-p
 
     const runPromise = runCli({
       argv: [],
-      env: trustedWorkspaceEnv(dbPath),
+      env: trustedWorkspaceEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: port,
@@ -3849,7 +3977,7 @@ function lastUserMessageWithImages(
 
 describe("CLI image-input e2e (design slice-6.2-cut.md §6#8a): /image stage drains exactly once (R12)", () => {
   it("/image <png> + a prompt attaches images to that turn's user message; the SECOND turn is clean", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const pngPath = join(workspace, "tiny.png");
     writeTinyPng(pngPath);
     const port = new SequencedRecordingModelPort([STOP_SCRIPT, STOP_SCRIPT]);
@@ -3898,7 +4026,7 @@ describe("CLI image-input e2e (design slice-6.2-cut.md §6#8a): /image stage dra
 
 describe("CLI image-input e2e (design slice-6.2-cut.md §6#8b): print --image attaches to the one-shot prompt", () => {
   it("print --image <png> ⇒ the captured request carries images; exit code 0", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const pngPath = join(workspace, "tiny.png");
     writeTinyPng(pngPath);
     const port = new RecordingModelPort();
@@ -3927,7 +4055,7 @@ describe("CLI image-input e2e (design slice-6.2-cut.md §6#8b): print --image at
 
 describe("CLI image-input e2e (design slice-6.2-cut.md §6#8c): a live /model switch is honored on the very next call", () => {
   it("/model to an unlisted id turns off capability immediately; the next /image is refused", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const pngPath = join(workspace, "tiny.png");
     writeTinyPng(pngPath);
     const input = new PassThrough();
@@ -3964,7 +4092,7 @@ describe("CLI image-input e2e (design slice-6.2-cut.md §6#8c): a live /model sw
 
 describe("CLI image-input e2e (design slice-6.2-cut.md §6#2): capability-off poison-proof", () => {
   it("/image refuses immediately with the explicit override hint; a normal turn continues text-only with zero images keys in history", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const pngPath = join(workspace, "tiny.png");
     writeTinyPng(pngPath);
     // test-model matches no catalog entry's models and no override is set,
@@ -3977,7 +4105,8 @@ describe("CLI image-input e2e (design slice-6.2-cut.md §6#2): capability-off po
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: port,
@@ -4000,7 +4129,7 @@ describe("CLI image-input e2e (design slice-6.2-cut.md §6#2): capability-off po
 
 describe("CLI image-input e2e (design slice-6.2-cut.md §1 DoD/agent-driven): scripted Read(png) attaches via ctx.media wiring", () => {
   it("a scripted Read on a real PNG carries images on the NEXT turn's tool-result message", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const pngPath = join(workspace, "tiny.png");
     writeTinyPng(pngPath);
     const port = new SequencedRecordingModelPort([readImageCall("r1", pngPath), STOP_SCRIPT]);
@@ -4083,7 +4212,7 @@ describe("CLI WebSearch e2e (design slice-6.3-cut.md §6#3): loopback happy path
   });
 
   it("a scripted WebSearch call hits the real loopback server with the key header and a percent-encoded query, and the key never leaks", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     let requestCount = 0;
     let capturedAuthHeader: string | undefined;
     let capturedUrl: string | undefined;
@@ -4142,7 +4271,7 @@ describe("CLI WebSearch e2e (design slice-6.3-cut.md §6#3): loopback happy path
 
 describe("CLI WebSearch e2e (design slice-6.3-cut.md §6#4): deny path never touches the network", () => {
   it("a denied WebSearch call reaches the permission gate but the loopback server sees zero requests", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     let requestCount = 0;
     const listening = await listenWebSearch((_req, res) => {
       requestCount += 1;
@@ -4185,7 +4314,7 @@ describe("CLI WebSearch e2e (design slice-6.3-cut.md §6#4): deny path never tou
 
 describe("CLI WebSearch e2e (design slice-6.3-cut.md §6#2): apiKeyEnv unset disables registration", () => {
   it("a webSearch section whose apiKeyEnv is absent from env warns at boot, never registers the tool, and issues zero HTTP requests", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     let requestCount = 0;
     const listening = await listenWebSearch((_req, res) => {
       requestCount += 1;
@@ -4205,7 +4334,8 @@ describe("CLI WebSearch e2e (design slice-6.3-cut.md §6#2): apiKeyEnv unset dis
 
       const runPromise = runCli({
         argv: [],
-        env: makeTitleTestEnv(dbPath),
+        env: makeTitleTestEnv(dbPath, home),
+        home,
         input,
         output,
         modelPort: port,
@@ -4260,7 +4390,7 @@ function readTelemetryRecords(dir: string): Array<{ t: string }> {
 
 describe("CLI telemetry e2e (design slice-6.6-cut.md §2-C4/DoD): enabled sink writes a valid per-session JSONL", () => {
   it("session_start -> turn events -> session_end, every line valid JSON, flushed by /quit's exit path", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const telDir = join(workspace, "tel");
     writeTelemetryConfig(workspace, telDir);
     const f = join(workspace, "f.txt");
@@ -4271,7 +4401,8 @@ describe("CLI telemetry e2e (design slice-6.6-cut.md §2-C4/DoD): enabled sink w
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: port,
@@ -4298,7 +4429,7 @@ describe("CLI telemetry e2e (design slice-6.6-cut.md §2-C4/DoD): enabled sink w
   }, 15000);
 
   it("every record carries v:1, a ts number, and this session's id", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const telDir = join(workspace, "tel");
     writeTelemetryConfig(workspace, telDir);
     const modelPort = new CountingModelPort();
@@ -4307,7 +4438,8 @@ describe("CLI telemetry e2e (design slice-6.6-cut.md §2-C4/DoD): enabled sink w
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort,
@@ -4335,7 +4467,7 @@ describe("CLI telemetry e2e (design slice-6.6-cut.md §2-C4/DoD): enabled sink w
 
 describe("CLI telemetry e2e (design slice-6.6-cut.md §6#1): sentinel-leak probe", () => {
   it("sentinel markers in the prompt, assistant text/reasoning, tool args, and a failing tool's error text never reach the JSONL", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const telDir = join(workspace, "tel");
     writeTelemetryConfig(workspace, telDir);
 
@@ -4374,7 +4506,8 @@ describe("CLI telemetry e2e (design slice-6.6-cut.md §6#1): sentinel-leak probe
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: port,
@@ -4408,7 +4541,7 @@ describe("CLI telemetry e2e (design slice-6.6-cut.md §6#1): sentinel-leak probe
 
 describe("CLI telemetry e2e (design slice-6.6-cut.md §2-C1/R3/R4): env kill-switch", () => {
   it("ANYCODE_TELEMETRY=0 disables the sink even with an enabled project config", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const telDir = join(workspace, "tel");
     writeTelemetryConfig(workspace, telDir);
     const modelPort = new CountingModelPort();
@@ -4434,7 +4567,7 @@ describe("CLI telemetry e2e (design slice-6.6-cut.md §2-C1/R3/R4): env kill-swi
 
 describe("CLI telemetry e2e (design slice-6.6-cut.md §6#4): hostile fs — unwritable sink dir", () => {
   it("a sink dir under a read-only parent never crashes the run: exit code stays 0 and no file is written", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const readonlyParent = mkdtempSync(join(tmpdir(), "anycode-tel-readonly-"));
     const telDir = join(readonlyParent, "tel");
     writeTelemetryConfig(workspace, telDir);
@@ -4448,7 +4581,8 @@ describe("CLI telemetry e2e (design slice-6.6-cut.md §6#4): hostile fs — unwr
 
       const runPromise = runCli({
         argv: [],
-        env: makeTitleTestEnv(dbPath),
+        env: makeTitleTestEnv(dbPath, home),
+        home,
         input,
         output,
         modelPort,
@@ -4470,14 +4604,15 @@ describe("CLI telemetry e2e (design slice-6.6-cut.md §6#4): hostile fs — unwr
 
 describe("CLI telemetry e2e (design slice-6.6-cut.md §2-C1/R12): print-mode session_end flush", () => {
   it("a --print run with telemetry enabled writes a file ending in session_end (the const+return reframe actually flushes)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const telDir = join(workspace, "tel");
     writeTelemetryConfig(workspace, telDir);
     const port = new SequencedModelPort([STOP_SCRIPT]);
 
     const exitCode = await runCli({
       argv: ["-p", "compute six times seven"],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input: new PassThrough(),
       output: new PassThrough(),
       errorOutput: new PassThrough(),
@@ -4494,7 +4629,7 @@ describe("CLI telemetry e2e (design slice-6.6-cut.md §2-C1/R12): print-mode ses
 
 describe("CLI telemetry e2e (design slice-6.6-cut.md §2-C1/L4): default byte-lock", () => {
   it("a workspace with NO .anycode/config.json#telemetry never creates a sink, warns nothing, and leaves the workspace untouched", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     // Deliberately NOT calling writeTelemetryConfig — this workspace carries no
     // .anycode/config.json at all (mirrors the pre-6.6 world, L4/L8): loadTelemetryConfig
     // resolves telemetry:null silently, so no sink is built anywhere (default dir or not).
@@ -4505,7 +4640,8 @@ describe("CLI telemetry e2e (design slice-6.6-cut.md §2-C1/L4): default byte-lo
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort,
@@ -4545,7 +4681,7 @@ function findJsonlFilesRecursive(dir: string): string[] {
 
 describe("CLI telemetry e2e (TASK.121): the home-fallback seam never resolves under a test runner", () => {
   it("a workspace with no project telemetry config, whose HOME has telemetry enabled without a dir, writes zero .jsonl files under home", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const tmpHome = mkdtempSync(join(tmpdir(), "anycode-cli-telemetry-home-"));
     titleTestTempDirs.push(tmpHome);
     // Deliberately NOT calling writeTelemetryConfig on `workspace` — this is the
@@ -4561,12 +4697,12 @@ describe("CLI telemetry e2e (TASK.121): the home-fallback seam never resolves un
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
       input,
       output,
       modelPort,
       cwd: workspace,
-      home: tmpHome,
+      home: tmpHome, // this test's own HOME-side telemetry fixture (TASK.121)
     });
 
     input.write("/quit\n");
@@ -4664,7 +4800,7 @@ describe("buildCliEndpointConfig (TASK.158 endpoint-builder)", () => {
 // ─────────────────────────────────────────────────────────────────────────
 describe("CLI boot clamp warning (TASK.159 onClamp wiring)", () => {
   it("an ANYCODE_MAX_OUTPUT_TOKENS above the catalog ceiling prints one [warn] clamp line at boot", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const output = new PassThrough();
     const errorOutput = new PassThrough();
     const getText = collectOutput(output);
@@ -4702,7 +4838,7 @@ describe("CLI boot clamp warning (TASK.159 onClamp wiring)", () => {
 // ─────────────────────────────────────────────────────────────────────────
 describe("CLI boot stub-fallback warning (TASK.170 onStubFallback wiring)", () => {
   it("a model on a models:[] catalog provider prints one [warn] stub line at boot", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const output = new PassThrough();
     const errorOutput = new PassThrough();
     const getText = collectOutput(output);
@@ -4734,7 +4870,7 @@ describe("CLI boot stub-fallback warning (TASK.170 onStubFallback wiring)", () =
   });
 
   it("a claude- model prints no stub-fallback line (its undefined ceiling is intentional, not a stub)", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const output = new PassThrough();
     const errorOutput = new PassThrough();
     const getErr = collectOutput(errorOutput);
@@ -4965,7 +5101,7 @@ describe("CLI proxy-relay lifecycle (Taskana 4074 cross-review F5)", () => {
 
 describe("--tui flag (Taskana 4082)", () => {
   it("1. --tui with interactive:true boots the Ink composer, and a submitted line reaches the loop", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
     const getText = collectOutput(output);
@@ -4974,7 +5110,8 @@ describe("--tui flag (Taskana 4082)", () => {
     const tuiHandles: TuiHandle[] = [];
     const runPromise = runCli({
       argv: ["--tui"],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort,
@@ -5017,7 +5154,7 @@ describe("--tui flag (Taskana 4082)", () => {
   });
 
   it("1b. --tui banner renders and the readline '> ' prompt stays silent in TUI mode", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
     const getText = collectOutput(output);
@@ -5025,7 +5162,8 @@ describe("--tui flag (Taskana 4082)", () => {
     const tuiHandles: TuiHandle[] = [];
     const runPromise = runCli({
       argv: ["--tui"],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort: new CountingModelPort(),
@@ -5057,7 +5195,7 @@ describe("--tui flag (Taskana 4082)", () => {
     // rework the question renders INSIDE the TUI (confirm mode) and the "n"
     // answer routes only to the confirm — the model port must never see a
     // turn with prompt "n" (the pre-fix behavior double-captured the line).
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
     const gitWorkspace = mkdtempSync(join(tmpdir(), "anycode-cli-tui-git-"));
     titleTestTempDirs.push(gitWorkspace);
     // A real repo with a dirty file, so /commit reaches its y/N question
@@ -5072,7 +5210,8 @@ describe("--tui flag (Taskana 4082)", () => {
     const tuiHandles: TuiHandle[] = [];
     const runPromise = runCli({
       argv: ["--tui"],
-      env: makeTitleTestEnv(dbPath),
+      env: makeTitleTestEnv(dbPath, home),
+      home,
       input,
       output,
       modelPort,
@@ -5131,7 +5270,7 @@ describe("--tui flag (Taskana 4082)", () => {
   });
 
   it("2. --tui with --print is silently ignored: byte-identical print output", async () => {
-    const { workspace, dbPath } = setupTitleTestDirs();
+    const { workspace, dbPath, home } = setupTitleTestDirs();
 
     const runPrint = async (argv: string[]): Promise<{ code: number | undefined; text: string }> => {
       const output = new PassThrough();
@@ -5139,7 +5278,8 @@ describe("--tui flag (Taskana 4082)", () => {
       const getText = collectOutput(output);
       const code = await runCli({
         argv,
-        env: makeTitleTestEnv(dbPath),
+        env: makeTitleTestEnv(dbPath, home),
+        home,
         input: new PassThrough(),
         output,
         errorOutput,
