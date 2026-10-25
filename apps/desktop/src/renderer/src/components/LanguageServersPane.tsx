@@ -41,6 +41,7 @@ import {
 } from "./language-servers-model.js";
 import { hasCrashedLspServer } from "./EnvironmentMenu.js";
 import { TabContext, useTabSend, useTabStore } from "../tab-context.js";
+import type { DesktopStoreApi } from "../tab-registry.js";
 import type {
   LspConfigScope,
   LspConfigStatus,
@@ -65,21 +66,26 @@ export interface LanguageServersPaneProps {
   tabId?: string;
   /** Injectable for tests / isolation; defaults to `window.anycode.lspConfig`. */
   bridge?: LspConfigBridge;
+  /**
+   * The scope tab's store, when the caller sits outside that tab's
+   * <TabContext.Provider> (Settings does) — the live-status section then
+   * renders against it. Ignored when a provider is already in scope.
+   */
+  tabStore?: DesktopStoreApi;
 }
 
-export function LanguageServersPane({ tabId, bridge = window.anycode.lspConfig }: LanguageServersPaneProps) {
+export function LanguageServersPane({ tabId, bridge = window.anycode.lspConfig, tabStore }: LanguageServersPaneProps) {
   const [status, setStatus] = useState<LspConfigStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [form, setForm] = useState<CustomLspFormFields | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-  // Live status comes from the pane's own tab context (the tab whose servers
-  // the pane describes). SettingsScreen mounts panes inside the active tab's
-  // tree, so the context resolves; outside one, the section degrades to the
-  // request-only form below.
-  const tabCtx = useContext(TabContext);
-  const liveServers = useTabStore((state) => state.lspServers);
-  const send = useTabSend();
+  // Live status needs a tab context. Settings is mounted OUTSIDE any
+  // <TabContext.Provider> and passes the scope tab's store instead; the tab
+  // hooks (which throw without a provider) live only inside <LiveLspStatus>,
+  // which is rendered only when one of the two resolves.
+  const ambientTabCtx = useContext(TabContext);
+  const tabCtx = ambientTabCtx ?? (tabId !== undefined && tabStore !== undefined ? { tabId, store: tabStore } : null);
 
   useEffect(() => {
     let cancelled = false;
@@ -93,14 +99,6 @@ export function LanguageServersPane({ tabId, bridge = window.anycode.lspConfig }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridge, tabId]);
-
-  // Same subscription the LspPanel drawer uses: ask once on mount, then read
-  // whatever the store holds as lsp_status events land.
-  useEffect(() => {
-    if (tabCtx) {
-      send({ type: "lsp_status_request" });
-    }
-  }, [tabCtx, send]);
 
   async function apply(result: Promise<LspMutationResult>): Promise<boolean> {
     const resolved = await result;
@@ -319,49 +317,68 @@ export function LanguageServersPane({ tabId, bridge = window.anycode.lspConfig }
 
       {/* d) Live status for the active tab (same plane as the LspPanel drawer) */}
       {tabCtx && (
-        <div className="mcp-section">
-          <div className="mcp-section-title">
-            Live status
-            <span className="mcp-section-note">This tab · config was read when the tab started</span>
-          </div>
-          {liveServers.length === 0 ? (
-            <div className="mcp-row-hint">
-              No language servers running in this tab (none configured when it started).
-            </div>
-          ) : (
-            <>
-              <ul className="mcp-row-list">
-                {liveServers.map((server) => (
-                  <li key={server.name} className="mcp-row lsp-status-row" data-lsp-status-name={server.name}>
-                    <div className="mcp-row-main">
-                      <div className="mcp-row-lines">
-                        <div className="mcp-row-line1">
-                          <span className="mcp-row-name settings-mcp-name">{server.name}</span>
-                          <span className={`lsp-state lsp-state-${server.state}`}>{formatLspState(server.state)}</span>
-                        </div>
-                        <div className="mcp-row-line2">{formatLspExtensions(server.extensions)} · pid {server.pid ?? "-"}</div>
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-              {hasCrashedLspServer(liveServers) && (
-                <div className="settings-field-row">
-                  <button
-                    type="button"
-                    className="settings-button"
-                    aria-label="Restart crashed servers"
-                    onClick={() => send({ type: "lsp_restart_request" })}
-                  >
-                    Restart crashed servers
-                  </button>
-                </div>
-              )}
-            </>
-          )}
-        </div>
+        <TabContext.Provider value={tabCtx}>
+          <LiveLspStatus />
+        </TabContext.Provider>
       )}
     </section>
+  );
+}
+
+// ── live status (needs a TabContext provider) ──
+
+function LiveLspStatus() {
+  const liveServers = useTabStore((state) => state.lspServers);
+  const send = useTabSend();
+
+  // Same subscription the LspPanel drawer uses: ask once on mount, then read
+  // whatever the store holds as lsp_status events land.
+  useEffect(() => {
+    send({ type: "lsp_status_request" });
+  }, [send]);
+
+  return (
+    <div className="mcp-section">
+      <div className="mcp-section-title">
+        Live status
+        <span className="mcp-section-note">This tab · config was read when the tab started</span>
+      </div>
+      {liveServers.length === 0 ? (
+        <div className="mcp-row-hint">
+          No language servers running in this tab (none configured when it started).
+        </div>
+      ) : (
+        <>
+          <ul className="mcp-row-list">
+            {liveServers.map((server) => (
+              <li key={server.name} className="mcp-row lsp-status-row" data-lsp-status-name={server.name}>
+                <div className="mcp-row-main">
+                  <div className="mcp-row-lines">
+                    <div className="mcp-row-line1">
+                      <span className="mcp-row-name settings-mcp-name">{server.name}</span>
+                      <span className={`lsp-state lsp-state-${server.state}`}>{formatLspState(server.state)}</span>
+                    </div>
+                    <div className="mcp-row-line2">{formatLspExtensions(server.extensions)} · pid {server.pid ?? "-"}</div>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+          {hasCrashedLspServer(liveServers) && (
+            <div className="settings-field-row">
+              <button
+                type="button"
+                className="settings-button"
+                aria-label="Restart crashed servers"
+                onClick={() => send({ type: "lsp_restart_request" })}
+              >
+                Restart crashed servers
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 

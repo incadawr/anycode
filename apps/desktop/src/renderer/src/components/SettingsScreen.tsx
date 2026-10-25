@@ -106,6 +106,7 @@ import { TrustedBinariesSection } from "./TrustedBinariesSection.js";
 import { TrustedFoldersSection } from "./TrustedFoldersSection.js";
 import { McpServersPane } from "./McpServersPane.js";
 import { LanguageServersPane } from "./LanguageServersPane.js";
+import { SettingsPaneBoundary } from "./SettingsPaneBoundary.js";
 import { SessionsApiPane } from "./SessionsApiPane.js";
 import { SESSIONS_API_DESCRIPTION, SESSIONS_API_LABEL } from "./sessions-api-model.js";
 import { SkillsPane } from "./SkillsPane.js";
@@ -1710,6 +1711,7 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
             tabIndex={0}
           >
             <div className="settings-pane-content">
+            <SettingsPaneBoundary paneId={activePane}>
             {/* Taskana 4706: the explicit Global-vs-Project scope bar — rendered
                 ONCE above the pane content, only for the three scope-dependent
                 panes. "Global (user)" targets the user config files (panes call
@@ -1893,7 +1895,7 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
           {/* Taskana 4743: language servers — like MCP above, the pane takes
               the scope bar's tab (project mode) or none (Global = user-only
               snapshot); detection and trust state resolve main-side. */}
-          {activePane === "language-servers" && <LanguageServersPane tabId={scopeTabId ?? undefined} />}
+          {activePane === "language-servers" && <LanguageServersPane tabId={scopeTabId ?? undefined} tabStore={scopeTabId ? tabRegistry.getStore(scopeTabId) : undefined} />}
 
           {activePane === "skills" && <SkillsPane tabId={scopeTabId ?? undefined} />}
 
@@ -2168,6 +2170,7 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
               </section>
             </>
           )}
+            </SettingsPaneBoundary>
             </div>
           </div>
           )}
