@@ -738,6 +738,37 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(0);
   });
 
+  it("create_session: firstMessage to a session outside the folders list is an explicit error, not a silent messageId omit (Taskana 4808, review F1)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-create-f1a-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const other = await mkdtemp(join(tmpdir(), "anycode-create-f1b-")); cleanups.push(() => rm(other, { recursive: true, force: true }));
+    const discoveryFile = join(dir, "communication.json");
+    const tabs: Array<{ sessionId: string; workspace: string; state: string; pid: number }> = [];
+    const request = vi.fn(async (_session: string, op: string, payload?: unknown) => {
+      if (op === "get_session_status") return { engine: "core", state: "idle" };
+      if (op === "send_message") return { envelope: payload, state: "queued" };
+      return undefined;
+    });
+    // Restricted server (folders = [dir]) whose creator lands the tab in `other` — the
+    // orphan F1 describes: the tab exists but list_sessions/send_message cannot see it.
+    const service = await startCommunicationServer({
+      manager: { listTabs: () => tabs, communicationRequest: request }, userData: dir, config: { workspaces: [dir], discoveryFile },
+      createSessionByAgent: async () => { tabs.push({ sessionId: "orphan-1", workspace: other, state: "running", pid: 100 }); return { ok: true, sessionId: "orphan-1", tabId: "tab-1" }; },
+      readyTimeoutMs: 150, readyPollMs: 10,
+    });
+    cleanups.push(() => service.close());
+    const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string };
+    const client = new Client({ name: "create-f1", version: "1" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(discovery.url), { requestInit: { headers: { Authorization: `Bearer ${discovery.token}` } } }));
+    cleanups.push(() => client.close());
+    const result = await client.callTool({ name: "create_session", arguments: { workspace: dir, firstMessage: "hello" } });
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(errorText(result)).toMatch(/^create_session not_allowed: /);
+    // The tab ids are never lost: the error names the created session and tab.
+    expect(errorText(result)).toContain("orphan-1");
+    expect(errorText(result)).toContain("tab-1");
+    expect(request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(0);
+  });
+
   it("send_message schema errors name sessionId, payload and mode instead of a zod issue list", async () => {
     const f = await fixture();
     const result = await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed" } });

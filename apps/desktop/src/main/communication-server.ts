@@ -88,7 +88,7 @@ const tools = [
   { name: "list_pending_approvals", description: "List tool requests waiting for an answer, for sessions whose External approvals switch is on. Shows tool and a short scrubbed description, never file contents or raw input. Omit sessionId to list every approving session. Asks that need a human reading or typing (ExitPlanMode, AskUserQuestion) are listed with answerable:false.", inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, additionalProperties: false } },
   { name: "answer_approval", description: "Allow or deny one pending tool request of a session whose External approvals switch is on. First answer wins (UI or this tool); a later answer reports already_answered. No 'always allow' from outside AnyCode.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, approvalId: { type: "string", minLength: 1, maxLength: 100 }, decision: { enum: ["allow", "deny"] } }, required: ["sessionId", "approvalId", "decision"], additionalProperties: false } },
   { name: "cancel_turn", description: "Stop the running turn of an allowed session, like the Stop button: queued agent messages are rejected and parked approvals are denied. Idle is not an error (cancelled:false, reason:idle). Needs only the Sessions API switch.", inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, required: ["sessionId"], additionalProperties: false } },
-  { name: "create_session", description: "Open a new tab in a project where the user switched on 'Allow agents to open tasks here' (sidebar project menu, off by default; trusted folders only; at most 5 per minute and 8 agent-opened alive). The new session is shared immediately. Optional firstMessage is delivered like send_message next_turn and returns messageId (omitted if the host was not ready within 10 s; then use send_message). Errors start with a code: not_allowed, not_trusted, folder_not_found, rate_limited, too_many, not_ready.", inputSchema: { type: "object", properties: { workspace: { type: "string", minLength: 1, maxLength: 4096 }, engine: { enum: ["core", "codex", "claude"] }, model: { type: "string", minLength: 1, maxLength: 128 }, handle: { type: "string", maxLength: 200 }, firstMessage: { type: "string", minLength: 1, maxLength: 32000 } }, required: ["workspace"], additionalProperties: false } },
+  { name: "create_session", description: "Open a new tab in a project where the user switched on 'Allow agents to open tasks here' (sidebar project menu, off by default; trusted folders only; at most 5 per minute and 8 agent-opened alive; only successful creations count towards the per-minute limit). The new session is shared immediately. Optional firstMessage is delivered like send_message next_turn and returns messageId (omitted if the host was not ready within 10 s; then use send_message; refused with not_allowed, naming the tab ids, if the new tab is outside the folders list). Errors start with a code: not_allowed, not_trusted, folder_not_found, rate_limited, too_many, not_ready.", inputSchema: { type: "object", properties: { workspace: { type: "string", minLength: 1, maxLength: 4096 }, engine: { enum: ["core", "codex", "claude"] }, model: { type: "string", minLength: 1, maxLength: 128 }, handle: { type: "string", maxLength: 200 }, firstMessage: { type: "string", minLength: 1, maxLength: 32000 } }, required: ["workspace"], additionalProperties: false } },
 ];
 
 async function writePrivateFile(path: string, text: string): Promise<void> {
@@ -413,6 +413,19 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         });
         let messageId: string | undefined;
         if (input.firstMessage !== undefined) {
+          // Taskana 4808 (review F1): the new tab must be INSIDE the folders list for firstMessage
+          // (its delivery rides list_sessions' requireSession). A tab outside the list can appear
+          // when the creator lands it on another workspace; waiting the full readiness timeout and
+          // then omitting messageId would silently drop the message. Refuse up front instead — the
+          // tab exists, so the error names its ids rather than hiding them.
+          const tabWorkspace = options.manager.listTabs().find((t) => t.sessionId === outcome.sessionId)?.workspace;
+          if (tabWorkspace !== undefined) {
+            let landed: string;
+            try { landed = await realpath(tabWorkspace); } catch { landed = tabWorkspace; }
+            if (restricted && !allowed.has(landed)) {
+              throw new Error(`create_session not_allowed: the new session landed outside the Sessions API folders list, so firstMessage cannot be delivered; the tab exists — sessionId ${outcome.sessionId}, tabId ${outcome.tabId}`);
+            }
+          }
           const deadline = Date.now() + (options.readyTimeoutMs ?? 10_000);
           const step = options.readyPollMs ?? 250;
           for (;;) {
