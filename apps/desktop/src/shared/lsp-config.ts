@@ -61,7 +61,11 @@ export interface LspCatalogStatusEntry {
   extensions: string[];
   /** Copyable install command — rendered as plain text, never executed. */
   installHint: string;
-  /** Existence-only detection result (main/lsp-detect.ts; nothing is spawned). */
+  /**
+   * Existence-only detection result (main/lsp-detect.ts; nothing is spawned).
+   * `found: false` + `foundSource: "project"` = present only in the project's
+   * node_modules/.bin, which the app does not spawn from: it will not start.
+   */
   found: boolean;
   foundSource: LspFoundSource | null;
 }

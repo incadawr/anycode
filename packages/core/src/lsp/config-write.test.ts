@@ -115,6 +115,49 @@ describe("upsertLspServer", () => {
     expect(read(files).lspServers).toEqual([entry]);
   });
 
+  it("replacing an entry WITHOUT initializationOptions keeps the existing ones (custom-form edit does not drop them)", async () => {
+    const existing = { name: "mine", command: "old", extensions: [".zz"], initializationOptions: { a: 1 } };
+    const { fs, files } = makeFs({ [CONFIG]: JSON.stringify({ lspServers: [existing] }) });
+    const next: LspServerEntry = { name: "mine", command: "new-server", args: ["--stdio"], extensions: [".zz", ".zy"] };
+    await upsertLspServer(fs, CONFIG, next);
+    expect(read(files).lspServers).toEqual([
+      { name: "mine", command: "new-server", args: ["--stdio"], extensions: [".zz", ".zy"], initializationOptions: { a: 1 } },
+    ]);
+  });
+
+  it("replacing WITH initializationOptions takes the new value (the new entry wins)", async () => {
+    const existing = { name: "mine", command: "old", extensions: [".zz"], initializationOptions: { a: 1 } };
+    const { fs, files } = makeFs({ [CONFIG]: JSON.stringify({ lspServers: [existing] }) });
+    const next: LspServerEntry = { name: "mine", command: "old", extensions: [".zz"], initializationOptions: { b: 2 } };
+    await upsertLspServer(fs, CONFIG, next);
+    expect(read(files).lspServers).toEqual([next]);
+  });
+
+  it("a NEW name is pushed with no initializationOptions (nothing to carry over)", async () => {
+    const existing = { name: "mine", command: "old", extensions: [".zz"], initializationOptions: { a: 1 } };
+    const { fs, files } = makeFs({ [CONFIG]: JSON.stringify({ lspServers: [existing] }) });
+    const fresh: LspServerEntry = { name: "fresh", command: "fresh-server", extensions: [".fr"] };
+    await upsertLspServer(fs, CONFIG, fresh);
+    const list = read(files).lspServers as Array<Record<string, unknown>>;
+    expect(list).toEqual([existing, fresh]);
+    expect(list[1]).not.toHaveProperty("initializationOptions");
+  });
+
+  it("carrying initializationOptions leaves unrelated keys and other entries unchanged", async () => {
+    const other = { name: "other", command: "other-server", extensions: [".ot"], initializationOptions: { keep: true } };
+    const existing = { name: "mine", command: "old", extensions: [".zz"], initializationOptions: { a: 1 } };
+    const { fs, files } = makeFs({
+      [CONFIG]: JSON.stringify({ telemetry: { enabled: true }, lspServers: [other, existing] }),
+    });
+    await upsertLspServer(fs, CONFIG, { name: "mine", command: "new", extensions: [".zz"] });
+    const config = read(files);
+    expect(config.telemetry).toEqual({ enabled: true });
+    expect(config.lspServers).toEqual([
+      other,
+      { name: "mine", command: "new", extensions: [".zz"], initializationOptions: { a: 1 } },
+    ]);
+  });
+
   it("refuses a non-array lspServers with invalid_shape and writes NOTHING", async () => {
     const raw = JSON.stringify({ lspServers: { typescript: { command: "x" } } });
     const { fs, files } = makeFs({ [CONFIG]: raw });

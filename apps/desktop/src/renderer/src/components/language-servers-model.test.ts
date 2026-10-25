@@ -11,6 +11,8 @@ import type { LspCatalogStatusEntry, LspConfigStatus, LspEntryView } from "../..
 import {
   NEW_SESSIONS_NOTICE,
   NOT_INSTALLED_NOTICE,
+  PROJECT_ONLY_BADGE,
+  PROJECT_ONLY_HINT,
   blankCustomForm,
   buildCatalogRows,
   buildCustomUpsertRequest,
@@ -173,6 +175,33 @@ describe("buildCatalogRows", () => {
     const pyright = rows.find((row) => row.entry.id === "pyright")!;
     expect(pyright.badge).toBe("Not installed");
     expect(pyright.notInstalled).toBe(true);
+  });
+
+  it("project-only (node_modules/.bin, found:false source project) gets its own label and hint, never plain Found", () => {
+    const projectOnly = catalogEntry({ id: "typescript", extensions: [".ts"], found: false, foundSource: "project" });
+    const row = buildCatalogRows(status({ catalog: [projectOnly] }))[0]!;
+    expect(row.badge).toBe(PROJECT_ONLY_BADGE);
+    expect(row.badge).not.toBe("Found");
+    expect(row.projectOnly).toBe(true);
+    expect(row.projectOnlyHint).toBe(PROJECT_ONLY_HINT);
+    expect(row.notInstalled).toBe(true);
+  });
+
+  it("a PATH hit is Found and is not project-only; a plain miss is Not installed with no project hint", () => {
+    const rows = buildCatalogRows(
+      status({
+        catalog: [
+          catalogEntry({ id: "gopls", extensions: [".go"], found: true, foundSource: "path" }),
+          catalogEntry({ id: "pyright", extensions: [".py"], found: false, foundSource: null }),
+        ],
+      }),
+    );
+    expect(rows[0]!.badge).toBe("Found");
+    expect(rows[0]!.projectOnly).toBe(false);
+    expect(rows[0]!.projectOnlyHint).toBeNull();
+    expect(rows[1]!.badge).toBe("Not installed");
+    expect(rows[1]!.projectOnly).toBe(false);
+    expect(rows[1]!.projectOnlyHint).toBeNull();
   });
 
   it("enabledLabel names each scope that defines the entry's name", () => {

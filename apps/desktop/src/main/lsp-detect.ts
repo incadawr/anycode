@@ -42,8 +42,17 @@ export interface LspDetectInputs {
 export type LspDetectSource = "path" | "project";
 
 export interface LspDetectResult {
+  /**
+   * `true` only for a PATH hit. `source: "project"` with `found: false` means
+   * the binary is present only in the project's `node_modules/.bin`: the app
+   * spawns by PATH (never from the project, which would bypass workspace
+   * trust), so such a server will not start from there.
+   */
   found: boolean;
-  /** Where the first hit came from; `null` when not found. */
+  /**
+   * Where the first hit came from; `null` when no hit. `"project"` pairs with
+   * `found: false` (see above).
+   */
   source: LspDetectSource | null;
 }
 
@@ -104,7 +113,9 @@ function isExecutable(stat: DetectedFile, platform: NodeJS.Platform): boolean {
  * Detects one command. Probes, in order: every `PATH` dir, the common extra
  * dirs, then (only when the caller passes a workspace — the catalog entry's
  * `nodeBin` flag decides whether main passes it) `<workspace>/node_modules/.bin`.
- * First hit wins and names its source. NEVER spawns or execs anything.
+ * First hit wins and names its source. A `node_modules/.bin` hit is reported
+ * as `found: false, source: "project"` (the app spawns by PATH, so it would
+ * not start). NEVER spawns or execs anything.
  */
 export async function detectCommand(command: string, inputs: LspDetectInputs): Promise<LspDetectResult> {
   const names = candidateFileNames(command.trim(), inputs.platform);
@@ -124,7 +135,7 @@ export async function detectCommand(command: string, inputs: LspDetectInputs): P
     for (const name of names) {
       const stat = await inputs.fileExists(joinPath(inputs.platform, binDir, name));
       if (stat !== undefined && stat.isFile && isExecutable(stat, inputs.platform)) {
-        return { found: true, source: "project" };
+        return { found: false, source: "project" };
       }
     }
   }

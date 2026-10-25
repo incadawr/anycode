@@ -68,6 +68,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   fallback chain like Agent calls do: a cooling primary hands the step to the
   next healthy entry, or to the parent's model, with a visible notice. Engine
   roles in orchestrate mode also run in the background by default.
+- Settings → Language servers no longer reports a server as found when it exists only in the project's node_modules (it would not start), and editing a custom server keeps its hand-written initializationOptions.
 
 ### Security
 

@@ -150,8 +150,16 @@ export type EnabledScopes = { project: boolean; user: boolean };
 
 export interface CatalogRowModel {
   entry: LspCatalogStatusEntry;
-  /** Badge text: "Found" / "Not installed". */
+  /** Badge text: "Found" / "Only in project node_modules — not on PATH" / "Not installed". */
   badge: string;
+  /**
+   * True when the binary is present only in the project's node_modules/.bin
+   * (detection `found: false, foundSource: "project"`): it exists but the app
+   * spawns by PATH, so it will not start from there.
+   */
+  projectOnly: boolean;
+  /** Hint line for the project-only state; null otherwise. */
+  projectOnlyHint: string | null;
   /** True when the binary was not detected — enabling still allowed, with the warning note. */
   notInstalled: boolean;
   enabled: EnabledScopes;
@@ -188,9 +196,12 @@ export function buildCatalogRows(status: LspConfigStatus): CatalogRowModel[] {
     if (enabled.project) labels.push("project");
     if (enabled.user) labels.push("all projects");
     const overlap = findExtensionOverlap(entry, status.catalog);
+    const projectOnly = !entry.found && entry.foundSource === "project";
     return {
       entry,
-      badge: entry.found ? "Found" : "Not installed",
+      badge: entry.found ? "Found" : projectOnly ? PROJECT_ONLY_BADGE : "Not installed",
+      projectOnly,
+      projectOnlyHint: projectOnly ? PROJECT_ONLY_HINT : null,
       notInstalled: !entry.found,
       enabled,
       enabledLabel: labels.length > 0 ? `Enabled (${labels.join(", ")})` : null,
@@ -199,6 +210,12 @@ export function buildCatalogRows(status: LspConfigStatus): CatalogRowModel[] {
     };
   });
 }
+
+/** Badge for a binary present only in the project's node_modules/.bin (never plain "Found"). */
+export const PROJECT_ONLY_BADGE = "Only in project node_modules — not on PATH";
+
+/** Hint shown under a project-only row: how to make the server actually startable. */
+export const PROJECT_ONLY_HINT = "Install it globally (e.g. npm i -g <package>) or use a custom entry with the full path.";
 
 /** Disabled-reason for the "Enable for this project" button; null when it is clickable. */
 export function projectEnableDisabledReason(projectScopeAvailable: boolean): string | null {
