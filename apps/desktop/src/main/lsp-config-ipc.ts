@@ -107,7 +107,7 @@ export class NodeLspConfigFs implements LspConfigFs {
 export interface LspConfigIpcDeps {
   /** `os.homedir()` in production; overridable at the main/index.ts wiring site (dev/test only, MCP precedent). */
   home(): string;
-  /** Resolves the active tab's workspace from main's own tab-meta fact — never a renderer-supplied path. */
+  /** Scope reference resolver (Taskana 4758): a tab id (legacy) or a workspace id `ws_<16 hex>`, resolved main-side — never a renderer-supplied path. */
   workspaceForTab(tabId: string): string | undefined;
   fs: LspConfigFs;
   /** `process.env.PATH` in production; injectable for tests. */

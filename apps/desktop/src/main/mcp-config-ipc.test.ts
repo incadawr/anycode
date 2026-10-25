@@ -618,3 +618,42 @@ describe("handleMcpConfigGet pluginServers (Taskana 4732 S1-C)", () => {
     expect(snapshot.problems.length).toBeGreaterThan(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Taskana 4758: a workspace scope reference (`ws_…`) resolves like a tab id.
+
+describe("mcp scope reference (Taskana 4758)", () => {
+  const WS_REF = "ws_0123456789abcdef";
+  const refDeps = (files: Record<string, string>, workspace: string | undefined): { deps: McpConfigIpcDeps; files: Record<string, string> } => {
+    const built = makeDeps(files, { noTab: true });
+    return {
+      deps: { ...built.deps, workspaceForTab: (ref) => (ref === WS_REF ? workspace : undefined) },
+      files: built.files,
+    };
+  };
+
+  it("get returns the folder's project entries when a ws_ reference resolves", async () => {
+    const { deps } = refDeps({ [PROJECT_CONFIG]: JSON.stringify({ mcpServers: { a: { command: "node" } } }) }, WORKSPACE);
+    const snapshot = await handleMcpConfigGet(deps, { tabId: WS_REF });
+    expect(snapshot.entries.find((e) => e.name === "a")?.source).toBe("project");
+  });
+
+  it("get falls back to user-only for an unresolvable ws_ reference", async () => {
+    const { deps } = refDeps({ [PROJECT_CONFIG]: JSON.stringify({ mcpServers: { a: { command: "node" } } }) }, undefined);
+    const snapshot = await handleMcpConfigGet(deps, { tabId: "ws_ffffffffffffffff" });
+    expect(snapshot.entries.find((e) => e.name === "a")).toBeUndefined();
+    expect(snapshot.projectAvailable).toBe(false);
+  });
+
+  it("an unresolvable (stale) ws_ reference refuses a project upsert and writes nothing", async () => {
+    const { deps, files } = refDeps({}, undefined);
+    const result = await handleMcpUpsert(deps, {
+      tabId: "ws_ffffffffffffffff",
+      scope: "project",
+      name: "srv",
+      entry: { command: "node" },
+    });
+    expect(result).toEqual({ ok: false, reason: "no_workspace" });
+    expect(files[PROJECT_CONFIG]).toBeUndefined();
+  });
+});

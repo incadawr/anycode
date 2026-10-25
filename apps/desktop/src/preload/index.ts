@@ -48,6 +48,7 @@ import {
   type CommunicationMutationResult,
   type CommunicationRegenerateResult,
 } from "../shared/communication-config.js";
+import { SCOPE_WORKSPACES_LIST_CHANNEL, type ScopeWorkspacesListResult } from "../shared/scope-workspaces.js";
 import {
   BROWSER_ACCESS_CHANGED_CHANNEL,
   BROWSER_ACCESS_GET_CHANNEL,
@@ -1120,6 +1121,12 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(COMMUNICATION_SET_SESSION_ACCESS_CHANNEL, { tabId, enabled }) as Promise<CommunicationMutationResult>,
     setSessionHandle: (tabId: string, handle: string | null): Promise<CommunicationHandleResult> =>
       ipcRenderer.invoke(COMMUNICATION_SET_SESSION_HANDLE_CHANNEL, { tabId, handle }) as Promise<CommunicationHandleResult>,
+  },
+  // Taskana 4758: the Settings scope dropdown's folder list. Opaque ids and
+  // display fields only; no path is ever sent back through this bridge.
+  scopeWorkspaces: {
+    list: (): Promise<ScopeWorkspacesListResult> =>
+      ipcRenderer.invoke(SCOPE_WORKSPACES_LIST_CHANNEL, {}) as Promise<ScopeWorkspacesListResult>,
   },
   // Taskana 4759: `browserAccess.*` — the per-session "Full browser access" switch.
   // The renderer names a tabId and a boolean only; main resolves the session, checks

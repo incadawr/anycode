@@ -424,3 +424,36 @@ describe("normalizeLspExtension", () => {
     expect(normalizeLspExtension(" ts ")).toBe(".ts");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Taskana 4758: a workspace scope reference (`ws_…`) resolves like a tab id.
+
+describe("lsp scope reference (Taskana 4758)", () => {
+  const WS_REF = "ws_0123456789abcdef";
+  const refDeps = (workspace: string | undefined, files: Record<string, string> = {}) => {
+    const built = makeDeps(files, { noTab: true });
+    return {
+      deps: { ...built.deps, workspaceForTab: (ref: string) => (ref === WS_REF ? workspace : undefined) },
+      files: built.files,
+    };
+  };
+
+  it("catalog status reports the project scope when a ws_ reference resolves", async () => {
+    const { deps } = refDeps(WORKSPACE);
+    const status = await handleLspCatalogStatus(deps, { tabId: WS_REF });
+    expect(status.projectScopeAvailable).toBe(true);
+  });
+
+  it("an unresolvable ws_ reference reports no project scope", async () => {
+    const { deps } = refDeps(undefined);
+    const status = await handleLspCatalogStatus(deps, { tabId: "ws_ffffffffffffffff" });
+    expect(status.projectScopeAvailable).toBe(false);
+  });
+
+  it("an unresolvable (stale) ws_ reference refuses a project enable and writes nothing", async () => {
+    const { deps, files } = refDeps(undefined);
+    const result = await handleLspEnable(deps, { tabId: "ws_ffffffffffffffff", presetId: "typescript", scope: "project" });
+    expect(result).toEqual({ ok: false, reason: "no_workspace" });
+    expect(files[PROJECT_CONFIG]).toBeUndefined();
+  });
+});

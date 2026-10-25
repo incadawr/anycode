@@ -119,6 +119,7 @@ import type {
   CommunicationMutationResult,
   CommunicationRegenerateResult,
 } from "../../shared/communication-config";
+import type { ScopeWorkspacesListResult } from "../../shared/scope-workspaces";
 import type {
   BrowserAccessChangedPayload,
   BrowserAccessGetResult,
@@ -624,6 +625,10 @@ declare global {
         setDefaultAccess(access: "off" | "on"): Promise<CommunicationMutationResult>;
         setSessionAccess(tabId: string, enabled: boolean): Promise<CommunicationMutationResult>;
         setSessionHandle(tabId: string, handle: string | null): Promise<CommunicationHandleResult>;
+      };
+      // Taskana 4758: the Settings scope dropdown's folder list (opaque ids only).
+      scopeWorkspaces: {
+        list(): Promise<ScopeWorkspacesListResult>;
       };
       // Taskana 4759: "Full browser access" per session. Only the user can set it (the
       // main window's sender is checked); set/get resolve the EFFECTIVE value.

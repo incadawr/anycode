@@ -454,3 +454,46 @@ describe("skills-create security hardening (P7.20 W6-FIX)", () => {
     expect(await exists(join(ws, ".anycode/skills/single/SKILL.md"))).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Taskana 4758: a workspace scope reference (`ws_…`) resolves like a tab id.
+
+describe("skills scope reference (Taskana 4758)", () => {
+  const WS_REF = "ws_0123456789abcdef";
+
+  function refDeps(workspace: string | undefined, home: string): SkillsIpcDeps {
+    return {
+      home: () => home,
+      workspaceForTab: (ref) => (ref === WS_REF ? workspace : undefined),
+      fs,
+      reveal: () => {},
+    };
+  }
+
+  it("lists the folder's project skills when a ws_ reference resolves", async () => {
+    const ws = await tmp();
+    const home = await tmp();
+    await seed(join(ws, ".anycode/skills/refskill/SKILL.md"), "---\nname: refskill\ndescription: R\n---\nbody\n");
+    const snapshot = await handleSkillsList(refDeps(ws, home), { tabId: WS_REF });
+    expect(snapshot.rows.find((r) => r.name === "refskill")?.sourceKind).toBe("project");
+  });
+
+  it("falls back to the user-only snapshot for an unresolvable ws_ reference", async () => {
+    const home = await tmp();
+    await seed(join(home, ".anycode/skills/personal/SKILL.md"), "---\nname: personal\ndescription: P\n---\nbody\n");
+    const snapshot = await handleSkillsList(refDeps(undefined, home), { tabId: "ws_ffffffffffffffff" });
+    expect(snapshot.rows.find((r) => r.name === "personal")?.sourceKind).toBe("user");
+  });
+
+  it("an unresolvable (stale) ws_ reference refuses a project create and writes nothing", async () => {
+    const home = await tmp();
+    const result = await handleSkillsCreate(refDeps(undefined, home), {
+      tabId: "ws_ffffffffffffffff",
+      scope: "project",
+      name: "ghostskill",
+      description: "d",
+    });
+    expect(result).toEqual({ ok: false, reason: "no_workspace" });
+    expect(await exists(join(home, ".anycode/skills/ghostskill/SKILL.md"))).toBe(false);
+  });
+});

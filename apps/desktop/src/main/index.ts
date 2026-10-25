@@ -149,6 +149,8 @@ import { createSystemProxyResolver, type SystemProxyCache } from "./system-proxy
 import { migrateLegacyProxyUrls, type LegacyProxyImportDeps } from "./proxy-scopes.js";
 import { sendToMainWindow } from "./main-window-send.js";
 import { NodeMcpConfigFs, registerMcpConfigIpc } from "./mcp-config-ipc.js";
+import { createScopeWorkspaceRegistry } from "./scope-workspaces.js";
+import { registerScopeWorkspacesIpc } from "./scope-workspaces-ipc.js";
 import { McpSecretForkCache } from "./mcp-secret-fork-cache.js";
 import { registerMcpSecretsIpc } from "./mcp-secrets-ipc.js";
 // Taskana 4743: Settings → Language servers control plane (same deps-bag shape
@@ -3109,9 +3111,24 @@ void app.whenReady().then(async () => {
   // double gate (W5-FIX, finding 5 — `resolveMcpImportHome` refuses it in a
   // packaged production build), else the real homedir; `workspaceForTab` reads
 
+  // Taskana 4758: the Settings scope dropdown's workspace list + the resolver
+  // behind the `ws_…` scope references the four config panes accept. The
+  // renderer never supplies a path: the registry lists open tabs and recent
+  // root sessions main-side, and `resolve` honours only ids from its own cache.
+  const scopeRegistry = createScopeWorkspaceRegistry({
+    listRootSessions: async (opts) => (persistence === null ? [] : persistence.listRootSessions(opts)),
+    openTabs: () => manager?.listTabs() ?? [],
+    realpathSync,
+    stat: (path) => fsStat(path),
+    statSync,
+    homedir,
+    now: () => Date.now(),
+  });
+  registerScopeWorkspacesIpc({ registry: scopeRegistry });
+
   registerMcpConfigIpc({
     home: () => (selfCheckProfile ?? resolveMcpImportHome(process.env, app.isPackaged)) ?? homedir(),
-    workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
+    workspaceForTab: (ref) => scopeRegistry.resolve(ref, (tabId) => manager?.getTab(tabId)?.workspace),
     fs: new NodeMcpConfigFs(),
     // Taskana 4732 xfix H1: the plugin-server rows consent state from the
     // SAME settings.json cell the host runtime + Plugins pane read/write.
@@ -3200,7 +3217,7 @@ void app.whenReady().then(async () => {
 
   registerLspConfigIpc({
     home: () => (selfCheckProfile ?? resolveMcpImportHome(process.env, app.isPackaged)) ?? homedir(),
-    workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
+    workspaceForTab: (ref) => scopeRegistry.resolve(ref, (tabId) => manager?.getTab(tabId)?.workspace),
     fs: new NodeLspConfigFs(),
     pathEnv: () => process.env.PATH,
     platform: () => process.platform,
@@ -3220,7 +3237,7 @@ void app.whenReady().then(async () => {
   // testable off a plain deps bag.
   registerSkillsIpc({
     home: () => (selfCheckProfile ?? resolveSkillsImportHome(process.env, app.isPackaged)) ?? homedir(),
-    workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
+    workspaceForTab: (ref) => scopeRegistry.resolve(ref, (tabId) => manager?.getTab(tabId)?.workspace),
     fs: new NodeSkillsFs(),
     reveal: (path) => shell.showItemInFolder(path),
   });
@@ -3236,7 +3253,7 @@ void app.whenReady().then(async () => {
   // testable off a plain deps bag.
   registerSubagentsIpc({
     home: () => (selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged)) ?? homedir(),
-    workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
+    workspaceForTab: (ref) => scopeRegistry.resolve(ref, (tabId) => manager?.getTab(tabId)?.workspace),
     fs: new NodeSubagentsFs(),
     reveal: (path) => shell.showItemInFolder(path),
   });

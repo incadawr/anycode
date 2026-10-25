@@ -128,7 +128,7 @@ export class NodeMcpConfigFs implements McpConfigFs {
 export interface McpConfigIpcDeps {
   /** `os.homedir()` in production; `ANYCODE_MCP_IMPORT_HOME`-overridable at the main/index.ts wiring site (dev/test only). */
   home(): string;
-  /** Resolves the active tab's workspace from main's own tab-meta fact (tab-ipc.ts) — never a renderer-supplied path. */
+  /** Scope reference resolver (Taskana 4758): a tab id (legacy) or a workspace id `ws_<16 hex>`, resolved main-side — never a renderer-supplied path. */
   workspaceForTab(tabId: string): string | undefined;
   fs: McpConfigFs;
   /**

@@ -633,3 +633,45 @@ describe("handleSubagentsPreview", () => {
     expect(result).toEqual({ ok: false, reason: "invalid" });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Taskana 4758: a workspace scope reference (`ws_…`) resolves like a tab id.
+
+describe("subagents scope reference (Taskana 4758)", () => {
+  const WS_REF = "ws_0123456789abcdef";
+
+  function refDeps(workspace: string | undefined, home: string): SubagentsIpcDeps {
+    return {
+      home: () => home,
+      workspaceForTab: (ref) => (ref === WS_REF ? workspace : undefined),
+      fs,
+      reveal: () => {},
+    };
+  }
+
+  it("lists the folder's project profiles when a ws_ reference resolves", async () => {
+    const ws = await tmp();
+    const home = await tmp();
+    await seed(join(ws, ".anycode/agents/refagent.md"), md({ name: "refagent", description: "Ref" }, "body"));
+    const snapshot = await handleSubagentsList(refDeps(ws, home), { tabId: WS_REF });
+    expect(snapshot.rows.find((r) => r.name === "refagent")?.sourceKind).toBe("project");
+  });
+
+  it("falls back to the user-only snapshot for an unresolvable ws_ reference", async () => {
+    const home = await tmp();
+    await seed(join(home, ".anycode/agents/personal.md"), md({ name: "personal", description: "P" }, "body"));
+    const snapshot = await handleSubagentsList(refDeps(undefined, home), { tabId: "ws_ffffffffffffffff" });
+    expect(snapshot.rows.find((r) => r.name === "personal")?.sourceKind).toBe("user");
+  });
+
+  it("an unresolvable (stale) ws_ reference refuses a project create and writes nothing", async () => {
+    const home = await tmp();
+    const result = await handleSubagentsCreate(refDeps(undefined, home), {
+      tabId: "ws_ffffffffffffffff",
+      scope: "project",
+      draft: { name: "ghostagent", description: "d", body: "b" },
+    });
+    expect(result.ok).toBe(false);
+    expect(await exists(join(home, ".anycode/agents/ghostagent.md"))).toBe(false);
+  });
+});
