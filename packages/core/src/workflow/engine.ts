@@ -32,6 +32,7 @@
 import type { AgentLoopConfig } from "../loop/agent-loop.js";
 import type { SessionSubagentPort } from "../ports/session-subagent.js";
 import type {
+  EngineProfileInfo,
   SubagentOutcome,
   SubagentPort,
   SubagentProgress,
@@ -49,6 +50,12 @@ import type {
 } from "../ports/workflow.js";
 import { buildSessionSubagentRequest } from "../subagents/agent-bridge.js";
 import { listPersonaNames } from "../subagents/personas.js";
+import {
+  buildRoleRouteRequestFields,
+  formatRoleDegradeNotice,
+  formatRoleFallbackNotice,
+  type RoleRouteRequestFields,
+} from "../subagents/role-route.js";
 import {
   WORKFLOW_OUTPUT_MAX_BYTES,
   WORKFLOW_STEP_PROMPT_MAX_BYTES,
@@ -328,6 +335,9 @@ function createRunner(
         };
 
         let sub: SubagentOutcome;
+        // Taskana 4735: set only when an engine-role step ran on a degraded or
+        // fallback route; prefixed to the step's finalText below.
+        let routeNotice: string | undefined;
         try {
           // TASK.192: an engine-profile step (engine: claude/codex md-profile)
           // routes through the session tier — the SAME SessionSubagentPort and
@@ -351,13 +361,28 @@ function createRunner(
             };
           } else if (engineProfile !== null) {
             const spawnToolCallId = `wf-${step.id}-${globalThis.crypto.randomUUID()}`;
-            const request = buildSessionSubagentRequest({
-              agentType: step.agentType,
-              description: `workflow ${definition.name} step ${step.id}`,
-              prompt: cappedPrompt.text,
-              spawnToolCallId,
-              profile: engineProfile,
-            });
+            // Taskana 4735: a cooling role primary degrades/falls back like the
+            // Agent tool does; a healthy or unresolved route keeps the profile.
+            const engineRoute = resolveEngineStepRoute(step.agentType, engineProfile, subagents);
+            const request =
+              engineRoute === null
+                ? buildSessionSubagentRequest({
+                    agentType: step.agentType,
+                    description: `workflow ${definition.name} step ${step.id}`,
+                    prompt: cappedPrompt.text,
+                    spawnToolCallId,
+                    profile: engineProfile,
+                  })
+                : {
+                    ...buildSessionSubagentRequest({
+                      agentType: step.agentType,
+                      description: `workflow ${definition.name} step ${step.id}`,
+                      prompt: `${engineRoute.systemPrompt}\n\n---\n\n${cappedPrompt.text}`,
+                      spawnToolCallId,
+                    }),
+                    ...engineRoute.fields,
+                  };
+            routeNotice = engineRoute?.notice;
             const sessionOutcome = await sessionSubagents!.run(request, subOpts);
             // Round-trip check (F14, ports/session-subagent.ts): core minted
             // the spawn identity, so the host must return exactly it.
@@ -446,13 +471,19 @@ function createRunner(
               : sub.status === "error"
                 ? "error"
                 : undefined;
+        // Taskana 4735: the route notice rides a step that ran to a result, the
+        // same way the Agent tool prefixes it; a cancelled step keeps its text.
+        const shownText =
+          routeNotice !== undefined && sub.status !== "cancelled"
+            ? sub.finalText
+              ? `${routeNotice}\n\n${sub.finalText}`
+              : routeNotice
+            : sub.finalText;
         const outcome: WorkflowStepOutcome = {
           stepId: step.id,
           agentType: step.agentType,
           status,
-          finalText: timedOut
-            ? `Step "${step.id}" timed out after ${stepTimeoutMs}ms.`
-            : sub.finalText,
+          finalText: timedOut ? `Step "${step.id}" timed out after ${stepTimeoutMs}ms.` : shownText,
           truncated: sub.truncated,
           ...(failureKind !== undefined ? { failureKind } : {}),
           turns: sub.turns,
@@ -625,6 +656,43 @@ function stepGraph(
     agentType: step.agentType,
     ...(step.dependsOn !== undefined ? { dependsOn: step.dependsOn } : {}),
   }));
+}
+
+/** A role-route resolution for an engine-role step that must not run its profile as-is. */
+interface EngineStepRoute {
+  /** Route fields stamped onto the request (the same set the Agent tool stamps). */
+  fields: RoleRouteRequestFields;
+  /** The role body the profile would have carried; prepended to the prompt instead. */
+  systemPrompt: string;
+  /** Model-visible notice prefixed to the step's finalText (Agent parity). */
+  notice: string;
+}
+
+/**
+ * Taskana 4735: an engine-role step honours the role chain the Agent tool
+ * honours (Taskana 4729). Returns null — the profile request stands — when the
+ * port has no resolver or the route has no skips (healthy primary or md-claimed
+ * profile). Otherwise the primary is cooling: a healthy later entry runs
+ * through the route stamping, and an exhausted chain runs on the parent's
+ * model, both without the profile attached.
+ */
+function resolveEngineStepRoute(
+  agentType: string,
+  engineProfile: EngineProfileInfo,
+  subagents: SubagentPort,
+): EngineStepRoute | null {
+  const route = subagents.resolveRoleRoute?.(agentType) ?? null;
+  if (route === null || route.skipped.length === 0) {
+    return null;
+  }
+  const degraded = route.entries.length === 0;
+  return {
+    fields: buildRoleRouteRequestFields(route, { degraded }),
+    systemPrompt: engineProfile.systemPrompt,
+    notice: degraded
+      ? formatRoleDegradeNotice(agentType, route.skipped)
+      : formatRoleFallbackNotice(agentType, route.skipped),
+  };
 }
 
 /** A step that never launched (dependency failed / run aborted before launch). */

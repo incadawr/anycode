@@ -58,7 +58,12 @@ import { isAbsolute, relative, resolve } from "node:path";
 import type { ZodError } from "zod";
 import type { FileSystemPort } from "../ports/file-system.js";
 import type { McpServerSpec } from "../ports/mcp.js";
-import { resolveMcpServerEntries, type McpServerEntry } from "../mcp/config.js";
+import {
+  isProjectGated,
+  resolveMcpServerEntries,
+  type McpServerEntry,
+  type ProjectTrustOptions,
+} from "../mcp/config.js";
 import type { SkillRoot } from "../skills/discovery.js";
 import { parseFrontmatter } from "../skills/frontmatter.js";
 import type { AgentProfileRoot } from "../subagents/profiles.js";
@@ -91,7 +96,7 @@ const TIER_RANK: Record<PluginTier, number> = {
   "legacy-user": 4,
 };
 
-export interface DiscoverPluginsOptions {
+export interface DiscoverPluginsOptions extends ProjectTrustOptions {
   workspace: string;
   home: string;
   /** Server names already claimed by explicit config; plugins never override them. */
@@ -566,6 +571,7 @@ export async function discoverPlugins(
   const workflowRoots: WorkflowRoot[] = [];
   const mcpServerSpecs: McpServerSpec[] = [];
 
+  const gated = isProjectGated(opts.workspace, opts.home, opts);
   for (const plugin of accepted) {
     const official = plugin.tier === "official";
 
@@ -601,10 +607,22 @@ export async function discoverPlugins(
       ...resolveContentRoots(plugin, pluginWorkflowsDirs(plugin.manifest), "workflows", problems),
     );
 
+    // Project-tier plugin MCP is covered by workspace trust (Taskana 4736):
+    // untrusted => never spawns. When the host supplied a trust decision, a
+    // trusted project needs no separate per-plugin consent (one prompt, not two).
+    if (gated && plugin.tier === "project") {
+      if (plugin.manifest.mcpServers) {
+        problems.push(`Plugin "${plugin.manifest.name}" MCP servers skipped: folder not trusted`);
+      }
+      continue;
+    }
+
     // MCP consent (design §4): undefined mcpConsent keeps today's behaviour.
     const hash = serversHash(plugin.manifest.mcpServers ?? {});
     const consentAllowed =
-      opts.mcpConsent === undefined || hasMcpConsent(opts.mcpConsent, plugin.manifest.name, hash);
+      opts.mcpConsent === undefined ||
+      (plugin.tier === "project" && opts.projectTrusted === true) ||
+      hasMcpConsent(opts.mcpConsent, plugin.manifest.name, hash);
     const resolvedServers = resolvePluginMcpServers(plugin, opts.claimedMcpNames, {
       allowed: consentAllowed,
       hash,

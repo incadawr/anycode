@@ -266,6 +266,8 @@ import {
   PERSONAS,
   ROLE_TURN_BUDGETS,
   isRoleRouteName,
+  // TASK.4721: the one ceiling-object builder (adaptive key absent when off).
+  buildCeilingConfig,
   type PersonaDefinition,
   type RoleRouteResolution,
 } from "@anycode/core";
@@ -304,6 +306,12 @@ import type {
 } from "@anycode/core";
 import { buildAgentProfileRoots } from "@anycode/core/subagents-admin";
 import { hasDurableTransitionResult } from "./worktree-recovery.js";
+import {
+  createSubagentBudgetPort,
+  defaultTurnBudgetHistoryPath,
+  recordAcceptedChildBudget,
+  stampLearnedMaxTurns,
+} from "./turn-budget-store.js";
 import { anycodeSetupDocsForHost } from "./anycode-setup-docs.js";
 import { buildHostBuiltinSkills } from "./builtin-skills.js";
 import { ChildReportQueue } from "./child-report-queue.js";
@@ -326,6 +334,8 @@ import {
   type CredentialResponse,
 } from "../shared/credentials.js";
 import { TERMINAL_INIT_MESSAGE_TYPE } from "../shared/terminal.js";
+import { WORKSPACE_TRUST_PENDING_MESSAGE_TYPE } from "../shared/workspace-trust.js";
+import { establishHostWorkspaceTrust, type HostWorkspaceTrust } from "./workspace-trust.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
 import { PROVIDER_QUOTA_EVENT_TYPE, type ProviderQuotaEvent } from "../shared/provider-quota.js";
 import { RECOGNIZER_CONFIG_CHANGED_TYPE, type RecognizerConfigChanged } from "../shared/recognizer.js";
@@ -390,6 +400,8 @@ const ENV_CONNECTION_ID = "ANYCODE_CONNECTION_ID";
  * `"pnpm test,pnpm typecheck"`.
  */
 const ENV_RUN_ALLOW_BASH = "ANYCODE_RUN_ALLOW_BASH";
+/** Taskana 4702: the ask-zone classifier record (JSON). Mirror of host-env.ts's constant. */
+const ENV_PERMISSION_CLASSIFIER = "ANYCODE_PERMISSION_CLASSIFIER";
 /**
  * 4088-on-4118 integration: the former ANYCODE_IMAGE_INPUT_MODELS local
  * literal is GONE — the live image-modality facts ride 4118's
@@ -466,6 +478,7 @@ import {
   type ChildSpawnRequest,
   type ChildTerminal,
 } from "../shared/child-sessions.js";
+import { parseAskClassifierEnv } from "./ask-classifier-env.js";
 import { createSnapshotHook } from "./snapshot-hook.js";
 import { TerminalManager } from "./terminal.js";
 import { createWirePort } from "./wire.js";
@@ -487,6 +500,15 @@ const outbound = new Outbound();
 const emit = (message: HostToUiMessage): void => {
   outbound.emit(message);
 };
+
+// Taskana 4736: the workspace trust gate, decided once per boot (see boot()). Until
+// boot computes it the gate is closed. `projectTrusted` gates every project-level
+// spawn declaration (MCP, hooks, LSP, project-tier plugin MCP); the pending message
+// is replayed to the UI on every ui_ready while the folder is undecided or changed.
+let hostWorkspaceTrust: HostWorkspaceTrust = { projectTrusted: false };
+function workspaceTrustRequiredMessage(): HostToUiMessage | undefined {
+  return hostWorkspaceTrust.pending?.message;
+}
 // TASK.145 срез 2: one pending-report queue per host process, i.e. per parent
 // session — see child-report-queue.ts's own header for why a bare
 // `outbound.sendDirect` (срез 1) is not reconnect-safe on its own. Wired into
@@ -1277,6 +1299,7 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     tmpDir: tmpdir(),
     pid: process.pid,
     engines: ["codex"],
+    projectTrusted: hostWorkspaceTrust.projectTrusted,
   });
   if (codexMcpForward.codexNames.length > 0) {
     console.log(`[host] codex mcp forward: ${codexMcpForward.codexNames.length} server(s): ${codexMcpForward.codexNames.join(", ")}`);
@@ -1654,6 +1677,7 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
       })
     : undefined;
   session = new Session({
+    workspaceTrustRequired: workspaceTrustRequiredMessage,
     outbound,
     engine: booted.engine,
     // TASK.39: the SAME CodexEngine instance, handed to Session as its narrow
@@ -1963,6 +1987,7 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     tmpDir: tmpdir(),
     pid: process.pid,
     engines: ["claude"],
+    projectTrusted: hostWorkspaceTrust.projectTrusted,
   });
   if (mcpForward.claudeNames.length > 0) {
     console.log(`[host] claude mcp forward: ${mcpForward.claudeNames.length} server(s): ${mcpForward.claudeNames.join(", ")}`);
@@ -2292,6 +2317,7 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
       })
     : undefined;
   session = new Session({
+    workspaceTrustRequired: workspaceTrustRequiredMessage,
     outbound,
     engine: booted.engine,
     // CC-D-min: the RAW ClaudeEngine, Claude's own immediate-apply seam (never
@@ -2523,6 +2549,21 @@ async function boot(): Promise<void> {
     }
     // Selection/probe is deliberately before loadEnvConfig: an external engine
     // must never require AnyCode provider credentials merely to fail/boot.
+    // Taskana 4736: decide the workspace trust gate ONCE, before any engine, hook,
+    // LSP, MCP or plugin wiring. A pending decision is reported to main on the
+    // control channel (main keys the answer by tab and hash, never by the UI).
+    hostWorkspaceTrust = await establishHostWorkspaceTrust(new NodeFileSystemAdapter(), {
+      workspace,
+      home: homedir(),
+      env: process.env,
+    });
+    if (hostWorkspaceTrust.pending !== undefined) {
+      process.parentPort?.postMessage({
+        type: WORKSPACE_TRUST_PENDING_MESSAGE_TYPE,
+        state: hostWorkspaceTrust.pending.state,
+        hash: hostWorkspaceTrust.pending.hash,
+      });
+    }
     const plugin = selectEnginePlugin(process.env);
     engineBootstrap = await beginEngineBootstrap(plugin);
     if (engineBootstrap.id === "codex") {
@@ -2590,6 +2631,13 @@ async function boot(): Promise<void> {
     // change). Logged unconditionally so a widened run is never silent, even
     // when every configured entry was malformed and none were accepted.
     const runAllowBashEntries = parseRunAllowBash(process.env[ENV_RUN_ALLOW_BASH]);
+    // Taskana 4702 Stage 1: the ask-zone classifier (default off). Parsed
+    // defensively; garbage or absence = off. Only the core AgentLoop config
+    // below receives it — engine sessions have their own approval bridges.
+    const askClassifierBoot = parseAskClassifierEnv(process.env[ENV_PERMISSION_CLASSIFIER]);
+    if (askClassifierBoot !== undefined) {
+      console.log(`[host] ${ENV_PERMISSION_CLASSIFIER}: ask-zone classifier ${askClassifierBoot.classifier.id} enabled`);
+    }
     if (process.env[ENV_RUN_ALLOW_BASH] !== undefined) {
       console.log(
         `[host] ${ENV_RUN_ALLOW_BASH}: accepted ${runAllowBashEntries.length} entr${runAllowBashEntries.length === 1 ? "y" : "ies"} ` +
@@ -2720,6 +2768,14 @@ async function boot(): Promise<void> {
       args.child === undefined
         ? createDefaultToolRegistry({ agent: { sessionTier: true }, ...(archMapEnabled ? { archMap: true } : {}) })
         : createDefaultToolRegistry(archMapEnabled ? { archMap: true } : undefined);
+
+    // TASK.4721: adaptive turn budget (ANYCODE_ADAPTIVE_TURN_BUDGET, mirror of
+    // `tools.adaptiveTurnBudget`). OFF => no ceiling key, no subagentBudget,
+    // no history file touched — the pre-4721 boot, byte-identical. ON => the
+    // ladder grants on progress and the learned base budget is fed from and
+    // read back through one shared store (inline + session tiers).
+    const adaptiveTurnBudget = envConfig.adaptiveTurnBudget === true;
+    const subagentBudget = adaptiveTurnBudget ? createSubagentBudgetPort(defaultTurnBudgetHistoryPath()) : undefined;
 
 
     // session from argv — create (`--session`) or load (`--resume`, mirror of
@@ -3034,7 +3090,10 @@ async function boot(): Promise<void> {
     let hookDeclarations: CommandHookDeclaration[] = [];
     let hookConfigError: string | undefined;
     try {
-      const declarations = await loadHookConfigs(fsAdapter, workspace, homedir());
+      const declarations = await loadHookConfigs(fsAdapter, workspace, homedir(), {
+        projectTrusted: hostWorkspaceTrust.projectTrusted,
+        onSkip: (message) => console.warn(`[host] ${message}`),
+      });
       hookDeclarations = declarations;
       for (const declaration of declarations) {
         hooks.register(createCommandHook(execAdapter, declaration, workspace));
@@ -3062,7 +3121,9 @@ async function boot(): Promise<void> {
     let lspServerSpecs: LspServerSpec[] = [];
     let lspIssues: string[] = [];
     try {
-      const loaded = await loadLspServerSpecs(fsAdapter, workspace, homedir());
+      const loaded = await loadLspServerSpecs(fsAdapter, workspace, homedir(), {
+        projectTrusted: hostWorkspaceTrust.projectTrusted,
+      });
       lspServerSpecs = loaded.specs;
       lspIssues = loaded.issues;
     } catch (error) {
@@ -3134,7 +3195,9 @@ async function boot(): Promise<void> {
     let mcpSpecs: McpServerSpec[] = [];
     let mcpProblems: string[] = [];
     try {
-      const loaded = await loadMcpServerSpecs(fsAdapter, workspace, homedir());
+      const loaded = await loadMcpServerSpecs(fsAdapter, workspace, homedir(), {
+        projectTrusted: hostWorkspaceTrust.projectTrusted,
+      });
       mcpSpecs = loaded.specs;
       mcpProblems = loaded.problems;
     } catch (error) {
@@ -3180,6 +3243,7 @@ async function boot(): Promise<void> {
         home: resolveExtensionsHomeOverride(process.env) ?? homedir(),
         claimedMcpNames: new Set(mcpSpecs.map((spec) => spec.name)),
         repoMapConfig,
+        projectTrusted: hostWorkspaceTrust.projectTrusted,
         ...(builtinSkills.length > 0 ? { builtinSkills } : {}),
       });
     } catch (error) {
@@ -3524,6 +3588,8 @@ async function boot(): Promise<void> {
         rules,
       ),
       permissionBroker: broker,
+      // Taskana 4702 Stage 1: optional; absent = byte-identical to pre-4702.
+      ...(askClassifierBoot !== undefined ? { askClassifier: askClassifierBoot } : {}),
       mode,
       // TASK.124 remainder (owner rule 2026-08-22): "присмотр есть ⇒ корневая
       // сессия вообще без потолка" — a supervised interactive ROOT has no turn
@@ -3540,8 +3606,15 @@ async function boot(): Promise<void> {
       // (never snapshotted): a run that starts supervised and goes quiet
       // mid-session falls under the ladder from that point on.
       ...(!isChildSessionBoot(args, sessionMeta)
-        ? { ceiling: { supervisedRoot: () => broker.isUnattended !== true } }
-        : {}),
+        ? {
+            ceiling: buildCeilingConfig({
+              adaptive: adaptiveTurnBudget,
+              supervisedRoot: () => broker.isUnattended !== true,
+            }),
+          }
+        : adaptiveTurnBudget
+          ? { ceiling: buildCeilingConfig({ adaptive: true }) }
+          : {}),
       ports: {
         fs: fsAdapter,
         exec: execAdapter,
@@ -3567,6 +3640,8 @@ async function boot(): Promise<void> {
       cwd: workspace,
       maxTurns: resolveChildMaxTurns(args.child, envConfig.maxTurns),
       subagentMaxTurns: envConfig.subagentMaxTurns,
+      // TASK.4721: learned base-budget port (adaptive only; see above).
+      ...(subagentBudget !== undefined ? { subagentBudget } : {}),
       // TASK.148 slice 1: subagent stall-detector override, ANYCODE_SUBAGENT_STALL_MS
       // / settings tools.subagentStallTimeoutMs (main/host-env.ts fills the env var
       // from the setting; envConfig re-reads it here exactly like subagentMaxTurns).
@@ -3716,7 +3791,13 @@ async function boot(): Promise<void> {
         // TASK.145 срез 1: the detach-delivery seam. Fires strictly AFTER
         // the spawning Agent tool call already returned at admit — see
         // deliverDetachedChildReport's own comment for the full picture.
-        onDetachedTerminal: deliverDetachedChildReport,
+        // TASK.4721: a detached child's TERMINAL is the only place its real
+        // turn count exists (the admit outcome is not evidence), so the
+        // adaptive history is written here, before the report is delivered.
+        onDetachedTerminal: (outcome, req) => {
+          recordAcceptedChildBudget(subagentBudget, outcome, req);
+          deliverDetachedChildReport(outcome, req);
+        },
         // TASK.148 slice 2: the detached-stall delivery seam — fires
         // mid-run, zero or more times, independently of onDetachedTerminal
         // above. See deliverDetachedChildStall's own comment for the full
@@ -3760,7 +3841,23 @@ async function boot(): Promise<void> {
             }
           }
         }
-        return innerRun(req, opts);
+        // TASK.4721: adaptive only — a learned base budget stands in for the
+        // host default (never over an explicit request, the settings budget, or
+        // an engine child). The same object is returned when nothing applies.
+        const budgeted = stampLearnedMaxTurns(req, {
+          adaptive: adaptiveTurnBudget,
+          settingsBudgetSet: envConfig.subagentMaxTurns !== undefined,
+          port: subagentBudget,
+        });
+        if (req.detach === true) {
+          // Detached: the admit outcome is not a finished run; the terminal
+          // records itself through onDetachedTerminal above.
+          return innerRun(budgeted, opts);
+        }
+        return innerRun(budgeted, opts).then((outcome) => {
+          recordAcceptedChildBudget(subagentBudget, outcome, budgeted);
+          return outcome;
+        });
       };
     }
     // taskana 4181: the supervisor idle watchdog for a CORE root boot — the
@@ -4023,6 +4120,7 @@ async function boot(): Promise<void> {
     const cleanupHandoff = sessionMeta.worktreeCleanup ?? parseCleanupIntent(process.env[WORKTREE_CLEANUP_ENV]);
     const coreHistoryMaxItems = resolveSessionHistoryMaxItems(process.env);
     session = new Session({
+      workspaceTrustRequired: workspaceTrustRequiredMessage,
       outbound,
       engine,
       broker,
@@ -4232,6 +4330,8 @@ async function boot(): Promise<void> {
                   if (lspStatusListener === listener) lspStatusListener = null;
                 };
               },
+              // Taskana 4711: Environment menu Restart → respawn crashed servers.
+              restart: () => lspManager!.restartCrashed(),
             },
           }
         : {}),

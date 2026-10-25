@@ -47,6 +47,8 @@ import {
   type ReasoningEffort,
 } from "../types/config.js";
 import { SubagentStallClock } from "./stall-clock.js";
+import { isAcceptedBudgetSample } from "./budget-learning.js";
+import { buildCeilingConfig } from "../loop/ceiling.js";
 import type { AnyToolDefinition } from "../types/tools.js";
 import type {
   EngineChildSpec,
@@ -63,7 +65,7 @@ import {
   listPersonaNames,
   type PersonaDefinition,
 } from "./personas.js";
-import { isRoleRouteName, type RoleRouteEntry, type RoleRouteResolution } from "./role-route.js";
+import { formatRoleDegradeNotice, isRoleRouteName, type RoleRouteEntry, type RoleRouteResolution } from "./role-route.js";
 import type { CeilingRefusalReason, TokenUsage } from "../types/events.js";
 import { summarizeChildToolCall } from "./summarize-tool.js";
 import { SPAWN_TOOLS } from "./spawn-tools.js";
@@ -333,6 +335,16 @@ export function buildChildConfig(
   // read near the end of run()) is a separate, distinctly-named datum for a
   // different question — what the provider reported, not what we asked for.
   const spawnModel = req.model ?? persona.model;
+  // TASK.4721: adaptive mode (ceiling.adaptive, set by the host/CLI from
+  // `tools.adaptiveTurnBudget`) lets the learned base budget stand in for the
+  // host default. It sits BELOW every explicit bound in the chain below.
+  const adaptive = parent.ceiling?.adaptive === true;
+  // Read only when nothing more specific is set: a request/role/setting budget
+  // never consults the history at all.
+  const learned =
+    adaptive && req.maxTurns === undefined && persona.turnBudget === undefined && parent.subagentMaxTurns === undefined
+      ? parent.subagentBudget?.learned({ role: persona.name, ...(spawnModel !== undefined ? { model: spawnModel } : {}) })
+    : undefined;
   return {
 
     // `model` override (slice 4.6, §2.5) resolves to a fixed child-only port
@@ -359,7 +371,7 @@ export function buildChildConfig(
     // guard, not the working budget: deadlineAt below is what usually ends a
     // long run (TASK.74 §2.4, carried into TASK.124).
     maxTurns: Math.min(
-      req.maxTurns ?? persona.turnBudget ?? parent.subagentMaxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS,
+      req.maxTurns ?? persona.turnBudget ?? parent.subagentMaxTurns ?? learned ?? DEFAULT_SUBAGENT_MAX_TURNS,
       SUBAGENT_MAX_TURNS_CEILING,
     ),
     ...(extras?.deadlineAt !== undefined ? { deadlineAt: extras.deadlineAt } : {}),
@@ -369,6 +381,7 @@ export function buildChildConfig(
     // eventually cancels) the decision call as the dispatcher's wall approaches.
     // The window/round/grant-sum defaults are the loop's own.
     ceiling: {
+      ...buildCeilingConfig({ adaptive }),
       maxTurnsCeiling: SUBAGENT_MAX_TURNS_CEILING,
       ...(extras?.outcomeDeadlineAt !== undefined
         ? { outcomeDeadlineAt: extras.outcomeDeadlineAt }
@@ -904,9 +917,8 @@ export function createSubagentRunner(
       // documented last resort is the parent's model — degrade to it, with a
       // notice naming every skip reason (same channel as the walk's own notice).
       if (personaCarriesRoute && chainEntries.length === 0 && req.model === undefined) {
-        const reasons = chainSkipped.map((s) => s.reason).join("; ");
         requestedModel = undefined;
-        roleFallbackNotice = `Agent: role "${req.agentType}" ran on the parent's model (every route entry is unhealthy${reasons ? `: ${reasons}` : ""})`;
+        roleFallbackNotice = formatRoleDegradeNotice(req.agentType, chainSkipped);
       }
 
       // Engine persona (md-profile `engine:`): the whole in-process path
@@ -989,6 +1001,14 @@ export function createSubagentRunner(
 
       let childModelPort: ModelPort | undefined;
       let childSettings: ResolvedChildModelSettings | undefined;
+      // TASK.4057: the provider's claim as observed NOW on the child's own port
+      // (undefined until its first response frame; always undefined when the
+      // child inherited the parent's port). Read-only: the end-of-run read below
+      // is unchanged and stays the authoritative final value.
+      const liveResponseModelSpread = (): { responseModel?: string } => {
+        const rm = childModelPort?.lastResponseModel;
+        return typeof rm === "string" && rm.length > 0 ? { responseModel: rm } : {};
+      };
       if (requestedModel !== undefined || chainEntries.length > 0) {
         const resolve = opts?.resolveChildModelPort;
         if (resolve === undefined && requestedModel !== undefined) {
@@ -1368,6 +1388,7 @@ export function createSubagentRunner(
                   toolCalls,
                   lastTool,
                   ...(usage !== undefined ? { usage } : {}),
+                  ...liveResponseModelSpread(),
                 });
                 // Activity emission rides the SAME stable boundary as the toolCalls
                 // counter directly above (design §4 W1-FIX, was the "tool_call"
@@ -1418,6 +1439,7 @@ export function createSubagentRunner(
                   toolCalls,
                   lastTool,
                   ...(usage !== undefined ? { usage } : {}),
+                  ...liveResponseModelSpread(),
                 });
                 break;
               case "loop_end":
@@ -1579,6 +1601,17 @@ export function createSubagentRunner(
           ...(ceilingDone ? { declaredDoneAtCeiling: true } : {}),
           ...(ceiling !== undefined ? { ceiling } : {}),
         };
+
+        // TASK.4721: learn from ACCEPTED runs only (the training filter lives in
+        // budget-learning.ts). Adaptive off => the store is never touched.
+        if (parent.ceiling?.adaptive === true && parent.subagentBudget !== undefined && isAcceptedBudgetSample(outcome)) {
+          const budgetModel = req.model ?? persona.model;
+          parent.subagentBudget.record({
+            role: persona.name,
+            ...(budgetModel !== undefined ? { model: budgetModel } : {}),
+            turns: outcome.turns,
+          });
+        }
 
         onProgress?.({
           kind: "end",

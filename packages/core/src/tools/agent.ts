@@ -54,7 +54,12 @@
 
 import type { ToolContext, ToolDefinition, ToolMetadata, ToolResult } from "../types/tools.js";
 import type { EngineProfileInfo } from "../ports/subagent.js";
-import type { RoleRouteResolution } from "../subagents/role-route.js";
+import {
+  buildRoleRouteRequestFields,
+  formatRoleDegradeNotice,
+  formatRoleFallbackNotice,
+  type RoleRouteResolution,
+} from "../subagents/role-route.js";
 import type { SessionSubagentRequest } from "../ports/session-subagent.js";
 import { SUBAGENT_OUTPUT_MAX_BYTES, SUBAGENT_TIME_BUDGET_MS } from "../types/config.js";
 import { listPersonaNames } from "../subagents/personas.js";
@@ -231,6 +236,19 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
       // it always runs as a child SESSION instead, through the exact same
       // SessionSubagentPort contract as an explicit `tier:"session"` call.
       const engineProfile = ctx.subagents?.engineProfile?.(agentType) ?? null;
+      // Taskana 4704 §2.3: detach-by-default is MECHANICAL. In an orchestrate
+      // session, a session-tier Agent call with no explicit detach/send_to/
+      // continue_session defaults to detach:true. An explicit detach:false is
+      // honored (the spread in runSessionTier keys on === true, so a false
+      // never rides). Taskana 4735: an engine profile always runs as a child
+      // session, so it counts as session-tier here — it must not sync-join
+      // when the rest of the orchestrate contract detaches.
+      const defaultDetach =
+        ctx.orchestrate === true &&
+        (tier === "session" || engineProfile !== null) &&
+        input.detach === undefined &&
+        input.send_to === undefined &&
+        input.continue_session === undefined;
       if (engineProfile !== null) {
         // provider is a core-connect concept; a foreign-engine child runs on
         // its own CLI account, so the field is meaningless here — even though
@@ -272,10 +290,28 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
               `as child sessions and are unavailable in this host.`,
           };
         }
+        // Taskana 4729: a settings-derived role whose PRIMARY is an engine entry
+        // carries the engine profile too. When its route chain is cooling the
+        // profile's engine/model must not run the dead primary: an exhausted
+        // chain degrades to the parent's model (no engine/model stamped, the
+        // role body kept, a notice), a cooling primary with a healthy fallback
+        // runs that entry through the route stamping. A healthy primary (no
+        // skips) and a md-claimed profile (null route) keep the profile request.
+        const engineRoute = ctx.subagents?.resolveRoleRoute?.(agentType) ?? null;
+        if (engineRoute !== null && engineRoute.skipped.length > 0) {
+          const degrade = {
+            systemPrompt: engineProfile.systemPrompt,
+            notice:
+              engineRoute.entries.length === 0
+                ? formatRoleDegradeNotice(agentType, engineRoute.skipped)
+                : formatRoleFallbackNotice(agentType, engineRoute.skipped),
+          };
+          return runSessionTier(input, ctx, agentType, undefined, undefined, engineRoute, defaultDetach, degrade);
+        }
         // tier is IGNORED for an engine profile: it always runs as a session,
         // a silent inline->session upgrade rather than a tier:"inline" refusal
         // — the migration this slice performs.
-        return runSessionTier(input, ctx, agentType, engineProfile);
+        return runSessionTier(input, ctx, agentType, engineProfile, undefined, undefined, defaultDetach);
       }
 
       // Profile connection routing (Taskana 4269). A routed md-profile declares
@@ -325,17 +361,6 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
           };
         }
       }
-
-      // Taskana 4704 §2.3: detach-by-default is MECHANICAL. In an orchestrate
-      // session, a tier:"session" Agent call with no explicit detach/send_to/
-      // continue_session defaults to detach:true. An explicit detach:false is
-      // honored (the spread below keys on === true, so a false never rides).
-      const defaultDetach =
-        ctx.orchestrate === true &&
-        tier === "session" &&
-        input.detach === undefined &&
-        input.send_to === undefined &&
-        input.continue_session === undefined;
 
       if (tier === "session") {
         return runSessionTier(
@@ -438,6 +463,7 @@ async function runSessionTier(
   routing?: { provider?: string; connection?: string },
   roleRoute?: RoleRouteResolution,
   defaultDetach?: boolean,
+  degrade?: { systemPrompt: string; notice: string },
 ): Promise<ToolResult<AgentOutput>> {
   if (!ctx.sessionSubagents) {
     return {
@@ -452,19 +478,13 @@ async function runSessionTier(
   // guaranteed send_to stands alone (tier session, no provider/detach/
   // continue_session); `agentType` was validated above, so this call also
   // rejects an unknown agent_type before delivering — same fail-fast as any
-  // other call shape. Fail-closed on a port without `send` (the field is
-  // optional so older/fake hosts keep compiling): an honest refusal, never
-  // a silent no-op. Mirrors AgentOutput's field set (schemas.ts) for a
-  // delivery that ran zero turns itself.
+  // other call shape. Cross-review Finding 1 (Taskana 4153): `send` is now
+  // REQUIRED on SessionSubagentPort, so the interface seam is enforced at
+  // compile time — no fail-closed branch for a missing method here anymore.
+  // Mirrors AgentOutput's field set (schemas.ts) for a delivery that ran zero
+  // turns itself.
   if (input.send_to !== undefined) {
-    const send = ctx.sessionSubagents.send;
-    if (send === undefined) {
-      return {
-        ok: false,
-        error: "Agent: sending to a running child is unavailable in this host.",
-      };
-    }
-    const sent = await send({ childSessionId: input.send_to, text: input.prompt }, { signal: ctx.abortSignal });
+    const sent = await ctx.sessionSubagents.send({ childSessionId: input.send_to, text: input.prompt }, { signal: ctx.abortSignal });
     if (!sent.ok) {
       return { ok: false, error: sent.message };
     }
@@ -517,7 +537,10 @@ async function runSessionTier(
       : buildSessionSubagentRequest({
           agentType,
           description: input.description,
-          prompt: input.prompt,
+          // Taskana 4729: a degraded engine-role spawn carries no profile
+          // (so no engine/model rides), but keeps the role body in the prompt
+          // with the same composition buildSessionSubagentRequest uses.
+          prompt: degrade !== undefined ? `${degrade.systemPrompt}\n\n---\n\n${input.prompt}` : input.prompt,
           model: input.model,
           spawnToolCallId: ctx.toolCallId,
           profile: engineProfile,
@@ -561,37 +584,16 @@ async function runSessionTier(
     // mistakes a caller's coincidentally-equal explicit model for a chain
     // hop — set exactly when every stamping spread below fired, i.e. the
     // caller passed neither provider nor model.
-    ...(resumeChildSessionId === undefined && roleRoute !== undefined && roleRoute.entries.length > 0
-      ? {
-          ...(input.provider === undefined && input.model === undefined && roleRoute.entries[0]!.provider !== undefined
-            ? { provider: roleRoute.entries[0]!.provider }
-            : {}),
-          ...(input.provider === undefined && roleRoute.entries[0]!.connection !== undefined
-            ? { connectionId: roleRoute.entries[0]!.connection }
-            : {}),
-          // F5(a) (Taskana 4704 cross-review): an engine entry (a role
-          // primary pinned to claude/codex by settings) stamps `engine` on
-          // the creating spawn — the host's respawn bookkeeping reads the
-          // entry the child ACTUALLY runs on from the request, and without
-          // the engine stamp a role-pinned-to-codex respawn would boot core.
-          ...(input.provider === undefined && input.model === undefined && roleRoute.entries[0]!.engine !== undefined
-            ? { engine: roleRoute.entries[0]!.engine }
-            : {}),
-          ...(input.model === undefined && roleRoute.entries[0]!.model !== undefined
-            ? { model: roleRoute.entries[0]!.model }
-            : {}),
-          // F9 (cross-review): an EXPLICIT model beats the route's model and
-          // also the route's effort — the caller chose the model, and the
-          // entry's effort tier belongs to a model they did not choose.
-          ...(input.model === undefined && roleRoute.entries[0]!.effort !== undefined ? { effort: roleRoute.entries[0]!.effort } : {}),
-          ...(roleRoute.turnBudget !== undefined && engineProfile?.turnBudget === undefined
-            ? { maxTurns: roleRoute.turnBudget }
-            : {}),
-          // R7: mark the spawn as route-stamped ONLY when the caller passed
-          // neither provider nor model — the two fields whose explicit
-          // presence means the caller chose the target themselves.
-          ...(input.provider === undefined && input.model === undefined ? { routeStamped: true } : {}),
-        }
+    // Taskana 4729/4735: the field set itself lives in the shared pure helper
+    // (subagents/role-route.ts) so the workflow engine's engine-role steps
+    // stamp the same fields from the same code.
+    ...(resumeChildSessionId === undefined
+      ? buildRoleRouteRequestFields(roleRoute, {
+          provider: input.provider,
+          model: input.model,
+          engineTurnBudget: engineProfile?.turnBudget,
+          degraded: degrade !== undefined,
+        })
       : {}),
     // TASK.145 срез 1: only ever `true` here — the validation check above
     // already refused `detach:true` on any tier but "session", and `false`/
@@ -651,7 +653,18 @@ async function runSessionTier(
   }, target);
   const presentation: { presentation?: ToolResultPresentation } =
     snapshot !== null ? { presentation: { subagent: snapshot } } : {};
-  return outcomeToResult(outcome, presentation);
+  // Taskana 4729: a role-route notice (degraded or fallback spawn) rides the
+  // model-visible text on a FRESH spawn only — a resume keeps its own history.
+  const notice =
+    degrade?.notice ??
+    (resumeChildSessionId === undefined && roleRoute !== undefined && roleRoute.entries.length === 0 && roleRoute.skipped.length > 0
+      ? formatRoleDegradeNotice(agentType, roleRoute.skipped)
+      : undefined);
+  const shown =
+    notice !== undefined
+      ? { ...outcome, finalText: outcome.finalText ? `${notice}\n\n${outcome.finalText}` : notice }
+      : outcome;
+  return outcomeToResult(shown, presentation);
 }
 
 /** Inline-only, byte-compatible with the pre-B1 constant export (CUT-S2 §2.1). */

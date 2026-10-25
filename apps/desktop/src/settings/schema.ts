@@ -40,6 +40,18 @@ const alwaysAllowRuleSchema = z.object({
   pattern: z.string().optional(),
 });
 
+/**
+ * Taskana 4702 Stage 1: the ask-zone classifier record. Optional and
+ * default-off; an invalid record is dropped by the caller's `.catch(undefined)`
+ * (classifier off) and never disturbs the sibling permission rules.
+ */
+export const permissionClassifierSchema = z.object({
+  enabled: z.boolean(),
+  kind: z.literal("command"),
+  command: z.string().refine((command) => command.trim().length > 0),
+  timeoutMs: z.number().int().positive().optional(),
+});
+
 /** One trusted-binary consent (TASK.103, DV-6). Validated PER ELEMENT — a malformed record is dropped alone (= that consent inert, fail-closed) without disturbing siblings. */
 export const trustedBinaryConsentSchema = z.object({
   path: z.string().min(1),
@@ -549,9 +561,13 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
       // field at boot). `.catch(undefined)` keeps the whole-document fail-soft
       // contract: a hand-edited truthy string degrades to "not enabled" alone.
       archMap: z.boolean().optional().catch(undefined),
+      // TASK.4721: adaptive turn budget, mirror of ANYCODE_ADAPTIVE_TURN_BUDGET
+      // (env > settings). Absent = OFF; `.catch(undefined)` as for archMap.
+      adaptiveTurnBudget: z.boolean().optional().catch(undefined),
     }),
     permissions: z.object({
       alwaysAllow: z.array(alwaysAllowRuleSchema),
+      classifier: permissionClassifierSchema.optional().catch(undefined),
     }),
     ui: z.object({
       theme: z.enum(["system", "light", "dark"]),

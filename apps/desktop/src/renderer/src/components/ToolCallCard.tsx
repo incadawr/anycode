@@ -1293,9 +1293,11 @@ export function statusLabel(
  */
 export function subagentResponseModelNote(sub: {
   model: string | null;
+  /** TASK.4057: the live claim from progress; the settled `final` value wins once present. */
+  responseModel?: string;
   final: { responseModel?: string } | null;
 }): { text: string; mismatch: boolean } | null {
-  const responseModel = sub.final?.responseModel;
+  const responseModel = sub.final?.responseModel ?? sub.responseModel;
   if (responseModel === undefined) {
     return null;
   }

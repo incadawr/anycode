@@ -29,6 +29,12 @@ export interface CoreEnvConfig {
   /** Turn budget override for subagent child loops (ANYCODE_SUBAGENT_MAX_TURNS). */
   subagentMaxTurns?: number;
   /**
+   * TASK.4721: adaptive turn budget (ANYCODE_ADAPTIVE_TURN_BUDGET, mirror of
+   * `tools.adaptiveTurnBudget`). true => progress-scaled grants and a base
+   * budget learned from accepted history; absent/false => the ladder, unchanged.
+   */
+  adaptiveTurnBudget?: boolean;
+  /**
    * Subagent stall-detector silence threshold override in ms (TASK.148 slice 1,
    * ANYCODE_SUBAGENT_STALL_MS). NOT the per-attempt stream watchdog
    * (`stallTimeoutMs` below, ANYCODE_STALL_TIMEOUT_MS) — this one bounds how

@@ -10,7 +10,7 @@
  * `process.parentPort` directly, so it is fully testable with fakes.
  *
  * Taskana 4153 / TASK.216 wire: the control plane now carries a THIRD op —
- * `ChildRunSend` (`sendToChild` below) — which delivers a follow-up to one
+ * `ChildRunSend` (`send` below) — which delivers a follow-up to one
  * of the parent's OWN still-running children. It shares the requestId
  * namespace and waiter map with `run()`, but nothing else: it never spawns,
  * never cancels, and settles on the additive `{ kind: "sent" }` ack rather
@@ -184,7 +184,7 @@ const MALFORMED_RESUME_MESSAGE = "Agent: the child session failed to start (malf
 const MALFORMED_MAX_TURNS_MESSAGE = "Agent: the child session failed to start (malformed turn budget).";
 
 /**
- * Taskana 4153 / TASK.216 wire: the RPC timeout bounding a `sendToChild`
+ * Taskana 4153 / TASK.216 wire: the RPC timeout bounding a `send`
  * call. Unlike `run()` (no client-side timeout by design — the file header's
  * sync-join contract), a send is a bounded request/reply pair: exactly one
  * `sent` XOR `rejected` ack must come back for it, and a main that neither
@@ -424,8 +424,17 @@ export interface ChildSessionPort extends SessionSubagentPort {
    * stays `continue_session`'s to address. Fail-closed on a malformed id or
    * an oversized text BEFORE anything is sent (main's parser would silently
    * drop it otherwise — same rationale as `findSpawnRequestShapeError`).
+   *
+   * Cross-review Finding 1 (Taskana 4153): this is now the INTERFACE method
+   * name — `SessionSubagentPort.send`, what core's Agent handler calls. It
+   * was originally exposed as `sendToChild`, which silently satisfied the
+   * then-optional `send?` interface member and left every production
+   * send_to call failing "unavailable in this host"; the interface member is
+   * REQUIRED now, so this override is also the compile-time proof this port
+   * implements the seam core actually calls (the seam test in this file's
+   * test suite is the runtime proof).
    */
-  sendToChild(req: { childSessionId: string; text: string }, opts?: { signal?: AbortSignal }): Promise<SessionSubagentSendResult>;
+  send(req: { childSessionId: string; text: string }, opts?: { signal?: AbortSignal }): Promise<SessionSubagentSendResult>;
   /**
    * Sends a `ChildRunCancel` for the ONE detached child matching this
    * `childSessionId`, addressed via the registry's own `requestId` (the
@@ -865,7 +874,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
             }
             case "sent": {
               // Taskana 4153: ack for a ChildRunSend — a run() waiter shares
-              // the requestId namespace but never sees this kind (sendToChild
+              // the requestId namespace but never sees this kind (send
               // deletes its own waiter the moment the ack lands, and main
               // never relays a send's ack into a run's lifecycle). Reachable
               // only through a same-requestId collision, which the
@@ -916,14 +925,14 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
   }
 
   /**
-   * Taskana 4153 / TASK.216 wire: `ChildSessionPort.sendToChild` — see the
+   * Taskana 4153 / TASK.216 wire: `ChildSessionPort.send` — see the
    * interface's own doc. Mirrors `run()`'s waiter pattern (one
    * `Map<requestId, waiter>` entry, resolved by the inbound `sent`/
    * `rejected` ack with that requestId), but bounded by
    * `CHILD_SEND_RPC_TIMEOUT_MS` — a bounded request/reply pair, not a
    * sync-join lifecycle (file header).
    */
-  function sendToChild(req: { childSessionId: string; text: string }, opts?: { signal?: AbortSignal }): Promise<SessionSubagentSendResult> {
+  function send(req: { childSessionId: string; text: string }, opts?: { signal?: AbortSignal }): Promise<SessionSubagentSendResult> {
     // Pre-flight (F8/F9 discipline, same rationale as run()'s own two early
     // returns): an ALREADY-aborted signal or a malformed id/text must fail
     // immediately and honestly, never reach options.send.
@@ -935,14 +944,31 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     }
     return new Promise<SessionSubagentSendResult>((resolve) => {
       const requestId = createRequestId();
-      // Finish is referenced by the timer before its own declaration, exactly
-      // like run()'s waiter closures — hoisted const, called only after both
-      // bindings exist.
+      // Finish is referenced by the timer/abort listener before its own
+      // declaration, exactly like run()'s waiter closures — hoisted const,
+      // called only after both bindings exist.
       const timer = setTimeout(() => finish({ ok: false, reason: "host_error", message: SEND_TIMEOUT_MESSAGE }), CHILD_SEND_RPC_TIMEOUT_MS);
       const finish = (result: SessionSubagentSendResult): void => {
         clearTimeout(timer);
         waiters.delete(requestId);
+        opts?.signal?.removeEventListener("abort", onAbort);
         resolve(result);
+      };
+      // Cross-review Finding 2 (Taskana 4153): run() observes a MID-FLIGHT
+      // abort through an abort listener; the send waiter must too, or a
+      // parent-turn cancel leaves it lingering until the 30s RPC timeout
+      // with a misleading "delivery unknown". Aborting settles the call
+      // immediately with the same honest "aborted before send" text the
+      // pre-flight check uses — delivery IS unknown to the caller, but the
+      // reason they cancelled is the reason this stopped waiting. Unlike
+      // run()'s onAbort this sends nothing (there is no cancel op for a
+      // send) and, unlike run()'s sync-join discipline, it resolves the
+      // promise directly: a send is a bounded request/reply pair whose only
+      // outcomes are this ack, main's ack, or the timeout — none of which
+      // the caller can still act on once its turn is gone. The waiter is
+      // deleted here, so main's eventual ack lands as a stray no-op.
+      const onAbort = (): void => {
+        finish({ ok: false, reason: "unavailable", message: SEND_ABORTED_MESSAGE });
       };
       waiters.set(requestId, {
         onEvent: (event) => {
@@ -952,6 +978,9 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
           finish(event.kind === "sent" ? { ok: true } : { ok: false, reason: mapSendRejectReason(event.message), message: event.message });
         },
       });
+      // opts.signal, if present, is guaranteed NOT already aborted here (the
+      // pre-flight return above handles that case before this executor runs).
+      opts?.signal?.addEventListener("abort", onAbort, { once: true });
       options.send({ type: CHILD_RUN_SEND_TYPE, requestId, childSessionId: req.childSessionId, text: req.text });
     });
   }
@@ -989,5 +1018,5 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     };
   }
 
-  return { run, sendToChild, listBackgroundChildren, cancelBackgroundChild, cancelAllBackgroundChildren, onBackgroundChildrenChanged };
+  return { run, send, listBackgroundChildren, cancelBackgroundChild, cancelAllBackgroundChildren, onBackgroundChildrenChanged };
 }

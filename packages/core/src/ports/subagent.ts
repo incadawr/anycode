@@ -164,7 +164,12 @@ export type SubagentProgress =
   // duplicated progress event cannot corrupt the total. Same discipline as
   // `turns`/`toolCalls` above. Absent while the run has yet to complete a turn,
   // and absent for tiers that report no spend at all.
-  | { kind: "progress"; turns: number; toolCalls: number; lastTool?: string; usage?: TokenUsage }
+  // `responseModel` (TASK.4057) is the provider's own model CLAIM read off the
+  // child's dedicated port as soon as its first response frame arrives — live-only
+  // so the card can show "provider reported" before the run ends. Absent until a
+  // claim exists, and absent for engine/inherited-port children. The `end` variant
+  // remains the authoritative final value.
+  | { kind: "progress"; turns: number; toolCalls: number; lastTool?: string; usage?: TokenUsage; responseModel?: string }
   // Per-child-tool activity (slice P7.18/F16b): one bounded one-liner per child
   // tool call for the renderer's live feed. `summary` is a pre-capped, sanitized
   // subject (never raw child input); bridged as a subagent_activity AgentEvent.

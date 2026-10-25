@@ -44,12 +44,14 @@ import type {
   SessionSubagentOutcome,
   SessionSubagentPort,
   SessionSubagentRequest,
+  SessionSubagentSendResult,
 } from "../ports/session-subagent.js";
 import type {
   WorkflowDefinition,
   WorkflowProgress,
   WorkflowStepOutcome,
 } from "../ports/workflow.js";
+import type { RoleRouteResolution } from "../subagents/role-route.js";
 import { createWorkflowRunner, createWorkflowRunnerForTest, withWorkflows } from "./engine.js";
 
 // ---------------------------------------------------------------------------
@@ -1563,6 +1565,13 @@ class FakeSessionSubagentPort implements SessionSubagentPort {
     this.requests.push(req);
     return this.behavior(req, opts);
   }
+
+  // SessionSubagentPort.send is REQUIRED (cross-review Finding 1, Taskana
+  // 4153); workflow engine steps only ever spawn, never send — a loud
+  // refusal if send were reached unexpectedly.
+  async send(): Promise<SessionSubagentSendResult> {
+    return { ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" };
+  }
 }
 
 function sessionOutcome(
@@ -1851,5 +1860,208 @@ describe("workflow engine session tier (engine-profile steps)", () => {
     expect(outcomeOf(outcome.steps, "a").status).toBe("error");
     expect(outcomeOf(outcome.steps, "a").finalText).toContain("timed out");
     expect(outcome.status).toBe("failed");
+  }, 5_000);
+});
+
+// Taskana 4735: an engine-role step honours the role chain the Agent tool
+// honours (Taskana 4729). A healthy primary or a null route keeps the profile
+// request; a cooling primary runs the healthy fallback (no profile, route
+// stamped, role body kept); an exhausted chain runs on the parent's model. The
+// notice rides the step's finalText on a completed/error outcome, never on a
+// timeout or cancellation.
+
+/** A SubagentPort whose resolveRoleRoute answers from a fixed map (null = md-claimed / no route). */
+class RoutedSubagentPort extends FakeSubagentPort {
+  constructor(
+    agentTypes: string[],
+    behavior: StepBehavior,
+    engineProfiles: Map<string, EngineProfileInfo>,
+    private readonly routes: ReadonlyMap<string, RoleRouteResolution | null>,
+  ) {
+    super(agentTypes, behavior, engineProfiles);
+  }
+
+  resolveRoleRoute(agentType: string): RoleRouteResolution | null {
+    return this.routes.get(agentType) ?? null;
+  }
+}
+
+describe("workflow engine role-route (engine-profile steps, Taskana 4735)", () => {
+  const ROLE_BODY = "ROLE BODY";
+  const PLANNER_PROFILES = new Map<string, EngineProfileInfo>([
+    ["planner", { engine: "claude", systemPrompt: ROLE_BODY, model: "profile-model" }],
+  ]);
+  const PLANNER_STEP = def("wf-role", [{ id: "a", agentType: "planner", promptTemplate: "${input}" }]);
+
+  function runPlanner(
+    port: SubagentPort,
+    session: FakeSessionSubagentPort,
+    opts: { stepTimeoutMs?: number } = {},
+  ) {
+    return createWorkflowRunnerForTest(port, [PLANNER_STEP], { sessionSubagents: session, ...opts }).run(
+      { name: "wf-role", input: "go" },
+      {},
+    );
+  }
+
+  function okSession(): FakeSessionSubagentPort {
+    return new FakeSessionSubagentPort(async (req) => sessionOutcome(req, { finalText: "ok-plan" }));
+  }
+
+  it("(a) healthy primary (no skips): the profile request is unchanged, no route stamps", async () => {
+    const port = new RoutedSubagentPort(
+      ["planner"],
+      (id, req, opts) => emitAndComplete(opts, req, `inline:${id}`),
+      PLANNER_PROFILES,
+      new Map([["planner", { entries: [{ engine: "claude", model: "opus" }], skipped: [] }]]),
+    );
+    const session = okSession();
+    const outcome = await runPlanner(port, session);
+
+    expect(session.requests).toHaveLength(1);
+    const req = session.requests[0]!;
+    expect(req.engine).toBe("claude");
+    expect(req.model).toBe("profile-model");
+    expect(req.prompt).toBe(`${ROLE_BODY}\n\n---\n\ngo`);
+    expect(req).not.toHaveProperty("routeStamped");
+    expect(req).not.toHaveProperty("provider");
+    expect(req).not.toHaveProperty("maxTurns");
+    expect(outcomeOf(outcome.steps, "a").finalText).toBe("ok-plan");
+  });
+
+  it("(b) cooling primary with a healthy fallback: runs the fallback entry without the profile, with a fallback notice", async () => {
+    const port = new RoutedSubagentPort(
+      ["planner"],
+      (id, req, opts) => emitAndComplete(opts, req, `inline:${id}`),
+      PLANNER_PROFILES,
+      new Map([
+        [
+          "planner",
+          {
+            entries: [{ provider: "conn-glm", model: "glm-5.3", effort: "high" }],
+            skipped: [{ entry: { engine: "claude", model: "opus" }, reason: "cooling down (rate limit)" }],
+            turnBudget: 80,
+          },
+        ],
+      ]),
+    );
+    const session = okSession();
+    const outcome = await runPlanner(port, session);
+
+    const req = session.requests[0]!;
+    expect(req).not.toHaveProperty("engine");
+    expect(req.provider).toBe("conn-glm");
+    expect(req.model).toBe("glm-5.3");
+    expect(req.effort).toBe("high");
+    expect(req.maxTurns).toBe(80);
+    expect(req.routeStamped).toBe(true);
+    expect(req.prompt).toBe(`${ROLE_BODY}\n\n---\n\ngo`);
+    expect(outcomeOf(outcome.steps, "a").finalText).toBe(
+      'Agent: role "planner" skipped its primary route entry (cooling down (rate limit)); running on the next healthy entry\n\nok-plan',
+    );
+  });
+
+  it("(c) exhausted chain: runs on the parent's model (no engine/model/provider), keeps the role body and turn budget, degrade notice", async () => {
+    const port = new RoutedSubagentPort(
+      ["planner"],
+      (id, req, opts) => emitAndComplete(opts, req, `inline:${id}`),
+      PLANNER_PROFILES,
+      new Map([
+        [
+          "planner",
+          {
+            entries: [],
+            skipped: [{ entry: { engine: "claude", model: "opus" }, reason: "cooling down" }],
+            turnBudget: 60,
+          },
+        ],
+      ]),
+    );
+    const session = okSession();
+    const outcome = await runPlanner(port, session);
+
+    const req = session.requests[0]!;
+    expect(req).not.toHaveProperty("engine");
+    expect(req).not.toHaveProperty("model");
+    expect(req).not.toHaveProperty("provider");
+    expect(req).not.toHaveProperty("connectionId");
+    expect(req).not.toHaveProperty("routeStamped");
+    expect(req.maxTurns).toBe(60);
+    expect(req.prompt).toBe(`${ROLE_BODY}\n\n---\n\ngo`);
+    expect(outcomeOf(outcome.steps, "a").finalText).toBe(
+      "Agent: role \"planner\" ran on the parent's model (every route entry is unhealthy: cooling down)\n\nok-plan",
+    );
+  });
+
+  it("(d) a port without resolveRoleRoute keeps today's profile request exactly", async () => {
+    const port = new FakeSubagentPort(
+      ["planner"],
+      (id, req, opts) => emitAndComplete(opts, req, `inline:${id}`),
+      PLANNER_PROFILES,
+    );
+    const session = okSession();
+    const outcome = await runPlanner(port, session);
+
+    expect(session.requests[0]).toEqual({
+      agentType: "planner",
+      description: "workflow wf-role step a",
+      prompt: `${ROLE_BODY}\n\n---\n\ngo`,
+      spawnToolCallId: session.requests[0]!.spawnToolCallId,
+      model: "profile-model",
+      engine: "claude",
+    });
+    expect(outcomeOf(outcome.steps, "a").finalText).toBe("ok-plan");
+  });
+
+  it("(e) a null route (md-claimed profile): the profile request is unchanged, no notice", async () => {
+    const port = new RoutedSubagentPort(
+      ["planner"],
+      (id, req, opts) => emitAndComplete(opts, req, `inline:${id}`),
+      PLANNER_PROFILES,
+      new Map([["planner", null]]),
+    );
+    const session = okSession();
+    const outcome = await runPlanner(port, session);
+
+    expect(session.requests[0]!.engine).toBe("claude");
+    expect(session.requests[0]!.model).toBe("profile-model");
+    expect(session.requests[0]).not.toHaveProperty("routeStamped");
+    expect(outcomeOf(outcome.steps, "a").finalText).toBe("ok-plan");
+  });
+
+  it("(f) a timed-out or cancelled step carries no route notice", async () => {
+    const fallbackRoute = new Map<string, RoleRouteResolution | null>([
+      [
+        "planner",
+        {
+          entries: [{ provider: "conn-glm", model: "glm-5.3" }],
+          skipped: [{ entry: { engine: "claude", model: "opus" }, reason: "cooling down" }],
+          turnBudget: 80,
+        },
+      ],
+    ]);
+    const inline = (): RoutedSubagentPort =>
+      new RoutedSubagentPort(
+        ["planner"],
+        (id, req, opts) => emitAndComplete(opts, req, `inline:${id}`),
+        PLANNER_PROFILES,
+        fallbackRoute,
+      );
+
+    const hanging = new FakeSessionSubagentPort(async (req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      await whenAborted(opts.signal);
+      return sessionOutcome(req, { status: "cancelled", finalText: "partial" });
+    });
+    const timedOut = await runPlanner(inline(), hanging, { stepTimeoutMs: 30 });
+    expect(outcomeOf(timedOut.steps, "a").finalText).toContain("timed out");
+    expect(outcomeOf(timedOut.steps, "a").finalText).not.toContain("skipped its primary");
+
+    const cancelled = new FakeSessionSubagentPort(async (req) =>
+      sessionOutcome(req, { status: "cancelled", finalText: "partial" }),
+    );
+    const outcome = await runPlanner(inline(), cancelled);
+    expect(outcomeOf(outcome.steps, "a").status).toBe("cancelled");
+    expect(outcomeOf(outcome.steps, "a").finalText).toBe("partial");
   }, 5_000);
 });

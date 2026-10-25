@@ -32,6 +32,7 @@ import { buildAgentProfileRoots } from "../subagents/admin-scan.js";
 import { buildProfilesPromptSection } from "../subagents/profiles-prompt-section.js";
 import { discoverPlugins } from "../plugins/discovery.js";
 import type { McpConsentEntry } from "../plugins/state.js";
+import type { ProjectTrustOptions } from "../mcp/config.js";
 import { discoverWorkflows, type WorkflowRoot } from "../workflow/discovery.js";
 import { buildWorkflowsPromptSection } from "../workflow/prompt-section.js";
 import { capUtf8Bytes } from "../util/bytes.js";
@@ -94,7 +95,7 @@ export interface ExtensionsBootstrap {
   problems: string[];
 }
 
-export interface DiscoverExtensionsOptions {
+export interface DiscoverExtensionsOptions extends ProjectTrustOptions {
   workspace: string;
   home: string;
   /** Server names already claimed by explicit config (so it always wins over plugins). */
@@ -264,6 +265,7 @@ export async function discoverExtensions(
       ...(opts.reservedSkillNames !== undefined ? { reservedSkillNames: opts.reservedSkillNames } : {}),
       ...(opts.reservedAgentNames !== undefined ? { reservedAgentNames: opts.reservedAgentNames } : {}),
       ...(opts.mcpConsent !== undefined ? { mcpConsent: opts.mcpConsent } : {}),
+      projectTrusted: opts.projectTrusted,
     });
     pluginSkillRoots = result.skillRoots;
     pluginAgentRoots = result.agentRoots;

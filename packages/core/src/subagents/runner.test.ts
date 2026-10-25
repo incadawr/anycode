@@ -3832,6 +3832,49 @@ describe("responseModel after the wrap-up rescue (codex blocking 4)", () => {
   });
 });
 
+describe("responseModel — live on progress from the first response frame (TASK.4057)", () => {
+  it("progress after the first model call carries the claim; the end-of-run value is unchanged", async () => {
+    // Call 1 (a tool turn) reports no claim; call 2 (the text turn) reports
+    // "glm-5.3". The tool_result progress rides call 1 (still unclaimed), the
+    // turn_end progress rides call 2 (claim known) — so the first emission
+    // carries no key and the later one carries the live claim.
+    let childCalls = 0;
+    const childPort = makeChildPort({
+      modelId: "glm-5.3-flash",
+      claimFor: () => (childCalls <= 1 ? undefined : "glm-5.3"),
+      script: () => {
+        childCalls += 1;
+        return childCalls <= 1 ? toolStep("k", "TodoRead", {}) : textStep("done");
+      },
+    });
+    const runner = createSubagentRunner(makeParent({ mode: "yolo" }), {
+      resolveChildModelPort: () => childPort,
+    });
+    const progress: SubagentProgress[] = [];
+
+    const outcome = await runner.run({ ...REQ, model: "glm-5.3-flash" }, { onProgress: (p) => progress.push(p) });
+
+    expect(outcome.status).toBe("completed");
+    const live = progress.filter((p): p is Extract<SubagentProgress, { kind: "progress" }> => p.kind === "progress");
+    expect(live.length).toBeGreaterThanOrEqual(2);
+    expect("responseModel" in live[0]!).toBe(false);
+    expect(live.at(-1)!.responseModel).toBe("glm-5.3");
+    expect(endOf(progress).responseModel).toBe("glm-5.3");
+  });
+
+  it("a child on the inherited parent port never emits a live claim", async () => {
+    const parentPort = new ScriptedModelPort((req) => (isChildRequest(req) ? textStep("child") : textStep("n/a")));
+    const runner = createSubagentRunner(makeParent({ modelPort: parentPort }));
+    const progress: SubagentProgress[] = [];
+
+    await runner.run(REQ, { onProgress: (p) => progress.push(p) });
+
+    for (const p of progress) {
+      expect("responseModel" in p).toBe(false);
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Stall clock wiring — inline tier (TASK.148 slice 1). A stall detector that
 // REPORTS, never kills: silence past SUBAGENT_STALL_TIMEOUT_MS must produce
@@ -5368,5 +5411,111 @@ describe("role route chain walk (Taskana 4704 §3.2)", () => {
     expect(outcome.finalText).toContain("ran on the parent's model");
     expect(outcome.finalText).toContain("quota");
     expect(parentModel.calls).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.4721: adaptive mode is reachable and the base budget is learned.
+// ---------------------------------------------------------------------------
+
+/** Fake SubagentBudgetPort: fixed learned value + a record spy. */
+function makeBudgetPort(learnedValue: number | undefined = undefined) {
+  const records: Array<{ role: string; model?: string; turns: number }> = [];
+  const learnedKeys: Array<{ role: string; model?: string }> = [];
+  return {
+    records,
+    learnedKeys,
+    port: {
+      learned: (key: { role: string; model?: string }) => {
+        learnedKeys.push(key);
+        return learnedValue;
+      },
+      record: (entry: { role: string; model?: string; turns: number }) => {
+        records.push(entry);
+      },
+    },
+  };
+}
+
+describe("TASK.4721 adaptive turn budget — buildChildConfig", () => {
+  it("adaptive OFF: the ceiling carries no adaptive key and the budget is byte-identical to the ladder path", () => {
+    const { port, learnedKeys } = makeBudgetPort(77);
+    const parent = makeParent({ subagentBudget: port });
+    const config = buildChildConfig(parent, getPersona("general-purpose"), REQ);
+    expect(config.ceiling).toEqual({ maxTurnsCeiling: SUBAGENT_MAX_TURNS_CEILING });
+    expect(config.maxTurns).toBe(DEFAULT_SUBAGENT_MAX_TURNS);
+    // The store is not consulted at all when adaptive is off.
+    expect(learnedKeys).toHaveLength(0);
+  });
+
+  it("adaptive ON: the parent ceiling's flag reaches the child ceiling as adaptive: true", () => {
+    const parent = makeParent({ ceiling: { adaptive: true } });
+    const config = buildChildConfig(parent, getPersona("general-purpose"), REQ);
+    expect(config.ceiling?.adaptive).toBe(true);
+    expect(config.ceiling?.maxTurnsCeiling).toBe(SUBAGENT_MAX_TURNS_CEILING);
+  });
+
+  it("adaptive ON: the learned value is used only when no explicit bound applies", () => {
+    const { port, learnedKeys } = makeBudgetPort(64);
+    const parent = makeParent({ ceiling: { adaptive: true }, subagentBudget: port });
+    // Nothing explicit: learned wins over the default, keyed by role + model.
+    const learned = buildChildConfig(parent, getPersona("general-purpose"), { ...REQ, model: "m-x" });
+    expect(learned.maxTurns).toBe(64);
+    expect(learnedKeys).toContainEqual({ role: "general-purpose", model: "m-x" });
+  });
+
+  it("user bounds beat the learned value: request, role turnBudget and the settings default", () => {
+    const { port } = makeBudgetPort(64);
+    const parent = makeParent({ ceiling: { adaptive: true }, subagentBudget: port });
+    const explore = getPersona("explore");
+    expect(buildChildConfig(parent, explore, { ...REQ, maxTurns: 12 }).maxTurns).toBe(12);
+    expect(buildChildConfig(parent, { ...explore, turnBudget: 9 }, REQ).maxTurns).toBe(9);
+    expect(
+      buildChildConfig({ ...parent, subagentMaxTurns: 33 }, explore, REQ).maxTurns,
+    ).toBe(33);
+  });
+
+  it("with no learned value (too little history) the default is kept", () => {
+    const { port } = makeBudgetPort(undefined);
+    const parent = makeParent({ ceiling: { adaptive: true }, subagentBudget: port });
+    expect(buildChildConfig(parent, getPersona("general-purpose"), REQ).maxTurns).toBe(
+      DEFAULT_SUBAGENT_MAX_TURNS,
+    );
+  });
+});
+
+describe("TASK.4721 adaptive turn budget — history recording", () => {
+  it("records a completed child and never a plain max_turns cut-off", async () => {
+    const { port, records } = makeBudgetPort(undefined);
+    const completed = new ScriptedModelPort(() => textStep("done"));
+    const runnerDone = createSubagentRunner(
+      makeParent({ modelPort: completed, ceiling: { adaptive: true }, subagentBudget: port, mode: "yolo" }),
+    );
+    const doneOutcome = await runnerDone.run(REQ, {});
+    expect(doneOutcome.status).toBe("completed");
+    expect(records).toEqual([{ role: "general-purpose", turns: doneOutcome.turns }]);
+
+    let step = 0;
+    const cutOff = new ScriptedModelPort((req) => {
+      if (isWrapUpRequest(req)) return textStep("REPORT");
+      step += 1;
+      return toolStep(`c${step}`, "TodoRead", {}, `turn-${step}`);
+    });
+    const runnerCut = createSubagentRunner(
+      makeParent({ modelPort: cutOff, ceiling: { adaptive: true }, subagentBudget: port, mode: "yolo" }),
+    );
+    const cut = await runnerCut.run({ ...REQ, maxTurns: 2 }, {});
+    expect(cut.status).toBe("max_turns");
+    expect(cut.declaredDoneAtCeiling).toBeUndefined();
+    // Still exactly one record: the cut-off was not training data.
+    expect(records).toHaveLength(1);
+  });
+
+  it("never records when adaptive is off", async () => {
+    const { port, records } = makeBudgetPort(undefined);
+    const model = new ScriptedModelPort(() => textStep("done"));
+    const runner = createSubagentRunner(makeParent({ modelPort: model, subagentBudget: port, mode: "yolo" }));
+    await runner.run(REQ, {});
+    expect(records).toHaveLength(0);
   });
 });

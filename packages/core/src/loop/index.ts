@@ -3,6 +3,8 @@ export type { AgentLoopConfig, ContextInfo, ContextBreakdown } from "./agent-loo
 // Referenced by AgentLoopConfig.ceiling (TASK.124 cut-1), so it has to travel
 // with it on the public surface.
 export type { CeilingConfig, CeilingVerdict } from "./ceiling.js";
+// TASK.4721: the one place a ceiling object is assembled (adaptive key off => byte-identical).
+export { buildCeilingConfig } from "./ceiling.js";
 export {
   TodoReminderTracker,
   resolveTodoReminderEvery,

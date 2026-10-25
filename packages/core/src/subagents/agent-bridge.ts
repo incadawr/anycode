@@ -457,6 +457,9 @@ export function mapProgressToEvent(progress: SubagentProgress, toolCallId: strin
         turns: progress.turns,
         toolCalls: progress.toolCalls,
         lastTool: progress.lastTool,
+        // TASK.4057: live provider claim, forwarded verbatim like
+        // `subagent_end.responseModel` (no cap there either).
+        ...(progress.responseModel !== undefined ? { responseModel: progress.responseModel } : {}),
       };
     case "tool":
       // Defense-in-depth cap at the trust boundary onto the wire (W1-FIX,

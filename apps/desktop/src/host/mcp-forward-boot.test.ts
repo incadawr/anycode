@@ -234,3 +234,50 @@ describe("missingForwardedMcpServerNames (TASK.182 reconciliation)", () => {
     expect(missingForwardedMcpServerNames([], [], false)).toEqual([]);
   });
 });
+
+describe("prepareEngineMcpForward — workspace trust gate (Taskana 4736)", () => {
+  const WS = "/ws-trust";
+  const HOME = "/home/trust-user";
+  const files = {
+    [`${WS}/.anycode/config.json`]: JSON.stringify({ mcpServers: { proj: { command: "proj-srv" } } }),
+    [`${HOME}/.anycode/config.json`]: JSON.stringify({ mcpServers: { user: { command: "user-srv" } } }),
+  };
+
+  it("an untrusted workspace forwards zero project MCP servers; user-level servers still forward", async () => {
+    const forward = await prepareEngineMcpForward({
+      fs: memFs(files),
+      workspace: WS,
+      home: HOME,
+      tmpDir: freshTmp(),
+      pid: 1,
+      engines: ["codex"],
+      projectTrusted: false,
+    });
+    expect(forward.codexNames).toEqual(["user"]);
+  });
+
+  it("a trusted workspace forwards the project servers as before", async () => {
+    const forward = await prepareEngineMcpForward({
+      fs: memFs(files),
+      workspace: WS,
+      home: HOME,
+      tmpDir: freshTmp(),
+      pid: 1,
+      engines: ["codex"],
+      projectTrusted: true,
+    });
+    expect(forward.codexNames.sort()).toEqual(["proj", "user"]);
+  });
+
+  it("an absent option (library/legacy caller) keeps today's behaviour", async () => {
+    const forward = await prepareEngineMcpForward({
+      fs: memFs(files),
+      workspace: WS,
+      home: HOME,
+      tmpDir: freshTmp(),
+      pid: 1,
+      engines: ["codex"],
+    });
+    expect(forward.codexNames.sort()).toEqual(["proj", "user"]);
+  });
+});

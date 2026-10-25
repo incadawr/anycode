@@ -24,9 +24,25 @@ export {
 export type { PersonaDefinition, PersonaName, RolePersonaName } from "./personas.js";
 // Taskana 4704: the role-route chain types shared between the host resolver
 // and core's chain walkers (runner inline walk + Agent session-tier stamping).
-export { isRoleRouteName } from "./role-route.js";
-export type { RoleRouteEntry, RoleRouteName, RoleRouteResolution, RoleRouteSkip } from "./role-route.js";
+export { buildRoleRouteRequestFields, isRoleRouteName } from "./role-route.js";
+export type {
+  RoleRouteEntry,
+  RoleRouteName,
+  RoleRouteRequestFields,
+  RoleRouteResolution,
+  RoleRouteSkip,
+} from "./role-route.js";
 export { discoverAgentProfiles } from "./profiles.js";
+// TASK.4721: the learned base-budget formula + the accepted-run filter, shared
+// by the desktop host's turn-budget history store.
+export {
+  LEARNED_BUDGET_MAX,
+  LEARNED_BUDGET_MIN,
+  LEARNING_MIN_SAMPLES,
+  isAcceptedBudgetSample,
+  learnBaseBudget,
+} from "./budget-learning.js";
+export type { BudgetOutcomeLike, BudgetSample } from "./budget-learning.js";
 export type { AgentProfileRoot, AgentProfilesResult } from "./profiles.js";
 export {
   createSubagentCardAccumulator,

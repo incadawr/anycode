@@ -510,7 +510,16 @@ describe("non-recursion locks #1/#2 (CUT-S2 §2.6.1/§2.6.2) — discriminating 
         spawnToolCallId: "s",
       }),
     );
-    return { port: { run }, run };
+    return {
+      port: {
+        run,
+        // SessionSubagentPort.send is REQUIRED (cross-review Finding 1,
+        // Taskana 4153); these lock tests only exercise run() — a loud
+        // refusal if send were ever reached unexpectedly.
+        send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
+      },
+      run,
+    };
   }
 
   it("lock #1 (registry): the RESTRICTED registry (mirrors index.ts's child-mode branch — createDefaultToolRegistry() with no {agent:{sessionTier:true}}) makes tier:\"session\" schema-invalid BEFORE the handler ever runs — even with a working sessionSubagents port wired, the port is never called", async () => {

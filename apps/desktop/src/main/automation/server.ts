@@ -181,6 +181,11 @@ import {
   previewSetContainer,
   previewNavigateMdDoc,
   replayArm,
+  dockState,
+  dockTabClick,
+  dockTabClose,
+  dockTabSplit,
+  windowSetSize,
   replayDisarm,
   replayPlay,
   replayPause,
@@ -311,6 +316,9 @@ const gitIntentBody = z.object({
 });
 const gitPanelBody = z.object({ open: z.boolean() });
 const gitViewBody = z.object({ view: z.enum(["changes", "history", "diff"]) });
+// Taskana 4703 `POST /window/size`: bounded int px (400–4000) — the dock
+// smoke's drawer/column threshold legs live inside this range on any display.
+const windowSizeBody = z.object({ width: z.number().int().min(400).max(4000), height: z.number().int().min(400).max(4000) });
 
 // ── project body (design/slice-GUI-P1-cut.md §2F.5) ──
 const projectBody = z.object({ workspace: z.string().min(1).max(4096) });
@@ -998,6 +1006,27 @@ async function route(
   // scroll port of every pane, so one reading covers all fourteen.
   if (method === "GET" && pathname === "/settings/layout") {
     return settingsLayoutState(deps);
+  }
+  // Dock probe/driver (Taskana 4703): DEDICATED routes — DOM-measured
+  // conversation/dock geometry the squash smoke asserts against, plus real
+  // clicks on the tab strip's own buttons. `POST /window/size` is the
+  // drawer/column legs' window-size lever (main-plane, zod 400–4000).
+  if (method === "GET" && pathname === "/dock/state") {
+    return dockState(deps);
+  }
+  if (method === "POST" && parts[0] === "dock" && parts.length === 4 && parts[1] === "tabs" && parts[3] === "click") {
+    return dockTabClick(deps, decodeURIComponent(parts[2]!));
+  }
+  if (method === "POST" && parts[0] === "dock" && parts.length === 4 && parts[1] === "tabs" && parts[3] === "close") {
+    return dockTabClose(deps, decodeURIComponent(parts[2]!));
+  }
+  // Stage 2 (§3): the ⫿ "Split right" driver, same route family.
+  if (method === "POST" && parts[0] === "dock" && parts.length === 4 && parts[1] === "tabs" && parts[3] === "split") {
+    return dockTabSplit(deps, decodeURIComponent(parts[2]!));
+  }
+  if (method === "POST" && pathname === "/window/size") {
+    const body = parseBody(rawBody, windowSizeBody);
+    return windowSetSize(deps, body.width, body.height);
   }
   // Keyboard shortcuts pane probe (slice-P7.24-cut.md §4 W4): a DEDICATED
   // route — every prior `/settings*` probe above stays byte-untouched (§4

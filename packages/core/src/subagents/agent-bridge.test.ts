@@ -221,6 +221,7 @@ describe("buildSessionSubagentRequest (§3.2)", () => {
           seen = req;
           return { ...BASE_OUTCOME, spawnToolCallId: req.spawnToolCallId };
         },
+        send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       };
       const full = createAgentTool({ sessionTier: true });
       await full.handler(input, makeCtx({ sessionSubagents: port, ...ctxOverrides }));
@@ -304,7 +305,7 @@ describe("runAgentBridgeCall (§3.4)", () => {
   };
 
   function portReturning(outcome: SessionSubagentOutcome): SessionSubagentPort {
-    return { run: async () => outcome };
+    return { run: async () => outcome, send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }) };
   }
 
   it("unknown agent_type => isError with the exact list-bearing message, no port call", async () => {
@@ -312,6 +313,7 @@ describe("runAgentBridgeCall (§3.4)", () => {
       run: async () => {
         throw new Error("must not be reached for an unknown agent_type");
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await runAgentBridgeCall(
       { agent_type: "ghost", description: "d", prompt: "p" },
@@ -345,6 +347,7 @@ describe("runAgentBridgeCall (§3.4)", () => {
         seen = req;
         return { ...BASE_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await runAgentBridgeCall(
       { agent_type: "codex-worker", description: "d", prompt: "do it" },
@@ -364,6 +367,7 @@ describe("runAgentBridgeCall (§3.4)", () => {
         seen = req;
         return { ...BASE_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await runAgentBridgeCall(
       { agent_type: "reviewer", description: "d", prompt: "review" },
@@ -420,6 +424,7 @@ describe("runAgentBridgeCall (§3.4)", () => {
         opts.onProgress?.({ kind: "end", status: "completed", turns: 1, durationMs: 10 });
         return { ...BASE_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await runAgentBridgeCall(
       { agent_type: "reviewer", description: "d", prompt: "p" },
@@ -429,6 +434,26 @@ describe("runAgentBridgeCall (§3.4)", () => {
     for (const ev of events) {
       expect(ev.toolCallId).toBe("toolu_events");
     }
+  });
+
+  it("forwards a live progress responseModel onto subagent_progress, and omits the key when absent (TASK.4057)", async () => {
+    const events: SubagentCardEvent[] = [];
+    const port: SessionSubagentPort = {
+      run: async (req, opts: SubagentRunOptions) => {
+        opts.onProgress?.({ kind: "progress", turns: 1, toolCalls: 0 });
+        opts.onProgress?.({ kind: "progress", turns: 2, toolCalls: 1, responseModel: "glm-5.3" });
+        return { ...BASE_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
+    };
+    await runAgentBridgeCall(
+      { agent_type: "reviewer", description: "d", prompt: "p" },
+      { catalog: [CORE_ENTRY], port, spawnToolCallId: "toolu_live_rm", onEvent: (ev) => events.push(ev) },
+    );
+    const progress = events.filter((ev) => ev.type === "subagent_progress");
+    expect(progress).toHaveLength(2);
+    expect("responseModel" in progress[0]!).toBe(false);
+    expect(progress[1]).toMatchObject({ type: "subagent_progress", responseModel: "glm-5.3" });
   });
 
   it("caller-supplied signal.abort() propagates into the port's own signal, and a resulting `cancelled` outcome reads as cancelled (not the wall message)", async () => {
@@ -442,6 +467,7 @@ describe("runAgentBridgeCall (§3.4)", () => {
             resolve({ ...BASE_OUTCOME, status: "cancelled", finalText: "", spawnToolCallId: req.spawnToolCallId });
           });
         }),
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const promise = runAgentBridgeCall(
       { agent_type: "reviewer", description: "d", prompt: "p" },
@@ -464,6 +490,7 @@ describe("runAgentBridgeCall (§3.4)", () => {
               resolve({ ...BASE_OUTCOME, status: "cancelled", finalText: "", spawnToolCallId: req.spawnToolCallId });
             });
           }),
+        send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       };
       const promise = runAgentBridgeCall(
         { agent_type: "reviewer", description: "d", prompt: "p" },
@@ -500,6 +527,7 @@ describe("runAgentBridgeCall — detach", () => {
           spawnToolCallId: req.spawnToolCallId,
         };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await runAgentBridgeCall(
       { agent_type: "glm-lead", description: "d", prompt: "do it", detach: true },
@@ -522,6 +550,7 @@ describe("runAgentBridgeCall — detach", () => {
         seen = req;
         return { status: "completed", finalText: "ok", truncated: false, turns: 1, toolCalls: 0, durationMs: 1, childSessionId: "c", parentSessionId: "p", spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await runAgentBridgeCall({ agent_type: "glm-lead", description: "d", prompt: "p" }, { catalog: [ENTRY], port, spawnToolCallId: "call_8" });
     expect(seen !== undefined && "detach" in seen).toBe(false);
@@ -541,6 +570,7 @@ describe("runAgentBridgeCall — continue_session (follow-up to a finished child
           seen = req;
           return { status: "completed", finalText: "ok", truncated: false, turns: 0, toolCalls: 0, durationMs: 1, childSessionId: "child-9", parentSessionId: "p", spawnToolCallId: req.spawnToolCallId };
         },
+        send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       },
     };
   }
@@ -611,6 +641,7 @@ describe("runAgentBridgeCall — childSessionId discoverability (TASK.218)", () 
           spawnToolCallId: "call_x",
         };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await runAgentBridgeCall(
       { agent_type: "glm-lead", description: "d", prompt: "p" },
@@ -635,6 +666,7 @@ describe("runAgentBridgeCall — childSessionId discoverability (TASK.218)", () 
         parentSessionId: "p",
         spawnToolCallId: req.spawnToolCallId,
       }),
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await runAgentBridgeCall(
       { agent_type: "glm-lead", description: "d", prompt: "p" },
@@ -657,6 +689,7 @@ describe("runAgentBridgeCall — childSessionId discoverability (TASK.218)", () 
         parentSessionId: "parent-1",
         spawnToolCallId: req.spawnToolCallId,
       }),
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await runAgentBridgeCall(
       { agent_type: "glm-lead", description: "d", prompt: "p", detach: true },
@@ -741,6 +774,7 @@ describe("runAgentBridgeCall — profile effort (TASK.127/TASK.217)", () => {
           seen = req;
           return { status: "completed", finalText: "ok", truncated: false, turns: 0, toolCalls: 0, durationMs: 1, childSessionId: "c", parentSessionId: "p", spawnToolCallId: req.spawnToolCallId };
         },
+        send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       },
     };
   }
@@ -808,6 +842,7 @@ describe("runAgentBridgeCall — catalog maxTurns (TASK.180)", () => {
         seen = req;
         return { ...BASE_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await runAgentBridgeCall(
       { agent_type: "budgeted", description: "d", prompt: "p" },
@@ -823,6 +858,7 @@ describe("runAgentBridgeCall — catalog maxTurns (TASK.180)", () => {
         seen = req;
         return { ...BASE_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await runAgentBridgeCall(
       { agent_type: "plain", description: "d", prompt: "p" },
@@ -838,6 +874,7 @@ describe("runAgentBridgeCall — catalog maxTurns (TASK.180)", () => {
         seen = req;
         return { ...BASE_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await runAgentBridgeCall(
       { agent_type: "budgeted", description: "d", prompt: "again", continue_session: "child-9" },
@@ -864,6 +901,7 @@ describe("runAgentBridgeCall — profile connection routing (Taskana 4269)", () 
           seen = req;
           return { ...BASE_OUTCOME, spawnToolCallId: req.spawnToolCallId };
         },
+        send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       },
     };
   }

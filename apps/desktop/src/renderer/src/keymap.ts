@@ -36,6 +36,7 @@ export type ActionId =
   | "sidebar.search"
   | "tab.activate"
   | "mode.focus"
+  | "dock.toggle"
   | "turn.interrupt";
 
 export interface KeyBinding {
@@ -60,6 +61,8 @@ export const KEYMAP: readonly KeyBinding[] = [
   { action: "sidebar.toggle", key: "b", mod: true, shift: false },
   { action: "sidebar.search", key: "f", mod: true, shift: false },
   { action: "mode.focus", key: "m", mod: true, shift: true },
+  // Taskana 4703: hide/show the right-side dock (editable like its siblings).
+  { action: "dock.toggle", key: "\\", mod: true, shift: false },
   { action: "turn.interrupt", key: "escape", mod: false, shift: false, docOnly: true },
 ];
 
@@ -94,6 +97,7 @@ export const ACTION_CATALOG: readonly ActionMeta[] = [
   { action: "sidebar.search", name: "Search sidebar", description: "Focus the sidebar search field.", editable: true },
   { action: "tab.activate", name: "Activate tab by number", description: "Jump to the nth open tab (⌘1–⌘9).", editable: false },
   { action: "mode.focus", name: "Focus mode selector", description: "Focus the composer mode selector.", editable: true },
+  { action: "dock.toggle", name: "Toggle side panels", description: "Show or hide the right-side dock (previews, subagents, review).", editable: true },
   { action: "turn.interrupt", name: "Interrupt turn", description: "Stop the current agent turn (Esc).", editable: false },
 ];
 

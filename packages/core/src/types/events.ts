@@ -313,6 +313,12 @@ export type AgentEvent =
       turns: number;
       toolCalls: number;
       lastTool?: string;
+      /**
+       * TASK.4057: the provider's own model claim, live (first response frame
+       * onward). Same semantics as `subagent_end.responseModel` — a claim, never
+       * proof of serving, never merged into `model`. Absent until observed.
+       */
+      responseModel?: string;
     }
   | {
       type: "subagent_end";
@@ -530,6 +536,25 @@ export type AgentEvent =
   // host and headless print never do, so these are dormant by construction.
   | { type: "checkpoint_created"; id: string; label: string }
   | { type: "checkpoint_failed"; reason: string }
+  /**
+   * Taskana 4702 Stage 1: one consulted ask-zone decision. Emitted by the
+   * dispatcher for every Bash ask the classifier was consulted on: `allow`
+   * skipped the broker; `ask` went to the broker (by verdict, or by `error`
+   * when the classifier failed, timed out or answered badly). Additive: absent
+   * unless a classifier is configured. The text fields are the classifier's
+   * own (`reason`), never the command; telemetry drops `reason` entirely.
+   */
+  | {
+      type: "permission_auto_decided";
+      toolCallId: string;
+      toolName: string;
+      classifier: string;
+      decision: "allow" | "ask";
+      reason: string;
+      score?: number;
+      latencyMs: number;
+      error?: string;
+    }
   /**
    * External-engine notice (codex-fixes TASK.42, cut §2(i)/§3.4): a warning,
    * retry, or informational notice from an engine that owns its own runtime

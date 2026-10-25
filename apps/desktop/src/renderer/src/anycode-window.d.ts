@@ -111,6 +111,7 @@ import type {
 // frozen shared/** module, imported directly — same convention as
 // preview-panel/md-preview above).
 import type { RecognizerProbeRequest, RecognizerProbeResult, RecognizerSetRequest } from "../../shared/recognizer";
+import type { WorkspaceTrustDecideRequest, WorkspaceTrustDecideResult } from "../../shared/workspace-trust";
 
 import type {
   McpConfigDeleteRequest,
@@ -436,6 +437,10 @@ declare global {
         // shape as `onProviderHealthChanged` below, but payload-carrying (same
         // shape as `updates.onUpdateStatus`/`window.onWindowState`).
         onSnapshotChanged(callback: (snapshot: ClaudeOnboardingSnapshot) => void): () => void;
+      };
+      // Taskana 4736: the answer to a folder's project-trust question (tab id + decision only).
+      workspaceTrust: {
+        decide(request: WorkspaceTrustDecideRequest): Promise<WorkspaceTrustDecideResult>;
       };
       // Slice 2.2 (design §3): settings + secret-vault invoke-API. A decrypted
       // secret is never returned — setSecret is the only value-carrying call.

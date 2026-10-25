@@ -14,6 +14,7 @@
 import { z } from "zod";
 import type { FileSystemPort } from "../ports/file-system.js";
 import type { LspServerSpec } from "../ports/lsp.js";
+import { isProjectGated, type ProjectTrustOptions } from "../mcp/config.js";
 
 export interface LoadedLspServerSpecs {
   specs: LspServerSpec[];
@@ -120,15 +121,24 @@ export async function loadLspServerSpecs(
   fs: FileSystemPort,
   workspace: string,
   home: string,
+  opts?: ProjectTrustOptions,
 ): Promise<LoadedLspServerSpecs> {
   const specs: LspServerSpec[] = [];
   const issues: string[] = [];
   const claimed = new Set<string>();
+  const projectPath = projectOrUserConfigPath(workspace);
+  const gated = isProjectGated(workspace, home, opts);
 
   const seenPaths = new Set<string>();
-  for (const path of [projectOrUserConfigPath(workspace), projectOrUserConfigPath(home)]) {
+  for (const path of [projectPath, projectOrUserConfigPath(home)]) {
     if (seenPaths.has(path)) continue;
     seenPaths.add(path);
+    if (gated && path === projectPath) {
+      if (await fs.exists(path)) {
+        issues.push(`Project LSP servers in ${path} skipped: folder not trusted`);
+      }
+      continue;
+    }
     await loadSource(fs, path, claimed, specs, issues);
   }
 

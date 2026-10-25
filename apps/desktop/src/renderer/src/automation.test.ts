@@ -20,6 +20,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
+import { useDockStore } from "./dock/dock-store.js";
 import type { GitBranchInfo, GitCommitInfo } from "@anycode/core";
 import { COMPOSER_IMAGE_MAX_BYTES, COMPOSER_IMAGE_MAX_PER_MESSAGE } from "./components/Composer.js";
 import {
@@ -77,6 +78,7 @@ import {
   type ReplayKeyEvent,
   type ChildCloseDom,
   type ChildSplitDom,
+  type DockDom,
   realModelPillDom,
 } from "./automation.js";
 import {
@@ -890,11 +892,12 @@ describe("automation facade — childCloseClick (TASK.188 S8.3, CUT-S3 §6.1 'ev
       layout, // 29 childLayoutStore
       undefined, // 30 sidebarDom
       undefined, // 31 settingsLayoutDom
-      undefined, // 32 workflowStepsDom
-      undefined, // 33 visionPaneDom
-      undefined, // 34 replayStore
-      undefined, // 35 replayTimer
-      childCloseDom, // 36
+      undefined, // 32 dockDom
+      undefined, // 33 workflowStepsDom
+      undefined, // 34 visionPaneDom
+      undefined, // 35 replayStore
+      undefined, // 36 replayTimer
+      childCloseDom, // 37
     );
     return { facade, tabsStore, registry };
   }
@@ -1000,12 +1003,13 @@ describe("automation facade — childSplitClick (TASK.188 S9.4, the entry-side t
       layout, // 29 childLayoutStore
       undefined, // 30 sidebarDom
       undefined, // 31 settingsLayoutDom
-      undefined, // 32 workflowStepsDom
-      undefined, // 33 visionPaneDom
-      undefined, // 34 replayStore
-      undefined, // 35 replayTimer
-      undefined, // 36 childCloseDom
-      childSplitDom, // 37
+      undefined, // 32 dockDom
+      undefined, // 33 workflowStepsDom
+      undefined, // 34 visionPaneDom
+      undefined, // 35 replayStore
+      undefined, // 36 replayTimer
+      undefined, // 37 childCloseDom
+      childSplitDom, // 38
     );
     return { facade, tabsStore, registry };
   }
@@ -6583,8 +6587,9 @@ describe("automation facade — Vision pane probe/driver (TASK.198 срез E2c)
       undefined, // 29 childLayoutStore
       undefined, // 30 sidebarDom
       undefined, // 31 settingsLayoutDom
-      undefined, // 32 workflowStepsDom
-      dom, // 33 visionPaneDom
+      undefined, // 32 dockDom
+      undefined, // 33 workflowStepsDom
+      dom, // 34 visionPaneDom
     );
   }
 
@@ -7752,7 +7757,8 @@ describe("automation facade — workflowStepsState/workflowStepClick (TASK.191 s
       undefined, // 29 childLayoutStore
       undefined, // 30 sidebarDom
       undefined, // 31 settingsLayoutDom
-      workflowStepsDom, // 32
+      undefined, // 32 dockDom
+      workflowStepsDom, // 33
     );
   }
 
@@ -8058,14 +8064,15 @@ describe("automation facade — workflowMapState/workflowMapToggle/workflowTicks
       undefined, // 29 childLayoutStore
       undefined, // 30 sidebarDom
       undefined, // 31 settingsLayoutDom
-      undefined, // 32 workflowStepsDom
-      undefined, // 33 visionPaneDom
-      undefined, // 34 replayStore
-      undefined, // 35 replayTimer
-      undefined, // 36 childCloseDom
-      undefined, // 37 childSplitDom
-      workflowMapDom, // 38
-      workflowTicksDom, // 39
+      undefined, // 32 dockDom
+      undefined, // 33 workflowStepsDom
+      undefined, // 34 visionPaneDom
+      undefined, // 35 replayStore
+      undefined, // 36 replayTimer
+      undefined, // 37 childCloseDom
+      undefined, // 38 childSplitDom
+      workflowMapDom, // 39
+      workflowTicksDom, // 40
     );
   }
 
@@ -10364,11 +10371,12 @@ describe("automation facade — replay* (TASK.188 S2)", () => {
       layoutStore, // 29 childLayoutStore
       undefined, // 30 sidebarDom
       undefined, // 31 settingsLayoutDom
-      undefined, // 32 workflowStepsDom
-      undefined, // 33 visionPaneDom
-      replayStore, // 34
-      replayTimer, // 35
-      childCloseDom, // 36
+      undefined, // 32 dockDom
+      undefined, // 33 workflowStepsDom
+      undefined, // 34 visionPaneDom
+      replayStore, // 35
+      replayTimer, // 36
+      childCloseDom, // 37
     );
   }
 
@@ -12601,5 +12609,91 @@ describe("automation facade — modelPillPick drill-down menu (TASK.106 shared p
       void tabsStore;
     }
     await expect(facade.modelPillPick("other", { kind: "model", value: "glm-5.2" })).resolves.toEqual({ ok: false, reason: "tab_not_active" });
+  });
+});
+
+function fakeDockDom(): DockDom {
+  return {
+    panelMode: () => null,
+    panelWidth: () => null,
+    conversationWidth: () => null,
+    tabButton: () => null,
+    clickTab: () => false,
+    clickTabClose: () => false,
+    clickTabSplit: () => false,
+  };
+}
+
+describe("automation facade — dockTabSplit honest refusal (Taskana 4703 cross-review D6)", () => {
+  function buildDockFacade(dockDom: DockDom) {
+    const tabsStore = createTabsStore();
+    const registry = createTabRegistry(tabsStore);
+    registry.registerPort("tab-a", "/ws/tab-a", asPort(new FakeMessagePort()));
+    const facade = createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      undefined, // 4  dom
+      undefined, // 5  todoPanelDom
+      undefined, // 6  startScreenDom
+      undefined, // 7  modelPillDom
+      undefined, // 8  settingsStore
+      undefined, // 9  settingsDom
+      undefined, // 10 ctxPopoverDom
+      undefined, // 11 agentCardDom
+      undefined, // 12 mcpPaneDom
+      undefined, // 13 skillsPaneDom
+      undefined, // 14 subagentsPaneDom
+      undefined, // 15 profilePaneDom
+      undefined, // 16 composerSlashDom
+      undefined, // 17 shortcutsPaneDom
+      undefined, // 18 lspPanelDom
+      undefined, // 19 hooksPanelDom
+      undefined, // 20 checkpointPanelDom
+      undefined, // 21 transcriptBlockDom
+      undefined, // 22 tryAgainButtonDom
+      undefined, // 23 providerPaneDom
+      undefined, // 24 codexPaneDom
+      undefined, // 25 codexProfileChipDom
+      undefined, // 26 codexImportDom
+      undefined, // 27 binaryTrustDialogDom
+      undefined, // 28 trustedBinariesSectionDom
+      undefined, // 29 childLayoutStore
+      undefined, // 30 sidebarDom
+      undefined, // 31 settingsLayoutDom
+      dockDom, // 32 dockDom
+      undefined, // 33 workflowStepsDom
+      undefined, // 34 visionPaneDom
+      undefined, // 35 replayStore
+      undefined, // 36 replayTimer
+    );
+    return facade;
+  }
+
+  it("reports split_refused when the click changed nothing (window too narrow / not splittable)", () => {
+    useDockStore.setState({ tabs: [{ id: "git", kind: "git", title: "Review" }], activeTabId: "git", splitTabId: null });
+    const facade = buildDockFacade({
+      ...fakeDockDom(),
+      clickTabSplit: () => true, // the affordance was present and clicked, the store refused
+    });
+    expect(facade.dockTabSplit("git")).toEqual({ ok: false, reason: "split_refused" });
+    expect(useDockStore.getState().splitTabId).toBe(null);
+  });
+
+  it("reports ok when the click pinned the tab", () => {
+    useDockStore.setState({ tabs: [{ id: "git", kind: "git", title: "Review" }], activeTabId: "git", splitTabId: null });
+    const facade = buildDockFacade({
+      ...fakeDockDom(),
+      clickTabSplit: () => {
+        useDockStore.setState({ splitTabId: "git" });
+        return true;
+      },
+    });
+    expect(facade.dockTabSplit("git")).toEqual({ ok: true });
+  });
+
+  it("reports tab_not_present when the split affordance is missing", () => {
+    const facade = buildDockFacade({ ...fakeDockDom(), clickTabSplit: () => false });
+    expect(facade.dockTabSplit("ghost")).toEqual({ ok: false, reason: "tab_not_present" });
   });
 });

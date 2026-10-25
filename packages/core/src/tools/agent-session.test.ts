@@ -48,7 +48,7 @@ const BASE_SESSION_OUTCOME: SessionSubagentOutcome = {
 };
 
 function portReturning(outcome: SessionSubagentOutcome): SessionSubagentPort {
-  return { run: async () => outcome };
+  return { run: async () => outcome, send: async () => ({ ok: true }) };
 }
 
 // ---------------------------------------------------------------------------
@@ -241,6 +241,7 @@ describe("agentTool handler — session-tier fail-closed lock (CUT-S2 §2.1)", (
       run: async () => {
         throw new Error("sessionSubagents.run must not be reached — this request never asked for tier:\"session\"");
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await full.handler({ description: "d", prompt: "p" }, makeCtx({ sessionSubagents: sessionPort }));
     expect(result).toEqual({ ok: false, error: "Agent: subagents are unavailable in this context." });
@@ -357,6 +358,7 @@ describe("agentTool handler — continue_session (TASK.218)", () => {
           seen = req;
           return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
         },
+        send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       },
     };
   }
@@ -418,6 +420,7 @@ describe("agentTool handler — continue_session (TASK.218)", () => {
         opts.onProgress?.({ kind: "start", agentType: "explore", description: "d" });
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await full.handler(
       { description: "d", prompt: "p", tier: "session" },
@@ -508,13 +511,19 @@ describe("agentTool handler — send_to (Taskana 4153)", () => {
     );
   });
 
-  it("a port WITHOUT send (older/fake host) => fail-closed, never a silent no-op", async () => {
-    const result = await full.handler(
-      { description: "d", prompt: "p", tier: "session", send_to: "child-77" },
-      makeCtx({ sessionSubagents: portReturning(BASE_SESSION_OUTCOME) }), // no send field
-    );
-    expect(result).toMatchObject({ ok: false });
-    expect(result.ok === false && result.error).toBe("Agent: sending to a running child is unavailable in this host.");
+  it("port.send throwing propagates out of the handler (same contract as any handler throw — the dispatcher owns error wrapping)", async () => {
+    const port: SessionSubagentPort = {
+      run: async () => BASE_SESSION_OUTCOME,
+      send: async () => {
+        throw new Error("boom");
+      },
+    };
+    await expect(
+      full.handler(
+        { description: "d", prompt: "p", tier: "session", send_to: "child-77" },
+        makeCtx({ sessionSubagents: port }),
+      ),
+    ).rejects.toThrow("boom");
   });
 
   it("send_to with tier inline (explicit) => invalid_input with the exact message", async () => {
@@ -595,6 +604,7 @@ describe("agentTool handler — session-tier presentation target (CUT-S2 §2.1)"
         opts.onProgress?.({ kind: "end", status: outcome.status, turns: outcome.turns, durationMs: outcome.durationMs });
         return outcome;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
   }
 
@@ -636,6 +646,7 @@ describe("agentTool handler — session-tier presentation target (CUT-S2 §2.1)"
   it("no presentation at all when the child never reaches subagent_start (mirrors inline's 'never fabricated' rule)", async () => {
     const port: SessionSubagentPort = {
       run: async () => ({ ...BASE_SESSION_OUTCOME, status: "error", finalText: "failed before start" }),
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await full.handler(
       { description: "d", prompt: "p", tier: "session" },
@@ -659,6 +670,7 @@ describe("agentTool handler — SessionSubagentRequest forwarding (CUT-S2 §2.1/
         seen = req;
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       {
@@ -691,6 +703,7 @@ describe("agentTool handler — SessionSubagentRequest forwarding (CUT-S2 §2.1/
         seen = req;
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler({ description: "d", prompt: "p", tier: "session" }, makeCtx({ sessionSubagents: port }));
     expect(seen?.agentType).toBe("general-purpose");
@@ -703,6 +716,7 @@ describe("agentTool handler — SessionSubagentRequest forwarding (CUT-S2 §2.1/
         seen = req;
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler({ description: "d", prompt: "p", tier: "session" }, makeCtx({ sessionSubagents: port }));
     expect(seen && "provider" in seen).toBe(false);
@@ -726,6 +740,7 @@ describe("agentTool handler — spawnToolCallId is ctx.toolCallId, verbatim (CUT
         seen = req;
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     // A value distinctive enough that no other field/constant in the handler
     // could accidentally match it (rules out both "hardcoded fallback" and
@@ -744,6 +759,7 @@ describe("agentTool handler — spawnToolCallId is ctx.toolCallId, verbatim (CUT
         opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const distinctiveToolCallId = "toolu_roundtrip_7b2c";
     const result = await full.handler(
@@ -774,6 +790,7 @@ describe("agentTool handler — spawnToolCallId is ctx.toolCallId, verbatim (CUT
         opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: "some-other-id-the-host-made-up" };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await full.handler(
       { description: "d", prompt: "p", tier: "session" },
@@ -805,6 +822,7 @@ describe("agentTool handler — subagent_attention bridges from a session-tier p
         opts.onProgress?.({ kind: "attention", waiting: false });
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", tier: "session" },
@@ -833,6 +851,7 @@ describe("agentTool handler — subagent_attention bridges from a session-tier p
         });
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", tier: "session" },
@@ -859,6 +878,7 @@ describe("agentTool handler — subagent_attention bridges from a session-tier p
         opts.onProgress?.({ kind: "end", status: "completed", turns: 1, durationMs: 10 });
         return { ...BASE_SESSION_OUTCOME, status: "completed", spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const withoutAttentionPort: SessionSubagentPort = {
       run: async (req, opts) => {
@@ -866,6 +886,7 @@ describe("agentTool handler — subagent_attention bridges from a session-tier p
         opts.onProgress?.({ kind: "end", status: "completed", turns: 1, durationMs: 10 });
         return { ...BASE_SESSION_OUTCOME, status: "completed", spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const withAttn = await full.handler(
       { description: "d", prompt: "p", tier: "session" },
@@ -945,6 +966,7 @@ describe("agentTool handler — engine-profile routing (TASK.102 CUT-S4 §2.2)",
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "do the task", agent_type: "claude-worker" },
@@ -966,6 +988,7 @@ describe("agentTool handler — engine-profile routing (TASK.102 CUT-S4 §2.2)",
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const systemPrompt = "PERSONA BODY";
     const taskPrompt = "do the task";
@@ -989,6 +1012,7 @@ describe("agentTool handler — engine-profile routing (TASK.102 CUT-S4 §2.2)",
         ran = true;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await full.handler(
       { description: "d", prompt: "p", agent_type: "claude-worker", tier: "inline" },
@@ -1005,6 +1029,7 @@ describe("agentTool handler — engine-profile routing (TASK.102 CUT-S4 §2.2)",
         ran = true;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await full.handler(
       { description: "d", prompt: "p", agent_type: "claude-worker" },
@@ -1035,6 +1060,7 @@ describe("agentTool handler — engine-profile model default (model plumbing fix
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await full.handler(
       { description: "d", prompt: "p", agent_type: "codex-worker" },
@@ -1058,6 +1084,7 @@ describe("agentTool handler — engine-profile model default (model plumbing fix
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", agent_type: "codex-worker", model: "explicit-model" },
@@ -1080,6 +1107,7 @@ describe("agentTool handler — engine-profile model default (model plumbing fix
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", agent_type: "claude-worker" },
@@ -1098,6 +1126,7 @@ describe("agentTool handler — engine-profile model default (model plumbing fix
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", agent_type: "claude-worker" },
@@ -1138,6 +1167,7 @@ describe("agentTool handler — codex engine profile now routes like claude (TAS
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await full.handler(
       { description: "d", prompt: "do the task", agent_type: "codex-worker" },
@@ -1160,6 +1190,7 @@ describe("agentTool handler — codex engine profile now routes like claude (TAS
         spawned = true;
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await full.handler(
       { description: "d", prompt: "p", agent_type: "codex-worker", tier: "session", provider: "anthropic-2" },
@@ -1283,6 +1314,7 @@ describe("agentTool handler — detach forwarding onto SessionSubagentRequest (T
         seen = req;
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", tier: "session", detach: true },
@@ -1298,6 +1330,7 @@ describe("agentTool handler — detach forwarding onto SessionSubagentRequest (T
         seen.push(req);
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler({ description: "d", prompt: "p", tier: "session" }, makeCtx({ sessionSubagents: port }));
     await full.handler(
@@ -1341,6 +1374,7 @@ describe("agentTool handler — detach admit outcome mapping (TASK.145 срез 
         parentSessionId: "parent-1",
         spawnToolCallId: "call-1",
       }),
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
   }
 
@@ -1393,6 +1427,7 @@ describe("agentTool handler — engine-profile turn budget (TASK.180)", () => {
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", agent_type: "claude-worker" },
@@ -1412,6 +1447,7 @@ describe("agentTool handler — engine-profile turn budget (TASK.180)", () => {
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", agent_type: "claude-worker" },
@@ -1438,6 +1474,7 @@ describe("agentTool handler — engine-profile effort", () => {
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", agent_type: "claude-worker" },
@@ -1457,6 +1494,7 @@ describe("agentTool handler — engine-profile effort", () => {
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", agent_type: "claude-worker" },
@@ -1503,6 +1541,7 @@ describe("agentTool handler — profile routing (Taskana 4269)", () => {
           seen = req;
           return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
         },
+        send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       },
     };
   }
@@ -1575,6 +1614,7 @@ describe("agentTool handler — orchestrate default-detach (Taskana 4704 §2.3)"
     return {
       seen: () => seen,
       port: {
+        send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
         run: async (req) => {
           seen = req;
           return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
@@ -1671,6 +1711,7 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
   ): { ctx: ToolContext; port: SessionSubagentPort; seen: () => SessionSubagentRequest | undefined } {
     let seen: SessionSubagentRequest | undefined;
     const port: SessionSubagentPort = {
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       run: async (req) => {
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
@@ -1855,6 +1896,7 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
   it("R6: role route REPLACES profile routing — one mechanism stamps the request, never both", async () => {
     let seen: SessionSubagentRequest | undefined;
     const port: SessionSubagentPort = {
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       run: async (req) => {
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
@@ -1887,6 +1929,7 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
   it("R7: routeStamped rides a route-stamped fresh spawn and is suppressed by an explicit model", async () => {
     let seen: SessionSubagentRequest | undefined;
     const port: SessionSubagentPort = {
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       run: async (req) => {
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
@@ -1909,6 +1952,7 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
     // not a chain hop, never recorded for respawn.
     let seen2: SessionSubagentRequest | undefined;
     const port2: SessionSubagentPort = {
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       run: async (req) => {
         seen2 = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
@@ -1920,5 +1964,347 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
     );
     expect(seen2?.model).toBe("route-model");
     expect(seen2 !== undefined && "routeStamped" in seen2).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Taskana 4729: a settings-derived role whose PRIMARY is an engine entry must
+// not run on the dead primary's engine/model when its route chain is cooling.
+// The session tier degrades to the parent's model (exhausted chain) or takes
+// the healthy fallback entry (cooling primary), and says so in a notice.
+
+describe("agentTool handler — role-route degrade at the session tier (Taskana 4729)", () => {
+  const full = createAgentTool({ sessionTier: true });
+  const ROLE_BODY = "ROLE BODY";
+
+  function routedCtx(opts: {
+    engine: EngineProfileInfo | null;
+    route: { entries: unknown[]; skipped: unknown[]; turnBudget?: number } | null;
+  }): { ctx: ToolContext; seen: () => SessionSubagentRequest | undefined } {
+    let seen: SessionSubagentRequest | undefined;
+    const sessionSubagents: SessionSubagentPort = {
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, finalText: "child done", spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    const subagents: SubagentPort = {
+      run: async () => {
+        throw new Error("inline run not expected");
+      },
+      listAgentTypes: () => ["executor", "general-purpose"],
+      engineProfile: (t) => (t === "executor" ? opts.engine : null),
+      resolveRoleRoute: (t) => (t === "executor" && opts.route !== null ? (opts.route as never) : null),
+    };
+    return { ctx: makeCtx({ subagents, sessionSubagents }), seen: () => seen };
+  }
+
+  const ENGINE_PRIMARY_PROFILE: EngineProfileInfo = { engine: "claude", systemPrompt: ROLE_BODY, model: "profile-model" };
+
+  it("(a) exhausted chain with an engine primary: no engine/model/effort/provider/connection on the request; body kept; maxTurns from the route; notice lists both reasons", async () => {
+    const { ctx, seen } = routedCtx({
+      engine: ENGINE_PRIMARY_PROFILE,
+      route: {
+        entries: [],
+        skipped: [
+          { entry: { engine: "claude", model: "opus" }, reason: "cooling down (rate limit)" },
+          { entry: { provider: "conn-glm", model: "glm-5.3" }, reason: "needs session tier" },
+        ],
+        turnBudget: 80,
+      },
+    });
+    const result = await full.handler({ description: "d", prompt: "do it", agent_type: "executor", tier: "session" }, ctx);
+    const req = seen();
+    expect(req).toBeDefined();
+    expect(req).not.toHaveProperty("engine");
+    expect(req).not.toHaveProperty("model");
+    expect(req).not.toHaveProperty("effort");
+    expect(req).not.toHaveProperty("provider");
+    expect(req).not.toHaveProperty("connectionId");
+    expect(req).not.toHaveProperty("routeStamped");
+    expect(req?.prompt).toBe(`${ROLE_BODY}\n\n---\n\ndo it`);
+    expect(req?.maxTurns).toBe(80);
+    expect(result.ok).toBe(true);
+    expect(result.output?.finalText).toContain(
+      'Agent: role "executor" ran on the parent\'s model (every route entry is unhealthy: cooling down (rate limit); needs session tier)',
+    );
+    expect(result.output?.finalText).toContain("child done");
+  });
+
+  it("(b) cooling engine primary with a healthy bare-model fallback: takes the fallback model, no engine, routeStamped, notice", async () => {
+    const { ctx, seen } = routedCtx({
+      engine: ENGINE_PRIMARY_PROFILE,
+      route: {
+        entries: [{ model: "glm-5.3" }],
+        skipped: [{ entry: { engine: "claude", model: "opus" }, reason: "cooling down (rate limit)" }],
+        turnBudget: 80,
+      },
+    });
+    const result = await full.handler({ description: "d", prompt: "do it", agent_type: "executor", tier: "session" }, ctx);
+    const req = seen();
+    expect(req?.model).toBe("glm-5.3");
+    expect(req).not.toHaveProperty("engine");
+    expect(req?.routeStamped).toBe(true);
+    expect(req?.maxTurns).toBe(80);
+    expect(result.output?.finalText).toContain(
+      'Agent: role "executor" skipped its primary route entry (cooling down (rate limit)); running on the next healthy entry',
+    );
+  });
+
+  it("(c) cooling engine primary with a healthy engine fallback: request engine is the fallback's, routeStamped, notice", async () => {
+    const { ctx, seen } = routedCtx({
+      engine: ENGINE_PRIMARY_PROFILE,
+      route: {
+        entries: [{ engine: "codex", model: "gpt-5.4", effort: "high" }],
+        skipped: [{ entry: { engine: "claude", model: "opus" }, reason: "cooling down (rate limit)" }],
+      },
+    });
+    const result = await full.handler({ description: "d", prompt: "do it", agent_type: "executor", tier: "session" }, ctx);
+    const req = seen();
+    expect(req?.engine).toBe("codex");
+    expect(req?.model).toBe("gpt-5.4");
+    expect(req?.effort).toBe("high");
+    expect(req?.routeStamped).toBe(true);
+    expect(req?.prompt).toBe(`${ROLE_BODY}\n\n---\n\ndo it`);
+    expect(result.output?.finalText).toContain("skipped its primary route entry");
+  });
+
+  it("(d) healthy chain: request is byte-identical to today's profile request (engine + profile model, no routeStamped, no notice)", async () => {
+    const { ctx, seen } = routedCtx({
+      engine: ENGINE_PRIMARY_PROFILE,
+      route: { entries: [{ engine: "claude", model: "opus" }], skipped: [] },
+    });
+    const result = await full.handler({ description: "d", prompt: "do it", agent_type: "executor", tier: "session" }, ctx);
+    expect(seen()).toEqual({
+      agentType: "executor",
+      description: "d",
+      prompt: `${ROLE_BODY}\n\n---\n\ndo it`,
+      spawnToolCallId: "call-1",
+      model: "profile-model",
+      engine: "claude",
+    });
+    expect(result.output?.finalText).toBe("child done");
+  });
+
+  it("(e) resolveRoleRoute returning null (md-claimed engine profile): unchanged profile request, no notice", async () => {
+    const { ctx, seen } = routedCtx({ engine: ENGINE_PRIMARY_PROFILE, route: null });
+    const result = await full.handler({ description: "d", prompt: "do it", agent_type: "executor", tier: "session" }, ctx);
+    expect(seen()).toEqual({
+      agentType: "executor",
+      description: "d",
+      prompt: `${ROLE_BODY}\n\n---\n\ndo it`,
+      spawnToolCallId: "call-1",
+      model: "profile-model",
+      engine: "claude",
+    });
+    expect(result.output?.finalText).toBe("child done");
+  });
+
+  it("(f) explicit input.model with an exhausted chain: the explicit model is honored and the notice still appears", async () => {
+    const { ctx, seen } = routedCtx({
+      engine: ENGINE_PRIMARY_PROFILE,
+      route: { entries: [], skipped: [{ entry: { engine: "claude", model: "opus" }, reason: "cooling down" }] },
+    });
+    const result = await full.handler(
+      { description: "d", prompt: "do it", agent_type: "executor", tier: "session", model: "explicit-m" },
+      ctx,
+    );
+    expect(seen()?.model).toBe("explicit-m");
+    expect(seen()).not.toHaveProperty("engine");
+    expect(result.output?.finalText).toContain('ran on the parent\'s model (every route entry is unhealthy: cooling down)');
+  });
+
+  it("(g) continue_session and send_to with an engine profile are refused before any route logic runs", async () => {
+    let routeAsked = false;
+    const subagents: SubagentPort = {
+      run: async () => {
+        throw new Error("inline run not expected");
+      },
+      listAgentTypes: () => ["executor"],
+      engineProfile: () => ENGINE_PRIMARY_PROFILE,
+      resolveRoleRoute: () => {
+        routeAsked = true;
+        return { entries: [], skipped: [{ entry: { model: "m" }, reason: "x" }] } as never;
+      },
+    };
+    let ran = false;
+    const sessionSubagents: SessionSubagentPort = {
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
+      run: async (req) => {
+        ran = true;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    const resumed = await full.handler(
+      { description: "d", prompt: "p", agent_type: "executor", tier: "session", continue_session: "child-1" },
+      makeCtx({ subagents, sessionSubagents }),
+    );
+    expect(resumed.ok).toBe(false);
+    expect(resumed.error).toContain("continue_session is supported only for AnyCode (core) profiles");
+    const sent = await full.handler(
+      { description: "d", prompt: "p", agent_type: "executor", tier: "session", send_to: "child-1" },
+      makeCtx({ subagents, sessionSubagents }),
+    );
+    expect(sent.ok).toBe(false);
+    expect(sent.error).toContain("send_to is supported only for AnyCode (core) children");
+    expect(routeAsked).toBe(false);
+    expect(ran).toBe(false);
+  });
+
+  it("(h) non-engine primary with an exhausted chain: no routing keys stamped, and the notice now appears", async () => {
+    const { ctx, seen } = routedCtx({
+      engine: null,
+      route: {
+        entries: [],
+        skipped: [{ entry: { provider: "conn-glm", model: "glm-5.3" }, reason: "cooling down" }],
+        turnBudget: 80,
+      },
+    });
+    const result = await full.handler({ description: "d", prompt: "do it", agent_type: "executor", tier: "session" }, ctx);
+    const req = seen();
+    expect(req).not.toHaveProperty("provider");
+    expect(req).not.toHaveProperty("connectionId");
+    expect(req).not.toHaveProperty("model");
+    expect(req).not.toHaveProperty("routeStamped");
+    expect(req?.prompt).toBe("do it");
+    expect(result.output?.finalText).toContain('ran on the parent\'s model (every route entry is unhealthy: cooling down)');
+  });
+});
+
+// Taskana 4735: an engine-profile role (a settings-derived role whose primary is
+// an engine entry) runs as a child session on the ENGINE path too, so an
+// orchestrate session must default it to detach:true exactly like the
+// non-engine session tier. Explicit detach:false still wins; the refusals for
+// continue_session / send_to are unchanged.
+describe("agentTool handler — engine-profile default-detach in orchestrate (Taskana 4735)", () => {
+  const full = createAgentTool({ sessionTier: true });
+  const ENGINE_PROFILE: EngineProfileInfo = { engine: "claude", systemPrompt: "ROLE BODY", model: "profile-model" };
+
+  function engineCtx(
+    extra: Partial<SubagentPort>,
+    orchestrate?: boolean,
+  ): { ctx: ToolContext; seen: () => SessionSubagentRequest | undefined; ran: () => boolean } {
+    let seen: SessionSubagentRequest | undefined;
+    let ran = false;
+    const sessionSubagents: SessionSubagentPort = {
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
+      run: async (req) => {
+        ran = true;
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, finalText: "child done", spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    const subagents: SubagentPort = {
+      run: async () => {
+        throw new Error("inline run not expected");
+      },
+      listAgentTypes: () => ["executor"],
+      engineProfile: () => ENGINE_PROFILE,
+      ...extra,
+    };
+    return {
+      ctx: makeCtx({ subagents, sessionSubagents, ...(orchestrate !== undefined ? { orchestrate } : {}) }),
+      seen: () => seen,
+      ran: () => ran,
+    };
+  }
+
+  const CALL = { description: "d", prompt: "do it", agent_type: "executor" };
+
+  it("healthy engine primary (no route port) in orchestrate: request detaches by default, tier omitted or session", async () => {
+    const a = engineCtx({}, true);
+    const r1 = await full.handler({ ...CALL, tier: "session" }, a.ctx);
+    expect(r1.ok).toBe(true);
+    expect(a.seen()).toHaveProperty("detach", true);
+    expect(a.seen()?.engine).toBe("claude");
+
+    const b = engineCtx({}, true);
+    await full.handler(CALL, b.ctx);
+    expect(b.seen()).toHaveProperty("detach", true);
+  });
+
+  it("healthy route (no skips) in orchestrate: engine profile request detaches and keeps its profile shape", async () => {
+    const { ctx, seen } = engineCtx(
+      { resolveRoleRoute: () => ({ entries: [{ engine: "claude", model: "opus" }], skipped: [] }) },
+      true,
+    );
+    await full.handler({ ...CALL, tier: "session" }, ctx);
+    expect(seen()).toEqual({
+      agentType: "executor",
+      description: "d",
+      prompt: "ROLE BODY\n\n---\n\ndo it",
+      spawnToolCallId: "call-1",
+      model: "profile-model",
+      engine: "claude",
+      detach: true,
+    });
+  });
+
+  it("degraded fallback (cooling primary) in orchestrate: the fallback spawn detaches too", async () => {
+    const { ctx, seen } = engineCtx(
+      {
+        resolveRoleRoute: () => ({
+          entries: [{ provider: "conn-glm", model: "glm-5.3" }],
+          skipped: [{ entry: { engine: "claude", model: "opus" }, reason: "cooling down" }],
+          turnBudget: 80,
+        }),
+      },
+      true,
+    );
+    await full.handler({ ...CALL, tier: "session" }, ctx);
+    expect(seen()?.model).toBe("glm-5.3");
+    expect(seen()).not.toHaveProperty("engine");
+    expect(seen()).toHaveProperty("detach", true);
+  });
+
+  it("exhausted chain (degrade to parent model) in orchestrate: the degraded spawn detaches too", async () => {
+    const { ctx, seen } = engineCtx(
+      {
+        resolveRoleRoute: () => ({
+          entries: [],
+          skipped: [{ entry: { engine: "claude", model: "opus" }, reason: "cooling down" }],
+          turnBudget: 60,
+        }),
+      },
+      true,
+    );
+    await full.handler({ ...CALL, tier: "session" }, ctx);
+    expect(seen()).not.toHaveProperty("engine");
+    expect(seen()?.maxTurns).toBe(60);
+    expect(seen()).toHaveProperty("detach", true);
+  });
+
+  it("explicit detach:false in orchestrate is honored: no detach key", async () => {
+    const { ctx, seen } = engineCtx({}, true);
+    await full.handler({ ...CALL, tier: "session", detach: false }, ctx);
+    expect(seen()).toBeDefined();
+    expect(seen()).not.toHaveProperty("detach");
+  });
+
+  it("orchestrate unset: engine profile request carries no detach key", async () => {
+    const { ctx, seen } = engineCtx({}, undefined);
+    await full.handler({ ...CALL, tier: "session" }, ctx);
+    expect(seen()).toEqual({
+      agentType: "executor",
+      description: "d",
+      prompt: "ROLE BODY\n\n---\n\ndo it",
+      spawnToolCallId: "call-1",
+      model: "profile-model",
+      engine: "claude",
+    });
+  });
+
+  it("continue_session and send_to stay refused for engine profiles in orchestrate, and nothing runs", async () => {
+    const resumed = engineCtx({}, true);
+    const r1 = await full.handler({ ...CALL, tier: "session", continue_session: "child-1" }, resumed.ctx);
+    expect(r1.ok).toBe(false);
+    expect(resumed.ran()).toBe(false);
+
+    const sent = engineCtx({}, true);
+    const r2 = await full.handler({ ...CALL, tier: "session", send_to: "child-1" }, sent.ctx);
+    expect(r2.ok).toBe(false);
+    expect(r2.error).toContain("send_to is supported only for AnyCode (core) children");
+    expect(sent.ran()).toBe(false);
   });
 });

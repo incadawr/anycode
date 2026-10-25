@@ -55,6 +55,7 @@ import type { UsageLimitNotice } from "./usage-limit.js";
 // here rather than re-derived, so the UI wire's cap can never silently drift
 // from the id shape this system actually mints.
 import { CHILD_ID_MAX_CHARS } from "./child-sessions.js";
+import type { WorkspaceTrustItemWire } from "./workspace-trust.js";
 import type { ChildCeilingSummary } from "./child-sessions.js";
 // Slice 5.7 (design slice-5.7-cut.md §2.1): git-domain types for the additive
 // git wire surface. Type-only (verbatimModuleSyntax erases them from the renderer
@@ -470,6 +471,8 @@ export type UiToHostMessage =
   | { type: "git_command"; requestId: string; command: GitCommand }
   // Renderer Panels sub-slice A: read-only LSP server-status request.
   | { type: "lsp_status_request" }
+  // Taskana 4711: payload-less; restarts every crashed language server
+  | { type: "lsp_restart_request" }
   // Slice P7.17 (F12, design §2.2): read-only per-category context-token
   // breakdown request. Mirror of lsp_status_request — payload-less, served even
   // mid-turn (contextBreakdown() is a pure read). Sent only when the ctx-meter
@@ -905,6 +908,9 @@ export type HostToUiMessage =
   | { type: "lsp_status"; servers: LspServerStatus[] }
   // Renderer Panels sub-slice B: trusted static command-hook config list.
   | { type: "hooks_list"; hooks: CommandHookDeclaration[]; configError?: string }
+  // Taskana 4736: the project folder's own spawn declarations are held until the
+  // user decides (display-only rows; the answer goes back as a tab id + decision).
+  | { type: "workspace_trust_required"; state: "unknown" | "changed"; workspace: string; items: WorkspaceTrustItemWire[] }
   // Renderer Panels sub-slice D: trusted background-task snapshots and output chunks.
   | { type: "task_list"; tasks: BackgroundTaskSnapshot[] }
   | { type: "task_output"; taskId: string; snapshot: BackgroundTaskSnapshot | null; newOutput: string }
@@ -1203,6 +1209,13 @@ export const lspStatusRequestSchema = z
   })
   .strict();
 
+// Taskana 4711: payload-less restart request (mirror of
+// lspStatusRequestSchema). Untrusted ui->host direction, so it rides zod even
+// though it carries no data — fail-closed on any extra key under .strict().
+export const lspRestartRequestSchema = z
+  .object({ type: z.literal("lsp_restart_request") })
+  .strict();
+
 // Slice P7.17 (F12): payload-less breakdown request (mirror of
 // lspStatusRequestSchema). Untrusted ui->host direction, so it rides zod even
 // though it carries no data — fail-closed on any extra key under .strict().
@@ -1318,6 +1331,7 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   engineSwitchRequestSchema,
   gitCommandMessageSchema,
   lspStatusRequestSchema,
+  lspRestartRequestSchema,
   contextBreakdownRequestSchema,
   usageAuditRequestSchema,
   compactRequestSchema,

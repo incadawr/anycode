@@ -32,9 +32,10 @@ import { useContext, useEffect, useRef, useState } from "react";
 import { TabContext, useTabSend, useTabStore } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
 import type { ConnectionPhase, TurnState } from "../store.js";
-import { Collapse, Dot, Globe, History, HookIcon, ServerStack, Terminal } from "./icons.js";
+import { Collapse, Dot, Globe, History, Terminal } from "./icons.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
 import { usePreviewStore } from "../preview/preview-store.js";
+import { useDockStore } from "../dock/dock-store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { PREVIEW_TRANSFERRED_TEXT, type ToastKind } from "../toasts.js";
 import type { PreviewChangedPayload, PreviewContainerKind, PreviewPanelInfo } from "../../../shared/preview-panel.js";
@@ -131,8 +132,6 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
 
   const tab = useTabsStore((state) => state.tabs.find((t) => t.tabId === tabId));
   const terminalOpen = tab?.terminalOpen ?? false;
-  const lspPanelOpen = tab?.lspPanelOpen ?? false;
-  const hooksPanelOpen = tab?.hooksPanelOpen ?? false;
   const timelinePanelOpen = tab?.timelinePanelOpen ?? false;
   const tasksPanelOpen = tab?.tasksPanelOpen ?? false;
   const title = tab?.title ?? (workspace ? basename(workspace) : "—");
@@ -206,9 +205,14 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
           console.warn("[SessionHeader] setContainer failed", error);
         });
     } else {
+      // Taskana 4703: picking a panel item focuses its DOCK TAB (the
+      // tab strip replaced the picker). The `select` call stays the main
+      // path; the dock focus is what actually mounts the body (D7's
+      // previewMounted follows the ACTIVE tab).
       window.anycode.previewPanel.select(tabId, item.previewId).catch((error: unknown) => {
         console.warn("[SessionHeader] select failed", error);
       });
+      useDockStore.getState().focus(`preview:${item.previewId}`);
     }
     setPreviewMenuOpen(false);
   }
@@ -223,14 +227,6 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
    */
   function toggleTerminal(): void {
     useTabsStore.getState().setTerminalOpen(tabId, !terminalOpen);
-  }
-
-  function toggleLspPanel(): void {
-    useTabsStore.getState().setLspPanelOpen(tabId, !lspPanelOpen);
-  }
-
-  function toggleHooksPanel(): void {
-    useTabsStore.getState().setHooksPanelOpen(tabId, !hooksPanelOpen);
   }
 
   function toggleTimelinePanel(): void {
@@ -288,28 +284,6 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
       </span>
 
       <span className="session-header-spacer" />
-
-      {!externalEngine && <button
-        type="button"
-        className={`session-header-panel-toggle${lspPanelOpen ? " session-header-panel-toggle-active" : ""}`}
-        aria-label="Toggle LSP status"
-        aria-pressed={lspPanelOpen}
-        title="LSP status"
-        onClick={toggleLspPanel}
-      >
-        <ServerStack />
-      </button>}
-
-      {!externalEngine && <button
-        type="button"
-        className={`session-header-panel-toggle${hooksPanelOpen ? " session-header-panel-toggle-active" : ""}`}
-        aria-label="Toggle hooks"
-        aria-pressed={hooksPanelOpen}
-        title="Hooks"
-        onClick={toggleHooksPanel}
-      >
-        <HookIcon />
-      </button>}
 
       {!externalEngine && supportsTasks && <button
         type="button"

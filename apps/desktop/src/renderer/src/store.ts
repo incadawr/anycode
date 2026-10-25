@@ -143,6 +143,17 @@ import { decodeWorkflowCardSnapshot, projectWorkflowCard } from "./workflow-card
 // provider_quota case projects the observation onto its snapshot's matching
 // connection `lastQuota` so the connect card updates live.
 import { useSettingsStore } from "./settings-store.js";
+import type { WorkspaceTrustItemWire } from "../../shared/workspace-trust.js";
+
+/** Taskana 4736: the pending project-trust question shown for a tab. */
+export interface WorkspaceTrustRequest {
+  state: "unknown" | "changed";
+  workspace: string;
+  items: WorkspaceTrustItemWire[];
+}
+
+/** Host's engine-switch announcement sentinel (mirrors host/engine-switch.ts ENGINE_SWITCH_TURN_ID). */
+const ENGINE_SWITCH_NOTICE_TURN_ID = "engine-switch";
 
 /** Lifecycle of the renderer<->host port itself, independent of the agent turn lifecycle. */
 export type ConnectionPhase = "awaiting_port" | "awaiting_host_ready" | "ready" | "host_exited";
@@ -223,6 +234,13 @@ export interface SubagentSubStatus {
   activity: { toolName: string; summary: string }[];
   /** Count of activity rows dropped from the front of the ring once the cap was exceeded (honest overflow counter, not a wire field). */
   activityDropped: number;
+  /**
+   * TASK.4057: the provider's model claim as seen LIVE on `subagent_progress`
+   * (first response frame onward). Live-only: the persisted card and the
+   * settled `final.responseModel` supersede it once the run ends. Absent
+   * until observed; never erased by a later progress that lacks it.
+   */
+  responseModel?: string;
   final: {
     status: "completed" | "max_turns" | "cancelled" | "error";
     durationMs: number;
@@ -1088,6 +1106,8 @@ export interface DesktopState {
   hookDeclarations: CommandHookDeclaration[];
   /** Hook config load error, if the host fail-softed to no command hooks. */
   hookConfigError: string | null;
+  /** Taskana 4736: this folder's pending project-trust question, or null once decided. */
+  workspaceTrust: WorkspaceTrustRequest | null;
   /** Latest background-task snapshots from the host, replaced wholesale. */
   backgroundTasks: BackgroundTaskSnapshot[];
   /** Accumulated output chunks keyed by taskId. */
@@ -1447,6 +1467,7 @@ interface SessionSlice {
   lspServers: LspServerStatus[];
   hookDeclarations: CommandHookDeclaration[];
   hookConfigError: string | null;
+  workspaceTrust: WorkspaceTrustRequest | null;
   backgroundTasks: BackgroundTaskSnapshot[];
   backgroundTaskOutput: Record<string, string>;
   backgroundChildren: WireBackgroundChild[];
@@ -1510,6 +1531,7 @@ function initialSessionSlice(): SessionSlice {
     lspServers: [],
     hookDeclarations: [],
     hookConfigError: null,
+    workspaceTrust: null,
     backgroundTasks: [],
     backgroundTaskOutput: {},
     backgroundChildren: [],
@@ -2351,7 +2373,16 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
      * settled canon already applied), a late/replayed progress event is
      * ALSO a no-op — the terminal record never regresses to "running".
      */
-    function patchSubagentProgress(toolCallId: string, turns: number, toolCalls: number, lastTool: string | null): void {
+    function patchSubagentProgress(
+      toolCallId: string,
+      turns: number,
+      toolCalls: number,
+      lastTool: string | null,
+      // TASK.4057: the provider's live claim. Stored when present; an absent
+      // value keeps the earlier known one (a progress frame without it must
+      // never erase the pill).
+      responseModel?: string,
+    ): void {
       flushDeltas();
       set((state) => ({
         transcript: state.transcript.map((block) => {
@@ -2361,6 +2392,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           // Progress is a confirmed sign of life: any prior stall report is
           // stale the moment it lands (TASK.148 follow-up slice).
           const subagent = { ...block.subagent, turns, toolCalls, lastTool };
+          if (responseModel !== undefined) {
+            subagent.responseModel = responseModel;
+          }
           delete subagent.stalled;
           return { ...block, subagent };
         }),
@@ -3075,12 +3109,19 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       // session-scoped bookkeeping (a notice + the turn-status flip below),
       // never transcript content, so admitting a late/foreign one costs at
       // most a stale toast.
+      // Taskana 4068 cross-review: the in-session engine switch announces
+      // itself as an `engine_notice` on ENGINE_SWITCH_TURN_ID (host/engine-switch.ts),
+      // also a between-turns sentinel. Exempted by the sentinel id, NOT by
+      // event type: other engines' drift `engine_notice`s are real turn-scoped
+      // events and must keep being dropped when foreign.
+      const isEngineSwitchNotice = event.type === "engine_notice" && turnId === ENGINE_SWITCH_NOTICE_TURN_ID;
       if (
         get().turn.turnId !== turnId &&
         event.type !== "context_usage" &&
         event.type !== "preview_console" &&
         event.type !== "compaction_start" &&
-        event.type !== "compaction_end"
+        event.type !== "compaction_end" &&
+        !isEngineSwitchNotice
       ) {
         return;
       }
@@ -3778,7 +3819,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           );
           return;
         case "subagent_progress":
-          patchSubagentProgress(event.toolCallId, event.turns, event.toolCalls, event.lastTool ?? null);
+          patchSubagentProgress(event.toolCallId, event.turns, event.toolCalls, event.lastTool ?? null, event.responseModel);
           return;
         case "subagent_end":
           patchSubagentEnd(
@@ -4087,6 +4128,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // TASK.208: a refused ladder round is telemetry-only for now — the
         // paired loop_end already stops the feed, so no UI surface.
         case "ceiling_refused":
+          return;
+
+        // Taskana 4702 Stage 1: an ask-zone auto-decision is journaled (the
+        // event is the source of truth; telemetry counts it). The muted
+        // transcript line "Auto-allowed by classifier <id>" is deferred to the
+        // follow-up card with the settings UI, so the transcript stays
+        // byte-identical for now.
+        case "permission_auto_decided":
           return;
 
         default: {
@@ -4700,6 +4749,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // Renderer Panels sub-slice B: host boot's static command-hook list;
             // a plain replacement because ui_ready re-sends the complete set.
             set({ hookDeclarations: message.hooks, hookConfigError: message.configError ?? null });
+            return;
+          case "workspace_trust_required":
+            // Taskana 4736: host boot found declarations in an undecided or changed
+            // folder. Re-sent on every ui_ready while pending; cleared by the dialog
+            // once the user answers (the host then restarts and decides again).
+            set({
+              workspaceTrust: { state: message.state, workspace: message.workspace, items: message.items },
+            });
             return;
           case "task_list":
             // Renderer Panels sub-slice D: full snapshot replacement; output is

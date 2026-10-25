@@ -1935,3 +1935,39 @@ describe("roles (Taskana 4704 §3.5, additive-optional)", () => {
     expect(bad.success === true && bad.data?.maxParallelChildren).toBeUndefined();
   });
 });
+
+describe("tools.adaptiveTurnBudget (TASK.4721)", () => {
+  function withTools(tools: Record<string, unknown>) {
+    const base = cloneDefaults();
+    return { ...base, tools: { ...base.tools, ...tools } };
+  }
+
+  it("absent stays absent (additive-optional: default OFF, no key emitted)", () => {
+    const parsed = settingsSchema.safeParse(cloneDefaults());
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect("adaptiveTurnBudget" in parsed.data.tools).toBe(false);
+    }
+  });
+
+  it("true and false are preserved through a JSON round-trip", () => {
+    for (const value of [true, false]) {
+      const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withTools({ adaptiveTurnBudget: value }))));
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.tools.adaptiveTurnBudget).toBe(value);
+      }
+    }
+  });
+
+  it("a non-boolean is dropped alone (.catch(undefined)); the rest of the document survives", () => {
+    const parsed = settingsSchema.safeParse(
+      withTools({ adaptiveTurnBudget: "yes", maxTurns: 40 }),
+    );
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.tools.adaptiveTurnBudget).toBeUndefined();
+      expect(parsed.data.tools.maxTurns).toBe(40);
+    }
+  });
+});

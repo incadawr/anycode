@@ -95,6 +95,18 @@ export interface AlwaysAllowRule {
 }
 
 /**
+ * Taskana 4702 Stage 1: the ask-zone classifier record (default off). Absent =
+ * off. `kind` is closed to `command` (an external program that receives each
+ * ask-zone Bash command line on stdin). Carried to the host as one JSON env var.
+ */
+export interface PermissionClassifierSettings {
+  enabled: boolean;
+  kind: "command";
+  command: string;
+  timeoutMs?: number;
+}
+
+/**
  * One per-path binary-trust consent (TASK.103), as persisted in
  * `settings.security.trustedBinaries`. Structurally REDECLARED here (not
  * imported) to keep this value-only module's zero-import rule — same
@@ -453,6 +465,12 @@ export interface AnycodeSettings {
     subagentMaxTurns?: number;
     subagentStallTimeoutMs?: number;
     /**
+     * TASK.4721: adaptive turn budget — progress-scaled ceiling grants and a
+     * base subagent budget learned from accepted-task history. Mirror of
+     * ANYCODE_ADAPTIVE_TURN_BUDGET (env > settings). Absent = OFF.
+     */
+    adaptiveTurnBudget?: boolean;
+    /**
      * Mirror of ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS
      * (env > settings) — Taskana 4705 provider retry knobs: retry count and
      * the transient-network wall-clock budget that extends past it.
@@ -477,7 +495,7 @@ export interface AnycodeSettings {
     archMap?: boolean;
   };
   /** Persisted always-allow rules seeded into every new host session (§5). */
-  permissions: { alwaysAllow: AlwaysAllowRule[] };
+  permissions: { alwaysAllow: AlwaysAllowRule[]; classifier?: PermissionClassifierSettings };
   ui: { theme: "system" | "light" | "dark" };
   /** Consent flag for weak secret storage on Linux/headless (§4), default false. */
   security: {

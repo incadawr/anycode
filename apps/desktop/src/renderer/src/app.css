@@ -392,6 +392,210 @@ body {
   background: var(--bg-hover);
 }
 
+/* ── right-side dock (Taskana 4703, docs/development/dock.md) ── One tabbed
+   column replacing the stacked git/preview/subagents columns: tab strip
+   (scroll on overflow), the ACTIVE tab's body only, one resize handle. */
+.dock-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg-sidebar);
+  border-left: 1px solid var(--border);
+}
+
+.dock-panel:focus-visible {
+  outline: none;
+}
+
+.dock-tab-strip {
+  display: flex;
+  gap: 1px;
+  flex-shrink: 0;
+  overflow-x: auto;
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.dock-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  max-width: 12rem;
+  flex-shrink: 0;
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--text-2);
+  background: transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.dock-tab:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+
+/* Cross-review D4: the tab is a wrapper holding real buttons (select / split /
+   close), each a keyboard tab stop; the active look rides the wrapper. */
+.dock-tab-active {
+  color: var(--text-1);
+  border-bottom-color: var(--text-1);
+  font-weight: var(--w-semibold);
+}
+
+.dock-tab-select {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.dock-tab-select:focus-visible,
+.dock-tab-split:focus-visible,
+.dock-tab-close:focus-visible {
+  outline: 1px solid var(--text-1);
+  outline-offset: 1px;
+}
+
+.dock-tab-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dock-tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.dock-tab-close:hover {
+  color: var(--text-1);
+}
+
+.dock-body {
+  position: relative; /* Stage 2: the split pane's absolute anchor */
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.dock-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+
+/* Drawer mode (available < 748px): absolute overlay mirroring .lsp-panel's
+   posture — the conversation keeps (nearly) full width underneath. */
+.dock-panel-drawer {
+  position: absolute;
+  top: var(--header-h);
+  right: 0;
+  bottom: 0;
+  width: min(var(--dock-width, 640px), 92vw);
+  z-index: 14;
+  box-shadow: var(--shadow-menu);
+}
+
+/* ── Stage 2 (Taskana 4703 §3): split view on wide windows ── The pinned
+   tab's secondary pane: absolute right of the primary body inside the dock,
+   fixed DOCK_SPLIT_MIN_PX, border-left. No drag between panes by design. */
+.dock-split-pane {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-sidebar);
+  border-left: 1px solid var(--border);
+  z-index: 1;
+}
+
+.dock-split-pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.dock-split-pane-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.dock-split-merge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.dock-split-merge:hover {
+  color: var(--text-1);
+}
+
+/* The per-tab "Split right" affordance (⫿): same shape as the close ×;
+   disabled state is carried by title text only (the store refuses anyway). */
+.dock-tab-split {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.dock-tab-split:hover {
+  color: var(--text-1);
+}
+
+.dock-tab-split:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.dock-tab-split-active {
+  color: var(--text-1);
+  font-weight: var(--w-semibold);
+}
+
 /* ── native DOM markdown preview (TASK.99 M1, CUT.md CONTRACTS) ──
    Renders inside .preview-panel-body when the visible preview's
    viewKind is "dom-md", AND as the whole content of the standalone
@@ -1541,6 +1745,13 @@ body {
   flex-shrink: 0;
   color: var(--text-3);
   font-size: var(--fs-xs);
+}
+
+.environment-menu-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .environment-menu-chevron {
@@ -5943,9 +6154,9 @@ body {
   border-left: 1px solid var(--border);
 }
 
-.session-content-split-open .git-panel,
-.session-content-split-open .preview-panel,
-.session-content-split-open .child-split-pane {
+.dock-panel .git-panel,
+.dock-panel .preview-panel,
+.dock-panel .child-split-pane {
   min-width: 0;
 }
 

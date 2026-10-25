@@ -60,6 +60,11 @@ export const ENV_NETWORK_RETRY_BUDGET_MS = "ANYCODE_NETWORK_RETRY_BUDGET_MS";
 /** Subagent turn budget; literal mirror of core's `provider/env.ts` ENV_SUBAGENT_MAX_TURNS. */
 export const ENV_SUBAGENT_MAX_TURNS = "ANYCODE_SUBAGENT_MAX_TURNS";
 /**
+ * TASK.4721: adaptive turn budget (boolean); literal mirror of core's
+ * `provider/env.ts` ENV_ADAPTIVE_TURN_BUDGET. Settings are projected as "1"/"0".
+ */
+export const ENV_ADAPTIVE_TURN_BUDGET = "ANYCODE_ADAPTIVE_TURN_BUDGET";
+/**
  * Subagent stall-detector silence threshold (TASK.148 slice 1); literal
  * mirror of core's `provider/env.ts` ENV_SUBAGENT_STALL_MS. NOT
  * ENV_STALL_TIMEOUT_MS above — that one is the per-attempt stream watchdog.
@@ -73,6 +78,13 @@ export const ENV_SUBAGENT_STALL_MS = "ANYCODE_SUBAGENT_STALL_MS";
  * diagnostics like the other tool mirrors.
  */
 export const ENV_GREP_BACKEND = "ANYCODE_GREP_BACKEND";
+
+/**
+ * Taskana 4702 Stage 1: the ask-zone classifier record, one JSON object
+ * mirroring `settings.permissions.classifier` (absent = off). Parsed defensively
+ * by the host (src/host/ask-classifier-env.ts): garbage is off.
+ */
+export const ENV_PERMISSION_CLASSIFIER = "ANYCODE_PERMISSION_CLASSIFIER";
 /**
  * Reasoning-effort inheritance rung (F14, slice-P7.15-cut.md §2.4). Literal
  * mirrors core's `provider/env.ts:11` (host already reads this into
@@ -407,6 +419,7 @@ const PROVIDER_ENV_KEYS: readonly string[] = [
   ENV_MAX_RETRIES,
   ENV_NETWORK_RETRY_BUDGET_MS,
   ENV_SUBAGENT_MAX_TURNS,
+  ENV_ADAPTIVE_TURN_BUDGET,
   ENV_SUBAGENT_STALL_MS,
   ENV_REASONING_EFFORT,
   ENV_MAX_OUTPUT_TOKENS,
@@ -415,6 +428,7 @@ const PROVIDER_ENV_KEYS: readonly string[] = [
   ENV_PROVIDER_TRANSPORT,
   ENV_INCLUDE_USAGE,
   ENV_GREP_BACKEND,
+  ENV_PERMISSION_CLASSIFIER,
   // 4088-on-4118 integration: ENV_IMAGE_INPUT_MODELS is GONE — the live
   // image-modality facts ride 4118's modelCapabilities transport instead (the
   // host reads them from the connection's settings record). Only the per-model
@@ -1159,11 +1173,24 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   fillFromSettings(env, ENV_MAX_RETRIES, numToStr(settings.tools.maxRetries));
   fillFromSettings(env, ENV_NETWORK_RETRY_BUDGET_MS, numToStr(settings.tools.networkRetryBudgetMs));
   fillFromSettings(env, ENV_SUBAGENT_MAX_TURNS, numToStr(settings.tools.subagentMaxTurns));
+  // TASK.4721: adaptive turn budget, boolean mirror (absent stays absent => OFF).
+  fillFromSettings(
+    env,
+    ENV_ADAPTIVE_TURN_BUDGET,
+    settings.tools.adaptiveTurnBudget === undefined ? undefined : settings.tools.adaptiveTurnBudget ? "1" : "0",
+  );
   fillFromSettings(env, ENV_SUBAGENT_STALL_MS, numToStr(settings.tools.subagentStallTimeoutMs));
   // Grep backend selector (Taskana 4160): string enum, not a number — no
   // numToStr; fillFromSettings keeps env > settings and only fills a blank
   // slot, exactly like the numeric tool mirrors above.
   fillFromSettings(env, ENV_GREP_BACKEND, settings.tools.grepBackend);
+  // Taskana 4702: the ask-zone classifier record rides as one JSON value; the
+  // host parses it defensively, so a hand-edited value can only turn it off.
+  fillFromSettings(
+    env,
+    ENV_PERMISSION_CLASSIFIER,
+    settings.permissions.classifier !== undefined ? JSON.stringify(settings.permissions.classifier) : undefined,
+  );
   // Reasoning-effort inheritance rung (F14 §2.4): a new host boot inherits the
   // active connection's last chosen effort instead of hardcoded `off`. Env still
   // wins by construction (fillFromSettings).

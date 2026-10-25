@@ -76,6 +76,12 @@ interface ServerRecord {
   client?: LspClient;
   pid?: number;
   stderrTail: string;
+  /**
+   * Taskana 4711 cross-review F2: bumped on every spawn. Callbacks of a
+   * superseded child (late exit, trailing stdout, init settlement) compare
+   * against it and no-op, so they cannot crash the respawned server.
+   */
+  lifecycle: number;
   /** Resolves true once initialize completes (state → ready); false on any failure. Always resolves, never rejects. */
   initPromise?: Promise<boolean>;
 }
@@ -102,6 +108,7 @@ export class LspManager implements LspPort {
       spec,
       state: "not_started" as LspServerState,
       stderrTail: "",
+      lifecycle: 0,
     }));
   }
 
@@ -223,6 +230,29 @@ export class LspManager implements LspPort {
     if (timer) clearTimeout(timer);
   }
 
+  /**
+   * Taskana 4711: restart every CRASHED server (the Environment menu's
+   * "Restart" action). Resets the record to a clean not_started state
+   * (no stale pid/client/handle/stderr) and immediately spawns it again —
+   * init then proceeds exactly like a first touch (lazy-spawn path).
+   * Ready/initializing/not_started records are untouched; disposed records
+   * are NOT restarted (disposed only happens at disposeAll/teardown).
+   */
+  restartCrashed(): void {
+    const restartable = this.records.filter((record) => record.state === "crashed");
+    for (const record of restartable) {
+      record.pid = undefined;
+      record.client = undefined;
+      record.handle = undefined;
+      record.stderrTail = "";
+      record.state = "not_started";
+      this.notifyStatusChange();
+    }
+    for (const record of restartable) {
+      this.spawnServer(record); // spawnServer guards absent exec.spawnPersistent itself
+    }
+  }
+
   // -------------------------------------------------------------------------
 
   /** Reads record.state through a method boundary so callers after an await are not held to a stale narrowing of the mutable field. */
@@ -242,14 +272,22 @@ export class LspManager implements LspPort {
     record.state = "initializing";
     this.notifyStatusChange();
 
+    const lifecycle = ++record.lifecycle;
+    const isCurrent = (): boolean => record.lifecycle === lifecycle;
     let client: LspClient | undefined;
     const handle = spawnPersistent({
       file: record.spec.command,
       args: record.spec.args,
       cwd: this.workspaceCwd,
-      onStdout: (chunk) => client?.receive(chunk),
-      onStderr: (text) => this.appendStderr(record, text),
-      onExit: () => this.handleServerExit(record),
+      onStdout: (chunk) => {
+        if (isCurrent()) client?.receive(chunk);
+      },
+      onStderr: (text) => {
+        if (isCurrent()) this.appendStderr(record, text);
+      },
+      onExit: () => {
+        if (isCurrent()) this.handleServerExit(record);
+      },
     });
     record.handle = handle;
     record.pid = handle.pid;
@@ -260,13 +298,16 @@ export class LspManager implements LspPort {
       ...(record.spec.initializationOptions !== undefined
         ? { initializationOptions: record.spec.initializationOptions }
         : {}),
-      onProtocolError: (error) => this.handleProtocolError(record, error),
+      onProtocolError: (error) => {
+        if (isCurrent()) this.handleProtocolError(record, error);
+      },
     });
     record.client = client;
 
     const initDeadline = Date.now() + LSP_INIT_TIMEOUT_MS;
     record.initPromise = client.initialize(initDeadline).then(
       (ok) => {
+        if (!isCurrent()) return false;
         if (record.state === "disposed" || record.state === "crashed") return false;
         if (ok) {
           record.state = "ready";
@@ -277,7 +318,7 @@ export class LspManager implements LspPort {
         return false;
       },
       () => {
-        this.markCrashed(record);
+        if (isCurrent()) this.markCrashed(record);
         return false;
       },
     );

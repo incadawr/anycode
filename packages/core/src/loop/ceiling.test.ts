@@ -13,6 +13,7 @@ import {
   CEILING_VERDICT_TOOL_NAME,
   acceptCeilingVerdict,
   adaptiveGrantForRound,
+  buildCeilingConfig,
   buildCeilingDecisionPrompt,
   ceilingGrant,
   ceilingWindowMs,
@@ -628,5 +629,28 @@ describe("TASK.4055 adaptive budget", () => {
     const ladder = buildCeilingDecisionPrompt(2, 3, 4);
     expect(ladder).toContain("must shorten");
     expect(ladder).not.toContain("demonstrated progress");
+  });
+});
+
+describe("buildCeilingConfig (TASK.4721)", () => {
+  it("off: the object is byte-identical to the pre-4721 literals", () => {
+    expect(buildCeilingConfig({})).toEqual({});
+    expect(buildCeilingConfig({ adaptive: false })).toEqual({});
+    expect("adaptive" in buildCeilingConfig({ adaptive: false })).toBe(false);
+  });
+
+  it("on: carries adaptive: true, alone or with a supervised-root predicate", () => {
+    expect(buildCeilingConfig({ adaptive: true })).toEqual({ adaptive: true });
+    const supervised = () => true;
+    const both = buildCeilingConfig({ adaptive: true, supervisedRoot: supervised });
+    expect(both.adaptive).toBe(true);
+    expect(both.supervisedRoot).toBe(supervised);
+  });
+
+  it("supervisedRoot alone is passed through untouched (no adaptive key)", () => {
+    const supervised = () => false;
+    const config = buildCeilingConfig({ supervisedRoot: supervised });
+    expect(config.supervisedRoot).toBe(supervised);
+    expect("adaptive" in config).toBe(false);
   });
 });

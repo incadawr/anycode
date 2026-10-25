@@ -1,29 +1,15 @@
 /**
- * Preview panel region (working-docs/panel-track/CUT.md §2.4/D12):
- * self-connecting like GitPanel.tsx/LspPanel.tsx (own tabId off TabContext),
- * mounted in ActiveTabBody ONLY while the active tab has >=1 panel-container
- * preview (App.tsx's `computePreviewPanelOpen` gate, D12) — never before, and
- * never for a background tab. Slim REAL React header (title, a preview
- * picker when there is more than one, close x) sits above the measured body
- * div the main-side WebContentsView is positioned over (D9's rAF-coalesced
- * bounds publisher lives here, fed through panel-bridge.ts's
- * `reportPanelBounds`); the body shows a neutral placeholder while the view
- * itself is actually hidden (any overlay open, D6) or before any preview has
- * settled. "Open in window" (96-P3, D14) calls `previewPanel.setContainer`
- * and, on `{ok:true, reloaded:true}`, raises the state-loss toast through
- * the caller-supplied `onToast` — App.tsx's existing onToast/toasts.ts
- * pipeline, threaded down the same way `ActiveTabBody` already threads it
- * to `TabNoticeCapture`.
- *
- * Owner smoke-test fix (two-header defect): the header row above is drawn
- * here ONLY for a web (WebContentsView-backed) visible preview, exactly as
- * before. A `dom-md` visible preview instead folds its title text and the
- * preview-picker `<select>` DOWN into `MarkdownPreviewView`'s own single
- * unified header (title/picker/`Rendered | Source`/Reload/Reveal/transfer/
- * close, all in one row) — this component keeps owning `selectPreview`/
- * `panelPreviews` (the picker is built here, just rendered there) and the
- * `closePreview`/`openInWindow` handlers, only the JSX for the row itself
- * moves. See MarkdownPreviewView.tsx's own doc comment for the full seam.
+ * ONE preview's body region inside the dock (Taskana 4703, was the panel-
+ * track CUT.md §2.4/D12 single visible-slot column): the dock tab strip is
+ * the picker now, so this component renders exactly the preview its
+ * `previewId` prop names — resolved from `usePreviewStore`, no visible-slot
+ * fallback, no `<select>`. Everything the main-side contract needs is kept
+ * byte-identical: the D9 rAF-coalesced bounds publisher over
+ * `.preview-panel-body`, `MarkdownPreviewView`'s unified header (TASK.99
+ * owner smoke-test fix), the web header's "Open in window" (D14) and close,
+ * and the `onToast` threading. A preview that vanishes from the store
+ * renders the neutral empty state — the App.tsx tab-derivation effect is
+ * what actually closes the tab.
  */
 import { useContext, useEffect, useRef } from "react";
 import { TabContext } from "../tab-context.js";
@@ -33,7 +19,7 @@ import { useOverlayOpenSnapshot } from "../preview/overlay-flag.js";
 import { PREVIEW_TRANSFERRED_TEXT, type ToastKind } from "../toasts.js";
 import { X } from "./icons.js";
 // TASK.99 M1: the native DOM markdown preview view — rendered inside this
-// panel's body slot when the visible preview's viewKind is "dom-md" (CUT.md
+// panel's body slot when the preview's viewKind is "dom-md" (CUT.md
 // CONTRACTS); bounds publisher below stays untouched, main just never
 // positions a WebContentsView for that record.
 import { MarkdownPreviewView } from "./MarkdownPreviewView.js";
@@ -41,11 +27,22 @@ import { MarkdownPreviewView } from "./MarkdownPreviewView.js";
 const EMPTY_PREVIEWS: never[] = [];
 
 export interface PreviewPanelProps {
+  /** The dock tab's id (`preview:<previewId>`) — carried for context/debug, the store lookup uses previewId. */
+  tabId: string;
+  /** The one preview this dock tab renders (the tab strip is the picker). */
+  previewId: string;
   /** P3 D14: raises the transfer state-loss toast (kind → tone/glyph in toasts.ts). */
   onToast(kind: ToastKind, text: string): void;
+  /**
+   * D9 bounds publisher ownership (cross-review D1). Only the dock's PRIMARY
+   * body publishes: main keeps one visible panel slot over one shared rect, so
+   * a second instance (the split pane) publishing would race the primary and
+   * position the web view over the wrong pane. Default true.
+   */
+  publishBounds?: boolean;
 }
 
-export function PreviewPanel({ onToast }: PreviewPanelProps) {
+export function PreviewPanel({ tabId: _dockTabId, previewId, onToast, publishBounds = true }: PreviewPanelProps) {
   const ctx = useContext(TabContext);
   if (!ctx) {
     throw new Error("PreviewPanel must be used within a <TabContext.Provider>");
@@ -53,22 +50,21 @@ export function PreviewPanel({ onToast }: PreviewPanelProps) {
   const { tabId } = ctx;
 
   const previews = usePreviewStore((state) => state.byTab[tabId]?.previews ?? EMPTY_PREVIEWS);
-  const visiblePanelPreviewId = usePreviewStore((state) => state.byTab[tabId]?.visiblePanelPreviewId ?? null);
   const overlayOpen = useOverlayOpenSnapshot();
   const bodyRef = useRef<HTMLDivElement>(null);
 
-  const panelPreviews = previews.filter((preview) => preview.container === "panel");
-  const visible = panelPreviews.find((preview) => preview.previewId === visiblePanelPreviewId) ?? panelPreviews[0] ?? null;
+  // The named preview only — the dock tab strip owns WHICH preview shows.
+  const visible = previews.find((preview) => preview.previewId === previewId) ?? null;
 
   // D9 bounds publisher: measures the BODY div (CSS px == DIP) on every
   // trigger — a body resize (drag/terminal open-close), a conversation-column
-  // resize (git panel toggle/resize, sidebar collapse, window resize — the
+  // resize (dock toggle/resize, sidebar collapse, window resize — the
   // conversation column absorbs every intra-grid x-shift), and a raw window
   // resize as belt. Each trigger only ever schedules the SAME rAF-coalesced
   // report (panel-bridge.ts owns the coalescing/dedup).
   useEffect(() => {
     const body = bodyRef.current;
-    if (!body) {
+    if (!body || !publishBounds) {
       return;
     }
 
@@ -98,26 +94,20 @@ export function PreviewPanel({ onToast }: PreviewPanelProps) {
       conversationObserver?.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, []);
+  }, [publishBounds]);
 
-  function selectPreview(previewId: string): void {
-    window.anycode.previewPanel.select(tabId, previewId).catch((error: unknown) => {
-      console.warn("[PreviewPanel] select failed", error);
-    });
-  }
-
-  function closePreview(previewId: string): void {
-    window.anycode.previewPanel.close(tabId, previewId).catch((error: unknown) => {
+  function closePreview(target: string): void {
+    window.anycode.previewPanel.close(tabId, target).catch((error: unknown) => {
       console.warn("[PreviewPanel] close failed", error);
     });
   }
 
-  // D14 (96-P3): transfer the visible panel preview out into a window.
+  // D14 (96-P3): transfer this panel preview out into a window.
   // `reloaded:false` (a same-container no-op) never reaches here because the
   // button only ever requests "window" from an already-panel preview.
-  function openInWindow(previewId: string): void {
+  function openInWindow(target: string): void {
     window.anycode.previewPanel
-      .setContainer(tabId, previewId, "window")
+      .setContainer(tabId, target, "window")
       .then((result) => {
         if (!result.ok) {
           // M1 interim (TASK.99 CUT.md Gap 3): a dom-md preview's "Open in
@@ -139,36 +129,15 @@ export function PreviewPanel({ onToast }: PreviewPanelProps) {
 
   const isMdPreview = visible?.viewKind === "dom-md";
   const title = visible?.title ?? visible?.sourcePath ?? visible?.url ?? "Preview";
-  // Owner smoke-test fix: built once, handed to MarkdownPreviewView's own
-  // header for a dom-md visible preview (below) instead of this component's
-  // now dom-md-skipped `.preview-panel-header` — `selectPreview`/
-  // `panelPreviews` stay owned here either way.
-  const picker =
-    panelPreviews.length > 1 ? (
-      <select
-        className="preview-panel-picker"
-        aria-label="Select preview"
-        value={visible?.previewId ?? ""}
-        onChange={(event) => selectPreview(event.target.value)}
-      >
-        {panelPreviews.map((preview) => (
-          <option key={preview.previewId} value={preview.previewId}>
-            {preview.title ?? preview.sourcePath ?? preview.url}
-          </option>
-        ))}
-      </select>
-    ) : undefined;
 
   return (
     <div className="preview-panel">
-      {/* Owner smoke-test fix (two-header defect): a dom-md visible preview
-          gets its title/picker/close/transfer folded into
-          MarkdownPreviewView's own unified header below instead — web
-          previews keep exactly this header, unchanged. */}
+      {/* Owner smoke-test fix (two-header defect): a dom-md preview gets its
+          title/close/transfer folded into MarkdownPreviewView's own unified
+          header below instead — web previews keep exactly this header. */}
       {!isMdPreview && (
         <div className="preview-panel-header">
           <span className="preview-panel-title">{title}</span>
-          {picker}
           {visible && (
             <button
               type="button"
@@ -207,7 +176,6 @@ export function PreviewPanel({ onToast }: PreviewPanelProps) {
             onClose={() => closePreview(visible.previewId)}
             onTransfer={() => openInWindow(visible.previewId)}
             title={title}
-            picker={picker}
           />
         ) : null}
       </div>

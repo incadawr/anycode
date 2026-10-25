@@ -1993,6 +1993,54 @@ describe("desktop store — subagent sub-status (task 3.1.4, design §3.3/§4.2)
     });
   });
 
+  it("TASK.4057: a live progress responseModel lands on the card, is kept across later progress without it, and a post-settle progress is a no-op", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId: "call-1", agentType: "general-purpose", description: "d", model: "opus" },
+    });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_progress", toolCallId: "call-1", turns: 1, toolCalls: 0 },
+    });
+    expect(findByToolCallId(store, "call-1")).not.toHaveProperty("subagent.responseModel");
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_progress", toolCallId: "call-1", turns: 2, toolCalls: 1, lastTool: "Read", responseModel: "glm-5.3" },
+    });
+    expect(findByToolCallId(store, "call-1")).toMatchObject({ subagent: { responseModel: "glm-5.3", turns: 2 } });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_progress", toolCallId: "call-1", turns: 3, toolCalls: 2, lastTool: "Grep" },
+    });
+    expect(findByToolCallId(store, "call-1")).toMatchObject({ subagent: { responseModel: "glm-5.3", turns: 3 } });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_end", toolCallId: "call-1", status: "completed", turns: 3, durationMs: 9, responseModel: "glm-5.3-final" },
+    });
+    const settled = store.getState().transcript;
+    expect(findByToolCallId(store, "call-1")).toMatchObject({ subagent: { final: { responseModel: "glm-5.3-final" } } });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_progress", toolCallId: "call-1", turns: 9, toolCalls: 9, responseModel: "late-claim" },
+    });
+    expect(store.getState().transcript).toEqual(settled);
+  });
+
   it("TASK.97 R5: subagent_start with an engine field seeds SubagentSubStatus.engine; absent field defaults to null", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
@@ -5340,6 +5388,24 @@ describe("desktop store — hooks_list (renderer panels sub-slice B)", () => {
     expect(store.getState().hookConfigError).toBeNull();
   });
 
+  it("workspace_trust_required holds the folder's pending question; decided (null) on a fresh tab", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    expect(store.getState().workspaceTrust).toBeNull();
+
+    store.getState().applyHostMessage({
+      type: "workspace_trust_required",
+      state: "unknown",
+      workspace: "/proj",
+      items: [{ kind: "mcp", name: "lint", commandLine: "node lint.js", source: "/proj/.anycode/config.json", envKeys: ["TOKEN"] }],
+    });
+    expect(store.getState().workspaceTrust).toEqual({
+      state: "unknown",
+      workspace: "/proj",
+      items: [{ kind: "mcp", name: "lint", commandLine: "node lint.js", source: "/proj/.anycode/config.json", envKeys: ["TOKEN"] }],
+    });
+  });
+
   it("stores and clears hook config errors based on later full snapshots", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
@@ -6558,6 +6624,38 @@ describe("desktop store — engine_settings_changed / pendingEngineChange (Codex
 
     expect(store.getState().engine).toBeNull();
     expect(store.getState().pendingEngineChange).toBeNull();
+  });
+
+  // Taskana 4068 cross-review (finding 2): the switch runs BETWEEN turns, so
+  // the renderer's turn id is null while the host's announcement carries the
+  // ENGINE_SWITCH_TURN_ID sentinel. Without the guard exemption the only
+  // in-transcript signal that the engine changed was silently dropped.
+  it("the engine-switch announcement survives the turn-scoped drop guard between turns", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReady());
+    expect(store.getState().turn.turnId).toBeNull();
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "engine-switch",
+      event: { type: "engine_notice", level: "info", message: 'Session switched from the "codex" engine to the "claude" engine.' },
+    });
+
+    expect(store.getState().notice).toEqual({
+      kind: "engine_notice",
+      text: 'Session switched from the "codex" engine to the "claude" engine.',
+    });
+  });
+
+  it("a foreign engine_notice (a real turn's id, not the switch sentinel) is still turn-scoped", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReady());
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "some-other-turn",
+      event: { type: "engine_notice", level: "warning", message: "stale drift warning" },
+    });
+    expect(store.getState().notice).toBeNull();
   });
 
   it("engine_switch_failed pushes the refusal reason on the one-slot notice channel and changes nothing else", () => {

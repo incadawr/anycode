@@ -226,6 +226,8 @@ function taskSnapshot(overrides?: Partial<BackgroundTaskSnapshot>): BackgroundTa
 }
 
 class FakeLspPort implements LspPort {
+  restartCalls = 0;
+
   constructor(private servers: LspServerStatus[]) {}
 
   setStatus(servers: LspServerStatus[]): void {
@@ -238,6 +240,10 @@ class FakeLspPort implements LspPort {
 
   status(): LspServerStatus[] {
     return this.servers;
+  }
+
+  restart(): void {
+    this.restartCalls += 1;
   }
 
   disposeAll(): Promise<void> {
@@ -315,6 +321,76 @@ describe("Session — LSP status panel wire", () => {
       lsp.setStatus([{ name: "typescript", state: "ready", pid: 456, extensions: [".ts", ".tsx"], stderrTail: "ok" }]);
       const before = h.received.filter(isLspStatus).length;
       h.send({ type: "lsp_status_request" });
+
+      await h.waitUntil(() => h.received.filter(isLspStatus).length > before);
+      expect(h.received.filter(isLspStatus).at(-1)?.servers).toEqual(lsp.status());
+    } finally {
+      h.close();
+    }
+  });
+});
+
+describe("Session — LSP restart wire (Taskana 4711)", () => {
+  it("restarts via the seam on lsp_restart_request and pushes a fresh lsp_status after it", async () => {
+    const lsp = new FakeLspPort([
+      { name: "typescript", state: "crashed", extensions: [".ts"], stderrTail: "boom" },
+    ]);
+    const h = createHarness({
+      steps: [finishStep()],
+      lspSeam: { status: () => lsp.status(), restart: () => lsp.restart() },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      await h.waitFor(isLspStatus); // the ui_ready push
+      expect(lsp.restartCalls).toBe(0);
+
+      const before = h.received.filter(isLspStatus).length;
+      h.send({ type: "lsp_restart_request" });
+
+      await h.waitUntil(() => lsp.restartCalls === 1);
+      await h.waitUntil(() => h.received.filter(isLspStatus).length > before);
+      // The post-restart push reflects the (synchronous) initializing transition.
+      const pushed = h.received.filter(isLspStatus).at(-1);
+      expect(pushed?.type).toBe("lsp_status");
+    } finally {
+      h.close();
+    }
+  });
+
+  it("a second lsp_restart_request restarts again (not one-shot)", async () => {
+    const lsp = new FakeLspPort([
+      { name: "typescript", state: "crashed", extensions: [".ts"], stderrTail: "" },
+    ]);
+    const h = createHarness({
+      steps: [finishStep()],
+      lspSeam: { status: () => lsp.status(), restart: () => lsp.restart() },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isLspStatus);
+
+      h.send({ type: "lsp_restart_request" });
+      h.send({ type: "lsp_restart_request" });
+      await h.waitUntil(() => lsp.restartCalls >= 2);
+      expect(lsp.restartCalls).toBe(2);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("without a restart seam the message is accepted, no crash, and pushLspStatus still fires", async () => {
+    const lsp = new FakeLspPort([
+      { name: "typescript", state: "crashed", extensions: [".ts"], stderrTail: "" },
+    ]);
+    // No lspSeam: the harness wraps `lsp` as a status-only seam (no restart).
+    const h = createHarness({ steps: [finishStep()], lsp });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isLspStatus);
+
+      const before = h.received.filter(isLspStatus).length;
+      h.send({ type: "lsp_restart_request" });
 
       await h.waitUntil(() => h.received.filter(isLspStatus).length > before);
       expect(h.received.filter(isLspStatus).at(-1)?.servers).toEqual(lsp.status());
