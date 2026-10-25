@@ -98,7 +98,7 @@ import { uiToHostMessageSchema } from "../shared/protocol.js";
 import { CHILD_STEER_QUEUE_MAX, type ChildCeilingSummary, type ChildRunStatus } from "../shared/child-sessions.js";
 import type { GitUiBridge } from "./git-bridge.js";
 import type { ExternalAnswer, IpcPermissionBroker } from "./permission-broker.js";
-import { describeApproval } from "./approval-summary.js";
+import { describeApproval, scrubApprovalText } from "./approval-summary.js";
 import { z } from "zod";
 import { extractSnapshotPath, isSnapshotTool, readSnapshot } from "./snapshot-hook.js";
 import { PreviewArtifactCollector } from "./preview-artifacts.js";
@@ -532,20 +532,32 @@ export interface ChildApprovalAsk {
 /**
  * Taskana 4821: the tool name plus its one-line subject (file path or command),
  * capped to the wire limits of `ChildProgress{kind:"attention"}`.
+ *
+ * Review F3: a COMMAND subject rides through the parent-visible approval
+ * notice, so it is scrubbed with the same `scrubApprovalText` the Sessions
+ * API's approval summaries use (approval-summary.ts) — Bearer headers,
+ * --password/-p-style flag values, token=/key=-style assignments and long
+ * base64/hex-ish runs become `[redacted]`. Only the `command` key is
+ * scrubbed: a file path identifies the ask and is not a credential (same
+ * posture as `describeApproval`'s file-tool branch), while scrubbing it
+ * anyway would redact long path SEGMENTS to uselessness.
  */
 export function describeChildApprovalAsk(toolName: string, input: unknown): ChildApprovalAsk {
   let subject = "";
+  let isCommand = false;
   if (input !== null && typeof input === "object") {
     const rec = input as Record<string, unknown>;
     for (const key of ["file_path", "notebook_path", "path", "command"]) {
       const value = rec[key];
       if (typeof value === "string" && value !== "") {
         subject = value;
+        isCommand = key === "command";
         break;
       }
     }
   }
-  return { toolName: toolName.slice(0, 80) || "unknown", subject: subject.slice(0, 160) };
+  const shown = isCommand ? scrubApprovalText(subject) : subject;
+  return { toolName: toolName.slice(0, 80) || "unknown", subject: shown.slice(0, 160) };
 }
 
 /**

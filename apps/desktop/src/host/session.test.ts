@@ -109,6 +109,7 @@ import {
   Session,
   summarizeProviderUsage,
   tapChildPermissions,
+  describeChildApprovalAsk,
   type ChildProgressReport,
   type ChildTerminalReport,
   type ProviderUsageAudit,
@@ -8596,5 +8597,32 @@ describe("tapChildPermissions ask identity (Taskana 4821)", () => {
       { waiting: true, ask: { toolName: "Write", subject: "/tmp/report.md" } },
       { waiting: false },
     ]);
+  });
+
+  it("describeChildApprovalAsk redacts token-shaped sequences in the command subject (review F3)", () => {
+    // Bearer header
+    const bearer = describeChildApprovalAsk("Bash", {
+      command: 'curl -H "Authorization: Bearer abc123def456ghi789abc123" https://example.com/health',
+    });
+    expect(bearer.subject).not.toContain("abc123def456ghi789abc123");
+    expect(bearer.subject).toContain("[redacted]");
+    expect(bearer.subject).toContain("https://example.com/health");
+    // --password / -p-style flag values
+    const flag = describeChildApprovalAsk("Bash", { command: "deploy --password hunter2 --verbose" });
+    expect(flag.subject).not.toContain("hunter2");
+    // token=/key=-style env assignments
+    for (const command of ["API_KEY=sk-abcdefghijklmnopqrstuvwxyz012345 make", "GITHUB_TOKEN=ghp_0123456789abcdef012345 gh release"]) {
+      const env = describeChildApprovalAsk("Bash", { command });
+      expect(env.subject).not.toMatch(/sk-abcdefgh|ghp_0123456789abcdef012345/);
+      expect(env.subject).toContain("[redacted]");
+    }
+    // long base64/hex-ish run
+    const b64 = describeChildApprovalAsk("Bash", { command: `echo QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVog== done` });
+    expect(b64.subject).not.toContain("QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVog");
+    expect(b64.subject).toContain("done");
+    // file paths ride unscrubbed (a path is not a credential; mirrors describeApproval)
+    expect(describeChildApprovalAsk("Write", { file_path: "/tmp/Verylongpathsegment0123456789/ok.md", content: "" }).subject).toBe(
+      "/tmp/Verylongpathsegment0123456789/ok.md",
+    );
   });
 });
