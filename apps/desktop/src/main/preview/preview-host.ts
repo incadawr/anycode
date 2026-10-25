@@ -81,11 +81,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // discipline.
 import { MD_PREVIEW_MAX_SOURCE_BYTES } from "./md-doc.js";
 import { isMarkdownPath } from "../../shared/previewable.js";
+import { BrowserController, checkInteractionPolicy, type BrowserControlContext, type InteractionKind } from "./browser-control.js";
 import {
   PREVIEW_EVENT_TYPE,
   PREVIEW_RESPONSE_TYPE,
   type PreviewArtifactsMessage,
   type PreviewConsoleEntry,
+  type PreviewControlSuccess,
   type PreviewEventMessage,
   type PreviewOp,
   type PreviewOpenSuccess,
@@ -170,6 +172,22 @@ export interface PreviewWebContentsLike {
    * instead of calling this at all).
    */
   restoreNavigationHistory(state: { entries: Array<{ url: string; title: string }>; index: number }): Promise<void>;
+  /**
+   * Taskana 4759: Chromium DevTools protocol access for the browser-control
+   * driver. The adapter reuses the single `debugger.attach("1.3")` that
+   * pageerror capture already performs; `send` re-attaches once if the debugger
+   * was detached and rejects with an Error when that is impossible.
+   */
+  cdp: PreviewCdpLike;
+  /** Taskana 4759: back (-1) / forward (+1) through the history (`navigationHistory.goToOffset`). */
+  goToOffset(offset: -1 | 1): Promise<void>;
+}
+
+/** Taskana 4759: the narrow CDP surface the browser-control driver is allowed to use. */
+export interface PreviewCdpLike {
+  send(method: string, params?: object): Promise<unknown>;
+  onEvent(listener: (method: string, params: unknown) => void): void;
+  ensureAttached(): boolean;
 }
 
 export interface PreviewWindowLike {
@@ -332,6 +350,12 @@ export interface PreviewHostDeps {
    * record — a reuse (`previewId` given) keeps its existing container.
    */
   displayMode(): "panel" | "window";
+  /**
+   * Taskana 4759: live "Full browser access" read for a tab. Absent = always
+   * off (every interaction needs the approval path). Read at decision time
+   * only, never cached on a record (Phase B wires the real store).
+   */
+  fullAccess?(tabId: string): boolean;
   /** Main wires this to `win.webContents.send(PREVIEW_CHANGED_CHANNEL, payload)` (D7); absent is a safe no-op (e.g. in tests that never care). */
   onPreviewsChanged?(payload: PreviewChangedPayload): void;
   logger: PreviewLogger;
@@ -531,6 +555,12 @@ interface WebPreviewRecord {
    * `disarmWatcher` are the only mutators.
    */
   watch?: { path: string; handle: { close(): void }; timer?: ReturnType<typeof setTimeout>; renamed?: boolean };
+  /** Taskana 4759: bumped on every main-frame navigation; refs minted under an older epoch are stale. */
+  navEpoch: number;
+  /** Taskana 4759: lazily created browser-control driver for this record (dropped on destroy). */
+  controller?: BrowserController;
+  /** Taskana 4759: serializes control actions on this record (no interleaved clicks). */
+  controlQueue: Promise<unknown>;
 }
 
 /**
@@ -1570,7 +1600,7 @@ class PreviewHost implements PreviewHostHandle {
   // ── RPC dispatch ──
 
   async handleRequest(tabId: string, message: PreviewRequestMessage): Promise<void> {
-    let result: PreviewResult<PreviewOpenSuccess | PreviewReadSuccess | PreviewScreenshotSuccess>;
+    let result: PreviewResult<PreviewOpenSuccess | PreviewReadSuccess | PreviewScreenshotSuccess | PreviewControlSuccess>;
     try {
       result = await this.dispatchOp(tabId, message.op);
     } catch (error) {
@@ -1585,7 +1615,7 @@ class PreviewHost implements PreviewHostHandle {
   private dispatchOp(
     tabId: string,
     op: PreviewOp,
-  ): Promise<PreviewResult<PreviewOpenSuccess | PreviewReadSuccess | PreviewScreenshotSuccess>> {
+  ): Promise<PreviewResult<PreviewOpenSuccess | PreviewReadSuccess | PreviewScreenshotSuccess | PreviewControlSuccess>> {
     switch (op.kind) {
       case "open":
         return this.openForTab(tabId, { path: op.path, url: op.url, previewId: op.previewId, allowRemote: op.allowRemote });
@@ -1593,7 +1623,128 @@ class PreviewHost implements PreviewHostHandle {
         return this.readForTab(tabId, op);
       case "screenshot":
         return this.screenshotFor(tabId, op.previewId);
+      case "control":
+        return this.controlForTab(tabId, op);
     }
+  }
+
+  // ── browser control (Taskana 4759) ──
+
+  /**
+   * Every control action. Never throws: a failure is an honest result.
+   * Order: navigate-by-url delegates to the open path; otherwise resolve the
+   * record, refuse markdown previews, wait for the page to settle, apply the
+   * interaction policy, then run on the record's serialized queue.
+   */
+  private async controlForTab(
+    tabId: string,
+    op: Extract<PreviewOp, { kind: "control" }>,
+  ): Promise<PreviewResult<PreviewControlSuccess>> {
+    const request = op.request;
+    const allowRemote = op.allowRemote === true;
+    const requestedId = "previewId" in request ? request.previewId : undefined;
+    try {
+      if (request.action === "navigate" && "url" in request.to) {
+        return await this.navigateByUrl(tabId, requestedId, request.to.url, allowRemote);
+      }
+      const record = this.resolveTarget(tabId, requestedId);
+      if (record === undefined) {
+        return this.fail(
+          "unavailable",
+          requestedId !== undefined ? `no such preview: ${requestedId}` : "no preview open — use BrowserOpen",
+        );
+      }
+      if (record.viewKind === "dom-md") {
+        return this.fail("invalid_input", "this is a markdown preview rendered natively; browser control is not supported");
+      }
+      const settled = await this.waitForSettle(record, READY_WAIT_MS);
+      if (settled === "timeout") {
+        return this.fail("timeout", "preview is not ready");
+      }
+      if (settled !== "ready") {
+        return this.fail(settled === "crashed" ? "crashed" : "load_failed", record.errorMessage ?? "preview failed to load");
+      }
+      const policy = checkInteractionPolicy(
+        request.action,
+        record.kind,
+        allowRemote,
+        record.url,
+        this.deps.fullAccess?.(tabId) === true,
+      );
+      if (!policy.allow) {
+        return this.fail(policy.errorKind, policy.error);
+      }
+      const run = (): Promise<PreviewResult<PreviewControlSuccess>> => this.runControl(record, request);
+      const next = record.controlQueue.then(run, run);
+      record.controlQueue = next.then(
+        () => undefined,
+        () => undefined,
+      );
+      return await next;
+    } catch (error) {
+      this.deps.logger.error("[preview] browser control failed unexpectedly", error);
+      return this.fail("unavailable", "browser control failed unexpectedly");
+    }
+  }
+
+  /** Runs one queued control action against a settled web record. */
+  private async runControl(
+    record: WebPreviewRecord,
+    request: Extract<PreviewOp, { kind: "control" }>["request"],
+  ): Promise<PreviewResult<PreviewControlSuccess>> {
+    if (record.destroyed) {
+      return this.fail("unavailable", `no such preview: ${record.previewId}`);
+    }
+    if (record.controller === undefined) {
+      record.controller = new BrowserController();
+    }
+    const wc = record.window.webContents;
+    const ctx: BrowserControlContext = {
+      cdp: wc.cdp,
+      previewId: record.previewId,
+      currentUrl: () => record.url,
+      navEpoch: () => record.navEpoch,
+      settle: (timeoutMs) => this.waitForSettle(record, timeoutMs),
+      reload: async () => {
+        record.status = "loading";
+        await wc.reload();
+      },
+      goToOffset: async (offset) => {
+        record.status = "loading";
+        await wc.goToOffset(offset);
+      },
+      navigationHistory: () => wc.getNavigationHistory(),
+      isNavigationAllowed: async (url) => (await this.evaluateNavigation(record, url)).allow,
+      signal: new AbortController().signal,
+    };
+    return record.controller.run(request, ctx);
+  }
+
+  /** navigate-by-url: delegates to the open path so the consent/origin policy keeps one copy. */
+  private async navigateByUrl(
+    tabId: string,
+    requestedId: string | undefined,
+    url: string,
+    allowRemote: boolean,
+  ): Promise<PreviewResult<PreviewControlSuccess>> {
+    const target = requestedId ?? this.resolveTarget(tabId, undefined)?.previewId;
+    const opened = await this.openForTab(tabId, {
+      url,
+      ...(target !== undefined ? { previewId: target } : {}),
+      ...(allowRemote ? { allowRemote: true } : {}),
+    });
+    if (!opened.ok) {
+      return opened;
+    }
+    return {
+      ok: true,
+      value: {
+        previewId: opened.value.previewId,
+        url: opened.value.url,
+        text: `navigated to ${opened.value.url}`,
+        navigated: true,
+      },
+    };
   }
 
   // ── auto-open (turn-end artifacts, cut §1(a)) ──
@@ -1666,6 +1817,10 @@ class PreviewHost implements PreviewHostHandle {
     // teardown, and the onClosed path alike (one copy, all teardown routes).
     this.disarmWatcher(record);
     record.destroyed = true;
+    if (record.viewKind === "web") {
+      record.controller?.invalidate();
+      record.controller = undefined;
+    }
     if (record.viewKind === "web") {
       this.flushEventSummary(record);
       if (record.status === "loading") {
@@ -2233,6 +2388,8 @@ class PreviewHost implements PreviewHostHandle {
       settleWaiters: [],
       destroyed: false,
       watch: undefined,
+      navEpoch: 0,
+      controlQueue: Promise.resolve(),
     };
   }
 
@@ -2481,6 +2638,23 @@ class PreviewHost implements PreviewHostHandle {
     // (subframes, images, scripts, fetch/XHR, WebSocket) that will-navigate
     // never sees, and every redirect hop besides.
     wc.setRequestGate(this.makeRequestGate(record));
+    // Taskana 4759: refs die on a main-frame navigation (Page.frameNavigated
+    // without parentId; subframe navigations leave them valid) and on a
+    // debugger detach. Page.enable is sent lazily by the controller, so an
+    // untouched preview keeps today's attach behaviour.
+    wc.cdp.onEvent(
+      guard((method: string, params: unknown) => {
+        if (method === "Page.frameNavigated") {
+          const frame = (params as { frame?: { parentId?: string } } | undefined)?.frame;
+          if (frame !== undefined && frame.parentId === undefined) {
+            record.navEpoch += 1;
+            record.controller?.invalidate();
+          }
+        } else if (method === "Inspector.detached") {
+          record.controller?.invalidate();
+        }
+      }),
+    );
     container.onClosed(guard(() => {
       this.destroyRecord(record);
       this.previews.delete(record.previewId);

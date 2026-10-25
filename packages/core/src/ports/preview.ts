@@ -76,8 +76,52 @@ export type PreviewResult<T> =
   | {
       ok: false;
       error: string;
-      errorKind?: "invalid_input" | "cancelled" | "unavailable" | "load_failed" | "crashed" | "timeout";
+      errorKind?:
+        | "invalid_input"
+        | "cancelled"
+        | "unavailable"
+        | "load_failed"
+        | "crashed"
+        | "timeout"
+        | "stale_ref"
+        | "not_allowed";
     };
+
+/** Element target for click/type: a snapshot ref (`e12`) or a CSS selector (main document only). */
+export type PreviewTarget = { ref: string } | { selector: string };
+
+/**
+ * Browser control (Taskana 4759). One discriminated request for every control
+ * action so the port surface, the RPC client and test fakes stay small.
+ * Phase B adds `console` and `eval`.
+ */
+export type PreviewControlRequest =
+  | { action: "navigate"; previewId?: string; to: { url: string } | { history: "back" | "forward" | "reload" } }
+  | { action: "snapshot"; previewId?: string; maxChars?: number }
+  | { action: "click"; previewId?: string; target: PreviewTarget; button?: "left" | "right"; doubleClick?: boolean }
+  | {
+      action: "type";
+      previewId?: string;
+      target: PreviewTarget;
+      text: string;
+      clear?: boolean;
+      submit?: boolean;
+    }
+  | { action: "waitFor"; previewId?: string; text?: string; selector?: string; gone?: boolean; timeoutMs?: number };
+
+export interface PreviewControlSuccess {
+  previewId: string;
+  url: string;
+  title?: string;
+  /** Model-facing text: the snapshot or the action report (already capped). */
+  text: string;
+  /** True when the main frame navigated while the action ran. */
+  navigated?: boolean;
+  /** snapshot only: number of refs issued. */
+  refs?: number;
+  /** snapshot only: true when the tree was cut at the node/char cap. */
+  truncated?: boolean;
+}
 
 export interface PreviewPort {
   /**
@@ -100,4 +144,14 @@ export interface PreviewPort {
     req: { previewId?: string },
     opts: { signal: AbortSignal; toolCallId?: string },
   ): Promise<PreviewResult<PreviewScreenshotSuccess>>;
+  /**
+   * Browser control (Taskana 4759). OPTIONAL: a port without it makes the
+   * control tools answer "Browser control is unavailable in this session."
+   * `allowRemote: true` only when the permission engine approved an escalated
+   * call; the host re-checks it (same rule as `open`).
+   */
+  control?(
+    req: PreviewControlRequest,
+    opts: { signal: AbortSignal; toolCallId?: string; allowRemote?: boolean },
+  ): Promise<PreviewResult<PreviewControlSuccess>>;
 }

@@ -59,6 +59,7 @@ describe("anycode-setup docs sync (Taskana 4707)", () => {
   it("the topic table names exactly the docs/user/*.md files (README is the index, not a topic)", () => {
     const listed = new Set(topicTableRows());
     const expected = [
+      "browser.md",
       "configuration.md",
       "engines.md",
       "lsp.md",

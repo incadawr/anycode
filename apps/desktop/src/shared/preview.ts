@@ -39,7 +39,34 @@ export type PreviewOp =
       waitMs?: number;
       includeConsole?: boolean;
     }
-  | { kind: "screenshot"; previewId?: string };
+  | { kind: "screenshot"; previewId?: string }
+  | { kind: "control"; request: PreviewControlRequest; allowRemote?: boolean };
+
+// ── browser control request (Taskana 4759; deliberate duplicate of core's
+// PreviewControlRequest in packages/core/src/ports/preview.ts). Phase B adds
+// the `console` and `eval` actions. No set-access action exists here by design.
+
+export type PreviewControlTarget = { ref: string } | { selector: string };
+
+export type PreviewControlRequest =
+  | { action: "navigate"; previewId?: string; to: { url: string } | { history: "back" | "forward" | "reload" } }
+  | { action: "snapshot"; previewId?: string; maxChars?: number }
+  | {
+      action: "click";
+      previewId?: string;
+      target: PreviewControlTarget;
+      button?: "left" | "right";
+      doubleClick?: boolean;
+    }
+  | {
+      action: "type";
+      previewId?: string;
+      target: PreviewControlTarget;
+      text: string;
+      clear?: boolean;
+      submit?: boolean;
+    }
+  | { action: "waitFor"; previewId?: string; text?: string; selector?: string; gone?: boolean; timeoutMs?: number };
 
 // ── result value shapes (main -> host, §2.1 verbatim) ──
 
@@ -80,12 +107,30 @@ export interface PreviewScreenshotSuccess {
   cssHeight?: number;
 }
 
+export interface PreviewControlSuccess {
+  previewId: string;
+  url: string;
+  title?: string;
+  text: string;
+  navigated?: boolean;
+  refs?: number;
+  truncated?: boolean;
+}
+
 export type PreviewResult<T> =
   | { ok: true; value: T }
   | {
       ok: false;
       error: string;
-      errorKind?: "invalid_input" | "cancelled" | "unavailable" | "load_failed" | "crashed" | "timeout";
+      errorKind?:
+        | "invalid_input"
+        | "cancelled"
+        | "unavailable"
+        | "load_failed"
+        | "crashed"
+        | "timeout"
+        | "stale_ref"
+        | "not_allowed";
     };
 
 // ── parentPort message types (host <-> main) ──
@@ -105,7 +150,7 @@ export const PREVIEW_RESPONSE_TYPE = "anycode:preview-response";
 export interface PreviewResponseMessage {
   type: typeof PREVIEW_RESPONSE_TYPE;
   requestId: string;
-  result: PreviewResult<PreviewOpenSuccess | PreviewReadSuccess | PreviewScreenshotSuccess>;
+  result: PreviewResult<PreviewOpenSuccess | PreviewReadSuccess | PreviewScreenshotSuccess | PreviewControlSuccess>;
 }
 
 /**

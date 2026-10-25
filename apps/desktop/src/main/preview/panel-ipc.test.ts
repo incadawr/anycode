@@ -47,6 +47,7 @@ import {
   type PreviewWebContentsLike,
   type PreviewWindowLike,
 } from "./preview-host.js";
+import { fakeCdp } from "./fake-cdp.js";
 
 /** A fake PreviewHostHandle (mirrors automation/handlers.test.ts's own fake) — every panel method is a spy so a test can assert exactly what panel-ipc.ts forwarded. */
 function fakeHost(overrides: Partial<PreviewHostHandle> = {}): PreviewHostHandle {
@@ -273,6 +274,8 @@ interface FakeWc extends PreviewWebContentsLike {
 function makeFakeWc(): FakeWc {
   const finishListeners: Array<() => void> = [];
   return {
+    cdp: fakeCdp(),
+    goToOffset: async () => {},
     loadURL: async () => {},
     reload: async () => {},
     isDestroyed: () => false,

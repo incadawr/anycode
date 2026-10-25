@@ -69,45 +69,22 @@ export function wrapCapturedImage(image: NativeImage): PreviewCapturedImage {
   };
 }
 
-/**
- * Best-effort CDP attach for `Runtime.exceptionThrown` -> classified
- * "pageerror". Never throws. `registerCleanup` (D3) is the container-neutral
- * teardown hook — the window adapter wires it to `win.once("closed", fn)`,
- * the panel adapter (panel-adapter.ts) wires it to its own synthesized
- * `destroy()` cleanup list.
- */
-function attachPageErrorCapture(
-  wc: WebContents,
-  registerCleanup: (fn: () => void) => void,
-  onPageError: (message: string) => void,
-): void {
-  try {
-    wc.debugger.attach(DEBUGGER_PROTOCOL_VERSION);
-  } catch (error) {
-    console.warn("[preview] debugger attach failed; pageerror capture degraded to console-message only", error);
-    return;
-  }
-  wc.debugger.on("message", (_event, method, params) => {
-    if (method !== "Runtime.exceptionThrown") {
-      return;
-    }
-    const details = (params as { exceptionDetails?: { exception?: { description?: string }; text?: string } })
-      .exceptionDetails;
-    const message = (details?.exception?.description ?? details?.text ?? "uncaught exception").slice(
-      0,
-      RING_MAX_MSG_CHARS,
+/** Taskana 4759: a CDP command that never answers must not hang a tool past its own timeout. */
+export const CDP_SEND_TIMEOUT_MS = 10_000;
+
+function withCdpTimeout<T>(promise: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("CDP command timed out")), CDP_SEND_TIMEOUT_MS);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
     );
-    onPageError(message);
-  });
-  wc.debugger.sendCommand("Runtime.enable").catch((error: unknown) => {
-    console.warn("[preview] failed to enable CDP Runtime domain", error);
-  });
-  registerCleanup(() => {
-    try {
-      wc.debugger.detach();
-    } catch {
-      // Already detached (e.g. DevTools attached to the same target instead).
-    }
   });
 }
 
@@ -125,13 +102,77 @@ function attachPageErrorCapture(
  */
 export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => void) => void): PreviewWebContentsLike {
   let consoleListener: (level: PreviewConsoleEntry["level"], message: string) => void = () => {};
+  // Taskana 4759: ONE debugger message handler fans CDP events out to the
+  // browser-control driver; the pageerror logic above stays first and unchanged.
+  const cdpListeners: Array<(method: string, params: unknown) => void> = [];
+  let attached = false;
+  let messageWired = false;
 
   // Kills the common STUN/UDP exfil path that `onBeforeRequest` cannot see
   // (cut §1.1/F2, "one cheap adapter hardening that IS in scope"); the
   // TURN-over-TCP edge is a recorded residual (R2), not closed here.
   wc.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
 
-  attachPageErrorCapture(wc, registerCleanup, (message) => consoleListener("pageerror", message));
+  const wireMessages = (): void => {
+    if (messageWired) {
+      return;
+    }
+    messageWired = true;
+    wc.debugger.on("message", (_event, method, params) => {
+      if (method === "Runtime.exceptionThrown") {
+        const details = (params as { exceptionDetails?: { exception?: { description?: string }; text?: string } })
+          .exceptionDetails;
+        const message = (details?.exception?.description ?? details?.text ?? "uncaught exception").slice(
+          0,
+          RING_MAX_MSG_CHARS,
+        );
+        consoleListener("pageerror", message);
+      }
+      for (const listener of cdpListeners) {
+        try {
+          listener(method, params);
+        } catch {
+          // A control-driver listener must never break pageerror capture.
+        }
+      }
+    });
+  };
+
+  /** Attaches the debugger once (idempotent while attached); never throws. */
+  const attachDebugger = (): boolean => {
+    if (attached) {
+      return true;
+    }
+    try {
+      wc.debugger.attach(DEBUGGER_PROTOCOL_VERSION);
+    } catch {
+      return false;
+    }
+    attached = true;
+    wireMessages();
+    wc.debugger.sendCommand("Runtime.enable").catch((error: unknown) => {
+      console.warn("[preview] failed to enable CDP Runtime domain", error);
+    });
+    return true;
+  };
+
+  // DevTools (or a crashed page process) can detach us at any time; the next
+  // CDP use re-attaches (ensureAttached below).
+  wc.debugger.on("detach", () => {
+    attached = false;
+  });
+
+  if (attachDebugger()) {
+    registerCleanup(() => {
+      try {
+        wc.debugger.detach();
+      } catch {
+        // Already detached (e.g. DevTools attached to the same target instead).
+      }
+    });
+  } else {
+    console.warn("[preview] debugger attach failed; pageerror capture degraded to console-message only");
+  }
   wc.on("console-message", (event) => {
     // Sliced BEFORE the listener (cut §1.3/F3) — the giant string still
     // arrives in main once (Chromium delivers it; unavoidable) but is never
@@ -213,6 +254,24 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
       index: wc.navigationHistory.getActiveIndex(),
     }),
     restoreNavigationHistory: (state) => wc.navigationHistory.restore({ entries: state.entries, index: state.index }),
+    // Taskana 4759: CDP access for the browser-control driver (main/preview/browser-control.ts).
+    cdp: {
+      send: (method, params) => {
+        if (!attachDebugger()) {
+          return Promise.reject(
+            new Error("debugger unavailable (DevTools open on this preview, or the page process is gone)"),
+          );
+        }
+        return withCdpTimeout(wc.debugger.sendCommand(method, params as object | undefined));
+      },
+      onEvent: (listener) => {
+        cdpListeners.push(listener);
+      },
+      ensureAttached: () => attachDebugger(),
+    },
+    goToOffset: async (offset) => {
+      wc.navigationHistory.goToOffset(offset);
+    },
   };
 }
 

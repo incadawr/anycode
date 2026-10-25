@@ -69,6 +69,8 @@ import { SECRET_ENV_KEYS, connectionById, type ModelCapabilitiesDto } from "../s
 import { defaultSettingsPath, loadSettings } from "../settings/files.js";
 import { CREDENTIAL_REQUEST_TYPE, type CredentialRequest, type CredentialResponse } from "../shared/credentials.js";
 import type {
+  PreviewControlRequest,
+  PreviewControlSuccess,
   PreviewOpenSuccess,
   PreviewPort,
   PreviewReadSuccess,
@@ -870,6 +872,17 @@ export function createPreviewRpcClient(options: CreatePreviewRpcClientOptions): 
     screenshot: (req, opts) =>
       call<PreviewScreenshotSuccess>(
         { kind: "screenshot", ...(req.previewId !== undefined ? { previewId: req.previewId } : {}) },
+        opts.signal,
+      ),
+    // Taskana 4759: browser control rides the same correlated RPC. The request
+    // union is structurally identical to core's PreviewControlRequest.
+    control: (req: PreviewControlRequest, opts) =>
+      call<PreviewControlSuccess>(
+        {
+          kind: "control",
+          request: req as Extract<PreviewOp, { kind: "control" }>["request"],
+          ...(opts.allowRemote !== undefined ? { allowRemote: opts.allowRemote } : {}),
+        },
         opts.signal,
       ),
   };

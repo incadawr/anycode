@@ -86,6 +86,9 @@ export type {
 } from "./artifacts.js";
 export type {
   PreviewConsoleEntry,
+  PreviewControlRequest,
+  PreviewControlSuccess,
+  PreviewTarget,
   PreviewOpenRequest,
   PreviewOpenSuccess,
   PreviewPort,

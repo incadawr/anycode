@@ -22,9 +22,20 @@ describe("buildHostBuiltinSkills", () => {
     expect(names(list)).toEqual([
       "using-git-worktrees",
       "using-browser-preview",
+      "control-browser",
       "creating-subagents",
       "anycode-setup",
     ]);
+  });
+
+  // Test 37 (Taskana 4759): control-browser is present iff the preview capability is, and never duplicated.
+  it("control-browser is present iff previewAvailable, with a unique name", () => {
+    const off = buildHostBuiltinSkills({ worktreeAvailable: false, previewAvailable: false, anycodeSetupDocs: DOCS });
+    expect(names(off)).not.toContain("control-browser");
+    const on = buildHostBuiltinSkills({ worktreeAvailable: false, previewAvailable: true, anycodeSetupDocs: DOCS });
+    const onNames = names(on);
+    expect(onNames.filter((n) => n === "control-browser")).toHaveLength(1);
+    expect(new Set(onNames).size).toBe(onNames.length);
   });
 
   it("gives the anycode-setup skill the docs location it was handed", () => {

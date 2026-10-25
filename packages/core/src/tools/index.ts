@@ -42,6 +42,22 @@ export type { BrowserOpenInput, BrowserReadInput } from "./browser-preview.js";
 export { browserScreenshotInputSchema, browserScreenshotTool } from "./browser-screenshot.js";
 export type { BrowserScreenshotInput } from "./browser-screenshot.js";
 export {
+  browserClickInputSchema,
+  browserNavigateInputSchema,
+  browserSnapshotInputSchema,
+  browserTypeInputSchema,
+  browserWaitForInputSchema,
+  createBrowserControlTools,
+} from "./browser-control.js";
+export type { BrowserControlToolsOptions } from "./browser-control.js";
+export type {
+  BrowserClickInput,
+  BrowserNavigateInput,
+  BrowserSnapshotInput,
+  BrowserTypeInput,
+  BrowserWaitForInput,
+} from "./browser-control.js";
+export {
   archMapTool,
   archMapInputSchema,
   scanImportGraph,

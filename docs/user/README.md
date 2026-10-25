@@ -21,6 +21,8 @@ developer-facing material (building, automation, release policy) see
 - [Language servers](lsp.md): the `lspServers` entries that give the agent
   go-to-definition and diagnostics, the Settings pane's catalog and PATH
   detection, and when changes apply.
+- [Browser control](browser.md): operating a page in the built-in preview
+  (navigate, snapshot, click, type, wait), the ref workflow, limits and approval.
 - [Permissions](permissions.md): the mode ladder (`plan`, `build`, `edit`,
   `auto`, `yolo`), always-allow rules and patterns, workspace confinement,
   trusted binaries, and the approval prompt.

@@ -21,6 +21,7 @@ import {
   type PreviewWindowLike,
 } from "./preview-host.js";
 import type { PreviewPanelBounds } from "../../shared/preview-panel.js";
+import { fakeCdp } from "./fake-cdp.js";
 
 const TAB = "tab-1";
 const WORKSPACE_ROOT = "/workspace";
@@ -42,6 +43,13 @@ async function flush(): Promise<void> {
 
 /** Minimal full `PreviewWebContentsLike` — only `executeJavaScript` is exercised by these tests. */
 class FakeWebContents implements PreviewWebContentsLike {
+  /** Taskana 4759: scriptable CDP surface (browser control); tests drive it via `cdp`. */
+  cdp = fakeCdp();
+  goToOffsetCalls: Array<-1 | 1> = [];
+  goToOffset(offset: -1 | 1): Promise<void> {
+    this.goToOffsetCalls.push(offset);
+    return Promise.resolve();
+  }
   executeJavaScriptImpl: (script: string) => Promise<unknown> = () => Promise.resolve(undefined);
   executeJavaScriptCalls: string[] = [];
   private didFinishLoad: Array<() => void> = [];

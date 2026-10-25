@@ -102,3 +102,10 @@ exact command or path: it should run without a prompt.
 If a rule seems ignored, check the mode first. In `plan` mode nothing that
 writes or runs a shell command runs, whatever the rules say. For more causes, see
 [troubleshooting.md](troubleshooting.md).
+
+## Browser control
+
+`BrowserNavigate`, `BrowserClick` and `BrowserType` ask for approval when they
+reach a non-localhost origin (a remote url, or a click or type the agent marks
+`remote: true`). Snapshot and wait calls, and anything on a localhost page or a
+local file, do not prompt. See [browser.md](browser.md).

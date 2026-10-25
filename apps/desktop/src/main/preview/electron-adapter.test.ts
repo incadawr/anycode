@@ -30,30 +30,53 @@ interface FakeDebugger {
   sendCommandCalls: string[];
   detachCalls: number;
   messageListeners: Array<(event: unknown, method: string, params: unknown) => void>;
+  /** Taskana 4759: when true, `attach` throws (DevTools already holds the target). */
+  attachThrows: boolean;
+  /** Taskana 4759: when true, `sendCommand` never settles (a hung CDP command). */
+  hangSend: boolean;
+  /** Taskana 4759: `sendCommand` method -> the params it was called with. */
+  sendParams: Array<{ method: string; params: unknown }>;
   attach(version: string): void;
-  on(event: string, listener: (event: unknown, method: string, params: unknown) => void): void;
-  sendCommand(method: string): Promise<unknown>;
+  on(event: string, listener: (event: unknown, ...args: unknown[]) => void): void;
+  sendCommand(method: string, params?: unknown): Promise<unknown>;
   detach(): void;
+  /** Taskana 4759: fire a debugger event (e.g. "detach") to its listeners. */
+  emit(event: string, ...args: unknown[]): void;
 }
 
 function fakeDebugger(): FakeDebugger {
+  const listeners = new Map<string, Array<(event: unknown, ...args: unknown[]) => void>>();
   return {
     attachCalls: [],
     sendCommandCalls: [],
     detachCalls: 0,
     messageListeners: [],
+    attachThrows: false,
+    hangSend: false,
+    sendParams: [],
     attach(version) {
+      if (this.attachThrows) {
+        throw new Error("Another debugger is already attached to the target");
+      }
       this.attachCalls.push(version);
     },
     on(event, listener) {
-      if (event === "message") this.messageListeners.push(listener);
+      if (event === "message") this.messageListeners.push(listener as FakeDebugger["messageListeners"][number]);
+      const list = listeners.get(event) ?? [];
+      list.push(listener);
+      listeners.set(event, list);
     },
-    sendCommand(method) {
+    sendCommand(method, params) {
       this.sendCommandCalls.push(method);
+      this.sendParams.push({ method, params });
+      if (this.hangSend) return new Promise(() => {});
       return Promise.resolve({});
     },
     detach() {
       this.detachCalls += 1;
+    },
+    emit(event, ...args) {
+      for (const listener of listeners.get(event) ?? []) listener({}, ...args);
     },
   };
 }
@@ -712,5 +735,74 @@ describe("createElectronPreviewWindow — Taskana 4100 stage 4", () => {
       partition: "preview-aot-pin",
     });
     expect(win.opts.webPreferences).not.toHaveProperty("preload");
+  });
+});
+
+describe("createElectronPreviewWindow — browser-control CDP access (Taskana 4759, Phase A)", () => {
+  // Test 35
+  it("cdp.send rejects with 'debugger unavailable' when the attach fails, and re-attaches after a detach event", async () => {
+    const win = createElectronPreviewWindow({ previewId: "cdp-1" });
+    const fake = latestWindow();
+    const dbg = fake.webContents.debugger;
+    expect(dbg.attachCalls).toEqual(["1.3"]);
+
+    dbg.emit("detach");
+    dbg.attachThrows = true;
+    await expect(win.webContents.cdp.send("Page.enable")).rejects.toThrow(/debugger unavailable/);
+    expect(win.webContents.cdp.ensureAttached()).toBe(false);
+
+    dbg.attachThrows = false;
+    expect(win.webContents.cdp.ensureAttached()).toBe(true);
+    expect(dbg.attachCalls).toEqual(["1.3", "1.3"]);
+    await win.webContents.cdp.send("DOM.enable");
+    expect(dbg.sendCommandCalls).toContain("DOM.enable");
+  });
+
+  it("the existing pageerror capture still works and the debugger is attached exactly once", () => {
+    const win = createElectronPreviewWindow({ previewId: "cdp-2" });
+    const fake = latestWindow();
+    const messages: Array<{ level: string; message: string }> = [];
+    win.webContents.onConsoleMessage((level, message) => messages.push({ level, message }));
+    win.webContents.cdp.ensureAttached();
+    expect(fake.webContents.debugger.attachCalls).toEqual(["1.3"]);
+    for (const listener of fake.webContents.debugger.messageListeners) {
+      listener({}, "Runtime.exceptionThrown", { exceptionDetails: { text: "Uncaught boom" } });
+    }
+    expect(messages).toEqual([{ level: "pageerror", message: "Uncaught boom" }]);
+  });
+
+  it("fans CDP events out to cdp.onEvent listeners", () => {
+    const win = createElectronPreviewWindow({ previewId: "cdp-3" });
+    const fake = latestWindow();
+    const seen: string[] = [];
+    win.webContents.cdp.onEvent((method) => seen.push(method));
+    for (const listener of fake.webContents.debugger.messageListeners) {
+      listener({}, "Page.frameNavigated", { frame: {} });
+    }
+    expect(seen).toEqual(["Page.frameNavigated"]);
+  });
+
+  it("a CDP command that never answers rejects after 10 seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      const win = createElectronPreviewWindow({ previewId: "cdp-4" });
+      const fake = latestWindow();
+      fake.webContents.debugger.hangSend = true;
+      const pending = win.webContents.cdp.send("Page.enable");
+      const assertion = expect(pending).rejects.toThrow(/timed out/);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("goToOffset maps to navigationHistory.goToOffset", async () => {
+    const win = createElectronPreviewWindow({ previewId: "cdp-5" });
+    const fake = latestWindow();
+    const calls: number[] = [];
+    (fake.webContents.navigationHistory as unknown as { goToOffset: (n: number) => void }).goToOffset = (n) => calls.push(n);
+    await win.webContents.goToOffset(-1);
+    expect(calls).toEqual([-1]);
   });
 });

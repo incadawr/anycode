@@ -7,6 +7,8 @@ import {
   SUBAGENT_BUILTIN_SKILLS,
   anycodeSetupBuiltinSkills,
   anycodeSetupSkill,
+  CONTROL_BROWSER_SKILL,
+  PREVIEW_BUILTIN_SKILLS,
   USING_BROWSER_PREVIEW_SKILL,
   USING_GIT_WORKTREES_SKILL,
   WORKTREE_BUILTIN_SKILLS,
@@ -224,6 +226,7 @@ describe("anycode-setup builtin skill (Taskana 4707)", () => {
     ].map((match) => match[1]);
     expect(topics.sort()).toEqual(
       [
+        "browser.md",
         "configuration.md",
         "engines.md",
         "lsp.md",
@@ -272,5 +275,20 @@ describe("anycode-setup builtin skill (Taskana 4707)", () => {
     });
     expect(result.metas).toEqual([]);
     expect(result.problems).toEqual([]);
+  });
+
+  it("control-browser skill names only Phase A tools and carries the safety rules", () => {
+    expect(CONTROL_BROWSER_SKILL.name).toBe("control-browser");
+    const body = CONTROL_BROWSER_SKILL.body;
+    for (const word of ["stale", "untrusted", "remote: true", "password"]) {
+      expect(body).toContain(word);
+    }
+    expect(USING_BROWSER_PREVIEW_SKILL.body).toContain("control-browser");
+  });
+
+  it("the preview builtin list holds unique names, including control-browser", () => {
+    const names = PREVIEW_BUILTIN_SKILLS.map((skill) => skill.name);
+    expect(new Set(names).size).toBe(names.length);
+    expect(names).toContain("control-browser");
   });
 });

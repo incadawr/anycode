@@ -14,12 +14,17 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PREVIEW_EVENT_TYPE,
+  PREVIEW_REQUEST_TYPE,
   PREVIEW_RESPONSE_TYPE,
   type PreviewConsoleEntry,
+  type PreviewControlRequest,
+  type PreviewControlSuccess,
   type PreviewEventMessage,
   type PreviewOp,
   type PreviewResponseMessage,
+  type PreviewResult,
 } from "../../shared/preview.js";
+import { fakeCdp } from "./fake-cdp.js";
 import {
   EXEC_JS_TIMEOUT_MS,
   LIVE_RELOAD_DEBOUNCE_MS,
@@ -56,6 +61,13 @@ function fakeImage(opts?: { empty?: boolean; width?: number; height?: number }):
 }
 
 class FakeWebContents implements PreviewWebContentsLike {
+  /** Taskana 4759: scriptable CDP surface (browser control); tests drive it via `cdp`. */
+  cdp = fakeCdp();
+  goToOffsetCalls: Array<-1 | 1> = [];
+  goToOffset(offset: -1 | 1): Promise<void> {
+    this.goToOffsetCalls.push(offset);
+    return Promise.resolve();
+  }
   destroyed = false;
   loadedUrls: string[] = [];
   /** Taskana 4100 stage 4: every `reload()` call, in order (live-reload assertions). */
@@ -3677,5 +3689,211 @@ describe("PreviewHost — live-reload (Taskana 4100, stage 4)", () => {
     await vi.advanceTimersByTimeAsync(LIVE_RELOAD_DEBOUNCE_MS);
     expect(rig.windows[0]!.webContents.reloadCalls).toBe(0);
     expect(rig.watchers.get(`${WORKSPACE_ROOT}/a.html`)!.closed).toBe(true);
+  });
+});
+
+// ── Taskana 4759 (Phase A): browser control through PreviewHost ──
+
+describe("PreviewHost — browser control (Taskana 4759, Phase A)", () => {
+  const TAB_2 = "tab-2";
+  const quad = (x: number, y: number, w: number, h: number) => [x, y, x + w, y, x + w, y + h, x, y + h];
+  const btnTree = () => ({
+    nodes: [
+      { nodeId: "1", ignored: false, role: { value: "RootWebArea" }, name: { value: "" }, childIds: ["2"], properties: [] },
+      { nodeId: "2", ignored: false, role: { value: "button" }, name: { value: "Save" }, backendDOMNodeId: 11, childIds: [], properties: [] },
+    ],
+  });
+
+  async function controlRequest(
+    rig: Rig,
+    request: PreviewControlRequest,
+    options: { tabId?: string; allowRemote?: boolean } = {},
+  ): Promise<PreviewResult<PreviewControlSuccess>> {
+    const requestId = `r-${Math.random()}`;
+    await rig.host.handleRequest(options.tabId ?? TAB, {
+      type: PREVIEW_REQUEST_TYPE,
+      requestId,
+      op: {
+        kind: "control",
+        request,
+        ...(options.allowRemote !== undefined ? { allowRemote: options.allowRemote } : {}),
+      },
+    });
+    const posted = rig.posted.at(-1)!;
+    if (posted.message.type !== PREVIEW_RESPONSE_TYPE) throw new Error("no response");
+    return posted.message.result as PreviewResult<PreviewControlSuccess>;
+  }
+
+  async function openedRig(path = `${WORKSPACE_ROOT}/a.html`): Promise<{ rig: Rig; previewId: string }> {
+    const rig = makeRig();
+    const opened = rig.host.openForTab(TAB, { path });
+    await flush();
+    rig.windows[rig.windows.length - 1]!.webContents.fireDidFinishLoad();
+    const result = await opened;
+    rig.posted.length = 0;
+    return { rig, previewId: result.ok ? result.value.previewId : "" };
+  }
+
+  // Test 28
+  it("no preview open => 'no preview open — use BrowserOpen'; unknown id => 'no such preview'; another tab's id is invisible", async () => {
+    const empty = makeRig();
+    const none = await controlRequest(empty, { action: "snapshot" });
+    expect(none).toEqual({ ok: false, error: "no preview open — use BrowserOpen", errorKind: "unavailable" });
+
+    const { rig, previewId } = await openedRig();
+    const unknown = await controlRequest(rig, { action: "snapshot", previewId: "nope" });
+    expect(unknown).toEqual({ ok: false, error: "no such preview: nope", errorKind: "unavailable" });
+
+    const otherTab = await controlRequest(rig, { action: "snapshot", previewId }, { tabId: TAB_2 });
+    expect(otherTab).toEqual({ ok: false, error: `no such preview: ${previewId}`, errorKind: "unavailable" });
+  });
+
+  // Test 29
+  it("two previews in one tab: preview_id selects the older one; omitted id targets the most recent and the report names it", async () => {
+    const { rig, previewId: older } = await openedRig(`${WORKSPACE_ROOT}/a.html`);
+    rig.clock.time += 1000;
+    const second = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/b.html` });
+    await flush();
+    rig.windows[1]!.webContents.fireDidFinishLoad();
+    const newer = await second;
+    const newerId = newer.ok ? newer.value.previewId : "";
+    rig.posted.length = 0;
+
+    const byId = await controlRequest(rig, { action: "snapshot", previewId: older });
+    expect(byId.ok && byId.value.previewId).toBe(older);
+
+    const implicit = await controlRequest(rig, { action: "snapshot" });
+    expect(implicit.ok && implicit.value.previewId).toBe(newerId);
+  });
+
+  // Test 30
+  it("a dom-md (rendered markdown) preview is refused as invalid_input", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const realPath = `${WORKSPACE_ROOT}/doc.md`;
+    rig.mdSourceFiles.set(realPath, { bytes: Buffer.from("# hi\n", "utf8") });
+    const opened = await rig.host.openForTab(TAB, { path: realPath });
+    const previewId = opened.ok ? opened.value.previewId : "";
+    const result = await controlRequest(rig, { action: "snapshot", previewId });
+    expect(result).toEqual({
+      ok: false,
+      error: "this is a markdown preview rendered natively; browser control is not supported",
+      errorKind: "invalid_input",
+    });
+  });
+
+  // Test 31
+  it("a record still loading waits for the page and then acts; a crashed page maps to crashed", async () => {
+    const rig = makeRig();
+    const opened = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    const pending = controlRequest(rig, { action: "snapshot" });
+    await flush();
+    rig.windows[0]!.webContents.cdp.respond("Accessibility.getFullAXTree", btnTree());
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await opened;
+    const waited = await pending;
+    expect(waited.ok).toBe(true);
+
+    const crashed = makeRig();
+    crashed.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    crashed.windows[0]!.webContents.fireRenderProcessGone("crashed");
+    crashed.posted.length = 0;
+    const crashedResult = await controlRequest(crashed, { action: "snapshot" });
+    expect(crashedResult).toMatchObject({ ok: false, errorKind: "crashed" });
+  });
+
+  // Test 32
+  it("a main-frame Page.frameNavigated invalidates refs; a subframe navigation does not", async () => {
+    const { rig, previewId } = await openedRig();
+    const cdp = rig.windows[0]!.webContents.cdp;
+    cdp.respond("Accessibility.getFullAXTree", btnTree());
+    cdp.respond("DOM.getBoxModel", { model: { content: quad(0, 0, 10, 10) } });
+    await controlRequest(rig, { action: "snapshot", previewId });
+
+    cdp.fire("Page.frameNavigated", { frame: { id: "child", parentId: "main" } });
+    const sub = await controlRequest(rig, { action: "click", previewId, target: { ref: "e1" }, doubleClick: false, button: "left" });
+    expect(sub.ok).toBe(true);
+
+    cdp.fire("Page.frameNavigated", { frame: { id: "main" } });
+    const main = await controlRequest(rig, { action: "click", previewId, target: { ref: "e1" }, doubleClick: false, button: "left" });
+    expect(main).toMatchObject({ ok: false, errorKind: "stale_ref" });
+  });
+
+  // Test 33
+  it("closing a preview drops its controller; later control reports 'no such preview'", async () => {
+    const { rig, previewId } = await openedRig();
+    rig.windows[0]!.webContents.cdp.respond("Accessibility.getFullAXTree", btnTree());
+    await controlRequest(rig, { action: "snapshot", previewId });
+    rig.host.closePreview(TAB, previewId);
+    const after = await controlRequest(rig, { action: "snapshot", previewId });
+    expect(after).toEqual({ ok: false, error: `no such preview: ${previewId}`, errorKind: "unavailable" });
+  });
+
+  // Test 27
+  it("two simultaneous control calls on one preview run strictly in order", async () => {
+    const { rig, previewId } = await openedRig();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    rig.windows[0]!.webContents.cdp.respond("Accessibility.getFullAXTree", async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return btnTree();
+    });
+    const [a, b] = await Promise.all([
+      controlRequest(rig, { action: "snapshot", previewId }),
+      controlRequest(rig, { action: "snapshot", previewId }),
+    ]);
+    expect(a.ok && b.ok).toBe(true);
+    expect(maxInFlight).toBe(1);
+  });
+
+  // Test 22 (navigate by url through the open path)
+  it("navigate by url: a remote url without approval is refused; with approval it loads; history reload works", async () => {
+    const { rig, previewId } = await openedRig();
+    const refused = await controlRequest(rig, { action: "navigate", previewId, to: { url: "https://example.org/" } });
+    expect(refused).toMatchObject({ ok: false, errorKind: "invalid_input" });
+    expect(refused.ok ? "" : refused.error).toContain("remote URL requires explicit approval");
+
+    const pendingApproved = controlRequest(rig, { action: "navigate", previewId, to: { url: "https://example.org/" } }, { allowRemote: true });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const approved = await pendingApproved;
+    expect(approved.ok).toBe(true);
+    if (approved.ok) {
+      expect(approved.value.text).toBe("navigated to https://example.org/");
+      expect(approved.value.navigated).toBe(true);
+    }
+
+    const pendingReload = controlRequest(rig, { action: "navigate", previewId, to: { history: "reload" } });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const reload = await pendingReload;
+    expect(reload.ok).toBe(true);
+    expect(rig.windows[0]!.webContents.reloadCalls).toBeGreaterThanOrEqual(1);
+  });
+
+  it("a remote page needs approval for click and eval-style actions, and the retry message names the origin", async () => {
+    const rig = makeRig();
+    const opened = rig.host.openForTab(TAB, { url: "https://example.org/page", allowRemote: true });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const result = await opened;
+    const previewId = result.ok ? result.value.previewId : "";
+    rig.windows[0]!.webContents.cdp.respond("Accessibility.getFullAXTree", btnTree());
+    rig.windows[0]!.webContents.cdp.respond("DOM.getBoxModel", { model: { content: quad(0, 0, 10, 10) } });
+    rig.posted.length = 0;
+    await controlRequest(rig, { action: "snapshot", previewId });
+    const refused = await controlRequest(rig, { action: "click", previewId, target: { ref: "e1" }, doubleClick: false, button: "left" });
+    expect(refused).toEqual({
+      ok: false,
+      error: "this preview shows a remote origin (https://example.org); the call needs the user's approval. Retry with remote:true so the user is asked.",
+      errorKind: "not_allowed",
+    });
+    const approved = await controlRequest(rig, { action: "click", previewId, target: { ref: "e1" }, doubleClick: false, button: "left" }, { allowRemote: true });
+    expect(approved.ok).toBe(true);
   });
 });

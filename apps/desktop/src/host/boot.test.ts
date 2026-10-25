@@ -818,6 +818,49 @@ describe("createPreviewRpcClient (night-track wave-1 cut §2.3)", () => {
     await expect(pending).resolves.toMatchObject({ ok: false, errorKind: "cancelled" });
     expect(isUnsubscribed()).toBe(true);
   });
+
+  // Test 36 (Taskana 4759): browser control rides the same RPC.
+  it("control() sends {kind:'control', request, allowRemote?} and resolves with the correlated result", async () => {
+    const { port, sent, respond } = harness();
+    const pending = port.control!({ action: "snapshot", maxChars: 5000 }, { signal: new AbortController().signal });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.op).toEqual({ kind: "control", request: { action: "snapshot", maxChars: 5000 } });
+    respond({ ok: true, value: { previewId: "p1", url: "http://localhost:3000/", text: "url: x" } });
+    await expect(pending).resolves.toEqual({
+      ok: true,
+      value: { previewId: "p1", url: "http://localhost:3000/", text: "url: x" },
+    });
+  });
+
+  it("control() forwards allowRemote only when the caller passed it, and ignores unrelated responses", async () => {
+    const { port, sent, respond } = harness();
+    const pending = port.control!(
+      { action: "click", target: { ref: "e1" }, doubleClick: false, button: "left" },
+      { signal: new AbortController().signal, allowRemote: true },
+    );
+    expect(sent[0]!.op).toMatchObject({ kind: "control", allowRemote: true });
+    respond({ ok: true, value: { previewId: "p1", url: "u", text: "t" } }, "some-other-request");
+    respond({ ok: true, value: { previewId: "p1", url: "u", text: "clicked [e1]" } });
+    await expect(pending).resolves.toMatchObject({ ok: true, value: { text: "clicked [e1]" } });
+  });
+
+  it("control() times out at the configured timeout and honours an abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const { port } = harness({ timeoutMs: 1000 });
+      const timedOut = port.control!({ action: "snapshot" }, { signal: new AbortController().signal });
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(timedOut).resolves.toMatchObject({ ok: false, errorKind: "timeout" });
+
+      const controller = new AbortController();
+      const { port: port2 } = harness();
+      const aborted = port2.control!({ action: "snapshot" }, { signal: controller.signal });
+      controller.abort();
+      await expect(aborted).resolves.toMatchObject({ ok: false, errorKind: "cancelled" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("routePreviewMessage (night-track wave-1 cut §2.3 parentPort filter)", () => {
