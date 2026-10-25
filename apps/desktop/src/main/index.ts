@@ -2591,7 +2591,7 @@ void app.whenReady().then(async () => {
     tabs: {
       workspaceTrustPendingFor: (tabId) => manager?.workspaceTrustPendingFor(tabId) ?? "unknown_tab",
       clearWorkspaceTrustPending: (tabId) => manager?.clearWorkspaceTrustPending(tabId),
-      restartTabHost: (tabId) => manager?.restartTabHost(tabId) ?? { ok: false, reason: "unknown_tab" },
+      restartTabHost: async (tabId) => (await manager?.restartTabHost(tabId)) ?? { ok: false, reason: "unknown_tab" },
     },
     onceApprovals: workspaceTrustOnceApprovals,
     logger: { error: (message) => console.error(message) },

@@ -851,7 +851,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   // print gate.
   let webSearchBackend: ResolvedWebSearchBackend | null = null;
   try {
-    const loadedWebSearch = await loadWebSearchConfig(fs, cwd, home, env);
+    const loadedWebSearch = await loadWebSearchConfig(fs, cwd, home, env, { projectTrusted });
     webSearchBackend = loadedWebSearch.backend;
     for (const issue of loadedWebSearch.issues) bootWrite(`[warn] websearch config: ${issue}\n`);
   } catch (error) {
@@ -870,7 +870,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   // absent (default byte-identical to pre-6.6, L4).
   let telemetryConfig: ResolvedTelemetryConfig | null = null;
   try {
-    const loadedTelemetry = await loadTelemetryConfig(fs, cwd, home, env);
+    const loadedTelemetry = await loadTelemetryConfig(fs, cwd, home, env, { projectTrusted });
     telemetryConfig = loadedTelemetry.telemetry;
     for (const issue of loadedTelemetry.issues) bootWrite(`[warn] telemetry config: ${issue}\n`);
   } catch (error) {
@@ -878,7 +878,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   }
   let repoMapConfig: RepoMapConfig | null = null;
   try {
-    const loadedRepoMap = await loadRepoMapConfig(fs, cwd, home, env);
+    const loadedRepoMap = await loadRepoMapConfig(fs, cwd, home, env, { projectTrusted });
     repoMapConfig = loadedRepoMap.repoMap;
     for (const issue of loadedRepoMap.issues) bootWrite(`[warn] repo-map config: ${issue}\n`);
   } catch (error) {
