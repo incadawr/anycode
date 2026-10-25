@@ -4960,6 +4960,8 @@ process.parentPort.on("message", (event) => {
           case "get_message_status": result = session.agentMessageStatus(String(communication.payload)); break;
           case "get_message_result": result = session.communicationMessageResult(String(communication.payload)); break;
           case "cancel_turn": result = session.communicationCancelTurn(); break;
+          case "list_pending_approvals": result = session.communicationPendingApprovals(); break;
+          case "answer_approval": result = session.communicationAnswerApproval(communication.payload); break;
           default: throw new Error("Unsupported communication operation");
         }
         process.parentPort.postMessage({ type: "communication_response", requestId: communication.requestId, result });

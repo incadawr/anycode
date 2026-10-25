@@ -1,4 +1,6 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +19,7 @@ import {
   handleSetEnabled,
   handleSetPort,
   handleSetSessionAccess,
+  handleSetSessionApprovals,
   handleSetSessionHandle,
   tomlString,
   type CommunicationIpcDeps,
@@ -60,11 +63,13 @@ function rig(over: { env?: string; picked?: string | undefined; script?: string 
     countExposed: () => sessions.exposedCount(),
   });
   const sessions = createSessionAccessStore({ file: join(dir, "sessions.json"), defaultOn: () => false });
+  const approvals = createSessionAccessStore({ file: join(dir, "communication-approvals.json"), defaultOn: () => false });
   const deps: CommunicationIpcDeps = {
     settingsPath,
     logger: { warn: () => {}, error: () => {} },
     controller,
     sessions,
+    approvals,
     tabs: () => [{ tabId: "tab-1", sessionId: "sess-1" }],
     env: () => over.env,
     pickFolder: vi.fn(async () => over.picked),
@@ -72,7 +77,7 @@ function rig(over: { env?: string; picked?: string | undefined; script?: string 
     realpath: (p: string) => import("node:fs/promises").then((fs) => fs.realpath(p)),
     stat: (p: string) => import("node:fs/promises").then((fs) => fs.stat(p)),
   };
-  return { deps, controller, sessions, startServer, pickFolder: deps.pickFolder as ReturnType<typeof vi.fn> };
+  return { deps, controller, sessions, approvals, startServer, pickFolder: deps.pickFolder as ReturnType<typeof vi.fn> };
 }
 
 describe("Sessions API IPC (Taskana 4747) — writes go through the dedicated channel", () => {
@@ -214,7 +219,7 @@ describe("Sessions API IPC — per-session switch", () => {
     sessions.register({ sessionId: "sess-1" }); sessions.set("sess-1", true);
     const result = await handleCommunicationGet(deps, {});
     if (!result.ok) throw new Error("expected ok");
-    expect(result.view.tabs).toEqual([{ tabId: "tab-1", enabled: true }]);
+    expect(result.view.tabs).toEqual([{ tabId: "tab-1", enabled: true, approvals: false }]);
     expect(JSON.stringify(result)).not.toContain("sess-1");
   });
 });
@@ -324,7 +329,7 @@ describe("session handles over IPC (Taskana 4750b)", () => {
     const result = await handleSetSessionHandle(deps, { tabId: "tab-1", handle: "build-bot" });
     expect(result.ok).toBe(true);
     expect(sessions.getHandle("sess-1")).toBe("build-bot");
-    if (result.ok) expect(result.view.tabs).toEqual([{ tabId: "tab-1", enabled: false, handle: "build-bot" }]);
+    if (result.ok) expect(result.view.tabs).toEqual([{ tabId: "tab-1", enabled: false, approvals: false, handle: "build-bot" }]);
     expect(JSON.stringify(result)).not.toContain("sess-1");
     expect(JSON.stringify(result)).not.toContain(TOKEN);
   });
@@ -362,3 +367,51 @@ describe("session handles over IPC (Taskana 4750b)", () => {
     expect(sessions.getHandle("sess-1")).toBeUndefined();
   });
 });
+
+describe("Sessions API IPC — External approvals switch (Taskana 4763)", () => {
+  it("T26 set-session-approvals: happy path only while shared; invalid payloads, unknown tab, env-controlled and access-off are refused", async () => {
+    const { deps, sessions, approvals } = rig();
+    sessions.register({ sessionId: "sess-1" });
+    approvals.register({ sessionId: "sess-1" });
+    expect(await handleSetSessionApprovals(deps, { tabId: "tab-1", enabled: true })).toEqual({ ok: false, reason: "not_found" });
+    expect(approvals.isExposed("sess-1")).toBe(false);
+    expect((await handleSetSessionAccess(deps, { tabId: "tab-1", enabled: true })).ok).toBe(true);
+    const happy = await handleSetSessionApprovals(deps, { tabId: "tab-1", enabled: true });
+    expect(happy.ok).toBe(true);
+    expect(approvals.isExposed("sess-1")).toBe(true);
+    if (happy.ok) expect(happy.view.tabs).toEqual([{ tabId: "tab-1", enabled: true, approvals: true }]);
+    expect(await handleSetSessionApprovals(deps, { tabId: "tab-1", enabled: true, sessionId: "sess-1" })).toEqual({ ok: false, reason: "invalid" });
+    expect(await handleSetSessionApprovals(deps, { tabId: "", enabled: true })).toEqual({ ok: false, reason: "invalid" });
+    expect(await handleSetSessionApprovals(deps, { tabId: "ghost", enabled: true })).toEqual({ ok: false, reason: "not_found" });
+    const envRig = rig({ env: "/abs/config.json" });
+    envRig.sessions.register({ sessionId: "sess-1" }); envRig.approvals.register({ sessionId: "sess-1" });
+    expect(await handleSetSessionApprovals(envRig.deps, { tabId: "tab-1", enabled: true })).toEqual({ ok: false, reason: "env_controlled" });
+  });
+
+  it("T27 turning sharing off also clears External approvals, so re-sharing comes back with approvals OFF; the view reports approvals", async () => {
+    const { deps, sessions, approvals } = rig();
+    sessions.register({ sessionId: "sess-1" }); approvals.register({ sessionId: "sess-1" });
+    await handleSetSessionAccess(deps, { tabId: "tab-1", enabled: true });
+    await handleSetSessionApprovals(deps, { tabId: "tab-1", enabled: true });
+    const shown = await handleCommunicationGet(deps, {});
+    if (!shown.ok) throw new Error("expected ok");
+    expect(shown.view.tabs).toEqual([{ tabId: "tab-1", enabled: true, approvals: true }]);
+    expect(await handleSetSessionAccess(deps, { tabId: "tab-1", enabled: false })).toMatchObject({ ok: true });
+    expect(approvals.isExposed("sess-1")).toBe(false);
+    await handleSetSessionAccess(deps, { tabId: "tab-1", enabled: true });
+    const again = await handleCommunicationGet(deps, {});
+    if (!again.ok) throw new Error("expected ok");
+    expect(again.view.tabs).toEqual([{ tabId: "tab-1", enabled: true, approvals: false }]);
+  });
+});
+
+describe("External approvals — the only writer (Taskana 4763)", () => {
+  it("T32 no main-process code except communication-ipc.ts sets the approvals store", () => {
+    const mainDir = fileURLToPath(new URL(".", import.meta.url));
+    const writers = readdirSync(mainDir)
+      .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
+      .filter((name) => /\.approvals\.set\(|communicationApprovals\??\.set\(/.test(readFileSync(join(mainDir, name), "utf8")));
+    expect(writers).toEqual(["communication-ipc.ts"]);
+  });
+});
+

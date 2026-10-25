@@ -6,13 +6,35 @@
  */
 import { useContext, useEffect, useState } from "react";
 import { TabContext } from "../tab-context.js";
-import { handleErrorText, sessionSwitchDisabledReason, sessionSwitchLabel, SESSION_HANDLE_LABEL, SESSION_HANDLE_PLACEHOLDER } from "./sessions-api-model.js";
+import { handleErrorText, sessionApprovalsLabel, sessionSwitchDisabledReason, sessionSwitchLabel, SESSION_APPROVALS_ARIA_LABEL, SESSION_APPROVALS_NOTE, SESSION_HANDLE_LABEL, SESSION_HANDLE_PLACEHOLDER } from "./sessions-api-model.js";
 import type { CommunicationGetResult, CommunicationHandleResult, CommunicationMutationResult } from "../../../shared/communication-config.js";
 
 export interface SessionAccessBridge {
   get(): Promise<CommunicationGetResult>;
   setSessionAccess(tabId: string, enabled: boolean): Promise<CommunicationMutationResult>;
   setSessionHandle(tabId: string, handle: string | null): Promise<CommunicationHandleResult>;
+  /** Taskana 4763: the External approvals switch. Refused by main unless the session is shared. */
+  setSessionApprovals(tabId: string, enabled: boolean): Promise<CommunicationMutationResult>;
+}
+
+/**
+ * Taskana 4763: the External approvals checkbox. Presentational: the row decides
+ * when it is shown (only while the session is shared and the row is not disabled).
+ */
+export function SessionApprovalsField({ approvals, onChange }: { approvals: boolean; onChange: (next: boolean) => void }) {
+  return (
+    <span className="environment-menu-row-main">
+      <span>{sessionApprovalsLabel(approvals)}</span>
+      <input
+        type="checkbox"
+        aria-label={SESSION_APPROVALS_ARIA_LABEL}
+        data-environment-action="sessions-api-approvals"
+        checked={approvals}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      <span className="environment-menu-row-detail">{SESSION_APPROVALS_NOTE}</span>
+    </span>
+  );
 }
 
 /**
@@ -27,6 +49,7 @@ export function commitSessionHandle(bridge: Pick<SessionAccessBridge, "setSessio
 export function SessionAccessRow({ bridge = window.anycode.communication }: { bridge?: SessionAccessBridge }) {
   const tabId = useContext(TabContext)?.tabId;
   const [enabled, setEnabled] = useState(false);
+  const [approvals, setApprovals] = useState(false);
   const [envControlled, setEnvControlled] = useState(false);
   const [known, setKnown] = useState(false);
   const [handle, setHandle] = useState("");
@@ -40,6 +63,7 @@ export function SessionAccessRow({ bridge = window.anycode.communication }: { br
       const tab = result.view.tabs.find((candidate) => candidate.tabId === tabId);
       setKnown(tab !== undefined);
       setEnabled(tab?.enabled ?? false);
+      setApprovals(tab?.approvals ?? false);
       setHandle(tab?.handle ?? "");
     });
     return () => {
@@ -78,11 +102,26 @@ export function SessionAccessRow({ bridge = window.anycode.communication }: { br
             if (tabId === undefined) return;
             const next = event.target.checked;
             void bridge.setSessionAccess(tabId, next).then((result) => {
-              if (result.ok) setEnabled(result.view.tabs.find((tab) => tab.tabId === tabId)?.enabled ?? next);
+              if (result.ok) {
+                const tab = result.view.tabs.find((candidate) => candidate.tabId === tabId);
+                setEnabled(tab?.enabled ?? next);
+                setApprovals(tab?.approvals ?? false);
+              }
             });
           }}
         />
       </span>
+      {enabled && reason === null && (
+        <SessionApprovalsField
+          approvals={approvals}
+          onChange={(next) => {
+            if (tabId === undefined) return;
+            void bridge.setSessionApprovals(tabId, next).then((result) => {
+              if (result.ok) setApprovals(result.view.tabs.find((tab) => tab.tabId === tabId)?.approvals ?? false);
+            });
+          }}
+        />
+      )}
       {enabled && reason === null && (
         <span className="environment-menu-row-main">
           <input

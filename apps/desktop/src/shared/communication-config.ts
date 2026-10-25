@@ -17,6 +17,8 @@ export const COMMUNICATION_COPY_CONFIG_CHANNEL = "anycode:communication-copy-con
 export const COMMUNICATION_SET_DEFAULT_ACCESS_CHANNEL = "anycode:communication-set-default-access";
 export const COMMUNICATION_SET_SESSION_ACCESS_CHANNEL = "anycode:communication-set-session-access";
 export const COMMUNICATION_SET_SESSION_HANDLE_CHANNEL = "anycode:communication-set-session-handle";
+/** Taskana 4763: the per-session External approvals switch. Writable ONLY from this channel (the renderer's trusted UI). */
+export const COMMUNICATION_SET_SESSION_APPROVALS_CHANNEL = "anycode:communication-set-session-approvals";
 
 /** Hard cap on the optional outer folder boundary. */
 export const COMMUNICATION_MAX_WORKSPACES = 20;
@@ -41,7 +43,8 @@ export interface CommunicationView {
   port: number | null;
   defaultSessionAccess: "off" | "on";
   status: CommunicationStatus;
-  tabs: Array<{ tabId: string; enabled: boolean; handle?: string }>;
+  /** `approvals` is the per-session External approvals switch (Taskana 4763); always false while `enabled` is false. */
+  tabs: Array<{ tabId: string; enabled: boolean; approvals: boolean; handle?: string }>;
 }
 
 export type CommunicationMutationReason =

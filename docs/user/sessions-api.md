@@ -14,9 +14,33 @@ send them a message. It is a local MCP endpoint that runs while AnyCode is open.
 | `send_message` | Sends a message. `mode: next_turn` queues it for the next turn; `mode: steer` steers an active Codex turn. |
 | `get_message_status` | Delivery state of a message you sent. |
 | `wait_for_result` | Waits (up to 120 s per call) until the turn that took your message finishes, then returns its answer. Returns `pending` on timeout; call it again. |
+| `cancel_turn` | Stops the running turn of a shared session, like the Stop button. Queued messages are rejected and parked approvals are denied. An idle session answers `cancelled: false`, which is not an error. |
+| `list_pending_approvals` | Lists tool requests waiting for an answer. Only sessions with **External approvals** on. See below. |
+| `answer_approval` | Allows or denies one pending request of a session with **External approvals** on. See below. |
 
 A session that is not shared is answered as unavailable, exactly like a session
 that does not exist.
+
+## Approve requests from outside
+
+Tool requests (a command, an edit, a fetch) normally wait for you in AnyCode.
+To let your external client answer them too, turn on **External approvals** for
+that session. Open the tab's environment menu and tick the checkbox under
+**Sessions API**. It appears only while the session is shared.
+
+- It is **off by default**. A new top-level tab never has it on, and a child
+  session inherits it from the parent that has it on.
+- Turning sharing off also turns it off, so sharing it again does not re-enable it.
+- `list_pending_approvals` shows the tool and a short, scrubbed description: a
+  command with secrets masked and long lines shortened, a file path, a URL
+  without its query, or a tool's argument names. It never shows file contents,
+  edit text or typed text.
+- The first answer wins, whether it comes from AnyCode or from the client. A
+  later answer gets `already_answered`, with who answered it. The modal in
+  AnyCode then closes with the notice **Answered from the Sessions API.**
+- Outside AnyCode you can only **allow** or **deny** once. There is no "always
+  allow". `ExitPlanMode` and `AskUserQuestion` must be answered in AnyCode.
+- A request still expires after 120 seconds, and the expiry denies it.
 
 ## Enable it in Settings
 
@@ -114,6 +138,20 @@ Services that bridge an outside channel use the same tools. See the
   the shared sessions. Treat the discovery file as a credential.
 - The folder list is an outer boundary, and the per-session switch is the
   inner one. A session must pass both when folders are set.
+- A token holder can also stop the turns of shared sessions (`cancel_turn`).
+- Only where **External approvals** is on, a token holder can also allow or deny
+  that session's tool requests. The switch is set only from AnyCode's own
+  settings. No tool, message or plugin can change it.
+
+## Worked example: approve a command from a bridge
+
+1. Turn on **External approvals** for the session in its environment menu.
+2. The session runs a command that asks, for example `npm publish`.
+3. Call `list_pending_approvals` with its `sessionId`. You get the tool, the
+   scrubbed command and an `approvalId`, with `answerable: true`.
+4. Call `answer_approval` with `decision: "allow"`. The command runs. The status
+   is `answered`. If the user already answered in AnyCode, the status is
+   `already_answered` with `settledBy: "ui"`.
 
 ## Troubleshooting
 

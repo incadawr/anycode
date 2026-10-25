@@ -526,6 +526,8 @@ let manager: TabHostManager | null = null;
 /** Taskana 4747: the Sessions API live controller and its per-session switch store (boot-wired). */
 let communicationController: CommunicationController | null = null;
 let communicationSessions: SessionAccessStore | null = null;
+/** Taskana 4763: per-session External approvals switch (default OFF, never inherited by a fresh root tab). */
+let communicationApprovals: SessionAccessStore | null = null;
 // Taskana 4759: the per-session "Full browser access" switch and the notifier that pushes
 // each tab's EFFECTIVE value (renderer + host flag) exactly once per change.
 let browserAccessStore: BrowserAccessStore | null = null;
@@ -2238,6 +2240,10 @@ void app.whenReady().then(async () => {
     defaultOn: () => defaultSessionAccessFromSettingsFile(settingsPath),
     handlesFile: join(app.getPath("userData"), "communication-handles.json"),
   });
+  communicationApprovals = createSessionAccessStore({
+    file: join(app.getPath("userData"), "communication-approvals.json"),
+    defaultOn: () => false,
+  });
   // Taskana 4759: an inherited ANYCODE_BROWSER_FULL_ACCESS must never reach a tab host;
   // the host flag is only ever stamped by main (tabs.ts) from the live switch.
   delete process.env.ANYCODE_BROWSER_FULL_ACCESS;
@@ -2265,11 +2271,13 @@ void app.whenReady().then(async () => {
     isSessionExposed: (sessionId) => communicationSessions?.isExposed(sessionId) ?? false,
     handleOf: (sessionId) => communicationSessions?.getHandle(sessionId),
     countExposed: () => communicationSessions?.exposedCount() ?? 0,
+    isExternalApprovalEnabled: (sessionId) => communicationApprovals?.isExposed(sessionId) ?? false,
   });
 
   manager = new TabHostManager({
     onSessionRegistered: (info) => {
       communicationSessions?.register(info);
+      communicationApprovals?.register(info);
       browserAccessStore?.register(info);
     },
     // Taskana 4759: the fork env carries the EFFECTIVE flag ("1"/"0"); the seed keeps the notifier's last-sent value in step.
@@ -3172,7 +3180,7 @@ void app.whenReady().then(async () => {
   // Taskana 4747: the Sessions API control plane. Folders come only from the native
   // dialog below; the renderer never sends a path. The stdio adapter is copied to
   // userData so an external client config survives app updates.
-  if (communicationController !== null && communicationSessions !== null) {
+  if (communicationController !== null && communicationSessions !== null && communicationApprovals !== null) {
     const commController = communicationController;
     registerCommunicationIpc({
       settingsPath,
@@ -3194,6 +3202,7 @@ void app.whenReady().then(async () => {
         discoveryFile: () => commController.discoveryFile(),
       },
       sessions: communicationSessions,
+      approvals: communicationApprovals,
       tabs: () => (manager?.listTabs() ?? []).map((tab) => ({ tabId: tab.tabId, sessionId: tab.sessionId })),
       env: () => process.env.ANYCODE_COMMUNICATION_CONFIG,
       pickFolder: async () => {

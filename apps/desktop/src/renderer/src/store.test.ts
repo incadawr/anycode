@@ -817,6 +817,24 @@ describe("desktop store — notice channel (Wave-1 revision)", () => {
     expect(store.getState().notice?.kind).toBe("permission_settled");
     expect(store.getState().notice?.text).toContain("timed out");
   });
+
+  it("T31 permission_settled with origin external clears the modal and raises the Sessions API notice (Taskana 4763)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({
+      type: "permission_request" as const,
+      requestId: "perm-ext",
+      toolName: "Bash",
+      input: { command: "ls" },
+      mode: "build" as const,
+      metadata: { name: "Bash", description: "run a command", readOnly: false, destructive: true, riskLevel: "high" as const, sideEffectScope: "process" as const },
+    });
+    expect(store.getState().permission?.requestId).toBe("perm-ext");
+    store.getState().applyHostMessage({ type: "permission_settled", requestId: "perm-ext", behavior: "allow", origin: "external" });
+    expect(store.getState().permission).toBeNull();
+    expect(store.getState().notice).toMatchObject({ kind: "permission_settled", text: "Answered from the Sessions API." });
+  });
 });
 
 describe("desktop store — child_report enqueues through the P7.14 prompt queue (TASK.145 срез 1/2)", () => {

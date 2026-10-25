@@ -8,7 +8,7 @@ import { z } from "zod";
 import type { AgentDelivery, AgentEnvelope } from "../shared/communication.js";
 
 export interface CommunicationManager {
-  listTabs(): ReadonlyArray<{ sessionId: string; workspace: string; state: string; pid?: number | null; childOf?: { parentTabId: string } }>;
+  listTabs(): ReadonlyArray<{ sessionId: string; workspace: string; state: string; pid?: number | null; childOf?: { parentTabId: string; requestId?: string } }>;
   onCommunicationDelivery?(listener: (sessionId: string, delivery: AgentDelivery) => void): () => void;
   communicationRequest(sessionId: string, operation: string, payload?: unknown, expectedWorkspace?: string): Promise<unknown>;
 }
@@ -42,6 +42,16 @@ const waitSchema = z.object({
 }).strict().refine((v) => (v.messageId !== undefined) !== (v.correlationId !== undefined), { message: "Provide messageId or correlationId" });
 /** Concurrent wait_for_result calls across all clients; the 33rd is refused. */
 const MAX_WAITERS = 32;
+/** Taskana 4763: the one message the approval tools use when the per-session switch is off. Clients match on it. */
+export const EXTERNAL_APPROVAL_OFF = "External approval is off for this session";
+/** Taskana 4763: most approvals one `list_pending_approvals` call returns. */
+const APPROVAL_LIMIT = 50;
+const listApprovalsSchema = z.object({ sessionId: z.string().min(1).optional() }).strict();
+const answerApprovalSchema = z.object({
+  sessionId: z.string().min(1),
+  approvalId: z.string().min(1).max(100),
+  decision: z.enum(["allow", "deny"]),
+}).strict();
 const tools = [
   { name: "list_sessions", description: "List allowed live GUI sessions; no transcript or credentials.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
   { name: "get_session_status", description: "Get engine and running/idle status for an allowed session.", inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, required: ["sessionId"], additionalProperties: false } },
@@ -49,6 +59,8 @@ const tools = [
   { name: "send_message", description: "Send an authenticated agent envelope. next_turn queues while busy; steer uses active Codex turn/steer. Acknowledged is not model-applied.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, payload: { type: "string", minLength: 1, maxLength: 32000 }, mode: { enum: ["next_turn", "steer"] }, kind: { enum: ["agent_message", "task_result"] }, correlationId: { type: "string" }, replyTo: { type: "string" }, idempotencyKey: { type: "string" } }, required: ["sessionId", "payload", "mode"], additionalProperties: false } },
   { name: "get_message_status", description: "Read delivery state. Unknown means do not blindly retry; the model may have received it.", inputSchema: { type: "object", properties: { messageId: { type: "string" } }, required: ["messageId"], additionalProperties: false } },
   { name: "wait_for_result", description: "Long-poll until the turn that consumed the message reaches a terminal state. Returns the same shape as get_session_result plus status. On timeout returns {status:'pending'}; call again.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, messageId: { type: "string" }, correlationId: { type: "string", maxLength: 200 }, timeoutMs: { type: "integer", minimum: 1, maximum: 120000, default: 30000 } }, required: ["sessionId"], additionalProperties: false } },
+  { name: "list_pending_approvals", description: "List tool requests waiting for an answer, for sessions whose External approvals switch is on. Shows tool and a short scrubbed description, never file contents or raw input. Omit sessionId to list every approving session. Asks that need a human reading or typing (ExitPlanMode, AskUserQuestion) are listed with answerable:false.", inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, additionalProperties: false } },
+  { name: "answer_approval", description: "Allow or deny one pending tool request of a session whose External approvals switch is on. First answer wins (UI or this tool); a later answer reports already_answered. No 'always allow' from outside AnyCode.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, approvalId: { type: "string", minLength: 1, maxLength: 100 }, decision: { enum: ["allow", "deny"] } }, required: ["sessionId", "approvalId", "decision"], additionalProperties: false } },
   { name: "cancel_turn", description: "Stop the running turn of an allowed session, like the Stop button: queued agent messages are rejected and parked approvals are denied. Idle is not an error (cancelled:false, reason:idle). Needs only the Sessions API switch.", inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, required: ["sessionId"], additionalProperties: false } },
 ];
 
@@ -69,6 +81,12 @@ export interface CommunicationServerOptions {
   handleOf?: (sessionId: string) => string | undefined;
   /** Delay between host polls inside wait_for_result (tests shorten it). */
   pollMs?: number;
+  /**
+   * Taskana 4763: the per-session External approvals switch, read on every
+   * request. FAIL CLOSED: absent means OFF for every session (the opposite of
+   * isSessionExposed). The legacy env-file mode passes none, so it never allows approvals.
+   */
+  isExternalApprovalEnabled?: (sessionId: string) => boolean;
 }
 
 /** Exactly one source: an env config FILE (legacy) or a live config OBJECT (Settings). */
@@ -124,6 +142,32 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     if (!tab) throw new Error("Session unavailable or outside authorized workspace");
     return tab;
   };
+  const approvalOn = (sessionId: string): boolean => options.isExternalApprovalEnabled?.(sessionId) === true;
+  /** Access first (an unshared session never reveals anything), then the approval switch. */
+  const requireApprovalSession = async (sessionId: string) => {
+    const tab = await requireSession(sessionId);
+    if (!approvalOn(sessionId)) throw new Error(EXTERNAL_APPROVAL_OFF);
+    return tab;
+  };
+  /** Only the whitelisted fields of a host approval; nothing from the host payload rides along (no input, no updatedInput). */
+  const approvalsOf = async (tab: { sessionId: string; workspace: string; childOf?: { parentTabId: string; requestId?: string } }, limit: number): Promise<{ items: unknown[]; truncated: boolean }> => {
+    const raw = await options.manager.communicationRequest(tab.sessionId, "list_pending_approvals", undefined, tab.workspace);
+    const hostItems: unknown[] = Array.isArray(raw) ? raw : [];
+    const items = hostItems.slice(0, limit).map((item) => {
+      const a = (item ?? {}) as { [key: string]: unknown };
+      return {
+        sessionId: tab.sessionId,
+        approvalId: String(a.approvalId ?? ""),
+        tool: String(a.tool ?? ""),
+        description: String(a.description ?? ""),
+        presented: a.presented === true,
+        expiresInMs: typeof a.expiresInMs === "number" ? a.expiresInMs : null,
+        answerable: a.answerable === true,
+        ...(tab.childOf ? { childOf: { parentTabId: tab.childOf.parentTabId, ...(tab.childOf.requestId !== undefined ? { requestId: tab.childOf.requestId } : {}) } } : {}),
+      };
+    });
+    return { items, truncated: hostItems.length > limit };
+  };
   // Every in-flight wait, so close() can abort them all (no leaked timers or hosts polled after close).
   const waiters = new Set<AbortController>();
   let closing = false;
@@ -175,8 +219,46 @@ export async function startCommunicationServer(options: CommunicationServerOptio
       case "list_sessions": {
         z.object({}).strict().parse(raw);
         const sessions = await tabs();
-        if (!options.handleOf) return { sessions };
-        return { sessions: sessions.map((tab) => { const handle = options.handleOf!(tab.sessionId); return handle === undefined ? tab : { ...tab, handle }; }) };
+        // externalApproval is reported only when the switch is wired at all (Taskana 4763).
+        const withApproval = (tab: (typeof sessions)[number]) => options.isExternalApprovalEnabled ? { ...tab, externalApproval: approvalOn(tab.sessionId) } : tab;
+        if (!options.handleOf) return { sessions: sessions.map(withApproval) };
+        return { sessions: sessions.map((tab) => { const handle = options.handleOf!(tab.sessionId); const row = withApproval(tab); return handle === undefined ? row : { ...row, handle }; }) };
+      }
+      case "list_pending_approvals": {
+        const input = listApprovalsSchema.parse(raw);
+        if (input.sessionId !== undefined) {
+          const tab = await requireApprovalSession(input.sessionId);
+          let page: { items: unknown[]; truncated: boolean };
+          try { page = await approvalsOf(tab, APPROVAL_LIMIT); } catch { throw new Error("Session closed"); }
+          return { approvals: page.items, truncated: page.truncated };
+        }
+        // Aggregate: only sessions whose access AND approval switches are both on; a failing tab is skipped.
+        const approvals: unknown[] = [];
+        let truncated = false;
+        for (const tab of (await tabs()).filter((t) => approvalOn(t.sessionId))) {
+          let page: { items: unknown[]; truncated: boolean };
+          try { page = await approvalsOf(tab, APPROVAL_LIMIT - approvals.length); } catch { continue; }
+          approvals.push(...page.items);
+          if (page.truncated) { truncated = true; break; }
+        }
+        return { approvals, truncated };
+      }
+      case "answer_approval": {
+        const input = answerApprovalSchema.parse(raw);
+        const tab = await requireApprovalSession(input.sessionId);
+        let answer: { result?: unknown; settledBy?: unknown } | undefined;
+        try {
+          answer = await options.manager.communicationRequest(input.sessionId, "answer_approval", { approvalId: input.approvalId, decision: input.decision }, tab.workspace) as typeof answer;
+        } catch {
+          throw new Error("Session closed");
+        }
+        const base = { sessionId: input.sessionId, approvalId: input.approvalId };
+        switch (answer?.result) {
+          case "answered": return { ...base, status: "answered", decision: input.decision };
+          case "already_answered": return { ...base, status: "already_answered", settledBy: typeof answer.settledBy === "string" ? answer.settledBy : "unknown" };
+          case "not_answerable": return { ...base, status: "not_answerable" };
+          default: return { ...base, status: "not_found" };
+        }
       }
       case "wait_for_result": {
         const input = waitSchema.parse(raw);

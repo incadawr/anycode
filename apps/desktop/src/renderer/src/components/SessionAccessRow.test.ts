@@ -6,13 +6,14 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { SessionAccessRow, commitSessionHandle } from "./SessionAccessRow.js";
-import { handleErrorText } from "./sessions-api-model.js";
+import { SessionAccessRow, SessionApprovalsField, commitSessionHandle } from "./SessionAccessRow.js";
+import { handleErrorText, SESSION_APPROVALS_ARIA_LABEL, SESSION_APPROVALS_NOTE, sessionApprovalsLabel } from "./sessions-api-model.js";
 
 const neverBridge = {
   get: () => new Promise<never>(() => {}),
   setSessionAccess: () => new Promise<never>(() => {}),
   setSessionHandle: () => new Promise<never>(() => {}),
+  setSessionApprovals: () => new Promise<never>(() => {}),
 };
 
 describe("SessionAccessRow (Taskana 4747)", () => {
@@ -49,3 +50,30 @@ describe("SessionAccessRow handle field (Taskana 4750b)", () => {
     expect(handleErrorText("duplicate")).toContain("Another live session");
   });
 });
+
+describe("SessionAccessRow External approvals (Taskana 4763)", () => {
+  it("T30 the approvals checkbox is NOT rendered while sharing is off (no tab, state not loaded)", () => {
+    const html = renderToStaticMarkup(createElement(SessionAccessRow, { bridge: neverBridge }));
+    expect(html).not.toContain('data-environment-action="sessions-api-approvals"');
+    expect(html).not.toContain(SESSION_APPROVALS_NOTE);
+  });
+
+  it("T30 when shown it carries the exact aria-label, the caption and the OFF label by default", () => {
+    const html = renderToStaticMarkup(createElement(SessionApprovalsField, { approvals: false, onChange: () => {} }));
+    // React static markup escapes the apostrophe as &#x27;.
+    expect(html).toContain(`aria-label="${SESSION_APPROVALS_ARIA_LABEL.replace(/'/g, "&#x27;")}"`);
+    expect(html).toContain('data-environment-action="sessions-api-approvals"');
+    expect(html).toContain(SESSION_APPROVALS_NOTE.replace(/'/g, "&#x27;"));
+    expect(html).toContain("External approvals off");
+    expect(html).not.toMatch(/<input[^>]*checked=""/);
+    expect(renderToStaticMarkup(createElement(SessionApprovalsField, { approvals: true, onChange: () => {} }))).toContain("External approvals on");
+  });
+
+  it("T30 sessions-api-model pins the labels and the caption", () => {
+    expect(SESSION_APPROVALS_ARIA_LABEL).toBe("Allow approving this session's tool requests from outside");
+    expect(SESSION_APPROVALS_NOTE).toBe("Whoever holds the Sessions API token can allow or deny this session's tool requests.");
+    expect(sessionApprovalsLabel(true)).toBe("External approvals on");
+    expect(sessionApprovalsLabel(false)).toBe("External approvals off");
+  });
+});
+

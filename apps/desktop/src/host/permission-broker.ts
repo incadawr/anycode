@@ -128,7 +128,27 @@ export function resolveAskTimeoutMs(toolName: string, defaultTimeoutMs: number):
 }
 
 /** Reason a parked ask was settled, surfaced to the UI in permission_settled. */
-export type SettleOrigin = "ui" | "timeout" | "turn_cancelled" | "disconnect" | "shutdown";
+export type SettleOrigin = "ui" | "external" | "timeout" | "turn_cancelled" | "disconnect" | "shutdown";
+
+/** Taskana 4763: how many recently settled asks remain addressable for `respondExternal`. */
+const SETTLED_RECORD_CAP = 64;
+
+/** Taskana 4763: one parked ask as the Sessions API sees it (copies only, no settle handle). */
+export interface PendingAskSnapshot {
+  requestId: string;
+  toolName: string;
+  input: unknown;
+  /** True for the ask currently in front of the UI; false while it waits in the queue. */
+  presented: boolean;
+  /** Remaining ask deadline when presented; null while queued (the clock starts at presentation). */
+  expiresInMs: number | null;
+}
+
+/** Taskana 4763: outcome of an answer that arrives from outside the UI. */
+export type ExternalAnswer =
+  | { result: "answered" }
+  | { result: "already_answered"; settledBy: SettleOrigin }
+  | { result: "not_found" };
 
 /** Projects the core ToolMetadata down to the UI-safe flat subset (no schemas/handlers). */
 export function toWireToolMeta(metadata: ToolMetadata): WireToolMeta {
@@ -175,6 +195,12 @@ interface PendingAsk {
   request: PermissionRequest;
   /** Armed only once `present()` sends the request to the UI; null while queued. */
   timer: ReturnType<typeof setTimeout> | null;
+  /** Taskana 4763: when the ask was parked. */
+  createdAt: number;
+  /** Taskana 4763: when `present()` showed it to the UI; null while queued. */
+  presentedAt: number | null;
+  /** Taskana 4763: the deadline armed at presentation (per-tool), used for `expiresInMs`. */
+  presentedTimeoutMs: number | null;
 }
 
 /**
@@ -213,6 +239,13 @@ export class IpcPermissionBroker implements PermissionBroker {
    */
   private unattended = false;
 
+  /**
+   * Taskana 4763: bounded record of recently settled asks, so an answer that
+   * arrives after the fact can say WHO settled it (`already_answered`) instead
+   * of the ask looking like it never existed. Oldest evicted past the cap.
+   */
+  private readonly settled = new Map<string, SettleOrigin>();
+
   constructor(
     private readonly emit: (message: HostToUiMessage) => void,
     private readonly timeoutMs: number = PERMISSION_ASK_TIMEOUT_MS,
@@ -246,7 +279,7 @@ export class IpcPermissionBroker implements PermissionBroker {
     }
     const requestId = randomUUID();
     return new Promise<PermissionDecision>((resolve) => {
-      const entry: PendingAsk = { resolve, request, timer: null };
+      const entry: PendingAsk = { resolve, request, timer: null, createdAt: Date.now(), presentedAt: null, presentedTimeoutMs: null };
       this.pending.set(requestId, entry);
       if (this.current === null) {
         this.present(requestId, entry);
@@ -313,6 +346,52 @@ export class IpcPermissionBroker implements PermissionBroker {
           : { behavior: "allow" }
         : { behavior: "deny", reason: "denied by user" };
     this.settle(requestId, decision, "ui");
+  }
+
+  /**
+   * Taskana 4763: the answer from outside the UI (Sessions API `answer_approval`).
+   * Settles through the same `settle` path as a UI click, so exactly one of the
+   * two wins: the loser sees `already_answered` with the winner's origin. Never
+   * carries `updatedInput` and never touches the always-allow rules.
+   */
+  respondExternal(requestId: string, behavior: "allow" | "deny"): ExternalAnswer {
+    if (this.pending.has(requestId)) {
+      this.noteHumanPresent();
+      const decision: PermissionDecision = behavior === "allow"
+        ? { behavior: "allow" }
+        : { behavior: "deny", reason: "denied from the Sessions API" };
+      this.settle(requestId, decision, "external");
+      return { result: "answered" };
+    }
+    const settledBy = this.settled.get(requestId);
+    if (settledBy !== undefined) return { result: "already_answered", settledBy };
+    return { result: "not_found" };
+  }
+
+  /**
+   * Taskana 4763: copies of every parked ask, the shown one first, then the
+   * queue in arrival order. Mutating a returned object never reaches the broker.
+   */
+  pendingSnapshot(): PendingAskSnapshot[] {
+    const now = Date.now();
+    const toSnapshot = (requestId: string, entry: PendingAsk, presented: boolean): PendingAskSnapshot => {
+      let input: unknown;
+      try { input = structuredClone(entry.request.input); } catch { input = undefined; }
+      const expiresInMs = presented && entry.presentedAt !== null && entry.presentedTimeoutMs !== null
+        ? Math.max(0, entry.presentedAt + entry.presentedTimeoutMs - now)
+        : null;
+      return { requestId, toolName: entry.request.toolName, input, presented, expiresInMs };
+    };
+    const out: PendingAskSnapshot[] = [];
+    if (this.current !== null) {
+      const shown = this.pending.get(this.current);
+      if (shown) out.push(toSnapshot(this.current, shown, true));
+    }
+    for (const requestId of this.queue) {
+      const entry = this.pending.get(requestId);
+      if (entry) out.push(toSnapshot(requestId, entry, false));
+    }
+    return out;
   }
 
   /**
@@ -412,6 +491,8 @@ export class IpcPermissionBroker implements PermissionBroker {
     // of the generic ask deadline. Resolved here, at presentation time, so a
     // queued ask still cannot start its clock before a human sees it.
     const timeoutMs = resolveAskTimeoutMs(entry.request.toolName, this.timeoutMs);
+    entry.presentedAt = Date.now();
+    entry.presentedTimeoutMs = timeoutMs;
     entry.timer = setTimeout(() => {
       // An expired ask is evidence that nobody is watching; every later ask in
       // this session is denied outright until a human proves otherwise.
@@ -488,6 +569,11 @@ export class IpcPermissionBroker implements PermissionBroker {
       clearTimeout(entry.timer);
     }
     this.pending.delete(requestId);
+    this.settled.set(requestId, origin);
+    if (this.settled.size > SETTLED_RECORD_CAP) {
+      const oldest = this.settled.keys().next().value;
+      if (oldest !== undefined) this.settled.delete(oldest);
+    }
     this.emit({
       type: "permission_settled",
       requestId,

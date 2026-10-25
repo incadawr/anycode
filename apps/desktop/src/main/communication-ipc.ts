@@ -30,6 +30,7 @@ import {
   COMMUNICATION_SET_ENABLED_CHANNEL,
   COMMUNICATION_SET_PORT_CHANNEL,
   COMMUNICATION_SET_SESSION_ACCESS_CHANNEL,
+  COMMUNICATION_SET_SESSION_APPROVALS_CHANNEL,
   COMMUNICATION_SET_SESSION_HANDLE_CHANNEL,
 } from "../shared/communication-config.js";
 import type {
@@ -58,6 +59,8 @@ export interface CommunicationIpcDeps {
   logger: { warn(message: string): void; error(message: string): void };
   controller: CommunicationControllerLike;
   sessions: SessionAccessStore;
+  /** Taskana 4763: per-session External approvals switch. Only this module writes it. */
+  approvals: SessionAccessStore;
   /** Live tab list (root and child). Only tabId and sessionId are read here. */
   tabs(): ReadonlyArray<{ tabId: string; sessionId: string }>;
   /** The legacy env override; when set, every write is refused and the pane is read-only. */
@@ -82,6 +85,7 @@ const copySchema = z.object({ client: z.enum(["claude-code", "codex", "generic"]
 const defaultAccessSchema = z.object({ access: z.enum(["off", "on"]) }).strict();
 const sessionAccessSchema = z.object({ tabId: z.string().min(1).max(200), enabled: z.boolean() }).strict();
 const sessionHandleSchema = z.object({ tabId: z.string().min(1).max(200), handle: z.string().max(200).nullable() }).strict();
+const sessionApprovalsSchema = z.object({ tabId: z.string().min(1).max(200), enabled: z.boolean() }).strict();
 
 function blockOf(settings: AnycodeSettings): Block {
   const raw = settings.communication;
@@ -98,7 +102,7 @@ function viewOf(deps: CommunicationIpcDeps, block: Block): CommunicationView {
     status: deps.controller.status(),
     tabs: deps.tabs().map((tab) => {
       const handle = deps.sessions.getHandle(tab.sessionId);
-      return { tabId: tab.tabId, enabled: deps.sessions.isExposed(tab.sessionId), ...(handle !== undefined ? { handle } : {}) };
+      return { tabId: tab.tabId, enabled: deps.sessions.isExposed(tab.sessionId), approvals: deps.approvals.isExposed(tab.sessionId), ...(handle !== undefined ? { handle } : {}) };
     }),
   };
 }
@@ -217,6 +221,25 @@ export async function handleSetSessionAccess(deps: CommunicationIpcDeps, raw: un
   if (deps.env() !== undefined && deps.env() !== "") return { ok: false, reason: "env_controlled" };
   const tab = deps.tabs().find((candidate) => candidate.tabId === parsed.data.tabId);
   if (!tab || !deps.sessions.set(tab.sessionId, parsed.data.enabled)) return { ok: false, reason: "not_found" };
+  // Sharing off also clears External approvals, so re-sharing never silently re-enables them (Taskana 4763).
+  if (!parsed.data.enabled) deps.approvals.set(tab.sessionId, false);
+  const loaded = await loadSettings(deps.settingsPath, deps.logger);
+  return { ok: true, view: viewOf(deps, blockOf(loaded.settings)) };
+}
+
+/**
+ * Taskana 4763: the per-session External approvals switch. It can be turned ON
+ * only while the session is shared (access ON), and it is never set by any
+ * Sessions API tool, host message or plugin: this handler is its only writer.
+ */
+export async function handleSetSessionApprovals(deps: CommunicationIpcDeps, raw: unknown): Promise<CommunicationMutationResult> {
+  const parsed = sessionApprovalsSchema.safeParse(raw);
+  if (!parsed.success) return { ok: false, reason: "invalid" };
+  if (deps.env() !== undefined && deps.env() !== "") return { ok: false, reason: "env_controlled" };
+  const tab = deps.tabs().find((candidate) => candidate.tabId === parsed.data.tabId);
+  if (!tab) return { ok: false, reason: "not_found" };
+  if (parsed.data.enabled && !deps.sessions.isExposed(tab.sessionId)) return { ok: false, reason: "not_found" };
+  if (!deps.approvals.set(tab.sessionId, parsed.data.enabled)) return { ok: false, reason: "not_found" };
   const loaded = await loadSettings(deps.settingsPath, deps.logger);
   return { ok: true, view: viewOf(deps, blockOf(loaded.settings)) };
 }
@@ -301,4 +324,5 @@ export function registerCommunicationIpc(deps: CommunicationIpcDeps): void {
   ipcMain.handle(COMMUNICATION_SET_DEFAULT_ACCESS_CHANNEL, (_event, raw: unknown) => handleSetDefaultAccess(deps, raw));
   ipcMain.handle(COMMUNICATION_SET_SESSION_ACCESS_CHANNEL, (_event, raw: unknown) => handleSetSessionAccess(deps, raw));
   ipcMain.handle(COMMUNICATION_SET_SESSION_HANDLE_CHANNEL, (_event, raw: unknown) => handleSetSessionHandle(deps, raw));
+  ipcMain.handle(COMMUNICATION_SET_SESSION_APPROVALS_CHANNEL, (_event, raw: unknown) => handleSetSessionApprovals(deps, raw));
 }

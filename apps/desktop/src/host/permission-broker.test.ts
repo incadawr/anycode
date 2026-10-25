@@ -918,3 +918,127 @@ describe("IpcPermissionBroker rules vs workspace confinement (Taskana 4294)", ()
     expect(emitted).toEqual([]);
   });
 });
+
+describe("external answers and the pending snapshot (Taskana 4763)", () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const asks = (emitted: HostToUiMessage[]) => emitted.filter((m): m is Extract<HostToUiMessage, { type: "permission_request" }> => m.type === "permission_request");
+
+  it("T8 pendingSnapshot lists the shown ask first, then the queue in arrival order; expiresInMs counts down and is null for queued; copies only", async () => {
+    vi.useFakeTimers();
+    const { broker, emitted } = makeBroker(60_000);
+    void broker.requestPermission(request);
+    void broker.requestPermission({ ...request, input: { file_path: "/workspace/b.txt", content: "b" } });
+    void broker.requestPermission({ ...request, input: { file_path: "/workspace/c.txt", content: "c" } });
+    const shown = requestId(emitted);
+    let snap = broker.pendingSnapshot();
+    expect(snap.map((s) => s.presented)).toEqual([true, false, false]);
+    expect(snap[0]!.requestId).toBe(shown);
+    expect(snap[1]!.input).toEqual({ file_path: "/workspace/b.txt", content: "b" });
+    expect(snap[2]!.input).toEqual({ file_path: "/workspace/c.txt", content: "c" });
+    expect(snap[0]!.expiresInMs).toBe(60_000);
+    expect(snap[1]!.expiresInMs).toBeNull();
+    vi.advanceTimersByTime(10_000);
+    snap = broker.pendingSnapshot();
+    expect(snap[0]!.expiresInMs).toBe(50_000);
+    expect(snap[2]!.expiresInMs).toBeNull();
+    // Copies: mutating what the caller got never changes the broker.
+    snap[0]!.toolName = "Evil";
+    (snap[0]!.input as { file_path: string }).file_path = "/etc/passwd";
+    const fresh = broker.pendingSnapshot();
+    expect(fresh[0]!.toolName).toBe("Write");
+    expect(fresh[0]!.input).toEqual({ file_path: "/workspace/a.txt", content: "hi" });
+    broker.denyAll("done", "shutdown");
+    expect(broker.pendingSnapshot()).toEqual([]);
+  });
+
+  it("T9 respondExternal allow settles the ask with origin external, presents the next queued ask and disarms the unattended latch", async () => {
+    vi.useFakeTimers();
+    const { broker, emitted } = makeBroker(1_000);
+    const first = broker.requestPermission(request);
+    const second = broker.requestPermission({ ...request, input: { file_path: "/workspace/b.txt", content: "b" } });
+    const firstId = requestId(emitted);
+    vi.advanceTimersByTime(1_000);
+    await expect(first).resolves.toMatchObject({ behavior: "deny" });
+    expect(broker.isUnattended).toBe(true);
+    expect(asks(emitted)).toHaveLength(2);
+    const secondId = asks(emitted)[1]!.requestId;
+    expect(secondId).not.toBe(firstId);
+    expect(broker.respondExternal(secondId, "allow")).toEqual({ result: "answered" });
+    await expect(second).resolves.toEqual({ behavior: "allow" });
+    expect(settled(emitted).find((m) => m.requestId === secondId)).toMatchObject({ behavior: "allow", origin: "external" });
+    expect(broker.isUnattended).toBe(false);
+    const third = broker.requestPermission({ ...request, input: { file_path: "/workspace/c.txt", content: "c" } });
+    expect(asks(emitted)).toHaveLength(3);
+    broker.denyAll("done", "shutdown");
+    await third;
+  });
+
+  it("T10 race: the first answer wins and the second is reported, never acted on, one permission_settled either way", async () => {
+    const uiFirst = makeBroker();
+    const askA = uiFirst.broker.requestPermission(request);
+    const idA = requestId(uiFirst.emitted);
+    uiFirst.broker.handleResponse(idA, "allow");
+    expect(uiFirst.broker.respondExternal(idA, "deny")).toEqual({ result: "already_answered", settledBy: "ui" });
+    await expect(askA).resolves.toEqual({ behavior: "allow" });
+    expect(settled(uiFirst.emitted)).toHaveLength(1);
+    expect(settled(uiFirst.emitted)[0]).toMatchObject({ behavior: "allow", origin: "ui" });
+
+    const externalFirst = makeBroker();
+    const askB = externalFirst.broker.requestPermission(request);
+    const idB = requestId(externalFirst.emitted);
+    expect(externalFirst.broker.respondExternal(idB, "deny")).toEqual({ result: "answered" });
+    externalFirst.broker.handleResponse(idB, "allow");
+    const decision = await askB;
+    expect(decision).toEqual({ behavior: "deny", reason: "denied from the Sessions API" });
+    expect(settled(externalFirst.emitted)).toHaveLength(1);
+    expect(settled(externalFirst.emitted)[0]).toMatchObject({ behavior: "deny", origin: "external" });
+  });
+
+  it("T11 respondExternal: unknown id, timed-out, denied-by-turn-cancel, eviction past 64, reason text, and never the rules matcher", async () => {
+    vi.useFakeTimers();
+    const emittedA: HostToUiMessage[] = [];
+    const brokerA = new IpcPermissionBroker((m) => emittedA.push(m), 1_000);
+    expect(brokerA.respondExternal("no-such-id", "allow")).toEqual({ result: "not_found" });
+    const timed = brokerA.requestPermission(request);
+    vi.advanceTimersByTime(1_000);
+    await timed;
+    expect(brokerA.respondExternal(settled(emittedA)[0]!.requestId, "allow")).toEqual({ result: "already_answered", settledBy: "timeout" });
+
+    const emittedB: HostToUiMessage[] = [];
+    const brokerB = new IpcPermissionBroker((m) => emittedB.push(m));
+    const cancelled = brokerB.requestPermission(request);
+    const cancelledId = requestId(emittedB);
+    brokerB.denyAll("turn cancelled", "turn_cancelled");
+    await expect(cancelled).resolves.toEqual({ behavior: "deny", reason: "turn cancelled" });
+    expect(brokerB.respondExternal(cancelledId, "allow")).toEqual({ result: "already_answered", settledBy: "turn_cancelled" });
+    const denied = brokerB.requestPermission({ ...request, input: { file_path: "/workspace/x.txt", content: "x" } });
+    const deniedId = requestId(emittedB.slice(emittedB.findIndex((m) => m.type === "permission_settled") + 1));
+    expect(brokerB.respondExternal(deniedId, "deny")).toEqual({ result: "answered" });
+    await expect(denied).resolves.toEqual({ behavior: "deny", reason: "denied from the Sessions API" });
+
+    // 65 asks settled by one sweep: the oldest record is evicted, the 64 newest stay.
+    const emittedC: HostToUiMessage[] = [];
+    const brokerC = new IpcPermissionBroker((m) => emittedC.push(m));
+    for (let i = 0; i < 65; i++) void brokerC.requestPermission({ ...request, input: { file_path: `/workspace/${i}.txt`, content: "x" } });
+    const ids = brokerC.pendingSnapshot().map((s) => s.requestId);
+    expect(ids).toHaveLength(65);
+    // denyAll settles the queue first (ids[1..64]) and the shown ask (ids[0]) last,
+    // so ids[1] is the oldest settled record and the one that gets evicted.
+    brokerC.denyAll("sweep", "shutdown");
+    expect(brokerC.respondExternal(ids[1]!, "allow")).toEqual({ result: "not_found" });
+    expect(brokerC.respondExternal(ids[2]!, "allow")).toEqual({ result: "already_answered", settledBy: "shutdown" });
+    expect(brokerC.respondExternal(ids[0]!, "allow")).toEqual({ result: "already_answered", settledBy: "shutdown" });
+
+    // respondExternal never consults the always-allow rules, only requestPermission does.
+    const ruleSpy = vi.fn(() => false);
+    const ruled = new IpcPermissionBroker(() => {}, 1_000, { matches: ruleSpy });
+    const parked = ruled.requestPermission({ ...request, toolName: "Bash", input: { command: "ls" } });
+    expect(ruleSpy).toHaveBeenCalledTimes(1);
+    ruleSpy.mockClear();
+    const parkedId = ruled.pendingSnapshot()[0]!.requestId;
+    expect(ruled.respondExternal(parkedId, "allow")).toEqual({ result: "answered" });
+    await expect(parked).resolves.toEqual({ behavior: "allow" });
+    expect(ruleSpy).not.toHaveBeenCalled();
+  });
+});
+

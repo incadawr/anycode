@@ -3,6 +3,7 @@ import { createHarness, textStep } from "./test-harness.js";
 import type { SessionEngine } from "./engines/session-engine.js";
 import { CORE_ENGINE_CAPABILITIES } from "./engines/session-engine.js";
 import type { AgentEnvelope } from "../shared/communication.js";
+import type { PermissionRequest } from "@anycode/core";
 const envelope = (messageId: string, mode: "next_turn" | "steer" = "next_turn"): AgentEnvelope => ({ messageId, sender: "test-supervisor", recipientSessionId: "test-session", payload: "Follow this clarification", mode, kind: "agent_message", createdAt: new Date().toISOString() });
 function fixture() {
   const inputs: string[] = []; const signals: AbortSignal[] = []; const finishes: Array<() => void> = [];
@@ -276,6 +277,61 @@ describe("Sessions API cancel_turn (Taskana 4763)", () => {
       expect(h.received).toContainEqual(expect.objectContaining({ type: "permission_settled", behavior: "deny", origin: "turn_cancelled" }));
       (await nextFinish(h, finishes))(); await settle(h);
     } finally { h.close(); }
+  });
+});
+
+describe("Sessions API approvals (Taskana 4763)", () => {
+  const askOf = (toolName: string, input: unknown): PermissionRequest => ({
+    toolName, input, mode: "build",
+    metadata: { name: toolName, description: "", readOnly: false, destructive: false, riskLevel: "high", sideEffectScope: "workspace" } as unknown as PermissionRequest["metadata"],
+  });
+
+  it("T12 communicationPendingApprovals shows a description and never the input; ExitPlanMode and AskUserQuestion are not answerable; an inline child's ask is listed under the parent", () => {
+    const { h } = fixture();
+    void h.broker.requestPermission(askOf("Write", { file_path: "/workspace/big.txt", content: "X".repeat(100_000) }));
+    void h.broker.requestPermission(askOf("ExitPlanMode", { plan: "step one" }));
+    void h.broker.requestPermission(askOf("AskUserQuestion", { questions: [] }));
+    void h.broker.requestPermission(askOf("Bash", { command: "echo from-inline-child" }));
+    const list = h.session.communicationPendingApprovals();
+    expect(list.map((a) => a.tool)).toEqual(["Write", "ExitPlanMode", "AskUserQuestion", "Bash"]);
+    expect(list[0]).toEqual({ approvalId: expect.any(String), tool: "Write", description: "/workspace/big.txt", presented: true, expiresInMs: expect.any(Number), answerable: true });
+    expect(list[0]).not.toHaveProperty("input");
+    expect(JSON.stringify(list)).not.toContain("XXXXXXXX");
+    expect(list[1]).toMatchObject({ presented: false, expiresInMs: null, answerable: false });
+    expect(list[2]!.answerable).toBe(false);
+    expect(list[3]).toMatchObject({ tool: "Bash", description: "echo from-inline-child", answerable: true });
+  });
+
+  it("T13 communicationAnswerApproval allow and deny settle the ask; not_answerable does NOT settle it", async () => {
+    const { h } = fixture();
+    const allowed = h.broker.requestPermission(askOf("Bash", { command: "ls" }));
+    const allowId = h.session.communicationPendingApprovals()[0]!.approvalId;
+    expect(h.session.communicationAnswerApproval({ approvalId: allowId, decision: "allow" })).toEqual({ result: "answered" });
+    await expect(allowed).resolves.toEqual({ behavior: "allow" });
+
+    const denied = h.broker.requestPermission(askOf("Bash", { command: "rm -rf x" }));
+    const denyId = h.session.communicationPendingApprovals()[0]!.approvalId;
+    expect(h.session.communicationAnswerApproval({ approvalId: denyId, decision: "deny" })).toEqual({ result: "answered" });
+    await expect(denied).resolves.toEqual({ behavior: "deny", reason: "denied from the Sessions API" });
+
+    const plan = h.broker.requestPermission(askOf("ExitPlanMode", { plan: "p" }));
+    const planId = h.session.communicationPendingApprovals()[0]!.approvalId;
+    expect(h.session.communicationAnswerApproval({ approvalId: planId, decision: "allow" })).toEqual({ result: "not_answerable" });
+    expect(h.broker.pendingCount).toBe(1);
+    expect(h.session.communicationPendingApprovals()).toEqual([expect.objectContaining({ approvalId: planId, answerable: false })]);
+    h.broker.denyAll("test cleanup", "shutdown");
+    await expect(plan).resolves.toMatchObject({ behavior: "deny" });
+  });
+
+  it("T14 communicationAnswerApproval rejects a malformed payload at the host boundary and settles nothing", () => {
+    const { h } = fixture();
+    void h.broker.requestPermission(askOf("Bash", { command: "ls" }));
+    const approvalId = h.session.communicationPendingApprovals()[0]!.approvalId;
+    expect(() => h.session.communicationAnswerApproval({ approvalId, decision: "always" })).toThrow();
+    expect(() => h.session.communicationAnswerApproval({ decision: "allow" })).toThrow();
+    expect(() => h.session.communicationAnswerApproval({ approvalId, decision: "allow", updatedInput: {} })).toThrow();
+    expect(() => h.session.communicationAnswerApproval(null)).toThrow();
+    expect(h.broker.pendingCount).toBe(1);
   });
 });
 

@@ -97,7 +97,9 @@ import type {
 import { uiToHostMessageSchema } from "../shared/protocol.js";
 import { CHILD_STEER_QUEUE_MAX, type ChildCeilingSummary, type ChildRunStatus } from "../shared/child-sessions.js";
 import type { GitUiBridge } from "./git-bridge.js";
-import type { IpcPermissionBroker } from "./permission-broker.js";
+import type { ExternalAnswer, IpcPermissionBroker } from "./permission-broker.js";
+import { describeApproval } from "./approval-summary.js";
+import { z } from "zod";
 import { extractSnapshotPath, isSnapshotTool, readSnapshot } from "./snapshot-hook.js";
 import { PreviewArtifactCollector } from "./preview-artifacts.js";
 import { describeError, sanitizeAgentEvent } from "./serialize.js";
@@ -1055,6 +1057,16 @@ export interface PendingChildReportsOptions {
   ack: (id: string) => void;
 }
 
+/** Taskana 4763: asks that need a human reading or typing stay in AnyCode. */
+function isAnswerableApproval(toolName: string): boolean {
+  return toolName !== "ExitPlanMode" && toolName !== "AskUserQuestion";
+}
+
+const answerApprovalSchema = z.object({
+  approvalId: z.string().min(1).max(100),
+  decision: z.enum(["allow", "deny"]),
+}).strict();
+
 export class Session {
   private readonly outbound: Outbound;
   /**
@@ -1757,6 +1769,33 @@ export class Session {
     const turnId = this.turnId ?? undefined;
     this.onCancel();
     return turnId === undefined ? { cancelled: true } : { cancelled: true, turnId };
+  }
+
+  /**
+   * Taskana 4763: parked approvals for the Sessions API. `description` is the
+   * scrubbed one-line summary (never the raw input); `answerable` is false for
+   * the two asks that need a human reading or typing in AnyCode.
+   */
+  communicationPendingApprovals(): Array<{ approvalId: string; tool: string; description: string; presented: boolean; expiresInMs: number | null; answerable: boolean }> {
+    return this.broker.pendingSnapshot().map((ask) => ({
+      approvalId: ask.requestId,
+      tool: ask.toolName,
+      description: describeApproval(ask.toolName, ask.input),
+      presented: ask.presented,
+      expiresInMs: ask.expiresInMs,
+      answerable: isAnswerableApproval(ask.toolName),
+    }));
+  }
+
+  /**
+   * Taskana 4763: an answer from the Sessions API. A not-answerable ask is
+   * refused WITHOUT settling, so the UI modal stays the only way to answer it.
+   */
+  communicationAnswerApproval(raw: unknown): ExternalAnswer | { result: "not_answerable" } {
+    const input = answerApprovalSchema.parse(raw);
+    const tool = this.broker.pendingToolName(input.approvalId);
+    if (tool !== undefined && !isAnswerableApproval(tool)) return { result: "not_answerable" };
+    return this.broker.respondExternal(input.approvalId, input.decision);
   }
 
   private agentDeliveryObserver?: (delivery: AgentDelivery) => void;

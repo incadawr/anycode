@@ -35,6 +35,8 @@ export interface CommunicationControllerDeps {
   isSessionExposed(sessionId: string): boolean;
   /** Session handle for `list_sessions` (main-owned). */
   handleOf?(sessionId: string): string | undefined;
+  /** Taskana 4763: per-session External approvals switch (main-owned). Absent = no approvals anywhere. The env-file mode never gets it. */
+  isExternalApprovalEnabled?(sessionId: string): boolean;
   /** Number of sessions currently switched on, for the status line. */
   countExposed?(): number;
 }
@@ -98,6 +100,7 @@ export function createCommunicationController(deps: CommunicationControllerDeps)
         config: { workspaces: input.workspaces, port: input.port ?? 0 },
         isSessionExposed: (sessionId) => deps.isSessionExposed(sessionId),
         handleOf: deps.handleOf ? (sessionId) => deps.handleOf?.(sessionId) : undefined,
+        ...(deps.isExternalApprovalEnabled ? { isExternalApprovalEnabled: (sessionId: string) => deps.isExternalApprovalEnabled?.(sessionId) === true } : {}),
       });
       mode = "settings";
       return listening("listening", running, input.workspaces.length);

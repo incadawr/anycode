@@ -35,12 +35,12 @@ describe("production communication MCP over real SDK HTTP", () => {
     const client = new Client({ name: "portable-supervisor", version: "1" });
     await client.connect(new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL("../../../../examples/agent-communication/stdio.mjs", import.meta.url)), f.discoveryFile] }));
     cleanups.push(() => client.close());
-    expect((await client.listTools()).tools).toHaveLength(7);
+    expect((await client.listTools()).tools).toHaveLength(9);
     expect(value(await client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } })).engine).toBe("codex");
   });
   it("initializes, lists/calls tools and enforces auth, origin and workspace scope", async () => {
     const f = await fixture();
-    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "cancel_turn"]);
+    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "list_pending_approvals", "answer_approval", "cancel_turn"]);
     expect(value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(["allowed"]);
     expect(value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } })).state).toBe("idle");
     expect((await f.client.callTool({ name: "send_message", arguments: { sessionId: "forbidden", payload: "no", mode: "next_turn" } })).isError).toBe(true);
@@ -228,9 +228,9 @@ describe("session handles and wait_for_result (Taskana 4750b)", () => {
     expect(sessions.every((s) => !("handle" in s))).toBe(true);
   });
 
-  it("tools list now has 7 tools in order (cancel_turn appended, Taskana 4763)", async () => {
+  it("tools list now has 9 tools in order (approval tools before cancel_turn, Taskana 4763)", async () => {
     const f = await waitFixture();
-    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "cancel_turn"]);
+    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "list_pending_approvals", "answer_approval", "cancel_turn"]);
   });
 
   it("wait_for_result resolves done for messageId", async () => {
@@ -407,6 +407,164 @@ describe("Sessions API cancel_turn (Taskana 4763)", () => {
       expect((result.content as Array<{ text: string }>)[0]!.text).toBe("Session unavailable or outside authorized workspace");
     }
     expect(f.request.mock.calls.filter((c) => c[1] === "cancel_turn")).toHaveLength(0);
+  });
+});
+
+/** A live-config server with the per-session approval switch wired (Taskana 4763). */
+async function approvalFixture(options: { approvals: Set<string>; exposed: Set<string>; request?: (session: string, op: string, payload?: unknown) => Promise<unknown> | unknown }) {
+  const dir = await mkdtemp(join(tmpdir(), "anycode-approvals-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
+  const discoveryFile = join(dir, "endpoint.json");
+  const tabs = [
+    { sessionId: "on", workspace: dir, state: "running", pid: 10 },
+    { sessionId: "off-approvals", workspace: dir, state: "running", pid: 11 },
+    { sessionId: "unshared-approving", workspace: dir, state: "running", pid: 12 },
+    { sessionId: "child", workspace: dir, state: "running", pid: 13, childOf: { parentTabId: "on", requestId: "req-1" } },
+  ];
+  const request = vi.fn(async (session: string, op: string, payload?: unknown) => {
+    const custom = options.request ? await options.request(session, op, payload) : undefined;
+    if (custom !== undefined) return custom;
+    if (op === "list_pending_approvals") return [];
+    if (op === "cancel_turn") return { cancelled: false, reason: "idle" };
+    return undefined;
+  });
+  const manager = { listTabs: () => tabs, communicationRequest: request };
+  const service = await startCommunicationServer({
+    manager, config: { workspaces: [dir], discoveryFile }, userData: dir,
+    isSessionExposed: (id) => options.exposed.has(id),
+    isExternalApprovalEnabled: (id) => options.approvals.has(id),
+  });
+  cleanups.push(() => service.close());
+  const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string };
+  const client = new Client({ name: "approvals-test", version: "1" });
+  await client.connect(new StreamableHTTPClientTransport(new URL(discovery.url), { requestInit: { headers: { Authorization: `Bearer ${discovery.token}` } } }));
+  cleanups.push(() => client.close());
+  return { client, request, service, dir };
+}
+const errorText = (result: unknown): string => (result as { content: Array<{ text: string }> }).content[0]!.text;
+
+describe("External approvals on the Sessions API (Taskana 4763)", () => {
+  it("T15 approval tools are listed with strict schemas (extra key and a bad decision are rejected)", async () => {
+    const f = await approvalFixture({ approvals: new Set(), exposed: new Set(["on"]) });
+    const tools = (await f.client.listTools()).tools;
+    expect(tools.map((t) => t.name)).toEqual(expect.arrayContaining(["list_pending_approvals", "answer_approval"]));
+    expect(tools.find((t) => t.name === "answer_approval")?.inputSchema).toMatchObject({ additionalProperties: false, required: ["sessionId", "approvalId", "decision"] });
+    expect((await f.client.callTool({ name: "answer_approval", arguments: { sessionId: "on", approvalId: "a", decision: "always" } })).isError).toBe(true);
+    expect((await f.client.callTool({ name: "answer_approval", arguments: { sessionId: "on", approvalId: "a", decision: "allow", remember: true } })).isError).toBe(true);
+    expect(f.request.mock.calls.filter((c) => c[1] === "answer_approval")).toHaveLength(0);
+  });
+
+  it("T18 with the switch off (or the option absent) the sessionId forms throw the fixed error and the host is not called", async () => {
+    const f = await approvalFixture({ approvals: new Set(), exposed: new Set(["on"]) });
+    const list = await f.client.callTool({ name: "list_pending_approvals", arguments: { sessionId: "on" } });
+    expect(list.isError).toBe(true);
+    expect(errorText(list)).toBe("External approval is off for this session");
+    const answer = await f.client.callTool({ name: "answer_approval", arguments: { sessionId: "on", approvalId: "a", decision: "allow" } });
+    expect(errorText(answer)).toBe("External approval is off for this session");
+    expect(f.request.mock.calls.filter((c) => c[1] === "list_pending_approvals" || c[1] === "answer_approval")).toHaveLength(0);
+  });
+
+  it("T19 with the switch on, the list returns exactly the whitelisted fields even if the host returns input or updatedInput", async () => {
+    const f = await approvalFixture({
+      approvals: new Set(["on"]), exposed: new Set(["on"]),
+      request: (_s, op) => (op === "list_pending_approvals" ? [{ approvalId: "a1", tool: "Write", description: "/w/a.txt", presented: true, expiresInMs: 5000, answerable: true, input: { content: "SECRET_BODY" }, updatedInput: { x: "SECRET_UPDATE" } }] : undefined),
+    });
+    const body = value(await f.client.callTool({ name: "list_pending_approvals", arguments: { sessionId: "on" } }));
+    expect(body).toEqual({ approvals: [{ sessionId: "on", approvalId: "a1", tool: "Write", description: "/w/a.txt", presented: true, expiresInMs: 5000, answerable: true }], truncated: false });
+    expect(JSON.stringify(body)).not.toContain("SECRET");
+  });
+
+  it("T20 aggregate list: only sessions with both switches on; a failing tab is skipped; 60 approvals -> 50 and truncated; child entries carry childOf", async () => {
+    const many = Array.from({ length: 60 }, (_, i) => ({ approvalId: `c${i}`, tool: "Bash", description: "ls", presented: i === 0, expiresInMs: null, answerable: true }));
+    const f = await approvalFixture({
+      approvals: new Set(["on", "child", "unshared-approving"]), exposed: new Set(["on", "off-approvals", "child"]),
+      request: (session, op) => {
+        if (op !== "list_pending_approvals") return undefined;
+        if (session === "on") throw new Error("boom");
+        return many;
+      },
+    });
+    const body = value(await f.client.callTool({ name: "list_pending_approvals", arguments: {} }));
+    expect(body.approvals).toHaveLength(50);
+    expect(body.truncated).toBe(true);
+    expect(body.approvals.every((a: { sessionId: string }) => a.sessionId === "child")).toBe(true);
+    expect(body.approvals[0]).toMatchObject({ childOf: { parentTabId: "on", requestId: "req-1" } });
+    const asked = f.request.mock.calls.filter((c) => c[1] === "list_pending_approvals").map((c) => c[0]);
+    expect(asked).not.toContain("off-approvals");
+    expect(asked).not.toContain("unshared-approving");
+  });
+
+  it("T21 the access switch wins: an approving but unshared session is unavailable", async () => {
+    const f = await approvalFixture({ approvals: new Set(["unshared-approving"]), exposed: new Set(["on"]) });
+    for (const call of [
+      { name: "list_pending_approvals", arguments: { sessionId: "unshared-approving" } },
+      { name: "answer_approval", arguments: { sessionId: "unshared-approving", approvalId: "a", decision: "deny" } },
+    ]) {
+      expect(errorText(await f.client.callTool(call))).toBe("Session unavailable or outside authorized workspace");
+    }
+    expect(f.request.mock.calls.filter((c) => c[0] === "unshared-approving")).toHaveLength(0);
+  });
+
+  it("T22 answer_approval statuses map correctly and none is an error", async () => {
+    const f = await approvalFixture({
+      approvals: new Set(["on"]), exposed: new Set(["on"]),
+      request: (_s, op, payload) => {
+        if (op !== "answer_approval") return undefined;
+        const id = (payload as { approvalId: string }).approvalId;
+        if (id === "a-ok") return { result: "answered" };
+        if (id === "a-dup") return { result: "already_answered", settledBy: "ui" };
+        if (id === "a-plan") return { result: "not_answerable" };
+        return { result: "not_found" };
+      },
+    });
+    const call = async (approvalId: string) => f.client.callTool({ name: "answer_approval", arguments: { sessionId: "on", approvalId, decision: "allow" } });
+    expect(value(await call("a-ok"))).toEqual({ sessionId: "on", approvalId: "a-ok", status: "answered", decision: "allow" });
+    expect(value(await call("a-dup"))).toEqual({ sessionId: "on", approvalId: "a-dup", status: "already_answered", settledBy: "ui" });
+    expect(value(await call("a-plan"))).toEqual({ sessionId: "on", approvalId: "a-plan", status: "not_answerable" });
+    expect(value(await call("a-gone"))).toEqual({ sessionId: "on", approvalId: "a-gone", status: "not_found" });
+    for (const id of ["a-ok", "a-dup", "a-plan", "a-gone"]) expect((await call(id)).isError).toBeFalsy();
+  });
+
+  it("T23 two concurrent answers for one approval: exactly one answered, one already_answered", async () => {
+    let settled = false;
+    const f = await approvalFixture({
+      approvals: new Set(["on"]), exposed: new Set(["on"]),
+      request: async (_s, op) => {
+        if (op !== "answer_approval") return undefined;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        if (settled) return { result: "already_answered", settledBy: "external" };
+        settled = true;
+        return { result: "answered" };
+      },
+    });
+    const call = () => f.client.callTool({ name: "answer_approval", arguments: { sessionId: "on", approvalId: "race", decision: "allow" } });
+    const [first, second] = [value(await call()), value(await call())];
+    expect([first.status, second.status].sort()).toEqual(["already_answered", "answered"]);
+  });
+
+  it("T24 live switches: turning approvals off takes effect on the next call; turning access off hides the session from both tools", async () => {
+    const approvals = new Set(["on"]);
+    const exposed = new Set(["on"]);
+    const f = await approvalFixture({ approvals, exposed, request: (_s, op) => (op === "answer_approval" ? { result: "answered" } : undefined) });
+    expect(value(await f.client.callTool({ name: "answer_approval", arguments: { sessionId: "on", approvalId: "a", decision: "allow" } })).status).toBe("answered");
+    approvals.delete("on");
+    expect(errorText(await f.client.callTool({ name: "answer_approval", arguments: { sessionId: "on", approvalId: "a", decision: "allow" } }))).toBe("External approval is off for this session");
+    approvals.add("on");
+    exposed.delete("on");
+    expect(errorText(await f.client.callTool({ name: "list_pending_approvals", arguments: { sessionId: "on" } }))).toBe("Session unavailable or outside authorized workspace");
+    expect(value(await f.client.callTool({ name: "list_pending_approvals", arguments: {} })).approvals).toEqual([]);
+  });
+
+  it("T25 list_sessions carries externalApproval only when the option is wired; the legacy env-file server never allows approvals", async () => {
+    const wired = await approvalFixture({ approvals: new Set(["on"]), exposed: new Set(["on", "off-approvals", "child"]) });
+    const sessions = value(await wired.client.callTool({ name: "list_sessions", arguments: {} })).sessions as Array<{ sessionId: string; externalApproval?: boolean }>;
+    expect(Object.fromEntries(sessions.map((s) => [s.sessionId, s.externalApproval]))).toEqual({ on: true, "off-approvals": false, child: false });
+
+    const legacy = await fixture();
+    const legacySessions = value(await legacy.client.callTool({ name: "list_sessions", arguments: {} })).sessions as Array<Record<string, unknown>>;
+    expect(legacySessions.length).toBeGreaterThan(0);
+    for (const s of legacySessions) expect(s).not.toHaveProperty("externalApproval");
+    expect(errorText(await legacy.client.callTool({ name: "list_pending_approvals", arguments: { sessionId: "allowed" } }))).toBe("External approval is off for this session");
+    expect(legacy.request.mock.calls.filter((c) => c[1] === "answer_approval" || c[1] === "list_pending_approvals")).toHaveLength(0);
   });
 });
 

@@ -40,6 +40,7 @@ import {
   COMMUNICATION_SET_ENABLED_CHANNEL,
   COMMUNICATION_SET_PORT_CHANNEL,
   COMMUNICATION_SET_SESSION_ACCESS_CHANNEL,
+  COMMUNICATION_SET_SESSION_APPROVALS_CHANNEL,
   COMMUNICATION_SET_SESSION_HANDLE_CHANNEL,
   type CommunicationCopyClient,
   type CommunicationCopyConfigResult,
@@ -1121,6 +1122,8 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(COMMUNICATION_SET_SESSION_ACCESS_CHANNEL, { tabId, enabled }) as Promise<CommunicationMutationResult>,
     setSessionHandle: (tabId: string, handle: string | null): Promise<CommunicationHandleResult> =>
       ipcRenderer.invoke(COMMUNICATION_SET_SESSION_HANDLE_CHANNEL, { tabId, handle }) as Promise<CommunicationHandleResult>,
+    setSessionApprovals: (tabId: string, enabled: boolean): Promise<CommunicationMutationResult> =>
+      ipcRenderer.invoke(COMMUNICATION_SET_SESSION_APPROVALS_CHANNEL, { tabId, enabled }) as Promise<CommunicationMutationResult>,
   },
   // Taskana 4758: the Settings scope dropdown's folder list. Opaque ids and
   // display fields only; no path is ever sent back through this bridge.

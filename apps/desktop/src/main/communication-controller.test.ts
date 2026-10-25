@@ -177,3 +177,22 @@ describe("communication controller (Taskana 4747) — settings-driven live serve
     expect(JSON.stringify(c.status())).not.toContain("communication.json");
   });
 });
+
+describe("External approvals wiring (Taskana 4763)", () => {
+  it("T28 isExternalApprovalEnabled reaches startServer in the settings path; the legacy env path passes none", async () => {
+    const live = deps({ isExternalApprovalEnabled: (id: string) => id === "a" });
+    const controller = createCommunicationController(live.d);
+    await controller.apply({ enabled: true, workspaces: ["/abs/one"] });
+    const options = live.server.starts[0] as { isExternalApprovalEnabled?: (id: string) => boolean };
+    expect(typeof options.isExternalApprovalEnabled).toBe("function");
+    expect(options.isExternalApprovalEnabled!("a")).toBe(true);
+    expect(options.isExternalApprovalEnabled!("b")).toBe(false);
+    await controller.dispose();
+
+    const env = deps({ isExternalApprovalEnabled: () => true, env: () => "/abs/config.json" });
+    const envController = createCommunicationController(env.d);
+    await envController.apply({ enabled: false, workspaces: [] });
+    expect(env.server.starts[0]).not.toHaveProperty("isExternalApprovalEnabled");
+  });
+});
+

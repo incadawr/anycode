@@ -112,6 +112,14 @@ export function sessionSwitchDisabledReason(envControlled: boolean, hasTab: bool
   return null;
 }
 
+/** Taskana 4763: per-session External approvals switch (shown only while the session is shared). */
+export const SESSION_APPROVALS_ARIA_LABEL = "Allow approving this session's tool requests from outside";
+export const SESSION_APPROVALS_NOTE = "Whoever holds the Sessions API token can allow or deny this session's tool requests.";
+
+export function sessionApprovalsLabel(enabled: boolean): string {
+  return enabled ? "External approvals on" : "External approvals off";
+}
+
 export const SESSION_HANDLE_LABEL = "Handle (optional)";
 export const SESSION_HANDLE_PLACEHOLDER = "e.g. build-bot";
 

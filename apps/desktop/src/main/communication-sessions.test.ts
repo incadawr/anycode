@@ -250,3 +250,34 @@ describe("session handles (Taskana 4750b)", () => {
     expect(handleStore(false).getHandle("a")).toBeUndefined();
   });
 });
+
+describe("External approvals store (Taskana 4763)", () => {
+  const approvalsFile = () => join(dir, "communication-approvals.json");
+  const approvals = () => createSessionAccessStore({ file: approvalsFile(), defaultOn: () => false });
+  it("T29 defaults off for a new root (even when sharing defaults on), inherits from the parent, persists across instances, and a corrupt file reads as all off", async () => {
+    defaultOn = true;
+    const a = approvals();
+    a.register({ sessionId: "root" });
+    expect(a.isExposed("root")).toBe(false);
+    a.set("root", true);
+    a.register({ sessionId: "child-of-on", parentSessionId: "root" });
+    expect(a.isExposed("child-of-on")).toBe(true);
+    a.register({ sessionId: "off-parent" });
+    a.register({ sessionId: "child-of-off", parentSessionId: "off-parent" });
+    expect(a.isExposed("child-of-off")).toBe(false);
+    const reopened = approvals();
+    expect(reopened.isExposed("root")).toBe(true);
+    expect(reopened.isExposed("child-of-on")).toBe(true);
+    await writeFile(approvalsFile(), "{not json");
+    const corrupt = approvals();
+    expect(corrupt.isExposed("root")).toBe(false);
+    expect(corrupt.isExposed("child-of-on")).toBe(false);
+  });
+  it("a resumed session keeps its own approval value", () => {
+    const a = approvals();
+    a.register({ sessionId: "s" }); a.set("s", true);
+    a.register({ sessionId: "s", parentSessionId: "parent-off" });
+    expect(a.isExposed("s")).toBe(true);
+  });
+});
+

@@ -625,6 +625,7 @@ declare global {
         setDefaultAccess(access: "off" | "on"): Promise<CommunicationMutationResult>;
         setSessionAccess(tabId: string, enabled: boolean): Promise<CommunicationMutationResult>;
         setSessionHandle(tabId: string, handle: string | null): Promise<CommunicationHandleResult>;
+        setSessionApprovals(tabId: string, enabled: boolean): Promise<CommunicationMutationResult>;
       };
       // Taskana 4758: the Settings scope dropdown's folder list (opaque ids only).
       scopeWorkspaces: {
