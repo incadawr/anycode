@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.41] — 2026-10-25
+
 ### Added
 
 - Sessions API: `create_session` — an external agent can open a new tab in a project where the sidebar ⋯ switch "Allow agents to open tasks here" is on (off by default, trusted folders only, at most 5 per minute and 8 alive). New tabs are shared immediately and marked "agent". `send_message` schema errors now name the expected fields; `get_session_status` and `get_session_result` now agree on `state`.
