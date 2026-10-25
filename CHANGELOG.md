@@ -14,6 +14,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Settings → Language servers: each catalog server has one Turn on / Turn off button that follows the scope dropdown (User = all projects, a folder = that project) instead of separate "this project" and "all projects" buttons.
 - The release self-check now opens every Settings pane in the packaged app and fails if one blanks the window, shows its error fallback or leaves a modal over the window.
 - Settings → MCP, Language servers, Skills and Subagents: one scope dropdown (`User · This computer` or a recent folder, with a count chip) replaces the Global/Project switcher. Folders come from your recent sessions and open tabs; folders without an open tab can be edited, and a folder that no longer exists is shown disabled.
 - The empty Timeline side panel is gone: the conversation now has a slim

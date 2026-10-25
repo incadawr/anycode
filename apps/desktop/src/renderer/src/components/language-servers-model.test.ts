@@ -23,6 +23,7 @@ import {
   formatCommandLine,
   lspRefusalMessage,
   parseExtensions,
+  catalogRowAction,
   projectEnableDisabledReason,
   sortEntryViews,
   splitArgs,
@@ -294,5 +295,24 @@ describe("formatCommandLine / sortEntryViews / lspRefusalMessage", () => {
     );
     expect(new Set(messages).size).toBe(5);
     expect(messages.every((message) => message.length > 0)).toBe(true);
+  });
+});
+
+describe("catalogRowAction — one button driven by the scope dropdown", () => {
+  const row = (project: boolean, user: boolean) => ({ entry: { label: "Go" }, enabled: { project, user } });
+
+  it("User · This computer (no project resolved) turns a server on/off for all projects", () => {
+    expect(catalogRowAction(row(false, false), false)).toMatchObject({ kind: "enable", scope: "user", label: "Turn on", ariaLabel: "Turn on Go for all projects", inheritedNote: null });
+    expect(catalogRowAction(row(true, true), false)).toMatchObject({ kind: "remove", scope: "user", label: "Turn off" });
+  });
+
+  it("a selected folder turns a server on/off for that project only", () => {
+    expect(catalogRowAction(row(false, false), true)).toMatchObject({ kind: "enable", scope: "project", ariaLabel: "Turn on Go for this project" });
+    expect(catalogRowAction(row(true, false), true)).toMatchObject({ kind: "remove", scope: "project" });
+  });
+
+  it("a folder view notes a server that is already on for every project", () => {
+    expect(catalogRowAction(row(false, true), true)).toMatchObject({ kind: "enable", scope: "project", inheritedNote: "On for all projects" });
+    expect(catalogRowAction(row(true, true), true).inheritedNote).toBeNull();
   });
 });

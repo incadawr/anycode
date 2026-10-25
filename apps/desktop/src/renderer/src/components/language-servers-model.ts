@@ -222,6 +222,37 @@ export function projectEnableDisabledReason(projectScopeAvailable: boolean): str
   return projectScopeAvailable ? null : "No project is open";
 }
 
+/**
+ * The one catalog-row action for the scope chosen in the Settings scope
+ * dropdown: "User · This computer" (no project resolved) targets the user
+ * config = every project; a folder targets that project. Replaces the old
+ * pair of "Enable for this project" / "Enable for all projects" buttons.
+ */
+export interface CatalogRowAction {
+  kind: "enable" | "remove";
+  scope: LspConfigScope;
+  label: string;
+  ariaLabel: string;
+  /** Shown on the row when viewing a project and the server is already on for every project. */
+  inheritedNote: string | null;
+}
+
+export function catalogRowAction(
+  row: { entry: { label: string }; enabled: { project: boolean; user: boolean } },
+  projectScopeAvailable: boolean,
+): CatalogRowAction {
+  const scope: LspConfigScope = projectScopeAvailable ? "project" : "user";
+  const on = scope === "project" ? row.enabled.project : row.enabled.user;
+  const where = scope === "project" ? "this project" : "all projects";
+  return {
+    kind: on ? "remove" : "enable",
+    scope,
+    label: on ? "Turn off" : "Turn on",
+    ariaLabel: `${on ? "Turn off" : "Turn on"} ${row.entry.label} for ${where}`,
+    inheritedNote: scope === "project" && !row.enabled.project && row.enabled.user ? "On for all projects" : null,
+  };
+}
+
 // ── notices (plain text, always rendered by the pane) ──
 
 export const NEW_SESSIONS_NOTICE = "Changes apply to new sessions and tabs; open tabs keep the servers they started with.";

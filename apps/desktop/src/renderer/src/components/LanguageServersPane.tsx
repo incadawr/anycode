@@ -33,7 +33,7 @@ import {
   canSubmitCustomForm,
   formatCommandLine,
   lspRefusalMessage,
-  projectEnableDisabledReason,
+  catalogRowAction,
   sortEntryViews,
   trustNotice,
   validateCustomForm,
@@ -160,7 +160,6 @@ export function LanguageServersPane({ tabId, bridge = window.anycode.lspConfig, 
   const rows = status ? buildCatalogRows(status) : [];
   const projectEntries = status?.entries.project !== undefined && status.entries.project !== null ? sortEntryViews(status.entries.project) : [];
   const userEntries = status ? sortEntryViews(status.entries.user) : [];
-  const projectReason = status ? projectEnableDisabledReason(status.projectScopeAvailable) : null;
 
   return (
     <section className="settings-section lsp-pane" aria-label="Language servers">
@@ -229,46 +228,22 @@ export function LanguageServersPane({ tabId, bridge = window.anycode.lspConfig, 
                   </div>
                 </div>
                 <div className="mcp-row-controls">
-                  {row.enabled.project ? (
-                    <button
-                      type="button"
-                      className="settings-button"
-                      aria-label={`Remove ${row.entry.label} from this project`}
-                      onClick={() => disable(row.entry.id, "project")}
-                    >
-                      Remove (project)
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="settings-button"
-                      disabled={projectReason !== null}
-                      title={projectReason ?? undefined}
-                      aria-label={`Enable ${row.entry.label} for this project`}
-                      onClick={() => enable(row, "project")}
-                    >
-                      Enable for this project
-                    </button>
-                  )}
-                  {row.enabled.user ? (
-                    <button
-                      type="button"
-                      className="settings-button"
-                      aria-label={`Remove ${row.entry.label} from all projects`}
-                      onClick={() => disable(row.entry.id, "user")}
-                    >
-                      Remove (all projects)
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="settings-button"
-                      aria-label={`Enable ${row.entry.label} for all projects`}
-                      onClick={() => enable(row, "user")}
-                    >
-                      Enable for all projects
-                    </button>
-                  )}
+                  {(() => {
+                    const action = catalogRowAction(row, status?.projectScopeAvailable ?? false);
+                    return (
+                      <>
+                        {action.inheritedNote !== null && <span className="mcp-row-hint">{action.inheritedNote}</span>}
+                        <button
+                          type="button"
+                          className={action.kind === "enable" ? "settings-button settings-button-primary" : "settings-button"}
+                          aria-label={action.ariaLabel}
+                          onClick={() => (action.kind === "enable" ? enable(row, action.scope) : disable(row.entry.id, action.scope))}
+                        >
+                          {action.label}
+                        </button>
+                      </>
+                    );
+                  })()}
                 </div>
               </li>
             ))}
