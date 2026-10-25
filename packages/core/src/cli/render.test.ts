@@ -1245,7 +1245,25 @@ describe("stream_retry past the announced total (Taskana 4705 review)", () => {
       [{ type: "stream_retry", attempt: 9, maxAttempts: 8, delayMs: 100, reason: "network" }],
       NOCOLOR,
     );
-    expect(text).toContain("[retry 9 in 100ms: network]");
+    expect(text).toContain("[retry 9 in 0.1 s: network]");
     expect(text).not.toContain("9/8");
+  });
+});
+
+describe("stream_retry delay and waiting_for_network (Taskana 4772)", () => {
+  it("renders the delay in seconds with one decimal, not raw float milliseconds", () => {
+    expect(collect([{ type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 791.1655902966864, reason: "connect timeout" }], NOCOLOR)).toContain(
+      "[retry 1/8 in 0.8 s: connect timeout]",
+    );
+    expect(collect([{ type: "stream_retry", attempt: 2, maxAttempts: 8, delayMs: 500, reason: "x" }], NOCOLOR)).toContain(
+      "[retry 2/8 in 0.5 s: x]",
+    );
+    expect(collect([{ type: "stream_retry", attempt: 3, maxAttempts: 8, delayMs: 1500, reason: "x" }], NOCOLOR)).toContain(
+      "[retry 3/8 in 1.5 s: x]",
+    );
+  });
+
+  it("renders a waiting_for_network line", () => {
+    expect(collect([{ type: "waiting_for_network" }], NOCOLOR)).toContain("[waiting for network…]");
   });
 });

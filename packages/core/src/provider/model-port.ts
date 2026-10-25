@@ -68,6 +68,7 @@ import type { EndpointConfig } from "./endpoint.js";
 import { classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
 import { createLanguageModel } from "./language-model.js";
 import type { ProviderQuotaUpdate } from "./quota.js";
+import type { NetworkWaiter } from "./network-waiter.js";
 import { DEFAULT_RETRY_POLICY, isRetryableStreamError, isTransientNetworkError, retryDelayMs, type RetryPolicy } from "./retry.js";
 import { toSdkMessages, toSdkTools } from "./sdk-mapping.js";
 import { describeStreamArtifact, isIgnorableStreamArtifact } from "./stream-artifacts.js";
@@ -372,6 +373,56 @@ function abortableDelay(ms: number, signal: AbortSignal | undefined): Promise<vo
   });
 }
 
+/** Taskana 4772: first probe tick while waiting for the network; doubles per failed tick up to the cap. */
+const NETWORK_WAIT_FIRST_TICK_MS = 5_000;
+const NETWORK_WAIT_MAX_TICK_MS = 60_000;
+
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException("Aborted", "AbortError");
+}
+
+/** A probe is a best-effort answer: a waiter that throws is treated as offline. */
+async function probeNetwork(waiter: NetworkWaiter, baseUrl: string, signal: AbortSignal | undefined): Promise<boolean> {
+  try {
+    return await waiter.probe(baseUrl, signal);
+  } catch {
+    return false;
+  }
+}
+
+/** Shared wake state of one waiting episode: `hinted` survives until consumed; `wake` ends the current tick wait early. */
+interface HintBox {
+  hinted: boolean;
+  wake?: () => void;
+}
+
+/**
+ * Resolves after `ms`, or at once when the hint box is woken, and rejects
+ * (with the abort reason) as soon as `signal` aborts. Clears its timer on every exit.
+ */
+function waitTickOrHint(ms: number, box: HintBox, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const finish = (): void => {
+      clearTimeout(timer);
+      box.wake = undefined;
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const onAbort = (): void => {
+      finish();
+      reject(abortReason(signal as AbortSignal));
+    };
+    const timer = setTimeout(() => {
+      finish();
+      resolve();
+    }, ms);
+    box.wake = () => {
+      finish();
+      resolve();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 /**
  * Waits for the iterator's next result, racing it against an abortable
  * `stallTimeoutMs` watchdog (unarmed when <= 0) and `signal`. A genuine abort
@@ -618,6 +669,52 @@ export class AiSdkModelPort implements ModelPort {
     });
   }
 
+  /**
+   * Taskana 4772: parks a pre-content transient network failure. Yields
+   * `waiting_for_network` once, then probes on a 5 s -> 60 s tick (or at once
+   * when the waiter reports a hint) until the endpoint answers. Returns the
+   * episode's monotonic duration on recovery. Throws `error` (the last
+   * transient failure, unchanged) once the cumulative wait reaches
+   * `maxWaitMs`. Stop (`signal`) rejects at once.
+   */
+  async *#awaitNetworkRecovery(
+    waiter: NetworkWaiter,
+    error: unknown,
+    spentBeforeMs: number,
+    maxWaitMs: number,
+    signal: AbortSignal | undefined,
+  ): AsyncGenerator<ModelStreamEvent, number, void> {
+    const episodeStart = waiter.monotonicNow();
+    const elapsedMs = (): number => waiter.monotonicNow() - episodeStart;
+    const box: HintBox = { hinted: false };
+    const unsubscribe = waiter.onHint?.(() => {
+      box.hinted = true;
+      box.wake?.();
+    });
+    try {
+      yield { type: "waiting_for_network" };
+      let tickMs = NETWORK_WAIT_FIRST_TICK_MS;
+      for (;;) {
+        if (signal?.aborted) throw abortReason(signal);
+        const remainingMs = maxWaitMs - spentBeforeMs - elapsedMs();
+        if (remainingMs <= 0) throw error;
+        let fromHint = box.hinted;
+        if (!fromHint) {
+          await waitTickOrHint(Math.min(tickMs, remainingMs), box, signal);
+          fromHint = box.hinted;
+        }
+        box.hinted = false;
+        if (await probeNetwork(waiter, this.config.baseUrl, signal)) {
+          return elapsedMs();
+        }
+        // Only a timer-driven miss backs the tick off; a hint-driven probe keeps the schedule.
+        if (!fromHint) tickMs = Math.min(tickMs * 2, NETWORK_WAIT_MAX_TICK_MS);
+      }
+    } finally {
+      unsubscribe?.();
+    }
+  }
+
   async *streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
     const policy = resolveRetryPolicy(this.config.retry);
     let attempt = 0;
@@ -625,6 +722,8 @@ export class AiSdkModelPort implements ModelPort {
     let midStreamRetries = 0;
     // Time of this step's first retryable failure; anchors networkRetryBudgetMs.
     let firstFailureAt: number | undefined;
+    // Taskana 4772: monotonic time this step has already spent waiting for the network (all episodes).
+    let networkWaitSpentMs = 0;
     // Count-bounded retry gate; past maxRetries only a transient NETWORK error
     // may continue, and only inside the wall-clock budget (0 retries = off).
     const mayRetry = (error: unknown): boolean => {
@@ -634,6 +733,16 @@ export class AiSdkModelPort implements ModelPort {
       if (!isTransientNetworkError(error)) return false;
       return Date.now() - firstFailureAt < policy.networkRetryBudgetMs;
     };
+    // Taskana 4772: with a network waiter, a pre-content transient network failure
+    // is also retryable past the count and the wall-clock budget: the seam below
+    // waits for the network instead of failing the turn.
+    const mayRetryOrWait = (error: unknown, hadOutput: boolean): boolean =>
+      mayRetry(error) ||
+      (!hadOutput &&
+        this.config.networkWaiter !== undefined &&
+        policy.maxRetries > 0 &&
+        policy.networkWaitMaxMs > 0 &&
+        isTransientNetworkError(error));
     // TASK.168: the failure that STARTED the include_usage probe, carried
     // from that attempt to the very next one (the probe retry) — see
     // `ProbeFailure`'s docstring.
@@ -805,7 +914,7 @@ export class AiSdkModelPort implements ModelPort {
             !completedFinish &&
             (hadModelOutput ? midStreamRetries < policy.midStreamRetries : true) &&
             isRetryableStreamError(event.error) &&
-            mayRetry(event.error) &&
+            mayRetryOrWait(event.error, hadModelOutput) &&
             !request.abortSignal?.aborted
           ) {
             if (hadModelOutput) midStreamRetries += 1;
@@ -861,7 +970,7 @@ export class AiSdkModelPort implements ModelPort {
           !completedFinish &&
           (hadModelOutput ? midStreamRetries < policy.midStreamRetries : true) &&
           isRetryableStreamError(error) &&
-          mayRetry(error) &&
+          mayRetryOrWait(error, hadModelOutput) &&
           !request.abortSignal?.aborted
         ) {
           if (hadModelOutput) midStreamRetries += 1;
@@ -906,7 +1015,7 @@ export class AiSdkModelPort implements ModelPort {
         if (
           !hadModelOutput &&
           isRetryableStreamError(failure.error) &&
-          mayRetry(failure.error) &&
+          mayRetryOrWait(failure.error, hadModelOutput) &&
           !request.abortSignal?.aborted
         ) {
           pendingRetryError = failure.error;
@@ -941,7 +1050,37 @@ export class AiSdkModelPort implements ModelPort {
         return;
       }
 
-      const delayMs = retryDelayMs(attempt, pendingRetryError, policy);
+      // Taskana 4772: a pre-content transient network failure with a waiter
+      // first gets a gate probe (only while the count budget lasts; a server
+      // blip on a reachable network keeps the ordinary backoff). If the endpoint
+      // is unreachable, the turn waits for the network instead of failing.
+      let recoveredAfterMs: number | undefined;
+      const networkWaiter = this.config.networkWaiter;
+      if (
+        networkWaiter !== undefined &&
+        !hadModelOutput &&
+        policy.networkWaitMaxMs > 0 &&
+        isTransientNetworkError(pendingRetryError)
+      ) {
+        const online =
+          attempt < policy.maxRetries && (await probeNetwork(networkWaiter, this.config.baseUrl, request.abortSignal));
+        if (!online) {
+          recoveredAfterMs = yield* this.#awaitNetworkRecovery(
+            networkWaiter,
+            pendingRetryError,
+            networkWaitSpentMs,
+            policy.networkWaitMaxMs,
+            request.abortSignal,
+          );
+          networkWaitSpentMs += recoveredAfterMs;
+        }
+      }
+
+      // A recovered wait already was the backoff: the replay follows at once.
+      const delayMs =
+        recoveredAfterMs !== undefined
+          ? Math.round(recoveredAfterMs)
+          : retryDelayMs(attempt, pendingRetryError, policy);
       attempt += 1;
       yield {
         type: "stream_retry",
@@ -950,7 +1089,9 @@ export class AiSdkModelPort implements ModelPort {
         delayMs,
         reason: describeRetryReason(pendingRetryError),
       };
-      await abortableDelay(delayMs, request.abortSignal);
+      if (recoveredAfterMs === undefined) {
+        await abortableDelay(delayMs, request.abortSignal);
+      }
       // Falls through to the top of the loop: the whole step is replayed.
     }
   }

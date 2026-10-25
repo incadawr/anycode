@@ -110,6 +110,14 @@ export type ModelStreamEvent =
   /** Emitted by the provider adapter before each retry of a not-yet-started stream (design §2.9). */
   | { type: "stream_retry"; attempt: number; maxAttempts: number; delayMs: number; reason: string }
   /**
+   * Taskana 4772: the adapter parked a pre-content transient network failure and
+   * is probing until the endpoint is reachable again (or the wait bound is hit,
+   * which ends the turn with the original error). Emitted once per waiting
+   * episode, before the probing begins; a recovery is announced by the usual
+   * `stream_retry`. Status only: it is not model output.
+   */
+  | { type: "waiting_for_network" }
+  /**
    * Provider-reported quota from response headers (Taskana 4090 / TASK.71).
    * Emitted after a model attempt completes, at most once per attempt;
    * null-suppressed (a provider that reports nothing emits nothing). This is

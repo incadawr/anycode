@@ -250,6 +250,13 @@ describe("classifyProviderFailure", () => {
     expect(isRetryableStreamError(error)).toBe(true);
   });
 
+  it("classifies a bare ENETUNREACH as network, retryable (Taskana 4772)", () => {
+    const error = Object.assign(new Error("connect ENETUNREACH 1.2.3.4:443"), { code: "ENETUNREACH" });
+
+    expect(classifyProviderFailure(error)).toMatchObject({ code: "network", retryable: true });
+    expect(isRetryableStreamError(error)).toBe(true);
+  });
+
   it("classifies a network-level fetch failure (ECONNRESET) as network, retryable", () => {
     const error = Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" } });
 

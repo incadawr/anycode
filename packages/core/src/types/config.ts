@@ -69,6 +69,11 @@ export interface CoreEnvConfig {
    * while inside this budget; 0 disables the extension.
    */
   networkRetryBudgetMs?: number;
+  /**
+   * Maximum wait for the network before a pre-content transient failure fails
+   * the turn (ANYCODE_NETWORK_WAIT_MAX_MS, Taskana 4772); 0 disables waiting.
+   */
+  networkWaitMaxMs?: number;
   /** SQLite database path override (ANYCODE_DB_PATH); default is ~/.anycode/anycode.sqlite. */
   dbPath?: string;
   /** Parallel cap override for read-only tool batches (ANYCODE_TOOL_CONCURRENCY). */

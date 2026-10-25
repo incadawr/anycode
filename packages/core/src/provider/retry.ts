@@ -33,6 +33,16 @@ export interface RetryPolicy {
    */
   networkRetryBudgetMs: number;
   /**
+   * Taskana 4772: maximum time (ms) a pre-content transient NETWORK failure may
+   * spend "waiting for network" before it fails the turn. Engaged only when the
+   * port has a NetworkWaiter (the desktop host and the CLI do); without one the
+   * waiter-less `networkRetryBudgetMs` path applies unchanged. The bound is
+   * measured on a MONOTONIC clock (`NetworkWaiter.monotonicNow`), which excludes
+   * system sleep, so a closed laptop does not spend it. Mid-stream failures are
+   * never waited out. 0 = off. Default 1 800 000 (30 min).
+   */
+  networkWaitMaxMs: number;
+  /**
    * Whole-step replays allowed after a MID-STREAM failure (real model output
    * was already delivered). The replay discards the partial output — tools of
    * the discarded attempt were never dispatched (dispatch runs after the
@@ -54,6 +64,7 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
   retryAfterCapMs: DEFAULT_RETRY_AFTER_CAP_MS,
   stallTimeoutMs: DEFAULT_STREAM_STALL_TIMEOUT_MS,
   networkRetryBudgetMs: 300_000,
+  networkWaitMaxMs: 1_800_000,
   midStreamRetries: DEFAULT_MIDSTREAM_RETRIES,
 };
 
@@ -64,6 +75,7 @@ const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504, 529]);
 const RETRYABLE_NETWORK_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
+  "ENETUNREACH",
   "ETIMEDOUT",
   "ENOTFOUND",
   "EAI_AGAIN",

@@ -13,6 +13,7 @@ import {
   ENV_MAX_RETRIES,
   ENV_MAX_OUTPUT_TOKENS,
   ENV_NETWORK_RETRY_BUDGET_MS,
+  ENV_NETWORK_WAIT_MAX_MS,
   ENV_PROVIDER_TRANSPORT,
   ENV_REASONING_EFFORT,
   ENV_ADAPTIVE_TURN_BUDGET,
@@ -219,6 +220,15 @@ describe("loadEnvConfig", () => {
     expect(loadEnvConfig(envWith({ ...base })).networkRetryBudgetMs).toBeUndefined();
     expect(() => loadEnvConfig(envWith({ ...base, [ENV_NETWORK_RETRY_BUDGET_MS]: "soon" }))).toThrow(
       /ANYCODE_NETWORK_RETRY_BUDGET_MS/,
+    );
+  });
+
+  it("ANYCODE_NETWORK_WAIT_MAX_MS (Taskana 4772): valid integer passes through; absent → undefined; non-integer throws naming the knob", () => {
+    const base = { [ENV_API_KEY]: "key-123", [ENV_MODEL]: "claude-x" } as const;
+    expect(loadEnvConfig(envWith({ ...base, [ENV_NETWORK_WAIT_MAX_MS]: "600000" })).networkWaitMaxMs).toBe(600_000);
+    expect(loadEnvConfig(envWith({ ...base })).networkWaitMaxMs).toBeUndefined();
+    expect(() => loadEnvConfig(envWith({ ...base, [ENV_NETWORK_WAIT_MAX_MS]: "soon" }))).toThrow(
+      /ANYCODE_NETWORK_WAIT_MAX_MS/,
     );
   });
 

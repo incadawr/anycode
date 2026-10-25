@@ -531,9 +531,13 @@ export function renderEvent(
       break;
     case "stream_retry":
       // Past the announced total (a network-budget retry) the total is dropped.
+      // Taskana 4772: the delay is shown in seconds, one decimal (no float ms).
       write(
-        `\n[retry ${event.attempt > event.maxAttempts ? event.attempt : `${event.attempt}/${event.maxAttempts}`} in ${event.delayMs}ms: ${event.reason}]\n`,
+        `\n[retry ${event.attempt > event.maxAttempts ? event.attempt : `${event.attempt}/${event.maxAttempts}`} in ${(event.delayMs / 1000).toFixed(1)} s: ${event.reason}]\n`,
       );
+      break;
+    case "waiting_for_network":
+      write("\n[waiting for network…]\n");
       break;
     case "microcompact":
       write(

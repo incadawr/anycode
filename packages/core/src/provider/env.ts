@@ -48,6 +48,12 @@ export const ENV_MAX_RETRIES = "ANYCODE_MAX_RETRIES";
  * ANYCODE_MAX_RETRIES. 0 disables the extension.
  */
 export const ENV_NETWORK_RETRY_BUDGET_MS = "ANYCODE_NETWORK_RETRY_BUDGET_MS";
+/**
+ * Maximum time in ms a pre-content transient network failure may spend waiting
+ * for the network before the turn fails (Taskana 4772). Monotonic clock, so
+ * system sleep does not count. 0 disables the wait. Default: RetryPolicy.networkWaitMaxMs.
+ */
+export const ENV_NETWORK_WAIT_MAX_MS = "ANYCODE_NETWORK_WAIT_MAX_MS";
 export const ENV_DB_PATH = "ANYCODE_DB_PATH";
 export const ENV_TOOL_CONCURRENCY = "ANYCODE_TOOL_CONCURRENCY";
 export const ENV_STALL_TIMEOUT_MS = "ANYCODE_STALL_TIMEOUT_MS";
@@ -167,6 +173,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
   const exploreModel = env[ENV_EXPLORE_MODEL]?.trim() || undefined;
   const maxRetries = readOptionalInteger(env, ENV_MAX_RETRIES);
   const networkRetryBudgetMs = readOptionalInteger(env, ENV_NETWORK_RETRY_BUDGET_MS);
+  const networkWaitMaxMs = readOptionalInteger(env, ENV_NETWORK_WAIT_MAX_MS);
   const toolConcurrency = readOptionalInteger(env, ENV_TOOL_CONCURRENCY);
   const stallTimeoutMs = readOptionalInteger(env, ENV_STALL_TIMEOUT_MS);
   const todoReminderEvery = readOptionalInteger(env, ENV_TODO_REMINDER_EVERY);
@@ -195,6 +202,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
     exploreModel,
     maxRetries,
     networkRetryBudgetMs,
+    networkWaitMaxMs,
     dbPath,
     toolConcurrency,
     stallTimeoutMs,

@@ -53,6 +53,9 @@ export function isModelOutputEvent(e: ModelStreamEvent): boolean {
     // Taskana 4090: a quota observation is transport telemetry, not model
     // output — it must never close the replay gate.
     case "provider_quota":
+    // Taskana 4772: a waiting status is not output either; the replay gate
+    // only closes on real model content.
+    case "waiting_for_network":
       return false;
     default: {
       // Compile-time exhaustiveness: a new ModelStreamEvent variant must be
@@ -122,6 +125,7 @@ const SAFE_MESSAGES: Record<ProviderFailureCode, string> = {
 const RETRYABLE_NETWORK_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
+  "ENETUNREACH",
   "ETIMEDOUT",
   "ENOTFOUND",
   "EAI_AGAIN",

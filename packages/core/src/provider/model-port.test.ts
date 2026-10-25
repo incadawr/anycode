@@ -1366,6 +1366,234 @@ describe("AiSdkModelPort — networkRetryBudgetMs (transient network outage)", (
   });
 });
 
+// Taskana 4772: pre-content transient network failures park the turn in a
+// "waiting for network" state (probe ladder 5 s -> 60 s, hint-woken) instead of
+// failing it, bounded by networkWaitMaxMs on a monotonic clock.
+describe("AiSdkModelPort — networkWaitMaxMs (Taskana 4772: wait for the network)", () => {
+  function connectTimeout(): TypeError {
+    return Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("Connect Timeout Error"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
+    });
+  }
+  function statusError(statusCode: number): APICallError {
+    return new APICallError({
+      message: `http ${statusCode}`,
+      url: "https://api.example.com/v1/messages",
+      requestBodyValues: {},
+      statusCode,
+      isRetryable: statusCode === 429,
+    });
+  }
+  const slow = { baseDelayMs: 10_000, maxDelayMs: 10_000 };
+
+  /** Scriptable waiter: `online` answers probes; hints fan out to every listener. */
+  function makeWaiter(initiallyOnline: boolean, monotonic: () => number = () => Date.now()) {
+    const listeners = new Set<() => void>();
+    const waiter = {
+      online: initiallyOnline,
+      probes: 0,
+      probe: vi.fn(async () => {
+        waiter.probes += 1;
+        return waiter.online;
+      }),
+      onHint: vi.fn((listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      }),
+      monotonicNow: monotonic,
+      hint(): void {
+        for (const listener of [...listeners]) listener();
+      },
+      listenerCount: () => listeners.size,
+    };
+    return waiter;
+  }
+
+  function failThenSucceed(failures: number, makeError: () => unknown): void {
+    let calls = 0;
+    mockStreamText.mockImplementation(() => {
+      calls += 1;
+      return calls <= failures
+        ? fakeResult([part(startPart), throwsWith(makeError())])
+        : fakeResult([part(startPart), part(finishPart)]);
+    });
+  }
+
+  async function settle(promise: Promise<unknown>, ms: number): Promise<{ ok: boolean; value: unknown }> {
+    const outcome = promise.then(
+      (value) => ({ ok: true, value }),
+      (value) => ({ ok: false, value }),
+    );
+    await vi.advanceTimersByTimeAsync(ms);
+    return outcome;
+  }
+
+  /** Pumps an event stream in the background so the test can drive fake time between events. */
+  function pumpEvents(iterable: AsyncIterable<unknown>) {
+    const events: Array<{ type: string } & Record<string, unknown>> = [];
+    const state: { done: boolean; error?: unknown } = { done: false };
+    const pump = (async () => {
+      try {
+        for await (const event of iterable) events.push(event as { type: string });
+      } catch (error) {
+        state.error = error;
+      }
+      state.done = true;
+    })();
+    return { events, state, pump };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(1);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("transient failure + offline probe ⇒ waiting_for_network instead of failing; rejects only at the deadline", async () => {
+    const original = connectTimeout();
+    mockStreamText.mockImplementation(() => fakeResult([part(startPart), throwsWith(original)]));
+    const waiter = makeWaiter(false);
+    const port = new AiSdkModelPort({ ...baseConfig({ ...slow, maxRetries: 1, networkRetryBudgetMs: 0, networkWaitMaxMs: 60_000 }), networkWaiter: waiter });
+    const run = pumpEvents(port.streamText(baseRequest));
+
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(run.state.done).toBe(false);
+    expect(run.events.filter((e) => e.type === "waiting_for_network")).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(run.state.done).toBe(true);
+    expect((run.state.error as Error).message).toBe("fetch failed");
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+    expect(waiter.probes).toBeGreaterThan(1);
+    await run.pump;
+  });
+
+  it("waiting exits on probe success and replays the same step once", async () => {
+    failThenSucceed(1, connectTimeout);
+    const waiter = makeWaiter(false);
+    const port = new AiSdkModelPort({ ...baseConfig({ ...slow, maxRetries: 1, networkRetryBudgetMs: 0, networkWaitMaxMs: 60_000 }), networkWaiter: waiter });
+    const run = pumpEvents(port.streamText(baseRequest));
+    setTimeout(() => {
+      waiter.online = true;
+    }, 10_000);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(run.state.done).toBe(true);
+    expect(run.state.error).toBeUndefined();
+    const types = run.events.map((e) => e.type);
+    expect(types.indexOf("waiting_for_network")).toBeGreaterThanOrEqual(0);
+    expect(types.indexOf("waiting_for_network")).toBeLessThan(types.indexOf("stream_retry"));
+    expect(run.events.find((e) => e.type === "stream_retry")).toMatchObject({ attempt: 1, maxAttempts: 1, delayMs: 15_000 });
+    expect(types.at(-1)).toBe("finish");
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+    await run.pump;
+  });
+
+  it("a hint fires an immediate probe without waiting out the 5 s tick", async () => {
+    failThenSucceed(1, connectTimeout);
+    const waiter = makeWaiter(false);
+    const port = new AiSdkModelPort({ ...baseConfig({ ...slow, maxRetries: 1, networkRetryBudgetMs: 0, networkWaitMaxMs: 60_000 }), networkWaiter: waiter });
+    const run = pumpEvents(port.streamText(baseRequest));
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(run.events.map((e) => e.type)).toContain("waiting_for_network");
+    waiter.online = true;
+    waiter.hint();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(run.events.map((e) => e.type)).toContain("stream_retry");
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(0);
+    await run.pump;
+    expect(waiter.listenerCount()).toBe(0);
+  });
+
+  it("an abort during waiting rejects at once with the abort reason and stops probing", async () => {
+    mockStreamText.mockImplementation(() => fakeResult([part(startPart), throwsWith(connectTimeout())]));
+    const waiter = makeWaiter(false);
+    const controller = new AbortController();
+    const port = new AiSdkModelPort({ ...baseConfig({ ...slow, maxRetries: 1, networkRetryBudgetMs: 0, networkWaitMaxMs: 600_000 }), networkWaiter: waiter });
+    const run = pumpEvents(port.streamText({ ...baseRequest, abortSignal: controller.signal }));
+
+    await vi.advanceTimersByTimeAsync(0);
+    const probesBefore = waiter.probes;
+    const reason = new Error("stop");
+    controller.abort(reason);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(run.state.done).toBe(true);
+    expect(run.state.error).toBe(reason);
+    expect(waiter.probes).toBe(probesBefore);
+    expect(waiter.listenerCount()).toBe(0);
+    await run.pump;
+  });
+
+  it("the deadline is measured on the monotonic clock, so wall time spent asleep does not count", async () => {
+    mockStreamText.mockImplementation(() => fakeResult([part(startPart), throwsWith(connectTimeout())]));
+    let monotonic = 0;
+    const waiter = makeWaiter(false, () => monotonic);
+    const port = new AiSdkModelPort({ ...baseConfig({ ...slow, maxRetries: 1, networkRetryBudgetMs: 0, networkWaitMaxMs: 1_000 }), networkWaiter: waiter });
+    const run = pumpEvents(port.streamText(baseRequest));
+
+    // Wall clock runs 5 s while the monotonic clock is frozen (system asleep).
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(run.state.done).toBe(false);
+    // Awake time reaches the bound: the next wake-up ends the wait.
+    monotonic = 1_000;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(run.state.done).toBe(true);
+    expect((run.state.error as Error).message).toBe("fetch failed");
+    await run.pump;
+  });
+
+  it("a probe that rejects counts as offline (never throws into the turn)", async () => {
+    mockStreamText.mockImplementation(() => fakeResult([part(startPart), throwsWith(connectTimeout())]));
+    const waiter = makeWaiter(false);
+    waiter.probe.mockRejectedValue(new Error("probe exploded"));
+    const port = new AiSdkModelPort({ ...baseConfig({ ...slow, maxRetries: 1, networkRetryBudgetMs: 0, networkWaitMaxMs: 10_000 }), networkWaiter: waiter });
+    const run = pumpEvents(port.streamText(baseRequest));
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(run.events.map((e) => e.type)).toContain("waiting_for_network");
+    expect(run.state.done).toBe(true);
+    expect((run.state.error as Error).message).toBe("fetch failed");
+    await run.pump;
+  });
+
+  it.each([429, 401, 403, 500])("HTTP %i never waits, even with a waiter present (guard)", async (status) => {
+    failThenSucceed(9, () => statusError(status));
+    const waiter = makeWaiter(false);
+    const port = new AiSdkModelPort({ ...baseConfig({ ...slow, maxRetries: 3, networkRetryBudgetMs: 0, networkWaitMaxMs: 600_000 }), networkWaiter: waiter });
+    const result = await settle(collect(port.streamText(baseRequest)), 200_000);
+    expect(result.ok).toBe(false);
+    expect(waiter.probes).toBe(0);
+    expect(mockStreamText.mock.calls.length).toBeLessThanOrEqual(4);
+  });
+
+  it("a transient failure with the probe online keeps the ordinary jittered retry (guard)", async () => {
+    failThenSucceed(1, connectTimeout);
+    const waiter = makeWaiter(true);
+    const port = new AiSdkModelPort({ ...baseConfig({ ...slow, maxRetries: 2, networkRetryBudgetMs: 0, networkWaitMaxMs: 600_000 }), networkWaiter: waiter });
+    const result = await settle(collect(port.streamText(baseRequest)), 20_000);
+    expect(result.ok).toBe(true);
+    const events = result.value as Array<{ type: string }>;
+    expect(events.map((e) => e.type)).not.toContain("waiting_for_network");
+    expect(events.find((e) => e.type === "stream_retry")).toMatchObject({ attempt: 1, delayMs: 10_000 });
+  });
+
+  it("a mid-stream failure (model output already delivered) is never waited out (guard)", async () => {
+    const textDelta = { type: "text-delta", id: "t", text: "partial" };
+    mockStreamText.mockImplementation(() => fakeResult([part(startPart), part(textDelta), throwsWith(connectTimeout())]));
+    const waiter = makeWaiter(false);
+    const port = new AiSdkModelPort({ ...baseConfig({ ...slow, maxRetries: 1, midStreamRetries: 0, networkRetryBudgetMs: 0, networkWaitMaxMs: 600_000 }), networkWaiter: waiter });
+    const result = await settle(collect(port.streamText(baseRequest)), 60_000);
+    expect(waiter.probes).toBe(0);
+    expect(result.ok).toBe(false);
+  });
+});
+
 // Taskana 4090 (TASK.71): the port's quota observation lifecycle. The
 // constructor installs a port-owned shim over `config.onQuotaHeaders` (the
 // shim writes `#lastQuota` then forwards); the factories see that shim via

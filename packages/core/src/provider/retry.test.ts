@@ -89,6 +89,7 @@ describe("retryDelayMs", () => {
     maxDelayMs: 30_000,
     retryAfterCapMs: DEFAULT_RETRY_AFTER_CAP_MS,
     networkRetryBudgetMs: 0,
+    networkWaitMaxMs: 0,
     stallTimeoutMs: DEFAULT_STREAM_STALL_TIMEOUT_MS,
     midStreamRetries: 0,
   };
@@ -147,7 +148,7 @@ describe("retryDelayMs", () => {
     expect(retryDelayMs(0, new Error("boom"), policy)).toBe(500);
   });
 
-  it("matches DEFAULT_RETRY_POLICY shape (Taskana 4705: maxRetries 8, max 60000ms, 5-min network budget, 2 mid-stream replays)", () => {
+  it("matches DEFAULT_RETRY_POLICY shape (Taskana 4705/4772: maxRetries 8, max 60000ms, 5-min network budget, 30-min network wait, 2 mid-stream replays)", () => {
     expect(DEFAULT_RETRY_POLICY).toEqual({
       maxRetries: 8,
       baseDelayMs: 1_000,
@@ -155,6 +156,7 @@ describe("retryDelayMs", () => {
       retryAfterCapMs: DEFAULT_RETRY_AFTER_CAP_MS,
       stallTimeoutMs: DEFAULT_STREAM_STALL_TIMEOUT_MS,
       networkRetryBudgetMs: 300_000,
+      networkWaitMaxMs: 1_800_000,
       midStreamRetries: 2,
     });
   });
@@ -167,6 +169,7 @@ describe("retryDelayMs — retry-after cap (design slice-2.3-cut.md, tail 4)", (
     maxDelayMs: 30_000,
     retryAfterCapMs: 60_000,
     networkRetryBudgetMs: 0,
+    networkWaitMaxMs: 0,
     stallTimeoutMs: DEFAULT_STREAM_STALL_TIMEOUT_MS,
     midStreamRetries: 0,
   };
@@ -190,6 +193,10 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(Object.assign(new Error("x"), { code: "UND_ERR_SOCKET" }))).toBe(true);
     expect(isTransientNetworkError(new TypeError("fetch failed", { cause: connect }))).toBe(true);
     expect(isTransientNetworkError(new Error("boom", { cause: connect }))).toBe(true);
+  });
+
+  it("accepts a bare ENETUNREACH (Taskana 4772: Wi-Fi off on macOS)", () => {
+    expect(isTransientNetworkError(Object.assign(new Error("connect ENETUNREACH"), { code: "ENETUNREACH" }))).toBe(true);
   });
 
   it("rejects HTTP-status failures and unrelated errors", () => {

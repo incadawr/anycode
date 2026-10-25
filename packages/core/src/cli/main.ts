@@ -93,6 +93,7 @@ import type { CatalogProviderEntry } from "../provider/catalog.js";
 import type { EndpointConfig } from "../provider/endpoint.js";
 import { ENV_API_KEY, ENV_MODEL, loadEnvConfig } from "../provider/env.js";
 import { AiSdkModelPort } from "../provider/model-port.js";
+import { createProbeOnlyNetworkWaiter } from "../provider/network-waiter.js";
 import { createMediaProjectionPort } from "../provider/media-projection.js";
 import { resolveIncludeUsage } from "../provider/openai-compatible.js";
 import type { RetryPolicy } from "../provider/retry.js";
@@ -235,6 +236,8 @@ export function buildCliEndpointConfig(args: {
     ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
     ...(Object.keys(retryOverride).length > 0 ? { retry: retryOverride } : {}),
     ...(includeUsageResolved ? { includeUsage: true as const } : {}),
+    // Taskana 4772: the CLI waits for the network via TCP probes (no OS hints).
+    networkWaiter: createProbeOnlyNetworkWaiter(),
   };
 }
 
@@ -603,6 +606,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   const retryOverride: Partial<RetryPolicy> = {
     ...(envConfig.maxRetries !== undefined ? { maxRetries: envConfig.maxRetries } : {}),
     ...(envConfig.networkRetryBudgetMs !== undefined ? { networkRetryBudgetMs: envConfig.networkRetryBudgetMs } : {}),
+    ...(envConfig.networkWaitMaxMs !== undefined ? { networkWaitMaxMs: envConfig.networkWaitMaxMs } : {}),
     ...(envConfig.stallTimeoutMs !== undefined ? { stallTimeoutMs: envConfig.stallTimeoutMs } : {}),
   };
 

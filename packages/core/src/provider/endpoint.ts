@@ -7,6 +7,7 @@
 
 import type { ProviderTransport } from "./catalog.js";
 import type { ProviderQuotaUpdate } from "./quota.js";
+import type { NetworkWaiter } from "./network-waiter.js";
 import type { RetryPolicy } from "./retry.js";
 
 export interface EndpointConfig {
@@ -52,6 +53,13 @@ export interface EndpointConfig {
    * When unset, behaviour is byte-for-byte the 2.2 static-key path.
    */
   resolveApiKey?: () => Promise<string | undefined>;
+  /**
+   * Optional network waiter (Taskana 4772). When set, a pre-content transient
+   * network failure parks the turn in a "waiting for network" state (probing
+   * until the endpoint is reachable again) instead of failing it, bounded by
+   * `retry.networkWaitMaxMs`. Unset: the waiter-less retry path, unchanged.
+   */
+  networkWaiter?: NetworkWaiter;
   /**
    * Catalog provider name (e.g. "Z.AI (GLM)", "Anthropic") used by the model port
    * to branch reasoning-effort mapping WITHIN a transport: GLM expects an effort
