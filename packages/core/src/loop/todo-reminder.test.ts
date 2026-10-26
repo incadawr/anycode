@@ -7,7 +7,23 @@ import {
   formatTodoReminder,
   resolveTodoReminderEvery,
   TodoReminderTracker,
+  isTodoMutation,
 } from "./todo-reminder.js";
+
+it("counts edits and mutating shell commands, not reads", () => {
+  expect(isTodoMutation("Read", {})).toBe(false);
+  expect(isTodoMutation("Grep", {})).toBe(false);
+  expect(isTodoMutation("Bash", { command: "cat src/main.ts" })).toBe(false);
+  expect(isTodoMutation("Bash", { command: "echo x > file" })).toBe(true);
+  expect(isTodoMutation("Edit", {})).toBe(true);
+  const tracker = new TodoReminderTracker(20);
+  for (let i = 0; i < 30; i++) tracker.observe("Read", "success", false);
+  expect(tracker.snapshot()).toEqual({ count: 0, threshold: 20 });
+  tracker.observe("Edit", "success", true);
+  expect(tracker.snapshot().count).toBe(1);
+  tracker.observe("TodoWrite", "success", false);
+  expect(tracker.snapshot().count).toBe(0);
+});
 
 function items(...statuses: Array<TodoItem["status"]>): TodoItem[] {
   return statuses.map((status, i) => ({ id: `t${i}`, content: `item ${i}`, status }));
