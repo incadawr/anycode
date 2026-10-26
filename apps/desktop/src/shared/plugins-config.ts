@@ -92,6 +92,8 @@ export interface PluginRowView {
   description?: string;
   tier: PluginTierView;
   status: PluginStatusView;
+  /** User-global disabled state (also applies to non-managed plugins). */
+  disabled: boolean;
   problems: string[];
   source: { kind: string; url?: string; fileName?: string; path?: string; ref?: string; commit?: string };
   capabilities?: {

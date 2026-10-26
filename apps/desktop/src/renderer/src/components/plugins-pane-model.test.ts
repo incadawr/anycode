@@ -60,6 +60,7 @@ function row(overrides: Partial<PluginRowView> = {}): PluginRowView {
     version: "1.0.0",
     tier: "official",
     status: "active",
+    disabled: false,
     source: { kind: "official" },
     managed: { enabled: true, pinned: false, active: "1.0.0" },
     capabilities: { skills: 2, agents: 1, workflows: 1, mcp: [], commands: 0, hooks: false, docs: false, engineSupport: [], promptOverlays: 0, services: [] },
@@ -125,6 +126,14 @@ describe("row derivations (S1-B fields → display state)", () => {
     expect(pluginPinned(row({ managed: undefined }))).toBe(false);
     expect(pluginPinned(row({ managed: { enabled: true, pinned: true, active: "1.0.0", previous: "0.9.0" } }))).toBe(true);
     expect(pluginPreviousVersion(row({ managed: { enabled: true, pinned: true, active: "1.0.0", previous: "0.9.0" } }))).toBe("0.9.0");
+  });
+
+  it("honours the disabled flag for every tier and preserves managed enabled:false", () => {
+    expect(pluginEnabled(row({ tier: "legacy-user", managed: undefined, disabled: true }))).toBe(false);
+    expect(pluginEnabled(row({ tier: "legacy-user", managed: undefined, disabled: false }))).toBe(true);
+    expect(pluginEnabled(row({ tier: "project", managed: undefined, status: "inactive", disabled: false }))).toBe(true);
+    expect(pluginEnabled(row({ disabled: true }))).toBe(false);
+    expect(pluginEnabled(row({ disabled: false, managed: { enabled: false, pinned: false, active: "1.0.0" } }))).toBe(false);
   });
 
   it("needs approval exactly when a server exists and consent is not granted", () => {

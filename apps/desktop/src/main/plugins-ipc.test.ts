@@ -245,6 +245,45 @@ describe("plugins IPC registration", () => {
     expect(prepare).toMatchObject({ ok: false, reason: "invalid" });
   });
 
+  it("carries a legacy plugin's disabled flag through disable/enable round-trips", async () => {
+    const scaffold = makeDeps();
+    const services = [{ name: "notify", command: "node", args: ["notify.js"] }];
+    await scaffold.fs.writeFile("/home/tester/.anycode/plugins/legacy-tool/.anycode-plugin/plugin.json",
+      JSON.stringify({ manifestVersion: 1, name: "legacy-tool", version: "1.0.0", services }));
+    await scaffold.fs.writeFile("/home/tester/.anycode/plugins/state.json",
+      JSON.stringify({ version: 1, plugins: {}, removedDefaults: [], disabled: ["legacy-tool"] }));
+    scaffold.settingsData.serviceConsent = [{ plugin: "legacy-tool", servicesHash: servicesHash(services), grantedAt: "x" }];
+    registerPluginsIpc(scaffold.deps);
+    const before = await invoke(PLUGINS_LIST_CHANNEL);
+    expect(before.plugins).toHaveLength(1);
+    expect(before.plugins[0]).toMatchObject({ name: "legacy-tool", tier: "legacy-user", status: "disabled", disabled: true });
+    expect(before.plugins[0].managed).toBeUndefined();
+    const result = await invoke(PLUGINS_SET_ENABLED_CHANNEL, { name: "legacy-tool", value: true });
+    expect(result.ok).toBe(true);
+    const after = await invoke(PLUGINS_LIST_CHANNEL);
+    expect(after.plugins[0]).toMatchObject({ status: "active", disabled: false, servicesConsentGranted: true });
+    expect(await invoke(PLUGINS_SET_ENABLED_CHANNEL, { name: "legacy-tool", value: false })).toMatchObject({ ok: true });
+    const disabledAgain = await invoke(PLUGINS_LIST_CHANNEL);
+    expect(disabledAgain.plugins[0]).toMatchObject({ status: "disabled", disabled: true });
+  });
+
+  it("round-trips a managed plugin through disable → list → enable → list", async () => {
+    const scaffold = makeDeps();
+    await scaffold.fs.writeFile("/home/tester/.anycode/plugins/.store/managed-tool/1.0.0/.anycode-plugin/plugin.json",
+      JSON.stringify({ manifestVersion: 1, name: "managed-tool", version: "1.0.0" }));
+    await scaffold.fs.writeFile("/home/tester/.anycode/plugins/state.json", JSON.stringify({
+      version: 1, removedDefaults: [], disabled: [],
+      plugins: { "managed-tool": { source: { kind: "official" }, trust: "official", active: "1.0.0", enabled: true, pinned: false, capabilities: [] } },
+    }));
+    registerPluginsIpc(scaffold.deps);
+    expect(await invoke(PLUGINS_SET_ENABLED_CHANNEL, { name: "managed-tool", value: false })).toMatchObject({ ok: true });
+    const disabled = await invoke(PLUGINS_LIST_CHANNEL);
+    expect(disabled.plugins[0]).toMatchObject({ status: "disabled", disabled: true, managed: { enabled: true } });
+    expect(await invoke(PLUGINS_SET_ENABLED_CHANNEL, { name: "managed-tool", value: true })).toMatchObject({ ok: true });
+    const enabled = await invoke(PLUGINS_LIST_CHANNEL);
+    expect(enabled.plugins[0]).toMatchObject({ status: "active", disabled: false, managed: { enabled: true } });
+  });
+
   it("list returns a snapshot with rows stripped of roots", async () => {
     const scaffold = makeDeps();
     registerPluginsIpc(scaffold.deps);
