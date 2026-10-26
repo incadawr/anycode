@@ -35,6 +35,8 @@ import {
   nextOpenState,
   popoverCounterText,
   rovingIndexFromKey,
+  rewindUserTurnTexts,
+  countUserTurns,
   selectUserTurns,
   shouldShowMinimap,
   summarizeTurn,
@@ -119,6 +121,24 @@ describe("selectUserTurns", () => {
     const marks = selectUserTurns(blocks);
     expect(marks).toHaveLength(2);
     expect(marks.map((m) => m.id)).toEqual(["u1", "u2"]);
+  });
+
+  it("counts authenticated agent deliveries as labeled turns while excluding reports", () => {
+    const blocks: TranscriptBlock[] = [
+      mkUser("agent-message:1", "first agent message", { origin: "system", agentMessage: true }),
+      mkUser("report", "child report", { origin: "system" }),
+      mkUser("agent-message:2", "second agent message", { origin: "system", agentMessage: true }),
+      mkUser("human", "human question"),
+    ];
+    const marks = selectUserTurns(blocks);
+    expect(marks.map((mark) => mark.id)).toEqual(["agent-message:1", "agent-message:2", "human"]);
+    expect(marks[0]?.agentMessage).toBe(true);
+    expect(countUserTurns(blocks)).toBe(3);
+    expect(shouldShowMinimap(marks.length)).toBe(true);
+    expect(createUserTurnsSelector()(blocks)).toEqual(marks);
+    expect(rewindUserTurnTexts(blocks)).toEqual(["", "", "human question"]);
+    const html = renderToStaticMarkup(createElement(TranscriptMinimap, { marks, activeIndex: 0, onJump: () => {} }));
+    expect(html).toContain("Turn 1 · Agent: first agent message");
   });
 
   it("marks preserve source order and carry the user block's id verbatim", () => {
