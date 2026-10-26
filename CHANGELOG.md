@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.45] — 2026-10-26
+
 ### Changed
 
 - The composer's model/effort pill stays usable while a turn is running (core engine): the pick is accepted, the chip says "next turn", and the change applies from the next turn — the running turn keeps the model it started with (Taskana 4895).
