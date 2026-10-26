@@ -46,9 +46,13 @@ user by accident.
    merged and pushed.
 7. Push the tag. Pushing is what starts the release — the tag alone does
    nothing until it reaches the remote.
-8. Run `release-self-check.mjs` against the draft's packaged executable (see
-   [the artifact check](automation-smoke.md#checking-the-packaged-executable)).
-   Then install that artifact and open it before pressing Publish.
+8. The artifact check now runs in CI. Every build job runs
+   `release-self-check.mjs` against the executable it just packaged — macOS
+   arm64 and x64, Windows, and Linux under `xvfb-run` (see
+   [the artifact check](automation-smoke.md#checking-the-packaged-executable))
+   — and a failure fails that job, so the draft is never assembled. Your
+   remaining manual part is unchanged: install the draft's artifact and open
+   it before pressing Publish.
 9. Owner-only acceptance: complete ChatGPT browser/device-code login and Claude
    Terminal/browser login, cancel and retry once, restart and confirm the ready
    account is retained, then select a project and send one real request.
@@ -69,6 +73,11 @@ Detailed implementation notes and private research remain outside Git in
 `.github/workflows/release.yml` reacts to a `v*` tag push: it runs typecheck and
 the test suite once on Linux, then packages macOS (arm64 + x64), Windows (NSIS
 x64), and Linux (AppImage x64) in parallel.
+
+Each build job then self-checks the executable it produced — the same
+`release-self-check.mjs` that used to be run by hand — so a package that cannot
+open its own window fails its platform job instead of becoming a draft. Dry
+runs get it too: it is a build check, not a publish step.
 
 The build jobs only produce files; they never publish. A single final job
 downloads all four, checks that no platform is missing, and assembles them into
