@@ -131,6 +131,13 @@ describe("lexMarkdown", () => {
     expect(paragraph.tokens.some((t) => t.type === "br")).toBe(true);
   });
 
+  it("breaks:false (document preview) keeps a single newline as a soft wrap", () => {
+    const tokens = lexMarkdown("a\nb", false);
+    expect(tokens).toHaveLength(1);
+    const paragraph = tokens[0] as Tokens.Paragraph;
+    expect(paragraph.tokens.some((t) => t.type === "br")).toBe(false);
+  });
+
   it("emits an inline html token for inline HTML (rendered as literal text)", () => {
     const inline = (lexMarkdown("x <span>y</span> z")[0] as Tokens.Paragraph).tokens;
     const html = inline.find((t) => t.type === "html") as Tokens.HTML;

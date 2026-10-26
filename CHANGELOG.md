@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The markdown preview renders documents the way GitHub does: a line break inside a paragraph is a soft wrap, not a hard break, and paragraphs, lists and headings get vertical spacing instead of running together.
+
 ## [0.0.42] — 2026-10-25
 
 ### Fixed
