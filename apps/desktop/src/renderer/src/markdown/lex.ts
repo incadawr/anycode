@@ -17,9 +17,13 @@ import type { Token } from "marked";
  * `white-space: pre-wrap` rendering). The returned `TokensList` is `Token[]`
  * plus a `links` map; the narrower `Token[]` type is sufficient since the
  * lexer has already resolved reference links into `link` tokens.
+ *
+ * `breaks: false` is for authored documents (the markdown preview): there a
+ * single newline is a soft wrap inside a paragraph, as on GitHub, so a README
+ * hard-wrapped at 80 columns reads as flowing prose.
  */
-export function lexMarkdown(text: string): Token[] {
-  return new Lexer({ gfm: true, breaks: true }).lex(text);
+export function lexMarkdown(text: string, breaks = true): Token[] {
+  return new Lexer({ gfm: true, breaks }).lex(text);
 }
 
 /**

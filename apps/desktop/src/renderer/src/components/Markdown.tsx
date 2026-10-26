@@ -299,8 +299,8 @@ function tryClipboardWrite(text: string, onSuccess: () => void): void {
   void write.then(onSuccess).catch(() => {});
 }
 
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
-  const tokens = useMemo(() => lexMarkdown(text), [text]);
+export const Markdown = memo(function Markdown({ text, breaks = true }: { text: string; breaks?: boolean }) {
+  const tokens = useMemo(() => lexMarkdown(text, breaks), [text, breaks]);
   const [linkTarget, setLinkTarget] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tabId = useContext(TabContext)?.tabId ?? null;

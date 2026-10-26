@@ -224,9 +224,9 @@ export function MarkdownPreviewView({ tabId, previewId, container, sourcePath, d
               <div className="md-preview-view-error-banner">{state.error}</div>
             )}
             {state.mode === "rendered" ? (
-              <div className="md-preview-view-rendered">
+              <div className="md-preview-view-rendered message-markdown">
                 <MdDocContext.Provider value={mdDocContextValue}>
-                  <Markdown text={stripLeadingFrontmatter(state.doc.sourceText)} />
+                  <Markdown text={stripLeadingFrontmatter(state.doc.sourceText)} breaks={false} />
                 </MdDocContext.Provider>
               </div>
             ) : (
