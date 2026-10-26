@@ -126,25 +126,3 @@ export function autoSelectPreset(engines: PresetEngineInput, activeConnectionId:
   const presets = deriveRolePresets(engines, activeConnectionId);
   return presets.find((preset) => presetApplicable(preset, engines)) ?? presets[presets.length - 1]!;
 }
-
-/**
- * Default model prefill for one role's primary entry (§3.9): the connection's
- * own `model`, else its first `models[]` entry, else "" (free text). Only a
- * CONNECTION-routed (or routing-less) entry consults the connection facts —
- * an engine entry names no connection, so its model is free text (§3.9's
- * "model text input prefilled from connection.model ?? connection.models[0]"
- * is about the connection option). Pure — the dialog calls it per role when
- * seeding the editable draft.
- */
-export function entryModelPrefill(entry: RoleRouteEntry, connectionModel: string | undefined, connectionModels: readonly string[] | undefined): string {
-  if (entry.engine !== undefined) {
-    return entry.model ?? "";
-  }
-  if (entry.model !== undefined) {
-    return entry.model;
-  }
-  if (connectionModel !== undefined && connectionModel.length > 0) {
-    return connectionModel;
-  }
-  return connectionModels?.[0] ?? "";
-}

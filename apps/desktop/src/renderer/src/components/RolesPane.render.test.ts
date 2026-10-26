@@ -6,9 +6,24 @@
  */
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { RolePickerDialog } from "./RolePickerDialog.js";
 import { RolesPane } from "./RolesPane.js";
+import { useSettingsStore } from "../settings-store.js";
+import type { SettingsSnapshot } from "../../../shared/settings.js";
+
+// SSR uses Zustand's initial snapshot. Read the fixture state directly so both
+// entry points receive the same settings without a browser or global singleton reset.
+vi.mock("../settings-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../settings-store.js")>();
+  return {
+    ...actual,
+    useSettingsStore: Object.assign(
+      (selector: (state: ReturnType<typeof actual.useSettingsStore.getState>) => unknown) => selector(actual.useSettingsStore.getState()),
+      actual.useSettingsStore,
+    ),
+  };
+});
 
 const base = {
   open: true,
@@ -29,4 +44,51 @@ describe("Roles editor modality", () => {
     expect(renderToStaticMarkup(createElement(RolePickerDialog, { ...base, inline: true }))).toMatch(/^<section[^>]*role-picker-inline/);
     expect(renderToStaticMarkup(createElement(RolePickerDialog, base))).toMatch(/^<dialog/);
   });
+});
+
+const originalSnapshot = useSettingsStore.getState().snapshot;
+afterEach(() => useSettingsStore.setState({ snapshot: originalSnapshot }));
+
+describe("Role model fields in both editor entry points", () => {
+  it.each(["dialog", "settings"] as const)("%s renders route models, empty default and unknown custom values", (surface) => {
+    const snapshot: SettingsSnapshot = {
+      settings: {
+        version: 2,
+        provider: { connections: [{ id: "c", providerId: "vendor", models: ["live-model"] }], activeConnectionId: "c" },
+        roles: { executor: { primary: { model: "saved-unknown" }, fallbacks: [{ connection: "c", model: "live-model" }] } },
+        tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false },
+      },
+      secrets: [], providerReady: true, envOverrides: [], readOnly: false,
+      catalog: [{ id: "vendor", name: "Vendor", authKind: "api_key", models: [{ id: "catalog-model", name: "Catalog model" }] }],
+    };
+    useSettingsStore.setState({ snapshot });
+    const html = renderToStaticMarkup(surface === "settings" ? createElement(RolesPane) : createElement(RolePickerDialog, {
+      ...base, connections: snapshot.settings.provider.connections!, activeConnectionId: "c",
+      initialRoles: { executor: snapshot.settings.roles!.executor! },
+    }));
+    expect(html).toContain('<option value="default" selected="">Default</option>');
+    expect(html).toContain('>Catalog model</option>');
+    expect(html).toContain('<option value="custom" selected="">Custom…</option>');
+    expect(html).toContain('aria-label="Primary custom model"');
+    expect(html).toContain('value="saved-unknown"');
+    expect(html).toContain('<option value="model:1" selected="">live-model</option>');
+    expect(html).not.toContain('model (optional)');
+  });
+});
+
+it.each(["claude", "codex"] as const)("renders %s engine options without a second default", (engine) => {
+  const html = renderToStaticMarkup(createElement(RolePickerDialog, {
+    ...base, initialRoles: { executor: { primary: { engine, model: "default" } } },
+  }));
+  const row = html.split('data-testid="role-picker-role-executor"')[1]!.split('class="role-picker-entry-effort"')[0]!;
+  expect(row).toContain('<option value="default" selected="">Default</option>');
+  expect(row).not.toContain('>Default (recommended)</option>');
+  expect(row).not.toContain('custom model');
+  if (engine === "claude") {
+    expect(row).toContain('>Sonnet</option>');
+    expect(row).toContain('>Opus</option>');
+  } else {
+    const modelSelect = row.split('aria-label="Primary model"')[1]!;
+    expect(modelSelect.match(/<option/g)).toHaveLength(2);
+  }
 });
