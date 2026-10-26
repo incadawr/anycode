@@ -42,10 +42,12 @@ describe("deriveRolePresets", () => {
     expect(p2.roles.executor.fallbacks).toBeUndefined();
   });
 
-  it("P3: Session's connection — every role on the active connection", () => {
+  it("P3: Current connection — every role pins the connection active now", () => {
     const presets = deriveRolePresets({ claudeReady: false, codexReady: false }, ACTIVE);
     const p3 = presets[2]!;
     expect(p3.id).toBe("this-connection");
+    expect(p3.label).toBe("Current connection");
+    expect(p3.description).toBe("Every role is pinned to the connection active now.");
     for (const role of ROLE_PRESET_ROLES) {
       expect(p3.roles[role]).toEqual({ primary: { connection: ACTIVE } });
     }

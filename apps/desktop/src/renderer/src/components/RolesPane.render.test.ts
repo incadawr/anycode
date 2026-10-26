@@ -101,7 +101,6 @@ it.each(["claude", "codex"] as const)("renders %s engine options without a secon
   }
 });
 
-
 describe("Roles save notice", () => {
   it.each([
     [true, "settings-notice-ok", "Roles saved."],
@@ -131,6 +130,6 @@ it("renders provider names in every route and preserves route values", () => {
   expect(html).toContain('value="connection:c">other · unknown</option>');
   expect(html).toContain('value="connection:d">d</option>');
   expect(html).toContain('value="connection:active" selected="">Session&#x27;s connection</option>');
-  expect(html).toContain('>Session&#x27;s connection</button>');
+  expect(html).toContain('>Current connection</button>');
   expect(html).not.toContain('>This connection</');
 });

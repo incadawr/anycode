@@ -13,8 +13,8 @@
  *     explore `{connection: activeConnectionId}`.
  *  P2 "All Claude" — requires claude ready: all roles `{engine:"claude"}`;
  *     explore fallback `[{connection: activeConnectionId}]`.
- *  P3 "Session's connection" — always available: every role
- *     `{connection: <active>}`.
+ *  P3 "Current connection" — always available: every role pins
+ *     `{connection: activeConnectionId}`.
  *
  * Auto-selection order is P1 > P2 > P3 (the first applicable wins); the user
  * can edit anything before Save.
@@ -68,7 +68,7 @@ function preset2(activeConnectionId: string): RolePreset["roles"] {
   };
 }
 
-/** P3 — "Session's connection" (§3.9 verbatim chain). */
+/** P3 — "Current connection" (§3.9 verbatim chain). */
 function preset3(activeConnectionId: string): RolePreset["roles"] {
   const entry: RoleRouteEntry = { connection: activeConnectionId };
   return {
@@ -102,8 +102,8 @@ export function deriveRolePresets(engines: PresetEngineInput, activeConnectionId
     },
     {
       id: "this-connection",
-      label: "Session's connection",
-      description: "Every role runs on the active connection's model.",
+      label: "Current connection",
+      description: "Every role is pinned to the connection active now.",
       roles: preset3(activeConnectionId),
     },
   ];
