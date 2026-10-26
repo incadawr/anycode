@@ -401,7 +401,7 @@ export const roleConfigSchema = z.object({
  * WHOLE-OBJECT `.catch(undefined)` (the `recognizer` precedent) keeps one
  * corrupt roles value from resetting the whole document to defaults.
  */
-export const rolesSchema = z
+export const rolesValueSchema = z
   .object({
     orchestrator: roleConfigSchema.optional(),
     planner: roleConfigSchema.optional(),
@@ -409,9 +409,33 @@ export const rolesSchema = z
     reviewer: roleConfigSchema.optional(),
     explore: roleConfigSchema.optional(),
     maxParallelChildren: z.number().int().min(1).max(16).optional().catch(undefined),
-  })
-  .optional()
-  .catch(undefined);
+  });
+export const rolesSchema = rolesValueSchema.optional().catch(undefined);
+
+// Strict registry shape also serves the write boundary. Arrays replace atomically on merge.
+export const roleProfilesSchema = z.object({
+  profiles: z.array(z.object({ id: z.string().min(1), name: z.string().trim().min(1), roles: rolesValueSchema }).strict()),
+  activeId: z.string().min(1),
+  projects: z.array(z.object({ projectRoot: z.string().refine(isAbsolute), profileId: z.string().min(1) }).strict()),
+}).strict().refine((value) => new Set(value.profiles.map((p) => p.id)).size === value.profiles.length && new Set(value.projects.map((p) => p.projectRoot)).size === value.projects.length);
+
+// Reject malformed profile writes instead of applying the read-time repair rules.
+const strictRoleEntrySchema = z.object({
+  engine: z.enum(["codex", "claude"]).optional(), connection: z.string().min(1).optional(),
+  provider: z.string().min(1).optional(), model: z.string().min(1).optional(),
+  effort: z.enum(["off", "low", "medium", "high", "xhigh", "max"]).optional(),
+}).strict().refine((entry) => !(entry.engine && (entry.connection || entry.provider)) && !(entry.connection && entry.provider));
+const strictRoleConfigSchema = z.object({ primary: strictRoleEntrySchema, fallbacks: z.array(strictRoleEntrySchema).optional() }).strict();
+const strictRolesSchema = z.object({
+  orchestrator: strictRoleConfigSchema.optional(), planner: strictRoleConfigSchema.optional(),
+  executor: strictRoleConfigSchema.optional(), reviewer: strictRoleConfigSchema.optional(),
+  explore: strictRoleConfigSchema.optional(), maxParallelChildren: z.number().int().min(1).max(16).optional(),
+}).strict();
+export const roleProfilesWriteSchema = z.object({
+  profiles: z.array(z.object({ id: z.string().min(1), name: z.string().trim().min(1), roles: strictRolesSchema }).strict()),
+  activeId: z.string().min(1),
+  projects: z.array(z.object({ projectRoot: z.string().refine(isAbsolute), profileId: z.string().min(1) }).strict()),
+}).strict().refine((value) => new Set(value.profiles.map((p) => p.id)).size === value.profiles.length && new Set(value.projects.map((p) => p.projectRoot)).size === value.projects.length);
 
 // Taskana 4732 S1-B (design §4/§7): per-plugin MCP-server consent entries.
 // Keyed by the manifest's serversHash so ANY server/arg change invalidates
@@ -829,6 +853,7 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     // means "built-in defaults"; the whole-object catch degrades a corrupt
     // value alone.
     roles: rolesSchema,
+    roleProfiles: roleProfilesSchema.optional().catch(undefined),
     // Plugins control-plane (Taskana 4732 S1-B, design §7; additive-optional,
     // version NOT bumped). Declared explicitly (not left to `.passthrough()`)
     // so it validates and survives a read-modify-write cycle. The whole-object

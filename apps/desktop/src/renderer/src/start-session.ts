@@ -1,3 +1,4 @@
+import { resolveProfileRoles } from "../../shared/role-profiles.js";
 /**
  * New Session draft submission (slice P7.12 §4.3): the single shared
  * implementation behind both the start screen's Send button and the
@@ -50,7 +51,7 @@ function defaultStartSubmitDeps(): StartSubmitDeps {
 
 /** Whether the settings snapshot already carries orchestration roles (the RolePickerDialog's first-run output). */
 function settingsHaveRoles(): boolean {
-  return !needsRolePicker(useSettingsStore.getState().snapshot?.settings.roles);
+  return !needsRolePicker((useSettingsStore.getState().snapshot?.settings.roleProfiles ?? resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {})));
 }
 
 /**
