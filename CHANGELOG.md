@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Sessions API: `close_session` closes shared tabs opened by agents, refuses running turns and user-opened tabs, and frees the agent tab limit. Agent-created tabs with a handle keep it as their sidebar title; titles without handles use the message payload instead of the delivery wrapper (Taskana 4880).
+
 ### Changed
 
 - Orchestration roles: choose models from each route’s composer model list in the first-run dialog and Settings → Roles, with default and custom model options (Taskana 4877).

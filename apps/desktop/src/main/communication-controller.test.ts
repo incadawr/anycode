@@ -196,3 +196,20 @@ describe("External approvals wiring (Taskana 4763)", () => {
   });
 });
 
+
+
+describe("close_session hook wiring (Taskana 4880)", () => {
+  it("passes the main gate only in settings mode", async () => {
+    const closeSessionByAgent = vi.fn(async () => ({ ok: true as const }));
+    const agentOpenedSessions = new Set(["agent"]);
+    const settings = deps({ closeSessionByAgent, agentOpenedSessions });
+    await createCommunicationController(settings.d).apply({ enabled: true, workspaces: [] });
+    expect((settings.server.starts[0] as { agentOpenedSessions: Set<string> }).agentOpenedSessions).toBe(agentOpenedSessions);
+    const start = settings.server.starts[0] as { closeSessionByAgent(id: string): Promise<unknown> };
+    await start.closeSessionByAgent("agent");
+    expect(closeSessionByAgent).toHaveBeenCalledWith("agent");
+    const env = deps({ closeSessionByAgent, env: () => "/abs/config.json" });
+    await createCommunicationController(env.d).apply({ enabled: true, workspaces: [] });
+    expect(env.server.starts[0]).not.toHaveProperty("closeSessionByAgent");
+  });
+});

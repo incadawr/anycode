@@ -55,7 +55,18 @@ export const CREATE_SESSION_RATE_LIMIT = 5;
 export const CREATE_SESSION_RATE_WINDOW_MS = 60_000;
 /** Taskana 4768: most agent-opened tabs alive at once. */
 export const MAX_AGENT_OPENED_TABS = 8;
-/** Taskana 4768: the fixed `create_session` refusal vocabulary. The code is the error text's prefix; clients match on it. */
+/** Taskana 4880: stable refusal codes for agent-owned tab closing. */
+export type CloseSessionRefusal = "not_allowed" | "not_found" | "not_agent_opened" | "busy" | "last_tab";
+export type CloseSessionOutcome = { ok: true } | { ok: false; reason: CloseSessionRefusal };
+const CLOSE_REFUSAL_TEXT: { [K in CloseSessionRefusal]: string } = {
+  not_allowed: "closing agent tabs is unavailable",
+  last_tab: "the last remaining tab cannot be closed; open another tab first",
+  not_found: "the session is unknown or not shared",
+  not_agent_opened: "only tabs opened through create_session can be closed",
+  busy: "the session is busy or its host is not ready; use cancel_turn first",
+};
+const closeRefusal = (code: CloseSessionRefusal) => new Error(`close_session ${code}: ${CLOSE_REFUSAL_TEXT[code]}`);
+/** Taskana 4768: fixed create_session refusal codes, prefixed in error text. */
 export type CreateSessionRefusal = "not_allowed" | "not_trusted" | "folder_not_found" | "rate_limited" | "too_many" | "not_ready";
 export type CreateSessionRequest = { workspace: string; engine?: "core" | "codex" | "claude"; model?: string; handle?: string };
 export type CreateSessionOutcome = { ok: true; sessionId: string; tabId: string; handle?: string } | { ok: false; reason: Exclude<CreateSessionRefusal, "rate_limited" | "folder_not_found"> };
@@ -89,6 +100,7 @@ const tools = [
   { name: "answer_approval", description: "Allow or deny one pending tool request of a session whose External approvals switch is on. First answer wins (UI or this tool); a later answer reports already_answered. No 'always allow' from outside AnyCode.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, approvalId: { type: "string", minLength: 1, maxLength: 100 }, decision: { enum: ["allow", "deny"] } }, required: ["sessionId", "approvalId", "decision"], additionalProperties: false } },
   { name: "cancel_turn", description: "Stop the running turn of an allowed session, like the Stop button: queued agent messages are rejected and parked approvals are denied. Idle is not an error (cancelled:false, reason:idle). Needs only the Sessions API switch.", inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, required: ["sessionId"], additionalProperties: false } },
   { name: "create_session", description: "Open a new tab in a project where the user switched on 'Allow agents to open tasks here' (sidebar project menu, off by default; trusted folders only; at most 5 per minute and 8 agent-opened alive; only successful creations count towards the per-minute limit). The new session is shared immediately. Optional firstMessage is delivered like send_message next_turn and returns messageId (omitted if the host was not ready within 10 s; then use send_message; refused with not_allowed, naming the tab ids, if the new tab is outside the folders list). Errors start with a code: not_allowed, not_trusted, folder_not_found, rate_limited, too_many, not_ready.", inputSchema: { type: "object", properties: { workspace: { type: "string", minLength: 1, maxLength: 4096 }, engine: { enum: ["core", "codex", "claude"] }, model: { type: "string", minLength: 1, maxLength: 128 }, handle: { type: "string", maxLength: 200 }, firstMessage: { type: "string", minLength: 1, maxLength: 32000 } }, required: ["workspace"], additionalProperties: false } },
+  { name: "close_session", description: "Close a shared tab opened by create_session, through the same path as closing it in the UI. A running turn must be stopped with cancel_turn first. Errors start with a code: not_allowed (including env-file mode), not_found (unknown, closing or not shared), not_agent_opened (user tab), busy (running turn or host not ready), last_tab (open another tab first).", inputSchema: { type: "object", properties: { sessionId: { type: "string", minLength: 1 } }, required: ["sessionId"], additionalProperties: false } },
 ];
 
 async function writePrivateFile(path: string, text: string): Promise<void> {
@@ -120,6 +132,9 @@ export interface CommunicationServerOptions {
    * env-file mode) means `create_session` always answers not_allowed.
    */
   createSessionByAgent?: (request: CreateSessionRequest) => Promise<CreateSessionOutcome>;
+  /** Main-owned bookkeeping shared by admission, the alive cap and close_session. */
+  agentOpenedSessions?: Set<string>;
+  closeSessionByAgent?: (sessionId: string) => Promise<CloseSessionOutcome>;
   /** Clock for the creation rate window (tests inject it). */
   now?: () => number;
   /** How long `create_session` waits for the new host before it returns without messageId, and the poll step (tests shorten both). */
@@ -208,7 +223,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   };
   const now = options.now ?? Date.now;
   const creationTimes: number[] = [];
-  const agentOpenedSessions = new Set<string>();
+  const agentOpenedSessions = options.agentOpenedSessions ?? new Set<string>();
   /**
    * Taskana 4808 (review F4): one in-flight create_session at a time. The rate check, the
    * alive-cap check and the creator hook run as one critical section, so two concurrent
@@ -386,6 +401,19 @@ export async function startCommunicationServer(options: CommunicationServerOptio
       }
       case "send_message": {
         return sendMessage(parseOr(messageSchema, raw, 'send_message expects sessionId, payload (1..32000 chars) and mode ("next_turn" or "steer"); optional: kind, correlationId, replyTo, idempotencyKey'));
+      }
+      case "close_session": {
+        const input = sessionSchema.parse(raw);
+        if (!options.closeSessionByAgent) throw closeRefusal("not_allowed");
+        try { await requireSession(input.sessionId); } catch { throw closeRefusal("not_found"); }
+        let outcome: CloseSessionOutcome;
+        try { outcome = await options.closeSessionByAgent(input.sessionId); }
+        catch { throw closeRefusal("not_allowed"); }
+        if (!outcome.ok) throw closeRefusal(outcome.reason);
+        // Main already removes it from the shared Set. Keep fallback server-local
+        // bookkeeping consistent when an embedder supplies its own close hook.
+        agentOpenedSessions.delete(input.sessionId);
+        return { sessionId: input.sessionId, closed: true };
       }
       case "create_session": {
         const input = parseOr(createSessionSchema, raw, "create_session expects workspace (absolute path); optional: engine (core|codex|claude), model, handle, firstMessage (1..32000 chars)");

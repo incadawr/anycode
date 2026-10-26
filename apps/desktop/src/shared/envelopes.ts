@@ -33,6 +33,9 @@
 /** Envelope type / IPC channel for delivering the host MessagePort into the page. */
 export const PORT_ENVELOPE_TYPE = "anycode:port" as const;
 
+/** Main-initiated close: dispose the tab through the same renderer path as UI closing. */
+export const TAB_CLOSED_ENVELOPE_TYPE = "anycode:tab-closed" as const;
+
 /** Envelope type / IPC channel notifying the page that the host process exited. */
 export const HOST_EXITED_ENVELOPE_TYPE = "anycode:host-exited" as const;
 
@@ -66,6 +69,8 @@ export interface PortEnvelope {
   child?: { parentTabId: string; parentSessionId: string; spawnToolCallId: string; childSessionId: string };
   /** Taskana 4768: present (true) only for a root tab a Sessions API agent opened; drives the "agent" marker. */
   openedByAgent?: true;
+  /** Accepted create_session handle, pinned against automatic title changes. */
+  agentTitle?: string;
 }
 
 /** Page envelope for the host-exited notification (no ports attached). */

@@ -1,3 +1,5 @@
+import { closeSessionForAgent } from "./communication-close-session.js";
+import { TAB_CLOSED_ENVELOPE_TYPE } from "../shared/envelopes.js";
 import { applyInputFromBlock, createCommunicationController, type CommunicationController } from "./communication-controller.js";
 import { createSessionAccessStore, defaultSessionAccessFromSettingsFile, normalizeHandle, type SessionAccessStore } from "./communication-sessions.js";
 import { registerCommunicationIpc } from "./communication-ipc.js";
@@ -534,6 +536,7 @@ let communicationApprovals: SessionAccessStore | null = null;
 /** Taskana 4768: per-project "Allow agents to open tasks here" switch (default OFF everywhere) and the sessions an agent opened (drives the "agent" marker). */
 let communicationAgentProjects: AgentProjectsStore | null = null;
 const agentOpenedSessions = new Set<string>();
+const agentSessionTitles = new Map<string, string>();
 // Taskana 4759: the per-session "Full browser access" switch and the notifier that pushes
 // each tab's EFFECTIVE value (renderer + host flag) exactly once per change.
 let browserAccessStore: BrowserAccessStore | null = null;
@@ -2306,6 +2309,11 @@ void app.whenReady().then(async () => {
     countExposed: () => communicationSessions?.exposedCount() ?? 0,
     isExternalApprovalEnabled: (sessionId) => communicationApprovals?.isExposed(sessionId) ?? false,
     createSessionByAgent: (request) => createSessionForAgent(request),
+    agentOpenedSessions,
+    closeSessionByAgent: (sessionId) => closeSessionForAgent(manager, agentOpenedSessions, sessionId, (tabId) => {
+      agentSessionTitles.delete(sessionId);
+      sendToMainWindow(win, TAB_CLOSED_ENVELOPE_TYPE, { tabId });
+    }),
   });
 
   /**
@@ -2338,7 +2346,6 @@ void app.whenReady().then(async () => {
     if (!created.ok) return { ok: false as const, reason: created.reason === "max_tabs" ? ("too_many" as const) : ("not_ready" as const) };
     const sessionId = created.tab.sessionId;
     agentOpenedSessions.add(sessionId);
-    tabs.deliverTabPort(created.tab);
     // Registered synchronously by createTab (onSessionRegistered); "shared immediately".
     sessions.set(sessionId, true);
     let handle: string | undefined;
@@ -2349,10 +2356,13 @@ void app.whenReady().then(async () => {
         if (sessions.setHandle(sessionId, normalized.handle, isLive).ok) handle = normalized.handle;
       }
     }
+    if (handle !== undefined) agentSessionTitles.set(sessionId, handle);
+    tabs.deliverTabPort(created.tab);
     return { ok: true as const, sessionId, tabId: created.tab.tabId, ...(handle !== undefined ? { handle } : {}) };
   };
 
   manager = new TabHostManager({
+    agentTitleOf: (sessionId) => agentSessionTitles.get(sessionId),
     isAgentOpenedSession: (sessionId) => agentOpenedSessions.has(sessionId),
     onSessionRegistered: (info) => {
       communicationSessions?.register(info);
@@ -2570,6 +2580,13 @@ void app.whenReady().then(async () => {
     // `closeTab`, so preview windows never outlive the tab that owned them,
     // and neither do the tab's artifact consent grants (TASK.77-A).
     onTabClosed: (tabId) => {
+      const liveSessions = new Set(manager?.listTabs().map((tab) => tab.sessionId));
+      for (const id of agentOpenedSessions) {
+        if (!liveSessions.has(id)) {
+          agentOpenedSessions.delete(id);
+          agentSessionTitles.delete(id);
+        }
+      }
       previewHost?.closeForTab(tabId);
       browserAccessNotifier?.forget(tabId);
       artifactConsentStore.clearTab(tabId);

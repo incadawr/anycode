@@ -17,7 +17,7 @@
  * Sandboxed CJS build — nothing else belongs here.
  */
 import { contextBridge, ipcRenderer } from "electron";
-import { HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE, type PortEnvelope } from "../shared/envelopes.js";
+import { TAB_CLOSED_ENVELOPE_TYPE, HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE, type PortEnvelope } from "../shared/envelopes.js";
 import {
   MCP_CONFIG_DELETE_CHANNEL,
   MCP_CONFIG_GET_CHANNEL,
@@ -663,6 +663,7 @@ ipcRenderer.on(
       child?: PortEnvelope["child"];
       // Taskana 4768: relayed untouched (root tabs a Sessions API agent opened).
       openedByAgent?: PortEnvelope["openedByAgent"];
+      agentTitle?: string;
     },
   ) => {
     // TASK.45 W10-FIX F2: forward the additive pin metadata (connectionId/providerId)
@@ -682,6 +683,7 @@ ipcRenderer.on(
         // every child registered as an ordinary visible tab, the exact
         // facade §5.3/§0.4 forbid.
         ...(payload.child !== undefined ? { child: payload.child } : {}),
+        ...(payload.agentTitle !== undefined ? { agentTitle: payload.agentTitle } : {}),
         ...(payload.openedByAgent === true ? { openedByAgent: true as const } : {}),
       },
       "*",
@@ -689,6 +691,10 @@ ipcRenderer.on(
     );
   },
 );
+
+ipcRenderer.on(TAB_CLOSED_ENVELOPE_TYPE, (_event, payload: { tabId: string }) => {
+  window.postMessage({ type: TAB_CLOSED_ENVELOPE_TYPE, tabId: payload.tabId }, "*");
+});
 
 ipcRenderer.on(HOST_EXITED_ENVELOPE_TYPE, (_event, payload: { tabId: string }) => {
   window.postMessage({ type: HOST_EXITED_ENVELOPE_TYPE, tabId: payload.tabId }, "*");

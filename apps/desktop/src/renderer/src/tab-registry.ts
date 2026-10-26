@@ -136,6 +136,7 @@ export interface TabRegistry {
     child?: PortEnvelope["child"],
     /** Taskana 4768: the envelope's `openedByAgent` marker; root tabs only. */
     openedByAgent?: boolean,
+    agentTitle?: string,
   ): boolean;
   /**
    * Flips the tab's own store into `host_exited` and mirrors that onto the
@@ -275,6 +276,7 @@ export function createTabRegistry(
   childRelationStore: ChildRelationStoreApi = defaultChildRelationStore,
 ): TabRegistry {
   const entries = new Map<string, TabEntry>();
+  const agentTitles = new Map<string, string>();
   const closedTabIds = new Set<string>();
   /**
    * Slice P7.12 §4.2 / F5#1b D3: text (+ optional task-scoped model/mode
@@ -467,7 +469,8 @@ export function createTabRegistry(
       // in the tabs-store (Sidebar reads it from there), not the per-tab
       // DesktopState — lift it here the same way host_ready's sessionId is.
       if (message.type === "title_changed") {
-        tabsStore.getState().setTitle(tabId, message.title);
+        // This pins automatic titles only; a future explicit user rename must win over the handle.
+        tabsStore.getState().setTitle(tabId, agentTitles.get(tabId) ?? message.title);
       }
       // host_ready's own applyHostMessage case resets the transcript (store.ts
       // §3.3 respawn semantics) — dispatch AFTER that reset, or a queued
@@ -564,10 +567,11 @@ export function createTabRegistry(
   }
 
   return {
-    registerPort(tabId, workspace, port, pinnedConnection, child, openedByAgent): boolean {
+    registerPort(tabId, workspace, port, pinnedConnection, child, openedByAgent, agentTitle): boolean {
       if (!tabId || closedTabIds.has(tabId)) {
         return false;
       }
+      if (openedByAgent && agentTitle !== undefined) agentTitles.set(tabId, agentTitle);
       const kind = classifyPortEnvelope({ child });
       let entry = entries.get(tabId);
       if (!entry) {
@@ -599,6 +603,7 @@ export function createTabRegistry(
           entry.store.getState().setChildSurface();
         } else {
           tabsStore.getState().addTab({ tabId, workspace, ...(openedByAgent === true ? { openedByAgent: true as const } : {}) });
+          if (agentTitles.has(tabId)) tabsStore.getState().setTitle(tabId, agentTitles.get(tabId)!);
           // R10 status mirror (slice-R10-cut §2.2): ONE store-lifetime
           // subscription per tabId, wired at store birth. The storm guard lives
           // in applyCoarse (no mirror write unless the coarse tuple flips);
@@ -697,6 +702,7 @@ export function createTabRegistry(
         // delivery for this tabId: no legitimate one exists for a child.
         entries.delete(tabId);
         pendingInitialPrompts.delete(tabId);
+        agentTitles.delete(tabId);
         closedTabIds.add(tabId);
       } else {
         tabsStore.getState().setHostExited(tabId, true);
@@ -714,6 +720,7 @@ export function createTabRegistry(
     },
 
     disposeTab(tabId): void {
+      agentTitles.delete(tabId);
       closedTabIds.add(tabId);
       const entry = entries.get(tabId);
       if (!entry) {
@@ -814,6 +821,7 @@ export function createTabRegistry(
     reset(): void {
       entries.clear();
       closedTabIds.clear();
+      agentTitles.clear();
       pendingInitialPrompts.clear();
       statusStore.getState().reset();
     },

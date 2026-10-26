@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createServer as createNetServer } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, StreamableHTTPClientTransport, StdioClientTransport } from "@anycode/core/communication-mcp";
-import { startCommunicationServer, type CreateSessionOutcome, type CreateSessionRequest } from "./communication-server.js";
+import { startCommunicationServer, type CloseSessionOutcome, type CreateSessionOutcome, type CreateSessionRequest } from "./communication-server.js";
 import type { AgentEnvelope } from "../shared/communication.js";
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
@@ -35,12 +35,12 @@ describe("production communication MCP over real SDK HTTP", () => {
     const client = new Client({ name: "portable-supervisor", version: "1" });
     await client.connect(new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL("../../../../examples/agent-communication/stdio.mjs", import.meta.url)), f.discoveryFile] }));
     cleanups.push(() => client.close());
-    expect((await client.listTools()).tools).toHaveLength(10);
+    expect((await client.listTools()).tools).toHaveLength(11);
     expect(value(await client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } })).engine).toBe("codex");
   });
   it("initializes, lists/calls tools and enforces auth, origin and workspace scope", async () => {
     const f = await fixture();
-    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "list_pending_approvals", "answer_approval", "cancel_turn", "create_session"]);
+    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "list_pending_approvals", "answer_approval", "cancel_turn", "create_session", "close_session"]);
     expect(value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(["allowed"]);
     expect(value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } })).state).toBe("idle");
     expect((await f.client.callTool({ name: "send_message", arguments: { sessionId: "forbidden", payload: "no", mode: "next_turn" } })).isError).toBe(true);
@@ -228,9 +228,9 @@ describe("session handles and wait_for_result (Taskana 4750b)", () => {
     expect(sessions.every((s) => !("handle" in s))).toBe(true);
   });
 
-  it("tools list has 10 tools in order (approval tools before cancel_turn, create_session last; Taskana 4763/4768)", async () => {
+  it("tools list has 11 tools in order (close_session last; Taskana 4880)", async () => {
     const f = await waitFixture();
-    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "list_pending_approvals", "answer_approval", "cancel_turn", "create_session"]);
+    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "list_pending_approvals", "answer_approval", "cancel_turn", "create_session", "close_session"]);
   });
 
   it("wait_for_result resolves done for messageId", async () => {
@@ -571,7 +571,7 @@ describe("External approvals on the Sessions API (Taskana 4763)", () => {
 
 describe("Sessions API create_session (Taskana 4768)", () => {
   type FixtureTab = { sessionId: string; workspace: string; state: string; pid: number };
-  async function createFixture(options: { creator?: (request: CreateSessionRequest, tabs: FixtureTab[]) => Promise<CreateSessionOutcome>; ready?: boolean; clock?: { now: number } } = {}) {
+  async function createFixture(options: { opened?: Set<string>; exposed?: (id: string) => boolean; closer?: (id: string, tabs: FixtureTab[]) => Promise<CloseSessionOutcome>; creator?: (request: CreateSessionRequest, tabs: FixtureTab[]) => Promise<CreateSessionOutcome>; ready?: boolean; clock?: { now: number } } = {}) {
     const dir = await mkdtemp(join(tmpdir(), "anycode-create-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
     const discoveryFile = join(dir, "communication.json");
     const tabs: FixtureTab[] = [];
@@ -589,7 +589,10 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     const clock = options.clock;
     const service = await startCommunicationServer({
       manager: { listTabs: () => tabs, communicationRequest: request }, userData: dir, config: { workspaces: [], discoveryFile },
-      createSessionByAgent: (input) => creator(input, tabs), ...(clock ? { now: () => clock.now } : {}), readyTimeoutMs: 120, readyPollMs: 10,
+      createSessionByAgent: (input) => creator(input, tabs),
+      ...(options.opened ? { agentOpenedSessions: options.opened } : {}),
+      ...(options.exposed ? { isSessionExposed: options.exposed } : {}),
+      ...(options.closer ? { closeSessionByAgent: (id: string) => options.closer!(id, tabs) } : {}), ...(clock ? { now: () => clock.now } : {}), readyTimeoutMs: 120, readyPollMs: 10,
     });
     cleanups.push(() => service.close());
     const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string };
@@ -599,6 +602,50 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     return { dir, client, request, tabs };
   }
   const errorText = (result: unknown) => (result as { isError?: boolean; content: Array<{ text: string }> }).content[0]!.text;
+
+  it("close_session validates input and fails closed without a hook", async () => {
+    const f = await fixture();
+    const tool = (await f.client.listTools()).tools.find((t) => t.name === "close_session")!;
+    expect(tool.inputSchema).toMatchObject({ required: ["sessionId"], additionalProperties: false });
+    for (const input of [{}, { sessionId: "" }, { sessionId: "allowed", extra: true }]) {
+      expect((await f.client.callTool({ name: "close_session", arguments: input })).isError).toBe(true);
+    }
+    expect(errorText(await f.client.callTool({ name: "close_session", arguments: { sessionId: "allowed" } }))).toMatch(/^close_session not_allowed:/);
+  });
+
+  it("close_session hides unshared sessions without invoking the main hook", async () => {
+    const closer = vi.fn(async () => ({ ok: true as const }));
+    const f = await createFixture({ closer, exposed: () => false });
+    await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } });
+    expect(errorText(await f.client.callTool({ name: "close_session", arguments: { sessionId: "agent-1" } }))).toMatch(/^close_session not_found:/);
+    expect(closer).not.toHaveBeenCalled();
+  });
+
+  it.each(["not_found", "not_agent_opened", "busy", "not_allowed", "last_tab"] as const)("close_session preserves %s refusal", async (reason) => {
+    const f = await createFixture({ closer: async () => ({ ok: false, reason }) });
+    await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } });
+    expect(errorText(await f.client.callTool({ name: "close_session", arguments: { sessionId: "agent-1" } }))).toMatch(new RegExp(`^close_session ${reason}:`));
+  });
+
+  it("close_session removes the session from list_sessions and frees the alive budget", async () => {
+    const clock = { now: 0 };
+    const opened = new Set<string>();
+    const f = await createFixture({ clock, opened, closer: async (id, tabs) => {
+      tabs.splice(tabs.findIndex((t) => t.sessionId === id), 1);
+      return { ok: true };
+    } });
+    for (let i = 0; i < 8; i++) {
+      clock.now += 61000;
+      await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } });
+    }
+    expect(opened.size).toBe(8);
+    expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatch(/^create_session too_many:/);
+    expect(value(await f.client.callTool({ name: "close_session", arguments: { sessionId: "agent-1" } }))).toEqual({ sessionId: "agent-1", closed: true });
+    expect(opened.size).toBe(7);
+    expect(value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions.some((t: { sessionId: string }) => t.sessionId === "agent-1")).toBe(false);
+    expect(value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } })).sessionId).toBe("agent-9");
+    expect(errorText(await f.client.callTool({ name: "close_session", arguments: { sessionId: "missing" } }))).toMatch(/^close_session not_found:/);
+  });
 
   it("create_session: lists in tools and refuses not_allowed when no creator hook is wired (env-file mode)", async () => {
     const f = await fixture();

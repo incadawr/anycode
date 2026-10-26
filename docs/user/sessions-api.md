@@ -15,6 +15,7 @@ send them a message. It is a local MCP endpoint that runs while AnyCode is open.
 | `get_message_status` | Delivery state of a message you sent. |
 | `wait_for_result` | Waits (up to 120 s per call) until the turn that took your message finishes, then returns its answer. Returns `pending` on timeout; call it again. |
 | `cancel_turn` | Stops the running turn of a shared session, like the Stop button. Queued messages are rejected and parked approvals are denied. An idle session answers `cancelled: false`, which is not an error. |
+| `close_session` | Closes a shared tab opened by `create_session`; stop a running turn with `cancel_turn` first. |
 | `create_session` | Opens a new tab in a project where you switched on **Allow agents to open tasks here**. See "Let agents open tasks" below. |
 | `list_pending_approvals` | Lists tool requests waiting for an answer. Only sessions with **External approvals** on. See below. |
 | `answer_approval` | Allows or denies one pending request of a session with **External approvals** on. See below. |
@@ -78,7 +79,12 @@ Settings → Sessions API → Advanced lists the projects that allow it and has 
 
 Input: `workspace` (absolute path, required); optional `engine` (`core`,
 `codex`, `claude`), `model`, `handle` and `firstMessage`. The new session is
-shared immediately. `firstMessage` is delivered like `send_message` with
+shared immediately. An accepted `handle` is the tab title for the tab's lifetime
+and stays fixed through automatic titling. This pin is in memory: saved session
+history retains the automatically generated payload title, which is shown when
+the session is resumed after closing the tab or restarting AnyCode. Without a
+handle the title comes from the message payload. `firstMessage` is delivered
+like `send_message` with
 `mode: next_turn` and the reply carries its `messageId`, so `wait_for_result`
 works on it. If the new tab's host is not ready within 10 seconds, the reply
 omits `messageId`; the tab exists, so send the message yourself with
@@ -90,7 +96,8 @@ Rules and limits:
 
 - The folder must be trusted in AnyCode (Settings → Permissions).
 - At most 5 creations per minute, and at most 8 agent-opened tabs alive at once.
-  These counters live in the running Sessions API and reset when it restarts.
+  The per-minute counter resets when the Sessions API restarts; the alive count
+  follows the tabs still open in AnyCode.
   Only creations that succeed count towards the 5-per-minute limit; refused
   attempts never consume it.
 - A refusal is an error whose text starts with a code: `not_allowed` (the
@@ -98,9 +105,23 @@ Rules and limits:
   `folder_not_found`, `rate_limited`, `too_many`, `not_ready` (the engine is not
   signed in, or the tab limit is reached).
 - Tabs an agent opened carry an **agent** marker in the sidebar row and in the
-  session header.
+  session header. Agent-opened marking is in memory: after an app restart,
+  restored tabs have no agent marker and cannot be closed by agents
+  (`not_agent_opened`).
 - With `ANYCODE_COMMUNICATION_CONFIG` set, `create_session` always answers
   `not_allowed`.
+
+### Close an agent-opened task
+
+Call `close_session {"sessionId":"…"}` to close a shared tab opened through
+`create_session`. It stops the host and removes the sidebar tab through the
+same close path as the UI, freeing one place in the 8-alive limit. The reply is
+`{"sessionId":"…","closed":true}`. Session history is kept, as with UI closing.
+
+Errors start with `close_session <code>:`: `not_found` (unknown, closing or not shared),
+`not_agent_opened` (user-opened tab), `busy` (running turn or host not ready;
+call `cancel_turn` and wait for idle), `last_tab` (open another tab before
+closing the last remaining tab), or `not_allowed` (env-file mode). Env-file mode never enables this tool.
 
 ## Connect an external client
 

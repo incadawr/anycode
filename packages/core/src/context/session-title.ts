@@ -39,7 +39,8 @@ const PAIRED_REMINDER_TAGS = ["hook-context", "plan-mode-reminder", "orchestrate
  * text without any of these tags passes through byte-for-byte.
  */
 export function sanitizeTitleSource(text: string): string {
-  let result = text;
+  // Agent delivery uses a literal \n separator; accept real newlines as well.
+  let result = text.replace(/^\[AnyCode authenticated agent message \{[^\r\n]*?\}\](?:\\n|\r?\n)/, "");
   for (const tag of PAIRED_REMINDER_TAGS) {
     const pairedBlock = new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, "g");
     result = result.replace(pairedBlock, "");

@@ -25,7 +25,7 @@
  * it, so a single teardown call stops both.
  */
 import type { HostToUiMessage, UiToHostMessage } from "../../shared/protocol.js";
-import { HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE, type PortEnvelope } from "../../shared/envelopes.js";
+import { TAB_CLOSED_ENVELOPE_TYPE, HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE, type PortEnvelope } from "../../shared/envelopes.js";
 import type { TermToHostMessage, TermToUiMessage } from "../../shared/terminal.js";
 import { TERMINAL_PORT_ENVELOPE_TYPE } from "../../shared/terminal.js";
 
@@ -113,6 +113,7 @@ export interface HostPortMeta {
   child?: PortEnvelope["child"];
   /** Taskana 4768: a Sessions API agent opened this root tab (envelope `openedByAgent === true`). */
   openedByAgent?: true;
+  agentTitle?: string;
 }
 
 /**
@@ -176,6 +177,7 @@ export function onHostPort(cb: (port: MessagePort, meta: HostPortMeta) => void):
         providerId?: unknown;
         child?: unknown;
         openedByAgent?: unknown;
+        agentTitle?: unknown;
       };
       const tabId = typeof envelope.tabId === "string" ? envelope.tabId : "";
       const wsFromEnvelope = typeof envelope.workspace === "string" ? envelope.workspace : "";
@@ -194,6 +196,7 @@ export function onHostPort(cb: (port: MessagePort, meta: HostPortMeta) => void):
         workspace: wsFromEnvelope,
         ...(pinnedConnection !== undefined ? { pinnedConnection } : {}),
         ...(child !== undefined ? { child } : {}),
+        ...(typeof envelope.agentTitle === "string" ? { agentTitle: envelope.agentTitle } : {}),
         ...(envelope.openedByAgent === true ? { openedByAgent: true as const } : {}),
       });
     }
@@ -278,9 +281,11 @@ export interface ConnectionRegistry {
     pinnedConnection?: { connectionId: string; providerId: string },
     child?: PortEnvelope["child"],
     openedByAgent?: boolean,
+    agentTitle?: string,
   ): boolean;
   /** Flips the given tab's connection/banner state to host-exited; a no-op for a tab that isn't registered. */
   markHostExited(tabId: string): void;
+  disposeTab?(tabId: string): void;
   /**
    * Attaches a fresh term-port for `tabId` (design slice-2.4-cut.md §4).
    * Unlike `registerPort`, an unknown tabId is NOT auto-registered — the
@@ -309,7 +314,7 @@ export function startConnectionManager(registry: ConnectionRegistry): () => void
       console.warn("[port] dropping port envelope with no tabId", meta);
       return;
     }
-    const attached = registry.registerPort(meta.tabId, meta.workspace, port, meta.pinnedConnection, meta.child, meta.openedByAgent);
+    const attached = registry.registerPort(meta.tabId, meta.workspace, port, meta.pinnedConnection, meta.child, meta.openedByAgent, meta.agentTitle);
     if (!attached) {
       console.warn("[port] dropping port for a closed/unknown tab", meta.tabId);
     }
@@ -333,7 +338,13 @@ export function startConnectionManager(registry: ConnectionRegistry): () => void
     registry.markHostExited(tabId);
   });
 
+  const onClosed = (event: MessageEvent): void => {
+    const data = event.data as { type?: unknown; tabId?: unknown } | null;
+    if (data?.type === TAB_CLOSED_ENVELOPE_TYPE && typeof data.tabId === "string" && data.tabId) registry.disposeTab?.(data.tabId);
+  };
+  window.addEventListener("message", onClosed);
   return () => {
+    window.removeEventListener("message", onClosed);
     stopPortListener();
     stopTerminalPortListener();
     stopExitListener();

@@ -9,7 +9,7 @@
  * FIXED-vocabulary detail, and the app keeps running. Neither the status nor the
  * log ever carries the bearer token or the discovery-file contents.
  */
-import { startCommunicationServer, type CommunicationManager, type CommunicationServerOptions, type CreateSessionOutcome, type CreateSessionRequest, type LiveCommunicationConfig } from "./communication-server.js";
+import { startCommunicationServer, type CloseSessionOutcome, type CommunicationManager, type CommunicationServerOptions, type CreateSessionOutcome, type CreateSessionRequest, type LiveCommunicationConfig } from "./communication-server.js";
 import type { CommunicationStatus } from "../shared/communication-config.js";
 
 export type { CommunicationStatus };
@@ -39,6 +39,8 @@ export interface CommunicationControllerDeps {
   isExternalApprovalEnabled?(sessionId: string): boolean;
   /** Taskana 4768: opens a tab for `create_session`. Absent = create_session always refuses. Settings mode only; the env-file mode never gets it. */
   createSessionByAgent?(request: CreateSessionRequest): Promise<CreateSessionOutcome>;
+  agentOpenedSessions?: Set<string>;
+  closeSessionByAgent?(sessionId: string): Promise<CloseSessionOutcome>;
   /** Number of sessions currently switched on, for the status line. */
   countExposed?(): number;
 }
@@ -102,6 +104,8 @@ export function createCommunicationController(deps: CommunicationControllerDeps)
         config: { workspaces: input.workspaces, port: input.port ?? 0 },
         isSessionExposed: (sessionId) => deps.isSessionExposed(sessionId),
         handleOf: deps.handleOf ? (sessionId) => deps.handleOf?.(sessionId) : undefined,
+        ...(deps.agentOpenedSessions ? { agentOpenedSessions: deps.agentOpenedSessions } : {}),
+        ...(deps.closeSessionByAgent ? { closeSessionByAgent: (sessionId: string) => deps.closeSessionByAgent!(sessionId) } : {}),
         ...(deps.createSessionByAgent ? { createSessionByAgent: (request: CreateSessionRequest) => deps.createSessionByAgent!(request) } : {}),
         ...(deps.isExternalApprovalEnabled ? { isExternalApprovalEnabled: (sessionId: string) => deps.isExternalApprovalEnabled?.(sessionId) === true } : {}),
       });
