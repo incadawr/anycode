@@ -28,6 +28,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { generateSessionTitle } from "../context/session-title.js";
 import type { ModelRequest } from "../ports/model.js";
 import type { ModelStreamEvent } from "../types/events.js";
 import { AiSdkModelPort } from "./model-port.js";
@@ -94,6 +95,15 @@ describe("DeepSeek reasoning-effort mapping over the real @ai-sdk/anthropic wire
     };
     return { port: new AiSdkModelPort(config), request };
   }
+
+  it("title request sends no tools or thinking and uses low effort (Taskana 4893)", async () => {
+    stubFetch();
+    const { port } = portFor("low");
+    expect(await generateSessionTitle({ modelPort: port, text: "Fix the sidebar" })).toBe("ok");
+    expect(captured[0]!.body).toMatchObject({ output_config: { effort: "low" }, max_tokens: 32 });
+    expect(captured[0]!.body.tools).toBeUndefined();
+    expect(captured[0]!.body.thinking).toBeUndefined();
+  });
 
   it("low: SDK wire carries output_config.effort='low', no thinking key, max_tokens unchanged", async () => {
     stubFetch();

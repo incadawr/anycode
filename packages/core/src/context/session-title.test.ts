@@ -147,6 +147,17 @@ describe("generateSessionTitle", () => {
     expect(request.messages).toEqual([{ role: "user", content: "hello there" }]);
   });
 
+  it.each([
+    "<｜DSML｜function_calls>",
+    "<｜｜DSML｜｜calls>",
+    "<tool_call>run</tool_call>",
+    "A title\n<invoke name=\"tool\">",
+  ])("rejects markup in a model reply: %s", async (reply) => {
+    const port = new ScriptedModelPort(textScript(reply));
+    expect(await generateSessionTitle({ modelPort: port, text: "Fix the sidebar" })).toBeNull();
+    expect(deriveSessionTitle(sanitizeTitleSource("Fix the sidebar"))).toBe("Fix the sidebar");
+  });
+
   it("strips wrapping quotes and a trailing period", async () => {
     const port = new ScriptedModelPort(textScript(`"Fix the login bug."`));
     const title = await generateSessionTitle({ modelPort: port, text: "x" });

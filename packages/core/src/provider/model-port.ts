@@ -603,6 +603,10 @@ export class AiSdkModelPort implements ModelPort {
     return this.config.model;
   }
 
+  get titleReasoningEffort(): "low" | undefined {
+    return this.config.providerName === "DeepSeek" ? "low" : undefined;
+  }
+
   /**
    * The provider's own model claim from the last raw response this port
    * observed, or undefined when none has been seen. Never derived from SDK
