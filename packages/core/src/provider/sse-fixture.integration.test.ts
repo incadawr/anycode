@@ -71,13 +71,18 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 describe("AiSdkModelPort over a real @ai-sdk/anthropic SSE stream (slice 3.7 R1)", () => {
   let server: Server;
   let baseUrl: string;
+  let cacheRead: number | undefined;
 
   beforeEach(async () => {
+    cacheRead = undefined;
     server = createServer((req, res) => {
       // Drain the request so the socket is not held open.
       req.resume();
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
-      res.end(serializeSse(CHUNKS));
+      res.end(serializeSse(CHUNKS.map((chunk) => chunk.type === "message_start"
+        ? { ...chunk, message: { id: "msg_1", model: "glm-5.2", role: "assistant",
+          usage: { input_tokens: 17, ...(cacheRead !== undefined ? { cache_read_input_tokens: cacheRead } : {}) } } }
+        : chunk)));
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const { port } = server.address() as AddressInfo;
@@ -86,6 +91,18 @@ describe("AiSdkModelPort over a real @ai-sdk/anthropic SSE stream (slice 3.7 R1)
 
   afterEach(async () => {
     await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+  });
+
+  it.each([undefined, 0, 80])("preserves Anthropic cache reads: %s", async (cached) => {
+    cacheRead = cached;
+    const events = await collect(new AiSdkModelPort({
+      transport: "anthropic-messages", baseUrl, apiKey: "test-key", model: "glm-5.2",
+      retry: { maxRetries: 0, stallTimeoutMs: 0 },
+    }).streamText({ messages: [{ role: "user", content: "hi" }], tools: [] }));
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    expect(events.find((e) => e.type === "finish")).toMatchObject({
+      type: "finish", usage: { cachedInputTokens: cached ?? 0 },
+    });
   });
 
   it("drops the unparsable `tool_result` artifact and still delivers start / text / finish", async () => {

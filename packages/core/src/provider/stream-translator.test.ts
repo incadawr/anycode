@@ -145,21 +145,37 @@ describe("translateStreamPart", () => {
     });
   });
 
-  it("preserves provider-reported prompt-cache reads on finish usage", () => {
+  it.each([
+    { transport: "anthropic-messages", stepRawUsage: { input_tokens: 500, cache_read_input_tokens: 80 }, cacheRead: 80, expected: 80 },
+    { transport: "anthropic-messages", stepRawUsage: { input_tokens: 500 }, cacheRead: 0, expected: 0 },
+    { transport: "openai-responses", stepRawUsage: { input_tokens_details: { cached_tokens: 3 } }, cacheRead: 3, expected: 3 },
+    { transport: "openai-responses", stepRawUsage: { input_tokens: 500 }, cacheRead: 0, expected: undefined },
+    { transport: "openai-responses", stepRawUsage: { input_tokens_details: { cached_tokens: 0 } }, cacheRead: 0, expected: 0 },
+    { transport: "openai-chat-completions", stepRawUsage: { prompt_tokens: 500 }, cacheRead: 0, expected: undefined },
+    { transport: "openai-chat-completions", stepRawUsage: { prompt_tokens_details: { cached_tokens: 0 } }, cacheRead: 0, expected: 0 },
+    { transport: "openai-chat-completions", stepRawUsage: { prompt_tokens_details: { cached_tokens: 12 } }, cacheRead: 12, expected: 12 },
+    { transport: "openai-chat-completions", stepRawUsage: { prompt_tokens_details: { cached_tokens: "12" } }, cacheRead: 0, expected: undefined },
+    { transport: "openai-chat-completions", stepRawUsage: undefined, cacheRead: 0, expected: undefined },
+    { transport: "openai-responses", stepRawUsage: undefined, cacheRead: 0, expected: undefined },
+    { transport: undefined, stepRawUsage: { prompt_tokens: 500 }, cacheRead: 80, expected: 80 },
+  ])("cache reads for $transport with raw $stepRawUsage become $expected", ({ transport, stepRawUsage, cacheRead, expected }) => {
+    // Real finish totals have no raw; it comes separately from finish-step.
     const part = {
       type: "finish",
       finishReason: "stop",
       totalUsage: {
-        inputTokens: 91_700,
-        inputTokenDetails: { cacheReadTokens: 87_115 },
-        outputTokens: 99,
-        totalTokens: 91_799,
+        inputTokens: 500,
+        inputTokenDetails: { cacheReadTokens: cacheRead },
+        outputTokens: 10,
+        totalTokens: 510,
       },
     } as Part;
-    expect(translateStreamPart(part)).toEqual({
+    const event = translateStreamPart(part, { transport, stepRawUsage });
+    expect(event).toEqual({
       type: "finish",
       finishReason: "stop",
-      usage: { inputTokens: 91_700, cachedInputTokens: 87_115, outputTokens: 99, totalTokens: 91_799 },
+      usage: { inputTokens: 500, outputTokens: 10, totalTokens: 510,
+        ...(expected !== undefined ? { cachedInputTokens: expected } : {}) },
     });
   });
 
