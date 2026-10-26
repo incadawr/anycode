@@ -55,6 +55,18 @@ read back its text and console, take a screenshot of it. Previews are sandboxed,
 fetch nothing from the network on their own, and obey the same consent model as
 every other file action.
 
+Subagents can also run in the background. A detached child keeps working while
+the parent session goes on, and the parent is told when something needs it:
+the child is waiting for an approval (which tool, which path, and how long the
+request stays open), it is close to its turn budget, it has gone quiet, or it
+has finished. See [Subagents](docs/user/subagents.md) and
+[Orchestration](docs/user/orchestration.md).
+
+With a language server configured, the agent sees its diagnostics in the result
+of every Edit or Write to a matching file, so a broken edit is visible in the
+same step rather than at the next manual type check. Settings shows whether each
+server is installed and running. See [Language servers](docs/user/lsp.md).
+
 Both CLI profiles are pinned against recorded protocol fixtures: the adapters
 have to stay in sync with the recorded streams, so a change on our side that
 drops or invents a wire message fails the build rather than surfacing as a
@@ -63,9 +75,10 @@ opt-in run against the real binary, not part of the default suite.
 
 ## Status
 
-AnyCode is **0.0.30, alpha**. Storage, APIs, and UI may change without
-backward-compatibility guarantees, and alpha builds are unsigned — signing
-arrives with the beta.
+AnyCode is in **alpha** (the current version is on the
+[Releases](https://github.com/incadawr/anycode/releases) page). Storage, APIs,
+and UI may change without backward-compatibility guarantees, and alpha builds
+are unsigned — signing arrives with the beta.
 
 How far validation has gone: the Codex and Claude Code profiles are covered by
 protocol fixtures and live smoke runs. On the Native profile, end-to-end use has
@@ -118,7 +131,8 @@ procedure, and [CHANGELOG.md](CHANGELOG.md) for user-facing changes.
 - `apps/desktop` — the Electron application.
 - `apps/cli` — the command-line interface.
 - `packages/core` — the agent loop and shared platform logic.
-- `docs/user` — user-facing configuration and setup documentation.
+- `docs/user` — user-facing configuration and setup documentation (start at
+  [docs/user/README.md](docs/user/README.md)).
 - `docs/development` — public development, automation, and release guidance.
 
 ## Roadmap and contribution guidance
