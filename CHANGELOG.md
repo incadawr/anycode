@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.43] — 2026-10-26
+
 ### Fixed
 
 - The markdown preview renders documents the way GitHub does: a line break inside a paragraph is a soft wrap, not a hard break, and paragraphs, lists and headings get vertical spacing instead of running together. The same spacing fix applies to assistant messages in the chat.
