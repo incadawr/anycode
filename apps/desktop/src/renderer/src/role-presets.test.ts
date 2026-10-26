@@ -42,7 +42,7 @@ describe("deriveRolePresets", () => {
     expect(p2.roles.executor.fallbacks).toBeUndefined();
   });
 
-  it("P3: This connection — every role on the active connection", () => {
+  it("P3: Session's connection — every role on the active connection", () => {
     const presets = deriveRolePresets({ claudeReady: false, codexReady: false }, ACTIVE);
     const p3 = presets[2]!;
     expect(p3.id).toBe("this-connection");

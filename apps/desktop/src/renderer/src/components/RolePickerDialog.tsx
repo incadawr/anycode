@@ -242,6 +242,14 @@ interface EntryRowProps {
   onMove?(delta: -1 | 1): void;
 }
 
+function connectionRouteLabel(connection: ProviderConnection, sources: RoleModelSources): string {
+  if (!connection.label) return connection.id;
+  const providerName = sources.catalog?.find((provider) => provider.id === connection.providerId)?.name
+    ?? sources.custom?.find((provider) => provider.id === connection.providerId)?.name
+    ?? connection.providerId;
+  return `${connection.label} · ${providerName}`;
+}
+
 function EntryRow({ label, entry, connections, modelSources, onChange, onRemove, onMove }: EntryRowProps) {
   const route = entry.engine !== "" ? `engine:${entry.engine}` : entry.connection.trim() !== "" ? `connection:${entry.connection}` : "connection:active";
   const models = resolveRoleModels(entry, modelSources);
@@ -257,10 +265,10 @@ function EntryRow({ label, entry, connections, modelSources, onChange, onRemove,
       >
         <option value="engine:claude">Claude engine</option>
         <option value="engine:codex">Codex engine</option>
-        <option value="connection:active">This connection</option>
+        <option value="connection:active">Session's connection</option>
         {connections.map((connection) => (
           <option key={connection.id} value={`connection:${connection.id}`}>
-            {connection.label ?? connection.id}
+            {connectionRouteLabel(connection, modelSources)}
           </option>
         ))}
       </select>

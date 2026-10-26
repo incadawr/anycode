@@ -8,7 +8,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RolePickerDialog } from "./RolePickerDialog.js";
-import { RolesPane } from "./RolesPane.js";
+import { RolesPane, RolesSaveNotice } from "./RolesPane.js";
 import { useSettingsStore } from "../settings-store.js";
 import type { SettingsSnapshot } from "../../../shared/settings.js";
 
@@ -99,4 +99,38 @@ it.each(["claude", "codex"] as const)("renders %s engine options without a secon
     const modelSelect = row.split('aria-label="Primary model"')[1]!;
     expect(modelSelect.match(/<option/g)).toHaveLength(2);
   }
+});
+
+
+describe("Roles save notice", () => {
+  it.each([
+    [true, "settings-notice-ok", "Roles saved."],
+    [false, "settings-notice", "Saving roles failed."],
+  ])("renders the %s save outcome with the correct class", (ok, className, message) => {
+    expect(renderToStaticMarkup(createElement(RolesSaveNotice, { ok })))
+      .toBe(`<p class="${className}" role="status">${message}</p>`);
+  });
+});
+
+it("renders provider names in every route and preserves route values", () => {
+  const connections = [
+    { id: "a", providerId: "deepseek", label: "test" },
+    { id: "b", providerId: "custom:local", label: "local" },
+    { id: "c", providerId: "unknown", label: "other" },
+    { id: "d", providerId: "deepseek" },
+  ];
+  const snapshot = {
+    settings: { version: 2, provider: { connections, custom: [{ id: "custom:local", name: "Local provider", baseUrl: "http://localhost", kind: "openai-compatible", models: [] }] }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false } },
+    secrets: [], providerReady: true, envOverrides: [], readOnly: false,
+    catalog: [{ id: "deepseek", name: "DeepSeek", authKind: "api_key", models: [] }],
+  } satisfies SettingsSnapshot;
+  useSettingsStore.setState({ snapshot });
+  const html = renderToStaticMarkup(createElement(RolePickerDialog, { ...base, connections, inline: true, initialRoles: { executor: { primary: {}, fallbacks: [{}] } } }));
+  expect(html.match(/test · DeepSeek/g)).toHaveLength(6);
+  expect(html.match(/local · Local provider/g)).toHaveLength(6);
+  expect(html).toContain('value="connection:c">other · unknown</option>');
+  expect(html).toContain('value="connection:d">d</option>');
+  expect(html).toContain('value="connection:active" selected="">Session&#x27;s connection</option>');
+  expect(html).toContain('>Session&#x27;s connection</button>');
+  expect(html).not.toContain('>This connection</');
 });
