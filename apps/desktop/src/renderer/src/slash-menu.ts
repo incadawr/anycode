@@ -88,11 +88,20 @@ export interface SlashMenuCtx extends SlashCapabilityCtx {
   ready: boolean;
   /**
    * Mirrors `ModelPill.tsx`'s `modelPickDisabled` — the Model row is enabled
-   * iff the pill itself is clickable (codex R1 P2 fix). ALSO read by the
-   * Compact row (TASK.146), which needs the very same "truly idle" window:
-   * `shouldEnqueue(turn.status, queueInFlight) || !ready`.
+   * iff the pill itself is clickable (codex R1 P2 fix). Since Taskana 4895
+   * that is engine-dependent (core is clickable mid-turn), so the Compact row
+   * reads `idle` below instead of borrowing this one.
    */
   modelDisabled: boolean;
+  /**
+   * Taskana 4895: "the host is truly idle right now" — the exact window a
+   * `compact_request` is accepted in. Kept separate from `modelDisabled`
+   * because that predicate became engine-dependent (the core engine accepts a
+   * mid-turn model/effort pick): a running turn must keep Compact disabled
+   * even while the Model row is live. Optional for callers written before the
+   * split; absent falls back to the old `!modelDisabled` reading.
+   */
+  idle?: boolean;
 }
 
 /**
@@ -306,13 +315,12 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     description: () => "Summarize the conversation to free context",
     icon: "compact",
     run: { kind: "compact_now" },
-    // Same truly-idle predicate the Model row reads (Composer's
-    // modelPickDisabled = shouldEnqueue(turn.status, queueInFlight) || !ready).
-    // The host refuses compact_request while busy (Session's silent-drop gate,
+    // The TRULY-IDLE window (Taskana 4895 split it out of `modelDisabled`):
+    // the host refuses compact_request while busy (Session's silent-drop gate,
     // TASK.146), so the row is gray for exactly that window: a running turn, a
     // compaction already in flight ("compacting"), a drained-but-unacked
     // prompt, or a not-yet-ready connection.
-    enabled: (ctx) => !ctx.modelDisabled,
+    enabled: (ctx) => ctx.idle ?? !ctx.modelDisabled,
     source: "engine",
     // Handled host-side by a real `compactNow` on the engine: CoreEngine's
     // (AgentLoop compaction) AND ClaudeEngine's allowlisted /compact slash

@@ -2585,6 +2585,18 @@ body {
   font-size: var(--fs-xs);
 }
 
+/* Taskana 4895: the running-turn timing note above the rows. Same muted
+   treatment as the empty line, hairline-separated from the rows below so it
+   reads as a caption, not as a pickable row. */
+.start-model-note {
+  padding: calc(var(--sp-1) + 2px) var(--sp-2);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--sp-1);
+}
+
 /* The level header: backs out one level, and names the level it is leaving. */
 .start-model-back {
   color: var(--text-3);
@@ -5170,6 +5182,23 @@ body {
   height: 12px;
   flex-shrink: 0;
   opacity: 0.7;
+}
+
+/* Taskana 4895: the chip is live while a turn runs, and this muted tag says
+   when a pick lands ("next turn"). Muted accent, never a second colour family —
+   it qualifies the label, it is not an alert. */
+.model-pill-midturn {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  opacity: 0.85;
+  white-space: nowrap;
+}
+
+/* The tag must not eat the label: the chip's 22ch cap is widened just enough
+   while the tag is present. */
+.model-pill-chip:has(.model-pill-midturn) {
+  max-width: 30ch;
 }
 
 .model-pill-popover {

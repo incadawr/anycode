@@ -282,7 +282,7 @@ describe("modelPickDisabled (client-side mirror of the host between-turns guard)
     expect(modelPickDisabled("idle", null, true)).toBe(false);
   });
 
-  it("is disabled while a turn is running, regardless of readiness", () => {
+  it("is disabled while a turn is running, regardless of readiness (engine without a mid-turn path)", () => {
     expect(modelPickDisabled("running", null, true)).toBe(true);
   });
 
@@ -292,6 +292,25 @@ describe("modelPickDisabled (client-side mirror of the host between-turns guard)
 
   it("is disabled whenever the connection isn't ready, even with an idle turn and no in-flight item", () => {
     expect(modelPickDisabled("idle", null, false)).toBe(true);
+  });
+
+  // Taskana 4895: the CORE engine queues a mid-turn pick and applies it at the
+  // next turn boundary, so the pill is usable while the turn runs.
+  it("stays ENABLED while a turn is running when the engine supports a mid-turn change (core)", () => {
+    expect(modelPickDisabled("running", null, true, true)).toBe(false);
+  });
+
+  it("stays enabled during the queue in-flight window too — the pick rides the queued turn", () => {
+    expect(modelPickDisabled("idle", IN_FLIGHT, true, true)).toBe(false);
+  });
+
+  it("stays enabled while a manual compaction runs (the host applies the pick at that boundary)", () => {
+    expect(modelPickDisabled("compacting", null, true, true)).toBe(false);
+  });
+
+  it("is STILL disabled when the connection isn't ready, even with a mid-turn-capable engine", () => {
+    expect(modelPickDisabled("running", null, false, true)).toBe(true);
+    expect(modelPickDisabled("idle", null, false, true)).toBe(true);
   });
 });
 

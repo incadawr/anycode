@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The composer's model/effort pill stays usable while a turn is running (core engine): the pick is accepted, the chip says "next turn", and the change applies from the next turn — the running turn keeps the model it started with (Taskana 4895).
+
 ### Fixed
 
 - A new session on a DeepSeek connection no longer starts at reasoning effort `low`: the model pill and the New Session picker showed the first level of the model's list, while DeepSeek's own default is `high`. The catalog now records each model's documented default effort (DeepSeek `high`, GLM-5.3 `max`), and a session where the user never picked a level both shows and sends it; an explicit pick still wins and persists (Taskana 4894).

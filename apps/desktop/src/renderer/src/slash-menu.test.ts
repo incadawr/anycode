@@ -457,6 +457,18 @@ describe("SLASH_COMMANDS registry invariants", () => {
     expect(enabled.find((item) => item.name === "Compact")!.disabled).toBe(false);
   });
 
+  // Taskana 4895: the Model row is live mid-turn on core, so Compact can no
+  // longer borrow `modelDisabled` — it reads the truly-idle `idle` flag.
+  it("Taskana 4895: Compact stays gray while a core turn runs even though the Model row is live", () => {
+    const compact = SLASH_COMMANDS.find((command) => command.id === "compact")!;
+    const model = SLASH_COMMANDS.find((command) => command.id === "model")!;
+    const midTurn = ctx({ modelDisabled: false, idle: false });
+    expect(model.enabled(midTurn)).toBe(true);
+    expect(compact.enabled(midTurn)).toBe(false);
+    // Idle restores it, and the legacy fallback (no `idle` supplied) is intact.
+    expect(compact.enabled(ctx({ modelDisabled: false, idle: true }))).toBe(true);
+  });
+
   it("has unique ids", () => {
     const ids = SLASH_COMMANDS.map((c) => c.id);
     expect(new Set(ids).size).toBe(ids.length);

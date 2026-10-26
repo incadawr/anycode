@@ -8255,7 +8255,10 @@ export function createAutomationFacade(
         effortItems: [...(state.availableEffortLevels ?? [])],
         currentModel: model,
         currentEffort: state.reasoningEffort,
-        modelPickDisabled: computeModelPickDisabled(state.turn.status, state.queueInFlight, state.connection === "ready"),
+        // Taskana 4895: same engine-dependent predicate the pill itself now
+        // renders with — core stays pickable mid-turn, a foreign engine keeps
+        // its between-turns gate (`state.engine === null` IS core).
+        modelPickDisabled: computeModelPickDisabled(state.turn.status, state.queueInFlight, state.connection === "ready", state.engine === null),
         manageModelsDisabled: modelPillDom.manageDisabled(),
       };
     },
@@ -8278,7 +8281,7 @@ export function createAutomationFacade(
       // a real click does nothing either). Stays synchronous and BEFORE any
       // click: a real disabled button no-ops a real click too, so there is no
       // commit to await here.
-      if (computeModelPickDisabled(state.turn.status, state.queueInFlight, state.connection === "ready")) {
+      if (computeModelPickDisabled(state.turn.status, state.queueInFlight, state.connection === "ready", state.engine === null)) {
         return { ok: false, reason: "pick_disabled" };
       }
       if (!modelPillDom.popoverOpen()) {

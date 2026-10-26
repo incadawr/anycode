@@ -1218,6 +1218,16 @@ export class Session {
   private availableEffortLevels: ReasoningEffort[] | undefined;
   /** Slice P7.15 (F14): the user-selected effort tier, persisted across a model switch. */
   private selectedEffort: ReasoningEffort;
+  /**
+   * Taskana 4895: a CORE-engine `set_model` / `set_reasoning_effort` that
+   * arrived while a turn was running. The running turn keeps the model it
+   * started with — the pick is queued here (last-value-wins per axis) and
+   * applied at the turn boundary, so it rides the NEXT turn and never races
+   * the running turn's model calls. `undefined` = nothing queued (the initial
+   * state and the state right after every apply/clear).
+   */
+  private pendingModel: string | undefined;
+  private pendingEffort: ReasoningEffort | undefined;
 
   /**
    * Prebuilt `session_history` payload (mapping + 500-cap applied once at
@@ -2439,71 +2449,59 @@ export class Session {
         // Validate against the model's declared effort levels (when known) so a
         // stale renderer can't request an unsupported tier; "off" always allowed.
         if (
-          !this.busy &&
           this.engine.capabilities.supportsReasoningEffort &&
           (message.effort === "off" || this.reasoningSupported) &&
           (this.availableEffortLevels === undefined || this.availableEffortLevels.includes(message.effort))
         ) {
-          // Slice P7.15 (F14): remember the user-selected tier so a later model
-          // switch re-resolves effort against it (a non-reasoning model drops it,
-          // but switching back restores it).
-          this.selectedEffort = message.effort;
-          this.engine.setReasoningEffort(message.effort === "off" ? undefined : message.effort);
-          this.outbound.emit({
-            type: "reasoning_effort_changed",
-            effort: message.effort,
-            ...(this.availableEffortLevels !== undefined ? { availableEffortLevels: this.availableEffortLevels } : {}),
-          });
+          if (!this.busy) {
+            this.applyReasoningEffort(message.effort);
+            break;
+          }
+          // Taskana 4895: the CORE engine queues a mid-turn pick instead of
+          // dropping it — it applies at the turn boundary (never to the turn
+          // that is running), see `applyPendingModelSelection`. A foreign
+          // engine keeps its own between-turns discipline (its effort picker
+          // is `set_engine_effort`, not this message).
+          if (this.engine.id === "core") {
+            this.pendingEffort = message.effort;
+          }
         }
         break;
       case "set_model": {
-        // Slice P7.15 (F14, design §2.1): mid-session model switch. Between-turns
-        // guard mirrors set_reasoning_effort — a switch is accepted ONLY while
-        // idle. Messages route sequentially, so a set_model arriving after an
-        // accepted user_message observes busy=true and is silently dropped (the
-        // authoritative host-side refusal; the renderer disables the row too, but
-        // this is the guarantee). Mirror of the CLI /model ambiguity rules: a
-        // non-empty trimmed id with no internal whitespace. No switch factory
-        // wired (legacy tests) -> silent no-op. Every rejection is a silent drop
-        // (no reply escape), exactly like set_reasoning_effort.
+        // Slice P7.15 (F14, design §2.1): mid-session model switch. Mirror of
+        // the CLI /model ambiguity rules: a non-empty trimmed id with no
+        // internal whitespace. No switch factory wired (legacy tests) ->
+        // silent no-op.
         const id = message.model.trim();
-        if (this.busy || !this.engine.capabilities.supportsModelSelection || id.length === 0 || /\s/.test(id)) {
+        if (!this.engine.capabilities.supportsModelSelection || id.length === 0 || /\s/.test(id)) {
           break;
         }
         // TASK.39: an engine with its OWN catalog validates the id against it
         // (never against AnyCode's provider catalog) and answers on the engine
         // settings channel. Reusing `set_model` rather than inventing a second
         // ui->host message keeps one model-switch verb on the wire for every
-        // engine; only the host-side handling differs.
+        // engine; only the host-side handling differs. Its between-turns
+        // discipline is unchanged (busy => silent drop).
         if (this.engineSettings !== undefined) {
+          if (this.busy) break;
           this.onEngineSettingsChange(this.engineSettings.selectModel(id), { model: id });
           break;
         }
         if (this.engine.switchModel === undefined) {
           break;
         }
-        // switchModel runs the full re-budget recipe host-side and returns the
-        // effort state re-resolved for the NEW model. selectedEffort is unchanged
-        // (the user's tier persists across the switch); only the effective effort
-        // and effort-levels follow the new model's capability.
-        const result = this.engine.switchModel(id, this.selectedEffort);
-        this.model = result.model;
-        this.availableEffortLevels = result.availableEffortLevels;
-        this.reasoningSupported = result.availableEffortLevels !== undefined;
-        this.outbound.emit({
-          type: "model_changed",
-          model: result.model,
-          reasoningEffort: result.reasoningEffort,
-          ...(result.availableEffortLevels !== undefined ? { availableEffortLevels: result.availableEffortLevels } : {}),
-          // TASK.56 W2: the verdict re-read for the NEW model — switchModel has
-          // already advanced the closure's current model above, so the push
-          // reflects the switched-to model (upfront re-gate on vision -> non-
-          // vision, mirror of the availableEffortLevels re-resolution).
-          ...(this.imageInputEnabled !== undefined ? { imageInput: this.imageInputEnabled() } : {}),
-          // TASK.198 срез C: same additive-optional discipline as imageInput above.
-          ...(this.imageFallbackAvailable !== undefined ? { imageFallback: this.imageFallbackAvailable() } : {}),
-          ...(this.contextWindowAssumed !== undefined ? { contextWindowAssumed: this.contextWindowAssumed() } : {}),
-        });
+        // Taskana 4895: the CORE engine queues a mid-turn pick instead of
+        // dropping it. Messages route sequentially, so a pick arriving after
+        // an accepted user_message sees busy=true; it is applied at that
+        // turn's boundary, never to the running turn. A foreign engine (or a
+        // core-shaped test double) keeps the historical silent drop.
+        if (this.busy) {
+          if (this.engine.id === "core") {
+            this.pendingModel = id;
+          }
+          break;
+        }
+        this.applyModelSwitch(id);
         break;
       }
       case "set_engine_preset":
@@ -2640,6 +2638,95 @@ export class Session {
         this.onBackgroundChildCancelRequest(message.requestId, message.childSessionId);
         break;
     }
+  }
+
+  /**
+   * Taskana 4895 — applies the core model/effort change queued by a mid-turn
+   * pick (see `pendingModel`/`pendingEffort`).
+   *
+   * Called at every root busy->idle boundary (the turn teardown, a manual
+   * compaction's and a rewind's finally, and the continuation path),
+   * SYNCHRONOUSLY and before `busy` relaxes: by then the running turn has
+   * fully resolved, so the switch cannot race its own model calls, and no
+   * inbound message can slip a new turn in between. A model switch re-resolves
+   * the effective effort from the SELECTED tier, so a queued tier travels as
+   * that tier's input rather than as a second ack — one `model_changed`
+   * carries both axes atomically, which is exactly what the renderer's
+   * ack-gated persist reads.
+   */
+  private applyPendingModelSelection(): void {
+    const model = this.pendingModel;
+    const effort = this.pendingEffort;
+    this.pendingModel = undefined;
+    this.pendingEffort = undefined;
+    if (model === undefined) {
+      if (effort !== undefined) {
+        this.applyReasoningEffort(effort);
+      }
+      return;
+    }
+    if (effort !== undefined) {
+      // The user's SELECTED tier (not the currently effective one): the
+      // switch below re-resolves it against the new model's capabilities.
+      this.selectedEffort = effort;
+    }
+    if (!this.applyModelSwitch(model) && effort !== undefined) {
+      this.applyReasoningEffort(effort);
+    }
+  }
+
+  /** Taskana 4895: drops a queued mid-turn pick — used when the engine itself is about to be replaced (the pick was made against the old one). */
+  private clearPendingModelSelection(): void {
+    this.pendingModel = undefined;
+    this.pendingEffort = undefined;
+  }
+
+  /**
+   * Slice P7.15 (F14) — the between-turns model switch, verbatim, now shared by
+   * the idle route and Taskana 4895's turn-boundary apply. Returns false when
+   * no switch factory is wired (a legacy engine/test double: a silent no-op).
+   */
+  private applyModelSwitch(id: string): boolean {
+    if (this.engine.switchModel === undefined) {
+      return false;
+    }
+    // switchModel runs the full re-budget recipe host-side and returns the
+    // effort state re-resolved for the NEW model. selectedEffort is unchanged
+    // (the user's tier persists across the switch); only the effective effort
+    // and effort-levels follow the new model's capability.
+    const result = this.engine.switchModel(id, this.selectedEffort);
+    this.model = result.model;
+    this.availableEffortLevels = result.availableEffortLevels;
+    this.reasoningSupported = result.availableEffortLevels !== undefined;
+    this.outbound.emit({
+      type: "model_changed",
+      model: result.model,
+      reasoningEffort: result.reasoningEffort,
+      ...(result.availableEffortLevels !== undefined ? { availableEffortLevels: result.availableEffortLevels } : {}),
+      // TASK.56 W2: the verdict re-read for the NEW model — switchModel has
+      // already advanced the closure's current model above, so the push
+      // reflects the switched-to model (upfront re-gate on vision -> non-
+      // vision, mirror of the availableEffortLevels re-resolution).
+      ...(this.imageInputEnabled !== undefined ? { imageInput: this.imageInputEnabled() } : {}),
+      // TASK.198 срез C: same additive-optional discipline as imageInput above.
+      ...(this.imageFallbackAvailable !== undefined ? { imageFallback: this.imageFallbackAvailable() } : {}),
+      ...(this.contextWindowAssumed !== undefined ? { contextWindowAssumed: this.contextWindowAssumed() } : {}),
+    });
+    return true;
+  }
+
+  /** Taskana 4895: the effort half of the same recipe — remembered as the user's SELECTED tier, applied to the engine, acked to the renderer. */
+  private applyReasoningEffort(effort: ReasoningEffort): void {
+    // Slice P7.15 (F14): remember the user-selected tier so a later model
+    // switch re-resolves effort against it (a non-reasoning model drops it,
+    // but switching back restores it).
+    this.selectedEffort = effort;
+    this.engine.setReasoningEffort(effort === "off" ? undefined : effort);
+    this.outbound.emit({
+      type: "reasoning_effort_changed",
+      effort,
+      ...(this.availableEffortLevels !== undefined ? { availableEffortLevels: this.availableEffortLevels } : {}),
+    });
   }
 
   private pushLspStatus(): void {
@@ -3198,6 +3285,10 @@ export class Session {
         restoredPaths: null,
       });
     } finally {
+      // Taskana 4895: the rewind held `busy`, so a mid-rewind model/effort
+      // pick was queued — apply it at this idle boundary (a maintenance op
+      // ends here; there is no turn for it to disturb).
+      this.applyPendingModelSelection();
       this.busy = false;
       if (this.currentTurn === op) this.currentTurn = null;
       this.drainAgentInbox();
@@ -3264,6 +3355,9 @@ export class Session {
       // is a defensive net mirroring runTurn's own catch above.
       this.outbound.emit({ type: "fatal", message: `compaction failed: ${describeError(error)}` });
     } finally {
+      // Taskana 4895: same idle-boundary apply as the rewind path above — a
+      // compaction holds `busy`, so a pick made during it was queued.
+      this.applyPendingModelSelection();
       this.busy = false;
       this.abort = null;
       if (this.currentTurn === op) this.currentTurn = null;
@@ -3399,6 +3493,9 @@ export class Session {
     } finally {
       release();
       if (this.currentTurn === op) this.currentTurn = null;
+      // Taskana 4895: a pick queued during the switch was made against the
+      // PREVIOUS engine, so it must not be replayed onto the new one.
+      this.clearPendingModelSelection();
       this.busy = false;
     }
   }
@@ -3664,6 +3761,10 @@ export class Session {
           pendingTurnIdHolder.turnId,
           this.currentStep !== undefined ? "settled" : "cancelled",
         );
+        // Taskana 4895: a core model/effort pick made DURING this turn applies
+        // HERE — synchronously, before `busy` relaxes, so it can never race
+        // the turn's own model calls and no next turn can overtake it.
+        this.applyPendingModelSelection();
         // TASK.102 CUT-S2 §10.10.1 O1: `busy` means something different for a
         // root session than for a child, and that asymmetry is now explicit
         // instead of one flag doing two incompatible jobs. ROOT: `busy` means
@@ -4673,6 +4774,9 @@ export class Session {
         await this.onContinuationComplete?.();
       }
     } finally {
+      // Taskana 4895: idle-boundary apply, same contract as the turn teardown
+      // (a resumed segment is a turn like any other).
+      this.applyPendingModelSelection();
       this.busy = false;
       this.abort = null;
       this.turnId = null;

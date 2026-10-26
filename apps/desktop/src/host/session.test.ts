@@ -3686,7 +3686,7 @@ describe("Session — model switch (slice P7.15 · F14)", () => {
     }
   });
 
-  it("silently drops a set_model while a turn is running (busy guard) — model unchanged, no model_changed", async () => {
+  it("queues a set_model while a turn is running and applies it at the turn boundary — never to the running turn (Taskana 4895)", async () => {
     const h = createHarness({
       steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()],
       reasoningSupported: true,
@@ -3701,21 +3701,103 @@ describe("Session — model switch (slice P7.15 · F14)", () => {
       h.send({ type: "user_message", requestId: "r1", text: "write it" });
       await h.waitFor(isPermissionRequest);
 
-      // A switch under a running turn is silently dropped (no reply escape).
+      // A switch under a running turn is QUEUED: no ack, and the live model
+      // the running turn uses is untouched.
       h.send({ type: "set_model", model: "glm-4.6" });
       await h.flush();
       await h.flush();
       expect(h.received.some(isModelChanged)).toBe(false);
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(isHostReady).length === 2);
+      expect(h.received.filter(isHostReady).at(-1)?.model).toBe("scripted-model");
 
-      // Release the ask, let the turn finish, then confirm the live model is
-      // still the boot model on the next handshake.
+      // Release the ask, let the turn finish -> the queued switch applies at
+      // that boundary, with its ordinary ack.
+      const req = await h.waitFor(isPermissionRequest);
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
+      await h.waitFor(agentEventOf("loop_end"));
+      const changed = await h.waitFor(isModelChanged);
+      expect(changed.model).toBe("glm-4.6");
+      expect(changed.reasoningEffort).toBe("off");
+
+      // And the NEXT turn (the next handshake) reports the switched model.
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(isHostReady).length === 3);
+      expect(h.received.filter(isHostReady).at(-1)?.model).toBe("glm-4.6");
+    } finally {
+      h.close();
+    }
+  });
+
+  it("queues a set_reasoning_effort while a turn is running and applies it at the turn boundary (Taskana 4895)", async () => {
+    const h = createHarness({
+      steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()],
+      reasoningSupported: true,
+      availableEffortLevels: ["off", "high", "max"],
+      switchModel: scriptedSwitchModel,
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      const isEffortChanged = (m: HostToUiMessage): m is Of<"reasoning_effort_changed"> =>
+        m.type === "reasoning_effort_changed";
+
+      // Establish a known live tier while idle, then run a turn that parks.
+      h.send({ type: "set_reasoning_effort", effort: "high" });
+      await h.waitFor(isEffortChanged);
+      h.send({ type: "user_message", requestId: "r1", text: "write it" });
+      await h.waitFor(isPermissionRequest);
+
+      // Queued, not acked: the running turn keeps its effort.
+      h.send({ type: "set_reasoning_effort", effort: "max" });
+      await h.flush();
+      await h.flush();
+      expect(h.received.filter(isEffortChanged)).toHaveLength(1);
+      expect(h.received.filter(isEffortChanged).at(-1)?.effort).toBe("high");
+
+      const req = await h.waitFor(isPermissionRequest);
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
+      await h.waitFor(agentEventOf("loop_end"));
+      await h.waitUntil(() => h.received.some((m) => isEffortChanged(m) && m.effort === "max"));
+
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(isHostReady).length === 2);
+      expect(h.received.filter(isHostReady).at(-1)?.reasoningEffort).toBe("max");
+    } finally {
+      h.close();
+    }
+  });
+
+  it("coalesces a queued model + effort pick into ONE model_changed at the boundary (Taskana 4895)", async () => {
+    const h = createHarness({
+      steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()],
+      reasoningSupported: true,
+      availableEffortLevels: ["off", "high", "max"],
+      switchModel: scriptedSwitchModel,
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "user_message", requestId: "r1", text: "write it" });
+      await h.waitFor(isPermissionRequest);
+      h.send({ type: "set_model", model: "glm-5.2" });
+      h.send({ type: "set_reasoning_effort", effort: "max" });
+      await h.flush();
+      await h.flush();
+      expect(h.received.some(isModelChanged)).toBe(false);
+
       const req = await h.waitFor(isPermissionRequest);
       h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
       await h.waitFor(agentEventOf("loop_end"));
 
-      h.send({ type: "ui_ready" });
-      await h.waitUntil(() => h.received.filter(isHostReady).length === 2);
-      expect(h.received.filter(isHostReady).at(-1)?.model).toBe("scripted-model");
+      // One ack carries both axes: the switch re-resolves the queued tier
+      // against the new model (the renderer's persist reads both from it).
+      const changed = await h.waitFor(isModelChanged);
+      expect(changed.model).toBe("glm-5.2");
+      expect(changed.reasoningEffort).toBe("max");
+      expect(h.received.filter(isModelChanged)).toHaveLength(1);
     } finally {
       h.close();
     }

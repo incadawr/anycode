@@ -129,6 +129,40 @@ const HOST_READY = (workspace: string, sessionId: string): HostToUiMessage => ({
   sessionId,
 });
 
+/**
+ * Taskana 4895: a NON-core (`codex`) handshake. The engine projection is what
+ * keeps the pill's between-turns gate — the core engine (no `engine` block,
+ * see `HOST_READY` above) now accepts a mid-turn model/effort pick instead.
+ */
+const FOREIGN_READY = (workspace: string, sessionId: string): HostToUiMessage => ({
+  type: "host_ready",
+  workspace,
+  mode: "build",
+  model: "m1",
+  sessionId,
+  engine: {
+    id: "codex",
+    capabilities: {
+      supportsCorePermissions: false,
+      supportsRewind: false,
+      supportsWorkflow: false,
+      supportsGitMutations: false,
+      supportsContextUsage: true,
+      supportsContextBreakdown: false,
+      supportsInteractiveApprovals: true,
+      costAccounting: false,
+      supportsModelSelection: true,
+      supportsReasoningEffort: true,
+      supportsImages: false,
+      supportsTasks: false,
+      supportsFileSnapshots: false,
+      supportsManualCompact: false,
+    },
+    model: { current: "gpt-5.2-codex", available: [{ id: "gpt-5.2-codex" }] },
+    permissions: { presets: [{ id: "ask", label: "Ask", description: "" }], activePresetId: "ask" },
+  },
+});
+
 function stubBridge(overrides: Partial<AnycodeBridge> = {}): AnycodeBridge {
   return {
     createTab: vi.fn(async (): Promise<CreateTabResult> => ({ ok: true, tabId: "resumed-tab", workspace: "/ws" })),
@@ -2956,9 +2990,30 @@ describe("automation facade — modelPillState / modelPillPick (design/slice-P7.
       expect(state.label).toBe("glm-4.6");
     });
 
-    it("reports modelPickDisabled:true WHILE a turn is running — the exact between-turns guard modelPillPick also enforces", () => {
+    it("reports modelPickDisabled:false WHILE a CORE turn is running — the pick is queued for the next turn (Taskana 4895)", () => {
       const { registry, tabsStore, port, tabId } = setupReadyTab();
       tabsStore.getState().setActiveTab(tabId);
+      port.emit({ type: "turn_started", requestId: "r0", turnId: "t0" });
+      const facade = createAutomationFacade(
+        registry,
+        tabsStore,
+        stubBridge(),
+        noTranscriptDom,
+        noTodoPanelDom,
+        noStartScreenDom,
+        pillDom(),
+        settingsStoreWith(null),
+      );
+      const state = facade.modelPillState(tabId);
+      expect(state.ok).toBe(true);
+      if (!state.ok) throw new Error("unreachable");
+      expect(state.modelPickDisabled).toBe(false);
+    });
+
+    it("reports modelPickDisabled:true WHILE a turn is running on a FOREIGN engine (codex/claude keep their between-turns rule)", () => {
+      const { registry, tabsStore, port, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      port.emit(FOREIGN_READY("/ws/a", "sess-a"));
       port.emit({ type: "turn_started", requestId: "r0", turnId: "t0" });
       const facade = createAutomationFacade(
         registry,
@@ -3033,9 +3088,10 @@ describe("automation facade — modelPillState / modelPillPick (design/slice-P7.
       await expect(facade.modelPillPick(tabId, { kind: "open" })).resolves.toEqual({ ok: false, reason: "not_present" });
     });
 
-    it("refuses EVERY pick kind with pick_disabled WHILE a turn is running (the live between-turns-guard negative) — and never touches the DOM", async () => {
+    it("refuses EVERY pick kind with pick_disabled WHILE a turn is running on a FOREIGN engine (the between-turns-guard negative) — and never touches the DOM", async () => {
       const { registry, tabsStore, port, tabId } = setupReadyTab();
       tabsStore.getState().setActiveTab(tabId);
+      port.emit(FOREIGN_READY("/ws/a", "sess-a"));
       port.emit({ type: "turn_started", requestId: "r0", turnId: "t0" });
       const dom = pillDom();
       const facade = createAutomationFacade(
@@ -12701,6 +12757,7 @@ describe("automation facade — modelPillPick drill-down menu (TASK.106 shared p
     };
     const dom = fakeDrillDom(world);
     const { facade, tabId, port, tabsStore } = readyFacade(dom);
+    port.emit(FOREIGN_READY("/ws/a", "sess-a"));
     port.emit({ type: "turn_started", requestId: "r0", turnId: "t0" });
     await expect(facade.modelPillPick(tabId, { kind: "model", value: "glm-5.2" })).resolves.toEqual({ ok: false, reason: "pick_disabled" });
     expect(dom.clickChip).not.toHaveBeenCalled();

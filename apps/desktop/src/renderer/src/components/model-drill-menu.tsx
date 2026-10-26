@@ -37,6 +37,13 @@ export interface ModelDrillMenuProps {
   focusIndex: number;
   /** What an empty level says instead of showing a blank box. */
   emptyText: string;
+  /**
+   * Taskana 4895: a plain-language line above the rows — the running session's
+   * chip passes "applies from the next turn" while a turn is in flight, so a
+   * pick that is accepted right away cannot read as already in effect. Absent
+   * on the start screen (nothing is running there) and between turns.
+   */
+  note?: string;
   /** The owner's row-button registry, filled by index so the owner can move DOM focus with the roving index. */
   itemRefs: MutableRefObject<(HTMLButtonElement | null)[]>;
   onKeyDown(event: KeyboardEvent<HTMLDivElement>): void;
@@ -159,6 +166,10 @@ export function ModelDrillMenu(props: ModelDrillMenuProps): ReactElement {
           {backLabel ?? "Models"}
         </button>
       )}
+      {/* Taskana 4895: the running-turn timing note (see the prop's doc). A
+          plain line, not a row — it is not focusable and never enters the
+          roving index. */}
+      {props.note !== undefined && <div className="start-model-note">{props.note}</div>}
       {/* Reachable only with no connected provider at all (the current
           connection always keeps a group, even an empty one). An empty box
           would read as a broken popover. */}

@@ -12,12 +12,14 @@
  * reused as-is rather than re-derived.
  *
  * Wire: picking a model sends `set_model`; picking an effort sends the
- * existing `set_reasoning_effort` (host guard silently drops both while
- * busy; since TASK.37 `set_mode` is the exception — mode changes are
- * accepted mid-turn). `modelPickDisabled` is the
- * client-side mirror of that guard (F15's `shouldEnqueue` plus `!ready`) so
- * the chip itself goes unclickable rather than offering a pick the host
- * would reject.
+ * existing `set_reasoning_effort` (since TASK.37 `set_mode` accepts a mid-turn
+ * change; since Taskana 4895 the CORE engine accepts `set_model` /
+ * `set_reasoning_effort` mid-turn too — it queues them and applies them at the
+ * next turn boundary, so the pill stays live while a turn runs and says
+ * plainly that a pick applies from the next turn). A foreign engine keeps its
+ * between-turns discipline. `modelPickDisabled` is the client-side mirror of
+ * that availability (F15's `shouldEnqueue` for engines without a mid-turn
+ * path, plus `!ready`), so the chip never offers a pick the host would reject.
  *
  * Persist (§2.4, the owner-pain half): a pick does NOT persist optimistically.
  * The component remembers the pending pick in a ref and only writes the
@@ -341,20 +343,30 @@ export function modelMenuItems(
 }
 
 /**
- * Client-side mirror of the host's authoritative between-turns guard (design
- * §2.1): a pick is offered only when the tab is truly idle — NOT
+ * Client-side mirror of the host's model/effort availability guard.
+ *
+ * Taskana 4895: the CORE engine accepts a `set_model` / `set_reasoning_effort`
+ * mid-turn and applies it at the next turn boundary (host/session.ts's
+ * `applyPendingModelSelection`), so a running turn no longer disables the pill
+ * there — `midTurnChangeSupported` is the caller's engine fact (the tab store's
+ * `engine === null`, i.e. core). A foreign engine (codex/claude) keeps its own
+ * between-turns discipline, and `engineControlDisabled` is still its gate.
+ *
+ * `ready` stays absolute: without a live host there is nothing to send to.
  * `shouldEnqueue` (the F15 predicate: a running turn OR the queue in-flight
- * window both count as busy) — AND the connection is `ready` (no host to
- * send to otherwise). The host's `!busy` check is the real backstop; this
- * only keeps the UI from offering a pick it knows would be silently
- * dropped. Exported for unit testing.
+ * window both count as busy) still decides for an engine that cannot take a
+ * mid-turn change. Exported for unit testing.
  */
 export function modelPickDisabled(
   turnStatus: TurnState["status"],
   queueInFlight: DesktopState["queueInFlight"],
   ready: boolean,
+  midTurnChangeSupported = false,
 ): boolean {
-  return shouldEnqueue(turnStatus, queueInFlight) || !ready;
+  if (!ready) {
+    return true;
+  }
+  return midTurnChangeSupported ? false : shouldEnqueue(turnStatus, queueInFlight);
 }
 
 /**
@@ -411,6 +423,15 @@ export function chainWrite(chain: Promise<unknown>, write: () => Promise<unknown
   });
 }
 
+/**
+ * Taskana 4895: what the chip says while a turn is running — a core model or
+ * effort pick is accepted right away but only takes effect at the next turn
+ * boundary (the host queues it; see host/session.ts's
+ * `applyPendingModelSelection`). Exported so the copy is unit-testable and the
+ * menu note and the chip title can never drift apart.
+ */
+export const MID_TURN_CHANGE_NOTE = "Model and effort changes apply from the next turn";
+
 export function ModelPill() {
   const sendToHost = useTabSend();
   const storeApi = useTabStoreApi();
@@ -426,6 +447,18 @@ export function ModelPill() {
   const connection = useTabStore((state) => state.connection);
   const pinnedConnection = useTabStore((state) => state.pinnedConnection);
   const ready = connection === "ready";
+  // Taskana 4895: the tab store's engine projection is `null` ONLY for the core
+  // engine (`host_ready` carries no `engine` block for core). Core accepts a
+  // mid-turn model/effort pick and applies it at the next turn boundary, so the
+  // pill stays live while a turn runs. A foreign engine (codex/claude) keeps its
+  // between-turns rules untouched — in practice its own `EngineModelMenu` is the
+  // picker there, and `engineControlDisabled` its gate.
+  const enginePresentation = useTabStore((state) => state.engine);
+  const midTurnChange = enginePresentation === null;
+  // "The host is busy right now" — the exact axis a mid-turn pick rides over.
+  // The note below is honest only while this is true.
+  const turnInProgress = shouldEnqueue(turnStatus, queueInFlight);
+  const idle = !turnInProgress;
 
   const snapshot = useSettingsStore((state) => state.snapshot);
   const connectionUpdate = useSettingsStore((state) => state.connectionUpdate);
@@ -518,7 +551,7 @@ export function ModelPill() {
   // soon as it is spent or the rebind fails.
   const effortResetRef = useRef<string | undefined>(undefined);
 
-  const pickDisabled = modelPickDisabled(turnStatus, queueInFlight, ready);
+  const pickDisabled = modelPickDisabled(turnStatus, queueInFlight, ready, midTurnChange);
 
   // TASK.106 cut-2 §D4: the drill-down's rows for THIS tab — groups over every
   // connected connection, the tab's own pin first with its live model
@@ -724,7 +757,11 @@ export function ModelPill() {
     if (pickDisabled) {
       return;
     }
-    if (id !== model) {
+    // Taskana 4895: a mid-turn pick is QUEUED host-side (last-value-wins), so
+    // re-picking the model still on screen must travel too: it replaces the
+    // queued pick instead of being mistaken for a no-op. `pendingPickRef` is
+    // the only record of a pick the host has not acked yet.
+    if (id !== model || pendingPickRef.current !== null) {
       pendingPickRef.current = { kind: "model", value: id, connectionId: writeTargetConnectionId };
       sendToHost({ type: "set_model", model: id });
     }
@@ -735,7 +772,8 @@ export function ModelPill() {
     if (pickDisabled) {
       return;
     }
-    if (effort !== reasoningEffort) {
+    // Same queued-pick rule as pickModel above.
+    if (effort !== reasoningEffort || pendingPickRef.current !== null) {
       pendingPickRef.current = { kind: "effort", value: effort, connectionId: writeTargetConnectionId };
       sendToHost({ type: "set_reasoning_effort", effort });
     }
@@ -758,11 +796,22 @@ export function ModelPill() {
    * before the rebind (rebinding then would boot the target on its OLD model),
    * and a refused rebind leaves the session exactly where it was running.
    *
-   * The idle gate (§D2) is the same `pickDisabled` predicate that mutes the
-   * chip — a switch mid-turn is refused, never queued.
+   * The idle gate (§D2) is NOT `pickDisabled` since Taskana 4895 (that one is
+   * live mid-turn for core): a rebind tears the host down, so it keeps the
+   * between-turns `idle` predicate and refuses loudly while a turn runs.
    */
   async function pickForeignModel(connectionId: string, modelId: string): Promise<void> {
     if (pickDisabled) {
+      return;
+    }
+    // Taskana 4895: the chip itself now stays live during a running turn (a
+    // same-connection pick is queued), but a FOREIGN connection pick is a
+    // rebind — it shuts the host down and respawns it, which would cut the
+    // running turn. That stays between-turns only; name the refusal instead of
+    // silently doing nothing.
+    if (!idle) {
+      close(false);
+      failRebind("wait for the running turn to finish before switching provider");
       return;
     }
     if (tabId === undefined) {
@@ -995,11 +1044,14 @@ export function ModelPill() {
         aria-haspopup="menu"
         aria-expanded={open}
         disabled={pickDisabled}
-        title={label}
+        title={turnInProgress ? `${label} — ${MID_TURN_CHANGE_NOTE}` : label}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={onChipKeyDown}
       >
         <span className="model-pill-label">{label}</span>
+        {/* Taskana 4895: plainly says WHEN a pick lands while a turn runs —
+            the running turn itself keeps the model it started with. */}
+        {turnInProgress && <span className="model-pill-midturn">next turn</span>}
         <Chevron className="model-pill-chevron" />
       </button>
 
@@ -1037,6 +1089,9 @@ export function ModelPill() {
             backLabel={drillPage.kind === "effort" ? "Effort" : (openGroup?.label ?? "Models")}
             focusIndex={focusIndex}
             emptyText="No connected providers yet."
+            // Taskana 4895: same wording as the chip's own note — a pick is
+            // accepted now and rides the NEXT turn, never the running one.
+            {...(turnInProgress ? { note: MID_TURN_CHANGE_NOTE } : {})}
             itemRefs={itemRefs}
             onKeyDown={onMenuKeyDown}
             onActivateRow={activateRow}
