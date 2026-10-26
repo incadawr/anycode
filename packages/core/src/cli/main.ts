@@ -668,8 +668,12 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
         `[warn] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}\n`,
       ),
   );
-  let selectedReasoningEffort = envConfig.reasoningEffort ?? "off";
-  const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, selectedReasoningEffort);
+  const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, envConfig.reasoningEffort);
+  // Taskana 4894: the cell model switches re-resolve from starts at the tier the
+  // session actually runs at — the model's recorded provider default when the
+  // user never chose one — so a switch cannot silently drop it. An explicit
+  // choice (env `ANYCODE_REASONING_EFFORT`) still wins, `"off"` stays `"off"`.
+  let selectedReasoningEffort = bootReasoningEffort ?? "off";
   // TASK.162 (F6): the same catalog + env overrides the boot above reads,
   // packaged once so an Agent-tool `model` override re-resolves the child's
   // ceiling/effort/window for ITS model instead of inheriting the parent's.

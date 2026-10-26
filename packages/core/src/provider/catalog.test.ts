@@ -197,8 +197,9 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
   });
 
   // TASK 4241 (2026-10-10): rows refreshed from the supplied authoritative
-  // live GET /models facts. Default effort high is comment-only in the
-  // catalog (no default-effort field exists on CatalogModel).
+  // live GET /models facts. Taskana 4894 carries the documented "default
+  // effort is high" as a real `defaultEffort` field, so a session with no
+  // explicit pick shows and sends `high` rather than the vocabulary's `low`.
   it("declares the refreshed DeepSeek rows (live GET /models facts, 2026-10-10)", () => {
     const deepseek = findCatalogEntry("deepseek");
     expect(deepseek?.models.map((m) => m.id)).toEqual(["deepseek-flash", "deepseek-v4-pro"]);
@@ -211,6 +212,7 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
       imageInput: true,
       reasoning: true,
       effortLevels: ["low", "high", "max"],
+      defaultEffort: "high",
     });
     const pro = deepseek?.models.find((m) => m.id === "deepseek-v4-pro");
     expect(pro).toEqual({
@@ -220,8 +222,23 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
       maxOutputTokens: 393_216,
       reasoning: true,
       effortLevels: ["low", "high", "max"],
+      defaultEffort: "high",
     });
     expect("imageInput" in (pro ?? {})).toBe(false);
+  });
+
+  // Taskana 4894: GLM-5.3's docs.z.ai page states the default tier is "max"
+  // (see catalog-data.ts's TASK.163 note) — recorded as data, not a guess.
+  it("records GLM-5.3's documented default effort and leaves undocumented rows alone", () => {
+    const zai = findCatalogEntry("z-ai");
+    expect(zai?.models.find((m) => m.id === "glm-5.3")?.defaultEffort).toBe("max");
+    // No recorded provider default for these: their docs state levels, not a
+    // default, so no `defaultEffort` may be invented (Taskana 4894).
+    expect(zai?.models.find((m) => m.id === "glm-5.3-flash")?.defaultEffort).toBeUndefined();
+    expect(zai?.models.find((m) => m.id === "glm-5.2")?.defaultEffort).toBeUndefined();
+    for (const id of ["kimi-for-coding", "kimi-for-coding-highspeed", "k3", "k3-256k"]) {
+      expect(findCatalogEntry("kimi")?.models.find((m) => m.id === id)?.defaultEffort).toBeUndefined();
+    }
   });
 });
 

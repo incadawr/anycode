@@ -970,6 +970,16 @@ export interface CatalogSummaryEntry {
     name?: string;
     reasoning?: boolean;
     effortLevels?: string[];
+    /**
+     * Taskana 4894: the provider's own default effort tier for this model
+     * (`CatalogModel.defaultEffort`) — present only where the catalog records
+     * one. The New Session picker uses it as the level to SHOW when the user
+     * has made no pick and the connection persists none, instead of the
+     * vocabulary's first entry (which displayed DeepSeek's `low` while the
+     * endpoint's real default is `high`). Optional/additive: an older main
+     * projects nothing and the renderer keeps its pre-4894 fallback.
+     */
+    defaultEffort?: string;
     maxOutputTokens?: number;
     /**
      * TASK.142: the two catalog window facts the drawer names in its

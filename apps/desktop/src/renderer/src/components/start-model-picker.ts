@@ -368,6 +368,38 @@ export function startModelEffortLevels(
 const START_MODEL_EFFORT_VOCABULARY: readonly string[] = ["off", "low", "medium", "high", "max"];
 
 /**
+ * The provider's own default effort tier for a model (Taskana 4894), or
+ * `undefined` when none is recorded.
+ *
+ * Only the catalog can answer this: a live `/models` fetch declares a
+ * VOCABULARY, never a default, so a catalog miss yields `undefined` and the
+ * caller keeps its pre-4894 behaviour. The recorded default is additionally
+ * checked against the vocabulary the picker would offer — a catalog row whose
+ * `defaultEffort` names a level the model itself does not declare is treated
+ * as no default at all rather than offered as a phantom level. Exported for
+ * unit testing.
+ */
+export function startModelDefaultEffort(
+  providerId: string | undefined,
+  modelId: string,
+  catalog: CatalogSummary | undefined,
+  liveCaps?: ModelCapabilitiesDto,
+): string | undefined {
+  const matched = catalog
+    ?.find((entry) => entry.id === providerId)
+    ?.models.find((model) => model.id === modelId);
+  const recorded = matched?.defaultEffort;
+  if (recorded === undefined) {
+    return undefined;
+  }
+  if (matched?.reasoning !== true) {
+    return undefined;
+  }
+  const efforts = startModelEffortLevels(providerId, modelId, catalog, liveCaps);
+  return efforts !== undefined && efforts.includes(recorded) ? recorded : undefined;
+}
+
+/**
  * The effort a draft should carry after its model changed (TASK.131): the
  * previous pick when the NEW model's vocabulary also contains it, else
  * `undefined` — "no explicit pick", which lets the connection's own persisted
@@ -389,14 +421,21 @@ export function carryDraftEffort(
  * (TASK.131): the draft's own pick when it has one, else the effort the
  * target connection already persists (`ProviderConnection.reasoningEffort` —
  * what the session would boot with if the user never opened this level), else
- * the vocabulary's own first level. `undefined` only when the model declares
- * no vocabulary, which is exactly when no effort level is rendered. Exported
- * for unit testing.
+ * the model's recorded provider default (`modelDefaultEffort`, Taskana 4894),
+ * else the vocabulary's own first level. `undefined` only when the model
+ * declares no vocabulary, which is exactly when no effort level is rendered.
+ *
+ * The default sits BEHIND the persisted effort on purpose: a persisted tier is
+ * an earlier explicit choice and must keep winning, while the provider default
+ * only answers "nobody ever chose" — before 4894 that case fell through to
+ * `efforts[0]`, which displayed DeepSeek's `low` against its documented
+ * `high`. Exported for unit testing.
  */
 export function resolveStartModelEffort(
   draftEffort: string | undefined,
   connectionEffort: string | undefined,
   efforts: readonly string[] | undefined,
+  modelDefaultEffort?: string,
 ): string | undefined {
   if (efforts === undefined || efforts.length === 0) {
     return undefined;
@@ -406,6 +445,9 @@ export function resolveStartModelEffort(
   }
   if (connectionEffort !== undefined && efforts.includes(connectionEffort)) {
     return connectionEffort;
+  }
+  if (modelDefaultEffort !== undefined && efforts.includes(modelDefaultEffort)) {
+    return modelDefaultEffort;
   }
   return efforts[0];
 }

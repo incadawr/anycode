@@ -16,6 +16,7 @@ import {
   deriveRecentModelIds,
   orderModelsByCatalog,
   resolveStartModelEffort,
+  startModelDefaultEffort,
   startModelEffortLevels,
   startModelLevelHeightPx,
   startModelMenuFlipsUp,
@@ -318,6 +319,65 @@ describe("effort carry/resolve (TASK.131)", () => {
   it("resolveStartModelEffort: undefined with no vocabulary — exactly when no effort level exists", () => {
     expect(resolveStartModelEffort("high", "high", undefined)).toBeUndefined();
     expect(resolveStartModelEffort("high", "high", [])).toBeUndefined();
+  });
+
+  // Taskana 4894: the level SHOWN for a pair with no explicit pick is the
+  // model's documented provider default, not the vocabulary's first entry.
+  it("resolveStartModelEffort: the model's recorded default beats the vocabulary's first level", () => {
+    // DeepSeek: levels low/high/max, documented default high.
+    expect(resolveStartModelEffort(undefined, undefined, ["low", "high", "max"], "high")).toBe("high");
+    // An explicit pick still wins...
+    expect(resolveStartModelEffort("low", undefined, ["low", "high", "max"], "high")).toBe("low");
+    // ...and so does an earlier persisted choice on the connection.
+    expect(resolveStartModelEffort(undefined, "max", ["low", "high", "max"], "high")).toBe("max");
+    // A default the vocabulary does not declare is never displayed.
+    expect(resolveStartModelEffort(undefined, undefined, ["low", "high", "max"], "medium")).toBe("low");
+  });
+
+  it("resolveStartModelEffort: no recorded default keeps the pre-4894 first-level behaviour", () => {
+    expect(resolveStartModelEffort(undefined, undefined, ["low", "high", "max"])).toBe("low");
+    expect(resolveStartModelEffort(undefined, undefined, ["low", "high", "max"], undefined)).toBe("low");
+  });
+});
+
+// ── Taskana 4894: the per-model default effort comes from the catalog ──
+
+describe("startModelDefaultEffort (Taskana 4894)", () => {
+  const CATALOG: CatalogSummary = [
+    {
+      id: "deepseek",
+      name: "DeepSeek",
+      authKind: "api_key",
+      models: [
+        { id: "deepseek-flash", name: "DeepSeek-V4.1-Flash", reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high" },
+        // A catalog row whose recorded default is outside its own vocabulary.
+        { id: "bogus-default", name: "Bogus", reasoning: true, effortLevels: ["low", "high"], defaultEffort: "max" },
+        // A non-reasoning row that somehow recorded a default.
+        { id: "blind", name: "Blind", defaultEffort: "high" },
+        { id: "k3", name: "K3", reasoning: true, effortLevels: ["low", "high", "max"] },
+      ],
+    },
+  ];
+
+  it("returns the catalog's recorded default for a reasoning model", () => {
+    expect(startModelDefaultEffort("deepseek", "deepseek-flash", CATALOG)).toBe("high");
+  });
+
+  it("returns undefined when the model records no default (pre-4894 rows)", () => {
+    expect(startModelDefaultEffort("deepseek", "k3", CATALOG)).toBeUndefined();
+    expect(startModelDefaultEffort("deepseek", "unknown-model", CATALOG)).toBeUndefined();
+    expect(startModelDefaultEffort(undefined, "deepseek-flash", CATALOG)).toBeUndefined();
+  });
+
+  it("fail-closed: never offers a default the model does not declare, or one on a non-reasoning model", () => {
+    expect(startModelDefaultEffort("deepseek", "bogus-default", CATALOG)).toBeUndefined();
+    expect(startModelDefaultEffort("deepseek", "blind", CATALOG)).toBeUndefined();
+  });
+
+  it("a live-only model has no default — live capabilities declare a vocabulary only", () => {
+    expect(
+      startModelDefaultEffort("deepseek", "unknown-model", CATALOG, { reasoning: true, effortLevels: ["low", "high", "max"] }),
+    ).toBeUndefined();
   });
 });
 

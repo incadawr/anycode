@@ -743,6 +743,28 @@ describe("projectCatalogSummary — value-only projection", () => {
     ]);
   });
 
+  it("Taskana 4894: projects each model's defaultEffort only when declared, leaving legacy fixtures byte-identical", () => {
+    const summary = projectCatalogSummary([
+      {
+        id: "deepseek",
+        name: "DeepSeek",
+        auth: { kind: "api_key" },
+        baseUrl: "https://api.deepseek.com/anthropic",
+        models: [
+          { id: "deepseek-flash", name: "DeepSeek-V4.1-Flash", reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high" },
+          { id: "k3", name: "K3", reasoning: true, effortLevels: ["low", "high", "max"] },
+        ],
+      },
+    ]);
+    // Conditional spread: only a model whose provider documents a default
+    // carries the field, so the picker can tell "no recorded default" from a
+    // real one and every pre-4894 fixture projects byte-identically.
+    expect(summary[0]?.models).toEqual([
+      { id: "deepseek-flash", name: "DeepSeek-V4.1-Flash", reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high" },
+      { id: "k3", name: "K3", reasoning: true, effortLevels: ["low", "high", "max"] },
+    ]);
+  });
+
   it("TASK.159: projects each model's maxOutputTokens only when declared, leaving legacy fixtures byte-identical", () => {
     const summary = projectCatalogSummary([
       {

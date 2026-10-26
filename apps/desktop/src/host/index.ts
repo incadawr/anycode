@@ -3449,6 +3449,13 @@ async function boot(): Promise<void> {
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
     ));
     const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, envConfig.reasoningEffort, liveCapsFor(envConfig.model));
+    // Taskana 4894: with no explicit tier anywhere, the tier this session runs
+    // at is the model's recorded provider default (`bootReasoningEffort`) — NOT
+    // `"off"`. Seeding `selectedEffort` with `"off"` would keep the default out
+    // of the persisted-tier cell, so the first mid-session model switch would
+    // re-resolve from `"off"` and silently drop a level the pill just showed.
+    // An explicit choice (env / connection) still wins, and `"off"` stays `"off"`.
+    selectedEffort = bootReasoningEffort ?? "off";
     const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry, liveCapsFor(envConfig.model));
     // TASK.162 (F6): the same catalog + env overrides the three boot
     // resolutions above read, packaged once so an Agent-tool `model` override

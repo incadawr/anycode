@@ -463,5 +463,47 @@ describe("Taskana 4118 — live capabilities supplement the catalog", () => {
     expect(resolveReasoningEffort("unknown-reasoner", entry, "medium", live)).toBeUndefined();
     expect(resolveReasoningEffort("unknown-reasoner", entry, "high")).toBeUndefined();
     expect(resolveReasoningEffort("unknown-reasoner", entry, "high", { reasoning: true, effortLevels: ["xhigh"] })).toBeUndefined();
+    // 4894: live capabilities declare a vocabulary only — never a default, so
+    // "no explicit choice" stays undefined on a catalog miss.
+    expect(resolveReasoningEffort("unknown-reasoner", entry, undefined, live)).toBeUndefined();
+  });
+});
+
+// ── Taskana 4894: a model's recorded provider default effort is the tier a ──
+// ── session with no explicit choice both SHOWS and SENDS ──
+
+describe("resolveReasoningEffort × per-model default effort (Taskana 4894)", () => {
+  const entry: CatalogProviderEntry = { id: "deepseek", name: "DeepSeek", baseUrl: "https://api.deepseek.com/anthropic", defaultTransport: "anthropic-messages", supportedTransports: ["anthropic-messages"], auth: { kind: "api_key" }, models: [
+    { id: "deepseek-flash", contextWindow: 1_048_576, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high" },
+    { id: "k3", contextWindow: 262_144, reasoning: true, effortLevels: ["low", "high", "max"] },
+    { id: "glm-basic", contextWindow: 128_000 },
+    { id: "bogus-default", contextWindow: 128_000, reasoning: true, effortLevels: ["low", "high"], defaultEffort: "max" },
+    { id: "off-default", contextWindow: 128_000, reasoning: true, effortLevels: ["off", "high"], defaultEffort: "off" },
+  ] };
+
+  it("no explicit choice → the model's recorded default", () => {
+    expect(resolveReasoningEffort("deepseek-flash", entry, undefined)).toBe("high");
+    // The old display path read effortLevels[0] ("low") — never the default.
+    expect(resolveEffortLevels("deepseek-flash", entry)?.[0]).toBe("low");
+  });
+
+  it("an explicit choice still wins over the default", () => {
+    expect(resolveReasoningEffort("deepseek-flash", entry, "low")).toBe("low");
+    expect(resolveReasoningEffort("deepseek-flash", entry, "max")).toBe("max");
+    // "off" is an explicit choice: it means no reasoning, not the default.
+    expect(resolveReasoningEffort("deepseek-flash", entry, "off")).toBeUndefined();
+  });
+
+  it("a model without a recorded default keeps the pre-4894 behaviour", () => {
+    expect(resolveReasoningEffort("k3", entry, undefined)).toBeUndefined();
+    expect(resolveReasoningEffort("k3", entry, "high")).toBe("high");
+    // A non-reasoning model never gains an effort from its catalog row.
+    expect(resolveReasoningEffort("glm-basic", entry, undefined)).toBeUndefined();
+  });
+
+  it("a default outside the model's own vocabulary is never applied (fail-closed)", () => {
+    expect(resolveReasoningEffort("bogus-default", entry, undefined)).toBeUndefined();
+    // An explicit "off" default means "no reasoning" — the host's undefined.
+    expect(resolveReasoningEffort("off-default", entry, undefined)).toBeUndefined();
   });
 });

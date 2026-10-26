@@ -43,6 +43,18 @@ export interface CatalogModel {
    */
   effortLevels?: ReasoningEffort[];
   /**
+   * Taskana 4894: the effort tier the PROVIDER applies when the request says
+   * nothing — only ever set where the provider's own documentation states it
+   * (DeepSeek: "default high"; GLM-5.3: "default max"). It is the rung between
+   * "the user picked a level" and "no effort information exists": with no
+   * explicit choice, a session both shows and sends this level instead of
+   * either guessing (`effortLevels[0]`, which made DeepSeek display `low`) or
+   * sending nothing and leaving the user unable to see what the endpoint is
+   * really doing. Absent = no recorded provider default, so the pre-4894
+   * behaviour stands untouched for that model.
+   */
+  defaultEffort?: ReasoningEffort;
+  /**
    * Static capability hint (Phase 6 slice 6.2): true marks the model as accepting
    * image input. Absent = not marked ⇒ the CLI refuses image attach without the
    * ANYCODE_IMAGE_INPUT=on override.

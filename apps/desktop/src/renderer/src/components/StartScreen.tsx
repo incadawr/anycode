@@ -74,6 +74,7 @@ import {
   carryDraftEffort,
   deriveRecentModelIds,
   resolveStartModelEffort,
+  startModelDefaultEffort,
   startModelEffortLevels,
   startModelLevelHeightPx,
   startModelMenuFlipsUp,
@@ -732,11 +733,24 @@ export function StartScreen({ onToast }: StartScreenProps) {
     snapshot?.catalog,
     chipConnection?.modelCapabilities?.[modelChip.modelId],
   );
+  // Taskana 4894: the provider's documented default tier for that model —
+  // the level to show when neither the draft nor the connection has a pick.
+  const modelDefaultEffort = startModelDefaultEffort(
+    chipConnection?.providerId,
+    modelChip.modelId,
+    snapshot?.catalog,
+    chipConnection?.modelCapabilities?.[modelChip.modelId],
+  );
   // What that level DISPLAYS and pre-selects: the draft's own pick, else the
   // effort the target connection already persists (what the session would
-  // boot with if the user never opened the level), else the vocabulary's
-  // first entry.
-  const modelEffort = resolveStartModelEffort(draft?.engineEffort, chipConnection?.reasoningEffort, modelEfforts);
+  // boot with if the user never opened the level), else the model's provider
+  // default (Taskana 4894), else the vocabulary's first entry.
+  const modelEffort = resolveStartModelEffort(
+    draft?.engineEffort,
+    chipConnection?.reasoningEffort,
+    modelEfforts,
+    modelDefaultEffort,
+  );
   // The chip carries the effort the session would actually boot with, the way
   // the active-session ModelPill does — a picked effort that is only visible
   // inside the popover reads as no effort at all. Falls back to the provider

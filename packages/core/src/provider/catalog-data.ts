@@ -116,7 +116,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     // `guides/vlm/`, and nobody has claimed images for it.
     models: [
       // GLM-5.3/5.3-flash/5.2: 1M context, 128K max output (docs.z.ai spec boxes).
-      { id: "glm-5.3", name: "GLM-5.3", contextWindow: 1_000_000, usableContextWindow: GLM_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["low", "high", "max"] },
+      { id: "glm-5.3", name: "GLM-5.3", contextWindow: 1_000_000, usableContextWindow: GLM_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "max" },
       { id: "glm-5.3-flash", name: "GLM-5.3 Flash", contextWindow: 1_000_000, usableContextWindow: GLM_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
       { id: "glm-5.2", name: "GLM-5.2", contextWindow: 1_000_000, usableContextWindow: GLM_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["off", "high", "max"] },
       // GLM-5.1/5/5-turbo/4.7/4.6: 200K context, 128K max output (docs.z.ai spec boxes).
@@ -142,10 +142,12 @@ const ENTRIES: CatalogProviderEntry[] = [
     auth: { kind: "api_key" },
     models: [
       // TASK 4241 (2026-10-10): rows replaced from the supplied authoritative
-      // live GET /models facts. Default effort is high — recorded here only;
-      // the catalog carries no default-effort field.
-      { id: "deepseek-flash", name: "DeepSeek-V4.1-Flash", contextWindow: 1_048_576, maxOutputTokens: 393_216, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
-      { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro", contextWindow: 1_048_576, maxOutputTokens: 393_216, reasoning: true, effortLevels: ["low", "high", "max"] },
+      // live GET /models facts. Default effort is high — carried as
+      // `defaultEffort` on both rows (Taskana 4894), so a session with no
+      // explicit pick shows AND sends `high` instead of falling back to the
+      // vocabulary's first entry (`low`).
+      { id: "deepseek-flash", name: "DeepSeek-V4.1-Flash", contextWindow: 1_048_576, maxOutputTokens: 393_216, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high" },
+      { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro", contextWindow: 1_048_576, maxOutputTokens: 393_216, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high" },
     ],
   },
   {

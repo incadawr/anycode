@@ -27,6 +27,7 @@ import {
   buildStartModelGroups,
   buildStartModelPopularRows,
   resolveStartModelEffort,
+  startModelDefaultEffort,
   startModelEffortLevels,
   type StartModelMenuGroup,
   type StartModelPopularRow,
@@ -116,7 +117,17 @@ export function buildSessionDrillRows(args: SessionDrillArgs): SessionDrillRows 
     args.catalog,
     currentConnection?.modelCapabilities?.[args.currentModelId],
   );
-  const effort = resolveStartModelEffort(args.currentEffort, currentConnection?.reasoningEffort, efforts);
+  const effort = resolveStartModelEffort(
+    args.currentEffort,
+    currentConnection?.reasoningEffort,
+    efforts,
+    startModelDefaultEffort(
+      currentConnection?.providerId,
+      args.currentModelId,
+      args.catalog,
+      currentConnection?.modelCapabilities?.[args.currentModelId],
+    ),
+  );
 
   let rows: ModelDrillRow[];
   if (page.kind === "group") {
@@ -232,7 +243,17 @@ export function resolveRebindEffort(args: {
   }
   return {
     carried: undefined,
-    resetTo: resolveStartModelEffort(undefined, args.targetConnectionEffort, efforts),
+    resetTo: resolveStartModelEffort(
+      undefined,
+      args.targetConnectionEffort,
+      efforts,
+      startModelDefaultEffort(
+        args.targetProviderId,
+        args.targetModelId,
+        args.catalog,
+        args.targetModelCapabilities,
+      ),
+    ),
     dropped: true,
   };
 }

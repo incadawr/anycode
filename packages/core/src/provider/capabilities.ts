@@ -161,15 +161,36 @@ export function resolveMaxOutputTokens(
   return DEFAULT_MAX_OUTPUT_TOKENS;
 }
 
+/**
+ * The effort tier actually in force for a session (TASK.131, extended by
+ * Taskana 4894). Precedence:
+ *
+ * 1. an explicit choice — the user's pick, the connection's persisted tier, or
+ *    the `ANYCODE_REASONING_EFFORT` env value — is validated fail-closed
+ *    against the model's declared vocabulary and returned verbatim; an
+ *    explicit `off` means "no reasoning" and resolves to `undefined` (the
+ *    host's own "no effort" value) exactly as before;
+ * 2. with NO explicit choice, the model's own recorded provider default
+ *    (`CatalogModel.defaultEffort`, set only where the provider documents
+ *    one). Before 4894 this rung did not exist, so a fresh DeepSeek session
+ *    sent nothing while the renderer displayed the vocabulary's first level
+ *    (`low`) — neither the shown nor the sent value was the provider's `high`;
+ * 3. no recorded default ⇒ `undefined`, the pre-4894 behaviour: nothing is
+ *    sent and the endpoint applies its own default.
+ *
+ * A live-only model (catalog miss, Taskana 4118) has no default fact: live
+ * capabilities declare a vocabulary, never a default, so rung 2 is skipped.
+ */
 export function resolveReasoningEffort(
   modelId: string,
   entry: CatalogProviderEntry | undefined,
   override: ReasoningEffort | undefined,
   live?: LiveModelCapabilities,
 ): ReasoningEffort | undefined {
-  if (override === undefined || override === "off") return undefined;
+  if (override === "off") return undefined;
   const matched = entry?.models.find((candidate) => candidate.id === modelId);
   if (matched === undefined) {
+    if (override === undefined) return undefined;
     // Taskana 4118: catalog miss ⇒ consult live capabilities, if any. The
     // override must still be inside the live-mapped vocabulary (fail-closed:
     // a level the endpoint never declared never reaches the wire).
@@ -177,6 +198,17 @@ export function resolveReasoningEffort(
     return levels !== undefined && levels.includes(override) ? override : undefined;
   }
   if (matched.reasoning !== true) return undefined;
+  if (override === undefined) {
+    // Taskana 4894: no explicit choice ⇒ the model's recorded provider default.
+    // Validated against the declared vocabulary like any other level, so a
+    // catalog row can never push a level its own model rejects.
+    const fallback = matched.defaultEffort;
+    if (fallback === undefined || fallback === "off") return undefined;
+    if (matched.effortLevels !== undefined && !matched.effortLevels.includes(fallback)) {
+      return undefined;
+    }
+    return fallback;
+  }
   // Validate against declared effortLevels: an undeclared level is rejected
   // (fail-closed) rather than silently coerced. Models without explicit
   // effortLevels accept the legacy four-level set.
