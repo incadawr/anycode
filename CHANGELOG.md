@@ -15,6 +15,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - OpenAI-compatible servers that don't report prompt caching (e.g. LM Studio) no longer show "Latest cache hit: 0%" — the popover now says "not reported by provider", while providers that do send `cached_tokens` (including a real 0) keep showing actual numbers (GitHub #11).
 - Settings → Plugins now shows disabled managed, project and legacy plugins as OFF and lets you turn them back on; re-enabled legacy plugins can run their approved background services (Taskana 4879, GitHub #13).
+- Replace key on a custom endpoint now saves the new key and resets stale health/quota; refusals explain how to retry. Clear key marks the shared endpoint as not needing a key, applying to all its connections (Taskana 4875, GitHub #10).
 
 ## [0.0.43] — 2026-10-26
 

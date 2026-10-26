@@ -24,6 +24,8 @@ import {
   providerSelectDisplayValue,
   providerOptionGroups,
   resolveCreatedConnectionId,
+  resolveCustomKeyOutcome,
+  buildKeyMutation,
   resolveCreatedCustomProviderId,
   resolveDrawerOAuthStartArgs,
   transportAfterNoAuthToggle,
@@ -59,6 +61,7 @@ import {
   MaxOutputSegmented,
   type MaxOutputSegmentedProps,
 } from "./ConnectionDrawer.js";
+import { describeCustomProviderMutationError } from "./SettingsScreen.js";
 import { PROXY_REF_INHERIT } from "./ProxyRefPicker.js";
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -1418,6 +1421,53 @@ describe("pre-create flow composition (TASK.183 items 1–2)", () => {
     // TASK.142 ownership preserved: A's number must not ride onto a manually
     // typed B of the same connection.
     expect(contextWindowAfterModelInput({ raw: "900000", model: "manual-a" }, "manual-b", undefined)).toEqual({ raw: "", model: "manual-b" });
+  });
+});
+
+// ── Taskana 4875 (GitHub #10): a custom:<id> connection's Replace/Clear key
+// must ride customProvider.update, never the connection-scoped secret-set
+// channel (handleSetSecret refuses provider.custom:<id>.apiKey as `invalid`,
+// so the old broken path silently dropped the new key and 401s stuck). ──
+
+describe("ConnectionDrawer save/clear key routing on a custom:<id> connection (Taskana 4875)", () => {
+  it("Replace routes a custom record to update with the shared record id and key", () => {
+    expect(buildKeyMutation("custom:record", "provider.custom:record.apiKey", "new-key")).toEqual({
+      channel: "custom", request: { id: "custom:record", apiKey: "new-key" },
+    });
+  });
+
+  it("Clear routes a custom record to update with authOptional:true", () => {
+    expect(buildKeyMutation("custom:record", "provider.custom:record.apiKey")).toEqual({
+      channel: "custom", request: { id: "custom:record", authOptional: true },
+    });
+  });
+
+  it("catalog Replace and Clear retain their connection-scoped secret channel", () => {
+    expect(buildKeyMutation("kimi", "provider.connection.c1.apiKey", "new-key")).toEqual({
+      channel: "connection", key: "provider.connection.c1.apiKey", value: "new-key",
+    });
+    expect(buildKeyMutation("kimi", "provider.connection.c1.apiKey")).toEqual({
+      channel: "connection", key: "provider.connection.c1.apiKey", value: undefined,
+    });
+  });
+
+  it("weak-storage consent is a refusal with actionable retry text and preserves the input", () => {
+    const outcome = resolveCustomKeyOutcome({ ok: false, reason: "weak_storage_needs_consent" });
+    expect(outcome.refused).toBe(true);
+    expect(outcome.detail).toContain("Settings → Security");
+    expect(outcome.detail).toMatch(/retry/i);
+    expect(outcome.clearInput).toBe(false);
+  });
+
+  it("success clears the input; every other custom refusal retains it and gives its own reason", () => {
+    expect(resolveCustomKeyOutcome({ ok: true, providers: [] })).toEqual({
+      refused: false, detail: null, clearInput: true,
+    });
+    for (const reason of ["invalid", "read_only", "not_found", "needs_api_key"] as const) {
+      expect(resolveCustomKeyOutcome({ ok: false, reason })).toEqual({
+        refused: true, detail: describeCustomProviderMutationError(reason), clearInput: false,
+      });
+    }
   });
 });
 

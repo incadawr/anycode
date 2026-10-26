@@ -60,6 +60,7 @@ import { loadSettings, normalizeActiveConnection, saveSettings, withSettingsFile
 import { isHttpsOrLocalhostUrl, isLoopbackUrl, settingsSchema } from "../settings/schema.js";
 import type { AnycodeSettings, CustomProviderRecord, ProviderConnection, SecretKey } from "../shared/settings.js";
 import { mergeModelIds, normalizeModelId } from "../shared/settings.js";
+import { discardPendingConnectionQuota } from "./connection-quota.js";
 import type { SecretSetResult } from "./vault.js";
 import { ProxyMisconfiguredError } from "./provider-proxy-fetch.js";
 
@@ -649,7 +650,33 @@ export async function handleCustomProviderUpdate(deps: ProviderIpcDeps, raw: unk
       delete updatedRecord.authOptional;
     }
     const custom = (loaded.settings.provider.custom ?? []).map((p) => (p.id === req.id ? updatedRecord : p));
-    const merged: AnycodeSettings = { ...loaded.settings, provider: { ...loaded.settings.provider, custom } };
+    // Taskana 4875 (GitHub #10): a credential change on this record (a fresh
+    // key, a keyed→keyless transition, or a base URL change) resets every connection
+    // POINTING at the record — `lastHealth` to `unchecked` and the quota line
+    // dropped — mirroring what a connection-key replace/clear does in
+    // settings-ipc's handleSetSecret/handleClearSecret (TASK.45 W11): health
+    // and quota observed against the superseded key or URL must never linger.
+    // `merged` is built from this projection so both write paths below persist it.
+    const credentialChanged = hasFreshKey || (willBeKeyless && !existingKeyless)
+      || (req.baseUrl !== undefined && req.baseUrl !== existing.baseUrl);
+    const nowIso = (deps.now ?? defaultNowIso)();
+    const connections = credentialChanged
+      ? loaded.settings.provider.connections.map((connection) => {
+          if (connection.providerId !== req.id) {
+            return connection;
+          }
+          const cleared: ProviderConnection = {
+            ...connection,
+            lastHealth: { status: "unchecked" as const, at: nowIso },
+          };
+          delete cleared.lastQuota;
+          return cleared;
+        })
+      : loaded.settings.provider.connections;
+    const merged: AnycodeSettings = {
+      ...loaded.settings,
+      provider: { ...loaded.settings.provider, custom, connections },
+    };
     if (!settingsSchema.safeParse(merged).success) {
       return { ok: false, reason: "invalid" };
     }
@@ -669,6 +696,15 @@ export async function handleCustomProviderUpdate(deps: ProviderIpcDeps, raw: unk
       // "keyless" record can never still boot a fork with a stale stored key
       // (buildHostEnv reads the custom key whenever one is present).
       await deps.vault.clearSecret(customProviderSecretKey(req.id));
+    }
+    if (credentialChanged) {
+      // Taskana 4875: any coalesced quota observation from the OLD key must
+      // not be written back by the throttle's trailing timer.
+      for (const connection of loaded.settings.provider.connections) {
+        if (connection.providerId === req.id) {
+          discardPendingConnectionQuota(connection.id);
+        }
+      }
     }
     await saveSettings(deps.settingsPath, merged);
     await deps.onMutation?.(merged);

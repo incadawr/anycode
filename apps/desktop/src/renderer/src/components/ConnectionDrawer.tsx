@@ -21,12 +21,10 @@
  * "созданная плашка честно остаётся в Needs credential"). Editing an existing
  * connection starts with this same post-creation shape.
  *
- * CUSTODY: the credential `<input>` is write-only — `secretFieldReducer`
- * (SettingsScreen.tsx) clears it back to `""` the instant Save is clicked,
- * and Edit never pre-fills it from a `SecretStatus` (which structurally holds
- * no value). Plaintext travels only via `store.setSecret`, keyed on the
- * connection's OWN vault key (`provider.connection.<id>.{apiKey,oauth}`) —
- * never a legacy key.
+ * CUSTODY: the credential input is write-only and never prefilled from a
+ * SecretStatus. Connection keys go through store.setSecret (which parks
+ * consent retries); shared custom-record keys go through customProvider.update
+ * and stay in the field on refusal so the user can retry.
  */
 import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
@@ -39,10 +37,11 @@ import type {
   ProviderConnection,
   ProviderTransportId,
   SecretStatus,
+  SecretKey,
   SettingsMutationResult,
 } from "../../../shared/settings.js";
 import { mergeModelIds, normalizeModelId } from "../../../shared/settings.js";
-import type { FetchModelsOutcome } from "../anycode-window.js";
+import type { CustomProviderMutationResult, CustomProviderUpdateRequest, FetchModelsOutcome } from "../anycode-window.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 import { connectionSecretKey, customProviderSecretKey, isCustomRecordProviderId } from "./ConnectionTile.js";
 import { PROXY_REF_INHERIT, ProxyRefPicker, connectionCreateProxyRefField, proxyRefInitialValue } from "./ProxyRefPicker.js";
@@ -74,6 +73,24 @@ import { X } from "./icons.js";
  */
 export function resolveCreatedConnectionId(result: SettingsMutationResult): string | undefined {
   return result.ok ? result.createdConnectionId : undefined;
+}
+
+/** Route shared custom-record credentials through their sole write channel. */
+export function buildKeyMutation(providerId: string, key: SecretKey, value?: string):
+  | { channel: "custom"; request: CustomProviderUpdateRequest }
+  | { channel: "connection"; key: SecretKey; value: string | undefined } {
+  return isCustomRecordProviderId(providerId)
+    ? { channel: "custom", request: { id: providerId, ...(value === undefined ? { authOptional: true } : { apiKey: value }) } }
+    : { channel: "connection", key, value };
+}
+
+/** Custom updates cannot queue consent retries; every refusal retains the input. */
+export function resolveCustomKeyOutcome(result: CustomProviderMutationResult): {
+  refused: boolean; detail: string | null; clearInput: boolean;
+} {
+  return result.ok
+    ? { refused: false, detail: null, clearInput: true }
+    : { refused: true, detail: describeCustomProviderMutationError(result.reason), clearInput: false };
 }
 
 // ── TASK.183: durable manually entered connection models ──
@@ -1568,11 +1585,22 @@ export function ConnectionDrawerFields({
         selectedModelId,
       );
       let keyRefused = false;
+      let keyRefusalDetail: string | null = null;
       if (secretValue && credentialKey !== undefined) {
-        const value = secretValue;
-        dispatchSecret({ type: "submitted" });
-        const secretResult = await store.getState().setSecret(credentialKey, value);
-        keyRefused = !secretResult.ok && secretResult.reason !== "weak_storage_needs_consent";
+        const mutation = buildKeyMutation(effectiveProviderId, credentialKey, secretValue);
+        if (mutation.channel === "custom") {
+          const keyOutcome = resolveCustomKeyOutcome(await resolvedCustomProvider().update(mutation.request));
+          keyRefused = keyOutcome.refused;
+          keyRefusalDetail = keyOutcome.detail;
+          if (keyOutcome.clearInput) {
+            dispatchSecret({ type: "submitted" });
+          }
+        } else {
+          // The settings store parks weak-storage consent and retries this channel.
+          dispatchSecret({ type: "submitted" });
+          const result = await store.getState().setSecret(mutation.key, mutation.value!);
+          keyRefused = !result.ok && result.reason !== "weak_storage_needs_consent";
+        }
       }
       // Compose ONE message so a concurrent key error is never overwritten by
       // the list-persistence error (or vice versa).
@@ -1583,7 +1611,7 @@ export function ConnectionDrawerFields({
       } else if (keyRefused && !outcome.appendOk) {
         setError("The changes were saved, but neither the model list nor the API key could be saved — retry Save.");
       } else if (keyRefused) {
-        setError("The changes were saved, but the API key was refused.");
+        setError(keyRefusalDetail ?? "The changes were saved, but the API key was refused.");
       } else if (!outcome.appendOk) {
         setError("The changes were saved, but the model list couldn't be saved — retry Save.");
       }
@@ -1597,8 +1625,25 @@ export function ConnectionDrawerFields({
       return;
     }
     setClearing(true);
+    setError(null);
     try {
-      await store.getState().clearSecret(credentialKey);
+      // Taskana 4875 (GitHub #10): a custom:<id> connection's shared vault key
+      // is only clearable through custom-provider-update's keyed→keyless
+      // transition (main drops the vault entry AND resets health/quota). The
+      // generic secret-clear channel refuses non-connection keys `invalid` —
+      // and the old path ignored the result entirely, so the button looked
+      // like it worked while the key stayed in the vault.
+      const mutation = buildKeyMutation(effectiveProviderId, credentialKey);
+      if (mutation.channel === "custom") {
+        const result = await resolvedCustomProvider().update(mutation.request);
+        if (!result.ok) {
+          setError(describeCustomProviderMutationError(result.reason));
+          return;
+        }
+      } else {
+        await store.getState().clearSecret(mutation.key);
+      }
+      await reloadSnapshot();
     } finally {
       setClearing(false);
     }

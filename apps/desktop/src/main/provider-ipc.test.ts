@@ -35,7 +35,7 @@ import {
   type ProviderIpcDeps,
   type ProviderVaultLike,
 } from "./provider-ipc.js";
-import type { SecretSetResult } from "./vault.js";
+import { Vault, type SecretSetResult } from "./vault.js";
 import { createProxyChainFetch, type ProxyDispatchRequest } from "./provider-proxy-fetch.js";
 import { hostForkProxyChain } from "../shared/proxy.js";
 
@@ -917,6 +917,101 @@ describe("handleCustomProviderUpdate", () => {
     await seed();
     const res = await handleCustomProviderUpdate(makeDeps(), { id: "custom:fixed-id", baseUrl: "http://evil.example.com" });
     expect(res).toEqual({ ok: false, reason: "invalid" });
+  });
+
+  // Taskana 4875 (GitHub #10): the drawer's Replace key on a custom:<id>
+  // connection routes through this handler with an apiKey-only request — the
+  // key rotation must ALSO reset every connection on the record back to
+  // `unchecked` (and drop its quota line), exactly like a connection-key
+  // replace does in settings-ipc's handleSetSecret: health observed against
+  // the superseded key must never linger.
+  it("a key rotation resets health to unchecked and drops lastQuota on every connection pointing at the record", async () => {
+    await seed();
+    // Two connections on the record, one with a stale auth_invalid + quota.
+    const base = JSON.parse(await readFile(settingsPath, "utf8")) as {
+      version: number;
+      provider: { connections: unknown[] };
+    };
+    base.provider.connections = [
+      { id: "conn-1", providerId: "custom:fixed-id", lastHealth: { status: "auth_invalid", at: "2026-01-01T00:00:00.000Z" }, lastQuota: { usedPercent: 50, observedAt: "2026-01-01T00:00:00.000Z", source: "x" } },
+      { id: "conn-2", providerId: "custom:fixed-id", lastHealth: { status: "ready", at: "2026-01-01T00:00:00.000Z" } },
+      { id: "conn-other", providerId: "kimi", lastHealth: { status: "auth_invalid", at: "2026-01-01T00:00:00.000Z" } },
+    ];
+    await writeFile(settingsPath, JSON.stringify(base));
+    const res = await handleCustomProviderUpdate(makeDeps({ now: () => "2026-02-02T00:00:00.000Z" }), {
+      id: "custom:fixed-id",
+      apiKey: "rotated-key",
+    });
+    expect(res.ok).toBe(true);
+    const reloaded = await loadSettings(settingsPath);
+    const [c1, c2, other] = reloaded.settings.provider.connections;
+    expect(c1?.lastHealth).toEqual({ status: "unchecked", at: "2026-02-02T00:00:00.000Z" });
+    expect(c1?.lastQuota).toBeUndefined();
+    expect(c2?.lastHealth).toEqual({ status: "unchecked", at: "2026-02-02T00:00:00.000Z" });
+    // A sibling connection on a DIFFERENT provider keeps its own health.
+    expect(other?.lastHealth).toEqual({ status: "auth_invalid", at: "2026-01-01T00:00:00.000Z" });
+    expect(await vault.getSecretValue(customProviderSecretKey("custom:fixed-id"))).toBe("rotated-key");
+  });
+
+  // Taskana 4875: a metadata/models-only update never resets health (no key
+  // change → no staleness), and the keyed→keyless transition (Clear key)
+  // resets it like a replace does.
+  it("a models-only update leaves health alone; a keyed→keyless transition resets it to unchecked", async () => {
+    await seed();
+    const base = JSON.parse(await readFile(settingsPath, "utf8")) as {
+      version: number;
+      provider: { connections: unknown[] };
+    };
+    base.provider.connections = [{ id: "conn-1", providerId: "custom:fixed-id", lastHealth: { status: "ready", at: "2026-01-01T00:00:00.000Z" } }];
+    await writeFile(settingsPath, JSON.stringify(base));
+
+    const modelsOnly = await handleCustomProviderUpdate(makeDeps(), { id: "custom:fixed-id", models: ["m1", "m2"] });
+    expect(modelsOnly.ok).toBe(true);
+    let reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections[0]?.lastHealth).toEqual({ status: "ready", at: "2026-01-01T00:00:00.000Z" });
+
+    const keyless = await handleCustomProviderUpdate(
+      makeDeps({ now: () => "2026-02-02T00:00:00.000Z" }),
+      { id: "custom:fixed-id", authOptional: true },
+    );
+    expect(keyless.ok).toBe(true);
+    reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections[0]?.lastHealth).toEqual({ status: "unchecked", at: "2026-02-02T00:00:00.000Z" });
+    expect(await vault.getSecretValue(customProviderSecretKey("custom:fixed-id"))).toBeUndefined();
+  });
+
+  it("Replace after Clear stores the fresh key and removes authOptional (file-backed vault)", async () => {
+    const makeFileVault = () => new Vault({
+      secretsPath: join(dir, "scratch-vault.json"),
+      platform: "darwin",
+      safeStorage: {
+        isEncryptionAvailable: () => true,
+        encryptString: (value) => Buffer.from(`test:${value}`),
+        decryptString: (value) => value.toString().slice(5),
+      },
+    });
+    const deps = makeDeps({ vault: makeFileVault() });
+    expect((await handleCustomProviderCreate(deps, {
+      name: "Original", baseUrl: "https://api.example.com", kind: "openai-compatible", apiKey: "original",
+    })).ok).toBe(true);
+    expect((await handleCustomProviderUpdate(deps, { id: "custom:fixed-id", authOptional: true })).ok).toBe(true);
+    expect(await makeFileVault().getSecretValue(customProviderSecretKey("custom:fixed-id"))).toBeUndefined();
+    expect((await loadSettings(settingsPath)).settings.provider.custom?.[0]?.authOptional).toBe(true);
+    expect((await handleCustomProviderUpdate(deps, { id: "custom:fixed-id", apiKey: "replacement" })).ok).toBe(true);
+    expect(await makeFileVault().getSecretValue(customProviderSecretKey("custom:fixed-id"))).toBe("replacement");
+    expect((await loadSettings(settingsPath)).settings.provider.custom?.[0]?.authOptional).toBeUndefined();
+  });
+
+  it.each(["https://other.example.com", "https://api.example.com/v2"])("a keyless baseUrl change to %s resets stale health and quota", async (baseUrl) => {
+    await seed();
+    await handleCustomProviderUpdate(makeDeps(), { id: "custom:fixed-id", authOptional: true });
+    const base = JSON.parse(await readFile(settingsPath, "utf8"));
+    base.provider.connections = [{ id: "conn-1", providerId: "custom:fixed-id", lastHealth: { status: "ready", at: "2026-01-01T00:00:00.000Z" }, lastQuota: { usedPercent: 50, observedAt: "2026-01-01T00:00:00.000Z", source: "x" } }];
+    await writeFile(settingsPath, JSON.stringify(base));
+    expect((await handleCustomProviderUpdate(makeDeps({ now: () => "2026-02-02T00:00:00.000Z" }), { id: "custom:fixed-id", baseUrl })).ok).toBe(true);
+    const connection = (await loadSettings(settingsPath)).settings.provider.connections[0];
+    expect(connection?.lastHealth).toEqual({ status: "unchecked", at: "2026-02-02T00:00:00.000Z" });
+    expect(connection?.lastQuota).toBeUndefined();
   });
 
   // RED-PROOF (F-C, surface b — update): a userinfo-carrying baseUrl is

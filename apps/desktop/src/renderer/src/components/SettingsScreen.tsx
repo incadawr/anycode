@@ -528,7 +528,7 @@ const CUSTOM_PROVIDER_MUTATION_ERROR_TEXT: Record<CustomProviderMutationReason, 
   // bound to the origin it was entered for).
   needs_api_key: "Changing the provider's address requires re-entering its API key — nothing was saved.",
   weak_storage_needs_consent:
-    "This machine has no secure keychain for storing the key — accept weak storage under Security to save it here.",
+    "This machine has no secure keychain for storing the key — enable weak secret storage in Settings → Security, then retry Save.",
 };
 
 /** User-facing text for a refused custom-provider mutation. */
