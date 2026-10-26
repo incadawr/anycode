@@ -193,3 +193,60 @@ describe("SessionsApiPaneView agent projects (Taskana 4768)", () => {
     expect(source).toMatch(/bridge\.agentProjectsOff\(key\)/);
   });
 });
+
+/** The declared body of `selector` in `css` (comments stripped); throws when absent. */
+function cssRule(css: string, selector: string): string {
+  const clean = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const match = clean.match(new RegExp(`(?:^|\\n)${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{([^}]*)\\}`));
+  if (!match) throw new Error(`no CSS rule ${selector}`);
+  return match[1] ?? "";
+}
+
+describe("SessionsApiPane step layout (Taskana 4897)", () => {
+  // Regression: after "Copy config", the notice was the step's 4th grid child. The
+  // step was `grid-template-columns: auto 1fr` and `::before` spanned exactly 3
+  // rows, so that 4th child auto-placed into column 1 — under the step number —
+  // and its long `<pre>` inflated the `auto` column, pushing the whole content
+  // column (title, segmented control, button, hint, notice) off the right edge.
+  const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
+
+  it("every step wraps ALL of its content in one `.sessions-api-step-body`, so the column count never depends on the child count", () => {
+    const html = render(props({
+      view: base({ enabled: true, port: 4310, status: listeningStatus() }),
+      copied: { label: "Claude Code", note: "claude mcp add anycode-sessions -- node /very/long/path/to/the/adapter/script.js --config /very/long/path/to/discovery.json" },
+    }));
+    const steps = html.match(/<li class="sessions-api-step">[\s\S]*?<\/li>/g) ?? [];
+    expect(steps).toHaveLength(3);
+    for (const step of steps) {
+      const bodies = step.match(/<div class="sessions-api-step-body">/g) ?? [];
+      expect(bodies).toHaveLength(1);
+      // The body is the li's ONLY direct child: nothing else can auto-place in column 1.
+      expect(step).toMatch(/^<li class="sessions-api-step"><div class="sessions-api-step-body">[\s\S]*<\/div><\/li>$/);
+    }
+    // The copy notice lives inside the content column, after the node hint.
+    const step2 = steps[1] ?? "";
+    const hintAt = step2.indexOf("Needs Node 22+");
+    const noticeAt = step2.indexOf("sessions-api-copied");
+    expect(hintAt).toBeGreaterThan(-1);
+    expect(noticeAt).toBeGreaterThan(hintAt);
+    expect(step2.slice(noticeAt)).toContain("claude mcp add anycode-sessions");
+  });
+
+  it("the step number occupies a fixed narrow column and no longer spans a magic row count", () => {
+    expect(cssRule(css, ".sessions-api-step")).toMatch(/grid-template-columns:\s*1\.5rem\s+minmax\(0,\s*1fr\)/);
+    const number = cssRule(css, ".sessions-api-step::before");
+    expect(number).toMatch(/grid-column:\s*1/);
+    expect(number).not.toMatch(/grid-row:\s*span/);
+    const body = cssRule(css, ".sessions-api-step-body");
+    expect(body).toMatch(/grid-column:\s*2/);
+    expect(body).toMatch(/min-width:\s*0/);
+  });
+
+  it("a long command scrolls inside its own `<pre>` and cannot widen the pane", () => {
+    const pre = cssRule(css, ".sessions-api-copied pre");
+    expect(pre).toMatch(/overflow-x:\s*auto/);
+    expect(pre).toMatch(/min-width:\s*0/);
+    expect(pre).toMatch(/white-space:\s*pre;/);
+    expect(cssRule(css, ".sessions-api-copied")).toMatch(/min-width:\s*0/);
+  });
+});

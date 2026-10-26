@@ -7915,17 +7915,25 @@ body {
   counter-reset: sessions-api-step;
 }
 
+/* Two fixed columns: the number dial in column 1, ALL step content in the
+   `.sessions-api-step-body` wrapper in column 2. The number no longer spans a
+   hard-coded count of rows, so a step may hold any number of children without
+   an extra child auto-placing under the number and inflating the `auto`
+   column (Taskana 4897: the copy notice's long `<pre>` pushed column 2
+   off-screen). Column 2 is `minmax(0, 1fr)` so its content can shrink and a
+   long command scrolls inside its own `<pre>` instead of widening the pane. */
 .sessions-api-step {
   counter-increment: sessions-api-step;
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: 1.5rem minmax(0, 1fr);
   column-gap: var(--sp-2);
   align-items: start;
 }
 
 .sessions-api-step::before {
   content: counter(sessions-api-step);
-  grid-row: span 3;
+  grid-column: 1;
+  grid-row: 1;
   width: 1.5rem;
   height: 1.5rem;
   border-radius: var(--r-full);
@@ -7935,6 +7943,14 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+.sessions-api-step-body {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .sessions-api-step-title {
@@ -7954,11 +7970,18 @@ body {
 
 .sessions-api-copied {
   margin-top: var(--sp-2);
+  min-width: 0;
 }
 
 .sessions-api-copied pre {
   margin: var(--sp-1) 0 0;
+  max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
+  /* The command must stay byte-identical on screen (and to selection):
+     `.settings-notice-ok` sets `white-space: pre-wrap`, so pin `pre` and let a
+     long command scroll horizontally inside this box only. */
+  white-space: pre;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
 }

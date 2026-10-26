@@ -135,44 +135,50 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
           <div className="settings-section-title">Connect an agent</div>
           <ol className="sessions-api-steps">
             <li className="sessions-api-step">
-              <div className="sessions-api-step-title">Choose which sessions to share</div>
-              <p className="settings-field-hint">{`Open a session's ⋯ environment menu and turn on Sessions API. Currently shared: ${shared}.`}</p>
-            </li>
-            <li className="sessions-api-step">
-              <div className="sessions-api-step-title">Copy the config for your agent</div>
-              <div className="sessions-api-copy-row">
-                <div className="connection-drawer-segmented" role="group" aria-label="Agent">
-                  {COPY_CLIENTS.map(({ client, label }) => (
-                    <button
-                      key={client}
-                      type="button"
-                      className={`connection-drawer-segmented-btn${copyClient === client ? " connection-drawer-segmented-btn-selected" : ""}`}
-                      aria-pressed={copyClient === client}
-                      onClick={() => props.onCopyClient(client)}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  className="settings-button settings-button-primary"
-                  disabled={!copyConfigEnabled(status, envControlled)}
-                  onClick={() => props.onCopy(copyClient, copyClientLabel(copyClient))}
-                >
-                  Copy config
-                </button>
+              <div className="sessions-api-step-body">
+                <div className="sessions-api-step-title">Choose which sessions to share</div>
+                <p className="settings-field-hint">{`Open a session's ⋯ environment menu and turn on Sessions API. Currently shared: ${shared}.`}</p>
               </div>
-              <p className="settings-field-hint">{SESSIONS_API_NODE_HINT}</p>
-              {copied && (
-                <div className="settings-notice-ok sessions-api-copied">
-                  <p>{`Copied the ${copied.label} config to the clipboard. It points at the adapter and the discovery file; it holds no token.`}</p>
-                  {copied.note !== "" && <pre>{copied.note}</pre>}
-                </div>
-              )}
             </li>
             <li className="sessions-api-step">
-              <div className="sessions-api-step-title">Paste it into your agent's MCP settings and restart the agent.</div>
+              <div className="sessions-api-step-body">
+                <div className="sessions-api-step-title">Copy the config for your agent</div>
+                <div className="sessions-api-copy-row">
+                  <div className="connection-drawer-segmented" role="group" aria-label="Agent">
+                    {COPY_CLIENTS.map(({ client, label }) => (
+                      <button
+                        key={client}
+                        type="button"
+                        className={`connection-drawer-segmented-btn${copyClient === client ? " connection-drawer-segmented-btn-selected" : ""}`}
+                        aria-pressed={copyClient === client}
+                        onClick={() => props.onCopyClient(client)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    className="settings-button settings-button-primary"
+                    disabled={!copyConfigEnabled(status, envControlled)}
+                    onClick={() => props.onCopy(copyClient, copyClientLabel(copyClient))}
+                  >
+                    Copy config
+                  </button>
+                </div>
+                <p className="settings-field-hint">{SESSIONS_API_NODE_HINT}</p>
+                {copied && (
+                  <div className="settings-notice-ok sessions-api-copied">
+                    <p>{`Copied the ${copied.label} config to the clipboard. It points at the adapter and the discovery file; it holds no token.`}</p>
+                    {copied.note !== "" && <pre>{copied.note}</pre>}
+                  </div>
+                )}
+              </div>
+            </li>
+            <li className="sessions-api-step">
+              <div className="sessions-api-step-body">
+                <div className="sessions-api-step-title">Paste it into your agent's MCP settings and restart the agent.</div>
+              </div>
             </li>
           </ol>
         </section>
