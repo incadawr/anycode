@@ -16,6 +16,20 @@
 # (ripgrep ships as a platform optionalDependency, node-pty ships prebuilds per
 # arch) — there is no cross-compilation anywhere in this workflow.
 #
+# Every build job self-checks the artifact it just produced (release procedure
+# step 8, docs/development/release.md). That step used to be manual: someone
+# downloaded the draft's executable and ran `release-self-check.mjs` by hand,
+# once per release — which meant a bundle that could not open its own window
+# was only discovered after the draft existed, and only if that person got to
+# it. The check is a property of the artifact, not of publishing: it launches
+# the packaged executable with `--self-check`, drives the real renderer,
+# preload and settings IPC inside a fresh temp profile, and exits non-zero on
+# a broken build. So each job runs it right after "Package (electron-builder)"
+# against its own unpacked output, and a failure fails that job — the `release`
+# job needs all four builds, so a draft is never assembled from a package that
+# fails its own check. `workflow_dispatch` dry runs run it too: it is a build
+# check, not a publish step.
+#
 # Secret-gating contract (design §7 step 6, §4/§5/§9-U2/U3/U4): every signing,
 # notarization, and publish step is switched on ONLY by the presence of the
 # relevant secret(s). Missing secrets must never turn a job red — they just
@@ -258,8 +272,101 @@ jobs:
           # electron-builder v24+; Windows picks up WIN_CSC_LINK on its own).
           # Their absence is a normal, unsigned/unnotarized, green build.
 
+      # ---- 6. self-check the packaged executable ------------------------------
+      # The artifact's own check (release procedure step 8): what ships in the
+      # dmg/zip/exe/AppImage is this unpacked tree, so that is what gets
+      # launched. Anything that can only be seen once the app actually starts —
+      # a renderer/preload that did not make it into the asar, a settings pane
+      # that crashes, a first-run screen that never paints — fails here instead
+      # of reaching the draft.
+      - name: Resolve the packaged executable for the self-check
+        working-directory: apps/desktop
+        run: |
+          set -euo pipefail
+          # Names come from electron-builder.yml (productName/executableName =
+          # AnyCode) and from electron-builder's own output layout
+          # (PlatformPackager.computeAppOutDir ->
+          # dist/<platformKey><archSuffix>[-unpacked], where the arch suffix is
+          # empty for the default arch x64; LinuxPackager keeps `AnyCode`'s
+          # case after sanitizing it). These are verified names, not guesses —
+          # the `find` below prints what packaging actually wrote if one drifts.
+          case "$RUNNER_OS/${{ matrix.id }}" in
+            macOS/macos-arm64) exe="dist/mac-arm64/AnyCode.app/Contents/MacOS/AnyCode" ;;
+            macOS/macos-x64)   exe="dist/mac/AnyCode.app/Contents/MacOS/AnyCode" ;;
+            Windows/windows-x64) exe="dist/win-unpacked/AnyCode.exe" ;;
+            Linux/linux-x64)   exe="dist/linux-unpacked/AnyCode" ;;
+            *)
+              echo "FAIL: no packaged-executable path is known for $RUNNER_OS/${{ matrix.id }}" >&2
+              exit 1
+              ;;
+          esac
+          if [ ! -f "$exe" ]; then
+            # Loud on purpose. A missing executable means packaging produced
+            # nothing runnable, and skipping the check would turn that into a
+            # silently unchecked release.
+            echo "FAIL: expected the packaged executable at $PWD/$exe" >&2
+            find dist -maxdepth 4 -print | sort >&2 || true
+            exit 1
+          fi
+          absolute="$(cd "$(dirname "$exe")" && pwd)/$(basename "$exe")"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # git-bash hands over POSIX paths; the checker (and Node) need the
+            # drive-letter form because release-self-check.mjs asserts the path
+            # is absolute before spawning it.
+            absolute="$(cygpath -w "$absolute")"
+          fi
+          echo "SELF_CHECK_BINARY=$absolute" >> "$GITHUB_ENV"
+          echo "Self-check target: $absolute"
 
-      # ---- 6. post-pack asserts + upload ---------------------------------------
+      - name: Self-check the packaged executable
+        timeout-minutes: 10
+        working-directory: apps/desktop
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            # A Linux runner has no display, and the check opens a real window:
+            # give it a throwaway X server. (xvfb is already on the GitHub
+            # ubuntu image; installed here so the step does not depend on that.)
+            if ! command -v xvfb-run >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y xvfb
+            fi
+            # Chromium's setuid sandbox needs chrome-sandbox owned by root with
+            # the SUID bit. electron-builder writes its copy into the unpacked
+            # tree as the unprivileged build user, so the ownership is wrong on
+            # the runner. Repair the helper the documented way for CI instead of
+            # weakening the shipped app (`--no-sandbox` in the app or in the
+            # check would apply to users too, and is not needed here).
+            sandbox="$(dirname "$SELF_CHECK_BINARY")/chrome-sandbox"
+            if [ -f "$sandbox" ]; then
+              sudo chown root:root "$sandbox"
+              sudo chmod 4755 "$sandbox"
+              ls -l "$sandbox"
+            fi
+            xvfb-run -a node scripts/release-self-check.mjs "$SELF_CHECK_BINARY"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            if [ "${{ matrix.id }}" = "macos-x64" ] && [ "$(uname -m)" != "x86_64" ]; then
+              # Only becomes reachable if the Intel label in the matrix is
+              # retired and the x64 job starts cross-building on an ARM host.
+              # Rosetta is enough when it is present: the kernel picks the x64
+              # slice of the packaged app on exec, even though the checking
+              # `node` is an arm64 build. If translation is unavailable this
+              # ONE combination is skipped, loudly — the alternatives are an
+              # x64 Node just to spawn the binary or pretending the check ran.
+              if ! arch -x86_64 /usr/bin/true >/dev/null 2>&1; then
+                sudo softwareupdate --install-rosetta --agree-to-license || true
+              fi
+              if ! arch -x86_64 /usr/bin/true >/dev/null 2>&1; then
+                echo "::warning title=macOS x64 self-check skipped::the x64 build was produced on an ARM host without Rosetta; this combination is unchecked (see release.yml step 6)"
+                exit 0
+              fi
+            fi
+            node scripts/release-self-check.mjs "$SELF_CHECK_BINARY"
+          else
+            node scripts/release-self-check.mjs "$SELF_CHECK_BINARY"
+          fi
+
+      # ---- 7. post-pack asserts + upload ---------------------------------------
       - name: Assert packaged native binaries (rg / pty.node / spawn-helper)
         working-directory: apps/desktop
         run: node scripts/assert-package.mjs dist
