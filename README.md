@@ -27,7 +27,7 @@ Electron's `safeStorage`, never in plaintext on disk — on Linux without a
 keychain, weak storage is refused unless you explicitly opt in. Decrypted
 values never leave the main process.
 
-![AnyCode showing an agent exploring and summarizing a codebase](docs/assets/anycode-demo.png)
+![AnyCode: an agent explores the repository, writes an architecture overview, and opens README.md in the preview beside it](docs/assets/anycode-demo.gif)
 
 ## Engine profiles
 
