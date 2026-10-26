@@ -27,7 +27,7 @@ export function ChildReportBlock({ block, enter = false }: { block: UserTextBloc
   const isAgentMessage = block.text.startsWith("[AnyCode authenticated agent message ");
 
   return (
-    <div className={`message message-child-report${enter ? " message-enter" : ""}`}>
+    <div data-block-id={block.id} className={`message message-child-report${block.agentMessage ? " minimap-turn" : ""}${enter ? " message-enter" : ""}`}>
       <button
         type="button"
         className="child-report-toggle"

@@ -652,7 +652,7 @@ export function MessageList({
     if (!el || minimapMarks.length === 0) {
       return;
     }
-    const bubbles = el.querySelectorAll<HTMLElement>(".message-user[data-block-id]");
+    const bubbles = el.querySelectorAll<HTMLElement>(".message-user[data-block-id], .minimap-turn[data-block-id]");
     const candidate = topmostVisibleUserIndex(
       bubbles.length,
       (i) => bubbles[i]!.getBoundingClientRect().top,
