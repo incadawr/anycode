@@ -30,7 +30,7 @@ import {
   type CodexProfileGuardResult,
   type ResolvedCodexProfile,
 } from "./codex-profiles.js";
-import { CODEX_DOCTOR_RPC_TIMEOUT_MS } from "../shared/codex-timeouts.js";
+import { CODEX_DOCTOR_RPC_TIMEOUT_MS, CODEX_LOGIN_RPC_TIMEOUT_MS } from "../shared/codex-timeouts.js";
 
 /**
  * Generous, HUMAN-interaction bound (typing credentials, 2FA, ...) —
@@ -41,9 +41,33 @@ import { CODEX_DOCTOR_RPC_TIMEOUT_MS } from "../shared/codex-timeouts.js";
  */
 export const CODEX_LOGIN_TIMEOUT_MS = 5 * 60_000;
 
+/**
+ * Taskana 4884: every failing branch used to collapse into a bare
+ * `reason: "failed"`, so the next failure could not say WHAT broke — the UI
+ * could only ever show "Sign-in failed. Try again." The failed outcome now also
+ * carries a short `detail` (never a credential, never a token; see
+ * `loginDetail`) that the controller logs and forwards to the renderer.
+ */
 export type CodexLoginOutcome =
   | { ok: true }
-  | { ok: false; reason: "cancelled" | "timeout" | "failed" };
+  | { ok: false; reason: "cancelled" | "timeout" | "failed"; detail?: string };
+
+/** Upper bound on a `detail` string — it is a UI/log line, not a transcript. */
+const LOGIN_DETAIL_MAX_CHARS = 200;
+
+/**
+ * CUSTODY: `detail` is human-facing text and must stay free of anything a
+ * credential could hide in. It is derived ONLY from our own literal labels and
+ * from `Error.message` values of our own RPC client (timeouts/transport) or the
+ * codex server's error text — never from `auth.json`, an env value, or a
+ * response field carrying auth material. Control characters are flattened so a
+ * multi-line payload cannot forge extra log lines, and the length is capped.
+ */
+function loginDetail(text: string): string {
+  const flattened = text.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  return flattened.length > LOGIN_DETAIL_MAX_CHARS ? `${flattened.slice(0, LOGIN_DETAIL_MAX_CHARS - 1)}…` : flattened;
+}
+
 
 export interface RunCodexLoginOptions {
   mode?: import("../shared/codex-login.js").CodexLoginMode;
@@ -53,7 +77,20 @@ export interface RunCodexLoginOptions {
   /** Resolves the in-flight wait early with `{ok:false, reason:"cancelled"}` and sends `account/login/cancel`. */
   signal?: AbortSignal;
   timeoutMs?: number;
+  /**
+   * Bound on the LOCAL RPCs of the handshake (`initialize`,
+   * `account/login/cancel`) — the doctor's own per-RPC bound by default.
+   */
   rpcTimeoutMs?: number;
+  /**
+   * Taskana 4884: bound on `account/login/start` alone. That one is a real
+   * NETWORK round trip (the server mints the device code / auth URL), so the
+   * doctor's `CODEX_DOCTOR_RPC_TIMEOUT_MS` is the wrong distribution to size it
+   * against: observed real mints ran 0.4s…4.0s, i.e. a 3s bound rejected a
+   * legitimately slow-but-successful login and surfaced as an instant
+   * "Sign-in failed". Defaults to `CODEX_LOGIN_RPC_TIMEOUT_MS`.
+   */
+  loginStartTimeoutMs?: number;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   spawnImpl?: (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
@@ -106,13 +143,18 @@ export async function runCodexLogin(binaryPath: string, options: RunCodexLoginOp
   // would make codex replace the symlink with a fresh credential FILE,
   // silently detaching the profile from the external account it mirrors.
   if (profile?.authLink !== undefined) {
-    return { ok: false, reason: "failed" };
+    return {
+      ok: false,
+      reason: "failed",
+      detail: "this profile mirrors an external credential (authLink) — use Re-link credential instead of signing in",
+    };
   }
   const spawnImpl = options.spawnImpl ?? spawn;
   const platform = options.platform ?? process.platform;
   const env = applyCodexProfileEnv(buildDoctorChildEnv(options.env ?? process.env, platform, options.relayUrl), profile);
   const timeoutMs = options.timeoutMs ?? CODEX_LOGIN_TIMEOUT_MS;
   const rpcTimeoutMs = options.rpcTimeoutMs ?? CODEX_DOCTOR_RPC_TIMEOUT_MS;
+  const loginStartTimeoutMs = options.loginStartTimeoutMs ?? CODEX_LOGIN_RPC_TIMEOUT_MS;
   const client = new CodexRpcClient(spawnImpl);
 
   let resolveCompletion: ((outcome: CodexLoginOutcome) => void) | null = null;
@@ -124,7 +166,7 @@ export async function runCodexLogin(binaryPath: string, options: RunCodexLoginOp
   let matchedLoginId: string | undefined;
   client.onNotification((notification) => {
     if (notification.method !== "account/login/completed") return;
-    const params = notification.params as { success?: unknown; loginId?: unknown } | undefined;
+    const params = notification.params as { success?: unknown; loginId?: unknown; error?: unknown } | undefined;
     // Correlate by loginId when the server supplied one on both sides;
     // otherwise (no loginId echoed) accept the single in-flight completion.
     if (matchedLoginId !== undefined && typeof params?.loginId === "string" && params.loginId !== matchedLoginId) {
@@ -133,7 +175,16 @@ export async function runCodexLogin(binaryPath: string, options: RunCodexLoginOp
     if (params?.success === true) {
       resolveCompletion?.({ ok: true });
     } else {
-      resolveCompletion?.({ ok: false, reason: "failed" });
+      // The server's own `error` string (contract: string|null) is the only
+      // explanation a failed sign-in ever gets — surface it instead of the old
+      // bare "failed" (Taskana 4884). Absent ⇒ say so, so the reader can tell a
+      // silent refusal from an unexplained one.
+      const serverError = typeof params?.error === "string" && params.error.trim() !== "" ? loginDetail(params.error) : undefined;
+      resolveCompletion?.({
+        ok: false,
+        reason: "failed",
+        detail: serverError !== undefined ? `the sign-in was rejected: ${serverError}` : "the sign-in was rejected without an error message",
+      });
     }
   });
 
@@ -141,16 +192,18 @@ export async function runCodexLogin(binaryPath: string, options: RunCodexLoginOp
     // Re-validated at SPAWN time, not merely at discovery (W2-review Medium) —
     // login executes the same binary the doctor approved, at a later moment.
     const trust = options.trust ?? ((path: string) => checkCodexBinaryPathTrust(path, undefined, platform));
-    if (trust(binaryPath) !== null) {
-      return { ok: false, reason: "failed" };
+    const trustRefusal = trust(binaryPath);
+    if (trustRefusal !== null) {
+      return { ok: false, reason: "failed", detail: loginDetail(`the Codex binary failed the trust check: ${trustRefusal}`) };
     }
     // Home guard for the profile being signed into (cut §2.5 + amended §A2):
     // re-asserted immediately before the spawn, same discipline as the binary
     // trust line above. Fail-closed: no spawn, no browser window.
     if (profile !== undefined) {
       const profileGuard = options.profileGuard ?? ((target: ResolvedCodexProfile) => assertCodexProfileHome(target, { platform }));
-      if (!profileGuard(profile).ok) {
-        return { ok: false, reason: "failed" };
+      const guard = profileGuard(profile);
+      if (!guard.ok) {
+        return { ok: false, reason: "failed", detail: loginDetail(`the profile home was refused: ${guard.reason}`) };
       }
     }
     client.spawn(binaryPath, env);
@@ -163,20 +216,32 @@ export async function runCodexLogin(binaryPath: string, options: RunCodexLoginOp
     const loginResponse = await client.request<{ type?: unknown; authUrl?: unknown; loginId?: unknown; userCode?: unknown; verificationUrl?: unknown }>(
       "account/login/start",
       { type: options.mode === "device" ? "chatgptDeviceCode" : "chatgpt" },
-      { timeoutMs: rpcTimeoutMs },
+      { timeoutMs: loginStartTimeoutMs },
     );
     const authUrl = options.mode === "device" ? loginResponse.verificationUrl : loginResponse.authUrl;
     const loginId = loginResponse.loginId;
     if (typeof authUrl !== "string" || authUrl === "" || typeof loginId !== "string" || loginId === "") {
-      return { ok: false, reason: "failed" };
+      return {
+        ok: false,
+        reason: "failed",
+        detail: `the login response carried no usable ${options.mode === "device" ? "verification URL" : "auth URL"} and login id`,
+      };
     }
     matchedLoginId = loginId;
     if (options.signal?.aborted) return { ok: false, reason: "cancelled" };
     const url = new URL(authUrl);
-    if (url.protocol !== "https:" || url.username || url.password) return { ok: false, reason: "failed" };
+    if (url.protocol !== "https:" || url.username || url.password) {
+      return { ok: false, reason: "failed", detail: "the login response carried an unsafe login URL (not a plain https URL)" };
+    }
     if (options.mode === "device") {
       const userCode = loginResponse.userCode;
-      if (loginResponse.type !== "chatgptDeviceCode" || typeof userCode !== "string" || !/^[A-Za-z0-9-]{1,64}$/.test(userCode)) return { ok: false, reason: "failed" };
+      if (loginResponse.type !== "chatgptDeviceCode" || typeof userCode !== "string" || !/^[A-Za-z0-9-]{1,64}$/.test(userCode)) {
+        return {
+          ok: false,
+          reason: "failed",
+          detail: `the device-code response was malformed (type=${typeof loginResponse.type === "string" ? loginResponse.type : "missing"}, code=${typeof userCode === "string" ? "present but invalid" : "missing"})`,
+        };
+      }
       // Device-code flow never auto-opens the browser: the user sees the code
       // and the link and opens the page (or copies the link) on purpose.
       options.onDeviceCode?.({ userCode, verificationUrl: authUrl });
@@ -194,7 +259,7 @@ export async function runCodexLogin(binaryPath: string, options: RunCodexLoginOp
       options.signal.addEventListener("abort", onAbort, { once: true });
     });
     const timedOut = new Promise<CodexLoginOutcome>((resolve) => {
-      timeout = setTimeout(() => resolve({ ok: false, reason: "timeout" }), timeoutMs);
+      timeout = setTimeout(() => resolve({ ok: false, reason: "timeout", detail: `the login did not complete within ${Math.round(timeoutMs / 1000)}s` }), timeoutMs);
     });
 
     const outcome = await Promise.race([completion, aborted, timedOut]);
@@ -206,8 +271,12 @@ export async function runCodexLogin(binaryPath: string, options: RunCodexLoginOp
       }
     }
     return outcome;
-  } catch {
-    return { ok: false, reason: "failed" };
+  } catch (error) {
+    // Taskana 4884: the RPC/transport message is the ONLY useful breadcrumb the
+    // old silent catch threw away (a timed-out network mint, a spawn failure, a
+    // server-side rejection). It is our own client's/error's text — never
+    // credential material — and it is what tells the user WHAT broke.
+    return { ok: false, reason: "failed", detail: loginDetail(`the login request failed: ${error instanceof Error ? error.message : String(error)}`) };
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
     if (onAbort !== undefined) options.signal?.removeEventListener("abort", onAbort);

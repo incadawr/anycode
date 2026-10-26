@@ -434,7 +434,14 @@ export type CodexUseBinaryResult =
 
 export type CodexLoginStartResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
-  | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed" };
+  /**
+   * Taskana 4884: `detail` is a short, non-secret explanation of a `failed`
+   * outcome (which branch refused, and why) — it exists so the UI can say
+   * something more useful than "Sign-in failed. Try again.", and so the main
+   * log carries a breadcrumb. Never a token/credential; absent when there is
+   * nothing to add (cancel, busy, a plain timeout).
+   */
+  | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed"; detail?: string };
 
 // TASK.50 (codex-profiles cut §2/§4, amended §A1): duplicated from
 // main/codex-ipc.ts's own `CodexProfilesSnapshot`/`CodexProfileCreateResult`/

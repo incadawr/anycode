@@ -91,6 +91,21 @@ export const CODEX_VERSION_PREFLIGHT_TIMEOUT_MS = 3_000;
  */
 export const CODEX_DOCTOR_RPC_TIMEOUT_MS = 3_000;
 
+/**
+ * `account/login/start` — the login's ONE RPC that is not a local app-server
+ * read: the server MINTS `loginId`/`userCode`/`authUrl` over the network
+ * (ChatGPT auth backend) before answering. Taskana 4884: the doctor's 3s
+ * interactive bound above was reused for it, so any mint slower than 3s
+ * rejected the request and the whole sign-in collapsed into "Sign-in failed"
+ * with no device code at all. Measured against a real 0.144.3 binary on the
+ * same machine, five consecutive cold-home mints: 415ms, 634ms, 621ms, 3896ms,
+ * … — i.e. the 3s bound is BELOW the real distribution's tail, not above it.
+ * Sized for that round trip with headroom (slow networks/proxies), while
+ * staying far below the human-interaction bound of the whole login
+ * (`CODEX_LOGIN_TIMEOUT_MS`, 5 minutes in main/codex-login.ts).
+ */
+export const CODEX_LOGIN_RPC_TIMEOUT_MS = 30_000;
+
 /** Doctor-only per-page `model/list` bound (see `CODEX_DOCTOR_RPC_TIMEOUT_MS` above) — tighter than the engine's page bound for the same interactive-UX reason. */
 export const CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS = 2_000;
 

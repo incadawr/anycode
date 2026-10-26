@@ -299,6 +299,20 @@ describe("loginFailureMessage", () => {
     expect(loginFailureMessage("failed")).toMatch(/failed/i);
     expect(loginFailureMessage("cancelled")).toBeNull();
   });
+
+  // Taskana 4884: the pane must not swallow main's explanation — the generic
+  // "Try again" line made every distinct failure look identical.
+  it("shows main's own failure detail instead of the generic line", () => {
+    expect(loginFailureMessage("failed", "the login request failed: codex doctor request timed out: account/login/start")).toContain(
+      "codex doctor request timed out: account/login/start",
+    );
+    expect(loginFailureMessage("timeout", "the login did not complete within 300s")).toContain("did not complete within 300s");
+  });
+
+  it("falls back to the generic line when there is no detail (or it is blank)", () => {
+    expect(loginFailureMessage("failed")).toBe("Sign-in failed. Try again.");
+    expect(loginFailureMessage("failed", "   ")).toBe("Sign-in failed. Try again.");
+  });
 });
 
 describe("codexVersionWarningNotice", () => {

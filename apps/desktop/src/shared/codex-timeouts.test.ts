@@ -11,6 +11,7 @@ import {
   CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS,
   CODEX_DOCTOR_RPC_TIMEOUT_MS,
   CODEX_DOCTOR_WATCHDOG_MS,
+  CODEX_LOGIN_RPC_TIMEOUT_MS,
   CODEX_MODEL_LIST_MAX_PAGES,
   CODEX_MODEL_LIST_PAGE_TIMEOUT_MS,
   CODEX_POST_INTERRUPT_SETTLE_MS,
@@ -32,6 +33,7 @@ const ALL_CONSTANTS = {
   CODEX_POST_INTERRUPT_SETTLE_MS,
   CODEX_VERSION_PREFLIGHT_TIMEOUT_MS,
   CODEX_DOCTOR_RPC_TIMEOUT_MS,
+  CODEX_LOGIN_RPC_TIMEOUT_MS,
   CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS,
   CODEX_DOCTOR_WATCHDOG_MS,
   CODEX_TEARDOWN_STDIN_EOF_WAIT_MS,
@@ -87,5 +89,13 @@ describe("codex-timeouts", () => {
   it("the doctor's own per-RPC bounds are tighter than the engine's patient boot bounds (doctor is an interactive Settings diagnostic, not a boot sequence)", () => {
     expect(CODEX_DOCTOR_RPC_TIMEOUT_MS).toBeLessThan(CODEX_BOOT_RPC_TIMEOUT_MS);
     expect(CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS).toBeLessThan(CODEX_MODEL_LIST_PAGE_TIMEOUT_MS);
+  });
+
+  it("login/start gets a bound WIDER than the doctor's per-RPC one — it is a network mint, not a local read (Taskana 4884)", () => {
+    // The regression this pins: reusing CODEX_DOCTOR_RPC_TIMEOUT_MS here made
+    // any server mint slower than 3s look like a hard sign-in failure, with no
+    // device code ever shown. 4s is below the observed tail (>3.9s).
+    expect(CODEX_LOGIN_RPC_TIMEOUT_MS).toBeGreaterThan(CODEX_DOCTOR_RPC_TIMEOUT_MS);
+    expect(CODEX_LOGIN_RPC_TIMEOUT_MS).toBeGreaterThan(4_000);
   });
 });

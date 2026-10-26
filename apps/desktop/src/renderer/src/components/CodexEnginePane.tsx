@@ -65,7 +65,14 @@ export type CodexUseBinaryResult =
 
 export type CodexLoginStartResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
-  | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed" };
+  /**
+   * Taskana 4884: `detail` is a short, non-secret explanation of a `failed`
+   * outcome (which branch refused, and why) — it exists so the UI can say
+   * something more useful than "Sign-in failed. Try again.", and so the main
+   * log carries a breadcrumb. Never a token/credential; absent when there is
+   * nothing to add (cancel, busy, a plain timeout).
+   */
+  | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed"; detail?: string };
 
 export interface CodexProfilesSnapshot {
   profiles: Array<{ profile: CodexProfileRecord; report?: CodexDoctorReport }>;
@@ -302,7 +309,16 @@ export function pickBinaryFailureMessage(reason: "cancelled" | "invalid"): strin
   return reason === "invalid" ? "That file isn't a valid, executable Codex binary." : null;
 }
 
-export function loginFailureMessage(reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed"): string | null {
+/**
+ * Taskana 4884: a failed sign-in carries main's own non-secret `detail` (which
+ * branch refused and why). When it is there, SHOW it — the generic "Try again"
+ * line told the user nothing and made every distinct failure look identical.
+ */
+export function loginFailureMessage(
+  reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed",
+  detail?: string,
+): string | null {
+  const explanation = detail !== undefined && detail.trim() !== "" ? detail.trim() : undefined;
   switch (reason) {
     case "busy":
       return "A Codex check is already in progress — try again in a moment.";
@@ -311,9 +327,9 @@ export function loginFailureMessage(reason: "busy" | "unsupported" | "cancelled"
     case "cancelled":
       return null;
     case "timeout":
-      return "Sign-in timed out. Try again.";
+      return explanation !== undefined ? `Sign-in timed out: ${explanation}` : "Sign-in timed out. Try again.";
     case "failed":
-      return "Sign-in failed. Try again.";
+      return explanation !== undefined ? `Sign-in failed: ${explanation}` : "Sign-in failed. Try again.";
     default: {
       const exhaustive: never = reason;
       return exhaustive;
@@ -867,7 +883,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
           if (login.ok) {
             setReportsById((prev) => ({ ...prev, [created.profile.id]: login.snapshot.report }));
           } else {
-            setNotice(loginFailureMessage(login.reason));
+            setNotice(loginFailureMessage(login.reason, login.detail));
           }
         } finally {
           setSigningInId(null);
@@ -903,7 +919,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
       if (result.ok) {
         setReportsById((prev) => ({ ...prev, [id]: result.snapshot.report }));
       } else {
-        setNotice(loginFailureMessage(result.reason));
+        setNotice(loginFailureMessage(result.reason, result.detail));
       }
     } finally {
       setSigningInId(null);

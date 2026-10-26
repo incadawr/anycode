@@ -157,12 +157,26 @@ if (args[0] === "--version") {
         const result = device
           ? { type: "chatgptDeviceCode", verificationUrl: flag("--unsafe-login-url") ? "file:///tmp/auth" : "https://example.invalid/device", userCode: flag("--invalid-device-code") ? "secret\npoison" : "ABCD-1234", loginId: "login-1" }
           : { type: "chatgpt", authUrl: "https://example.invalid/auth", loginId: "login-1" };
-        process.stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);
-        if (flag("--auto-complete-login")) {
-          setTimeout(() => {
-            process.stdout.write(`${JSON.stringify({ method: "account/login/completed", params: { success: true, loginId: "login-1", error: null } })}\n`);
-          }, 20);
-        }
+        // Taskana 4884: the REAL server MINTS the device code over the network,
+        // so this response is the one login RPC that is not instant — observed
+        // 0.3-4.7s against real binaries. This knob models that latency so a
+        // test can prove AnyCode's own bound is sized for it.
+        const respond = () => {
+          process.stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);
+          if (flag("--auto-complete-login")) {
+            setTimeout(() => {
+              process.stdout.write(`${JSON.stringify({ method: "account/login/completed", params: { success: true, loginId: "login-1", error: null } })}\n`);
+            }, 20);
+          }
+          if (flag("--login-rejected")) {
+            setTimeout(() => {
+              process.stdout.write(`${JSON.stringify({ method: "account/login/completed", params: { success: false, loginId: "login-1", error: "device authorization expired" } })}\n`);
+            }, 20);
+          }
+        };
+        const loginStartDelay = Number(value("--login-start-delay") ?? "0");
+        if (loginStartDelay > 0) setTimeout(respond, loginStartDelay);
+        else respond();
       } else if (request.method === "account/login/cancel") {
         process.stdout.write(`${JSON.stringify({ id: request.id, result: { status: "canceled" } })}\n`);
       } else if (request.method === "exit") {

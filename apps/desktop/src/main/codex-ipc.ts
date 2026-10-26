@@ -95,7 +95,14 @@ export type CodexUseBinaryResult =
 
 export type CodexLoginStartResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
-  | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed" };
+  /**
+   * Taskana 4884: `detail` is a short, non-secret explanation of a `failed`
+   * outcome (which branch refused, and why) — it exists so the UI can say
+   * something more useful than "Sign-in failed. Try again.", and so the main
+   * log carries a breadcrumb. Never a token/credential; absent when there is
+   * nothing to add (cancel, busy, a plain timeout).
+   */
+  | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed"; detail?: string };
 
 /** One registry row projected for the renderer: the persisted record + the last in-memory doctor report (cut §4.3 — reports are cached in main memory, never on disk). */
 export interface CodexProfilesSnapshot {
@@ -930,7 +937,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       try {
         const resolution = await resolveProfile(profileId);
         if (!resolution.ok) {
-          return { ok: false, reason: "failed" };
+          return { ok: false, reason: "failed", detail: `the profile could not be resolved: ${resolution.reason}` };
         }
         const profile = resolution.profile;
         // An authLink profile mirrors an external credential — its login flow
@@ -993,7 +1000,17 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
           }),
         );
         if (!outcome.ok) {
-          return { ok: false, reason: outcome.reason };
+          // Taskana 4884: a failing login must leave a breadcrumb in MAIN's own
+          // log — the renderer shows the same text, but a user reporting
+          // "sign-in fails" has to be diagnosable from the log alone.
+          if (outcome.detail !== undefined) {
+            console.warn(`[main] codex login failed (${outcome.reason}): ${outcome.detail}`);
+          }
+          return {
+            ok: false,
+            reason: outcome.reason,
+            ...(outcome.detail !== undefined ? { detail: outcome.detail } : {}),
+          };
         }
         // Re-diagnose via the doctor (never trust the login handshake's own
         // success flag for account/version state) — one source of truth for
@@ -1168,7 +1185,9 @@ export function registerCodexIpc(deps: CodexIpcDeps): CodexOnboardingController 
   });
   ipcMain.handle(CODEX_LOGIN_START_CHANNEL, (_event, args?: unknown) => {
     const mode = (args as { mode?: unknown } | undefined)?.mode;
-    if (mode !== undefined && mode !== "browser" && mode !== "device") return { ok: false, reason: "failed" };
+    if (mode !== undefined && mode !== "browser" && mode !== "device") {
+      return { ok: false, reason: "failed", detail: `unsupported login mode: ${String(mode).slice(0, 32)}` };
+    }
     return controller.loginStart(profileIdArg(args), mode);
   });
   ipcMain.handle(CODEX_LOGIN_CANCEL_CHANNEL, () => controller.loginCancel());

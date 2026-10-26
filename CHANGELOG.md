@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Codex "Sign in with a code" no longer fails instantly for a managed account profile: the device-code request to the Codex server (a real network round trip that takes 0.3–4.7s in practice) was bounded by the 3-second diagnostic timeout, so slower answers looked like a hard sign-in failure and no code was ever shown. A failed Codex sign-in also now says what went wrong instead of only "Sign-in failed. Try again." (Taskana 4884).
+
 ## [0.0.44] — 2026-10-26
 
 ### Added

@@ -377,6 +377,34 @@ describe("createCodexOnboardingController.loginStart / loginCancel", () => {
     expect(result).toEqual({ ok: false, reason: "timeout" });
   });
 
+  it("forwards the login outcome's own failure detail to the renderer and logs it (Taskana 4884)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const deps = makeDeps({
+        runLogin: async () => ({ ok: false, reason: "failed", detail: "the login request failed: codex doctor request timed out: account/login/start" }),
+      });
+      const controller = createCodexOnboardingController(deps);
+      const result = await controller.loginStart();
+      expect(result).toEqual({
+        ok: false,
+        reason: "failed",
+        detail: "the login request failed: codex doctor request timed out: account/login/start",
+      });
+      // The log line is what makes a user's "sign-in fails" report diagnosable.
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("account/login/start"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("omits detail entirely when the outcome carries none (cancel stays silent)", async () => {
+    const deps = makeDeps({ runLogin: async () => ({ ok: false, reason: "cancelled" }) });
+    const controller = createCodexOnboardingController(deps);
+    const result = await controller.loginStart();
+    expect(result).toEqual({ ok: false, reason: "cancelled" });
+    expect("detail" in result).toBe(false);
+  });
+
   it("refuses a second concurrent loginStart with busy", async () => {
     let resolveLogin!: (outcome: { ok: true }) => void;
     const runLogin = vi.fn(() => new Promise<{ ok: true }>((resolve) => { resolveLogin = resolve; }));
