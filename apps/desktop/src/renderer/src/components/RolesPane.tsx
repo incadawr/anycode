@@ -33,11 +33,11 @@ export function RolesPane(): React.JSX.Element {
 
   const persistedRoles = (snapshot?.settings.roles ?? undefined) as Partial<Record<PresetRole, RoleConfig>> | undefined;
   const [maxParallelChildren, setMaxParallelChildren] = useState<number>(snapshot?.settings.roles?.maxParallelChildren ?? 4);
-  const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const [savedNotice, setSavedNotice] = useState<boolean | null>(null);
 
   async function handleSave(roles: Partial<Record<PresetRole, RoleConfig>>): Promise<void> {
     const result = await setPatch({ roles: { ...roles, maxParallelChildren } });
-    setSavedNotice(result.ok ? "Roles saved." : "Saving roles failed.");
+    setSavedNotice(result.ok);
   }
 
   const initialRoles = useMemo(
@@ -82,10 +82,17 @@ export function RolesPane(): React.JSX.Element {
       </label>
 
       {savedNotice !== null && (
-        <p className="settings-notice" role="status">
-          {savedNotice}
-        </p>
+        <RolesSaveNotice ok={savedNotice} />
       )}
     </div>
+  );
+}
+
+/** The save result remains visible until the next save. */
+export function RolesSaveNotice({ ok }: { ok: boolean }): React.JSX.Element {
+  return (
+    <p className={ok ? "settings-notice-ok" : "settings-notice"} role="status">
+      {ok ? "Roles saved." : "Saving roles failed."}
+    </p>
   );
 }
