@@ -761,6 +761,9 @@ export class AiSdkModelPort implements ModelPort {
 
     for (;;) {
       let hadModelOutput = false;
+      // finish totals discard raw usage; keep the latest step's wire usage
+      // inside this attempt so abandoned attempts cannot affect a retry.
+      let stepRawUsage: unknown;
       // Taskana 4705 review: set once a non-error `finish` is yielded. The step
       // is then complete; replaying it would re-bill the provider and drop the
       // usage of the attempt the caller already received, so it is never replayed.
@@ -859,7 +862,13 @@ export class AiSdkModelPort implements ModelPort {
             this.#lastResponseModel = rawResponseModel;
           }
 
-          let event = translateStreamPart(outcome.value);
+          if (outcome.value.type === "finish-step") {
+            stepRawUsage = outcome.value.usage.raw;
+          }
+          let event = translateStreamPart(outcome.value, {
+            transport: this.config.transport,
+            stepRawUsage,
+          });
           if (event === null) {
             continue;
           }

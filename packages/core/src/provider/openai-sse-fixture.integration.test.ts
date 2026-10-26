@@ -99,6 +99,24 @@ describe("AiSdkModelPort over a real @ai-sdk/openai-compatible SSE stream (TASK.
     return new AiSdkModelPort(full);
   }
 
+  it.each([undefined, 0, 12])("uses reported cache reads from the final usage chunk: %s", async (cached) => {
+    responseChunks = [
+      { choices: [{ index: 0, delta: { content: "ok" }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+      { choices: [], usage: { prompt_tokens: 500, completion_tokens: 10, total_tokens: 510,
+        ...(cached !== undefined ? { prompt_tokens_details: { cached_tokens: cached } } : {}) } },
+    ];
+    const events = await collect(portFor({ includeUsage: true }).streamText({
+      messages: [{ role: "user", content: "hi" }], tools: [],
+    }));
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    expect(events.find((e) => e.type === "finish")).toEqual({
+      type: "finish", finishReason: "stop",
+      usage: { inputTokens: 500, outputTokens: 10, totalTokens: 510,
+        ...(cached !== undefined ? { cachedInputTokens: cached } : {}) },
+    });
+  });
+
   it("posts to /chat/completions with Bearer auth (no x-api-key), include_usage, reasoning_effort, and streams through finish.usage", async () => {
     responseChunks = [
       { choices: [{ index: 0, delta: { role: "assistant", reasoning_content: "thinking it through" }, finish_reason: null }] },

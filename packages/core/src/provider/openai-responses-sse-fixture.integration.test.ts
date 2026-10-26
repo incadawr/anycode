@@ -117,6 +117,23 @@ describe("AiSdkModelPort over a real @ai-sdk/openai Responses SSE stream (TASK.4
     return new AiSdkModelPort(full);
   }
 
+  it.each([undefined, 0, 3])("uses reported cache reads from response.completed: %s", async (cached) => {
+    responseChunks = [created(), {
+      type: "response.completed",
+      response: { usage: { input_tokens: 500, output_tokens: 10,
+        ...(cached !== undefined ? { input_tokens_details: { cached_tokens: cached } } : {}) } },
+    }];
+    const events = await collect(portFor().streamText({
+      messages: [{ role: "user", content: "hi" }], tools: [],
+    }));
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    expect(events.find((e) => e.type === "finish")).toEqual({
+      type: "finish", finishReason: "stop",
+      usage: { inputTokens: 500, outputTokens: 10, totalTokens: 510,
+        ...(cached !== undefined ? { cachedInputTokens: cached } : {}) },
+    });
+  });
+
   it("posts to /responses with store:false in the body and streams text through finish.usage", async () => {
     responseChunks = [
       created(),

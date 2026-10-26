@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- OpenAI-compatible servers that don't report prompt caching (e.g. LM Studio) no longer show "Latest cache hit: 0%" — the popover now says "not reported by provider", while providers that do send `cached_tokens` (including a real 0) keep showing actual numbers (GitHub #11).
+
 ## [0.0.43] — 2026-10-26
 
 ### Fixed

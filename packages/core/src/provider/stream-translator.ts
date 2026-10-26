@@ -50,7 +50,38 @@ function normalizeFinishReason(sdkReason: string): FinishReason {
   }
 }
 
-export function translateStreamPart(part: TextStreamPart<ToolSet>): ModelStreamEvent | null {
+/**
+ * The SDK drops raw usage when summing finish.totalUsage. model-port captures
+ * the latest finish-step.usage.raw separately (one SDK step per call), scoped
+ * to each attempt so retries cannot reuse abandoned usage (GitHub #11).
+ * Chat Completions and Responses coerce missing cache reads to zero; only a
+ * numeric cached_tokens in that transport's wire details confirms reporting.
+ * Anthropic and unknown transports keep the SDK's cache-read value unchanged.
+ */
+interface StreamTranslationContext {
+  transport?: string;
+  stepRawUsage?: unknown;
+}
+
+function cacheReadTokensReported(
+  cacheReadTokens: number | undefined,
+  { transport, stepRawUsage }: StreamTranslationContext,
+): number | undefined {
+  const detailsKey = transport === "openai-chat-completions"
+    ? "prompt_tokens_details"
+    : transport === "openai-responses" ? "input_tokens_details" : undefined;
+  if (detailsKey === undefined) return cacheReadTokens;
+  if (stepRawUsage === null || typeof stepRawUsage !== "object") return undefined;
+  const details = (stepRawUsage as Record<string, unknown>)[detailsKey];
+  if (details === null || typeof details !== "object") return undefined;
+  return typeof (details as Record<string, unknown>).cached_tokens === "number"
+    ? cacheReadTokens : undefined;
+}
+
+export function translateStreamPart(
+  part: TextStreamPart<ToolSet>,
+  context: StreamTranslationContext = {},
+): ModelStreamEvent | null {
   switch (part.type) {
     case "start":
       return { type: "start" };
@@ -85,19 +116,21 @@ export function translateStreamPart(part: TextStreamPart<ToolSet>): ModelStreamE
           ...(part.invalid === true ? { invalid: { reason: describeInvalidToolCall(part.error) } } : {}),
         },
       };
-    case "finish":
+    case "finish": {
+      const cachedInputTokens = cacheReadTokensReported(
+        part.totalUsage.inputTokenDetails?.cacheReadTokens, context,
+      );
       return {
         type: "finish",
         finishReason: normalizeFinishReason(part.finishReason),
         usage: {
           inputTokens: part.totalUsage.inputTokens,
-          ...(part.totalUsage.inputTokenDetails?.cacheReadTokens !== undefined
-            ? { cachedInputTokens: part.totalUsage.inputTokenDetails.cacheReadTokens }
-            : {}),
+          ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
           outputTokens: part.totalUsage.outputTokens,
           totalTokens: part.totalUsage.totalTokens,
         },
       };
+    }
     case "error":
       return { type: "error", error: part.error };
     default:
