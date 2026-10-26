@@ -11,6 +11,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Sessions API `create_session` no longer ignores `model` for the core engine: it now selects the provider connection to open the tab on (by connection id, its label, `providerId/model`, or a model id that connection offers) and runs that model. An unknown or ambiguous value is refused with `invalid_model` and the text lists the connections; without `model` the active connection is used as before (Taskana 4888).
 - Codex "Sign in with a code" no longer fails instantly for a managed account profile: the device-code request to the Codex server (a real network round trip that takes 0.3–4.7s in practice) was bounded by the 3-second diagnostic timeout, so slower answers looked like a hard sign-in failure and no code was ever shown. A failed Codex sign-in also now says what went wrong instead of only "Sign-in failed. Try again." (Taskana 4884).
+- Settings → Roles shows its title and description once: the pane no longer adds a second "Roles" header of its own, and the embedded role editor no longer shows its onboarding header ("Orchestration roles" + "change this later in Settings → Roles") (Taskana 4885).
 
 ## [0.0.44] — 2026-10-26
 
