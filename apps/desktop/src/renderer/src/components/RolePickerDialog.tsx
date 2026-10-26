@@ -56,7 +56,10 @@ export interface RolePickerDialogProps {
   skippable?: boolean;
   /**
    * Render in the page flow instead of as a modal (the Settings Roles pane).
-   * A modal there made the whole window inert with no way out.
+   * A modal there made the whole window inert with no way out. The
+   * onboarding header ("Orchestration roles" + "change this later in
+   * Settings") is suppressed here — the pane supplies its own heading and
+   * description.
    */
   inline?: boolean;
   onSave(roles: Partial<Record<PresetRole, RoleConfig>>): void;
@@ -127,12 +130,14 @@ export function RolePickerDialog({
 
   const content = (
     <>
-        <div className="role-picker-header">
-          <span className="role-picker-title">Orchestration roles</span>
-          <p className="role-picker-subtitle">
-            Pick which engine or connection each role runs on. You can change this later in Settings → Roles.
-          </p>
-        </div>
+        {!inline && (
+          <div className="role-picker-header">
+            <span className="role-picker-title">Orchestration roles</span>
+            <p className="role-picker-subtitle">
+              Pick which engine or connection each role runs on. You can change this later in Settings → Roles.
+            </p>
+          </div>
+        )}
 
         <div className="role-picker-presets" role="radiogroup" aria-label="Presets">
           {presets.map((preset) => {

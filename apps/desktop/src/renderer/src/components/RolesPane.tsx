@@ -49,14 +49,6 @@ export function RolesPane(): React.JSX.Element {
 
   return (
     <div className="settings-pane" data-testid="settings-roles-pane">
-      <header className="settings-pane-header">
-        <h2>Roles</h2>
-        <p>
-          Which engine or connection each orchestration role runs on, with ordered fallbacks, a per-role parallel-children cap
-          for the Agent tool, and per-role turn budgets. Changes apply to new spawns.
-        </p>
-      </header>
-
       <RolePickerDialog
         open
         inline

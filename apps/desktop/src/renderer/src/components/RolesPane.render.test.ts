@@ -40,6 +40,14 @@ describe("Roles editor modality", () => {
     expect(html).not.toContain("<dialog");
   });
 
+  it("the Settings Roles pane renders no heading of its own — the Settings screen supplies the single 'Roles' title above it", () => {
+    const html = renderToStaticMarkup(createElement(RolesPane));
+    expect(html).not.toContain("<h2");
+    expect(html).not.toContain("settings-pane-header");
+    expect(html).not.toContain("Orchestration roles");
+    expect(html).not.toContain("later in Settings");
+  });
+
   it("inline mode renders a section; the default (first run) stays a dialog", () => {
     expect(renderToStaticMarkup(createElement(RolePickerDialog, { ...base, inline: true }))).toMatch(/^<section[^>]*role-picker-inline/);
     expect(renderToStaticMarkup(createElement(RolePickerDialog, base))).toMatch(/^<dialog/);
