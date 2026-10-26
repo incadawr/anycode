@@ -2,7 +2,7 @@
  * Taskana 4704 §3.9 (part B) — the first-run role picker dialog. Modal
  * listing the five roles; per role a primary row (engine select
  * claude/codex/«connection <id>» populated from the settings snapshot's
- * connections; model text input prefilled via entryModelPrefill; effort
+ * connections; route-specific model select with custom input; effort
  * select) and zero-or-more fallback rows (add/remove/move up-down). Preset
  * chips come from the PURE deriveRolePresets (role-presets.ts); every list
  * mutation goes through the pure role-editor-model helpers, so the node-env
@@ -13,12 +13,11 @@
  * written. Electron's window.confirm/prompt throw — all interactions are
  * inline buttons.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { RoleConfig, ProviderConnection } from "../../../shared/settings.js";
 import {
   autoSelectPreset,
   deriveRolePresets,
-  entryModelPrefill,
   presetApplicable,
   ROLE_PRESET_ROLES,
   type PresetEngineInput,
@@ -38,6 +37,9 @@ import {
   type RolesDraft,
 } from "../role-editor-model.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
+import { useSettingsStore } from "../settings-store.js";
+import { resolveRoleModels, roleModelSelection, routePatch, nextCustomMode, type RoleModelSources } from "../role-model-options.js";
+import { useRoleEngineModels } from "../use-role-engine-models.js";
 import { Check, Chevron, Plus, X } from "./icons.js";
 
 export interface RolePickerDialogProps {
@@ -73,6 +75,13 @@ export function RolePickerDialog({
   onSave,
   onSkip,
 }: RolePickerDialogProps) {
+  const snapshot = useSettingsStore((state) => state.snapshot);
+  const engineModels = useRoleEngineModels(open && engines.codexReady);
+  const modelSources = useMemo<RoleModelSources>(() => ({
+    connections, activeConnectionId, engineModels,
+    catalog: snapshot?.catalog,
+    custom: snapshot?.settings.provider.custom,
+  }), [connections, activeConnectionId, engineModels, snapshot]);
   const dialogRef = useRef<HTMLDialogElement>(null);
   // D8 overlay wiring: the preview WebContentsView must hide while this
   // dialog is up.
@@ -155,6 +164,7 @@ export function RolePickerDialog({
                 label="Primary"
                 entry={draft[role].primary}
                 connections={connections}
+                modelSources={modelSources}
                 onChange={(patch) => setDraft((d) => patchEntry(d, role, null, patch))}
               />
               {draft[role].fallbacks.map((entry, index) => (
@@ -163,6 +173,7 @@ export function RolePickerDialog({
                   label={`Fallback ${index + 1}`}
                   entry={entry}
                   connections={connections}
+                  modelSources={modelSources}
                   onChange={(patch) => setDraft((d) => patchEntry(d, role, index, patch))}
                   onRemove={() => setDraft((d) => removeFallback(d, role, index))}
                   onMove={(delta) => setDraft((d) => moveFallback(d, role, index, delta))}
@@ -220,19 +231,16 @@ interface EntryRowProps {
   label: string;
   entry: RolesDraft[PresetRole]["primary"];
   connections: readonly ProviderConnection[];
+  modelSources: RoleModelSources;
   onChange(patch: Partial<RolesDraft[PresetRole]["primary"]>): void;
   onRemove?(): void;
   onMove?(delta: -1 | 1): void;
 }
 
-function EntryRow({ label, entry, connections, onChange, onRemove, onMove }: EntryRowProps) {
+function EntryRow({ label, entry, connections, modelSources, onChange, onRemove, onMove }: EntryRowProps) {
   const route = entry.engine !== "" ? `engine:${entry.engine}` : entry.connection.trim() !== "" ? `connection:${entry.connection}` : "connection:active";
-  const selectedConnection = entry.connection.trim() !== "" ? entry.connection.trim() : undefined;
-  const modelPrefill = entryModelPrefill(
-    { ...(entry.engine !== "" ? { engine: entry.engine } : {}), ...(selectedConnection !== undefined ? { connection: selectedConnection } : {}), ...(entry.model !== "" ? { model: entry.model } : {}) },
-    connections.find((c) => c.id === selectedConnection)?.model,
-    connections.find((c) => c.id === selectedConnection)?.models,
-  );
+  const models = resolveRoleModels(entry, modelSources);
+  const selection = nextCustomMode(entry.customModel === true, entry.model, models) ? "custom" : roleModelSelection(entry.model, models, entry.engine);
   return (
     <div className="role-picker-entry" data-route={route}>
       <span className="role-picker-entry-label">{label}</span>
@@ -240,17 +248,7 @@ function EntryRow({ label, entry, connections, onChange, onRemove, onMove }: Ent
         className="role-picker-entry-route"
         aria-label={`${label} route`}
         value={route}
-        onChange={(event) => {
-          const next = event.target.value;
-          if (next === "engine:claude") {
-            onChange({ engine: "claude", connection: "" });
-          } else if (next === "engine:codex") {
-            onChange({ engine: "codex", connection: "" });
-          } else if (next.startsWith("connection:")) {
-            const id = next.slice("connection:".length);
-            onChange({ engine: "", connection: id === "active" ? "" : id });
-          }
-        }}
+        onChange={(event) => onChange(routePatch(event.target.value))}
       >
         <option value="engine:claude">Claude engine</option>
         <option value="engine:codex">Codex engine</option>
@@ -261,14 +259,35 @@ function EntryRow({ label, entry, connections, onChange, onRemove, onMove }: Ent
           </option>
         ))}
       </select>
-      <input
+      <select
         className="role-picker-entry-model"
         aria-label={`${label} model`}
-        type="text"
-        placeholder="model (optional)"
-        value={entry.model !== "" ? entry.model : modelPrefill}
-        onChange={(event) => onChange({ model: event.target.value })}
-      />
+        value={selection}
+        onChange={(event) => {
+          const next = event.target.value;
+          if (next === "custom") {
+            onChange({ model: "", customModel: nextCustomMode(true, "", models) });
+          } else {
+            onChange({ model: next === "default" ? "" : models[Number(next.slice("model:".length))]!.id, customModel: false });
+          }
+        }}
+      >
+        <option value="default">Default</option>
+        {models.map((model, index) => <option key={model.id} value={`model:${index}`}>{model.name ?? model.id}</option>)}
+        <option value="custom">Custom…</option>
+      </select>
+      {selection === "custom" && (
+        <input
+          className="role-picker-entry-model"
+          aria-label={`${label} custom model`}
+          type="text"
+          placeholder="Model ID"
+          value={entry.model}
+          onChange={(event) => {
+            onChange({ model: event.target.value, customModel: nextCustomMode(true, event.target.value, models) });
+          }}
+        />
+      )}
       <select
         className="role-picker-entry-effort"
         aria-label={`${label} effort`}

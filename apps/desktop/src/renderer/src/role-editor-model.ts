@@ -22,6 +22,8 @@ export interface DraftEntry {
   engine: "" | "codex" | "claude";
   connection: string;
   model: string;
+  /** UI-only Custom selection; travels with the entry through reorder/remove. */
+  customModel?: boolean;
   effort: RoleEffortLevel;
 }
 
@@ -38,7 +40,7 @@ export function toDraftEntry(entry: RoleRouteEntry | undefined): DraftEntry {
   return {
     engine: entry?.engine ?? "",
     connection: entry?.connection ?? "",
-    model: entry?.model ?? "",
+    model: entry?.engine && entry.model === "default" ? "" : entry?.model ?? "",
     effort: (entry?.effort ?? "") as RoleEffortLevel,
   };
 }
@@ -65,7 +67,7 @@ export function fromDraftEntry(entry: DraftEntry): RoleRouteEntry {
   if (entry.connection.trim() !== "") {
     out.connection = entry.connection.trim();
   }
-  if (entry.model.trim() !== "") {
+  if (entry.model.trim() !== "" && !(entry.engine !== "" && entry.model.trim() === "default")) {
     out.model = entry.model.trim();
   }
   if (entry.effort !== "") {

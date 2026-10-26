@@ -1,6 +1,6 @@
 /**
  * Taskana 4704 §3.9 (part B) — preset derivation pins. Pure-function tests
- * over deriveRolePresets/presetApplicable/autoSelectPreset/entryModelPrefill
+ * over deriveRolePresets/presetApplicable/autoSelectPreset
  * (the dialog JSX renders what these return; this package's vitest is node,
  * no jsdom).
  */
@@ -8,7 +8,6 @@ import { describe, expect, it } from "vitest";
 import {
   autoSelectPreset,
   deriveRolePresets,
-  entryModelPrefill,
   presetApplicable,
   ROLE_PRESET_ROLES,
 } from "./role-presets.js";
@@ -93,25 +92,5 @@ describe("autoSelectPreset", () => {
 
   it("neither engine -> P3 (never null)", () => {
     expect(autoSelectPreset({ claudeReady: false, codexReady: false }, ACTIVE).id).toBe("this-connection");
-  });
-});
-
-describe("entryModelPrefill", () => {
-  it("an explicit entry model wins", () => {
-    expect(entryModelPrefill({ connection: ACTIVE, model: "explicit" }, "conn-model", ["m1"])).toBe("explicit");
-  });
-
-  it("falls back to the connection's model, then its first models[] entry, then empty", () => {
-    expect(entryModelPrefill({ connection: ACTIVE }, "conn-model", ["m1", "m2"])).toBe("conn-model");
-    expect(entryModelPrefill({ connection: ACTIVE }, undefined, ["m1", "m2"])).toBe("m1");
-    expect(entryModelPrefill({ connection: ACTIVE }, undefined, undefined)).toBe("");
-    expect(entryModelPrefill({ connection: ACTIVE }, "", ["m1"])).toBe("m1");
-  });
-
-  it("an engine entry ignores connection facts (the connection is not the route) and prefills empty", () => {
-    // §3.9: the prefill reads the CONNECTION the entry names; an engine entry
-    // names no connection, so no connection model applies — free text.
-    expect(entryModelPrefill({ engine: "claude" }, "conn-model", ["m1"])).toBe("");
-    expect(entryModelPrefill({ engine: "claude", model: "sonnet" }, "conn-model", ["m1"])).toBe("sonnet");
   });
 });
