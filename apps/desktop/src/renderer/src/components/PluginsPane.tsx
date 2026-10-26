@@ -464,7 +464,7 @@ export function PluginsPane({
           rows={rows}
           emptyKind={emptyKind}
           busyName={busyName}
-          onToggle={(row) => void runMutation(row.name, () => bridge.setEnabled(row.name, !pluginEnabled(row)))}
+          onToggle={(name, enabled) => void runMutation(name, () => bridge.setEnabled(name, enabled))}
           onUpdate={(row) => void runMutation(row.name, () => bridge.update(row.name))}
           onRollback={(row) => void runMutation(row.name, () => bridge.rollback(row.name))}
           onPin={(row) => void runMutation(row.name, () => bridge.setPinned(row.name, !pluginPinned(row)))}
@@ -519,7 +519,7 @@ export interface PluginsPaneBodyProps {
   rows: readonly PluginRowView[];
   emptyKind: PluginsEmptyKind;
   busyName: string | null;
-  onToggle: (row: PluginRowView) => void;
+  onToggle: (name: string, enabled: boolean) => void;
   onUpdate: (row: PluginRowView) => void;
   onRollback: (row: PluginRowView) => void;
   onPin: (row: PluginRowView) => void;
@@ -578,7 +578,7 @@ export function PluginsPaneBody({
                 key={row.name}
                 row={row}
                 busy={busyName === row.name}
-                onToggle={() => onToggle(row)}
+                onToggle={() => onToggle(row.name, !pluginEnabled(row))}
                 onUpdate={() => onUpdate(row)}
                 onRollback={() => onRollback(row)}
                 onPin={() => onPin(row)}

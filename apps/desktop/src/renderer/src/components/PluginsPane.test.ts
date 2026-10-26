@@ -11,7 +11,7 @@
  * idiom SettingsScreen.test.ts's walk/mountUnit already established.
  */
 import { Fragment, type ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   PluginInstallPreview,
   PluginRowView,
@@ -112,6 +112,7 @@ function installedRow(overrides: Partial<PluginRowView> = {}): PluginRowView {
     version: "1.0.0",
     tier: "official",
     status: "active",
+    disabled: false,
     source: { kind: "official" },
     managed: { enabled: true, pinned: false, active: "1.0.0" },
     capabilities: { skills: 1, agents: 0, workflows: 1, mcp: [], commands: 0, hooks: false, docs: false, engineSupport: [], promptOverlays: 0, services: [] },
@@ -230,6 +231,22 @@ describe("PluginsPaneBody", () => {
       plugins: [installedRow({ problems: ['Plugin "x" skills entry "../esc" escapes the plugin root — dropped'] })],
     });
     expect(call(() => PluginsPaneBody(bodyPropsFor(snap)))).toContain("escapes the plugin root");
+  });
+
+  it.each(["legacy-user", "official", "project"] as const)("renders a disabled %s plugin OFF and clicking enables it", (tier) => {
+    const legacy = installedRow({
+      name: "disabled-tool", tier,
+      managed: tier === "official" ? { enabled: true, pinned: false, active: "1.0.0" } : undefined,
+      status: "disabled", disabled: true,
+    });
+    const bridge = { setEnabled: vi.fn() };
+    const body = PluginsPaneBody(bodyPropsFor(snapshot({ plugins: [legacy] }), { onToggle: bridge.setEnabled }));
+    expect(renderToString(body)).toContain("data-plugin-enabled=false");
+    const switches = findElements(body, (el) => el.type === "button" && el.props.role === "switch");
+    expect(switches).toHaveLength(1);
+    expect(switches[0]!.props["aria-checked"]).toBe(false);
+    (switches[0]!.props.onClick as () => void)();
+    expect(bridge.setEnabled).toHaveBeenCalledWith("disabled-tool", true);
   });
 
   it("renders disabled rows as disabled (data flag for the row state)", () => {

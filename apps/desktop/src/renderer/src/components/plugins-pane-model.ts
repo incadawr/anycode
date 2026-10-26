@@ -74,9 +74,9 @@ export function pluginSourceText(source: PluginRowView["source"]): string {
 
 // ── row derivations (S1-B fields → S1-C display state) ──
 
-/** Whether the row's enable toggle reads ON (managed `enabled`, default true). */
+/** Whether the toggle reads ON: neither managed bookkeeping nor user-global state disables it. */
 export function pluginEnabled(row: PluginRowView): boolean {
-  return row.managed?.enabled ?? true;
+  return row.managed?.enabled === false ? false : !row.disabled;
 }
 
 /** Whether the row is pinned (managed only). */

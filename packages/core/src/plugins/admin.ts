@@ -61,6 +61,8 @@ export interface PluginAdminRow {
   description?: string;
   tier: PluginTier;
   status: PluginStatus;
+  /** User-global disabled state, including project and legacy dir plugins. */
+  disabled: boolean;
   /** Reason(s) behind inactive/disabled/problems chip (free-form strings). */
   problems: string[];
   source: PluginSourceView;
@@ -172,6 +174,7 @@ export async function scanPluginsAdmin(
     const row: PluginAdminRow = {
       name,
       tier: entry.trust === "official" ? "official" : entry.trust === "local" ? "local" : "third-party",
+      disabled: disabled.has(name),
       status: disabled.has(name) ? "disabled" : discovered ? "active" : "inactive",
       problems: [],
       source: sourceViewOf(entry),
@@ -199,6 +202,7 @@ export async function scanPluginsAdmin(
     rows.set(name, {
       name,
       tier: info.tier,
+      disabled: disabled.has(name),
       status: disabled.has(name) ? "disabled" : "active",
       problems: [],
       source: { kind: "dir" },
@@ -218,6 +222,7 @@ export async function scanPluginsAdmin(
     rows.set(candidate.name, {
       name: candidate.name,
       tier: candidate.tier,
+      disabled: disabled.has(candidate.name) || candidate.reason === "disabled",
       status: candidate.reason === "disabled" ? "disabled" : "inactive",
       problems: [candidate.problem],
       source: { kind: "dir" },

@@ -109,8 +109,11 @@ export async function listServiceCandidates(deps: ServiceCandidatesDeps): Promis
     serviceConsent: consent,
   }).catch(() => ({ rows: [] as PluginAdminRow[], problems: [] as string[] }));
   for (const row of homeScan.rows) {
-    if (row.tier === "project") continue;
-    push(await candidatesOf(deps.fs, row, true, deps.resolveSecrets));
+    // With workspace === home, discovery sees the user plugin root as a
+    // project root too. These hand-placed dirs are user-global legacy plugins,
+    // so retain their services with the correct tier rather than dropping them.
+    const homeRow: PluginAdminRow = row.tier === "project" ? { ...row, tier: "legacy-user" } : row;
+    push(await candidatesOf(deps.fs, homeRow, true, deps.resolveSecrets));
   }
 
   for (const workspace of new Set(deps.liveWorkspaces())) {

@@ -90,6 +90,20 @@ describe("listServiceCandidates (Taskana 4750a)", () => {
     expect(out.filter((c) => c.enabled)).toEqual([]);
   });
 
+  it("re-enabling a legacy plugin makes its approved service runnable", async () => {
+    const files = {
+      [STATE]: JSON.stringify({ version: 1, plugins: {}, removedDefaults: [], disabled: ["legacy"] }),
+      [`${USER_PLUGINS}/legacy/.anycode-plugin/plugin.json`]: JSON.stringify({ name: "legacy", services: SERVICES }),
+    };
+    const fs = makeFs(files, { [USER_PLUGINS]: ["legacy"] });
+    const source = deps(fs, {
+      serviceConsent: async () => [{ plugin: "legacy", servicesHash: servicesHash(SERVICES), grantedAt: "x" }],
+    });
+    expect((await listServiceCandidates(source))[0]).toMatchObject({ tier: "legacy-user", enabled: false, consented: true });
+    files[STATE] = JSON.stringify({ version: 1, plugins: {}, removedDefaults: [], disabled: [] });
+    expect((await listServiceCandidates(source))[0]).toMatchObject({ tier: "legacy-user", enabled: true, consented: true, trusted: true });
+  });
+
   it("project-tier services come only from live workspaces and carry that workspace's trust", async () => {
     const files = {
       [`${WS}/.anycode/plugins/proj-bridge/.anycode-plugin/plugin.json`]: JSON.stringify({
