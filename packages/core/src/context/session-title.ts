@@ -84,6 +84,7 @@ export async function generateSessionTitle(opts: {
     messages: [{ role: "user", content }],
     tools: [],
     maxOutputTokens: 32,
+    reasoningEffort: opts.modelPort.titleReasoningEffort,
     temperature: 0,
     abortSignal: signal,
   };
@@ -123,6 +124,11 @@ export async function generateSessionTitle(opts: {
  * keeps the heuristic title).
  */
 function postProcessTitle(raw: string): string | null {
+  // Reject the entire reply, including markup on later lines, so the caller
+  // keeps the title derived from the first user message.
+  if (/<[｜|][^<>]*>|<\/?[a-zA-Z_][\w:.-]*(?:\s[^<>]*?)?\s*\/?>/.test(raw)) {
+    return null;
+  }
   const firstLine = raw.split("\n", 1)[0] ?? "";
   let candidate = firstLine.trim();
   candidate = stripSurroundingQuotes(candidate);
