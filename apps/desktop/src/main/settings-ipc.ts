@@ -25,7 +25,7 @@ import { z } from "zod";
 import { SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
 import type { FileIoLogger } from "../settings/files.js";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
-import { keybindingsSchema, mergeSettings, settingsSchema } from "../settings/schema.js";
+import { keybindingsSchema, mergeSettings, settingsSchema, roleProfilesWriteSchema } from "../settings/schema.js";
 import { RECOGNIZER_SET_CHANNEL } from "../shared/recognizer.js";
 import type { RecognizerSetRequest } from "../shared/recognizer.js";
 import type { ProxyProfile, ProxyProfileDeleteResult } from "../shared/proxy.js";
@@ -979,6 +979,10 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
     if (!rolesPatchSchema.safeParse((rawPatch as Record<string, unknown>).roles).success) {
       return { ok: false, reason: "invalid" };
     }
+  }
+
+  if ("roleProfiles" in rawPatch && !roleProfilesWriteSchema.safeParse(rawPatch.roleProfiles).success) {
+    return { ok: false, reason: "invalid" };
   }
 
   return withSettingsFileLock(deps.settingsPath, async () => {

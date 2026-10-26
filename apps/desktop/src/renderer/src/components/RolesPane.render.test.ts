@@ -100,3 +100,13 @@ it.each(["claude", "codex"] as const)("renders %s engine options without a secon
     expect(modelSelect.match(/<option/g)).toHaveLength(2);
   }
 });
+
+it("renders profile and project selection controls", () => {
+  const html = renderToStaticMarkup(createElement(RolesPane));
+  expect(html).toContain('aria-label="Global role profile"');
+  expect(html).toContain('aria-label="Project role profile"');
+  expect(html).toContain('Create profile');
+  expect(html).toContain('Duplicate profile');
+  expect(html).toContain('Rename profile');
+  expect(html).toContain('Delete profile');
+});

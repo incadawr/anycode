@@ -1,3 +1,4 @@
+import { resolveProfileRoles, rolesPatch } from "../../../shared/role-profiles.js";
 /**
  * "New Task" start screen (slice P7.12 §4.5 / intake F5#1a, extended by F5#1b
  * §2-D2/D3, restyled in slice-start-composer-cut): a composer-styled new-task
@@ -1120,7 +1121,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   async function submit(): Promise<void> {
     if (draft !== null) {
       const plan = resolveStartOrchestrate(draft.engine, draft.orchestrate, draft.prompt);
-      if (startSendNeedsRolePicker(plan, useSettingsStore.getState().snapshot?.settings.roles)) {
+      if (startSendNeedsRolePicker(plan, (useSettingsStore.getState().snapshot?.settings.roleProfiles ?? resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {})))) {
         setStartRolePickerOpen(true);
         return;
       }
@@ -1137,7 +1138,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   /** RolePickerDialog Save: persists the roles, then sends the draft as an orchestrating send. A failed write keeps the draft and leaves the settings notice to explain it. */
   async function saveStartRolesAndSubmit(roles: Parameters<RolePickerDialogProps["onSave"]>[0]): Promise<void> {
     setStartRolePickerOpen(false);
-    const result = await useSettingsStore.getState().setPatch({ roles });
+    const result = await useSettingsStore.getState().setPatch(rolesPatch(useSettingsStore.getState().snapshot?.settings ?? {}, roles));
     if (result.ok) {
       await submit();
     }
