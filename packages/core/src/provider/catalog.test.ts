@@ -204,6 +204,8 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
     const deepseek = findCatalogEntry("deepseek");
     expect(deepseek?.models.map((m) => m.id)).toEqual(["deepseek-flash", "deepseek-v4-pro"]);
     const flash = deepseek?.models.find((m) => m.id === "deepseek-flash");
+    expect(flash?.todoReminderEvery).toBe(20);
+    expect(deepseek?.models.find((m) => m.id === "deepseek-v4-pro")?.todoReminderEvery).toBe(20);
     expect(flash).toEqual({
       id: "deepseek-flash",
       name: "DeepSeek-V4.1-Flash",
@@ -213,6 +215,7 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
       reasoning: true,
       effortLevels: ["low", "high", "max"],
       defaultEffort: "high",
+      todoReminderEvery: 20,
     });
     const pro = deepseek?.models.find((m) => m.id === "deepseek-v4-pro");
     expect(pro).toEqual({
@@ -223,6 +226,7 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
       reasoning: true,
       effortLevels: ["low", "high", "max"],
       defaultEffort: "high",
+      todoReminderEvery: 20,
     });
     expect("imageInput" in (pro ?? {})).toBe(false);
   });

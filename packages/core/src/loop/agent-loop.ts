@@ -85,6 +85,7 @@ import {
 } from "./ceiling.js";
 import {
   TodoReminderTracker,
+  isTodoMutation,
   resolveTodoReminderEvery,
   type TodoReminderConfig,
 } from "./todo-reminder.js";
@@ -676,6 +677,11 @@ export class AgentLoop {
    * runTurn calls.
    */
   private readonly todoReminder: TodoReminderTracker | null;
+
+  setTodoReminderEvery(every: number | undefined): void {
+    const resolved = resolveTodoReminderEvery({ everyToolCalls: every });
+    if (resolved !== null) this.todoReminder?.setThreshold(resolved);
+  }
 
   /** Vision-fallback overview-caption cache (plan §7); shared when the wiring supplies one, private to this loop otherwise. */
   private readonly askCache: AskCache;
@@ -1599,8 +1605,9 @@ export class AgentLoop {
         if (this.todoReminder !== null) {
           for (const call of toolCalls) {
             const outcome = outcomeById.get(call.id);
-            if (outcome) this.todoReminder.observe(call.name, outcome.status);
+            if (outcome) this.todoReminder.observe(call.name, outcome.status, isTodoMutation(call.name, call.input));
           }
+          yield { type: "todo_reminder_state", ...this.todoReminder.snapshot() };
         }
         const todos = this.config.ports.todos as CorePorts["todos"] | undefined;
         const reminder = this.todoReminder?.take(() => todos?.read() ?? []) ?? null;

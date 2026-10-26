@@ -202,6 +202,7 @@ describe("AgentLoop.runTurn — tool call then completion", () => {
       "context_usage",
       "tool_execution_start",
       "tool_result",
+      "todo_reminder_state",
       "turn_end",
       "turn_start",
       "start",
@@ -4742,7 +4743,7 @@ describe("AgentLoop.runTurn — stale todo reminder (Taskana 4665)", () => {
   function mockStep(id: string): ModelStreamEvent[] {
     return [
       { type: "start" },
-      { type: "tool_call", toolCall: { id, name: "Mock", input: { value: "x" } } },
+      { type: "tool_call", toolCall: { id, name: "Edit", input: { value: "x" } } },
       { type: "finish", finishReason: "tool_calls", usage: {} },
     ];
   }
@@ -4751,7 +4752,7 @@ describe("AgentLoop.runTurn — stale todo reminder (Taskana 4665)", () => {
   function multiMockStep(...ids: string[]): ModelStreamEvent[] {
     return [
       { type: "start" },
-      ...ids.map<ModelStreamEvent>((id) => ({ type: "tool_call", toolCall: { id, name: "Mock", input: { value: "x" } } })),
+      ...ids.map<ModelStreamEvent>((id) => ({ type: "tool_call", toolCall: { id, name: "Edit", input: { value: "x" } } })),
       { type: "finish", finishReason: "tool_calls", usage: {} },
     ];
   }
@@ -4770,7 +4771,7 @@ describe("AgentLoop.runTurn — stale todo reminder (Taskana 4665)", () => {
   function makeReminderLoop(steps: ModelStreamEvent[][], todoReminder: AgentLoopConfig["todoReminder"]): AgentLoop {
     return makeLoop({
       modelPort: new MockModelPort(steps),
-      registry: makeRegistry({ Mock: makeTool(), TodoWrite: todoWriteTool }),
+      registry: makeRegistry({ Edit: { ...makeTool(), metadata: { ...baseMetadata, name: "Edit" } }, TodoWrite: todoWriteTool }),
       ports: { todos: new InMemoryTodoStore() } as unknown as CorePorts,
       todoReminder,
     });
@@ -4785,7 +4786,7 @@ describe("AgentLoop.runTurn — stale todo reminder (Taskana 4665)", () => {
 
   function mockToolResultEvents(events: AgentEvent[]): Array<Extract<AgentEvent, { type: "tool_result" }>> {
     return events.filter(
-      (e): e is Extract<AgentEvent, { type: "tool_result" }> => e.type === "tool_result" && e.outcome.toolName === "Mock",
+      (e): e is Extract<AgentEvent, { type: "tool_result" }> => e.type === "tool_result" && e.outcome.toolName === "Edit",
     );
   }
 
@@ -4982,10 +4983,11 @@ describe("AgentLoop.queueInjection (Taskana 4110 / TASK.123)", () => {
     );
 
     // Seam slice: the exact event-type sequence around the injection point.
-    expect(types(events).slice(4, 13)).toEqual([
+    expect(types(events).slice(4, 14)).toEqual([
       "context_usage",
       "tool_execution_start",
       "tool_result",      // c1 result appended...
+      "todo_reminder_state",
       "turn_end",         // step1 ends
       "turn_start",       // step2 begins, its exit gates pass...
       "user_injected",    // ...then the frame is flushed, right before the request

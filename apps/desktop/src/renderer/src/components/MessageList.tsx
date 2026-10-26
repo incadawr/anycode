@@ -498,8 +498,10 @@ export function MessageList({
   promptQueueLength,
   readOnly = false,
   rewind,
+  todoReminderState,
 }: {
   blocks: TranscriptBlock[];
+  todoReminderState?: { count: number; threshold: number } | null;
   turn: TurnState;
   workspace: string | null;
   /** TASK.33 W8-FIX #1: gates the rendered Try-again button on connection readiness. */
@@ -874,7 +876,7 @@ export function MessageList({
       tabIndex={-1}
       data-tab-id={tabId ?? undefined}
     >
-      <TodoPanel transcript={blocks} onJumpToBlock={jumpToBlock} />
+      <TodoPanel transcript={blocks} onJumpToBlock={jumpToBlock} reminderState={todoReminderState} />
       {/* TASK.48 / Taskana 4086 + 4742: LEFT-edge tick rail (evolved from
           the right-edge dot pill). FIRST-child position (beside TodoPanel)
           on purpose: a `top`-sticky box only gets pushed DOWN to its inset,

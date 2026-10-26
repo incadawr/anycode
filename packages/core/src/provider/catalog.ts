@@ -22,6 +22,8 @@ export type ProviderTransport =
 
 export interface CatalogModel {
   id: string;
+  /** Mutating calls between stale-plan reminders (default: 10). */
+  todoReminderEvery?: number;
   name?: string;
   contextWindow: number;
   /**

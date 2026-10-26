@@ -7,7 +7,6 @@
 import { describe, expect, it } from "vitest";
 import type { TranscriptBlock } from "../store.js";
 import {
-  TODO_STALE_TOOL_CALLS,
   isPlanPossiblyStale,
   progressLabel,
   selectCurrentTodos,
@@ -121,29 +120,7 @@ describe("selectCurrentTodos", () => {
     expect(selectCurrentTodos([other])).toBeNull();
   });
 
-  it("counts tool_call blocks after the source block (user_text and pre-source blocks excluded)", () => {
-    const transcript = [
-      bashBlock("pre1"),
-      otherBlock("u1"),
-      todoBlock("t1", "success", TWO_ITEMS),
-      otherBlock("u2"),
-      bashBlock("b1"),
-      bashBlock("b2"),
-    ];
-    const result = selectCurrentTodos(transcript);
-    expect(result?.sourceBlockId).toBe("t1");
-    expect(result?.toolCallsSince).toBe(2);
-  });
 
-  it("counts tool_call blocks of any status, including failed ones", () => {
-    const transcript = [
-      todoBlock("t1", "success", TWO_ITEMS),
-      bashBlock("b1"),
-      bashBlock("b2", "error"),
-      bashBlock("b3", "running"),
-    ];
-    expect(selectCurrentTodos(transcript)?.toolCallsSince).toBe(3);
-  });
 });
 
 describe("isPlanPossiblyStale / staleHint (Taskana 4665)", () => {
@@ -152,27 +129,25 @@ describe("isPlanPossiblyStale / staleHint (Taskana 4665)", () => {
   }
 
   it("flags at 10 tool calls with an open item, not at 9", () => {
-    expect(TODO_STALE_TOOL_CALLS).toBe(10);
-    expect(isPlanPossiblyStale(selectCurrentTodos(transcriptWith(9))!)).toBe(false);
-    expect(isPlanPossiblyStale(selectCurrentTodos(transcriptWith(10))!)).toBe(true);
+    expect(isPlanPossiblyStale(selectCurrentTodos(transcriptWith(9))!, { count: 19, threshold: 20 })).toBe(false);
+    expect(isPlanPossiblyStale(selectCurrentTodos(transcriptWith(10))!, { count: 20, threshold: 20 })).toBe(true);
   });
 
   it("never flags when every item is completed", () => {
-    expect(isPlanPossiblyStale(selectCurrentTodos(transcriptWith(10, ONE_DONE))!)).toBe(false);
+    expect(isPlanPossiblyStale(selectCurrentTodos(transcriptWith(10, ONE_DONE))!, { count: 20, threshold: 20 })).toBe(false);
   });
 
   it("a newer successful TodoWrite resets the count to 0", () => {
     const transcript = [...transcriptWith(12), todoBlock("t2", "success", TWO_ITEMS)];
     const result = selectCurrentTodos(transcript);
     expect(result?.sourceBlockId).toBe("t2");
-    expect(result?.toolCallsSince).toBe(0);
-    expect(isPlanPossiblyStale(result!)).toBe(false);
+    expect(isPlanPossiblyStale(result!, { count: 0, threshold: 20 })).toBe(false);
   });
 
   it("staleHint returns null when fresh and a descriptive string when stale", () => {
     expect(staleHint(selectCurrentTodos(transcriptWith(3))!)).toBeNull();
-    const hint = staleHint(selectCurrentTodos(transcriptWith(10))!);
-    expect(hint).toContain("10 tool calls");
+    const hint = staleHint(selectCurrentTodos(transcriptWith(10))!, { count: 20, threshold: 20 });
+    expect(hint).toContain("20 mutating tool calls");
     expect(hint).toContain("may be out of date");
   });
 });

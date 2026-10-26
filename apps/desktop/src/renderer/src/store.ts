@@ -1085,6 +1085,7 @@ export interface DesktopState {
   steering: { supported: boolean; ready: boolean } | null;
   turn: TurnState;
   transcript: TranscriptBlock[];
+  todoReminderState: { count: number; threshold: number } | null;
   permission: PermissionUiRequest | null;
   /**
    * TASK.115 S1: toolCallIds of live Agent tool_call blocks whose child is
@@ -1485,6 +1486,7 @@ interface SessionSlice {
   shell: ShellCapabilitiesProjection | null;
   turn: TurnState;
   transcript: TranscriptBlock[];
+  todoReminderState: { count: number; threshold: number } | null;
   permission: PermissionUiRequest | null;
   /** TASK.115 S1: see `DesktopState.waitingSubagents`'s own doc comment. */
   waitingSubagents: ReadonlySet<string>;
@@ -1554,6 +1556,7 @@ function initialSessionSlice(): SessionSlice {
     shell: null,
     turn: { status: "idle", turnId: null, requestId: null },
     transcript: [],
+    todoReminderState: null,
     permission: null,
     waitingSubagents: new Set<string>(),
     notice: null,
@@ -3416,6 +3419,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           return;
 
         // ── tool-call lifecycle: tool_call -> tool_execution_start -> tool_result (immediate) ──
+        case "todo_reminder_state":
+          set({ todoReminderState: { count: event.count, threshold: event.threshold } });
+          return;
         case "tool_call": {
           // TASK.117: a replayed tool_call for an id ALREADY on screen
           // (hydrated block from session_history, or a live block from an

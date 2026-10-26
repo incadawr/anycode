@@ -1,6 +1,16 @@
 /** Stale-plan reminder (Taskana 4665): pure counter, wired by AgentLoop. */
 import type { TodoItem } from "../tools/todo-store.js";
 import type { ToolCallStatus } from "../types/tools.js";
+import { classifyBashCommandLine } from "../permissions/safe-command.js";
+
+/** Only workspace mutations advance the stale-plan clock. */
+export function isTodoMutation(name: string, input: unknown): boolean {
+  if (name === "Bash") {
+    const command = typeof input === "object" && input !== null && "command" in input ? input.command : undefined;
+    return typeof command !== "string" || classifyBashCommandLine(command).class !== "read-only";
+  }
+  return name === "Write" || name === "Edit" || name === "MultiEdit" || name === "ApplyPatch";
+}
 
 export const DEFAULT_TODO_REMINDER_EVERY_TOOL_CALLS = 10;
 
@@ -31,15 +41,22 @@ export class TodoReminderTracker {
   private sinceUpdate = 0;
   private sinceReminder = 0;
 
-  constructor(private readonly every: number) {}
+  constructor(private every: number) {}
+
+  setThreshold(every: number): void { this.every = every; }
+
+  snapshot(): { count: number; threshold: number } {
+    return { count: this.sinceUpdate, threshold: this.every };
+  }
 
   /** One settled tool call, in proposal order. */
-  observe(toolName: string, status: ToolCallStatus): void {
+  observe(toolName: string, status: ToolCallStatus, mutating = true): void {
     if (toolName === "TodoWrite" && status === "success") {
       this.sinceUpdate = 0;
       this.sinceReminder = 0;
       return;
     }
+    if (!mutating) return;
     this.sinceUpdate += 1;
     this.sinceReminder += 1;
   }
