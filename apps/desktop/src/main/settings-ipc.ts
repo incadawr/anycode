@@ -565,6 +565,8 @@ export interface CatalogEntryShape {
     name?: string;
     reasoning?: boolean;
     effortLevels?: readonly string[];
+    /** : the provider's documented default tier for this model, when the catalog records one; `string`-typed to keep this module core-import-free. */
+    defaultEffort?: string;
     maxOutputTokens?: number;
     /** : the two window facts the drawer names in its context-window hint; the effective catalog window is their min. */
     contextWindow?: number;
@@ -602,6 +604,10 @@ export function projectCatalogSummary(providers: readonly CatalogEntryShape[]): 
       // model still projects to exactly `{id,name}`.
       ...(m.reasoning === true ? { reasoning: true } : {}),
       ...(m.effortLevels !== undefined ? { effortLevels: [...m.effortLevels] } : {}),
+      // : same conditional-spread rule — only a model whose
+      // provider documents a default carries it, so every legacy fixture
+      // projects byte-identically.
+      ...(m.defaultEffort !== undefined ? { defaultEffort: m.defaultEffort } : {}),
       // : same conditional-spread precedent — only when the catalog
       // declares a ceiling, so legacy fixtures stay byte-identical.
       ...(m.maxOutputTokens !== undefined ? { maxOutputTokens: m.maxOutputTokens } : {}),
