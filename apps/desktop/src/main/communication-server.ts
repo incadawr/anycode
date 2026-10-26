@@ -67,9 +67,14 @@ const CLOSE_REFUSAL_TEXT: { [K in CloseSessionRefusal]: string } = {
 };
 const closeRefusal = (code: CloseSessionRefusal) => new Error(`close_session ${code}: ${CLOSE_REFUSAL_TEXT[code]}`);
 /** Taskana 4768: fixed create_session refusal codes, prefixed in error text. */
-export type CreateSessionRefusal = "not_allowed" | "not_trusted" | "folder_not_found" | "rate_limited" | "too_many" | "not_ready";
+export type CreateSessionRefusal = "not_allowed" | "not_trusted" | "folder_not_found" | "rate_limited" | "too_many" | "not_ready" | "invalid_model";
 export type CreateSessionRequest = { workspace: string; engine?: "core" | "codex" | "claude"; model?: string; handle?: string };
-export type CreateSessionOutcome = { ok: true; sessionId: string; tabId: string; handle?: string } | { ok: false; reason: Exclude<CreateSessionRefusal, "rate_limited" | "folder_not_found"> };
+/**
+ * Taskana 4888: a refusal MAY carry a `detail` sentence that main already made
+ * human-readable (the `invalid_model` candidate list). It is appended after the
+ * fixed code text, never in place of it.
+ */
+export type CreateSessionOutcome = { ok: true; sessionId: string; tabId: string; handle?: string } | { ok: false; reason: Exclude<CreateSessionRefusal, "rate_limited" | "folder_not_found">; detail?: string };
 const CREATE_REFUSAL_TEXT: { [K in CreateSessionRefusal]: string } = {
   not_allowed: "the project does not allow agents to open tasks (sidebar project menu, off by default)",
   not_trusted: "the folder is not trusted in AnyCode",
@@ -77,8 +82,10 @@ const CREATE_REFUSAL_TEXT: { [K in CreateSessionRefusal]: string } = {
   rate_limited: `at most ${CREATE_SESSION_RATE_LIMIT} sessions per minute`,
   too_many: `at most ${MAX_AGENT_OPENED_TABS} agent-opened sessions alive at once`,
   not_ready: "AnyCode could not open the tab right now (engine not signed in or tab limit reached)",
+  invalid_model: "the requested model does not select exactly one provider connection (Taskana 4888: for the core engine, model picks the connection — by connection id, its label, providerId/model, or a model id the connection offers)",
 };
-const createRefusal = (code: CreateSessionRefusal) => new Error(`create_session ${code}: ${CREATE_REFUSAL_TEXT[code]}`);
+const createRefusal = (code: CreateSessionRefusal, detail?: string) =>
+  new Error(`create_session ${code}: ${CREATE_REFUSAL_TEXT[code]}${detail === undefined || detail === "" ? "" : ` — ${detail}`}`);
 /** Taskana 4763: the one message the approval tools use when the per-session switch is off. Clients match on it. */
 export const EXTERNAL_APPROVAL_OFF = "External approval is off for this session";
 /** Taskana 4763: most approvals one `list_pending_approvals` call returns. */
@@ -99,7 +106,7 @@ const tools = [
   { name: "list_pending_approvals", description: "List tool requests waiting for an answer, for sessions whose External approvals switch is on. Shows tool and a short scrubbed description, never file contents or raw input. Omit sessionId to list every approving session. Asks that need a human reading or typing (ExitPlanMode, AskUserQuestion) are listed with answerable:false.", inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, additionalProperties: false } },
   { name: "answer_approval", description: "Allow or deny one pending tool request of a session whose External approvals switch is on. First answer wins (UI or this tool); a later answer reports already_answered. No 'always allow' from outside AnyCode.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, approvalId: { type: "string", minLength: 1, maxLength: 100 }, decision: { enum: ["allow", "deny"] } }, required: ["sessionId", "approvalId", "decision"], additionalProperties: false } },
   { name: "cancel_turn", description: "Stop the running turn of an allowed session, like the Stop button: queued agent messages are rejected and parked approvals are denied. Idle is not an error (cancelled:false, reason:idle). Needs only the Sessions API switch.", inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, required: ["sessionId"], additionalProperties: false } },
-  { name: "create_session", description: "Open a new tab in a project where the user switched on 'Allow agents to open tasks here' (sidebar project menu, off by default; trusted folders only; at most 5 per minute and 8 agent-opened alive; only successful creations count towards the per-minute limit). The new session is shared immediately. Optional firstMessage is delivered like send_message next_turn and returns messageId (omitted if the host was not ready within 10 s; then use send_message; refused with not_allowed, naming the tab ids, if the new tab is outside the folders list). Errors start with a code: not_allowed, not_trusted, folder_not_found, rate_limited, too_many, not_ready.", inputSchema: { type: "object", properties: { workspace: { type: "string", minLength: 1, maxLength: 4096 }, engine: { enum: ["core", "codex", "claude"] }, model: { type: "string", minLength: 1, maxLength: 128 }, handle: { type: "string", maxLength: 200 }, firstMessage: { type: "string", minLength: 1, maxLength: 32000 } }, required: ["workspace"], additionalProperties: false } },
+  { name: "create_session", description: "Open a new tab in a project where the user switched on 'Allow agents to open tasks here' (sidebar project menu, off by default; trusted folders only; at most 5 per minute and 8 agent-opened alive; only successful creations count towards the per-minute limit). The new session is shared immediately. model picks what the new session runs: for engine \"core\" (the default) it selects the configured provider connection — by connection id, its label, providerId/model, or a model id that connection offers — and an unknown or ambiguous value is refused with invalid_model, whose text lists the candidates; omit model to use the active connection. For \"codex\"/\"claude\" model is passed to that engine. Optional firstMessage is delivered like send_message next_turn and returns messageId (omitted if the host was not ready within 10 s; then use send_message; refused with not_allowed, naming the tab ids, if the new tab is outside the folders list). Errors start with a code: not_allowed, not_trusted, folder_not_found, rate_limited, too_many, not_ready, invalid_model.", inputSchema: { type: "object", properties: { workspace: { type: "string", minLength: 1, maxLength: 4096 }, engine: { enum: ["core", "codex", "claude"] }, model: { type: "string", minLength: 1, maxLength: 128 }, handle: { type: "string", maxLength: 200 }, firstMessage: { type: "string", minLength: 1, maxLength: 32000 } }, required: ["workspace"], additionalProperties: false } },
   { name: "close_session", description: "Close a shared tab opened by create_session, through the same path as closing it in the UI. A running turn must be stopped with cancel_turn first. Errors start with a code: not_allowed (including env-file mode), not_found (unknown, closing or not shared), not_agent_opened (user tab), busy (running turn or host not ready), last_tab (open another tab first).", inputSchema: { type: "object", properties: { sessionId: { type: "string", minLength: 1 } }, required: ["sessionId"], additionalProperties: false } },
 ];
 
@@ -432,7 +439,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
           try {
             created = await createByAgent({ workspace: resolved, ...(input.engine ? { engine: input.engine } : {}), ...(input.model ? { model: input.model } : {}), ...(input.handle !== undefined ? { handle: input.handle } : {}) });
           } catch { throw createRefusal("not_ready"); }
-          if (!created.ok) throw createRefusal(created.reason);
+          if (!created.ok) throw createRefusal(created.reason, created.detail);
           // Taskana 4808 (review F2): only a successful creation consumes the rate budget — refused
           // attempts (not_trusted, too_many, not_ready, a throwing hook) never count. Still inside
           // the section, together with the cap bookkeeping (review F4).

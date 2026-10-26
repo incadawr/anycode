@@ -672,6 +672,36 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatch(/^create_session not_ready/);
   });
 
+  it("create_session: invalid_model is its own code and its text carries main's candidate list verbatim (Taskana 4888)", async () => {
+    const detail = 'no connection offers "deepseek-flash"; connections: conn-a (deepseek: deepseek-flash); conn-b (zai: glm-5)';
+    const f = await createFixture({ creator: async () => ({ ok: false, reason: "invalid_model", detail }) });
+    const text = errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, model: "deepseek-flash" } }));
+    expect(text).toMatch(/^create_session invalid_model: /);
+    expect(text).toContain(detail);
+    expect(f.tabs).toHaveLength(0);
+  });
+
+  it("create_session: an invalid_model refusal does not consume the 5/min budget (Taskana 4888)", async () => {
+    let refusedLeft = 5;
+    let successes = 0;
+    const f = await createFixture({ creator: async () => {
+      if (refusedLeft-- > 0) return { ok: false, reason: "invalid_model", detail: "ambiguous model" };
+      successes++;
+      return { ok: true, sessionId: `agent-${successes}`, tabId: `tab-${successes}` };
+    } });
+    for (let i = 0; i < 5; i++) {
+      expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, model: "x" } }))).toMatch(/^create_session invalid_model: /);
+    }
+    expect(value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatchObject({ sessionId: "agent-1" });
+  });
+
+  it("create_session: the tool description documents how core picks a connection from model (Taskana 4888)", async () => {
+    const f = await createFixture();
+    const tool = (await f.client.listTools()).tools.find((t) => t.name === "create_session")!;
+    expect(tool.description).toContain("provider connection");
+    expect(tool.description).toContain("invalid_model");
+  });
+
   it("create_session: refused creations do not consume the 5/min budget (Taskana 4808, review F2)", async () => {
     let refusedLeft = 5;
     let successes = 0;

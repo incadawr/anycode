@@ -104,6 +104,9 @@ import { spawnServiceProcess } from "./plugins/service-process.js";
 import { isWorkspaceTrustedFor, listServiceCandidates } from "./plugins/service-candidates.js";
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import { activeConnection, activeProviderView, connectionById, resolveProviderConnection } from "../shared/settings.js";
+// Taskana 4888: `create_session {engine:"core", model}` resolves to a provider
+// CONNECTION (the core engine has no engine-model argv), never a silent fallback.
+import { resolveCoreConnectionForModel } from "../shared/core-model-connection.js";
 import {
   RECOGNIZER_CONFIG_CHANGED_TYPE,
   recognizerFingerprint,
@@ -2334,13 +2337,34 @@ void app.whenReady().then(async () => {
     if (tabs.atCapacity()) return { ok: false as const, reason: "too_many" as const };
     const engine = request.engine ?? "core";
     try { await mcpSecretCache.prime(key); } catch { return { ok: false as const, reason: "not_ready" as const }; }
-    const connectionId = engine === "core" ? settings?.provider.activeConnectionId : undefined;
+    /**
+     * Taskana 4888: for the CORE engine `model` selects the provider CONNECTION,
+     * not an engine argv. A core host runs on one connection's env (endpoint,
+     * key, model) and `engineModel` is `--engine-model` argv, which the core
+     * engine never reads — so `model` used to be dropped silently and the tab
+     * opened on the active connection. `resolveCoreConnectionForModel` is the one
+     * policy (id / label / `<providerId>/<model>` / bare model id); an unknown or
+     * ambiguous value is an explicit `invalid_model` refusal naming the
+     * candidates, never a quiet fallback. Without `model`, core keeps the active
+     * connection. Codex/Claude keep their existing `engineModel` channel.
+     */
+    let connectionId = engine === "core" ? settings?.provider.activeConnectionId : undefined;
+    let modelOverride: string | undefined;
+    if (engine === "core" && request.model !== undefined) {
+      const resolved = resolveCoreConnectionForModel(currentSettings(), request.model);
+      if (!resolved.ok) {
+        return { ok: false as const, reason: "invalid_model" as const, detail: resolved.detail };
+      }
+      connectionId = resolved.connectionId;
+      modelOverride = resolved.model;
+    }
     const created = tabs.createTab({
       workspace: key,
       sessionId: randomUUID(),
       resume: false,
       engine,
-      ...(request.model !== undefined ? { engineModel: request.model } : {}),
+      ...(engine !== "core" && request.model !== undefined ? { engineModel: request.model } : {}),
+      ...(modelOverride !== undefined ? { modelOverride } : {}),
       ...(connectionId !== undefined ? { connectionId } : {}),
     });
     if (!created.ok) return { ok: false as const, reason: created.reason === "max_tabs" ? ("too_many" as const) : ("not_ready" as const) };

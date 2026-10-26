@@ -92,6 +92,21 @@ omits `messageId`; the tab exists, so send the message yourself with
 changed while the tab was opening), `firstMessage` is refused with
 `not_allowed` naming the tab's ids instead of being silently dropped.
 
+`model` picks what the new session runs:
+
+- For `engine: "core"` (the default) it selects one of the **provider
+  connections** you already configured. Name it by connection id, by its
+  **label**, as `<providerId>/<model>` (for example `deepseek/deepseek-v4-pro`),
+  or by a model id that connection offers (its default model or an entry in its
+  model list). The session is pinned to that connection; when the value names a
+  model other than the connection's default, the session runs that model.
+- An unknown value, or one that matches more than one connection, is refused
+  with `invalid_model` and the error text lists the connections to choose from.
+  AnyCode never falls back to the active connection in that case.
+- Omit `model` to use the active connection, as before.
+- For `engine: "codex"` or `engine: "claude"`, `model` is the model that engine
+  runs.
+
 Rules and limits:
 
 - The folder must be trusted in AnyCode (Settings → Permissions).
@@ -103,7 +118,8 @@ Rules and limits:
 - A refusal is an error whose text starts with a code: `not_allowed` (the
   project switch is off, or the folders list excludes it), `not_trusted`,
   `folder_not_found`, `rate_limited`, `too_many`, `not_ready` (the engine is not
-  signed in, or the tab limit is reached).
+  signed in, or the tab limit is reached), `invalid_model` (`model` does not
+  select exactly one provider connection; the text lists the candidates).
 - Tabs an agent opened carry an **agent** marker in the sidebar row and in the
   session header. Agent-opened marking is in memory: after an app restart,
   restored tabs have no agent marker and cannot be closed by agents
@@ -225,6 +241,7 @@ Services that bridge an outside channel use the same tools. See the
 | `create_session` says `not_allowed` | Tick **Allow agents to open tasks here** in the project's sidebar **⋯** menu. |
 | `create_session` says `not_trusted` | Trust the folder first (Settings → Permissions). |
 | `create_session` says `rate_limited` or `too_many` | At most 5 per minute and 8 agent-opened tabs alive. Wait, or close some. |
+| `create_session` says `invalid_model` | The `model` value matches no configured provider connection, or more than one. The error lists the connections; retry with a connection id, its label, `<providerId>/<model>`, or omit `model`. |
 | Copy buttons are disabled | The endpoint is not listening. Fix the status first. |
 | Copied config says the adapter was not found | This build does not include the adapter. Install an official build. |
 | `401` after you regenerate the token | The client still uses the old token. Restart its MCP connection. |
