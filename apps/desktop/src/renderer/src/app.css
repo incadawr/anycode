@@ -3058,8 +3058,12 @@ body {
   font-size: var(--fs-md);
   line-height: var(--lh-body);
 }
-/* Vertical rhythm: owl selector; children keep margin 0. */
-.message-markdown > * + * {
+/* Vertical rhythm: owl selector; children keep margin 0. Written as
+   `:not(:first-child)` (same match as `* + *`) for one more class of
+   specificity: the `.md-p`/`.md-list`/`.md-blockquote`/`.md-codeblock-pre`
+   `margin: 0` resets below would otherwise win on source order and run
+   every block together. */
+.message-markdown > :not(:first-child) {
   margin-block-start: var(--sp-3);
 }
 /* Heading proximity (R15): air above a heading must clearly exceed the air
