@@ -232,3 +232,11 @@ describe("generateSessionTitle mid-stream replay ( review)", () => {
     expect(await generateSessionTitle({ modelPort: port, text: "x" })).toBe("A Title");
   });
 });
+
+
+describe("agent envelope titles", () => {
+  it.each(["\\n", "\n"])("uses the payload after separator %j", (separator) => {
+    const source = `[AnyCode authenticated agent message {"sender":"supervisor"}]${separator}Fix the sidebar\nDetails`;
+    expect(deriveSessionTitle(sanitizeTitleSource(source))).toBe("Fix the sidebar");
+  });
+});

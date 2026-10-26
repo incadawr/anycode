@@ -787,7 +787,9 @@ export interface TabHostManagerDeps {
   onTabClosed?: (tabId: string) => void;
   /** a: fires after a tab is registered (the service supervisor reconciles on it). Absent = no-op. */
   onTabOpened?: (tabId: string) => void;
-  /** : true for a session a Sessions API agent opened; stamps `openedByAgent` on the root tab-port envelope. Absent = never. */
+  /** : accepted handle pinned as the agent tab title. */
+  agentTitleOf?: (sessionId: string) => string | undefined;
+  /** : stamps `openedByAgent` on root tab-port envelopes. Absent = never. */
   isAgentOpenedSession?: (sessionId: string) => boolean;
   now?: () => number;
   genId?: () => string;
@@ -3110,7 +3112,7 @@ export class TabHostManager {
               },
             }
           : this.deps.isAgentOpenedSession?.(tab.sessionId) === true
-            ? { openedByAgent: true }
+            ? { openedByAgent: true, ...(this.deps.agentTitleOf?.(tab.sessionId) !== undefined ? { agentTitle: this.deps.agentTitleOf(tab.sessionId) } : {}) }
             : {}),
       },
       [channel.port2],

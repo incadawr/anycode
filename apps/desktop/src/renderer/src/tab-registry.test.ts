@@ -409,6 +409,18 @@ describe("tab-registry — routing by tabId", () => {
     );
   });
 
+  it("keeps an agent handle as title through the first turn and refinement", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("agent", "/ws/a", asPort(port), undefined, undefined, true, "worker-1");
+    expect(tabsStore.getState().tabs[0]?.title).toBe("worker-1");
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+    port.emit({ type: "title_changed", title: "First message" });
+    port.emit({ type: "title_changed", title: "Refined title" });
+    expect(tabsStore.getState().tabs[0]?.title).toBe("worker-1");
+  });
+
   it("switching the active tab does not stall a background tab's delta accumulation", () => {
     const tabsStore = createTabsStore();
     const { registry, schedulers } = createTestRegistry(tabsStore);

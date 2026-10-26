@@ -1,3 +1,4 @@
+/** Forwards the server tool list unchanged, including create_session and close_session. */
 /** Portable MCP stdio -> local JSON Streamable HTTP adapter; Node >=22. */
 import { readFile, lstat } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
