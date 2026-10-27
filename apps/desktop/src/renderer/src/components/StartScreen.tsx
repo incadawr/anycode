@@ -1121,7 +1121,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   async function submit(): Promise<void> {
     if (draft !== null) {
       const plan = resolveStartOrchestrate(draft.engine, draft.orchestrate, draft.prompt);
-      if (startSendNeedsRolePicker(plan, (useSettingsStore.getState().snapshot?.settings.roleProfiles ?? resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {})))) {
+      if (startSendNeedsRolePicker(plan, resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}))) {
         setStartRolePickerOpen(true);
         return;
       }

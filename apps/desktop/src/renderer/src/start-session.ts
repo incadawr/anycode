@@ -51,7 +51,7 @@ function defaultStartSubmitDeps(): StartSubmitDeps {
 
 /** Whether the settings snapshot already carries orchestration roles (the RolePickerDialog's first-run output). */
 function settingsHaveRoles(): boolean {
-  return !needsRolePicker((useSettingsStore.getState().snapshot?.settings.roleProfiles ?? resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {})));
+  return !needsRolePicker(resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}));
 }
 
 /**

@@ -104,6 +104,8 @@ it.each(["claude", "codex"] as const)("renders %s engine options without a secon
 it("renders profile and project selection controls", () => {
   const html = renderToStaticMarkup(createElement(RolesPane));
   expect(html).toContain('aria-label="Global role profile"');
+  expect(html).toContain('aria-label="Project"');
+  expect(html).not.toContain('aria-label="Project folder path"');
   expect(html).toContain('aria-label="Project role profile"');
   expect(html).toContain('Create profile');
   expect(html).toContain('Duplicate profile');
