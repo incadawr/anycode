@@ -174,7 +174,11 @@ export function TodoPanel({
             <Chevron />
           </span>
           <span className="todo-panel-title">{progressLabel(todos)}</span>
-          {hint !== null && <span className="todo-panel-stale">may be stale</span>}
+          {hint !== null && (
+            <span className="todo-panel-stale" title={hint}>
+              may be stale
+            </span>
+          )}
         </button>
         {!panelCollapsed && (
           <div className="todo-panel-body">

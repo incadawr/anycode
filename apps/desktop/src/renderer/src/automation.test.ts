@@ -1895,6 +1895,8 @@ describe("automation facade — todoPanelState (design/slice-P7.11-cut.md §3 W2
       panelCollapsed: false,
       completedRow: null,
       items: [],
+      stale: false,
+      staleHint: null,
     });
   });
 
@@ -1938,6 +1940,8 @@ describe("automation facade — todoPanelState (design/slice-P7.11-cut.md §3 W2
         { glyph: "active", content: "item two" },
         { glyph: "pending", content: "item three" },
       ],
+      stale: false,
+      staleHint: null,
     });
   });
 
@@ -1960,6 +1964,8 @@ describe("automation facade — todoPanelState (design/slice-P7.11-cut.md §3 W2
       panelCollapsed: true,
       completedRow: "↑ 3 completed",
       items: [],
+      stale: false,
+      staleHint: null,
     });
   });
 });
