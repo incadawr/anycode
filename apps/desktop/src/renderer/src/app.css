@@ -4562,10 +4562,9 @@ body {
 
 /* Keep the total and turn summary on one line, with scrolling for long text. */
 .ctx-popover-cost-block { display: flex; flex-direction: column; min-width: 0; gap: var(--sp-2); }
-.ctx-popover-cost-line { max-width: 100%; min-width: 0; white-space: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.ctx-popover-cost-line { max-width: 100%; min-width: 0; white-space: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .ctx-popover-footnote { min-width: 0; overflow-wrap: anywhere; }
-.ctx-popover-cost-line::-webkit-scrollbar { height: 3px; }
-.ctx-popover-cost-line::-webkit-scrollbar-thumb { border: 0; background: var(--text-ghost); }
+.ctx-popover-cost-line::-webkit-scrollbar { display: none; }
 
 /* The popover's headline answer: what this session has cost so far. One step
    up from the surrounding meta text in size, weight and contrast, so the
