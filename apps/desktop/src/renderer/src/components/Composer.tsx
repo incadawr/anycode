@@ -583,12 +583,26 @@ export function formatUsageAuditLines(a: {
   return { session, lastStep };
 }
 
+function formatUsageMoney(value: number): string {
+  return `$${value > 0 && value < 0.0001 ? value.toPrecision(2) : value.toFixed(4)}`;
+}
+
+function formatStepCost(step: WireUsageAuditStep | null): string {
+  if (step?.priceBasisId === "subscription") return "By subscription";
+  return step?.costUsd === undefined ? "Price unknown" : `≈ ${formatUsageMoney(step.costUsd)}`;
+}
+
+/** A visible ledger must follow completion of a turn or manual compaction. */
+export function shouldRefreshUsageAudit(open: boolean, previous: TurnState["status"], current: TurnState["status"]): boolean {
+  return open && previous !== "idle" && current === "idle";
+}
+
 /** Cost is a historical snapshot, never recalculated from current settings. */
 export function formatUsageCostLines(last: WireUsageAuditStep | null, totals: WireUsageAuditTotals | null): string[] {
-  const money = (value: number) => `$${value > 0 && value < 0.0001 ? value.toPrecision(2) : value.toFixed(4)}`;
+  const money = formatUsageMoney;
   const partial = totals?.unpricedSteps ? " · some steps price unknown" : "";
   return [
-    `Last step: ${last?.priceBasisId === "subscription" ? "By subscription" : last?.costUsd === undefined ? "Price unknown" : `≈ ${money(last.costUsd)}`}`,
+    `Last step: ${formatStepCost(last)}`,
     `Session cost: ${totals?.costUsd === undefined ? (totals?.subscriptionSteps ? `By subscription${partial}` : "Price unknown") : `${partial ? "≥" : "≈"} ${money(totals.costUsd)}${partial}${totals?.subscriptionSteps ? " · plus subscription" : ""}`}`,
     `Cache saved: ${totals?.cacheSavingsUsd === undefined ? "Price unknown" : `≈ ${money(totals.cacheSavingsUsd)}${totals.unknownSavingsSteps ? " · some steps savings unknown" : partial}${totals?.subscriptionSteps ? " · plus subscription" : ""}`}`,
     "Estimates use peak rates where available",
@@ -602,7 +616,7 @@ export function formatUsageAuditStepRow(step: WireUsageAuditStep): string {
   const cachedPart = step.cachedInputTokens !== undefined ? `cached ${formatCtxTokenCount(step.cachedInputTokens)}` : null;
   const outPart = step.outputTokens !== undefined ? `out ${formatCtxTokenCount(step.outputTokens)}` : null;
   const retryPart = step.transportRetries > 0 ? `retry ${step.transportRetries}` : null;
-  return ["step " + step.step, inPart, cachedPart, outPart, retryPart].filter((part) => part !== null).join(" · ");
+  return ["step " + step.step, inPart, cachedPart, outPart, retryPart, `cost ${formatStepCost(step)}`].filter((part) => part !== null).join(" · ");
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -756,6 +770,7 @@ function CtxPopover({
   contextBreakdown,
   sessionTokens,
   usageAudit,
+  turnStatus,
   quota,
   percent,
   tint,
@@ -772,6 +787,7 @@ function CtxPopover({
     totalSteps: number;
     list: WireUsageAuditStep[] | null;
   };
+  turnStatus: TurnState["status"];
   quota: CodexRateLimitsWire | null;
   percent: number;
   tint: string;
@@ -787,6 +803,14 @@ function CtxPopover({
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const hoverTimerRef = useRef<number | null>(null);
+  const previousTurnStatus = useRef(turnStatus);
+
+  useEffect(() => {
+    if (shouldRefreshUsageAudit(open, previousTurnStatus.current, turnStatus)) {
+      sendToHost({ type: "usage_audit_request" });
+    }
+    previousTurnStatus.current = turnStatus;
+  }, [open, turnStatus, sendToHost]);
 
   function clearHoverTimer(): void {
     if (hoverTimerRef.current !== null) {
@@ -1850,6 +1874,7 @@ export function Composer() {
               contextBreakdown={contextBreakdown}
               sessionTokens={sessionTokens}
               usageAudit={usageAudit}
+              turnStatus={turn.status}
               quota={quota}
               percent={ctxPercent}
               tint={ctxTint}

@@ -1178,6 +1178,19 @@ describe("ClaudeEngine — presentation surface", () => {
     }
   });
 
+  it("reports each native result to the durable cost observer", async () => {
+    const transport = new FakeTransport({
+      frames: streamFrames("w0-02-control-writeprobe.jsonl"),
+      contextUsage: { totalTokens: 1, maxTokens: 2 },
+    });
+    const engine = engineWith(transport);
+    const observed = vi.fn();
+    engine.onCostResult(observed);
+    await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
+    expect(observed).toHaveBeenCalledTimes(1);
+    expect(observed.mock.calls[0]![0].total_cost_usd).toBeGreaterThan(0);
+  });
+
   it("CC-C has no resume source, so history is empty by construction", () => {
     expect(engineWith(new FakeTransport()).historyItems()).toEqual([]);
   });

@@ -8,6 +8,9 @@ describe("usage cost snapshots", () => {
       .toEqual({ costUsd: 0.1848, cacheSavingsUsd: 0.2352, priceBasisId: "test" });
     expect(calculateUsageCost({ inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 0 }, price)?.costUsd).toBe(0.3);
   });
+  it("does not persist non-finite results when finite counts and rates overflow", () => {
+    expect(calculateUsageCost({ inputTokens: Number.MAX_VALUE, cachedInputTokens: 0, outputTokens: 0 }, { ...price, input: Number.MAX_VALUE })).toBeUndefined();
+  });
   it("does not invent a price or cache usage", () => {
     expect(calculateUsageCost({ inputTokens: 100, outputTokens: 1 }, price)).toBeUndefined();
     expect(calculateUsageCost({ inputTokens: 100, cachedInputTokens: 101, outputTokens: 1 }, price)).toBeUndefined();

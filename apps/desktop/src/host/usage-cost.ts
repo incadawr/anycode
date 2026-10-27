@@ -10,11 +10,10 @@ export function calculateUsageCost(
   if (price === undefined || input === undefined || cached === undefined || output === undefined ||
       ![input, cached, write, output, price.input, price.cachedInput, price.output].every((n) => Number.isFinite(n) && n >= 0) ||
       cached + write > input || (write > 0 && (price.cacheWrite === undefined || !Number.isFinite(price.cacheWrite) || price.cacheWrite < 0))) return undefined;
-  return {
-    costUsd: ((input - cached - write) * price.input + cached * price.cachedInput + write * (price.cacheWrite ?? 0) + output * price.output) / 1_000_000,
-    cacheSavingsUsd: cached * (price.input - price.cachedInput) / 1_000_000,
-    priceBasisId: price.basisId,
-  };
+  const costUsd = ((input - cached - write) * price.input + cached * price.cachedInput + write * (price.cacheWrite ?? 0) + output * price.output) / 1_000_000;
+  const cacheSavingsUsd = cached * (price.input - price.cachedInput) / 1_000_000;
+  if (!Number.isFinite(costUsd) || !Number.isFinite(cacheSavingsUsd)) return undefined;
+  return { costUsd, cacheSavingsUsd, priceBasisId: price.basisId };
 }
 
 /** Read the connection snapshot passed by main; malformed overrides stay unknown. */
