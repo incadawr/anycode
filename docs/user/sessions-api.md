@@ -163,8 +163,10 @@ so the config keeps working after an app update. The client needs **Node 22+**.
   directory. It holds the URL, the token and the folder list, with mode `0600`.
   Keep it private.
 - **Regenerate token** writes a new token to the discovery file. A running
-  stdio adapter keeps the old token, so restart the external client's MCP
-  connection after you regenerate.
+  stdio adapter reloads the discovery file and retries once after a refused
+  connection or HTTP 401, including after a restart or token regeneration.
+  Other network failures are reported without an automatic retry because the
+  request may already have been processed.
 
 ## Environment override
 
@@ -244,7 +246,7 @@ Services that bridge an outside channel use the same tools. See the
 | `create_session` says `invalid_model` | The `model` value matches no configured provider connection, or more than one. The error lists the connections; retry with a connection id, its label, `<providerId>/<model>`, or omit `model`. |
 | Copy buttons are disabled | The endpoint is not listening. Fix the status first. |
 | Copied config says the adapter was not found | This build does not include the adapter. Install an official build. |
-| `401` after you regenerate the token | The client still uses the old token. Restart its MCP connection. |
+| `401` after you regenerate the token | Check that the discovery file is private and current, then retry the call or restart the MCP connection. |
 | Settings pane is read-only | `ANYCODE_COMMUNICATION_CONFIG` is set. Unset it and restart AnyCode to use Settings. |
 
 See also [configuration.md](configuration.md) and
