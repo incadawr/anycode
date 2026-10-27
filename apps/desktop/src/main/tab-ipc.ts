@@ -43,7 +43,7 @@ import type {
   CodexNotReadyReason,
 } from "../shared/tabs.js";
 import type { CodexDoctorReport } from "../shared/codex-doctor.js";
-import type { TabHostManager } from "./tabs.js";
+import { canonicalWorkspace, type TabHostManager } from "./tabs.js";
 import { isEngineId, type EngineId } from "../shared/engines.js";
 // TASK.102 CUT-S2 §10.5/§10.8.1 point 5: `isValidChildId` is the SAME
 // shape/charset pre-flight the parent host's RPC client (host/child-session-port.ts)
@@ -871,7 +871,7 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
 export async function handleWorkspacePick(deps: TabIpcDeps): Promise<WorkspacePickResult> {
   const picked = await deps.dialog.showOpenDialog({ properties: ["openDirectory"], defaultPath: homedir() });
   const workspace = picked.filePaths[0];
-  return { workspace: picked.canceled || workspace === undefined ? null : workspace };
+  return { workspace: picked.canceled || workspace === undefined ? null : canonicalWorkspace(workspace) };
 }
 
 /**

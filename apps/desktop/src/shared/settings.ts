@@ -740,6 +740,12 @@ export interface AnycodeSettings {
     explore?: RoleConfig;
     maxParallelChildren?: number;
   };
+  /** Named, serializable orchestration role sets and project selections. */
+  roleProfiles?: {
+    profiles: Array<{ id: string; name: string; roles: NonNullable<AnycodeSettings["roles"]> }>;
+    activeId: string;
+    projects: Array<{ projectRoot: string; profileId: string }>;
+  };
   /**
    * Live session-capacity limits (TASK.119 / TASK.147 slice 2; additive-optional,
    * version NOT bumped). Absent = built-in defaults (20 / 3 / 8). Survives load via

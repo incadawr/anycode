@@ -10,6 +10,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Added
 
 - The context popover shows durable per-step and session cost estimates, cache savings, and separate subagent costs. Connections can use custom rates or subscription pricing; unknown prices stay unknown (Taskana 4889).
+- Role profiles can be selected globally or per project, with project-aware first-run setup (Taskana 4886).
 
 ### Changed
 
@@ -39,6 +40,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ## [0.0.44] — 2026-10-26
 
 ### Added
+
+- Named orchestration role profiles with global and project selection (Taskana 4886).
 
 - Sessions API: `close_session` closes shared tabs opened by agents, refuses running turns and user-opened tabs, and frees the agent tab limit. Agent-created tabs with a handle keep it as their sidebar title; titles without handles use the message payload instead of the delivery wrapper (Taskana 4880).
 

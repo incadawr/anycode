@@ -1,3 +1,4 @@
+import { resolveProfileRoles, rolesPatch } from "../../../shared/role-profiles.js";
 /**
  * Message input + turn controls (design §5, restructured in UI-5). Sends
  * `user_message` / `cancel_turn` / `set_mode` through the active tab's
@@ -1071,6 +1072,10 @@ export function Composer() {
   const lastSlashQueryRef = useRef<string | null>(null);
   const lastSlashItemsKeyRef = useRef("");
   const slashTabId = useContext(TabContext)?.tabId;
+  const projectRoot = useTabsStore((state) => {
+    const tab = state.tabs.find((item) => item.tabId === slashTabId);
+    return tab?.projectRoot ?? tab?.workspace;
+  });
   // Taskana 4704 §3.8 (part B): first-run /orchestrate state — the task text
   // parked while the RolePickerDialog is up, and the dialog's visibility.
   // Local to Composer: the pending text belongs to THIS tab's composer draft
@@ -1283,7 +1288,7 @@ export function Composer() {
     }
     setPendingOrchestrateTask(task);
     // The shared first-run gate (orchestrate-start.ts) — the start screen uses the same one.
-    if (needsRolePicker(useSettingsStore.getState().snapshot?.settings.roles)) {
+    if (needsRolePicker(resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}, projectRoot))) {
       setRolePickerOpen(true);
       return;
     }
@@ -1691,8 +1696,8 @@ export function Composer() {
           // §3.9: Save writes roles, then the stashed task proceeds under
           // orchestrate (the enable + submit are the same proceed step as
           // Skip — only the settings write differs).
-          void useSettingsStore.getState().setPatch({ roles });
-          proceedOrchestrateSubmit();
+          void useSettingsStore.getState().setPatch(rolesPatch(useSettingsStore.getState().snapshot?.settings ?? {}, roles, projectRoot))
+            .then((result) => { if (result.ok) proceedOrchestrateSubmit(); });
         }}
         onSkip={() => {
           // §3.9: Skip writes nothing; built-in defaults apply.

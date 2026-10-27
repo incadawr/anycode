@@ -1,3 +1,4 @@
+import { readRoleSettings } from "./role-settings.js";
 import { SqliteCodexAgentCardLog } from "./engines/codex/agent-card-log.js";
 import { CodexDynamicToolBridge, codexAgentPermissionMode } from "./engines/codex/dynamic-tool-bridge.js";
 import { createEngineBrowserBridge } from "./engines/browser-bridge.js";
@@ -565,14 +566,9 @@ type RolesSettings = NonNullable<import("../shared/settings.js").AnycodeSettings
  * Absent roles means "built-in defaults".
  */
 let rolesSettings: RolesSettings | undefined;
+let rolesProjectRoot = workspace;
 function refreshRolesSettings(): void {
-  try {
-    const raw = JSON.parse(readFileSync(defaultSettingsPath(), "utf8"));
-    const parsed = parseSettings(raw);
-    rolesSettings = parsed.status === "ok" ? parsed.settings.roles : undefined;
-  } catch {
-    rolesSettings = undefined;
-  }
+  rolesSettings = readRoleSettings(hostSettingsPathOverride() ?? defaultSettingsPath(), rolesProjectRoot);
 }
 refreshRolesSettings();
 
@@ -618,6 +614,7 @@ refreshPluginsSettings();
  */
 let mdClaimedProfileNames: ReadonlySet<string> = new Set();
 function resolveRoleRouteImpl(agentType: string): RoleRouteResolution | null {
+  refreshRolesSettings();
   if (!isRoleRouteName(agentType)) return null;
   const budget =
     agentType === "planner" || agentType === "executor" || agentType === "reviewer"
@@ -3313,6 +3310,8 @@ async function boot(): Promise<void> {
       };
     }
     const projectRoot = sessionMeta.projectRoot ?? sessionMeta.workspace;
+    rolesProjectRoot = projectRoot;
+    refreshRolesSettings();
     // Taskana 4118: live capabilities for models the catalog does not know,
     // read fail-soft from settings.json (main persists them on the connection).
     // The fork env's connection id wins over the session row's pin: on a
@@ -4288,7 +4287,7 @@ async function boot(): Promise<void> {
         // Taskana 4704 §2.8/§3.6: the parallel-children cap (live cell —
         // `roles.maxParallelChildren ?? 4`; undefined only when the settings
         // read failed, which keeps the pre-4704 unlimited posture).
-        maxDetachedChildren: () => rolesSettings?.maxParallelChildren ?? 4,
+        maxDetachedChildren: () => { refreshRolesSettings(); return rolesSettings?.maxParallelChildren ?? 4; },
       });
       config.sessionSubagents = childSessionPortHandle;
       // Taskana 4704 §3.6: the respawn path re-spawns through THIS port, and
@@ -4425,6 +4424,7 @@ async function boot(): Promise<void> {
           // list stays FIRST and untouched; the derived entries trail it, and
           // the runner's profile-wins resolution handles the rest.
           profiles: () => {
+            refreshRolesSettings();
             const claimed = new Set(ext.profiles.map((p) => p.name));
             const derived: PersonaDefinition[] = [];
             for (const role of ["planner", "executor", "reviewer"] as const) {
@@ -4877,6 +4877,7 @@ async function boot(): Promise<void> {
       // on the tab's active connection (§9-Q2: connection switching stays
       // manual). Returns the engine_notice line when a switch happened.
       orchestratorRouteCheck: (): string | undefined => {
+        refreshRolesSettings();
         const orchestrator = rolesSettings?.orchestrator;
         if (orchestrator === undefined) return undefined;
         const chain = [orchestrator.primary, ...(orchestrator.fallbacks ?? [])].map(toCoreEntry);

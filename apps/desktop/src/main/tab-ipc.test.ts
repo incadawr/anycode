@@ -8,7 +8,9 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
+import { mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { join } from "node:path";
 import type { CreateTabRequest, SessionDeleteSummaryWire } from "../shared/tabs.js";
 import { ENV_ENGINE } from "../shared/engines.js";
 import {
@@ -1246,6 +1248,17 @@ describe("handleWorkspacePick (slice P7.12 §4.4)", () => {
 
     expect(showOpenDialog).toHaveBeenCalledWith({ properties: ["openDirectory"], defaultPath: homedir() });
     expect(res).toEqual({ workspace: "/picked/dir" });
+  });
+
+  it("returns the same canonical project identity used for the new tab", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "anycode-pick-"));
+    try {
+      const link = join(dir, "project-link");
+      symlinkSync(dir, link, "dir");
+      const { dialog } = makeDialog({ canceled: false, filePaths: [link] });
+      const deps: TabIpcDeps = { manager: makeManager().manager, persistence: persistenceStub, dialog };
+      expect(await handleWorkspacePick(deps)).toEqual({ workspace: realpathSync(dir) });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   it("cancel returns { workspace: null }", async () => {
