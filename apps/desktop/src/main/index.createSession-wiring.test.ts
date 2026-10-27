@@ -48,12 +48,14 @@ interface CapturedDeps {
 }
 interface ForkCall {
   env: NodeJS.ProcessEnv;
+  args: string[];
   host: FakeHostProcess;
 }
 
-const { ipcHandlers, forkCalls, scratchRef, captured, buildGate } = vi.hoisted(() => ({
+const { ipcHandlers, forkCalls, forkWaiters, scratchRef, captured, buildGate } = vi.hoisted(() => ({
   ipcHandlers: new Map<string, IpcHandler>(),
   forkCalls: [] as ForkCall[],
+  forkWaiters: new Map<string, (call: ForkCall) => void>(),
   scratchRef: { userData: "", home: "" },
   captured: { deps: null as CapturedDeps | null, mutation: null as null | ((settings: import("../shared/settings.js").AnycodeSettings) => void | Promise<void>) },
   buildGate: { hook: undefined as undefined | ((id: string | undefined, settings: import("../shared/settings.js").AnycodeSettings) => void | Promise<void>) },
@@ -124,9 +126,11 @@ vi.mock("electron", () => ({
   },
   shell: { openExternal: vi.fn(async () => undefined), showItemInFolder: vi.fn() },
   utilityProcess: {
-    fork: vi.fn((_entry: string, _args: string[], options: { env: NodeJS.ProcessEnv }) => {
+    fork: vi.fn((_entry: string, args: string[], options: { env: NodeJS.ProcessEnv }) => {
       const host = new FakeHostProcess();
-      forkCalls.push({ env: options.env, host });
+      const call = { env: options.env, args, host };
+      forkCalls.push(call);
+      if (args[0] === "--resume" && args[1] !== undefined) forkWaiters.get(args[1])?.(call);
       return host;
     }),
   },
@@ -167,6 +171,13 @@ vi.mock("./codex-ipc.js", () => ({
     loginCancel: vi.fn(),
     shutdown: vi.fn(async () => undefined),
   })),
+}));
+
+// The boot-time Claude doctor persists a settings check asynchronously. This
+// suite supplies provider mutations directly, so an unrelated disk reload must
+// not overwrite those in-memory fixtures while a provider refresh is paused.
+vi.mock("./claude-ipc.js", () => ({
+  registerClaudeIpc: vi.fn(() => ({ recheck: vi.fn(async () => ({})) })),
 }));
 
 /**
@@ -222,6 +233,7 @@ async function canonicalKey(path: string): Promise<string> {
 beforeEach(async () => {
   ipcHandlers.clear();
   forkCalls.length = 0;
+  forkWaiters.clear();
   captured.deps = null;
   captured.mutation = null;
   buildGate.hook = undefined;
@@ -284,6 +296,13 @@ afterEach(async () => {
   for (const [key, value] of Object.entries(savedAmbient)) if (value !== undefined) process.env[key] = value;
   await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
+
+function nextRespawn(sessionId: string | undefined): Promise<ForkCall> {
+  if (sessionId === undefined) throw new Error("session was not created");
+  return new Promise((resolve) => {
+    forkWaiters.set(sessionId, (call) => { forkWaiters.delete(sessionId); resolve(call); });
+  });
+}
 
 /** Boots main and returns the captured create_session hook (after the tab manager exists). */
 async function boot(): Promise<(request: CreateSessionRequest) => Promise<CreateSessionOutcome>> {
@@ -355,7 +374,8 @@ it("keeps an active pin reserved and primed when settings switch during admissio
 
 it("serializes overlapping provider refreshes before a pinned tab respawns", async () => {
   const create = await boot();
-  expect(await create({ workspace, engine: "core", model: "glm-5.3" })).toMatchObject({ ok: true });
+  const outcome = await create({ workspace, engine: "core", model: "glm-5.3" });
+  expect(outcome).toMatchObject({ ok: true });
   const host = forkCalls.at(-1)!.host;
   const initial = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
   initial.provider.connections[1].models = ["glm-old"];
@@ -378,8 +398,9 @@ it("serializes overlapping provider refreshes before a pinned tab respawns", asy
   release();
   await Promise.all([first, second]);
   expect(secondFinished).toBe(true);
+  const respawn = nextRespawn(outcome.sessionId);
   host.emit("exit", 1);
-  expect(forkCalls.at(-1)?.env.ANYCODE_CONNECTION_ID).toBe("conn-glm");
+  expect((await respawn).env.ANYCODE_CONNECTION_ID).toBe("conn-glm");
 }, 30_000);
 
 it("uses the newly active connection credentials while its refresh is paused", async () => {
@@ -414,20 +435,24 @@ it("keeps a prime that finishes after refresh replaces the cache", async () => {
   const fresh = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
   await captured.mutation!(fresh);
   release();
-  expect(await pending).toMatchObject({ ok: true });
+  const outcome = await pending;
+  expect(outcome).toMatchObject({ ok: true });
   const host = forkCalls.at(-1)!.host;
   expect(forkCalls.at(-1)?.env).toMatchObject({ ANYCODE_CONNECTION_ID: "conn-glm", ANYCODE_MODEL: "glm-5.3", ANYCODE_API_KEY: "test-key-conn-glm" });
+  const respawn = nextRespawn(outcome.sessionId);
   host.emit("exit", 1);
-  expect(forkCalls.at(-1)?.env).toMatchObject({ ANYCODE_CONNECTION_ID: "conn-glm", ANYCODE_API_KEY: "test-key-conn-glm" });
+  expect((await respawn).env).toMatchObject({ ANYCODE_CONNECTION_ID: "conn-glm", ANYCODE_API_KEY: "test-key-conn-glm" });
 }, 30_000);
 
 
 it("defers an existing pinned host's respawn until refreshed settings are ready", async () => {
   const create = await boot();
-  await create({ workspace, engine: "core", model: "glm-5.3" });
+  const outcome = await create({ workspace, engine: "core", model: "glm-5.3" });
+  expect(outcome).toMatchObject({ ok: true });
   const host = forkCalls.at(-1)!.host;
   const fresh = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
   fresh.provider.connections[1].model = "glm-refreshed";
+  await writeFile(join(dir, "settings.json"), JSON.stringify(fresh));
   let entered!: () => void;
   let release!: () => void;
   const started = new Promise<void>((resolve) => { entered = resolve; });
@@ -436,12 +461,14 @@ it("defers an existing pinned host's respawn until refreshed settings are ready"
   const refresh = captured.mutation!(fresh);
   await started;
   const count = forkCalls.length;
+  const respawn = nextRespawn(outcome.sessionId);
   host.emit("exit", 1);
   expect(forkCalls).toHaveLength(count);
   release();
   await refresh;
-  await vi.waitFor(() => expect(forkCalls).toHaveLength(count + 1));
-  expect(forkCalls.at(-1)!.env).toMatchObject({ ANYCODE_CONNECTION_ID: "conn-glm", ANYCODE_MODEL: "glm-refreshed", ANYCODE_API_KEY: "test-key-refreshed" });
+  const call = await respawn;
+  expect(forkCalls).toHaveLength(count + 1);
+  expect(call.env).toMatchObject({ ANYCODE_CONNECTION_ID: "conn-glm", ANYCODE_MODEL: "glm-refreshed", ANYCODE_API_KEY: "test-key-refreshed" });
 }, 30_000);
 
 it("registers managed plugin role discovery for Settings", async () => {

@@ -25,7 +25,7 @@ describe("cost popover layout", () => {
         const metrics = rows.map(row => { const line = parseFloat(getComputedStyle(row).lineHeight); const font = parseFloat(getComputedStyle(row).fontSize); const height = row.getBoundingClientRect().height; const old = row.scrollLeft; row.scrollLeft = row.scrollWidth; const style = getComputedStyle(row); return { height, line: Number.isFinite(line) ? line : font * 1.2, width: row.clientWidth, content: row.scrollWidth, canScroll: row.scrollLeft > old, title: row.title, text: row.textContent, whiteSpace: style.whiteSpace, overflowX: style.overflowX, overflowY: style.overflowY }; });
         document.querySelector('#result').textContent = JSON.stringify({popWidth: document.querySelector('.ctx-popover').getBoundingClientRect().width, metrics});
       </script>`);
-      const run = spawnSync(chrome, ["--headless", "--no-sandbox", "--disable-gpu", "--disable-background-networking", "--no-first-run", `--user-data-dir=${directory}/profile`, "--dump-dom", `file://${file}`], { encoding: "utf8", timeout: 30_000 });
+      const run = spawnSync(chrome, ["--headless", "--no-sandbox", "--disable-gpu", "--disable-features=OverlayScrollbar", "--disable-background-networking", "--no-first-run", `--user-data-dir=${directory}/profile`, "--dump-dom", `file://${file}`], { encoding: "utf8", timeout: 30_000 });
       expect(run.status, run.stderr).toBe(0);
       const match = run.stdout.match(/<pre id="result">([^<]+)<\/pre>/);
       expect(match).not.toBeNull();
