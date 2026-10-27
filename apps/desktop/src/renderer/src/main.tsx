@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
+import "./agent-messages.css";
 import { MdPreviewWindowApp } from "./components/MdPreviewWindowApp.js";
 import { applyDensity, readDensity } from "./density.js";
 

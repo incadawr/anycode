@@ -1,4 +1,5 @@
 import { agentMessageText } from "../../shared/communication.js";
+import type { AgentDelivery } from "../../shared/communication.js";
 /**
  * Renderer zustand store. FROZEN shape (design/phase-mvp.md §5) — MVP.1
  * fixed the state contract and a skeletal reducer over HostToUiMessage so
@@ -456,6 +457,16 @@ export type TranscriptBlock =
       agentMessage?: true;
       /** Original payload for the minimap preview, without envelope metadata or delivery status. */
       agentMessagePayload?: string;
+      /**
+       * GitHub #19: the delivery's terminal state, kept as a STRUCTURED field
+       * (not only as prose inside `text`) so a renderer reload, a state update
+       * and the grouped agent-message view can show it without re-parsing the
+       * text. Absent on hydrated history blocks, which only carry the legacy
+       * `Delivery: <state>` suffix inside `text`.
+       */
+      agentMessageState?: AgentDelivery["state"];
+      /** GitHub #19: the host's one-line detail for that state, when it sent one. */
+      agentMessageDetail?: string;
       /** Epoch ms: when the message was sent (live: renderer clock at creation; reload: the persisted item's createdAt). Absent -> no time shown. */
       at?: number;
     }
@@ -4579,7 +4590,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           case "agent_message": {
             const d = message.delivery;
             const id = `agent-message:${d.envelope.messageId}`;
-            const block: TranscriptBlock = { kind: "user_text", id, origin: "system", agentMessage: true, agentMessagePayload: d.envelope.payload, text: `${agentMessageText(d.envelope)}\nDelivery: ${d.state}${d.detail ? ` — ${d.detail}` : ""}` };
+            // GitHub #19: keep the delivery state/detail as STRUCTURED fields
+            // alongside the legacy prose suffix. A rerendered (or reloaded)
+            // transcript then shows the state and a payload preview without
+            // parsing, while every existing consumer of `text` still works.
+            const block: TranscriptBlock = { kind: "user_text", id, origin: "system", agentMessage: true, agentMessagePayload: d.envelope.payload, agentMessageState: d.state, ...(d.detail !== undefined ? { agentMessageDetail: d.detail } : {}), text: `${agentMessageText(d.envelope)}\nDelivery: ${d.state}${d.detail ? ` — ${d.detail}` : ""}` };
             set((state) => {
               const existing = state.transcript.findIndex((b) => b.id === id || (b.kind === "user_text" && b.text === agentMessageText(d.envelope)));
               if (existing < 0) return { transcript: [...state.transcript, block] };

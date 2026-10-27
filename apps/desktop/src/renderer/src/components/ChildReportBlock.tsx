@@ -16,15 +16,27 @@ import type { TranscriptBlock } from "../store.js";
 import { Chevron } from "./icons.js";
 import { formatBlockTime } from "../block-time.js";
 import { parseChildReportText, childReportCardLabel } from "../child-report-format.js";
+import { agentMessagePreview, agentMessageStatusLabel, isAuthenticatedAgentMessage } from "../agent-message-format.js";
 
 type UserTextBlock = Extract<TranscriptBlock, { kind: "user_text" }>;
 
-export function ChildReportBlock({ block, enter = false }: { block: UserTextBlock; enter?: boolean }) {
-  const [expanded, setExpanded] = useState(false);
+/**
+ * GitHub #19: an authenticated agent delivery keeps a ONE-LINE, always-visible
+ * preview of its payload, even while collapsed. Before this, a run of agent
+ * messages collapsed into a stack of identical `Agent message · acknowledged`
+ * headers with no content — after a renderer reload the real conversation was
+ * pushed below a wall of empty rows. Ordinary detached-child reports keep
+ * their existing presentation (the summary only in the expanded body).
+ *
+ * `defaultExpanded` lets a grouped stack open every member at once while a
+ * single card still starts collapsed.
+ */
+export function ChildReportBlock({ block, enter = false, defaultExpanded = false }: { block: UserTextBlock; enter?: boolean; defaultExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const textId = useId();
   const parsed = parseChildReportText(block.text);
   const time = formatBlockTime(block.at, Date.now());
-  const isAgentMessage = block.text.startsWith("[AnyCode authenticated agent message ");
+  const isAgentMessage = isAuthenticatedAgentMessage(block);
 
   return (
     <div data-block-id={block.id} className={`message message-child-report${block.agentMessage ? " minimap-turn" : ""}${enter ? " message-enter" : ""}`}>
@@ -39,13 +51,17 @@ export function ChildReportBlock({ block, enter = false }: { block: UserTextBloc
           <Chevron />
         </span>
         <span className={`child-report-status child-report-status-${parsed.status}`} aria-hidden="true" />
-        {isAgentMessage ? `Agent message · ${block.text.match(/Delivery: ([a-z]+)/)?.[1] ?? "received"}` : childReportCardLabel(parsed)}
+        {isAgentMessage ? `Agent message · ${agentMessageStatusLabel(block)}` : childReportCardLabel(parsed)}
         {time && (
           <time className="block-time" title={time.title}>
             {time.label}
           </time>
         )}
       </button>
+      {/* Outside the expanded body on purpose: the preview is what makes the
+          collapsed transcript readable after a reload. Plain text, never
+          Markdown/HTML — an agent payload is untrusted content. */}
+      {isAgentMessage && <div className="agent-message-preview">{agentMessagePreview(block)}</div>}
       {expanded && (
         <pre id={textId} className="child-report-text" aria-live="off">
           {isAgentMessage ? block.text : parsed.summary}

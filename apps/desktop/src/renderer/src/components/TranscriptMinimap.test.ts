@@ -45,6 +45,8 @@ import {
   type UserTurnMark,
 } from "./TranscriptMinimap.js";
 import type { ToolCallBlock, TranscriptBlock } from "../store.js";
+import { matchCheckpointsToTurns } from "./checkpoint-model.js";
+import type { WireCheckpointMeta } from "../../../shared/protocol.js";
 
 function mkUser(id: string, text: string, extra: Partial<Extract<TranscriptBlock, { kind: "user_text" }>> = {}): TranscriptBlock {
   return { kind: "user_text", id, text, ...extra };
@@ -137,6 +139,10 @@ describe("selectUserTurns", () => {
     expect(shouldShowMinimap(marks.length)).toBe(true);
     expect(createUserTurnsSelector()(blocks)).toEqual(marks);
     expect(rewindUserTurnTexts(blocks)).toEqual(["", "", "human question"]);
+    // GitHub #19: grouping is presentation only — an agent mark never acquires
+    // a rewind checkpoint, even with a checkpoint carrying the same text.
+    const checkpoints: WireCheckpointMeta[] = [{ id: "cp-1", label: "first agent message", createdAt: 1, reason: "auto" }];
+    expect(matchCheckpointsToTurns(rewindUserTurnTexts(blocks), checkpoints)).toEqual([null, null, null]);
     const html = renderToStaticMarkup(createElement(TranscriptMinimap, { marks, activeIndex: 0, onJump: () => {} }));
     expect(html).toContain("Turn 1 · Agent: first agent message");
   });

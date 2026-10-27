@@ -44,6 +44,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// GitHub #19: main now installs its application menu inside `app.whenReady()`
+// and then continues through the ENTIRE boot chain (window, updater, services).
+// These wiring tests boot the real module, so they get headroom over the 5 s
+// default that the full suite's parallel load can exceed.
+vi.setConfig({ testTimeout: 15_000 });
+
+
 // Duplicated channel literals — codex-ipc.ts / codex-install.ts /
 // codex-rollout-ipc.ts hold the sources of truth; same "duplicated on
 // purpose" convention as index.appVersion-wiring.test.ts's own channel copy
@@ -98,6 +105,13 @@ vi.mock("electron", () => ({
     whenReady: () => Promise.resolve(),
     on: vi.fn(),
     quit: vi.fn(),
+  },
+  // GitHub #19: main installs an explicit application menu inside
+  // app.whenReady(); a wiring test must provide the primitives it touches.
+  Menu: {
+    buildFromTemplate: vi.fn((template: unknown) => ({ template })),
+    setApplicationMenu: vi.fn(),
+    getApplicationMenu: vi.fn(() => null),
   },
   dialog: {
     showOpenDialogSync: vi.fn(() => undefined),

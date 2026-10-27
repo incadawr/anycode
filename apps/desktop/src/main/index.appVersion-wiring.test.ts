@@ -32,6 +32,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONNECTION_CREATE_CHANNEL, SETTINGS_GET_CHANNEL } from "../shared/settings.js";
 import type { SettingsMutationResult, SettingsSnapshot } from "../shared/settings.js";
 
+// GitHub #19: main now installs its application menu inside `app.whenReady()`
+// and then continues through the ENTIRE boot chain (window, updater, services).
+// These wiring tests boot the real module, so they get headroom over the 5 s
+// default that the full suite's parallel load can exceed.
+vi.setConfig({ testTimeout: 15_000 });
+
+
 // Not statically imported from ./provider-ipc.js: that module chain-imports
 // "electron" too, and a top-level import of it here resolves before this
 // file's own `vi.mock("electron", ...)` factory has finished hoisting,
@@ -83,6 +90,13 @@ vi.mock("electron", () => ({
     whenReady: () => Promise.resolve(),
     on: vi.fn(),
     quit: vi.fn(),
+  },
+  // GitHub #19: main installs an explicit application menu inside
+  // app.whenReady(); a wiring test must provide the primitives it touches.
+  Menu: {
+    buildFromTemplate: vi.fn((template: unknown) => ({ template })),
+    setApplicationMenu: vi.fn(),
+    getApplicationMenu: vi.fn(() => null),
   },
   dialog: {
     showOpenDialogSync: vi.fn(() => undefined),

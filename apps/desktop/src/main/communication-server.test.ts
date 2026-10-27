@@ -29,6 +29,14 @@ async function fixture() {
   return { dir, discoveryFile, configFile, client, manager, request, service, discovery };
 }
 function value(result: unknown): any { return JSON.parse((result as { content: Array<{ text: string }> }).content[0]!.text); }
+/** Connects a fresh client to a restarted server over the SAME durable discovery file. */
+async function reconnect(discoveryFile: string): Promise<Client> {
+  const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string };
+  const client = new Client({ name: "restart-supervisor", version: "1" });
+  await client.connect(new StreamableHTTPClientTransport(new URL(discovery.url), { requestInit: { headers: { Authorization: `Bearer ${discovery.token}` } } }));
+  cleanups.push(() => client.close());
+  return client;
+}
 describe("production communication MCP over real SDK HTTP", () => {
   it("connects a portable stdio MCP client through the discovery-file adapter", async () => {
     const f = await fixture();
@@ -69,10 +77,12 @@ describe("production communication MCP over real SDK HTTP", () => {
     expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
     expect((await f.client.callTool({ name: "send_message", arguments: { ...input, payload: "changed" } })).isError).toBe(true);
     await f.client.close(); await f.service.close();
-    // Reopen same durable ledger: acknowledged becomes unknown, never redelivered to model.
+    // Reopen the same durable ledger (GitHub #19): a SETTLED record keeps its
+    // state and detail — a runtime restart is not evidence that the delivery was
+    // lost — and it is still never redelivered to the model.
     const restart = await startCommunicationServer({ manager: f.manager, configFile: f.configFile, userData: f.dir }); cleanups.push(() => restart.close());
     const records = JSON.parse(await readFile(`${f.discoveryFile}.messages`, "utf8"));
-    expect(records[0].state).toBe("unknown");
+    expect(records[0]).toMatchObject({ state: "acknowledged", detail: "transport accepted", idempotencyKey: "clarification-1" });
     expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
   });
   it("marks a queued delivery unknown when its host generation changes without replaying it", async () => {
@@ -91,6 +101,140 @@ describe("production communication MCP over real SDK HTTP", () => {
     const record = value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed", payload: "clarification", mode: "steer", idempotencyKey: "uncertain" } }));
     expect(record.state).toBe("unknown");
     expect(value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed", payload: "clarification", mode: "steer", idempotencyKey: "uncertain" } })).envelope.messageId).toBe(record.envelope.messageId);
+    expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
+  });
+  // GitHub #19: a renderer reload does NOT restart this server at all; these
+  // cover the separate app/server restart, which must not rewrite settled
+  // delivery history (acknowledged is transport acceptance, not model success).
+  it("restarting the server preserves acknowledged rejected and unknown records and idempotency keys", async () => {
+    const f = await fixture();
+    f.request.mockImplementation(async (_session, op, payload) => {
+      if (op !== "send_message") return undefined;
+      const text = (payload as AgentEnvelope).payload;
+      if (text === "acked") return { envelope: payload, state: "acknowledged", detail: "transport accepted" };
+      if (text === "rejected") return { envelope: payload, state: "rejected", detail: "steering refused; use next_turn" };
+      throw new Error("Host died after applying message");
+    });
+    const send = async (payload: string, idempotencyKey: string) =>
+      value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed", payload, mode: "next_turn", idempotencyKey } }));
+    const acked = await send("acked", "key-acked");
+    const rejected = await send("rejected", "key-rejected");
+    const unknown = await send("unknown", "key-unknown");
+    expect([acked.state, rejected.state, unknown.state]).toEqual(["acknowledged", "rejected", "unknown"]);
+    await f.client.close(); await f.service.close();
+
+    const restart = await startCommunicationServer({ manager: f.manager, configFile: f.configFile, userData: f.dir });
+    cleanups.push(() => restart.close());
+    const client = await reconnect(f.discoveryFile);
+    const statusOf = async (messageId: string) => value(await client.callTool({ name: "get_message_status", arguments: { messageId } }));
+    expect(await statusOf(acked.envelope.messageId)).toMatchObject({ state: "acknowledged", detail: "transport accepted" });
+    expect(await statusOf(rejected.envelope.messageId)).toMatchObject({ state: "rejected", detail: "steering refused; use next_turn" });
+    expect(await statusOf(unknown.envelope.messageId)).toMatchObject({ state: "unknown", detail: "Host response unavailable; do not blindly resend" });
+
+    const ledger = JSON.parse(await readFile(`${f.discoveryFile}.messages`, "utf8")) as Array<{ idempotencyKey?: string; state: string }>;
+    expect(ledger.map((record) => record.idempotencyKey)).toEqual(["key-acked", "key-rejected", "key-unknown"]);
+    expect(ledger.map((record) => record.state)).toEqual(["acknowledged", "rejected", "unknown"]);
+    // Same idempotency key after the restart still resolves to the settled record: never resent.
+    const retried = value(await client.callTool({ name: "send_message", arguments: { sessionId: "allowed", payload: "acked", mode: "next_turn", idempotencyKey: "key-acked" } }));
+    expect(retried.envelope.messageId).toBe(acked.envelope.messageId);
+    expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(3);
+  });
+  it("a queued record survives a restart against the same live host and reconciles its status", async () => {
+    const f = await fixture();
+    const record = value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed", payload: "still queued", mode: "next_turn" } }));
+    expect(record.state).toBe("queued");
+    await f.client.close(); await f.service.close();
+
+    let hostState: "queued" | "acknowledged" = "queued";
+    let hostPolls = 0;
+    f.request.mockImplementation(async (_session, op) => {
+      if (op !== "get_message_status") return undefined;
+      hostPolls += 1;
+      return { envelope: record.envelope, state: hostState, ...(hostState === "queued" ? {} : { detail: "host accepted after restart" }) };
+    });
+    // Same host generation (same pid): the queued record must NOT be downgraded.
+    const restart = await startCommunicationServer({ manager: f.manager, configFile: f.configFile, userData: f.dir });
+    cleanups.push(() => restart.close());
+    await vi.waitFor(() => expect(hostPolls).toBeGreaterThan(1), { timeout: 2500, interval: 30 });
+    const stillQueued = JSON.parse(await readFile(`${f.discoveryFile}.messages`, "utf8")) as Array<{ state: string }>;
+    expect(stillQueued[0]!.state).toBe("queued");
+    expect(value(await (await reconnect(f.discoveryFile)).callTool({ name: "get_message_status", arguments: { messageId: record.envelope.messageId } })).state).toBe("queued");
+
+    // A real live transition reconciles into the ledger without any model resend.
+    hostState = "acknowledged";
+    await vi.waitFor(async () => {
+      const records = JSON.parse(await readFile(`${f.discoveryFile}.messages`, "utf8")) as Array<{ state: string; detail?: string }>;
+      expect(records[0]).toMatchObject({ state: "acknowledged", detail: "host accepted after restart" });
+    }, { timeout: 2500, interval: 30 });
+    expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
+  });
+  it("keeps a queued delivery after a status timeout and reconciles recovery on the same host", async () => {
+    const f = await fixture();
+    const record = value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed", payload: "pending", mode: "next_turn" } }));
+    let recovered = false;
+    f.request.mockImplementation(async (_session, op) => {
+      if (op === "get_message_status") {
+        if (!recovered) throw new Error("status request timed out");
+        return { envelope: record.envelope, state: "acknowledged", detail: "accepted after recovery" };
+      }
+      return undefined;
+    });
+    const status = () => f.client.callTool({ name: "get_message_status", arguments: { messageId: record.envelope.messageId } });
+    expect(value(await status()).state).toBe("queued");
+    const ledger = JSON.parse(await readFile(`${f.discoveryFile}.messages`, "utf8"));
+    expect(ledger[0].state).toBe("queued");
+    recovered = true;
+    await vi.waitFor(async () => {
+      const records = JSON.parse(await readFile(`${f.discoveryFile}.messages`, "utf8"));
+      expect(records[0]).toMatchObject({ state: "acknowledged", detail: "accepted after recovery" });
+    }, { timeout: 2500, interval: 30 });
+    expect(value(await status()).state).toBe("acknowledged");
+    expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
+  });
+  it("persists unknown when a queued recipient closes or disappears between polls", async () => {
+    for (const lost of ["closing", "removed", "during query"] as const) {
+      const f = await fixture();
+      const record = value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed", payload: lost, mode: "next_turn" } }));
+      expect(record.state).toBe("queued");
+      if (lost === "closing") f.manager.listTabs = () => [{ sessionId: "allowed", workspace: f.dir, state: "closing", pid: 10 }];
+      if (lost === "removed") f.manager.listTabs = () => [];
+      if (lost === "during query") f.request.mockImplementation(async (_session, op) => {
+        if (op === "get_message_status") {
+          f.manager.listTabs = () => [];
+          throw new Error("host closed");
+        }
+        return undefined;
+      });
+      const status = value(await f.client.callTool({ name: "get_message_status", arguments: { messageId: record.envelope.messageId } }));
+      expect(status).toMatchObject({ state: "unknown", detail: "Host restarted before queued delivery could be confirmed; no automatic model replay" });
+      const ledger = JSON.parse(await readFile(`${f.discoveryFile}.messages`, "utf8"));
+      expect(ledger[0].state).toBe("unknown");
+      expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
+    }
+  });
+  it("reconciliation persists unknown when a queued recipient disappears", async () => {
+    const f = await fixture();
+    const record = value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed", payload: "pending", mode: "next_turn" } }));
+    f.manager.listTabs = () => [];
+    await vi.waitFor(async () => {
+      const ledger = JSON.parse(await readFile(`${f.discoveryFile}.messages`, "utf8"));
+      expect(ledger[0]).toMatchObject({ state: "unknown", detail: "Host restarted before queued delivery could be confirmed; no automatic model replay" });
+    }, { timeout: 2500, interval: 30 });
+    expect(value(await f.client.callTool({ name: "get_message_status", arguments: { messageId: record.envelope.messageId } })).state).toBe("unknown");
+  });
+  it("a queued record becomes unknown only after its host generation is lost across a restart", async () => {
+    const f = await fixture();
+    const record = value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed", payload: "queued before restart", mode: "next_turn" } }));
+    expect(record.state).toBe("queued");
+    await f.client.close(); await f.service.close();
+    // Different pid = a lost host generation: the transport never confirmed this one.
+    f.manager.listTabs = () => [{ sessionId: "allowed", workspace: f.dir, state: "running", pid: 999 }];
+    const restart = await startCommunicationServer({ manager: f.manager, configFile: f.configFile, userData: f.dir });
+    cleanups.push(() => restart.close());
+    await vi.waitFor(async () => {
+      const records = JSON.parse(await readFile(`${f.discoveryFile}.messages`, "utf8")) as Array<{ state: string; detail: string }>;
+      expect(records[0]).toMatchObject({ state: "unknown", detail: "Host restarted before queued delivery could be confirmed; no automatic model replay" });
+    }, { timeout: 2500, interval: 30 });
     expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
   });
 });

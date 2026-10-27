@@ -3,6 +3,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import type { KeyboardInputEvent } from "electron";
 
 export function createSelfCheckProfile(argv: readonly string[]): string | undefined {
   if (!argv.includes("--self-check")) return undefined;
@@ -121,3 +122,118 @@ export const selfCheckBinaryFs = {
   realpath: (_path: string): never => { throw Object.assign(new Error("Self-check has no external CLI"), { code: "ENOENT" }); },
   readdir: (_path: string): string[] => [],
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GitHub #19 — packaged reload-shortcut protection check
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Minimal structural menu shapes (compatible with a real Electron `Menu`). */
+export interface ReloadMenuItem {
+  role?: string;
+  accelerator?: string | null;
+  label?: string;
+  submenu?: ReloadMenu | ReloadMenuItem[];
+}
+export interface ReloadMenu {
+  items: ReloadMenuItem[];
+}
+
+/** The isolated-window surface `checkReloadProtection` needs (satisfied by a real BrowserWindow). */
+export interface ReloadCheckWindow {
+  focus(): void;
+  webContents: {
+    on(event: "did-start-loading", listener: () => void): void;
+    removeListener(event: "did-start-loading", listener: () => void): void;
+    sendInputEvent(event: KeyboardInputEvent): void;
+    executeJavaScript(expression: string): Promise<unknown>;
+  };
+}
+
+type ReloadModifier = NonNullable<KeyboardInputEvent["modifiers"]>[number];
+
+const FORBIDDEN_MENU_ROLES = new Set(["reload", "forceReload", "toggleDevTools", "viewMenu"]);
+
+/** Detects the two reload accelerators in their common string spellings. */
+export function isReloadAcceleratorText(accelerator: string | null | undefined): boolean {
+  if (!accelerator) return false;
+  const normalized = accelerator.replace(/\s+/g, "").toLowerCase();
+  return /(commandorcontrol|cmdorctrl|command|control|cmd|ctrl)(\+shift)?\+r$/.test(normalized);
+}
+
+function collectForbiddenMenuItems(item: ReloadMenuItem, into: string[]): void {
+  if (item.role !== undefined && FORBIDDEN_MENU_ROLES.has(item.role)) into.push(`role:${item.role}`);
+  if (isReloadAcceleratorText(item.accelerator)) into.push(`accelerator:${item.accelerator}`);
+  const submenu = item.submenu;
+  if (Array.isArray(submenu)) {
+    for (const child of submenu) collectForbiddenMenuItems(child, into);
+  } else if (submenu !== undefined && Array.isArray(submenu.items)) {
+    for (const child of submenu.items) collectForbiddenMenuItems(child, into);
+  }
+}
+
+function reloadKeyInput(platform: NodeJS.Platform, withShift: boolean): KeyboardInputEvent {
+  const primary: ReloadModifier[] = platform === "darwin" ? ["command"] : ["control"];
+  const modifiers: ReloadModifier[] = [...primary, ...(withShift ? (["shift"] as ReloadModifier[]) : [])];
+  return {
+    type: "keyDown",
+    keyCode: "R",
+    modifiers,
+  } as KeyboardInputEvent;
+}
+
+const RELOAD_SETTLE_MS = 500;
+
+/**
+ * Packaged reload-shortcut acceptance (GitHub #19). Verifies the installed
+ * application menu has no reload/forceReload/DevTools role, no reload
+ * accelerator and no `viewMenu` (which would reinstate implicit reload
+ * commands), then sends real Cmd+R / Cmd+Shift+R (Ctrl equivalents elsewhere)
+ * key events at the isolated window and asserts zero `did-start-loading`
+ * events and an unchanged DOM sentinel. The listener is always detached.
+ */
+export async function checkReloadProtection(
+  win: ReloadCheckWindow,
+  menu: ReloadMenu | null,
+  platform: NodeJS.Platform,
+): Promise<void> {
+  if (menu === null || !Array.isArray(menu.items)) {
+    throw new Error("Application menu is missing");
+  }
+  const forbidden: string[] = [];
+  for (const item of menu.items) collectForbiddenMenuItems(item, forbidden);
+  if (forbidden.length > 0) {
+    throw new Error(`Reload shortcuts exposed in application menu: ${forbidden.join(", ")}`);
+  }
+
+  win.focus();
+  const sentinel = `anycode-reload-sentinel-${Math.random().toString(36).slice(2)}`;
+  const setExpression = `document.documentElement.dataset.anycodeReloadSentinel = ${JSON.stringify(sentinel)}; ${JSON.stringify(sentinel)}`;
+  const initial = await win.webContents.executeJavaScript(setExpression);
+  if (initial !== sentinel) {
+    throw new Error("Reload sentinel did not stick before key events");
+  }
+
+  let loadStarts = 0;
+  const onLoadStart = (): void => {
+    loadStarts += 1;
+  };
+  win.webContents.on("did-start-loading", onLoadStart);
+  try {
+    for (const withShift of [false, true]) {
+      win.webContents.sendInputEvent(reloadKeyInput(platform, withShift));
+      win.webContents.sendInputEvent({ ...reloadKeyInput(platform, withShift), type: "keyUp" });
+      await new Promise((resolve) => setTimeout(resolve, RELOAD_SETTLE_MS));
+      const current = await win.webContents.executeJavaScript(
+        "document.documentElement.dataset.anycodeReloadSentinel",
+      );
+      if (current !== sentinel) {
+        throw new Error(`Reload shortcut (${withShift ? "Cmd/Ctrl+Shift+R" : "Cmd/Ctrl+R"}) reloaded the window`);
+      }
+      if (loadStarts !== 0) {
+        throw new Error(`Reload shortcut started ${loadStarts} load(s)`);
+      }
+    }
+  } finally {
+    win.webContents.removeListener("did-start-loading", onLoadStart);
+  }
+}
