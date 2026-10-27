@@ -92,7 +92,7 @@ export function RolePickerDialog({
 
   const presets = deriveRolePresets(engines, activeConnectionId ?? "");
   const [draft, setDraft] = useState<RolesDraft>(() =>
-    initialRoles && Object.keys(initialRoles).length > 0 ? toDraft(initialRoles) : toDraft(autoSelectPreset(engines, activeConnectionId ?? "").roles),
+    initialRoles !== undefined ? toDraft(initialRoles) : toDraft(autoSelectPreset(engines, activeConnectionId ?? "").roles),
   );
   const [presetId, setPresetId] = useState<RolePreset["id"]>(() => autoSelectPreset(engines, activeConnectionId ?? "").id);
 
@@ -100,7 +100,7 @@ export function RolePickerDialog({
   // component mounted; `open` flips per first-run attempt).
   useEffect(() => {
     if (open) {
-      setDraft(initialRoles && Object.keys(initialRoles).length > 0 ? toDraft(initialRoles) : toDraft(autoSelectPreset(engines, activeConnectionId ?? "").roles));
+      setDraft(initialRoles !== undefined ? toDraft(initialRoles) : toDraft(autoSelectPreset(engines, activeConnectionId ?? "").roles));
       setPresetId(autoSelectPreset(engines, activeConnectionId ?? "").id);
     }
     const dialog = dialogRef.current;

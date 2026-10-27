@@ -13,11 +13,13 @@ export function resolveProfileRoles(settings: Pick<AnycodeSettings, "roles" | "r
     ?? (settings.roleProfiles ? undefined : settings.roles);
 }
 
-/** First-run editor updates the selected profile once profiles exist. */
-export function rolesPatch(settings: Pick<AnycodeSettings, "roles" | "roleProfiles">, roles: NonNullable<AnycodeSettings["roles"]>): Partial<AnycodeSettings> {
+/** First-run editor updates the profile that actually applies to the project. */
+export function rolesPatch(settings: Pick<AnycodeSettings, "roles" | "roleProfiles">, roles: NonNullable<AnycodeSettings["roles"]>, projectRoot?: string): Partial<AnycodeSettings> {
   if (!settings.roleProfiles) return { roles };
   const registry = settings.roleProfiles;
-  const id = registry.profiles.find((p) => p.id === registry.activeId)?.id ?? "default";
+  const projectId = registry.projects.find((p) => p.projectRoot === projectRoot)?.profileId;
+  const id = registry.profiles.find((p) => p.id === projectId)?.id
+    ?? registry.profiles.find((p) => p.id === registry.activeId)?.id ?? "default";
   const profile = registry.profiles.find((p) => p.id === id);
-  return { roleProfiles: { ...registry, activeId: id, profiles: [...registry.profiles.filter((p) => p.id !== id), { id, name: profile?.name ?? "Default", roles }] } };
+  return { roleProfiles: { ...registry, activeId: projectId === id || registry.profiles.some((p) => p.id === registry.activeId) ? registry.activeId : id, profiles: [...registry.profiles.filter((p) => p.id !== id), { id, name: profile?.name ?? "Default", roles }] } };
 }
