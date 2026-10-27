@@ -16,7 +16,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- : stale-plan reminders count workspace mutations, with a higher DeepSeek threshold.
+- Stale-plan reminders count workspace mutations, with a higher DeepSeek threshold.
 
 ### Fixed
 
@@ -38,7 +38,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - A new session on a DeepSeek connection no longer starts at reasoning effort `low`: the model pill and the New Session picker showed the first level of the model's list, while DeepSeek's own default is `high`. The catalog now records each model's documented default effort (DeepSeek `high`, GLM-5.3 `max`), and a session where the user never picked a level both shows and sends it; an explicit pick still wins and persists.
 - Sessions API `create_session` no longer ignores `model` for the core engine: it now selects the provider connection to open the tab on (by connection id, its label, `providerId/model`, or a model id that connection offers) and runs that model. An unknown or ambiguous value is refused with `invalid_model` and the text lists the connections; without `model` the active connection is used as before.
-- Codex "Sign in with a code" no longer fails instantly for a managed account profile: the device-code request to the Codex server (a real network round trip that takes 0.3–4.7s in practice) was bounded by the 3-second diagnostic timeout, so slower answers looked like a hard sign-in failure and no code was ever shown. A failed Codex sign-in also now says what went wrong instead of only "Sign-in failed. Try again.".
+- Codex "Sign in with a code" no longer fails instantly for a managed account profile: the device-code request to the Codex server (a real network round trip that takes 0.3–4.7s in practice) was bounded by the 3-second diagnostic timeout, so slower answers looked like a hard sign-in failure and no code was ever shown. A failed Codex sign-in also now says what went wrong instead of only "Sign-in failed. Try again."
 - Settings → Roles shows its title and description once: the pane no longer adds a second "Roles" header of its own, and the embedded role editor no longer shows its onboarding header ("Orchestration roles" + "change this later in Settings → Roles").
 
 ## [0.0.44] — 2026-10-26
@@ -56,8 +56,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - OpenAI-compatible servers that don't report prompt caching (e.g. LM Studio) no longer show "Latest cache hit: 0%" — the popover now says "not reported by provider", while providers that do send `cached_tokens` (including a real 0) keep showing actual numbers (GitHub #11).
-- Settings → Plugins now shows disabled managed, project and legacy plugins as OFF and lets you turn them back on; re-enabled legacy plugins can run their approved background services (, GitHub #13).
-- Replace key on a custom endpoint now saves the new key and resets stale health/quota; refusals explain how to retry. Clear key marks the shared endpoint as not needing a key, applying to all its connections (, GitHub #10).
+- Settings → Plugins now shows disabled managed, project and legacy plugins as OFF and lets you turn them back on; re-enabled legacy plugins can run their approved background services (GitHub #13).
+- Replace key on a custom endpoint now saves the new key and resets stale health/quota; refusals explain how to retry. Clear key marks the shared endpoint as not needing a key, applying to all its connections (GitHub #10).
 
 ## [0.0.43] — 2026-10-26
 
@@ -191,7 +191,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   update checks. Official index signatures, archive hashes and safe extraction
   are verified before anything lands. Until the production signing key exists,
   the official channel shows "not configured". See `docs/user/plugins.md`.
-- Plugin manifest v1 groundwork (, stage 1 core): plugins can
+- Plugin manifest v1 groundwork (stage 1 core): plugins can
   declare `displayName`, `publisher`, `author`, `homepage`, `license`, an
   `engines.anycode` compatibility range (a plugin needing a newer AnyCode
   stays installed but inactive, with the reason visible), and a `workflows`
