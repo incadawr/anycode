@@ -8351,7 +8351,7 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
     }
   });
 
-  it("foreign engine: session does not manufacture usage records", async () => {
+  it("foreign engine: records native child as unpriced without manufacturing parent usage", async () => {
     const { sink, records } = recordingSink();
     const h = createHarness({
       steps: [usageStep({ inputTokens: 10, outputTokens: 4, totalTokens: 14 }, "one")],
@@ -8390,6 +8390,7 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
       async *runTurn(): AsyncIterable<AgentEvent> {
         yield { type: "turn_start", turn: 1 };
         yield { type: "finish", finishReason: "stop", usage: { inputTokens: 99, outputTokens: 9, totalTokens: 108 } };
+        yield { type: "subagent_start", toolCallId: "native-child", agentType: "codex subagent", description: "child", engine: "codex" };
         yield { type: "turn_end", turn: 1, finishReason: "stop" };
         yield { type: "loop_end", reason: "completed", turns: 1 };
       },
@@ -8403,7 +8404,9 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
       h2.send({ type: "user_message", requestId: "r1", text: "go" });
       await h2.waitFor((m): m is HostToUiMessage => m.type === "agent_event" && m.event.type === "loop_end");
       await h2.flush();
-      expect(records).toHaveLength(0);
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ subagentId: "codex-native:native-child", finishReason: "unknown" });
+      expect(records[0]?.costUsd).toBeUndefined();
     } finally {
       h2.close();
     }

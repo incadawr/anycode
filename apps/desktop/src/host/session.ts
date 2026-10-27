@@ -4574,6 +4574,13 @@ export class Session {
           }
           continue;
         }
+        // Native Codex collab children do not have AnyCode session rows or
+        // separate usage reports. Keep their cost explicitly unknown instead
+        // of presenting the parent as having no children.
+        if (this.engine.id === "codex" && event.type === "subagent_start" && event.agentType === "codex subagent") {
+          const childId = `codex-native:${event.toolCallId}`;
+          this.usageAudit?.sink.record({ turnId: childId, subagentId: childId, step: 1, model: event.model, finishReason: "unknown", transportRetries: 0 });
+        }
         this.captureSnapshotPath(event);
         this.previewArtifacts.observeStart(event);
         const wireEvent = sanitizeAgentEvent(event);
