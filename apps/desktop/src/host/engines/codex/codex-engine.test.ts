@@ -1571,6 +1571,16 @@ describe("TASK.39 — posture enforcement on every turn (cut §2(k).1)", () => {
     expect(engine.snapshot()).toEqual({ model: "gpt-native", activePresetId: "ask" });
   });
 
+  it("attributes usage to the applied model until the next turn accepts a pending selection", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await createNativeCodexSession(server, "/work", undefined, undefined, { model: "gpt-5.6-sol", origin: "draft" });
+    expect(engine.usageModel()).toBe("gpt-5.6-sol");
+    expect(engine.selectModel("gpt-5.4-mini")).toMatchObject({ ok: true });
+    expect(engine.usageModel()).toBe("gpt-5.6-sol");
+    await runTurn(server, engine);
+    expect(engine.usageModel()).toBe("gpt-5.4-mini");
+  });
+
   it("re-resolves the effort for the switched-to model and restores the remembered value when switching back", async () => {
     const server = new FakeAppServer();
     // gpt-5.4-mini advertises ONLY "medium"; the thread's effective effort is "high".

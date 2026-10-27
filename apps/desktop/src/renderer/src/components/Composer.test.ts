@@ -27,6 +27,7 @@ import {
   formatUsageAuditLines,
   formatUsageCostLines,
   formatUsageAuditStepRow,
+  shouldRefreshUsageAudit,
   hasSendableDraft,
   insertDraftText,
   quotaWindowLabel,
@@ -536,14 +537,31 @@ describe("formatUsageAuditStepRow (Taskana 4083 / TASK.34)", () => {
   it("omits cached/retry parts when undefined/0", () => {
     const base = { turnId: "t1", createdAt: 1, finishReason: "stop" };
     expect(formatUsageAuditStepRow({ ...base, step: 1, inputTokens: 10, outputTokens: 4, transportRetries: 0 })).toBe(
-      "step 1 · in 10 · out 4",
+      "step 1 · in 10 · out 4 · cost Price unknown",
     );
     expect(
       formatUsageAuditStepRow({ ...base, step: 2, inputTokens: 85_900, cachedInputTokens: 85_400, outputTokens: 500, transportRetries: 2 }),
-    ).toBe("step 2 · in 85.9K · cached 85.4K · out 500 · retry 2");
+    ).toBe("step 2 · in 85.9K · cached 85.4K · out 500 · retry 2 · cost Price unknown");
+  });
+
+  it("shows each stored step's price or subscription without inventing a price", () => {
+    const step = { turnId: "t", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0 };
+    expect(formatUsageAuditStepRow({ ...step, costUsd: 0.2 })).toBe("step 1 · cost ≈ $0.2000");
+    expect(formatUsageAuditStepRow({ ...step, priceBasisId: "subscription" })).toBe("step 1 · cost By subscription");
+    expect(formatUsageAuditStepRow(step)).toBe("step 1 · cost Price unknown");
   });
 });
 
+
+describe("visible cost refresh", () => {
+  it("refreshes after a turn or compaction only while the popover is open", () => {
+    expect(shouldRefreshUsageAudit(true, "running", "idle")).toBe(true);
+    expect(shouldRefreshUsageAudit(true, "compacting", "idle")).toBe(true);
+    expect(shouldRefreshUsageAudit(false, "running", "idle")).toBe(false);
+    expect(shouldRefreshUsageAudit(true, "idle", "running")).toBe(false);
+    expect(shouldRefreshUsageAudit(true, "idle", "idle")).toBe(false);
+  });
+});
 
 describe("cost presentation", () => {
   it("shows unknown instead of zero and marks incomplete history", () => {
