@@ -363,6 +363,7 @@ export interface WireUsageAuditTotals {
   costUsd?: number;
   cacheSavingsUsd?: number;
   unknownSavingsSteps?: number;
+  priceBasisIds?: string[];
   unpricedSteps?: number;
   subscriptionSteps?: number;
   subagentCostUsd?: number;
@@ -1117,7 +1118,7 @@ export const setModeSchema = z
 
 export const setReasoningEffortSchema = z.object({
   type: z.literal("set_reasoning_effort"),
-  effort: z.enum(["off", "low", "medium", "high", "max"]),
+  effort: z.enum(["off", "low", "medium", "high", "xhigh", "max"]),
 }).strict();
 
 // Taskana 4704 §3.7: untrusted set_orchestrate. Mirror of setModeSchema —

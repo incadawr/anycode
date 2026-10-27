@@ -97,14 +97,14 @@ describe("reasoningRequestOptions", () => {
       "Z.AI (GLM)",
     );
     expect(high.maxOutputTokens).toBe(115_072);
-    expect(high.maxOutputTokens! + high.providerOptions!.anthropic.thinking!.budgetTokens).toBe(131_072);
+    expect(high.maxOutputTokens! + (high.providerOptions!.anthropic.thinking as { type: "enabled"; budgetTokens: number }).budgetTokens).toBe(131_072);
 
     const max = reasoningRequestOptions(
       { ...baseRequest, maxOutputTokens: 131_072, reasoningEffort: "max" },
       "Z.AI (GLM)",
     );
     expect(max.maxOutputTokens).toBe(99_072);
-    expect(max.maxOutputTokens! + max.providerOptions!.anthropic.thinking!.budgetTokens).toBe(131_072);
+    expect(max.maxOutputTokens! + (max.providerOptions!.anthropic.thinking as { type: "enabled"; budgetTokens: number }).budgetTokens).toBe(131_072);
   });
 
   // TASK 4241 (2026-10-10): DeepSeek declares distinct low/high/max effort
@@ -192,6 +192,18 @@ describe("reasoningRequestOptions — prompt cache options (GitHub #15)", () => 
     ).toEqual({
       maxOutputTokens: 2048,
       providerOptions: { openai: { store: false, reasoningEffort: "max", promptCacheOptions: cache } },
+    });
+  });
+
+  it("preserves caching with GPT-6 reasoning and disabled reasoning", () => {
+    expect(reasoningRequestOptions({ ...baseRequest, reasoningEffort: "high" }, "OpenAI", "openai-responses", cache, "gpt-6-sol")).toEqual({
+      providerOptions: { openai: { store: false, reasoningEffort: "high", forceReasoning: true, promptCacheOptions: cache } },
+    });
+    expect(reasoningRequestOptions({ ...baseRequest, reasoningEffort: "off" }, "OpenAI", "openai-responses", cache, "gpt-6-sol")).toEqual({
+      providerOptions: { openai: { store: false, reasoningEffort: "none", forceReasoning: true, promptCacheOptions: cache } },
+    });
+    expect(reasoningRequestOptions({ ...baseRequest, reasoningEffort: "off" }, "OpenAI", "openai-chat-completions", cache, "gpt-6-sol")).toEqual({
+      providerOptions: { openaiCompatible: { reasoningEffort: "none", prompt_cache_options: cache } },
     });
   });
 
@@ -914,6 +926,10 @@ describe("reasoningRequestOptions — transport branching (TASK.43 §0.7)", () =
   it.each(["low", "medium", "high", "max"] as const)(
     "passes openai-responses effort %s through VERBATIM (no chat-completions-style max->high collapse), alongside store:false",
     (effort) => {
+      // forceReasoning rides along because @ai-sdk/openai decides whether to
+      // emit reasoning.effort from an id-prefix heuristic (o1/o3/o4-mini/gpt-5*)
+      // — the GPT-6 ids the catalog now ships fall outside it, and without the
+      // flag the SDK drops the effort with an "unsupported" warning.
       expect(
         reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 4096, reasoningEffort: effort }, "OpenAI", "openai-responses"),
       ).toEqual({

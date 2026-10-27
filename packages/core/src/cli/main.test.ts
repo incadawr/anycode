@@ -940,7 +940,7 @@ describe("CLI extensions wiring (design slice-3.3-cut.md §6/slice-3.4-cut.md §
       env: {
         ANYCODE_API_KEY: "test-key",
         ANYCODE_BASE_URL: "https://api.z.ai/api/anthropic",
-        ANYCODE_MODEL: "glm-4.5",
+        ANYCODE_MODEL: "glm-4.7",
         ANYCODE_DB_PATH: ":memory:",
         ANYCODE_REPO_MAP: "1",
         ANYCODE_SETTINGS_PATH: isolatedSettingsPath(),
@@ -952,14 +952,16 @@ describe("CLI extensions wiring (design slice-3.3-cut.md §6/slice-3.4-cut.md §
       cwd: process.cwd(),
     });
     input.write("first\n");
-    input.write("/model glm-4.6\n");
+    // Switch to a model with a LARGER window (glm-4.7 200k -> glm-5.3's usable
+    // 300k): the re-rendered repo map must grow with it.
+    input.write("/model glm-5.3\n");
     input.write("second\n");
     input.end();
     expect(await runPromise).toBe(0);
 
     expect(port.requests).toHaveLength(2);
-    expect(port.requests[0]!.system).toContain("glm-4.5");
-    expect(port.requests[1]!.system).toContain("glm-4.6");
+    expect(port.requests[0]!.system).toContain("glm-4.7");
+    expect(port.requests[1]!.system).toContain("glm-5.3");
     expect(port.requests[1]!.system!.length).toBeGreaterThan(port.requests[0]!.system!.length);
     expect(discover).toHaveBeenCalledOnce();
   });
@@ -1961,13 +1963,13 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
     expect(text).toContain("[model] glm-4.6");
     // TASK.113: the refreshed Z.AI catalog line, fresh-first.
     expect(text).toContain(
-      "[model] provider: Z.AI (GLM) — models: glm-5.3, glm-5.3-flash, glm-5.2, glm-5.1, glm-5, glm-5-turbo, glm-4.7, glm-4.6, glm-4.5, glm-4.5-air (switch: /model <id>)",
+      "[model] provider: Z.AI (GLM) — models: glm-5.3, glm-5.3-flash, glm-5.3-flashx, glm-5.2, glm-5.1, glm-5, glm-4.7, glm-4.6 (switch: /model <id>)",
     );
     // /model show never reaches the model.
     expect(modelPort.calls).toBe(0);
   });
 
-  it("scenario 5: /model glm-4.5 with a factory routes the next turn through the new port and persists session.model", async () => {
+  it("scenario 5: /model glm-4.7 with a factory routes the next turn through the new port and persists session.model", async () => {
     const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
@@ -1986,20 +1988,20 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
       cwd: workspace,
     });
 
-    input.write("/model glm-4.5\n");
+    input.write("/model glm-4.7\n");
     input.write("hello there\n");
     input.write("/quit\n");
 
     expect(await runPromise).toBe(0);
     const text = getText();
-    expect(text).toContain("[model] now glm-4.5");
-    // The turn AFTER the switch runs through the factory-built glm-4.5 port.
-    expect(text).toContain("from-glm-4.5");
+    expect(text).toContain("[model] now glm-4.7");
+    // The turn AFTER the switch runs through the factory-built glm-4.7 port.
+    expect(text).toContain("from-glm-4.7");
     // touchSession persisted the new model (sqlite is synchronous).
-    expect(await readSessionModel(dbPath, workspace)).toBe("glm-4.5");
+    expect(await readSessionModel(dbPath, workspace)).toBe("glm-4.7");
   });
 
-  it("scenario 6: /model glm-4.5 with an injected port but NO factory refuses; the model is unchanged", async () => {
+  it("scenario 6: /model glm-4.7 with an injected port but NO factory refuses; the model is unchanged", async () => {
     const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
@@ -2016,7 +2018,7 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
       cwd: workspace,
     });
 
-    input.write("/model glm-4.5\n");
+    input.write("/model glm-4.7\n");
     input.write("/model\n");
     input.write("/quit\n");
 
@@ -2119,7 +2121,7 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
         { type: "start" } as ModelStreamEvent,
         {
           type: "tool_call",
-          toolCall: { id: "call-1", name: "Agent", input: { agent_type: "general-purpose", description: "delegate", prompt: "do it", model: "glm-4.5" } },
+          toolCall: { id: "call-1", name: "Agent", input: { agent_type: "general-purpose", description: "delegate", prompt: "do it", model: "glm-4.7" } },
         } as ModelStreamEvent,
         { type: "finish", finishReason: "tool_calls", usage: {} } as ModelStreamEvent,
       ],
@@ -2154,9 +2156,9 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
     expect(await runPromise).toBe(0);
     const text = getText();
     // The child ran (subagent events surfaced) and its final text came from the
-    // factory-built glm-4.5 port (the tool result body).
+    // factory-built glm-4.7 port (the tool result body).
     expect(text).toContain("[subagent call-1] start: general-purpose");
-    expect(text).toContain("child-from-glm-4.5");
+    expect(text).toContain("child-from-glm-4.7");
     expect(text).not.toContain("is not supported in this host");
   });
 
@@ -2166,7 +2168,7 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
         { type: "start" } as ModelStreamEvent,
         {
           type: "tool_call",
-          toolCall: { id: "call-1", name: "Agent", input: { agent_type: "general-purpose", description: "delegate", prompt: "do it", model: "glm-4.5" } },
+          toolCall: { id: "call-1", name: "Agent", input: { agent_type: "general-purpose", description: "delegate", prompt: "do it", model: "glm-4.7" } },
         } as ModelStreamEvent,
         { type: "finish", finishReason: "tool_calls", usage: {} } as ModelStreamEvent,
       ],
@@ -2200,7 +2202,7 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
 
     expect(await runPromise).toBe(0);
     const text = getText();
-    expect(text).toContain('Agent: model override "glm-4.5" is not supported in this host; retry without the model field.');
+    expect(text).toContain('Agent: model override "glm-4.7" is not supported in this host; retry without the model field.');
     // The error returns BEFORE the semaphore/spawn, so no subagent ever starts.
     expect(text).not.toContain("[subagent call-1] start");
   });
@@ -2323,11 +2325,11 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
     });
 
     input.write("/model\n");
-    input.write("/model glm-4.5\n");
+    input.write("/model glm-4.7\n");
     input.write("/quit\n");
 
     expect(await runPromise).toBe(0);
-    expect(getText()).toContain("[model] now glm-4.5");
+    expect(getText()).toContain("[model] now glm-4.7");
     // Neither the show nor the switch runs a turn ⇒ zero base-port calls.
     expect(modelPort.calls).toBe(0);
   });
@@ -2354,7 +2356,7 @@ function findContextEventIndex(text: string, budgetTokens: number): number {
 }
 
 describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
-  it("scenario 1: boot on a 128k catalog model (z-ai/glm-4.5) reports context_usage budgetTokens 104000 — the overflow-fix number", async () => {
+  it("scenario 1: boot on a catalogued, quality-capped window (z-ai/glm-5.3: 1M advertised, 300k usable) reports context_usage budgetTokens 276000 — the overflow-fix number", async () => {
     const input = new PassThrough();
     const output = new PassThrough();
     const getText = collectOutput(output);
@@ -2363,7 +2365,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
       argv: [],
       env: {
         ANYCODE_API_KEY: "test-key",
-        ANYCODE_MODEL: "glm-4.5",
+        ANYCODE_MODEL: "glm-5.3",
         ANYCODE_BASE_URL: "https://api.z.ai/api/anthropic",
         ANYCODE_DB_PATH: ":memory:",
       ANYCODE_SETTINGS_PATH: isolatedSettingsPath(),
@@ -2381,14 +2383,15 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
     expect(await runPromise).toBe(0);
     const text = getText();
     // The turn's context_usage event carries the catalog-resolved denominator.
-    expect(text).toContain("/104000 tokens");
-    // /context's own snapshot agrees: 128k window, 91000 auto-compact threshold
-    // (161920 would be the pre-6.4 defect — see scenario 3 below for that number).
-    expect(text).toContain("[context] window 128000 — output reserve 24000 — auto-compact at 91000");
+    expect(text).toContain("/276000 tokens");
+    // /context's own snapshot agrees: the catalog's usable 300k window (not the
+    // 1M the model advertises), auto-compacting at 253920 — never the
+    // 200k-default 161920 the pre-6.4 defect produced.
+    expect(text).toContain("[context] window 300000 — output reserve 24000 — auto-compact at 253920");
     expect(text).not.toContain("auto-compact at 161920");
   });
 
-  it("scenario 2: /model glm-4.5 on a z-ai boot re-budgets between turns — 200k (176000) becomes 128k (104000); /context shows both windows before/after", async () => {
+  it("scenario 2: /model glm-4.7 on a z-ai boot re-budgets between turns — 300k (276000) becomes 200k (176000); /context shows both windows before/after", async () => {
     const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
@@ -2398,7 +2401,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
       argv: [],
       env: {
         ANYCODE_API_KEY: "test-key",
-        ANYCODE_MODEL: "glm-4.6",
+        ANYCODE_MODEL: "glm-5.3",
         ANYCODE_BASE_URL: "https://api.z.ai/api/anthropic",
         ANYCODE_DB_PATH: dbPath,
       ANYCODE_SETTINGS_PATH: join(dirname(dbPath), "settings.json"),
@@ -2414,7 +2417,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
 
     input.write("/context\n");
     input.write("hi\n");
-    input.write("/model glm-4.5\n");
+    input.write("/model glm-4.7\n");
     input.write("/context\n");
     input.write("hello again\n");
     input.write("/quit\n");
@@ -2422,26 +2425,26 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
     expect(await runPromise).toBe(0);
     const text = getText();
 
-    // /context BEFORE the switch: boot window is the 200k catalog model (glm-4.6).
-    const beforeIdx = text.indexOf("[context] window 200000 — output reserve 24000 — auto-compact at 161920");
+    // /context BEFORE the switch: the boot model's usable 300k window.
+    const beforeIdx = text.indexOf("[context] window 300000 — output reserve 24000 — auto-compact at 253920");
     expect(beforeIdx).toBeGreaterThanOrEqual(0);
-    // The turn immediately after boot carries the SAME 200k-model denominator
+    // The turn immediately after boot carries the SAME denominator
     // (the context_usage EVENT line, not /context's own snapshot line above).
-    const firstTurnIdx = findContextEventIndex(text, 176_000);
+    const firstTurnIdx = findContextEventIndex(text, 276_000);
     expect(firstTurnIdx).toBeGreaterThan(beforeIdx);
 
-    const switchIdx = text.indexOf("[model] now glm-4.5");
+    const switchIdx = text.indexOf("[model] now glm-4.7");
     expect(switchIdx).toBeGreaterThan(firstTurnIdx);
 
-    // /context AFTER the switch: the 128k window, re-budgeted between turns.
-    const afterIdx = text.indexOf("[context] window 128000 — output reserve 24000 — auto-compact at 91000");
+    // /context AFTER the switch: the 200k window, re-budgeted between turns.
+    const afterIdx = text.indexOf("[context] window 200000 — output reserve 24000 — auto-compact at 161920");
     expect(afterIdx).toBeGreaterThan(switchIdx);
 
-    // The turn after the switch ran through the factory-built glm-4.5 port AND
-    // carries the new (104000) denominator — the re-budget took effect.
-    const secondTurnIdx = text.indexOf("from-glm-4.5");
+    // The turn after the switch ran through the factory-built glm-4.7 port AND
+    // carries the new (176000) denominator — the re-budget took effect.
+    const secondTurnIdx = text.indexOf("from-glm-4.7");
     expect(secondTurnIdx).toBeGreaterThan(afterIdx);
-    expect(findContextEventIndex(text, 104_000)).toBeGreaterThan(afterIdx);
+    expect(findContextEventIndex(text, 176_000)).toBeGreaterThan(afterIdx);
   });
 
   it("scenario 3: ANYCODE_CONTEXT_WINDOW overrides the catalog window at boot AND survives a /model switch — the denominator never moves (R7 floor math: 50000 ⇒ 26000)", async () => {
@@ -2454,7 +2457,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
       argv: [],
       env: {
         ANYCODE_API_KEY: "test-key",
-        ANYCODE_MODEL: "glm-4.6",
+        ANYCODE_MODEL: "glm-5.3",
         ANYCODE_BASE_URL: "https://api.z.ai/api/anthropic",
         ANYCODE_CONTEXT_WINDOW: "50000",
         ANYCODE_DB_PATH: dbPath,
@@ -2468,7 +2471,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
     });
 
     input.write("hi\n");
-    input.write("/model glm-4.5\n");
+    input.write("/model glm-4.7\n");
     input.write("hello again\n");
     input.write("/context\n");
     input.write("/quit\n");
@@ -2482,23 +2485,23 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
     // snapshot line, which also happens to share the window below).
     const firstTurnIdx = findContextEventIndex(text, 26_000);
     expect(firstTurnIdx).toBeGreaterThanOrEqual(0);
-    // The switch still ran through the factory-built glm-4.5 port...
-    const switchTextIdx = text.indexOf("from-glm-4.5");
+    // The switch still ran through the factory-built glm-4.7 port...
+    const switchTextIdx = text.indexOf("from-glm-4.7");
     expect(switchTextIdx).toBeGreaterThan(firstTurnIdx);
     // ...but the override wins again inside resolveContextWindow for the
     // post-switch turn ⇒ the SAME (26000) denominator, never the catalog's
-    // 104000 for glm-4.5 — the override is immovable across the switch.
+    // 176000 for glm-4.7 — the override is immovable across the switch.
     // Exactly two context_usage EVENTS carry it (one per turn).
     const eventMatches = [...text.matchAll(/\[context: ~\d+\/26000 tokens \(/g)];
     expect(eventMatches.length).toBe(2);
     expect(eventMatches[1]!.index).toBeGreaterThan(switchTextIdx);
     // /context's own snapshot after the switch agrees: 50000/13000, never the
-    // catalog's 128000/91000 for glm-4.5.
+    // catalog's 200000/161920 for glm-4.7.
     expect(text).toContain("[context] window 50000 — output reserve 24000 — auto-compact at 13000");
-    expect(text).not.toContain("[context] window 128000");
     expect(text).not.toContain("[context] window 200000");
-    expect(findContextEventIndex(text, 104_000)).toBe(-1);
+    expect(text).not.toContain("[context] window 300000");
     expect(findContextEventIndex(text, 176_000)).toBe(-1);
+    expect(findContextEventIndex(text, 276_000)).toBe(-1);
   });
 
   it("scenario 4: a non-catalog model resolves the ASSUMED 8192 window at boot (TASK.142) — loopConfig.context carries it and /context reflects the degraded budget (8192/2048/1884) instead of the DEFAULT 200000", async () => {
@@ -2603,7 +2606,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
     });
 
     input.write("hi\n");
-    input.write("/model glm-4.5\n");
+    input.write("/model glm-4.7\n");
     input.write("hello again\n");
     input.write("/context\n");
     input.write("/quit\n");
@@ -2612,11 +2615,11 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
     const text = getText();
     const bootIdx = findContextEventIndex(text, 26_000);
     expect(bootIdx).toBeGreaterThanOrEqual(0);
-    // glm-4.5's catalog window is 128000 (104000 effective), NOT A's 50000.
-    const afterIdx = findContextEventIndex(text, 104_000);
+    // glm-4.7's catalog window is 200000 (176000 effective), NOT A's 50000.
+    const afterIdx = findContextEventIndex(text, 176_000);
     expect(afterIdx).toBeGreaterThan(bootIdx);
-    expect(text).toContain("[context] window 128000 — output reserve 24000 — auto-compact at 91000");
-    expect(findContextEventIndex(text, 176_000)).toBe(-1);
+    expect(text).toContain("[context] window 200000 — output reserve 24000 — auto-compact at 161920");
+    expect(findContextEventIndex(text, 276_000)).toBe(-1);
   });
 
   it("scenario 7: /model A -> B -> A re-resolves each model's own window — switching back to A reuses the boot pair (TASK.142)", async () => {
@@ -2644,7 +2647,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
     });
 
     input.write("hi\n");
-    input.write("/model glm-4.5\n");
+    input.write("/model glm-4.7\n");
     input.write("after switch\n");
     input.write("/model glm-4.6\n");
     input.write("back to a\n");
@@ -2656,8 +2659,8 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
     // Boot on the bound model A: 50000 - 24000 = 26000.
     const bootIdx = findContextEventIndex(text, 26_000);
     expect(bootIdx).toBeGreaterThanOrEqual(0);
-    // Switch to the catalogued B: B's own 128000 window (104000 effective).
-    const bIdx = findContextEventIndex(text, 104_000);
+    // Switch to the catalogued B: B's own 200000 window (176000 effective).
+    const bIdx = findContextEventIndex(text, 176_000);
     expect(bIdx).toBeGreaterThan(bootIdx);
     // Switch BACK to A: the boot pair applies again — observed as the same
     // applied budget AFTER B's turn, which only holds if A's pair is reused and
@@ -2665,8 +2668,8 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
     expect(findContextEventIndex(text.slice(bIdx), 26_000)).toBeGreaterThanOrEqual(0);
     // The final /context header names A's window, not B's.
     expect(text).toContain("[context] window 50000 — output reserve 24000 — auto-compact at 13000");
-    expect(text).not.toContain("[context] window 128000");
-    expect(findContextEventIndex(text, 176_000)).toBe(-1);
+    expect(text).not.toContain("[context] window 200000");
+    expect(findContextEventIndex(text, 276_000)).toBe(-1);
   });
 });
 
@@ -4124,8 +4127,8 @@ describe("CLI image-input e2e (design slice-6.2-cut.md §6#8c): a live /model sw
       argv: [],
       // No ANYCODE_IMAGE_INPUT override: capability comes straight from the
       // catalog hint. The default anthropic endpoint (no ANYCODE_BASE_URL)
-      // marks claude-opus-4-20250514 image-capable (provider/catalog-data.ts).
-      env: { ...makeTitleTestEnv(dbPath), ANYCODE_MODEL: "claude-opus-4-20250514" },
+      // marks claude-opus-5-5 image-capable (provider/catalog-data.ts).
+      env: { ...makeTitleTestEnv(dbPath), ANYCODE_MODEL: "claude-opus-5-5" },
       input,
       output,
       modelPort: new CountingModelPort(),
@@ -4965,7 +4968,7 @@ describe("CLI boot stub-fallback warning (TASK.170 onStubFallback wiring)", () =
       argv: ["-p", "probe the claude no-stub path"],
       env: {
         ...makeTitleTestEnv(dbPath),
-        ANYCODE_MODEL: "claude-opus-4-20250514",
+        ANYCODE_MODEL: "claude-opus-5-5",
       },
       input: new PassThrough(),
       output,
@@ -5034,7 +5037,7 @@ describe("CLI child-model settings seam (TASK.162 §0b: live SELECTED tier, not 
     ]);
     const childPorts = new Map<string, RecordingTextModelPort>();
     const modelPortFactory = (id: string): ModelPort => {
-      if (id === "glm-4.5") {
+      if (id === "glm-5") {
         return parentAfterSwitch;
       }
       const port = new RecordingTextModelPort(`child-from-${id}`);
@@ -5050,12 +5053,12 @@ describe("CLI child-model settings seam (TASK.162 §0b: live SELECTED tier, not 
       argv: [],
       env: {
         ANYCODE_API_KEY: "test-key",
-        // Real z-ai catalog entry: glm-5.2 accepts off/high/max, glm-4.5 is not
-        // reasoning-capable at all and declares a 32_768 ceiling, glm-5.3-flash
-        // accepts low/high/max and declares its OWN 131_072 ceiling (TASK.170)
-        // — deliberately different from glm-4.5's, so the F6 check below still
+        // Real z-ai catalog entry: glm-5.2 accepts off/high/max, glm-5 carries
+        // no `reasoning` flag at all (the non-reasoning parent this test needs
+        // after the switch), glm-5.3-flash accepts low/high/max and declares its
+        // OWN 131_072 ceiling — so the check below still
         // discriminates "resolved against the child's own model" from
-        // "copied from the parent" instead of the two coinciding by accident.
+        // "copied from the parent".
         ANYCODE_BASE_URL: "https://api.z.ai/api/anthropic",
         ANYCODE_MODEL: "glm-5.2",
         ANYCODE_DB_PATH: ":memory:",
@@ -5071,7 +5074,7 @@ describe("CLI child-model settings seam (TASK.162 §0b: live SELECTED tier, not 
     // The tier is chosen while a reasoning-capable model is live (the CLI
     // refuses a non-"off" tier otherwise), THEN the parent switches away.
     input.write("/reasoning high\n");
-    input.write("/model glm-4.5\n");
+    input.write("/model glm-5\n");
     input.write("delegate a task\n");
     input.write("/quit\n");
 
@@ -5087,7 +5090,7 @@ describe("CLI child-model settings seam (TASK.162 §0b: live SELECTED tier, not 
     expect(childPort!.requests[0]!.reasoningEffort).toBe("high");
     // F6 in the same request: the child re-resolves maxOutputTokens against
     // its OWN model (glm-5.3-flash's declared 131_072, TASK.170) — not the
-    // parent's already-resolved 32_768 (glm-4.5's row). Before the F6 fix
+    // parent's already-resolved 32_768 (glm-4.7's row). Before the F6 fix
     // (child-model-settings.ts) this would have been the parent's 32_768,
     // copied verbatim; the two ceilings are deliberately different catalog
     // values here so equality below can only pass by genuinely re-resolving

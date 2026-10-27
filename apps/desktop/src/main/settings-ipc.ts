@@ -345,7 +345,7 @@ function isPlainObjectLike(value: unknown): value is Record<string, unknown> {
 
 // ── connection CRUD payload schemas (TASK.45 W9) ──
 const transportEnum = z.enum(["anthropic-messages", "openai-chat-completions", "openai-responses"]);
-const reasoningEffortEnum = z.enum(["off", "low", "medium", "high", "max"]);
+const reasoningEffortEnum = z.enum(["off", "low", "medium", "high", "xhigh", "max"]);
 // `.strict()` (custody, §6.5): a CRUD payload carrying a credential field
 // (`apiKey`/`token`/…) is rejected `invalid` — plaintext NEVER crosses IPC on a
 // metadata channel; secrets travel only via `secret-set`.

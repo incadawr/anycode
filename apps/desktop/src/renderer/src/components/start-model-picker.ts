@@ -30,7 +30,7 @@ import { providerModelsFor } from "./ModelPill.js";
 /**
  * The display order for one connection's offered models (TASK.131 D4): the
  * provider catalog's own order — deliberately curated fresh-first
- * (`catalog-data.ts` lays `glm-5.3` before `glm-4.5`) — is authoritative;
+ * (`catalog-data.ts` lays `glm-5.3` before `glm-4.6`) — is authoritative;
  * live-fetched ids the catalog doesn't know append AFTER it, in the
  * provider's own (alphabetical) order. A live list that exactly covers the
  * catalog ids re-orders them back to catalog order; unknown ids never
@@ -365,7 +365,7 @@ export function startModelEffortLevels(
 }
 
 /** The closed effort vocabulary a live-declared level must map to by exact name (Taskana 4118). */
-const START_MODEL_EFFORT_VOCABULARY: readonly string[] = ["off", "low", "medium", "high", "max"];
+const START_MODEL_EFFORT_VOCABULARY: readonly string[] = ["off", "low", "medium", "high", "xhigh", "max"];
 
 /**
  * The provider's own default effort tier for a model (Taskana 4894), or

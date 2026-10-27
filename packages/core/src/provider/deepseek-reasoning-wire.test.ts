@@ -34,6 +34,8 @@ import { createMediaProjectionPort } from "./media-projection.js";
 import type { ModelRequest } from "../ports/model.js";
 import type { ModelStreamEvent } from "../types/events.js";
 import { AiSdkModelPort } from "./model-port.js";
+import { findCatalogEntry } from "./catalog-data.js";
+import { resolveReasoningEffort } from "./capabilities.js";
 import type { AnthropicEndpointConfig } from "./anthropic.js";
 
 /** Minimal valid anthropic SSE so the AiSdkModelPort stream finishes without error. */
@@ -97,6 +99,25 @@ describe("DeepSeek reasoning-effort mapping over the real @ai-sdk/anthropic wire
     };
     return { port: new AiSdkModelPort(config), request };
   }
+
+  it("serializes the saved retired Claude model's resolved effort", async () => {
+    stubFetch();
+    const model = "claude-opus-4-20250514";
+    const effort = resolveReasoningEffort(model, findCatalogEntry("anthropic"), "high");
+    const port = new AiSdkModelPort({ transport: "anthropic-messages", baseUrl: "http://127.0.0.1:9", apiKey: "test-key", model, providerName: "Anthropic", retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+    await drain(port.streamText({ messages: [{ role: "user", content: "hi" }], tools: [], maxOutputTokens: 4096, reasoningEffort: effort }));
+    expect(captured[0]!.body.thinking).toMatchObject({ type: "enabled", budget_tokens: 24576 });
+  });
+
+  it("serializes the resolved Claude effort with adaptive thinking", async () => {
+    stubFetch();
+    const model = "claude-opus-5-5";
+    const effort = resolveReasoningEffort(model, findCatalogEntry("anthropic"), "xhigh");
+    const port = new AiSdkModelPort({ transport: "anthropic-messages", baseUrl: "http://127.0.0.1:9", apiKey: "test-key", model, providerName: "Anthropic", retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+    const events = await drain(port.streamText({ messages: [{ role: "user", content: "hi" }], tools: [], maxOutputTokens: 4096, reasoningEffort: effort }));
+    expect(events.filter((event) => event.type === "error")).toEqual([]);
+    expect(captured[0]!.body).toMatchObject({ thinking: { type: "adaptive" }, output_config: { effort: "xhigh" }, max_tokens: 4096 });
+  });
 
   it("title request sends no tools or thinking and uses low effort (Taskana 4893)", async () => {
     stubFetch();

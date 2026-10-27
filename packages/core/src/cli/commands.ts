@@ -788,7 +788,7 @@ export async function handleSlashCommand(line: string, deps: SlashCommandDeps): 
     case "reasoning": {
       const arg = rest.trim();
       if (arg !== "") {
-        if (arg !== "off" && arg !== "low" && arg !== "medium" && arg !== "high" && arg !== "max") {
+        if (arg !== "off" && arg !== "low" && arg !== "medium" && arg !== "high" && arg !== "xhigh" && arg !== "max") {
           deps.write("[reasoning] usage: /reasoning <off|low|medium|high|max>\n");
           return;
         }

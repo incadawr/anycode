@@ -4560,6 +4560,68 @@ body {
   color: var(--text-3);
 }
 
+/* Keep the total and turn summary on one line, with scrolling for long text. */
+.ctx-popover-cost-block { display: flex; flex-direction: column; min-width: 0; gap: var(--sp-2); }
+.ctx-popover-cost-line { max-width: 100%; min-width: 0; white-space: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.ctx-popover-footnote { min-width: 0; overflow-wrap: anywhere; }
+.ctx-popover-cost-line::-webkit-scrollbar { height: 3px; }
+.ctx-popover-cost-line::-webkit-scrollbar-thumb { border: 0; background: var(--text-ghost); }
+
+/* The popover's headline answer: what this session has cost so far. One step
+   up from the surrounding meta text in size, weight and contrast, so the
+   number reads first and the footnote stays a footnote. */
+.ctx-popover-total {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Its muted suffix ("incl. subagents ≈ $0.0040") — same line, no emphasis. */
+.ctx-popover-total-sub {
+  font-size: var(--fs-2xs);
+  font-weight: 400;
+  color: var(--text-3);
+}
+
+/* Tokens / cache savings / rate basis, folded into one quiet line. */
+.ctx-popover-footnote {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Collapsed per-turn step summary: reads like the surrounding session lines but
+   is a real <button> (aria-expanded) that toggles the full per-step list. */
+.ctx-popover-steps-toggle {
+  display: block;
+  width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: var(--fs-2xs);
+  color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ctx-popover-steps-toggle:hover {
+  color: var(--text-1);
+  text-decoration: underline;
+}
+
+.ctx-popover-steps-toggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ctx-popover-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+}
+
 /* R7 ctx ring (slice-R7-cut §4.1): track = hairline, fill = currentColor so
    the meter's warning/danger classes tint ring and number together. The
    dashoffset transition sweeps between discrete per-turn readings. */

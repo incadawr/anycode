@@ -304,7 +304,7 @@ export function createTabRegistry(
    * an unrecognized level is dropped here instead of riding the wire.
    */
   function asReasoningEffort(value: string): ReasoningEffort | undefined {
-    const levels: readonly string[] = ["off", "low", "medium", "high", "max"];
+    const levels: readonly string[] = ["off", "low", "medium", "high", "xhigh", "max"];
     return levels.includes(value) ? (value as ReasoningEffort) : undefined;
   }
 

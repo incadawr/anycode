@@ -52,10 +52,10 @@ describe("createLanguageModel", () => {
 
   it("builds an OpenAI Responses model for the openai-responses transport", () => {
     const model = createLanguageModel(
-      config({ transport: "openai-responses", baseUrl: "https://api.openai.com/v1", model: "gpt-5.1" }),
+      config({ transport: "openai-responses", baseUrl: "https://api.openai.com/v1", model: "gpt-6.1-sol" }),
     );
     expect(model).toBeDefined();
-    expect(typeof model === "string" ? model : model.modelId).toBe("gpt-5.1");
+    expect(typeof model === "string" ? model : model.modelId).toBe("gpt-6.1-sol");
   });
 
   it("builds an openai-responses model even without an api key (construction is side-effect free)", () => {

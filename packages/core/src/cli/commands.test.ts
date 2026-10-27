@@ -332,18 +332,18 @@ describe("handleSlashCommand — /model (design slice-4.6-cut.md §2.3)", () => 
     const set = vi.fn(() => null);
     const { deps, getText } = makeDeps({
       model: {
-        get: () => "glm-4.5",
+        get: () => "glm-4.7",
         set,
         hints: [
-          { id: "glm-4.5", contextWindow: 128000 },
-          { id: "glm-4.6", contextWindow: 128000 },
+          { id: "glm-4.7", contextWindow: 200000 },
+          { id: "glm-4.6", contextWindow: 200000 },
         ],
         providerName: "Z.AI (GLM)",
       },
     });
     await handleSlashCommand("/model", deps);
     expect(getText()).toBe(
-      "[model] glm-4.5\n[model] provider: Z.AI (GLM) — models: glm-4.5, glm-4.6 (switch: /model <id>)\n",
+      "[model] glm-4.7\n[model] provider: Z.AI (GLM) — models: glm-4.7, glm-4.6 (switch: /model <id>)\n",
     );
     expect(set).not.toHaveBeenCalled();
   });
@@ -358,19 +358,19 @@ describe("handleSlashCommand — /model (design slice-4.6-cut.md §2.3)", () => 
     );
   });
 
-  it("/model glm-4.5 switches via deps.model.set and reports the new id", async () => {
+  it("/model glm-4.7 switches via deps.model.set and reports the new id", async () => {
     const set = vi.fn(() => null);
     const { deps, getText } = makeDeps({ model: { get: () => "old-model", set, hints: [] } });
-    await handleSlashCommand("/model glm-4.5", deps);
-    expect(set).toHaveBeenCalledWith("glm-4.5");
-    expect(getText()).toBe("[model] now glm-4.5\n");
+    await handleSlashCommand("/model glm-4.7", deps);
+    expect(set).toHaveBeenCalledWith("glm-4.7");
+    expect(getText()).toBe("[model] now glm-4.7\n");
   });
 
   it("a refused switch prints the reason verbatim and reports no new model", async () => {
     const set = vi.fn(() => "model switching is unavailable: this session runs on an injected model port");
     const { deps, getText } = makeDeps({ model: { get: () => "old-model", set, hints: [] } });
-    await handleSlashCommand("/model glm-4.5", deps);
-    expect(set).toHaveBeenCalledWith("glm-4.5");
+    await handleSlashCommand("/model glm-4.7", deps);
+    expect(set).toHaveBeenCalledWith("glm-4.7");
     expect(getText()).toBe("[model] model switching is unavailable: this session runs on an injected model port\n");
   });
 

@@ -29,13 +29,13 @@ function responsesConfig(baseUrl: string): EndpointConfig {
     transport: "openai-responses",
     baseUrl,
     apiKey: "test-key",
-    model: "gpt-5.1",
+    model: "gpt-6.1-sol",
     retry: { maxRetries: 0, stallTimeoutMs: 0 },
   };
 }
 
 const OK_FRAMES: Record<string, unknown>[] = [
-  { type: "response.created", response: { id: "resp_1", created_at: 1_700_000_000, model: "gpt-5.1" } },
+  { type: "response.created", response: { id: "resp_1", created_at: 1_700_000_000, model: "gpt-6.1-sol" } },
   { type: "response.output_item.added", output_index: 0, item: { type: "message", id: "msg_1" } },
   { type: "response.output_text.delta", item_id: "msg_1", delta: "ok" },
   { type: "response.output_item.done", output_index: 0, item: { type: "message", id: "msg_1" } },

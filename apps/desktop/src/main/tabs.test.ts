@@ -4967,9 +4967,9 @@ describe("TASK.194 model admission before fork", () => {
       prepareChildConnection: async () => ({ ok: true, release: () => {} }),
     });
     manager.createTab({ workspace: "/ws", sessionId: "model-provider-root", resume: false, connectionId: "z-ai-connection" });
-    hosts[0]!.emit("message", spawnRequest({ model: "claude-opus-4-20250514", provider: "anthropic" }));
+    hosts[0]!.emit("message", spawnRequest({ model: "claude-opus-5-5", provider: "anthropic" }));
     await flush();
-    expect(validateChildModel).toHaveBeenCalledWith("claude-opus-4-20250514", "anthropic-connection");
+    expect(validateChildModel).toHaveBeenCalledWith("claude-opus-5-5", "anthropic-connection");
     expect(hosts).toHaveLength(2);
   });
 });

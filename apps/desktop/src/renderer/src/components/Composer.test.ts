@@ -22,12 +22,11 @@ import {
   formatCtxTokenCount,
   formatQuotaCreditsLine,
   formatQuotaWindowLine,
-  formatSessionTokensLine,
-  formatLatestCacheHitLine,
-  formatUsageAuditLines,
-  formatUsageCostLines,
+  formatUsageCostLedger,
   formatUsageAuditStepRow,
   shouldRefreshUsageAudit,
+  currentTurnSteps,
+  formatTurnStepSummary,
   hasSendableDraft,
   insertDraftText,
   quotaWindowLabel,
@@ -291,36 +290,6 @@ describe("ctxPopoverAnchorFromRect (P7.17 W3-FIX P2-b — resize re-clamp fix)",
   });
 });
 
-describe("formatSessionTokensLine (slice P7.17 · F12 W3)", () => {
-  it("returns null when nothing has finished yet this session", () => {
-    expect(formatSessionTokensLine(null)).toBeNull();
-  });
-
-  it("formats in/out/total with the same compact token formatting", () => {
-    const tokens: SessionTokens = { input: 198_300, output: 4_500, total: 202_800 };
-    expect(formatSessionTokensLine(tokens)).toBe("in 198.3K · out 4.5K · total 202.8K");
-  });
-});
-
-describe("formatLatestCacheHitLine", () => {
-  it("formats the last provider cache-read metric against that request's input", () => {
-    expect(formatLatestCacheHitLine({
-      input: 91_700,
-      output: 99,
-      total: 91_799,
-      latestCacheRead: 87_115,
-      latestCacheInput: 91_700,
-    })).toBe("Latest cache hit: 95% (87.1K/91.7K input)");
-  });
-
-  it("states when the active provider did not report a cache metric", () => {
-    expect(formatLatestCacheHitLine(null)).toBeNull();
-    expect(formatLatestCacheHitLine({ input: 100, output: 5, total: 105 })).toBe(
-      "Latest cache hit: not reported by provider",
-    );
-  });
-});
-
 describe("quotaWindowLabel (TASK.51, cut §6.2 — label derived from windowDurationMins, never hardcoded)", () => {
   it("uses the cut's exact table for the five confirmed durations", () => {
     expect(quotaWindowLabel(60, null)).toBe("1h");
@@ -477,62 +446,6 @@ describe("assumed context window hint (Taskana 4127)", () => {
   });
 });
 
-/**
- * Taskana 4083 / TASK.34: the durable audit lines. The last-step cache % is
- * computed ONLY from that step's own numbers; absent fields render the honest
- * "not reported" line; cost/quota wording never appears (the provider did not
- * report it).
- */
-describe("formatUsageAuditLines (Taskana 4083 / TASK.34)", () => {
-  const step = {
-    turnId: "t1",
-    step: 2,
-    createdAt: 2000,
-    model: "m1",
-    reasoningEffort: "low",
-    finishReason: "stop",
-    transportRetries: 0,
-  };
-
-  it("totals null -> both lines null", () => {
-    expect(formatUsageAuditLines({ lastStep: null, totals: null })).toEqual({ session: null, lastStep: null });
-  });
-
-  it("totals present -> the exact audited-session string", () => {
-    const lines = formatUsageAuditLines({
-      lastStep: null,
-      totals: { input: 85_900, output: 500, total: 86_400, stepsReported: 2, stepsWithCache: 1 },
-    });
-    expect(lines.session).toBe("Audited (2 records, 1 with cache): in 85.9K · out 500 · total 86.4K");
-    expect(lines.lastStep).toBeNull();
-  });
-
-  it("lastStep without cache -> the honest not-reported line", () => {
-    const lines = formatUsageAuditLines({
-      lastStep: { ...step, inputTokens: 10, outputTokens: 4, totalTokens: 14 },
-      totals: null,
-    });
-    expect(lines.lastStep).toBe("Last audited step: cache not reported by provider");
-  });
-
-  it("lastStep with the live 85.4K/85.9K reading -> a 99% cache line from THAT step's own numbers", () => {
-    const lines = formatUsageAuditLines({
-      lastStep: { ...step, inputTokens: 85_900, cachedInputTokens: 85_400, outputTokens: 500, totalTokens: 86_400 },
-      totals: null,
-    });
-    expect(lines.lastStep).toBe("Last audited step: 99% cache (85.4K/85.9K input)");
-  });
-
-  it("never renders cost or quota wording", () => {
-    const lines = formatUsageAuditLines({
-      lastStep: { ...step, inputTokens: 85_900, cachedInputTokens: 85_400, outputTokens: 500, totalTokens: 86_400 },
-      totals: { input: 85_900, output: 500, total: 86_400, stepsReported: 1, stepsWithCache: 1 },
-    });
-    expect(lines.session).not.toMatch(/cost|quota/i);
-    expect(lines.lastStep).not.toMatch(/cost|quota/i);
-  });
-});
-
 describe("formatUsageAuditStepRow (Taskana 4083 / TASK.34)", () => {
   it("omits cached/retry parts when undefined/0", () => {
     const base = { turnId: "t1", createdAt: 1, finishReason: "stop" };
@@ -554,12 +467,16 @@ describe("formatUsageAuditStepRow (Taskana 4083 / TASK.34)", () => {
 
 
 describe("Claude result accounting", () => {
+  it("names unknown and subscription portions of mixed turns", () => {
+    const step = { turnId: "t", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0 };
+    expect(formatTurnStepSummary([{ ...step, priceBasisId: "subscription" }, { ...step, step: 2 }])).toContain("by subscription · some steps price unknown");
+    expect(formatTurnStepSummary([{ ...step, priceBasisId: "subscription" }, { ...step, step: 2, costUsd: 1 }])).toContain("plus subscription");
+  });
   it("labels the reported aggregate as a turn, even when its price is unknown", () => {
     const turn = { turnId: "t", step: 1, createdAt: 1, finishReason: "result", transportRetries: 0, inputTokens: 100, cachedInputTokens: 80, outputTokens: 5 };
-    expect(formatUsageCostLines({ ...turn, costUsd: 0.2 }, null)[0]).toBe("Last turn: ≈ $0.2000");
-    expect(formatUsageCostLines(turn, null)[0]).toBe("Last turn: Price unknown");
-    expect(formatUsageAuditLines({ lastStep: turn, totals: null }).lastStep).toBe("Last audited turn: 80% cache (80/100 input)");
     expect(formatUsageAuditStepRow(turn)).toBe("turn total · in 100 · cached 80 · out 5 · cost Price unknown");
+    // The turn line reads its own cache percentage off such a row.
+    expect(formatTurnStepSummary([{ ...turn, costUsd: 0.2 }])).toBe("This turn: 1 step · ≈ $0.2 · cache 80%");
   });
 });
 
@@ -573,31 +490,171 @@ describe("visible cost refresh", () => {
   });
 });
 
-describe("cost presentation", () => {
-  it("shows unknown instead of zero and marks incomplete history", () => {
-    expect(formatUsageCostLines(null, null).slice(0, 3)).toEqual([
-      "Last step: Price unknown", "Session cost: Price unknown", "Cache saved: Price unknown",
-    ]);
-    expect(formatUsageCostLines(
-      { turnId: "t", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0, costUsd: 0.2 },
-      { input: 1, output: 1, total: 2, stepsReported: 2, stepsWithCache: 1, costUsd: 0.2, cacheSavingsUsd: 0.1, unpricedSteps: 1 },
-    ).slice(0, 3)).toEqual([
-      "Last step: ≈ $0.2000", "Session cost: ≥ $0.2000 · some steps price unknown", "Cache saved: ≈ $0.1000 · some steps price unknown",
-    ]);
+describe("formatUsageCostLedger (one session total, one footnote)", () => {
+  const base = { input: 0, output: 0, total: 0, stepsReported: 2, stepsWithCache: 1 };
+
+  it("leads with the session total and folds tokens, savings and the rate basis into one footnote", () => {
+    const ledger = formatUsageCostLedger(
+      { ...base, input: 142_800, output: 536, total: 143_336, costUsd: 0.0053, cacheSavingsUsd: 0.0378 },
+      { input: 142_800, output: 536, total: 143_336 } as SessionTokens,
+    );
+    expect(ledger).toEqual({
+      total: "Spent in this session: ≈ $0.0053",
+      subagentSuffix: null,
+      footnote: "Tokens in 142.8K · out 536 · cache saved ≈ $0.0378 · estimated rates",
+    });
+  });
+
+  it("distinguishes short-context estimates from provider-reported costs", () => {
+    expect(formatUsageCostLedger({ ...base, costUsd: 1, priceBasisIds: ["gpt-6.1-sol-openai-2026-10-27"] }, null).footnote).toContain("short-context rate estimates");
+    expect(formatUsageCostLedger({ ...base, costUsd: 1, priceBasisIds: ["claude-cli-reported"] }, null).footnote).toBeNull();
+    expect(formatUsageCostLedger({ ...base, costUsd: 1, priceBasisIds: ["deepseek-v4-pro-deepseek-peak-2026-10-27"] }, null).footnote).toContain("peak-rate estimates");
+  });
+
+  it("shows an honest unknown instead of inventing a price", () => {
+    expect(formatUsageCostLedger(null, null)).toEqual({
+      total: "Spent in this session: Price unknown",
+      subagentSuffix: null,
+      footnote: null,
+    });
+    // Tokens known, nothing priced: the tokens still render, no estimate claim.
+    expect(formatUsageCostLedger(null, { input: 1_000, output: 20, total: 1_020 })).toEqual({
+      total: "Spent in this session: Price unknown",
+      subagentSuffix: null,
+      footnote: "Tokens in 1K · out 20",
+    });
+  });
+
+  it("marks a lower bound when any parent or child step is unpriced", () => {
+    expect(formatUsageCostLedger({ ...base, costUsd: 0.2, unpricedSteps: 1 }, null).total)
+      .toBe("Spent in this session: ≥ $0.2000 · some steps price unknown");
+    // An unpriced CHILD step makes the session figure a bound too.
+    expect(formatUsageCostLedger({ ...base, costUsd: 0.2, subagentCount: 1, subagentUnpriced: 1 }, null).total)
+      .toBe("Spent in this session: ≥ $0.2000 · some steps price unknown");
+  });
+
+  it("keeps the subscription wording, alone and mixed", () => {
+    expect(formatUsageCostLedger({ ...base, subscriptionSteps: 1 }, null).total)
+      .toBe("Spent in this session: By subscription");
+    expect(formatUsageCostLedger({ ...base, subscriptionSteps: 1, unpricedSteps: 1 }, null).total)
+      .toBe("Spent in this session: By subscription · some steps price unknown");
+    expect(formatUsageCostLedger({ ...base, costUsd: 0.2, subscriptionSteps: 1 }, null).total)
+      .toBe("Spent in this session: ≈ $0.2000 · plus subscription");
+  });
+
+  it("adds the subagent share to the total and names it in a muted suffix", () => {
+    const ledger = formatUsageCostLedger(
+      { ...base, costUsd: 0.0053, subagentCostUsd: 0.004, subagentCount: 2 },
+      null,
+    );
+    // The total INCLUDES the children: 0.0053 + 0.0040.
+    expect(ledger.total).toBe("Spent in this session: ≈ $0.0093");
+    expect(ledger.subagentSuffix).toBe("incl. subagents ≈ $0.0040");
+  });
+
+  it("keeps the native-Claude caveat beside the number it qualifies", () => {
+    expect(
+      formatUsageCostLedger({ ...base, costUsd: 0.5, subagentCostUsd: 0.25, subagentCount: 1, subagentIncludedInReportedCost: true }, null)
+        .subagentSuffix,
+    ).toBe("incl. subagents ≈ $0.2500 · native Claude costs may already be included");
+  });
+
+  it("names an unpriced or subscription subagent share without inventing one", () => {
+    expect(formatUsageCostLedger({ ...base, costUsd: 0.5, subagentCount: 1, subagentUnpriced: 1 }, null))
+      .toMatchObject({ subagentSuffix: "incl. subagents price unknown" });
+    expect(formatUsageCostLedger({ ...base, costUsd: 0.5, subagentCount: 1, subagentSubscription: 1 }, null))
+      .toMatchObject({ total: "Spent in this session: ≈ $0.5000 · plus subscription", subagentSuffix: "incl. subagents by subscription" });
+  });
+
+  it("says nothing about subagents when the session has none", () => {
+    expect(formatUsageCostLedger({ ...base, costUsd: 0.2, subagentCount: 0 }, null).subagentSuffix).toBeNull();
+    expect(formatUsageCostLedger({ ...base, costUsd: 0.2 }, null).subagentSuffix).toBeNull();
+  });
+
+  it("flags partly-unknown cache savings inside the same footnote", () => {
+    expect(
+      formatUsageCostLedger({ ...base, costUsd: 0.2, cacheSavingsUsd: 0.1, unknownSavingsSteps: 1 }, null).footnote,
+    ).toBe("cache saved ≈ $0.1000 · some steps savings unknown · estimated rates");
+  });
+
+  it("stays at most three lines collapsed: total (+ its suffix), turn, footnote", () => {
+    const ledger = formatUsageCostLedger({ ...base, costUsd: 0.2, subagentCostUsd: 0.1, subagentCount: 1 }, null);
+    // Exactly the three fields the render maps onto those three lines.
+    expect(Object.keys(ledger).sort()).toEqual(["footnote", "subagentSuffix", "total"]);
   });
 });
 
-it("renders subscription and separate child cost", () => {
-  const totals = { input: 0, output: 0, total: 0, stepsReported: 1, stepsWithCache: 0, subscriptionSteps: 1, subagentCount: 2, subagentCostUsd: 0.25, subagentUnpriced: 1 };
-  const lines = formatUsageCostLines({ turnId: "t", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0, priceBasisId: "subscription" }, totals);
-  expect(lines[0]).toBe("Last step: By subscription");
-  expect(lines[1]).toBe("Session cost: By subscription");
-  expect(lines[4]).toBe("Subagents: ≥ $0.2500 · some steps price unknown");
+describe("currentTurnSteps (ctx popover: one turn at a time)", () => {
+  // The host sends `usage_audit` newest-first (pushUsageAudit reverses the last
+  // 50 stored rows), so a previous turn's tail sits directly under the new
+  // turn's first step. These rows reproduce the reported defect: turn b's
+  // steps 1,2 followed by turn a's steps 20,21.
+  const list = [
+    { turnId: "b", step: 2, createdAt: 50, finishReason: "result", transportRetries: 0 },
+    { turnId: "b", step: 1, createdAt: 40, finishReason: "stop", transportRetries: 0 },
+    { turnId: "a", step: 21, createdAt: 30, finishReason: "stop", transportRetries: 0 },
+    { turnId: "a", step: 20, createdAt: 20, finishReason: "stop", transportRetries: 0 },
+  ];
+
+  it("returns only the newest turn's steps, in step order", () => {
+    expect(currentTurnSteps(list).map((step) => `${step.turnId}:${step.step}`)).toEqual(["b:1", "b:2"]);
+  });
+
+  it("never lets a previous turn's step leak into the new turn", () => {
+    const steps = currentTurnSteps(list);
+    expect(steps.every((step) => step.turnId === "b")).toBe(true);
+    expect(steps.some((step) => step.step === 21)).toBe(false);
+  });
+
+  it("identifies the current turn by its newest timestamp, not by list position", () => {
+    // Same rows in oldest-first order: still turn b, still ascending.
+    expect(currentTurnSteps([...list].reverse()).map((step) => `${step.turnId}:${step.step}`)).toEqual(["b:1", "b:2"]);
+  });
+
+  it("returns nothing for an unloaded or empty list", () => {
+    expect(currentTurnSteps(null)).toEqual([]);
+    expect(currentTurnSteps([])).toEqual([]);
+  });
 });
 
-it("identifies Claude native child costs as unattributed and possibly included", () => {
-  const totals = { input: 0, output: 0, total: 0, stepsReported: 1, stepsWithCache: 0, costUsd: 0.5, subagentCount: 1, subagentUnpriced: 1, subagentIncludedInReportedCost: true };
-  const lines = formatUsageCostLines(null, totals);
-  expect(lines[1]).toBe("Session cost: ≈ $0.5000");
-  expect(lines[4]).toBe("Subagents: Price unknown · native Claude costs may already be included");
+describe("formatTurnStepSummary (collapsed per-turn line)", () => {
+  const step = (overrides: Partial<Parameters<typeof formatUsageAuditStepRow>[0]> = {}) => ({
+    turnId: "t",
+    step: 1,
+    createdAt: 1,
+    finishReason: "stop",
+    transportRetries: 0,
+    ...overrides,
+  });
+
+  it("labels itself as THIS turn: '<n> steps · ≈ <cost> · cache <pct>%'", () => {
+    const steps = [
+      step({ step: 1, inputTokens: 85_900, cachedInputTokens: 85_400, outputTokens: 100, costUsd: 0.002 }),
+      step({ step: 2, inputTokens: 86_000, cachedInputTokens: 85_500, outputTokens: 100, costUsd: 0.002 }),
+    ];
+    // The "This turn:" prefix is what stops this figure being read as the
+    // session total printed directly above it.
+    expect(formatTurnStepSummary(steps)).toBe("This turn: 2 steps · ≈ $0.004 · cache 99%");
+  });
+
+  it("says 'step' for a single-step turn and drops the cache part when nobody reported it", () => {
+    expect(formatTurnStepSummary([step({ inputTokens: 10, outputTokens: 4, costUsd: 1.5 })]))
+      .toBe("This turn: 1 step · ≈ $1.5");
+  });
+
+  it("never invents a cost or a cache percentage", () => {
+    expect(formatTurnStepSummary([step({ inputTokens: 10, outputTokens: 4 })])).toBe("This turn: 1 step · price unknown");
+    expect(formatTurnStepSummary([step({ inputTokens: 10, outputTokens: 4, priceBasisId: "subscription" })]))
+      .toBe("This turn: 1 step · by subscription");
+    // A turn mixing priced and unpriced rows is a lower bound, marked as such.
+    expect(formatTurnStepSummary([step({ costUsd: 0.002 }), step({ step: 2 })]))
+      .toBe("This turn: 2 steps · ≥ $0.002 · some steps price unknown");
+    // Cached input without a reported input count cannot yield a percentage.
+    expect(formatTurnStepSummary([step({ cachedInputTokens: 5, costUsd: 0.002 })]))
+      .toBe("This turn: 1 step · ≈ $0.002");
+  });
+
+  it("has no summary at all when there is no current turn", () => {
+    expect(formatTurnStepSummary([])).toBeNull();
+  });
 });

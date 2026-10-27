@@ -3486,13 +3486,8 @@ async function boot(): Promise<void> {
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
     ));
     const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, envConfig.reasoningEffort, liveCapsFor(envConfig.model));
-    // Taskana 4894: with no explicit tier anywhere, the tier this session runs
-    // at is the model's recorded provider default (`bootReasoningEffort`) — NOT
-    // `"off"`. Seeding `selectedEffort` with `"off"` would keep the default out
-    // of the persisted-tier cell, so the first mid-session model switch would
-    // re-resolve from `"off"` and silently drop a level the pill just showed.
-    // An explicit choice (env / connection) still wins, and `"off"` stays `"off"`.
-    selectedEffort = bootReasoningEffort ?? "off";
+    // Preserve explicit selections even when the current model suppresses them.
+    selectedEffort = envConfig.reasoningEffort ?? bootReasoningEffort ?? "off";
     const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry, liveCapsFor(envConfig.model));
     // TASK.162 (F6): the same catalog + env overrides the three boot
     // resolutions above read, packaged once so an Agent-tool `model` override
@@ -4603,11 +4598,9 @@ async function boot(): Promise<void> {
       loop,
       config,
       switchModelImpl,
+      resolveSelectedEffort: (effort) => resolveReasoningEffort(currentModel, catalogEntry, effort, liveCapsFor(currentModel)),
       onBeforeTurn: refreshExtensionProfiles,
-      // TASK.162 (§0b): keeps the host's `selectedEffort` cell equal to the
-      // tier the USER selected. Session maps its own "off" to undefined before
-      // calling, so the cell stores "off" for that case — the same value
-      // resolveReasoningEffort treats as "no effort".
+      // Preserve the selected tier independently of the model-effective tier.
       onReasoningEffortSet: (effort) => {
         selectedEffort = effort ?? "off";
       },

@@ -794,7 +794,7 @@ describe("buildHostEnv — ANYCODE_PROVIDER_TRANSPORT (TASK.43 W5)", () => {
       getSecret: noSecret,
       resolveSelection: async () => ({
         baseUrl: "https://api.openai.com/v1",
-        model: "gpt-5.1",
+        model: "gpt-6.1-sol",
         apiKey: "sk-openai",
         authKind: "api_key",
         defaultTransport: "openai-responses",
@@ -817,7 +817,7 @@ describe("buildHostEnv — ANYCODE_PROVIDER_TRANSPORT (TASK.43 W5)", () => {
       getSecret: noSecret,
       resolveSelection: async () => ({
         baseUrl: "https://api.openai.com/v1",
-        model: "gpt-5.1",
+        model: "gpt-6.1-sol",
         apiKey: "sk-openai",
         authKind: "api_key",
         defaultTransport: "openai-responses",
@@ -1374,7 +1374,7 @@ describe("shouldSkipConnectionHealthBinding (TASK.45 W11 env-override rule)", ()
   });
 
   it("ignores an unrelated override (ANYCODE_MODEL alone does not gate health binding)", () => {
-    expect(shouldSkipConnectionHealthBinding({ ANYCODE_MODEL: "gpt-5.1" })).toBe(false);
+    expect(shouldSkipConnectionHealthBinding({ ANYCODE_MODEL: "gpt-6.1-sol" })).toBe(false);
   });
 });
 

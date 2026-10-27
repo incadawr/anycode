@@ -422,7 +422,7 @@ export interface HarnessOptions {
    */
   switchModel?: (
     id: string,
-    selectedEffort: ReasoningEffort,
+    selectedEffort: ReasoningEffort | undefined,
   ) => { model: string; reasoningEffort: ReasoningEffort; availableEffortLevels?: ReasoningEffort[] };
   /**
    * TASK.117 phase-1 (test-only, causal fault injection): a FileSystemPort

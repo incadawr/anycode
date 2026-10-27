@@ -190,7 +190,7 @@ export const browserSettingsSchema = z
 const transportSchema = z.enum(["anthropic-messages", "openai-chat-completions", "openai-responses"]);
 
 /** Per-model reasoning-effort tiers. */
-const reasoningEffortSchema = z.enum(["off", "low", "medium", "high", "max"]);
+const reasoningEffortSchema = z.enum(["off", "low", "medium", "high", "xhigh", "max"]);
 
 /**
  * Opt-in implicit prompt cache (GitHub #15). Strict on-disk shape: ONLY the

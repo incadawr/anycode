@@ -2330,7 +2330,7 @@ describe("handleSetSecret / handleClearSecret — reset health to unchecked (cut
 
 describe("handleConnectionUpdate — resets health on a significant ENDPOINT field edit only", () => {
   it("changing model/transport/baseUrl resets health to unchecked", async () => {
-    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "glm-4.5" }); // conn-1
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "glm-4.7" }); // conn-1
     const deps = makeDeps({ catalogIds: CATALOG_IDS, now: () => "2026-07-15T03:00:00.000Z" });
     await applyConnectionHealthEvent(deps, "conn-1", { kind: "success" });
 
@@ -2345,11 +2345,11 @@ describe("handleConnectionUpdate — resets health on a significant ENDPOINT fie
   });
 
   it("a label-only edit (or resending the SAME model) leaves health untouched", async () => {
-    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "glm-4.5" }); // conn-1
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "glm-4.7" }); // conn-1
     const deps = makeDeps({ catalogIds: CATALOG_IDS });
     await applyConnectionHealthEvent(deps, "conn-1", { kind: "success" });
 
-    const res = await handleConnectionUpdate(deps, { id: "conn-1", label: "Work", model: "glm-4.5" });
+    const res = await handleConnectionUpdate(deps, { id: "conn-1", label: "Work", model: "glm-4.7" });
     expect(res.ok).toBe(true);
 
     const loaded = await loadSettings(settingsPath);
@@ -3258,7 +3258,7 @@ describe('handleConnectionUpdate — ""-sentinel clears transport (W12-FIX §3)'
   // `invalid`) or the normalize-before-persist step turns this red.
   it('§3.1 update {transport:""} on an explicit transport clears it: no `transport` key on disk, health resets', async () => {
     const deps = makeDeps({ catalogIds: CATALOG_IDS, now: () => "2026-07-15T04:00:00.000Z" });
-    await handleConnectionCreate(deps, { providerId: "z-ai", model: "glm-4.5", transport: "openai-chat-completions" }); // conn-1
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "glm-4.7", transport: "openai-chat-completions" }); // conn-1
     await applyConnectionHealthEvent(deps, "conn-1", { kind: "success" });
 
     const res = await handleConnectionUpdate(deps, { id: "conn-1", transport: "" });
@@ -3280,7 +3280,7 @@ describe('handleConnectionUpdate — ""-sentinel clears transport (W12-FIX §3)'
   // would wrongly reset health here).
   it('§3.2 update {transport:""} when transport was already absent is a health no-op', async () => {
     const deps = makeDeps({ catalogIds: CATALOG_IDS });
-    await handleConnectionCreate(deps, { providerId: "z-ai", model: "glm-4.5" }); // conn-1, no transport
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "glm-4.7" }); // conn-1, no transport
     await applyConnectionHealthEvent(deps, "conn-1", { kind: "success" });
 
     const res = await handleConnectionUpdate(deps, { id: "conn-1", transport: "" });
@@ -3293,7 +3293,7 @@ describe('handleConnectionUpdate — ""-sentinel clears transport (W12-FIX §3)'
   // §3.4 — regress: omitting transport entirely on update keeps the old value.
   it("§3.4 update WITHOUT the transport field keeps the existing transport (regress)", async () => {
     const deps = makeDeps({ catalogIds: CATALOG_IDS });
-    await handleConnectionCreate(deps, { providerId: "z-ai", model: "glm-4.5", transport: "openai-responses" }); // conn-1
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "glm-4.7", transport: "openai-responses" }); // conn-1
     const res = await handleConnectionUpdate(deps, { id: "conn-1", label: "Work" });
     expect(res.ok).toBe(true);
     const loaded = await loadSettings(settingsPath);

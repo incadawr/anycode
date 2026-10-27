@@ -487,8 +487,8 @@ describe("buildModelSelectOptions", () => {
 
 describe("engineModelChoicesToModelList", () => {
   it("maps EngineModelChoice[] down to {id, name?}, using the label as the display name", () => {
-    const choices: EngineModelChoice[] = [{ id: "gpt-5.1", label: "GPT-5.1" }, { id: "gpt-5-mini" }];
-    expect(engineModelChoicesToModelList(choices)).toEqual([{ id: "gpt-5.1", name: "GPT-5.1" }, { id: "gpt-5-mini" }]);
+    const choices: EngineModelChoice[] = [{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol" }, { id: "gpt-5-mini" }];
+    expect(engineModelChoicesToModelList(choices)).toEqual([{ id: "gpt-6.1-sol", name: "GPT-6.1 Sol" }, { id: "gpt-5-mini" }]);
   });
 
   it("maps an empty list to an empty list", () => {
@@ -498,7 +498,7 @@ describe("engineModelChoicesToModelList", () => {
 
 describe("resolveSubagentModelOptions", () => {
   const parentCatalogModels = [{ id: "claude-opus-5", name: "Claude Opus" }];
-  const codexChoices: EngineModelChoice[] = [{ id: "gpt-5.1", label: "GPT-5.1" }];
+  const codexChoices: EngineModelChoice[] = [{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol" }];
 
   it("engine '' (Same as parent): uses the parent's catalog models and the 'Same as parent' label", () => {
     expect(resolveSubagentModelOptions("", parentCatalogModels, {})).toEqual({
@@ -509,7 +509,7 @@ describe("resolveSubagentModelOptions", () => {
 
   it("engine 'codex' with a cached choice list: maps it and uses the 'Default' label", () => {
     expect(resolveSubagentModelOptions("codex", parentCatalogModels, { codex: codexChoices })).toEqual({
-      models: [{ id: "gpt-5.1", name: "GPT-5.1" }],
+      models: [{ id: "gpt-6.1-sol", name: "GPT-6.1 Sol" }],
       inheritLabel: "Default",
     });
   });

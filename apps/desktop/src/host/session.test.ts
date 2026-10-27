@@ -3114,6 +3114,25 @@ describe("Session — authoritative title snapshot (GitHub #19)", () => {
 });
 
 describe("Session — mode changes", () => {
+  it("applies a selected no-reasoning level through the model resolver", async () => {
+    const entry = matchCatalogEntryByBaseUrl(getBuiltinCatalog(), "https://api.openai.com/v1");
+    const config: AgentLoopConfig = {
+      modelPort: new ScriptedModelPort([]), registry: createDefaultToolRegistry(), hooks: new InMemoryHookRunner(),
+      permissionEngine: new RuleAwarePermissionEngine(new ModePermissionEngine(), new SessionPermissionRules()),
+      permissionBroker: new IpcPermissionBroker(() => {}), mode: "build", cwd: "/workspace", reasoningEffort: "high",
+      ports: { fs: new MemFs(), exec: {} as AgentLoopConfig["ports"]["exec"], http: new NodeHttpAdapter(), todos: new InMemoryTodoStore() },
+    };
+    const engine = new CoreEngine({ loop: new AgentLoop(config), config, resolveSelectedEffort: (effort) => resolveReasoningEffort("gpt-6.1-terra", entry, effort) });
+    const h = createHarness({ steps: [], engine, reasoningSupported: true, availableEffortLevels: resolveEffortLevels("gpt-6.1-terra", entry) });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_reasoning_effort", effort: "off" });
+      await h.waitFor((m): m is Of<"reasoning_effort_changed"> => m.type === "reasoning_effort_changed");
+      expect(config.reasoningEffort).toBe("off");
+    } finally { h.close(); }
+  });
+
   it("changes reasoning effort between turns and reports it on the next handshake", async () => {
     const h = createHarness({ steps: [textStep("x"), finishStep()], availableEffortLevels: ["off", "high", "max"] });
     try {
@@ -3697,7 +3716,7 @@ const zAiEntry = matchCatalogEntryByBaseUrl(getBuiltinCatalog(), "https://api.z.
 const scriptedSwitchModel = (
   id: string,
   selectedEffort: Parameters<NonNullable<Parameters<typeof createHarness>[0]["switchModel"]>>[1],
-): { model: string; reasoningEffort: typeof selectedEffort; availableEffortLevels?: (typeof selectedEffort)[] } => {
+): { model: string; reasoningEffort: ReasoningEffort; availableEffortLevels?: ReasoningEffort[] } => {
   const resolvedEffort = resolveReasoningEffort(id, zAiEntry, selectedEffort);
   const availableEffortLevels = resolveEffortLevels(id, zAiEntry);
   return {
@@ -3707,6 +3726,40 @@ const scriptedSwitchModel = (
   };
 };
 const isModelChanged = (m: HostToUiMessage): m is Of<"model_changed"> => m.type === "model_changed";
+
+
+describe("catalog defaults in a fresh session", () => {
+  it.each([
+    ["openai", "gpt-6.1-sol", "gpt-6.1-terra", "medium"],
+    ["anthropic", "claude-opus-5-5", "claude-sonnet-5-5", "medium"],
+    ["anthropic", "claude-sonnet-5-5", "claude-opus-5-5", "high"],
+  ] as const)("shows and carries %s %s default through a model switch", async (provider, initial, next, expected) => {
+    const entry = getBuiltinCatalog().providers.find((item) => item.id === provider)!;
+    const bootEffort = resolveReasoningEffort(initial, entry, undefined);
+    const port = new ScriptedModelPort([textStep("done")]);
+    const config: AgentLoopConfig = {
+      modelPort: port, registry: createDefaultToolRegistry(), hooks: new InMemoryHookRunner(),
+      permissionEngine: new RuleAwarePermissionEngine(new ModePermissionEngine(), new SessionPermissionRules()),
+      permissionBroker: new IpcPermissionBroker(() => {}), mode: "build",
+      ports: { fs: new MemFs(), exec: {} as AgentLoopConfig["ports"]["exec"], http: new NodeHttpAdapter(), todos: new InMemoryTodoStore() },
+      cwd: "/workspace", reasoningEffort: bootEffort,
+    };
+    const engine = new CoreEngine({ loop: new AgentLoop(config), config, switchModelImpl: (id, selected) => {
+      config.reasoningEffort = resolveReasoningEffort(id, entry, selected);
+      return { model: id, reasoningEffort: config.reasoningEffort ?? "off", availableEffortLevels: resolveEffortLevels(id, entry) };
+    } });
+    const h = createHarness({ steps: [], engine, reasoningSupported: true, availableEffortLevels: resolveEffortLevels(initial, entry), selectedEffort: bootEffort });
+    try {
+      h.send({ type: "ui_ready" });
+      expect((await h.waitFor(isHostReady)).reasoningEffort).toBe(expected);
+      h.send({ type: "set_model", model: next });
+      expect((await h.waitFor(isModelChanged)).reasoningEffort).toBe(expected);
+      h.send({ type: "user_message", requestId: "default", text: "hello" });
+      await h.waitUntil(() => port.requests.length === 1);
+      expect(port.requests[0]?.reasoningEffort).toBe(expected);
+    } finally { h.close(); }
+  });
+});
 
 describe("Session — model switch (slice P7.15 · F14)", () => {
   it("switches the model between turns, emits model_changed, and reports it on the next handshake", async () => {
@@ -5556,7 +5609,7 @@ describe("Session — shutdown() admission funnel: exit_worktree / rewind_reques
       steps: [],
       switchModel: (id, effort) => {
         switchCalls += 1;
-        return { model: id, reasoningEffort: effort };
+        return { model: id, reasoningEffort: effort ?? "off" };
       },
     });
     try {
@@ -6927,7 +6980,7 @@ function createTierSeamWiring(bootModel: string): TierSeamWiring {
   const entry = matchCatalogEntryByBaseUrl(getBuiltinCatalog(), "https://api.z.ai/api/anthropic");
   // The host cell: seeded from the boot tier, then kept current by the two
   // writers below and read at spawn time by the resolver closure.
-  let selectedEffort: ReasoningEffort = "off";
+  let selectedEffort: ReasoningEffort | undefined = "off";
   let currentModel = bootModel;
 
   const settingsForChild = buildChildModelSettingsResolver({
@@ -6976,7 +7029,7 @@ function createTierSeamWiring(bootModel: string): TierSeamWiring {
   // the re-budget recipe against the NEW model.
   const switchModelImpl = (
     id: string,
-    selectedTier: ReasoningEffort,
+    selectedTier: ReasoningEffort | undefined,
   ): { model: string; reasoningEffort: ReasoningEffort; availableEffortLevels?: ReasoningEffort[] } => {
     selectedEffort = selectedTier;
     currentModel = id;
@@ -8279,6 +8332,7 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
         reasoningEffort: "off",
         inputTokens: 10,
         cachedInputTokens: undefined,
+        cacheWriteTokens: undefined,
         outputTokens: 4,
         totalTokens: 14,
         finishReason: "stop",
@@ -8431,7 +8485,7 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
       expect(step1.totalTokens).toBe(10);
       expect(step1.transportRetries).toBe(1);
       const s = await usageAudit.summary.summary();
-      expect(s.totals).toEqual({ input: 27, output: 9, total: 36, stepsReported: 2, stepsWithCache: 0 });
+      expect(s.totals).toEqual({ input: 27, output: 9, total: 36, stepsReported: 2, stepsWithCache: 0, unpricedSteps: 2 });
     } finally {
       h.close();
       await adapter.close();
@@ -8473,7 +8527,7 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
       const s = await usageAudit.summary.summary();
       expect(s.steps).toHaveLength(1);
       expect(s.steps[0]!.inputTokens).toBe(10);
-      expect(s.totals).toEqual({ input: 10, output: 4, total: 14, stepsReported: 1, stepsWithCache: 0 });
+      expect(s.totals).toEqual({ input: 10, output: 4, total: 14, stepsReported: 1, stepsWithCache: 0, unpricedSteps: 1 });
     } finally {
       h.close();
       await adapter.close();
@@ -8640,7 +8694,7 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
       const withAudit = h.received.slice(before).filter((m): m is Of<"session_checkpoint"> => isCheckpoint(m) && m.usageAudit !== undefined);
       const checkpoint = withAudit[withAudit.length - 1]!;
       expect(checkpoint.usageAudit!.totalSteps).toBe(1);
-      expect(checkpoint.usageAudit!.totals).toEqual({ input: 10, output: 4, total: 14, stepsReported: 1, stepsWithCache: 0 });
+      expect(checkpoint.usageAudit!.totals).toEqual({ input: 10, output: 4, total: 14, stepsReported: 1, stepsWithCache: 0, unpricedSteps: 1 });
       expect(checkpoint.usageAudit!.lastStep).toMatchObject({ turnId, step: 1, inputTokens: 10, outputTokens: 4, totalTokens: 14, finishReason: "stop" });
     } finally {
       h.close();
@@ -8685,7 +8739,7 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
       expect(reply.steps.map((s) => s.step)).toEqual([2, 1]); // newest-first
       expect(reply.steps[0]!.cachedInputTokens).toBe(85400);
       expect(reply.steps[1]!.cachedInputTokens).toBeUndefined();
-      expect(reply.totals).toEqual({ input: 85910, output: 504, total: 86414, stepsReported: 2, stepsWithCache: 1 });
+      expect(reply.totals).toEqual({ input: 85910, output: 504, total: 86414, stepsReported: 2, stepsWithCache: 1, unpricedSteps: 2 });
       const before2 = h.received.length;
       h.send({ type: "usage_audit_request" });
       await h.waitUntil(() => h.received.slice(before2).some(isUsageAudit));
@@ -8695,6 +8749,19 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
     } finally {
       h.close();
     }
+  });
+
+  it("usage_audit_request retains every step of a long current turn", async () => {
+    const steps = Array.from({ length: 60 }, (_, index) => ({ sessionId: "s", turnId: "current", step: index + 1, createdAt: index + 1, finishReason: "stop", transportRetries: 0 }));
+    const h = createHarness({ steps: [], usageAudit: { sink: recordingSink().sink, summary: fakeSummary(summarizeProviderUsage(steps)) } });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      const before = h.received.length;
+      h.send({ type: "usage_audit_request" });
+      await h.waitUntil(() => h.received.slice(before).some(isUsageAudit));
+      expect(h.received.slice(before).find(isUsageAudit)!.steps.map((step) => step.step)).toEqual(steps.map((step) => step.step).reverse());
+    } finally { h.close(); }
   });
 
   it("usage_audit_request on a session WITHOUT the option: no reply ever (foreign host posture)", async () => {
@@ -9165,6 +9232,10 @@ describe("tapChildPermissions ask identity (Taskana 4821)", () => {
 
 
 describe("durable cost summary", () => {
+  it("retains the unknown count when every parent step is unpriced", () => {
+    const summary = summarizeProviderUsage([{ sessionId: "s", turnId: "t", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0 }]);
+    expect(summary.totals).toMatchObject({ unpricedSteps: 1 });
+  });
   it("sums snapshots while retaining unpriced historical steps", () => {
     const base = { sessionId: "s", turnId: "t", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0 };
     const summary = summarizeProviderUsage([

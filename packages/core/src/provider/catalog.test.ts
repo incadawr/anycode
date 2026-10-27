@@ -98,13 +98,21 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
       modeLabel: "Subscription (kimi.com)",
     });
     expect(kimi?.authOptional).toBeUndefined();
+    // Current kimi.com/coding ids (kimi.com/code/docs/en/kimi-code/models,
+    // checked 2026-10-27); the K3.1 Pro pair is the newest generation and now
+    // leads the list.
     expect(kimi?.models.map((model) => model.id)).toEqual([
+      "k3.1-pro",
+      "k3.1-pro-highspeed",
       "kimi-for-coding",
       "kimi-for-coding-highspeed",
       "k3",
       "k3-256k",
     ]);
-    // Thinking-only models: no "off" tier; k3 mirrors its native low/high/max set.
+    // Thinking-only models: no "off" tier; k3/3.1 mirror their native
+    // low/high/max set and document "default high".
+    expect(kimi?.models.find((model) => model.id === "k3.1-pro")?.effortLevels).toEqual(["low", "high", "max"]);
+    expect(kimi?.models.find((model) => model.id === "k3.1-pro")?.defaultEffort).toBe("high");
     expect(kimi?.models.find((model) => model.id === "kimi-for-coding")?.effortLevels).toEqual(["low", "medium", "high"]);
     expect(kimi?.models.find((model) => model.id === "k3")?.effortLevels).toEqual(["low", "high", "max"]);
     for (const model of kimi?.models ?? []) {
@@ -123,12 +131,10 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
   it("declares per-model effort levels for reasoning-capable models", () => {
     const anthropic = findCatalogEntry("anthropic");
     const zAi = findCatalogEntry("z-ai");
-    expect(anthropic?.models.find((model) => model.id === "claude-sonnet-4-20250514")?.effortLevels).toEqual([
-      "off",
-      "low",
-      "medium",
-      "high",
-    ]);
+    for (const model of anthropic?.models ?? []) {
+      expect(model.reasoning).toBe(true);
+      expect(model.effortLevels).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    }
     expect(zAi?.models.find((model) => model.id === "glm-5.2")?.effortLevels).toEqual(["off", "high", "max"]);
     expect(zAi?.models.find((model) => model.id === "glm-4.6")?.effortLevels).toBeUndefined();
   });
@@ -173,6 +179,7 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
     const flash = findCatalogEntry("z-ai")?.models.find((model) => model.id === "glm-5.3-flash");
     expect(flash).toEqual({
       id: "glm-5.3-flash",
+      pricing: { basisId: "glm-5.3-flash-zai-2026-10-27", input: 0.15, cachedInput: 0.03, cacheWrite: 0.15, output: 0.5 },
       name: "GLM-5.3 Flash",
       contextWindow: 1_000_000,
       usableContextWindow: 300_000,
@@ -208,7 +215,7 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
     expect(deepseek?.models.find((m) => m.id === "deepseek-v4-pro")?.todoReminderEvery).toBe(20);
     expect(flash).toEqual({
       id: "deepseek-flash",
-      pricing: { basisId: "deepseek-flash-peak-owner-2026-10-26", input: 0.3, cachedInput: 0.006, output: 1.2 },
+      pricing: { basisId: "deepseek-flash-deepseek-peak-2026-10-27", input: 0.3, cachedInput: 0.006, output: 1.2 },
       name: "DeepSeek-V4.1-Flash",
       contextWindow: 1_048_576,
       maxOutputTokens: 393_216,
@@ -221,6 +228,7 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
     const pro = deepseek?.models.find((m) => m.id === "deepseek-v4-pro");
     expect(pro).toEqual({
       id: "deepseek-v4-pro",
+      pricing: { basisId: "deepseek-v4-pro-deepseek-peak-2026-10-27", input: 1.32, cachedInput: 0.044, output: 3.96 },
       name: "DeepSeek-V4-Pro",
       contextWindow: 1_048_576,
       maxOutputTokens: 393_216,
@@ -420,5 +428,197 @@ describe("assertBrandContract (TASK.70 dev-time invariant)", () => {
       modeLabel: "Only mode",
     } as unknown as CatalogProviderEntry;
     expect(() => assertBrandContract([entry])).toThrow(/Brand "lonely" has a single entry/);
+  });
+});
+
+// A `pricing` snapshot per model (rates checked 2026-10-27), so the
+// context popover can show $ per step / per session for more than one model.
+// Every rate below was read off the provider's OWN pricing page on 2026-10-27
+// (URL and tier in the comment above each catalog row); a model whose provider
+// does not publish a USD per-1M-token rate is deliberately left unpriced — the
+// popover then says "price unknown" instead of inventing one.
+describe("model pricing", () => {
+  // What the calculator (apps/desktop/src/host/usage-cost.ts) needs to price a
+  // step at all: input, cached input and output present and positive.
+  const PRICED = {
+    anthropic: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"],
+    "z-ai": ["glm-5.3", "glm-5.3-flash", "glm-5.3-flashx", "glm-5.2", "glm-5.1", "glm-5", "glm-4.7", "glm-4.6"],
+    deepseek: ["deepseek-flash", "deepseek-v4-pro"],
+    moonshot: ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3"],
+    openai: ["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-6-astra", "gpt-6-sol"],
+  };
+
+  it("gives every priced model a complete, self-consistent rate snapshot", () => {
+    const rows = Object.entries(PRICED).flatMap(([providerId, ids]) =>
+      ids.map((id) => ({
+        providerId,
+        id,
+        model: findCatalogEntry(providerId)?.models.find((candidate) => candidate.id === id),
+      })),
+    );
+    // Guard against a typo in PRICED itself hiding behind `?.` below.
+    expect(rows.map((row) => row.model).filter((model) => model !== undefined)).toHaveLength(rows.length);
+
+    for (const { providerId, id, model } of rows) {
+      const label = `${providerId}/${id}`;
+      const pricing = model?.pricing;
+      expect(pricing, `${label} has pricing`).toBeDefined();
+      if (!pricing) continue;
+      for (const field of ["input", "cachedInput", "output"] as const) {
+        expect(Number.isFinite(pricing[field]), `${label}.${field} is a number`).toBe(true);
+        expect(pricing[field], `${label}.${field} is positive`).toBeGreaterThan(0);
+      }
+      // A cache hit can never cost more than a miss: usage-cost.ts bills the
+      // gap as the saving the popover reports.
+      expect(pricing.cachedInput, `${label}.cachedInput ≤ input`).toBeLessThanOrEqual(pricing.input);
+      // A declared write rate must be priceable too. 0 is legitimate (Z.AI
+      // currently waives cache storage); undefined means "provider never bills
+      // one", which usage-cost.ts treats as "rate unknown" for non-zero writes.
+      if (pricing.cacheWrite !== undefined) {
+        expect(Number.isFinite(pricing.cacheWrite), `${label}.cacheWrite is a number`).toBe(true);
+        expect(pricing.cacheWrite, `${label}.cacheWrite is non-negative`).toBeGreaterThanOrEqual(0);
+      }
+      // basisId = "<model id>-<source>-<date checked>", so a stale rate is
+      // traceable back to the page and the day it was read.
+      expect(pricing.basisId.startsWith(`${id}-`), `${label} basisId names the model: ${pricing.basisId}`).toBe(true);
+      expect(pricing.basisId, `${label} basisId carries the check date`).toMatch(/-\d{4}-\d{2}-\d{2}$/);
+    }
+  });
+
+  it("prices exactly the listed models — a new rate or a new unpriced row is a deliberate edit", () => {
+    const priced = getBuiltinCatalog().providers.flatMap((entry) =>
+      entry.models.filter((model) => model.pricing !== undefined).map((model) => `${entry.id}/${model.id}`),
+    );
+    expect(priced).toEqual(
+      Object.entries(PRICED).flatMap(([providerId, ids]) => ids.map((id) => `${providerId}/${id}`)),
+    );
+  });
+
+  it("uses the published Kimi platform rates", () => {
+    const models = findCatalogEntry("moonshot")!.models;
+    for (const [id, input, cachedInput, cacheWrite, output] of [
+      ["kimi-k3.1-pro", 2, 0.2, 2, 10],
+      ["kimi-k3.1-pro-highspeed", 4, 0.2, 4, 20],
+      ["kimi-k3", 3, 0.3, 3, 15],
+    ] as const) {
+      expect(models.find((model) => model.id === id)?.pricing).toMatchObject({ input, cachedInput, cacheWrite, output });
+    }
+  });
+
+  it("records the documented current model defaults", () => {
+    for (const [provider, model, effort] of [
+      ["openai", "gpt-6.1-sol", "medium"], ["openai", "gpt-6.1-terra", "medium"],
+      ["openai", "gpt-6-sol", "medium"], ["openai", "gpt-6-luna", "medium"],
+      ["anthropic", "claude-opus-5-5", "medium"], ["anthropic", "claude-haiku-5-5", "medium"],
+      ["anthropic", "claude-sonnet-5-5", "high"], ["anthropic", "claude-fable-5-1", "high"],
+    ] as const) {
+      expect(findCatalogEntry(provider)?.models.find((row) => row.id === model)?.defaultEffort).toBe(effort);
+    }
+  });
+
+  it("leaves models with no published official rate unpriced rather than guessing", () => {
+    const unpriced: ReadonlyArray<readonly [string, string]> = [
+      ["moonshot", "kimi-k2.7-code"],
+      ["moonshot", "kimi-k2.7-code-highspeed"],
+      ["moonshot", "kimi-k2.6"],
+      // Kimi For Coding: membership quota, no USD per-token rate (see the
+      // catalog comment) — a connection states "subscription" instead.
+      ["kimi", "k3.1-pro"],
+      ["kimi", "k3.1-pro-highspeed"],
+      ["kimi", "kimi-for-coding"],
+      ["kimi", "kimi-for-coding-highspeed"],
+      ["kimi", "k3"],
+      ["kimi", "k3-256k"],
+    ];
+    for (const [providerId, id] of unpriced) {
+      expect(findCatalogEntry(providerId)?.models.find((model) => model.id === id)?.pricing, `${providerId}/${id}`).toBeUndefined();
+    }
+  });
+
+  it("prices both DeepSeek rows at peak, so a cache hit is cheaper than a miss", () => {
+    for (const id of ["deepseek-flash", "deepseek-v4-pro"]) {
+      const pricing = findCatalogEntry("deepseek")?.models.find((model) => model.id === id)?.pricing;
+      expect(pricing).toBeDefined();
+      expect(pricing?.cachedInput).toBeLessThan(pricing?.input ?? 0);
+      expect(pricing?.output).toBeGreaterThan(pricing?.input ?? 0);
+    }
+    // Off-peak is exactly half of peak (DeepSeek's own note), and the recorded
+    // rate is the peak ceiling of the pair.
+    expect(findCatalogEntry("deepseek")?.models.find((model) => model.id === "deepseek-v4-pro")?.pricing).toEqual({
+      basisId: "deepseek-v4-pro-deepseek-peak-2026-10-27",
+      input: 1.32,
+      cachedInput: 0.044,
+      output: 3.96,
+    });
+  });
+});
+
+// The catalog's model lists are refreshed against the providers' OWN pages
+// (all fetched 2026-10-27): OpenAI's models page + each model's own page,
+// Anthropic's models overview, Z.AI's model matrix and the Kimi platform model
+// list. These rows are what a picker shows, so a stale entry is a UI lie even
+// when nothing else breaks.
+describe("current model lineups (checked 2026-10-27)", () => {
+  it("ships the GPT-6 family with its documented windows and caps", () => {
+    const openai = findCatalogEntry("openai");
+    expect(openai?.models.map((model) => model.id)).toEqual([
+      "gpt-6.1-sol",
+      "gpt-6.1-terra",
+      "gpt-6-luna",
+      "gpt-6-astra",
+      "gpt-6-sol",
+    ]);
+    for (const model of openai?.models ?? []) {
+      // developers.openai.com/api/docs/models/<id>: 1,050,000 context window,
+      // 128,000 max output, text+image input.
+      expect(model).toMatchObject({ contextWindow: 1_050_000, maxOutputTokens: 128_000, imageInput: true });
+    }
+  });
+
+  it("ships the Claude 5 family with 1M context and 128K output", () => {
+    const anthropic = findCatalogEntry("anthropic");
+    expect(anthropic?.models.map((model) => model.id)).toEqual([
+      "claude-opus-5-5",
+      "claude-sonnet-5-5",
+      "claude-haiku-5-5",
+      "claude-fable-5-1",
+    ]);
+    for (const model of anthropic?.models ?? []) {
+      expect(model).toMatchObject({ contextWindow: 1_000_000, maxOutputTokens: 131_072, imageInput: true });
+    }
+  });
+
+  it("adds GLM-5.3-FlashX and drops the rows Z.AI no longer lists", () => {
+    const ids = (findCatalogEntry("z-ai")?.models ?? []).map((model) => model.id);
+    expect(ids).toContain("glm-5.3-flashx");
+    // GLM-5 Turbo is gone from the pricing page AND the model matrix;
+    // GLM-4.5/4.5-Air survive only in the collapsed "Other Pricing" table.
+    expect(ids).not.toContain("glm-5-turbo");
+    expect(ids).not.toContain("glm-4.5");
+    expect(ids).not.toContain("glm-4.5-air");
+    // The K3.1 Pro pair is the current kimi.com/coding generation.
+    const kimi = (findCatalogEntry("kimi")?.models ?? []).map((model) => model.id);
+    expect(kimi.slice(0, 2)).toEqual(["k3.1-pro", "k3.1-pro-highspeed"]);
+  });
+
+  it("never lists an id the provider has retired", () => {
+    const retired = new Set([
+      "claude-opus-4-20250514",
+      "claude-sonnet-4-20250514",
+      "claude-3-5-haiku-20241022",
+      "gpt-5.1",
+      "gpt-4o",
+      "gpt-4o-mini",
+      "glm-5-turbo",
+      "glm-4.5",
+      "glm-4.5-air",
+      "kimi-k2-0711-preview",
+      "moonshot-v1-128k",
+    ]);
+    for (const entry of getBuiltinCatalog().providers) {
+      for (const model of entry.models) {
+        expect(retired.has(model.id), `${entry.id}/${model.id} is retired`).toBe(false);
+      }
+    }
   });
 });

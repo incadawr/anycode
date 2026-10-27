@@ -4,7 +4,7 @@ import type { ImageInputOverride } from "../provider/capabilities.js";
 import type { ProviderTransport } from "../provider/catalog.js";
 import type { ToolResultBudget } from "./tools.js";
 
-export type ReasoningEffort = "off" | "low" | "medium" | "high" | "max";
+export type ReasoningEffort = "off" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /**
  * Opt-in implicit prompt caching for OpenAI transports (GitHub #15). This is

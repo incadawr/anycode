@@ -27,6 +27,8 @@ import type { ToolDeclaration } from "../types/tools.js";
 import type { ModelStreamEvent } from "../types/events.js";
 import type { EndpointConfig } from "./endpoint.js";
 import { AiSdkModelPort } from "./model-port.js";
+import { findCatalogEntry } from "./catalog-data.js";
+import { resolveReasoningEffort } from "./capabilities.js";
 
 interface CapturedRequest {
   method: string | undefined;
@@ -55,7 +57,7 @@ const READ_TOOL: ToolDeclaration = {
 
 /** A minimal `response.created` frame — always the first event on a real stream. */
 function created(id = "resp_1"): Record<string, unknown> {
-  return { type: "response.created", response: { id, created_at: 1_700_000_000, model: "gpt-5.1" } };
+  return { type: "response.created", response: { id, created_at: 1_700_000_000, model: "gpt-6.1-sol" } };
 }
 
 /** A minimal `response.completed` usage/finish frame. Output items are NOT re-sent here on the streaming path. */
@@ -110,7 +112,7 @@ describe("AiSdkModelPort over a real @ai-sdk/openai Responses SSE stream (TASK.4
       transport: "openai-responses",
       baseUrl,
       apiKey: "test-key",
-      model: "gpt-5.1",
+      model: "gpt-6.1-sol",
       retry: { maxRetries: 0, stallTimeoutMs: 0 },
       ...config,
     };
@@ -185,12 +187,37 @@ describe("AiSdkModelPort over a real @ai-sdk/openai Responses SSE stream (TASK.4
       { type: "response.output_item.done", output_index: 0, item: { type: "message", id: "msg_1" } },
       completed({ input: 5, output: 2 }),
     ];
-    const request: ModelRequest = { messages: [{ role: "user", content: "hi" }], tools: [], reasoningEffort: "high" };
+    const request: ModelRequest = { messages: [{ role: "user", content: "hi" }], tools: [], reasoningEffort: resolveReasoningEffort("gpt-6.1-sol", findCatalogEntry("openai"), "high") };
 
-    await collect(portFor({ model: "gpt-5.1" }).streamText(request));
+    await collect(portFor({ model: "gpt-6.1-sol", providerName: "OpenAI" }).streamText(request));
 
     expect(captured!.body["store"]).toBe(false);
     expect(captured!.body["reasoning"]).toMatchObject({ effort: "high" });
+  });
+
+  it("serializes the fresh default after switching models as medium", async () => {
+    responseChunks = [created(), completed({ input: 5, output: 2 })];
+    const entry = findCatalogEntry("openai");
+    const displayed = resolveReasoningEffort("gpt-6.1-sol", entry, undefined);
+    const switched = resolveReasoningEffort("gpt-6.1-terra", entry, displayed);
+    await collect(portFor({ model: "gpt-6.1-terra", providerName: "OpenAI" }).streamText({ messages: [{ role: "user", content: "hi" }], tools: [], reasoningEffort: switched }));
+    expect(captured!.body.reasoning).toMatchObject({ effort: "medium" });
+  });
+
+  it("serializes the catalog-resolved off selection as none", async () => {
+    responseChunks = [created(), completed({ input: 5, output: 2 })];
+    const effort = resolveReasoningEffort("gpt-6.1-terra", findCatalogEntry("openai"), "off");
+    expect(effort).toBe("off");
+    await collect(portFor({ model: "gpt-6.1-terra", providerName: "OpenAI" }).streamText({ messages: [{ role: "user", content: "hi" }], tools: [], reasoningEffort: effort }));
+    expect(captured!.body.reasoning).toMatchObject({ effort: "none" });
+  });
+
+  it("keeps the compatible endpoint system-role wire shape", async () => {
+    responseChunks = [created(), completed({ input: 5, output: 2 })];
+    await collect(portFor({ model: "custom-model", providerName: "custom" }).streamText({ system: "be concise", messages: [{ role: "user", content: "hi" }], tools: [], reasoningEffort: "high" }));
+    expect(captured!.body.input).toEqual(expect.arrayContaining([expect.objectContaining({ role: "system" })]));
+    expect(captured!.body.include).toBeUndefined();
+    expect(captured!.body.reasoning).toBeUndefined();
   });
 
   it("does the full function_call round trip: tool-input streaming, tool_call with the FULL parsed arguments, finishReason tool_calls", async () => {

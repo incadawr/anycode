@@ -40,7 +40,7 @@ const CATALOG: CatalogSummary = [
     models: [
       { id: "glm-5.3", name: "GLM-5.3" },
       { id: "glm-5.2", name: "GLM-5.2" },
-      { id: "glm-4.5", name: "GLM-4.5" },
+      { id: "glm-4.7", name: "GLM-4.7" },
     ],
   },
   {
@@ -57,8 +57,8 @@ const CATALOG: CatalogSummary = [
 describe("orderModelsByCatalog (TASK.131 D4 — catalog order, not the provider's alphabet)", () => {
   it("re-orders a live list that covers catalog ids back into the catalog's curated (fresh-first) order", () => {
     // z.ai /v1/models answers alphabetically; the catalog is fresh-first.
-    const ordered = orderModelsByCatalog(CATALOG[0]!.models, [{ id: "glm-4.5" }, { id: "glm-5.3" }, { id: "glm-5.2" }]);
-    expect(ordered.map((m) => m.id)).toEqual(["glm-5.3", "glm-5.2", "glm-4.5"]);
+    const ordered = orderModelsByCatalog(CATALOG[0]!.models, [{ id: "glm-4.7" }, { id: "glm-5.3" }, { id: "glm-5.2" }]);
+    expect(ordered.map((m) => m.id)).toEqual(["glm-5.3", "glm-5.2", "glm-4.7"]);
   });
 
   it("keeps live-only ids the catalog doesn't know, appended after the catalog's own ids in the live list's order", () => {
@@ -74,8 +74,8 @@ describe("orderModelsByCatalog (TASK.131 D4 — catalog order, not the provider'
 
 describe("connectionOfferedModels (TASK.131 D4)", () => {
   it("resolves via providerModelsFor (connection ids UNIONED with catalog hints) and orders catalog-first", () => {
-    const conn = connection({ id: "c1", providerId: "z-ai", models: ["glm-4.5", "glm-5.3"] });
-    expect(connectionOfferedModels(conn, CATALOG, undefined)?.map((m) => m.id)).toEqual(["glm-5.3", "glm-5.2", "glm-4.5"]);
+    const conn = connection({ id: "c1", providerId: "z-ai", models: ["glm-4.7", "glm-5.3"] });
+    expect(connectionOfferedModels(conn, CATALOG, undefined)?.map((m) => m.id)).toEqual(["glm-5.3", "glm-5.2", "glm-4.7"]);
   });
 
   it("a curated custom subset resolves for a custom:<slug> connection and orders against the custom record's own catalog miss (no catalog entry → offered order)", () => {
@@ -105,7 +105,7 @@ describe("buildStartModelGroups (TASK.131 D1 — empty connections out, current 
   it("D1: a live models:[] fetch on a catalog provider falls back to the static catalog (still offered, still in the rail)", () => {
     const conn = connection({ id: "c1", providerId: "z-ai", models: [] });
     const groups = buildStartModelGroups([conn], CATALOG, undefined, { connectionId: "c1", modelId: "glm-5.3" });
-    expect(groups[0]?.items.map((i) => i.id)).toEqual(["glm-5.3", "glm-5.2", "glm-4.5"]);
+    expect(groups[0]?.items.map((i) => i.id)).toEqual(["glm-5.3", "glm-5.2", "glm-4.7"]);
   });
 
   it("D1 ordering: current pair first, then descending model count, ties keep settings order", () => {
@@ -180,11 +180,11 @@ describe("deriveRecentModelIds (TASK.131 D6 — popularity is measured, not cura
 
   it("newest first, regardless of the order the list arrives in", () => {
     const ids = deriveRecentModelIds([
-      session({ id: "s1", model: "glm-4.5", updatedAt: 10 }),
+      session({ id: "s1", model: "glm-4.7", updatedAt: 10 }),
       session({ id: "s2", model: "glm-5.3", updatedAt: 30 }),
       session({ id: "s3", model: "k3", updatedAt: 20 }),
     ]);
-    expect(ids).toEqual(["glm-5.3", "k3", "glm-4.5"]);
+    expect(ids).toEqual(["glm-5.3", "k3", "glm-4.7"]);
   });
 
   it("windowed: an abandoned model cannot outvote this month's by accumulated count", () => {
@@ -206,8 +206,8 @@ describe("buildStartModelPopularRows (TASK.131 D6 + owner decision 17.08 — top
   );
 
   it("ranks by usage count, ties by recency, and names the group each pick comes from", () => {
-    const rows = buildStartModelPopularRows(groups, ["k3", "glm-4.5", "k3", "glm-5.2"], "conn-glm");
-    expect(rows.map((r) => r.modelId)).toEqual(["k3", "glm-4.5", "glm-5.2"]);
+    const rows = buildStartModelPopularRows(groups, ["k3", "glm-4.7", "k3", "glm-5.2"], "conn-glm");
+    expect(rows.map((r) => r.modelId)).toEqual(["k3", "glm-4.7", "glm-5.2"]);
     expect(rows[0]).toMatchObject({ connectionId: "conn-kimi", groupLabel: "Kimi", name: "K3" });
   });
 
@@ -218,7 +218,7 @@ describe("buildStartModelPopularRows (TASK.131 D6 + owner decision 17.08 — top
       undefined,
       { connectionId: "conn-b", modelId: "glm-5.3" },
     );
-    expect(buildStartModelPopularRows(twoGlm, ["glm-4.5"], "conn-b")[0]?.connectionId).toBe("conn-b");
+    expect(buildStartModelPopularRows(twoGlm, ["glm-4.7"], "conn-b")[0]?.connectionId).toBe("conn-b");
   });
 
   it("drops ids no connected group offers (a deleted connection's model, a Codex session's own id)", () => {
@@ -229,12 +229,12 @@ describe("buildStartModelPopularRows (TASK.131 D6 + owner decision 17.08 — top
 
   it("no history at all: tops up from the current connection's own catalog order (fresh first), never an empty strip", () => {
     const rows = buildStartModelPopularRows(groups, [], "conn-glm");
-    expect(rows.map((r) => r.modelId)).toEqual(["glm-5.3", "glm-5.2", "glm-4.5"]);
+    expect(rows.map((r) => r.modelId)).toEqual(["glm-5.3", "glm-5.2", "glm-4.7"]);
     expect(rows[0]?.current).toBe(true);
   });
 
   it("never repeats a model id across the ranked and topped-up halves", () => {
-    const rows = buildStartModelPopularRows(groups, ["glm-4.5"], "conn-glm");
+    const rows = buildStartModelPopularRows(groups, ["glm-4.7"], "conn-glm");
     expect(new Set(rows.map((r) => r.modelId)).size).toBe(rows.length);
   });
 });
@@ -270,13 +270,13 @@ describe("startModelEffortLevels (TASK.131 — the vocabulary belongs to the MOD
 
   // ── Taskana 4118: live caps supplement the catalog (renderer rule mirrors core) ──
 
-  it("Taskana 4118: catalog-unknown id + live {reasoning, [high, xhigh]} maps to [high] — unknowns dropped fail-closed", () => {
+  it("Catalog-unknown id retains recognized live effort levels", () => {
     expect(
       startModelEffortLevels("z-ai", "live-only-id", EFFORT_CATALOG, {
         reasoning: true,
         effortLevels: ["high", "xhigh"],
       }),
-    ).toEqual(["high"]);
+    ).toEqual(["high", "xhigh"]);
   });
 
   it("Taskana 4118: live reasoning without effortLevels gets the legacy four; non-reasoning live stays undefined", () => {

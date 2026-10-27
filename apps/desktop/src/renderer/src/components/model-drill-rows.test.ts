@@ -117,11 +117,10 @@ describe("buildSessionDrillRows (TASK.106 cut-2 §D4 — every connection, the T
       currentModelId: "or/foreign-model",
       recentModelIds: [],
     });
-    // xhigh drops at mapping; the mapped vocabulary is [high, max], the first
-    // level is what the row displays with no explicit pick.
-    expect(efforts).toEqual(["high", "max"]);
-    expect(effort).toBe("high");
-    expect(rows.at(-1)).toEqual({ kind: "effort-open", value: "high" });
+    // The row uses the first supported level when no explicit tier is selected.
+    expect(efforts).toEqual(["xhigh", "high", "max"]);
+    expect(effort).toBe("xhigh");
+    expect(rows.at(-1)).toEqual({ kind: "effort-open", value: "xhigh" });
   });
 
   it("lists the OPEN group's models on the group level", () => {

@@ -11,10 +11,18 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - OpenAI connections can opt into implicit 30-minute prompt caching, while disabled connections keep their existing request format (GitHub #15).
 
+### Changed
+
+- The context popover now leads with one prominent figure — "Spent in this session", subagents included and named in a muted suffix — followed by the current turn and a single quiet footnote with tokens, cache savings and the rate basis. The duplicate "Last step / Latest cache hit / Last audited step", the separate "Session cost", "Cache saved", "Session tokens", "Subagents: None" and "Estimates use peak rates" lines are gone, so the cost block takes three lines instead of fifteen.
+- The model catalog now lists the providers' current lineups, checked against their own documentation on 2026-10-27: the GPT-6 family (GPT-6.1 Sol/Terra, GPT-6 Luna/Sol/Astra, 1.05M context, 128K output), the Claude 5 family (Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.1, 1M context), GLM-5.3-FlashX, DeepSeek-V4-Pro and the K3.1 Pro pair, each with its official price and a comment naming the source page. Retired rows (GPT-5.1/GPT-4o, Claude Opus 4/Sonnet 4/3.5 Haiku, GLM-5 Turbo, GLM-4.5/4.5-Air, the discontinued Moonshot ids) are gone from the pickers; a connection that still carries one of those ids as free text keeps working with its assumed window and any explicit override. Reasoning effort now also reaches the wire on GPT-6 models, which the OpenAI SDK's older model-name check used to drop.
+
 ### Fixed
 
 - Bare slash commands are intercepted on submit, and busy sessions visibly refuse manual compaction instead of sending it to the model (GitHub #14).
 - Packaged reload shortcuts are disabled, and renderer reloads preserve task titles, agent-message previews and live task views (GitHub #19).
+- The context popover keeps its per-step list collapsed behind one line for the current turn ("This turn: 2 steps · ≈ $0.0005 · cache 96%"), expandable and collapsible by clicking it; the expanded list shows only the current turn's steps, so a previous turn's steps no longer appear under the new turn's.
+- Session and step cost is now shown for every catalog model whose provider publishes a per-token rate — including the DeepSeek line, which had no price at all before. Each rate was read from the provider's own pricing page on 2026-10-27 and recorded with its source and check date; a model with no published rate (the Kimi subscription tier, the Kimi platform models) still says "price unknown".
+
 
 ## [0.0.46] — 2026-10-27
 

@@ -28,7 +28,10 @@ export async function summarizeWithChildren(persistence: SqlitePersistenceAdapte
     if (childRows.some((row) => row.priceBasisId === "claude-native-unattributed")) own.totals.subagentIncludedInReportedCost = true;
     own.totals.subagentSubscription = childRows.filter((row) => row.priceBasisId === "subscription").length;
     own.totals.subagentUnpriced = emptyChildren + childRows.length - priced.length - own.totals.subagentSubscription;
-    if (priced.length > 0) own.totals.subagentCostUsd = priced.reduce((sum, row) => sum + row.costUsd!, 0);
+    if (priced.length > 0) {
+      own.totals.subagentCostUsd = priced.reduce((sum, row) => sum + row.costUsd!, 0);
+      own.totals.priceBasisIds = [...new Set([...(own.totals.priceBasisIds ?? []), ...priced.flatMap((row) => row.priceBasisId === undefined ? [] : [row.priceBasisId])])];
+    }
   }
   return own;
 }

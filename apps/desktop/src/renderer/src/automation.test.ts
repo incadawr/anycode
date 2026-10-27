@@ -2079,8 +2079,8 @@ describe("automation facade — startScreenState (design/slice-P7.12-cut.md §5 
     tabsStore.getState().openDraft("/ws/chosen");
     expect(facade.startScreenState().model).toBeNull();
 
-    tabsStore.getState().setDraftModel("claude-opus-4");
-    expect(facade.startScreenState().model).toBe("claude-opus-4");
+    tabsStore.getState().setDraftModel("claude-opus-5-5");
+    expect(facade.startScreenState().model).toBe("claude-opus-5-5");
   });
 });
 

@@ -103,10 +103,10 @@ describe("set_model protocol (slice P7.15 · F14)", () => {
 
 describe("set_reasoning_effort protocol", () => {
   it("accepts every core reasoning level and rejects unknown values", () => {
-    for (const effort of ["off", "low", "medium", "high", "max"]) {
+    for (const effort of ["off", "low", "medium", "high", "xhigh", "max"]) {
       expect(uiToHostMessageSchema.safeParse({ type: "set_reasoning_effort", effort }).success).toBe(true);
     }
-    expect(uiToHostMessageSchema.safeParse({ type: "set_reasoning_effort", effort: "xhigh" }).success).toBe(false);
+    expect(uiToHostMessageSchema.safeParse({ type: "set_reasoning_effort", effort: "invalid" }).success).toBe(false);
   });
 
   it("host_ready and change messages carry available effort levels as structured-clone-safe data", () => {

@@ -57,7 +57,7 @@ export function resolveImageInput(
   if (liveModality?.(modelId) === true) {
     return true;
   }
-  const model = entry?.models.find((candidate) => candidate.id === modelId);
+  const model = (entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId));
   return model?.imageInput === true;
 }
 
@@ -97,7 +97,7 @@ export function resolveContextWindowInfo(
   if (override !== undefined && (overrideModel === undefined || overrideModel === modelId)) {
     return { tokens: override, source: "override" };
   }
-  const model = entry?.models.find((candidate) => candidate.id === modelId);
+  const model = (entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId));
   if (model === undefined) {
     return { tokens: UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS, source: "assumed" };
   }
@@ -148,7 +148,7 @@ export function resolveMaxOutputTokens(
   onClamp?: (requested: number, clamped: number, modelId: string) => void,
   onStubFallback?: (modelId: string, applied: number) => void,
 ): number | undefined {
-  const matched = entry?.models.find((candidate) => candidate.id === modelId);
+  const matched = (entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId));
   const ceiling = matched?.maxOutputTokens;
   if (override !== undefined) {
     if (ceiling === undefined || override <= ceiling) return override;
@@ -187,8 +187,11 @@ export function resolveReasoningEffort(
   override: ReasoningEffort | undefined,
   live?: LiveModelCapabilities,
 ): ReasoningEffort | undefined {
-  if (override === "off") return undefined;
-  const matched = entry?.models.find((candidate) => candidate.id === modelId);
+  if (override === "off") {
+    const model = entry?.models.find((candidate) => candidate.id === modelId);
+    return model?.supportsExplicitOff ? "off" : undefined;
+  }
+  const matched = (entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId));
   if (matched === undefined) {
     if (override === undefined) return undefined;
     // Taskana 4118: catalog miss ⇒ consult live capabilities, if any. The
@@ -236,7 +239,7 @@ export function resolveEffortLevels(
   entry: CatalogProviderEntry | undefined,
   live?: LiveModelCapabilities,
 ): ReasoningEffort[] | undefined {
-  const matched = entry?.models.find((candidate) => candidate.id === modelId);
+  const matched = (entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId));
   if (matched === undefined) return liveEffortLevels(live); // Taskana 4118: catalog miss ⇒ live
   if (matched.reasoning !== true) return undefined; // live never resurrects a catalog model
   return matched.effortLevels ?? ["off", "low", "medium", "high"];
@@ -257,7 +260,7 @@ export interface LiveModelCapabilities {
 
 /**
  * Foreign effort level → our closed enum, by EXACT name only (Taskana 4118).
- * `xhigh`/`minimal`/`none`/`default`/… are absent ⇒ dropped at mapping time —
+ * `minimal`/`none`/`default`/… are absent ⇒ dropped at mapping time —
  * never silently folded into a neighbouring level.
  *
  * A `Map` (NOT an object literal) so endpoint-controlled `supported_efforts`
@@ -267,7 +270,7 @@ export interface LiveModelCapabilities {
  * a Function value inside a `ReasoningEffort[]` (cross-review finding 1).
  */
 const EFFORT_LEVEL_PASSTHROUGH: ReadonlyMap<string, ReasoningEffort> = new Map([
-  ["off", "off"], ["low", "low"], ["medium", "medium"], ["high", "high"], ["max", "max"],
+  ["off", "off"], ["low", "low"], ["medium", "medium"], ["high", "high"], ["xhigh", "xhigh"], ["max", "max"],
 ]);
 
 /** Maps foreign levels: keeps source order, drops unknowns, dedupes. */

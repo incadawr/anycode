@@ -638,7 +638,7 @@ export interface ProviderUsageAudit {
 export interface ProviderUsageSummaryPort {
   summary(): Promise<{
     steps: ProviderUsageRecord[];
-    totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unknownSavingsSteps?: number; unpricedSteps?: number; subscriptionSteps?: number; subagentCostUsd?: number; subagentUnpriced?: number; subagentSubscription?: number; subagentIncludedInReportedCost?: boolean; subagentCount?: number } | null;
+    totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unknownSavingsSteps?: number; priceBasisIds?: string[]; unpricedSteps?: number; subscriptionSteps?: number; subagentCostUsd?: number; subagentUnpriced?: number; subagentSubscription?: number; subagentIncludedInReportedCost?: boolean; subagentCount?: number } | null;
   }>;
 }
 
@@ -652,7 +652,7 @@ export interface ProviderUsageSummaryPort {
  */
 export function summarizeProviderUsage(steps: ProviderUsageRecord[]): {
   steps: ProviderUsageRecord[];
-  totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unknownSavingsSteps?: number; unpricedSteps?: number; subscriptionSteps?: number; subagentCostUsd?: number; subagentUnpriced?: number; subagentSubscription?: number; subagentIncludedInReportedCost?: boolean; subagentCount?: number } | null;
+  totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unknownSavingsSteps?: number; priceBasisIds?: string[]; unpricedSteps?: number; subscriptionSteps?: number; subagentCostUsd?: number; subagentUnpriced?: number; subagentSubscription?: number; subagentIncludedInReportedCost?: boolean; subagentCount?: number } | null;
 } {
   if (steps.length === 0) {
     return { steps, totals: null };
@@ -683,10 +683,11 @@ export function summarizeProviderUsage(steps: ProviderUsageRecord[]): {
   const savings = steps.filter((step) => step.cacheSavingsUsd !== undefined);
   const costs = priced.length === 0 ? {} : {
     costUsd: priced.reduce((sum, step) => sum + step.costUsd!, 0),
+    priceBasisIds: [...new Set(priced.flatMap((step) => step.priceBasisId === undefined ? [] : [step.priceBasisId]))],
     ...(savings.length ? { cacheSavingsUsd: savings.reduce((sum, step) => sum + step.cacheSavingsUsd!, 0) } : {}),
 
   };
-  return { steps, totals: { input, output, total, stepsReported, stepsWithCache, ...costs, ...(priced.length || subscriptionSteps ? { unpricedSteps: steps.length - priced.length - subscriptionSteps, unknownSavingsSteps: steps.length - savings.length - subscriptionSteps } : {}), ...(subscriptionSteps ? { subscriptionSteps } : {}) } };
+  return { steps, totals: { input, output, total, stepsReported, stepsWithCache, ...costs, ...(steps.length > priced.length + subscriptionSteps ? { unpricedSteps: steps.length - priced.length - subscriptionSteps } : {}), ...(priced.length || subscriptionSteps ? { unknownSavingsSteps: steps.length - savings.length - subscriptionSteps } : {}), ...(subscriptionSteps ? { subscriptionSteps } : {}) } };
 }
 
 export interface SessionOptions {
@@ -2763,7 +2764,8 @@ export class Session {
     // switch re-resolves effort against it (a non-reasoning model drops it,
     // but switching back restores it).
     this.selectedEffort = effort;
-    this.engine.setReasoningEffort(effort === "off" ? undefined : effort);
+    if (this.engine.setSelectedReasoningEffort) this.engine.setSelectedReasoningEffort(effort);
+    else this.engine.setReasoningEffort(effort === "off" ? undefined : effort);
     this.outbound.emit({
       type: "reasoning_effort_changed",
       effort,
@@ -2804,7 +2806,7 @@ export class Session {
 
   /**
    * Taskana 4083 / TASK.34: answers a `usage_audit_request` with the durable
-   * audit list (newest-first, bounded to the last 50 steps) + totals. Any
+   * audit list (newest-first, retaining the complete current turn) + totals. Any
    * engine with an audit port answers; an unwired host answers nothing. A read
    * failure answers an empty list (honest "nothing loaded" instead of a hang)
    * and logs to the process console; never throws into the wire loop.
@@ -2816,7 +2818,9 @@ export class Session {
     try {
       const s = await this.usageAudit.summary.summary();
       this.lastUsageSummary = s;
-      this.outbound.sendDirect({ type: "usage_audit", steps: s.steps.slice(-50).reverse(), totals: s.totals });
+      const latestTurnId = s.steps.at(-1)?.turnId;
+      const start = Math.min(Math.max(0, s.steps.length - 50), s.steps.findIndex((step) => step.turnId === latestTurnId));
+      this.outbound.sendDirect({ type: "usage_audit", steps: s.steps.slice(Math.max(0, start)).reverse(), totals: s.totals });
     } catch (e) {
       console.error(`[host] usage audit read failed: ${e instanceof Error ? e.message : String(e)}`);
       this.outbound.sendDirect({ type: "usage_audit", steps: [], totals: null });

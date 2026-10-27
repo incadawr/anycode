@@ -388,7 +388,7 @@ const queueDeleteBody = z.object({ tabId: z.string().min(1), id: z.string().min(
 const modelPillPickBody = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("open") }).strict(),
   z.object({ kind: z.literal("model"), value: z.string().min(1).max(256) }).strict(),
-  z.object({ kind: z.literal("effort"), value: z.enum(["off", "low", "medium", "high", "max"]) }).strict(),
+  z.object({ kind: z.literal("effort"), value: z.enum(["off", "low", "medium", "high", "xhigh", "max"]) }).strict(),
 ]);
 
 // ── ctx-popover open/close body (slice-P7.17-cut.md F12 W4): `tabId` rides in

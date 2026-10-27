@@ -217,20 +217,23 @@ const Z_AI_ENTRY: CatalogProviderEntry = {
   defaultTransport: "anthropic-messages",
   supportedTransports: ["anthropic-messages"],
   auth: { kind: "api_key" },
+  // Synthetic ids on purpose: the shipped GLM line no longer has a 128K row
+  // (every current one is 200K or 1M), while these resolution rules need a
+  // narrow/wide pair to be meaningful. A test fixture is not a model claim.
   models: [
-    { id: "glm-4.6", name: "GLM-4.6", contextWindow: 200_000 },
-    { id: "glm-4.5", name: "GLM-4.5", contextWindow: 128_000 },
-    { id: "glm-4.5-air", name: "GLM-4.5 Air", contextWindow: 128_000 },
+    { id: "glm-test-wide", name: "GLM wide (fixture)", contextWindow: 200_000 },
+    { id: "glm-test-narrow", name: "GLM narrow (fixture)", contextWindow: 128_000 },
+    { id: "glm-test-narrow-air", name: "GLM narrow air (fixture)", contextWindow: 128_000 },
   ],
 };
 
 describe("resolveContextWindowInfo provenance (Taskana 4127)", () => {
   it("a catalog model reports source catalog", () => {
-    expect(resolveContextWindowInfo("glm-4.5", Z_AI_ENTRY, undefined)).toEqual({ tokens: 128_000, source: "catalog" });
+    expect(resolveContextWindowInfo("glm-test-narrow", Z_AI_ENTRY, undefined)).toEqual({ tokens: 128_000, source: "catalog" });
   });
 
   it("an explicit override (also for an unknown model, or a matching binding) reports source override", () => {
-    expect(resolveContextWindowInfo("glm-4.5", Z_AI_ENTRY, 50_000)).toEqual({ tokens: 50_000, source: "override" });
+    expect(resolveContextWindowInfo("glm-test-narrow", Z_AI_ENTRY, 50_000)).toEqual({ tokens: 50_000, source: "override" });
     expect(resolveContextWindowInfo("ghost", undefined, 50_000, "ghost")).toEqual({ tokens: 50_000, source: "override" });
   });
 
@@ -242,7 +245,7 @@ describe("resolveContextWindowInfo provenance (Taskana 4127)", () => {
 
 describe("resolveContextWindow (slice 6.4 §2-B1, mirror of resolveImageInput)", () => {
   it("an explicit override wins even for a known model", () => {
-    expect(resolveContextWindow("glm-4.5", Z_AI_ENTRY, 50_000)).toBe(50_000);
+    expect(resolveContextWindow("glm-test-narrow", Z_AI_ENTRY, 50_000)).toBe(50_000);
   });
 
   it("an explicit override wins for an unknown model / missing entry", () => {
@@ -251,8 +254,8 @@ describe("resolveContextWindow (slice 6.4 §2-B1, mirror of resolveImageInput)",
   });
 
   it("without override, a matched catalog model resolves its contextWindow", () => {
-    expect(resolveContextWindow("glm-4.5", Z_AI_ENTRY, undefined)).toBe(128_000);
-    expect(resolveContextWindow("glm-4.6", Z_AI_ENTRY, undefined)).toBe(200_000);
+    expect(resolveContextWindow("glm-test-narrow", Z_AI_ENTRY, undefined)).toBe(128_000);
+    expect(resolveContextWindow("glm-test-wide", Z_AI_ENTRY, undefined)).toBe(200_000);
   });
 
   it("without override, a model's usableContextWindow caps its advertised window; an override still wins", () => {
@@ -277,7 +280,7 @@ describe("resolveContextWindow (slice 6.4 §2-B1, mirror of resolveImageInput)",
   });
 
   it("without override, a missing entry resolves the ASSUMED 8192 fallback (TASK.142)", () => {
-    expect(resolveContextWindow("glm-4.5", undefined, undefined)).toBe(8_192);
+    expect(resolveContextWindow("glm-test-narrow", undefined, undefined)).toBe(8_192);
   });
 
   it("an entry with no matching model resolves the ASSUMED 8192 fallback (custom endpoint case)", () => {
@@ -295,29 +298,29 @@ describe("resolveContextWindow (slice 6.4 §2-B1, mirror of resolveImageInput)",
   });
 
   it("an id from a different entry does not match (entry-scoped, R4)", () => {
-    expect(resolveContextWindow("claude-opus-4-20250514", Z_AI_ENTRY, undefined)).toBe(8_192);
+    expect(resolveContextWindow("claude-opus-5-5", Z_AI_ENTRY, undefined)).toBe(8_192);
   });
 
   it("a bound override applies to ITS model only; a mismatched binding falls through to the catalog, not the override (TASK.142)", () => {
     // A-bound override on A: the override wins over the catalog.
-    expect(resolveContextWindow("glm-4.5", Z_AI_ENTRY, 50_000, "glm-4.5")).toBe(50_000);
+    expect(resolveContextWindow("glm-test-narrow", Z_AI_ENTRY, 50_000, "glm-test-narrow")).toBe(50_000);
     // A-bound override on B: ignored; B resolves through the catalog.
-    expect(resolveContextWindow("glm-4.6", Z_AI_ENTRY, 50_000, "glm-4.5")).toBe(200_000);
+    expect(resolveContextWindow("glm-test-wide", Z_AI_ENTRY, 50_000, "glm-test-narrow")).toBe(200_000);
     // A-bound override on an unknown model: ignored; the assumed fallback applies.
-    expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, 50_000, "glm-4.5")).toBe(8_192);
+    expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, 50_000, "glm-test-narrow")).toBe(8_192);
   });
 
   it("a shell-global override (no binding) still wins over the catalog and over the assumed fallback", () => {
-    expect(resolveContextWindow("glm-4.5", Z_AI_ENTRY, 50_000, undefined)).toBe(50_000);
+    expect(resolveContextWindow("glm-test-narrow", Z_AI_ENTRY, 50_000, undefined)).toBe(50_000);
     expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, 50_000, undefined)).toBe(50_000);
   });
 
   it("a mismatched binding WITH a catalog match uses the catalog window, not the override", () => {
-    expect(resolveContextWindow("glm-4.6", Z_AI_ENTRY, 50_000, "other-model")).toBe(200_000);
+    expect(resolveContextWindow("glm-test-wide", Z_AI_ENTRY, 50_000, "other-model")).toBe(200_000);
   });
 
   it("a binding with NO override changes nothing (inert binding)", () => {
-    expect(resolveContextWindow("glm-4.5", Z_AI_ENTRY, undefined, "glm-4.5")).toBe(128_000);
+    expect(resolveContextWindow("glm-test-narrow", Z_AI_ENTRY, undefined, "glm-test-narrow")).toBe(128_000);
     expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, undefined, "ghost-model")).toBe(8_192);
   });
 
@@ -407,11 +410,11 @@ describe("Taskana 4118 — live capabilities supplement the catalog", () => {
   ] };
 
   it("mapForeignEffortLevels keeps exact-name matches in source order, dedupes, drops the rest", () => {
-    expect(mapForeignEffortLevels(["xhigh", "high", "low", "minimal"])).toEqual(["high", "low"]);
+    expect(mapForeignEffortLevels(["xhigh", "high", "low", "minimal"])).toEqual(["xhigh", "high", "low"]);
     // Case-sensitive by design: HIGH is a foreign spelling, not our enum value.
     expect(mapForeignEffortLevels(["high", "HIGH"])).toEqual(["high"]);
     expect(mapForeignEffortLevels([])).toEqual([]);
-    expect(mapForeignEffortLevels(["xhigh", "minimal", "none", "default"])).toEqual([]);
+    expect(mapForeignEffortLevels(["minimal", "none", "default"])).toEqual([]);
   });
 
   it("mapForeignEffortLevels is immune to prototype-key poisoning (cross-review F1)", () => {
@@ -437,8 +440,8 @@ describe("Taskana 4118 — live capabilities supplement the catalog", () => {
     expect(liveEffortLevels({})).toBeUndefined();
     expect(liveEffortLevels({ reasoning: true })).toEqual(["off", "low", "medium", "high"]);
     expect(liveEffortLevels({ reasoning: true, effortLevels: [] })).toEqual(["off", "low", "medium", "high"]);
-    expect(liveEffortLevels({ reasoning: true, effortLevels: ["xhigh"] })).toBeUndefined();
-    expect(liveEffortLevels({ reasoning: true, effortLevels: ["high", "xhigh", "max"] })).toEqual(["high", "max"]);
+    expect(liveEffortLevels({ reasoning: true, effortLevels: ["xhigh"] })).toEqual(["xhigh"]);
+    expect(liveEffortLevels({ reasoning: true, effortLevels: ["high", "xhigh", "max"] })).toEqual(["high", "xhigh", "max"]);
   });
 
   it("resolveEffortLevels: catalog match is unchanged, with AND without live meta", () => {
@@ -454,7 +457,7 @@ describe("Taskana 4118 — live capabilities supplement the catalog", () => {
     expect(resolveEffortLevels("unknown-reasoner", entry, { reasoning: true, effortLevels: ["high", "max"] })).toEqual(["high", "max"]);
     // No live ⇒ pre-4118 behaviour (undefined) is unchanged.
     expect(resolveEffortLevels("unknown-model", entry)).toBeUndefined();
-    expect(resolveEffortLevels("unknown-model", entry, { reasoning: true, effortLevels: ["xhigh"] })).toBeUndefined();
+    expect(resolveEffortLevels("unknown-model", entry, { reasoning: true, effortLevels: ["xhigh"] })).toEqual(["xhigh"]);
   });
 
   it("resolveReasoningEffort: catalog-miss override must be inside the live vocabulary", () => {
@@ -505,5 +508,20 @@ describe("resolveReasoningEffort × per-model default effort (Taskana 4894)", ()
     expect(resolveReasoningEffort("bogus-default", entry, undefined)).toBeUndefined();
     // An explicit "off" default means "no reasoning" — the host's undefined.
     expect(resolveReasoningEffort("off-default", entry, undefined)).toBeUndefined();
+  });
+});
+
+
+
+describe("saved retired models", () => {
+  it("retains image, context and effort capabilities while hiding suggestions", () => {
+    const anthropic = findCatalogEntry("anthropic")!;
+    const openai = findCatalogEntry("openai")!;
+    expect(anthropic.models.some((model) => model.id === "claude-opus-4-20250514")).toBe(false);
+    expect(openai.models.some((model) => model.id === "gpt-4o")).toBe(false);
+    expect(resolveImageInput("claude-opus-4-20250514", anthropic, undefined)).toBe(true);
+    expect(resolveReasoningEffort("claude-opus-4-20250514", anthropic, "high")).toBe("high");
+    expect(resolveImageInput("gpt-4o", openai, undefined)).toBe(true);
+    expect(resolveContextWindow("gpt-4o", openai, undefined)).toBe(128_000);
   });
 });

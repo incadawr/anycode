@@ -982,14 +982,14 @@ describe("host boot context-window resolution shape (design slice-6.4-cut.md §2
     expect(spread).toEqual({ context: { contextWindowTokens: 8_192 } });
   });
 
-  it("catalog hit (z-ai + glm-4.5) -> spread yields { context: { contextWindowTokens: 128000 } }", () => {
-    const spread = bootContextSpread("https://api.z.ai/api/anthropic", "glm-4.5", undefined);
+  it("catalog hit (z-ai + glm-4.7) -> spread yields { context: { contextWindowTokens: 200000 } }", () => {
+    const spread = bootContextSpread("https://api.z.ai/api/anthropic", "glm-4.7", undefined);
 
-    expect(spread).toEqual({ context: { contextWindowTokens: 128_000 } });
+    expect(spread).toEqual({ context: { contextWindowTokens: 200_000 } });
   });
 
   it("env override wins over a catalog hit", () => {
-    const spread = bootContextSpread("https://api.z.ai/api/anthropic", "glm-4.5", 50_000);
+    const spread = bootContextSpread("https://api.z.ai/api/anthropic", "glm-4.7", 50_000);
 
     expect(spread).toEqual({ context: { contextWindowTokens: 50_000 } });
   });
@@ -1003,15 +1003,15 @@ describe("host boot context-window resolution shape (design slice-6.4-cut.md §2
   // TASK.142: the override is model-bound, so booting on ANOTHER model must not
   // inherit it — the host's 4th arg is what makes that hold at boot.
   it("a matching bound override applies; a mismatched one does not (boot on B with A's pair)", () => {
-    expect(bootContextSpread("https://api.z.ai/api/anthropic", "glm-4.5", 50_000, "glm-4.5")).toEqual({
+    expect(bootContextSpread("https://api.z.ai/api/anthropic", "glm-4.7", 50_000, "glm-4.7")).toEqual({
       context: { contextWindowTokens: 50_000 },
     });
     // A-bound pair, boot on B (catalogued): B resolves its own catalog window.
-    expect(bootContextSpread("https://api.z.ai/api/anthropic", "glm-4.6", 50_000, "glm-4.5")).toEqual({
-      context: { contextWindowTokens: 200_000 },
+    expect(bootContextSpread("https://api.z.ai/api/anthropic", "glm-5.3", 50_000, "glm-4.7")).toEqual({
+      context: { contextWindowTokens: 300_000 },
     });
     // A-bound pair, boot on an UNKNOWN B: the assumed fallback, not A's 50000.
-    expect(bootContextSpread("https://api.anthropic.com", "test-model", 50_000, "glm-4.5")).toEqual({
+    expect(bootContextSpread("https://api.anthropic.com", "test-model", 50_000, "glm-4.7")).toEqual({
       context: { contextWindowTokens: 8_192 },
     });
   });

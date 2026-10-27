@@ -129,7 +129,7 @@ describe("loadEnvConfig", () => {
 
   it("warns and ignores invalid reasoning effort", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(loadEnvConfig(envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m", [ENV_REASONING_EFFORT]: "xhigh" })).reasoningEffort).toBeUndefined();
+    expect(loadEnvConfig(envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m", [ENV_REASONING_EFFORT]: "invalid" })).reasoningEffort).toBeUndefined();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(ENV_REASONING_EFFORT));
     warn.mockRestore();
   });

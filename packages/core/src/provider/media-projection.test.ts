@@ -7,6 +7,8 @@
 
 import { describe, expect, it } from "vitest";
 import { createMediaProjectionPort, projectMessagesForMedia } from "./media-projection.js";
+import { findCatalogEntry } from "./catalog-data.js";
+import { resolveImageInput } from "./capabilities.js";
 import type { ModelPort, ModelRequest } from "../ports/model.js";
 import type { ModelStreamEvent } from "../types/events.js";
 import type { ChatMessage } from "../types/history.js";
@@ -96,6 +98,13 @@ async function drain(iter: AsyncIterable<ModelStreamEvent>): Promise<void> {
 }
 
 describe("createMediaProjectionPort", () => {
+  it.each([["anthropic", "claude-opus-4-20250514"], ["openai", "gpt-4o"]])("preserves images for saved %s model %s", async (provider, model) => {
+    const inner = new RecordingModelPort(model);
+    const port = createMediaProjectionPort(inner, () => resolveImageInput(model, findCatalogEntry(provider), undefined));
+    await drain(port.streamText({ messages: [{ role: "user", content: "look", images: [img] }], tools: [] }));
+    expect(inner.requests[0]?.messages[0]).toMatchObject({ images: [img] });
+  });
+
   it("projects request.messages through the live imageInputAllowed() verdict on every call", async () => {
     let allowed = false;
     const inner = new RecordingModelPort();

@@ -524,68 +524,6 @@ export function ctxPopoverBodyState(supportsBreakdown: boolean, loading: boolean
   return timedOut ? "empty" : "skeleton";
 }
 
-/**
- * "Session tokens: in X · out Y · total Z" line, or `null` to hide the row
- * entirely (no `finish` has landed in this session yet). Exported for unit
- * testing.
- */
-export function formatSessionTokensLine(tokens: SessionTokens | null): string | null {
-  if (!tokens) {
-    return null;
-  }
-  return `in ${formatCtxTokenCount(tokens.input)} · out ${formatCtxTokenCount(tokens.output)} · total ${formatCtxTokenCount(tokens.total)}`;
-}
-
-/** Latest provider cache-hit percentage, or an explicit unavailable state. */
-export function formatLatestCacheHitLine(tokens: SessionTokens | null): string | null {
-  if (!tokens) {
-    return null;
-  }
-  if (tokens.latestCacheRead === undefined || tokens.latestCacheInput === undefined || tokens.latestCacheInput <= 0) {
-    return "Latest cache hit: not reported by provider";
-  }
-  const percent = Math.round((tokens.latestCacheRead / tokens.latestCacheInput) * 100);
-  return `Latest cache hit: ${percent}% (${formatCtxTokenCount(tokens.latestCacheRead)}/${formatCtxTokenCount(tokens.latestCacheInput)} input)`;
-}
-
-/**
- * Taskana 4083 / TASK.34: the DURABLE audit lines. `session` is null when no
- * totals exist (nothing audited yet); `lastStep` is null when no step was
- * captured. The last-step cache % is computed ONLY from that step's own
- * numbers (never from session sums — TASK.34 invariant 6), and an absent
- * cache field is the honest "not reported by provider" line, never 0%.
- * Never renders cost/quota — the provider did not report it. Exported for
- * unit testing.
- */
-export function formatUsageAuditLines(a: {
-  lastStep: WireUsageAuditStep | null;
-  totals: WireUsageAuditTotals | null;
-}): { session: string | null; lastStep: string | null } {
-  let session: string | null = null;
-  if (a.totals !== null) {
-    session = `Audited (${a.totals.stepsReported} records, ${a.totals.stepsWithCache} with cache): in ${formatCtxTokenCount(
-      a.totals.input,
-    )} · out ${formatCtxTokenCount(a.totals.output)} · total ${formatCtxTokenCount(a.totals.total)}`;
-  }
-  let lastStep: string | null = null;
-  if (a.lastStep !== null) {
-    const label = a.lastStep.finishReason === "result" ? "Last audited turn" : "Last audited step";
-    if (
-      a.lastStep.cachedInputTokens === undefined ||
-      a.lastStep.inputTokens === undefined ||
-      a.lastStep.inputTokens <= 0
-    ) {
-      lastStep = `${label}: cache not reported by provider`;
-    } else {
-      const percent = Math.round((a.lastStep.cachedInputTokens / a.lastStep.inputTokens) * 100);
-      lastStep = `${label}: ${percent}% cache (${formatCtxTokenCount(a.lastStep.cachedInputTokens)}/${formatCtxTokenCount(
-        a.lastStep.inputTokens,
-      )} input)`;
-    }
-  }
-  return { session, lastStep };
-}
-
 function formatUsageMoney(value: number): string {
   return `$${value > 0 && value < 0.0001 ? value.toPrecision(2) : value.toFixed(4)}`;
 }
@@ -600,17 +538,111 @@ export function shouldRefreshUsageAudit(open: boolean, previous: TurnState["stat
   return open && previous !== "idle" && current === "idle";
 }
 
-/** Cost is a historical snapshot, never recalculated from current settings. */
-export function formatUsageCostLines(last: WireUsageAuditStep | null, totals: WireUsageAuditTotals | null): string[] {
+/**
+ * The popover's whole usage/cost block, in the three lines it is allowed to
+ * take when collapsed:
+ *
+ *   total          "Spent in this session: ≈ $0.0053" — the headline number
+ *   subagentSuffix "incl. subagents ≈ $0.0040"        (muted, same line)
+ *   footnote       "Tokens in 142.8K · out 536 · cache saved ≈ $0.038 · estimates at peak rates"
+ *
+ * The total is the SESSION's, subagents INCLUDED (own priced steps + the
+ * children's own sub-total) — that was the number the owner could not find.
+ * The turn line lives between total and footnote and is built separately
+ * (`formatTurnStepSummary`), so a "this turn" figure can never be mistaken for
+ * the session's.
+ *
+ * Honesty rules are unchanged from the per-line era: any unpriced step makes
+ * the figure a lower bound ("≥ … · some steps price unknown"); a session whose
+ * steps are all subscription reads "By subscription" and a mixed one appends
+ * "· plus subscription"; with nothing priced at all it reads "Price unknown";
+ * and native Claude children, whose costs may already be inside the reported
+ * total, keep their "may already be included" caveat right next to the number.
+ *
+ * Cost is a historical snapshot, never recalculated from current settings.
+ * `tokens` is the LIVE session counter (preferred, because the audit totals are
+ * the restored-after-restart fallback) and only feeds the footnote.
+ */
+export interface UsageCostLedger {
+  /** The single prominent total line, including subagents. */
+  total: string;
+  /** Muted suffix naming the subagent share; null when the session has none. */
+  subagentSuffix: string | null;
+  /** Quiet tokens/savings/provider footnote; null when nothing was reported. */
+  footnote: string | null;
+}
+
+export function formatUsageCostLedger(
+  totals: WireUsageAuditTotals | null,
+  tokens: SessionTokens | null,
+): UsageCostLedger {
   const money = formatUsageMoney;
-  const partial = totals?.unpricedSteps ? " · some steps price unknown" : "";
-  return [
-    `${last?.finishReason === "result" ? "Last turn" : "Last step"}: ${formatStepCost(last)}`,
-    `Session cost: ${totals?.costUsd === undefined ? (totals?.subscriptionSteps ? `By subscription${partial}` : "Price unknown") : `${partial ? "≥" : "≈"} ${money(totals.costUsd)}${partial}${totals?.subscriptionSteps ? " · plus subscription" : ""}`}`,
-    `Cache saved: ${totals?.cacheSavingsUsd === undefined ? "Price unknown" : `≈ ${money(totals.cacheSavingsUsd)}${totals.unknownSavingsSteps ? " · some steps savings unknown" : partial}${totals?.subscriptionSteps ? " · plus subscription" : ""}`}`,
-    "Estimates use peak rates where available",
-    totals?.subagentCount ? `Subagents: ${totals.subagentCostUsd === undefined ? (totals.subagentSubscription ? `By subscription${totals.subagentUnpriced ? " · some steps price unknown" : ""}` : "Price unknown") : `${totals.subagentUnpriced ? "≥" : "≈"} ${money(totals.subagentCostUsd)}${totals.subagentUnpriced ? " · some steps price unknown" : ""}${totals.subagentSubscription ? " · plus subscription" : ""}`}${totals.subagentIncludedInReportedCost ? " · native Claude costs may already be included" : ""}` : "Subagents: None",
-  ];
+  const ownPriced = totals?.costUsd !== undefined;
+  const subPriced = totals?.subagentCostUsd !== undefined;
+  const pricedTotal = (ownPriced ? (totals?.costUsd ?? 0) : 0) + (subPriced ? (totals?.subagentCostUsd ?? 0) : 0);
+  // A bound is a bound across BOTH halves: one unpriced child step makes the
+  // session figure a lower bound exactly like one unpriced parent step does.
+  const partial = (totals?.unpricedSteps ?? 0) > 0 || (totals?.subagentUnpriced ?? 0) > 0;
+  const subscription = (totals?.subscriptionSteps ?? 0) > 0;
+  const subSubscription = (totals?.subagentSubscription ?? 0) > 0;
+
+  let total: string;
+  if (!ownPriced && !subPriced) {
+    total = `Spent in this session: ${subscription || subSubscription ? "By subscription" : "Price unknown"}`;
+    if (partial && (subscription || subSubscription)) {
+      total += " · some steps price unknown";
+    }
+  } else {
+    total = `Spent in this session: ${partial ? "≥" : "≈"} ${money(pricedTotal)}`;
+    if (partial) {
+      total += " · some steps price unknown";
+    }
+    if (subscription || subSubscription) {
+      total += " · plus subscription";
+    }
+  }
+
+  const subagentCount = totals?.subagentCount ?? 0;
+  let subagentSuffix: string | null = null;
+  if (totals !== null && subagentCount > 0) {
+    const share = subPriced
+      ? `${(totals.subagentUnpriced ?? 0) > 0 ? "≥" : "≈"} ${money(totals.subagentCostUsd ?? 0)}`
+      : subSubscription ? "by subscription" : "price unknown";
+    subagentSuffix =
+      `incl. subagents ${share}` +
+      (totals.subagentIncludedInReportedCost ? " · native Claude costs may already be included" : "");
+  }
+
+  const inputTokens = tokens?.input ?? totals?.input;
+  const outputTokens = tokens?.output ?? totals?.output;
+  const parts: string[] = [];
+  // A session with no token counts at all (every counter still zero) gets no
+  // "in 0 · out 0" noise — there is nothing to report yet.
+  if ((inputTokens ?? 0) > 0 || (outputTokens ?? 0) > 0) {
+    parts.push(
+      `Tokens in ${inputTokens === undefined ? "?" : formatCtxTokenCount(inputTokens)} · out ${
+        outputTokens === undefined ? "?" : formatCtxTokenCount(outputTokens)
+      }`,
+    );
+  }
+  let showsEstimate = ownPriced || subPriced;
+  if (totals?.cacheSavingsUsd !== undefined) {
+    parts.push(
+      `cache saved ≈ ${money(totals.cacheSavingsUsd)}` +
+        ((totals.unknownSavingsSteps ?? 0) > 0 ? " · some steps savings unknown" : ""),
+    );
+    showsEstimate = true;
+  }
+  const bases = totals?.priceBasisIds ?? [];
+  if (bases.some((id) => id.includes("-openai-") || id.startsWith("claude-haiku-5-5-anthropic-"))) {
+    parts.push("short-context rate estimates");
+  }
+  if (bases.some((id) => id.includes("-peak-"))) parts.push("peak-rate estimates");
+  if (bases.some((id) => id.startsWith("connection:"))) parts.push("connection-rate estimates");
+  if (bases.some((id) => id !== "claude-cli-reported" && !id.startsWith("connection:") && !id.includes("-openai-") && !id.includes("-peak-") && !id.startsWith("claude-haiku-5-5-anthropic-"))) parts.push("standard-rate estimates");
+  if (showsEstimate && bases.length === 0) parts.push("estimated rates");
+
+  return { total, subagentSuffix, footnote: parts.length > 0 ? parts.join(" · ") : null };
 }
 
 /** Taskana 4083 / TASK.34: one popover row per audited step, omitting absent cache/retry parts. */
@@ -620,6 +652,80 @@ export function formatUsageAuditStepRow(step: WireUsageAuditStep): string {
   const outPart = step.outputTokens !== undefined ? `out ${formatCtxTokenCount(step.outputTokens)}` : null;
   const retryPart = step.transportRetries > 0 ? `retry ${step.transportRetries}` : null;
   return [step.finishReason === "result" ? "turn total" : "step " + step.step, inPart, cachedPart, outPart, retryPart, `cost ${formatStepCost(step)}`].filter((part) => part !== null).join(" · ");
+}
+
+/**
+ * The CURRENT turn's audited steps, in step order. The list arrives
+ * newest-first (host `pushUsageAudit` reverses the tail), so "current" is the
+ * turn that owns the newest `createdAt` — never simply `list[0]`, which would
+ * silently break if the host's ordering ever changed. Filtering by that
+ * `turnId` is what keeps a previous turn's `step 21` from appearing beneath the
+ * new turn's `step 1`: the collapsed summary and the expanded list both speak
+ * about exactly one turn. Empty list (or none loaded) -> no summary, no rows.
+ */
+export function currentTurnSteps(list: readonly WireUsageAuditStep[] | null): WireUsageAuditStep[] {
+  if (list === null || list.length === 0) {
+    return [];
+  }
+  const latest = list.reduce((best, step) => (step.createdAt > best.createdAt ? step : best));
+  return list
+    .filter((step) => step.turnId === latest.turnId)
+    .sort((a, b) => a.step - b.step || a.createdAt - b.createdAt);
+}
+
+/** Money for the one-line summary: up to four decimals, trailing zeros trimmed ("$0.004", "$1.5"). */
+function formatCompactMoney(value: number): string {
+  if (value === 0) {
+    return "$0";
+  }
+  if (value > 0 && value < 0.0001) {
+    return `$${value.toPrecision(2)}`;
+  }
+  return `$${value.toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}`;
+}
+
+/**
+ * The collapsed one-line summary of one turn's steps:
+ * `"This turn: 12 steps · ≈ $0.004 · cache 99%"`.
+ *
+ * The "This turn:" prefix is load-bearing: the session total sits directly
+ * above this line, and without the label a reader takes the turn's money for
+ * the session's (that misreading is what the step list "not adding up to the
+ * total" looked like). `$0.004` is the SUM of that turn's priced steps; a turn
+ * with any unpriced step reads "≥", a fully unknown one "price unknown", and a
+ * subscription one "by subscription". The cache percentage divides that turn's
+ * cached input by its own input and appears ONLY when a step actually reported
+ * both (never a fabricated 0%).
+ */
+export function formatTurnStepSummary(steps: readonly WireUsageAuditStep[]): string | null {
+  if (steps.length === 0) {
+    return null;
+  }
+  const priced = steps.filter((step) => step.costUsd !== undefined);
+  const subscription = steps.filter((step) => step.priceBasisId === "subscription");
+  const unpriced = steps.length - priced.length - subscription.length;
+  let costPart: string;
+  if (priced.length === 0) {
+    costPart = subscription.length > 0 ? "by subscription" : "price unknown";
+  } else {
+    const sum = priced.reduce((total, step) => total + (step.costUsd ?? 0), 0);
+    costPart = `${unpriced > 0 || subscription.length > 0 ? "≥" : "≈"} ${formatCompactMoney(sum)}`;
+  }
+  if (subscription.length > 0 && priced.length > 0) costPart += " · plus subscription";
+  if (unpriced > 0 && (priced.length > 0 || subscription.length > 0)) costPart += " · some steps price unknown";
+  const withCache = steps.filter(
+    (step) => step.inputTokens !== undefined && step.cachedInputTokens !== undefined && step.inputTokens > 0,
+  );
+  const cachePart = withCache.length === 0
+    ? null
+    : `cache ${Math.round(
+        (withCache.reduce((total, step) => total + (step.cachedInputTokens ?? 0), 0) /
+          withCache.reduce((total, step) => total + (step.inputTokens ?? 0), 0)) *
+          100,
+      )}%`;
+  return [`This turn: ${steps.length} step${steps.length === 1 ? "" : "s"}`, costPart, cachePart]
+    .filter((part) => part !== null)
+    .join(" · ");
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -759,6 +865,29 @@ export function ctxPopoverAnchorFromRect(
   };
 }
 
+/** The collapsed cost summary uses three rows, with a wrapping footnote. */
+export function UsageCostBlock({ ledger, turnSummary, turnSteps, expanded, onToggle }: {
+  ledger: UsageCostLedger;
+  turnSummary: string | null;
+  turnSteps: readonly WireUsageAuditStep[];
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const total = ledger.total + (ledger.subagentSuffix !== null ? ` · ${ledger.subagentSuffix}` : "");
+  return <div className="ctx-popover-cost-block">
+    <div className="ctx-popover-total ctx-popover-cost-line" tabIndex={0} title={total}>
+      {ledger.total}{ledger.subagentSuffix !== null && <span className="ctx-popover-total-sub"> · {ledger.subagentSuffix}</span>}
+    </div>
+    {turnSummary !== null && <>
+      <button type="button" className="ctx-popover-steps-toggle ctx-popover-cost-line" aria-expanded={expanded} title={turnSummary} onClick={onToggle}>{turnSummary}</button>
+      {expanded && <div className="ctx-popover-steps" role="group" aria-label="This turn's steps">
+        {turnSteps.map((step) => <div className="ctx-popover-session" key={`${step.turnId}:${step.step}`}>{formatUsageAuditStepRow(step)}</div>)}
+      </div>}
+    </>}
+    {ledger.footnote !== null && <div className="ctx-popover-session ctx-popover-footnote" tabIndex={0} title={ledger.footnote}>{ledger.footnote}</div>}
+  </div>;
+}
+
 /**
  * Hover/focus/click-triggered popover anchored to the ctx meter. Positioning
  * mirrors ModelPill.tsx's popover (position:fixed, anchor computed from
@@ -803,6 +932,8 @@ function CtxPopover({
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<{ left: number; bottom: number } | null>(null);
   const [timedOut, setTimedOut] = useState(false);
+  /** Per-step list starts collapsed and returns to collapsed on every close. */
+  const [stepsExpanded, setStepsExpanded] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const hoverTimerRef = useRef<number | null>(null);
@@ -825,6 +956,7 @@ function CtxPopover({
   function close(): void {
     clearHoverTimer();
     setOpen(false);
+    setStepsExpanded(false);
   }
 
   // Cleanup a pending hover-intent timer on unmount (e.g. a tab switch mid-hover).
@@ -934,17 +1066,14 @@ function CtxPopover({
   const rows = ctxPopoverRows(contextBreakdown);
   const loading = ctxPopoverLoading(open, contextBreakdown);
   const bodyState = ctxPopoverBodyState(supportsContextBreakdown, loading, timedOut);
-  const sessionLine = formatSessionTokensLine(sessionTokens);
-  const cacheHitLine = formatLatestCacheHitLine(sessionTokens);
-  // Taskana 4083 / TASK.34: the durable audit view. When the live
-  // sessionTokens died with a restart but the audit survived, the audited
-  // session line still renders (restored-after-restart case) — the LIVE
-  // sessionTokens keeps priority whenever present.
-  const auditLines = formatUsageAuditLines({
-    lastStep: usageAudit.lastStep,
-    totals: sessionTokens !== null ? null : usageAudit.totals,
-  });
-  const auditRows = usageAudit.list !== null ? usageAudit.list.slice(0, 10) : [];
+  // The usage/cost block: ONE session total (subagents included), the current
+  // turn, one quiet footnote. Three lines at most, so the number the owner
+  // came for is the number that stands out.
+  const ledger = formatUsageCostLedger(usageAudit.totals, sessionTokens);
+  // Current-turn steps only (never a mix of turns): the summary line and the
+  // expandable list below are both built from this one array.
+  const turnSteps = currentTurnSteps(usageAudit.list);
+  const turnStepSummary = formatTurnStepSummary(turnSteps);
   const quotaView = buildQuotaPopoverView(quota, Date.now());
   const fillPercent = Math.min(100, Math.max(0, percent));
 
@@ -1010,27 +1139,11 @@ function CtxPopover({
               ))}
             </div>
           )}
-          {(sessionLine !== null || quotaView !== null) && <div className="ctx-popover-divider" />}
-          {sessionLine !== null && (
-            <>
-              <div className="ctx-popover-session">Session tokens: {sessionLine}</div>
-              {cacheHitLine !== null && <div className="ctx-popover-session">{cacheHitLine}</div>}
-            </>
-          )}
-          {formatUsageCostLines(usageAudit.lastStep, usageAudit.totals).map((line) => (
-            <div className="ctx-popover-session" key={line}>{line}</div>
-          ))}
+          <div className="ctx-popover-divider" />
+          <UsageCostBlock ledger={ledger} turnSummary={turnStepSummary} turnSteps={turnSteps} expanded={stepsExpanded} onToggle={() => setStepsExpanded((value) => !value)} />
           {usageAudit.list === null && usageAudit.totalSteps > 0 && (
-            <div className="ctx-popover-session">Audit: {usageAudit.totalSteps} records — reopen to load</div>
+            <div className="ctx-popover-session">Step history: {usageAudit.totalSteps} records — reopen to load</div>
           )}
-          {auditLines.session !== null && <div className="ctx-popover-session">{auditLines.session}</div>}
-          {auditLines.lastStep !== null && <div className="ctx-popover-session">{auditLines.lastStep}</div>}
-          {auditRows.length > 0 &&
-            auditRows.map((step) => (
-              <div className="ctx-popover-session" key={`${step.turnId}:${step.step}`}>
-                {formatUsageAuditStepRow(step)}
-              </div>
-            ))}
           {quotaView !== null && (
             <>
               {quotaView.primaryLine !== null && <div className="ctx-popover-session">{quotaView.primaryLine}</div>}

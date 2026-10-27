@@ -54,6 +54,8 @@ export interface CatalogModel {
    * GLM-5.2 declares `["off", "high", "max"]` to mirror its native 3-state UI.
    */
   effortLevels?: ReasoningEffort[];
+  /** The provider accepts an explicit no-reasoning effort. */
+  supportsExplicitOff?: boolean;
   /**
    * Taskana 4894: the effort tier the PROVIDER applies when the request says
    * nothing — only ever set where the provider's own documentation states it
@@ -140,6 +142,8 @@ export interface CatalogProviderEntry {
   apiKeyEnv?: string;
   headers?: Record<string, string>;
   models: CatalogModel[];
+  /** Historical capability hints for saved connections, excluded from suggestions. */
+  retiredModels?: CatalogModel[];
   /**
    * True when this endpoint legitimately runs with no credential at all (a
    * local vLLM/Ollama-style server, TASK.43 W5) — readiness does not require a

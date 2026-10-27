@@ -52,6 +52,30 @@ const ENTRIES: CatalogProviderEntry[] = [
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
     models: [
+      // Live Claude lineup, checked 2026-10-27. Specs (API id, 1M-token
+      // context, 128K max output, text+image input) come from
+      // platform.claude.com/docs/en/models/overview; rates from
+      // platform.claude.com/docs/en/about-claude/pricing, USD per 1M tokens,
+      // standard (non-batch) tier. `cachedInput` is that page's "hits and
+      // refreshes" column; `cacheWrite` is the 5-minute cache write (the 1-hour
+      // write is a separate, pricier row). Order follows Anthropic's own
+      // advice ("start with Claude Opus 5.5"), since the first row is what an
+      // empty model field prefills; Fable 5.1 is last because it is the
+      // specialist tier, not the default.
+      //
+      // Effort levels and defaults: https://platform.claude.com/docs/en/build-with-claude/effort (checked 2026-10-28).
+      // Opus 5.5: $4 in / $0.20 hit / $5 5m write / $20 out.
+      { id: "claude-opus-5-5", pricing: { basisId: "claude-opus-5-5-anthropic-2026-10-27", input: 4, cachedInput: 0.2, cacheWrite: 5, output: 20 }, name: "Claude Opus 5.5", contextWindow: 1_000_000, maxOutputTokens: 131_072, imageInput: true, reasoning: true, effortLevels: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "medium" },
+      // Sonnet 5.5: $2 in / $0.10 hit / $2.50 5m write / $10 out.
+      { id: "claude-sonnet-5-5", pricing: { basisId: "claude-sonnet-5-5-anthropic-2026-10-27", input: 2, cachedInput: 0.1, cacheWrite: 2.5, output: 10 }, name: "Claude Sonnet 5.5", contextWindow: 1_000_000, maxOutputTokens: 131_072, imageInput: true, reasoning: true, effortLevels: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "high" },
+      // Haiku 5.5: the pricing page tiers it by prompt length — these are the
+      // "prompts up to 100,000 tokens" rates ($0.10 in / $0.01 hit / $0.125 5m
+      // write / $0.50 out); prompts over 100k pay $0.50 / $0.05 / $0.625 / $2.50.
+      { id: "claude-haiku-5-5", pricing: { basisId: "claude-haiku-5-5-anthropic-2026-10-27", input: 0.1, cachedInput: 0.01, cacheWrite: 0.125, output: 0.5 }, name: "Claude Haiku 5.5", contextWindow: 1_000_000, maxOutputTokens: 131_072, imageInput: true, reasoning: true, effortLevels: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "medium" },
+      // Fable 5.1: $10 in / $0.25 hit / $12.50 5m write / $50 out.
+      { id: "claude-fable-5-1", pricing: { basisId: "claude-fable-5-1-anthropic-2026-10-27", input: 10, cachedInput: 0.25, cacheWrite: 12.5, output: 50 }, name: "Claude Fable 5.1", contextWindow: 1_000_000, maxOutputTokens: 131_072, imageInput: true, reasoning: true, effortLevels: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "high" },
+    ],
+    retiredModels: [
       { id: "claude-opus-4-20250514", name: "Claude Opus 4", contextWindow: 200_000, imageInput: true, reasoning: true, effortLevels: ["off", "low", "medium", "high"] },
       { id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4", contextWindow: 200_000, imageInput: true, reasoning: true, effortLevels: ["off", "low", "medium", "high"] },
       { id: "claude-3-5-haiku-20241022", name: "Claude 3.5 Haiku", contextWindow: 200_000, imageInput: true },
@@ -116,16 +140,45 @@ const ENTRIES: CatalogProviderEntry[] = [
     // unmarked on purpose: it is documented under `guides/llm/`, not
     // `guides/vlm/`, and nobody has claimed images for it.
     models: [
-      // GLM-5.3/5.3-flash/5.2: 1M context, 128K max output (docs.z.ai spec boxes).
-      { id: "glm-5.3", name: "GLM-5.3", contextWindow: 1_000_000, usableContextWindow: GLM_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "max" },
-      { id: "glm-5.3-flash", name: "GLM-5.3 Flash", contextWindow: 1_000_000, usableContextWindow: GLM_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
-      { id: "glm-5.2", name: "GLM-5.2", contextWindow: 1_000_000, usableContextWindow: GLM_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["off", "high", "max"] },
-      // GLM-5.1/5/5-turbo/4.7/4.6: 200K context, 128K max output (docs.z.ai spec boxes).
-      { id: "glm-5.1", name: "GLM-5.1", contextWindow: 200_000, maxOutputTokens: 131_072 },
-      { id: "glm-5", name: "GLM-5", contextWindow: 200_000, maxOutputTokens: 131_072 },
+      // Current Z.AI text models, checked 2026-10-27 against
+      // docs.z.ai/guides/overview/overview (the provider's own model matrix)
+      // and docs.z.ai/guides/overview/pricing. Prices are USD per 1M tokens:
+      // "Input" / "Cached Input" / "Output". Z.AI lists a single rate per model
+      // (no peak/off-peak, no context tier), so those ARE the whole table.
+      // Newly cached content is billed at the standard input rate; cache
+      // storage is free (https://docs.z.ai/guides/capabilities/cache, 2026-10-28).
+      // Dropped 2026-10-27 because Z.AI no longer lists them as current:
+      // `glm-5-turbo` (absent from both pages), `glm-4.5` and `glm-4.5-air`
+      // (still billed under the page's collapsed "Other Pricing" table, but no
+      // longer in the model matrix). A connection carrying those ids as free
+      // text keeps working — the catalog is a hint list, not an allow-list.
+      // GLM-5.3/5.3-flash/5.3-flashx/5.2: 1M context, 128K max output
+      // (docs.z.ai spec boxes; the 5.3-Flash page states "Context Length 1M",
+      // "Maximum Output Tokens 128K" for the flash/flashx pair).
+      // GLM-5.3: $1.4 in / $0.26 cached / $4.4 out (docs.z.ai/guides/overview/pricing, 2026-10-27).
+      { id: "glm-5.3", pricing: { basisId: "glm-5.3-zai-2026-10-27", input: 1.4, cachedInput: 0.26, cacheWrite: 1.4, output: 4.4 }, name: "GLM-5.3", contextWindow: 1_000_000, usableContextWindow: GLM_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "max" },
+      // GLM-5.3-Flash: $0.15 in / $0.03 cached / $0.50 out (docs.z.ai/guides/overview/pricing, 2026-10-27).
+      { id: "glm-5.3-flash", pricing: { basisId: "glm-5.3-flash-zai-2026-10-27", input: 0.15, cachedInput: 0.03, cacheWrite: 0.15, output: 0.5 }, name: "GLM-5.3 Flash", contextWindow: 1_000_000, usableContextWindow: GLM_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
+      // GLM-5.3-FlashX: the same model at ~200 tokens/s. Model code and the
+      // family's "Video / Image / Text / File" input plus "thinking.type only
+      // supports enabled" come from docs.z.ai/guides/vlm/glm-5.3-flash
+      // (2026-10-27); $0.37 in / $0.075 cached / $1.25 out from
+      // docs.z.ai/guides/overview/pricing (2026-10-27).
+      { id: "glm-5.3-flashx", pricing: { basisId: "glm-5.3-flashx-zai-2026-10-27", input: 0.37, cachedInput: 0.075, cacheWrite: 0.37, output: 1.25 }, name: "GLM-5.3 FlashX", contextWindow: 1_000_000, usableContextWindow: GLM_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
+      // GLM-5.2: $1.4 in / $0.26 cached / $4.4 out (docs.z.ai/guides/overview/pricing, 2026-10-27).
+      { id: "glm-5.2", pricing: { basisId: "glm-5.2-zai-2026-10-27", input: 1.4, cachedInput: 0.26, cacheWrite: 1.4, output: 4.4 }, name: "GLM-5.2", contextWindow: 1_000_000, usableContextWindow: GLM_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["off", "high", "max"] },
+      // GLM-5.1/5/4.7/4.6: 200K context, 128K max output (docs.z.ai spec boxes).
+      // GLM-5.1: $1.4 in / $0.26 cached / $4.4 out (docs.z.ai/guides/overview/pricing, 2026-10-27).
+      { id: "glm-5.1", pricing: { basisId: "glm-5.1-zai-2026-10-27", input: 1.4, cachedInput: 0.26, cacheWrite: 1.4, output: 4.4 }, name: "GLM-5.1", contextWindow: 200_000, maxOutputTokens: 131_072 },
+      // GLM-5: $1 in / $0.2 cached / $3.2 out (docs.z.ai/guides/overview/pricing, 2026-10-27).
+      { id: "glm-5", pricing: { basisId: "glm-5-zai-2026-10-27", input: 1, cachedInput: 0.2, cacheWrite: 1, output: 3.2 }, name: "GLM-5", contextWindow: 200_000, maxOutputTokens: 131_072 },
+      // GLM-4.7: $0.6 in / $0.11 cached / $2.2 out (docs.z.ai/guides/overview/pricing, 2026-10-27).
+      { id: "glm-4.7", pricing: { basisId: "glm-4.7-zai-2026-10-27", input: 0.6, cachedInput: 0.11, cacheWrite: 0.6, output: 2.2 }, name: "GLM-4.7", contextWindow: 200_000, maxOutputTokens: 131_072 },
+      // GLM-4.6: $0.6 in / $0.11 cached / $2.2 out (docs.z.ai/guides/overview/pricing, 2026-10-27).
+      { id: "glm-4.6", pricing: { basisId: "glm-4.6-zai-2026-10-27", input: 0.6, cachedInput: 0.11, cacheWrite: 0.6, output: 2.2 }, name: "GLM-4.6", contextWindow: 200_000, maxOutputTokens: 131_072 },
+    ],
+    retiredModels: [
       { id: "glm-5-turbo", name: "GLM-5 Turbo", contextWindow: 200_000, maxOutputTokens: 131_072 },
-      { id: "glm-4.7", name: "GLM-4.7", contextWindow: 200_000, maxOutputTokens: 131_072 },
-      { id: "glm-4.6", name: "GLM-4.6", contextWindow: 200_000, maxOutputTokens: 131_072 },
       { id: "glm-4.5", name: "GLM-4.5", contextWindow: 128_000, maxOutputTokens: 32_768 },
       { id: "glm-4.5-air", name: "GLM-4.5 Air", contextWindow: 128_000, maxOutputTokens: 32_768 },
     ],
@@ -147,10 +200,17 @@ const ENTRIES: CatalogProviderEntry[] = [
       // `defaultEffort` on both rows (Taskana 4894), so a session with no
       // explicit pick shows AND sends `high` instead of falling back to the
       // vocabulary's first entry (`low`).
-      // Owner-supplied peak rates, 2026-10-26; off-peak cannot be inferred
-      // from usage. This is an estimate, not a verified invoice price.
-      { id: "deepseek-flash", pricing: { basisId: "deepseek-flash-peak-owner-2026-10-26", input: 0.3, cachedInput: 0.006, output: 1.2 }, name: "DeepSeek-V4.1-Flash", contextWindow: 1_048_576, maxOutputTokens: 393_216, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high", todoReminderEvery: 20 },
-      { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro", contextWindow: 1_048_576, maxOutputTokens: 393_216, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high", todoReminderEvery: 20 },
+      // https://api-docs.deepseek.com/quick_start/pricing/ — checked 2026-10-27.
+      // Peak rates; usage does not distinguish peak from off-peak.
+      { id: "deepseek-flash", pricing: { basisId: "deepseek-flash-deepseek-peak-2026-10-27", input: 0.3, cachedInput: 0.006, output: 1.2 }, name: "DeepSeek-V4.1-Flash", contextWindow: 1_048_576, maxOutputTokens: 393_216, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high", todoReminderEvery: 20 },
+      // Official DeepSeek pricing page, checked 2026-10-27
+      // (api-docs.deepseek.com/quick_start/pricing, checked 2026-10-27) lists
+      // peak / off-peak rates; off-peak is exactly half of peak, and a usage
+      // record carries no timestamp to tell them apart, so — same convention as
+      // the Flash row above — the PEAK rate is recorded (the conservative
+      // ceiling). V4-Pro peak: $1.32 in / $0.044 cache hit / $3.96 out per 1M
+      // tokens; off-peak is $0.66 / $0.022 / $1.98.
+      { id: "deepseek-v4-pro", pricing: { basisId: "deepseek-v4-pro-deepseek-peak-2026-10-27", input: 1.32, cachedInput: 0.044, output: 3.96 }, name: "DeepSeek-V4-Pro", contextWindow: 1_048_576, maxOutputTokens: 393_216, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high", todoReminderEvery: 20 },
     ],
   },
   {
@@ -165,6 +225,32 @@ const ENTRIES: CatalogProviderEntry[] = [
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
     models: [
+      // Current platform models, checked 2026-10-27 against
+      // platform.kimi.ai/docs/models (the provider's Model List). The two rows
+      // that used to be here (`kimi-k2-0711-preview`, `moonshot-v1-128k`) are
+      // on that page's own Deprecated list — discontinued 2026-05-25 and
+      // 2026-08-31 — so they are gone from the hint list. A connection that
+      // still carries one of those ids as free text keeps working.
+      // Context windows: the pricing page states "All K3 series models support
+      // a 1,048,576-token context window" and "All K2 series models support a
+      // 262,144-token context window" (platform.kimi.ai/docs/pricing/chat).
+      // `imageInput` only where the Model List says so ("native visual
+      // understanding" for K3/K3.1, "visual and text input" for K2.6).
+      // K3 rates: https://platform.kimi.ai/ checked 2026-10-27, USD per million tokens.
+      // No output ceiling is published on the model list.
+      // https://platform.kimi.ai/ — checked 2026-10-27.
+      { id: "kimi-k3.1-pro", pricing: { basisId: "kimi-k3.1-pro-kimi-2026-10-27", input: 2, cachedInput: 0.2, cacheWrite: 2, output: 10 }, name: "Kimi K3.1 Pro", contextWindow: 1_048_576, imageInput: true },
+      // https://platform.kimi.ai/ — checked 2026-10-27.
+      { id: "kimi-k3.1-pro-highspeed", pricing: { basisId: "kimi-k3.1-pro-highspeed-kimi-2026-10-27", input: 4, cachedInput: 0.2, cacheWrite: 4, output: 20 }, name: "Kimi K3.1 Pro Highspeed", contextWindow: 1_048_576, imageInput: true },
+      // https://platform.kimi.ai/ — checked 2026-10-27.
+      { id: "kimi-k3", pricing: { basisId: "kimi-k3-kimi-2026-10-27", input: 3, cachedInput: 0.3, cacheWrite: 3, output: 15 }, name: "Kimi K3", contextWindow: 1_048_576, imageInput: true },
+      // https://platform.kimi.ai/docs/pricing/chat and https://platform.kimi.ai/
+      // checked 2026-10-28: neither current page lists rates for these K2 models.
+      { id: "kimi-k2.7-code", name: "Kimi K2.7 Code", contextWindow: 262_144 },
+      { id: "kimi-k2.7-code-highspeed", name: "Kimi K2.7 Code Highspeed", contextWindow: 262_144 },
+      { id: "kimi-k2.6", name: "Kimi K2.6", contextWindow: 262_144, imageInput: true },
+    ],
+    retiredModels: [
       { id: "kimi-k2-0711-preview", name: "Kimi K2", contextWindow: 128_000, maxOutputTokens: 32_768 },
       { id: "moonshot-v1-128k", name: "Moonshot v1 128k", contextWindow: 128_000, maxOutputTokens: 32_768 },
     ],
@@ -208,8 +294,29 @@ const ENTRIES: CatalogProviderEntry[] = [
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
     models: [
-      { id: "kimi-for-coding", name: "K2.7 Coding", contextWindow: 262_144, imageInput: true, reasoning: true, effortLevels: ["low", "medium", "high"] },
-      { id: "kimi-for-coding-highspeed", name: "K2.7 Coding Highspeed", contextWindow: 262_144, imageInput: true, reasoning: true, effortLevels: ["low", "medium", "high"] },
+      // Model list checked 2026-10-27 against
+      // kimi.com/code/docs/en/kimi-code/models (the product's own "Model
+      // Configuration" table): it now also offers k3.1-pro and
+      // k3.1-pro-highspeed. The context column there reads "Up to 1048576 (for
+      // higher-tier members)" for k3.1-pro/k3/kimi-for-coding, but access to
+      // the 1M window is plan-gated (403 without it), so the rows keep the
+      // 262_144 floor this entry has always used rather than promising a window
+      // half the users' plans reject.
+      //
+      // NO `pricing` on purpose (checked 2026-10-27). This endpoint is the
+      // membership product, not metered API billing: the same page gates each
+      // model by plan tier (Moderato/Andante/…) and quota, and publishes no USD
+      // per-1M-token rate; the pay-as-you-go price list on platform.kimi.ai
+      // explicitly says it "differs from … Kimi Code". A subscription
+      // connection states that with the connection's own "subscription"
+      // pricing mode instead of inventing a rate.
+      // Names follow the version column of that table: `kimi-for-coding` is
+      // served as K2.8 Preview, `kimi-for-coding-highspeed` as K2.7 Code
+      // Highspeed.
+      { id: "k3.1-pro", name: "K3.1 Pro", contextWindow: 262_144, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high" },
+      { id: "k3.1-pro-highspeed", name: "K3.1 Pro Highspeed", contextWindow: 262_144, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high" },
+      { id: "kimi-for-coding", name: "K2.8 Preview", contextWindow: 262_144, imageInput: true, reasoning: true, effortLevels: ["low", "medium", "high"] },
+      { id: "kimi-for-coding-highspeed", name: "K2.7 Code Highspeed", contextWindow: 262_144, imageInput: true, reasoning: true, effortLevels: ["low", "medium", "high"] },
       { id: "k3", name: "K3", contextWindow: 262_144, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
       { id: "k3-256k", name: "K3 256k", contextWindow: 262_144, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
     ],
@@ -221,9 +328,31 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "openai-responses",
     supportedTransports: ["openai-responses", "openai-chat-completions"],
     auth: { kind: "api_key" },
-    // Conservative public model ids only; reasoning/effortLevels intentionally
-    // omitted until W6 live-smoke confirms per-model tiers (TASK.43 W5).
+    // Current GPT-6 family, checked 2026-10-27. Ids/specs from each model's own
+    // page under developers.openai.com/api/docs/models (all five: 1,050,000
+    // context window, 922,000 max input, 128,000 max output, text+image
+    // input); rates from developers.openai.com/api/docs/pricing, USD per 1M
+    // tokens, standard (non-batch/Flex/Fast) short-context tier — the pricing
+    // page states a >272K-input request pays 2x input/cache and 1.5x output.
+    // `cachedInput` is that page's "cached input" column, `cacheWrite` its
+    // "30m write" column (12h writes cost more and are not what a live session
+    // creates).
+    // Effort levels and defaults: https://developers.openai.com/api/docs/guides/reasoning
+    // and https://developers.openai.com/api/docs/models/gpt-6.1-terra (checked 2026-10-28).
+    // OpenAI does not document Astra's default there, so it remains unspecified.
     models: [
+      // gpt-6.1-sol: $2 in / $0.10 cached / $2.50 30m write / $10 out.
+      { id: "gpt-6.1-sol", pricing: { basisId: "gpt-6.1-sol-openai-2026-10-27", input: 2, cachedInput: 0.1, cacheWrite: 2.5, output: 10 }, name: "GPT-6.1 Sol", contextWindow: 1_050_000, maxOutputTokens: 128_000, imageInput: true, reasoning: true, effortLevels: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "medium" },
+      // gpt-6.1-terra: $1 in / $0.05 cached / $1.25 30m write / $5 out.
+      { id: "gpt-6.1-terra", pricing: { basisId: "gpt-6.1-terra-openai-2026-10-27", input: 1, cachedInput: 0.05, cacheWrite: 1.25, output: 5 }, name: "GPT-6.1 Terra", contextWindow: 1_050_000, maxOutputTokens: 128_000, imageInput: true, reasoning: true, supportsExplicitOff: true, effortLevels: ["off", "low", "medium", "high", "xhigh", "max"], defaultEffort: "medium" },
+      // gpt-6-luna: $0.10 in / $0.01 cached / $0.125 30m write / $0.50 out.
+      { id: "gpt-6-luna", pricing: { basisId: "gpt-6-luna-openai-2026-10-27", input: 0.1, cachedInput: 0.01, cacheWrite: 0.125, output: 0.5 }, name: "GPT-6 Luna", contextWindow: 1_050_000, maxOutputTokens: 128_000, imageInput: true, reasoning: true, supportsExplicitOff: true, effortLevels: ["off", "low", "medium", "high", "xhigh", "max"], defaultEffort: "medium" },
+      // gpt-6-astra: $10 in / $1 cached / $12.50 30m write / $50 out.
+      { id: "gpt-6-astra", pricing: { basisId: "gpt-6-astra-openai-2026-10-27", input: 10, cachedInput: 1, cacheWrite: 12.5, output: 50 }, name: "GPT-6 Astra", contextWindow: 1_050_000, maxOutputTokens: 128_000, imageInput: true },
+      // gpt-6-sol: $2 in / $0.20 cached / $2.50 30m write / $10 out.
+      { id: "gpt-6-sol", pricing: { basisId: "gpt-6-sol-openai-2026-10-27", input: 2, cachedInput: 0.2, cacheWrite: 2.5, output: 10 }, name: "GPT-6 Sol", contextWindow: 1_050_000, maxOutputTokens: 128_000, imageInput: true, reasoning: true, supportsExplicitOff: true, effortLevels: ["off", "low", "medium", "high", "xhigh", "max"], defaultEffort: "medium" },
+    ],
+    retiredModels: [
       { id: "gpt-5.1", name: "GPT-5.1", contextWindow: 400_000, maxOutputTokens: 128_000 },
       { id: "gpt-4o", name: "GPT-4o", contextWindow: 128_000, maxOutputTokens: 16_384, imageInput: true },
       { id: "gpt-4o-mini", name: "GPT-4o mini", contextWindow: 128_000, maxOutputTokens: 16_384, imageInput: true },
