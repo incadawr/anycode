@@ -150,6 +150,7 @@ describe("generateSessionTitle", () => {
   it.each([
     "<｜DSML｜function_calls>",
     "<｜｜DSML｜｜calls>",
+    "<｜DSML｜function_calls",
     "<tool_call>run</tool_call>",
     "A title\n<invoke name=\"tool\">",
   ])("rejects markup in a model reply: %s", async (reply) => {

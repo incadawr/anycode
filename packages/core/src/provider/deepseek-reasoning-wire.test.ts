@@ -29,6 +29,8 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { generateSessionTitle } from "../context/session-title.js";
+import { SwitchableModelPort } from "../cli/model.js";
+import { createMediaProjectionPort } from "./media-projection.js";
 import type { ModelRequest } from "../ports/model.js";
 import type { ModelStreamEvent } from "../types/events.js";
 import { AiSdkModelPort } from "./model-port.js";
@@ -99,10 +101,22 @@ describe("DeepSeek reasoning-effort mapping over the real @ai-sdk/anthropic wire
   it("title request sends no tools or thinking and uses low effort (Taskana 4893)", async () => {
     stubFetch();
     const { port } = portFor("low");
-    expect(await generateSessionTitle({ modelPort: port, text: "Fix the sidebar" })).toBe("ok");
+    // Desktop wraps the real port in both decorators; test the actual chain.
+    const switchable = new SwitchableModelPort(port);
+    const desktopPort = createMediaProjectionPort(switchable, () => true);
+    expect(await generateSessionTitle({ modelPort: desktopPort, text: "Fix the sidebar" })).toBe("ok");
     expect(captured[0]!.body).toMatchObject({ output_config: { effort: "low" }, max_tokens: 32 });
     expect(captured[0]!.body.tools).toBeUndefined();
     expect(captured[0]!.body.thinking).toBeUndefined();
+
+    // The wrapper must follow a later model/provider switch as well.
+    switchable.setPort(new AiSdkModelPort({
+      transport: "anthropic-messages", baseUrl: "http://127.0.0.1:9",
+      apiKey: "test-key", model: "other-model", providerName: "Anthropic",
+      retry: { maxRetries: 0, stallTimeoutMs: 0 },
+    }));
+    expect(await generateSessionTitle({ modelPort: desktopPort, text: "Fix the sidebar" })).toBe("ok");
+    expect(captured[1]!.body.output_config).toBeUndefined();
   });
 
   it("low: SDK wire carries output_config.effort='low', no thinking key, max_tokens unchanged", async () => {

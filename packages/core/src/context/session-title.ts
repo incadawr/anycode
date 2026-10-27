@@ -126,7 +126,7 @@ export async function generateSessionTitle(opts: {
 function postProcessTitle(raw: string): string | null {
   // Reject the entire reply, including markup on later lines, so the caller
   // keeps the title derived from the first user message.
-  if (/<[｜|][^<>]*>|<\/?[a-zA-Z_][\w:.-]*(?:\s[^<>]*?)?\s*\/?>/.test(raw)) {
+  if (/<[｜|]|<\/?[a-zA-Z_][\w:.-]*(?:\s[^<>]*?)?\s*\/?>/.test(raw)) {
     return null;
   }
   const firstLine = raw.split("\n", 1)[0] ?? "";
