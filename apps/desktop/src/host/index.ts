@@ -4085,8 +4085,8 @@ async function boot(): Promise<void> {
       // / settings tools.subagentStallTimeoutMs (main/host-env.ts fills the env var
       // from the setting; envConfig re-reads it here exactly like subagentMaxTurns).
       subagentStallTimeoutMs: envConfig.subagentStallTimeoutMs,
-      ...(envConfig.todoReminderEvery !== undefined
-        ? { todoReminder: { everyToolCalls: envConfig.todoReminderEvery } }
+      ...((envConfig.todoReminderEvery ?? catalogEntry?.models.find((m) => m.id === envConfig.model)?.todoReminderEvery) !== undefined
+        ? { todoReminder: { everyToolCalls: envConfig.todoReminderEvery ?? catalogEntry?.models.find((m) => m.id === envConfig.model)?.todoReminderEvery } }
         : {}),
       maxOutputTokens: bootMaxOutputTokens,
       reasoningEffort: bootReasoningEffort,
@@ -4534,6 +4534,7 @@ async function boot(): Promise<void> {
         config.systemPrompt = composeSystemPrompt(switchedSystemPromptComponents);
         config.systemPromptComponents = switchedSystemPromptComponents;
         loop.setContextWindow(contextWindow);
+        loop.setTodoReminderEvery(envConfig.todoReminderEvery ?? catalogEntry?.models.find((m) => m.id === id)?.todoReminderEvery);
         config.context = { ...config.context, contextWindowTokens: contextWindow };
         const availableEffortLevels = resolveEffortLevels(id, catalogEntry, liveCapsFor(id));
         if (persistence) {

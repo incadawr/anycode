@@ -355,6 +355,7 @@ export interface SessionSurfaceProps {
 export function SessionSurface({ tabId, onToast }: SessionSurfaceProps) {
   const connection = useTabStore((state) => state.connection);
   const transcript = useTabStore((state) => state.transcript);
+  const todoReminderState = useTabStore((state) => state.todoReminderState);
   const turn = useTabStore((state) => state.turn);
   const lastFatal = useTabStore((state) => state.lastFatal);
   const workspace = useTabStore((state) => state.workspace);
@@ -450,6 +451,7 @@ export function SessionSurface({ tabId, onToast }: SessionSurfaceProps) {
         <MessageList
           key={tabId}
           blocks={transcript}
+          todoReminderState={todoReminderState}
           turn={turn}
           workspace={workspace}
           connection={connection}
