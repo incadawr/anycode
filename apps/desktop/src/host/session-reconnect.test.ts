@@ -1862,3 +1862,30 @@ describe("TASK.117 — rendered reconnect (Session -> fresh desktopStore)", () =
     }
   });
 });
+
+
+describe("Taskana 4896 — reminder state on reconnect", () => {
+  it("restores the live counter after an idle reconnect even when replay events belong to an ended turn", async () => {
+    const h = createHarness({
+      steps: [toolStep("w1", "Write", { file_path: "/workspace/a.txt", content: "hello" }), finishStep()],
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor((m) => m.type === "host_ready");
+      h.send({ type: "user_message", requestId: "r1", text: "write" });
+      const ask = await h.waitFor((m) => m.type === "permission_request");
+      if (ask.type !== "permission_request") throw new Error("missing permission request");
+      h.send({ type: "permission_response", requestId: ask.requestId, behavior: "allow" });
+      await h.waitUntil(() => countLoopEnds(h) === 1);
+      await settle();
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some((m) => m.type === "todo_reminder_snapshot"));
+      const store = createDesktopStore({ schedule: (fn) => fn() });
+      for (const message of h.received.slice(before)) store.getState().applyHostMessage(message);
+      expect(store.getState().todoReminderState).toEqual({ count: 1, threshold: 10 });
+    } finally {
+      h.close();
+    }
+  });
+});

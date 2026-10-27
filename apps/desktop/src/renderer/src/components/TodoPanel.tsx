@@ -1,9 +1,8 @@
 /**
  * Perpetual todo progress panel (design/slice-P7.11-cut.md F1b): a sticky
  * card overlaid top-right of the transcript, anchored independently from the
- * "Git tools/Progress" reference. No new store state — the model's plan
- * lives entirely in the transcript's TodoWrite tool_call blocks already
- * (§1); this module just projects it.
+ * "Git tools/Progress" reference. The plan comes from transcript TodoWrite
+ * blocks; the stale-plan counter comes from the core session.
  */
 import { useMemo, useState } from "react";
 import type { TranscriptBlock } from "../store.js";
@@ -14,8 +13,6 @@ export interface CurrentTodos {
   todos: TodoItemView[];
   /** `id` of the source tool_call block — matches the `data-block-id` MessageList stamps on the card. */
   sourceBlockId: string;
-  /** tool_call blocks after the source block (any tool, any status). */
-  toolCallsSince: number;
 }
 
 /**
@@ -38,8 +35,7 @@ export function selectCurrentTodos(transcript: TranscriptBlock[]): CurrentTodos 
     if (todos === null) {
       continue;
     }
-    const toolCallsSince = transcript.slice(i + 1).filter((b) => b.kind === "tool_call").length;
-    return { todos, sourceBlockId: block.id, toolCallsSince };
+    return { todos, sourceBlockId: block.id };
   }
   return null;
 }
@@ -61,17 +57,14 @@ export function progressLabel(todos: TodoItemView[]): string {
   return `Progress ${done}/${todos.length}`;
 }
 
-/** Same unit and default as core's DEFAULT_TODO_REMINDER_EVERY_TOOL_CALLS (renderer can't value-import core). */
-export const TODO_STALE_TOOL_CALLS = 10;
-
-/** Taskana 4665: open items AND >= TODO_STALE_TOOL_CALLS tool calls since the last successful TodoWrite. */
-export function isPlanPossiblyStale(current: CurrentTodos): boolean {
-  return current.toolCallsSince >= TODO_STALE_TOOL_CALLS && current.todos.some((t) => t.status !== "completed");
+/** Use the core session's counter and threshold. */
+export function isPlanPossiblyStale(current: CurrentTodos, state?: { count: number; threshold: number } | null): boolean {
+  return state != null && state.count >= state.threshold && current.todos.some((t) => t.status !== "completed");
 }
 
-export function staleHint(current: CurrentTodos): string | null {
-  return isPlanPossiblyStale(current)
-    ? `Plan not updated for ${current.toolCallsSince} tool calls — progress may be out of date`
+export function staleHint(current: CurrentTodos, state?: { count: number; threshold: number } | null): string | null {
+  return isPlanPossiblyStale(current, state)
+    ? `Plan not updated for ${state!.count} mutating tool calls — progress may be out of date`
     : null;
 }
 
@@ -135,9 +128,11 @@ function TodoPanelRow({
 export function TodoPanel({
   transcript,
   onJumpToBlock,
+  reminderState,
 }: {
   transcript: TranscriptBlock[];
   onJumpToBlock: (blockId: string) => void;
+  reminderState?: { count: number; threshold: number } | null;
 }) {
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [completedExpanded, setCompletedExpanded] = useState(false);
@@ -159,7 +154,7 @@ export function TodoPanel({
   const { todos, sourceBlockId } = selected;
   const completed = todos.filter((todo) => todo.status === "completed");
   const active = todos.filter((todo) => todo.status !== "completed");
-  const hint = staleHint(selected);
+  const hint = staleHint(selected, reminderState);
 
   return (
     <div className="todo-panel">
@@ -179,7 +174,11 @@ export function TodoPanel({
             <Chevron />
           </span>
           <span className="todo-panel-title">{progressLabel(todos)}</span>
-          {hint !== null && <span className="todo-panel-stale">may be stale</span>}
+          {hint !== null && (
+            <span className="todo-panel-stale" title={hint}>
+              may be stale
+            </span>
+          )}
         </button>
         {!panelCollapsed && (
           <div className="todo-panel-body">

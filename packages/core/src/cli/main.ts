@@ -1486,8 +1486,8 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
         subagentMaxTurns: envConfig.subagentMaxTurns,
         // TASK.148 slice 1: subagent stall-detector override, ANYCODE_SUBAGENT_STALL_MS.
         subagentStallTimeoutMs: envConfig.subagentStallTimeoutMs,
-        ...(envConfig.todoReminderEvery !== undefined
-          ? { todoReminder: { everyToolCalls: envConfig.todoReminderEvery } }
+        ...((envConfig.todoReminderEvery ?? catalogEntry?.models.find((m) => m.id === envConfig.model)?.todoReminderEvery) !== undefined
+          ? { todoReminder: { everyToolCalls: envConfig.todoReminderEvery ?? catalogEntry?.models.find((m) => m.id === envConfig.model)?.todoReminderEvery } }
           : {}),
         maxOutputTokens: bootMaxOutputTokens,
         reasoningEffort: bootReasoningEffort,
@@ -1942,6 +1942,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
                 return "model switching is unavailable: this session runs on an injected model port";
               }
               modelPort.setPort(modelPortFactory(id));
+              loop.setTodoReminderEvery(envConfig.todoReminderEvery ?? catalogEntry?.models.find((m) => m.id === id)?.todoReminderEvery);
               currentModel = id;
 
               // reference, A12) and the rebuilt parent prompt see the new modelId.

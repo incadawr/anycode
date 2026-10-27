@@ -202,6 +202,7 @@ describe("AgentLoop.runTurn — tool call then completion", () => {
       "context_usage",
       "tool_execution_start",
       "tool_result",
+      "todo_reminder_state",
       "turn_end",
       "turn_start",
       "start",
@@ -4742,7 +4743,7 @@ describe("AgentLoop.runTurn — stale todo reminder (Taskana 4665)", () => {
   function mockStep(id: string): ModelStreamEvent[] {
     return [
       { type: "start" },
-      { type: "tool_call", toolCall: { id, name: "Mock", input: { value: "x" } } },
+      { type: "tool_call", toolCall: { id, name: "Edit", input: { value: "x" } } },
       { type: "finish", finishReason: "tool_calls", usage: {} },
     ];
   }
@@ -4751,7 +4752,7 @@ describe("AgentLoop.runTurn — stale todo reminder (Taskana 4665)", () => {
   function multiMockStep(...ids: string[]): ModelStreamEvent[] {
     return [
       { type: "start" },
-      ...ids.map<ModelStreamEvent>((id) => ({ type: "tool_call", toolCall: { id, name: "Mock", input: { value: "x" } } })),
+      ...ids.map<ModelStreamEvent>((id) => ({ type: "tool_call", toolCall: { id, name: "Edit", input: { value: "x" } } })),
       { type: "finish", finishReason: "tool_calls", usage: {} },
     ];
   }
@@ -4770,7 +4771,7 @@ describe("AgentLoop.runTurn — stale todo reminder (Taskana 4665)", () => {
   function makeReminderLoop(steps: ModelStreamEvent[][], todoReminder: AgentLoopConfig["todoReminder"]): AgentLoop {
     return makeLoop({
       modelPort: new MockModelPort(steps),
-      registry: makeRegistry({ Mock: makeTool(), TodoWrite: todoWriteTool }),
+      registry: makeRegistry({ Edit: { ...makeTool(), metadata: { ...baseMetadata, name: "Edit" } }, Read: { ...makeTool(), metadata: { ...baseMetadata, name: "Read" } }, TodoWrite: todoWriteTool }),
       ports: { todos: new InMemoryTodoStore() } as unknown as CorePorts,
       todoReminder,
     });
@@ -4785,9 +4786,25 @@ describe("AgentLoop.runTurn — stale todo reminder (Taskana 4665)", () => {
 
   function mockToolResultEvents(events: AgentEvent[]): Array<Extract<AgentEvent, { type: "tool_result" }>> {
     return events.filter(
-      (e): e is Extract<AgentEvent, { type: "tool_result" }> => e.type === "tool_result" && e.outcome.toolName === "Mock",
+      (e): e is Extract<AgentEvent, { type: "tool_result" }> => e.type === "tool_result" && e.outcome.toolName === "Edit",
     );
   }
+
+  it("ignores read-heavy work, synchronizes snapshots, and applies a switched threshold", async () => {
+    const readSteps: ModelStreamEvent[][] = Array.from({ length: 25 }, (_, i) => [
+      { type: "start" },
+      { type: "tool_call", toolCall: { id: `read-${i}`, name: "Read", input: { value: "x" } } },
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ]);
+    const loop = makeReminderLoop([todoStep(...openPlan), ...readSteps, mockStep("m1"), stopStep], { everyToolCalls: 20 });
+    const events = await collect(loop.runTurn("go"));
+    expect(toolTexts(loop).every((text) => !text.includes("<system-reminder>"))).toBe(true);
+    expect(events.filter((event) => event.type === "todo_reminder_state").at(-1)).toEqual({
+      type: "todo_reminder_state", count: 1, threshold: 20,
+    });
+    loop.setTodoReminderEvery(undefined);
+    expect(loop.todoReminderSnapshot()).toEqual({ count: 1, threshold: 10 });
+  });
 
   it("fires on the last tool result of the due step; earlier results and the yielded event stay clean", async () => {
     const loop = makeReminderLoop(
@@ -4827,7 +4844,7 @@ describe("AgentLoop.runTurn — stale todo reminder (Taskana 4665)", () => {
     expect(texts[1]).not.toContain("<system-reminder>");
     expect(texts[2]).not.toContain("<system-reminder>");
     expect(texts[3]).toContain("<system-reminder>");
-    expect(texts[3]).toContain("3 tool calls");
+    expect(texts[3]).toContain("3 mutating tool calls");
   });
 
   it("no plan in this loop's store: never fires", async () => {
@@ -4892,7 +4909,7 @@ describe("AgentLoop.runTurn — stale todo reminder (Taskana 4665)", () => {
     const withReminder = texts.filter((t) => t.includes("<system-reminder>"));
     expect(withReminder).toHaveLength(1);
     expect(withReminder[0]).toBe(texts[10]); // the 10th Mock result
-    expect(withReminder[0]).toContain("10 tool calls");
+    expect(withReminder[0]).toContain("10 mutating tool calls");
   });
 });
 
@@ -4982,10 +4999,11 @@ describe("AgentLoop.queueInjection (Taskana 4110 / TASK.123)", () => {
     );
 
     // Seam slice: the exact event-type sequence around the injection point.
-    expect(types(events).slice(4, 13)).toEqual([
+    expect(types(events).slice(4, 14)).toEqual([
       "context_usage",
       "tool_execution_start",
       "tool_result",      // c1 result appended...
+      "todo_reminder_state",
       "turn_end",         // step1 ends
       "turn_start",       // step2 begins, its exit gates pass...
       "user_injected",    // ...then the frame is flushed, right before the request

@@ -1,6 +1,25 @@
 /** Stale-plan reminder (Taskana 4665): pure counter, wired by AgentLoop. */
 import type { TodoItem } from "../tools/todo-store.js";
 import type { ToolCallStatus } from "../types/tools.js";
+import { classifyBashCommandLine } from "../permissions/safe-command.js";
+
+/** Only workspace mutations advance the stale-plan clock. */
+export function isTodoMutation(name: string, input: unknown): boolean {
+  if (name === "Bash") {
+    const command = typeof input === "object" && input !== null && "command" in input ? input.command : undefined;
+    if (typeof command !== "string") return true;
+    if (classifyBashCommandLine(command).class === "read-only") return false;
+    // The permission classifier deliberately excludes rg and standalone sed:
+    // it is a security gate, not a measure of typical read-only work. Recognize
+    // their common simple forms here, without changing permission decisions.
+    if (/^\s*(?:rg|sed)\s/.test(command) && !/[;&|<>`$\n\r]/.test(command)) {
+      if (/^\s*rg\s/.test(command)) return /(?:^|\s)--(?:pre|pre-glob|hostname-bin)(?:[=\s]|$)|(?:^|\s)-[^\s]*z/.test(command);
+      return !/^\s*sed\s+-n\s+['"]?\d+(?:,\d+)?p['"]?\s+[^\s]+\s*$/.test(command);
+    }
+    return true;
+  }
+  return name === "Write" || name === "Edit" || name === "MultiEdit" || name === "ApplyPatch";
+}
 
 export const DEFAULT_TODO_REMINDER_EVERY_TOOL_CALLS = 10;
 
@@ -20,7 +39,7 @@ export function resolveTodoReminderEvery(config: TodoReminderConfig | undefined)
 export function formatTodoReminder(callsSinceUpdate: number, openItems: number): string {
   return (
     "<system-reminder>\n" +
-    `The todo list has not been updated for ${callsSinceUpdate} tool calls and still has ${openItems} unfinished item(s). ` +
+    `The todo list has not been updated for ${callsSinceUpdate} mutating tool calls and still has ${openItems} unfinished item(s). ` +
     "If you have made progress, call TodoWrite now: mark finished items completed and the current one in_progress. " +
     "If the plan is still accurate, continue. Do not mention this reminder to the user.\n" +
     "</system-reminder>"
@@ -31,15 +50,23 @@ export class TodoReminderTracker {
   private sinceUpdate = 0;
   private sinceReminder = 0;
 
-  constructor(private readonly every: number) {}
+  constructor(private every: number) {}
+
+  setThreshold(every: number): void { this.every = every; }
+
+  snapshot(): { count: number; threshold: number } {
+    return { count: this.sinceUpdate, threshold: this.every };
+  }
 
   /** One settled tool call, in proposal order. */
-  observe(toolName: string, status: ToolCallStatus): void {
+  observe(toolName: string, status: ToolCallStatus, mutating = true): void {
     if (toolName === "TodoWrite" && status === "success") {
       this.sinceUpdate = 0;
       this.sinceReminder = 0;
       return;
     }
+    // Denied and invalid calls never ran; shell failures may have made changes.
+    if (!mutating || status === "denied" || status === "invalid_input" || status === "max_turns") return;
     this.sinceUpdate += 1;
     this.sinceReminder += 1;
   }

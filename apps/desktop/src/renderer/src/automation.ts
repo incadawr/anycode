@@ -368,6 +368,14 @@ export interface TodoPanelState {
   panelCollapsed: boolean;
   completedRow: string | null;
   items: Array<{ glyph: "done" | "active" | "pending"; content: string }>;
+  /**
+   * Taskana 4896 live acceptance (optional, read-only): whether the panel is
+   * currently showing the "may be stale" badge, plus the badge's hint text
+   * ("Plan not updated for N mutating tool calls — …") parsed out of it.
+   * Absent (undefined) only if an older build is under test.
+   */
+  stale?: boolean;
+  staleHint?: string | null;
 }
 
 /**
@@ -464,6 +472,11 @@ export interface TodoPanelDom {
     completedRow: string | null;
     items: Array<{ glyph: "done" | "active" | "pending"; content: string }>;
   } | null;
+  /**
+   * Taskana 4896 live acceptance (optional so existing fakes keep working):
+   * the stale badge's presence + hint text off the same scoped card.
+   */
+  staleBadge?(tabId: string): { stale: boolean; hint: string | null };
 }
 
 /**
@@ -3409,6 +3422,19 @@ function realTranscriptDom(): TranscriptDom {
 }
 
 /**
+ * Taskana 4896 live acceptance: the scoped `.todo-panel-card` node for a tab
+ * (same scoping guard `realTodoPanelDom.panel` used inline), so the stale-badge
+ * read and the panel read share one resolution path.
+ */
+function cardDom(tabId: string): HTMLElement | null {
+  const matches = document.querySelectorAll<HTMLDivElement>(
+    `.message-list[data-tab-id="${CSS.escape(tabId)}"]`,
+  );
+  const container = matches.length === 1 ? matches[0] : null;
+  return container?.querySelector<HTMLElement>(".todo-panel-card") ?? null;
+}
+
+/**
  * The real todo-panel DOM accessor (design/slice-P7.11-cut.md §3 W2): queries
  * live at call time, same laziness discipline as `realTranscriptDom` (safe to
  * evaluate as a default parameter outside a browser; tests always pass an
@@ -3419,11 +3445,7 @@ function realTranscriptDom(): TranscriptDom {
 function realTodoPanelDom(): TodoPanelDom {
   return {
     panel(tabId: string) {
-      const matches = document.querySelectorAll<HTMLDivElement>(
-        `.message-list[data-tab-id="${CSS.escape(tabId)}"]`,
-      );
-      const container = matches.length === 1 ? matches[0] : null;
-      const card = container?.querySelector(".todo-panel-card") ?? null;
+      const card = cardDom(tabId);
       if (!card) {
         return null;
       }
@@ -3440,6 +3462,11 @@ function realTodoPanelDom(): TodoPanelDom {
         return { glyph, content };
       });
       return { header, panelCollapsed, completedRow, items };
+    },
+    // Taskana 4896 live acceptance: the badge node's presence + hint (title attr).
+    staleBadge(tabId: string) {
+      const node = cardDom(tabId)?.querySelector<HTMLElement>(".todo-panel-stale") ?? null;
+      return { stale: node !== null, hint: node?.getAttribute("title") ?? null };
     },
   };
 }
@@ -7974,9 +8001,12 @@ export function createAutomationFacade(
       if (panel === null) {
         // A valid reading, not an error (design §3 W2): no completed
         // TodoWrite yet, or the last one's `todos` array is empty.
-        return { ok: true, visible: false, header: null, panelCollapsed: false, completedRow: null, items: [] };
+        return { ok: true, visible: false, header: null, panelCollapsed: false, completedRow: null, items: [], stale: false, staleHint: null };
       }
-      return { ok: true, visible: true, ...panel };
+      // Taskana 4896 live acceptance: the stale badge's presence + hint text,
+      // through the same DI accessor as the panel read (no direct DOM here).
+      const badgeInfo = todoPanelDom.staleBadge?.(tabId) ?? { stale: false, hint: null };
+      return { ok: true, visible: true, ...panel, stale: badgeInfo.stale, staleHint: badgeInfo.hint };
     },
 
     startScreenState(): StartScreenState {

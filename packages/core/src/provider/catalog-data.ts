@@ -146,8 +146,8 @@ const ENTRIES: CatalogProviderEntry[] = [
       // `defaultEffort` on both rows (Taskana 4894), so a session with no
       // explicit pick shows AND sends `high` instead of falling back to the
       // vocabulary's first entry (`low`).
-      { id: "deepseek-flash", name: "DeepSeek-V4.1-Flash", contextWindow: 1_048_576, maxOutputTokens: 393_216, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high" },
-      { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro", contextWindow: 1_048_576, maxOutputTokens: 393_216, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high" },
+      { id: "deepseek-flash", name: "DeepSeek-V4.1-Flash", contextWindow: 1_048_576, maxOutputTokens: 393_216, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high", todoReminderEvery: 20 },
+      { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro", contextWindow: 1_048_576, maxOutputTokens: 393_216, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high", todoReminderEvery: 20 },
     ],
   },
   {

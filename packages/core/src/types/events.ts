@@ -207,6 +207,7 @@ export type AgentEvent =
   | { type: "user_injected"; step: number; text: string }
   | { type: "tool_execution_start"; toolCallId: string; toolName: string; input: unknown }
   | { type: "tool_result"; outcome: ToolCallOutcome }
+  | { type: "todo_reminder_state"; count: number; threshold: number }
   | { type: "workspace_transition"; transition: WorkspaceTransition }
   | {
       type: "loop_end";

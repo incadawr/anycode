@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Taskana 4896: stale-plan reminders count workspace mutations, with a higher DeepSeek threshold.
+
 ### Fixed
 
 - Settings → Roles now shows successful saves in green, identifies each labeled route by provider, and calls the active route “Session’s connection” (Taskana 4899).

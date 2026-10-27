@@ -87,6 +87,7 @@ export interface SessionEngine {
   reasoningEffort(): ReasoningEffort | undefined;
   setReasoningEffort(effort: ReasoningEffort | undefined): void;
   switchModel?(id: string, effort: ReasoningEffort): ModelSwitchResult;
+  todoReminderSnapshot?(): { count: number; threshold: number } | null;
   runTurn(input: string, options: RunTurnOptions): AsyncIterable<AgentEvent>;
   /** Continue a terminal-control turn after rehost without a synthetic user frame. */
   continueTurn?(options: RunTurnOptions): AsyncIterable<AgentEvent>;

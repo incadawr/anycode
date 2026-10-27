@@ -2303,6 +2303,7 @@ export class Session {
           .catch(() => {});
         this.pushSessionCheckpoint();
         this.outbound.replay();
+        this.pushTodoReminderSnapshot();
         for (const delivery of this.agentDeliveries.values()) this.outbound.sendDirect({ type: "agent_message", delivery });
         // TASK.145 срез 2: re-post every still-unacknowledged detached-child
         // report to the just-(re)attached renderer — covers the race the
@@ -2712,7 +2713,14 @@ export class Session {
       ...(this.imageFallbackAvailable !== undefined ? { imageFallback: this.imageFallbackAvailable() } : {}),
       ...(this.contextWindowAssumed !== undefined ? { contextWindowAssumed: this.contextWindowAssumed() } : {}),
     });
+    this.pushTodoReminderSnapshot();
     return true;
+  }
+
+  private pushTodoReminderSnapshot(): void {
+    if (this.engine.todoReminderSnapshot !== undefined) {
+      this.outbound.sendDirect({ type: "todo_reminder_snapshot", state: this.engine.todoReminderSnapshot() });
+    }
   }
 
   /** Taskana 4895: the effort half of the same recipe — remembered as the user's SELECTED tier, applied to the engine, acked to the renderer. */
