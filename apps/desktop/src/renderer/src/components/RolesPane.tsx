@@ -20,6 +20,15 @@ export function RolesPane(): React.JSX.Element {
   const snapshot = useSettingsStore((s) => s.snapshot);
   const setPatch = useSettingsStore((s) => s.setPatch);
   const availableEngines = useTabsStore((s) => s.availableEngines);
+  const tabs = useTabsStore((s) => s.tabs);
+  const [sessionProjects, setSessionProjects] = useState<string[]>([]);
+  useEffect(() => {
+    let live = true;
+    void window.anycode.listSessions().then((sessions) => {
+      if (live) setSessionProjects(sessions.map((s) => s.projectRoot ?? s.workspace));
+    }).catch(() => {});
+    return () => { live = false; };
+  }, []);
 
   const connections: readonly ProviderConnection[] = snapshot?.settings.provider.connections ?? [];
   const activeConnectionId = snapshot?.settings.provider.activeConnectionId;
@@ -36,6 +45,7 @@ export function RolesPane(): React.JSX.Element {
   const persistedRoles = selected?.roles;
   const [maxParallelChildren, setMaxParallelChildren] = useState<number>(persistedRoles?.maxParallelChildren ?? 4);
   const [projectRoot, setProjectRoot] = useState("");
+  const projects = [...new Set([...tabs.map((tab) => tab.projectRoot ?? tab.workspace), ...sessionProjects, ...registry.projects.map((p) => p.projectRoot)])];
   const [profileName, setProfileName] = useState("");
   useEffect(() => { setMaxParallelChildren(selected?.roles.maxParallelChildren ?? 4); }, [selected?.id, selected?.roles.maxParallelChildren]);
   async function saveRegistry(next: typeof registry): Promise<void> {
@@ -77,9 +87,9 @@ export function RolesPane(): React.JSX.Element {
       <button type="button" onClick={() => addProfile(true)}>Duplicate profile</button>
       <button type="button" disabled={!selected || !profileName.trim()} onClick={() => { if (selected) void saveRegistry({ ...registry, profiles: registry.profiles.map((p) => p.id === selected.id ? { ...p, name: profileName.trim() } : p) }); }}>Rename profile</button>
       <button type="button" disabled={!selected} onClick={() => { if (selected) { const profiles = registry.profiles.filter((p) => p.id !== selected.id); void saveRegistry({ profiles, activeId: profiles[0]?.id ?? "default", projects: registry.projects.filter((p) => p.profileId !== selected.id) }); } }}>Delete profile</button>
-      <label className="settings-field"><span className="settings-field-label">Project folder path</span><input aria-label="Project folder path" value={projectRoot} onChange={(event) => setProjectRoot(event.target.value)} /></label>
+      <label className="settings-field"><span className="settings-field-label">Project</span><select aria-label="Project" value={projectRoot} onChange={(event) => setProjectRoot(event.target.value)}><option value="">Select a project</option>{projects.map((path) => <option key={path} value={path}>{path}</option>)}</select></label>
       <label className="settings-field"><span className="settings-field-label">Project role profile</span>
-        <select aria-label="Project role profile" disabled={!projectRoot.startsWith("/")} value={registry.projects.find((p) => p.projectRoot === projectRoot)?.profileId ?? ""} onChange={(event) => void saveRegistry({ ...registry, projects: [...registry.projects.filter((p) => p.projectRoot !== projectRoot), ...(event.target.value ? [{ projectRoot, profileId: event.target.value }] : [])] })}>
+        <select aria-label="Project role profile" disabled={!projectRoot} value={registry.projects.find((p) => p.projectRoot === projectRoot)?.profileId ?? ""} onChange={(event) => void saveRegistry({ ...registry, projects: [...registry.projects.filter((p) => p.projectRoot !== projectRoot), ...(event.target.value ? [{ projectRoot, profileId: event.target.value }] : [])] })}>
           <option value="">Use global profile</option>{registry.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
       </label>

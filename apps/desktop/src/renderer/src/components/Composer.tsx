@@ -1243,7 +1243,7 @@ export function Composer() {
     }
     setPendingOrchestrateTask(task);
     // The shared first-run gate (orchestrate-start.ts) — the start screen uses the same one.
-    if (needsRolePicker((useSettingsStore.getState().snapshot?.settings.roleProfiles ?? resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {})))) {
+    if (needsRolePicker(resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}))) {
       setRolePickerOpen(true);
       return;
     }
