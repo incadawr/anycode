@@ -278,6 +278,16 @@ describe("TurnTranslator — renderer invariants", () => {
 });
 
 describe("TurnTranslator — errors and retries (cut §2(i))", () => {
+  it("surfaces the message for the modelNotFound error code", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const events = translator.onNotification({
+      method: "error",
+      params: { threadId: THREAD_ID, turnId: TURN_ID, error: { message: "Model not found", codexErrorInfo: "modelNotFound", additionalDetails: null }, willRetry: false },
+    });
+    expect(events).toEqual([{ type: "error", error: expect.any(Error) }]);
+    expect((events[0] as { error: Error }).error.message).toBe("Model not found");
+  });
+
   it("a terminal error notification (willRetry:false) surfaces with its ORIGINAL safe message, followed by an honest loop_end reason", () => {
     const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
     // Real fixture shape: contract/fixtures/w1-p6-start-echo-and-error.jsonl.
