@@ -281,6 +281,7 @@ import {
 import { getBuiltinCatalog } from "@anycode/core/catalog";
 import { calculateUsageCost, connectionPricing } from "./usage-cost.js";
 import { summarizeWithChildren } from "./usage-summary.js";
+import { claudeUsageRecord } from "./claude-usage.js";
 import { closeProxyRelay, credentialedProxyValuesForRelay, resolveProxyRelay } from "@anycode/core/proxy-relay";
 import type {
   AgentBridgeCatalogEntry,
@@ -2635,17 +2636,7 @@ async function bootClaudeSession(
     claudeUsageAudit.sink.record({ turnId: "legacy-unpriced", step: 1, finishReason: "history", transportRetries: 0 });
   }
   claudeEngine.onCostResult((result) => {
-    const count = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-    const input = count(result.usage?.input_tokens);
-    const cached = count(result.usage?.cache_read_input_tokens);
-    const write = count(result.usage?.cache_creation_input_tokens);
-    const output = count(result.usage?.output_tokens);
-    const cost = count(result.total_cost_usd);
-    claudeUsageAudit.sink.record({ turnId: randomUUID(), step: 1, model: claudeEngine.resolvedModel() ?? connected.model, finishReason: "result", transportRetries: 0,
-      ...(input !== undefined && cached !== undefined && write !== undefined ? { inputTokens: input + cached + write } : {}),
-      ...(cached !== undefined ? { cachedInputTokens: cached } : {}), ...(write !== undefined ? { cacheWriteTokens: write } : {}),
-      ...(output !== undefined ? { outputTokens: output } : {}),
-      ...(cost !== undefined ? { costUsd: cost, priceBasisId: "claude-cli-reported" } : {}) });
+    claudeUsageAudit.sink.record(claudeUsageRecord(result, randomUUID(), claudeEngine.resolvedModel() ?? connected.model));
   });
   session = new Session({
     workspaceTrustRequired: workspaceTrustRequiredMessage,

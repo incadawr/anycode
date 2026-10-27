@@ -17,7 +17,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { SqlitePersistenceAdapter } from "@anycode/core";
 import type { AgentEvent, ToolResultPresentation } from "@anycode/core";
+import { claudeUsageRecord } from "../../claude-usage.js";
 import {
   CLAUDE_ENGINE_CAPABILITIES,
   CLAUDE_PRESET_IDS,
@@ -1189,6 +1191,22 @@ describe("ClaudeEngine — presentation surface", () => {
     await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
     expect(observed).toHaveBeenCalledTimes(1);
     expect(observed.mock.calls[0]![0].total_cost_usd).toBeGreaterThan(0);
+  });
+
+  it("records a captured native result as a durable cost snapshot", async () => {
+    const db = new SqlitePersistenceAdapter(":memory:");
+    await db.createSession({ id: "claude", workspace: "/work", model: "m", mode: "build" });
+    const transport = new FakeTransport({ frames: streamFrames("w0-02-control-writeprobe.jsonl"), contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    const pending: Promise<void>[] = [];
+    engine.onCostResult((result) => pending.push(db.recordProviderUsage({ ...claudeUsageRecord(result, "turn-1", "m"), sessionId: "claude", createdAt: 1 })));
+    await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
+    await Promise.all(pending);
+    const records = await db.listProviderUsage("claude");
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ priceBasisId: "claude-cli-reported", costUsd: expect.any(Number), inputTokens: expect.any(Number), cachedInputTokens: expect.any(Number), outputTokens: expect.any(Number) });
+    expect(records[0]!.costUsd).toBeGreaterThan(0);
+    await db.close();
   });
 
   it("CC-C has no resume source, so history is empty by construction", () => {

@@ -3,6 +3,16 @@ import { SqlitePersistenceAdapter } from "@anycode/core";
 import { summarizeWithChildren } from "./usage-summary.js";
 
 describe("session and child cost rollup", () => {
+  it("marks a session child with only inline descendant records as unpriced", async () => {
+    const db = new SqlitePersistenceAdapter(":memory:");
+    await db.createSession({ id: "root", workspace: "/w", model: "m", mode: "build" });
+    await db.createSession({ id: "child", workspace: "/w", model: "m", mode: "build", parentSessionId: "root", spawnToolCallId: "call" });
+    await db.recordProviderUsage({ sessionId: "child", turnId: "inline", step: 1, createdAt: 1, subagentId: "inline", costUsd: 0.5, finishReason: "stop", transportRetries: 0 });
+    const summary = await summarizeWithChildren(db, "root");
+    expect(summary.totals).toMatchObject({ subagentCount: 2, subagentCostUsd: 0.5, subagentUnpriced: 1 });
+    await db.close();
+  });
+
   it("separates inline and durable descendants, subscriptions, and missing history", async () => {
     const db = new SqlitePersistenceAdapter(":memory:");
     await db.createSession({ id: "root", workspace: "/w", model: "m", mode: "build" });
