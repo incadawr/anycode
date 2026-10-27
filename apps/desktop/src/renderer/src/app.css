@@ -7824,6 +7824,19 @@ body {
   text-transform: capitalize;
 }
 
+/* a same-named md agent profile outranks this role's Settings
+   route — a quiet, readable notice (not an error: it is legitimate config). */
+.role-picker-role-override {
+  margin: var(--sp-1) 0 var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-left: 2px solid var(--warning);
+  background: var(--warning-soft);
+  border-radius: var(--r-sm);
+  color: var(--warning);
+  font-size: var(--fs-2xs);
+  line-height: 1.4;
+}
+
 .role-picker-entry {
   display: flex;
   flex-wrap: wrap;

@@ -2008,7 +2008,7 @@ describe("handleChildHistory — CHILD_HISTORY_CHANNEL (TASK.102 CUT-S2 §2.5/§
 function makeRebindManager(tab: Record<string, unknown> | undefined) {
   const getTab = vi.fn(() => tab);
   const rebindTab = vi.fn(async () => ({ ok: true as const }));
-  const manager = { getTab, rebindTab } as unknown as TabHostManager;
+  const manager = { getTab, rebindTab, acquireRebind: () => true, releaseRebind: () => {} } as unknown as TabHostManager;
   return { manager, getTab, rebindTab };
 }
 
@@ -2169,7 +2169,7 @@ describe("handleTabRebind — TASK.106 cut-2 (§D6 fail-closed order)", () => {
     const getTab = vi.fn(() => tab);
     const rebindTab = vi.fn(async () => ({ ok: false as const, reason: "not_ready" as const }));
     const deps: TabIpcDeps = {
-      manager: { getTab, rebindTab } as unknown as TabHostManager,
+      manager: { getTab, rebindTab, acquireRebind: () => true, releaseRebind: () => {} } as unknown as TabHostManager,
       persistence: { ...persistenceStub, touchSession },
       dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) } as DialogLike,
       connectionExists: () => true,

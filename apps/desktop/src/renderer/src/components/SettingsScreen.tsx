@@ -1983,8 +1983,11 @@ export function SettingsScreen({
           )}
 
           {/* Taskana 4704 §3.9 (part B): orchestration roles — sits right after
-              Subagents (the persona/profile registry this builds on). */}
-          {activePane === "roles" && <RolesPane />}
+              Subagents (the persona/profile registry this builds on). It takes the same scope as the Subagents pane so a same-named
+              md profile's override of a role is visible here, not silent. In
+              Global mode the active tab still answers "will my route apply in
+              the project I have open". */}
+          {activePane === "roles" && <RolesPane tabId={scopeRef ?? activeTabId ?? undefined} />}
           {/* Taskana 4732 S1-C: the Plugins pane — NOT scope-bar-dependent (it
               shows every tier at once: managed installs + project plugins of
               the active workspace + legacy dirs); main resolves the workspace

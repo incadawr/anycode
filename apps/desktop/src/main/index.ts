@@ -42,7 +42,7 @@ import { assertChildModel } from "../shared/child-model.js";
  */
 import { randomUUID } from "node:crypto";
 import { CODEX_LOGIN_PROGRESS_CHANNEL } from "../shared/codex-login.js";
-import { mkdirSync, realpathSync, statSync, watch as fsWatch } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, statSync, watch as fsWatch } from "node:fs";
 import { access, realpath as fsRealpath, stat as fsStat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import {
@@ -108,7 +108,10 @@ import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import { activeConnection, activeProviderView, connectionById, resolveProviderConnection } from "../shared/settings.js";
 // Taskana 4888: `create_session {engine:"core", model}` resolves to a provider
 // CONNECTION (the core engine has no engine-model argv), never a silent fallback.
-import { resolveCoreConnectionForModel } from "../shared/core-model-connection.js";
+import { primeNewSessionPin } from "./session-pin.js";
+import { createSessionForAgent as createSessionForAgentImpl, type CreateSessionByAgentDeps } from "./create-session-by-agent.js";
+import { rebuildHostEnvCache } from "./host-env-cache.js";
+import { recordHostFailure } from "../host/error-diagnostics.js";
 import {
   RECOGNIZER_CONFIG_CHANGED_TYPE,
   recognizerFingerprint,
@@ -180,6 +183,9 @@ import {
 } from "./plugins/store.js";
 import { createPluginsScheduler, type PluginsScheduler } from "./plugins/scheduler.js";
 import { isOfficialChannelConfigured } from "../shared/plugin-trust.js";
+import { buildHostBuiltinSkills } from "../host/builtin-skills.js";
+import { listPersonaNames } from "@anycode/core/subagents-admin";
+import { pluginsDiscoveryWiring } from "../host/plugin-wiring.js";
 import { NodeSubagentsFs, registerSubagentsIpc } from "./subagents-ipc.js";
 import {
   ArtifactConsentStore,
@@ -651,6 +657,10 @@ let codexBinaryPath: string | null = null;
  * up by the next respawn.
  */
 let currentHostEnv: NodeJS.ProcessEnv = {};
+let currentHostEnvSettings: AnycodeSettings | null = null;
+const hostEnvSettings = new WeakMap<NodeJS.ProcessEnv, { settings: AnycodeSettings; epoch: number }>();
+let providerRefreshEpoch = 0;
+let currentHostEnvEpoch = -1;
 /**
  * Per-pinned-connection host env (TASK.45 W10). A tab pinned to a connection that
  * is NOT the current active one (a resumed non-active connection, or one whose
@@ -1626,7 +1636,7 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
   // against (refreshProviderState racing a whenReady-time assignment) no
   // longer exists by construction.
   applyCodexProfilesHomeOverride(env, codexProfilesHome ?? null);
-  env.ANYCODE_DIAGNOSTICS_DIR = join(app.getPath("userData"), "diagnostics");
+  env.ANYCODE_DIAGNOSTICS_DIR = hostDiagnosticsDir();
   // Taskana 4732 S1-B (design §7): the app-version carrier for the host's
   // plugin engines gating — app.getVersion() stamped into every fork env.
   env[ENV_APP_VERSION] = app.getVersion();
@@ -1641,14 +1651,34 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
 }
 
 /**
+ * the ONE diagnostics directory. Every host fork receives it as
+ * ANYCODE_DIAGNOSTICS_DIR, and main writes the same per-session files itself
+ * when no host survives to record a cause (a fail-closed fork refusal or a
+ * breaker give-up).
+ */
+function hostDiagnosticsDir(): string {
+  return join(app.getPath("userData"), "diagnostics");
+}
+
+/**
  * Recomputes the host fork env + readiness from the current settings/vault so a
  * scrub never changes the outcome. Also rebuilds the per-pinned-connection env
  * cache (TASK.45 W10) for every connection a live tab is pinned to that is NOT
  * the active one, so a resumed/pinned session keeps its own account and a
  * key-replace on that connection is honoured on its next respawn.
  */
-async function refreshProviderState(): Promise<void> {
+let providerRefreshTail: Promise<void> = Promise.resolve();
+
+function refreshProviderState(): Promise<void> {
+  providerRefreshEpoch++;
+  const refresh = providerRefreshTail.then(rebuildProviderState);
+  providerRefreshTail = refresh.catch(() => undefined);
+  return refresh;
+}
+
+async function rebuildProviderState(): Promise<void> {
   const current = currentSettings();
+  const epoch = providerRefreshEpoch;
   // TASK.141 §4/§5: the system-resolve and password caches
   // `proxyMaterialization` exposes are refreshed HERE, before the env below is
   // composed and — since every mutating handler calls this through `onMutation`
@@ -1667,7 +1697,8 @@ async function refreshProviderState(): Promise<void> {
   // fail-closed `direct` — never a credentialed URL across the boundary.
   await prewarmProxyRelays(current).catch(() => undefined);
   await (systemProxyCache?.refreshAll() ?? Promise.resolve());
-  currentHostEnv = await buildHostEnvFor(current);
+  const nextHostEnv = await buildHostEnvFor(current);
+  currentHostEnv = nextHostEnv;
   const transportInfo = selectedTransportInfo(current);
   const credential = activeCredential(current);
   providerReady = await computeProviderReady({
@@ -1681,15 +1712,33 @@ async function refreshProviderState(): Promise<void> {
   });
 
   const activeId = current.provider.activeConnectionId;
-  const next = new Map<string, NodeJS.ProcessEnv>();
-  for (const id of manager?.pinnedConnectionIds() ?? new Set<string>()) {
+  // the pin set is snapshotted inside the rebuild BEFORE its
+  // awaits; a pin reserved or registered mid-rebuild is absent from that
+  // snapshot, so the result is MERGED over the live cache instead of replacing
+  // it wholesale — a refresh can never drop a newer primed/live env.
+  const cacheAtStart = new Map(hostEnvByConnection);
+  const rebuiltCache = await rebuildHostEnvCache({
+    previous: hostEnvByConnection,
+    pinned: manager?.pinnedConnectionIds() ?? new Set<string>(),
+    ...(activeId !== undefined ? { activeConnectionId: activeId } : {}),
     // A pin equal to the active connection uses `currentHostEnv`; a deleted pin
     // (blocked from deletion while live, but defensive) has no env to build.
-    if (id !== activeId && connectionById(current, id) !== undefined) {
-      next.set(id, await buildHostEnvFor(settingsPinnedTo(current, id)));
-    }
+    connectionExists: (id) => connectionById(current, id) !== undefined,
+    buildEnv: async (id) => {
+      const env = await buildHostEnvFor(settingsPinnedTo(current, id));
+      hostEnvSettings.set(env, { settings: current, epoch });
+      return env;
+    },
+    reserved: (id) => pinReservations.has(id),
+    livePin: (id) => manager?.pinnedConnectionIds().has(id) ?? false,
+  });
+  for (const [id, env] of hostEnvByConnection) {
+    if ((pinReservations.has(id) || manager?.pinnedConnectionIds().has(id)) &&
+        (!rebuiltCache.has(id) || cacheAtStart.get(id) !== env)) rebuiltCache.set(id, env);
   }
-  hostEnvByConnection = next;
+  hostEnvByConnection = rebuiltCache;
+  currentHostEnvSettings = current;
+  currentHostEnvEpoch = epoch;
 }
 
 /**
@@ -1707,26 +1756,32 @@ async function refreshProviderState(): Promise<void> {
  * `refreshProviderState` before it spawns, so this only ever bites the deleted case.
  */
 function hostEnvForConnection(connectionId?: string): NodeJS.ProcessEnv | undefined {
-  if (connectionId === undefined || connectionId === currentSettings().provider.activeConnectionId) {
+  const current = currentSettings();
+  if (currentHostEnvSettings === current && currentHostEnvEpoch === providerRefreshEpoch && (connectionId === undefined || connectionId === currentHostEnvSettings.provider.activeConnectionId)) {
     return currentHostEnv;
   }
-  return hostEnvByConnection.get(connectionId);
+  if (connectionId === undefined) return undefined;
+  const env = hostEnvByConnection.get(connectionId);
+  const version = env && hostEnvSettings.get(env);
+  return version?.settings === current && version.epoch === providerRefreshEpoch ? env : undefined;
 }
 
 /**
  * Primes the per-connection env cache for a pinned connection before its tab
- * spawns (TASK.45 W10). A no-op for the active connection (uses currentHostEnv)
- * or a missing one (the caller has already refused `connection_missing`).
+ * spawns. A missing connection has already been refused by the caller.
  */
 async function ensurePinnedEnv(connectionId: string): Promise<void> {
-  const current = currentSettings();
-  if (connectionId === current.provider.activeConnectionId) {
+  for (;;) {
+    const current = currentSettings();
+    const epoch = providerRefreshEpoch;
+    if (connectionById(current, connectionId) === undefined) return;
+    const env = await buildHostEnvFor(settingsPinnedTo(current, connectionId));
+    // A settings mutation can complete while the vault or proxy lookup awaits.
+    if (currentSettings() !== current || providerRefreshEpoch !== epoch) continue;
+    hostEnvSettings.set(env, { settings: current, epoch });
+    hostEnvByConnection.set(connectionId, env);
     return;
   }
-  if (connectionById(current, connectionId) === undefined) {
-    return;
-  }
-  hostEnvByConnection.set(connectionId, await buildHostEnvFor(settingsPinnedTo(current, connectionId)));
 }
 
 /**
@@ -2372,78 +2427,41 @@ void app.whenReady().then(async () => {
   });
 
   /**
-   * Taskana 4768: the Sessions API `create_session` hook. Main owns every gate:
-   * the per-project switch, workspace trust ("trusted" decision in the store),
-   * tab capacity and engine readiness. The path is canonicalised here; the new
-   * session is shared immediately (it was created by an authenticated agent).
+   * the Sessions API `create_session` hook. Main owns every gate
+   * (per-project switch, workspace trust, capacity, engine readiness) and the
+   * core `model` -> provider connection resolution; the logic lives in
+   * `create-session-by-agent.ts` so the production path is directly testable.
    */
-  const createSessionForAgent = async (request: { workspace: string; engine?: "core" | "codex" | "claude"; model?: string; handle?: string }) => {
-    const projects = communicationAgentProjects;
-    const tabs = manager;
-    const sessions = communicationSessions;
-    if (projects === null || tabs === null || sessions === null) return { ok: false as const, reason: "not_ready" as const };
-    const key = canonicalWorkspaceKey(request.workspace, realpathSync);
-    if (!projects.isAllowed(key)) return { ok: false as const, reason: "not_allowed" as const };
-    const trust = await readTrustStore(nodeTrustStoreFs, defaultTrustStorePath(homedir()));
-    if (trust.folders[key]?.decision !== "trusted") return { ok: false as const, reason: "not_trusted" as const };
-    if (tabs.atCapacity()) return { ok: false as const, reason: "too_many" as const };
-    const engine = request.engine ?? "core";
-    try { await mcpSecretCache.prime(key); } catch { return { ok: false as const, reason: "not_ready" as const }; }
-    /**
-     * Taskana 4888: for the CORE engine `model` selects the provider CONNECTION,
-     * not an engine argv. A core host runs on one connection's env (endpoint,
-     * key, model) and `engineModel` is `--engine-model` argv, which the core
-     * engine never reads — so `model` used to be dropped silently and the tab
-     * opened on the active connection. `resolveCoreConnectionForModel` is the one
-     * policy (id / label / `<providerId>/<model>` / bare model id); an unknown or
-     * ambiguous value is an explicit `invalid_model` refusal naming the
-     * candidates, never a quiet fallback. Without `model`, core keeps the active
-     * connection. Codex/Claude keep their existing `engineModel` channel.
-     */
-    let connectionId = engine === "core" ? settings?.provider.activeConnectionId : undefined;
-    let modelOverride: string | undefined;
-    if (engine === "core" && request.model !== undefined) {
-      const resolved = resolveCoreConnectionForModel(currentSettings(), request.model);
-      if (!resolved.ok) {
-        return { ok: false as const, reason: "invalid_model" as const, detail: resolved.detail };
-      }
-      connectionId = resolved.connectionId;
-      modelOverride = resolved.model;
-    }
-    const created = tabs.createTab({
-      workspace: key,
-      sessionId: randomUUID(),
-      resume: false,
-      engine,
-      ...(engine !== "core" && request.model !== undefined ? { engineModel: request.model } : {}),
-      ...(modelOverride !== undefined ? { modelOverride } : {}),
-      ...(connectionId !== undefined ? { connectionId } : {}),
-    });
-    if (!created.ok) return { ok: false as const, reason: created.reason === "max_tabs" ? ("too_many" as const) : ("not_ready" as const) };
-    const sessionId = created.tab.sessionId;
-    agentOpenedSessions.add(sessionId);
-    // Registered synchronously by createTab (onSessionRegistered); "shared immediately".
-    sessions.set(sessionId, true);
-    let handle: string | undefined;
-    if (request.handle !== undefined) {
-      const normalized = normalizeHandle(request.handle);
-      if (normalized.ok && normalized.handle !== null) {
-        const isLive = (id: string) => (manager?.listTabs() ?? []).some((tab) => tab.sessionId === id);
-        if (sessions.setHandle(sessionId, normalized.handle, isLive).ok) handle = normalized.handle;
-      }
-    }
-    if (handle !== undefined) agentSessionTitles.set(sessionId, handle);
-    tabs.deliverTabPort(created.tab);
-    return { ok: true as const, sessionId, tabId: created.tab.tabId, ...(handle !== undefined ? { handle } : {}) };
+  const createSessionDeps: CreateSessionByAgentDeps = {
+    projects: communicationAgentProjects,
+    manager: () => manager,
+    sessions: () => communicationSessions,
+    realpathSync,
+    readTrustStore: () => readTrustStore(nodeTrustStoreFs, defaultTrustStorePath(homedir())),
+    mcpSecretPrime: (key) => mcpSecretCache.prime(key),
+    currentSettings,
+    primeNewSessionPin,
+    resolveResumePin,
+    randomUUID,
+    agentOpenedSessions,
+    agentSessionTitles,
+    listTabs: () => manager?.listTabs() ?? [],
   };
+  const createSessionForAgent = (request: { workspace: string; engine?: "core" | "codex" | "claude"; model?: string; handle?: string }) =>
+    createSessionForAgentImpl(request, createSessionDeps);
 
   manager = new TabHostManager({
     agentTitleOf: (sessionId) => agentSessionTitles.get(sessionId),
     isAgentOpenedSession: (sessionId) => agentOpenedSessions.has(sessionId),
     onSessionRegistered: (info) => {
-      communicationSessions?.register(info);
-      communicationApprovals?.register(info);
-      browserAccessStore?.register(info);
+      const sessionsAdded = communicationSessions?.register(info);
+      const approvalsAdded = communicationApprovals?.register(info);
+      const browserAdded = browserAccessStore?.register(info);
+      return () => {
+        if (sessionsAdded) communicationSessions?.remove(info.sessionId);
+        if (approvalsAdded) communicationApprovals?.remove(info.sessionId);
+        if (browserAdded) browserAccessStore?.remove(info.sessionId);
+      };
     },
     // Taskana 4759: the fork env carries the EFFECTIVE flag ("1"/"0"); the seed keeps the notifier's last-sent value in step.
     browserFullAccess: (tabId) => {
@@ -2470,6 +2488,17 @@ void app.whenReady().then(async () => {
     // TASK.45 W10: fork env resolved for the tab's PINNED connection (session
     // pinning), not merely the current active one.
     env: (connectionId) => hostEnvForConnection(connectionId),
+    waitForHostEnv: (connectionId) => (currentHostEnvSettings !== currentSettings() || currentHostEnvEpoch !== providerRefreshEpoch) ? (async () => {
+      while (currentHostEnvSettings !== currentSettings() || currentHostEnvEpoch !== providerRefreshEpoch) {
+        await providerRefreshTail;
+        if (currentHostEnvSettings !== currentSettings() || currentHostEnvEpoch !== providerRefreshEpoch) await refreshProviderState();
+      }
+      if (connectionId !== undefined && hostEnvForConnection(connectionId) === undefined) await ensurePinnedEnv(connectionId);
+    })() : undefined,
+    // a tab whose host never ran (fail-closed fork refusal, or a
+    // breaker give-up after repeated exits) still gets a safe cause recorded in
+    // the same per-session diagnostics file the host writes its own into.
+    recordHostFailure: (sessionId, reason, exitCode, stderr, signal) => recordHostFailure(hostDiagnosticsDir(), sessionId, reason, exitCode, stderr, signal),
     // TASK.45 W10-FIX F2: the pinned connection's immutable providerId for the
     // tab-port envelope, so the renderer's ModelPill targets the PINNED
     // connection's catalog + write-target. Undefined for a since-deleted pin.
@@ -3439,6 +3468,7 @@ void app.whenReady().then(async () => {
     home: () => (selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged)) ?? homedir(),
     workspaceForTab: (ref) => scopeRegistry.resolve(ref, (tabId) => manager?.getTab(tabId)?.workspace),
     fs: new NodeSubagentsFs(),
+    pluginDiscoveryOptions: (home, workspace) => ({ ...pluginsDiscoveryWiring({ home, pluginsSettings: settings?.plugins, builtinSkillNames: buildHostBuiltinSkills({ worktreeAvailable: existsSync(join(workspace, ".git")), previewAvailable: true, anycodeSetupDocs: { kind: "remote", ref: "latest" } }).map((skill) => skill.name), builtinPersonaNames: listPersonaNames() }), appVersion: app.getVersion() }),
     reveal: (path) => shell.showItemInFolder(path),
   });
 

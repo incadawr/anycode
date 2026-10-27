@@ -14,10 +14,12 @@
     "check:codex-manifest": "node scripts/check-codex-manifest.mjs"
   },
   "devDependencies": {
+    "jsdom": "26.1.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
   },
   "pnpm": {
+    "overrides": { "jsdom": "26.1.0" },
     "onlyBuiltDependencies": [
       "esbuild",
       "electron"

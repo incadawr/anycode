@@ -36,6 +36,7 @@ import { dirname } from "node:path";
 import { z } from "zod";
 import {
   createAgentProfile,
+  discoverRoleClaims,
   deleteAgentProfile,
   buildProfilePreview,
   effectiveProfileTools,
@@ -163,6 +164,7 @@ export class NodeSubagentsFs implements SubagentsFs {
 export interface SubagentsIpcDeps {
   /** `os.homedir()` in production; dev/automation-overridable at the main/index.ts wiring site (mirrors ANYCODE_SKILLS_IMPORT_HOME). */
   home(): string;
+  pluginDiscoveryOptions?: (home: string, workspace: string) => Omit<import("@anycode/core/subagents-admin").ScanAgentProfilesAdminOptions, "workspace" | "home">;
   /** Scope reference resolver (Taskana 4758): a tab id (legacy) or a workspace id `ws_<16 hex>`, resolved main-side — never a renderer-supplied path. */
   workspaceForTab(tabId: string): string | undefined;
   fs: SubagentsFs;
@@ -322,11 +324,13 @@ async function buildSnapshot(deps: SubagentsIpcDeps, tabId: string | undefined):
   const hasWorkspace = workspace !== undefined;
   const effectiveWorkspace = workspace ?? home;
 
-  const scan = await scanAgentProfilesAdmin(deps.fs, { workspace: effectiveWorkspace, home });
+  const options = { workspace: effectiveWorkspace, home, ...deps.pluginDiscoveryOptions?.(home, effectiveWorkspace) };
+  const scan = await scanAgentProfilesAdmin(deps.fs, options);
   const builtinRows = listPersonaNames().map((name) => toBuiltinRowView(PERSONAS[name]));
   const catalogRows = scan.rows.map((row) => toRowView(row, hasWorkspace));
   return {
     rows: [...builtinRows, ...catalogRows],
+    roleClaims: await discoverRoleClaims(deps.fs, options),
     problems: scan.problems,
   };
 }

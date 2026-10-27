@@ -4,6 +4,7 @@ import { CodexDynamicToolBridge, codexAgentPermissionMode } from "./engines/code
 import { createEngineBrowserBridge } from "./engines/browser-bridge.js";
 import { assertChildModel, readAllowedChildModels } from "../shared/child-model.js";
 import { resolveModelClassifierBoot } from "./model-classifier-boot.js";
+import { recordHostBootFailure } from "./error-diagnostics.js";
 /**
  * Host utilityProcess entry point (design §2/§6, MVP.3; persistence/hooks
  * wiring per §2.12, task 1.9).
@@ -5024,6 +5025,10 @@ async function boot(): Promise<void> {
     // silently. No core is instantiated in degraded mode.
     initFailure = `host failed to initialize: ${describeError(error)}`;
     console.error("[host]", initFailure);
+    // make the crash cause visible in the per-session diagnostic
+    // file too (host stdio is inherited, so this console.error alone would not
+    // reach a diagnostic artifact). Safe, fixed-vocabulary code only.
+    recordHostBootFailure(process.env.ANYCODE_DIAGNOSTICS_DIR, parseHostArgs(process.argv.slice(2)).sessionId, error);
   } finally {
     // Env-hardening (ruling §3, slice 2.2.3): runs on BOTH the success and the
     // init-failure path (defense-in-depth — a degraded host still leaks

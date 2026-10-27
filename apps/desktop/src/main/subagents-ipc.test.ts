@@ -1,3 +1,5 @@
+import { pluginsDiscoveryWiring } from "../host/plugin-wiring.js";
+import { claimedRoleOverrides, roleOverrideNotice } from "../renderer/src/role-profile-overrides.js";
 /**
  * Unit tests for the subagents editor IPC handler logic (design
  * slice-P7.21-cut.md §4 W2 gate), exercised as the exported handle* functions
@@ -674,4 +676,49 @@ describe("subagents scope reference (Taskana 4758)", () => {
     expect(result.ok).toBe(false);
     expect(await exists(join(home, ".anycode/agents/ghostagent.md"))).toBe(false);
   });
+});
+
+it("reports a symlinked role claim without exposing its target", async () => {
+  const ws = await tmp();
+  const home = await tmp();
+  const target = join(home, "private-profile.md");
+  await seed(target, md({ name: "reviewer", description: "reviews" }, "body"));
+  await mkdir(join(ws, ".anycode/agents"), { recursive: true });
+  await symlink(target, join(ws, ".anycode/agents/reviewer.md"));
+  const snapshot = await handleSubagentsList(makeDeps(ws, home), { tabId: TAB_ID });
+  expect(snapshot.roleClaims).toContainEqual({ name: "reviewer", path: join(ws, ".anycode/agents/reviewer.md") });
+  expect(JSON.stringify(snapshot)).not.toContain(target);
+});
+
+
+it("shows the active managed plugin's role claim in the warning", async () => {
+  const ws = await tmp();
+  const home = await tmp();
+  const root = join(home, ".anycode/plugins/.store/demo/1.0.0");
+  await seed(join(root, ".anycode-plugin/plugin.json"), JSON.stringify({ manifestVersion: 1, name: "demo", version: "1.0.0", agents: ["agents"] }));
+  const profile = join(root, "agents/reviewer.md");
+  await seed(profile, md({ name: "reviewer", description: "reviews" }, "body"));
+  await seed(join(home, ".anycode/plugins/state.json"), JSON.stringify({ version: 1, plugins: { demo: { source: { kind: "official" }, trust: "official", active: "1.0.0", enabled: true, pinned: false, capabilities: [] } }, removedDefaults: [], disabled: [] }));
+  const deps = makeDeps(ws, home);
+  deps.pluginDiscoveryOptions = (h) => ({ ...pluginsDiscoveryWiring({ home: h, pluginsSettings: undefined, builtinSkillNames: [], builtinPersonaNames: ["reviewer"] }), appVersion: "1.0.0" });
+  const snapshot = await handleSubagentsList(deps, { tabId: TAB_ID });
+  const override = claimedRoleOverrides(snapshot.rows, snapshot.roleClaims).reviewer;
+  expect(override?.path).toBe(profile);
+  expect(roleOverrideNotice(override!)).toContain(profile);
+});
+
+it("names the winning project symlink rather than a shadowed user profile", async () => {
+  const ws = await tmp();
+  const home = await tmp();
+  const target = join(home, "private-profile.md");
+  await seed(target, md({ name: "reviewer", description: "project" }, "body"));
+  await seed(join(home, ".anycode/agents/reviewer.md"), md({ name: "reviewer", description: "user" }, "body"));
+  const path = join(ws, ".anycode/agents/reviewer.md");
+  await mkdir(join(ws, ".anycode/agents"), { recursive: true });
+  await symlink(target, path);
+  const snapshot = await handleSubagentsList(makeDeps(ws, home), { tabId: TAB_ID });
+  const notice = roleOverrideNotice(claimedRoleOverrides(snapshot.rows, snapshot.roleClaims).reviewer!);
+  expect(notice).toContain(path);
+  expect(notice).not.toContain(target);
+  expect(notice).not.toContain(join(home, ".anycode/agents/reviewer.md"));
 });

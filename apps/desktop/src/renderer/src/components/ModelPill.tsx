@@ -857,7 +857,7 @@ export function ModelPill() {
     const result = await window.anycode.tabRebind({ tabId, connectionId });
     if (!result.ok) {
       effortResetRef.current = undefined;
-      failRebind(result.reason);
+      failRebind(result.reason === "spawn_failed" ? "host failed to start" : result.reason);
     }
     // Success needs nothing here: the transcript line is written by the
     // pin-watching effect above once the respawned host's `host_ready` has

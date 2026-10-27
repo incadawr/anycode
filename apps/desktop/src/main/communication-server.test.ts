@@ -816,6 +816,19 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatch(/^create_session not_ready/);
   });
 
+  it("create_session: a priming failure's safe reason reaches the API answer, not a generic not_ready", async () => {
+    // Main's create_session hook now classifies a priming failure (vault read,
+    // provider probe) into this fixed-vocabulary sentence. Before it, the client
+    // got "sign-in or tab limit" with no way to tell it was the connection.
+    const detail = "could not prepare connection conn-glm: Sign-in failed or expired. Sign in again in Settings, then retry.";
+    const f = await createFixture({ creator: async () => ({ ok: false, reason: "not_ready", detail }) });
+    const text = errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, model: "glm-5.3" } }));
+    expect(text).toMatch(/^create_session not_ready: /);
+    expect(text).toContain(detail);
+    // No tab was created, so the refusal consumed no capacity.
+    expect(f.tabs).toHaveLength(0);
+  });
+
   it("create_session: invalid_model is its own code and its text carries main's candidate list verbatim (Taskana 4888)", async () => {
     const detail = 'no connection offers "deepseek-flash"; connections: conn-a (deepseek: deepseek-flash); conn-b (zai: glm-5)';
     const f = await createFixture({ creator: async () => ({ ok: false, reason: "invalid_model", detail }) });

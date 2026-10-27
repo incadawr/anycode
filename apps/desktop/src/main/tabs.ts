@@ -26,7 +26,8 @@ import {
   CREDENTIAL_RESPONSE_TYPE,
   type CredentialResponse,
 } from "../shared/credentials.js";
-import { HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE } from "../shared/envelopes.js";
+import { HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE, TAB_CLOSED_ENVELOPE_TYPE } from "../shared/envelopes.js";
+import type { HostFailureReason } from "../host/error-diagnostics.js";
 import {
   CHILD_PROGRESS_TYPE,
   CHILD_READY_TYPE,
@@ -593,7 +594,7 @@ export function decideRespawn(args: {
 export interface HostForkOptions {
   cwd: string;
   env: NodeJS.ProcessEnv;
-  stdio: "inherit";
+  stdio: ["ignore", "inherit", "pipe"];
 }
 
 /** Injected wrapper over utilityProcess.fork (real) / a fake (tests). */
@@ -631,7 +632,7 @@ export interface TabHostManagerDeps {
    * ensure its per-session Sessions API switch exists (a child inherits its
    * parent's). Absent in legacy tests.
    */
-  onSessionRegistered?: (info: { sessionId: string; parentSessionId?: string }) => void;
+  onSessionRegistered?: (info: { sessionId: string; parentSessionId?: string }) => void | (() => void);
   /** utilityProcess.fork (or a fake). */
   fork: HostForkFn;
   /**
@@ -680,6 +681,7 @@ export interface TabHostManagerDeps {
    * ANOTHER connection's ANYCODE_CONNECTION_ID is the custody defect this closes.
    */
   env?: (connectionId?: string) => NodeJS.ProcessEnv | undefined;
+  waitForHostEnv?: (connectionId?: string) => Promise<void> | undefined;
   /**
 
    * refuses with `not_ready` instead of spawning a keyless host. Absent = always
@@ -799,10 +801,18 @@ export interface TabHostManagerDeps {
   childRunsPerParentMax?: () => number | undefined;
   childRunsGlobalMax?: () => number | undefined;
   logger?: TabLogger;
+  /**
+   * records a safe, fixed-vocabulary reason into the SAME
+   * per-session diagnostics file the host writes, for the two cases where no
+   * host process survives to write one itself (a fail-closed fork refusal and
+   * a breaker give-up). Main owns the diagnostics directory; absent in legacy
+   * tests.
+   */
+  recordHostFailure?: (sessionId: string, reason: HostFailureReason, exitCode?: number, stderr?: string, signal?: string) => void;
 }
 
 export type CreateTabResult =
-  | { ok: true; tab: TabHost }
+  | { ok: true; tab: TabHost; deferred?: boolean }
   | { ok: false; reason: "max_tabs" | "already_open" | "not_ready"; focusTabId?: string; openTabs?: number; maxTabs?: number };
 
 export type { CloseTabResult };
@@ -853,6 +863,7 @@ export interface ChildRunSummary {
 
 export class TabHostManager {
   private readonly tabs = new Map<string, TabHost>();
+  private readonly closingTabs = new Set<string>();
   /* */
   private readonly bindings = new Map<string, string>();
   /**
@@ -927,6 +938,9 @@ export class TabHostManager {
    * nulls `proc`), so tab state alone cannot distinguish this window.
    */
   private readonly drainingParents = new Map<string, number>();
+  private readonly rebindings = new Set<string>();
+  private readonly deferredRegistrationRollbacks = new Map<string, () => void>();
+  private readonly spawnAttempts = new WeakMap<TabHost, number>();
   /**
    * `UtilityProcess` references whose `shutdownTabHost` call hit its
    * `exitDeadlineMs` timeout and force-killed rather than seeing a real exit
@@ -1159,6 +1173,7 @@ export class TabHostManager {
     connectionId?: string;
     /** Per-fork ANYCODE_MODEL override (S4-1 arm 2): the imported-session model pick; see TabHost.modelOverride. */
     modelOverride?: string;
+    onDeferredInitialSpawn?: () => void;
   }): CreateTabResult {
 
     // secret-clear on an open window lets `+` spawn a host with no provider key.
@@ -1204,10 +1219,16 @@ export class TabHostManager {
     };
     this.tabs.set(tab.tabId, tab);
     this.bindings.set(params.sessionId, tab.tabId);
+    const spawn = this.spawnTabHost(tab, { firstSpawn: true, onDeferredInitialSpawn: params.onDeferredInitialSpawn });
+    if (spawn === false) {
+      this.tabs.delete(tab.tabId);
+      this.bindings.delete(params.sessionId);
+      return { ok: false, reason: "not_ready" };
+    }
     this.deps.onTabOpened?.(tab.tabId);
-    this.deps.onSessionRegistered?.({ sessionId: params.sessionId });
-    this.spawnTabHost(tab, { firstSpawn: true });
-    return { ok: true, tab };
+    const rollback = this.deps.onSessionRegistered?.({ sessionId: params.sessionId });
+    if (spawn === "deferred" && rollback) this.deferredRegistrationRollbacks.set(tab.tabId, rollback);
+    return { ok: true, tab, ...(spawn === "deferred" ? { deferred: true } : {}) };
   }
 
   /**
@@ -1215,7 +1236,10 @@ export class TabHostManager {
    * of a new session uses `--session <id>`, a resume or ANY respawn uses
 
    */
-  private spawnTabHost(tab: TabHost, opts: { firstSpawn: boolean }): void {
+  private spawnTabHost(tab: TabHost, opts: { firstSpawn: boolean; onDeferredInitialSpawn?: () => void; onDeferredFinished?: () => void }): void | false | "deferred" {
+    const attempt = (this.spawnAttempts.get(tab) ?? 0) + 1;
+    this.spawnAttempts.set(tab, attempt);
+    if (!opts.firstSpawn) this.deferredRegistrationRollbacks.delete(tab.tabId);
     const resume = tab.initialResume || !opts.firstSpawn;
     const args = resume ? ["--resume", tab.sessionId] : ["--session", tab.sessionId];
     // TASK.39: the draft choice rides argv only on the spawn that CREATES the
@@ -1269,13 +1293,44 @@ export class TabHostManager {
     // renderer's replacement flow (F1) can recover; never respawn a refused fork.
     const baseEnv = this.env(tab.connectionId);
     if (baseEnv === undefined) {
+      const pending = this.deps.waitForHostEnv?.(tab.connectionId);
+      if (pending) {
+        void pending.then(() => {
+          if (this.spawnAttempts.get(tab) !== attempt || this.quitting || this.tabs.get(tab.tabId) !== tab || tab.state !== "running" || tab.proc !== null) { opts.onDeferredFinished?.(); return; }
+          const result = this.spawnTabHost(tab, opts);
+          if (result === false) {
+            if (opts.firstSpawn) this.rollbackDeferredCreation(tab);
+            opts.onDeferredFinished?.();
+            return;
+          }
+          if (result === "deferred") return;
+          if (opts.firstSpawn && tab.proc !== null) {
+            this.deferredRegistrationRollbacks.delete(tab.tabId);
+            opts.onDeferredInitialSpawn?.();
+          }
+          this.deliverTabPort(tab);
+          opts.onDeferredFinished?.();
+        }).catch((error) => {
+          if (this.spawnAttempts.get(tab) !== attempt || this.tabs.get(tab.tabId) !== tab || tab.state !== "running") { opts.onDeferredFinished?.(); return; }
+          this.logger.error(`[main] tab ${tab.tabId} host environment refresh failed`, error);
+          tab.state = "crash_looped";
+          this.deps.recordHostFailure?.(tab.sessionId, "connection_env_unavailable");
+          this.notifyHostExited(tab.tabId);
+          if (opts.firstSpawn) this.rollbackDeferredCreation(tab);
+          opts.onDeferredFinished?.();
+        });
+        return "deferred";
+      }
       this.logger.error(
         `[main] tab ${tab.tabId} pinned to unavailable connection ${tab.connectionId ?? "?"}; refusing to spawn`,
       );
+      // no host forks here, so nothing else can record the cause
+      // (the 0.0.45 crash_looped tab left only an inherited-stdio log line).
+      this.deps.recordHostFailure?.(tab.sessionId, "connection_env_unavailable");
       tab.proc = null;
       tab.state = "crash_looped";
       this.notifyHostExited(tab.tabId);
-      return;
+      return false;
     }
     // TASK.102 S4 gate-fix (F4, latent): resolve the engine env overlay BEFORE
     // forking, same layer as the baseEnv check above. registry.ts's
@@ -1297,45 +1352,60 @@ export class TabHostManager {
       tab.proc = null;
       tab.state = "crash_looped";
       this.notifyHostExited(tab.tabId);
-      return;
+      return false;
     }
     tab.hostGeneration = nextGeneration;
     tab.engineProcess = null;
     const cleanup = tab.pendingWorktreeCleanup;
     delete tab.workspaceTrustPending;
-    const child = this.deps.fork(this.deps.hostEntry, args, {
-      cwd: tab.workspace,
-      env: {
-        // TASK.45 W10: base env resolved for THIS tab's pinned connection (main
-        // keeps a per-connection env fresh across mutations); ANYCODE_CONNECTION_ID
-        // is stamped per-fork from `tab.connectionId` (never baked into the shared
-        // base env — a legacy/unpinned tab must not inherit another tab's pin).
-        ...baseEnv,
-        ...(tab.connectionId !== undefined ? { [ENV_CONNECTION_ID]: tab.connectionId } : {}),
-        // S4-1 arm 2 (W4-F1): an imported session's picked model, stamped over
-        // the base env's ANYCODE_MODEL (the active connection's model). Per-fork
-        // like ANYCODE_CONNECTION_ID above and rides every respawn (lives on the
-        // tab). Absent for every non-import spawn ⇒ nothing stamped.
-        ...(tab.modelOverride !== undefined ? { [ENV_MODEL]: tab.modelOverride } : {}),
-        // Core children: xhigh maps to the existing core "max"; absent keeps
-        // the absent-field behavior (nothing stamped).
-        ...(tab.effortOverride !== undefined
-          ? { [ENV_REASONING_EFFORT]: tab.effortOverride === "xhigh" ? "max" : tab.effortOverride }
-          : {}),
-        ...engineEnvOverlay,
-        // Taskana 4752 part A: the session's tools identify their session. Stamped
-        // AFTER baseEnv/engineEnvOverlay so no inherited value overrides it, and
-        // per fork so a respawn carries the same pair. Empty values are omitted.
-        ...sessionToolEnv(tab.sessionId, tab.workspace),
-        // Taskana 4752 part C: the referenced MCP secret values for this workspace.
-        // Consumed and deleted by the host right after its MCP config load.
-        ...mcpSecretsFork(this.deps.mcpSecretsEnv?.(tab.workspace)),
-        ...(cleanup !== undefined ? { [WORKTREE_CLEANUP_ENV]: JSON.stringify(cleanup) } : {}),
-        // Taskana 4736: a main-approved "trust once" for this workspace, this app run only.
-        ...this.workspaceTrustOnceEnv(tab.workspace),
-        ...this.browserFullAccessEnv(tab.tabId),
-      },
-      stdio: "inherit",
+    let child: UtilityProcess;
+    try {
+      child = this.deps.fork(this.deps.hostEntry, args, {
+        cwd: tab.workspace,
+        env: {
+          // Base env resolved for THIS tab's pinned connection (main
+          // keeps a per-connection env fresh across mutations); ANYCODE_CONNECTION_ID
+          // is stamped per-fork from `tab.connectionId` (never baked into the shared
+          // base env — a legacy/unpinned tab must not inherit another tab's pin).
+          ...baseEnv,
+          ...(tab.connectionId !== undefined ? { [ENV_CONNECTION_ID]: tab.connectionId } : {}),
+          // S4-1 arm 2 (W4-F1): an imported session's picked model, stamped over
+          // the base env's ANYCODE_MODEL (the active connection's model). Per-fork
+          // like ANYCODE_CONNECTION_ID above and rides every respawn (lives on the
+          // tab). Absent for every non-import spawn ⇒ nothing stamped.
+          ...(tab.modelOverride !== undefined ? { [ENV_MODEL]: tab.modelOverride } : {}),
+          // Core children: xhigh maps to the existing core "max"; absent keeps
+          // the absent-field behavior (nothing stamped).
+          ...(tab.effortOverride !== undefined
+            ? { [ENV_REASONING_EFFORT]: tab.effortOverride === "xhigh" ? "max" : tab.effortOverride }
+            : {}),
+          ...engineEnvOverlay,
+          // The session's tools identify their session. Stamped
+          // AFTER baseEnv/engineEnvOverlay so no inherited value overrides it, and
+          // per fork so a respawn carries the same pair. Empty values are omitted.
+          ...sessionToolEnv(tab.sessionId, tab.workspace),
+          // The referenced MCP secret values for this workspace.
+          // Consumed and deleted by the host right after its MCP config load.
+          ...mcpSecretsFork(this.deps.mcpSecretsEnv?.(tab.workspace)),
+          ...(cleanup !== undefined ? { [WORKTREE_CLEANUP_ENV]: JSON.stringify(cleanup) } : {}),
+          // A main-approved "trust once" for this workspace, this app run only.
+          ...this.workspaceTrustOnceEnv(tab.workspace),
+          ...this.browserFullAccessEnv(tab.tabId),
+        },
+        stdio: ["ignore", "inherit", "pipe"],
+      });
+    } catch (error) {
+      tab.proc = null;
+      tab.state = "crash_looped";
+      this.logger.error(`[main] tab ${tab.tabId} host spawn failed`, error);
+      this.deps.recordHostFailure?.(tab.sessionId, "host_crash_loop");
+      this.notifyHostExited(tab.tabId);
+      return false;
+    }
+    let startupStderr = "";
+    child.stderr?.on("data", (chunk: Buffer) => {
+      process.stderr.write(chunk);
+      startupStderr = (startupStderr + chunk.toString()).slice(-16384);
     });
     tab.proc = child;
     tab.spawnedAt = this.now();
@@ -1346,8 +1416,8 @@ export class TabHostManager {
     child.on("spawn", () => {
       this.logger.log(`[main] tab ${tab.tabId} host spawned (pid ${child.pid ?? "?"})`);
     });
-    child.once("exit", (code: number) => {
-      this.handleExit(tab, child, code);
+    child.once("exit", (code: number, signal?: string) => {
+      this.handleExit(tab, child, code, startupStderr, signal);
     });
     // Credential channel (design §3.3): an oauth-mode host asks main for a fresh
     // access token per attempt; main answers THIS proc (per-proc routing).
@@ -1964,8 +2034,32 @@ export class TabHostManager {
     // `finally` runs `releasePrepared` exactly once (idempotent) on every exit —
     // a throwing fork, a null child proc, or successful registration.
     try {
+      if (this.env(childTab.connectionId) === undefined) {
+        const pending = this.deps.waitForHostEnv?.(childTab.connectionId);
+        if (pending) {
+          try { await pending; } catch {
+            if (this.childRuns.get(req.requestId) !== entry) return;
+            rollback();
+            reject("spawn_failed", CHILD_SPAWN_FAILED_MESSAGE);
+            this.pumpChildSpawnQueue();
+            return;
+          }
+          if (this.childRuns.get(req.requestId) !== entry) return;
+          if (this.tabs.get(parentTab.tabId) !== parentTab || parentTab.proc !== sender || parentTab.state !== "running" || this.quitting || this.drainingParents.has(parentTab.tabId) || entry.state !== "starting") {
+            rollback();
+            reject("closing", CHILD_CLOSING_MESSAGE);
+            this.pumpChildSpawnQueue();
+            return;
+          }
+        }
+      }
       try {
-        this.spawnTabHost(childTab, { firstSpawn: true });
+        if (this.spawnTabHost(childTab, { firstSpawn: true }) === false) {
+          rollback();
+          reject("spawn_failed", CHILD_SPAWN_FAILED_MESSAGE);
+          this.pumpChildSpawnQueue();
+          return;
+        }
       } catch (error) {
         rollback();
         this.logger.error(`[main] child spawn threw for request ${req.requestId}`, error);
@@ -2797,7 +2891,18 @@ export class TabHostManager {
    * `rapidRespawns` is reset for the same reason `relocateTab` resets it — a new
    * process on a new account is a new epoch, not a continuation of a crash streak.
    */
-  async rebindTab(tab: TabHost, connectionId: string): Promise<{ ok: true } | { ok: false; reason: "not_ready" }> {
+  /** Acquire the per-tab rebind operation before asynchronous preparation. */
+  acquireRebind(tabId: string): boolean {
+    if (this.rebindings.has(tabId)) return false;
+    this.rebindings.add(tabId);
+    return true;
+  }
+
+  releaseRebind(tabId: string): void {
+    this.rebindings.delete(tabId);
+  }
+
+  async rebindTab(tab: TabHost, connectionId: string): Promise<{ ok: true } | { ok: false; reason: "not_ready" | "spawn_failed" }> {
     if (this.env(connectionId) === undefined) {
       this.logger.error(
         `[main] tab ${tab.tabId} rebind to ${connectionId} refused: no primed fork env for that connection`,
@@ -2808,6 +2913,10 @@ export class TabHostManager {
     // the parent is about to run on a different account entirely.
     await this.drainChildren(tab);
     await this.shutdownTabHost(tab);
+    if (this.quitting || this.closingTabs.has(tab.tabId) || this.tabs.get(tab.tabId) !== tab) return { ok: false, reason: "not_ready" };
+    const previousConnectionId = tab.connectionId;
+    const previousModelOverride = tab.modelOverride;
+    const previousEffortOverride = tab.effortOverride;
     tab.connectionId = connectionId;
     // The target connection's own env model is the authority for the new host
     // (core reads its model off the fork env on a resume boot); a stale per-fork
@@ -2817,7 +2926,13 @@ export class TabHostManager {
     tab.initialResume = true;
     tab.rapidRespawns = 0;
     tab.state = "running";
-    this.spawnTabHost(tab, { firstSpawn: false });
+    const spawn = this.spawnTabHost(tab, { firstSpawn: false });
+    if (spawn === false) {
+      tab.connectionId = previousConnectionId;
+      tab.modelOverride = previousModelOverride;
+      tab.effortOverride = previousEffortOverride;
+      return { ok: false, reason: "spawn_failed" };
+    }
     this.deliverTabPort(tab);
     return { ok: true };
   }
@@ -2865,6 +2980,7 @@ export class TabHostManager {
     // parent that has since moved on).
     await this.drainChildren(tab);
     await this.shutdownTabHost(tab);
+    if (this.quitting || this.closingTabs.has(tab.tabId) || this.tabs.get(tab.tabId) !== tab) return;
     tab.workspace = message.toWorkspace;
     tab.projectRoot = message.projectRoot;
     if (message.worktree !== undefined) tab.worktree = message.worktree;
@@ -2876,7 +2992,8 @@ export class TabHostManager {
     }
     tab.initialResume = true;
     tab.rapidRespawns = 0;
-    this.spawnTabHost(tab, { firstSpawn: false });
+    tab.state = "running";
+    if (this.spawnTabHost(tab, { firstSpawn: false }) === false) return;
     this.deliverTabPort(tab);
   }
 
@@ -2886,7 +3003,7 @@ export class TabHostManager {
    * already-replaced host; otherwise notifies the page, runs the breaker, and
    * respawns (with a fresh channel) unless a per-tab or global breaker tripped.
    */
-  private handleExit(tab: TabHost, child: UtilityProcess, code: number): void {
+  private handleExit(tab: TabHost, child: UtilityProcess, code: number, startupStderr: string, signal?: string): void {
     const deliberate = this.deliberateRestarts.delete(child);
     // TASK.102 fix-wave F2 / review T3: read the snapshot BEFORE deleting —
     // consumed once, regardless of root/child. A root never needed the F2
@@ -2920,13 +3037,13 @@ export class TabHostManager {
       // crash: no rapid-respawn or storm accounting, and the same resume path re-forks.
       void this.drainChildren(tab);
       this.notifyHostExited(tab.tabId);
-      this.spawnTabHost(tab, { firstSpawn: false });
+      const spawn = this.spawnTabHost(tab, { firstSpawn: false });
       // xfix m1: spawnTabHost may have refused (deleted connection / engine-env
       // guard) WITHOUT incrementing, so the compensating decrement is clamped —
       // a negative counter would hand a genuine crash storm one respawn beyond
       // globalMaxRapidRespawns until real forks climbed back above zero.
       this.stormForks = Math.max(0, this.stormForks - 1);
-      this.deliverTabPort(tab);
+      if (spawn !== false) this.deliverTabPort(tab);
       return;
     }
 
@@ -2963,11 +3080,13 @@ export class TabHostManager {
       this.logger.error(
         `[main] tab ${tab.tabId} host giving up respawn (${decision.reason}, code ${code})`,
       );
+      // the exit code alone named no cause; record the verdict.
+      this.deps.recordHostFailure?.(tab.sessionId, /(?:ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Cannot find module|Cannot find package)/i.test(startupStderr) ? "host_module_load" : /SyntaxError/.test(startupStderr) ? "host_syntax_error" : /(?:ERR_DLOPEN_FAILED|dlopen|shared librar(?:y|ies))/i.test(startupStderr) ? "host_native_load" : "host_crash_loop", code, startupStderr, signal);
       return;
     }
 
     this.logger.error(`[main] tab ${tab.tabId} host exited unexpectedly (code ${code}); respawning`);
-    this.spawnTabHost(tab, { firstSpawn: false });
+    if (this.spawnTabHost(tab, { firstSpawn: false }) === false) return;
     this.deliverTabPort(tab);
   }
 
@@ -3045,6 +3164,19 @@ export class TabHostManager {
       this.deps.reapEngineProcess?.(registration);
     } catch (error) {
       this.logger.warn(`[main] failed to reap external engine for tab ${tab.tabId}`, error);
+    }
+  }
+
+  private rollbackDeferredCreation(tab: TabHost): void {
+    if (this.tabs.get(tab.tabId) !== tab) return;
+    this.tabs.delete(tab.tabId);
+    this.bindings.delete(tab.sessionId);
+    this.deferredRegistrationRollbacks.get(tab.tabId)?.();
+    this.deferredRegistrationRollbacks.delete(tab.tabId);
+    this.deps.onTabClosed?.(tab.tabId);
+    const win = this.deps.getWindow();
+    if (win !== null && !win.isDestroyed()) {
+      win.webContents.send(TAB_CLOSED_ENVELOPE_TYPE, { tabId: tab.tabId });
     }
   }
 
@@ -3217,9 +3349,8 @@ export class TabHostManager {
   }
 
   /**
-   * Closes a single tab (design §2.2/§4.1): refuses the last remaining tab (no
-   * "window with zero hosts" state) and unknown ids; otherwise gracefully shuts
-   * the host and drops the tab + its binding.
+   * Closes a single tab: refuses the last healthy tab and unknown ids; a
+   * failed last tab can be closed. Drops the tab and its binding after shutdown.
    */
   async closeTab(tabId: string): Promise<CloseTabResult> {
     const tab = this.tabs.get(tabId);
@@ -3234,7 +3365,7 @@ export class TabHostManager {
     // still the application's only root and must not be closable, and
     // conversely a root's children must never inflate the denominator into
     // falsely allowing (or blocking) a close.
-    if (this.rootCount() <= 1) {
+    if (this.rootCount() <= 1 && tab.state !== "crash_looped") {
       return { ok: false, reason: "last_tab" };
     }
     // Seal FIRST, synchronously, before any await (cut §2.6.4/anti-facade
@@ -3242,10 +3373,13 @@ export class TabHostManager {
     // "running"` and is rejected `closing` by `spawnChild`'s admission
     // section. Anything admitted BEFORE this line is already registered in
     // `childrenByParentTab` and is swept by the drain below.
+    this.closingTabs.add(tabId);
     tab.state = "closing";
     await this.drainChildren(tab);
     await this.shutdownTabHost(tab);
     this.tabs.delete(tabId);
+    this.deferredRegistrationRollbacks.delete(tabId);
+    this.closingTabs.delete(tabId);
     this.bindings.delete(tab.sessionId);
     // Preview windows belong to the TAB, not the host proc — a respawn must
     // never close them, but a real close (here) must always destroy them.

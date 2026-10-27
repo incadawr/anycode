@@ -61,12 +61,13 @@ export interface TabRebindRequest {
  *  - `same_connection`: the target IS the tab's current pin (no-op refusal);
  *  - `connection_missing`: the id is absent from main's live registry;
  *  - `not_ready`: the target connection's fork env could not be primed.
+ *  - `spawn_failed`: the replacement host could not be started.
  */
 export type TabRebindResult =
   | { ok: true; connectionId: string }
   | {
       ok: false;
-      reason: "unknown_tab" | "busy" | "connection_missing" | "not_ready" | "same_connection" | "non_core";
+      reason: "unknown_tab" | "busy" | "connection_missing" | "not_ready" | "spawn_failed" | "same_connection" | "non_core";
     };
 
 /** Request: optional { limit?: number } — absent = full list (TASK.125). */

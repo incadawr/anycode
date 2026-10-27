@@ -824,17 +824,9 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
       }
       pinnedConnectionId = pin.connectionId;
     }
-    // S4-1 arm 2 (W4-F1): the FIRST resume of an imported session carries the
-    // user's picked model as a per-fork ANYCODE_MODEL override (consume-once).
-    // Consulted only here (the resume path); a `new` request never reads it, and
-    // a non-imported resume finds no entry — both unchanged. L4·1 (F1 review):
-    // PEEK the pick (read without delete), then CONSUME it only after createTab
-    // SUCCEEDS (below) — so a refusal (max_tabs / not_ready / already_open, or a
-    // throw) never spends the pick and a later resume of the reopened session
-    // still boots on the chosen model. No await sits between peek and consume
-    // (createTab is synchronous), so the consume window cannot race.
-    // The MCP secret prime is awaited BEFORE the peek: no await may sit between
-    // the peek and the consume below (the same-tick window the peek relies on).
+    // Keep the imported model pending until the first host actually forks.
+    // A deferred fork consumes it in its completion callback; a synchronous
+    // refusal or a deferred failure leaves it available for retry.
     await deps.primeMcpSecrets?.(meta.workspace);
     const importModelOverride = deps.peekPendingImportModel?.(req.sessionId);
     const result = deps.manager.createTab({
@@ -847,14 +839,13 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
       ...(pinnedConnectionId !== undefined ? { connectionId: pinnedConnectionId } : {}),
       ...(resumeCodexProfile !== undefined ? { codexProfile: resumeCodexProfile } : {}),
       ...(importModelOverride !== undefined ? { modelOverride: importModelOverride } : {}),
+      onDeferredInitialSpawn: () => { deps.consumePendingImportModel?.(req.sessionId); },
     });
     if (!result.ok) {
       return result;
     }
-    // L4·1: createTab committed the tab ⇒ the pick has now been applied; burn it
-    // so a second resume of the same session boots on the persisted model. A
-    // no-op for a non-imported resume (empty map).
-    deps.consumePendingImportModel?.(req.sessionId);
+    // A synchronous successful fork has applied the pick.
+    if (!result.deferred) deps.consumePendingImportModel?.(req.sessionId);
     deps.manager.deliverTabPort(result.tab);
     return { ok: true, tabId: result.tab.tabId, workspace: result.tab.workspace };
   } finally {
@@ -906,51 +897,57 @@ export async function handleWorkspacePick(deps: TabIpcDeps): Promise<WorkspacePi
  * switch simply did not stick, and the model chip says so.
  */
 export async function handleTabRebind(deps: TabIpcDeps, req: TabRebindRequest): Promise<TabRebindResult> {
-  const tab = deps.manager.getTab(req.tabId);
-  // TASK.102 CUT-S2: a child session's tabId is not externally addressable —
-  // the same "reads as no such tab" closeTab applies.
-  if (tab === undefined || tab.childOf !== undefined) {
-    return { ok: false, reason: "unknown_tab" };
-  }
-  if (tab.state !== "running") {
-    return { ok: false, reason: "busy" };
-  }
-  if (tab.engine !== "core") {
-    return { ok: false, reason: "non_core" };
-  }
-  if (req.connectionId === tab.connectionId) {
-    return { ok: false, reason: "same_connection" };
-  }
-  if (deps.connectionExists === undefined || !deps.connectionExists(req.connectionId)) {
-    return { ok: false, reason: "connection_missing" };
-  }
-  // Prime the fork env BEFORE anything is mutated — the same
-  // validated-then-primed order the cut-1 `new`-tab pick established. A throw
-  // (vault read failure) is a fail-closed `not_ready`, never a spawn on an
-  // unprimed env.
-  if (deps.ensureConnectionEnv !== undefined) {
-    try {
-      await deps.ensureConnectionEnv(req.connectionId);
-    } catch {
-      return { ok: false, reason: "not_ready" };
+  if (!deps.manager.acquireRebind(req.tabId)) return { ok: false, reason: "not_ready" };
+  try {
+    const tab = deps.manager.getTab(req.tabId);
+    // A child session's tabId is not externally addressable —
+    // the same "reads as no such tab" closeTab applies.
+    if (tab === undefined || tab.childOf !== undefined) {
+      return { ok: false, reason: "unknown_tab" };
     }
+    if (tab.state !== "running") {
+      return { ok: false, reason: "busy" };
+    }
+    if (tab.engine !== "core") {
+      return { ok: false, reason: "non_core" };
+    }
+    if (req.connectionId === tab.connectionId) {
+      return { ok: false, reason: "same_connection" };
+    }
+    if (deps.connectionExists === undefined || !deps.connectionExists(req.connectionId)) {
+      return { ok: false, reason: "connection_missing" };
+    }
+    // Prime the fork env BEFORE anything is mutated — the same
+    // validated-then-primed order the cut-1 `new`-tab pick established. A throw
+    // (vault read failure) is a fail-closed `not_ready`, never a spawn on an
+    // unprimed env.
+    if (deps.ensureConnectionEnv !== undefined) {
+      try {
+        await deps.ensureConnectionEnv(req.connectionId);
+      } catch {
+        return { ok: false, reason: "not_ready" };
+      }
+    }
+    const rebound = await deps.manager.rebindTab(tab, req.connectionId);
+    if (!rebound.ok) {
+      // Nothing durable was written, so the refusal leaves the session row
+      // pinned where the tab still runs.
+      return { ok: false, reason: rebound.reason };
+    }
+    deps.consumePendingImportModel?.(tab.sessionId);
+    // Design doc §D3/D5: the target connection's own model is the authority for
+    // the re-bound host (the core resume boot reads the model off the fork env),
+    // so the row is stamped with it in the SAME touch as the pin — one durable
+    // write, no window where the row and the env disagree about the account.
+    const model = deps.readConnectionModel?.(req.connectionId);
+    await deps.persistence.touchSession(tab.sessionId, {
+      connectionId: req.connectionId,
+      ...(model !== undefined ? { model } : {}),
+    });
+    return { ok: true, connectionId: req.connectionId };
+  } finally {
+    deps.manager.releaseRebind(req.tabId);
   }
-  const rebound = await deps.manager.rebindTab(tab, req.connectionId);
-  if (!rebound.ok) {
-    // Nothing durable was written, so the refusal leaves the session row
-    // pinned where the tab still runs.
-    return { ok: false, reason: rebound.reason };
-  }
-  // Design doc §D3/D5: the target connection's own model is the authority for
-  // the re-bound host (the core resume boot reads the model off the fork env),
-  // so the row is stamped with it in the SAME touch as the pin — one durable
-  // write, no window where the row and the env disagree about the account.
-  const model = deps.readConnectionModel?.(req.connectionId);
-  await deps.persistence.touchSession(tab.sessionId, {
-    connectionId: req.connectionId,
-    ...(model !== undefined ? { model } : {}),
-  });
-  return { ok: true, connectionId: req.connectionId };
 }
 
 /**

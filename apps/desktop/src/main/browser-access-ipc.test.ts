@@ -21,6 +21,7 @@ function rig(options: { trust?: Record<string, unknown>; onChanged?: (tabId: str
   const store: BrowserAccessStore = {
     isOn: (sessionId) => on.has(sessionId),
     register: () => {},
+    remove: () => {},
     set: (sessionId, value) => {
       if (value) on.add(sessionId); else on.delete(sessionId);
       return true;

@@ -10,10 +10,16 @@
  */
 
 import { EventEmitter } from "node:events";
+import { spawn } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { recordHostFailure } from "../host/error-diagnostics.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessagePortMain, UtilityProcess } from "electron";
 import { CREDENTIAL_REQUEST_TYPE, CREDENTIAL_RESPONSE_TYPE } from "../shared/credentials.js";
-import { PORT_ENVELOPE_TYPE } from "../shared/envelopes.js";
+import { PORT_ENVELOPE_TYPE, TAB_CLOSED_ENVELOPE_TYPE } from "../shared/envelopes.js";
+import { handleCreate, handleTabRebind, type TabIpcDeps } from "./tab-ipc.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
 import { PROVIDER_QUOTA_EVENT_TYPE } from "../shared/provider-quota.js";
 import { TERMINAL_INIT_MESSAGE_TYPE, TERMINAL_PORT_ENVELOPE_TYPE } from "../shared/terminal.js";
@@ -355,11 +361,161 @@ describe("TabHostManager — session registration hook (Taskana 4747)", () => {
     const seen: Array<{ sessionId: string; parentSessionId?: string }> = [];
     const manager = new TabHostManager({
       fork, hostEntry: "/fake/host.js", createChannel: fakeChannel, getWindow: () => window, env: () => ({}), logger: silentLogger, limits: {},
-      onSessionRegistered: (info) => seen.push(info),
+      onSessionRegistered: (info) => { seen.push(info); },
     });
     manager.createTab({ workspace: "/ws", sessionId: "root-session", resume: false });
     expect(seen).toEqual([{ sessionId: "root-session" }]);
   });
+});
+
+describe("TabHostManager — host spawn", () => {
+  it("forks with ignored stdin, inherited stdout and piped stderr", () => {
+    const fork = vi.fn<HostForkFn>(() => new FakeHost() as unknown as UtilityProcess);
+    const manager = makeManager(fork, windowRig().window);
+    expect(manager.createTab({ workspace: "/ws", sessionId: "stdio", resume: false }).ok).toBe(true);
+    expect(fork.mock.calls[0]?.[2].stdio).toEqual(["ignore", "inherit", "pipe"]);
+  });
+
+  it("rolls back a throwing fork and logs its cause", () => {
+    const error = new Error("fork failed: invalid stdin");
+    const logError = vi.fn();
+    const opened = vi.fn();
+    const registered = vi.fn();
+    const fork = vi.fn<HostForkFn>().mockImplementationOnce(() => { throw error; })
+      .mockImplementation(() => new FakeHost() as unknown as UtilityProcess);
+    const manager = new TabHostManager({
+      fork, hostEntry: "/fake/host.js", createChannel: fakeChannel,
+      getWindow: () => windowRig().window, env: () => ({}),
+      logger: { ...silentLogger, error: logError }, onTabOpened: opened, onSessionRegistered: registered,
+    });
+    expect(manager.createTab({ workspace: "/ws", sessionId: "retry", resume: false }))
+      .toEqual({ ok: false, reason: "not_ready" });
+    expect(manager.listTabs()).toHaveLength(0);
+    expect(opened).not.toHaveBeenCalled();
+    expect(registered).not.toHaveBeenCalled();
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining("host spawn failed"), error);
+    expect(manager.createTab({ workspace: "/ws", sessionId: "retry", resume: false }).ok).toBe(true);
+  });
+
+  it("rolls back a deferred initial fork failure and notifies the renderer", async () => {
+    const error = new Error("deferred fork failed");
+    let blocked = true;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const registered = vi.fn();
+    const closed = vi.fn();
+    const logError = vi.fn();
+    const send = vi.fn();
+    const window = windowRig().window;
+    window.webContents.send = send;
+    const manager = new TabHostManager({
+      fork: () => { throw error; }, hostEntry: "/fake/host.js", createChannel: fakeChannel,
+      getWindow: () => window, env: () => blocked ? undefined : {},
+      waitForHostEnv: () => blocked ? pending : undefined,
+      logger: { ...silentLogger, error: logError }, onSessionRegistered: registered, onTabClosed: closed,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "deferred-failure", connectionId: "old", resume: false });
+    if (!created.ok) throw new Error("create failed");
+    expect(registered).toHaveBeenCalledWith({ sessionId: "deferred-failure" });
+    blocked = false;
+    release();
+    await vi.waitFor(() => expect(manager.getTab(created.tab.tabId)).toBeUndefined());
+    expect(manager.sessionOpenInTab("deferred-failure")).toBeUndefined();
+    expect(manager.pinnedConnectionIds().has("old")).toBe(false);
+    expect(registered).toHaveBeenCalledTimes(1);
+    expect(closed).toHaveBeenCalledWith(created.tab.tabId);
+    expect(send).toHaveBeenCalledWith(TAB_CLOSED_ENVELOPE_TYPE, { tabId: created.tab.tabId });
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining("host spawn failed"), error);
+  });
+
+  it("refuses IPC rebind when the replacement fork throws without persisting the pin", async () => {
+    const rig = shutdownableForkRig();
+    const error = new Error("replacement fork failed");
+    const logError = vi.fn();
+    let calls = 0;
+    const manager = new TabHostManager({
+      fork: (...args) => { if (calls++ === 1) throw error; return rig.fork(...args); },
+      hostEntry: "/fake/host.js", createChannel: fakeChannel, getWindow: () => windowRig().window,
+      env: () => ({}), logger: { ...silentLogger, error: logError },
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "rebind-failure", connectionId: "old", resume: false });
+    if (!created.ok) throw new Error("create failed");
+    const touchSession = vi.fn();
+    const deps = { manager, connectionExists: () => true, persistence: { touchSession } } as unknown as TabIpcDeps;
+    expect(await handleTabRebind(deps, { tabId: created.tab.tabId, connectionId: "new" })).toEqual({ ok: false, reason: "spawn_failed" });
+    expect(touchSession).not.toHaveBeenCalled();
+    expect(created.tab.connectionId).toBe("old");
+    expect(created.tab.state).toBe("crash_looped");
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining("host spawn failed"), error);
+    await expect(manager.closeTab(created.tab.tabId)).resolves.toEqual({ ok: true });
+  });
+
+  it("marks a tab failed and logs the cause when a respawn fork throws", () => {
+    const host = new FakeHost();
+    const error = new Error("respawn fork failed");
+    const logError = vi.fn();
+    const recorded = vi.fn();
+    const fork = vi.fn<HostForkFn>()
+      .mockImplementationOnce(() => host as unknown as UtilityProcess)
+      .mockImplementation(() => { throw error; });
+    const manager = new TabHostManager({
+      fork, hostEntry: "/fake/host.js", createChannel: fakeChannel,
+      getWindow: () => windowRig().window, env: () => ({}),
+      logger: { ...silentLogger, error: logError }, recordHostFailure: recorded,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "respawn", resume: false });
+    expect(created.ok).toBe(true);
+    host.emit("exit", 1);
+    expect(created.ok && manager.getTab(created.tab.tabId)?.state).toBe("crash_looped");
+    expect(created.ok && manager.getTab(created.tab.tabId)?.proc).toBeNull();
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining("host spawn failed"), error);
+    expect(recorded).toHaveBeenCalledWith("respawn", "host_crash_loop");
+  });
+
+  it.each(["restart", "worktree move"] as const)("leaves a failed tab when a %s replacement fork throws", async (kind) => {
+    const rig = shutdownableForkRig();
+    const error = new Error("replacement fork failed");
+    const logError = vi.fn();
+    let calls = 0;
+    const manager = new TabHostManager({
+      fork: (...args) => { if (calls++ > 0) throw error; return rig.fork(...args); },
+      hostEntry: "/fake/host.js", createChannel: fakeChannel, getWindow: () => windowRig().window,
+      env: () => ({}), logger: { ...silentLogger, error: logError },
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "replacement", resume: false });
+    if (!created.ok) throw new Error("create failed");
+    if (kind === "restart") {
+      await manager.restartTabHost(created.tab.tabId);
+    } else {
+      rig.hosts[0]!.emit("message", { type: WORKTREE_TRANSITION_MESSAGE_TYPE, sessionId: "replacement", fromWorkspace: "/ws", toWorkspace: "/ws/wt", projectRoot: "/ws", worktree: { id: "wt", path: "/ws/wt", branch: "feature", baseRef: "main", ownedByAnyCode: true } });
+    }
+    await vi.waitFor(() => expect(created.tab.state).toBe("crash_looped"));
+    expect(created.tab.proc).toBeNull();
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining("host spawn failed"), error);
+  });
+
+  it("drains large stderr output until exit and retains only its bounded tail", async () => {
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      let done!: (stderr: string | undefined) => void;
+      const recorded = new Promise<string | undefined>((resolve) => { done = resolve; });
+      const manager = new TabHostManager({
+        fork: () => {
+          const child = spawn(process.execPath, ["-e", "process.stderr.write('x'.repeat(1048576) + 'END-MARKER', () => process.exit(1))"], { stdio: ["ignore", "ignore", "pipe"] });
+          Object.assign(child, { postMessage: () => {} });
+          return child as unknown as UtilityProcess;
+        },
+        hostEntry: "/unused", createChannel: fakeChannel, getWindow: () => windowRig().window,
+        env: () => ({}), logger: silentLogger, limits: { maxRapidRespawns: 0 },
+        recordHostFailure: (_id, _reason, _code, stderr) => done(stderr),
+      });
+      expect(manager.createTab({ workspace: "/tmp", sessionId: "large-stderr", resume: false }).ok).toBe(true);
+      const stderr = await recorded;
+      expect(stderr).toHaveLength(16384);
+      expect(stderr?.endsWith("END-MARKER")).toBe(true);
+      expect(write.mock.calls.reduce((n, call) => n + Buffer.byteLength(call[0] as string | Buffer), 0)).toBe(1048576 + 10);
+    } finally { write.mockRestore(); }
+  }, 30_000);
 });
 
 describe("TabHostManager — per-tab circuit breaker", () => {
@@ -381,6 +537,118 @@ describe("TabHostManager — per-tab circuit breaker", () => {
     expect(hostExited.length).toBe(DEFAULT_BREAKER_LIMITS.maxRapidRespawns + 1);
     expect(new Set(hostExited)).toEqual(new Set([created.ok ? created.tab.tabId : ""]));
   });
+
+  it("closeTab closes a crash_looped tab — the breaker verdict is not a close veto", async () => {
+    const { fork } = dyingForkRig();
+    const { window } = windowRig();
+    const manager = makeManager(fork, window);
+    const a = manager.createTab({ workspace: "/ws", sessionId: "s-a", resume: false });
+    const b = manager.createTab({ workspace: "/ws", sessionId: "s-b", resume: false });
+    expect(a.ok && b.ok).toBe(true);
+    await flush();
+    const tabId = a.ok ? a.tab.tabId : "";
+    expect(manager.getTab(tabId)?.state).toBe("crash_looped");
+    // The PUBLIC close path (what close_session calls through main) accepts it:
+    // state "closing" is sealed synchronously, the (absent) host is shut down,
+    // and the tab is removed — no live-host round trip is involved.
+    await expect(manager.closeTab(tabId)).resolves.toEqual({ ok: true });
+    expect(manager.getTab(tabId)).toBeUndefined();
+  });
+
+  it("records a safe cause when the breaker gives up — the exit code alone named none", async () => {
+    const { fork } = dyingForkRig();
+    const { window } = windowRig();
+    const recorded: Array<{ sessionId: string; reason: string }> = [];
+    const manager = new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => window,
+      env: () => ({}),
+      logger: silentLogger,
+      recordHostFailure: (sessionId, reason) => recorded.push({ sessionId, reason }),
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "sess-loop", resume: false });
+    expect(created.ok).toBe(true);
+    await flush();
+    expect(manager.getTab(created.ok ? created.tab.tabId : "")?.state).toBe("crash_looped");
+    // One record, at the give-up (never per intermediate respawn).
+    expect(recorded).toEqual([{ sessionId: "sess-loop", reason: "host_crash_loop" }]);
+  });
+
+  it("records a module-load failure from a real host process that exits before boot", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "host-start-failure-"));
+    try {
+      const { window } = windowRig();
+      let done!: () => void;
+      const recorded = new Promise<void>((resolve) => { done = resolve; });
+      const manager = new TabHostManager({
+        fork: () => {
+          const child = spawn(process.execPath, ["--input-type=module", "-e", "import 'missing-anycode-host-test-module'"], { stdio: ["ignore", "pipe", "pipe"] });
+          Object.assign(child, { postMessage: () => {} });
+          return child as unknown as UtilityProcess;
+        },
+        hostEntry: "/unused", createChannel: fakeChannel, getWindow: () => window,
+        env: () => ({}), logger: silentLogger,
+        recordHostFailure: (sessionId, reason, exitCode) => { recordHostFailure(dir, sessionId, reason, exitCode); done(); },
+      });
+      const created = manager.createTab({ workspace: "/tmp", sessionId: "early-failure", resume: false });
+      expect(created.ok).toBe(true);
+      await recorded;
+      const diagnostic = JSON.parse((await readFile(join(dir, "early-failure.jsonl"), "utf8")).trim());
+      expect(diagnostic).toMatchObject({ code: "host_module_load", exitCode: 1 });
+      expect(diagnostic.message).toContain("required module");
+      expect(diagnostic.message).not.toContain("missing-anycode-host-test-module");
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  }, 30_000);
+
+  it("records a safe system code from a real failing host process", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "host-eacces-"));
+    try {
+      const { window } = windowRig();
+      let done!: () => void;
+      const recorded = new Promise<void>((resolve) => { done = resolve; });
+      const manager = new TabHostManager({
+        fork: () => {
+          const child = spawn(process.execPath, ["-e", "throw new Error('EACCES: permission denied /private/secret')"], { stdio: ["ignore", "pipe", "pipe"] });
+          Object.assign(child, { postMessage: () => {} });
+          return child as unknown as UtilityProcess;
+        },
+        hostEntry: "/unused", createChannel: fakeChannel, getWindow: () => window,
+        env: () => ({}), logger: silentLogger,
+        recordHostFailure: (id, reason, code, stderr, signal) => { recordHostFailure(dir, id, reason, code, stderr, signal); done(); },
+      });
+      manager.createTab({ workspace: "/tmp", sessionId: "permission-failure", resume: false });
+      await recorded;
+      const diagnostic = JSON.parse((await readFile(join(dir, "permission-failure.jsonl"), "utf8")).trim());
+      expect(diagnostic).toMatchObject({ code: "host_crash_loop", errorLine: "Error: EACCES: [details redacted]" });
+      expect(JSON.stringify(diagnostic)).not.toMatch(/private|secret|permission denied/);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  }, 30_000);
+
+  it("records a redacted syntax error from an actual host startup", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "host-syntax-"));
+    try {
+      const { window } = windowRig();
+      let done!: () => void;
+      const recorded = new Promise<void>((resolve) => { done = resolve; });
+      const manager = new TabHostManager({
+        fork: () => {
+          const child = spawn(process.execPath, ["-e", "throw new SyntaxError('secret /Users/private')"], { stdio: ["ignore", "pipe", "pipe"] });
+          Object.assign(child, { postMessage: () => {} });
+          return child as unknown as UtilityProcess;
+        },
+        hostEntry: "/unused", createChannel: fakeChannel, getWindow: () => window,
+        env: () => ({}), logger: silentLogger,
+        recordHostFailure: (id, reason, code, stderr, signal) => { recordHostFailure(dir, id, reason, code, stderr, signal); done(); },
+      });
+      manager.createTab({ workspace: "/tmp", sessionId: "syntax-failure", resume: false });
+      await recorded;
+      const diagnostic = JSON.parse((await readFile(join(dir, "syntax-failure.jsonl"), "utf8")).trim());
+      expect(diagnostic).toMatchObject({ code: "host_syntax_error", exitCode: 1, errorLine: "SyntaxError: [details redacted]" });
+      expect(JSON.stringify(diagnostic)).not.toMatch(/secret|Users/);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  }, 30_000);
 
   it("passes the session-bearing argv: --session on first spawn, --resume on respawn", async () => {
     const forkSpy = vi.fn<HostForkFn>();
@@ -1036,13 +1304,28 @@ describe("TabHostManager — connection pinning (TASK.45 W10)", () => {
       logger: silentLogger,
     });
     const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: true, connectionId: "conn-gone" });
-    expect(created.ok).toBe(true);
-    const tabId = created.ok ? created.tab.tabId : "";
-    // Custody invariant: the wrong-account fork never happened.
+    expect(created).toEqual({ ok: false, reason: "not_ready" });
     expect(forkSpy).not.toHaveBeenCalled();
-    // Surfaced as a host-exit (renderer replacement flow), terminal — no respawn.
-    expect(hostExited).toEqual([tabId]);
-    expect(manager.getTab(tabId)?.state).toBe("crash_looped");
+    expect(hostExited).toHaveLength(1);
+    expect(manager.listTabs()).toHaveLength(0);
+  });
+
+  it("records the dead-host cause for a fail-closed env miss — the 0.0.45 crash_looped shape", () => {
+    const { window } = windowRig();
+    const recorded: Array<{ sessionId: string; reason: string }> = [];
+    const manager = new TabHostManager({
+      fork: vi.fn<HostForkFn>(() => new FakeHost() as unknown as UtilityProcess),
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => window,
+      env: (id?: string) => (id === "conn-glm" ? undefined : { PATH: "/base" }),
+      logger: silentLogger,
+      recordHostFailure: (sessionId, reason) => recorded.push({ sessionId, reason }),
+    });
+    manager.createTab({ workspace: "/ws", sessionId: "sess-glm", resume: false, connectionId: "conn-glm" });
+    // Without this call the cause lived only in an inherited-stdio log line and
+    // the user saw just "Session host unavailable".
+    expect(recorded).toEqual([{ sessionId: "sess-glm", reason: "connection_env_unavailable" }]);
   });
 
   it("still forks a pinned tab whose connection env IS available (fail-closed is miss-only)", () => {
@@ -6622,4 +6905,320 @@ describe("TabHostManager — browser access env stamp (Taskana 4759) — test 49
     expect(hosts[0]!.postMessage).not.toHaveBeenCalled();
     expect(seen).toEqual([]);
   });
+});
+
+describe("A new session on a NON-active connection reaches the spawn with that env", () => {
+  // Models main/index.ts: a per-connection env cache that is fail-closed on a miss
+  // (hostEnvForConnection) and is filled only by the resume-pin primer.
+  function rig() {
+    const cache = new Map<string, NodeJS.ProcessEnv>();
+    const resolveResumePin = async (meta: { connectionId?: string }) => {
+      if (meta.connectionId === "conn-gone") return { ok: false as const, connectionId: "conn-gone" };
+      if (meta.connectionId === "conn-boom") throw new Error("vault unreadable");
+      cache.set(meta.connectionId!, { PATH: "/base", ANYCODE_API_KEY: "glm-key" });
+      return { ok: true as const, connectionId: meta.connectionId, release: vi.fn() };
+    };
+    const forkEnvs: Array<NodeJS.ProcessEnv | undefined> = [];
+    const hosts: FakeHost[] = [];
+    const fork: HostForkFn = (_entry, _args, opts) => {
+      forkEnvs.push(opts?.env as NodeJS.ProcessEnv | undefined);
+      const host = new FakeHost();
+      hosts.push(host);
+      queueMicrotask(() => host.emit("spawn"));
+      return host as unknown as UtilityProcess;
+    };
+    const w = windowRig();
+    const manager = childManager(fork, w.window, {
+      env: (id) => (id === undefined || id === "conn-active" ? { PATH: "/active" } : cache.get(id)),
+    });
+    return { manager, resolveResumePin, forkEnvs, hostExited: w.hostExited };
+  }
+
+  it("primed: the fork receives the non-active connection's env (no crash_looped)", async () => {
+    const { primeNewSessionPin } = await import("./session-pin.js");
+    const r = rig();
+    const pin = await primeNewSessionPin("conn-glm", "conn-active", r.resolveResumePin);
+    expect(pin.ok).toBe(true);
+    const created = r.manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false, connectionId: "conn-glm" });
+    expect(created.ok).toBe(true);
+    await flush();
+    expect(r.forkEnvs).toHaveLength(1);
+    expect(r.forkEnvs[0]?.ANYCODE_API_KEY).toBe("glm-key");
+    expect(r.hostExited).toEqual([]);
+  });
+
+  it("regression: WITHOUT priming the same tab is refused (crash_looped) — what 0.0.45 shipped", async () => {
+    const r = rig();
+    r.manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false, connectionId: "conn-glm" });
+    await flush();
+    expect(r.forkEnvs).toHaveLength(0);
+    expect(r.hostExited).toHaveLength(1);
+  });
+
+  it("active connection is primed, no pin skips priming, and failures return a clean refusal", async () => {
+    const { primeNewSessionPin } = await import("./session-pin.js");
+    const r = rig();
+    const spy = vi.fn(r.resolveResumePin);
+    expect((await primeNewSessionPin("conn-active", "conn-active", spy)).ok).toBe(true);
+    expect((await primeNewSessionPin(undefined, "conn-active", spy)).ok).toBe(true);
+    expect(spy).toHaveBeenCalledExactlyOnceWith({ connectionId: "conn-active" });
+    expect(await primeNewSessionPin("conn-gone", "conn-active", r.resolveResumePin)).toMatchObject({ ok: false, reason: "connection_missing" });
+    // a priming failure carries a safe, actionable reason (the
+    // raw error — a vault read, a probe — is classified, never echoed).
+    const boom = await primeNewSessionPin("conn-boom", "conn-active", r.resolveResumePin);
+    expect(boom).toMatchObject({ ok: false, reason: "not_ready", connectionId: "conn-boom" });
+    if (boom.ok) throw new Error("expected a refusal");
+    expect(boom.detail).toContain("could not prepare connection conn-boom");
+    expect(boom.detail).not.toContain("vault unreadable");
+  });
+});
+
+describe("deferred host spawns during a settings refresh", () => {
+  it.each(["initial create", "crash respawn", "restart", "worktree move", "reconnect"] as const)("resumes %s after refresh", async (kind) => {
+    const rig = shutdownableForkRig();
+    let blocked = kind === "initial create";
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const manager = childManager(rig.fork, windowRig().window, {
+      env: () => blocked ? undefined : {},
+      waitForHostEnv: () => blocked ? pending : undefined,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "session", resume: false, connectionId: "old" });
+    if (!created.ok) throw new Error("create failed");
+    let reconnect: Promise<unknown> | undefined;
+    if (kind !== "initial create") {
+      const host = rig.hosts[0]!;
+      if (kind === "reconnect") {
+        const post = host.postMessage.getMockImplementation()!;
+        host.postMessage.mockImplementation((message: unknown) => { blocked = true; return post(message); });
+        reconnect = manager.rebindTab(created.tab, "new");
+        await vi.waitFor(() => expect(created.tab.proc).toBeNull());
+      } else {
+        blocked = true;
+        if (kind === "crash respawn") host.emit("exit", 1);
+        if (kind === "restart") await manager.restartTabHost(created.tab.tabId);
+        if (kind === "worktree move") {
+          host.emit("message", { type: WORKTREE_TRANSITION_MESSAGE_TYPE, sessionId: "session", fromWorkspace: "/ws", toWorkspace: "/ws/wt", projectRoot: "/ws", worktree: { id: "wt", path: "/ws/wt", branch: "feature", baseRef: "main", ownedByAnyCode: true } });
+          await vi.waitFor(() => expect(created.tab.workspace).toBe("/ws/wt"));
+        }
+      }
+    }
+    const count = rig.hosts.length;
+    expect(created.tab.proc).toBeNull();
+    blocked = false;
+    release();
+    await reconnect;
+    await vi.waitFor(() => expect(rig.hosts).toHaveLength(count + 1));
+    expect(created.tab.state).toBe("running");
+    expect(created.tab.proc).not.toBeNull();
+  });
+
+  it.each(["rejects", "resolves"] as const)("ignores a superseded deferred rebind when its refresh %s", async (outcome) => {
+    const rig = shutdownableForkRig();
+    const { window, hostExited } = windowRig();
+    let blocked = false;
+    let resolve!: () => void;
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((res, rej) => { resolve = res; reject = rej; });
+    const recordHostFailure = vi.fn();
+    const manager = childManager(rig.fork, window, {
+      env: () => blocked ? undefined : {},
+      waitForHostEnv: () => blocked ? pending : undefined,
+      recordHostFailure,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "superseded", connectionId: "old", resume: false });
+    if (!created.ok) throw new Error("create failed");
+    const post = rig.hosts[0]!.postMessage.getMockImplementation()!;
+    rig.hosts[0]!.postMessage.mockImplementation((message: unknown) => { blocked = true; return post(message); });
+    expect(await manager.rebindTab(created.tab, "first")).toEqual({ ok: true });
+    expect(created.tab.proc).toBeNull();
+    blocked = false;
+    expect(await manager.rebindTab(created.tab, "second")).toEqual({ ok: true });
+    const liveHost = created.tab.proc;
+    expect(rig.hosts).toHaveLength(2);
+    hostExited.length = 0;
+    recordHostFailure.mockClear();
+    if (outcome === "rejects") reject(new Error("old refresh failed"));
+    else resolve();
+    await flush();
+    expect(created.tab.state).toBe("running");
+    expect(created.tab.proc).toBe(liveHost);
+    expect(rig.hosts).toHaveLength(2);
+    expect(hostExited).toEqual([]);
+    expect(recordHostFailure).not.toHaveBeenCalled();
+  });
+
+  it("does not resume a deferred spawn after close", async () => {
+    const rig = shutdownableForkRig();
+    let blocked = false;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const manager = childManager(rig.fork, windowRig().window, { env: () => blocked ? undefined : {}, waitForHostEnv: () => blocked ? pending : undefined });
+    manager.createTab({ workspace: "/ws", sessionId: "control", resume: false });
+    blocked = true;
+    const created = manager.createTab({ workspace: "/ws", sessionId: "deferred", resume: false });
+    if (!created.ok) throw new Error("create failed");
+    await manager.closeTab(created.tab.tabId);
+    blocked = false;
+    release();
+    await flush();
+    expect(rig.hosts).toHaveLength(1);
+    expect(manager.getTab(created.tab.tabId)).toBeUndefined();
+  });
+});
+
+it("does not rehost a worktree move racing a real close", async () => {
+  const rig = liveForkRig();
+  const manager = childManager(rig.fork, windowRig().window);
+  manager.createTab({ workspace: "/ws", sessionId: "control", resume: false });
+  const created = manager.createTab({ workspace: "/ws", sessionId: "moving", resume: false });
+  if (!created.ok) throw new Error("create failed");
+  const host = rig.hosts[1]!;
+  host.emit("message", { type: WORKTREE_TRANSITION_MESSAGE_TYPE, sessionId: "moving", fromWorkspace: "/ws", toWorkspace: "/ws/wt", projectRoot: "/ws", worktree: { id: "wt", path: "/ws/wt", branch: "feature", baseRef: "main", ownedByAnyCode: true } });
+  await vi.waitFor(() => expect(host.postMessage).toHaveBeenCalled());
+  const closing = manager.closeTab(created.tab.tabId);
+  await vi.waitFor(() => expect(host.postMessage).toHaveBeenCalledTimes(2));
+  host.emit("exit", 0);
+  await closing;
+  await flush();
+  expect(manager.getTab(created.tab.tabId)).toBeUndefined();
+  expect(rig.hosts).toHaveLength(2);
+});
+
+it("starts a child after a paused settings refresh", async () => {
+  const rig = shutdownableForkRig();
+  let blocked = false;
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  const manager = childManager(rig.fork, windowRig().window, { env: () => blocked ? undefined : {}, waitForHostEnv: () => blocked ? pending : undefined });
+  manager.createTab({ workspace: "/ws", sessionId: "parent", resume: false });
+  blocked = true;
+  const host = rig.hosts[0]!;
+  host.emit("message", spawnRequest({ requestId: "deferred-child" }));
+  expect(rig.hosts).toHaveLength(1);
+  expect(childRunEvents(host).find((event) => event.requestId === "deferred-child")).toBeUndefined();
+  blocked = false;
+  release();
+  await vi.waitFor(() => expect(rig.hosts).toHaveLength(2));
+  expect(childRunEvents(host)).toContainEqual(expect.objectContaining({ requestId: "deferred-child", kind: "accepted" }));
+});
+
+
+it("refuses overlapping rebinds during refresh and persists the live connection", async () => {
+  const rig = shutdownableForkRig();
+  let blocked = false;
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  const envs: Array<NodeJS.ProcessEnv | undefined> = [];
+  const manager = childManager((entry, args, opts) => { envs.push(opts.env); return rig.fork(entry, args, opts); }, windowRig().window, {
+    env: () => blocked ? undefined : {}, waitForHostEnv: () => blocked ? pending : undefined,
+  });
+  const created = manager.createTab({ workspace: "/ws", sessionId: "rebind-race", connectionId: "old", resume: false });
+  if (!created.ok) throw new Error("create failed");
+  const post = rig.hosts[0]!.postMessage.getMockImplementation()!;
+  rig.hosts[0]!.postMessage.mockImplementation((message: unknown) => { blocked = true; return post(message); });
+  const touchSession = vi.fn(async () => {});
+  const deps = { manager, connectionExists: () => true, persistence: { touchSession } } as unknown as TabIpcDeps;
+  const firstPending = handleTabRebind(deps, { tabId: created.tab.tabId, connectionId: "new" });
+  const secondPending = handleTabRebind(deps, { tabId: created.tab.tabId, connectionId: "other" });
+  expect(await secondPending).toEqual({ ok: false, reason: "not_ready" });
+  expect(await firstPending).toEqual({ ok: true, connectionId: "new" });
+  expect(await handleTabRebind(deps, { tabId: created.tab.tabId, connectionId: "other" })).toEqual({ ok: false, reason: "not_ready" });
+  blocked = false;
+  release();
+  await vi.waitFor(() => expect(rig.hosts).toHaveLength(2));
+  expect(envs[1]?.ANYCODE_CONNECTION_ID).toBe("new");
+  expect(touchSession).toHaveBeenCalledOnce();
+  expect(touchSession).toHaveBeenCalledWith("rebind-race", { connectionId: "new" });
+});
+
+it("keeps the imported model after a deferred failure and applies it on retry", async () => {
+  const rig = liveForkRig();
+  let blocked = true;
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  let fail = true;
+  const envs: Array<NodeJS.ProcessEnv | undefined> = [];
+  const manager = childManager((entry, args, opts) => {
+    if (fail) throw new Error("fork failed");
+    envs.push(opts.env);
+    return rig.fork(entry, args, opts);
+  }, windowRig().window, { env: () => blocked ? undefined : {}, waitForHostEnv: () => blocked ? pending : undefined });
+  const models = new Map([["imported", "chosen-model"]]);
+  const deps = {
+    manager, dialog: {}, persistence: { getRootSession: async () => ({ id: "imported", workspace: "/ws", model: "old", mode: "build", createdAt: 1, updatedAt: 1 }) },
+    peekPendingImportModel: (id: string) => models.get(id),
+    consumePendingImportModel: (id: string) => { const model = models.get(id); models.delete(id); return model; },
+  } as unknown as TabIpcDeps;
+  const first = await handleCreate(deps, { kind: "resume", sessionId: "imported" });
+  expect(first.ok).toBe(true);
+  expect(models.get("imported")).toBe("chosen-model");
+  blocked = false;
+  release();
+  await vi.waitFor(() => expect(manager.sessionOpenInTab("imported")).toBeUndefined());
+  expect(models.get("imported")).toBe("chosen-model");
+  fail = false;
+  const retry = await handleCreate(deps, { kind: "resume", sessionId: "imported" });
+  expect(retry.ok).toBe(true);
+  expect(envs[0]?.ANYCODE_MODEL).toBe("chosen-model");
+  expect(models.has("imported")).toBe(false);
+});
+
+it.each([false, true])("holds the rebind guard during preparation and releases it after failure=%s", async (fail) => {
+  const rig = shutdownableForkRig();
+  const manager = childManager(rig.fork, windowRig().window, { env: () => ({}) });
+  const created = manager.createTab({ workspace: "/ws", sessionId: "prepare-race", connectionId: "old", resume: false });
+  if (!created.ok) throw new Error("create failed");
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  const ensureConnectionEnv = vi.fn(async () => {
+    if (ensureConnectionEnv.mock.calls.length === 1) {
+      await pending;
+      if (fail) throw new Error("preparation failed");
+    }
+  });
+  const deps = { manager, connectionExists: () => true, ensureConnectionEnv, persistence: { touchSession: vi.fn(async () => {}) } } as unknown as TabIpcDeps;
+  const first = handleTabRebind(deps, { tabId: created.tab.tabId, connectionId: "new" });
+  expect(await handleTabRebind(deps, { tabId: created.tab.tabId, connectionId: "other" })).toEqual({ ok: false, reason: "not_ready" });
+  expect(ensureConnectionEnv).toHaveBeenCalledTimes(1);
+  expect(rig.hosts).toHaveLength(1);
+  release();
+  expect(await first).toEqual(fail ? { ok: false, reason: "not_ready" } : { ok: true, connectionId: "new" });
+  expect(rig.hosts).toHaveLength(fail ? 1 : 2);
+  expect(await handleTabRebind(deps, { tabId: created.tab.tabId, connectionId: "other" })).toEqual({ ok: true, connectionId: "other" });
+  expect(rig.hosts).toHaveLength(fail ? 2 : 3);
+});
+
+it("drops a deferred imported model when rebind supersedes the initial start", async () => {
+  const rig = shutdownableForkRig();
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  let blocked = true;
+  const envs: Array<NodeJS.ProcessEnv | undefined> = [];
+  const manager = childManager((entry, args, opts) => { envs.push(opts.env); return rig.fork(entry, args, opts); }, windowRig().window, {
+    env: (id) => id === "old" && blocked ? undefined : { ANYCODE_MODEL: "connection-model" },
+    waitForHostEnv: (id) => id === "old" && blocked ? pending : undefined,
+  });
+  const models = new Map([["imported-rebind", "import-model"]]);
+  const deps = {
+    manager, dialog: {}, connectionExists: () => true,
+    resolveResumePin: async () => ({ ok: true, connectionId: blocked ? "old" : "new" }),
+    persistence: { getRootSession: async () => ({ id: "imported-rebind", workspace: "/ws", connectionId: "old", model: "connection-model", mode: "build", createdAt: 1, updatedAt: 1 }), touchSession: async () => {} },
+    peekPendingImportModel: (id: string) => models.get(id),
+    consumePendingImportModel: (id: string) => { const model = models.get(id); models.delete(id); return model; },
+  } as unknown as TabIpcDeps;
+  const created = await handleCreate(deps, { kind: "resume", sessionId: "imported-rebind" });
+  if (!created.ok) throw new Error("create failed");
+  const tabId = created.tabId;
+  expect(models.has("imported-rebind")).toBe(true);
+  expect(await handleTabRebind(deps, { tabId, connectionId: "new" })).toEqual({ ok: true, connectionId: "new" });
+  expect(models.has("imported-rebind")).toBe(false);
+  blocked = false;
+  release();
+  await flush();
+  expect(rig.hosts).toHaveLength(1);
+  manager.createTab({ workspace: "/ws", sessionId: "control", resume: false });
+  expect(await manager.closeTab(tabId)).toEqual({ ok: true });
+  expect((await handleCreate(deps, { kind: "resume", sessionId: "imported-rebind" })).ok).toBe(true);
+  expect(envs[2]?.ANYCODE_MODEL).toBe("connection-model");
 });
