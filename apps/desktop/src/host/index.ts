@@ -281,7 +281,7 @@ import {
 import { getBuiltinCatalog } from "@anycode/core/catalog";
 import { calculateUsageCost, connectionPricing } from "./usage-cost.js";
 import { summarizeWithChildren } from "./usage-summary.js";
-import { claudeUsageRecord } from "./claude-usage.js";
+import { claudeNativeChildrenFromHistory, claudeUsageRecord } from "./claude-usage.js";
 import { closeProxyRelay, credentialedProxyValuesForRelay, resolveProxyRelay } from "@anycode/core/proxy-relay";
 import type {
   AgentBridgeCatalogEntry,
@@ -2635,6 +2635,9 @@ async function bootClaudeSession(
   if (args.resume && bootHistory.length > 0 && (await persistence!.listProviderUsage(rowId)).length === 0) {
     claudeUsageAudit.sink.record({ turnId: "legacy-unpriced", step: 1, finishReason: "history", transportRetries: 0 });
   }
+  // Older native-child identities can be recovered from the shadow history,
+  // but their individual costs remain unknown. Existing markers dedupe in SQLite.
+  for (const record of claudeNativeChildrenFromHistory(bootHistory)) claudeUsageAudit.sink.record(record);
   claudeEngine.onCostResult((result) => {
     claudeUsageAudit.sink.record(claudeUsageRecord(result, randomUUID(), claudeEngine.resolvedModel() ?? connected.model));
   });

@@ -606,7 +606,7 @@ export function formatUsageCostLines(last: WireUsageAuditStep | null, totals: Wi
     `Session cost: ${totals?.costUsd === undefined ? (totals?.subscriptionSteps ? `By subscription${partial}` : "Price unknown") : `${partial ? "≥" : "≈"} ${money(totals.costUsd)}${partial}${totals?.subscriptionSteps ? " · plus subscription" : ""}`}`,
     `Cache saved: ${totals?.cacheSavingsUsd === undefined ? "Price unknown" : `≈ ${money(totals.cacheSavingsUsd)}${totals.unknownSavingsSteps ? " · some steps savings unknown" : partial}${totals?.subscriptionSteps ? " · plus subscription" : ""}`}`,
     "Estimates use peak rates where available",
-    totals?.subagentCount ? `Subagents: ${totals.subagentCostUsd === undefined ? (totals.subagentSubscription ? `By subscription${totals.subagentUnpriced ? " · some steps price unknown" : ""}` : "Price unknown") : `${totals.subagentUnpriced ? "≥" : "≈"} ${money(totals.subagentCostUsd)}${totals.subagentUnpriced ? " · some steps price unknown" : ""}${totals.subagentSubscription ? " · plus subscription" : ""}`}` : "Subagents: None",
+    totals?.subagentCount ? `Subagents: ${totals.subagentCostUsd === undefined ? (totals.subagentSubscription ? `By subscription${totals.subagentUnpriced ? " · some steps price unknown" : ""}` : "Price unknown") : `${totals.subagentUnpriced ? "≥" : "≈"} ${money(totals.subagentCostUsd)}${totals.subagentUnpriced ? " · some steps price unknown" : ""}${totals.subagentSubscription ? " · plus subscription" : ""}`}${totals.subagentIncludedInReportedCost ? " · native Claude costs may already be included" : ""}` : "Subagents: None",
   ];
 }
 

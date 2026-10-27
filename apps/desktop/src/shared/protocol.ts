@@ -368,6 +368,7 @@ export interface WireUsageAuditTotals {
   subagentCostUsd?: number;
   subagentUnpriced?: number;
   subagentSubscription?: number;
+  subagentIncludedInReportedCost?: boolean;
   subagentCount?: number;
 }
 
