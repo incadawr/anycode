@@ -355,6 +355,19 @@ describe("TurnTranslator — errors and retries (cut §2(i))", () => {
 });
 
 describe("TurnTranslator — engine_session_tokens (cut §5.3, REPLACE semantics)", () => {
+  it("records each distinct request once and preserves missing usage", () => {
+    const observed: unknown[] = [];
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1, onUsage: (entry) => observed.push(entry) });
+    const last = { inputTokens: 80, cachedInputTokens: 30, outputTokens: 20, totalTokens: 100 };
+    const notification = { method: "thread/tokenUsage/updated", params: { threadId: THREAD_ID, turnId: TURN_ID, tokenUsage: { last, total: last } } };
+    translator.onNotification(notification);
+    translator.onNotification(notification);
+    expect(observed).toEqual([last]);
+    const empty: unknown[] = [];
+    new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1, onUsage: (entry) => empty.push(entry) }).finishTerminal("error");
+    expect(empty).toEqual([{}]);
+  });
+
   const usage = (lastTotal: number, cumulative: { inputTokens: number; cachedInputTokens: number; outputTokens: number; reasoningOutputTokens: number; totalTokens: number }): JsonRpcNotification => ({
     method: "thread/tokenUsage/updated",
     params: {

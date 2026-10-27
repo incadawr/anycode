@@ -97,6 +97,16 @@ function settings(over: SettingsOver = {}): AnycodeSettings {
 const noSecret = async (_key: SecretKey): Promise<string | undefined> => undefined;
 const vaultSecret = (value: string) => async (_key: SecretKey): Promise<string | undefined> => value;
 
+it("passes the active connection pricing snapshot and clears inherited stale values", async () => {
+  const configured = settings({ provider: { id: "deepseek" } });
+  configured.provider.connections[0]!.pricing = { mode: "subscription" };
+  const env = await buildHostEnv({ bootEnv: {}, settings: configured, getSecret: noSecret });
+  expect(env.ANYCODE_CONNECTION_PRICING).toBe('{"mode":"subscription"}');
+  delete configured.provider.connections[0]!.pricing;
+  const cleared = await buildHostEnv({ bootEnv: { ANYCODE_CONNECTION_PRICING: 'stale' }, settings: configured, getSecret: noSecret });
+  expect(cleared.ANYCODE_CONNECTION_PRICING).toBeUndefined();
+});
+
 describe("buildHostEnv — I2 priority (env > vault > settings)", () => {
   it("env wins over the vault for the API key", async () => {
     const env = await buildHostEnv({

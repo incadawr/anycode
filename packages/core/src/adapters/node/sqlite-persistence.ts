@@ -365,6 +365,16 @@ const MIGRATIONS: readonly Migration[] = [
     version: 20,
     statements: ["ALTER TABLE sessions ADD COLUMN pending_child_reports_json TEXT"],
   },
+  {
+    version: 21,
+    statements: [
+      "ALTER TABLE provider_usage ADD COLUMN cost_usd REAL",
+      "ALTER TABLE provider_usage ADD COLUMN cache_savings_usd REAL",
+      "ALTER TABLE provider_usage ADD COLUMN price_basis_id TEXT",
+    ],
+  },
+  { version: 22, statements: ["ALTER TABLE provider_usage ADD COLUMN cache_write_tokens INTEGER"] },
+  { version: 23, statements: ["ALTER TABLE provider_usage ADD COLUMN subagent_id TEXT"] },
 ];
 
 /**
@@ -684,6 +694,7 @@ function rowToCodexShadowCommandItem(row: CodexThreadItemRow): CodexShadowComman
 
 /** One completed model step's provider-reported usage (migration v19, append-only). */
 export interface ProviderUsageRecord {
+  subagentId?: string;
   sessionId: string;
   turnId: string;
   step: number;
@@ -692,13 +703,18 @@ export interface ProviderUsageRecord {
   reasoningEffort?: string;
   inputTokens?: number;
   cachedInputTokens?: number;
+  cacheWriteTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
   finishReason: string;
   transportRetries: number;
+  costUsd?: number;
+  cacheSavingsUsd?: number;
+  priceBasisId?: string;
 }
 
 interface ProviderUsageRow {
+  subagent_id: string | null;
   session_id: string;
   turn_id: string;
   step: number;
@@ -707,15 +723,20 @@ interface ProviderUsageRow {
   reasoning_effort: string | null;
   input_tokens: number | null;
   cached_input_tokens: number | null;
+  cache_write_tokens: number | null;
   output_tokens: number | null;
   total_tokens: number | null;
   finish_reason: string;
   transport_retries: number;
+  cost_usd: number | null;
+  cache_savings_usd: number | null;
+  price_basis_id: string | null;
 }
 
 /** Mirrors rowToCodexShadowCommandItem: optional fields spread only when non-null (undefined never decodes as 0). */
 function rowToProviderUsage(row: ProviderUsageRow): ProviderUsageRecord {
   return {
+    ...(row.subagent_id !== null ? { subagentId: row.subagent_id } : {}),
     sessionId: row.session_id,
     turnId: row.turn_id,
     step: row.step,
@@ -724,10 +745,14 @@ function rowToProviderUsage(row: ProviderUsageRow): ProviderUsageRecord {
     ...(row.reasoning_effort !== null ? { reasoningEffort: row.reasoning_effort } : {}),
     ...(row.input_tokens !== null ? { inputTokens: row.input_tokens } : {}),
     ...(row.cached_input_tokens !== null ? { cachedInputTokens: row.cached_input_tokens } : {}),
+    ...(row.cache_write_tokens !== null ? { cacheWriteTokens: row.cache_write_tokens } : {}),
     ...(row.output_tokens !== null ? { outputTokens: row.output_tokens } : {}),
     ...(row.total_tokens !== null ? { totalTokens: row.total_tokens } : {}),
     finishReason: row.finish_reason,
     transportRetries: row.transport_retries,
+    ...(row.cost_usd !== null ? { costUsd: row.cost_usd } : {}),
+    ...(row.cache_savings_usd !== null ? { cacheSavingsUsd: row.cache_savings_usd } : {}),
+    ...(row.price_basis_id !== null ? { priceBasisId: row.price_basis_id } : {}),
   };
 }
 
@@ -1500,8 +1525,8 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       `INSERT OR IGNORE INTO provider_usage
          (session_id, turn_id, step, created_at, model, reasoning_effort,
           input_tokens, cached_input_tokens, output_tokens, total_tokens,
-          finish_reason, transport_retries)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          finish_reason, transport_retries, cost_usd, cache_savings_usd, price_basis_id, cache_write_tokens, subagent_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       record.sessionId,
       record.turnId,
@@ -1515,6 +1540,11 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       record.totalTokens ?? null,
       record.finishReason,
       record.transportRetries,
+      record.costUsd ?? null,
+      record.cacheSavingsUsd ?? null,
+      record.priceBasisId ?? null,
+      record.cacheWriteTokens ?? null,
+      record.subagentId ?? null,
     );
   }
 

@@ -1927,7 +1927,10 @@ export class ClaudeEngine implements SessionEngine {
     }
   }
 
+  private costObserver?: (result: ClaudeResultMessage) => void;
+  onCostResult(observer: (result: ClaudeResultMessage) => void): void { this.costObserver = observer; }
   private onResult(result: ClaudeResultMessage): void {
+    this.costObserver?.(result);
     if (typeof result.total_cost_usd === "number" && Number.isFinite(result.total_cost_usd)) {
       this.totalCostUsd += result.total_cost_usd;
     }

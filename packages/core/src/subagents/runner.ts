@@ -115,6 +115,8 @@ export interface ResolvedChildModelSettings {
  * built-in (built-in always wins in resolution).
  */
 export interface SubagentRunnerOptions {
+  /** One recorder per inline child; called for each completed model request. */
+  createUsageRecorder?: (model: string | undefined) => (usage: TokenUsage) => void;
   /**
    * Md-profile personas (already validated/capped by subagents/profiles.ts).
    * A plain array is a boot-time snapshot. A thunk is re-invoked on every
@@ -1362,6 +1364,7 @@ export function createSubagentRunner(
         // attempt on top of the winning one.
         let usage: TokenUsage | undefined;
         let pendingUsage: TokenUsage | undefined;
+        const recordUsage = opts?.createUsageRecorder?.(requestedModel ?? parent.modelPort.modelId);
         // Folds the parked call into the run total and empties the slot, so a
         // value can never be counted twice. `turn_end` and `loop_end` arrive
         // back-to-back on a tool-free final turn (agent-loop.ts yields
@@ -1369,7 +1372,8 @@ export function createSubagentRunner(
         // consumes rather than commits: the second caller finds the slot empty.
         const consumePendingUsage = (): void => {
           if (pendingUsage === undefined) return;
-          usage = mergeUsage(usage, pendingUsage);
+          try { recordUsage?.(pendingUsage); } catch { /* Accounting must not break a child. */ }
+          if (hasAnyUsage(pendingUsage)) usage = mergeUsage(usage, pendingUsage);
           pendingUsage = undefined;
         };
         // Per-run activity-event emission counter (slice P7.18/F16b): the feed is
@@ -1422,7 +1426,7 @@ export function createSubagentRunner(
                 // whose provider reports nothing keeps `usage` undefined rather
                 // than acquiring an empty object: the card must be able to tell
                 // "not reported" from "reported as none".
-                pendingUsage = hasAnyUsage(event.usage) ? event.usage : undefined;
+                pendingUsage = event.usage;
                 break;
               case "stream_retry":
                 // The step is replayed from scratch; discard the aborted attempt's text.
@@ -1598,6 +1602,7 @@ export function createSubagentRunner(
             // arrived before a later failure stays billed (runWrapUp only
             // returns usage it actually observed on a finish event).
             if (wrapUp.usage !== undefined) {
+              try { recordUsage?.(wrapUp.usage); } catch { /* Accounting must not break a child. */ }
               usage = mergeUsage(usage, wrapUp.usage);
             }
           }
