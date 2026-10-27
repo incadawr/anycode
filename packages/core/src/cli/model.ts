@@ -42,6 +42,11 @@ export class SwitchableModelPort implements ModelPort {
     return this.current.streamText(request);
   }
 
+  /** Use the currently selected provider's title request policy. */
+  get titleReasoningEffort(): ModelPort["titleReasoningEffort"] {
+    return this.current.titleReasoningEffort;
+  }
+
   /** Identity readback of the port currently installed (undefined when it exposes none). */
   get modelId(): string | undefined {
     return this.current.modelId;
