@@ -171,7 +171,12 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   try {
     const prior = JSON.parse(await readFile(ledgerFile, "utf8")) as Record[];
     for (const record of prior) {
-      if (record.envelope?.messageId) messages.set(record.envelope.messageId, { ...record, state: record.state === "rejected" ? "rejected" : "unknown", detail: "Runtime restarted; no automatic replay to model" });
+      // GitHub #19: a renderer reload never restarts this server, and an app
+      // restart must NOT downgrade a settled delivery merely because the
+      // runtime restarted — acknowledged/rejected/unknown (and their detail)
+      // survive unchanged. Only a LOST host generation downgrades a still-
+      // queued record later, in `reconcile` (no automatic model replay).
+      if (record.envelope?.messageId) messages.set(record.envelope.messageId, record);
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -186,6 +191,15 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     return writes;
   };
   await persist();
+  const markLostGeneration = async (record: Record) => {
+    if (record.state !== "queued") return false;
+    const tab = options.manager.listTabs().find((t) => t.sessionId === record.envelope.recipientSessionId);
+    if (tab && tab.state === "running" && tab.pid != null && tab.pid === record.hostPid) return false;
+    record.state = "unknown";
+    record.detail = "Host restarted before queued delivery could be confirmed; no automatic model replay";
+    await persist();
+    return true;
+  };
   const tabs = async () => {
     const result = [];
     for (const tab of options.manager.listTabs()) {
@@ -483,11 +497,14 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         if (options.isSessionExposed && !options.isSessionExposed(record.envelope.recipientSessionId)) throw new Error("Message unavailable");
         if (record.workspace) { if (restricted && !allowed.has(record.workspace)) throw new Error("Message outside authorized workspace"); }
         else await requireSession(record.envelope.recipientSessionId);
-        try {
-          const tab = await requireSession(record.envelope.recipientSessionId);
-          const current = await options.manager.communicationRequest(record.envelope.recipientSessionId, name, messageId, tab.workspace) as AgentDelivery | undefined;
-          if (current) { record.state = current.state; record.detail = current.detail; await persist(); }
-        } catch { if (record.state === "queued") { record.state = "unknown"; record.detail = "Host disconnected; queued delivery cannot be confirmed"; await persist(); } }
+        if (!await markLostGeneration(record)) {
+          try {
+            const tab = await requireSession(record.envelope.recipientSessionId);
+            const wasQueued = record.state === "queued";
+            const current = await options.manager.communicationRequest(record.envelope.recipientSessionId, name, messageId, tab.workspace) as AgentDelivery | undefined;
+            if ((!wasQueued || record.state === "queued") && !await markLostGeneration(record) && current) { record.state = current.state; record.detail = current.detail; await persist(); }
+          } catch { await markLostGeneration(record); }
+        }
         return record;
       }
       default: throw new Error("Unknown tool");
@@ -511,13 +528,10 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     if (reconciling) return;
     reconciling = true;
     try {
+      for (const record of messages.values()) await markLostGeneration(record);
       for (const tab of await tabs()) {
         const records = [...messages.values()].filter((r) => r.envelope.recipientSessionId === tab.sessionId);
         if (!records.length) continue;
-        for (const record of records.filter((r) => r.state === "queued" && r.hostPid !== tab.pid)) {
-          record.state = "unknown"; record.detail = "Host restarted before queued delivery could be confirmed; no automatic model replay";
-          await persist();
-        }
         const key = `${tab.sessionId}:${tab.pid}`;
         if (!restoredHosts.has(key)) {
           await options.manager.communicationRequest(tab.sessionId, "restore_agent_messages", records, tab.workspace);
@@ -525,7 +539,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         }
         for (const record of records.filter((r) => r.state === "queued")) {
           const current = await options.manager.communicationRequest(tab.sessionId, "get_message_status", record.envelope.messageId, tab.workspace) as AgentDelivery | undefined;
-          if (current && (current.state !== record.state || current.detail !== record.detail)) { record.state = current.state; record.detail = current.detail; await persist(); }
+          if (record.state === "queued" && !await markLostGeneration(record) && current && (current.state !== record.state || current.detail !== record.detail)) { record.state = current.state; record.detail = current.detail; await persist(); }
         }
       }
     } catch { /* a closing/crashed host cannot authorize replay */ }

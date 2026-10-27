@@ -299,6 +299,8 @@ export interface HarnessOptions {
   historyMaxItems?: number;
   /** Whether the boot session already had a title (skips title derivation). */
   hasTitle?: boolean;
+  /** GitHub #19: persisted boot title, re-asserted on every ui_ready. */
+  initialTitle?: string;
   /**
    * Tier-2 title refinement callback (Phase 4 slice 4.4-T, design §3,
 
@@ -752,6 +754,7 @@ export function createHarness(options: HarnessOptions): Harness {
     bootHistory: options.bootHistory,
     ...(options.historyMaxItems !== undefined ? { historyMaxItems: options.historyMaxItems } : {}),
     hasTitle: options.hasTitle,
+    ...(options.initialTitle !== undefined ? { initialTitle: options.initialTitle } : {}),
     rules,
     persistence,
     refineTitle: options.refineTitle,

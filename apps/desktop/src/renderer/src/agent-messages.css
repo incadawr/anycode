@@ -1,0 +1,77 @@
+/*
+ * GitHub #19 — authenticated agent deliveries in the transcript.
+ *
+ * A renderer reload used to turn a run of agent messages into a stack of
+ * identical collapsed headers with no content. Every delivered message now
+ * carries a one-line payload preview, and a run of them groups into a single
+ * collapsible block (slice 4B). These rules only affect that presentation:
+ * the transcript keeps its original width and every original block still owns
+ * its own `data-block-id` / minimap mark.
+ */
+
+.agent-message-preview {
+  /* One line, never wrapping: the group header stays a header. `min-width: 0`
+     lets it shrink inside the flex/grid rail instead of forcing the transcript
+     wider. */
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-body);
+  padding: 0 0 var(--sp-1) var(--sp-4);
+}
+
+/* Collapsed stack: the tail members' anchors are real, zero-height in-flow
+   blocks (NOT display:none) so scroll-spy reads nondecreasing real positions.
+   They are inert: no focus target and nothing for the accessibility tree. */
+.agent-message-stack-anchor {
+  display: block;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.agent-message-stack {
+  /* Presentation only — the rail geometry (minimap.css) is untouched. */
+  display: block;
+}
+
+.agent-message-stack-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text-2);
+  cursor: pointer;
+  padding: var(--sp-1) 0;
+  font: inherit;
+  font-weight: var(--w-medium);
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+
+.agent-message-stack-toggle:hover {
+  color: var(--text-1);
+}
+
+/* Same shared Chevron behaviour as the reasoning/tool-stack toggles. */
+.agent-message-stack-toggle[aria-expanded="false"] .reasoning-caret svg {
+  transform: rotate(-90deg);
+}
+
+.agent-message-stack-count {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Expanded body spacing matches a single child report's own rhythm. */
+.agent-message-stack-body {
+  display: block;
+  padding-left: var(--sp-2);
+}

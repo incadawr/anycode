@@ -18,6 +18,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ENV_CODEX_SUPPORT_POLICY } from "../shared/codex-version-policy.js";
 import { PROFILE_STATS_GET_CHANNEL } from "../shared/profile-config.js";
 
+// GitHub #19: main now installs its application menu inside `app.whenReady()`
+// and then continues through the ENTIRE boot chain (window, updater, services).
+// These wiring tests boot the real module, so they get headroom over the 5 s
+// default that the full suite's parallel load can exceed.
+vi.setConfig({ testTimeout: 15_000 });
+
+
 type IpcHandler = (event: unknown, ...args: unknown[]) => unknown;
 
 const ENGINES_CHANGED_CHANNEL = "anycode:engines-changed"; // duplicated literal, same convention as the sibling wiring file.
@@ -82,6 +89,13 @@ vi.mock("electron", () => ({
     // The self-check boot path calls app.exit when its (mocked-away) renderer
     // probe cannot succeed; keep it inert so no late rejection escapes.
     exit: vi.fn(),
+  },
+  // GitHub #19: main installs an explicit application menu inside
+  // app.whenReady(); a wiring test must provide the primitives it touches.
+  Menu: {
+    buildFromTemplate: vi.fn((template: unknown) => ({ template })),
+    setApplicationMenu: vi.fn(),
+    getApplicationMenu: vi.fn(() => null),
   },
   dialog: { showOpenDialogSync: vi.fn(() => undefined) },
   nativeImage: { createFromPath: vi.fn(() => ({ isEmpty: () => true })) },

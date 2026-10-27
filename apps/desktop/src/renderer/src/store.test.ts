@@ -7577,6 +7577,29 @@ describe("TASK.242 visible agent provenance", () => {
     store.getState().applyHostMessage({ type: "agent_message", delivery: { envelope, state: "acknowledged" } });
     expect(store.getState().transcript.map((block) => block.id)).toEqual(["agent-message:agent-order", "agent-message:agent-order-2"]);
   });
+  it("an agent state update replaces one stable history-ordered block and retains payload (GitHub #19)", () => {
+    const store = createDesktopStore();
+    const envelope: AgentEnvelope = { messageId: "agent-state", sender: "authenticated-local-supervisor", recipientSessionId: "s", payload: "Please keep the child running", kind: "agent_message", mode: "next_turn", createdAt: "2026-10-04" };
+    // Hydrated history row first (no state), then the live queued -> acknowledged
+    // updates: ONE block, in its original position, carrying the newest state.
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s", truncated: false, items: [{ id: "native-user-item", createdAt: 0, message: { role: "user", content: agentMessageText(envelope) } }] });
+    store.getState().applyHostMessage({ type: "agent_message", delivery: { envelope, state: "queued" } });
+    store.getState().applyHostMessage({ type: "agent_message", delivery: { envelope, state: "acknowledged", detail: "transport accepted" } });
+    const blocks = store.getState().transcript;
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({
+      kind: "user_text",
+      id: "agent-message:agent-state",
+      origin: "system",
+      agentMessage: true,
+      agentMessagePayload: "Please keep the child running",
+      agentMessageState: "acknowledged",
+      agentMessageDetail: "transport accepted",
+    });
+    // A replayed duplicate of the same event adds no second row and keeps order.
+    store.getState().applyHostMessage({ type: "agent_message", delivery: { envelope, state: "acknowledged", detail: "transport accepted" } });
+    expect(store.getState().transcript.map((block) => block.id)).toEqual(["agent-message:agent-state"]);
+  });
   it("updates one agent card and replaces native user-shaped history with authenticated delivery metadata", () => {
     const store = createDesktopStore();
     const envelope: AgentEnvelope = { messageId: "agent-1", sender: "authenticated-local-supervisor", recipientSessionId: "s", payload: "clarification", kind: "agent_message", mode: "steer", createdAt: "2026-10-04" };

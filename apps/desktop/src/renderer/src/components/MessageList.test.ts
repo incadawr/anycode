@@ -45,10 +45,121 @@ describe("agent deliveries in the minimap (Taskana 4891)", () => {
       blocks, turn: { status: "idle" } as never, workspace: null, connection: "ready", retry: null,
       onTryAgain: () => undefined, continueOffer: null, onContinue: () => undefined, promptQueueLength: 0,
     }));
+    // One mark per agent message survives grouping:
+    // the rail projection reads BLOCKS, and each mark keeps its own label.
     expect(html).toContain('aria-label="Turn 1 · Agent: First task"');
     expect(html).toContain('aria-label="Turn 2 · Agent: Follow up"');
-    expect(html).toContain('data-block-id="agent-message:first" class="message message-child-report minimap-turn');
-    expect(html).toContain('data-block-id="agent-message:second" class="message message-child-report minimap-turn');
+    // GitHub #19: the two ADJACENT deliveries now render as ONE collapsed
+    // group — the head id on the root, the tail id on a zero-height anchor,
+    // so both original block ids (and both minimap marks) still exist.
+    expect(html).toContain('class="agent-message-stack minimap-turn"');
+    expect(html).toContain('data-block-id="agent-message:first"');
+    expect(html).toContain('class="agent-message-stack-anchor minimap-turn"');
+    expect(html).toContain('data-block-id="agent-message:second"');
+    expect(html).toContain("2 agent messages");
+    expect(html).toContain(">Follow up</div>");
+    // Collapsed: no member card body is mounted yet.
+    expect(html).not.toContain("message-child-report");
+  });
+});
+
+describe("agent-message grouping (GitHub #19)", () => {
+  const agent = (id: string, payload: string): TranscriptBlock => ({
+    kind: "user_text",
+    id: `agent-message:${id}`,
+    origin: "system",
+    agentMessage: true,
+    agentMessagePayload: payload,
+    agentMessageState: "acknowledged",
+    text: `[AnyCode authenticated agent message {"messageId":"${id}"}]\n${payload}\nDelivery: acknowledged`,
+  });
+  const human = (id: string): TranscriptBlock => ({ kind: "user_text", id, text: "human question" });
+  const assistant = (id: string): TranscriptBlock => ({ kind: "assistant_text", id, text: "assistant answer" });
+  const childReport = (id: string): TranscriptBlock => ({
+    kind: "user_text",
+    id,
+    origin: "system",
+    text: "[SYSTEM NOTIFICATION - NOT USER INPUT]\n<task-notification><status>completed</status><summary>done</summary></task-notification>",
+  });
+  const tool = (id: string): ToolCallBlock => ({
+    kind: "tool_call",
+    id,
+    toolCallId: id,
+    toolName: "Bash",
+    input: { command: "ls" },
+    status: "success",
+    modelText: null,
+    snapshots: { before: null, after: null },
+    subagent: null,
+    workflow: null,
+  });
+  const shape = (blocks: TranscriptBlock[]) =>
+    groupTranscriptBlocks(blocks).map((item) =>
+      item.kind === "single" ? item.block.id : `${item.kind}(${item.blocks.map((block) => block.id).join(",")})`,
+    );
+
+  it("consecutive agent messages form one previewed stack", () => {
+    const blocks = [agent("a", "First task"), agent("b", "Second task"), agent("c", "Newest payload")];
+    expect(shape(blocks)).toEqual(["agent_message_stack(agent-message:a,agent-message:b,agent-message:c)"]);
+    const html = renderToStaticMarkup(createElement(MessageList, {
+      blocks, turn: { status: "idle" } as never, workspace: null, connection: "ready", retry: null,
+      onTryAgain: () => undefined, continueOffer: null, onContinue: () => undefined, promptQueueLength: 0,
+    }));
+    expect(html).toContain("3 agent messages");
+    // The collapsed preview is the MOST RECENT member's payload, one line.
+    expect(html).toContain(">Newest payload</div>");
+    expect(html).toContain('aria-expanded="false"');
+  });
+
+  it("a single agent message stays a single card, never a one-member group", () => {
+    expect(shape([agent("a", "only")])).toEqual(["agent-message:a"]);
+    expect(groupTranscriptBlocks([agent("a", "only")])[0]?.kind).toBe("single");
+  });
+
+  it("assistant human tool and child-report boundaries break agent stacks", () => {
+    const blocks = [
+      agent("a", "first run"),
+      agent("b", "first run 2"),
+      assistant("answer"),
+      agent("c", "second run"),
+      agent("d", "second run 2"),
+      human("q1"),
+      agent("e", "third run"),
+      agent("f", "third run 2"),
+      childReport("child"),
+      agent("g", "fourth run"),
+      agent("h", "fourth run 2"),
+    ];
+    expect(shape(blocks)).toEqual([
+      "agent_message_stack(agent-message:a,agent-message:b)",
+      "answer",
+      "agent_message_stack(agent-message:c,agent-message:d)",
+      "q1",
+      "agent_message_stack(agent-message:e,agent-message:f)",
+      "child",
+      "agent_message_stack(agent-message:g,agent-message:h)",
+    ]);
+    // A terminal tool run is its own stack, and it breaks an agent run too.
+    expect(shape([agent("a", "x"), agent("b", "y"), tool("t1"), tool("t2"), agent("c", "z"), agent("d", "w")])).toEqual([
+      "agent_message_stack(agent-message:a,agent-message:b)",
+      "tool_stack(t1,t2)",
+      "agent_message_stack(agent-message:c,agent-message:d)",
+    ]);
+  });
+
+  it("growing a group keeps its first key", () => {
+    const two = groupTranscriptBlocks([agent("a", "one"), agent("b", "two")]);
+    const three = groupTranscriptBlocks([agent("a", "one"), agent("b", "two"), agent("c", "three")]);
+    expect(two).toHaveLength(1);
+    expect(three).toHaveLength(1);
+    expect(two[0]!.kind).toBe("agent_message_stack");
+    expect(three[0]!.kind).toBe("agent_message_stack");
+    if (two[0]!.kind === "agent_message_stack" && three[0]!.kind === "agent_message_stack") {
+      // The render key is the FIRST member's id: React reuses the node, so an
+      // open group stays open while the run grows.
+      expect(two[0]!.blocks[0]!.id).toBe(three[0]!.blocks[0]!.id);
+      expect(three[0]!.blocks).toHaveLength(3);
+    }
   });
 });
 

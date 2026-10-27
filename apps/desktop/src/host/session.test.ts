@@ -3030,6 +3030,89 @@ describe("Session — replay", () => {
   });
 });
 
+describe("Session — authoritative title snapshot (GitHub #19)", () => {
+  const isTitleEvent = (m: HostToUiMessage): m is Of<"title_changed"> => m.type === "title_changed";
+
+  it("reasserts a persisted title on every ui_ready without a new turn", async () => {
+    const h = createHarness({ steps: [textStep("ok")], initialTitle: "Persisted plan title" });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      await h.waitUntil(() => h.received.filter(isTitleEvent).length >= 1);
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(isTitleEvent).length >= 2);
+      const titles = h.received.filter(isTitleEvent).map((m) => m.title);
+      expect(titles).toEqual(["Persisted plan title", "Persisted plan title"]);
+      expect(h.touches).toHaveLength(0);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("latest refined title wins after replay", async () => {
+    const h = createHarness({ steps: [textStep("ok"), finishStep()], refineTitle: async () => "Refined title" });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "r1", text: "fix the login bug" });
+      await h.waitFor(agentEventOf("loop_end"));
+      await h.waitUntil(() => h.touches.some((t) => t.title === "Refined title"));
+      await h.waitUntil(() => h.received.some((m) => isTitleEvent(m) && m.title === "Refined title"));
+      // Put a stale title at the end of the replay ring, then drain its live event.
+      h.outbound.emit({ type: "title_changed", title: "Stale replay title" });
+      await h.waitUntil(() => h.received.some((m) => isTitleEvent(m) && m.title === "Stale replay title"));
+      await h.flush();
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some((m) => m.type === "background_children"));
+      const cascade = h.received.slice(before);
+      expect(cascade.some(isHostReady)).toBe(true);
+      expect(cascade.filter(isTitleEvent).map((m) => m.title)).toEqual(expect.arrayContaining(["Stale replay title"]));
+      expect(cascade.filter(isTitleEvent).at(-1)?.title).toBe("Refined title");
+    } finally {
+      h.close();
+    }
+  });
+
+  it("title survives replay buffer eviction", async () => {
+    const h = createHarness({ steps: [textStep("ok"), finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "r1", text: "ship the fix" });
+      await h.waitFor(agentEventOf("loop_end"));
+      await h.waitUntil(() => h.touches.some((t) => t.title === "ship the fix"));
+      // Flood the replay ring so the original buffered title_changed is evicted.
+      for (let i = 0; i < REPLAY_BUFFER_CAP + 1_000; i++) {
+        h.outbound.emit({ type: "title_changed", title: `flood-${i}` });
+      }
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      // The authoritative re-assert is the derived title, delivered LAST (after
+      // the replay of the flood ring); wait for IT specifically, not any title.
+      await h.waitUntil(() =>
+        h.received.slice(before).some((m) => isTitleEvent(m) && m.title === "ship the fix"),
+      );
+      const reasserted = h.received.slice(before).filter(isTitleEvent);
+      expect(reasserted.at(-1)?.title).toBe("ship the fix");
+    } finally {
+      h.close();
+    }
+  });
+
+  it("untitled new session emits no manufactured title", async () => {
+    const h = createHarness({ steps: [textStep("ok")] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(h.received.filter(isTitleEvent)).toHaveLength(0);
+    } finally {
+      h.close();
+    }
+  });
+});
+
 describe("Session — mode changes", () => {
   it("changes reasoning effort between turns and reports it on the next handshake", async () => {
     const h = createHarness({ steps: [textStep("x"), finishStep()], availableEffortLevels: ["off", "high", "max"] });

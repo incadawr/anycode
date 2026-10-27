@@ -14,6 +14,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - Bare slash commands are intercepted on submit, and busy sessions visibly refuse manual compaction instead of sending it to the model (GitHub #14).
+- Packaged reload shortcuts are disabled, and renderer reloads preserve task titles, agent-message previews and live task views (GitHub #19).
 
 ## [0.0.46] — 2026-10-27
 

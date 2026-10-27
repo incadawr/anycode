@@ -760,6 +760,15 @@ export interface SessionOptions {
   historyMaxItems?: number;
   /** Whether the boot session already had a title -> skip title derivation (design §4.2). */
   hasTitle?: boolean;
+  /**
+   * GitHub #19: the persisted session title, supplied at host boot from the
+   * actual `sessions.title` row. Re-asserted on every `ui_ready` so a renderer
+   * reload rehydrates the visible tab title even when the original
+   * `title_changed` event aged out of the replay ring (or a resumed host never
+   * emitted one in this process). Nonblank only; `Untitled task` is never a
+   * persisted title.
+   */
+  initialTitle?: string;
   /** Narrow persistence callback for title/mode patches (design §4.2). */
   persistence?: SessionPersistence;
   /**
@@ -1260,6 +1269,13 @@ export class Session {
   private titleSet: boolean;
 
   /**
+   * GitHub #19: the current authoritative title (persisted boot title, then
+   * the latest heuristic/refined title). Re-asserted on every ui_ready via
+   * `title_changed`; undefined until a title exists.
+   */
+  private currentTitle: string | undefined;
+
+  /**
    * The raw text of the user message the heuristic just titled, held until the
    * first turn's teardown so the tier-2 refinement can run over it exactly
    * once (Phase 4 slice 4.4-T, design §3). Null whenever there is nothing
@@ -1642,7 +1658,9 @@ export class Session {
     this.pendingChildReports = options.pendingChildReports;
     this.eventTap = options.eventTap;
     this.now = options.child?.now ?? Date.now;
-    this.titleSet = options.hasTitle ?? false;
+    const initialTitle = typeof options.initialTitle === "string" ? options.initialTitle.trim() : "";
+    this.currentTitle = initialTitle.length > 0 ? options.initialTitle : undefined;
+    this.titleSet = this.currentTitle !== undefined || (options.hasTitle ?? false);
     this.historyMaxItems = options.historyMaxItems ?? SESSION_HISTORY_MAX_ITEMS;
     this.sessionHistory = buildSessionHistory(options.bootHistory ?? [], this.historyMaxItems);
     const publicHistory = options.bootHistory ?? this.engine.historyItems();
@@ -2319,6 +2337,14 @@ export class Session {
           .catch(() => {});
         this.pushSessionCheckpoint();
         this.outbound.replay();
+        // GitHub #19: re-assert the authoritative title on every ui_ready, as
+        // an un-buffered sendDirect AFTER replay(). This covers a resumed host
+        // whose persisted title never produced an event in this process AND a
+        // long-lived host whose original title_changed aged out of the replay
+        // ring — the renderer always rehydrates the correct visible title.
+        if (this.currentTitle !== undefined) {
+          this.outbound.sendDirect({ type: "title_changed", title: this.currentTitle });
+        }
         this.pushTodoReminderSnapshot();
         for (const delivery of this.agentDeliveries.values()) this.outbound.sendDirect({ type: "agent_message", delivery });
         // TASK.145 срез 2: re-post every still-unacknowledged detached-child
@@ -5208,6 +5234,7 @@ export class Session {
     this.titleSet = true;
     const title = deriveSessionTitle(sanitizeTitleSource(text));
     if (title.length > 0) {
+      this.currentTitle = title;
       this.persistence?.touch({ title });
       this.outbound.emit({ type: "title_changed", title });
       // Arms the tier-2 refinement below, over the SAME raw text — only ever
@@ -5235,6 +5262,7 @@ export class Session {
     void this.refineTitle(text)
       .then((title) => {
         if (title) {
+          this.currentTitle = title;
           this.persistence?.touch({ title });
           this.outbound.emit({ type: "title_changed", title });
         }

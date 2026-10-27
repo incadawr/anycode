@@ -30,6 +30,7 @@ import { TabContext } from "../tab-context.js";
 import { isReplaySurface, replayStore } from "../replay.js";
 import { matchCheckpointsToTurns } from "./checkpoint-model.js";
 import { ChildReportBlock } from "./ChildReportBlock.js";
+import { AgentMessageStack } from "./AgentMessageStack.js";
 import { COMPOSER_INSERT_EVENT } from "./Composer.js";
 import { ImageViewer } from "./ImageViewer.js";
 import { Markdown } from "./Markdown.js";
@@ -158,21 +159,42 @@ export function stackStatusClass(blocks: ToolCallBlock[]): string {
  * One render item produced by `groupTranscriptBlocks`: either a single block
  * of any kind (rendered by the existing per-kind path) or a stack of ≥2
  * adjacent terminal `tool_call` blocks (any mix of tool names — the header
- * label is derived from the members via `stackHeaderLabel`).
+ * label is derived from the members via `stackHeaderLabel`), or a stack of ≥2
+ * adjacent authenticated agent messages (GitHub #19).
  */
 export type RenderItem =
   | { kind: "single"; block: TranscriptBlock }
-  | { kind: "tool_stack"; blocks: ToolCallBlock[]; status: ToolStackStatus };
+  | { kind: "tool_stack"; blocks: ToolCallBlock[]; status: ToolStackStatus }
+  | { kind: "agent_message_stack"; blocks: AgentMessageBlock[] };
+
+/** A `user_text` block that IS an authenticated agent delivery (never a child report). */
+export type AgentMessageBlock = Extract<TranscriptBlock, { kind: "user_text" }> & { agentMessage: true };
 
 /**
- * Linear-time grouping projection (TASK.31 §1). Walks the transcript once with
- * a `buffer` of adjacent terminal tool_calls; flushes a `tool_stack` when the
- * run ends AND the buffer holds ≥2, otherwise emits each buffered card as a
- * standalone `single` (invariant: a lone eligible card is never wrapped).
- * ANY adjacent terminal tool_call joins the run, regardless of toolName — a
- * single-tool run is just the special case where every member matches. Block
- * order and ids are preserved verbatim — the projection never reorders, drops
- * or synthesizes blocks.
+ * GitHub #19: narrow a block to an authenticated agent delivery. Both fields
+ * are required, so a system-origin DETACHED-CHILD report (which has no
+ * `agentMessage` flag) is never swept into a communication group.
+ */
+export function isAgentMessageBlock(block: TranscriptBlock): block is AgentMessageBlock {
+  return block.kind === "user_text" && block.agentMessage === true;
+}
+
+/**
+ * Linear-time grouping projection. Walks
+ * the transcript once with two run buffers: adjacent terminal `tool_call`s
+ * (→ `tool_stack`) and adjacent authenticated agent messages (→
+ * `agent_message_stack`). A run is flushed when it ends; a buffer holding ≥2
+ * members becomes ONE stack, otherwise each buffered block is emitted as a
+ * standalone `single` (invariant: a lone eligible block is never wrapped).
+ * ANY adjacent terminal tool_call joins a tool run regardless of toolName, and
+ * ANY adjacent flagged agent message joins an agent run regardless of delivery
+ * state — a single-agent run is just the special case of length one.
+ *
+ * Assistant text, human turns, tool cards and detached-child reports each BREAK
+ * both runs (they are neither flagged nor terminal tool calls), so agent
+ * messages are never grouped across real conversation content. Block order and
+ * ids are preserved verbatim — the projection never reorders, drops or
+ * synthesizes blocks.
  *
  * Single→stack transitions on the same React key are safe: a `single` item
  * carries no component state, so promoting it into a stack (or demoting a
@@ -180,31 +202,47 @@ export type RenderItem =
  */
 export function groupTranscriptBlocks(blocks: TranscriptBlock[]): RenderItem[] {
   const items: RenderItem[] = [];
-  let buffer: ToolCallBlock[] = [];
+  let toolBuffer: ToolCallBlock[] = [];
+  let agentBuffer: AgentMessageBlock[] = [];
 
   const flush = (): void => {
-    if (buffer.length >= 2 && buffer[0] !== undefined) {
+    if (toolBuffer.length >= 2 && toolBuffer[0] !== undefined) {
       items.push({
         kind: "tool_stack",
-        blocks: buffer,
-        status: aggregateStackStatus(buffer),
+        blocks: toolBuffer,
+        status: aggregateStackStatus(toolBuffer),
       });
     } else {
-      for (const block of buffer) {
+      for (const block of toolBuffer) {
         items.push({ kind: "single", block });
       }
     }
-    buffer = [];
+    toolBuffer = [];
+    if (agentBuffer.length >= 2 && agentBuffer[0] !== undefined) {
+      items.push({ kind: "agent_message_stack", blocks: agentBuffer });
+    } else {
+      for (const block of agentBuffer) {
+        items.push({ kind: "single", block });
+      }
+    }
+    agentBuffer = [];
   };
 
   for (const block of blocks) {
     if (block.kind === "tool_call" && isTerminalStatus(block.status)) {
       // Adjacent terminal tool_call — extend the current run (any toolName).
-      buffer.push(block);
+      // Only one buffer can be non-empty at a time, so this preserves order.
+      if (agentBuffer.length > 0) flush();
+      toolBuffer.push(block);
       continue;
     }
-    // Any other kind, or a non-terminal tool_call (proposed/running): the run
-    // is broken — flush, then emit this block as a plain single.
+    if (isAgentMessageBlock(block)) {
+      if (toolBuffer.length > 0) flush();
+      agentBuffer.push(block);
+      continue;
+    }
+    // Any other kind, or a non-terminal tool_call (proposed/running): both runs
+    // are broken — flush, then emit this block as a plain single.
     flush();
     items.push({ kind: "single", block });
   }
@@ -212,9 +250,111 @@ export function groupTranscriptBlocks(blocks: TranscriptBlock[]): RenderItem[] {
   return items;
 }
 
+/**
+ * The minimal DOM surface `jumpToTranscriptBlock` needs, expressed structurally
+ * so the jump path (including stack expansion) is testable under this
+ * package's node vitest environment with a fake element tree. `HTMLElement`
+ * satisfies it.
+ */
+export interface JumpTarget {
+  closest(selector: string): JumpTarget | null;
+  classList: { contains(token: string): boolean };
+  querySelector(selector: string): JumpTarget | null;
+  getAttribute(name: string): string | null;
+  click?(): void;
+  scrollIntoView?(options?: { block?: string; behavior?: string }): void;
+}
+
+export interface JumpContainer {
+  querySelector(selector: string): JumpTarget | null;
+  addEventListener?(type: string, listener: () => void): void;
+  removeEventListener?(type: string, listener: () => void): void;
+}
+
+function escapeSelector(value: string): string {
+  return typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(value) : value;
+}
+
+/**
+ * Scroll a block into view by its `data-block-id` (TodoPanel row click, minimap
+ * mark click). Extracted from the component so the disclosure handling is
+ * testable without mounting React.
+ *
+ * Collapsed stacks hide their members, and `scrollIntoView` on a hidden node is
+ * a no-op — so a match inside a collapsed `ToolCallStack` (a `display:none`
+ * anchor) or a collapsed `AgentMessageStack` (a zero-height anchor, or the
+ * group root for the HEAD member) first EXPANDS the stack through its real
+ * toggle, then scrolls to the now-visible inner card. Two rAFs: the first
+ * resolves after the React commit flush from the toggle's setState, the second
+ * after the resulting layout pass. An already-expanded group matches its inner
+ * card directly and takes the ordinary path.
+ */
+export function jumpToTranscriptBlock(el: JumpContainer, blockId: string, afterJump: () => void): void {
+  const target = el.querySelector(`[data-block-id="${escapeSelector(blockId)}"]`);
+  if (!target) {
+    return;
+  }
+  const toolStack = target.closest(".tool-call-stack");
+  if (toolStack !== null && target.classList.contains("tool-call-stack-anchor")) {
+    const toggle = toolStack.querySelector(".tool-call-stack-toggle");
+    toggle?.click?.();
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const card = el.querySelector(`[data-block-id="${escapeSelector(blockId)}"]`);
+        card?.scrollIntoView?.({ block: "center", behavior: "auto" });
+        afterJump();
+      });
+    });
+    return;
+  }
+  // GitHub #19: same path for a collapsed agent-message group — a tail anchor
+  // OR the root itself (the head member's id lives on the group root).
+  const agentStack = target.closest(".agent-message-stack");
+  if (
+    agentStack !== null &&
+    (target.classList.contains("agent-message-stack-anchor") || agentStack === target)
+  ) {
+    const toggle = agentStack.querySelector(".agent-message-stack-toggle");
+    if (toggle?.getAttribute("aria-expanded") === "false") {
+      toggle.click?.();
+    }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const member = el.querySelector(`[data-block-id="${escapeSelector(blockId)}"]`);
+        member?.scrollIntoView?.({ block: "center", behavior: "auto" });
+        afterJump();
+      });
+    });
+    return;
+  }
+  const reducedMotion =
+    typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reducedMotion) {
+    // Instant path: layout settles synchronously, spy right away.
+    target.scrollIntoView?.({ block: "center", behavior: "auto" });
+    afterJump();
+    return;
+  }
+  target.scrollIntoView?.({ block: "center", behavior: "smooth" });
+  // Re-run the scroll-spy once the smooth scroll settles —
+  // "scrollend" is not universally fired (older WebKit), so the timer fallback
+  // keeps the highlight from wedging; scrollend clears the timer.
+  let settled = false;
+  const settle = (): void => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    el.removeEventListener?.("scrollend", settle);
+    window.clearTimeout(fallbackTimer);
+    afterJump();
+  };
+  el.addEventListener?.("scrollend", settle);
+  const fallbackTimer = window.setTimeout(settle, 700);
+}
+
 /** Basename of a workspace path — same rule as Sidebar's/SessionHeader's private twins. */
-function basename(path: string): string {
-  const trimmed = path.replace(/[/\\]+$/, "");
+function basename(path: string): string {  const trimmed = path.replace(/[/\\]+$/, "");
   const segments = trimmed.split(/[/\\]/);
   return segments[segments.length - 1] || path;
 }
@@ -784,64 +924,13 @@ export function MessageList({
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   };
 
-  /** F1b: scroll a tool_call card into view by its `data-block-id` (TodoPanel row click). */
+  /** F1b: scroll a block into view by its `data-block-id` (TodoPanel/minimap jump). */
   const jumpToBlock = (blockId: string): void => {
     const el = containerRef.current;
     if (!el) {
       return;
     }
-    const target = el.querySelector(`[data-block-id="${CSS.escape(blockId)}"]`);
-    if (!target) {
-      return;
-    }
-    // TASK.31 regression fix: if the match is a collapsed-stack anchor, the
-    // member card is hidden inside a collapsed `ToolCallStack` and
-    // scrollIntoView is a no-op on the `display:none` span. Expand the stack
-    // first (a real button click on its toggle), then, once React has committed
-    // the expanded body and the browser has laid it out, scroll to the now-
-    // visible inner card. Two rAFs: the first resolves after the React commit
-    // flush from the click's setState, the second after the resulting layout
-    // pass — matching MessageList's own post-commit sticky-follow timing.
-    const stack = target.closest(".tool-call-stack");
-    if (stack instanceof HTMLElement && target.classList.contains("tool-call-stack-anchor")) {
-      const toggle = stack.querySelector<HTMLButtonElement>(".tool-call-stack-toggle");
-      toggle?.click();
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          const card = el.querySelector(`[data-block-id="${CSS.escape(blockId)}"]`);
-          card?.scrollIntoView({ block: "center", behavior: "auto" });
-          // 4086 follow-up: the jump landed — re-run the scroll-spy so the
-          // active dot reflects the destination immediately (the plain
-          // scrollIntoView path fires no scrollend we can await portably).
-          spyActiveMark();
-        });
-      });
-      return;
-    }
-    const reducedMotion =
-      typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reducedMotion) {
-      // Instant path: layout settles synchronously, spy right away.
-      target.scrollIntoView({ block: "center", behavior: "auto" });
-      spyActiveMark();
-      return;
-    }
-    target.scrollIntoView({ block: "center", behavior: "smooth" });
-    // 4086 follow-up: re-run the scroll-spy once the smooth scroll settles —
-    // "scrollend" is not universally fired (older WebKit), so the timer
-    // fallback keeps the highlight from wedging; scrollend clears the timer.
-    let settled = false;
-    const settle = (): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      el.removeEventListener("scrollend", settle);
-      window.clearTimeout(fallbackTimer);
-      spyActiveMark();
-    };
-    el.addEventListener("scrollend", settle);
-    const fallbackTimer = window.setTimeout(settle, 700);
+    jumpToTranscriptBlock(el, blockId, spyActiveMark);
   };
 
   const isFirstRender = firstRenderRef.current;
@@ -952,6 +1041,21 @@ export function MessageList({
             const head = item.blocks[0]!;
             return (
               <ToolCallStack
+                key={head.id}
+                blocks={item.blocks}
+                enter={enterIds.has(head.id)}
+              />
+            );
+          }
+          // GitHub #19: ≥2 adjacent authenticated agent deliveries become one
+          // collapsible block (header count + newest payload preview); the
+          // members keep their own cards once expanded. Keyed by the FIRST
+          // member's id, so a live append that grows the run keeps the node
+          // (and the user's expansion choice).
+          if (item.kind === "agent_message_stack") {
+            const head = item.blocks[0]!;
+            return (
+              <AgentMessageStack
                 key={head.id}
                 blocks={item.blocks}
                 enter={enterIds.has(head.id)}

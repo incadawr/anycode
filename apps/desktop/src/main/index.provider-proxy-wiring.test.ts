@@ -18,6 +18,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PROXY_REF_SET_CHANNEL } from "../shared/proxy.js";
 import { UPDATE_CHECK_CHANNEL } from "../shared/updates.js";
 
+// GitHub #19: main now installs its application menu inside `app.whenReady()`
+// and then continues through the ENTIRE boot chain (window, updater, services).
+// These wiring tests boot the real module, so they get headroom over the 5 s
+// default that the full suite's parallel load can exceed.
+vi.setConfig({ testTimeout: 15_000 });
+
+
 type IpcHandler = (event: unknown, ...args: unknown[]) => unknown;
 
 // `vi.hoisted` so the capturing cells exist before the hoisted vi.mock
@@ -162,6 +169,13 @@ vi.mock("electron", () => ({
     whenReady: () => Promise.resolve(),
     on: vi.fn(),
     quit: vi.fn(),
+  },
+  // GitHub #19: main installs an explicit application menu inside
+  // app.whenReady(); a wiring test must provide the primitives it touches.
+  Menu: {
+    buildFromTemplate: vi.fn((template: unknown) => ({ template })),
+    setApplicationMenu: vi.fn(),
+    getApplicationMenu: vi.fn(() => null),
   },
   dialog: { showOpenDialogSync: vi.fn(() => undefined) },
   nativeImage: { createFromPath: vi.fn(() => ({ isEmpty: () => true })) },

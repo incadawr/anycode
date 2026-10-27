@@ -4,6 +4,9 @@ import type { SessionEngine } from "./engines/session-engine.js";
 import { CORE_ENGINE_CAPABILITIES } from "./engines/session-engine.js";
 import type { AgentEnvelope } from "../shared/communication.js";
 import type { PermissionRequest } from "@anycode/core";
+import type { HostToUiMessage } from "../shared/protocol.js";
+const isHostReady = (m: HostToUiMessage): m is Extract<HostToUiMessage, { type: "host_ready" }> => m.type === "host_ready";
+const isAgentDelivery = (m: HostToUiMessage): m is Extract<HostToUiMessage, { type: "agent_message" }> => m.type === "agent_message";
 const envelope = (messageId: string, mode: "next_turn" | "steer" = "next_turn"): AgentEnvelope => ({ messageId, sender: "test-supervisor", recipientSessionId: "test-session", payload: "Follow this clarification", mode, kind: "agent_message", createdAt: new Date().toISOString() });
 function fixture() {
   const inputs: string[] = []; const signals: AbortSignal[] = []; const finishes: Array<() => void> = [];
@@ -55,6 +58,53 @@ describe("authenticated session inbox", () => {
       expect(signals[0]?.aborted).toBe(true);
       expect(h.session.agentMessageStatus("pending")?.state).toBe("rejected");
       finishes.shift()!(); await h.flush(); expect(inputs).toHaveLength(1);
+    } finally { h.close(); }
+  });
+  // GitHub #19: a renderer reload re-delivers the host's visible deliveries;
+  // restoration must preserve each settled state/detail verbatim and never open
+  // a model turn (no replay), no matter how many handshakes arrive.
+  it("restored acknowledged, rejected and unknown deliveries keep their state across two ui_ready handshakes with zero model turns", async () => {
+    const { h, inputs, make } = fixture();
+    const agentDeliveries = (messageId: string) =>
+      h.received
+        .filter(isAgentDelivery)
+        .filter((m) => m.delivery.envelope.messageId === messageId)
+        .map((m) => m.delivery.state);
+    try {
+      h.session.restoreAgentMessages([
+        { envelope: make("restored-acked"), state: "acknowledged", detail: "app-server accepted input for turn native-1; model application unverified" },
+        { envelope: make("restored-rejected"), state: "rejected", detail: "Steering requires an active supported Codex turn; use next_turn" },
+        { envelope: make("restored-unknown"), state: "unknown", detail: "Runtime restarted; no automatic replay to model" },
+      ]);
+      const expected = {
+        "restored-acked": { state: "acknowledged", detail: "app-server accepted input for turn native-1; model application unverified" },
+        "restored-rejected": { state: "rejected", detail: "Steering requires an active supported Codex turn; use next_turn" },
+        "restored-unknown": { state: "unknown", detail: "Runtime restarted; no automatic replay to model" },
+      } as const;
+      for (let handshake = 1; handshake <= 2; handshake++) {
+        h.send({ type: "ui_ready" });
+        await h.waitFor(isHostReady);
+        await h.waitUntil(() => agentDeliveries("restored-unknown").length >= handshake);
+        for (const [messageId, delivery] of Object.entries(expected)) {
+          expect(h.session.agentMessageStatus(messageId)).toMatchObject(delivery);
+          expect(agentDeliveries(messageId)).toHaveLength(handshake);
+          expect(agentDeliveries(messageId).every((state) => state === delivery.state)).toBe(true);
+        }
+      }
+      // Restoring visible history never starts a turn and never touches the model.
+      expect(inputs).toHaveLength(0);
+    } finally { h.close(); }
+  });
+  it("a newer live acknowledged state is not replaced by an older queued restoration", async () => {
+    const { h, inputs, finishes, make } = fixture();
+    try {
+      // The live delivery lands first (server observer), then a stale queued
+      // restoration arrives from the ledger: the live state must win.
+      expect((await h.session.receiveAgentMessage(make("racing"))).state).toBe("acknowledged");
+      h.session.restoreAgentMessages([{ envelope: make("racing"), state: "queued" }]);
+      expect(h.session.agentMessageStatus("racing")?.state).toBe("acknowledged");
+      expect(inputs).toHaveLength(1);
+      (await nextFinish(h, finishes))(); await settle(h);
     } finally { h.close(); }
   });
   it("rejects foreign session and closing inbox; restored envelopes never open model turns", async () => {

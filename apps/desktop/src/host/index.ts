@@ -1952,6 +1952,7 @@ async function bootCodexSession(
     // boot (a child-mode codex session has no detached children of its own).
     ...(codexPendingChildReports !== undefined ? { pendingChildReports: codexPendingChildReports } : {}),
     hasTitle: connected.sessionMeta.title !== undefined && connected.sessionMeta.title.length > 0,
+    initialTitle: connected.sessionMeta.title,
     // TASK.144: the SAME store the broker above matches against, so an
     // in-session "Always allow" starts working from the very next ask instead
     // of only after a restart re-seeds it from settings.json.
@@ -2677,6 +2678,7 @@ async function bootClaudeSession(
     // boot (a child-mode claude session has no detached children of its own).
     ...(claudePendingChildReports !== undefined ? { pendingChildReports: claudePendingChildReports } : {}),
     hasTitle: connected.sessionMeta?.title !== undefined && connected.sessionMeta.title.length > 0,
+    initialTitle: connected.sessionMeta?.title,
     // TASK.144: the SAME store the broker above matches against, so an
     // in-session "Always allow" starts working from the very next ask instead
     // of only after a restart re-seeds it from settings.json.
@@ -4793,6 +4795,7 @@ async function boot(): Promise<void> {
       // here (the composition root) and never inside Session itself.
       ...(coreHistoryMaxItems !== null ? { historyMaxItems: coreHistoryMaxItems } : {}),
       hasTitle: sessionMeta.title !== undefined && sessionMeta.title.length > 0,
+      initialTitle: sessionMeta.title,
       // Same instance as config.permissionEngine's RuleAwarePermissionEngine
       // (design §5): Session.maybeRemember appends to it on a remembered allow.
       rules,

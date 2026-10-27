@@ -15,7 +15,8 @@ import {
 } from "./browser-access-ipc.js";
 import { BROWSER_ACCESS_CHANGED_CHANNEL, BROWSER_ACCESS_HOST_MESSAGE_TYPE } from "../shared/browser-access.js";
 import { stdioAdapterForHost } from "./communication-adapter.js";
-import { createSelfCheckProfile, selfCheckEnvironment, runSelfCheck, selfCheckStorage, selfCheckBinaryFs } from "./self-check.js";
+import { createSelfCheckProfile, selfCheckEnvironment, runSelfCheck, selfCheckStorage, selfCheckBinaryFs, checkReloadProtection } from "./self-check.js";
+import { buildApplicationMenuTemplate, confirmReloadIfBusy, isReloadAccelerator } from "./application-menu.js";
 import { assertChildModel } from "../shared/child-model.js";
 /**
 
@@ -55,6 +56,7 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   BrowserWindow,
+  Menu,
   MessageChannelMain,
   app,
   dialog,
@@ -789,6 +791,45 @@ function resolveResumeId(): string | undefined {
   return undefined;
 }
 
+/** Compile-time + packaged gate: dev-only menu entries and automation are
+ * enabled only in an unpackaged development build. `app.isPackaged` is read
+ * live (not captured at module load) so the wiring tests can flip it. */
+function isDevelopmentBuild(): boolean {
+  return __ANYCODE_DEV_AUTOMATION__ && !app.isPackaged;
+}
+
+/** Guards against a double-click on a dev reload item while a confirmation dialog is open. */
+let reloadConfirmPending = false;
+
+/** Re-checks `win` after the awaited guard, then reloads the main renderer. */
+function reloadMainWindow(force: boolean): void {
+  const target = win;
+  if (target === null) return;
+  if (force) target.webContents.reloadIgnoringCache();
+  else target.webContents.reload();
+}
+
+/**
+ * Menu-initiated dev reload: confirm first if any live root/child turn is busy
+ * (or its busy state cannot be established), then reload only if `win` is still
+ * present. Crash recovery and forced CDP reloads never route through here.
+ */
+async function requestDevReload(force: boolean): Promise<void> {
+  if (reloadConfirmPending) return;
+  reloadConfirmPending = true;
+  try {
+    const proceed = await confirmReloadIfBusy({
+      listTabs: () => manager?.listTabs() ?? [],
+      status: (sessionId, workspace) =>
+        manager!.communicationRequest(sessionId, "get_session_status", undefined, workspace),
+      confirm: (options) => dialog.showMessageBox(win!, options),
+    });
+    if (proceed) reloadMainWindow(force);
+  } finally {
+    reloadConfirmPending = false;
+  }
+}
+
 function createWindow(): void {
   // Custom titlebar (design/ui-track custom-titlebar §4): frameless chrome so the
   // renderer draws the caption buttons + drag regions itself. macOS keeps its
@@ -834,6 +875,17 @@ function createWindow(): void {
   // Forward maximize/fullscreen transitions to the renderer so the custom
   // titlebar can flip its Maximize<->Restore glyph and drag-region clearance.
   wireWindowStateEvents(win);
+
+  // GitHub #19: a production build has no reload menu entry, but a stray
+  // accelerator could still reach the default key path — swallow the two
+  // reload accelerators at the main webContents. The preview window's own
+  // menus and website controls are left alone. Dev builds route their reload
+  // shortcuts through the application-menu guard instead (no listener here).
+  if (!isDevelopmentBuild()) {
+    win.webContents.on("before-input-event", (event, input) => {
+      if (isReloadAccelerator(input, process.platform)) event.preventDefault();
+    });
+  }
 
   // Re-deliver a fresh port to every live tab on every load, not just the first:
   // a vite reload or a renderer crash re-loads the page and each tab must get a
@@ -3588,13 +3640,30 @@ void app.whenReady().then(async () => {
     });
   }
 
+  // GitHub #19: install the explicit application menu BEFORE the first window,
+  // so the renderer never boots under Electron's implicit reload-menu default.
+  // Production has no reload/DevTools entries; development routes reloads
+  // through the busy-turn confirmation guard.
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(
+      buildApplicationMenuTemplate({
+        platform: process.platform,
+        development: isDevelopmentBuild(),
+        onReload: () => { void requestDevReload(false); },
+        onForceReload: () => { void requestDevReload(true); },
+        onToggleDevTools: () => { win?.webContents.toggleDevTools(); },
+      }),
+    ),
+  );
+
   createWindow();
   if (selfCheckProfile !== undefined) {
     win!.webContents.on("did-fail-load", (_event, code) => console.error(`[self-check] renderer load failed (${code})`));
     win!.webContents.on("render-process-gone", (_event, details) => console.error(`[self-check] renderer exited (${details.reason})`));
     try {
       await runSelfCheck(win!, selfCheckProfile, process.platform === "linux" && process.argv.includes("--self-check-allow-unavailable-capture"));
-      console.log(`ANYCODE_SELF_CHECK ${JSON.stringify({ ok: true, packaged: app.isPackaged, profile: selfCheckProfile, checks: ["renderer", "preload", "settings-ipc", "first-run-choices", "engine-panes", "api-required-fields", "settings-escape", "settings-panes"] })}`);
+      await checkReloadProtection(win!, Menu.getApplicationMenu(), process.platform);
+      console.log(`ANYCODE_SELF_CHECK ${JSON.stringify({ ok: true, packaged: app.isPackaged, profile: selfCheckProfile, checks: ["renderer", "preload", "settings-ipc", "first-run-choices", "engine-panes", "api-required-fields", "settings-escape", "settings-panes", "reload-shortcuts"] })}`);
       await shutdownEverything();
       app.exit(0);
     } catch (error) {

@@ -16,6 +16,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UserTurnMark } from "./TranscriptMinimap.js";
+import { jumpToTranscriptBlock, type JumpTarget } from "./MessageList.js";
 
 interface HarnessState {
   state: Record<string, unknown[]>;
@@ -382,5 +383,192 @@ describe("TranscriptMinimap wiring (4742 — slot-backed hooks harness)", () => 
     expect(findButton(reopened, "minimap-preview-confirm-confirm")).toBeUndefined();
     expect(findButton(reopened, "minimap-preview-rewind")).toBeDefined();
     expect(onRewind).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * GitHub #19: selecting a mark inside a COLLAPSED agent-message group must
+ * expand the group and land on the exact original message. The rail stays the
+ * entry point (its mark click is the `onJump` the transcript wires to
+ * `jumpToTranscriptBlock`), so this pins the real wiring end to end with a
+ * structural fake DOM — the package's vitest environment has no jsdom.
+ */
+interface FakeNode {
+  tag: string;
+  classes: string[];
+  blockId?: string;
+  attrs: Record<string, string>;
+  children: FakeNode[];
+  parent: FakeNode | null;
+  onClick?: () => void;
+  clicked: number;
+  scrolls: Array<{ block?: string; behavior?: string } | undefined>;
+}
+
+function fakeNode(tag: string, classes: string[], blockId?: string, attrs: Record<string, string> = {}): FakeNode {
+  return { tag, classes, ...(blockId !== undefined ? { blockId } : {}), attrs, children: [], parent: null, clicked: 0, scrolls: [] };
+}
+
+function append(parent: FakeNode, child: FakeNode): FakeNode {
+  child.parent = parent;
+  parent.children.push(child);
+  return child;
+}
+
+function matches(node: FakeNode, selector: string): boolean {
+  if (selector.startsWith(".")) {
+    return node.classes.includes(selector.slice(1));
+  }
+  const attribute = /^\[([a-z-]+)="(.*)"\]$/.exec(selector);
+  if (attribute) {
+    const value = attribute[1] === "data-block-id" ? node.blockId : node.attrs[attribute[1]!];
+    return value === attribute[2];
+  }
+  return false;
+}
+
+/** One stable wrapper per node: `closest()` must return the SAME object for the node itself. */
+const targetWrappers = new WeakMap<FakeNode, JumpTarget>();
+
+function fakeTarget(node: FakeNode): JumpTarget {
+  const cached = targetWrappers.get(node);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const wrapper: JumpTarget = {
+    closest(selector: string): JumpTarget | null {
+      let current: FakeNode | null = node;
+      while (current !== null) {
+        if (matches(current, selector)) return fakeTarget(current);
+        current = current.parent;
+      }
+      return null;
+    },
+    classList: { contains: (token: string) => node.classes.includes(token) },
+    querySelector: (selector: string) => {
+      const found = findBySelector(node, selector);
+      return found === null ? null : fakeTarget(found);
+    },
+    getAttribute: (name: string) => node.attrs[name] ?? null,
+    click: () => {
+      node.clicked += 1;
+      node.onClick?.();
+    },
+    scrollIntoView: (options?) => {
+      node.scrolls.push(options);
+    },
+  };
+  targetWrappers.set(node, wrapper);
+  return wrapper;
+}
+
+function findBySelector(root: FakeNode, selector: string): FakeNode | null {
+  for (const child of root.children) {
+    if (matches(child, selector)) return child;
+    const nested = findBySelector(child, selector);
+    if (nested !== null) return nested;
+  }
+  return null;
+}
+
+/** Runs `body` with a queue-backed requestAnimationFrame; the queue is drained by the caller. */
+function withAnimationFrames(body: (frames: Array<() => void>) => void): void {
+  const frames: Array<() => void> = [];
+  const previous = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = ((callback: () => void) => {
+    frames.push(callback);
+    return frames.length;
+  }) as typeof globalThis.requestAnimationFrame;
+  try {
+    body(frames);
+  } finally {
+    globalThis.requestAnimationFrame = previous;
+  }
+}
+
+const agentMarks: UserTurnMark[] = [
+  { id: "agent-message:a", index: 0, questionExcerpt: "first agent message", agentMessage: true },
+  { id: "agent-message:b", index: 1, questionExcerpt: "second agent message", agentMessage: true },
+];
+
+interface CollapsedGroup {
+  container: FakeNode;
+  stack: FakeNode;
+  toggle: FakeNode;
+  memberA: FakeNode;
+  memberB: FakeNode;
+}
+
+/** A collapsed group of two agent messages + the expanded members it swaps in on toggle. */
+function collapsedGroup(): CollapsedGroup {
+  const container = fakeNode("div", ["message-list"]);
+  const stack = append(container, fakeNode("div", ["agent-message-stack", "minimap-turn"], "agent-message:a"));
+  const toggle = append(stack, fakeNode("button", ["agent-message-stack-toggle"], undefined, { "aria-expanded": "false" }));
+  append(stack, fakeNode("div", ["agent-message-preview"]));
+  const anchorB = append(stack, fakeNode("span", ["agent-message-stack-anchor", "minimap-turn"], "agent-message:b"));
+  const memberA = fakeNode("div", ["message", "message-child-report", "minimap-turn"], "agent-message:a");
+  const memberB = fakeNode("div", ["message", "message-child-report", "minimap-turn"], "agent-message:b");
+  toggle.onClick = () => {
+    toggle.attrs["aria-expanded"] = "true";
+    stack.blockId = undefined;
+    stack.classes = ["agent-message-stack"];
+    stack.children = [toggle, memberA, memberB];
+    memberA.parent = stack;
+    memberB.parent = stack;
+  };
+  void anchorB;
+  return { container, stack, toggle, memberA, memberB };
+}
+
+describe("TranscriptMinimap -> grouped agent-message jump (GitHub #19)", () => {
+  beforeEach(() => resetHarness());
+
+  it("selecting the second mark expands the group and scrolls the second original id", () => {
+    const group = collapsedGroup();
+    const afterJump = vi.fn();
+    const onJump = vi.fn((blockId: string) => jumpToTranscriptBlock(fakeTarget(group.container), blockId, afterJump));
+    withAnimationFrames((frames) => {
+      const tree = mountRail({ marks: agentMarks, activeIndex: null, onJump });
+      // The SECOND mark of the rail is the tail member of the collapsed group.
+      (findTick(tree, 1)!.props.onClick as () => void)();
+      expect(onJump).toHaveBeenCalledWith("agent-message:b");
+      expect(group.toggle.clicked).toBe(1);
+      expect(group.toggle.attrs["aria-expanded"]).toBe("true");
+      // Two rAFs: the React commit after the toggle click, then layout.
+      while (frames.length > 0) {
+        const queued = frames.splice(0);
+        for (const frame of queued) frame();
+      }
+      expect(group.memberB.scrolls).toEqual([{ block: "center", behavior: "auto" }]);
+      expect(group.memberA.scrolls).toHaveLength(0);
+      expect(afterJump).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("selecting the FIRST mark (the group root) also expands and targets the head member", () => {
+    const group = collapsedGroup();
+    const afterJump = vi.fn();
+    withAnimationFrames((frames) => {
+      const onJump = (blockId: string) => jumpToTranscriptBlock(fakeTarget(group.container), blockId, afterJump);
+      const tree = mountRail({ marks: agentMarks, activeIndex: null, onJump });
+      (findTick(tree, 0)!.props.onClick as () => void)();
+      expect(group.toggle.clicked).toBe(1);
+      while (frames.length > 0) {
+        const queued = frames.splice(0);
+        for (const frame of queued) frame();
+      }
+      expect(group.memberA.scrolls).toEqual([{ block: "center", behavior: "auto" }]);
+      expect(afterJump).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("an already-expanded member takes the plain scroll path (no second toggle click)", () => {
+    const group = collapsedGroup();
+    group.toggle.onClick!();
+    const afterJump = vi.fn();
+    const onJump = (blockId: string) => jumpToTranscriptBlock(fakeTarget(group.container), blockId, afterJump);
+    const tree = mountRail({ marks: agentMarks, activeIndex: null, onJump });
+    (findTick(tree, 1)!.props.onClick as () => void)();
+    expect(group.toggle.clicked).toBe(0);
   });
 });

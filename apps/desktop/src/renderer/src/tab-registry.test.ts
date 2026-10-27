@@ -421,6 +421,26 @@ describe("tab-registry — routing by tabId", () => {
     expect(tabsStore.getState().tabs[0]?.title).toBe("worker-1");
   });
 
+  it("a reconnect cascade rehydrates the visible title from the re-asserted title_changed (GitHub #19)", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+    port.emit({ type: "title_changed", title: "Persisted plan title" });
+    expect(tabsStore.getState().tabs.find((t) => t.tabId === "tab-a")?.title).toBe("Persisted plan title");
+
+    // Forced renderer reload: a fresh port re-delivers the handshake and the
+    // host re-asserts the persisted title on ui_ready (the GitHub #19 host
+    // change); the existing title_changed lift restores the visible title.
+    registry.markHostExited("tab-a");
+    const respawn = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(respawn));
+    respawn.emit(HOST_READY("/ws/a", "sess-a"));
+    respawn.emit({ type: "title_changed", title: "Persisted plan title" });
+    expect(tabsStore.getState().tabs.find((t) => t.tabId === "tab-a")?.title).toBe("Persisted plan title");
+  });
+
   it("switching the active tab does not stall a background tab's delta accumulation", () => {
     const tabsStore = createTabsStore();
     const { registry, schedulers } = createTestRegistry(tabsStore);
