@@ -9,6 +9,7 @@ import type { ProviderTransport } from "./catalog.js";
 import type { ProviderQuotaUpdate } from "./quota.js";
 import type { NetworkWaiter } from "./network-waiter.js";
 import type { RetryPolicy } from "./retry.js";
+import type { ImplicitPromptCache } from "../types/config.js";
 
 export interface EndpointConfig {
   /**
@@ -43,6 +44,13 @@ export interface EndpointConfig {
    * escape hatch. Ignored by anthropic-messages, which always streams usage.
    */
   includeUsage?: boolean;
+  /**
+   * Opt-in implicit prompt caching (GitHub #15): when set, the model port emits
+   * the transport-specific cache options on every OpenAI request. Absent = no
+   * additional request field — byte-identical to today. Ignored by the
+   * anthropic-messages transport.
+   */
+  promptCache?: ImplicitPromptCache;
   /** Overrides over DEFAULT_RETRY_POLICY; maxRetries 0 disables retries (design §2.9). */
   retry?: Partial<RetryPolicy>;
   /**

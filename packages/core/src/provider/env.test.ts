@@ -16,6 +16,7 @@ import {
   ENV_NETWORK_WAIT_MAX_MS,
   ENV_PROVIDER_TRANSPORT,
   ENV_REASONING_EFFORT,
+  ENV_PROMPT_CACHE_OPTIONS,
   ENV_ADAPTIVE_TURN_BUDGET,
   ENV_INCLUDE_USAGE,
   ENV_MAX_TURNS,
@@ -26,6 +27,7 @@ import {
   ENV_TOOL_CONCURRENCY,
   loadEnvConfig,
   parseImageInputModelOverride,
+  readPromptCacheOptions,
 } from "./env.js";
 
 function envWith(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
@@ -490,5 +492,68 @@ describe("loadEnvConfig", () => {
       );
       expect(config.apiKey).toBe("key-123");
     });
+  });
+});
+
+describe("ANYCODE_PROMPT_CACHE_OPTIONS (GitHub #15)", () => {
+  const base = { [ENV_API_KEY]: "key-123", [ENV_MODEL]: "claude-x" } as const;
+
+  it("leaves promptCache undefined when unset or blank (default Off, never enabled)", () => {
+    expect(loadEnvConfig(envWith(base)).promptCache).toBeUndefined();
+    expect(loadEnvConfig(envWith({ ...base, [ENV_PROMPT_CACHE_OPTIONS]: "  " })).promptCache).toBeUndefined();
+  });
+
+  it("reads a literal off as no override, without warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(loadEnvConfig(envWith({ ...base, [ENV_PROMPT_CACHE_OPTIONS]: "off" })).promptCache).toBeUndefined();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("parses the enabled object with an explicit 30m ttl", () => {
+    const config = loadEnvConfig(envWith({ ...base, [ENV_PROMPT_CACHE_OPTIONS]: '{"mode":"implicit","ttl":"30m"}' }));
+    expect(config.promptCache).toEqual({ mode: "implicit", ttl: "30m" });
+  });
+
+  it("fills an omitted ttl to 30m for hand-authored env", () => {
+    expect(readPromptCacheOptions(envWith({ [ENV_PROMPT_CACHE_OPTIONS]: '{"mode":"implicit"}' }))).toEqual({
+      mode: "implicit",
+      ttl: "30m",
+    });
+  });
+
+  it("rejects explicit mode, 12h and arbitrary TTLs as invalid", () => {
+    for (const raw of [
+      '{"mode":"explicit","ttl":"30m"}',
+      '{"mode":"implicit","ttl":"12h"}',
+      '{"mode":"implicit","ttl":"1h"}',
+      '{"mode":"implicit","ttl":"30m","extra":true}',
+      '{"mode":"implicit"} extra',
+      "not-json",
+    ]) {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        expect(readPromptCacheOptions(envWith({ [ENV_PROMPT_CACHE_OPTIONS]: raw }))).toBeUndefined();
+        expect(warn).toHaveBeenCalledTimes(1);
+      } finally {
+        warn.mockRestore();
+      }
+    }
+  });
+
+  it("never echoes the raw env value in the diagnostic", () => {
+    const raw = '{"mode":"explicit","secret":"sk-should-not-leak"}';
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(readPromptCacheOptions(envWith({ [ENV_PROMPT_CACHE_OPTIONS]: raw }))).toBeUndefined();
+      const message = warn.mock.calls[0]![0] as string;
+      expect(message).not.toContain("sk-should-not-leak");
+      expect(message).toContain(ENV_PROMPT_CACHE_OPTIONS);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

@@ -332,6 +332,94 @@ it("persists, changes, validates, and clears per-connection pricing", async () =
   expect(snapshot.settings.provider.connections[0]?.pricing).toBeUndefined();
 });
 
+// GitHub #15: the opt-in prompt-cache policy is per-connection state with the
+// same lifecycle as `pricing`/`maxOutputTokens` — set on create, kept when the
+// update omits it, deleted by the `""` sentinel, and refused at the IPC
+// boundary unless it is the ONE enabled value the SDKs accept.
+describe("handleConnectionCreate/Update — prompt cache policy (GitHub #15)", () => {
+  const CACHE = { mode: "implicit", ttl: "30m" } as const;
+
+  it("creates, updates, preserves and clears only the requested connection cache policy", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "m" })).ok).toBe(true); // conn-1
+    expect(
+      (await handleConnectionCreate(deps, { providerId: "z-ai", model: "m", promptCache: CACHE })).ok,
+    ).toBe(true); // conn-2
+    let loaded = await loadSettings(settingsPath);
+    // Create omits Off entirely (absence, never a `mode:"off"` literal).
+    expect("promptCache" in (loaded.settings.provider.connections[0] ?? {})).toBe(false);
+    expect(loaded.settings.provider.connections[1]?.promptCache).toEqual(CACHE);
+
+    // Enabling on conn-1 leaves conn-2 untouched.
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", promptCache: CACHE })).ok).toBe(true);
+    loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.promptCache).toEqual(CACHE);
+    expect(loaded.settings.provider.connections[1]?.promptCache).toEqual(CACHE);
+
+    // An unrelated edit (label only) KEEPS the policy.
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", label: "Work" })).ok).toBe(true);
+    loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.promptCache).toEqual(CACHE);
+
+    // The `""` sentinel deletes the key (Off is absence).
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", promptCache: "" })).ok).toBe(true);
+    loaded = await loadSettings(settingsPath);
+    expect("promptCache" in (loaded.settings.provider.connections[0] ?? {})).toBe(false);
+    expect(loaded.settings.provider.connections[1]?.promptCache).toEqual(CACHE);
+  });
+
+  it("refuses explicit mode, a 12h TTL and arbitrary extra fields at the IPC boundary", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "m" }); // conn-1
+    for (const bad of [
+      { mode: "explicit", ttl: "30m" },
+      { mode: "explicit" },
+      { mode: "implicit", ttl: "12h" },
+      { mode: "implicit" },
+      { mode: "off" },
+      { mode: "implicit", ttl: "30m", cache_control: { type: "ephemeral" } },
+      "on",
+    ]) {
+      expect(await handleConnectionCreate(deps, { providerId: "z-ai", promptCache: bad })).toEqual({
+        ok: false,
+        reason: "invalid",
+      });
+      expect(await handleConnectionUpdate(deps, { id: "conn-1", promptCache: bad })).toEqual({
+        ok: false,
+        reason: "invalid",
+      });
+    }
+    const loaded = await loadSettings(settingsPath);
+    // A refused write changes nothing: no policy, and no extra connection was created.
+    expect(loaded.settings.provider.connections.length).toBe(1);
+    expect("promptCache" in (loaded.settings.provider.connections[0] ?? {})).toBe(false);
+  });
+
+  // A cache-policy edit changes the REQUEST the endpoint is probed with, so
+  // health observed under the old policy must not read as already-probed.
+  it("changing the cache policy resets lastHealth; resending the same policy does not", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      model: "m",
+      promptCache: CACHE,
+    }); // conn-1
+    const deps = makeDeps({ catalogIds: CATALOG_IDS, now: () => "2026-08-17T03:00:00.000Z" });
+    await applyConnectionHealthEvent(deps, "conn-1", { kind: "success" });
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.lastHealth?.status).toBe("ready");
+
+    // Re-sending the identical object is not a policy change.
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", promptCache: CACHE, label: "Work" })).ok).toBe(true);
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.lastHealth?.status).toBe("ready");
+
+    // Clearing it IS a policy change.
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", promptCache: "" })).ok).toBe(true);
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.lastHealth).toEqual({
+      status: "unchecked",
+      at: "2026-08-17T03:00:00.000Z",
+    });
+  });
+});
+
 describe("handleGet — snapshot projection", () => {
   it("returns a full snapshot with SecretStatus (never a value)", async () => {
     const snap = await handleGet(makeDeps());

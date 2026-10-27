@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- OpenAI connections can opt into implicit 30-minute prompt caching, while disabled connections keep their existing request format (#15).
+
 ## [0.0.46] — 2026-10-27
 
 ### Added

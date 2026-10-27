@@ -151,6 +151,64 @@ describe("reasoningRequestOptions", () => {
   });
 });
 
+describe("reasoningRequestOptions — prompt cache options (GitHub #15)", () => {
+  const cache = { mode: "implicit", ttl: "30m" } as const;
+
+  it("cache options survive absent and disabled reasoning", () => {
+    expect(reasoningRequestOptions({ ...baseRequest }, "OpenAI", "openai-chat-completions", cache)).toEqual({
+      providerOptions: { openaiCompatible: { prompt_cache_options: cache } },
+    });
+    expect(
+      reasoningRequestOptions({ ...baseRequest, reasoningEffort: "off", maxOutputTokens: 4096 }, undefined, "openai-chat-completions", cache),
+    ).toEqual({
+      maxOutputTokens: 4096,
+      providerOptions: { openaiCompatible: { prompt_cache_options: cache } },
+    });
+    expect(reasoningRequestOptions({ ...baseRequest }, "OpenAI", "openai-responses", cache)).toEqual({
+      providerOptions: { openai: { store: false, promptCacheOptions: cache } },
+    });
+    expect(
+      reasoningRequestOptions({ ...baseRequest, reasoningEffort: "off", maxOutputTokens: 4096 }, undefined, "openai-responses", cache),
+    ).toEqual({
+      maxOutputTokens: 4096,
+      providerOptions: { openai: { store: false, promptCacheOptions: cache } },
+    });
+  });
+
+  it("cache options merge with transport-specific effort", () => {
+    expect(
+      reasoningRequestOptions({ ...baseRequest, reasoningEffort: "high", maxOutputTokens: 2048 }, "custom", "openai-chat-completions", cache),
+    ).toEqual({
+      maxOutputTokens: 2048,
+      providerOptions: { openaiCompatible: { reasoningEffort: "high", prompt_cache_options: cache } },
+    });
+    expect(
+      reasoningRequestOptions({ ...baseRequest, reasoningEffort: "max" }, "custom", "openai-chat-completions", cache),
+    ).toEqual({
+      providerOptions: { openaiCompatible: { reasoningEffort: "high", prompt_cache_options: cache } },
+    });
+    expect(
+      reasoningRequestOptions({ ...baseRequest, reasoningEffort: "max", maxOutputTokens: 2048 }, "OpenAI", "openai-responses", cache),
+    ).toEqual({
+      maxOutputTokens: 2048,
+      providerOptions: { openai: { store: false, reasoningEffort: "max", promptCacheOptions: cache } },
+    });
+  });
+
+  it("no cache options leaves the old option object exact", () => {
+    expect(reasoningRequestOptions({ ...baseRequest }, "OpenAI", "openai-chat-completions")).toEqual({});
+    expect(reasoningRequestOptions({ ...baseRequest }, "OpenAI", "openai-responses")).toEqual({
+      providerOptions: { openai: { store: false } },
+    });
+    expect(reasoningRequestOptions({ ...baseRequest, reasoningEffort: "high", maxOutputTokens: 2048 }, "custom", "openai-chat-completions")).toEqual({
+      maxOutputTokens: 2048,
+      providerOptions: { openaiCompatible: { reasoningEffort: "high" } },
+    });
+    // Anthropic ignores the fourth argument entirely.
+    expect(reasoningRequestOptions({ ...baseRequest }, "Anthropic", "anthropic-messages", cache)).toEqual({});
+  });
+});
+
 type FakeStep = { kind: "part"; part: Record<string, unknown> } | { kind: "throw"; error: unknown };
 
 function part(p: Record<string, unknown>): FakeStep {

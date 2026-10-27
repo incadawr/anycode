@@ -162,6 +162,6 @@ export {
   WORKFLOW_TOOL_TIMEOUT_MS,
   WORKFLOWS_PROMPT_SECTION_MAX_CHARS,
 } from "./config.js";
-export type { CoreEnvConfig, ReasoningEffort } from "./config.js";
+export type { CoreEnvConfig, ImplicitPromptCache, ReasoningEffort } from "./config.js";
 export type { DiagnosticEvent, DiagnosticSink } from "./diagnostics.js";
 export { consoleDiagnosticSink } from "./diagnostics.js";
