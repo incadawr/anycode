@@ -36,6 +36,8 @@ export interface ModelPort {
    * identity, NOT execution identity — no production port canonicalizes ids.
    */
   readonly modelId?: string;
+  /** Provider-specific minimum effort for lightweight title requests, if needed. */
+  readonly titleReasoningEffort?: ReasoningEffort;
   /**
    * Provider-reported model id from the most recent raw response observed by
    * this port (anthropic-messages `message_start.message.model`). `undefined`

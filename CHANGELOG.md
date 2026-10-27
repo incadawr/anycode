@@ -10,7 +10,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - Settings → Roles now shows successful saves in green, identifies each labeled route by provider, and calls the active route “Session’s connection” (Taskana 4899).
-
+- DeepSeek session titles reject tool-call markup and fall back to the first user message; title requests use low reasoning effort (Taskana 4893).
 - Settings → Sessions API step 2 no longer collapses after "Copy config": the step's content (title, agent picker, Copy button, node hint and the "Copied the … config" notice) stays in its column under the step number, and the long `claude mcp add …` command scrolls inside its own box instead of running off the pane (Taskana 4897).
 
 ## [0.0.45] — 2026-10-26

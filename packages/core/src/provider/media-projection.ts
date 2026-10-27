@@ -93,6 +93,10 @@ class MediaProjectionModelPort implements ModelPort {
     );
   }
 
+  get titleReasoningEffort(): ModelPort["titleReasoningEffort"] {
+    return this.inner.titleReasoningEffort;
+  }
+
   get modelId(): string | undefined {
     return this.inner.modelId;
   }
