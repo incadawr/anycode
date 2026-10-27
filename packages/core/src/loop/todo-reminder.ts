@@ -7,7 +7,16 @@ import { classifyBashCommandLine } from "../permissions/safe-command.js";
 export function isTodoMutation(name: string, input: unknown): boolean {
   if (name === "Bash") {
     const command = typeof input === "object" && input !== null && "command" in input ? input.command : undefined;
-    return typeof command !== "string" || classifyBashCommandLine(command).class !== "read-only";
+    if (typeof command !== "string") return true;
+    if (classifyBashCommandLine(command).class === "read-only") return false;
+    // The permission classifier deliberately excludes rg and standalone sed:
+    // it is a security gate, not a measure of typical read-only work. Recognize
+    // their common simple forms here, without changing permission decisions.
+    if (/^\s*(?:rg|sed)\s/.test(command) && !/[;&|<>`$\n\r]/.test(command)) {
+      if (/^\s*rg\s/.test(command)) return /(?:^|\s)--(?:pre|pre-glob|hostname-bin)(?:[=\s]|$)|(?:^|\s)-[^\s]*z/.test(command);
+      return !/^\s*sed\s+-n\s+['"]?\d+(?:,\d+)?p['"]?\s+[^\s]+\s*$/.test(command);
+    }
+    return true;
   }
   return name === "Write" || name === "Edit" || name === "MultiEdit" || name === "ApplyPatch";
 }
