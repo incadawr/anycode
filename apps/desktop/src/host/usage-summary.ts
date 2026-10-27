@@ -30,4 +30,3 @@ export async function summarizeWithChildren(persistence: SqlitePersistenceAdapte
   }
   return own;
 }
-
