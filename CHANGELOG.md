@@ -11,53 +11,53 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- The context popover shows durable per-step and session cost estimates, cache savings, and separate subagent costs. Connections can use custom rates or subscription pricing; unknown prices stay unknown (Taskana 4889).
-- Role profiles can be selected globally or per project, with project-aware first-run setup (Taskana 4886).
+- The context popover shows durable per-step and session cost estimates, cache savings, and separate subagent costs. Connections can use custom rates or subscription pricing; unknown prices stay unknown.
+- Role profiles can be selected globally or per project, with project-aware first-run setup.
 
 ### Changed
 
-- Taskana 4896: stale-plan reminders count workspace mutations, with a higher DeepSeek threshold.
+- Stale-plan reminders count workspace mutations, with a higher DeepSeek threshold.
 
 ### Fixed
 
-- Settings → Roles now shows successful saves in green, identifies each labeled route by provider, and calls the active route “Session’s connection” (Taskana 4899).
-- DeepSeek session titles reject tool-call markup and fall back to the first user message; title requests use low reasoning effort (Taskana 4893).
-- The context popover labels native Claude result costs as turn totals, rather than individual model steps (Taskana 4889).
-- Claude usage snapshots keep reported token totals when cache-write counts are omitted, and subagent cost rollups flag missing child usage, including unattributed native Claude children (Taskana 4889).
-- The Sessions API stdio adapter reloads its endpoint and token after a refused connection or HTTP 401, so it can reconnect after AnyCode restarts or the token changes (Taskana 4887).
-- Agent messages now appear as labeled turns in the conversation minimap (Taskana 4891).
-- Settings → Sessions API step 2 no longer collapses after "Copy config": the step's content (title, agent picker, Copy button, node hint and the "Copied the … config" notice) stays in its column under the step number, and the long `claude mcp add …` command scrolls inside its own box instead of running off the pane (Taskana 4897).
+- Settings → Roles now shows successful saves in green, identifies each labeled route by provider, and calls the active route “Session’s connection”.
+- DeepSeek session titles reject tool-call markup and fall back to the first user message; title requests use low reasoning effort.
+- The context popover labels native Claude result costs as turn totals, rather than individual model steps.
+- Claude usage snapshots keep reported token totals when cache-write counts are omitted, and subagent cost rollups flag missing child usage, including unattributed native Claude children.
+- The Sessions API stdio adapter reloads its endpoint and token after a refused connection or HTTP 401, so it can reconnect after AnyCode restarts or the token changes.
+- Agent messages now appear as labeled turns in the conversation minimap.
+- Settings → Sessions API step 2 no longer collapses after "Copy config": the step's content (title, agent picker, Copy button, node hint and the "Copied the … config" notice) stays in its column under the step number, and the long `claude mcp add …` command scrolls inside its own box instead of running off the pane.
 
 ## [0.0.45] — 2026-10-26
 
 ### Changed
 
-- The composer's model/effort pill stays usable while a turn is running (core engine): the pick is accepted, the chip says "next turn", and the change applies from the next turn — the running turn keeps the model it started with (Taskana 4895).
+- The composer's model/effort pill stays usable while a turn is running (core engine): the pick is accepted, the chip says "next turn", and the change applies from the next turn — the running turn keeps the model it started with.
 
 ### Fixed
 
-- A new session on a DeepSeek connection no longer starts at reasoning effort `low`: the model pill and the New Session picker showed the first level of the model's list, while DeepSeek's own default is `high`. The catalog now records each model's documented default effort (DeepSeek `high`, GLM-5.3 `max`), and a session where the user never picked a level both shows and sends it; an explicit pick still wins and persists (Taskana 4894).
-- Sessions API `create_session` no longer ignores `model` for the core engine: it now selects the provider connection to open the tab on (by connection id, its label, `providerId/model`, or a model id that connection offers) and runs that model. An unknown or ambiguous value is refused with `invalid_model` and the text lists the connections; without `model` the active connection is used as before (Taskana 4888).
-- Codex "Sign in with a code" no longer fails instantly for a managed account profile: the device-code request to the Codex server (a real network round trip that takes 0.3–4.7s in practice) was bounded by the 3-second diagnostic timeout, so slower answers looked like a hard sign-in failure and no code was ever shown. A failed Codex sign-in also now says what went wrong instead of only "Sign-in failed. Try again." (Taskana 4884).
-- Settings → Roles shows its title and description once: the pane no longer adds a second "Roles" header of its own, and the embedded role editor no longer shows its onboarding header ("Orchestration roles" + "change this later in Settings → Roles") (Taskana 4885).
+- A new session on a DeepSeek connection no longer starts at reasoning effort `low`: the model pill and the New Session picker showed the first level of the model's list, while DeepSeek's own default is `high`. The catalog now records each model's documented default effort (DeepSeek `high`, GLM-5.3 `max`), and a session where the user never picked a level both shows and sends it; an explicit pick still wins and persists.
+- Sessions API `create_session` no longer ignores `model` for the core engine: it now selects the provider connection to open the tab on (by connection id, its label, `providerId/model`, or a model id that connection offers) and runs that model. An unknown or ambiguous value is refused with `invalid_model` and the text lists the connections; without `model` the active connection is used as before.
+- Codex "Sign in with a code" no longer fails instantly for a managed account profile: the device-code request to the Codex server (a real network round trip that takes 0.3–4.7s in practice) was bounded by the 3-second diagnostic timeout, so slower answers looked like a hard sign-in failure and no code was ever shown. A failed Codex sign-in also now says what went wrong instead of only "Sign-in failed. Try again."
+- Settings → Roles shows its title and description once: the pane no longer adds a second "Roles" header of its own, and the embedded role editor no longer shows its onboarding header ("Orchestration roles" + "change this later in Settings → Roles").
 
 ## [0.0.44] — 2026-10-26
 
 ### Added
 
-- Named orchestration role profiles with global and project selection (Taskana 4886).
+- Named orchestration role profiles with global and project selection.
 
-- Sessions API: `close_session` closes shared tabs opened by agents, refuses running turns and user-opened tabs, and frees the agent tab limit. Agent-created tabs with a handle keep it as their sidebar title; titles without handles use the message payload instead of the delivery wrapper (Taskana 4880).
+- Sessions API: `close_session` closes shared tabs opened by agents, refuses running turns and user-opened tabs, and frees the agent tab limit. Agent-created tabs with a handle keep it as their sidebar title; titles without handles use the message payload instead of the delivery wrapper.
 
 ### Changed
 
-- Orchestration roles: choose models from each route’s composer model list in the first-run dialog and Settings → Roles, with default and custom model options (Taskana 4877).
+- Orchestration roles: choose models from each route’s composer model list in the first-run dialog and Settings → Roles, with default and custom model options.
 
 ### Fixed
 
 - OpenAI-compatible servers that don't report prompt caching (e.g. LM Studio) no longer show "Latest cache hit: 0%" — the popover now says "not reported by provider", while providers that do send `cached_tokens` (including a real 0) keep showing actual numbers (GitHub #11).
-- Settings → Plugins now shows disabled managed, project and legacy plugins as OFF and lets you turn them back on; re-enabled legacy plugins can run their approved background services (Taskana 4879, GitHub #13).
-- Replace key on a custom endpoint now saves the new key and resets stale health/quota; refusals explain how to retry. Clear key marks the shared endpoint as not needing a key, applying to all its connections (Taskana 4875, GitHub #10).
+- Settings → Plugins now shows disabled managed, project and legacy plugins as OFF and lets you turn them back on; re-enabled legacy plugins can run their approved background services (GitHub #13).
+- Replace key on a custom endpoint now saves the new key and resets stale health/quota; refusals explain how to retry. Clear key marks the shared endpoint as not needing a key, applying to all its connections (GitHub #10).
 
 ## [0.0.43] — 2026-10-26
 
@@ -69,7 +69,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- `pnpm test` no longer depends on the developer's own `~/.anycode/config.json`: the core CLI e2e suite now runs every `runCli` drive against an isolated home, so user-scope LSP servers (or any other user config) can't leak into the results (Taskana 4850).
+- `pnpm test` no longer depends on the developer's own `~/.anycode/config.json`: the core CLI e2e suite now runs every `runCli` drive against an isolated home, so user-scope LSP servers (or any other user config) can't leak into the results.
 - With language servers configured, the system prompt now says so in one line — which extensions are covered and that their diagnostics arrive attached to Edit/Write results (with a note that intermediate diagnostics during a multi-file change are expected), so the model no longer answers "no LSP tools" and proposes manual `tsc` runs.
 - LSP status panel: a configured server whose binary is missing shows "Not installed" with the catalog's install command instead of a misleading "Not started"/"Crashed" (detection is the Settings pane's existence-only check; nothing is spawned).
 - A markdown preview in the right-side dock fills the panel again; it had collapsed to a thin strip (most visible in Source mode).
@@ -191,7 +191,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   update checks. Official index signatures, archive hashes and safe extraction
   are verified before anything lands. Until the production signing key exists,
   the official channel shows "not configured". See `docs/user/plugins.md`.
-- Plugin manifest v1 groundwork (Taskana 4732, stage 1 core): plugins can
+- Plugin manifest v1 groundwork (stage 1 core): plugins can
   declare `displayName`, `publisher`, `author`, `homepage`, `license`, an
   `engines.anycode` compatibility range (a plugin needing a newer AnyCode
   stays installed but inactive, with the reason visible), and a `workflows`
