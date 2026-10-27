@@ -163,9 +163,10 @@ so the config keeps working after an app update. The client needs **Node 22+**.
   directory. It holds the URL, the token and the folder list, with mode `0600`.
   Keep it private.
 - **Regenerate token** writes a new token to the discovery file. A running
-  stdio adapter reloads the discovery file and retries once after a network
-  error or HTTP 401, including after a restart or token regeneration. A network
-  error can occur after a request was processed, so a retry may repeat its effect.
+  stdio adapter reloads the discovery file and retries once after a refused
+  connection or HTTP 401, including after a restart or token regeneration.
+  Other network failures are reported without an automatic retry because the
+  request may already have been processed.
 
 ## Environment override
 

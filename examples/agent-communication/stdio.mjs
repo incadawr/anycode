@@ -30,7 +30,10 @@ for await (const line of lines) {
     let retried = false;
     try {
       response = await post(request);
-    } catch {
+    } catch (error) {
+      // A refused connection cannot have delivered the request. Other failures
+      // (including timeouts and resets) may occur after the server acted.
+      if (error?.cause?.code !== 'ECONNREFUSED') throw error;
       retried = true;
       ({ discovery, endpoint } = await loadDiscovery());
       response = await post(request);
