@@ -48,6 +48,7 @@ export interface AgentProfilesResult {
   profiles: PersonaDefinition[];
   /** Fail-soft problems (unreadable dir, bad frontmatter, collision, cap …). */
   problems: string[];
+  profilePaths: Record<string, string>;
 }
 
 /** Profile/skill name shape (design §2.10); the {0,63} tail also caps length at 64. */
@@ -416,6 +417,7 @@ export async function discoverAgentProfiles(
   roots: readonly AgentProfileRoot[],
 ): Promise<AgentProfilesResult> {
   const profiles: PersonaDefinition[] = [];
+  const profilePaths: Record<string, string> = {};
   const problems: string[] = [];
   // A name claimed by a higher-precedence source shadows lower sources (mirror
   // of mcp/config claimed-set): an errored/capped high entry still claims it.
@@ -618,6 +620,7 @@ export async function discoverAgentProfiles(
         problems.push(`Agent profile ${path}: ${suffix}`);
       }
 
+      profilePaths[name] = path;
       profiles.push({
         name,
         description,
@@ -633,5 +636,5 @@ export async function discoverAgentProfiles(
     }
   }
 
-  return { profiles, problems };
+  return { profiles, problems, profilePaths };
 }

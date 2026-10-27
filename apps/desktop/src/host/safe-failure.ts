@@ -14,6 +14,18 @@ const MESSAGES = {
   engine_connection: "The agent process disconnected. Start a new task; if it repeats, recheck the engine in Settings.",
   engine_protocol: "The agent returned an unsupported response. Recheck its version in Settings.",
   unknown: "The agent request failed. Retry or recheck the selected connection in Settings.",
+  /**
+   * host-START failures (no engine response to classify). Same
+   * fixed vocabulary and same diagnostics file as the engine codes above, so a
+   * crash cause reaches the user without ever echoing a raw URL/credential.
+   */
+  connection_env_unavailable:
+    "The session's provider connection is unavailable, so its host could not start. Re-pin the tab to a configured connection, then start a new task.",
+  host_syntax_error: "The session host encountered a syntax error during startup. Reinstall AnyCode and retry.",
+  host_native_load: "The session host could not load a native library. Reinstall AnyCode and retry.",
+  host_module_load: "The session host could not load a required module. Reinstall AnyCode and retry.",
+  host_crash_loop:
+    "The session host kept exiting right after it started, so it was stopped. Check its exit code in diagnostics and reinstall AnyCode if the problem persists.",
 } as const;
 
 export type SafeFailureCode = keyof typeof MESSAGES;

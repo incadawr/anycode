@@ -1,3 +1,4 @@
+import { discoverAgentProfiles } from "./profiles.js";
 /**
  * Agent-profile admin scan + roots recipe (P7.21 W1, design §4-W1 + §2-D7/D8).
  *
@@ -358,6 +359,17 @@ async function readProfileNoFollow(fs: FileSystemPort, path: string): Promise<st
  * emits rows with source/path/bodyBytes instead of runtime personas, and mirrors
  * discovery's fail-soft problem strings verbatim. Never throws.
  */
+export async function discoverRoleClaims(fs: FileSystemPort, opts: ScanAgentProfilesAdminOptions): Promise<Array<{ name: string; path: string }>> {
+  const { workspace, home } = opts;
+  let pluginRoots: AgentProfileRoot[] = [];
+  try {
+    pluginRoots = (await discoverPlugins(fs, { ...opts, claimedMcpNames: new Set() })).agentRoots;
+  } catch { /* Match host's fail-soft discovery. */ }
+  const { profiles, profilePaths } = await discoverAgentProfiles(fs, buildAgentProfileRoots(workspace, home, pluginRoots));
+  return profiles.filter((profile) => ["planner", "executor", "reviewer", "explore"].includes(profile.name))
+    .map((profile) => ({ name: profile.name, path: profilePaths[profile.name]! }));
+}
+
 export async function scanAgentProfilesAdmin(
   fs: FileSystemPort,
   opts: ScanAgentProfilesAdminOptions,

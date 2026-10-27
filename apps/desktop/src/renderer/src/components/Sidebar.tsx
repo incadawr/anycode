@@ -660,8 +660,7 @@ export function Sidebar({
   const menuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const menuItemRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
-  // Design §2.3: the × close affordance matches main's last-tab refusal — a
-  // window with zero hosts is a state we don't introduce.
+  // The last healthy tab stays open; a failed host can be closed.
   const canClose = tabs.length > 1;
 
   /** Slice P7.12 (§4.6): opens the start-screen draft instead of firing the folder dialog directly. */
@@ -1199,7 +1198,7 @@ export function Sidebar({
                           type="button"
                           className="sidebar-row-close"
                           aria-label={`Close ${row.title}`}
-                          disabled={!canClose}
+                          disabled={!canClose && !row.hostExited}
                           onClick={() => onCloseTab(row.tabId!)}
                         >
                           <X />

@@ -152,3 +152,42 @@ it("an empty saved profile displays the active connection instead of an unsaved 
   expect(html).not.toContain('data-route="engine:claude"');
   expect(html).not.toContain('data-route="engine:codex"');
 });
+/**
+ * a same-named md agent profile claims a role
+ * and silently outranks the Settings route. The editor must SAY which profile
+ * file wins — and say nothing once that profile is removed.
+ */
+describe("Role editor — a profile that claims a role is named, not silently obeyed", () => {
+  const override = (role: "reviewer"): Partial<Record<"planner" | "executor" | "reviewer" | "explore", { role: "reviewer"; profileName: string; path: string }>> => ({
+    [role]: { role, profileName: role, path: `/ws/.anycode/agents/${role}.md` },
+  });
+
+  it.each(["settings", "dialog"] as const)("%s: shows the claiming profile's path on the claimed role only", (surface) => {
+    const html = renderToStaticMarkup(
+      surface === "settings"
+        ? createElement(RolesPane)
+        : createElement(RolePickerDialog, { ...base, initialRoles: undefined, profileOverrides: override("reviewer") }),
+    );
+    // The pane's own fetch is an effect (not run under SSR), so the direct
+    // dialog render carries the collision; the pane render proves the notice
+    // slot exists in the shared editor without claiming anything by default.
+    const reviewRow = html.split('data-testid="role-picker-role-reviewer"')[1]!.split('data-testid="role-picker-role-explore"')[0]!;
+    if (surface === "dialog") {
+      expect(reviewRow).toContain("/ws/.anycode/agents/reviewer.md");
+      expect(reviewRow).toContain("Settings route is not used");
+      expect(reviewRow).toContain('data-testid="role-route-overridden-reviewer"');
+      const plannerRow = html.split('data-testid="role-picker-role-planner"')[1]!.split('data-testid="role-picker-role-executor"')[0]!;
+      expect(plannerRow).not.toContain("Overridden by the agent profile");
+    } else {
+      expect(html).not.toContain("Overridden by the agent profile");
+    }
+  });
+
+  it("removal: with no claiming profile the editor renders no override notice", () => {
+    const withProfile = renderToStaticMarkup(createElement(RolePickerDialog, { ...base, profileOverrides: override("reviewer") }));
+    const afterRemoval = renderToStaticMarkup(createElement(RolePickerDialog, { ...base, profileOverrides: {} }));
+    expect(withProfile).toContain("Overridden by the agent profile");
+    expect(afterRemoval).not.toContain("Overridden by the agent profile");
+    expect(afterRemoval).not.toContain("role-route-overridden-");
+  });
+});

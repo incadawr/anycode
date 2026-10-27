@@ -35,7 +35,8 @@ export interface BrowserAccessStore {
   /** The STORED switch of a session (not trust-gated; see effectiveFullAccess). Unknown => false. */
   isOn(sessionId: string): boolean;
   /** Ensures a switch entry exists. A child takes its parent's ON state only; a resumed session keeps its own. */
-  register(info: { sessionId: string; parentSessionId?: string }): void;
+  register(info: { sessionId: string; parentSessionId?: string }): boolean | void;
+  remove(sessionId: string): void;
   /** Sets the switch of a KNOWN session; false (and no change) for an unknown one or a failed write. */
   set(sessionId: string, on: boolean): boolean;
 }
@@ -84,13 +85,18 @@ export function createBrowserAccessStore(deps: BrowserAccessStoreDeps): BrowserA
       return map.get(sessionId) === true;
     },
     register({ sessionId, parentSessionId }) {
-      if (map.has(sessionId)) return;
+      if (map.has(sessionId)) return false;
       const on = parentSessionId !== undefined
         ? map.get(parentSessionId) === true
         : loaded.healthy && deps.defaultOn();
       map.set(sessionId, on);
       // A failed write must never fail tab creation: the in-memory value still answers.
       try { persist(deps.file, map); } catch { /* retried on the next change */ }
+      return true;
+    },
+    remove(sessionId) {
+      map.delete(sessionId);
+      try { persist(deps.file, map); } catch { /* best effort */ }
     },
     set(sessionId, on) {
       if (!map.has(sessionId)) return false;

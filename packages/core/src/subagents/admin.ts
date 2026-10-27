@@ -14,6 +14,7 @@
 
 export {
   buildAgentProfileRoots,
+  discoverRoleClaims,
   ownAgentRoots,
   scanAgentProfilesAdmin,
 } from "./admin-scan.js";

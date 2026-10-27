@@ -67,4 +67,35 @@ describe("main close_session gate", () => {
     expect(await f.close("agent")).toEqual({ ok: false, reason: "busy" });
     expect(f.manager.closeTab).not.toHaveBeenCalled();
   });
+
+  it("closes a definitively crash-looped tab without an idle-host RPC", async () => {
+    const f = fixture();
+    f.manager.listTabs()[0]!.state = "crash_looped";
+    expect(await f.close("agent")).toEqual({ ok: true });
+    expect(f.manager.communicationRequest).not.toHaveBeenCalled();
+    expect(f.manager.closeTab).toHaveBeenCalledWith("tab");
+    expect(f.opened.size).toBe(0);
+    expect(f.closed).toHaveBeenCalledWith("tab");
+  });
+
+  it("keeps a crash-looped tab's bookkeeping when the UI close path refuses", async () => {
+    const opened = new Set(["agent"]);
+    const notify = vi.fn();
+    const manager = {
+      listTabs: () => [{ tabId: "tab", sessionId: "agent", workspace: "/ws", state: "crash_looped" }],
+      communicationRequest: vi.fn(async () => ({ state: "idle" })),
+      closeTab: vi.fn(async () => ({ ok: false as const, reason: "last_tab" as const })),
+    };
+    expect(await closeSessionForAgent(manager, opened, "agent", notify)).toEqual({ ok: false, reason: "last_tab" });
+    expect(manager.communicationRequest).not.toHaveBeenCalled();
+    expect(opened.size).toBe(1);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("still refuses a concurrent close of a crash-looped tab once sealed", async () => {
+    const f = fixture();
+    f.manager.listTabs()[0]!.state = "closing";
+    expect(await f.close("agent")).toEqual({ ok: false, reason: "not_found" });
+    expect(f.manager.closeTab).not.toHaveBeenCalled();
+  });
 });

@@ -34,7 +34,8 @@ export type SetHandleFailure = "unknown_session" | "invalid" | "duplicate" | "io
 export interface SessionAccessStore {
   isExposed(sessionId: string): boolean;
   /** Ensures a switch entry exists. A child inherits its parent's switch; a resumed session keeps its own. A child never inherits a handle. */
-  register(info: { sessionId: string; parentSessionId?: string }): void;
+  register(info: { sessionId: string; parentSessionId?: string }): boolean | void;
+  remove(sessionId: string): void;
   /** Sets the switch of a KNOWN session; false (and no change) for an unknown one. */
   set(sessionId: string, enabled: boolean): boolean;
   exposedCount(): number;
@@ -132,11 +133,18 @@ export function createSessionAccessStore(deps: SessionAccessStoreDeps): SessionA
       return map.get(sessionId) === true;
     },
     register({ sessionId, parentSessionId }) {
-      if (map.has(sessionId)) return;
+      if (map.has(sessionId)) return false;
       const inherited = parentSessionId !== undefined ? map.get(parentSessionId) : undefined;
       map.set(sessionId, inherited ?? deps.defaultOn());
       // A failed write must never fail tab creation: the in-memory value still answers.
       try { persist(deps.file, map); } catch { /* retried on the next change */ }
+      return true;
+    },
+    remove(sessionId) {
+      map.delete(sessionId);
+      handles.delete(sessionId);
+      try { persist(deps.file, map); } catch { /* best effort */ }
+      if (deps.handlesFile) try { persist(deps.handlesFile, handles); } catch { /* best effort */ }
     },
     set(sessionId, enabled) {
       if (!map.has(sessionId)) return false;

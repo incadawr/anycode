@@ -9,14 +9,25 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import type { ProviderConnection } from "../../../shared/settings.js";
+import type { SubagentsSnapshot } from "../../../shared/subagents-config.js";
 import { useSettingsStore } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
 import { deriveRolePresets, presetApplicable, ROLE_PRESET_ROLES, type PresetRole } from "../role-presets.js";
 import type { RoleConfig } from "../../../shared/settings.js";
 import { roleProfiles } from "../../../shared/role-profiles.js";
+import { claimedRoleOverrides, type RoleProfileOverride } from "../role-profile-overrides.js";
 import { RolePickerDialog } from "./RolePickerDialog.js";
 
-export function RolesPane(): React.JSX.Element {
+export interface RolesPaneProps {
+  /**
+   * The tab whose workspace scopes the profile scan (the Settings scope bar's
+   * project, or the active tab in Global mode). Absent = user-level profiles
+   * only, mirroring the Subagents pane next to this one.
+   */
+  tabId?: string;
+}
+
+export function RolesPane({ tabId }: RolesPaneProps = {}): React.JSX.Element {
   const snapshot = useSettingsStore((s) => s.snapshot);
   const setPatch = useSettingsStore((s) => s.setPatch);
   const availableEngines = useTabsStore((s) => s.availableEngines);
@@ -60,6 +71,30 @@ export function RolesPane(): React.JSX.Element {
     void saveRegistry({ ...registry, profiles: [...registry.profiles, { id, name, roles }], activeId: id });
   }
   const [savedNotice, setSavedNotice] = useState<{ ok: boolean; message?: string } | null>(null);
+  // role names a same-named md agent profile currently claims —
+  // such a role's Settings route never takes effect, so the editor says which
+  // file to edit or remove.
+  const [profileOverrides, setProfileOverrides] = useState<Partial<Record<PresetRole, RoleProfileOverride>>>({});
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const bridge = window.anycode?.subagents;
+    if (bridge === undefined) return;
+    let cancelled = false;
+    void bridge
+      .list(tabId === undefined ? {} : { tabId })
+      .then((snapshot: SubagentsSnapshot) => {
+        if (!cancelled) setProfileOverrides(claimedRoleOverrides(snapshot.rows, snapshot.roleClaims));
+      })
+      .catch(() => {
+        if (!cancelled) setProfileOverrides({});
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Re-scan when the pane's project changes or settings are saved (the same
+    // snapshot identity every other pane follows).
+  }, [tabId, snapshot]);
 
   async function handleSave(roles: Partial<Record<PresetRole, RoleConfig>>): Promise<void> {
     const id = selected?.id ?? "default";
@@ -104,6 +139,7 @@ export function RolesPane(): React.JSX.Element {
         activeConnectionId={activeConnectionId}
         engines={engines}
         initialRoles={initialRoles}
+        profileOverrides={profileOverrides}
         onSave={(roles) => {
           void handleSave(roles);
         }}

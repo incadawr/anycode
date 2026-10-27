@@ -300,7 +300,7 @@ describe("discoverAgentProfiles — validation & fail-soft", () => {
   it("returns an empty result (no problems) when the roots do not exist", async () => {
     const fs = new FakeFs({});
     const result = await discoverAgentProfiles(fs, ROOTS);
-    expect(result).toEqual({ profiles: [], problems: [] });
+    expect(result).toEqual({ profiles: [], problems: [], profilePaths: {} });
   });
 });
 

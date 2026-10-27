@@ -39,6 +39,7 @@ import {
 import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { useSettingsStore } from "../settings-store.js";
 import { resolveRoleModels, roleModelSelection, routePatch, nextCustomMode, type RoleModelSources } from "../role-model-options.js";
+import { roleOverrideNotice, type RoleProfileOverride } from "../role-profile-overrides.js";
 import { useRoleEngineModels } from "../use-role-engine-models.js";
 import { Check, Chevron, Plus, X } from "./icons.js";
 
@@ -62,6 +63,13 @@ export interface RolePickerDialogProps {
    * description.
    */
   inline?: boolean;
+  /**
+   * roles claimed by a same-named md agent profile
+   * (`.anycode/agents/<role>.md`). Such a profile OUTRANKS the Settings route,
+   * so the row says so instead of letting the user save a setting that silently
+   * never applies.
+   */
+  profileOverrides?: Partial<Record<PresetRole, RoleProfileOverride>>;
   onSave(roles: Partial<Record<PresetRole, RoleConfig>>): void;
   onSkip?(): void;
 }
@@ -75,6 +83,7 @@ export function RolePickerDialog({
   saveLabel = "Save",
   skippable = true,
   inline = false,
+  profileOverrides,
   onSave,
   onSkip,
 }: RolePickerDialogProps) {
@@ -165,6 +174,15 @@ export function RolePickerDialog({
           {ROLE_PRESET_ROLES.map((role) => (
             <section key={role} className="role-picker-role" data-testid={`role-picker-role-${role}`}>
               <div className="role-picker-role-name">{role}</div>
+              {profileOverrides?.[role] !== undefined && (
+                <p
+                  className="role-picker-role-override"
+                  role="status"
+                  data-testid={`role-route-overridden-${role}`}
+                >
+                  {roleOverrideNotice(profileOverrides[role])}
+                </p>
+              )}
               <EntryRow
                 label="Primary"
                 entry={draft[role].primary}

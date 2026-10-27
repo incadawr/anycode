@@ -15,6 +15,17 @@ export async function closeSessionForAgent(
   const tab = manager?.listTabs().find((t) => t.sessionId === sessionId);
   if (!manager || !tab || tab.state === "closing") return { ok: false, reason: "not_found" };
   if (!agentOpened.has(sessionId)) return { ok: false, reason: "not_agent_opened" };
+  // a definitively crash-looped tab has no live host to answer a
+  // status request (its host exited and the breaker gave up). Closing it must
+  // not depend on an idle-host RPC. Route it straight to the UI close path,
+  // which still enforces the last-tab and concurrent-close guards.
+  if (tab.state === "crash_looped") {
+    const result = await manager.closeTab(tab.tabId);
+    if (!result.ok) return { ok: false, reason: result.reason === "unknown_tab" ? "not_found" : "last_tab" };
+    agentOpened.delete(sessionId);
+    notifyClosed(tab.tabId);
+    return { ok: true };
+  }
   try {
     // Recheck after the initial round trip: a prompt or queued next_turn may
     // have started while the first idle response was in flight. No await is

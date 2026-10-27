@@ -111,6 +111,7 @@ export interface SubagentRowView {
 
 export interface SubagentsSnapshot {
   rows: SubagentRowView[];
+  roleClaims?: Array<{ name: string; path: string }>;
   /** Fail-soft discovery/plugin-discovery problems (never throws). */
   problems: string[];
 }

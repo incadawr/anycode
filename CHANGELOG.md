@@ -23,6 +23,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - The context popover keeps its per-step list collapsed behind one line for the current turn ("This turn: 2 steps · ≈ $0.0005 · cache 96%"), expandable and collapsible by clicking it; the expanded list shows only the current turn's steps, so a previous turn's steps no longer appear under the new turn's.
 - Session and step cost is now shown for every catalog model whose provider publishes a per-token rate — including the DeepSeek line, which had no price at all before. Each rate was read from the provider's own pricing page on 2026-10-27 and recorded with its source and check date; a model with no published rate (the Kimi subscription tier, the Kimi platform models) still says "price unknown".
 
+- Sessions API `close_session` can now close a tab that is already crash-looped: such a tab has no live host to answer a status request, so the call used to answer `busy` forever and the tab — plus its slot in the agent tab limit — stayed behind.
+- A refused or crashed `create_session` now says why: preparing a non-active connection reports its safe, classified reason (for example an expired sign-in) instead of the generic "engine not signed in or tab limit reached", and a session host that cannot start or keeps exiting records the cause in `diagnostics/` instead of leaving only an exit code.
+- Settings → Roles marks a role that a same-named agent profile (`.anycode/agents/<role>.md`, project or user level) overrides, and names the file to edit or remove — that profile wins over the Settings route, so the route silently did nothing while it existed.
+- Sessions API `create_session` with a `model` that resolves to a non-active connection (for example `glm-5.3` while DeepSeek is active) no longer opens a tab that immediately crash-loops: the new session's connection env is primed before the host is spawned (as resume already did), and a priming failure is returned as a clean error.
+- An orchestrator tab now delegates planner/executor/reviewer/explore work through the roles configured in Settings → Roles instead of picking an engine-named project profile (such as `claude` or `codex` in `.anycode/agents/`) on its own; such a profile is used only when the user explicitly asks for it.
 
 ## [0.0.46] — 2026-10-27
 
