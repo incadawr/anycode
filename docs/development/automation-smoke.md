@@ -131,7 +131,10 @@ separately by the owner. It checks the actual
 packaged renderer, preload, settings IPC and first-run panes, makes no account
 login or model request, skips the updater and Codex manifest network refresh,
 and exits with a JSON result. It exposes no HTTP control channel. The printed
-profile retains screenshots for review. A normal launch does not enter this mode.
+profile retains screenshots for review. Linux release CI allows an unavailable
+screenshot when Xvfb reports `UnknownVizError`, while still running all renderer
+and IPC checks; missing screenshots are reported in the app's self-check log.
+A normal launch does not enter this mode.
 
 This is a packaging and UI check, not proof that OAuth, Terminal sign-in,
 provider credentials or a real model request work. Those require the owner
