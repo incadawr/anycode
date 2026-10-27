@@ -12,6 +12,7 @@ import {
   FOCUS_MODE_MENU_EVENT,
   FOCUS_MODEL_PILL_EVENT,
   openSettingsAddConnection,
+  resolveBareSlashSubmit,
   RUN_ACTION_EVENT,
   SETTINGS_ADD_CONNECTION_EVENT,
   SETTINGS_SELECT_PANE_EVENT,
@@ -667,5 +668,87 @@ describe("/plugins command (Taskana 4732 S1-C)", () => {
   it("matches the /plug query", () => {
     const items = filterSlashItems(SLASH_COMMANDS, [], "plug", ctx());
     expect(items.map((i) => i.name)).toContain("Plugins");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// resolveBareSlashSubmit — GitHub #14 submit-time interception
+// ─────────────────────────────────────────────────────────────────────────
+
+describe("resolveBareSlashSubmit (GitHub #14)", () => {
+  it("trims surrounding whitespace independently of caret and runs /compact when truly idle", () => {
+    for (const draft of ["/compact", "/compact ", "\n/compact\t"]) {
+      expect(resolveBareSlashSubmit(draft, ctx(), 0, false)).toEqual({
+        kind: "run",
+        intent: { kind: "compact_now" },
+      });
+    }
+  });
+
+  it("refuses bare compact while running, compacting, or a drained queue item is in flight", () => {
+    // the Model row is live mid-turn on core, so `modelDisabled`
+    // is false here — only the truly-idle `idle` gate may refuse compact.
+    const midTurn = ctx({ idle: false, modelDisabled: false });
+    expect(resolveBareSlashSubmit("/compact ", midTurn, 0, false)).toEqual({
+      kind: "refuse",
+      reason: "Cannot compact while this session is busy. Try again after this turn.",
+    });
+  });
+
+  it("refuses bare compact on a not-ready connection before any other gate", () => {
+    expect(resolveBareSlashSubmit("/compact", ctx({ ready: false }), 0, false)).toEqual({
+      kind: "refuse",
+      reason: "Wait for this session to connect before running a command.",
+    });
+  });
+
+  it("refuses any known bare command when attachments are present, retaining the draft semantics", () => {
+    expect(resolveBareSlashSubmit("/compact", ctx(), 1, false)).toEqual({
+      kind: "refuse",
+      reason: "Remove attachments before running a slash command.",
+    });
+  });
+
+  it("consumes hidden commands with a reason: core-hidden, Claude-shown, and unsupported Codex/child compact", () => {
+    // A Claude-shaped ctx (no core permissions) still runs native compaction.
+    expect(resolveBareSlashSubmit("/compact", ctx({ supportsCorePermissions: false }), 0, false)).toEqual({
+      kind: "run",
+      intent: { kind: "compact_now" },
+    });
+    // But a core-only command is refused, not leaked to the model.
+    expect(resolveBareSlashSubmit("/mode", ctx({ supportsCorePermissions: false }), 0, false)).toEqual({
+      kind: "refuse",
+      reason: "This command is not available in this session.",
+    });
+    // Codex has no manual compaction; a child surface's transcript belongs to the parent.
+    expect(resolveBareSlashSubmit("/compact", ctx({ supportsManualCompact: false }), 0, false)).toEqual({
+      kind: "refuse",
+      reason: "Manual compaction is not available in this session.",
+    });
+    expect(resolveBareSlashSubmit("/compact", ctx(), 0, true)).toEqual({
+      kind: "refuse",
+      reason: "Manual compaction is not available in this session.",
+    });
+  });
+
+  it("consumes a bare /orchestrate with the add-a-task hint instead of enabling an empty task", () => {
+    expect(resolveBareSlashSubmit("/orchestrate", ctx(), 0, false)).toEqual({
+      kind: "refuse",
+      reason: "Add a task after /orchestrate.",
+    });
+  });
+
+  it("refuses other visible-but-disabled commands with the not-right-now reason", () => {
+    expect(resolveBareSlashSubmit("/model", ctx({ modelDisabled: true }), 0, false)).toEqual({
+      kind: "refuse",
+      reason: "This command is not available right now.",
+    });
+  });
+
+  it("leaves non-bare and unknown slash drafts as ordinary text", () => {
+    expect(resolveBareSlashSubmit("/compact explain", ctx(), 0, false)).toEqual({ kind: "text" });
+    expect(resolveBareSlashSubmit("/compact.txt", ctx(), 0, false)).toEqual({ kind: "text" });
+    expect(resolveBareSlashSubmit("/unknown", ctx(), 0, false)).toEqual({ kind: "text" });
+    expect(resolveBareSlashSubmit("please /compact", ctx(), 0, false)).toEqual({ kind: "text" });
   });
 });

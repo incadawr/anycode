@@ -271,6 +271,7 @@ const isPermissionSettled = (m: HostToUiMessage): m is Of<"permission_settled"> 
 const isModeChanged = (m: HostToUiMessage): m is Of<"mode_changed"> => m.type === "mode_changed";
 const isModeChangeRejected = (m: HostToUiMessage): m is Of<"mode_change_rejected"> =>
   m.type === "mode_change_rejected";
+const isCompactRejected = (m: HostToUiMessage): m is Of<"compact_rejected"> => m.type === "compact_rejected";
 const isLspStatus = (m: HostToUiMessage): m is Of<"lsp_status"> => m.type === "lsp_status";
 const isHooksList = (m: HostToUiMessage): m is Of<"hooks_list"> => m.type === "hooks_list";
 const isTaskList = (m: HostToUiMessage): m is Of<"task_list"> => m.type === "task_list";
@@ -7168,7 +7169,7 @@ describe("Session — manual compaction wire (TASK.146)", () => {
     }
   });
 
-  it("silently dropped while a turn is busy; accepted again the instant the turn ends", async () => {
+  it("visibly refused (compact_rejected) while a turn is busy; accepted again the instant the turn ends", async () => {
     const h = createHarness({ steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()] });
     try {
       h.send({ type: "ui_ready" });
@@ -7179,9 +7180,9 @@ describe("Session — manual compaction wire (TASK.146)", () => {
       const req = await h.waitFor(isPermissionRequest);
 
       h.send({ type: "compact_request" });
-      await h.flush();
-      await h.flush();
-      await h.flush();
+      const rejected = await h.waitFor(isCompactRejected);
+      expect(rejected.reason).toBe("Cannot compact while this session is busy. Try again after this turn.");
+      // Zero model calls: no compaction_start ever fires, nothing reaches the model.
       expect(h.received.some(agentEventOf("compaction_start"))).toBe(false);
 
       // Release the parked ask so the turn drains cleanly.
@@ -7199,7 +7200,7 @@ describe("Session — manual compaction wire (TASK.146)", () => {
     }
   });
 
-  it("dropped by construction on an engine without compactNow (movement-profile gate, no `if (engine === \"claude\")` needed)", async () => {
+  it("refused (compact_rejected) by construction on an engine without compactNow (movement-profile gate, no `if (engine === \"claude\")` needed)", async () => {
     const engine: SessionEngine = {
       id: "codex",
       capabilities: {
@@ -7233,9 +7234,8 @@ describe("Session — manual compaction wire (TASK.146)", () => {
       await h.waitFor(isHostReady);
 
       h.send({ type: "compact_request" });
-      await h.flush();
-      await h.flush();
-      await h.flush();
+      const rejected = await h.waitFor(isCompactRejected);
+      expect(rejected.reason).toBe("Manual compaction is not available in this session.");
 
       expect(h.received.some(agentEventOf("compaction_start"))).toBe(false);
       expect(h.received.some((m) => m.type === "fatal")).toBe(false);
@@ -7304,7 +7304,7 @@ describe("Session — manual compaction wire (TASK.146)", () => {
   });
 
 
-  it("silently dropped for a CHILD session even though its engine does implement compactNow", async () => {
+  it("visibly refused (compact_rejected) for a CHILD session even though its engine does implement compactNow", async () => {
     // The child branch runs a REAL CoreEngine (compactNow present) over a real
     // AgentLoop, and the history below is the same compactable seed the
     // accepted-between-turns case uses — so route()'s `child !== undefined`
@@ -7320,29 +7320,105 @@ describe("Session — manual compaction wire (TASK.146)", () => {
     const h = createChildHarness({
       steps: [textStep("Summary of the earlier conversation."), textStep("child reply")],
     });
-    const flush = (): Promise<void> =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
     try {
       h.engine.replaceHistory!(seedManualCompactionHistory());
       h.send({ type: "ui_ready" });
       await h.waitFor(isHostReady);
 
       h.send({ type: "compact_request" });
-      await flush();
-      await flush();
-      await flush();
+      const rejected = await h.waitFor(isCompactRejected);
+      expect(rejected.reason).toBe("Manual compaction is not available in this session.");
 
       expect(h.received.some(agentEventOf("compaction_start"))).toBe(false);
       expect(h.received.some((m) => m.type === "fatal")).toBe(false);
       expect(h.engine.historyItems()).toHaveLength(12);
 
-      // Positive control: a silent DROP, not a dead harness and not a
+      // Positive control: a refused request, not a dead harness and not a
       // swallowed session — `busy` was never taken by onCompact, so the very
       // next ordinary message still opens a real turn.
       h.send({ type: "user_message", requestId: "r1", text: "hello" });
       await h.waitFor(isTurnStarted);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("Claude compact request sends one allowlisted frame and refuses a busy request", async () => {
+    const transport = new SeamTransport();
+    const catalog = ClaudeModelCatalog.fromInitialize([{ value: "m", resolvedModel: "m", displayName: "m" }]);
+    const engine = new ClaudeEngine(transport, "ref", undefined, {
+      catalog, model: "m", preset: findClaudePreset("ask")!, effortsByModel: new Map(), notices: [], slashPassthrough: true,
+    });
+    const h = createHarness({ steps: [], engine });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "compact_request" });
+      await h.waitFor(agentEventOf("compaction_start"));
+      await vi.waitFor(() => expect(transport.sent).toEqual(["/compact"]));
+      h.send({ type: "compact_request" });
+      const rejected = await h.waitFor(isCompactRejected);
+      expect(rejected.reason).toBe("Cannot compact while this session is busy. Try again after this turn.");
+      expect(transport.sent).toEqual(["/compact"]);
+      transport.push(seamResult());
+      await h.waitFor(agentEventOf("compaction_end"));
+    } finally {
+      await engine.dispose("session-close");
+      h.close();
+    }
+  });
+
+  it("a busy race returns compact_rejected without invoking compactNow (host backstop)", async () => {
+    // The renderer checks idle before sending, but the host is the backstop:
+    // it re-checks inside onCompact and refuses visibly instead of silently
+    // dropping. This is the SAME code path as the busy-turn test above, but
+    // pinned from the host's own gate order (no renderer in the loop).
+    const h = createHarness({ steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "user_message", requestId: "r1", text: "write it" });
+      await h.waitFor(isPermissionRequest);
+
+      h.send({ type: "compact_request" });
+      const rejected = await h.waitFor(isCompactRejected);
+      expect(rejected.reason).toBe("Cannot compact while this session is busy. Try again after this turn.");
+      expect(h.received.some(agentEventOf("compaction_start"))).toBe(false);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("refused (compact_rejected) while relocating", async () => {
+    const h = createHarness({ steps: [] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      // A workspace move has begun (Session.relocating is the exact flag
+      // exit_worktree sets before its handoff await).
+      (h.session as unknown as { relocating: boolean }).relocating = true;
+      h.send({ type: "compact_request" });
+      const rejected = await h.waitFor(isCompactRejected);
+      expect(rejected.reason).toBe("Wait for the workspace move to finish before compacting.");
+      expect(h.received.some(agentEventOf("compaction_start"))).toBe(false);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("refused (compact_rejected) after shutdown", async () => {
+    const h = createHarness({ steps: [] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      await h.session.shutdown();
+      h.send({ type: "compact_request" });
+      const rejected = await h.waitFor(isCompactRejected);
+      expect(rejected.reason).toBe("This session is closing.");
+      expect(h.received.some(agentEventOf("compaction_start"))).toBe(false);
     } finally {
       h.close();
     }

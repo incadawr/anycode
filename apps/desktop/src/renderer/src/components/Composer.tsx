@@ -58,6 +58,7 @@ import {
   SLASH_COMMANDS,
   assertNever,
   filterSlashItems,
+  resolveBareSlashSubmit,
   skillsToSlashSkills,
   slashMenuReduce,
   slashQueryAt,
@@ -1202,6 +1203,9 @@ export function Composer() {
     shellGitReadOnly,
     shellTerminal,
   };
+  const isBareCommand = resolveBareSlashSubmit(
+    reconstitutePasteMarkers(text, pasteBlocks), slashCtx, attachedImages.length, childSurface,
+  ).kind !== "text";
   const slashQuery = slashQueryAt(text, caret);
   const slashItems =
     slashQuery !== null
@@ -1342,13 +1346,21 @@ export function Composer() {
       case "store_git_panel":
         tabStore.getState().gitSetPanelOpen(true);
         break;
-      case "compact_now":
-        // TASK.146: one payload-less send. Every gate that matters is
-        // elsewhere — the row is hidden without supportsCorePermissions and
-        // gray unless truly idle (slash-menu.ts), and the host silently drops
-        // the request while busy or on an engine without compactNow.
-        sendToHost({ type: "compact_request" });
+      case "compact_now": {
+        // One payload-less send. The row's own gates (hidden without
+        // supportsManualCompact, gray unless truly idle) already screened the
+        // menu, but the SAME availability must be rechecked here so a menu
+        // mouse/Tab selection and the bare-`/compact` submit interceptor share
+        // one refusal path (GitHub #14). The host is the backstop for the
+        // post-check busy race (its `compact_rejected` reply).
+        const verdict = resolveBareSlashSubmit("/compact", slashCtx, attachedImages.length, childSurface);
+        if (verdict.kind === "refuse") {
+          tabStore.getState().setNotice({ kind: "slash_command_rejected", text: verdict.reason });
+        } else if (verdict.kind === "run") {
+          sendToHost({ type: "compact_request" });
+        }
         break;
+      }
       case "settings_pane":
         window.dispatchEvent(new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" }));
         window.dispatchEvent(new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: intent.pane }));
@@ -1363,6 +1375,30 @@ export function Composer() {
       default:
         assertNever(intent);
     }
+  }
+
+  /**
+   * GitHub #14 submit-time interception: classify a WHOLE outgoing draft as a
+   * bare slash command BEFORE any queue/steer/append side effect. `false`
+   * means "ordinary text — keep the existing send path"; `true` means the
+   * draft was fully consumed (refused with a visible notice, or run as a
+   * command). Commands are never appended to the transcript and never
+   * recorded as a sent message — they are not model prompts.
+   */
+  function trySubmitBareCommand(outgoing: string): boolean {
+    const result = resolveBareSlashSubmit(outgoing, slashCtx, attachedImages.length, childSurface);
+    if (result.kind === "text") {
+      return false;
+    }
+    if (result.kind === "refuse") {
+      tabStore.getState().setNotice({ kind: "slash_command_rejected", text: result.reason });
+      return true;
+    }
+    setText("");
+    setPasteBlocks([]);
+    setCaret(0);
+    dispatchSlashIntent(result.intent, "");
+    return true;
   }
 
   /**
@@ -1381,8 +1417,15 @@ export function Composer() {
     if (!item || item.disabled || slashQuery === null) {
       return;
     }
-    const tokenEnd = slashTokenEnd(text, slashQuery.start);
     const intent = item.intent;
+    if (intent.kind === "compact_now") {
+      const verdict = resolveBareSlashSubmit("/compact", slashCtx, attachedImages.length, childSurface);
+      if (verdict.kind === "refuse") {
+        tabStore.getState().setNotice({ kind: "slash_command_rejected", text: verdict.reason });
+        return;
+      }
+    }
+    const tokenEnd = slashTokenEnd(text, slashQuery.start);
     const isInsert = intent.kind === "insert";
     const replacement = intent.kind === "insert" ? intent.text : "";
     const nextText = text.slice(0, slashQuery.start) + replacement + text.slice(tokenEnd);
@@ -1451,10 +1494,16 @@ export function Composer() {
   }
 
   function handleSend(): void {
+    const outgoing = reconstitutePasteMarkers(text, pasteBlocks);
+    // GitHub #14: a recognized whole-draft slash command is consumed (run or
+    // visibly refused) BEFORE the canSend gate and before any queue/steer/
+    // append side effect — it is never delivered to the model as a prompt.
+    if (trySubmitBareCommand(outgoing)) {
+      return;
+    }
     if (!canSend) {
       return;
     }
-    const outgoing = reconstitutePasteMarkers(text, pasteBlocks);
     const images = attachedImages.map((image) => ({
       name: image.name,
       sizeBytes: image.sizeBytes,
@@ -1771,6 +1820,23 @@ export function Composer() {
           if (event.nativeEvent.isComposing) {
             return;
           }
+          // GitHub #14: an unshifted Enter on a recognized bare command is
+          // intercepted BEFORE menu selection so a disabled row (busy/child/
+          // unsupported) still gets a visible reason instead of a silent
+          // no-op. Shift+Enter and the menu's Tab completion are untouched.
+          if (event.key === "Enter" && !event.shiftKey) {
+            const resolved = resolveBareSlashSubmit(
+              reconstitutePasteMarkers(text, pasteBlocks),
+              slashCtx,
+              attachedImages.length,
+              childSurface,
+            );
+            if (resolved.kind !== "text") {
+              event.preventDefault();
+              handleSend();
+              return;
+            }
+          }
           if (slashOpen) {
             switch (event.key) {
               case "ArrowDown":
@@ -1896,7 +1962,7 @@ export function Composer() {
                   className="composer-send"
                   aria-label="Queue message"
                   title={attachmentsBlockedByModel ? MODEL_IMAGE_SEND_BLOCKED_TEXT : "Queue message"}
-                  disabled={attachmentsBlockedByModel}
+                  disabled={attachmentsBlockedByModel && !isBareCommand}
                   onClick={handleSend}
                 >
                   <ArrowUp />
@@ -1904,7 +1970,13 @@ export function Composer() {
               )}
               {engine?.id === "codex" && text.trim() && attachedImages.length === 0 && (
                 <button type="button" className="composer-send" aria-label="Steer active Codex turn" title="Steer active turn; acknowledgement does not prove model application" onClick={() => {
-                  sendToHost({ type: "steer_message", requestId: crypto.randomUUID(), text: reconstitutePasteMarkers(text, pasteBlocks) });
+                  // GitHub #14: the explicit Codex steer must not leak a known
+                  // bare command to the model either — classify first.
+                  const outgoing = reconstitutePasteMarkers(text, pasteBlocks);
+                  if (trySubmitBareCommand(outgoing)) {
+                    return;
+                  }
+                  sendToHost({ type: "steer_message", requestId: crypto.randomUUID(), text: outgoing });
                   setText("");
                   setPasteBlocks([]);
                 }}><ArrowUp /></button>
@@ -1925,7 +1997,7 @@ export function Composer() {
               className="composer-send"
               aria-label="Send"
               title={sendDisabledReason ?? (hintHidden ? undefined : hintText)}
-              disabled={!canSend}
+              disabled={!canSend && !isBareCommand}
               onClick={handleSend}
             >
               <ArrowUp />

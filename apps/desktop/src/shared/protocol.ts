@@ -859,6 +859,12 @@ export type HostToUiMessage =
       contextWindowAssumed?: boolean;
     }
   | { type: "mode_change_rejected"; reason: string }
+  // GitHub #14: the host visibly refused a `compact_request` (busy race after
+  // the renderer checked idle, unsupported engine/child, relocation, or
+  // shutdown) instead of silently dropping it. Trusted host->renderer, no zod
+  // (only the untrusted UiToHostMessage direction is validated), precedent
+  // mode_change_rejected above. `compact_request` itself stays payload-less.
+  | { type: "compact_rejected"; reason: string }
   // Codex-fixes TASK.39 (cut §3.3): host acknowledges a `set_engine_preset` or a
   // `set_model` for an engine with native controls — trusted, no zod, precedent
   // mode_changed/model_changed. `appliesFrom:"next_turn"` is the ONLY value today

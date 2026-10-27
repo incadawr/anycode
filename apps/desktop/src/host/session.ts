@@ -2183,6 +2183,13 @@ export class Session {
             restoredPaths: null,
           });
           break;
+        case "compact_request":
+          // GitHub #14: the caller asked for a manual compaction the dying
+          // host can no longer start — an honest, visible refusal (same reply
+          // shape onCompact itself sends, but reached here before the main
+          // switch because this funnel returns early).
+          this.outbound.sendDirect({ type: "compact_rejected", reason: "This session is closing." });
+          break;
         default:
           break;
       }
@@ -2594,19 +2601,11 @@ export class Session {
         if (this.engine.capabilities.supportsContextBreakdown) this.pushContextBreakdown();
         break;
       case "compact_request":
-        // TASK.146: same authoritative host-side silent-drop contract as
-        // set_model (:1347-1356 above) — no reply escape, the renderer's row
-        // disables itself too via the same truly-idle predicate. `relocating`
-        // mirrors onRewind's BLOCKER-2(a) window; `child !== undefined` is
-        // dropped because a child's context belongs to the parent Agent-tool
-        // chain (TASK.102/145) — it is either busy (the whole chain is) or
-        // terminal (read-only), so an accepted request here is impossible by
-        // construction. `engine.compactNow === undefined` IS the engine gate:
-        // CoreEngine and ClaudeEngine (TASK.92, allowlisted /compact
-        // passthrough) implement it, a codex boot drops this unconditionally
-        // — no `if (engine === "claude")` needed. void: onCompact holds
+        // GitHub #14: NO silent early drop here. `onCompact` owns the full
+        // gate order (shutting down -> unsupported method/child -> relocating
+        // -> busy) and answers each refusal with a visible `compact_rejected`
+        // reply instead of swallowing the request. `void`: onCompact holds
         // `busy` across an await; route() itself never awaits.
-        if (this.busy || this.relocating || this.child !== undefined || this.engine.compactNow === undefined) break;
         void this.onCompact();
         break;
       case "engine_switch_request":
@@ -3325,15 +3324,31 @@ export class Session {
    * is opened, so every `agent_event` this emits rides the
    * `MANUAL_COMPACTION_TURN_ID` sentinel instead of a real turn id.
    *
-   * Re-checks the same gates `route()`'s `case "compact_request"` already
-   * checked before calling here: messages route synchronously and
-   * sequentially, so this is a defensive net (mirrors the CUT-S2 comment
-   * pattern elsewhere in this file), not a race — `route()` never awaits
-   * between the gate and this call.
+   * GitHub #14: this method now OWNS the whole gate order (`route()` no longer
+   * pre-drops `compact_request`) and answers every refusal with a visible
+   * `compact_rejected` reply instead of a silent drop. The renderer checks
+   * idle before sending, but a turn can start in the gap — that busy race is
+   * exactly what the host-side re-check here is for. There is no pending
+   * compaction, no queue and no fallback to `runTurn`.
    */
   private async onCompact(): Promise<void> {
-    if (this.busy || this.relocating || this.child !== undefined || this.engine.compactNow === undefined) {
-      return;
+    const refuse = (reason: string): void => {
+      this.outbound.sendDirect({ type: "compact_rejected", reason });
+    };
+    // GitHub #14: the renderer checks idle before sending, but a turn can
+    // become busy in the gap (the busy race). Refuse visibly instead of the
+    // old silent drop; there is no fallback to runTurn and no pending queue.
+    if (this.shuttingDown) {
+      return refuse("This session is closing.");
+    }
+    if (this.child !== undefined || this.engine.compactNow === undefined) {
+      return refuse("Manual compaction is not available in this session.");
+    }
+    if (this.relocating) {
+      return refuse("Wait for the workspace move to finish before compacting.");
+    }
+    if (this.busy) {
+      return refuse("Cannot compact while this session is busy. Try again after this turn.");
     }
     // Bound to `this.engine` (NOT extracted into a local const): CoreEngine's
     // compactNow reads `this.options.loop` internally — detaching the method

@@ -1,3 +1,4 @@
+import { SLASH_COMMANDS } from "./slash-menu.js";
 import { resolveProfileRoles } from "../../shared/role-profiles.js";
 /**
  * New Session draft submission (slice P7.12 §4.3): the single shared
@@ -104,10 +105,13 @@ export async function submitStartDraft(
   if (workspace === null) {
     return { ok: false, message: "Choose a project first." };
   }
+  if (SLASH_COMMANDS.some((command) => prompt.trim() === `/${command.id}`) && prompt.trim() !== "/orchestrate") {
+    return { ok: false, message: "Wait for this session to connect before running a command." };
+  }
   // `/orchestrate <task>` (orchestrate-start.ts) turns orchestrate on for this
   // send and sends only the task as the first message.
   const plan = resolveStartOrchestrate(engine, draft.orchestrate, prompt);
-  if (plan.bareSlash) {
+  if (plan.bareSlash || prompt.trim() === "/orchestrate") {
     return { ok: false, message: "Type a task after /orchestrate." };
   }
   if (plan.text.trim() === "") {

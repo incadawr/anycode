@@ -26,6 +26,13 @@ const ALL_KINDS: ToastKind[] = [
   "background_task_rejected",
   "rewind_restored",
   "rewind_rejected",
+  "engine_notice",
+  "worktree_notice",
+  "retry_blocked",
+  "rebind_failed",
+  "engine_switch_failed",
+  "steer_requeued",
+  "slash_command_rejected",
   "shell_error",
   "preview_transferred",
 ];
@@ -174,6 +181,8 @@ describe("toastTone", () => {
     expect(toastTone("session_history_truncated")).toBe("neutral");
     expect(toastTone("rewind_restored")).toBe("neutral");
     expect(toastTone("rewind_rejected")).toBe("danger");
+    expect(toastTone("steer_requeued")).toBe("warning");
+    expect(toastTone("slash_command_rejected")).toBe("warning");
     expect(toastTone("preview_transferred")).toBe("neutral");
   });
 });

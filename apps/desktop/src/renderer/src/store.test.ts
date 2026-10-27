@@ -8713,3 +8713,42 @@ describe("desktop store — provider_quota (Taskana 4090)", () => {
     }
   });
 });
+
+describe("compact_rejected (GitHub #14)", () => {
+  it("shows a slash_command_rejected notice outside an active turn", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+
+    store.getState().applyHostMessage({
+      type: "compact_rejected",
+      reason: "Cannot compact while this session is busy. Try again after this turn.",
+    });
+
+    expect(store.getState().notice).toEqual({
+      kind: "slash_command_rejected",
+      text: "Cannot compact while this session is busy. Try again after this turn.",
+    });
+    // It is a top-level reply, not a turn-scoped agent event: no turn is
+    // required and none is invented.
+    expect(store.getState().turn.status).toBe("idle");
+    expect(store.getState().transcript).toEqual([]);
+  });
+
+  it("still surfaces while a turn is running (never filtered by the turn guard)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
+    store.getState().applyHostMessage({
+      type: "compact_rejected",
+      reason: "Cannot compact while this session is busy. Try again after this turn.",
+    });
+
+    expect(store.getState().turn.status).toBe("running");
+    expect(store.getState().notice).toEqual({
+      kind: "slash_command_rejected",
+      text: "Cannot compact while this session is busy. Try again after this turn.",
+    });
+  });
+});

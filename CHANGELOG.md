@@ -9,7 +9,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- OpenAI connections can opt into implicit 30-minute prompt caching, while disabled connections keep their existing request format (#15).
+- OpenAI connections can opt into implicit 30-minute prompt caching, while disabled connections keep their existing request format (GitHub #15).
+
+### Fixed
+
+- Bare slash commands are intercepted on submit, and busy sessions visibly refuse manual compaction instead of sending it to the model (GitHub #14).
 
 ## [0.0.46] — 2026-10-27
 
