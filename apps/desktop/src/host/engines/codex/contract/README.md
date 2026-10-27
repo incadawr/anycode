@@ -36,10 +36,10 @@ protocol AnyCode's Codex adapter is built against (design
 
 ## Supported version ceiling
 
-`<0.165.0` (mirrors `SUPPORTED_CODEX_VERSION` in
+`<0.166.0` (mirrors `SUPPORTED_CODEX_VERSION` in
 `host/engines/codex/protocol.ts`). TASK.173 (owner decision, 2026-08-29)
 dropped the floor this used to pair with: support is a single ceiling, not a
-closed range, so any codex-cli build below 0.165.0 is accepted by version
+closed range, so any codex-cli build below 0.166.0 is accepted by version
 number alone, however old. A build genuinely too old to speak the CONSUMED
 wire shapes fails on its own later, at whichever call first needs a shape it
 lacks, instead of being preemptively refused here. The Codex CLI's TypeScript
@@ -125,6 +125,16 @@ the path is in `REVIEWED_REMOVALS`, paired with an assertion that the
 inline-result alternative still exists. 0.164.0 passed the live GUI smoke
 **10/10** and is the recommended installer version; 0.163.x was not
 individually live-smoked.
+
+## 0.165.0 verification (2026-10-28)
+
+The real 0.164.0 and 0.165.0 extracted contracts differ only in two
+additions: `Account` gains the `gcp` variant (with required `type`), and
+`CodexErrorInfo` gains `modelNotFound`. Consumed methods and decision enums
+are identical; no existing fields or variants changed or were removed. Account
+verification accepts any non-null account, and error translation uses the
+message independently of the error code. Both behaviors have regression tests.
+Layer 2 passes against the real 0.165.0 binary. The live GUI smoke is pending.
 
 ## Raising the ceiling / updating the pin
 

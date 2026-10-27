@@ -486,6 +486,12 @@ describe("CodexEngine — native session boot", () => {
     expect(server.calls.find((call) => call.method === "thread/resume")?.params).toEqual({ threadId: "persisted-thread", cwd: "/work" });
   });
 
+  it("accepts a GCP account returned by Codex 0.165", async () => {
+    const server = new FakeAppServer();
+    server.account = { type: "gcp" };
+    await expect(createNativeCodexSession(server, "/work")).resolves.toMatchObject({ threadId: "fresh-thread" });
+  });
+
   it("refuses a signed-out account before native thread creation", async () => {
     const server = new FakeAppServer();
     server.account = null;
