@@ -1097,6 +1097,8 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // migration the active connection ≡ the former singleton, so the ladder OUTPUT
   // stays byte-equivalent (DoD #5).
   const view = activeProviderView(settings);
+  if (view.pricing !== undefined) env.ANYCODE_CONNECTION_PRICING = JSON.stringify(view.pricing);
+  else delete env.ANYCODE_CONNECTION_PRICING;
   // Custom-provider route (F-G-B): a `custom:<slug>` providerId resolves from
   // `settings.provider.custom[]` — the record's baseUrl verbatim plus the
   // provider's ONE shared vault key — NEVER from the catalog selection

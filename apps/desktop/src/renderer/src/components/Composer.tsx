@@ -588,11 +588,11 @@ export function formatUsageCostLines(last: WireUsageAuditStep | null, totals: Wi
   const money = (value: number) => `$${value > 0 && value < 0.0001 ? value.toPrecision(2) : value.toFixed(4)}`;
   const partial = totals?.unpricedSteps ? " · some steps price unknown" : "";
   return [
-    `Last step: ${last?.costUsd === undefined ? "Price unknown" : `≈ ${money(last.costUsd)}`}`,
-    `Session cost: ${totals?.costUsd === undefined ? "Price unknown" : `≈ ${money(totals.costUsd)}${partial}`}`,
-    `Cache saved: ${totals?.cacheSavingsUsd === undefined ? "Price unknown" : `≈ ${money(totals.cacheSavingsUsd)}${partial}`}`,
+    `Last step: ${last?.priceBasisId === "subscription" ? "By subscription" : last?.costUsd === undefined ? "Price unknown" : `≈ ${money(last.costUsd)}`}`,
+    `Session cost: ${totals?.costUsd === undefined ? (totals?.subscriptionSteps ? `By subscription${partial}` : "Price unknown") : `${partial ? "≥" : "≈"} ${money(totals.costUsd)}${partial}${totals?.subscriptionSteps ? " · plus subscription" : ""}`}`,
+    `Cache saved: ${totals?.cacheSavingsUsd === undefined ? "Price unknown" : `≈ ${money(totals.cacheSavingsUsd)}${totals.unknownSavingsSteps ? " · some steps savings unknown" : partial}${totals?.subscriptionSteps ? " · plus subscription" : ""}`}`,
     "Estimates use peak rates where available",
-    "Subagents: Price unknown",
+    totals?.subagentCount ? `Subagents: ${totals.subagentCostUsd === undefined ? (totals.subagentSubscription ? `By subscription${totals.subagentUnpriced ? " · some steps price unknown" : ""}` : "Price unknown") : `${totals.subagentUnpriced ? "≥" : "≈"} ${money(totals.subagentCostUsd)}${totals.subagentUnpriced ? " · some steps price unknown" : ""}${totals.subagentSubscription ? " · plus subscription" : ""}`}` : "Subagents: None",
   ];
 }
 

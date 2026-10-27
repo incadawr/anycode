@@ -316,6 +316,22 @@ function containsSecret(value: unknown): boolean {
   return JSON.stringify(value)?.includes(SECRET_VALUE) ?? false;
 }
 
+it("persists, changes, validates, and clears per-connection pricing", async () => {
+  const deps = makeDeps({ catalogIds: CATALOG_IDS });
+  const created = await handleConnectionCreate(deps, { providerId: "z-ai", pricing: { mode: "subscription" } });
+  expect(created.ok).toBe(true);
+  let snapshot = await handleGet(deps);
+  expect(snapshot.settings.provider.connections[0]?.pricing).toEqual({ mode: "subscription" });
+  const rates = { mode: "rates", input: 1, cachedInput: 0.1, output: 2 };
+  expect((await handleConnectionUpdate(deps, { id: "conn-1", pricing: rates })).ok).toBe(true);
+  snapshot = await handleGet(deps);
+  expect(snapshot.settings.provider.connections[0]?.pricing).toEqual(rates);
+  expect(await handleConnectionUpdate(deps, { id: "conn-1", pricing: { ...rates, input: -1 } })).toEqual({ ok: false, reason: "invalid" });
+  expect((await handleConnectionUpdate(deps, { id: "conn-1", pricing: "" })).ok).toBe(true);
+  snapshot = await handleGet(deps);
+  expect(snapshot.settings.provider.connections[0]?.pricing).toBeUndefined();
+});
+
 describe("handleGet — snapshot projection", () => {
   it("returns a full snapshot with SecretStatus (never a value)", async () => {
     const snap = await handleGet(makeDeps());

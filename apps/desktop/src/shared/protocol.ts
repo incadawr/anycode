@@ -362,7 +362,13 @@ export interface WireUsageAuditTotals {
   stepsWithCache: number;
   costUsd?: number;
   cacheSavingsUsd?: number;
+  unknownSavingsSteps?: number;
   unpricedSteps?: number;
+  subscriptionSteps?: number;
+  subagentCostUsd?: number;
+  subagentUnpriced?: number;
+  subagentSubscription?: number;
+  subagentCount?: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────

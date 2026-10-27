@@ -152,6 +152,7 @@ export interface TurnTranslatorOptions {
   threadId: string;
   turnId: string;
   turn: number;
+  onUsage?: (usage: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; totalTokens?: number }) => void;
   /**
    * Approval-correlation index for this turn (cut §2(l)). Every `item/started`
    * of the turn is recorded here — including item types this renderer adapter
@@ -367,6 +368,7 @@ export class TurnTranslator {
   private readonly collab: CollabAgentCardIndex;
   /** Native `subAgentActivity` ids already rendered as a mapped activity ROW, so start+complete yields one row. */
   private readonly activityRowIds = new Set<string>();
+  private lastUsageKey: string | null = null;
   private finished = false;
   /** Monotonic per-turn suffix for synthetic plan-card ids (`turn/plan/updated` carries no item id of its own). */
   private planRevision = 0;
@@ -954,7 +956,18 @@ export class TurnTranslator {
     ) {
       events.push({ type: "context_usage", estimatedTokens: totalTokens, budgetTokens: contextWindow, source: "provider" });
     }
-    const sessionTokens = this.sessionTokens(record(usage?.total));
+    // The native last value describes one request; total identifies redeliveries.
+    const cumulative = record(usage?.total);
+    if (last !== null && cumulative !== null) {
+      const key = JSON.stringify(cumulative);
+      if (key !== this.lastUsageKey) {
+        this.lastUsageKey = key;
+        const number = (value: unknown): number | undefined =>
+          typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+        this.options.onUsage?.({ inputTokens: number(last.inputTokens), cachedInputTokens: number(last.cachedInputTokens), outputTokens: number(last.outputTokens), totalTokens: number(last.totalTokens) });
+      }
+    }
+    const sessionTokens = this.sessionTokens(cumulative);
     if (sessionTokens !== null) events.push(sessionTokens);
     return events;
   }
@@ -1038,6 +1051,7 @@ export class TurnTranslator {
   private finish(params: Record<string, unknown>): AgentEvent[] {
     if (this.finished) return [];
     this.finished = true;
+    if (this.lastUsageKey === null) this.options.onUsage?.({});
     const turn = record(params.turn);
     const status = turn?.status;
     const loopReason = status === "completed" ? "completed" : status === "interrupted" ? "cancelled" : "error";

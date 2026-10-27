@@ -554,7 +554,15 @@ describe("cost presentation", () => {
       { turnId: "t", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0, costUsd: 0.2 },
       { input: 1, output: 1, total: 2, stepsReported: 2, stepsWithCache: 1, costUsd: 0.2, cacheSavingsUsd: 0.1, unpricedSteps: 1 },
     ).slice(0, 3)).toEqual([
-      "Last step: ≈ $0.2000", "Session cost: ≈ $0.2000 · some steps price unknown", "Cache saved: ≈ $0.1000 · some steps price unknown",
+      "Last step: ≈ $0.2000", "Session cost: ≥ $0.2000 · some steps price unknown", "Cache saved: ≈ $0.1000 · some steps price unknown",
     ]);
   });
+});
+
+it("renders subscription and separate child cost", () => {
+  const totals = { input: 0, output: 0, total: 0, stepsReported: 1, stepsWithCache: 0, subscriptionSteps: 1, subagentCount: 2, subagentCostUsd: 0.25, subagentUnpriced: 1 };
+  const lines = formatUsageCostLines({ turnId: "t", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0, priceBasisId: "subscription" }, totals);
+  expect(lines[0]).toBe("Last step: By subscription");
+  expect(lines[1]).toBe("Session cost: By subscription");
+  expect(lines[4]).toBe("Subagents: ≥ $0.2500 · some steps price unknown");
 });
