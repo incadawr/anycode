@@ -25,6 +25,7 @@ export async function summarizeWithChildren(persistence: SqlitePersistenceAdapte
     const priced = childRows.filter((row) => row.costUsd !== undefined);
     own.totals ??= { input: 0, output: 0, total: 0, stepsReported: 0, stepsWithCache: 0 };
     own.totals.subagentCount = count;
+    if (childRows.some((row) => row.priceBasisId === "claude-native-unattributed")) own.totals.subagentIncludedInReportedCost = true;
     own.totals.subagentSubscription = childRows.filter((row) => row.priceBasisId === "subscription").length;
     own.totals.subagentUnpriced = emptyChildren + childRows.length - priced.length - own.totals.subagentSubscription;
     if (priced.length > 0) own.totals.subagentCostUsd = priced.reduce((sum, row) => sum + row.costUsd!, 0);

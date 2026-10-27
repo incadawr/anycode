@@ -1,5 +1,6 @@
 import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult } from "../shared/communication.js";
 import { safeFailureMessage } from "./safe-failure.js";
+import { claudeNativeChildRecord } from "./claude-usage.js";
 /**
  * Host session: the protocol server tying the UI wire to the core agent loop
  * (design §2/§3/§4/§5). One workspace, one session, one turn at a time.
@@ -637,7 +638,7 @@ export interface ProviderUsageAudit {
 export interface ProviderUsageSummaryPort {
   summary(): Promise<{
     steps: ProviderUsageRecord[];
-    totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unknownSavingsSteps?: number; unpricedSteps?: number; subscriptionSteps?: number; subagentCostUsd?: number; subagentUnpriced?: number; subagentSubscription?: number; subagentCount?: number } | null;
+    totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unknownSavingsSteps?: number; unpricedSteps?: number; subscriptionSteps?: number; subagentCostUsd?: number; subagentUnpriced?: number; subagentSubscription?: number; subagentIncludedInReportedCost?: boolean; subagentCount?: number } | null;
   }>;
 }
 
@@ -651,7 +652,7 @@ export interface ProviderUsageSummaryPort {
  */
 export function summarizeProviderUsage(steps: ProviderUsageRecord[]): {
   steps: ProviderUsageRecord[];
-  totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unknownSavingsSteps?: number; unpricedSteps?: number; subscriptionSteps?: number; subagentCostUsd?: number; subagentUnpriced?: number; subagentSubscription?: number; subagentCount?: number } | null;
+  totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unknownSavingsSteps?: number; unpricedSteps?: number; subscriptionSteps?: number; subagentCostUsd?: number; subagentUnpriced?: number; subagentSubscription?: number; subagentIncludedInReportedCost?: boolean; subagentCount?: number } | null;
 } {
   if (steps.length === 0) {
     return { steps, totals: null };
@@ -2741,6 +2742,15 @@ export class Session {
     this.outbound.sendDirect({ type: "lsp_status", servers: this.lsp?.status() ?? [] });
   }
 
+  /** Accounting must never terminate a turn when a sink throws synchronously. */
+  private recordUsageAuditRow(row: Parameters<ProviderUsageAudit["record"]>[0]): void {
+    try {
+      this.usageAudit?.sink.record(row);
+    } catch (e) {
+      console.error(`[host] usage audit write failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   /**
    * Taskana 4083 cross-review finding 1: hands the staged per-step audit row
    * (see pendingUsageAuditRow) to the write-behind sink. Fail-soft in the
@@ -2756,19 +2766,13 @@ export class Session {
       return;
     }
     this.pendingUsageAuditRow = null;
-    try {
-      this.usageAudit?.sink.record(row);
-    } catch (e) {
-      console.error(`[host] usage audit write failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
+    this.recordUsageAuditRow(row);
   }
 
   /**
    * Taskana 4083 / TASK.34: answers a `usage_audit_request` with the durable
-   * audit list (newest-first, bounded to the last 50 steps) + totals. Core
-   * only by construction (the option is wired only for the core boot); a
-   * foreign host answers NOTHING — the renderer keeps its skeleton until
-   * timeout, the same posture as an unsupported `context_breakdown`. A read
+   * audit list (newest-first, bounded to the last 50 steps) + totals. Any
+   * engine with an audit port answers; an unwired host answers nothing. A read
    * failure answers an empty list (honest "nothing loaded" instead of a hang)
    * and logs to the process console; never throws into the wire loop.
    */
@@ -4579,7 +4583,13 @@ export class Session {
         // of presenting the parent as having no children.
         if (this.engine.id === "codex" && event.type === "subagent_start" && event.agentType === "codex subagent") {
           const childId = `codex-native:${event.toolCallId}`;
-          this.usageAudit?.sink.record({ turnId: childId, subagentId: childId, step: 1, model: event.model, finishReason: "unknown", transportRetries: 0 });
+          this.recordUsageAuditRow({ turnId: childId, subagentId: childId, step: 1, model: event.model, finishReason: "unknown", transportRetries: 0 });
+        }
+        // Claude's native Agent/Task tool does not expose per-child cost.
+        // The CLI's result cost can already include this child, so retain an
+        // unknown marker without adding any amount to the parent or guessing.
+        if (this.engine.id === "claude" && event.type === "tool_call" && (event.toolCall.name === "Agent" || event.toolCall.name === "Task")) {
+          this.recordUsageAuditRow(claudeNativeChildRecord(event.toolCall.id));
         }
         this.captureSnapshotPath(event);
         this.previewArtifacts.observeStart(event);

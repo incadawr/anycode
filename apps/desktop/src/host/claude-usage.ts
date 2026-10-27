@@ -1,4 +1,4 @@
-import type { ProviderUsageRecord } from "@anycode/core";
+import type { HistoryItem, ProviderUsageRecord } from "@anycode/core";
 import type { ClaudeResultMessage } from "./engines/claude/protocol.js";
 
 /** Snapshot a native Claude result without inventing unreported cache reads. */
@@ -32,4 +32,23 @@ export function claudeUsageRecord(
     ...(typeof cost === "number" && Number.isFinite(cost) && cost >= 0
       ? { costUsd: cost, priceBasisId: "claude-cli-reported" } : {}),
   };
+}
+
+/** Native Claude child costs are not separately reported by the CLI. */
+export function claudeNativeChildRecord(toolCallId: string): Omit<ProviderUsageRecord, "sessionId" | "createdAt"> {
+  const childId = `claude-native:${toolCallId}`;
+  return { turnId: childId, subagentId: childId, step: 1, priceBasisId: "claude-native-unattributed", finishReason: "unknown", transportRetries: 0 };
+}
+
+/** Recover only child identities from a shadow transcript, never past prices. */
+export function claudeNativeChildrenFromHistory(history: readonly HistoryItem[]): ReturnType<typeof claudeNativeChildRecord>[] {
+  const ids = new Set<string>();
+  for (const item of history) {
+    const message = item?.message;
+    if (message?.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (part?.type === "tool_call" && (part.toolName === "Agent" || part.toolName === "Task") && typeof part.toolCallId === "string" && part.toolCallId.length > 0) ids.add(part.toolCallId);
+    }
+  }
+  return [...ids].map(claudeNativeChildRecord);
 }

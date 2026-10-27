@@ -584,3 +584,10 @@ it("renders subscription and separate child cost", () => {
   expect(lines[1]).toBe("Session cost: By subscription");
   expect(lines[4]).toBe("Subagents: ≥ $0.2500 · some steps price unknown");
 });
+
+it("identifies Claude native child costs as unattributed and possibly included", () => {
+  const totals = { input: 0, output: 0, total: 0, stepsReported: 1, stepsWithCache: 0, costUsd: 0.5, subagentCount: 1, subagentUnpriced: 1, subagentIncludedInReportedCost: true };
+  const lines = formatUsageCostLines(null, totals);
+  expect(lines[1]).toBe("Session cost: ≈ $0.5000");
+  expect(lines[4]).toBe("Subagents: Price unknown · native Claude costs may already be included");
+});

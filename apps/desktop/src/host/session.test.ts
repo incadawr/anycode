@@ -8351,8 +8351,15 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
     }
   });
 
-  it("foreign engine: records native child as unpriced without manufacturing parent usage", async () => {
+  it.each([
+    { engineId: "codex" as const, native: { type: "subagent_start", toolCallId: "native-child", agentType: "codex subagent", description: "child", engine: "codex" } as AgentEvent, marker: "codex-native:native-child", basis: undefined, throws: false },
+    { engineId: "claude" as const, native: { type: "tool_call", toolCall: { id: "native-child", name: "Agent", input: {} } } as AgentEvent, marker: "claude-native:native-child", basis: "claude-native-unattributed", throws: false },
+    { engineId: "claude" as const, native: { type: "tool_call", toolCall: { id: "native-child", name: "Task", input: {} } } as AgentEvent, marker: "claude-native:native-child", basis: "claude-native-unattributed", throws: false },
+    { engineId: "claude" as const, native: { type: "tool_call", toolCall: { id: "native-child", name: "Agent", input: {} } } as AgentEvent, marker: "claude-native:native-child", basis: "claude-native-unattributed", throws: true },
+  ])("$engineId: records a native child as unpriced without manufacturing parent usage", async ({ engineId, native, marker, basis, throws }) => {
     const { sink, records } = recordingSink();
+    const consoleError = throws ? vi.spyOn(console, "error").mockImplementation(() => {}) : undefined;
+    if (throws) sink.record = () => { throw new Error("audit sink boom"); };
     const h = createHarness({
       steps: [usageStep({ inputTokens: 10, outputTokens: 4, totalTokens: 14 }, "one")],
       usageAudit: { sink, summary: fakeSummary({ steps: [], totals: null }) },
@@ -8367,7 +8374,7 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
     }
     // Foreign-engine turn via a minimal engine (mirrors the TASK.117 foreign test).
     const engine: SessionEngine = {
-      id: "codex",
+      id: engineId,
       capabilities: {
         supportsCorePermissions: false,
         supportsRewind: false,
@@ -8390,7 +8397,10 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
       async *runTurn(): AsyncIterable<AgentEvent> {
         yield { type: "turn_start", turn: 1 };
         yield { type: "finish", finishReason: "stop", usage: { inputTokens: 99, outputTokens: 9, totalTokens: 108 } };
-        yield { type: "subagent_start", toolCallId: "native-child", agentType: "codex subagent", description: "child", engine: "codex" };
+        yield native;
+        // The AnyCode bridge creates its own session child and must not be
+        // mistaken for a Claude native Agent tool.
+        yield { type: "tool_call", toolCall: { id: "bridge-child", name: "mcp__anycode__agent", input: {} } };
         yield { type: "turn_end", turn: 1, finishReason: "stop" };
         yield { type: "loop_end", reason: "completed", turns: 1 };
       },
@@ -8404,11 +8414,18 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
       h2.send({ type: "user_message", requestId: "r1", text: "go" });
       await h2.waitFor((m): m is HostToUiMessage => m.type === "agent_event" && m.event.type === "loop_end");
       await h2.flush();
-      expect(records).toHaveLength(1);
-      expect(records[0]).toMatchObject({ subagentId: "codex-native:native-child", finishReason: "unknown" });
-      expect(records[0]?.costUsd).toBeUndefined();
+      if (throws) {
+        expect(records).toHaveLength(0);
+        expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("audit sink boom"));
+      } else {
+        expect(records).toHaveLength(1);
+        expect(records[0]).toMatchObject({ subagentId: marker, finishReason: "unknown" });
+        expect(records[0]?.priceBasisId).toBe(basis);
+        expect(records[0]?.costUsd).toBeUndefined();
+      }
     } finally {
       h2.close();
+      consoleError?.mockRestore();
     }
   });
 

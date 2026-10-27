@@ -3,6 +3,17 @@ import { SqlitePersistenceAdapter } from "@anycode/core";
 import { summarizeWithChildren } from "./usage-summary.js";
 
 describe("session and child cost rollup", () => {
+  it("preserves unknown Claude native-child cost without adding it twice", async () => {
+    const db = new SqlitePersistenceAdapter(":memory:");
+    await db.createSession({ id: "root", workspace: "/w", model: "m", mode: "build" });
+    await db.recordProviderUsage({ sessionId: "root", turnId: "own", step: 1, createdAt: 1, costUsd: 0.5, finishReason: "result", transportRetries: 0 });
+    await db.recordProviderUsage({ sessionId: "root", turnId: "native", step: 1, createdAt: 2, subagentId: "native", priceBasisId: "claude-native-unattributed", finishReason: "unknown", transportRetries: 0 });
+    const summary = await summarizeWithChildren(db, "root");
+    expect(summary.totals).toMatchObject({ costUsd: 0.5, subagentCount: 1, subagentUnpriced: 1, subagentIncludedInReportedCost: true });
+    expect(summary.totals?.subagentCostUsd).toBeUndefined();
+    await db.close();
+  });
+
   it("marks a session child with only inline descendant records as unpriced", async () => {
     const db = new SqlitePersistenceAdapter(":memory:");
     await db.createSession({ id: "root", workspace: "/w", model: "m", mode: "build" });
