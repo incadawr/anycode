@@ -125,7 +125,7 @@ describe("selectUserTurns", () => {
 
   it("counts authenticated agent deliveries as labeled turns while excluding reports", () => {
     const blocks: TranscriptBlock[] = [
-      mkUser("agent-message:1", "first agent message", { origin: "system", agentMessage: true }),
+      mkUser("agent-message:1", "envelope metadata\nfirst agent message\nDelivery: queued", { origin: "system", agentMessage: true, agentMessagePayload: "first agent message" }),
       mkUser("report", "child report", { origin: "system" }),
       mkUser("agent-message:2", "second agent message", { origin: "system", agentMessage: true }),
       mkUser("human", "human question"),

@@ -454,6 +454,8 @@ export type TranscriptBlock =
       origin?: "system";
       /** Authenticated agent delivery, distinct from a detached child report. */
       agentMessage?: true;
+      /** Original payload for the minimap preview, without envelope metadata or delivery status. */
+      agentMessagePayload?: string;
       /** Epoch ms: when the message was sent (live: renderer clock at creation; reload: the persisted item's createdAt). Absent -> no time shown. */
       at?: number;
     }
@@ -4554,7 +4556,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           case "agent_message": {
             const d = message.delivery;
             const id = `agent-message:${d.envelope.messageId}`;
-            const block: TranscriptBlock = { kind: "user_text", id, origin: "system", agentMessage: true, text: `${agentMessageText(d.envelope)}\nDelivery: ${d.state}${d.detail ? ` — ${d.detail}` : ""}` };
+            const block: TranscriptBlock = { kind: "user_text", id, origin: "system", agentMessage: true, agentMessagePayload: d.envelope.payload, text: `${agentMessageText(d.envelope)}\nDelivery: ${d.state}${d.detail ? ` — ${d.detail}` : ""}` };
             set((state) => {
               const existing = state.transcript.findIndex((b) => b.id === id || (b.kind === "user_text" && b.text === agentMessageText(d.envelope)));
               if (existing < 0) return { transcript: [...state.transcript, block] };
