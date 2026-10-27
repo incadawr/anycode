@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The transcript tick rail stays clear of message text in narrow panes, including when a side panel is open (#16).
+
 ## [0.0.49] — 2026-10-28
 
 ### Added

@@ -28,18 +28,31 @@
 
 /* Gutter modifier on .message-list (added by MessageList when the rail is
    shown): reserves left padding >= rail band + --sp-2 so the centred
-   .message-column can never intersect the rail. The rail is a 1.25rem-wide
-   (20px) hit strip at the very left edge (ticks are 10px, the active 18px,
+   .message-column can never intersect the rail. The rail is a 1rem-wide
+   (16px) hit strip at the very left edge (ticks are 6px, the active 12px,
    both inside that band). .message-list's own padding is var(--sp-4)
-   (16px); padding-left lifts to 2.75rem (44px) = 20px rail + 8px (--sp-2
-   gap) + 16px (the original padding), so at ANY viewport width — including
-   the 720px window minimum — the column's content box starts 44px in,
-   clear of the rail band with the original breathing room intact. The
-   centre axis shifts ~6px left of the composer's (the column is centred by
-   margin: 0 auto inside a slightly asymmetric box); imperceptible and
-   inherent to reserving a one-sided gutter. */
+   (16px); padding-left lifts to 2.75rem (44px) = 16px rail + 8px (--sp-2
+   gap) + 16px (the original padding) + 4px spare, so at ANY viewport width
+   — including the 720px window minimum — the column's content box starts
+   44px in, clear of the rail band with the original breathing room intact.
+   The centre axis shifts ~6px left of the composer's (the column is centred
+   by margin: 0 auto inside a slightly asymmetric box); imperceptible and
+   inherent to reserving a one-sided gutter.
+
+   The padding alone also moves a normal-flow sticky child: .minimap-slot is
+   the FIRST in-flow child of .message-list, and `position: sticky` keeps it
+   in normal flow, so it starts at the padded content edge (44px) — exactly
+   where .message-column starts. At narrow widths the column fills the
+   content box and the ticks land on the text's first characters. The
+   counter-margin below pulls the slot back to the list's original --sp-2
+   (8px) inset, restoring it into the reserved gutter at every width while
+   leaving the column untouched. */
 .message-list-has-rail {
   padding-left: 2.75rem;
+}
+
+.message-list-has-rail .minimap-slot {
+  margin-left: calc(var(--sp-2) - 2.75rem);
 }
 
 /* The bare tick rail itself: no pill chrome. position:relative anchors the
@@ -65,10 +78,11 @@
   display: none;
 }
 
-/* Invisible 1.25rem hit area wrapping a short horizontal tick. The tick is
-   a <span> so the button's accessible name comes from aria-label. */
+/* Invisible 1rem hit area wrapping a short horizontal tick. The tick is
+   a <span> so the button's accessible name comes from aria-label. The strip
+   is 16px (not 20px) so it ends 20px before the 44px gutter's text edge. */
 .minimap-mark {
-  width: 1.25rem;
+  width: 1rem;
   height: 1.25rem;
   display: flex;
   align-items: center;
@@ -80,7 +94,7 @@
 }
 
 .minimap-mark-dot {
-  width: 10px;
+  width: 6px;
   height: 2px;
   border-radius: 1px;
   background: var(--text-dim);
@@ -96,7 +110,7 @@
 
 /* Focus ring comes free from the global :focus-visible rule (tokens.css). */
 .minimap-mark-active .minimap-mark-dot {
-  width: 18px;
+  width: 12px;
   height: 2px;
   border-radius: 1px;
   background: var(--accent);
