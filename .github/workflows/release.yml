@@ -277,7 +277,7 @@ jobs:
       # dmg/zip/exe/AppImage is this unpacked tree, so that is what gets
       # launched. Anything that can only be seen once the app actually starts —
       # a renderer/preload that did not make it into the asar, a settings pane
-      # that crashes, a first-run screen that never paints — fails here instead
+      # that crashes, a first-run screen that never appears — fails here instead
       # of reaching the draft.
       - name: Resolve the packaged executable for the self-check
         working-directory: apps/desktop
@@ -343,7 +343,10 @@ jobs:
               sudo chmod 4755 "$sandbox"
               ls -l "$sandbox"
             fi
-            xvfb-run -a node scripts/release-self-check.mjs "$SELF_CHECK_BINARY"
+            # Xvfb can render the UI while Chromium cannot capture a frame.
+            # Allow that specific capture failure; renderer, preload and every
+            # settings check still have to pass on the packaged executable.
+            xvfb-run -a node scripts/release-self-check.mjs "$SELF_CHECK_BINARY" --self-check-allow-unavailable-capture
           elif [ "$RUNNER_OS" = "macOS" ]; then
             if [ "${{ matrix.id }}" = "macos-x64" ] && [ "$(uname -m)" != "x86_64" ]; then
               # Only becomes reachable if the Intel label in the matrix is

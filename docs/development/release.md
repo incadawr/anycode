@@ -77,7 +77,10 @@ x64), and Linux (AppImage x64) in parallel.
 Each build job then self-checks the executable it produced — the same
 `release-self-check.mjs` that used to be run by hand — so a package that cannot
 open its own window fails its platform job instead of becoming a draft. Dry
-runs get it too: it is a build check, not a publish step.
+runs get it too: it is a build check, not a publish step. On Linux, CI permits
+Chromium's `UnknownVizError` when capturing screenshots under Xvfb; the actual
+renderer, preload, settings IPC and UI checks must still pass. Other capture
+errors fail the job, and manual self-checks retain strict screenshot capture.
 
 The build jobs only produce files; they never publish. A single final job
 downloads all four, checks that no platform is missing, and assembles them into
