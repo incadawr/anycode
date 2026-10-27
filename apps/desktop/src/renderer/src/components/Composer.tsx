@@ -561,21 +561,22 @@ export function formatUsageAuditLines(a: {
 }): { session: string | null; lastStep: string | null } {
   let session: string | null = null;
   if (a.totals !== null) {
-    session = `Audited (${a.totals.stepsReported} steps, ${a.totals.stepsWithCache} with cache): in ${formatCtxTokenCount(
+    session = `Audited (${a.totals.stepsReported} records, ${a.totals.stepsWithCache} with cache): in ${formatCtxTokenCount(
       a.totals.input,
     )} · out ${formatCtxTokenCount(a.totals.output)} · total ${formatCtxTokenCount(a.totals.total)}`;
   }
   let lastStep: string | null = null;
   if (a.lastStep !== null) {
+    const label = a.lastStep.finishReason === "result" ? "Last audited turn" : "Last audited step";
     if (
       a.lastStep.cachedInputTokens === undefined ||
       a.lastStep.inputTokens === undefined ||
       a.lastStep.inputTokens <= 0
     ) {
-      lastStep = "Last audited step: cache not reported by provider";
+      lastStep = `${label}: cache not reported by provider`;
     } else {
       const percent = Math.round((a.lastStep.cachedInputTokens / a.lastStep.inputTokens) * 100);
-      lastStep = `Last audited step: ${percent}% cache (${formatCtxTokenCount(a.lastStep.cachedInputTokens)}/${formatCtxTokenCount(
+      lastStep = `${label}: ${percent}% cache (${formatCtxTokenCount(a.lastStep.cachedInputTokens)}/${formatCtxTokenCount(
         a.lastStep.inputTokens,
       )} input)`;
     }
@@ -602,7 +603,7 @@ export function formatUsageCostLines(last: WireUsageAuditStep | null, totals: Wi
   const money = formatUsageMoney;
   const partial = totals?.unpricedSteps ? " · some steps price unknown" : "";
   return [
-    `Last step: ${formatStepCost(last)}`,
+    `${last?.finishReason === "result" ? "Last turn" : "Last step"}: ${formatStepCost(last)}`,
     `Session cost: ${totals?.costUsd === undefined ? (totals?.subscriptionSteps ? `By subscription${partial}` : "Price unknown") : `${partial ? "≥" : "≈"} ${money(totals.costUsd)}${partial}${totals?.subscriptionSteps ? " · plus subscription" : ""}`}`,
     `Cache saved: ${totals?.cacheSavingsUsd === undefined ? "Price unknown" : `≈ ${money(totals.cacheSavingsUsd)}${totals.unknownSavingsSteps ? " · some steps savings unknown" : partial}${totals?.subscriptionSteps ? " · plus subscription" : ""}`}`,
     "Estimates use peak rates where available",
@@ -616,7 +617,7 @@ export function formatUsageAuditStepRow(step: WireUsageAuditStep): string {
   const cachedPart = step.cachedInputTokens !== undefined ? `cached ${formatCtxTokenCount(step.cachedInputTokens)}` : null;
   const outPart = step.outputTokens !== undefined ? `out ${formatCtxTokenCount(step.outputTokens)}` : null;
   const retryPart = step.transportRetries > 0 ? `retry ${step.transportRetries}` : null;
-  return ["step " + step.step, inPart, cachedPart, outPart, retryPart, `cost ${formatStepCost(step)}`].filter((part) => part !== null).join(" · ");
+  return [step.finishReason === "result" ? "turn total" : "step " + step.step, inPart, cachedPart, outPart, retryPart, `cost ${formatStepCost(step)}`].filter((part) => part !== null).join(" · ");
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1018,7 +1019,7 @@ function CtxPopover({
             <div className="ctx-popover-session" key={line}>{line}</div>
           ))}
           {usageAudit.list === null && usageAudit.totalSteps > 0 && (
-            <div className="ctx-popover-session">Audit: {usageAudit.totalSteps} steps recorded — reopen to load</div>
+            <div className="ctx-popover-session">Audit: {usageAudit.totalSteps} records — reopen to load</div>
           )}
           {auditLines.session !== null && <div className="ctx-popover-session">{auditLines.session}</div>}
           {auditLines.lastStep !== null && <div className="ctx-popover-session">{auditLines.lastStep}</div>}

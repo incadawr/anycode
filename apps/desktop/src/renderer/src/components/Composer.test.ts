@@ -503,7 +503,7 @@ describe("formatUsageAuditLines (Taskana 4083 / TASK.34)", () => {
       lastStep: null,
       totals: { input: 85_900, output: 500, total: 86_400, stepsReported: 2, stepsWithCache: 1 },
     });
-    expect(lines.session).toBe("Audited (2 steps, 1 with cache): in 85.9K · out 500 · total 86.4K");
+    expect(lines.session).toBe("Audited (2 records, 1 with cache): in 85.9K · out 500 · total 86.4K");
     expect(lines.lastStep).toBeNull();
   });
 
@@ -552,6 +552,16 @@ describe("formatUsageAuditStepRow (Taskana 4083 / TASK.34)", () => {
   });
 });
 
+
+describe("Claude result accounting", () => {
+  it("labels the reported aggregate as a turn, even when its price is unknown", () => {
+    const turn = { turnId: "t", step: 1, createdAt: 1, finishReason: "result", transportRetries: 0, inputTokens: 100, cachedInputTokens: 80, outputTokens: 5 };
+    expect(formatUsageCostLines({ ...turn, costUsd: 0.2 }, null)[0]).toBe("Last turn: ≈ $0.2000");
+    expect(formatUsageCostLines(turn, null)[0]).toBe("Last turn: Price unknown");
+    expect(formatUsageAuditLines({ lastStep: turn, totals: null }).lastStep).toBe("Last audited turn: 80% cache (80/100 input)");
+    expect(formatUsageAuditStepRow(turn)).toBe("turn total · in 100 · cached 80 · out 5 · cost Price unknown");
+  });
+});
 
 describe("visible cost refresh", () => {
   it("refreshes after a turn or compaction only while the popover is open", () => {
