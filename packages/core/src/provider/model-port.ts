@@ -87,7 +87,7 @@ const GLM_MAX_TOKENS = 131_072;
 interface AnthropicReasoningOptions {
   maxOutputTokens?: number;
   // thinking optional since the DeepSeek branch (4241) sends the effort enum alone.
-  providerOptions?: { anthropic: { effort?: string; thinking?: { type: "enabled"; budgetTokens: number } } };
+  providerOptions?: { anthropic: { effort?: string; thinking?: { type: "enabled"; budgetTokens: number } | { type: "adaptive" } } };
 }
 
 /**
@@ -112,10 +112,19 @@ interface OpenAICompatibleReasoningOptions {
  * AnyCode-external persistence of the conversation on OpenAI's servers. There
  * is no token-budget arithmetic here either (§4.3, mirrors chat-completions):
  * `reasoning_effort` is an enum on this transport too.
+ *
+ * `forceReasoning` exists because `@ai-sdk/openai` decides whether to put
+ * `reasoning.effort` on the wire from an ID-PREFIX heuristic
+ * (`o1|o3|o4-mini|gpt-5*` in 4.0.14), not from what the caller asked for: any
+ * model id outside that list — the whole GPT-6 line included — is treated as a
+ * non-reasoning model and the effort is silently DROPPED with an unsupported
+ * warning. The caller only passes an effort after resolving it against the
+ * catalog, so an effort here is a deliberate claim that this model reasons;
+ * `forceReasoning: true` makes the SDK honour it.
  */
 interface OpenAIResponsesReasoningOptions {
   maxOutputTokens?: number;
-  providerOptions: { openai: { store: false; reasoningEffort?: string; promptCacheOptions?: ImplicitPromptCache } };
+  providerOptions: { openai: { store: false; reasoningEffort?: string; forceReasoning?: true; promptCacheOptions?: ImplicitPromptCache } };
 }
 
 type ReasoningOptions = AnthropicReasoningOptions | OpenAICompatibleReasoningOptions | OpenAIResponsesReasoningOptions;
@@ -176,30 +185,35 @@ export function reasoningRequestOptions(
   providerName?: string,
   transport?: "anthropic-messages",
   promptCache?: ImplicitPromptCache,
+  modelId?: string,
 ): AnthropicReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
   providerName: string | undefined,
   transport: "openai-chat-completions",
   promptCache?: ImplicitPromptCache,
+  modelId?: string,
 ): OpenAICompatibleReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
   providerName: string | undefined,
   transport: "openai-responses",
   promptCache?: ImplicitPromptCache,
+  modelId?: string,
 ): OpenAIResponsesReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
   providerName: string | undefined,
   transport: ProviderTransport,
   promptCache?: ImplicitPromptCache,
+  modelId?: string,
 ): ReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
   providerName?: string,
   transport: ProviderTransport = "anthropic-messages",
   promptCache?: ImplicitPromptCache,
+  modelId?: string,
 ): ReasoningOptions {
   const effort = request.reasoningEffort;
 
@@ -207,8 +221,12 @@ export function reasoningRequestOptions(
     // store:false is unconditional (§0.2): AnyCode owns history end-to-end, and
     // leaving `store` absent defaults the real API to `store: true` server-side
     // — a hidden second persistence this transport must never create.
-    // `promptCacheOptions` (GitHub #15) is spread conditionally and must
-    // coexist with `store:false` and any existing reasoning effort.
+    if (effort === "off" && providerName === "OpenAI" && ["gpt-6.1-terra", "gpt-6-luna", "gpt-6-sol"].includes(modelId ?? "")) {
+      return {
+        ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
+        providerOptions: { openai: { store: false, reasoningEffort: "none", forceReasoning: true, ...(promptCache !== undefined ? { promptCacheOptions: promptCache } : {}) } },
+      };
+    }
     if (effort === undefined || effort === "off") {
       return {
         ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
@@ -226,6 +244,7 @@ export function reasoningRequestOptions(
         openai: {
           store: false,
           reasoningEffort: effort,
+          ...(providerName === "OpenAI" && ["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-6-astra", "gpt-6-sol"].includes(modelId ?? "") ? { forceReasoning: true as const } : {}),
           ...(promptCache !== undefined ? { promptCacheOptions: promptCache } : {}),
         },
       },
@@ -233,6 +252,9 @@ export function reasoningRequestOptions(
   }
 
   if (transport === "openai-chat-completions") {
+    if (effort === "off" && providerName === "OpenAI" && ["gpt-6.1-terra", "gpt-6-luna", "gpt-6-sol"].includes(modelId ?? "")) {
+      return { ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}), providerOptions: { openaiCompatible: { reasoningEffort: "none", ...(promptCache !== undefined ? { prompt_cache_options: promptCache } : {}) } } };
+    }
     if (effort === undefined || effort === "off") {
       if (request.maxOutputTokens === undefined && promptCache === undefined) {
         return {};
@@ -260,6 +282,13 @@ export function reasoningRequestOptions(
 
   if (effort === undefined || effort === "off") {
     return request.maxOutputTokens === undefined ? {} : { maxOutputTokens: request.maxOutputTokens };
+  }
+
+  if (providerName === "Anthropic" && /^(claude-(?:opus|sonnet|haiku)-5-5|claude-fable-5-1)$/.test(modelId ?? "")) {
+    return {
+      ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
+      providerOptions: { anthropic: { effort, thinking: { type: "adaptive" } } },
+    };
   }
 
   // GLM via z.ai: effort enum ("low"|"high"|"max") + thinking budget
@@ -312,7 +341,7 @@ export function reasoningRequestOptions(
 
   // Default / real Anthropic (Claude): budgetTokens is the canonical extended-thinking format.
   const budgetTokens =
-    effort === "max"
+    effort === "max" || effort === "xhigh"
       ? REASONING_BUDGET_TOKENS.high
       : REASONING_BUDGET_TOKENS[effort as "low" | "medium" | "high"];
   const maxOutputTokens = Math.max(request.maxOutputTokens ?? 0, budgetTokens + 1_024);
@@ -856,7 +885,7 @@ export class AiSdkModelPort implements ModelPort {
           // transport carries one (`message_start.message.model`); the flag
           // stays off elsewhere so no other transport pays for duplicate parts.
           ...(this.config.transport === "anthropic-messages" ? { includeRawChunks: true } : {}),
-          ...reasoningRequestOptions(request, this.config.providerName, this.config.transport, this.config.promptCache),
+          ...reasoningRequestOptions(request, this.config.providerName, this.config.transport, this.config.promptCache, this.config.model),
           temperature: request.temperature,
         });
 

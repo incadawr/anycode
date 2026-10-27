@@ -293,7 +293,7 @@ function readProviderTransport(env: NodeJS.ProcessEnv): ProviderTransport | unde
 function readReasoningEffort(env: NodeJS.ProcessEnv): ReasoningEffort | undefined {
   const raw = env[ENV_REASONING_EFFORT];
   if (raw === undefined || raw.trim() === "") return undefined;
-  if (raw === "off" || raw === "low" || raw === "medium" || raw === "high" || raw === "max") return raw;
+  if (raw === "off" || raw === "low" || raw === "medium" || raw === "high" || raw === "xhigh" || raw === "max") return raw;
   console.warn(`Invalid ${ENV_REASONING_EFFORT}: "${raw}" is not off, low, medium, high, or max — ignoring`);
   return undefined;
 }

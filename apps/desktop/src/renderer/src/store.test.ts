@@ -362,7 +362,7 @@ describe("desktop store — connection lifecycle", () => {
     expect(store.getState().contextWindowAssumed).toBeUndefined();
     store.getState().applyHostMessage({ type: "model_changed", model: "ghost", reasoningEffort: "off", contextWindowAssumed: true });
     expect(store.getState().contextWindowAssumed).toBe(true);
-    store.getState().applyHostMessage({ type: "model_changed", model: "glm-4.5", reasoningEffort: "off", contextWindowAssumed: false });
+    store.getState().applyHostMessage({ type: "model_changed", model: "glm-5.3", reasoningEffort: "off", contextWindowAssumed: false });
     expect(store.getState().contextWindowAssumed).toBe(false);
   });
 

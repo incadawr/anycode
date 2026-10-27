@@ -86,6 +86,7 @@ export interface SessionEngine {
   setMode?(mode: PermissionMode): void;
   reasoningEffort(): ReasoningEffort | undefined;
   setReasoningEffort(effort: ReasoningEffort | undefined): void;
+  setSelectedReasoningEffort?(effort: ReasoningEffort): void;
   switchModel?(id: string, effort: ReasoningEffort): ModelSwitchResult;
   todoReminderSnapshot?(): { count: number; threshold: number } | null;
   runTurn(input: string, options: RunTurnOptions): AsyncIterable<AgentEvent>;

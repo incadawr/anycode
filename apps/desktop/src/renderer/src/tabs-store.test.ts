@@ -314,8 +314,8 @@ describe("tabs-store draft slot (slice P7.12, §4.1)", () => {
     store.getState().openDraft("/ws/a");
     store.getState().setDraftPrompt("hello");
 
-    store.getState().setDraftModel("claude-opus-4");
-    expect(store.getState().draft).toEqual({ workspace: "/ws/a", prompt: "hello", engine: "core", model: "claude-opus-4", mode: "build" });
+    store.getState().setDraftModel("claude-opus-5-5");
+    expect(store.getState().draft).toEqual({ workspace: "/ws/a", prompt: "hello", engine: "core", model: "claude-opus-5-5", mode: "build" });
 
     store.getState().setDraftModel(null);
     expect(store.getState().draft).toEqual({ workspace: "/ws/a", prompt: "hello", engine: "core", model: null, mode: "build" });

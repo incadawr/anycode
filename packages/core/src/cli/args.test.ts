@@ -220,8 +220,8 @@ describe("parseCliArgs — slice-4.5 additions (design slice-4.5-cut.md §2.1)",
 
 describe("parseCliArgs — slice-4.6 additions (design slice-4.6-cut.md §2.2)", () => {
   it("--model <id> and --model=<id>", () => {
-    expect(parseCliArgs(["--model", "glm-4.5"]).model).toBe("glm-4.5");
-    expect(parseCliArgs(["--model=glm-4.5"]).model).toBe("glm-4.5");
+    expect(parseCliArgs(["--model", "glm-4.7"]).model).toBe("glm-4.7");
+    expect(parseCliArgs(["--model=glm-4.7"]).model).toBe("glm-4.7");
   });
 
   it("trailing bare --model (no following token) resolves to the empty string, not undefined", () => {
@@ -239,8 +239,8 @@ describe("parseCliArgs — slice-4.6 additions (design slice-4.6-cut.md §2.2)",
   });
 
   it("--model two-token form consumes the following token without disturbing other flags", () => {
-    const args = parseCliArgs(["--model", "glm-4.5", "-p", "hi"]);
-    expect(args.model).toBe("glm-4.5");
+    const args = parseCliArgs(["--model", "glm-4.7", "-p", "hi"]);
+    expect(args.model).toBe("glm-4.7");
     expect(args.printPrompt).toBe("hi");
   });
 

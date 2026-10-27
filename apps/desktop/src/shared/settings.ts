@@ -189,7 +189,7 @@ export interface RoleConfig {
 export type ProviderTransportId = "anthropic-messages" | "openai-chat-completions" | "openai-responses";
 
 /** Per-model reasoning-effort tier (mirrors core's `ReasoningEffort`; local literal keeps this module zero-import). */
-export type ReasoningEffort = "off" | "low" | "medium" | "high" | "max";
+export type ReasoningEffort = "off" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /**
  * Live per-model capability facts a connection's `/v1/models` fetch declared

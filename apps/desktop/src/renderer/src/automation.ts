@@ -648,8 +648,8 @@ export interface ModelPillDom {
  * straight off the live store's own `sessionTokens` field (`store.js`'s
  * `SessionTokens`, same read-only reference-copy discipline as
  * `TabStateSnapshot.git`/`envStatus`) rather than re-parsed from the rendered
- * `formatSessionTokensLine` text, which loses precision once a count crosses
- * the K/M formatting threshold — the DOM stays the source for
+ * the usage footnote's rendered text, which loses precision once a count
+ * crosses the K/M formatting threshold — the DOM stays the source for
  * `open`/`headline`/`percentText`/`rows`, none of which have a raw
  * store-side counterpart.
  */
@@ -685,7 +685,7 @@ export interface CtxPopoverDom {
   headline(): string | null;
   /** Every rendered category row (`.ctx-popover-row`), parsed from its label/percent text nodes; empty if closed or no rows yet. */
   rows(): { label: string; percent: number }[];
-  /** Whether the panel's session-tokens line (`.ctx-popover-session`) is currently rendered — used only as a "loaded" gate; the numeric reading itself comes off the live store (see `CtxPopoverState` above). */
+  /** Whether the panel's usage footnote (`.ctx-popover-session`) is currently rendered — used only as a "loaded" gate; the numeric reading itself comes off the live store (see `CtxPopoverState` above). */
   sessionLineVisible(): boolean;
 }
 

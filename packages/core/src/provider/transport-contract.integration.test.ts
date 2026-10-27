@@ -246,7 +246,7 @@ const chatCompletionsKit: TransportKit = {
 // ---------------------------------------------------------------------------
 
 function responsesCreated(): Record<string, unknown> {
-  return { type: "response.created", response: { id: "resp_1", created_at: 1_700_000_000, model: "gpt-5.1" } };
+  return { type: "response.created", response: { id: "resp_1", created_at: 1_700_000_000, model: "gpt-6.1-sol" } };
 }
 
 function responsesUsage(output: number): Record<string, unknown> {
@@ -262,13 +262,13 @@ function responsesUsage(output: number): Record<string, unknown> {
 
 const responsesKit: TransportKit = {
   transport: "openai-responses",
-  model: "gpt-5.1",
+  model: "gpt-6.1-sol",
   requestPathSuffix: "/responses",
   buildConfig: (baseUrl, overrides = {}) => ({
     transport: "openai-responses",
     baseUrl,
     apiKey: "test-key",
-    model: "gpt-5.1",
+    model: "gpt-6.1-sol",
     retry: { maxRetries: 0, stallTimeoutMs: 0 },
     ...overrides,
   }),

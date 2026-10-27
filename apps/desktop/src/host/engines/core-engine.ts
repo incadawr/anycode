@@ -14,6 +14,7 @@ export interface CoreEngineOptions {
   loop: AgentLoop;
   config: AgentLoopConfig;
   switchModelImpl?: (id: string, effort: ReasoningEffort) => ModelSwitchResult;
+  resolveSelectedEffort?: (effort: ReasoningEffort) => ReasoningEffort | undefined;
   capabilities?: EngineCapabilities;
   /**
    * Awaited before every new user turn is handed to the loop (subagent-model
@@ -30,12 +31,8 @@ export interface CoreEngineOptions {
    * for anything that must re-resolve against the selected tier later — the
    * child-model settings resolver at subagent spawn, above all.
    *
-   * At THIS seam `undefined` unambiguously means the user selected "off":
-   * Session maps off -> undefined before calling `setReasoningEffort`, and a
-   * tier merely suppressed by the current model's capabilities never travels
-   * through this method (the model switch re-resolves that separately, from
-   * the preserved tier). That is precisely why the cell it feeds stays a
-   * faithful SELECTED tier rather than model-effective state.
+   * The selected tier is kept independently from the model-effective tier,
+   * which is resolved again when the model changes.
    *
    * Additive-optional: no subscriber => behavior byte-identical.
    */
@@ -81,6 +78,13 @@ export class CoreEngine implements SessionEngine {
 
   setReasoningEffort(effort: ReasoningEffort | undefined): void {
     this.options.config.reasoningEffort = effort;
+    this.options.onReasoningEffortSet?.(effort);
+  }
+
+  setSelectedReasoningEffort(effort: ReasoningEffort): void {
+    this.options.config.reasoningEffort = this.options.resolveSelectedEffort
+      ? this.options.resolveSelectedEffort(effort)
+      : effort === "off" ? undefined : effort;
     this.options.onReasoningEffortSet?.(effort);
   }
 

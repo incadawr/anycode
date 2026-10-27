@@ -16,7 +16,7 @@ function config(overrides: Partial<EndpointConfig> = {}): EndpointConfig {
     transport: "openai-responses",
     baseUrl: "https://api.openai.com/v1",
     apiKey: "test-key",
-    model: "gpt-5.1",
+    model: "gpt-6.1-sol",
     ...overrides,
   };
 }
@@ -25,7 +25,7 @@ describe("createOpenAIResponsesLanguageModel", () => {
   it("builds a model carrying the requested model id, side-effect free", () => {
     const model = createOpenAIResponsesLanguageModel(config());
     expect(model).toBeDefined();
-    expect(typeof model === "string" ? model : model.modelId).toBe("gpt-5.1");
+    expect(typeof model === "string" ? model : model.modelId).toBe("gpt-6.1-sol");
   });
 
   it("uses the stable public provider name 'openai'", () => {

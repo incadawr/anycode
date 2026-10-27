@@ -164,14 +164,14 @@ describe("formatModelInfo", () => {
       supportedTransports: ["anthropic-messages"],
       auth: { kind: "api_key" },
       models: [
+        { id: "glm-4.7", name: "GLM-4.7", contextWindow: 200_000 },
         { id: "glm-4.6", name: "GLM-4.6", contextWindow: 200_000 },
-        { id: "glm-4.5", name: "GLM-4.5", contextWindow: 128_000 },
-        { id: "glm-4.5-air", name: "GLM-4.5 Air", contextWindow: 128_000 },
+        { id: "glm-5", name: "GLM-5", contextWindow: 200_000 },
       ],
     };
     expect(formatModelInfo("glm-4.6", entry)).toBe(
       "[model] glm-4.6\n" +
-        "[model] provider: Z.AI (GLM) — models: glm-4.6, glm-4.5, glm-4.5-air (switch: /model <id>)\n",
+        "[model] provider: Z.AI (GLM) — models: glm-4.7, glm-4.6, glm-5 (switch: /model <id>)\n",
     );
   });
 

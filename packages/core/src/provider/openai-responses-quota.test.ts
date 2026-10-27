@@ -52,7 +52,7 @@ function config(overrides: Partial<EndpointConfig> = {}): EndpointConfig {
     transport: "openai-responses",
     baseUrl: "https://api.openai.com/v1",
     apiKey: "test-key",
-    model: "gpt-5.1",
+    model: "gpt-6.1-sol",
     ...overrides,
   };
 }

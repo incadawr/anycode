@@ -318,7 +318,7 @@ curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/open -d '{}'
 curl "${A[@]}" "$B/start-screen"
 curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/prompt -d '{"text":"hello"}'
 curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/workspace -d '{"workspace":"/tmp/proj-c"}'
-curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/model -d '{"model":"claude-opus-4"}'
+curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/model -d '{"model":"claude-opus-5-5"}'
 curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/engine -d '{"engineId":"codex"}'
 curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/project-menu -d '{"open":true}'
 curl "${A[@]}" "$B/start-screen/model-menu"
