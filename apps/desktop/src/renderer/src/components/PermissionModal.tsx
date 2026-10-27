@@ -86,6 +86,12 @@ export interface PermissionModalProps {
   allowRemember?: boolean;
   /** The active tab's canonical workspace (host's process cwd), or null before the host hello. */
   workspace?: string | null;
+  /**
+   * GitHub #17 slice E: set when this dialog presents a CHILD
+   * session's ask in the parent's window — printed in the header so the owner
+   * knows which agent is asking. Absent for the tab's own ask.
+   */
+  ownerLabel?: string;
 }
 
 const RISK_LABELS: Record<RiskLevel, string> = {
@@ -435,7 +441,14 @@ export function buildPermissionAllowMessage(
   };
 }
 
-export function PermissionModal({ request, onAllow, onDeny, allowRemember = true, workspace = null }: PermissionModalProps) {
+export function PermissionModal({
+  request,
+  onAllow,
+  onDeny,
+  allowRemember = true,
+  workspace = null,
+  ownerLabel,
+}: PermissionModalProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const denyRef = useRef<HTMLButtonElement>(null);
   const [alwaysAllow, setAlwaysAllow] = useState(false);
@@ -590,6 +603,9 @@ export function PermissionModal({ request, onAllow, onDeny, allowRemember = true
               </>
             )}
           </span>
+          {ownerLabel !== undefined && (
+            <span className="permission-owner-label">{ownerLabel}</span>
+          )}
           {!isPlan && (
             <span
               className={`permission-risk-badge ${

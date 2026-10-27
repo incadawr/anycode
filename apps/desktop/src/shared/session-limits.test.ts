@@ -3,7 +3,9 @@ import {
   SESSION_LIMIT_RANGES,
   clampSessionLimit,
   readSessionLimits,
+  resolveChildSessionsPerParentMax,
 } from "./session-limits.js";
+import { CHILD_RUNS_GLOBAL_MAX, CHILD_RUNS_PER_PARENT_MAX } from "./child-sessions.js";
 
 describe("clampSessionLimit", () => {
   const cases = [
@@ -89,5 +91,56 @@ describe("readSessionLimits", () => {
 
   it("extra keys are dropped", () => {
     expect(readSessionLimits({ maxTabs: 10, nope: 1, other: "x" })).toEqual({ maxTabs: 10 });
+  });
+});
+
+/**
+ * GitHub #17 slice B: ONE effective per-parent cap shared by
+ * main and the host. The session setting is the base; an explicit selected
+ * role profile's maxParallelChildren can only LOWER it. The old competing
+ * role default of 4 must not resurface anywhere.
+ */
+describe("resolveChildSessionsPerParentMax", () => {
+  it("per-parent default is three with no competing role default", () => {
+    expect(resolveChildSessionsPerParentMax(undefined, undefined)).toBe(3);
+    expect(resolveChildSessionsPerParentMax({}, undefined)).toBe(3);
+    // Presence of a role profile WITHOUT an explicit value is not a value:
+    // the old `?? 4` would have returned 4 here.
+    expect(resolveChildSessionsPerParentMax({}, null)).toBe(3);
+    expect(resolveChildSessionsPerParentMax({}, "4")).toBe(3);
+  });
+
+  it("an explicit role cap lowers the session cap and never raises it", () => {
+    const cases = [
+      [{ childSessionsPerParentMax: 6 }, 2, 2],
+      [{ childSessionsPerParentMax: 6 }, undefined, 6],
+      [{ childSessionsPerParentMax: 3 }, 8, 3],
+      [{ childSessionsPerParentMax: 6 }, 6, 6],
+    ] as const;
+    for (const [limits, role, expected] of cases) {
+      expect(resolveChildSessionsPerParentMax(limits, role)).toBe(expected);
+    }
+  });
+
+  it("an invalid role value leaves the base untouched", () => {
+    for (const role of [0, -1, 17, 2.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(resolveChildSessionsPerParentMax({ childSessionsPerParentMax: 5 }, role)).toBe(5);
+    }
+    expect(resolveChildSessionsPerParentMax(undefined, 0)).toBe(3);
+  });
+
+  it("the session setting is clamped like every other limit", () => {
+    expect(resolveChildSessionsPerParentMax({ childSessionsPerParentMax: 0 }, undefined)).toBe(1);
+    expect(resolveChildSessionsPerParentMax({ childSessionsPerParentMax: 99 }, undefined)).toBe(8);
+    expect(resolveChildSessionsPerParentMax({ childSessionsPerParentMax: 2.7 }, undefined)).toBe(2);
+    expect(resolveChildSessionsPerParentMax({ childSessionsPerParentMax: "6" }, undefined)).toBe(3);
+    expect(resolveChildSessionsPerParentMax("nope", undefined)).toBe(3);
+  });
+
+  it("agrees with the admission constants main falls back to (3 / 8)", () => {
+    expect(CHILD_RUNS_PER_PARENT_MAX).toBe(SESSION_LIMIT_RANGES.childSessionsPerParentMax.default);
+    expect(CHILD_RUNS_GLOBAL_MAX).toBe(SESSION_LIMIT_RANGES.childSessionsGlobalMax.default);
+    expect(CHILD_RUNS_PER_PARENT_MAX).toBe(3);
+    expect(CHILD_RUNS_GLOBAL_MAX).toBe(8);
   });
 });

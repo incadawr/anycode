@@ -409,6 +409,17 @@ export interface WireBackgroundChild {
   agentType: string;
   description: string;
   startedAt: number; // epoch ms
+  /**
+   * GitHub #17 slice E: light optional progress. Absent when the
+   * child has not reported that fact (an engine that reports no turns keeps
+   * `turns` absent rather than showing a fictitious zero), while `startedAt`
+   * stays the ADMISSION time so elapsed time never resets at a handoff.
+   */
+  turns?: number;
+  toolCalls?: number;
+  lastTool?: string;
+  /** True while the child is blocked on a permission ask of its own. */
+  waitingForApproval?: boolean;
 }
 
 // ── renderer -> host ──

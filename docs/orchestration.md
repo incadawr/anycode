@@ -165,6 +165,21 @@ The supervisor therefore never holds a turn open or polls while GLM works.
 Without `detach` the call blocks the supervisor's turn until the child ends,
 and ending that turn early cancels the child.
 
+On a **Native** session the `Agent` tool's session tier is background by
+default (GitHub #17): an omitted `detach` behaves like `detach: true`, for an
+ordinary session call, an engine-profile call and a `continue_session` alike.
+Pass `detach: false` only for a short lookup whose result the next step needs;
+ending the turn while a joining child runs still cancels it. A joining call is
+given **120 seconds** of admitted run time — measured from the child's own
+`accepted` event, not from the model request — and then handed over to the
+background without restarting or cancelling it ("the child is still running
+after 120 seconds; its report will arrive as a message"). Stopping the turn
+before the handoff keeps the sync cascade; after it, the child keeps running.
+Workflow engine steps never opt into the handoff: they must wait for the real
+terminal before their dependency is satisfied. The Codex and Claude bridge
+tools (`anycode_agent`, `mcp__anycode__agent`) keep their explicit-`detach`
+contract unchanged.
+
 Because the supervisor never polls, the HOST also watches for the one state
 the loop itself cannot escape: the supervisor's turn has ended, there are no
 live detached children, and its final message carries no terminal marker

@@ -27,6 +27,46 @@ export interface RolesPaneProps {
   tabId?: string;
 }
 
+/** Shown in the existing save-notice slot when the cap input is unusable. */
+export const ROLE_CHILD_LIMIT_INVALID_MESSAGE = "Enter a whole number from 1 to 16, or leave blank to use the session limit.";
+
+/**
+ * GitHub #17 slice B: parses the pane's "Max parallel children"
+ * input. Blank (or whitespace) is VALID and means "no explicit cap" — the
+ * profile stores no key and the shared session limit applies. Anything else
+ * must be a whole number 1..16; everything else (zero, fractions, text,
+ * out-of-range) is invalid and must refuse the save rather than be clamped.
+ */
+export function parseRoleChildLimitInput(raw: string): { valid: true; value?: number } | { valid: false } {
+  const trimmed = raw.trim();
+  if (trimmed === "") return { valid: true };
+  if (!/^\d+$/.test(trimmed)) return { valid: false };
+  const value = Number(trimmed);
+  if (!Number.isSafeInteger(value) || value < 1 || value > 16) return { valid: false };
+  return { valid: true, value };
+}
+
+/**
+ * GitHub #17 slice B: the roles object a save actually writes.
+ * The preset roles never own the cap, so the resolved value is the ONLY
+ * source: a valid number sets it, and a blank input DELETES any previously
+ * stored cap (the old pane always wrote its `?? 4` default back).
+ */
+export function buildRoleProfileRoles<R extends object>(
+  roles: R,
+  raw: string,
+): { valid: true; roles: R & { maxParallelChildren?: number } } | { valid: false } {
+  const parsed = parseRoleChildLimitInput(raw);
+  if (!parsed.valid) return { valid: false };
+  const { maxParallelChildren: _previous, ...rest } = roles as R & { maxParallelChildren?: number };
+  return {
+    valid: true,
+    roles: (parsed.value !== undefined ? { ...rest, maxParallelChildren: parsed.value } : rest) as R & {
+      maxParallelChildren?: number;
+    },
+  };
+}
+
 export function RolesPane({ tabId }: RolesPaneProps = {}): React.JSX.Element {
   const snapshot = useSettingsStore((s) => s.snapshot);
   const setPatch = useSettingsStore((s) => s.setPatch);
@@ -54,12 +94,16 @@ export function RolesPane({ tabId }: RolesPaneProps = {}): React.JSX.Element {
   const registry = roleProfiles(snapshot?.settings ?? {});
   const selected = registry.profiles.find((p) => p.id === registry.activeId);
   const persistedRoles = selected?.roles;
-  const [maxParallelChildren, setMaxParallelChildren] = useState<number>(persistedRoles?.maxParallelChildren ?? 4);
+  // GitHub #17 slice B: the field is a STRING and starts EMPTY
+  // when the profile carries no explicit cap — the old numeric state seeded
+  // `?? 4` and silently wrote that competing default back on every save.
+  // Blank means "inherit the session limit" (shared/session-limits.ts).
+  const [maxParallelChildren, setMaxParallelChildren] = useState<string>(persistedRoles?.maxParallelChildren?.toString() ?? "");
   const [projectRoot, setProjectRoot] = useState("");
   const projects = [...new Set([...tabs.map((tab) => tab.projectRoot ?? tab.workspace), ...sessionProjects, ...registry.projects.map((p) => p.projectRoot)])];
   const [profileName, setProfileName] = useState("");
   const projectProfileId = registry.projects.find((p) => p.projectRoot === projectRoot)?.profileId;
-  useEffect(() => { setMaxParallelChildren(selected?.roles.maxParallelChildren ?? 4); }, [selected?.id, selected?.roles.maxParallelChildren]);
+  useEffect(() => { setMaxParallelChildren(selected?.roles.maxParallelChildren?.toString() ?? ""); }, [selected?.id, selected?.roles.maxParallelChildren]);
   async function saveRegistry(next: typeof registry): Promise<void> {
     const result = await setPatch({ roleProfiles: next });
     setSavedNotice({ ok: result.ok, message: result.ok ? "Profiles saved." : "Saving profiles failed." });
@@ -98,7 +142,15 @@ export function RolesPane({ tabId }: RolesPaneProps = {}): React.JSX.Element {
 
   async function handleSave(roles: Partial<Record<PresetRole, RoleConfig>>): Promise<void> {
     const id = selected?.id ?? "default";
-    const profile = { id, name: selected?.name ?? "Default", roles: { ...roles, maxParallelChildren } };
+    // Slice B: an invalid cap refuses the WHOLE save (never writes a clamped
+    // guess); a blank field writes no key at all, which clears an old
+    // explicit cap and lets the session limit apply.
+    const built = buildRoleProfileRoles(roles, maxParallelChildren);
+    if (!built.valid) {
+      setSavedNotice({ ok: false, message: ROLE_CHILD_LIMIT_INVALID_MESSAGE });
+      return;
+    }
+    const profile = { id, name: selected?.name ?? "Default", roles: built.roles };
     const result = await setPatch({ roleProfiles: { ...registry, profiles: [...registry.profiles.filter((p) => p.id !== id), profile], activeId: id } });
     setSavedNotice({ ok: result.ok });
   }
@@ -148,19 +200,15 @@ export function RolesPane({ tabId }: RolesPaneProps = {}): React.JSX.Element {
       <label className="settings-field">
         <span className="settings-field-label">Max parallel children</span>
         <input
-          type="number"
-          min={1}
-          max={16}
+          type="text"
+          inputMode="numeric"
           value={maxParallelChildren}
           aria-label="Max parallel children"
-          onChange={(event) => {
-            const next = Number(event.target.value);
-            if (Number.isFinite(next)) {
-              setMaxParallelChildren(Math.min(16, Math.max(1, Math.trunc(next))));
-            }
-          }}
+          onChange={(event) => setMaxParallelChildren(event.target.value)}
         />
-        <span className="settings-field-hint">Detached child sessions this orchestrator may run at once (1–16, default 4).</span>
+        <span className="settings-field-hint">
+          Optional lower limit (1–16); blank uses the session limit, default 3. The lower of both limits applies.
+        </span>
       </label>
 
       {savedNotice !== null && (

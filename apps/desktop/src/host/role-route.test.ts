@@ -357,3 +357,55 @@ describe("respawnReportId (R3)", () => {
     expect(sent.map((m) => m.id)).toEqual(["spawn-1", "spawn-1:respawn-refused"]);
   });
 });
+
+/**
+ * GitHub #17 slice D: a synchronous join can be handed off to
+ * the background after its tool call already returned, so its route facts MUST
+ * be captured at dispatch. This pins the preservation rule: the fallback chain
+ * that decides the later background terminal is the one captured then, not a
+ * fresh read of the (now changed) settings.
+ */
+describe("routed facts captured at dispatch survive a handoff (GitHub #17 slice D)", () => {
+  it("a settings change after dispatch cannot change the captured fallback chain", () => {
+    const health = new RoleHealthCache();
+    const dispatchSettings = {
+      primary: { connection: "conn-a", model: "model-a" },
+      fallbacks: [{ connection: "conn-b", model: "model-b" }],
+    };
+    const resolution = resolveRoleRouteChain({
+      role: "executor",
+      config: dispatchSettings,
+      claimedByMdProfile: false,
+      health: health.snapshot(),
+      now: T0,
+    })!;
+    // The facts index.ts's noteRoutedSpawn records at dispatch time.
+    const captured: RoutedSpawnFacts = {
+      role: "executor",
+      entry: resolution.entries[0]!,
+      rest: resolution.entries.slice(1),
+      usedFallback: resolution.skipped.length > 0,
+    };
+
+    // The owner edits settings while the child keeps running in the background.
+    const laterSettings = {
+      primary: { connection: "conn-c", model: "model-c" },
+      fallbacks: [{ connection: "conn-d", model: "model-d" }],
+    };
+    const laterResolution = resolveRoleRouteChain({
+      role: "executor",
+      config: laterSettings,
+      claimedByMdProfile: false,
+      health: health.snapshot(),
+      now: T0 + 1,
+    })!;
+    expect(laterResolution.entries[0]).not.toEqual(captured.entry);
+
+    const decision = decideRoutedTerminal(captured, "error", "rate limited (HTTP 429)", health, T0 + 2);
+    expect(decision.action).toBe("respawn");
+    if (decision.action !== "respawn") return;
+    // Captured chain: the ORIGINAL fallback, never the edited one.
+    expect(decision.entry).toEqual({ connection: "conn-b", model: "model-b" });
+    expect(decision.next.rest).toEqual([]);
+  });
+});

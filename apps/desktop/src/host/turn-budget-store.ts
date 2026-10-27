@@ -200,9 +200,24 @@ export function stampLearnedMaxTurns<R extends SessionBudgetRequest>(
  */
 export function recordAcceptedChildBudget(
   port: Pick<TurnBudgetPort, "record"> | undefined,
-  outcome: { status: string; turns: number; truncated?: boolean; declaredDoneAtCeiling?: boolean },
+  outcome: {
+    status: string;
+    turns: number;
+    truncated?: boolean;
+    declaredDoneAtCeiling?: boolean;
+    /**
+     * GitHub #17 slice D: an admission/handoff outcome (the
+     * child is still running) rather than a finished run. Checked BEFORE every
+     * other filter: a dispatch that took zero turns must never train a
+     * completed-run sample, whatever its status says.
+     */
+    background?: { reason: "requested" | "join_budget" };
+  },
   req: SessionBudgetRequest,
 ): void {
+  if (outcome.background !== undefined) {
+    return;
+  }
   if (port === undefined || req.engine !== undefined || !isAcceptedBudgetSample(outcome)) {
     return;
   }

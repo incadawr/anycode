@@ -18,6 +18,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Session agents release the parent promptly, hand off long waits to the background, share one child limit, and expose child progress and permission requests in the parent window (GitHub #17).
+
 - Bare slash commands are intercepted on submit, and busy sessions visibly refuse manual compaction instead of sending it to the model (GitHub #14).
 - Packaged reload shortcuts are disabled, and renderer reloads preserve task titles, agent-message previews and live task views (GitHub #19).
 - The context popover keeps its per-step list collapsed behind one line for the current turn ("This turn: 2 steps · ≈ $0.0005 · cache 96%"), expandable and collapsible by clicking it; the expanded list shows only the current turn's steps, so a previous turn's steps no longer appear under the new turn's.

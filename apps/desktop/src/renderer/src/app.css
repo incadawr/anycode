@@ -4763,6 +4763,20 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* GitHub #17 slice E: optional per-child progress and the blocked-on-ask line. */
+.background-agents-progress {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+}
+
+.background-agents-waiting {
+  flex-shrink: 0;
+  color: var(--warning, var(--text-2));
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+}
+
 .background-agents-action {
   flex-shrink: 0;
   padding: 0.15rem 0.4rem;
@@ -5808,6 +5822,13 @@ body {
 
 /* Soft-pill risk badge (UI-6 handoff pattern): bg-soft fill + solid text, no
    hard border — sits a shade deeper than the header wash it's nested in. */
+/* GitHub #17 slice E: names the child session whose ask is forwarded here. */
+.permission-owner-label {
+  align-self: flex-start;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
 .permission-risk-badge {
   align-self: flex-start;
   display: inline-flex;
