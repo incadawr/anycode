@@ -20,7 +20,17 @@ export type ProviderTransport =
   | "openai-chat-completions"
   | "openai-responses";
 
+/** USD per million tokens. A basis ID identifies the immutable rate snapshot. */
+export interface ModelPricing {
+  basisId: string;
+  input: number;
+  cachedInput: number;
+  cacheWrite?: number;
+  output: number;
+}
+
 export interface CatalogModel {
+  pricing?: ModelPricing;
   id: string;
   name?: string;
   contextWindow: number;

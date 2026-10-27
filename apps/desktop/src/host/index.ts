@@ -279,6 +279,7 @@ import {
   type RoleRouteResolution,
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
+import { calculateUsageCost } from "./usage-cost.js";
 import { closeProxyRelay, credentialedProxyValuesForRelay, resolveProxyRelay } from "@anycode/core/proxy-relay";
 import type {
   AgentBridgeCatalogEntry,
@@ -4899,10 +4900,15 @@ async function boot(): Promise<void> {
       usageAudit: {
         sink: {
           record: (r) => {
+            // Only the exact catalog endpoint is eligible: a proxy or reseller
+            // may charge a different price even when it exposes the same model.
+            const price = envConfig.baseUrl.replace(/\/$/, "") === catalogEntry?.baseUrl.replace(/\/$/, "")
+              ? catalogEntry.models.find((model) => model.id === r.model)?.pricing : undefined;
+            const cost = calculateUsageCost(r, price);
             // Serialized (chained off the tail, never parallel) so flush()
             // below is an honest drain of every queued write IN ORDER.
             usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve())
-              .then(() => persistence!.recordProviderUsage({ ...r, sessionId, createdAt: Date.now() }))
+              .then(() => persistence!.recordProviderUsage({ ...r, ...cost, sessionId, createdAt: Date.now() }))
               .catch((e) => console.error(`[host] usage audit write failed: ${e instanceof Error ? e.message : String(e)}`));
           },
           // Cross-review finding 4: shutdown drain — a serialized tail exactly

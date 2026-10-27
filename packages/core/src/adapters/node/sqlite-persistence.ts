@@ -365,6 +365,14 @@ const MIGRATIONS: readonly Migration[] = [
     version: 20,
     statements: ["ALTER TABLE sessions ADD COLUMN pending_child_reports_json TEXT"],
   },
+  {
+    version: 21,
+    statements: [
+      "ALTER TABLE provider_usage ADD COLUMN cost_usd REAL",
+      "ALTER TABLE provider_usage ADD COLUMN cache_savings_usd REAL",
+      "ALTER TABLE provider_usage ADD COLUMN price_basis_id TEXT",
+    ],
+  },
 ];
 
 /**
@@ -696,6 +704,9 @@ export interface ProviderUsageRecord {
   totalTokens?: number;
   finishReason: string;
   transportRetries: number;
+  costUsd?: number;
+  cacheSavingsUsd?: number;
+  priceBasisId?: string;
 }
 
 interface ProviderUsageRow {
@@ -711,6 +722,9 @@ interface ProviderUsageRow {
   total_tokens: number | null;
   finish_reason: string;
   transport_retries: number;
+  cost_usd: number | null;
+  cache_savings_usd: number | null;
+  price_basis_id: string | null;
 }
 
 /** Mirrors rowToCodexShadowCommandItem: optional fields spread only when non-null (undefined never decodes as 0). */
@@ -728,6 +742,9 @@ function rowToProviderUsage(row: ProviderUsageRow): ProviderUsageRecord {
     ...(row.total_tokens !== null ? { totalTokens: row.total_tokens } : {}),
     finishReason: row.finish_reason,
     transportRetries: row.transport_retries,
+    ...(row.cost_usd !== null ? { costUsd: row.cost_usd } : {}),
+    ...(row.cache_savings_usd !== null ? { cacheSavingsUsd: row.cache_savings_usd } : {}),
+    ...(row.price_basis_id !== null ? { priceBasisId: row.price_basis_id } : {}),
   };
 }
 
@@ -1500,8 +1517,8 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       `INSERT OR IGNORE INTO provider_usage
          (session_id, turn_id, step, created_at, model, reasoning_effort,
           input_tokens, cached_input_tokens, output_tokens, total_tokens,
-          finish_reason, transport_retries)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          finish_reason, transport_retries, cost_usd, cache_savings_usd, price_basis_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       record.sessionId,
       record.turnId,
@@ -1515,6 +1532,9 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       record.totalTokens ?? null,
       record.finishReason,
       record.transportRetries,
+      record.costUsd ?? null,
+      record.cacheSavingsUsd ?? null,
+      record.priceBasisId ?? null,
     );
   }
 

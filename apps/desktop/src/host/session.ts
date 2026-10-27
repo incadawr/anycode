@@ -637,7 +637,7 @@ export interface ProviderUsageAudit {
 export interface ProviderUsageSummaryPort {
   summary(): Promise<{
     steps: ProviderUsageRecord[];
-    totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number } | null;
+    totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unpricedSteps?: number } | null;
   }>;
 }
 
@@ -651,7 +651,7 @@ export interface ProviderUsageSummaryPort {
  */
 export function summarizeProviderUsage(steps: ProviderUsageRecord[]): {
   steps: ProviderUsageRecord[];
-  totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number } | null;
+  totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unpricedSteps?: number } | null;
 } {
   if (steps.length === 0) {
     return { steps, totals: null };
@@ -677,7 +677,13 @@ export function summarizeProviderUsage(steps: ProviderUsageRecord[]): {
       stepsWithCache += 1;
     }
   }
-  return { steps, totals: { input, output, total, stepsReported, stepsWithCache } };
+  const priced = steps.filter((step) => step.costUsd !== undefined && step.cacheSavingsUsd !== undefined);
+  const costs = priced.length === 0 ? {} : {
+    costUsd: priced.reduce((sum, step) => sum + step.costUsd!, 0),
+    cacheSavingsUsd: priced.reduce((sum, step) => sum + step.cacheSavingsUsd!, 0),
+    unpricedSteps: steps.length - priced.length,
+  };
+  return { steps, totals: { input, output, total, stepsReported, stepsWithCache, ...costs } };
 }
 
 export interface SessionOptions {
