@@ -13,6 +13,7 @@ export interface TokenUsage {
   inputTokens?: number;
   /** Input tokens served from the provider prompt cache; included in inputTokens. */
   cachedInputTokens?: number;
+  cacheWriteTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
 }

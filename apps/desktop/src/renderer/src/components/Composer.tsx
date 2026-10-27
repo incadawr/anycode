@@ -561,26 +561,54 @@ export function formatUsageAuditLines(a: {
 }): { session: string | null; lastStep: string | null } {
   let session: string | null = null;
   if (a.totals !== null) {
-    session = `Audited (${a.totals.stepsReported} steps, ${a.totals.stepsWithCache} with cache): in ${formatCtxTokenCount(
+    session = `Audited (${a.totals.stepsReported} records, ${a.totals.stepsWithCache} with cache): in ${formatCtxTokenCount(
       a.totals.input,
     )} · out ${formatCtxTokenCount(a.totals.output)} · total ${formatCtxTokenCount(a.totals.total)}`;
   }
   let lastStep: string | null = null;
   if (a.lastStep !== null) {
+    const label = a.lastStep.finishReason === "result" ? "Last audited turn" : "Last audited step";
     if (
       a.lastStep.cachedInputTokens === undefined ||
       a.lastStep.inputTokens === undefined ||
       a.lastStep.inputTokens <= 0
     ) {
-      lastStep = "Last audited step: cache not reported by provider";
+      lastStep = `${label}: cache not reported by provider`;
     } else {
       const percent = Math.round((a.lastStep.cachedInputTokens / a.lastStep.inputTokens) * 100);
-      lastStep = `Last audited step: ${percent}% cache (${formatCtxTokenCount(a.lastStep.cachedInputTokens)}/${formatCtxTokenCount(
+      lastStep = `${label}: ${percent}% cache (${formatCtxTokenCount(a.lastStep.cachedInputTokens)}/${formatCtxTokenCount(
         a.lastStep.inputTokens,
       )} input)`;
     }
   }
   return { session, lastStep };
+}
+
+function formatUsageMoney(value: number): string {
+  return `$${value > 0 && value < 0.0001 ? value.toPrecision(2) : value.toFixed(4)}`;
+}
+
+function formatStepCost(step: WireUsageAuditStep | null): string {
+  if (step?.priceBasisId === "subscription") return "By subscription";
+  return step?.costUsd === undefined ? "Price unknown" : `≈ ${formatUsageMoney(step.costUsd)}`;
+}
+
+/** A visible ledger must follow completion of a turn or manual compaction. */
+export function shouldRefreshUsageAudit(open: boolean, previous: TurnState["status"], current: TurnState["status"]): boolean {
+  return open && previous !== "idle" && current === "idle";
+}
+
+/** Cost is a historical snapshot, never recalculated from current settings. */
+export function formatUsageCostLines(last: WireUsageAuditStep | null, totals: WireUsageAuditTotals | null): string[] {
+  const money = formatUsageMoney;
+  const partial = totals?.unpricedSteps ? " · some steps price unknown" : "";
+  return [
+    `${last?.finishReason === "result" ? "Last turn" : "Last step"}: ${formatStepCost(last)}`,
+    `Session cost: ${totals?.costUsd === undefined ? (totals?.subscriptionSteps ? `By subscription${partial}` : "Price unknown") : `${partial ? "≥" : "≈"} ${money(totals.costUsd)}${partial}${totals?.subscriptionSteps ? " · plus subscription" : ""}`}`,
+    `Cache saved: ${totals?.cacheSavingsUsd === undefined ? "Price unknown" : `≈ ${money(totals.cacheSavingsUsd)}${totals.unknownSavingsSteps ? " · some steps savings unknown" : partial}${totals?.subscriptionSteps ? " · plus subscription" : ""}`}`,
+    "Estimates use peak rates where available",
+    totals?.subagentCount ? `Subagents: ${totals.subagentCostUsd === undefined ? (totals.subagentSubscription ? `By subscription${totals.subagentUnpriced ? " · some steps price unknown" : ""}` : "Price unknown") : `${totals.subagentUnpriced ? "≥" : "≈"} ${money(totals.subagentCostUsd)}${totals.subagentUnpriced ? " · some steps price unknown" : ""}${totals.subagentSubscription ? " · plus subscription" : ""}`}${totals.subagentIncludedInReportedCost ? " · native Claude costs may already be included" : ""}` : "Subagents: None",
+  ];
 }
 
 /** Taskana 4083 / TASK.34: one popover row per audited step, omitting absent cache/retry parts. */
@@ -589,7 +617,7 @@ export function formatUsageAuditStepRow(step: WireUsageAuditStep): string {
   const cachedPart = step.cachedInputTokens !== undefined ? `cached ${formatCtxTokenCount(step.cachedInputTokens)}` : null;
   const outPart = step.outputTokens !== undefined ? `out ${formatCtxTokenCount(step.outputTokens)}` : null;
   const retryPart = step.transportRetries > 0 ? `retry ${step.transportRetries}` : null;
-  return ["step " + step.step, inPart, cachedPart, outPart, retryPart].filter((part) => part !== null).join(" · ");
+  return [step.finishReason === "result" ? "turn total" : "step " + step.step, inPart, cachedPart, outPart, retryPart, `cost ${formatStepCost(step)}`].filter((part) => part !== null).join(" · ");
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -743,6 +771,7 @@ function CtxPopover({
   contextBreakdown,
   sessionTokens,
   usageAudit,
+  turnStatus,
   quota,
   percent,
   tint,
@@ -759,6 +788,7 @@ function CtxPopover({
     totalSteps: number;
     list: WireUsageAuditStep[] | null;
   };
+  turnStatus: TurnState["status"];
   quota: CodexRateLimitsWire | null;
   percent: number;
   tint: string;
@@ -774,6 +804,14 @@ function CtxPopover({
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const hoverTimerRef = useRef<number | null>(null);
+  const previousTurnStatus = useRef(turnStatus);
+
+  useEffect(() => {
+    if (shouldRefreshUsageAudit(open, previousTurnStatus.current, turnStatus)) {
+      sendToHost({ type: "usage_audit_request" });
+    }
+    previousTurnStatus.current = turnStatus;
+  }, [open, turnStatus, sendToHost]);
 
   function clearHoverTimer(): void {
     if (hoverTimerRef.current !== null) {
@@ -977,8 +1015,11 @@ function CtxPopover({
               {cacheHitLine !== null && <div className="ctx-popover-session">{cacheHitLine}</div>}
             </>
           )}
+          {formatUsageCostLines(usageAudit.lastStep, usageAudit.totals).map((line) => (
+            <div className="ctx-popover-session" key={line}>{line}</div>
+          ))}
           {usageAudit.list === null && usageAudit.totalSteps > 0 && (
-            <div className="ctx-popover-session">Audit: {usageAudit.totalSteps} steps recorded — reopen to load</div>
+            <div className="ctx-popover-session">Audit: {usageAudit.totalSteps} records — reopen to load</div>
           )}
           {auditLines.session !== null && <div className="ctx-popover-session">{auditLines.session}</div>}
           {auditLines.lastStep !== null && <div className="ctx-popover-session">{auditLines.lastStep}</div>}
@@ -1834,6 +1875,7 @@ export function Composer() {
               contextBreakdown={contextBreakdown}
               sessionTokens={sessionTokens}
               usageAudit={usageAudit}
+              turnStatus={turn.status}
               quota={quota}
               percent={ctxPercent}
               tint={ctxTint}

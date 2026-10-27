@@ -797,6 +797,10 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
 }
 
 export class CodexEngine implements SessionEngine {
+  private usageObserver?: (usage: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; totalTokens?: number }) => void;
+  onUsage(observer: (usage: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; totalTokens?: number }) => void): void { this.usageObserver = observer; }
+  /** A selection made during a turn applies only on the next accepted turn. */
+  usageModel(): string { return this.applied.model; }
   private bridgeEvents: AgentEvent[] = [];
   private bridgeWake: (() => void) | undefined;
   pushBridgeEvent(event: AgentEvent, owner: ActiveCodexTurn | null = this.activeTurn): void {
@@ -1319,6 +1323,7 @@ export class CodexEngine implements SessionEngine {
         // per-turn translator (same rationale as the quota tracker above) so
         // later child observations patch the original spawn card.
         collab: this.collabIndex,
+        onUsage: (usage) => this.usageObserver?.(usage),
       });
       let terminal = false;
       // Two independent per-turn counters, both reset to 0 for every turn

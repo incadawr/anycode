@@ -372,9 +372,14 @@ const CONTEXT_WINDOW_TOKENS_MIN = 1_024;
 const CONTEXT_WINDOW_TOKENS_MAX = 1_000_000;
 const contextWindowTokensSchema = z.number().int().min(CONTEXT_WINDOW_TOKENS_MIN).max(CONTEXT_WINDOW_TOKENS_MAX);
 
+const connectionPricingSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("subscription") }).strict(),
+  z.object({ mode: z.literal("rates"), input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict(),
+]);
 const connectionCreateSchema = z
   .object({
     providerId: z.string().min(1),
+    pricing: connectionPricingSchema.optional(),
     label: z.string().optional(),
     model: z.string().optional(),
     transport: transportEnum.optional(),
@@ -410,6 +415,7 @@ const connectionCreateSchema = z
   .strict();
 const connectionUpdateSchema = z
   .object({
+    pricing: z.union([connectionPricingSchema, z.literal("")]).optional(),
     id: z.string().min(1),
     label: z.string().optional(),
     model: z.string().optional(),
@@ -1733,6 +1739,7 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
     }
     const connection: ProviderConnection = {
       id,
+      ...(req.pricing !== undefined ? { pricing: req.pricing } : {}),
       providerId: req.providerId,
       ...(req.label !== undefined ? { label: req.label } : {}),
       ...(req.model !== undefined ? { model: req.model } : {}),
@@ -1854,6 +1861,10 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
         ? { lastHealth: { status: "unchecked" as const, at: (deps.now ?? defaultNowIso)() } }
         : {}),
     };
+    if (req.pricing !== undefined) {
+      if (req.pricing === "") delete updatedConnection.pricing;
+      else updatedConnection.pricing = req.pricing;
+    }
     // Taskana 4090 follow-up: a re-point invalidates the provider-reported
     // quota line the same way it invalidates `lastHealth` above — a quota
     // observed against the OLD endpoint/key must not linger under the new

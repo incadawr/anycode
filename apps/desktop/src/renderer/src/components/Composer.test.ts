@@ -25,7 +25,9 @@ import {
   formatSessionTokensLine,
   formatLatestCacheHitLine,
   formatUsageAuditLines,
+  formatUsageCostLines,
   formatUsageAuditStepRow,
+  shouldRefreshUsageAudit,
   hasSendableDraft,
   insertDraftText,
   quotaWindowLabel,
@@ -501,7 +503,7 @@ describe("formatUsageAuditLines (Taskana 4083 / TASK.34)", () => {
       lastStep: null,
       totals: { input: 85_900, output: 500, total: 86_400, stepsReported: 2, stepsWithCache: 1 },
     });
-    expect(lines.session).toBe("Audited (2 steps, 1 with cache): in 85.9K · out 500 · total 86.4K");
+    expect(lines.session).toBe("Audited (2 records, 1 with cache): in 85.9K · out 500 · total 86.4K");
     expect(lines.lastStep).toBeNull();
   });
 
@@ -535,10 +537,67 @@ describe("formatUsageAuditStepRow (Taskana 4083 / TASK.34)", () => {
   it("omits cached/retry parts when undefined/0", () => {
     const base = { turnId: "t1", createdAt: 1, finishReason: "stop" };
     expect(formatUsageAuditStepRow({ ...base, step: 1, inputTokens: 10, outputTokens: 4, transportRetries: 0 })).toBe(
-      "step 1 · in 10 · out 4",
+      "step 1 · in 10 · out 4 · cost Price unknown",
     );
     expect(
       formatUsageAuditStepRow({ ...base, step: 2, inputTokens: 85_900, cachedInputTokens: 85_400, outputTokens: 500, transportRetries: 2 }),
-    ).toBe("step 2 · in 85.9K · cached 85.4K · out 500 · retry 2");
+    ).toBe("step 2 · in 85.9K · cached 85.4K · out 500 · retry 2 · cost Price unknown");
   });
+
+  it("shows each stored step's price or subscription without inventing a price", () => {
+    const step = { turnId: "t", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0 };
+    expect(formatUsageAuditStepRow({ ...step, costUsd: 0.2 })).toBe("step 1 · cost ≈ $0.2000");
+    expect(formatUsageAuditStepRow({ ...step, priceBasisId: "subscription" })).toBe("step 1 · cost By subscription");
+    expect(formatUsageAuditStepRow(step)).toBe("step 1 · cost Price unknown");
+  });
+});
+
+
+describe("Claude result accounting", () => {
+  it("labels the reported aggregate as a turn, even when its price is unknown", () => {
+    const turn = { turnId: "t", step: 1, createdAt: 1, finishReason: "result", transportRetries: 0, inputTokens: 100, cachedInputTokens: 80, outputTokens: 5 };
+    expect(formatUsageCostLines({ ...turn, costUsd: 0.2 }, null)[0]).toBe("Last turn: ≈ $0.2000");
+    expect(formatUsageCostLines(turn, null)[0]).toBe("Last turn: Price unknown");
+    expect(formatUsageAuditLines({ lastStep: turn, totals: null }).lastStep).toBe("Last audited turn: 80% cache (80/100 input)");
+    expect(formatUsageAuditStepRow(turn)).toBe("turn total · in 100 · cached 80 · out 5 · cost Price unknown");
+  });
+});
+
+describe("visible cost refresh", () => {
+  it("refreshes after a turn or compaction only while the popover is open", () => {
+    expect(shouldRefreshUsageAudit(true, "running", "idle")).toBe(true);
+    expect(shouldRefreshUsageAudit(true, "compacting", "idle")).toBe(true);
+    expect(shouldRefreshUsageAudit(false, "running", "idle")).toBe(false);
+    expect(shouldRefreshUsageAudit(true, "idle", "running")).toBe(false);
+    expect(shouldRefreshUsageAudit(true, "idle", "idle")).toBe(false);
+  });
+});
+
+describe("cost presentation", () => {
+  it("shows unknown instead of zero and marks incomplete history", () => {
+    expect(formatUsageCostLines(null, null).slice(0, 3)).toEqual([
+      "Last step: Price unknown", "Session cost: Price unknown", "Cache saved: Price unknown",
+    ]);
+    expect(formatUsageCostLines(
+      { turnId: "t", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0, costUsd: 0.2 },
+      { input: 1, output: 1, total: 2, stepsReported: 2, stepsWithCache: 1, costUsd: 0.2, cacheSavingsUsd: 0.1, unpricedSteps: 1 },
+    ).slice(0, 3)).toEqual([
+      "Last step: ≈ $0.2000", "Session cost: ≥ $0.2000 · some steps price unknown", "Cache saved: ≈ $0.1000 · some steps price unknown",
+    ]);
+  });
+});
+
+it("renders subscription and separate child cost", () => {
+  const totals = { input: 0, output: 0, total: 0, stepsReported: 1, stepsWithCache: 0, subscriptionSteps: 1, subagentCount: 2, subagentCostUsd: 0.25, subagentUnpriced: 1 };
+  const lines = formatUsageCostLines({ turnId: "t", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0, priceBasisId: "subscription" }, totals);
+  expect(lines[0]).toBe("Last step: By subscription");
+  expect(lines[1]).toBe("Session cost: By subscription");
+  expect(lines[4]).toBe("Subagents: ≥ $0.2500 · some steps price unknown");
+});
+
+it("identifies Claude native child costs as unattributed and possibly included", () => {
+  const totals = { input: 0, output: 0, total: 0, stepsReported: 1, stepsWithCache: 0, costUsd: 0.5, subagentCount: 1, subagentUnpriced: 1, subagentIncludedInReportedCost: true };
+  const lines = formatUsageCostLines(null, totals);
+  expect(lines[1]).toBe("Session cost: ≈ $0.5000");
+  expect(lines[4]).toBe("Subagents: Price unknown · native Claude costs may already be included");
 });

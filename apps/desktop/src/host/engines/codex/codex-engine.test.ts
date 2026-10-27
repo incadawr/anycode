@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { describe, beforeEach, afterEach, expect, it, vi } from "vitest";
 import type { AgentEvent, SessionSubagentPort } from "@anycode/core";
-import { NodeFileSystemAdapter } from "@anycode/core";
+import { NodeFileSystemAdapter, SqlitePersistenceAdapter } from "@anycode/core";
 import type { HostToUiMessage } from "../../../shared/protocol.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
 import { CodexApprovalBridge } from "./approval-bridge.js";
@@ -1571,6 +1571,16 @@ describe("TASK.39 — posture enforcement on every turn (cut §2(k).1)", () => {
     expect(engine.snapshot()).toEqual({ model: "gpt-native", activePresetId: "ask" });
   });
 
+  it("attributes usage to the applied model until the next turn accepts a pending selection", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await createNativeCodexSession(server, "/work", undefined, undefined, { model: "gpt-5.6-sol", origin: "draft" });
+    expect(engine.usageModel()).toBe("gpt-5.6-sol");
+    expect(engine.selectModel("gpt-5.4-mini")).toMatchObject({ ok: true });
+    expect(engine.usageModel()).toBe("gpt-5.6-sol");
+    await runTurn(server, engine);
+    expect(engine.usageModel()).toBe("gpt-5.4-mini");
+  });
+
   it("re-resolves the effort for the switched-to model and restores the remembered value when switching back", async () => {
     const server = new FakeAppServer();
     // gpt-5.4-mini advertises ONLY "medium"; the thread's effective effort is "high".
@@ -2560,6 +2570,22 @@ describe("CodexEngine — a re-delivered item/completed enriches the shadow row'
 describe("CodexEngine + resumeNativeCodexSession — real interleave composition (W6 class-killer)", () => {
   const LIVE_THREAD_ID = "019f554d-16be-7b21-b55e-e9ce5b023a52";
   const LIVE_TURN_ID = "019f554d-16fb-7493-bc52-fe8403dbd61c";
+
+  it("persists captured native request usage without inventing a Codex price", async () => {
+    const db = new SqlitePersistenceAdapter(":memory:");
+    await db.createSession({ id: "codex", workspace: "/work", model: "m", mode: "build" });
+    const writer = new CodexEngine(new ReplayClient(loadFixtureNotifications("w0-command-accept.jsonl"), LIVE_TURN_ID), LIVE_THREAD_ID);
+    const pending: Promise<void>[] = [];
+    let step = 0;
+    writer.onUsage((usage) => pending.push(db.recordProviderUsage({ ...usage, sessionId: "codex", turnId: "turn", step: ++step, createdAt: step, finishReason: "unknown", transportRetries: 0 })));
+    for await (const _event of writer.runTurn("test", { signal: new AbortController().signal })) { /* drain the captured turn */ }
+    await Promise.all(pending);
+    const records = await db.listProviderUsage("codex");
+    expect(records.length).toBeGreaterThan(0);
+    expect(records[0]).toMatchObject({ inputTokens: expect.any(Number), cachedInputTokens: expect.any(Number), outputTokens: expect.any(Number) });
+    expect(records.every((row) => row.costUsd === undefined)).toBe(true);
+    await db.close();
+  });
 
   it("domain-drift sentinel: every item type the paired thread/read capture returns is inside NATIVE_PERSISTED", () => {
     const read = lastFixtureResult("w0-command-accept-resume-read.jsonl") as {

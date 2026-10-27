@@ -591,6 +591,18 @@ describe("subagentEventTap wiring (TASK.160 §2.2)", () => {
 });
 
 describe("createSubagentRunner — parent spawns child", () => {
+  it("records each completed inline child request through its own recorder", async () => {
+    const model = new ScriptedModelPort(() => [{ type: "start" }, { type: "text_delta", id: "t", text: "child done" }, { type: "finish", finishReason: "stop", usage: { inputTokens: 100, cachedInputTokens: 40, outputTokens: 10 } }]);
+    const recorded: unknown[] = [];
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }), {
+      createUsageRecorder: () => (usage) => recorded.push(usage),
+    });
+    const outcome = await runner.run(REQ, {});
+    expect(outcome.status).toBe("completed");
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toEqual(expect.objectContaining({ inputTokens: expect.any(Number), outputTokens: expect.any(Number) }));
+  });
+
   it("runs a child loop and lands its finalText + progress bridge in the parent stream", async () => {
     const model = new ScriptedModelPort((req) => {
       if (isChildRequest(req)) {

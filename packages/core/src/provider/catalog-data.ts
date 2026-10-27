@@ -18,6 +18,7 @@
 export type {
   CatalogAuth,
   CatalogModel,
+  ModelPricing,
   CatalogProviderEntry,
   ProviderCatalog,
   ProviderTransport,
@@ -146,7 +147,9 @@ const ENTRIES: CatalogProviderEntry[] = [
       // `defaultEffort` on both rows (Taskana 4894), so a session with no
       // explicit pick shows AND sends `high` instead of falling back to the
       // vocabulary's first entry (`low`).
-      { id: "deepseek-flash", name: "DeepSeek-V4.1-Flash", contextWindow: 1_048_576, maxOutputTokens: 393_216, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high", todoReminderEvery: 20 },
+      // Owner-supplied peak rates, 2026-10-26; off-peak cannot be inferred
+      // from usage. This is an estimate, not a verified invoice price.
+      { id: "deepseek-flash", pricing: { basisId: "deepseek-flash-peak-owner-2026-10-26", input: 0.3, cachedInput: 0.006, output: 1.2 }, name: "DeepSeek-V4.1-Flash", contextWindow: 1_048_576, maxOutputTokens: 393_216, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high", todoReminderEvery: 20 },
       { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro", contextWindow: 1_048_576, maxOutputTokens: 393_216, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high", todoReminderEvery: 20 },
     ],
   },

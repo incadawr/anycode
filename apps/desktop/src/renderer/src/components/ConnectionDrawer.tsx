@@ -1125,6 +1125,21 @@ export function ConnectionDrawerFields({
       : proxyRefInitialValue({ kind: "connection", connectionId: editConnection.id }, proxySnapshot.settings),
   );
   const [noAuth, setNoAuth] = useState(editConnection?.authOptional === true);
+  const [pricingMode, setPricingMode] = useState<"catalog" | "subscription" | "rates">(editConnection?.pricing?.mode ?? "catalog");
+  const initialRates = editConnection?.pricing?.mode === "rates" ? editConnection.pricing : undefined;
+  const [priceInput, setPriceInput] = useState(initialRates ? String(initialRates.input) : "");
+  const [priceCached, setPriceCached] = useState(initialRates ? String(initialRates.cachedInput) : "");
+  const [priceOutput, setPriceOutput] = useState(initialRates ? String(initialRates.output) : "");
+  const [priceWrite, setPriceWrite] = useState(initialRates?.cacheWrite === undefined ? "" : String(initialRates.cacheWrite));
+  const pricingPayload = () => {
+    if (pricingMode === "catalog") return "" as const;
+    if (pricingMode === "subscription") return { mode: "subscription" as const };
+    const raw = [priceInput, priceCached, priceOutput];
+    const values = raw.map(Number);
+    const write = Number(priceWrite);
+    if (raw.some((v) => !v.trim()) || values.some((v) => !Number.isFinite(v) || v < 0) || (priceWrite.trim() !== "" && (!Number.isFinite(write) || write < 0))) return null;
+    return { mode: "rates" as const, input: values[0]!, cachedInput: values[1]!, output: values[2]!, ...(priceWrite.trim() ? { cacheWrite: write } : {}) };
+  };
   // TASK.150: stored as a string (it backs a plain `<input type="number">`) so
   // an in-progress edit (e.g. a momentarily-empty field) never gets coerced
   // through `Number()` before the user is done typing; `maxOutputTokensField`
@@ -1397,6 +1412,8 @@ export function ConnectionDrawerFields({
     // dropped: `min`/`max` on a number input only constrain the spinner, not
     // what can be typed, so silently discarding e.g. `500` would create a
     // connection whose ceiling the user believes they set.
+    const pricing = pricingPayload();
+    if (pricing === null) { setError("Enter non-negative prices per million tokens."); return; }
     const mot = maxOutputTokensField(maxOutputTokens);
     if (!mot.ok) {
       // A refused Advanced field must not stay hidden behind a closed disclosure.
@@ -1448,6 +1465,7 @@ export function ConnectionDrawerFields({
         reloadSnapshot,
         {
           providerId,
+          ...(pricing !== "" ? { pricing } : {}),
           ...(createModel !== "" ? { model: createModel } : {}),
           ...(label.trim() ? { label: label.trim() } : {}),
           ...(transport ? { transport } : {}),
@@ -1530,6 +1548,8 @@ export function ConnectionDrawerFields({
     // bound refuses the whole update with a bare `reason: "invalid"`, so this
     // gives the specific, actionable message instead (same pattern as the
     // `modelSaveBlocked` guard just above).
+    const pricing = pricingPayload();
+    if (pricing === null) { setError("Enter non-negative prices per million tokens."); return; }
     const mot = maxOutputTokensField(maxOutputTokens);
     if (!mot.ok) {
       // A refused Advanced field must not stay hidden behind a closed disclosure.
@@ -1569,7 +1589,7 @@ export function ConnectionDrawerFields({
         modelPersistenceBridge(),
         reloadSnapshot,
         createdConnectionId,
-        buildConnectionUpdatePayload({
+        { ...buildConnectionUpdatePayload({
           connectionId: createdConnectionId,
           label,
           model: selectedModelId ?? model,
@@ -1581,7 +1601,7 @@ export function ConnectionDrawerFields({
           maxOutputTokens: mot.value,
           contextWindowTokens: cw.value,
           imageInput,
-        }),
+        }), pricing },
         selectedModelId,
       );
       let keyRefused = false;
@@ -1754,6 +1774,15 @@ export function ConnectionDrawerFields({
     >
       <summary>{simplified ? "Advanced settings (optional)" : "Advanced"}</summary>
       {simplified && labelField}
+      <label className="settings-field">
+        <span className="settings-field-label">Pricing</span>
+        <select className="settings-field-select" value={pricingMode} disabled={readOnly} onChange={(e) => setPricingMode(e.target.value as "catalog" | "subscription" | "rates")}>
+          <option value="catalog">Catalog or unknown</option><option value="subscription">By subscription</option><option value="rates">Custom rates</option>
+        </select>
+      </label>
+      {pricingMode === "rates" && <div>
+        {([["Input", priceInput, setPriceInput], ["Cached input", priceCached, setPriceCached], ["Output", priceOutput, setPriceOutput], ["Cache write (optional)", priceWrite, setPriceWrite]] as const).map(([label, value, set]) => <label className="settings-field" key={label}><span className="settings-field-label">{label} · USD / 1M tokens</span><input type="number" min="0" step="any" value={value} disabled={readOnly} onChange={(e) => set(e.target.value)} /></label>)}
+      </div>}
 
       <label className="settings-field">
         <span className="settings-field-label">Transport</span>
