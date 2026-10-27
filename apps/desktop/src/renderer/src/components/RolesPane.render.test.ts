@@ -133,3 +133,22 @@ it("renders provider names in every route and preserves route values", () => {
   expect(html).toContain('>Current connection</button>');
   expect(html).not.toContain('>This connection</');
 });
+
+it("renders profile and project selection controls", () => {
+  const html = renderToStaticMarkup(createElement(RolesPane));
+  expect(html).toContain('aria-label="Global role profile"');
+  expect(html).toContain('aria-label="Project"');
+  expect(html).not.toContain('aria-label="Project folder path"');
+  expect(html).toContain('aria-label="Project role profile"');
+  expect(html).toContain('Create profile');
+  expect(html).toContain('Duplicate profile');
+  expect(html).toContain('Rename profile');
+  expect(html).toContain('Delete profile');
+});
+
+it("an empty saved profile displays the active connection instead of an unsaved preset", () => {
+  const html = renderToStaticMarkup(createElement(RolePickerDialog, { ...base, inline: true, initialRoles: {} }));
+  expect(html).toContain('data-route="connection:active"');
+  expect(html).not.toContain('data-route="engine:claude"');
+  expect(html).not.toContain('data-route="engine:codex"');
+});

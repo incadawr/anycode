@@ -346,7 +346,7 @@ function argvId(value: string | undefined): string | null {
   return trimmed;
 }
 
-function canonicalWorkspace(value: string): string {
+export function canonicalWorkspace(value: string): string {
   try {
     return realpathSync(value);
   } catch {
