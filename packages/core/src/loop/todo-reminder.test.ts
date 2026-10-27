@@ -14,6 +14,10 @@ it("counts edits and mutating shell commands, not reads", () => {
   expect(isTodoMutation("Read", {})).toBe(false);
   expect(isTodoMutation("Grep", {})).toBe(false);
   expect(isTodoMutation("Bash", { command: "cat src/main.ts" })).toBe(false);
+  expect(isTodoMutation("Bash", { command: "rg -n pattern src" })).toBe(false);
+  expect(isTodoMutation("Bash", { command: "sed -n '1,200p' src/main.ts" })).toBe(false);
+  expect(isTodoMutation("Bash", { command: "sed -i 's/a/b/' file" })).toBe(true);
+  expect(isTodoMutation("Bash", { command: "rg --pre=script pattern src" })).toBe(true);
   expect(isTodoMutation("Bash", { command: "echo x > file" })).toBe(true);
   expect(isTodoMutation("Edit", {})).toBe(true);
   const tracker = new TodoReminderTracker(20);
