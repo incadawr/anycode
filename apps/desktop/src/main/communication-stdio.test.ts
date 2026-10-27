@@ -58,6 +58,13 @@ describe("stdio discovery refresh", () => {
     expect((await b.call(2)).result).toBe("ok");
     expect(calls).toBe(4);
   });
+  it("does not retry a request when the connection drops after delivery", async () => {
+    let calls = 0;
+    const s = await server((req) => { calls++; req.socket.destroy(); });
+    const b = await bridge(s.url);
+    expect((await b.call(1)).error.message).toContain("fetch failed");
+    expect(calls).toBe(1);
+  });
   it("revalidates file permissions before retrying", async () => {
     const s = await server((_req, res) => res.writeHead(401).end());
     const b = await bridge(s.url);
