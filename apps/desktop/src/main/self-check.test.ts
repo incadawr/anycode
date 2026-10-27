@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { rmSync, readFileSync } from "node:fs";
+import { describe, expect, it, vi } from "vitest";
+import { existsSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { SELF_CHECK_MIN_SETTINGS_PANES, checkSettingsPanes, createSelfCheckProfile, selfCheckEnvironment, selfCheckBinaryFs } from "./self-check.js";
+import { SELF_CHECK_MIN_SETTINGS_PANES, checkSettingsPanes, runSelfCheck, createSelfCheckProfile, selfCheckEnvironment, selfCheckBinaryFs } from "./self-check.js";
 it("normal launch creates no self-check profile", () => expect(createSelfCheckProfile(["anycode"])).toBeUndefined());
 it("self-check creates its own profile and cannot inherit production state or automation", () => {
   const root = createSelfCheckProfile(["anycode", "--self-check"])!;
@@ -62,5 +62,67 @@ describe("checkSettingsPanes (every Settings pane must open without killing or l
   it("fails when the rail lists too few panes, or Settings cannot be closed", async () => {
     await expect(checkSettingsPanes(fakeDom(ids.slice(0, 3), () => healthy), noSleep)).rejects.toThrow("too few panes");
     await expect(checkSettingsPanes(fakeDom(ids, () => healthy, false), noSleep)).rejects.toThrow("Back to app did not close Settings");
+  });
+});
+
+describe("runSelfCheck capture under Xvfb", () => {
+  const ids = Array.from({ length: SELF_CHECK_MIN_SETTINGS_PANES }, (_, i) => `pane-${i}`);
+
+  async function run(captureError: Error | undefined, allowUnavailableCapture: boolean) {
+    const root = createSelfCheckProfile(["--self-check"])!;
+    const expressions: string[] = [];
+    const capturePage = vi.fn(async () => {
+      if (captureError) throw captureError;
+      return { toPNG: () => Buffer.from("png") };
+    });
+    const executeJavaScript = vi.fn(async (expression: string): Promise<unknown> => {
+      expressions.push(expression);
+      if (expression.includes("querySelectorAll('.settings-dialog [role=tab]")) return ids;
+      if (expression.includes("extraModal")) return { open: true, panel: true, failed: false, extraModal: false };
+      if (expression.includes("window.anycode.settings.get()")) return { provider: { connections: [] } };
+      if (expression.includes("Back to app")) return undefined;
+      if (expression === "!!document.querySelector('.settings-dialog')?.open") {
+        return !expressions.some(item => item.includes("Back to app"));
+      }
+      return true;
+    });
+    vi.useFakeTimers();
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = runSelfCheck({ webContents: { capturePage, executeJavaScript } }, root, allowUnavailableCapture)
+        .then(() => undefined, (error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(20_000);
+      return { result: await result, capturePage, expressions, warningCount: warning.mock.calls.length,
+        welcome: existsSync(join(root, "welcome.png")), settings: existsSync(join(root, "settings.png")) };
+    } finally {
+      warning.mockRestore();
+      vi.useRealTimers();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it("continues the full renderer and IPC checks when both captures report UnknownVizError", async () => {
+    const result = await run(new Error("UnknownVizError"), true);
+    expect(result.result).toBeUndefined();
+    expect(result.capturePage).toHaveBeenCalledTimes(2);
+    expect(result.warningCount).toBe(2);
+    expect(result.welcome).toBe(false);
+    expect(result.settings).toBe(false);
+    expect(result.expressions).toContain("window.anycode.settings.get()");
+    expect(result.expressions.filter(item => item.includes("extraModal"))).toHaveLength(ids.length);
+    expect(result.expressions.some(item => item.includes("Back to app"))).toBe(true);
+  });
+
+  it("still saves both screenshots when capture works", async () => {
+    const result = await run(undefined, true);
+    expect(result.result).toBeUndefined();
+    expect(result.welcome).toBe(true);
+    expect(result.settings).toBe(true);
+    expect(result.warningCount).toBe(0);
+  });
+
+  it("fails on UnknownVizError without the opt-in and on other errors even with it", async () => {
+    expect((await run(new Error("UnknownVizError"), false)).result).toEqual(new Error("UnknownVizError"));
+    expect((await run(new Error("capture failed"), true)).result).toEqual(new Error("capture failed"));
   });
 });

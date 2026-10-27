@@ -29,7 +29,7 @@ export function selfCheckEnvironment(env: NodeJS.ProcessEnv, root: string): Node
 interface CheckWindow {
   webContents: { executeJavaScript(expression: string): Promise<unknown>; capturePage(): Promise<{ toPNG(): Buffer }> };
 }
-export async function runSelfCheck(win: CheckWindow, root: string): Promise<void> {
+export async function runSelfCheck(win: CheckWindow, root: string, allowUnavailableCapture = false): Promise<void> {
   const bounded = async <T>(promise: Promise<T>): Promise<T> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -40,6 +40,19 @@ export async function runSelfCheck(win: CheckWindow, root: string): Promise<void
     try { return await bounded(win.webContents.executeJavaScript(expression)); }
     catch { throw new Error(`Self-check renderer operation failed: ${expression}`); }
   };
+  const capture = async (name: string) => {
+    let image: { toPNG(): Buffer };
+    try {
+      image = await bounded(win.webContents.capturePage());
+    } catch (error) {
+      // Xvfb can run the renderer without a usable compositor for capturePage.
+      // Only the Linux CI opt-in may omit this evidence; all UI/IPC checks run.
+      if (!allowUnavailableCapture || !(error instanceof Error) || error.message !== "UnknownVizError") throw error;
+      console.warn(`[self-check] ${name} unavailable: ${error.message}`);
+      return;
+    }
+    writeFileSync(join(root, name), image.toPNG());
+  };
   const deadline = Date.now() + 30_000;
   while (!await evaluate("document.querySelectorAll('.welcome-path').length === 3")) {
     if (Date.now() >= deadline) throw new Error("First-run screen did not appear");
@@ -47,7 +60,7 @@ export async function runSelfCheck(win: CheckWindow, root: string): Promise<void
   }
   if (!await evaluate("document.querySelector('.connection-drawer-body') === null")) throw new Error("Fresh startup opened API form prematurely");
   await new Promise(resolve => setTimeout(resolve, 500));
-  writeFileSync(join(root, "welcome.png"), (await bounded(win.webContents.capturePage())).toPNG());
+  await capture("welcome.png");
   // UI-bound choices and error recovery without external auth or network.
   for (const index of [0, 1, 2]) {
     await evaluate(`document.querySelectorAll('.welcome-path')[${index}].click()`);
@@ -59,7 +72,7 @@ export async function runSelfCheck(win: CheckWindow, root: string): Promise<void
   await evaluate("[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Open settings').click()");
   await new Promise(resolve => setTimeout(resolve, 250));
   if (!await evaluate("!!document.querySelector('.settings-dialog')?.open")) throw new Error("First-run settings escape is unavailable");
-  writeFileSync(join(root, "settings.png"), (await bounded(win.webContents.capturePage())).toPNG());
+  await capture("settings.png");
   // The preload must be packaged too; exercise real settings IPC and migration.
   const snapshot = await evaluate("window.anycode.settings.get()");
   if (!(snapshot && typeof snapshot === "object" && JSON.stringify(snapshot).includes('"connections":[]'))) throw new Error("Settings IPC did not return the isolated empty provider profile");

@@ -5,9 +5,12 @@ import assert from "node:assert/strict";
 import { isAbsolute } from "node:path";
 const binary = process.argv[2];
 assert(binary && isAbsolute(binary), "Supply the absolute packaged executable path");
+const extraArgs = process.argv.slice(3);
+assert(extraArgs.every(arg => arg === "--self-check-allow-unavailable-capture") && extraArgs.length <= 1,
+  "Only --self-check-allow-unavailable-capture is supported after the executable path");
 const env = { ...process.env };
 for (const key of ["ELECTRON_RUN_AS_NODE", "ELECTRON_RENDERER_URL", "REMOTE_DEBUGGING_PORT"]) delete env[key];
-const child = spawn(binary, ["--self-check"], { env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+const child = spawn(binary, ["--self-check", ...extraArgs], { env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
 let output = "";
 for (const stream of [child.stdout, child.stderr]) stream.on("data", chunk => { output = (output + chunk).slice(-128000); });
 let forceTimer;
@@ -22,6 +25,7 @@ try {
   const line = output.split("\n").find(line => line.startsWith("ANYCODE_SELF_CHECK "));
   assert(line, `No self-check result (exit ${exitCode}): ${output}`);
   const result = JSON.parse(line.slice("ANYCODE_SELF_CHECK ".length));
+  for (const warning of output.split("\n").filter(line => line.startsWith("[self-check] "))) console.warn(warning);
   assert.equal(exitCode, 0, JSON.stringify(result));
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.packaged, true, "This check must run against a packaged release artifact");

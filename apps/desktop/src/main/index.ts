@@ -3593,7 +3593,7 @@ void app.whenReady().then(async () => {
     win!.webContents.on("did-fail-load", (_event, code) => console.error(`[self-check] renderer load failed (${code})`));
     win!.webContents.on("render-process-gone", (_event, details) => console.error(`[self-check] renderer exited (${details.reason})`));
     try {
-      await runSelfCheck(win!, selfCheckProfile);
+      await runSelfCheck(win!, selfCheckProfile, process.platform === "linux" && process.argv.includes("--self-check-allow-unavailable-capture"));
       console.log(`ANYCODE_SELF_CHECK ${JSON.stringify({ ok: true, packaged: app.isPackaged, profile: selfCheckProfile, checks: ["renderer", "preload", "settings-ipc", "first-run-choices", "engine-panes", "api-required-fields", "settings-escape", "settings-panes"] })}`);
       await shutdownEverything();
       app.exit(0);
