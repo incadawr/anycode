@@ -508,13 +508,40 @@ describe("TranscriptMinimap (SSR component render)", () => {
   });
 });
 
-describe("minimap.css clipping contract (hover preview must not be clipped)", () => {
+describe("minimap.css contract (clipping and gutter geometry)", () => {
   const css = readFileSync(new URL("../minimap.css", import.meta.url), "utf8");
+  const tokens = readFileSync(new URL("../tokens.css", import.meta.url), "utf8");
+  const ROOT_REM_PX = 16;
+
   function ruleBody(selector: string): string {
     const start = css.indexOf(`${selector} {`);
     expect(start).toBeGreaterThan(-1);
     // Strip comments first: the rule's prose may mention "overflow" itself.
     return css.slice(start, css.indexOf("}", start)).replace(/\/\*[\s\S]*?\*\//g, "");
+  }
+
+  /** First declared value of a spacing token in tokens.css (the :root default). */
+  function tokenValue(name: string): string {
+    const match = tokens.match(new RegExp(`${name}\\s*:\\s*([^;]+);`));
+    expect(match).toBeTruthy();
+    return match![1]!.trim();
+  }
+
+  function declaration(body: string, property: string): string | undefined {
+    const match = body.match(new RegExp(`${property}\\s*:\\s*([^;]+);`));
+    return match?.[1]?.trim();
+  }
+
+  function parseRem(value: string): number {
+    const match = /^(-?[\d.]+)rem$/.exec(value);
+    expect(match).toBeTruthy();
+    return Number(match![1]!);
+  }
+
+  function parsePx(value: string): number {
+    const match = /^(-?[\d.]+)px$/.exec(value);
+    expect(match).toBeTruthy();
+    return Number(match![1]!);
   }
 
   it("the outer .minimap shell declares no overflow (its absolutely-positioned preview would be clipped)", () => {
@@ -523,5 +550,38 @@ describe("minimap.css clipping contract (hover preview must not be clipped)", ()
 
   it("the scrolling moved onto .minimap-marks, which is the only overflow box", () => {
     expect(ruleBody(".minimap-marks")).toMatch(/overflow-y:\s*auto/);
+  });
+
+  it("rail band sits wholly in the reserved gutter at the narrowest content width", () => {
+    // Owner-requested visual dimensions, read from the shipped stylesheet.
+    const ordinaryWidthPx = parsePx(declaration(ruleBody(".minimap-mark-dot"), "width")!);
+    const activeWidthPx = parsePx(declaration(ruleBody(".minimap-mark-active .minimap-mark-dot"), "width")!);
+    const hitWidthPx = ROOT_REM_PX * parseRem(declaration(ruleBody(".minimap-mark"), "width")!);
+    expect(ordinaryWidthPx).toBe(6);
+    expect(activeWidthPx).toBe(12);
+    expect(hitWidthPx).toBe(16); // 1rem
+
+    // The gutter (2.75rem) and the counter-margin that restores the sticky
+    // slot back into it. Without the counter-margin the slot starts at the
+    // padded content edge — the same left edge as .message-column's text.
+    const gutterPx = ROOT_REM_PX * parseRem(declaration(ruleBody(".message-list-has-rail"), "padding-left")!);
+    const margin = declaration(ruleBody(".message-list-has-rail .minimap-slot"), "margin-left");
+    expect(margin).toBeDefined();
+    expect(margin).toBe("calc(var(--sp-2) - 2.75rem)");
+
+    const sp2Px = ROOT_REM_PX * parseRem(tokenValue("--sp-2"));
+    // In-flow sticky child: static position = content edge (gutter), then the
+    // negative margin shifts it left, so the rail begins at --sp-2.
+    const railLeft = gutterPx + (sp2Px - gutterPx);
+    expect(railLeft).toBeGreaterThanOrEqual(0);
+
+    const hitRight = railLeft + hitWidthPx;
+    const activeRight = railLeft + activeWidthPx;
+    expect(hitRight).toBeLessThan(gutterPx);
+    expect(activeRight).toBeLessThan(gutterPx);
+    expect(activeWidthPx).toBeLessThanOrEqual(hitWidthPx);
+
+    // String inspection cannot prove Blink layout; this pins the arithmetic
+    // contract that keeps the band inside the gutter at every viewport width.
   });
 });
