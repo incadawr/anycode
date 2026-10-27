@@ -14,7 +14,8 @@ export async function summarizeWithChildren(persistence: SqlitePersistenceAdapte
     if (seen.has(child.id)) continue;
     seen.add(child.id);
     const rows = await persistence.listProviderUsage(child.id);
-    if (rows.length === 0) emptyChildren++;
+    // Inline descendants do not account for the session child's own usage.
+    if (!rows.some((row) => row.subagentId === undefined)) emptyChildren++;
     childRows.push(...rows);
     for (const row of rows) if (row.subagentId !== undefined) inlineIds.add(`${child.id}:${row.subagentId}`);
     pending.push(...await persistence.listChildSessions(child.id));
