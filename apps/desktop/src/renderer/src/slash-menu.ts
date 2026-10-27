@@ -436,6 +436,76 @@ export const SLASH_COMMANDS: SlashCommand[] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────
+// Bare-command submit interception (GitHub #14)
+// ─────────────────────────────────────────────────────────────────────────
+
+/** The submit-time verdict for a WHOLE-draft slash token (`/compact `, `\n/compact\t`, …). */
+export type BareSlashSubmit =
+  | { kind: "text" }
+  | { kind: "run"; intent: SlashRunIntent }
+  | { kind: "refuse"; reason: string };
+
+/**
+ * Classifies a trimmed WHOLE draft as a bare slash command, independent of the
+ * caret (the menu's `slashQueryAt` ends the token at whitespace, so `/compact `
+ * has no menu trigger and would otherwise be sent to the model verbatim).
+ *
+ * Exact, case-sensitive `/` + registry `id` after `trim()` only — no fuzzy
+ * match, no `/compact explain`, no path/glued-token handling. Disabled and
+ * invisible commands are still RECOGNIZED (so an unsupported command is
+ * visibly refused rather than leaking to the model); the refusal reason is
+ * chosen by the same gates the menu would have applied, plus two submit-only
+ * gates (not-ready and attachments) and the bare-`/orchestrate` rule.
+ */
+export function resolveBareSlashSubmit(
+  text: string,
+  ctx: SlashMenuCtx,
+  imageCount: number,
+  childSurface: boolean,
+): BareSlashSubmit {
+  const command = SLASH_COMMANDS.find((candidate) => text.trim() === `/${candidate.id}`);
+  if (command === undefined) {
+    return { kind: "text" };
+  }
+
+  if (!ctx.ready) {
+    return { kind: "refuse", reason: "Wait for this session to connect before running a command." };
+  }
+  if (imageCount > 0) {
+    return { kind: "refuse", reason: "Remove attachments before running a slash command." };
+  }
+
+  if (command.id === "compact") {
+    // Unsupported = no engine compactNow (Codex) or a child surface (its
+    // transcript belongs to the parent's Agent-tool chain).
+    if (!ctx.supportsManualCompact || childSurface) {
+      return { kind: "refuse", reason: "Manual compaction is not available in this session." };
+    }
+    // The truly-idle window (separate from `modelDisabled`):
+    // running, compacting, drained-but-unacked queue, or not-yet-ready.
+    if (!command.enabled(ctx)) {
+      return { kind: "refuse", reason: "Cannot compact while this session is busy. Try again after this turn." };
+    }
+    return { kind: "run", intent: command.run };
+  }
+
+  if (command.id === "orchestrate") {
+    // A bare `/orchestrate` has no task; never enable an empty orchestration
+    // task. `/orchestrate <task>` is not a whole-draft match and keeps its
+    // existing menu workflow.
+    return { kind: "refuse", reason: "Add a task after /orchestrate." };
+  }
+
+  if (!command.visible(ctx)) {
+    return { kind: "refuse", reason: "This command is not available in this session." };
+  }
+  if (!command.enabled(ctx)) {
+    return { kind: "refuse", reason: "This command is not available right now." };
+  }
+  return { kind: "run", intent: command.run };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Trigger detection (cut §4.3)
 // ─────────────────────────────────────────────────────────────────────────
 

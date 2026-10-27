@@ -679,7 +679,14 @@ export type NoticeKind =
    * into the running turn — it was moved into the prompt queue for the next
    * turn instead (never dropped), and the user must see that it happened.
    */
-  | "steer_requeued";
+  | "steer_requeued"
+  /**
+   * GitHub #14: a bare slash command was consumed at submit time and refused
+   * (busy compaction, unsupported engine/child, not ready, attachments, bare
+   * /orchestrate, or a host-side `compact_rejected` race). The refusal is
+   * visible, the draft is retained, and nothing is sent to the model.
+   */
+  | "slash_command_rejected";
 
 /** Status-bar projection of the `context_usage` event (design §2.5/§2.12) — last-known reading, minimal. */
 export interface ContextUsage {
@@ -4426,6 +4433,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             return;
           case "mode_change_rejected":
             set({ notice: { kind: "mode_change_rejected", text: message.reason } });
+            return;
+          case "compact_rejected":
+            // GitHub #14: the host refused a manual compaction after the
+            // renderer had already checked idle (a busy race). Outside the
+            // turn-scoped agent_event guard by construction — this is a
+            // top-level reply, so it must surface even with no active turn.
+            set({ notice: { kind: "slash_command_rejected", text: message.reason } });
             return;
           case "worktree_notice":
             set({ notice: { kind: "worktree_notice", text: message.message } });

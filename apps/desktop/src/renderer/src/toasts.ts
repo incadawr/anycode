@@ -93,6 +93,11 @@ const TOAST_TONES: Readonly<Record<ToastKind, ToastTone>> = {
   // lost, but not delivered mid-turn either; warning, same family as
   // turn_rejected.
   steer_requeued: "warning",
+  // GitHub #14: a bare slash command was visibly refused at submit (busy /
+  // unsupported / not ready / attachments / bare /orchestrate). Not a lost
+  // message (the draft is retained), but a degraded, refused action — warning,
+  // same family as turn_rejected/permission_settled.
+  slash_command_rejected: "warning",
   shell_error: "danger",
   preview_transferred: "neutral",
 };

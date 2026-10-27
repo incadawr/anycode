@@ -10,7 +10,7 @@ import { createTabsStore } from "./tabs-store.js";
 import { resolveCodexDraftModel } from "./codex-draft-model.js";
 import { createSettingsStore, useSettingsStore } from "./settings-store.js";
 import { cloneDefaults } from "../../settings/schema.js";
-import { selectStartModelRow } from "./components/StartScreen.js";
+import { guardedSubmit, selectStartModelRow } from "./components/StartScreen.js";
 import type { CreateTabResult } from "../../shared/tabs.js";
 import type { SettingsSnapshot } from "../../shared/settings.js";
 
@@ -32,6 +32,21 @@ function makeDeps(createTabResult: CreateTabResult, order: string[] = []) {
   };
   return { deps, tabsStore, createTab, queueInitialPrompt, order };
 }
+
+describe("start-screen submission of bare commands", () => {
+  it.each(["core", "claude", "codex"] as const)("refuses a first compact draft for %s without creating or queueing", async (engine) => {
+    const { deps, tabsStore, createTab, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftEngine(engine);
+    tabsStore.getState().setDraftPrompt("/compact ");
+    const onToast = vi.fn();
+    await guardedSubmit({ canSend: true, guard: { current: false }, setSubmitting: vi.fn(), submit: () => submitStartDraft(deps), onToast });
+    expect(onToast).toHaveBeenCalledWith("shell_error", "Wait for this session to connect before running a command.");
+    expect(createTab).not.toHaveBeenCalled();
+    expect(queueInitialPrompt).not.toHaveBeenCalled();
+    expect(tabsStore.getState().draft?.prompt).toBe("/compact ");
+  });
+});
 
 describe("submitStartDraft — Orchestrate (start screen)", () => {
   it("first-run role gate: an orchestrating send with no roles refuses before createTab, and leaves the draft untouched", async () => {
