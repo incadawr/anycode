@@ -583,6 +583,19 @@ export function formatUsageAuditLines(a: {
   return { session, lastStep };
 }
 
+/** Cost is a historical snapshot, never recalculated from current settings. */
+export function formatUsageCostLines(last: WireUsageAuditStep | null, totals: WireUsageAuditTotals | null): string[] {
+  const money = (value: number) => `$${value > 0 && value < 0.0001 ? value.toPrecision(2) : value.toFixed(4)}`;
+  const partial = totals?.unpricedSteps ? " · some steps price unknown" : "";
+  return [
+    `Last step: ${last?.costUsd === undefined ? "Price unknown" : `≈ ${money(last.costUsd)}`}`,
+    `Session cost: ${totals?.costUsd === undefined ? "Price unknown" : `≈ ${money(totals.costUsd)}${partial}`}`,
+    `Cache saved: ${totals?.cacheSavingsUsd === undefined ? "Price unknown" : `≈ ${money(totals.cacheSavingsUsd)}${partial}`}`,
+    "Estimates use peak rates where available",
+    "Subagents: Price unknown",
+  ];
+}
+
 /** Taskana 4083 / TASK.34: one popover row per audited step, omitting absent cache/retry parts. */
 export function formatUsageAuditStepRow(step: WireUsageAuditStep): string {
   const inPart = step.inputTokens !== undefined ? `in ${formatCtxTokenCount(step.inputTokens)}` : null;
@@ -977,6 +990,9 @@ function CtxPopover({
               {cacheHitLine !== null && <div className="ctx-popover-session">{cacheHitLine}</div>}
             </>
           )}
+          {formatUsageCostLines(usageAudit.lastStep, usageAudit.totals).map((line) => (
+            <div className="ctx-popover-session" key={line}>{line}</div>
+          ))}
           {usageAudit.list === null && usageAudit.totalSteps > 0 && (
             <div className="ctx-popover-session">Audit: {usageAudit.totalSteps} steps recorded — reopen to load</div>
           )}

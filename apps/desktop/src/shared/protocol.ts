@@ -348,6 +348,9 @@ export interface WireUsageAuditStep {
   totalTokens?: number;
   finishReason: string;
   transportRetries: number;
+  costUsd?: number;
+  cacheSavingsUsd?: number;
+  priceBasisId?: string;
 }
 
 /** Honest session totals folded from the durable step list; `stepsReported`/`stepsWithCache` expose the coverage. */
@@ -357,6 +360,9 @@ export interface WireUsageAuditTotals {
   total: number;
   stepsReported: number;
   stepsWithCache: number;
+  costUsd?: number;
+  cacheSavingsUsd?: number;
+  unpricedSteps?: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────

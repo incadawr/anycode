@@ -206,6 +206,7 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
     const flash = deepseek?.models.find((m) => m.id === "deepseek-flash");
     expect(flash).toEqual({
       id: "deepseek-flash",
+      pricing: { basisId: "deepseek-flash-peak-owner-2026-10-26", input: 0.3, cachedInput: 0.006, output: 1.2 },
       name: "DeepSeek-V4.1-Flash",
       contextWindow: 1_048_576,
       maxOutputTokens: 393_216,

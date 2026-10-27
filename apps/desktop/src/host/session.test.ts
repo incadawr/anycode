@@ -8983,3 +8983,16 @@ describe("tapChildPermissions ask identity (Taskana 4821)", () => {
     expect(capped.subject).not.toMatch(/[\n\t]/);
   });
 });
+
+
+describe("durable cost summary", () => {
+  it("sums snapshots while retaining unpriced historical steps", () => {
+    const base = { sessionId: "s", turnId: "t", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0 };
+    const summary = summarizeProviderUsage([
+      base,
+      { ...base, step: 2, costUsd: 0.2, cacheSavingsUsd: 0.1, priceBasisId: "old" },
+      { ...base, step: 3, costUsd: 0.3, cacheSavingsUsd: 0.2, priceBasisId: "new" },
+    ]);
+    expect(summary.totals).toMatchObject({ costUsd: 0.5, cacheSavingsUsd: expect.closeTo(0.3), unpricedSteps: 1 });
+  });
+});

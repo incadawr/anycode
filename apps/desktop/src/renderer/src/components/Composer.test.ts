@@ -25,6 +25,7 @@ import {
   formatSessionTokensLine,
   formatLatestCacheHitLine,
   formatUsageAuditLines,
+  formatUsageCostLines,
   formatUsageAuditStepRow,
   hasSendableDraft,
   insertDraftText,
@@ -540,5 +541,20 @@ describe("formatUsageAuditStepRow (Taskana 4083 / TASK.34)", () => {
     expect(
       formatUsageAuditStepRow({ ...base, step: 2, inputTokens: 85_900, cachedInputTokens: 85_400, outputTokens: 500, transportRetries: 2 }),
     ).toBe("step 2 · in 85.9K · cached 85.4K · out 500 · retry 2");
+  });
+});
+
+
+describe("cost presentation", () => {
+  it("shows unknown instead of zero and marks incomplete history", () => {
+    expect(formatUsageCostLines(null, null).slice(0, 3)).toEqual([
+      "Last step: Price unknown", "Session cost: Price unknown", "Cache saved: Price unknown",
+    ]);
+    expect(formatUsageCostLines(
+      { turnId: "t", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0, costUsd: 0.2 },
+      { input: 1, output: 1, total: 2, stepsReported: 2, stepsWithCache: 1, costUsd: 0.2, cacheSavingsUsd: 0.1, unpricedSteps: 1 },
+    ).slice(0, 3)).toEqual([
+      "Last step: ≈ $0.2000", "Session cost: ≈ $0.2000 · some steps price unknown", "Cache saved: ≈ $0.1000 · some steps price unknown",
+    ]);
   });
 });

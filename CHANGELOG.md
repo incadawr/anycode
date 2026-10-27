@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- The context popover shows durable per-step and session cost estimates and cache savings for DeepSeek Flash at the owner-supplied peak rates; unpriced usage remains unknown (Taskana 4889).
+
 ### Fixed
 
 - Settings → Sessions API step 2 no longer collapses after "Copy config": the step's content (title, agent picker, Copy button, node hint and the "Copied the … config" notice) stays in its column under the step number, and the long `claude mcp add …` command scrolls inside its own box instead of running off the pane (Taskana 4897).
