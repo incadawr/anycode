@@ -236,19 +236,20 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
       // it always runs as a child SESSION instead, through the exact same
       // SessionSubagentPort contract as an explicit `tier:"session"` call.
       const engineProfile = ctx.subagents?.engineProfile?.(agentType) ?? null;
-      // Taskana 4704 §2.3: detach-by-default is MECHANICAL. In an orchestrate
-      // session, a session-tier Agent call with no explicit detach/send_to/
-      // continue_session defaults to detach:true. An explicit detach:false is
-      // honored (the spread in runSessionTier keys on === true, so a false
-      // never rides). Taskana 4735: an engine profile always runs as a child
-      // session, so it counts as session-tier here — it must not sync-join
-      // when the rest of the orchestrate contract detaches.
+      // GitHub #17 slice C: detach-by-default is MECHANICAL and
+      // no longer gated on an orchestrate session. A session-tier Agent call
+      // (and an engine profile, which always runs as a child session) with no
+      // explicit detach and no send_to defaults to detach:true — it reports
+      // back as a message instead of joining the parent's turn for minutes.
+      // An explicit detach:false is honored (the spread in runSessionTier keys
+      // on === true, so a false never rides). A continue_session IS a real
+      // session run, so it takes the same default; send_to is an ordinary
+      // delivery acknowledgement and stays a plain call. Inline keeps its
+      // synchronous default.
       const defaultDetach =
-        ctx.orchestrate === true &&
         (tier === "session" || engineProfile !== null) &&
         input.detach === undefined &&
-        input.send_to === undefined &&
-        input.continue_session === undefined;
+        input.send_to === undefined;
       if (engineProfile !== null) {
         // provider is a core-connect concept; a foreign-engine child runs on
         // its own CLI account, so the field is meaningless here — even though
@@ -601,7 +602,12 @@ async function runSessionTier(
     // (byte-compatible default, same discipline as every other optional
     // field on this request). Taskana 4704 §2.3: an orchestrate session's
     // default-detach ALSO lands here (mechanical, not prose).
-    ...(input.detach === true || defaultDetach === true ? { detach: true } : {}),
+    // GitHub #17 slice D: a session request that will actually
+    // JOIN carries the host's internal handoff eligibility — when the child
+    // outlives the join budget, the host hands the same child to background
+    // mode instead of holding this turn open. Never model input, never a wire
+    // field; Workflow engine steps never carry it.
+    ...(input.detach === true || defaultDetach === true ? { detach: true } : { allowBackgroundHandoff: true }),
   };
 
   // Same accumulation/bridge discipline as the inline tier above — the
@@ -646,13 +652,11 @@ async function runSessionTier(
     parentSessionId: outcome.parentSessionId,
     spawnToolCallId: outcome.spawnToolCallId,
   };
-  const snapshot = finalizeSubagentCard(acc, {
-    status: outcome.status,
-    durationMs: outcome.durationMs,
-    ...(outcome.finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" } : {}),
-  }, target);
-  const presentation: { presentation?: ToolResultPresentation } =
-    snapshot !== null ? { presentation: { subagent: snapshot } } : {};
+  // GitHub #17 slice D: an admitted/handed-off child is still
+  // running — this result reports the DISPATCH. No terminal card is finalized
+  // (that would claim completed work), the transient live card is cleared by
+  // the renderer through the structured handoff marker, and the running child
+  // shows up in the existing background-agents strip instead.
   // Taskana 4729: a role-route notice (degraded or fallback spawn) rides the
   // model-visible text on a FRESH spawn only — a resume keeps its own history.
   const notice =
@@ -664,6 +668,29 @@ async function runSessionTier(
     notice !== undefined
       ? { ...outcome, finalText: outcome.finalText ? `${notice}\n\n${outcome.finalText}` : notice }
       : outcome;
+  if (outcome.background !== undefined) {
+    const handoffPresentation: { presentation?: ToolResultPresentation } = {
+      presentation: {
+        subagentHandoff: {
+          target: {
+            kind: "session",
+            childSessionId: outcome.childSessionId,
+            parentSessionId: outcome.parentSessionId,
+            spawnToolCallId: outcome.spawnToolCallId,
+          },
+          reason: outcome.background.reason,
+        },
+      },
+    };
+    return outcomeToResult(shown, handoffPresentation);
+  }
+  const snapshot = finalizeSubagentCard(acc, {
+    status: outcome.status,
+    durationMs: outcome.durationMs,
+    ...(outcome.finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" } : {}),
+  }, target);
+  const presentation: { presentation?: ToolResultPresentation } =
+    snapshot !== null ? { presentation: { subagent: snapshot } } : {};
   return outcomeToResult(shown, presentation);
 }
 

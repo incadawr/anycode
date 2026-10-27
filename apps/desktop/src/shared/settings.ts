@@ -745,8 +745,12 @@ export interface AnycodeSettings {
    * and means "built-in defaults"). Each role carries an ordered route chain:
    * `primary` first, then `fallbacks`; the parent model stays the implicit
    * last resort (host stamps no route fields when every entry is skipped).
-   * `maxParallelChildren` caps an orchestrate session's live detached
-   * children (default 4, honest refusal at the cap — no queueing).
+   * `maxParallelChildren` is an OPTIONAL stricter ceiling on every session
+   * child of that project's parent session: it can only LOWER the shared
+   * session limit (`sessionLimits.childSessionsPerParentMax`, default 3) and
+   * never enlarge it. Absent = the session limit alone. A detached spawn
+   * above the effective cap is refused immediately
+   * (no queueing); a synchronous one still waits in the FIFO queue.
    */
   roles?: {
     orchestrator?: RoleConfig;

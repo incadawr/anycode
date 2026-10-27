@@ -41,6 +41,7 @@ import {
   CHILD_START_DEADLINE_MS,
   CHILD_START_TYPE,
   CHILD_TERMINAL_TYPE,
+  isValidEffectiveChildMaxTurns,
   parseChildProgress,
   parseChildReady,
   parseChildRunCancel,
@@ -798,7 +799,14 @@ export interface TabHostManagerDeps {
   limits?: Partial<BreakerLimits>;
   /** TASK.119/TASK.147-с2: LIVE limit values read from settings. `undefined` (unset/unreadable) falls back to `limits`/constants VERBATIM — the explicit-injection path is never clamped. */
   maxTabs?: () => number | undefined;
-  childRunsPerParentMax?: () => number | undefined;
+  /**
+   * GitHub #17 slice B: resolved for the OWNING tab's project root
+   * (the reader receives the workspace string), because the effective cap
+   * depends on the project's selected role profile. Functions that ignore the
+   * argument remain valid test doubles (an untyped `() => number | undefined`
+   * satisfies `(workspace: string) => number | undefined`).
+   */
+  childRunsPerParentMax?: (workspace: string) => number | undefined;
   childRunsGlobalMax?: () => number | undefined;
   logger?: TabLogger;
   /**
@@ -859,6 +867,15 @@ export interface ChildRunSummary {
   childSessionId: string;
   state: "starting" | "running" | "cancelling";
   pid: number | null;
+  /**
+   * GitHub #17 slice F: the child tab's ACTUAL fork time on
+   * this manager's injected clock (`tabs.get(...).spawnedAt`), so the live
+   * acceptance driver can measure fork→tool-result delivery. `null` for a
+   * provider preparation that has not registered a child tab yet. Read-only
+   * dev-automation projection only — never added to the production
+   * ChildRunEvent protocol.
+   */
+  forkedAt: number | null;
 }
 
 export class TabHostManager {
@@ -965,7 +982,7 @@ export class TabHostManager {
   private readonly forceKilledExits = new Map<UtilityProcess, EngineProcessRegistration | null>();
   private readonly limits: BreakerLimits;
   private readonly maxTabsReader?: () => number | undefined;
-  private readonly childPerParentReader?: () => number | undefined;
+  private readonly childPerParentReader?: (workspace: string) => number | undefined;
   private readonly childGlobalReader?: () => number | undefined;
   private readonly env: (connectionId?: string) => NodeJS.ProcessEnv | undefined;
   private readonly isReady: () => boolean;
@@ -1082,6 +1099,7 @@ export class TabHostManager {
       childSessionId: e.childSessionId,
       state: e.state,
       pid: this.tabs.get(e.childTabId)?.proc?.pid ?? null,
+      forkedAt: this.tabs.get(e.childTabId)?.spawnedAt ?? null,
     }));
   }
 
@@ -1664,8 +1682,18 @@ export class TabHostManager {
       reject("spawn_failed", CHILD_DUPLICATE_SPAWN_MESSAGE);
       return;
     }
-    const capBlock = this.childSpawnCapBlock(parentTab.tabId);
+    const capBlock = this.childSpawnCapBlock(parentTab);
     if (capBlock !== undefined) {
+      // GitHub #17 slice B: a DETACHED over-cap request is
+      // refused IMMEDIATELY — it is never queued. A parked detached request
+      // sends no `accepted` until capacity frees, so the parent's step would
+      // await a tool call that main has not answered (the sync-join the
+      // detach flag exists to avoid). The existing FIFO queue stays for
+      // explicitly synchronous callers only.
+      if (req.detach === true) {
+        reject(capBlock.reason, capBlock.message);
+        return;
+      }
       // TASK.147 срез 1: the cap itself is unchanged (`childSpawnCapBlock`
       // runs the EXACT same two checks the pre-queue code ran inline here) —
       // only the RESPONSE to hitting it changes, from an immediate reject to
@@ -1710,10 +1738,15 @@ export class TabHostManager {
    * relaxed or stricter twin.
    */
   private childSpawnCapBlock(
-    parentTabId: string,
+    parentTab: TabHost,
   ): { reason: "limit_parent" | "limit_global"; message: string } | undefined {
-    const perParent = this.childrenByParentTab.get(parentTabId)?.size ?? 0;
-    const perParentMax = clampSessionLimit("childSessionsPerParentMax", this.childPerParentReader?.()) ?? CHILD_RUNS_PER_PARENT_MAX;
+    const perParent = this.childrenByParentTab.get(parentTab.tabId)?.size ?? 0;
+    // GitHub #17 slice B: the effective per-parent cap is
+    // resolved for the OWNING tab's project root (the selected role profile can
+    // lower it per project). The reader receives the stable project root.
+    const perParentMax =
+      clampSessionLimit("childSessionsPerParentMax", this.childPerParentReader?.(parentTab.projectRoot)) ??
+      CHILD_RUNS_PER_PARENT_MAX;
     if (perParent >= perParentMax) {
       return { reason: "limit_parent", message: CHILD_LIMIT_PARENT_MESSAGE };
     }
@@ -2091,7 +2124,14 @@ export class TabHostManager {
       // park/enqueue time. A long wait therefore never eats into the window a
       // child gets to answer `child-ready` once it actually starts.
       entry.startDeadline = setTimeout(() => this.handleChildStartTimeout(req.requestId), CHILD_START_DEADLINE_MS);
-      this.deliverTabPort(childTab);
+      // GitHub #17 slice A: the accepted acknowledgement is
+      // posted BEFORE the child's renderer port is delivered, and never
+      // awaited — a detached waiter must settle at accept regardless of
+      // whether the channel delivery below succeeds. If delivery throws, the
+      // fork, registration, start deadline and the existing cancellation/reap
+      // machinery all stay intact (a later startup failure is terminal; no
+      // contradictory rejected event may follow an accepted one).
+      const effectiveMaxTurns = engine === "core" ? this.resolveAcceptedChildMaxTurns(stampedMaxTurns, this.env(connectionId)) : undefined;
       // TASK.102 S4 gate-fix (L1): connectionId is "Never consulted for a
       // non-core engine" (§1249's own law) — an engine child's omitted model
       // reports the SAME placeholder describeChildModel falls back to, never
@@ -2105,21 +2145,20 @@ export class TabHostManager {
         childSessionId,
         childTabId,
         model: modelOverride ?? (engine === "core" ? this.describeChildModel(connectionId) : "default"),
-        // Taskana 4820 review F1: the child's EFFECTIVE turn cap as THIS fork
-        // resolved it — the stamped `--child-max-turns` when the creating
-        // spawn had a budget, else the host env's resolved ANYCODE_MAX_TURNS
-        // off the SAME env() the fork itself used (buildHostEnv fills it from
-        // settings; core's loadEnvConfig reads it back out on the child side,
-        // and resolveChildMaxTurns keeps argv > env precedence). Absent when
-        // neither source set one (the child then runs at core's
-        // DEFAULT_MAX_TURNS internally). Only a CORE child consults it — the
-        // claude engine maps the stamped budget to its native --max-turns
-        // (never the env default) and codex enforces no turn cap at all, so
-        // for both an absent key is the honest report.
-        ...(engine === "core"
-          ? { maxTurns: this.resolveAcceptedChildMaxTurns(stampedMaxTurns, this.env(connectionId)) }
-          : {}),
+        // GitHub #17 slice A + the previous review: the
+        // child's EFFECTIVE turn cap as THIS fork resolved it — the stamped
+        // `--child-max-turns` when the creating spawn had a budget, else the
+        // host env's resolved ANYCODE_MAX_TURNS off the SAME env() the fork
+        // itself used. Included ONLY when defined (main never emits a key for
+        // an invalid/absent effective cap, so it can never invalidate the
+        // accepted event or suppress the acknowledgement).
+        ...(effectiveMaxTurns !== undefined ? { maxTurns: effectiveMaxTurns } : {}),
       });
+      try {
+        this.deliverTabPort(childTab);
+      } catch (error) {
+        this.logger.error(`[main] child renderer-port delivery failed for request ${req.requestId}`, error);
+      }
     } finally {
       releasePrepared();
     }
@@ -2168,7 +2207,7 @@ export class TabHostManager {
         this.childSpawnKeys.delete(waiter.spawnKey);
         continue;
       }
-      if (this.childSpawnCapBlock(waiter.parentTabId) !== undefined) {
+      if (this.childSpawnCapBlock(parentTab) !== undefined) {
         i += 1;
         continue;
       }
@@ -2258,14 +2297,19 @@ export class TabHostManager {
    */
   private resolveAcceptedChildMaxTurns(stamped: number | undefined, env: NodeJS.ProcessEnv | undefined): number | undefined {
     if (stamped !== undefined) {
-      return stamped;
+      // GitHub #17 slice A: a stamped request budget keeps its
+      // request > env precedence, but only survives when it is a positive safe
+      // integer — main never acknowledges a malformed/out-of-range effective
+      // cap (a non-conforming value is omitted, never allowed to suppress the
+      // accepted acknowledgement itself).
+      return isValidEffectiveChildMaxTurns(stamped) ? stamped : undefined;
     }
     const raw = env?.[ENV_MAX_TURNS];
     if (raw === undefined || raw.trim() === "") {
       return undefined;
     }
     const parsed = Number(raw);
-    return Number.isInteger(parsed) ? parsed : undefined;
+    return isValidEffectiveChildMaxTurns(parsed) ? parsed : undefined;
   }
 
   /** requestId -> its owning parent's cancel of a still-live run (Agent tool abort/timeout, cut §0.5's ctx.abortSignal). */

@@ -693,6 +693,9 @@ describe("agentTool handler — SessionSubagentRequest forwarding (CUT-S2 §2.1/
       spawnToolCallId: "call-1",
       provider: "second-connection",
       model: "glm-4.6",
+      // GitHub #17 slice C: an omitted detach on a session-tier call is now
+      // background by default.
+      detach: true,
     });
   });
 
@@ -1323,7 +1326,7 @@ describe("agentTool handler — detach forwarding onto SessionSubagentRequest (T
     expect(seen?.detach).toBe(true);
   });
 
-  it("omits the detach key entirely when input.detach is false or absent (no silent `detach:false` riding the wire)", async () => {
+  it("an ordinary session Agent omitting detach requests background (GitHub #17 slice C)", async () => {
     const seen: SessionSubagentRequest[] = [];
     const port: SessionSubagentPort = {
       run: async (req) => {
@@ -1333,12 +1336,23 @@ describe("agentTool handler — detach forwarding onto SessionSubagentRequest (T
       send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler({ description: "d", prompt: "p", tier: "session" }, makeCtx({ sessionSubagents: port }));
+    expect(seen[0]?.detach).toBe(true);
+  });
+
+  it("an explicit detach:false still joins — no `detach:false` rides the wire", async () => {
+    const seen: SessionSubagentRequest[] = [];
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen.push(req);
+        return BASE_SESSION_OUTCOME;
+      },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
+    };
     await full.handler(
       { description: "d", prompt: "p", tier: "session", detach: false },
       makeCtx({ sessionSubagents: port }),
     );
-    expect(seen[0] && "detach" in seen[0]).toBe(false);
-    expect(seen[1] && "detach" in seen[1]).toBe(false);
+    expect(seen[0] && "detach" in seen[0]!).toBe(false);
   });
 });
 
@@ -1641,13 +1655,13 @@ describe("agentTool handler — orchestrate default-detach (Taskana 4704 §2.3)"
     expect(seen() !== undefined && "detach" in seen()!).toBe(false);
   });
 
-  it("non-orchestrate sessions unchanged: no detach key without the flag", async () => {
+  it("a NON-orchestrate session tier also defaults to background (GitHub #17 slice C: no orchestrate gate)", async () => {
     const { port, seen } = capturingPort();
     await full.handler(
       { description: "d", prompt: "p", tier: "session" },
       makeCtx({ sessionSubagents: port }),
     );
-    expect(seen() !== undefined && "detach" in seen()!).toBe(false);
+    expect(seen()?.detach).toBe(true);
   });
 
   it("inline tier is unaffected by the orchestrate flag", async () => {
@@ -1692,14 +1706,14 @@ describe("agentTool handler — orchestrate default-detach (Taskana 4704 §2.3)"
     expect(delivered).toBe(true);
   });
 
-  it("continue_session suppresses the default-detach (a resume keeps sync-join semantics)", async () => {
+  it("a continued session defaults to background too — continue_session IS a session run (GitHub #17 slice C)", async () => {
     const { port, seen } = capturingPort();
     await full.handler(
       { description: "d", prompt: "p", tier: "session", continue_session: "child-9" },
       makeCtx({ orchestrate: true, sessionSubagents: port }),
     );
     expect(seen()?.resumeChildSessionId).toBe("child-9");
-    expect(seen() !== undefined && "detach" in seen()!).toBe(false);
+    expect(seen()?.detach).toBe(true);
   });
 });
 
@@ -2083,6 +2097,9 @@ describe("agentTool handler — role-route degrade at the session tier (Taskana 
       spawnToolCallId: "call-1",
       model: "profile-model",
       engine: "claude",
+      // GitHub #17 slice C: an engine profile is session-tier, so an omitted
+      // detach is background by default.
+      detach: true,
     });
     expect(result.output?.finalText).toBe("child done");
   });
@@ -2097,6 +2114,9 @@ describe("agentTool handler — role-route degrade at the session tier (Taskana 
       spawnToolCallId: "call-1",
       model: "profile-model",
       engine: "claude",
+      // GitHub #17 slice C: an engine profile is session-tier, so an omitted
+      // detach is background by default.
+      detach: true,
     });
     expect(result.output?.finalText).toBe("child done");
   });
@@ -2282,7 +2302,7 @@ describe("agentTool handler — engine-profile default-detach in orchestrate (Ta
     expect(seen()).not.toHaveProperty("detach");
   });
 
-  it("orchestrate unset: engine profile request carries no detach key", async () => {
+  it("orchestrate unset: an engine profile still requests background (GitHub #17 slice C)", async () => {
     const { ctx, seen } = engineCtx({}, undefined);
     await full.handler({ ...CALL, tier: "session" }, ctx);
     expect(seen()).toEqual({
@@ -2292,6 +2312,7 @@ describe("agentTool handler — engine-profile default-detach in orchestrate (Ta
       spawnToolCallId: "call-1",
       model: "profile-model",
       engine: "claude",
+      detach: true,
     });
   });
 

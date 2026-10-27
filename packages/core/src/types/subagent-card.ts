@@ -77,6 +77,19 @@ export interface SubagentCardSnapshotV1 {
 /** Envelope on a tool result. Extensible: other presentation kinds (e.g. workflow cards) add sibling keys later. */
 export interface ToolResultPresentation {
   subagent?: SubagentCardSnapshotV1;
+  /**
+   * GitHub #17 slice D: this Agent call DISPATCHED a child that
+   * keeps running in the background — an admission/handoff, not a finished
+   * review. Deliberately NOT a terminal SubagentCardSnapshotV1: a persisted
+   * "completed" card for unfinished work would be a lie, and the renderer's
+   * background-agents strip is the live view for this child. `reason`
+   * distinguishes an explicitly detached call from a synchronous one that
+   * waited out its join budget.
+   */
+  subagentHandoff?: {
+    target: Extract<SubagentCardTarget, { kind: "session" }>;
+    reason: "requested" | "join_budget";
+  };
   /** TASK.191 slice S5: the workflow tool's own persisted card, riding the same envelope. */
   workflow?: WorkflowCardSnapshotV1;
 }

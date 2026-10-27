@@ -12,12 +12,18 @@ import {
   CHILD_RUN_EVENT_TYPE,
   CHILD_RUN_SEND_TYPE,
   CHILD_SPAWN_REQUEST_TYPE,
+  parseChildSpawnRequest,
   type ChildRunCancel,
   type ChildRunEvent,
   type ChildRunSend,
   type ChildSpawnRequest,
 } from "../shared/child-sessions.js";
-import { createChildSessionPort, CHILD_SEND_RPC_TIMEOUT_MS, type ChildSessionPort } from "./child-session-port.js";
+import {
+  createChildSessionPort,
+  CHILD_SEND_RPC_TIMEOUT_MS,
+  CHILD_SYNC_JOIN_BUDGET_MS,
+  type ChildSessionPort,
+} from "./child-session-port.js";
 
 const PARENT_SESSION_ID = "parent-session-1";
 
@@ -1264,6 +1270,75 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
       const outcome = await pending;
       expect(outcome.finalText).toBe("done");
       expect(detachedTerminals).toHaveLength(0);
+    });
+
+    it("GitHub #17 slice A: detached terminal before accepted settles the original promise once — no background report, no reservation leak", async () => {
+      const { port, sent, emit, detachedTerminals } = detachHarness();
+      let resolved = 0;
+      const pending = port
+        .run(
+          { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-term-before", detach: true },
+          {},
+        )
+        .then((outcome) => {
+          resolved += 1;
+          return outcome;
+        });
+      const requestId = spawns(sent)[0]!.requestId;
+
+      // A terminal arriving with NO accepted acknowledgement (a missing/dropped
+      // admit reply) must still settle the original tool promise — exactly once.
+      emit(
+        terminalEvent(requestId, {
+          status: "completed",
+          finalText: "done anyway",
+          turns: 1,
+          toolCalls: 1,
+          durationMs: 5,
+          childSessionId: "child-term-before",
+        }),
+      );
+      const outcome = await pending;
+
+      expect(resolved).toBe(1);
+      expect(outcome.status).toBe("completed");
+      expect(outcome.finalText).toBe("done anyway");
+      // No background child was ever announced, so no background report.
+      expect(detachedTerminals).toHaveLength(0);
+      expect(port.listBackgroundChildren()).toEqual([]);
+
+      // A late accepted and a duplicate terminal are both no-ops.
+      emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-term-before", childTabId: "t1", model: "m" });
+      expect(() => emit(terminalEvent(requestId, { finalText: "second", childSessionId: "child-term-before" }))).not.toThrow();
+      expect(resolved).toBe(1);
+      expect(port.listBackgroundChildren()).toEqual([]);
+    });
+
+    it("GitHub #17 slice A: a throwing background subscriber cannot block detached admission or cleanup", async () => {
+      const { port, sent, emit, detachedTerminals } = detachHarness();
+      const good = vi.fn();
+      port.onBackgroundChildrenChanged(() => {
+        throw new Error("view subscriber boom");
+      });
+      port.onBackgroundChildrenChanged(good);
+
+      const pending = port.run(
+        { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-subscriber", detach: true },
+        {},
+      );
+      const requestId = spawns(sent)[0]!.requestId;
+      emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-sub", childTabId: "t1", model: "m" });
+
+      const outcome = await pending;
+      expect(outcome.status).toBe("completed");
+      expect(port.listBackgroundChildren()).toHaveLength(1);
+      expect(good).toHaveBeenCalled();
+
+      // Terminal cleanup (registry removal + report) must also survive the
+      // throwing subscriber.
+      emit(terminalEvent(requestId, { status: "completed", childSessionId: "child-sub" }));
+      expect(port.listBackgroundChildren()).toHaveLength(0);
+      expect(detachedTerminals).toHaveLength(1);
     });
   });
 });
@@ -2586,5 +2661,522 @@ describe("detached approval notice delivery (Taskana 4821)", () => {
     expect(settled).toEqual([{ req: expect.objectContaining({ spawnToolCallId: "spawn-appr-3" }), childSessionId: "" }]);
     emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-appr-3", childTabId: "t1", model: "m" });
     await pending;
+  });
+});
+
+/**
+ * GitHub #17 slice B: the detach flag crosses the parentPort
+ * wire (main must see it to choose immediate refusal over FIFO parking), and
+ * the host-local cap refuses an over-cap detached admit BEFORE any accept
+ * while freeing the refused request's reservation. Cancellation stays
+ * per-child: stopping one sibling never touches the other.
+ */
+describe("child-session-port — detach on the wire and per-child cancellation (GitHub #17 slice B)", () => {
+  function harness(cap?: () => number | undefined) {
+    const sent: SentMessage[] = [];
+    let listener: ((event: ChildRunEvent) => void) | undefined;
+    let nextId = 0;
+    const port = createChildSessionPort({
+      parentSessionId: PARENT_SESSION_ID,
+      getPermissionMode: () => "build",
+      send: (message) => sent.push(message),
+      subscribe: (cb) => {
+        listener = cb;
+        return () => {};
+      },
+      createRequestId: () => `req-${++nextId}`,
+      ...(cap !== undefined ? { maxDetachedChildren: cap } : {}),
+    });
+    return { port, sent, emit: (event: ChildRunEvent) => listener?.(event) };
+  }
+
+  it("forwards detach true/false verbatim and omits it when the request has none", () => {
+    const { port, sent } = harness();
+    void port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "wire-true", detach: true }, {});
+    void port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "wire-false", detach: false }, {});
+    void port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "wire-absent" }, {});
+    const requests = sent.filter((m) => m.type === CHILD_SPAWN_REQUEST_TYPE);
+    expect(requests).toHaveLength(3);
+    expect(requests.map((m) => (m as { detach?: boolean }).detach)).toEqual([true, false, undefined]);
+    expect("detach" in requests[2]!).toBe(false);
+    // The flag also survives main's own parser (the strict unknown-key gate).
+    for (const request of requests) expect(parseChildSpawnRequest(request)).toEqual(request);
+  });
+
+  it("four pending detached admits at cap 3 refuse the fourth before ANY accept, freeing its reservation", async () => {
+    const { port, sent, emit } = harness(() => 3);
+    const pending = ["a", "b", "c"].map((suffix) =>
+      port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: `four-${suffix}`, detach: true }, {}),
+    );
+    expect(sent.filter((m) => m.type === CHILD_SPAWN_REQUEST_TYPE)).toHaveLength(3);
+
+    const refused = await port.run(
+      { agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "four-d", detach: true },
+      {},
+    );
+    expect(refused.status).toBe("error");
+    expect(refused.finalText).toBe(
+      "Agent: child limit reached (3 running). Wait for a report or stop a child before delegating more.",
+    );
+    expect(sent.filter((m) => m.type === CHILD_SPAWN_REQUEST_TYPE)).toHaveLength(3);
+
+    // No accept ever arrived for the three pending admits, yet the refused
+    // request never reserved a slot that could leak: acknowledging the three
+    // keeps the port at exactly three, and a fourth is still refused.
+    sent
+      .filter((m) => m.type === CHILD_SPAWN_REQUEST_TYPE)
+      .forEach((m, i) =>
+        emit({
+          type: CHILD_RUN_EVENT_TYPE,
+          requestId: (m as { requestId: string }).requestId,
+          kind: "accepted",
+          childSessionId: `child-four-${i}`,
+          childTabId: "t1",
+          model: "m",
+        }),
+      );
+    await Promise.all(pending);
+    const again = await port.run(
+      { agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "four-e", detach: true },
+      {},
+    );
+    expect(again.status).toBe("error");
+  });
+
+  it("two admitted detached siblings: cancelling one sends exactly one cancel for it and leaves the other listed until its own terminal", async () => {
+    const terminals: Array<{ id: string; status: string }> = [];
+    const sent: SentMessage[] = [];
+    let listener: ((event: ChildRunEvent) => void) | undefined;
+    let nextId = 0;
+    const port = createChildSessionPort({
+      parentSessionId: PARENT_SESSION_ID,
+      getPermissionMode: () => "build",
+      send: (message) => sent.push(message),
+      subscribe: (cb) => {
+        listener = cb;
+        return () => {};
+      },
+      createRequestId: () => `req-${++nextId}`,
+      onDetachedTerminal: (outcome) => terminals.push({ id: outcome.childSessionId, status: outcome.status }),
+    });
+    const emit = (event: ChildRunEvent) => listener?.(event);
+    const runA = port.run({ agentType: "executor", description: "A", prompt: "p", spawnToolCallId: "sib-a", detach: true }, {});
+    const runB = port.run({ agentType: "executor", description: "B", prompt: "p", spawnToolCallId: "sib-b", detach: true }, {});
+    const requests = sent.filter((m) => m.type === CHILD_SPAWN_REQUEST_TYPE);
+    expect(requests).toHaveLength(2);
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId: requests[0]!.requestId, kind: "accepted", childSessionId: "child-a", childTabId: "ta", model: "m" });
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId: requests[1]!.requestId, kind: "accepted", childSessionId: "child-b", childTabId: "tb", model: "m" });
+    await Promise.all([runA, runB]);
+    expect(port.listBackgroundChildren().map((c) => c.childSessionId)).toEqual(["child-a", "child-b"]);
+
+    expect(port.cancelBackgroundChild("child-a")).toBe(true);
+    expect(cancels(sent).map((c) => c.requestId)).toEqual([requests[0]!.requestId]);
+    // B is untouched by A's stop: still listed, no cancel for it.
+    expect(port.listBackgroundChildren().map((c) => c.childSessionId)).toEqual(["child-a", "child-b"]);
+
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId: requests[0]!.requestId, kind: "terminal", status: "cancelled", finalText: "stopped", truncated: false, turns: 1, toolCalls: 0, durationMs: 5, childSessionId: "child-a" });
+    expect(port.listBackgroundChildren().map((c) => c.childSessionId)).toEqual(["child-b"]);
+
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId: requests[1]!.requestId, kind: "terminal", status: "completed", finalText: "done", truncated: false, turns: 2, toolCalls: 1, durationMs: 9, childSessionId: "child-b" });
+    expect(port.listBackgroundChildren()).toEqual([]);
+    expect(cancels(sent)).toHaveLength(1);
+    // Each sibling produced exactly one terminal, attributed to itself.
+    expect(terminals).toEqual([
+      { id: "child-a", status: "cancelled" },
+      { id: "child-b", status: "completed" },
+    ]);
+  });
+});
+
+/**
+ * GitHub #17 slice D: a SYNCHRONOUS native Agent call gets
+ * CHILD_SYNC_JOIN_BUDGET_MS of ADMITTED join time. At that boundary the SAME
+ * child is handed over to background mode — no restart, no cancel — and the
+ * call settles with a dispatch result. Workflow/legacy joins never opt in.
+ */
+describe("child-session-port — synchronous join budget handoff (GitHub #17 slice D)", () => {
+  function joinHarness(budget?: number) {
+    const sent: SentMessage[] = [];
+    let listener: ((event: ChildRunEvent) => void) | undefined;
+    let nextId = 0;
+    const detachedTerminals: SessionSubagentOutcome[] = [];
+    const approvals: Array<{ toolName: string; subject: string }> = [];
+    const settled: string[] = [];
+    const stalls: string[] = [];
+    const port = createChildSessionPort({
+      parentSessionId: PARENT_SESSION_ID,
+      getPermissionMode: () => "build",
+      send: (message) => sent.push(message),
+      subscribe: (cb) => {
+        listener = cb;
+        return () => {};
+      },
+      createRequestId: () => `req-${++nextId}`,
+      onDetachedTerminal: (outcome) => detachedTerminals.push(outcome),
+      onDetachedApproval: (ask) => approvals.push(ask),
+      onDetachedApprovalSettled: (_req, childSessionId) => settled.push(childSessionId),
+      onDetachedStall: (_report, _req, childSessionId) => stalls.push(childSessionId),
+      ...(budget !== undefined ? { syncJoinBudgetMs: budget } : {}),
+    });
+    return {
+      port,
+      sent,
+      detachedTerminals,
+      approvals,
+      settled,
+      stalls,
+      emit: (event: ChildRunEvent) => listener?.(event),
+    };
+  }
+
+  const JOIN_REQUEST = (eligible: boolean): SessionSubagentRequest => ({
+    agentType: "executor",
+    description: "d",
+    prompt: "p",
+    spawnToolCallId: "spawn-join-1",
+    detach: false,
+    ...(eligible ? { allowBackgroundHandoff: true as const } : {}),
+  });
+
+  function accept(harness: ReturnType<typeof joinHarness>, requestId: string, childSessionId = "child-join"): void {
+    harness.emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId, childTabId: "t1", model: "m" });
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("hands off at exactly 120000 ms from admission, not at 119999 ms, keeping the child and sending no cancel", async () => {
+    vi.useFakeTimers();
+    expect(CHILD_SYNC_JOIN_BUDGET_MS).toBe(120_000);
+    const h = joinHarness();
+    let settledOutcome: SessionSubagentOutcome | undefined;
+    const pending = h.port.run(JOIN_REQUEST(true), {}).then((outcome) => {
+      settledOutcome = outcome;
+      return outcome;
+    });
+    accept(h, spawns(h.sent)[0]!.requestId);
+
+    await vi.advanceTimersByTimeAsync(CHILD_SYNC_JOIN_BUDGET_MS - 1);
+    expect(settledOutcome).toBeUndefined();
+    expect(h.detachedTerminals).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const outcome = await pending;
+    expect(outcome.background).toEqual({ reason: "join_budget" });
+    expect(outcome.status).toBe("completed");
+    expect(outcome.childSessionId).toBe("child-join");
+    expect(outcome.finalText).toContain("still running after 120 seconds");
+    // Handed off, not restarted and not cancelled: the same child is listed.
+    expect(h.port.listBackgroundChildren().map((c) => c.childSessionId)).toEqual(["child-join"]);
+    expect(h.port.listBackgroundChildren()[0]!.startedAt).toBeLessThanOrEqual(Date.now());
+    expect(cancels(h.sent)).toHaveLength(0);
+    // Nothing is fabricated as a child result at handoff.
+    expect(h.detachedTerminals).toHaveLength(0);
+  });
+
+  it("a request that never opts in stays synchronous past the budget (Workflow/legacy shape)", async () => {
+    vi.useFakeTimers();
+    const h = joinHarness();
+    let done = false;
+    void h.port.run(JOIN_REQUEST(false), {}).then(() => {
+      done = true;
+    });
+    accept(h, spawns(h.sent)[0]!.requestId);
+    await vi.advanceTimersByTimeAsync(CHILD_SYNC_JOIN_BUDGET_MS * 2);
+    expect(done).toBe(false);
+    expect(h.port.listBackgroundChildren()).toEqual([]);
+    expect(h.detachedTerminals).toHaveLength(0);
+  });
+
+  it("an eligible request whose host has no background terminal callback stays synchronous", async () => {
+    vi.useFakeTimers();
+    const sent: SentMessage[] = [];
+    let listener: ((event: ChildRunEvent) => void) | undefined;
+    const port = createChildSessionPort({
+      parentSessionId: PARENT_SESSION_ID,
+      getPermissionMode: () => "build",
+      send: (message) => sent.push(message),
+      subscribe: (cb) => {
+        listener = cb;
+        return () => {};
+      },
+    });
+    let done = false;
+    void port.run(JOIN_REQUEST(true), {}).then(() => {
+      done = true;
+    });
+    listener?.({ type: CHILD_RUN_EVENT_TYPE, requestId: spawns(sent)[0]!.requestId, kind: "accepted", childSessionId: "child-x", childTabId: "t1", model: "m" } as ChildRunEvent);
+    await vi.advanceTimersByTimeAsync(CHILD_SYNC_JOIN_BUDGET_MS * 2);
+    expect(done).toBe(false);
+  });
+
+  it("a quick synchronous terminal clears the budget: terminal result now, no handoff and no later report", async () => {
+    vi.useFakeTimers();
+    const h = joinHarness();
+    const pending = h.port.run(JOIN_REQUEST(true), {});
+    const requestId = spawns(h.sent)[0]!.requestId;
+    accept(h, requestId);
+    h.emit(terminalEvent(requestId, { finalText: "quick", childSessionId: "child-join" }));
+    await vi.advanceTimersByTimeAsync(0);
+    const outcome = await pending;
+    expect(outcome.status).toBe("completed");
+    expect(outcome.finalText).toBe("quick");
+    expect(outcome.background).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(CHILD_SYNC_JOIN_BUDGET_MS * 2);
+    expect(h.detachedTerminals).toHaveLength(0);
+    expect(h.port.listBackgroundChildren()).toEqual([]);
+  });
+
+  it("one later report arrives after handoff, and only that child's terminal is delivered", async () => {
+    vi.useFakeTimers();
+    const h = joinHarness();
+    const pending = h.port.run(JOIN_REQUEST(true), {});
+    const requestId = spawns(h.sent)[0]!.requestId;
+    accept(h, requestId);
+    await vi.advanceTimersByTimeAsync(CHILD_SYNC_JOIN_BUDGET_MS);
+    await pending;
+    h.emit(terminalEvent(requestId, { finalText: "the real result", childSessionId: "child-join" }));
+    expect(h.detachedTerminals).toHaveLength(1);
+    expect(h.detachedTerminals[0]!.finalText).toBe("the real result");
+    expect(h.detachedTerminals[0]!.background).toBeUndefined();
+    expect(h.port.listBackgroundChildren()).toEqual([]);
+    // A terminal after the handoff never resolves the (already settled) call twice.
+    h.emit(terminalEvent(requestId, { finalText: "duplicate", childSessionId: "child-join" }));
+    expect(h.detachedTerminals).toHaveLength(1);
+  });
+
+  it("an abort BEFORE the handoff disarms it and keeps the sync cascade (exactly one cancel)", async () => {
+    vi.useFakeTimers();
+    const h = joinHarness();
+    const controller = new AbortController();
+    let outcomeSeen: SessionSubagentOutcome | undefined;
+    void h.port.run(JOIN_REQUEST(true), { signal: controller.signal }).then((outcome) => {
+      outcomeSeen = outcome;
+    });
+    const requestId = spawns(h.sent)[0]!.requestId;
+    accept(h, requestId);
+    controller.abort();
+    expect(cancels(h.sent)).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(CHILD_SYNC_JOIN_BUDGET_MS * 2);
+    // No handoff happened: the cancel is followed by the child's own terminal.
+    expect(h.port.listBackgroundChildren()).toEqual([]);
+    expect(h.detachedTerminals).toHaveLength(0);
+    h.emit(terminalEvent(requestId, { status: "cancelled", finalText: "stopped", childSessionId: "child-join" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(outcomeSeen?.status).toBe("cancelled");
+  });
+
+  it("an abort AFTER the handoff does not cascade into the child", async () => {
+    vi.useFakeTimers();
+    const h = joinHarness();
+    const controller = new AbortController();
+    const pending = h.port.run(JOIN_REQUEST(true), { signal: controller.signal });
+    accept(h, spawns(h.sent)[0]!.requestId);
+    await vi.advanceTimersByTimeAsync(CHILD_SYNC_JOIN_BUDGET_MS);
+    await pending;
+    controller.abort();
+    expect(cancels(h.sent)).toHaveLength(0);
+    expect(h.port.listBackgroundChildren().map((c) => c.childSessionId)).toEqual(["child-join"]);
+  });
+
+  it("a pending approval ask survives the handoff: waiting state seeded, notice raised once, settle retracts it", async () => {
+    vi.useFakeTimers();
+    const h = joinHarness();
+    const pending = h.port.run(JOIN_REQUEST(true), {});
+    const requestId = spawns(h.sent)[0]!.requestId;
+    accept(h, requestId);
+    h.emit({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId,
+      kind: "attention",
+      waiting: true,
+      toolName: "Write",
+      subject: "/workspace/gh17-allow.txt",
+    } as ChildRunEvent);
+    // Nothing is raised while the call is still joining (no live parent notice yet).
+    expect(h.approvals).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(CHILD_SYNC_JOIN_BUDGET_MS);
+    await pending;
+    expect(h.approvals).toEqual([{ toolName: "Write", subject: "/workspace/gh17-allow.txt" }]);
+    expect(h.port.listBackgroundChildren()[0]?.waitingForApproval).toBe(true);
+
+    h.emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: false } as ChildRunEvent);
+    expect(h.settled).toEqual(["child-join"]);
+    expect(h.port.listBackgroundChildren()[0]?.waitingForApproval).toBe(false);
+  });
+
+  it("the terminal and the budget race in either order: exactly one settlement, at most one report", async () => {
+    vi.useFakeTimers();
+    // Order 1: terminal first.
+    const first = joinHarness();
+    const p1 = first.port.run(JOIN_REQUEST(true), {});
+    const id1 = spawns(first.sent)[0]!.requestId;
+    accept(first, id1);
+    first.emit(terminalEvent(id1, { finalText: "first", childSessionId: "child-join" }));
+    await vi.advanceTimersByTimeAsync(CHILD_SYNC_JOIN_BUDGET_MS);
+    expect((await p1).background).toBeUndefined();
+    expect(first.detachedTerminals).toHaveLength(0);
+
+    // Order 2: budget first, terminal immediately after.
+    const second = joinHarness();
+    const p2 = second.port.run(JOIN_REQUEST(true), {});
+    const id2 = spawns(second.sent)[0]!.requestId;
+    accept(second, id2);
+    await vi.advanceTimersByTimeAsync(CHILD_SYNC_JOIN_BUDGET_MS);
+    expect((await p2).background).toEqual({ reason: "join_budget" });
+    second.emit(terminalEvent(id2, { finalText: "second", childSessionId: "child-join" }));
+    expect(second.detachedTerminals).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(CHILD_SYNC_JOIN_BUDGET_MS);
+    expect(second.detachedTerminals).toHaveLength(1);
+  });
+
+  it("a duplicate accepted cannot restart the budget or settle twice", async () => {
+    vi.useFakeTimers();
+    const h = joinHarness();
+    let resolutions = 0;
+    const pending = h.port.run(JOIN_REQUEST(true), {}).then((outcome) => {
+      resolutions += 1;
+      return outcome;
+    });
+    const requestId = spawns(h.sent)[0]!.requestId;
+    accept(h, requestId);
+    await vi.advanceTimersByTimeAsync(60_000);
+    accept(h, requestId); // duplicate — must NOT restart the 120s clock
+    await vi.advanceTimersByTimeAsync(60_000);
+    const outcome = await pending;
+    expect(outcome.background).toEqual({ reason: "join_budget" });
+    expect(resolutions).toBe(1);
+  });
+
+  it("the stall clock keeps running across the handoff and routes its notice to the parent", async () => {
+    vi.useFakeTimers();
+    const h = joinHarness(120_000);
+    const pending = h.port.run(JOIN_REQUEST(true), {});
+    accept(h, spawns(h.sent)[0]!.requestId);
+    await vi.advanceTimersByTimeAsync(CHILD_SYNC_JOIN_BUDGET_MS);
+    await pending;
+    await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS);
+    expect(h.stalls).toEqual(["child-join"]);
+  });
+});
+
+/**
+ * GitHub #17 slice E: the background-children registry carries
+ * light progress (counters, current tool, waiting-for-approval) so the parent's
+ * strip can show what a child is doing. Only facts the child actually reported
+ * are copied — an engine that reports no turns keeps `turns` absent.
+ */
+describe("child-session-port — background progress snapshots (GitHub #17 slice E)", () => {
+  function progressHarness() {
+    const sent: SentMessage[] = [];
+    let listener: ((event: ChildRunEvent) => void) | undefined;
+    let nextId = 0;
+    const progressEvents: SubagentProgress[] = [];
+    const changes: number[] = [];
+    const port = createChildSessionPort({
+      parentSessionId: PARENT_SESSION_ID,
+      getPermissionMode: () => "build",
+      send: (message) => sent.push(message),
+      subscribe: (cb) => {
+        listener = cb;
+        return () => {};
+      },
+      createRequestId: () => `req-${++nextId}`,
+      // A host that wires this callback is the one a join can be handed off to.
+      onDetachedTerminal: () => {},
+    });
+    port.onBackgroundChildrenChanged(() => changes.push(port.listBackgroundChildren().length));
+    return {
+      port,
+      sent,
+      progressEvents,
+      changes,
+      emit: (event: ChildRunEvent) => listener?.(event),
+      run: (spawnToolCallId: string, detach = true, handoff = false) =>
+        port.run(
+          {
+            agentType: "executor",
+            description: "review",
+            prompt: "p",
+            spawnToolCallId,
+            ...(detach ? { detach: true } : { detach: false }),
+            ...(handoff ? { allowBackgroundHandoff: true as const } : {}),
+          },
+          { onProgress: (progress) => progressEvents.push(progress) },
+        ),
+    };
+  }
+
+  it("progress/activity/attention update the snapshot without touching identity or admission time", async () => {
+    const h = progressHarness();
+    const pending = h.run("spawn-prog");
+    const requestId = spawns(h.sent)[0]!.requestId;
+    h.emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-prog", childTabId: "t1", model: "m" });
+    await pending;
+
+    const initial = h.port.listBackgroundChildren()[0]!;
+    expect(initial).toEqual({
+      childSessionId: "child-prog",
+      agentType: "executor",
+      description: "review",
+      startedAt: initial.startedAt,
+    });
+    expect("turns" in initial).toBe(false);
+    expect("waitingForApproval" in initial).toBe(false);
+
+    h.emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "progress", turns: 3, toolCalls: 2, lastTool: "Read" } as ChildRunEvent);
+    const afterProgress = h.port.listBackgroundChildren()[0]!;
+    expect(afterProgress).toMatchObject({ turns: 3, toolCalls: 2, lastTool: "Read" });
+    // Identity and the admission timestamp never move.
+    expect(afterProgress.startedAt).toBe(initial.startedAt);
+    expect(afterProgress.childSessionId).toBe("child-prog");
+    expect(afterProgress.agentType).toBe("executor");
+
+    h.emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "activity", toolName: "Write", summary: "wrote a file" } as ChildRunEvent);
+    expect(h.port.listBackgroundChildren()[0]!.lastTool).toBe("Write");
+
+    h.emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: true, toolName: "Write", subject: "/tmp/x" } as ChildRunEvent);
+    expect(h.port.listBackgroundChildren()[0]!.waitingForApproval).toBe(true);
+    h.emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: false } as ChildRunEvent);
+    expect(h.port.listBackgroundChildren()[0]!.waitingForApproval).toBe(false);
+
+    // A detached call's live progress never reaches the already-returned tool.
+    expect(h.progressEvents).toEqual([]);
+  });
+
+  it("a handoff seeds elapsed time from admission, not from the handoff", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = progressHarness();
+      const pending = h.run("spawn-handoff-progress", false, true);
+      const requestId = spawns(h.sent)[0]!.requestId;
+      const requested = h.port.listBackgroundChildren();
+      expect(requested).toEqual([]);
+      h.emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-hp", childTabId: "t1", model: "m" });
+      await vi.advanceTimersByTimeAsync(CHILD_SYNC_JOIN_BUDGET_MS);
+      await pending;
+      const snapshot = h.port.listBackgroundChildren()[0]!;
+      // startedAt is the admission instant (before the budget elapsed).
+      expect(snapshot.startedAt).toBeLessThanOrEqual(Date.now() - CHILD_SYNC_JOIN_BUDGET_MS + 50);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("terminal removes only that child's entry and observers see the real change count", async () => {
+    const h = progressHarness();
+    const first = h.run("spawn-e-1");
+    const second = h.run("spawn-e-2");
+    const [requestIdA, requestIdB] = spawns(h.sent).map((spawn) => spawn.requestId);
+    h.emit({ type: CHILD_RUN_EVENT_TYPE, requestId: requestIdA!, kind: "accepted", childSessionId: "child-e1", childTabId: "t1", model: "m" });
+    h.emit({ type: CHILD_RUN_EVENT_TYPE, requestId: requestIdB!, kind: "accepted", childSessionId: "child-e2", childTabId: "t2", model: "m" });
+    await Promise.all([first, second]);
+    expect(h.port.listBackgroundChildren().map((c) => c.childSessionId)).toEqual(["child-e1", "child-e2"]);
+
+    h.emit(terminalEvent(requestIdA!, { status: "completed", childSessionId: "child-e1" }));
+    expect(h.port.listBackgroundChildren().map((c) => c.childSessionId)).toEqual(["child-e2"]);
+    expect(h.changes).toEqual([1, 2, 1]);
   });
 });

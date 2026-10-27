@@ -254,6 +254,32 @@ export function decodeSubagentCardSnapshot(
 }
 
 /**
+ * GitHub #17 slice D: decodes the untrusted
+ * `presentation.subagentHandoff` marker an Agent result carries when the call
+ * DISPATCHED a child that keeps running (explicit detach, or a synchronous
+ * join handed off at its budget). Fail-closed: Agent only, nonempty correctly
+ * shaped session ids, `spawnToolCallId` must equal this call's own id, and
+ * the reason must be one of the two known values. A malformed marker returns
+ * null and leaves whatever the block already shows untouched.
+ */
+export function decodeSubagentHandoff(
+  value: unknown,
+  ctx: { toolCallId: string; toolName: string },
+): { target: Extract<SubagentCardTarget, { kind: "session" }>; reason: "requested" | "join_budget" } | null {
+  try {
+    if (ctx.toolName !== "Agent") return null;
+    if (!isPlainObject(value)) return null;
+    const { reason } = value;
+    if (reason !== "requested" && reason !== "join_budget") return null;
+    const target = decodeTarget(value.target, ctx.toolCallId);
+    if (target === null || target.kind !== "session") return null;
+    return { target, reason };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Straight 1:1 field mapping onto `SubagentSubStatus` (store.ts) — `attention`
  * is S2-reserved and never projected (CUT-S1 §0.3 vердикт 3, §3 W4).
  * `sessionChild` (TASK.102 CUT-S2 §10.8.1 vердикт 1) is the one exception:

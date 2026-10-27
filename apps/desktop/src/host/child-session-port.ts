@@ -305,6 +305,26 @@ function detachAdmitMessage(childSessionId: string): string {
 }
 
 /**
+ * GitHub #17 slice D: how long a native Agent call that ASKED
+ * to join (explicit `detach:false`, or an omitted detach that reached a
+ * handoff-eligible request) waits for its child before handing it over to
+ * background mode. Measured from the child's own `accepted` event — a request
+ * merely queued for admission is not running and spends none of this budget.
+ * Not a user setting and not model input: Workflow dependency joins never
+ * carry the eligibility flag at all.
+ */
+export const CHILD_SYNC_JOIN_BUDGET_MS = 120_000;
+
+/** The handoff result's `finalText` — the child keeps running; only the WAIT ended. */
+function joinBudgetHandoffMessage(childSessionId: string): string {
+  return (
+    "Agent: the child is still running after 120 seconds; its report will arrive as a message. " +
+    `Child session ${childSessionId} continues in the background — do not poll it, and end this turn. ` +
+    "To send a follow-up to this same child later, pass this id as continue_session in the next agent call."
+  );
+}
+
+/**
  * TASK.145 срез 3: one live detached (background) child, as tracked by this
  * port's own in-memory registry — surfaced host-side so `session.ts` can
  * answer "how many children are running in the background" and let the
@@ -319,6 +339,15 @@ export interface BackgroundChildSnapshot {
   childSessionId: string;
   agentType: string;
   description: string;
+  /**
+   * GitHub #17 slice E: light optional progress, mirrored
+   * identically onto the wire (`WireBackgroundChild`). Unknown counters stay
+   * ABSENT — never fabricated as zero. `startedAt` remains the admission time.
+   */
+  turns?: number;
+  toolCalls?: number;
+  lastTool?: string;
+  waitingForApproval?: boolean;
   /** Epoch ms, captured when this child's spawn was admitted (the "accepted" ChildRunEvent). */
   startedAt: number;
 }
@@ -429,12 +458,20 @@ export interface CreateChildSessionPortOptions {
    */
   stallTimeoutMs?: number;
   /**
+   * GitHub #17 slice D: test seam for the synchronous join
+   * budget. Production never sets it — `CHILD_SYNC_JOIN_BUDGET_MS` applies.
+   */
+  syncJoinBudgetMs?: number;
+  /**
    * Taskana 4704 §2.8/§3.6: cap on THIS parent's simultaneously-live detached
    * children, enforced at the detach ADMIT as an honest refusal (no queueing
    * — queueing risks unbounded hidden state, §9-Q5). Read at admit time (a
    * live cell, not a snapshot) so settings changes land on the next spawn.
-   * Absent/undefined => unlimited (byte-identical pre-4704 behavior; the
-   * host passes `roles.maxParallelChildren ?? 4`).
+   * Absent/undefined => unlimited (the behavior before per-profile caps). The
+   * host passes the SHARED effective cap
+   * (`host/child-session-limits.ts` → session setting, optionally lowered by
+   * an explicit role profile; GitHub #17 slice B), so this
+   * local guard no longer disagrees with main's per-parent limit.
    */
   maxDetachedChildren?: () => number | undefined;
 }
@@ -534,8 +571,35 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
   }
   function notifyBackgroundChildrenChanged(): void {
     for (const listener of backgroundChildrenListeners) {
-      listener();
+      try {
+        listener();
+      } catch {
+        // GitHub #17 slice A: a view subscriber throwing must
+        // never block admission settlement or terminal cleanup — the registry
+        // transition has already happened by the time this fan-out runs.
+      }
     }
+  }
+
+  /**
+   * GitHub #17 slice E: replace one live background child's
+   * lightweight progress, copying only facts the child actually reported and
+   * notifying observers ONLY on a real change. A child that reports nothing
+   * keeps its counters absent — never a fabricated zero.
+   */
+  function updateBackgroundSnapshot(childSessionId: string, patch: Partial<BackgroundChildSnapshot>): void {
+    const entry = backgroundChildren.get(childSessionId);
+    if (entry === undefined) return;
+    const defined = Object.fromEntries(
+      Object.entries(patch).filter(([, value]) => value !== undefined),
+    ) as Partial<BackgroundChildSnapshot>;
+    const next: BackgroundChildSnapshot = { ...entry.snapshot, ...defined };
+    const changed = (Object.keys(defined) as Array<keyof BackgroundChildSnapshot>).some(
+      (key) => next[key] !== entry.snapshot[key],
+    );
+    if (!changed) return;
+    backgroundChildren.set(childSessionId, { ...entry, snapshot: next });
+    notifyBackgroundChildrenChanged();
   }
 
   options.subscribe((event) => {
@@ -646,6 +710,39 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     // below; read by the progress branch's latch check.
     let effectiveMaxTurns: number = req.maxTurns ?? DEFAULT_MAX_TURNS;
 
+    // GitHub #17 slice D: this run's settlement MODE. Every
+    // event branch below routes on this state, never on the immutable request
+    // flag — a joining run can become a background one at its join budget,
+    // and everything a detached run does (registry, callbacks, Stop) must
+    // start applying at that instant.
+    // An explicitly detached request starts in background mode, so the events
+    // that can precede its acknowledgement (the pre-accept approval
+    // ask and its settle) keep their established detached routing.
+    let mode: "joining" | "background" = req.detach === true ? "background" : "joining";
+    // Whether this run's promise was already settled by a background handoff —
+    // the idempotency latch for enterBackground (mode alone cannot express it:
+    // an explicit detach is in background mode before it is ever handed off).
+    let handedOff = false;
+    let acceptedEvent: Extract<ChildRunEvent, { kind: "accepted" }> | undefined;
+    let acceptedAt = 0;
+    let terminalSeen = false;
+    let joinTimer: ReturnType<typeof setTimeout> | undefined;
+    // A permission ask that arrived while this run was still JOINING: a
+    // handoff must seed the background waiting state and raise the parent's
+    // notice once, so its later settlement retracts that same notice.
+    let joiningAsk: { toolName: string; subject: string } | undefined;
+    const syncJoinBudgetMs = options.syncJoinBudgetMs ?? CHILD_SYNC_JOIN_BUDGET_MS;
+    // The request the background callbacks receive: an explicitly detached run
+    // keeps its own object identity; an automatically handed-off one gets a
+    // derived copy (never a mutation of the caller's request).
+    const backgroundRequest = (): SessionSubagentRequest => (req.detach === true ? req : { ...req, detach: true });
+    function clearJoinTimer(): void {
+      if (joinTimer !== undefined) {
+        clearTimeout(joinTimer);
+        joinTimer = undefined;
+      }
+    }
+
     // TASK.148 slice 1/2: constructed for BOTH tiers now. A non-detached
     // run's notice still bridges to opts.onProgress (unchanged from slice
     // 1). A DETACHED run's notice can no longer reach opts.onProgress (that
@@ -659,8 +756,8 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
       description: req.description,
       timeoutMs: stallTimeoutMs,
       onStall: (report) => {
-        if (req.detach === true) {
-          options.onDetachedStall?.(report, req, detachedChildSessionId ?? "");
+        if (mode === "background") {
+          options.onDetachedStall?.(report, backgroundRequest(), detachedChildSessionId ?? "");
           return;
         }
         opts.onProgress?.({
@@ -676,6 +773,12 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
 
     return new Promise<SessionSubagentOutcome>((resolve) => {
       let cancelSent = false;
+      // GitHub #17 slice A: whether this detached waiter has
+      // already settled its run() promise at accept. Terminal events therefore
+      // distinguish \"never acknowledged\" (resolve the original tool promise,
+      // no background report) from \"already handed off\" (route through the
+      // background terminal callback). Duplicate accepted events are a no-op.
+      let admitResultDelivered = false;
 
       // F6: reserve the cap slot for the whole admit->accept window (a
       // sync-join run reserved nothing — `reservedAdmitSlot` stays false and
@@ -688,6 +791,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
       }
 
       const finish = (outcome: SessionSubagentOutcome): void => {
+        clearJoinTimer();
         stallClock.dispose();
         waiters.delete(requestId);
         pendingDetachedAdmits.delete(requestId);
@@ -700,12 +804,80 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
           return;
         }
         cancelSent = true;
+        // Slice D: an abort BEFORE any handoff disarms the join budget — one
+        // cancel, no background transition, unchanged cascade semantics.
+        clearJoinTimer();
         options.send({ type: CHILD_RUN_CANCEL_TYPE, requestId });
         // Sync-join semantics (cut §0.5): abort never resolves this promise by
         // itself. Only main's eventual `terminal` (normally "cancelled", once
         // the child host has actually wound down and flushed its history)
         // does — the waiter stays registered above so that late event still
         // reaches `finish` normally instead of being silently dropped.
+      };
+
+      /**
+       * GitHub #17 slice D: hand this run over to background
+       * mode exactly once. Idempotent, and never fires for a run that has
+       * already ended, been cancelled, or lost its signal — a handoff keeps
+       * the SAME child (no restart, no cancel) and only stops waiting on it.
+       */
+      const enterBackground = (reason: "requested" | "join_budget"): void => {
+        if (handedOff || terminalSeen || cancelSent || opts.signal?.aborted) return;
+        if (acceptedEvent === undefined) return;
+        handedOff = true;
+        mode = "background";
+        clearJoinTimer();
+        // A detach is an exit from the turn: from here on, cancelling the
+        // parent's turn must NOT cascade into this child.
+        opts.signal?.removeEventListener("abort", onAbort);
+        // F6: the admit window is over — the accepted registry below now owns
+        // this child's slot, so the pending reservation goes the same instant.
+        pendingDetachedAdmits.delete(requestId);
+        detachedChildSessionId = acceptedEvent.childSessionId;
+        if (req.maxTurns === undefined && acceptedEvent.maxTurns !== undefined) {
+          effectiveMaxTurns = acceptedEvent.maxTurns;
+        }
+        backgroundChildren.set(acceptedEvent.childSessionId, {
+          requestId,
+          snapshot: {
+            childSessionId: acceptedEvent.childSessionId,
+            agentType: req.agentType,
+            description: req.description,
+            // Elapsed time continues from the ACTUAL admission, not the
+            // handoff — a 2-minute wait is not reset to zero by the handoff.
+            startedAt: acceptedAt !== 0 ? acceptedAt : Date.now(),
+            ...(joiningAsk !== undefined ? { waitingForApproval: true } : {}),
+          },
+          cancelRequested: false,
+        });
+        admitResultDelivered = true;
+        resolve({
+          status: "completed",
+          finalText:
+            reason === "join_budget"
+              ? joinBudgetHandoffMessage(acceptedEvent.childSessionId)
+              : detachAdmitMessage(acceptedEvent.childSessionId),
+          truncated: false,
+          turns: 0,
+          toolCalls: 0,
+          durationMs: 0,
+          childSessionId: acceptedEvent.childSessionId,
+          parentSessionId: options.parentSessionId,
+          spawnToolCallId: req.spawnToolCallId,
+          // An admission/handoff fact, never a child terminal: consumers (the
+          // host's budget bookkeeping, core's card finalization) use this to
+          // avoid treating dispatch success as completed child work.
+          background: { reason },
+        });
+        notifyBackgroundChildrenChanged();
+        // An ask that was already pending when the wait ended is still
+        // pending: seed the background waiting state and raise the notice
+        // ONCE, so its later settlement retracts exactly this notice. The
+        // permission deadline and the stall clock are NOT restarted.
+        if (joiningAsk !== undefined) {
+          detachedAskPending = true;
+          options.onDetachedApproval?.(joiningAsk, backgroundRequest(), acceptedEvent.childSessionId);
+        }
       };
 
       waiters.set(requestId, {
@@ -730,50 +902,17 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               // never observably "live" without ALSO being cancellable/listed,
               // and never listed without ALSO having had its cascade-cancel
               // disarmed.
-              if (req.detach === true) {
-                opts.signal?.removeEventListener("abort", onAbort);
-                // F6: the admit window is over — the accepted registry below
-                // now owns this child's cap slot, so the pending reservation
-                // must go the same instant the registry row appears (a child
-                // is never double-counted, never briefly uncounted).
-                pendingDetachedAdmits.delete(requestId);
-                // TASK.148 slice 2: the id a later stall notice's
-                // onDetachedStall call carries — set exactly once, the
-                // moment it becomes known, mirroring the registry entry
-                // built in the same step below.
-                detachedChildSessionId = event.childSessionId;
-                // Taskana 4820 review F1: an unstamped spawn (persona/default
-                // budgets never ride session-tier wires) still caps at the
-                // child host's resolved limit — carried here when it differs
-                // from the default — so the budget latch below warns against
-                // the cap the child will ACTUALLY stop at. The request's own
-                // explicit budget always outranks it (a stamped budget IS the
-                // child's cap — argv precedence, resolveChildMaxTurns).
-                if (req.maxTurns === undefined && event.maxTurns !== undefined) {
-                  effectiveMaxTurns = event.maxTurns;
-                }
-                backgroundChildren.set(event.childSessionId, {
-                  requestId,
-                  snapshot: {
-                    childSessionId: event.childSessionId,
-                    agentType: req.agentType,
-                    description: req.description,
-                    startedAt: Date.now(),
-                  },
-                  cancelRequested: false,
-                });
-                notifyBackgroundChildrenChanged();
-                resolve({
-                  status: "completed",
-                  finalText: detachAdmitMessage(event.childSessionId),
-                  truncated: false,
-                  turns: 0,
-                  toolCalls: 0,
-                  durationMs: 0,
-                  childSessionId: event.childSessionId,
-                  parentSessionId: options.parentSessionId,
-                  spawnToolCallId: req.spawnToolCallId,
-                });
+              // GitHub #17 slice D: the admission is recorded
+              // BEFORE either path acts on it — background mode (explicitly
+              // detached OR already handed off), a handoff-eligible joining run
+              // that starts its budget clock here, or a plain synchronous join.
+              // A duplicate accepted is a no-op: settlement happens once.
+              acceptedEvent = event;
+              acceptedAt = Date.now();
+              if (mode === "background" || req.detach === true) {
+                // A5 (slice D): an explicitly detached run keeps its own
+                // request object and settles with `reason: "requested"`.
+                enterBackground("requested");
                 return;
               }
               // TASK.102 CUT-S4 §3.1: `engine` rides verbatim from the
@@ -788,6 +927,18 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 ...(req.engine !== undefined ? { engine: req.engine } : {}),
               };
               opts.onProgress?.(progress);
+              // Slice D: only a native Agent call that actually joins opts in
+              // (`allowBackgroundHandoff`), and only when a background terminal
+              // callback exists to receive the handed-off child. Workflow and
+              // legacy callers never carry the flag, so their joins are
+              // unchanged. The clock starts at ADMISSION, not at the model
+              // request: a request still queued has spent none of its budget.
+              if (req.allowBackgroundHandoff === true && options.onDetachedTerminal !== undefined) {
+                joinTimer = setTimeout(() => {
+                  joinTimer = undefined;
+                  enterBackground("join_budget");
+                }, syncJoinBudgetMs);
+              }
               return;
             }
             case "rejected": {
@@ -818,7 +969,12 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               // returned at admit, so no live card exists for opts.onProgress
               // to update.
               stallClock.noteProgress(event.lastTool);
-              if (req.detach === true) {
+              if (mode === "background") {
+                updateBackgroundSnapshot(acceptedEvent?.childSessionId ?? "", {
+                  turns: event.turns,
+                  toolCalls: event.toolCalls,
+                  ...(event.lastTool !== undefined ? { lastTool: event.lastTool } : {}),
+                });
                 // Taskana 4820: a detached run's progress is the only place
                 // the parent can learn its child is about to hit its turn
                 // cap. Checked inside the detach branch (a sync-join parent
@@ -855,7 +1011,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                   turnBudgetNotified = true;
                   options.onDetachedTurnBudget?.(
                     { turns: event.turns, maxTurns: effectiveMaxTurns },
-                    req,
+                    backgroundRequest(),
                     detachedChildSessionId ?? "",
                   );
                 }
@@ -872,7 +1028,8 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
             }
             case "activity": {
               stallClock.noteProgress(event.toolName);
-              if (req.detach === true) {
+              if (mode === "background") {
+                updateBackgroundSnapshot(acceptedEvent?.childSessionId ?? "", { lastTool: event.toolName });
                 return;
               }
               const progress: SubagentProgress = { kind: "tool", toolName: event.toolName, summary: event.summary };
@@ -892,12 +1049,25 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               } else {
                 stallClock.resume();
               }
-              if (req.detach === true) {
+              if (mode === "joining") {
+                // A joining run has no parent-side notice yet, but a handoff
+                // must know whether an ask was already pending when the wait
+                // ended (see enterBackground).
+                joiningAsk =
+                  event.waiting && event.toolName !== undefined
+                    ? { toolName: event.toolName, subject: event.subject ?? "" }
+                    : undefined;
+              }
+              if (mode === "background") {
+                updateBackgroundSnapshot(acceptedEvent?.childSessionId ?? "", {
+                  waitingForApproval: event.waiting,
+                  ...(event.waiting && event.toolName !== undefined ? { lastTool: event.toolName } : {}),
+                });
                 if (event.waiting && event.toolName !== undefined) {
                   detachedAskPending = true;
                   options.onDetachedApproval?.(
                     { toolName: event.toolName, subject: event.subject ?? "" },
-                    req,
+                    backgroundRequest(),
                     detachedChildSessionId ?? "",
                   );
                 } else if (!event.waiting && detachedAskPending) {
@@ -909,7 +1079,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                   // Idempotent on the host side (ack of an unknown id is a
                   // no-op), fires once per ask->settle cycle.
                   detachedAskPending = false;
-                  options.onDetachedApprovalSettled?.(req, detachedChildSessionId ?? "");
+                  options.onDetachedApprovalSettled?.(backgroundRequest(), detachedChildSessionId ?? "");
                 }
                 return;
               }
@@ -918,11 +1088,16 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               return;
             }
             case "terminal": {
+              // GitHub #17 slice D: a real terminal always ends
+              // this waiter's life — disarm the pending join budget first, so a
+              // timer can never hand off a finished child.
+              terminalSeen = true;
+              clearJoinTimer();
               // TASK.240: the cancel cause lives only in this host's registry
               // row, which the detached branch below deletes — read it NOW,
               // while the row still exists, so a user stop reaches the parent.
               const userCancelled =
-                req.detach === true &&
+                mode === "background" &&
                 event.status === "cancelled" &&
                 backgroundChildren.get(event.childSessionId)?.cancelCause === "user";
               const outcome: SessionSubagentOutcome = {
@@ -960,19 +1135,30 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               // (срез 3 already removed it at admit) but stays cheap and
               // harmless for a request that somehow never reached "accepted"'s
               // detach branch (defense in depth, not a reachable path today).
-              if (req.detach === true) {
+              if (mode === "background") {
+                // GitHub #17 slice A: a detached run whose
+                // `accepted` acknowledgement was never delivered (missing or
+                // dropped) must still settle its ORIGINAL tool promise at
+                // terminal — otherwise the parent's step would hang forever.
+                // There is no background child the parent was ever told about,
+                // so `finish()` resolves the original run directly and no
+                // background report is emitted.
+                if (!admitResultDelivered) {
+                  finish(outcome);
+                  return;
+                }
                 // TASK.148 slice 2: this waiter's own stall clock stops here
                 // too — the true end of its life for a detached run, same as
                 // every other teardown step on this branch (`finish()` never
-                // runs for a detached waiter, so nothing else would ever
-                // dispose it).
+                // runs for a detached waiter once handed off, so nothing else
+                // would ever dispose it).
                 stallClock.dispose();
                 waiters.delete(requestId);
                 pendingDetachedAdmits.delete(requestId);
                 opts.signal?.removeEventListener("abort", onAbort);
                 backgroundChildren.delete(event.childSessionId);
                 notifyBackgroundChildrenChanged();
-                options.onDetachedTerminal?.(outcome, req);
+                options.onDetachedTerminal?.(outcome, backgroundRequest());
                 return;
               }
               // CUT-S2 §10.7 п.4: passthrough of the honest suppressed-count
@@ -1050,6 +1236,10 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         // TASK.180: the turn budget rides only the CREATING spawn — a
         // resume request (resumeChildSessionId set) never re-imposes a budget.
         ...(req.resumeChildSessionId === undefined && req.maxTurns !== undefined ? { maxTurns: req.maxTurns } : {}),
+        // GitHub #17 slice B: the detach flag rides the wire so
+        // main can refuse an over-cap detached request immediately instead of
+        // parking it (a parked detached request holds the parent's whole step).
+        ...(req.detach !== undefined ? { detach: req.detach } : {}),
         permissionMode: options.getPermissionMode(),
       };
       options.send(spawnRequest);

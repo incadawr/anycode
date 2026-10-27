@@ -331,17 +331,19 @@ export const agentInputSchema = z.object({
   /**
    * TASK.145 срез 1: session-tier-only, mirrors the `provider` field's
    * "invalid for inline tier" discipline exactly (handler-level check,
-   * agent.ts). true: the tool returns immediately once the child session is
-   * admitted, instead of waiting for it to finish — the child runs in the
-   * background and its report arrives later as a separate message. Absent/
-   * false: today's sync-join behavior, unchanged.
+   * agent.ts). GitHub #17 slice C: a session-tier call is now
+   * background BY DEFAULT (an omitted detach means true); false opts into a
+   * short synchronous join. Either way the child runs as a child session and
+   * its report arrives later as a separate message.
    */
   detach: z
     .boolean()
     .optional()
     .describe(
-      'Session tier only: if true, return immediately once the child session starts (do not wait for it to finish). ' +
-        "The child runs in the background; its report arrives later as a new message in this conversation. " +
+      'Session tier only, and background by default: an omitted detach returns immediately once the child ' +
+        "session starts — end your turn after dispatch; do not poll, the child's report arrives later as a new " +
+        "message in this conversation. Pass false only for a short lookup whose result you need in this step; " +
+        "a joining call is handed over to the background after 120 seconds and its report arrives as a message. " +
         "Invalid for inline tier.",
     ),
   continue_session: z

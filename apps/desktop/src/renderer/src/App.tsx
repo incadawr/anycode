@@ -48,6 +48,7 @@ import type { UiToHostMessage } from "../../shared/protocol.js";
 import { FOCUS_MODE_MENU_EVENT } from "./components/ModeMenu.js";
 import { RUN_ACTION_EVENT } from "./slash-menu.js";
 import { ConnectedPermissionModal } from "./components/PermissionModal.js";
+import { ParentChildPermissionModal } from "./components/ParentChildPermissionModal.js";
 import { Collapse as CollapseIcon } from "./components/icons.js";
 import { GitPanel } from "./components/GitPanel.js";
 import { GitConfirmDialog } from "./components/GitConfirmDialog.js";
@@ -333,6 +334,7 @@ export function dispatchContinue(
 
 export interface SessionSurfaceProps {
   tabId: string;
+  suppressPermissionModal?: boolean;
   /** R8: push one toast into the App-level queue (kind → tone/glyph in toasts.ts). */
   onToast(kind: ToastKind, text: string): void;
 }
@@ -352,7 +354,7 @@ export interface SessionSurfaceProps {
  * reuse this component unchanged — it is this slice's actual hand-off, not
  * an implementation detail of `ActiveTabBody`.
  */
-export function SessionSurface({ tabId, onToast }: SessionSurfaceProps) {
+export function SessionSurface({ tabId, onToast, suppressPermissionModal = false }: SessionSurfaceProps) {
   const connection = useTabStore((state) => state.connection);
   const transcript = useTabStore((state) => state.transcript);
   const todoReminderState = useTabStore((state) => state.todoReminderState);
@@ -476,7 +478,7 @@ export function SessionSurface({ tabId, onToast }: SessionSurfaceProps) {
 
       {/* Permission modal: self-connecting wrapper, renders only when THIS
           tab's store has a pending permission request. */}
-      <ConnectedPermissionModal />
+      {!suppressPermissionModal && <ConnectedPermissionModal />}
       {/* R8: store notice slot → App toast queue (render-less bridge). */}
       <TabNoticeCapture tabId={tabId} onNotice={(notice) => onToast(notice.kind, notice.text)} />
       {/* Taskana 4736: this folder's project declarations wait for the user's
@@ -495,7 +497,7 @@ interface ActiveTabBodyProps {
 }
 
 /** The active tab's whole chat UI — mounted exactly once, inside that tab's TabContext.Provider. */
-function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: ActiveTabBodyProps) {
+export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: ActiveTabBodyProps) {
   const turn = useTabStore((state) => state.turn);
   const workspace = useTabStore((state) => state.workspace);
   const engine = useTabStore((state) => state.engine);
@@ -849,7 +851,7 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
       childSplitSurface = childStore ? (
         <div className="session-content">
           <TabContext.Provider value={{ tabId: childRelation.childTabId, store: childStore }}>
-            <SessionSurface tabId={childRelation.childTabId} onToast={onToast} />
+            <SessionSurface tabId={childRelation.childTabId} onToast={onToast} suppressPermissionModal />
           </TabContext.Provider>
         </div>
       ) : (
@@ -874,32 +876,43 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
   // regardless (background-completion notifications, preview-panel
   // bookkeeping, etc.) — only the JSX choice changes here, so switching back
   // to master via the breadcrumb never lost any of that state to begin with.
+  const permissionForwarder = <ParentChildPermissionModal />;
+
   if (childView.kind === "child") {
     if (childRelation !== undefined && childRelation.live) {
       return (
-        <ChildSessionPane
-          parentTabId={tabId}
-          spawnToolCallId={childView.spawnToolCallId}
-          relation={childRelation}
-          sidebarCollapsed={sidebarCollapsed}
-          onToggleSidebar={onToggleSidebar}
-          onToast={onToast}
-        />
+        <>
+          <ConnectedPermissionModal />
+          {permissionForwarder}
+          <ChildSessionPane
+            parentTabId={tabId}
+            spawnToolCallId={childView.spawnToolCallId}
+            relation={childRelation}
+            sidebarCollapsed={sidebarCollapsed}
+            onToggleSidebar={onToggleSidebar}
+            onToast={onToast}
+          />
+        </>
       );
     }
     return (
-      <ChildHistoryPane
-        parentTabId={tabId}
-        parentSessionId={parentSessionId}
-        spawnToolCallId={childView.spawnToolCallId}
-        sidebarCollapsed={sidebarCollapsed}
-        onToggleSidebar={onToggleSidebar}
-      />
+      <>
+        <ConnectedPermissionModal />
+        {permissionForwarder}
+        <ChildHistoryPane
+          parentTabId={tabId}
+          parentSessionId={parentSessionId}
+          spawnToolCallId={childView.spawnToolCallId}
+          sidebarCollapsed={sidebarCollapsed}
+          onToggleSidebar={onToggleSidebar}
+        />
+      </>
     );
   }
 
   return (
     <>
+      {permissionForwarder}
       <SessionHeader sidebarCollapsed={sidebarCollapsed} onToggleSidebar={onToggleSidebar} onToast={onToast} />
 
       <div
@@ -957,8 +970,8 @@ interface ChildSessionPaneProps {
  * TASK.102 CUT-S2 §2.5 (C3): layout B's child view — a breadcrumb bar
  * (replacing SessionHeader) above the SAME SessionSurface the master pane
  * uses, re-scoped to the child tab's own `<TabContext.Provider>` so its
- * composer sends land on the child's connection and its permission modal
- * binds to the child's own pending request, not the master's. Still rendered
+ * composer sends land on the child's connection. Permission requests are
+ * presented by the parent in one shared order. Still rendered
  * from INSIDE the master's own TabContext (ActiveTabBody never re-wraps
  * itself) — `useTabStore`/`useTabsStore` below read the MASTER's title and
  * transcript (to find the Agent card's own agentType/description for the
@@ -1025,7 +1038,7 @@ function ChildSessionPane({
       <div className="session-content">
         {childStore ? (
           <TabContext.Provider value={{ tabId: relation.childTabId, store: childStore }}>
-            <SessionSurface tabId={relation.childTabId} onToast={onToast} />
+            <SessionSurface tabId={relation.childTabId} onToast={onToast} suppressPermissionModal />
           </TabContext.Provider>
         ) : (
           <div className="main-empty">This child session is no longer available.</div>

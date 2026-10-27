@@ -72,6 +72,7 @@ import type {
 import {
   CHILD_RUN_EVENT_TYPE,
   parseChildRunCancel,
+  parseChildRunEvent,
   parseChildSpawnRequest,
   type ChildRunCancel,
   type ChildRunEvent,
@@ -98,8 +99,8 @@ interface FakeParentPort {
   hostSubscribe(listener: (event: ChildRunEvent) => void): () => void;
   /** main-side: registers the scripted responder over whatever the host sent. */
   onFromHost(listener: (message: unknown) => void): void;
-  /** main-side: delivers a ChildRunEvent back to the host (mirrors index.ts's parseChildRunEvent branch). */
-  sendToHost(event: ChildRunEvent): void;
+  /** main-side: delivers a RAW message back to the host, parsed with the REAL parseChildRunEvent before fan-out (mirrors index.ts's parseChildRunEvent branch). */
+  sendToHost(event: unknown): void;
 }
 
 function fakeParentPort(): FakeParentPort {
@@ -118,8 +119,17 @@ function fakeParentPort(): FakeParentPort {
     onFromHost: (listener) => {
       mainListeners.add(listener);
     },
-    sendToHost: (event) => {
-      for (const listener of hostListeners) listener(event);
+    sendToHost: (raw) => {
+      // GitHub #17 slice A: mirror index.ts's real dispatch
+      // gate — parse the inbound event with the production parser and fan out
+      // ONLY what parses, so a wire test cannot smuggle an unparseable event
+      // (e.g. an accepted maxTurns above the profile ceiling) past the exact
+      // fail-closed boundary the real host enforces.
+      const parsed = parseChildRunEvent(raw);
+      if (parsed === null) {
+        return;
+      }
+      for (const listener of hostListeners) listener(parsed);
     },
   };
 }
@@ -268,7 +278,7 @@ describe("session-tier Agent call over a fake parentPort (TASK.102 CUT-S2 §3 sl
       args: ROOT_ARGS,
       meta: rootMeta(),
       sessionSubagentsPort: port,
-      steps: [toolStep("call-1", "Agent", { description: "delegate build", prompt: "build X", tier: "session" }), finishStep()],
+      steps: [toolStep("call-1", "Agent", { description: "delegate build", prompt: "build X", tier: "session", detach: false }), finishStep()],
     });
     const loop = new AgentLoop(config);
 
@@ -349,7 +359,7 @@ describe("session-tier Agent call over a fake parentPort (TASK.102 CUT-S2 §3 sl
       args: ROOT_ARGS,
       meta: rootMeta(),
       sessionSubagentsPort: port,
-      steps: [toolStep("call-2", "Agent", { description: "d", prompt: "p", tier: "session" }), finishStep()],
+      steps: [toolStep("call-2", "Agent", { description: "d", prompt: "p", tier: "session", detach: false }), finishStep()],
     });
     const loop = new AgentLoop(config);
 
@@ -403,7 +413,7 @@ describe("session-tier Agent call over a fake parentPort (TASK.102 CUT-S2 §3 sl
       args: ROOT_ARGS,
       meta: rootMeta(),
       sessionSubagentsPort: port,
-      steps: [toolStep("call-len", "Agent", { description: "d", prompt: "p", tier: "session" }), finishStep()],
+      steps: [toolStep("call-len", "Agent", { description: "d", prompt: "p", tier: "session", detach: false }), finishStep()],
     });
     const loop = new AgentLoop(config);
 
@@ -444,7 +454,7 @@ describe("session-tier Agent call over a fake parentPort (TASK.102 CUT-S2 §3 sl
       args: ROOT_ARGS,
       meta: rootMeta(),
       sessionSubagentsPort: port,
-      steps: [toolStep("call-3", "Agent", { description: "d", prompt: "p", tier: "session" }), finishStep()],
+      steps: [toolStep("call-3", "Agent", { description: "d", prompt: "p", tier: "session", detach: false }), finishStep()],
     });
     const loop = new AgentLoop(config);
     const controller = new AbortController();
@@ -492,6 +502,53 @@ describe("session-tier Agent call over a fake parentPort (TASK.102 CUT-S2 §3 sl
     const toolResult = events.find(isToolResult("call-3"))!;
     expect(toolResult.outcome.status).toBe("cancelled");
     expect(main.cancels).toHaveLength(1);
+  });
+
+  it("GitHub #17 slice A: parsed detached admission with effective cap 300 yields an Agent tool_result before terminal", async () => {
+    const channel = fakeParentPort();
+    const port = createChildSessionPort({
+      parentSessionId: "parent-17a",
+      getPermissionMode: () => "build",
+      send: channel.hostSend,
+      subscribe: channel.hostSubscribe,
+    });
+    wireScriptedMain(channel, (spawn) => {
+      // The child's EFFECTIVE session cap (settings.tools.maxTurns=300) must
+      // cross the REAL parser (fakeParentPort.sendToHost now parses, so an
+      // accepted event rejected by parseChildRunEvent would be silently
+      // dropped and this tool call would never settle).
+      channel.sendToHost({
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId: spawn.requestId,
+        kind: "accepted",
+        childSessionId: "child-17a",
+        childTabId: "tab-17a",
+        model: "m",
+        maxTurns: 300,
+      });
+      // No terminal — the child stays alive. The detached run settles at
+      // accept, so the parent's step must already end with a tool result.
+    });
+
+    const config = buildConfig({
+      args: ROOT_ARGS,
+      meta: rootMeta(),
+      sessionSubagentsPort: port,
+      steps: [toolStep("call-17a", "Agent", { description: "d", prompt: "p", tier: "session", detach: true }), finishStep()],
+    });
+    const loop = new AgentLoop(config);
+
+    const events: AgentEvent[] = [];
+    for await (const event of loop.runTurn("delegate")) {
+      events.push(event);
+    }
+
+    const toolResult = events.find(isToolResult("call-17a"));
+    expect(toolResult).toBeDefined();
+    expect(toolResult!.outcome.status).toBe("success");
+    expect((toolResult!.outcome.result?.output as { finalText: string }).finalText).toContain("background");
+    // No terminal was delivered, so there is no completed child report.
+    expect(events.some((e) => e.type === "subagent_end")).toBe(false);
   });
 });
 
@@ -604,7 +661,7 @@ describe("non-recursion locks #1/#2 (CUT-S2 §2.6.1/§2.6.2) — discriminating 
       args: ROOT_ARGS,
       meta: rootMeta(),
       sessionSubagentsPort: port,
-      steps: [toolStep("call-both", "Agent", { description: "d", prompt: "p", tier: "session" }), finishStep()],
+      steps: [toolStep("call-both", "Agent", { description: "d", prompt: "p", tier: "session", detach: false }), finishStep()],
     });
     const loop = new AgentLoop(config);
 
@@ -695,5 +752,163 @@ describe("one handshake, one session_history (CUT-S1 §9.2 / CUT-S2 §10.4, B5's
 
     uiPort.close();
     hostPort.close();
+  });
+});
+
+/**
+ * GitHub #17 slice C: an ordinary session-tier Agent call with
+ * NO detach argument is background by default, so "run 3 reviews" finishes the
+ * spawning step while every child is still alive and each child's report
+ * arrives later as its own message.
+ */
+describe("three default session Agent calls release the spawning step (GitHub #17 slice C)", () => {
+  it("the step finishes before any child terminal, then one report per child arrives in a different order", async () => {
+    const channel = fakeParentPort();
+    const reports: SessionSubagentOutcome[] = [];
+    const port = createChildSessionPort({
+      parentSessionId: "parent-17",
+      getPermissionMode: () => "build",
+      send: channel.hostSend,
+      subscribe: channel.hostSubscribe,
+      onDetachedTerminal: (outcome) => reports.push(outcome),
+    });
+    const adopted: Array<{ requestId: string; childSessionId: string }> = [];
+    const main = wireScriptedMain(channel, (spawn) => {
+      const n = adopted.length + 1;
+      adopted.push({ requestId: spawn.requestId, childSessionId: `child-${n}` });
+      channel.sendToHost({
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId: spawn.requestId,
+        kind: "accepted",
+        childSessionId: `child-${n}`,
+        childTabId: `tab-${n}`,
+        model: "m",
+      });
+    });
+
+    const calls = ["call-a", "call-b", "call-c"];
+    const spawnStep: ModelStreamEvent[] = [
+      { type: "start" },
+      ...calls.map((id) => ({
+        type: "tool_call" as const,
+        toolCall: { id, name: "Agent", input: { description: `review ${id}`, prompt: "review the change", tier: "session" } },
+      })),
+      { type: "finish", finishReason: "tool_calls" as const, usage: {} },
+    ];
+    const loop = new AgentLoop(
+      buildConfig({
+        args: ROOT_ARGS,
+        meta: rootMeta(),
+        sessionSubagentsPort: port,
+        steps: [spawnStep, finishStep()],
+      }),
+    );
+
+    const events: AgentEvent[] = [];
+    for await (const event of loop.runTurn("run three parallel reviews")) {
+      events.push(event);
+    }
+
+    // Every call reached main WITHOUT a detach field (the model omitted it) and
+    // was admitted — and the parent's step completed while all three children
+    // are still alive (no terminal was ever sent).
+    expect(main.spawns.map((s) => s.spawnToolCallId)).toEqual(calls);
+    for (const spawn of main.spawns) expect("detach" in spawn === false || spawn.detach === true).toBe(true);
+    expect(adopted).toHaveLength(3);
+    for (const id of calls) {
+      const result = events.find(isToolResult(id))!;
+      expect(result).toBeDefined();
+      expect(result.outcome.status).toBe("success");
+    }
+    // Nothing is fabricated at admission: no report before a real terminal.
+    expect(reports).toHaveLength(0);
+
+    // Terminals in a DIFFERENT order deliver three separate reports, each
+    // naming its own child, one per child.
+    for (const index of [2, 0, 1]) {
+      const child = adopted[index]!;
+      channel.sendToHost(
+        terminalEvent(child.requestId, {
+          finalText: `review ${child.childSessionId} done`,
+          turns: 2,
+          toolCalls: 1,
+          durationMs: 10,
+          childSessionId: child.childSessionId,
+        }),
+      );
+    }
+    expect(reports.map((r) => r.childSessionId)).toEqual(["child-3", "child-1", "child-2"]);
+    expect(new Set(reports.map((r) => r.spawnToolCallId)).size).toBe(3);
+  });
+});
+
+/**
+ * GitHub #17 slice D: a native Agent call that ASKS to join and
+ * outlives its budget is handed off to background mode. The real AgentLoop gets
+ * a dispatch result (handoff marker, no terminal card) while the child lives on;
+ * the child's later terminal arrives through the background callback — the one
+ * event a completed-run sample may be learned from.
+ */
+describe("a joining Agent call is handed off at its budget (GitHub #17 slice D)", () => {
+  it("the tool result is a handoff marker before any terminal, and the real terminal arrives afterwards", async () => {
+    const channel = fakeParentPort();
+    const reports: SessionSubagentOutcome[] = [];
+    const port = createChildSessionPort({
+      parentSessionId: "parent-d",
+      getPermissionMode: () => "build",
+      send: channel.hostSend,
+      subscribe: channel.hostSubscribe,
+      syncJoinBudgetMs: 20,
+      onDetachedTerminal: (outcome) => reports.push(outcome),
+    });
+    let acceptedRequestId = "";
+    wireScriptedMain(channel, (spawn) => {
+      // Correct: an explicit detach:false join goes on the wire WITHOUT a
+      // detach flag, so main treats it as the synchronous admit it is.
+      acceptedRequestId = spawn.requestId;
+      channel.sendToHost({
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId: spawn.requestId,
+        kind: "accepted",
+        childSessionId: "child-d",
+        childTabId: "tab-d",
+        model: "m",
+      });
+    });
+
+    const loop = new AgentLoop(
+      buildConfig({
+        args: ROOT_ARGS,
+        meta: rootMeta(),
+        sessionSubagentsPort: port,
+        steps: [
+          toolStep("call-h", "Agent", { description: "d", prompt: "p", tier: "session", detach: false }),
+          finishStep(),
+        ],
+      }),
+    );
+    const events: AgentEvent[] = [];
+    for await (const event of loop.runTurn("join for a while")) {
+      events.push(event);
+    }
+
+    const toolResult = events.find(isToolResult("call-h"))!;
+    expect(toolResult.outcome.status).toBe("success");
+    expect(toolResult.outcome.result?.presentation?.subagent).toBeUndefined();
+    expect(toolResult.outcome.result?.presentation?.subagentHandoff).toMatchObject({
+      target: { kind: "session", childSessionId: "child-d", spawnToolCallId: "call-h" },
+      reason: "join_budget",
+    });
+    // The child is still alive: no report, and it is listed for the parent UI.
+    expect(reports).toHaveLength(0);
+    expect(port.listBackgroundChildren().map((c) => c.childSessionId)).toEqual(["child-d"]);
+
+    // Its real terminal arrives afterwards — exactly one report, no marker.
+    channel.sendToHost(
+      terminalEvent(acceptedRequestId, { finalText: "the child finished", turns: 4, childSessionId: "child-d" }),
+    );
+    expect(reports).toHaveLength(1);
+    expect(reports[0]!.finalText).toBe("the child finished");
+    expect(reports[0]!.background).toBeUndefined();
   });
 });

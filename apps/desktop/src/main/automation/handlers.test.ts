@@ -1316,7 +1316,8 @@ describe("health / getState / screenshot", () => {
 
   it("getState projects manager.listChildRuns() verbatim as childRuns (TASK.102 S2d D1)", async () => {
     const childRuns = [
-      { requestId: "r1", parentSessionId: "sess-p", childTabId: "tab-c", childSessionId: "sess-c", state: "running" as const, pid: 555 },
+      // GitHub #17 slice F: the projection carries the child tab's fork time.
+      { requestId: "r1", parentSessionId: "sess-p", childTabId: "tab-c", childSessionId: "sess-c", state: "running" as const, pid: 555, forkedAt: 1_700_000 },
     ];
     const deps = fakeDeps({
       callFacade: vi.fn(async () => ({ tabs: [], activeTabId: null, states: {} })),
@@ -1334,7 +1335,7 @@ describe("health / getState / screenshot", () => {
 
   it("getStateForTab projects the SAME un-narrowed childRuns list alongside the narrowed tab", async () => {
     const childRuns = [
-      { requestId: "r1", parentSessionId: "sess-p", childTabId: "tab-c", childSessionId: "sess-c", state: "starting" as const, pid: null },
+      { requestId: "r1", parentSessionId: "sess-p", childTabId: "tab-c", childSessionId: "sess-c", state: "starting" as const, pid: null, forkedAt: null },
     ];
     const tabs: TabSummary[] = [{ tabId: "t1", workspace: "/a", sessionId: "s1", state: "running", pid: 111 }];
     const deps = fakeDeps({

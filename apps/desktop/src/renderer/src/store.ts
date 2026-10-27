@@ -138,7 +138,7 @@ import type {
 import { stripReminderBlocks } from "./transcript-sanitize.js";
 import { type UsageLimitNotice } from "./provider-notices.js";
 import { saveConnectionSwitch, type ConnectionSwitchRecord } from "./provider-switch-log.js";
-import { decodeSubagentCardSnapshot, projectSubagentCard } from "./subagent-card.js";
+import { decodeSubagentCardSnapshot, decodeSubagentHandoff, projectSubagentCard } from "./subagent-card.js";
 import { decodeWorkflowCardSnapshot, projectWorkflowCard } from "./workflow-card.js";
 // Taskana 4090: the global settings-store (NOT part of DesktopState) — the
 // provider_quota case projects the observation onto its snapshot's matching
@@ -3514,6 +3514,18 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           const decodedSubagent = presentedSubagent !== undefined
             ? decodeSubagentCardSnapshot(presentedSubagent, { toolCallId: event.outcome.toolCallId, toolName: event.outcome.toolName })
             : null;
+          // GitHub #17 slice D: a valid handoff marker means
+          // this call DISPATCHED a child that is still running. Clear the
+          // block's transient live sub-status (the old synchronous spinner)
+          // without marking anything completed — the running child lives in
+          // the background-agents strip. The generic dispatch result text
+          // stays. Absent/invalid marker: existing behavior untouched.
+          const decodedHandoff = event.outcome.result?.presentation?.subagentHandoff !== undefined
+            ? decodeSubagentHandoff(event.outcome.result?.presentation?.subagentHandoff, {
+                toolCallId: event.outcome.toolCallId,
+                toolName: event.outcome.toolName,
+              })
+            : null;
           const presentedWorkflow = event.outcome.result?.presentation?.workflow;
           const decodedWorkflow = presentedWorkflow !== undefined
             ? decodeWorkflowCardSnapshot(presentedWorkflow, { toolCallId: event.outcome.toolCallId, toolName: event.outcome.toolName })
@@ -3523,6 +3535,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             modelText: event.outcome.modelText,
             ...(decodedSubagent !== null ? { subagent: projectSubagentCard(decodedSubagent) } : {}),
             ...(decodedWorkflow !== null ? { workflow: projectWorkflowCard(decodedWorkflow) } : {}),
+            ...(decodedHandoff !== null ? { subagent: null } : {}),
           });
           return;
         }

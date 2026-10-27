@@ -89,14 +89,28 @@ export interface SessionSubagentRequest {
    * TASK.145 срез 1: `Agent{tier:"session", detach:true}`'s own field,
    * threaded straight through (tools/agent.ts validates it is only ever set
    * alongside `tier:"session"` before building this request). This flag is
-   * consumed ENTIRELY by the parent host's own RPC client
-   * (host/child-session-port.ts) — it never crosses the parentPort wire to
-   * main (`ChildSpawnRequest` carries no such field): whether a run's promise
-   * settles at admit vs. terminal is a fact about THIS client's own waiter,
-   * not something main's spawn/accept/terminal protocol needs to know. Absent
-   * = the existing sync-join behavior, byte-identical to pre-145.
+   * whether a run's promise settles at admit vs. terminal is decided by the
+   * parent host's own RPC client (host/child-session-port.ts), but GitHub #17
+   * slice B now ALSO forwards this flag over the parentPort
+   * wire (`ChildSpawnRequest.detach`) so main can choose IMMEDIATE refusal at
+   * the cap for a detached request instead of FIFO parking it — a parked
+   * detached request sends no `accepted` until capacity frees and therefore
+   * holds the parent's whole step. Absent = the existing sync-join behavior,
+   * byte-identical to pre-145.
    */
   detach?: boolean;
+  /**
+   * GitHub #17 slice D: internal eligibility flag for the
+   * host's synchronous JOIN budget. Set by the native Agent tool on session
+   * requests that actually join (an explicit `detach:false`), never
+   * model-visible, never sent on the parentPort wire. When the host has
+   * waited `CHILD_SYNC_JOIN_BUDGET_MS` from admission, it hands the SAME
+   * child over to background mode and settles the call with
+   * `background:{reason:"join_budget"}` instead of holding the parent turn.
+   * Workflow engine steps and every other direct caller leave it unset, so
+   * their joins keep the terminal-before-dependency semantics.
+   */
+  allowBackgroundHandoff?: true;
   /**
    * Follow-up to an earlier finished CORE child of the same parent session:
    * main resumes that child's own session (row + history) instead of minting
@@ -140,6 +154,15 @@ export interface SessionSubagentOutcome extends SubagentOutcome {
    * reading the stop as a failure to retry. Absent for every other cause.
    */
   cancelledBy?: "user";
+  /**
+   * GitHub #17 slice D: this outcome is an ADMISSION/HANDOFF,
+   * not a child terminal — the child (if any) is still running and its report
+   * arrives later. `requested` is an explicitly detached call, `join_budget`
+   * a synchronous call that waited out its budget and was handed over.
+   * A real child terminal never carries this field; consumers must not treat
+   * such an outcome as completed child work.
+   */
+  background?: { reason: "requested" | "join_budget" };
 }
 
 /**

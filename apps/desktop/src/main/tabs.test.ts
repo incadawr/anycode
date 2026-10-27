@@ -43,6 +43,7 @@ import {
   CHILD_START_DEADLINE_MS,
   CHILD_START_TYPE,
   CHILD_TERMINAL_TYPE,
+  parseChildRunEvent,
   type ChildRunEvent,
   type ChildRunSend,
   type ChildSpawnRequest,
@@ -51,7 +52,7 @@ import {
   WORKTREE_TRANSITION_MESSAGE_TYPE,
   type WorktreeTransitionMessage,
 } from "../shared/worktrees.js";
-import { ENV_MODEL } from "./host-env.js";
+import { ENV_MAX_TURNS, ENV_MODEL } from "./host-env.js";
 import { RECOGNIZER_CONFIG_CHANGED_TYPE, type RecognizerConfigChanged } from "../shared/recognizer.js";
 import {
   DEFAULT_BREAKER_LIMITS,
@@ -3675,7 +3676,32 @@ describe("TabHostManager — children are invisible outside the manager (TASK.10
       childSessionId,
       state: "starting",
       pid: childHost.pid,
+      // GitHub #17 slice F: the child tab's real fork stamp on the clock.
+      forkedAt: expect.any(Number),
     });
+  });
+
+  // GitHub #17 slice F: the automation projection carries the
+  // child tab's ACTUAL fork time on the injected clock — the anchor the live
+  // acceptance driver measures delivery against.
+  it("listChildRuns exposes forkedAt as the injected clock's actual child spawn time, and null before a child tab exists", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    let clock = 5_000;
+    const manager = childManager(fork, window, { now: () => clock });
+    expect(manager.createTab({ workspace: "/ws", sessionId: "root-forked-at", resume: false }).ok).toBe(true);
+    const rootHost = hosts[0]!;
+    clock = 9_123;
+    rootHost.emit("message", spawnRequest({ requestId: "fa-1" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "fa-1" && e.kind === "accepted");
+    expect(accepted?.kind).toBe("accepted");
+    const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+    expect(manager.listChildRuns()[0]?.forkedAt).toBe(9_123);
+    // Looked up live: once the child tab is gone the fork time is null, never stale.
+    const childHost = hosts[1]!;
+    childHost.emit("message", childTerminalMsg({ status: "completed" }));
+    expect(manager.getTab(childTabId)).toBeUndefined();
+    expect(manager.listChildRuns()).toEqual([]);
   });
 
   it("deliverTabPort stamps the child envelope field and SKIPS the terminal channel entirely for a child tab", () => {
@@ -7221,4 +7247,256 @@ it("drops a deferred imported model when rebind supersedes the initial start", a
   expect(await manager.closeTab(tabId)).toEqual({ ok: true });
   expect((await handleCreate(deps, { kind: "resume", sessionId: "imported-rebind" })).ok).toBe(true);
   expect(envs[2]?.ANYCODE_MODEL).toBe("connection-model");
+});
+
+describe("TabHostManager — GitHub #17 slice A accepted acknowledgement", () => {
+  function rawAccepted(host: FakeHost, requestId: string): unknown {
+    const raw = host.postMessage.mock.calls.map((c) => c[0] as { type?: unknown; requestId?: unknown; kind?: unknown });
+    return raw.find(
+      (m) => m.type === CHILD_RUN_EVENT_TYPE && m.requestId === requestId && m.kind === "accepted",
+    );
+  }
+
+  it("a forked child's accepted event survives the real parser with ANYCODE_MAX_TURNS=300, and a stamped request budget outranks the env", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, { env: () => ({ PATH: "/base", [ENV_MAX_TURNS]: "300" }) });
+    manager.createTab({ workspace: "/ws", sessionId: "root-mt300", resume: false });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "mt-300" }));
+    expect(parseChildRunEvent(rawAccepted(rootHost, "mt-300"))).toMatchObject({ kind: "accepted", maxTurns: 300 });
+
+    // Stamped request budget (17) keeps its request > env precedence and is
+    // carried verbatim, not replaced by the env's 300.
+    rootHost.emit("message", spawnRequest({ requestId: "mt-17", maxTurns: 17 }));
+    expect(parseChildRunEvent(rawAccepted(rootHost, "mt-17"))).toMatchObject({ kind: "accepted", maxTurns: 17 });
+  });
+
+  it("absent, malformed, zero and negative ANYCODE_MAX_TURNS are omitted from accepted (never invalidate the acknowledgement)", () => {
+    for (const envMax of [undefined, "", "0", "-5", "abc", "2.5"]) {
+      const { fork, hosts } = shutdownableForkRig();
+      const { window } = windowRig();
+      const env = envMax === undefined ? { PATH: "/base" } : { PATH: "/base", [ENV_MAX_TURNS]: envMax };
+      const manager = childManager(fork, window, { env: () => env });
+      manager.createTab({ workspace: "/ws", sessionId: `root-mt-${envMax ?? "undef"}`, resume: false });
+      const rootHost = hosts[0]!;
+      rootHost.emit("message", spawnRequest({ requestId: "mt-invalid" }));
+      const parsed = parseChildRunEvent(rawAccepted(rootHost, "mt-invalid"));
+      expect(parsed).toMatchObject({ kind: "accepted" });
+      expect((parsed as { maxTurns?: number } | null)?.maxTurns).toBeUndefined();
+    }
+  });
+
+  it("child channel delivery failure does not suppress accepted — exactly one accepted, no rejection, and the start deadline still reaps", () => {
+    vi.useFakeTimers();
+    try {
+      const hosts: FakeHost[] = [];
+      const fork: HostForkFn = () => {
+        const host = new FakeHost();
+        hosts.push(host);
+        queueMicrotask(() => host.emit("spawn"));
+        host.postMessage.mockImplementation((msg: unknown) => {
+          // The SECOND fork is the child: its host-channel delivery throws,
+          // which must not prevent the already-posted accepted acknowledgement.
+          if (hosts.length === 2 && (msg as { type?: unknown }).type === "anycode:init") {
+            throw new Error("child renderer-port delivery boom");
+          }
+          if ((msg as { type?: unknown }).type === "shutdown") {
+            queueMicrotask(() => host.emit("exit", 0));
+          }
+        });
+        return host as unknown as UtilityProcess;
+      };
+      const { window } = windowRig();
+      const manager = childManager(fork, window);
+      manager.createTab({ workspace: "/ws", sessionId: "root-chan", resume: false });
+      const rootHost = hosts[0]!;
+
+      rootHost.emit("message", spawnRequest({ requestId: "chan-1" }));
+      const events = childRunEvents(rootHost);
+      expect(events.filter((e) => e.kind === "accepted")).toHaveLength(1);
+      expect(events.find((e) => e.requestId === "chan-1")).toMatchObject({ kind: "accepted" });
+      expect(events.some((e) => e.kind === "rejected")).toBe(false);
+      expect(hosts).toHaveLength(2); // fork already happened before delivery
+      expect(manager.listChildRuns()).toHaveLength(1);
+
+      vi.advanceTimersByTime(CHILD_START_DEADLINE_MS);
+      expect(childRunEvents(rootHost).find((e) => e.requestId === "chan-1" && e.kind === "terminal")).toMatchObject({
+        status: "error",
+      });
+      expect(manager.listChildRuns()).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * GitHub #17 slice B: a DETACHED spawn above the per-parent or
+ * global cap is refused IMMEDIATELY. A parked detached request sends no
+ * `accepted` until capacity frees, and the parent's step awaits every tool
+ * call — so parking a detached request is exactly the sync-join the detach
+ * flag exists to avoid. Explicitly synchronous callers keep the FIFO queue.
+ */
+describe("TabHostManager — detached spawns are refused at the cap, never parked (GitHub #17 slice B)", () => {
+  it("four detached same-step requests accept three and reject the fourth without queueing", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    manager.createTab({ workspace: "/ws", sessionId: "root-detach-burst", resume: false });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "d1", detach: true }));
+    rootHost.emit("message", spawnRequest({ requestId: "d2", detach: true }));
+    rootHost.emit("message", spawnRequest({ requestId: "d3", detach: true }));
+    rootHost.emit("message", spawnRequest({ requestId: "d4", detach: true, spawnToolCallId: "d4-call" }));
+
+    const events = childRunEvents(rootHost);
+    expect(events.filter((e) => e.kind === "accepted").map((e) => e.requestId)).toEqual(["d1", "d2", "d3"]);
+    // The 4th is ANSWERED — a refusal, not silence.
+    expect(events.find((e) => e.requestId === "d4")).toEqual({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "d4",
+      kind: "rejected",
+      reason: "limit_parent",
+      message:
+        'Agent: session-subagent limit reached — this session already has 3 running child sessions. Wait for one to finish, or use tier "inline".',
+    });
+    // Nothing was queued, nothing was reserved, nothing forked.
+    const raw = manager as unknown as { childSpawnQueue: string[]; childSpawnKeys: Map<string, string> };
+    expect(raw.childSpawnQueue).toEqual([]);
+    expect(raw.childSpawnKeys.has(["root-detach-burst", "d4-call"].join(String.fromCharCode(0)))).toBe(false);
+    expect(hosts).toHaveLength(1 + 3);
+    expect(events.filter((e) => e.requestId === "d4" && e.kind === "terminal")).toHaveLength(0);
+  });
+
+  it("a detached SYNCHRONOUS sibling occupying the last slot makes the next detached spawn refuse immediately", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    manager.createTab({ workspace: "/ws", sessionId: "root-mixed", resume: false });
+    const rootHost = hosts[0]!;
+
+    // Two synchronous children fill 2 of 3 slots; one more sync child fills the cap.
+    rootHost.emit("message", spawnRequest({ requestId: "s1", detach: false }));
+    rootHost.emit("message", spawnRequest({ requestId: "s2" }));
+    rootHost.emit("message", spawnRequest({ requestId: "s3" }));
+    expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(3);
+
+    // A sync spawn would park here (the existing queue behavior)...
+    rootHost.emit("message", spawnRequest({ requestId: "s4", spawnToolCallId: "s4-call" }));
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "s4")).toBe(false);
+    const raw = manager as unknown as { childSpawnQueue: string[] };
+    expect(raw.childSpawnQueue).toEqual(["s4"]);
+
+    // ...but a DETACHED one must be refused at once, so its step can finish.
+    rootHost.emit("message", spawnRequest({ requestId: "d-over", detach: true, spawnToolCallId: "d-over-call" }));
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "d-over")).toMatchObject({
+      kind: "rejected",
+      reason: "limit_parent",
+    });
+    expect(raw.childSpawnQueue).toEqual(["s4"]);
+  });
+
+  it("a detached global overflow rejects immediately while another parent owns the slots", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    for (const sid of ["root-gA", "root-gB", "root-gC", "root-gD"]) {
+      expect(manager.createTab({ workspace: "/ws", sessionId: sid, resume: false }).ok).toBe(true);
+    }
+    const [hostA, hostB, hostC, hostD] = [hosts[0]!, hosts[1]!, hosts[2]!, hosts[3]!];
+    const perParentCounts = [3, 3, 2]; // sums to the global cap of 8
+
+    for (let p = 0; p < 3; p++) {
+      for (let n = 0; n < perParentCounts[p]!; n++) {
+        [hostA, hostB, hostC][p]!.emit("message", spawnRequest({ requestId: `g${p}-${n}` }));
+      }
+    }
+    expect(childRunEvents(hostC).filter((e) => e.kind === "accepted")).toHaveLength(2);
+
+    hostD.emit("message", spawnRequest({ requestId: "d-global", detach: true, spawnToolCallId: "d-global-call" }));
+    const refused = childRunEvents(hostD).find((e) => e.requestId === "d-global");
+    expect(refused).toMatchObject({ kind: "rejected", reason: "limit_global" });
+    const raw = manager as unknown as { childSpawnQueue: string[]; childSpawnKeys: Map<string, string> };
+    expect(raw.childSpawnQueue).toEqual([]);
+    expect(raw.childSpawnKeys.has(["root-gD", "d-global-call"].join(String.fromCharCode(0)))).toBe(false);
+    expect(hosts).toHaveLength(4 + 8);
+  });
+
+  it("the live per-parent resolver uses the OWNING workspace", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const seen: string[] = [];
+    const manager = childManager(fork, window, {
+      childRunsPerParentMax: (workspace) => {
+        seen.push(workspace);
+        return workspace === "/proj-narrow" ? 1 : 3;
+      },
+    });
+    expect(manager.createTab({ workspace: "/proj-narrow", sessionId: "root-narrow", resume: false }).ok).toBe(true);
+    expect(manager.createTab({ workspace: "/proj-wide", sessionId: "root-wide", resume: false }).ok).toBe(true);
+    const [narrowHost, wideHost] = [hosts[0]!, hosts[1]!];
+
+    narrowHost.emit("message", spawnRequest({ requestId: "n1", detach: true }));
+    narrowHost.emit("message", spawnRequest({ requestId: "n2", detach: true }));
+    expect(childRunEvents(narrowHost).find((e) => e.requestId === "n2")).toMatchObject({
+      kind: "rejected",
+      reason: "limit_parent",
+    });
+
+    wideHost.emit("message", spawnRequest({ requestId: "w1", detach: true }));
+    wideHost.emit("message", spawnRequest({ requestId: "w2", detach: true }));
+    expect(childRunEvents(wideHost).filter((e) => e.kind === "accepted")).toHaveLength(2);
+    // The reader was consulted with each parent's OWN workspace, never a
+    // process-wide workspace or a workspace-less default.
+    expect(seen).toContain("/proj-narrow");
+    expect(seen).toContain("/proj-wide");
+  });
+
+  it("uses the stable project root for a worktree session's role cap", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const seen: string[] = [];
+    const manager = childManager(fork, window, {
+      childRunsPerParentMax: (projectRoot) => {
+        seen.push(projectRoot);
+        return projectRoot === "/project" ? 1 : 3;
+      },
+    });
+    manager.createTab({ workspace: "/project/.worktrees/one", projectRoot: "/project", sessionId: "worktree-root", resume: false });
+    const host = hosts[0]!;
+    host.emit("message", spawnRequest({ requestId: "one", detach: false }));
+    host.emit("message", spawnRequest({ requestId: "two", detach: true }));
+    expect(childRunEvents(host).find((event) => event.requestId === "two")).toMatchObject({ kind: "rejected", reason: "limit_parent" });
+    expect(seen).toEqual(["/project", "/project"]);
+  });
+
+  it("lowering the live per-parent cap does not cancel admitted children", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    let cap = 3;
+    const manager = childManager(fork, window, { childRunsPerParentMax: () => cap });
+    manager.createTab({ workspace: "/ws", sessionId: "root-lower", resume: false });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "l1", detach: true }));
+    rootHost.emit("message", spawnRequest({ requestId: "l2", detach: true }));
+    const accepted = childRunEvents(rootHost).filter((e) => e.kind === "accepted");
+    expect(accepted).toHaveLength(2);
+    const childTabIds = accepted.map((e) => (e.kind === "accepted" ? e.childTabId : ""));
+
+    cap = 1;
+    rootHost.emit("message", spawnRequest({ requestId: "l3", detach: true }));
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "l3")).toMatchObject({
+      kind: "rejected",
+      reason: "limit_parent",
+    });
+    // The two admitted children still run: no cancel, no terminal, still listed.
+    await flush();
+    const events = childRunEvents(rootHost);
+    expect(events.some((e) => e.kind === "terminal")).toBe(false);
+    for (const childTabId of childTabIds) expect(manager.getTab(childTabId)).toBeDefined();
+  });
 });

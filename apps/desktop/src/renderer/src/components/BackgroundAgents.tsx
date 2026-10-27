@@ -23,6 +23,28 @@ export function backgroundHeading(count: number): string {
   return count === 1 ? "1 background agent running" : `${count} background agents running`;
 }
 
+/**
+ * GitHub #17 slice E: the optional progress line for one child.
+ * Only facts the child actually reported appear — an engine that reports no
+ * turns shows no turn count rather than a fictitious zero (Codex children).
+ */
+export function backgroundProgressText(
+  child: Pick<WireBackgroundChild, "turns" | "toolCalls" | "lastTool">,
+): string {
+  const parts: string[] = [];
+  if (child.turns !== undefined) parts.push(`turn ${child.turns}`);
+  if (child.toolCalls !== undefined) parts.push(child.toolCalls === 1 ? "1 tool" : `${child.toolCalls} tools`);
+  if (child.lastTool !== undefined) parts.push(child.lastTool);
+  return parts.join(" · ");
+}
+
+/** "Waiting for permission" while the child is blocked on its own ask, else null. */
+export function backgroundWaitingText(
+  child: Pick<WireBackgroundChild, "waitingForApproval">,
+): string | null {
+  return child.waitingForApproval === true ? "Waiting for permission" : null;
+}
+
 export function BackgroundAgents() {
   const children = useTabStore((state) => state.backgroundChildren);
   const tabId = useTabContextTabId();
@@ -57,6 +79,12 @@ export function BackgroundAgents() {
               <span className="background-agents-type">{child.agentType}</span>
               <span className="background-agents-description">{child.description}</span>
               <span className="background-agents-elapsed">{backgroundElapsed(child.startedAt, now)}</span>
+              {backgroundProgressText(child) !== "" && (
+                <span className="background-agents-progress">{backgroundProgressText(child)}</span>
+              )}
+              {backgroundWaitingText(child) !== null && (
+                <span className="background-agents-waiting">{backgroundWaitingText(child)}</span>
+              )}
               {spawnToolCallId !== undefined && (
                 <button
                   type="button"

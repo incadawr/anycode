@@ -7,6 +7,8 @@
  * message/rule construction) — are covered directly instead of through DOM
  * rendering.
  */
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { EnginePresentation } from "../../../shared/protocol.js";
 import {
@@ -29,6 +31,7 @@ import {
   describePermissionAsk,
   formatPermissionTitle,
   neutralRiskLabelFor,
+  PermissionModal,
   suggestAlwaysAllowPattern,
 } from "./PermissionModal.js";
 
@@ -823,5 +826,54 @@ describe("describePermissionAsk — header neutralisation (Taskana 4070)", () =>
     expect(neutralRiskLabelFor(HIGH_DESTRUCTIVE, null)).toBeNull();
     expect(neutralRiskLabelFor(HIGH_DESTRUCTIVE, BASH_RISK_PLAQUE.unknownBinary)).toBeNull();
     expect(neutralRiskLabelFor({ riskLevel: "medium", destructive: false }, BASH_RISK_PLAQUE.readOnly)).toBeNull();
+  });
+});
+
+/**
+ * GitHub #17 slice E: an optional owner label names the child
+ * session whose ask is forwarded into the parent window. Everything else the
+ * dialog presents (title, risk badge, deny/allow actions) is unchanged.
+ */
+describe("PermissionModal owner label (GitHub #17 slice E)", () => {
+  const request = {
+    requestId: "req-17",
+    toolName: "Write",
+    input: { file_path: "/workspace/gh17-allow.txt", content: "hello" },
+    mode: "build" as const,
+    metadata: { riskLevel: "medium" as const, destructive: false, readOnly: false, needsApproval: true, title: "Write gh17-allow.txt" },
+  };
+
+  function render(props: Parameters<typeof PermissionModal>[0]): string {
+    // The dialog reads the platform from `window.anycode` while rendering; the
+    // node test environment has no window, so a minimal stub stands in for it.
+    const scope = globalThis as { window?: unknown };
+    const previous = scope.window;
+    scope.window = { anycode: { platform: "darwin" } };
+    try {
+      return renderToStaticMarkup(createElement(PermissionModal, props));
+    } finally {
+      if (previous === undefined) delete scope.window;
+      else scope.window = previous;
+    }
+  }
+
+  it("prints the child's label while keeping the existing ask presentation", () => {
+    const html = render({
+      request: request as never,
+      onAllow: () => {},
+      onDeny: () => {},
+      workspace: "/workspace",
+      ownerLabel: "Subagent: child-17",
+    });
+    expect(html).toContain("Subagent: child-17");
+    expect(html).toContain("permission-owner-label");
+    expect(html).toContain("permission-risk-badge");
+    expect(html).toContain("permission-modal-close");
+  });
+
+  it("omits the label entirely for the tab's own ask", () => {
+    const html = render({ request: request as never, onAllow: () => {}, onDeny: () => {}, workspace: "/workspace" });
+    expect(html).not.toContain("permission-owner-label");
+    expect(html).not.toContain("Subagent:");
   });
 });

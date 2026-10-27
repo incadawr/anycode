@@ -396,7 +396,8 @@ describe("routing reaches the handler layer", () => {
 
   it("GET /state projects manager.listChildRuns() as childRuns (TASK.102 S2d D1), [] when the manager lacks it", async () => {
     const childRuns = [
-      { requestId: "r1", parentSessionId: "sess-p", childTabId: "tab-c", childSessionId: "sess-c", state: "running" as const, pid: 777 },
+      // GitHub #17 slice F: forkedAt rides the same projection.
+      { requestId: "r1", parentSessionId: "sess-p", childTabId: "tab-c", childSessionId: "sess-c", state: "running" as const, pid: 777, forkedAt: 1_700_001 },
     ];
     const manager = fakeManager({ listChildRuns: () => childRuns });
     const h = await boot({ manager });

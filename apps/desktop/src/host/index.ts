@@ -484,6 +484,7 @@ import { Outbound, Session, summarizeProviderUsage, tapChildPermissions, type Ch
 // RPC-client wiring (createChildSessionPort), the ChildRunEvent dispatch
 // table, and the sessionTier:true/sessionSubagents non-recursion locks.
 import { createChildSessionPort, type ChildSessionPort } from "./child-session-port.js";
+import { readChildSessionsPerParentMax } from "./child-session-limits.js";
 import {
   CHILD_PROGRESS_TYPE,
   CHILD_READY_TYPE,
@@ -4286,10 +4287,13 @@ async function boot(): Promise<void> {
         // when the env/setting is unset. Now governs BOTH the sync and
         // detached stall clocks (slice 2 wires the detached one too).
         stallTimeoutMs: envConfig.subagentStallTimeoutMs,
-        // Taskana 4704 §2.8/§3.6: the parallel-children cap (live cell —
-        // `roles.maxParallelChildren ?? 4`; undefined only when the settings
-        // read failed, which keeps the pre-4704 unlimited posture).
-        maxDetachedChildren: () => { refreshRolesSettings(); return rolesSettings?.maxParallelChildren ?? 4; },
+        // GitHub #17 slice B: the SAME effective per-parent cap
+        // main resolves — session setting (default 3) optionally lowered by an
+        // EXPLICIT selected role profile's maxParallelChildren (1..16). Read at
+        // spawn time; no implicit role default of 4. This host-local refusal is
+        // only an early optimization — main stays the admission authority.
+        maxDetachedChildren: () =>
+          readChildSessionsPerParentMax(hostSettingsPathOverride() ?? defaultSettingsPath(), rolesProjectRoot),
       });
       config.sessionSubagents = childSessionPortHandle;
       // Taskana 4704 §3.6: the respawn path re-spawns through THIS port, and
@@ -4309,7 +4313,16 @@ async function boot(): Promise<void> {
         // caller) stamped the request (tools/agent.ts), so a caller's explicit
         // model that merely equals the bare head model is never mistaken for a
         // chain hop. Field equality is no longer consulted.
-        if (req.detach === true && isRoleRouteName(req.agentType) && req.resumeChildSessionId === undefined) {
+        // GitHub #17 slice D: a SYNCHRONOUS join that can be
+        // handed off to the background needs the same route facts recorded —
+        // its real terminal arrives after the tool call returned. The snapshot
+        // (head/rest/skipped) is captured HERE, at dispatch, so a later
+        // background terminal never reads freshly changed settings.
+        if (
+          (req.detach === true || req.allowBackgroundHandoff === true) &&
+          isRoleRouteName(req.agentType) &&
+          req.resumeChildSessionId === undefined
+        ) {
           const resolution = resolveRoleRouteImpl(req.agentType);
           const head = resolution?.entries[0];
           if (head !== undefined) {
@@ -4326,12 +4339,16 @@ async function boot(): Promise<void> {
           settingsBudgetSet: envConfig.subagentMaxTurns !== undefined,
           port: subagentBudget,
         });
-        if (req.detach === true) {
-          // Detached: the admit outcome is not a finished run; the terminal
-          // records itself through onDetachedTerminal above.
-          return innerRun(budgeted, opts);
-        }
+        // GitHub #17 slice D: ONE outcome-based continuation for
+        // every request. An admission/handoff outcome (explicit detach OR a
+        // join-budget handoff) is not a finished run — it must neither train
+        // the budget nor release the routed-spawn facts (the child's real
+        // terminal, delivered through onDetachedTerminal, still needs them).
+        // A real synchronous terminal/rejection records its budget and drops
+        // the route facts, exactly like before this slice.
         return innerRun(budgeted, opts).then((outcome) => {
+          if (outcome.background !== undefined) return outcome;
+          routedSpawns.delete(req.spawnToolCallId);
           recordAcceptedChildBudget(subagentBudget, outcome, budgeted);
           return outcome;
         });

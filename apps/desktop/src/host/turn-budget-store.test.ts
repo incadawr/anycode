@@ -206,4 +206,23 @@ describe("session-tier budget wiring (TASK.4721)", () => {
   it("adaptive OFF (no port): recording is a no-op", () => {
     expect(() => recordAcceptedChildBudget(undefined, { status: "completed", turns: 3 }, base)).not.toThrow();
   });
+
+  // GitHub #17 slice D: an admission/handoff outcome says the
+  // child is STILL RUNNING. However "completed" its status reads, it is not a
+  // finished run and must never train a completed-run sample.
+  it("a background admission or a join-budget handoff never trains a sample", () => {
+    const { port, records } = fakePort(undefined);
+    recordAcceptedChildBudget(port, { status: "completed", turns: 0, background: { reason: "requested" } }, base);
+    recordAcceptedChildBudget(port, { status: "completed", turns: 0, background: { reason: "join_budget" } }, base);
+    // Even a handoff that somehow carried a plausible turn count is refused.
+    recordAcceptedChildBudget(port, { status: "completed", turns: 12, background: { reason: "join_budget" } }, base);
+    expect(records).toEqual([]);
+  });
+
+  it("the child's REAL terminal after a handoff still records exactly once", () => {
+    const { port, records } = fakePort(undefined);
+    recordAcceptedChildBudget(port, { status: "completed", turns: 0, background: { reason: "join_budget" } }, base);
+    recordAcceptedChildBudget(port, { status: "completed", turns: 9 }, base);
+    expect(records).toEqual([{ role: "explore", turns: 9 }]);
+  });
 });

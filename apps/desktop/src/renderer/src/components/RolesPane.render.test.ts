@@ -8,7 +8,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RolePickerDialog } from "./RolePickerDialog.js";
-import { RolesPane, RolesSaveNotice } from "./RolesPane.js";
+import { RolesPane, RolesSaveNotice, buildRoleProfileRoles, parseRoleChildLimitInput } from "./RolesPane.js";
 import { useSettingsStore } from "../settings-store.js";
 import type { SettingsSnapshot } from "../../../shared/settings.js";
 
@@ -189,5 +189,71 @@ describe("Role editor — a profile that claims a role is named, not silently ob
     expect(withProfile).toContain("Overridden by the agent profile");
     expect(afterRemoval).not.toContain("Overridden by the agent profile");
     expect(afterRemoval).not.toContain("role-route-overridden-");
+  });
+});
+
+
+/**
+ * GitHub #17 slice B: the pane used to seed its number input
+ * with `?? 4` and write that competing default back on every save, so an
+ * absent role cap silently became an explicit 4. Blank must now mean
+ * "inherit the session limit" (default 3), and anything unparseable must
+ * refuse the save instead of being clamped.
+ */
+describe("Max parallel children input (GitHub #17 slice B)", () => {
+  /** The <input> that follows the cap label — attribute order is not stable. */
+  function childLimitInput(html: string): string {
+    return html.split('Max parallel children</span>')[1]!.split(">")[0]! + ">";
+  }
+
+  const settingsSnapshot = (roles: Record<string, unknown>): SettingsSnapshot => ({
+    settings: {
+      version: 2,
+      provider: { connections: [] },
+      roleProfiles: { activeId: "p", profiles: [{ id: "p", name: "P", roles }], projects: [] },
+      tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false },
+    },
+    secrets: [], providerReady: true, envOverrides: [], readOnly: false, catalog: [],
+  });
+
+  it("an absent explicit cap renders BLANK, never a fabricated 4", () => {
+    useSettingsStore.setState({ snapshot: settingsSnapshot({}) });
+    const html = renderToStaticMarkup(createElement(RolesPane));
+    const input = childLimitInput(html);
+    expect(input).toContain('value=""');
+    expect(html).not.toContain("default 4");
+    expect(html).toContain("blank uses the session limit, default 3");
+  });
+
+  it("an explicit cap survives in the input", () => {
+    useSettingsStore.setState({ snapshot: settingsSnapshot({ maxParallelChildren: 2 }) });
+    const html = renderToStaticMarkup(createElement(RolesPane));
+    expect(childLimitInput(html)).toContain('value="2"');
+  });
+
+  it("parses only blank or a whole number 1..16", () => {
+    expect(parseRoleChildLimitInput("")).toEqual({ valid: true });
+    expect(parseRoleChildLimitInput("   ")).toEqual({ valid: true });
+    expect(parseRoleChildLimitInput(" 2 ")).toEqual({ valid: true, value: 2 });
+    expect(parseRoleChildLimitInput("16")).toEqual({ valid: true, value: 16 });
+    for (const raw of ["0", "-1", "17", "2.5", "two", "1e3", " 4 5", "0x10"]) {
+      expect(parseRoleChildLimitInput(raw)).toEqual({ valid: false });
+    }
+  });
+
+  it("a blank field CLEARS a previously saved cap instead of rewriting 4", () => {
+    const previous = { executor: { primary: { engine: "claude" as const } }, maxParallelChildren: 4 };
+    const cleared = buildRoleProfileRoles(previous, "");
+    expect(cleared.valid).toBe(true);
+    expect(cleared.valid && "maxParallelChildren" in cleared.roles).toBe(false);
+    expect(cleared.valid && cleared.roles.executor).toEqual(previous.executor);
+  });
+
+  it("a valid value is written, and an invalid one refuses the whole save", () => {
+    const built = buildRoleProfileRoles({ executor: { primary: {} } }, "2");
+    expect(built).toEqual({ valid: true, roles: { executor: { primary: {} }, maxParallelChildren: 2 } });
+    for (const raw of ["0", "17", "2.5"]) {
+      expect(buildRoleProfileRoles({ maxParallelChildren: 4 }, raw)).toEqual({ valid: false });
+    }
   });
 });

@@ -8775,3 +8775,118 @@ describe("compact_rejected (GitHub #14)", () => {
     });
   });
 });
+
+/**
+ * GitHub #17 slice D: an Agent tool_result whose child was
+ * DISPATCHED (explicit detach or a join-budget handoff) carries a
+ * `subagentHandoff` marker instead of a terminal card. The block must lose its
+ * transient live spinner, keep its generic dispatch text, and never claim the
+ * child finished — live and after a reload.
+ */
+describe("desktop store — Agent background handoff (GitHub #17 slice D)", () => {
+  const HANDOFF_TARGET = {
+    kind: "session" as const,
+    childSessionId: "child-17",
+    parentSessionId: "parent-17",
+    spawnToolCallId: "call-17",
+  };
+
+  function agentStore() {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "parent-17" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
+    const send = (event: Record<string, unknown>) =>
+      store.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: event as never });
+    send({ type: "tool_call", toolCall: { id: "call-17", name: "Agent", input: { description: "review", prompt: "go", tier: "session" } } });
+    send({ type: "tool_execution_start", toolCallId: "call-17", toolName: "Agent", input: {} });
+    // A live child card exists while the call is joining.
+    send({
+      type: "subagent_start",
+      toolCallId: "call-17",
+      agentType: "executor",
+      description: "review",
+      model: "glm-5.3",
+    });
+    return { store, send };
+  }
+
+  it("a valid handoff clears the live spinner and keeps the generic dispatch result", () => {
+    const { store, send } = agentStore();
+    expect(findBlock(store.getState().transcript, "tool_call")?.subagent).not.toBeNull();
+
+    send({
+      type: "tool_result",
+      outcome: {
+        toolCallId: "call-17",
+        toolName: "Agent",
+        status: "success",
+        modelText: "Agent: the child is still running after 120 seconds; its report will arrive as a message.",
+        durationMs: 120_000,
+        result: { ok: true, output: {}, presentation: { subagentHandoff: { target: HANDOFF_TARGET, reason: "join_budget" } } },
+      },
+    });
+
+    const block = findBlock(store.getState().transcript, "tool_call");
+    expect(block?.status).toBe("success");
+    expect(block?.subagent).toBeNull();
+    expect(block?.modelText).toContain("still running");
+  });
+
+  it("a malformed or foreign handoff leaves the existing live state untouched", () => {
+    for (const presentation of [
+      { subagentHandoff: { target: { ...HANDOFF_TARGET, spawnToolCallId: "call-other" }, reason: "requested" } },
+      { subagentHandoff: { target: HANDOFF_TARGET, reason: "finished" } },
+    ]) {
+      const { store, send } = agentStore();
+      send({
+        type: "tool_result",
+        outcome: {
+          toolCallId: "call-17",
+          toolName: "Agent",
+          status: "success",
+          modelText: "some text",
+          durationMs: 1,
+          result: { ok: true, output: {}, presentation },
+        },
+      });
+      expect(findBlock(store.getState().transcript, "tool_call")?.subagent).not.toBeNull();
+    }
+  });
+
+  it("a reloaded transcript renders the dispatched Agent card as generic, not completed and not spinning", () => {
+    const blocks = projectHistoryToBlocks([
+      {
+        id: "i1",
+        createdAt: 1,
+        message: { role: "user", content: "run a review" },
+      },
+      {
+        id: "i2",
+        createdAt: 2,
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_call", toolCallId: "call-17", toolName: "Agent", input: { description: "review", prompt: "go", tier: "session" } }],
+        },
+      },
+      {
+        id: "i3",
+        createdAt: 3,
+        message: {
+          role: "tool",
+          content: [
+            {
+              toolCallId: "call-17",
+              status: "success",
+              text: "Agent: child session child-17 started in the background.",
+              presentation: { subagentHandoff: { target: HANDOFF_TARGET, reason: "requested" } },
+            },
+          ],
+        },
+      },
+    ] as never);
+
+    const block = blocks.find((b) => b.kind === "tool_call");
+    expect(block?.kind === "tool_call" && block.subagent).toBeNull();
+    expect(block?.kind === "tool_call" && block.status).toBe("success");
+  });
+});

@@ -245,7 +245,11 @@ describe("buildSessionSubagentRequest (§3.2)", () => {
         spawnToolCallId: "call-fx-1",
         profile,
       });
-      expect(seen).toEqual(built);
+      // GitHub #17 slice C: the NATIVE Agent tool defaults an
+      // engine-profile session call to background; the bridge builder keeps
+      // its explicit-detach contract, so the native request is the builder's
+      // shape PLUS the default detach flag.
+      expect(seen).toEqual({ ...built, detach: true });
     });
 
     it("fixture 2: engine profile, no override (falls back to the profile's own model)", async () => {
@@ -261,7 +265,8 @@ describe("buildSessionSubagentRequest (§3.2)", () => {
         spawnToolCallId: "call-fx-2",
         profile,
       });
-      expect(seen).toEqual(built);
+      // GitHub #17 slice C: native engine-profile calls detach by default.
+      expect(seen).toEqual({ ...built, detach: true });
     });
 
     it("fixture 3: plain core session-tier call (no engine profile) plus provider/detach", async () => {

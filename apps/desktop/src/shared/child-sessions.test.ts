@@ -69,6 +69,24 @@ describe("parseChildSpawnRequest", () => {
     expect(parseChildSpawnRequest(valid)).toEqual(valid);
   });
 
+  // GitHub #17 slice B: the detach flag rides the wire so main
+  // can refuse an over-cap detached request immediately instead of parking it.
+  it("round-trips detach true and false, and keeps legacy absent absent", () => {
+    const detached = { ...valid, detach: true };
+    expect(parseChildSpawnRequest(detached)).toEqual(detached);
+    const joined = { ...valid, detach: false };
+    expect(parseChildSpawnRequest(joined)).toEqual(joined);
+    const parsed = parseChildSpawnRequest(valid);
+    expect(parsed).toEqual(valid);
+    expect(parsed !== null && "detach" in parsed).toBe(false);
+  });
+
+  it("fails closed on a non-boolean detach", () => {
+    for (const detach of ["true", 1, 0, null, {}]) {
+      expect(parseChildSpawnRequest({ ...valid, detach })).toBeNull();
+    }
+  });
+
   it("accepts a well-formed resumeChildSessionId and drops a malformed one", () => {
     const withResume = { ...valid, resumeChildSessionId: "child-1" };
     expect(parseChildSpawnRequest(withResume)).toEqual(withResume);
@@ -1140,11 +1158,23 @@ describe("parseChildRunEvent — accepted maxTurns (Taskana 4820 F1)", () => {
     expect(parseChildRunEvent(base)).toEqual(base);
   });
 
-  it("rejects a non-conforming maxTurns (0, negative, fraction, string, over-ceiling) — fail-closed, same gate as the spawn request", () => {
+  it("accepted effective maxTurns may exceed the profile ceiling (GitHub #17 slice A)", () => {
+    // The accepted event's maxTurns is the child's EFFECTIVE session cap
+    // (settings.tools.maxTurns / ANYCODE_MAX_TURNS), not a requested profile
+    // budget — so 201/300/MAX_SAFE_INTEGER parse, while non-safe/fractional/
+    // non-positive values still fail closed.
+    expect(parseChildRunEvent({ ...base, maxTurns: 201 })).toEqual({ ...base, maxTurns: 201 });
+    expect(parseChildRunEvent({ ...base, maxTurns: 300 })).toEqual({ ...base, maxTurns: 300 });
+    expect(parseChildRunEvent({ ...base, maxTurns: Number.MAX_SAFE_INTEGER })).toEqual({
+      ...base,
+      maxTurns: Number.MAX_SAFE_INTEGER,
+    });
     expect(parseChildRunEvent({ ...base, maxTurns: 0 })).toBeNull();
     expect(parseChildRunEvent({ ...base, maxTurns: -3 })).toBeNull();
     expect(parseChildRunEvent({ ...base, maxTurns: 2.5 })).toBeNull();
     expect(parseChildRunEvent({ ...base, maxTurns: "40" })).toBeNull();
-    expect(parseChildRunEvent({ ...base, maxTurns: 201 })).toBeNull();
+    expect(parseChildRunEvent({ ...base, maxTurns: NaN })).toBeNull();
+    expect(parseChildRunEvent({ ...base, maxTurns: Infinity })).toBeNull();
+    expect(parseChildRunEvent({ ...base, maxTurns: 2 ** 53 })).toBeNull();
   });
 });

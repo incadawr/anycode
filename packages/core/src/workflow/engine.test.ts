@@ -1929,6 +1929,36 @@ describe("workflow engine role-route (engine-profile steps, Taskana 4735)", () =
     expect(outcomeOf(outcome.steps, "a").finalText).toBe("ok-plan");
   });
 
+  // GitHub #17 slice D: the join-budget handoff is a native
+  // Agent concern ONLY. A workflow step's synchronous child must reach a real
+  // terminal before its dependency is satisfied — handing it off would let the
+  // engine run downstream steps against a child that never finished.
+  it("(GitHub #17 slice D) a workflow session step never opts into the join handoff, and a pending child satisfies no dependency", async () => {
+    const port = new RoutedSubagentPort(
+      ["planner"],
+      (id, req, opts) => emitAndComplete(opts, req, `inline:${id}`),
+      PLANNER_PROFILES,
+      new Map([["planner", { entries: [{ engine: "claude", model: "opus" }], skipped: [] }]]),
+    );
+    let release: ((outcome: SessionSubagentOutcome) => void) | undefined;
+    const session = new FakeSessionSubagentPort(
+      async () => new Promise<SessionSubagentOutcome>((resolve) => { release = resolve; }),
+    );
+    let settled = false;
+    const running = runPlanner(port, session).then((outcome) => {
+      settled = true;
+      return outcome;
+    });
+    await Promise.resolve();
+    // Still waiting on the child: no step outcome yet.
+    expect(settled).toBe(false);
+    expect(session.requests[0]).not.toHaveProperty("allowBackgroundHandoff");
+    expect(session.requests[0]).not.toHaveProperty("detach");
+
+    release!(sessionOutcome(session.requests[0]!, { finalText: "late plan" }));
+    expect(outcomeOf((await running).steps, "a").finalText).toBe("late plan");
+  });
+
   it("(b) cooling primary with a healthy fallback: runs the fallback entry without the profile, with a fallback notice", async () => {
     const port = new RoutedSubagentPort(
       ["planner"],

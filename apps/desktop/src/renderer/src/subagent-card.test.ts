@@ -32,6 +32,7 @@ import {
   DESCRIPTION_MAX_CHARS,
   MODEL_MAX_CHARS,
   decodeSubagentCardSnapshot,
+  decodeSubagentHandoff,
   projectSubagentCard,
 } from "./subagent-card.js";
 import { SUBAGENT_ACTIVITY_RING } from "./store.js";
@@ -396,5 +397,44 @@ describe("constant parity (CUT-S1 §5 anti-facade #2: a silent renderer/core cap
 
   it("the ring cap equals the renderer's own live SUBAGENT_ACTIVITY_RING (store.ts) — post-reload '+N earlier' must never read shorter than the live feed", () => {
     expect(ACTIVITY_RING).toBe(SUBAGENT_ACTIVITY_RING);
+  });
+});
+
+/**
+ * GitHub #17 slice D: the handoff marker is untrusted payload
+ * from a persisted/live tool result. It must fail closed on anything that is
+ * not an Agent result carrying nonempty session ids bound to THIS call.
+ */
+describe("decodeSubagentHandoff (GitHub #17 slice D)", () => {
+  const target = {
+    kind: "session",
+    childSessionId: "child-1",
+    parentSessionId: "parent-1",
+    spawnToolCallId: "call-1",
+  };
+
+  it("accepts both reasons on a well-formed Agent handoff", () => {
+    expect(decodeSubagentHandoff({ target, reason: "requested" }, CTX)).toEqual({ target, reason: "requested" });
+    expect(decodeSubagentHandoff({ target, reason: "join_budget" }, CTX)).toEqual({ target, reason: "join_budget" });
+  });
+
+  it("ignores a marker on a foreign tool, an unknown reason, or a mismatched call id", () => {
+    expect(decodeSubagentHandoff({ target, reason: "requested" }, { toolCallId: "call-1", toolName: "Bash" })).toBeNull();
+    expect(decodeSubagentHandoff({ target, reason: "completed" }, CTX)).toBeNull();
+    expect(decodeSubagentHandoff({ target: { ...target, spawnToolCallId: "call-other" }, reason: "requested" }, CTX)).toBeNull();
+  });
+
+  it("ignores malformed targets and non-objects", () => {
+    for (const value of [
+      null,
+      "handoff",
+      [],
+      {},
+      { target: { kind: "inline" }, reason: "requested" },
+      { target: { ...target, childSessionId: "" }, reason: "requested" },
+      { target: { ...target, parentSessionId: 7 }, reason: "requested" },
+    ]) {
+      expect(decodeSubagentHandoff(value, CTX)).toBeNull();
+    }
   });
 });

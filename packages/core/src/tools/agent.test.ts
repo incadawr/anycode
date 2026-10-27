@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { agentTool } from "./agent.js";
+import { agentTool, createAgentTool } from "./agent.js";
 import { agentInputSchema } from "./schemas.js";
 import type { ToolContext, ToolEmittedEvent } from "../types/tools.js";
 import type { CorePorts } from "../ports/index.js";
@@ -21,7 +21,7 @@ import type {
   SubagentRequest,
   SubagentRunOptions,
 } from "../ports/subagent.js";
-import type { SessionSubagentPort } from "../ports/session-subagent.js";
+import type { SessionSubagentOutcome, SessionSubagentPort, SessionSubagentRequest } from "../ports/session-subagent.js";
 
 function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
@@ -1312,5 +1312,121 @@ describe("agentTool — presentation attach across all four settle branches (TAS
     );
 
     expect(result.presentation?.subagent?.activity.dropped).toBe(9);
+  });
+});
+
+/**
+ * GitHub #17 slice D: an Agent call whose child was ADMITTED (or
+ * handed off at its join budget) reports the dispatch — a structured
+ * `subagentHandoff` marker and NO finalized terminal card, because the child is
+ * still running. A real terminal keeps the existing card behavior.
+ */
+describe("agentTool — background handoff presentation (GitHub #17 slice D)", () => {
+  const full = createAgentTool({ sessionTier: true });
+
+  function sessionPort(outcome: Omit<SessionSubagentOutcome, "childSessionId" | "parentSessionId" | "spawnToolCallId">) {
+    const seen: SessionSubagentRequest[] = [];
+    const port: SessionSubagentPort = {
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
+      run: async (req) => {
+        seen.push(req);
+        return { ...outcome, childSessionId: "child-17", parentSessionId: "parent-17", spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    return { port, seen };
+  }
+
+  it("an admitted child returns the structured marker and no completed card", async () => {
+    const { port } = sessionPort({
+      status: "completed",
+      finalText: "Agent: child session child-17 started in the background.",
+      truncated: false,
+      turns: 0,
+      toolCalls: 0,
+      durationMs: 0,
+      background: { reason: "requested" },
+    });
+    const result = await full.handler(
+      { description: "review", prompt: "go", tier: "session", detach: true },
+      makeCtx({ sessionSubagents: port }),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.presentation?.subagent).toBeUndefined();
+    expect(result.presentation?.subagentHandoff).toEqual({
+      target: {
+        kind: "session",
+        childSessionId: "child-17",
+        parentSessionId: "parent-17",
+        spawnToolCallId: "call-1",
+      },
+      reason: "requested",
+    });
+    // The model-visible text reports the dispatch, not a finished review.
+    expect(result.output?.finalText).toContain("background");
+  });
+
+  it("a join-budget handoff carries reason join_budget and the handoff text", async () => {
+    const { port } = sessionPort({
+      status: "completed",
+      finalText: "Agent: the child is still running after 120 seconds; its report will arrive as a message.",
+      truncated: false,
+      turns: 0,
+      toolCalls: 0,
+      durationMs: 0,
+      background: { reason: "join_budget" },
+    });
+    const result = await full.handler(
+      { description: "review", prompt: "go", tier: "session", detach: false },
+      makeCtx({ sessionSubagents: port }),
+    );
+    expect(result.presentation?.subagent).toBeUndefined();
+    expect(result.presentation?.subagentHandoff?.reason).toBe("join_budget");
+    expect(result.output?.finalText).toContain("still running");
+  });
+
+  it("a real terminal still produces its terminal card and no handoff marker", async () => {
+    const port: SessionSubagentPort = {
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
+      run: async (req, opts) => {
+        // A real host emits the live start/end progress a card is built from.
+        opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description, model: "glm-4.6" });
+        opts.onProgress?.({ kind: "end", status: "completed", turns: 3, durationMs: 900 });
+        return {
+          status: "completed",
+          finalText: "the review is done",
+          truncated: false,
+          turns: 3,
+          toolCalls: 2,
+          durationMs: 900,
+          childSessionId: "child-17",
+          parentSessionId: "parent-17",
+          spawnToolCallId: req.spawnToolCallId,
+        };
+      },
+    };
+    const result = await full.handler(
+      { description: "review", prompt: "go", tier: "session", detach: false },
+      makeCtx({ sessionSubagents: port }),
+    );
+    expect(result.presentation?.subagentHandoff).toBeUndefined();
+    expect(result.presentation?.subagent?.final).toMatchObject({ status: "completed" });
+    expect(result.presentation?.subagent?.target).toMatchObject({ kind: "session", childSessionId: "child-17" });
+  });
+
+  it("a joining request opts into the host's handoff; a detached one does not", async () => {
+    const { port, seen } = sessionPort({
+      status: "completed",
+      finalText: "done",
+      truncated: false,
+      turns: 0,
+      toolCalls: 0,
+      durationMs: 0,
+    });
+    await full.handler({ description: "d", prompt: "p", tier: "session", detach: false }, makeCtx({ sessionSubagents: port }));
+    await full.handler({ description: "d", prompt: "p", tier: "session", detach: true }, makeCtx({ sessionSubagents: port }));
+    expect(seen[0]?.allowBackgroundHandoff).toBe(true);
+    expect("detach" in (seen[0] ?? {})).toBe(false);
+    expect(seen[1]?.detach).toBe(true);
+    expect("allowBackgroundHandoff" in (seen[1] ?? {})).toBe(false);
   });
 });

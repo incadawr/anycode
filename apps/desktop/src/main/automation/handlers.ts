@@ -84,6 +84,8 @@ export interface ChildRunSummary {
   childSessionId: string;
   state: "starting" | "running" | "cancelling";
   pid: number | null;
+  /** GitHub #17 slice F: the child tab's actual fork time (null before a child tab exists). */
+  forkedAt: number | null;
 }
 
 /**

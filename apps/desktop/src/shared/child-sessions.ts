@@ -113,6 +113,16 @@ export interface ChildSpawnRequest {
    * defaults; follow-up (resume) requests never carry it.
    */
   maxTurns?: number;
+  /**
+   * GitHub #17 slice B: whether this spawn is a DETACHED
+   * (background) request. Main uses it to choose IMMEDIATE refusal at the
+   * per-parent/global cap instead of FIFO parking — a parked detached request
+   * would hold the parent's whole step (the tool call waits for `accepted`,
+   * and a queued request sends no accepted until capacity frees). Absent =
+   * legacy synchronous queue behavior (the field predates this flag); only
+   * absent/boolean is well-formed.
+   */
+  detach?: boolean;
 }
 
 /** Aborts a running child (parent turn cancel/timeout, §0.5's ctx.abortSignal). */
@@ -209,6 +219,17 @@ export type ChildRunEvent = { type: typeof CHILD_RUN_EVENT_TYPE; requestId: stri
        * against the cap the child will ACTUALLY stop at, never a duplicated
        * literal. NEVER outranks the request's own `maxTurns` (parent-side
        * precedence: request > accepted > DEFAULT_MAX_TURNS).
+       */
+      /**
+       * GitHub #17 slice A: this is the child's EFFECTIVE
+       * session turn cap — distinct from a REQUESTED profile budget
+       * (`ChildSpawnRequest.maxTurns`, bounded 1..CHILD_MAX_TURNS_CEILING).
+       * Main resolves it from the stamped `--child-max-turns` (request
+       * precedence) else the host env's `ANYCODE_MAX_TURNS`
+       * (`settings.tools.maxTurns`, which the schema permits up to 300), and
+       * omits it when neither source produced a valid positive safe integer.
+       * Validated with `isValidEffectiveChildMaxTurns` — any positive safe
+       * integer — never the profile-budget ceiling.
        */
       maxTurns?: number;
     }
@@ -494,6 +515,22 @@ function isCounter(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
+/**
+ * GitHub #17 slice A: the ACCEPTED event's `maxTurns` is the
+ * child's EFFECTIVE session turn cap — a fact main already resolved from
+ * `settings.tools.maxTurns`/`ANYCODE_MAX_TURNS`, whose schema permits values
+ * ABOVE the requested-profile ceiling (`settings/schema.ts` allows up to 300).
+ * That ceiling (`CHILD_MAX_TURNS_CEILING`) remains correct for a REQUESTED
+ * profile budget (`ChildSpawnRequest.maxTurns`, argv `--child-max-turns`) but
+ * must NOT gate an effective session fact — a valid 201/300 accepted event
+ * must parse, or main's acknowledgement is silently dropped and the parent's
+ * detached waiter never settles. The two limits are intentionally distinct:
+ * request budgets stay 1..200; an effective cap is any positive safe integer.
+ */
+export function isValidEffectiveChildMaxTurns(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
 function isPermissionMode(value: unknown): value is PermissionMode {
   return typeof value === "string" && PERMISSION_MODE_VALUES.includes(value);
 }
@@ -521,6 +558,8 @@ const CHILD_SPAWN_REQUEST_KEYS = [
   "resumeChildSessionId",
   // TASK.180: additive key (profile turn budget for the creating spawn).
   "maxTurns",
+  // GitHub #17 slice B: additive key (detach admission flag).
+  "detach",
 ] as const;
 
 const CHILD_EFFORT_VALUES: readonly string[] = ["off", "low", "medium", "high", "xhigh", "max"] satisfies readonly ChildEffort[];
@@ -587,6 +626,12 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
   ) {
     return null;
   }
+  // GitHub #17 slice B: absent stays valid (legacy synchronous
+  // queue behavior); a defined detach must be a boolean — anything else
+  // rejects the whole message (fail-closed, like every other invalid field).
+  if (msg.detach !== undefined && typeof msg.detach !== "boolean") {
+    return null;
+  }
   return {
     type: CHILD_SPAWN_REQUEST_TYPE,
     requestId: msg.requestId,
@@ -602,6 +647,7 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
     ...(msg.engine !== undefined ? { engine: msg.engine } : {}),
     ...(msg.resumeChildSessionId !== undefined ? { resumeChildSessionId: msg.resumeChildSessionId as string } : {}),
     ...(msg.maxTurns !== undefined ? { maxTurns: msg.maxTurns as number } : {}),
+    ...(msg.detach !== undefined ? { detach: msg.detach } : {}),
   };
 }
 
@@ -704,13 +750,12 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
       ) {
         return null;
       }
-      // Taskana 4820 review F1: optional turn cap — same shape discipline as
-      // the spawn request's own maxTurns gate above (a safe integer within
-      // 1..CHILD_MAX_TURNS_CEILING), fail-closed on anything else.
-      if (
-        msg.maxTurns !== undefined &&
-        !(typeof msg.maxTurns === "number" && Number.isSafeInteger(msg.maxTurns) && msg.maxTurns >= 1 && msg.maxTurns <= CHILD_MAX_TURNS_CEILING)
-      ) {
+      // GitHub #17 slice A: an accepted event's maxTurns is the
+      // child's EFFECTIVE session cap — any positive safe integer — NOT the
+      // requested profile budget, whose 1..CHILD_MAX_TURNS_CEILING ceiling
+      // remains enforced only on ChildSpawnRequest.maxTurns. See the accepted
+      // variant's doc comment above.
+      if (msg.maxTurns !== undefined && !isValidEffectiveChildMaxTurns(msg.maxTurns)) {
         return null;
       }
       return {

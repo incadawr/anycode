@@ -33,3 +33,25 @@ export function readSessionLimits(raw: unknown): SessionLimitsSettings {
   if (global !== undefined) out.childSessionsGlobalMax = global;
   return out;
 }
+
+/**
+ * GitHub #17 slice B: ONE shared effective per-parent child
+ * cap, used identically by main and the host. The session setting
+ * (`sessionLimits.childSessionsPerParentMax`, clamped 1..8, default 3) is the
+ * base; an EXPLICIT selected role profile's `maxParallelChildren` (valid
+ * 1..16) can only LOWER it, never enlarge it. No implicit role default of 4
+ * is consulted here — a missing/invalid role value leaves the base unchanged.
+ */
+export function resolveChildSessionsPerParentMax(rawLimits: unknown, explicitRoleMax: unknown): number {
+  const base =
+    readSessionLimits(rawLimits).childSessionsPerParentMax ?? SESSION_LIMIT_RANGES.childSessionsPerParentMax.default;
+  if (
+    typeof explicitRoleMax === "number" &&
+    Number.isSafeInteger(explicitRoleMax) &&
+    explicitRoleMax >= 1 &&
+    explicitRoleMax <= 16
+  ) {
+    return Math.min(base, explicitRoleMax);
+  }
+  return base;
+}
