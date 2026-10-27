@@ -39,7 +39,7 @@ export function resolveTodoReminderEvery(config: TodoReminderConfig | undefined)
 export function formatTodoReminder(callsSinceUpdate: number, openItems: number): string {
   return (
     "<system-reminder>\n" +
-    `The todo list has not been updated for ${callsSinceUpdate} tool calls and still has ${openItems} unfinished item(s). ` +
+    `The todo list has not been updated for ${callsSinceUpdate} mutating tool calls and still has ${openItems} unfinished item(s). ` +
     "If you have made progress, call TodoWrite now: mark finished items completed and the current one in_progress. " +
     "If the plan is still accurate, continue. Do not mention this reminder to the user.\n" +
     "</system-reminder>"
@@ -65,7 +65,8 @@ export class TodoReminderTracker {
       this.sinceReminder = 0;
       return;
     }
-    if (!mutating) return;
+    // Denied and invalid calls never ran; shell failures may have made changes.
+    if (!mutating || status === "denied" || status === "invalid_input" || status === "max_turns") return;
     this.sinceUpdate += 1;
     this.sinceReminder += 1;
   }

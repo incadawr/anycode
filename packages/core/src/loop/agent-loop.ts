@@ -678,6 +678,10 @@ export class AgentLoop {
    */
   private readonly todoReminder: TodoReminderTracker | null;
 
+  todoReminderSnapshot(): { count: number; threshold: number } | null {
+    return this.todoReminder?.snapshot() ?? null;
+  }
+
   setTodoReminderEvery(every: number | undefined): void {
     const resolved = resolveTodoReminderEvery({ everyToolCalls: every });
     if (resolved !== null) this.todoReminder?.setThreshold(resolved);

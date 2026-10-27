@@ -4282,6 +4282,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
 
       applyHostMessage(message: HostToUiMessage): void {
         switch (message.type) {
+          case "todo_reminder_snapshot":
+            set({ todoReminderState: message.state });
+            return;
           case "host_ready":
             // A `host_ready` on a store that already has session state only
 
