@@ -452,6 +452,10 @@ export type TranscriptBlock =
       images?: readonly ImageAttachment[];
       /** TASK.145 срез 2: present iff this "user" turn was host-injected (a detached child's report), not typed by the human — MessageList.tsx renders it as a compact system card instead of the normal user bubble. Survives reload: mirrors WireHistoryItem.origin via projectHistoryToBlocks, and the live append path (tab-registry.ts) stamps it too. */
       origin?: "system";
+      /** Authenticated agent delivery, distinct from a detached child report. */
+      agentMessage?: true;
+      /** Original payload for the minimap preview, without envelope metadata or delivery status. */
+      agentMessagePayload?: string;
       /** Epoch ms: when the message was sent (live: renderer clock at creation; reload: the persisted item's createdAt). Absent -> no time shown. */
       at?: number;
     }
@@ -4561,8 +4565,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           case "agent_message": {
             const d = message.delivery;
             const id = `agent-message:${d.envelope.messageId}`;
-            const block: TranscriptBlock = { kind: "user_text", id, origin: "system", text: `${agentMessageText(d.envelope)}\nDelivery: ${d.state}${d.detail ? ` — ${d.detail}` : ""}` };
-            set((state) => ({ transcript: [...state.transcript.filter((b) => b.id !== id && !(b.kind === "user_text" && b.text === agentMessageText(d.envelope))), block] }));
+            const block: TranscriptBlock = { kind: "user_text", id, origin: "system", agentMessage: true, agentMessagePayload: d.envelope.payload, text: `${agentMessageText(d.envelope)}\nDelivery: ${d.state}${d.detail ? ` — ${d.detail}` : ""}` };
+            set((state) => {
+              const existing = state.transcript.findIndex((b) => b.id === id || (b.kind === "user_text" && b.text === agentMessageText(d.envelope)));
+              if (existing < 0) return { transcript: [...state.transcript, block] };
+              return { transcript: state.transcript.map((b, i) => i === existing ? block : b).filter((b, i) => i === existing || (b.id !== id && !(b.kind === "user_text" && b.text === agentMessageText(d.envelope)))) };
+            });
             return;
           }
           case "agent_event":

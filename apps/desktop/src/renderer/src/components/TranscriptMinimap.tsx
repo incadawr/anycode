@@ -10,8 +10,7 @@
  * confirm, sending the same rewind_request the old Timeline dock panel
  * (removed by 4742) used to send. Pure renderer projection over
  * `TranscriptBlock[]` — no new store state (same posture as TodoPanel), so
- * resumed/hydrated sessions get it for free. System-origin `user_text`
- * blocks are host-injected reports, not user moves, and never open a turn.
+ * resumed/hydrated sessions get it for free. System-origin reports do not open a turn; authenticated agent deliveries do.
  *
  * 4086 follow-up — cheap on long sessions. The projection never builds the
  * full answer text of any turn (4742 dropped the answer/files/tool preview
@@ -43,6 +42,8 @@ export interface UserTurnMark {
   index: number;
   /** First ~240 chars of the question, whitespace-collapsed (popover text + aria-label source). */
   questionExcerpt: string;
+  /** Authenticated agent delivery, shown distinctly from a human turn. */
+  agentMessage?: true;
 }
 
 export const PREVIEW_QUESTION_MAX = 240;
@@ -82,16 +83,17 @@ export function summarizeTurn(blocks: TranscriptBlock[], userIndex: number, endE
   return {
     id: userBlock.id,
     index: userIndex,
-    questionExcerpt: excerpt(userBlock.text, PREVIEW_QUESTION_MAX),
+    questionExcerpt: excerpt(userBlock.agentMessagePayload ?? userBlock.text, PREVIEW_QUESTION_MAX),
+    ...(userBlock.agentMessage ? { agentMessage: true as const } : {}),
   };
 }
 
-/** Indices of blocks that OPEN a turn: `user_text` without system origin, in order. */
+/** Indices of blocks that OPEN a turn: `user_text` from a human or authenticated agent, in order. */
 function userTurnStarts(blocks: TranscriptBlock[]): number[] {
   const starts: number[] = [];
   for (let i = 0; i < blocks.length; i += 1) {
     const block = blocks[i]!;
-    if (block.kind === "user_text" && block.origin !== "system") {
+    if (block.kind === "user_text" && (block.origin !== "system" || block.agentMessage)) {
       starts.push(i);
     }
   }
@@ -100,7 +102,7 @@ function userTurnStarts(blocks: TranscriptBlock[]): number[] {
 
 /**
  * Project the flat transcript into user turns (unmemoized reference path).
- * A turn starts at each `user_text` block whose `origin !== "system"` and
+ * A turn starts at each `user_text` block from a human or authenticated agent and
  * stays open until the next eligible `user_text` or the end of the array.
  */
 export function selectUserTurns(blocks: TranscriptBlock[]): UserTurnMark[] {
@@ -123,12 +125,13 @@ export interface UserTurnsSelector {
 
 /**
  * Taskana 4742: the raw user-turn texts in mark order (the SAME turn split
- * `selectUserTurns` uses — system-origin blocks excluded) for
+ * `selectUserTurns` uses — ordinary system reports excluded) for
  * `matchCheckpointsToTurns`, which derives each turn's checkpoint label
  * from its full prompt text (checkpoint-model.ts mirrors core's
  * `deriveCheckpointLabel`, which slices the label out of the first line of
  * the RAW prompt — an excerpt would truncate differently and break the
- * match). Order-aligned with the marks array by construction.
+ * match). Agent deliveries use an empty placeholder to avoid guessing a
+ * checkpoint while keeping the result aligned with the marks array.
  */
 export function rewindUserTurnTexts(blocks: TranscriptBlock[]): string[] {
   const starts = userTurnStarts(blocks);
@@ -136,7 +139,7 @@ export function rewindUserTurnTexts(blocks: TranscriptBlock[]): string[] {
   for (let t = 0; t < starts.length; t += 1) {
     const start = starts[t]!;
     const block = blocks[start] as Extract<TranscriptBlock, { kind: "user_text" }>;
-    texts.push(block.text);
+    texts.push(block.agentMessage ? "" : block.text);
   }
   return texts;
 }
@@ -221,7 +224,7 @@ export function shouldShowMinimap(turnCount: number): boolean {
 
 /**
  * Taskana 4742: number of eligible user turns (same rule as
- * `selectUserTurns` — system-origin `user_text` blocks excluded). A cheap
+ * `selectUserTurns` — ordinary system reports excluded). A cheap
  * counting variant for owners that only need the rail's visibility gate /
  * refresh trigger, without building mark objects.
  */
@@ -498,7 +501,7 @@ export function TranscriptMinimap({
         onMouseEnter={() => applyPopoverEvent({ kind: "enterPopover" })}
         onMouseLeave={() => applyPopoverEvent({ kind: "leavePopover" })}
       >
-        <div className="minimap-preview-counter">{popoverCounterText(openIndex!, marks.length)}</div>
+        <div className="minimap-preview-counter">{popoverCounterText(openIndex!, marks.length) + (openMark.agentMessage ? " · Agent" : "")}</div>
         {/* The query text: plain text node only (no markup from user text).
             aria-describedby points here — via the outer tooltip's id in the
             no-action case, or this element's own id when actions exist and
@@ -552,7 +555,7 @@ export function TranscriptMinimap({
           className={"minimap-mark" + (tickLengthFor(i, activeIndex) === "active" ? " minimap-mark-active" : "")}
           data-mark-index={i}
           data-mark-block-id={mark.id}
-          aria-label={`Turn ${i + 1}: ${excerpt(mark.questionExcerpt, ARIA_LABEL_MAX)}`}
+          aria-label={`Turn ${i + 1}${mark.agentMessage ? " · Agent" : ""}: ${excerpt(mark.questionExcerpt, ARIA_LABEL_MAX)}`}
           aria-describedby={markDescribedBy(openIndex, i, previewId)}
           tabIndex={i === rovingIndex ? 0 : -1}
           onMouseEnter={() => applyPopoverEvent({ kind: "enterTick", index: i })}

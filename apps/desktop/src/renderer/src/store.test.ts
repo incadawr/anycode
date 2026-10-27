@@ -7567,6 +7567,16 @@ describe("TASK.242 visible agent provenance", () => {
     expect(store.getState().transcript[0]).toMatchObject({ kind: "user_text" });
     expect((store.getState().transcript[0] as { origin?: string }).origin).toBeUndefined();
   });
+  it("keeps an agent delivery in transcript order when its status changes", () => {
+    const store = createDesktopStore();
+    const envelope: AgentEnvelope = { messageId: "agent-order", sender: "supervisor", recipientSessionId: "s", payload: "work", kind: "agent_message", mode: "steer", createdAt: "2026-10-04" };
+    // A second delivery after the first keeps its own place when the first is updated.
+    const second = { ...envelope, messageId: "agent-order-2", payload: "more work" };
+    store.getState().applyHostMessage({ type: "agent_message", delivery: { envelope, state: "queued" } });
+    store.getState().applyHostMessage({ type: "agent_message", delivery: { envelope: second, state: "queued" } });
+    store.getState().applyHostMessage({ type: "agent_message", delivery: { envelope, state: "acknowledged" } });
+    expect(store.getState().transcript.map((block) => block.id)).toEqual(["agent-message:agent-order", "agent-message:agent-order-2"]);
+  });
   it("updates one agent card and replaces native user-shaped history with authenticated delivery metadata", () => {
     const store = createDesktopStore();
     const envelope: AgentEnvelope = { messageId: "agent-1", sender: "authenticated-local-supervisor", recipientSessionId: "s", payload: "clarification", kind: "agent_message", mode: "steer", createdAt: "2026-10-04" };
@@ -7575,7 +7585,7 @@ describe("TASK.242 visible agent provenance", () => {
     store.getState().applyHostMessage({ type: "agent_message", delivery: { envelope, state: "acknowledged", detail: "model application unverified" } });
     const blocks = store.getState().transcript;
     expect(blocks).toHaveLength(1);
-    expect(blocks[0]).toMatchObject({ kind: "user_text", origin: "system" });
+    expect(blocks[0]).toMatchObject({ kind: "user_text", origin: "system", agentMessage: true });
     expect((blocks[0] as { text: string }).text).toContain("Delivery: acknowledged");
     expect((blocks[0] as { text: string }).text).toContain("model application unverified");
   });
