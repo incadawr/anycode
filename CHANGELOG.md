@@ -7,7 +7,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.0.47] — 2026-10-28
+## [0.0.48] — 2026-10-28
 
 ### Added
 
@@ -16,7 +16,6 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - Codex CLI 0.165.0 is supported (supported range now >=0.144.0 <0.166.0).
-
 - The context popover highlights session spending, including subagents, and summarizes the current turn, token usage and cache savings.
 - The model catalog includes current GPT-6, Claude 5, GLM, DeepSeek and Kimi models and prices. Retired models remain usable as free text, and GPT-6 requests now include reasoning effort.
 
@@ -31,6 +30,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Settings → Roles identifies agent profiles that override a configured role and names the file to edit or remove.
 - Sessions API primes non-active connections before starting a session and reports preparation failures.
 - Orchestrator tabs delegate through configured roles instead of automatically choosing engine-named project profiles.
+- Cost rows in the context popover no longer grow a visible scrollbar on Windows and Linux.
+
+## [0.0.47] — 2026-10-28
+
+Tagged but not published: the release build failed its Linux test run. All of its changes ship in 0.0.48.
 
 ## [0.0.46] — 2026-10-27
 
