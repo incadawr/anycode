@@ -24,7 +24,33 @@ import {
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageList } from "./MessageList.js";
-import type { ErrorRetryMeta, RetryOffer, ToolCallBlock, TranscriptBlock } from "../store.js";
+import { createDesktopStore, type ErrorRetryMeta, type RetryOffer, type ToolCallBlock, type TranscriptBlock } from "../store.js";
+import { agentMessageText, type AgentEnvelope } from "../../../shared/communication.js";
+
+describe("agent deliveries in the minimap (Taskana 4891)", () => {
+  it("renders restored agent deliveries in history order with labeled ticks and jump anchors", () => {
+    const store = createDesktopStore();
+    const first: AgentEnvelope = { messageId: "first", sender: "supervisor", recipientSessionId: "s", payload: "First task", kind: "agent_message", mode: "next_turn", createdAt: "2026-10-04" };
+    const second: AgentEnvelope = { ...first, messageId: "second", payload: "Follow up" };
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s", truncated: false, items: [
+      { id: "first-history", createdAt: 1, origin: "system", message: { role: "user", content: agentMessageText(first) } },
+      { id: "second-history", createdAt: 2, origin: "system", message: { role: "user", content: agentMessageText(second) } },
+    ] });
+    for (const envelope of [second, first]) {
+      store.getState().applyHostMessage({ type: "agent_message", delivery: { envelope, state: "acknowledged" } });
+    }
+    const blocks = store.getState().transcript;
+    expect(blocks.map((block) => block.id)).toEqual(["agent-message:first", "agent-message:second"]);
+    const html = renderToStaticMarkup(createElement(MessageList, {
+      blocks, turn: { status: "idle" } as never, workspace: null, connection: "ready", retry: null,
+      onTryAgain: () => undefined, continueOffer: null, onContinue: () => undefined, promptQueueLength: 0,
+    }));
+    expect(html).toContain('aria-label="Turn 1 · Agent: First task"');
+    expect(html).toContain('aria-label="Turn 2 · Agent: Follow up"');
+    expect(html).toContain('data-block-id="agent-message:first" class="message message-child-report minimap-turn');
+    expect(html).toContain('data-block-id="agent-message:second" class="message message-child-report minimap-turn');
+  });
+});
 
 describe("Continue button DOM class (Taskana 4111 cross-review — must not share the Try-again probe's class)", () => {
   it("a Continue offer renders a button that is NOT counted by the Try-again probe selector", () => {

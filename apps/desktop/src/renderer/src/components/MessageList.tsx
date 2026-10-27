@@ -452,8 +452,8 @@ export function showStandaloneRetry(
 
 /**
  * Minimap scroll-spy core (TASK.48 / 4086 follow-up) — exported pure for unit
- * tests. Given the monotone `top`s of the USER BUBBLES (`.message-user
- * [data-block-id]`, one per non-system user turn, DOM order == mark order)
+ * tests. Given the monotone `top`s of human bubbles and agent delivery cards
+ * (one per minimap turn, DOM order == mark order)
  * and the container's box, returns the index of the last bubble whose top
  * sits above the container's vertical midpoint (null when none exist).
  * Binary search keeps a tick at O(log n) layout reads on a long transcript:
