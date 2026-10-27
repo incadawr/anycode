@@ -83,7 +83,7 @@ export function summarizeTurn(blocks: TranscriptBlock[], userIndex: number, endE
   return {
     id: userBlock.id,
     index: userIndex,
-    questionExcerpt: excerpt(userBlock.text, PREVIEW_QUESTION_MAX),
+    questionExcerpt: excerpt(userBlock.agentMessagePayload ?? userBlock.text, PREVIEW_QUESTION_MAX),
     ...(userBlock.agentMessage ? { agentMessage: true as const } : {}),
   };
 }
