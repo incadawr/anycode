@@ -16,6 +16,19 @@ describe("role profiles", () => {
     expect(resolveProfileRoles({ roleProfiles: { ...registry, projects: [{ projectRoot: "/project", profileId: "missing" }] } }, "/project")).toEqual(legacy);
     expect(resolveProfileRoles({ roleProfiles: { ...registry, activeId: "missing" } }, "/other")).toBeUndefined();
   });
+  it("first-run saves the project profile without changing the global profile", () => {
+    const patch = rolesPatch({ roleProfiles: registry }, { planner: { primary: { model: "project-model" } } }, "/project");
+    expect(patch.roleProfiles?.activeId).toBe("a");
+    expect(patch.roleProfiles?.profiles.find((p) => p.id === "a")?.roles).toEqual(legacy);
+    expect(resolveProfileRoles(patch, "/project")).toEqual({ planner: { primary: { model: "project-model" } } });
+    expect(resolveProfileRoles(patch, "/other")).toEqual(legacy);
+  });
+  it("first-run writes the global profile when the project reference is missing", () => {
+    const dangling = { ...registry, projects: [{ projectRoot: "/project", profileId: "missing" }] };
+    const patch = rolesPatch({ roleProfiles: dangling }, other, "/project");
+    expect(resolveProfileRoles(patch, "/project")).toEqual(other);
+    expect(patch.roleProfiles?.activeId).toBe("a");
+  });
   it("validates registry and updates first-run selected profile", () => {
     expect(roleProfilesSchema.safeParse(registry).success).toBe(true);
     expect(roleProfilesWriteSchema.safeParse({ ...registry, profiles: [{ id: "x", name: "X", roles: { maxParallelChildren: 100 } }] }).success).toBe(false);

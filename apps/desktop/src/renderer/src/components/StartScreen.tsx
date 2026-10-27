@@ -1121,7 +1121,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   async function submit(): Promise<void> {
     if (draft !== null) {
       const plan = resolveStartOrchestrate(draft.engine, draft.orchestrate, draft.prompt);
-      if (startSendNeedsRolePicker(plan, resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}))) {
+      if (startSendNeedsRolePicker(plan, resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}, draft.workspace ?? undefined))) {
         setStartRolePickerOpen(true);
         return;
       }
@@ -1138,7 +1138,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   /** RolePickerDialog Save: persists the roles, then sends the draft as an orchestrating send. A failed write keeps the draft and leaves the settings notice to explain it. */
   async function saveStartRolesAndSubmit(roles: Parameters<RolePickerDialogProps["onSave"]>[0]): Promise<void> {
     setStartRolePickerOpen(false);
-    const result = await useSettingsStore.getState().setPatch(rolesPatch(useSettingsStore.getState().snapshot?.settings ?? {}, roles));
+    const result = await useSettingsStore.getState().setPatch(rolesPatch(useSettingsStore.getState().snapshot?.settings ?? {}, roles, useTabsStore.getState().draft?.workspace ?? undefined));
     if (result.ok) {
       await submit();
     }

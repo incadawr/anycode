@@ -1,4 +1,4 @@
-import { resolveProfileRoles } from "../shared/role-profiles.js";
+import { readRoleSettings } from "./role-settings.js";
 import { SqliteCodexAgentCardLog } from "./engines/codex/agent-card-log.js";
 import { CodexDynamicToolBridge, codexAgentPermissionMode } from "./engines/codex/dynamic-tool-bridge.js";
 import { createEngineBrowserBridge } from "./engines/browser-bridge.js";
@@ -563,18 +563,9 @@ type RolesSettings = NonNullable<import("../shared/settings.js").AnycodeSettings
  * Absent roles means "built-in defaults".
  */
 let rolesSettings: RolesSettings | undefined;
-let rolesSource: Pick<import("../shared/settings.js").AnycodeSettings, "roles" | "roleProfiles"> = {};
 let rolesProjectRoot = workspace;
 function refreshRolesSettings(): void {
-  try {
-    const raw = JSON.parse(readFileSync(defaultSettingsPath(), "utf8"));
-    const parsed = parseSettings(raw);
-    rolesSource = parsed.status === "ok" ? parsed.settings : {};
-    rolesSettings = resolveProfileRoles(rolesSource, rolesProjectRoot);
-  } catch {
-    rolesSource = {};
-    rolesSettings = undefined;
-  }
+  rolesSettings = readRoleSettings(hostSettingsPathOverride() ?? defaultSettingsPath(), rolesProjectRoot);
 }
 refreshRolesSettings();
 
@@ -3288,7 +3279,7 @@ async function boot(): Promise<void> {
     }
     const projectRoot = sessionMeta.projectRoot ?? sessionMeta.workspace;
     rolesProjectRoot = projectRoot;
-    rolesSettings = resolveProfileRoles(rolesSource, rolesProjectRoot);
+    refreshRolesSettings();
     // Taskana 4118: live capabilities for models the catalog does not know,
     // read fail-soft from settings.json (main persists them on the connection).
     // The fork env's connection id wins over the session row's pin: on a

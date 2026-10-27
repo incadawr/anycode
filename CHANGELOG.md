@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Role profiles can be selected globally or per project, with project-aware first-run setup (Taskana 4886).
+
 ### Fixed
 
 - Settings → Sessions API step 2 no longer collapses after "Copy config": the step's content (title, agent picker, Copy button, node hint and the "Copied the … config" notice) stays in its column under the step number, and the long `claude mcp add …` command scrolls inside its own box instead of running off the pane (Taskana 4897).

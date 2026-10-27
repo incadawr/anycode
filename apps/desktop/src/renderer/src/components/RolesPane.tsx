@@ -47,6 +47,7 @@ export function RolesPane(): React.JSX.Element {
   const [projectRoot, setProjectRoot] = useState("");
   const projects = [...new Set([...tabs.map((tab) => tab.projectRoot ?? tab.workspace), ...sessionProjects, ...registry.projects.map((p) => p.projectRoot)])];
   const [profileName, setProfileName] = useState("");
+  const projectProfileId = registry.projects.find((p) => p.projectRoot === projectRoot)?.profileId;
   useEffect(() => { setMaxParallelChildren(selected?.roles.maxParallelChildren ?? 4); }, [selected?.id, selected?.roles.maxParallelChildren]);
   async function saveRegistry(next: typeof registry): Promise<void> {
     const result = await setPatch({ roleProfiles: next });
@@ -68,7 +69,7 @@ export function RolesPane(): React.JSX.Element {
   }
 
   const initialRoles = useMemo(
-    () => (persistedRoles !== undefined && Object.keys(persistedRoles).length > 0 ? persistedRoles : deriveRolePresets(engines, activeConnectionId ?? "")[0]!.roles),
+    () => (persistedRoles !== undefined ? persistedRoles : deriveRolePresets(engines, activeConnectionId ?? "")[0]!.roles),
     // Seed once per snapshot identity; the dialog re-seeds on open anyway.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [snapshot, persistedRoles, engines, activeConnectionId],
@@ -89,8 +90,8 @@ export function RolesPane(): React.JSX.Element {
       <button type="button" disabled={!selected} onClick={() => { if (selected) { const profiles = registry.profiles.filter((p) => p.id !== selected.id); void saveRegistry({ profiles, activeId: profiles[0]?.id ?? "default", projects: registry.projects.filter((p) => p.profileId !== selected.id) }); } }}>Delete profile</button>
       <label className="settings-field"><span className="settings-field-label">Project</span><select aria-label="Project" value={projectRoot} onChange={(event) => setProjectRoot(event.target.value)}><option value="">Select a project</option>{projects.map((path) => <option key={path} value={path}>{path}</option>)}</select></label>
       <label className="settings-field"><span className="settings-field-label">Project role profile</span>
-        <select aria-label="Project role profile" disabled={!projectRoot} value={registry.projects.find((p) => p.projectRoot === projectRoot)?.profileId ?? ""} onChange={(event) => void saveRegistry({ ...registry, projects: [...registry.projects.filter((p) => p.projectRoot !== projectRoot), ...(event.target.value ? [{ projectRoot, profileId: event.target.value }] : [])] })}>
-          <option value="">Use global profile</option>{registry.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        <select aria-label="Project role profile" disabled={!projectRoot} value={projectProfileId ?? ""} onChange={(event) => void saveRegistry({ ...registry, projects: [...registry.projects.filter((p) => p.projectRoot !== projectRoot), ...(event.target.value ? [{ projectRoot, profileId: event.target.value }] : [])] })}>
+          <option value="">Use global profile</option>{projectProfileId && !registry.profiles.some((p) => p.id === projectProfileId) && <option value={projectProfileId}>Missing profile (using global)</option>}{registry.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
       </label>
       <RolePickerDialog

@@ -38,7 +38,7 @@ export interface StartSubmitDeps {
    * writes roles, so every caller (the Send button and the automation facade)
    * meets the same first-run gate.
    */
-  rolesConfigured?(): boolean;
+  rolesConfigured?(projectRoot: string): boolean;
 }
 
 function defaultStartSubmitDeps(): StartSubmitDeps {
@@ -50,8 +50,8 @@ function defaultStartSubmitDeps(): StartSubmitDeps {
 }
 
 /** Whether the settings snapshot already carries orchestration roles (the RolePickerDialog's first-run output). */
-function settingsHaveRoles(): boolean {
-  return !needsRolePicker(resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}));
+function settingsHaveRoles(projectRoot: string): boolean {
+  return !needsRolePicker(resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}, projectRoot));
 }
 
 /**
@@ -114,7 +114,7 @@ export async function submitStartDraft(
     return { ok: false, message: "Type a message to send." };
   }
   const rolesConfigured = deps.rolesConfigured ?? settingsHaveRoles;
-  if (plan.orchestrate && !rolesConfigured()) {
+  if (plan.orchestrate && !rolesConfigured(workspace)) {
     return { ok: false, message: "Set up orchestration roles first." };
   }
   // TASK.241: decide the Codex draft model BEFORE creating anything — a

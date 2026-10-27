@@ -112,3 +112,10 @@ it("renders profile and project selection controls", () => {
   expect(html).toContain('Rename profile');
   expect(html).toContain('Delete profile');
 });
+
+it("an empty saved profile displays the active connection instead of an unsaved preset", () => {
+  const html = renderToStaticMarkup(createElement(RolePickerDialog, { ...base, inline: true, initialRoles: {} }));
+  expect(html).toContain('data-route="connection:active"');
+  expect(html).not.toContain('data-route="engine:claude"');
+  expect(html).not.toContain('data-route="engine:codex"');
+});

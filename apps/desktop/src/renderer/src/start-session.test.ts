@@ -8,7 +8,8 @@ import { describe, expect, it, vi } from "vitest";
 import { submitStartDraft, type StartSubmitDeps } from "./start-session.js";
 import { createTabsStore } from "./tabs-store.js";
 import { resolveCodexDraftModel } from "./codex-draft-model.js";
-import { createSettingsStore } from "./settings-store.js";
+import { createSettingsStore, useSettingsStore } from "./settings-store.js";
+import { cloneDefaults } from "../../settings/schema.js";
 import { selectStartModelRow } from "./components/StartScreen.js";
 import type { CreateTabResult } from "../../shared/tabs.js";
 import type { SettingsSnapshot } from "../../shared/settings.js";
@@ -35,7 +36,8 @@ function makeDeps(createTabResult: CreateTabResult, order: string[] = []) {
 describe("submitStartDraft — Orchestrate (start screen)", () => {
   it("first-run role gate: an orchestrating send with no roles refuses before createTab, and leaves the draft untouched", async () => {
     const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
-    deps.rolesConfigured = () => false;
+    const rolesConfigured = vi.fn(() => false);
+    deps.rolesConfigured = rolesConfigured;
     tabsStore.getState().openDraft("/ws/a");
     tabsStore.getState().setDraftPrompt("refactor");
     tabsStore.getState().setDraftOrchestrate(true);
@@ -44,8 +46,31 @@ describe("submitStartDraft — Orchestrate (start screen)", () => {
 
     expect(res).toEqual({ ok: false, message: "Set up orchestration roles first." });
     expect(createTab).not.toHaveBeenCalled();
+    expect(rolesConfigured).toHaveBeenCalledWith("/ws/a");
     expect(tabsStore.getState().draft?.prompt).toBe("refactor");
     expect(tabsStore.getState().draft?.orchestrate).toBe(true);
+  });
+
+  it("uses the draft project profile for the real first-run gate", async () => {
+    const original = useSettingsStore.getState().snapshot;
+    const settings = cloneDefaults();
+    settings.roleProfiles = {
+      profiles: [{ id: "project", name: "Project", roles: { planner: { primary: { model: "project-model" } } } }],
+      activeId: "missing", projects: [{ projectRoot: "/ws/a", profileId: "project" }],
+    };
+    useSettingsStore.setState({ snapshot: { settings, secrets: [], providerReady: true, envOverrides: [], readOnly: false } });
+    try {
+      const configured = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+      configured.tabsStore.getState().openDraft("/ws/a");
+      configured.tabsStore.getState().setDraftPrompt("refactor");
+      configured.tabsStore.getState().setDraftOrchestrate(true);
+      expect((await submitStartDraft(configured.deps)).ok).toBe(true);
+      const unconfigured = makeDeps({ ok: true, tabId: "t2", workspace: "/ws/b" });
+      unconfigured.tabsStore.getState().openDraft("/ws/b");
+      unconfigured.tabsStore.getState().setDraftPrompt("refactor");
+      unconfigured.tabsStore.getState().setDraftOrchestrate(true);
+      expect(await submitStartDraft(unconfigured.deps)).toEqual({ ok: false, message: "Set up orchestration roles first." });
+    } finally { useSettingsStore.setState({ snapshot: original }); }
   });
 
   it("with roles configured, an orchestrating core send forwards orchestrate=true as queueInitialPrompt's last argument", async () => {
