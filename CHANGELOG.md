@@ -7,29 +7,30 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.47] — 2026-10-28
+
 ### Added
 
-- OpenAI connections can opt into implicit 30-minute prompt caching, while disabled connections keep their existing request format (GitHub #15).
+- OpenAI connections can opt into implicit 30-minute prompt caching (GitHub #15).
 
 ### Changed
 
-- The context popover now leads with one prominent figure — "Spent in this session", subagents included and named in a muted suffix — followed by the current turn and a single quiet footnote with tokens, cache savings and the rate basis. The duplicate "Last step / Latest cache hit / Last audited step", the separate "Session cost", "Cache saved", "Session tokens", "Subagents: None" and "Estimates use peak rates" lines are gone, so the cost block takes three lines instead of fifteen.
-- The model catalog now lists the providers' current lineups, checked against their own documentation on 2026-10-27: the GPT-6 family (GPT-6.1 Sol/Terra, GPT-6 Luna/Sol/Astra, 1.05M context, 128K output), the Claude 5 family (Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.1, 1M context), GLM-5.3-FlashX, DeepSeek-V4-Pro and the K3.1 Pro pair, each with its official price and a comment naming the source page. Retired rows (GPT-5.1/GPT-4o, Claude Opus 4/Sonnet 4/3.5 Haiku, GLM-5 Turbo, GLM-4.5/4.5-Air, the discontinued Moonshot ids) are gone from the pickers; a connection that still carries one of those ids as free text keeps working with its assumed window and any explicit override. Reasoning effort now also reaches the wire on GPT-6 models, which the OpenAI SDK's older model-name check used to drop.
+- Codex CLI 0.165.0 is supported (supported range now >=0.144.0 <0.166.0).
+
+- The context popover highlights session spending, including subagents, and summarizes the current turn, token usage and cache savings.
+- The model catalog includes current GPT-6, Claude 5, GLM, DeepSeek and Kimi models and prices. Retired models remain usable as free text, and GPT-6 requests now include reasoning effort.
 
 ### Fixed
 
-- Session agents release the parent promptly, hand off long waits to the background, share one child limit, and expose child progress and permission requests in the parent window (GitHub #17).
-
-- Bare slash commands are intercepted on submit, and busy sessions visibly refuse manual compaction instead of sending it to the model (GitHub #14).
+- Session agents release the parent promptly, hand off long waits to the background, share one child limit, and expose progress and permission requests in the parent window (GitHub #17).
+- Bare slash commands are intercepted on submit, and busy sessions visibly refuse manual compaction (GitHub #14).
 - Packaged reload shortcuts are disabled, and renderer reloads preserve task titles, agent-message previews and live task views (GitHub #19).
-- The context popover keeps its per-step list collapsed behind one line for the current turn ("This turn: 2 steps · ≈ $0.0005 · cache 96%"), expandable and collapsible by clicking it; the expanded list shows only the current turn's steps, so a previous turn's steps no longer appear under the new turn's.
-- Session and step cost is now shown for every catalog model whose provider publishes a per-token rate — including the DeepSeek line, which had no price at all before. Each rate was read from the provider's own pricing page on 2026-10-27 and recorded with its source and check date; a model with no published rate (the Kimi subscription tier, the Kimi platform models) still says "price unknown".
-
-- Sessions API `close_session` can now close a tab that is already crash-looped: such a tab has no live host to answer a status request, so the call used to answer `busy` forever and the tab — plus its slot in the agent tab limit — stayed behind.
-- A refused or crashed `create_session` now says why: preparing a non-active connection reports its safe, classified reason (for example an expired sign-in) instead of the generic "engine not signed in or tab limit reached", and a session host that cannot start or keeps exiting records the cause in `diagnostics/` instead of leaving only an exit code.
-- Settings → Roles marks a role that a same-named agent profile (`.anycode/agents/<role>.md`, project or user level) overrides, and names the file to edit or remove — that profile wins over the Settings route, so the route silently did nothing while it existed.
-- Sessions API `create_session` with a `model` that resolves to a non-active connection (for example `glm-5.3` while DeepSeek is active) no longer opens a tab that immediately crash-loops: the new session's connection env is primed before the host is spawned (as resume already did), and a priming failure is returned as a clean error.
-- An orchestrator tab now delegates planner/executor/reviewer/explore work through the roles configured in Settings → Roles instead of picking an engine-named project profile (such as `claude` or `codex` in `.anycode/agents/`) on its own; such a profile is used only when the user explicitly asks for it.
+- The context popover's expandable step list shows only the current turn.
+- Session and step costs appear for catalog models with published rates, including DeepSeek; models without published rates show an unknown price.
+- Sessions API can close crash-looped tabs, and reports classified causes for refused or crashed session creation.
+- Settings → Roles identifies agent profiles that override a configured role and names the file to edit or remove.
+- Sessions API primes non-active connections before starting a session and reports preparation failures.
+- Orchestrator tabs delegate through configured roles instead of automatically choosing engine-named project profiles.
 
 ## [0.0.46] — 2026-10-27
 
