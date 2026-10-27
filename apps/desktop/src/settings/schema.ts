@@ -197,7 +197,12 @@ const reasoningEffortSchema = z.enum(["off", "low", "medium", "high", "max"]);
  * every default is optional (a connection may exist with only a credential, or
  * only a remembered model). `lastHealth` is the advisory cache (W11 writes it).
  */
+const connectionPricingSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("subscription") }),
+  z.object({ mode: z.literal("rates"), input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }),
+]);
 const connectionSchema = z.object({
+  pricing: connectionPricingSchema.optional().catch(undefined),
   id: z.string(),
   providerId: z.string(),
   label: z.string().optional(),

@@ -637,7 +637,7 @@ export interface ProviderUsageAudit {
 export interface ProviderUsageSummaryPort {
   summary(): Promise<{
     steps: ProviderUsageRecord[];
-    totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unpricedSteps?: number } | null;
+    totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unknownSavingsSteps?: number; unpricedSteps?: number; subscriptionSteps?: number; subagentCostUsd?: number; subagentUnpriced?: number; subagentSubscription?: number; subagentCount?: number } | null;
   }>;
 }
 
@@ -651,7 +651,7 @@ export interface ProviderUsageSummaryPort {
  */
 export function summarizeProviderUsage(steps: ProviderUsageRecord[]): {
   steps: ProviderUsageRecord[];
-  totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unpricedSteps?: number } | null;
+  totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unknownSavingsSteps?: number; unpricedSteps?: number; subscriptionSteps?: number; subagentCostUsd?: number; subagentUnpriced?: number; subagentSubscription?: number; subagentCount?: number } | null;
 } {
   if (steps.length === 0) {
     return { steps, totals: null };
@@ -677,13 +677,15 @@ export function summarizeProviderUsage(steps: ProviderUsageRecord[]): {
       stepsWithCache += 1;
     }
   }
-  const priced = steps.filter((step) => step.costUsd !== undefined && step.cacheSavingsUsd !== undefined);
+  const subscriptionSteps = steps.filter((step) => step.priceBasisId === "subscription").length;
+  const priced = steps.filter((step) => step.costUsd !== undefined);
+  const savings = steps.filter((step) => step.cacheSavingsUsd !== undefined);
   const costs = priced.length === 0 ? {} : {
     costUsd: priced.reduce((sum, step) => sum + step.costUsd!, 0),
-    cacheSavingsUsd: priced.reduce((sum, step) => sum + step.cacheSavingsUsd!, 0),
-    unpricedSteps: steps.length - priced.length,
+    ...(savings.length ? { cacheSavingsUsd: savings.reduce((sum, step) => sum + step.cacheSavingsUsd!, 0) } : {}),
+
   };
-  return { steps, totals: { input, output, total, stepsReported, stepsWithCache, ...costs } };
+  return { steps, totals: { input, output, total, stepsReported, stepsWithCache, ...costs, ...(priced.length || subscriptionSteps ? { unpricedSteps: steps.length - priced.length - subscriptionSteps, unknownSavingsSteps: steps.length - savings.length - subscriptionSteps } : {}), ...(subscriptionSteps ? { subscriptionSteps } : {}) } };
 }
 
 export interface SessionOptions {
@@ -4658,6 +4660,7 @@ export class Session {
               reasoningEffort: this.selectedEffort,
               inputTokens: event.usage.inputTokens,
               cachedInputTokens: event.usage.cachedInputTokens,
+              cacheWriteTokens: event.usage.cacheWriteTokens,
               outputTokens: event.usage.outputTokens,
               totalTokens: event.usage.totalTokens,
               finishReason: event.finishReason,

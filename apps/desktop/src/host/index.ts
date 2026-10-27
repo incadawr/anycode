@@ -279,7 +279,8 @@ import {
   type RoleRouteResolution,
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
-import { calculateUsageCost } from "./usage-cost.js";
+import { calculateUsageCost, connectionPricing } from "./usage-cost.js";
+import { summarizeWithChildren } from "./usage-summary.js";
 import { closeProxyRelay, credentialedProxyValuesForRelay, resolveProxyRelay } from "@anycode/core/proxy-relay";
 import type {
   AgentBridgeCatalogEntry,
@@ -1171,7 +1172,19 @@ let persistence: SqlitePersistenceAdapter | null = null;
  * resolves once the tail settles. Lets Session.shutdown() drain audit writes
  * strictly before the host closes the database.
  */
+
 let usageAuditWriteTail: Promise<void> | null = null;
+function foreignUsageAudit(sessionId: string, beforeWrite: () => Promise<void> = async () => {}) {
+  return {
+    sink: {
+      record: (row: Omit<import("@anycode/core").ProviderUsageRecord, "sessionId" | "createdAt">) => {
+        usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve()).then(beforeWrite).then(() => persistence!.recordProviderUsage({ ...row, sessionId, createdAt: Date.now() })).catch((e) => console.error("[host] usage audit write failed", e));
+      },
+      flush: () => usageAuditWriteTail ?? Promise.resolve(),
+    },
+    summary: { summary: async () => { await (usageAuditWriteTail ?? Promise.resolve()); return summarizeWithChildren(persistence!, sessionId); } },
+  };
+}
 // null until the MCP boot block below successfully constructs one (or forever
 // null if it fails-soft) — every reader below guards on this (design §6).
 let mcpManager: McpManager | null = null;
@@ -1886,6 +1899,11 @@ async function bootCodexSession(
         saveJson: (json) => persistence!.savePendingChildReports(connected.sessionMeta.id, json),
       })
     : undefined;
+  const codexUsageAudit = foreignUsageAudit(connected.sessionMeta.id);
+  if (args.resume && connected.engine.historyItems().length > 0 && (await persistence!.listProviderUsage(connected.sessionMeta.id)).length === 0) {
+    codexUsageAudit.sink.record({ turnId: "legacy-unpriced", step: 1, finishReason: "history", transportRetries: 0 });
+  }
+  connected.engine.onUsage((usage) => codexUsageAudit.sink.record({ turnId: randomUUID(), step: 1, model: connected.engine.usageModel(), ...usage, finishReason: "unknown", transportRetries: 0 }));
   session = new Session({
     workspaceTrustRequired: workspaceTrustRequiredMessage,
     outbound,
@@ -1900,6 +1918,7 @@ async function bootCodexSession(
     workspace,
     model: connected.model,
     sessionId: connected.sessionMeta.id,
+    usageAudit: codexUsageAudit,
     // Codex owns native thread history; never an AgentLoop history — this is
     // the resume projection built ONCE at boot (TASK.42, cut §2(e)):
     // native `thread/read` merged with the command shadow log, `[]` for a
@@ -2611,8 +2630,26 @@ async function bootClaudeSession(
           rowWriter.savePendingChildReports(json).then(() => undefined),
       })
     : undefined;
+  const claudeUsageAudit = foreignUsageAudit(rowId, () => rowWriter.settled());
+  if (args.resume && bootHistory.length > 0 && (await persistence!.listProviderUsage(rowId)).length === 0) {
+    claudeUsageAudit.sink.record({ turnId: "legacy-unpriced", step: 1, finishReason: "history", transportRetries: 0 });
+  }
+  claudeEngine.onCostResult((result) => {
+    const count = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+    const input = count(result.usage?.input_tokens);
+    const cached = count(result.usage?.cache_read_input_tokens);
+    const write = count(result.usage?.cache_creation_input_tokens);
+    const output = count(result.usage?.output_tokens);
+    const cost = count(result.total_cost_usd);
+    claudeUsageAudit.sink.record({ turnId: randomUUID(), step: 1, model: claudeEngine.resolvedModel() ?? connected.model, finishReason: "result", transportRetries: 0,
+      ...(input !== undefined && cached !== undefined && write !== undefined ? { inputTokens: input + cached + write } : {}),
+      ...(cached !== undefined ? { cachedInputTokens: cached } : {}), ...(write !== undefined ? { cacheWriteTokens: write } : {}),
+      ...(output !== undefined ? { outputTokens: output } : {}),
+      ...(cost !== undefined ? { costUsd: cost, priceBasisId: "claude-cli-reported" } : {}) });
+  });
   session = new Session({
     workspaceTrustRequired: workspaceTrustRequiredMessage,
+    usageAudit: claudeUsageAudit,
     outbound,
     engine: booted.engine,
     // CC-D-min: the RAW ClaudeEngine, Claude's own immediate-apply seam (never
@@ -4373,6 +4410,18 @@ async function boot(): Promise<void> {
     const loop = new AgentLoop(
       withWorkflows(
         withSubagents(config, {
+          createUsageRecorder: (model) => {
+            const subagentId = randomUUID();
+            let step = 0;
+            return (usage) => {
+              const price = envConfig.baseUrl.replace(/\/$/, "") === catalogEntry?.baseUrl.replace(/\/$/, "")
+                ? catalogEntry.models.find((item) => item.id === model)?.pricing : undefined;
+              const override = connectionPricing(process.env.ANYCODE_CONNECTION_PRICING);
+              const cost = override?.subscription ? { priceBasisId: "subscription" } : calculateUsageCost(usage, override?.price ?? price);
+              const row = { ...usage, ...cost, subagentId, sessionId, turnId: subagentId, step: ++step, createdAt: Date.now(), model, finishReason: "unknown", transportRetries: 0 };
+              usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve()).then(() => persistence!.recordProviderUsage(row)).catch((e) => console.error("[host] usage audit write failed", e));
+            };
+          },
           // Taskana 4704 §3.6: settings-derived role personas. For each of
           // planner/executor/reviewer NOT claimed by md-discovery, a derived
           // PersonaDefinition is appended carrying the settings
@@ -4904,7 +4953,9 @@ async function boot(): Promise<void> {
             // may charge a different price even when it exposes the same model.
             const price = envConfig.baseUrl.replace(/\/$/, "") === catalogEntry?.baseUrl.replace(/\/$/, "")
               ? catalogEntry.models.find((model) => model.id === r.model)?.pricing : undefined;
-            const cost = calculateUsageCost(r, price);
+            const override = connectionPricing(process.env.ANYCODE_CONNECTION_PRICING);
+            const cost = override?.subscription ? { priceBasisId: "subscription" }
+              : calculateUsageCost(r, override?.price ?? price);
             // Serialized (chained off the tail, never parallel) so flush()
             // below is an honest drain of every queued write IN ORDER.
             usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve())
@@ -4919,7 +4970,7 @@ async function boot(): Promise<void> {
           flush: () => usageAuditWriteTail ?? Promise.resolve(),
         },
         summary: {
-          summary: () => persistence!.listProviderUsage(sessionId).then(summarizeProviderUsage),
+          summary: async () => { await (usageAuditWriteTail ?? Promise.resolve()); return summarizeWithChildren(persistence!, sessionId); },
         },
       },
 

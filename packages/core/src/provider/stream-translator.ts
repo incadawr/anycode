@@ -126,6 +126,7 @@ export function translateStreamPart(
         usage: {
           inputTokens: part.totalUsage.inputTokens,
           ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+          ...(part.totalUsage.inputTokenDetails?.cacheWriteTokens !== undefined ? { cacheWriteTokens: part.totalUsage.inputTokenDetails.cacheWriteTokens } : {}),
           outputTokens: part.totalUsage.outputTokens,
           totalTokens: part.totalUsage.totalTokens,
         },

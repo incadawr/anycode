@@ -8351,7 +8351,7 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
     }
   });
 
-  it("foreign engine: a codex finish with usage -> NO sink call (the core gate holds)", async () => {
+  it("foreign engine: session does not manufacture usage records", async () => {
     const { sink, records } = recordingSink();
     const h = createHarness({
       steps: [usageStep({ inputTokens: 10, outputTokens: 4, totalTokens: 14 }, "one")],

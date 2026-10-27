@@ -222,7 +222,12 @@ export type ProviderHealthStatus =
  * "legacy" bucket (no catalog pick) so `activeProviderView` reads back an
  * absent `provider.id`, exactly like a v1 singleton with no id.
  */
+export type ConnectionPricing =
+  | { mode: "subscription" }
+  | { mode: "rates"; input: number; cachedInput: number; output: number; cacheWrite?: number };
+
 export interface ProviderConnection {
+  pricing?: ConnectionPricing;
   id: string;
   providerId: string;
   label?: string;
@@ -419,6 +424,7 @@ export interface ProviderSettingsV2 {
  * Never persisted.
  */
 export interface ActiveProviderView {
+  pricing?: ConnectionPricing;
   id?: string;
   model?: string;
   baseUrl?: string;
@@ -1162,6 +1168,7 @@ export type SettingsPatch = Omit<DeepPartial<AnycodeSettings>, "provider">;
 // ── connection CRUD request payloads (companions to the connection-* channels) ──
 
 export interface ConnectionCreateRequest {
+  pricing?: ConnectionPricing;
   providerId: string;
   label?: string;
   model?: string;
@@ -1200,6 +1207,7 @@ export interface ConnectionCreateRequest {
 }
 
 export interface ConnectionUpdateRequest {
+  pricing?: ConnectionPricing | "";
   id: string;
   label?: string;
   model?: string;
@@ -1456,6 +1464,7 @@ export function activeProviderView(settings: AnycodeSettings): ActiveProviderVie
     return {};
   }
   return {
+    pricing: connection.pricing,
     id: connection.providerId === "" ? undefined : connection.providerId,
     model: connection.model,
     baseUrl: connection.baseUrl,
