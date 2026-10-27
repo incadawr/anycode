@@ -376,6 +376,20 @@ const connectionPricingSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("subscription") }).strict(),
   z.object({ mode: z.literal("rates"), input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict(),
 ]);
+
+/**
+ * Opt-in implicit prompt cache (GitHub #15), strict at the trust boundary:
+ * ONLY the enabled `{mode:"implicit",ttl:"30m"}` object is accepted (explicit
+ * mode, 12h TTL and arbitrary fields are refused `invalid` — the SDK accepts
+ * no other values). The persisted schema stays lenient (`.catch(undefined)`);
+ * strictness belongs here, where exactly one value is being written.
+ */
+const promptCacheSchema = z
+  .object({
+    mode: z.literal("implicit"),
+    ttl: z.literal("30m"),
+  })
+  .strict();
 const connectionCreateSchema = z
   .object({
     providerId: z.string().min(1),
@@ -398,6 +412,7 @@ const connectionCreateSchema = z
     // atomically with the connection, never as a second call that can be lost.
     proxyRef: z.string().min(1).optional(),
     reasoningEffort: reasoningEffortEnum.optional(),
+    promptCache: promptCacheSchema.optional(),
     maxOutputTokens: maxOutputTokensSchema.optional(),
     // Per-model context window (TASK.142). Only the numeric value is accepted
     // from the renderer; the model binding is derived server-side from the
@@ -435,6 +450,9 @@ const connectionUpdateSchema = z
     // connection's own legacy `proxyUrl` into a real profile.
     proxyRef: z.string().optional(),
     reasoningEffort: reasoningEffortEnum.optional(),
+    // Opt-in prompt cache (GitHub #15) with the same `""` clear sentinel as
+    // `maxOutputTokens` below: absent = keep, enabled object = set, `""` = clear.
+    promptCache: z.union([promptCacheSchema, z.literal("")]).optional(),
     // Output-token ceiling (TASK.150) with the same `""` clear sentinel as
     // `transport`/`proxyRef` above.
     maxOutputTokens: z.union([maxOutputTokensSchema, z.literal("")]).optional(),
@@ -1752,6 +1770,7 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
       ...(req.proxyUrl !== undefined ? { proxyUrl: req.proxyUrl } : {}),
       ...(req.proxyRef !== undefined ? { proxyRef: req.proxyRef } : {}),
       ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort } : {}),
+      ...(req.promptCache !== undefined ? { promptCache: req.promptCache } : {}),
       ...(req.maxOutputTokens !== undefined ? { maxOutputTokens: req.maxOutputTokens } : {}),
       ...(req.contextWindowTokens !== undefined
         ? { contextWindowTokens: req.contextWindowTokens, contextWindowModel: createContextWindowModel }
@@ -1840,6 +1859,18 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     // A proxy edit joins that set (TASK.132): it changes the NETWORK PATH the
     // request takes, so health observed through the old path is just as stale
     // as health observed against the old transport.
+    const normalizedPromptCache = req.promptCache === "" ? undefined : req.promptCache;
+    // A cache-policy change is an endpoint REQUEST change (GitHub #15): health
+    // probed without the new options must not read as already-probed for them.
+    const promptCacheChanged =
+      req.promptCache !== undefined &&
+      !(
+        normalizedPromptCache === undefined
+          ? existing.promptCache === undefined
+          : existing.promptCache !== undefined &&
+            existing.promptCache.mode === normalizedPromptCache.mode &&
+            existing.promptCache.ttl === normalizedPromptCache.ttl
+      );
     const endpointChanged =
       (req.model !== undefined && req.model !== existing.model) ||
       (req.transport !== undefined && normalizedTransport !== existing.transport) ||
@@ -1847,7 +1878,8 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
       (req.proxyUrl !== undefined && normalizedProxyUrl !== existing.proxyUrl) ||
       // A ref change moves the network path exactly the way a `proxyUrl` change
       // does — including a change to `direct`, which is a path, not an absence.
-      (normalizedProxyRef !== undefined && normalizedProxyRef !== (existing.proxyRef ?? null));
+      (normalizedProxyRef !== undefined && normalizedProxyRef !== (existing.proxyRef ?? null)) ||
+      promptCacheChanged;
     // A baseUrl change re-points the connection at a DIFFERENT endpoint, so a
     // live-fetched model list from the old one must not linger (same staleness
     // rationale as the lastHealth reset, scoped to baseUrl only — a model/
@@ -1913,6 +1945,16 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
         delete updatedConnection.maxOutputTokens;
       } else {
         updatedConnection.maxOutputTokens = req.maxOutputTokens;
+      }
+    }
+    // Opt-in prompt cache (GitHub #15): identical shape to the output-ceiling
+    // clear branch — `""` deletes the key (Off is absence, never a
+    // `mode:"off"` literal), an enabled object sets it, absent keeps it.
+    if (req.promptCache !== undefined) {
+      if (req.promptCache === "") {
+        delete updatedConnection.promptCache;
+      } else {
+        updatedConnection.promptCache = req.promptCache;
       }
     }
     // Per-model context window (TASK.142): `""` deletes BOTH keys (tokens and

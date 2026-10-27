@@ -25,6 +25,7 @@ import {
   ENV_INCLUDE_USAGE,
   ENV_MAX_OUTPUT_TOKENS,
   ENV_PROVIDER_TRANSPORT,
+  ENV_PROMPT_CACHE_OPTIONS,
   ENV_REASONING_EFFORT,
   applyCodexProfilesHomeOverride,
   applyConnectionProxy,
@@ -487,6 +488,97 @@ describe("buildHostEnv — ANYCODE_MAX_OUTPUT_TOKENS (TASK.150)", () => {
       getSecret: noSecret,
     });
     expect(env[ENV_MAX_OUTPUT_TOKENS]).toBe("8192");
+  });
+});
+
+describe("buildHostEnv — ANYCODE_PROMPT_CACHE_OPTIONS (GitHub #15)", () => {
+  const CACHE = { mode: "implicit", ttl: "30m" } as const;
+  /** Core's parser needs a usable provider env; the cache field is what we read. */
+  const parse = (env: NodeJS.ProcessEnv) => loadEnvConfig({ ...env, ANYCODE_API_KEY: "sk-test", ANYCODE_MODEL: "m" });
+
+  /** A connection with an optional persisted opt-in cache policy. */
+  function cacheConn(connectionId: string, policy: typeof CACHE | undefined) {
+    const conn = connectionFixture({ connectionId, id: "z-ai", model: "m", baseUrl: "https://gw.example/v1" });
+    return { ...conn, ...(policy !== undefined ? { promptCache: policy } : {}) };
+  }
+
+  it("pinned connections get distinct prompt cache environments, and the host parses them back", async () => {
+    const enabled = cacheConn("conn-a", CACHE);
+    const off = cacheConn("conn-b", undefined);
+    const base = settings();
+    const envA = await buildHostEnv({
+      bootEnv: {},
+      settings: { ...base, provider: providerV2Multi("conn-a", [enabled, off]) },
+      getSecret: noSecret,
+    });
+    const envB = await buildHostEnv({
+      bootEnv: {},
+      settings: { ...base, provider: providerV2Multi("conn-b", [enabled, off]) },
+      getSecret: noSecret,
+    });
+    expect(envA[ENV_PROMPT_CACHE_OPTIONS]).toBe('{"mode":"implicit","ttl":"30m"}');
+    // Off is ABSENCE — never a `mode:"off"` literal on the fork env.
+    expect(envB[ENV_PROMPT_CACHE_OPTIONS]).toBeUndefined();
+    // The value round-trips through core's parser into the request policy.
+    expect(parse(envA).promptCache).toEqual(CACHE);
+    expect(parse(envB).promptCache).toBeUndefined();
+  });
+
+  it("a shell `off` beats a saved implicit policy (fillFromSettings never overwrites a boot slot)", async () => {
+    const env = await buildHostEnv({
+      bootEnv: { [ENV_PROMPT_CACHE_OPTIONS]: "off" },
+      settings: { ...settings(), provider: providerV2Multi("conn-a", [cacheConn("conn-a", CACHE)]) },
+      getSecret: noSecret,
+    });
+    expect(env[ENV_PROMPT_CACHE_OPTIONS]).toBe("off");
+    expect(parse(env).promptCache).toBeUndefined();
+  });
+
+  it("a shell JSON policy is left exactly as the shell set it", async () => {
+    const shell = '{"mode":"implicit"}';
+    const env = await buildHostEnv({
+      bootEnv: { [ENV_PROMPT_CACHE_OPTIONS]: shell },
+      settings: { ...settings(), provider: providerV2Multi("conn-a", [cacheConn("conn-a", CACHE)]) },
+      getSecret: noSecret,
+    });
+    expect(env[ENV_PROMPT_CACHE_OPTIONS]).toBe(shell);
+  });
+
+  it("clearing the policy and rebinding does not leak a previous enabled value", async () => {
+    const enabled = cacheConn("conn-a", CACHE);
+    const off = cacheConn("conn-b", undefined);
+    const base = settings();
+    const first = await buildHostEnv({
+      bootEnv: {},
+      settings: { ...base, provider: providerV2Multi("conn-a", [enabled, off]) },
+      getSecret: noSecret,
+    });
+    expect(first[ENV_PROMPT_CACHE_OPTIONS]).toBe('{"mode":"implicit","ttl":"30m"}');
+    // The SAME connection after the user switched Off (key deleted) must emit
+    // no policy at all — a stale value may not survive the rebuild.
+    const cleared = { ...cacheConn("conn-a", undefined) };
+    const afterClear = await buildHostEnv({
+      bootEnv: {},
+      settings: { ...base, provider: providerV2Multi("conn-a", [cleared, off]) },
+      getSecret: noSecret,
+    });
+    expect(afterClear[ENV_PROMPT_CACHE_OPTIONS]).toBeUndefined();
+    // Rebinding to a still-Off connection emits none either.
+    const afterRebind = await buildHostEnv({
+      bootEnv: {},
+      settings: { ...base, provider: providerV2Multi("conn-b", [enabled, off]) },
+      getSecret: noSecret,
+    });
+    expect(afterRebind[ENV_PROMPT_CACHE_OPTIONS]).toBeUndefined();
+  });
+
+  it("emits nothing when the active connection persists no policy (no default-enabled object)", async () => {
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ provider: { id: "z-ai", model: "m" } }),
+      getSecret: noSecret,
+    });
+    expect(ENV_PROMPT_CACHE_OPTIONS in env).toBe(false);
   });
 });
 

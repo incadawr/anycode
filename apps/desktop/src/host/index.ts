@@ -3061,6 +3061,10 @@ async function boot(): Promise<void> {
           ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
           ...(resolveApiKey !== undefined ? { resolveApiKey } : {}),
           ...(includeUsage ? { includeUsage: true } : {}),
+          // GitHub #15: forward the parsed prompt-cache policy into EVERY port
+          // this factory builds (hot swaps, classifiers, inline agents), not
+          // just the first model instance. Absent = no field, byte-identical.
+          ...(envConfig.promptCache !== undefined ? { promptCache: envConfig.promptCache } : {}),
           ...(childRetryBoot
             ? { retry: childRetryPolicy(true, envRetry) }
             : Object.keys(envRetry).length > 0

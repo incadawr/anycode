@@ -72,17 +72,25 @@ describe("AiSdkModelPort over a real @ai-sdk/anthropic SSE stream (slice 3.7 R1)
   let server: Server;
   let baseUrl: string;
   let cacheRead: number | undefined;
+  let capturedRaw: string;
 
   beforeEach(async () => {
     cacheRead = undefined;
+    capturedRaw = "";
     server = createServer((req, res) => {
-      // Drain the request so the socket is not held open.
-      req.resume();
-      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+      // Drain the request into the capture buffer so the socket is not held
+      // open AND the outgoing bytes are inspectable (GitHub #15: the anthropic
+      // transport must never emit an OpenAI cache field).
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        capturedRaw = Buffer.concat(chunks).toString("utf8");
+        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
       res.end(serializeSse(CHUNKS.map((chunk) => chunk.type === "message_start"
         ? { ...chunk, message: { id: "msg_1", model: "glm-5.2", role: "assistant",
           usage: { input_tokens: 17, ...(cacheRead !== undefined ? { cache_read_input_tokens: cacheRead } : {}) } } }
         : chunk)));
+      });
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const { port } = server.address() as AddressInfo;
@@ -137,5 +145,26 @@ describe("AiSdkModelPort over a real @ai-sdk/anthropic SSE stream (slice 3.7 R1)
 
     // The drop was warned (once — a single artifact signature).
     expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // GitHub #15: the anthropic-messages transport must ignore the opt-in cache
+  // policy entirely — no OpenAI `prompt_cache_options` (or Anthropic-style
+  // `cache_control`) may ever reach the wire, even when the endpoint config
+  // carries an enabled value.
+  it("ignores an enabled promptCache policy — no OpenAI/Anthropic cache field reaches the wire", async () => {
+    const events = await collect(
+      new AiSdkModelPort({
+        transport: "anthropic-messages",
+        baseUrl,
+        apiKey: "test-key",
+        model: "glm-5.2",
+        retry: { maxRetries: 0, stallTimeoutMs: 0 },
+        promptCache: { mode: "implicit", ttl: "30m" },
+      }).streamText({ messages: [{ role: "user", content: "hi" }], tools: [] }),
+    );
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    expect(capturedRaw).not.toContain("prompt_cache_options");
+    expect(capturedRaw).not.toContain("promptCacheOptions");
+    expect(capturedRaw).not.toContain("cache_control");
   });
 });

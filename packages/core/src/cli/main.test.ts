@@ -4849,6 +4849,35 @@ describe("buildCliEndpointConfig (TASK.158 endpoint-builder)", () => {
       }),
     ).toHaveProperty("includeUsage", true);
   });
+
+  it("conditionally forwards the parsed prompt-cache policy (GitHub #15), absent stays byte-identical", () => {
+    const cache = { mode: "implicit", ttl: "30m" } as const;
+    const withCache = {
+      baseUrl: "https://gw.example.com/v1",
+      model: "unused-here",
+      promptCache: cache,
+    } as unknown as Parameters<typeof buildCliEndpointConfig>[0]["envConfig"];
+
+    const enabled = buildCliEndpointConfig({
+      transport: "openai-chat-completions",
+      envConfig: withCache,
+      catalogEntry: undefined,
+      retryOverride: {},
+      includeUsageResolved: false,
+      model: "gpt-oss-120b",
+    });
+    expect(enabled.promptCache).toEqual(cache);
+
+    const disabled = buildCliEndpointConfig({
+      transport: "openai-chat-completions",
+      envConfig: envConfig("https://gw.example.com/v1"),
+      catalogEntry: undefined,
+      retryOverride: {},
+      includeUsageResolved: false,
+      model: "gpt-oss-120b",
+    });
+    expect("promptCache" in disabled).toBe(false);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────

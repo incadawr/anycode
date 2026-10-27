@@ -236,6 +236,10 @@ export function buildCliEndpointConfig(args: {
     ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
     ...(Object.keys(retryOverride).length > 0 ? { retry: retryOverride } : {}),
     ...(includeUsageResolved ? { includeUsage: true as const } : {}),
+    // GitHub #15: conditionally forward the parsed prompt-cache policy so the
+    // CLI and desktop interpret the provider env identically. Absent = no
+    // field, byte-identical to today.
+    ...(envConfig.promptCache !== undefined ? { promptCache: envConfig.promptCache } : {}),
     // Taskana 4772: the CLI waits for the network via TCP probes (no OS hints).
     networkWaiter: createProbeOnlyNetworkWaiter(),
   };

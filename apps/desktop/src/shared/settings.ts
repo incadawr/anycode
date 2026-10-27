@@ -30,6 +30,13 @@
 // shape is exactly the drift that silently drops a field on a round-trip.
 import type { ProxyProfile } from "./proxy.js";
 import { ENV_MCP_SECRETS } from "./mcp-secrets.js";
+// GitHub #15: the ONE value edge where a core TYPE crosses into the shared
+// control-plane contract. `verbatimModuleSyntax` erases this statement
+// entirely (zero-runtime-import rule intact), so no bundle grows by a byte;
+// desktop contracts reference `ImplicitPromptCache` structurally via this
+// re-export without adding a runtime core dependency.
+import type { ImplicitPromptCache } from "@anycode/core";
+export type { ImplicitPromptCache };
 
 // ── invoke channels (5 — frozen; named consistently with shared/tabs.ts) ──
 
@@ -288,6 +295,13 @@ export interface ProviderConnection {
   proxyRef?: string;
   reasoningEffort?: ReasoningEffort;
   /**
+   * Opt-in implicit prompt caching (GitHub #15). Absent = Off (no cache
+   * options on the wire). Persisted ONLY as the enabled object; a malformed
+   * disk field is dropped locally without resetting the connection. Ignored
+   * for the anthropic-messages transport at the model port.
+   */
+  promptCache?: ImplicitPromptCache;
+  /**
    * Explicit output-token ceiling for this connection (TASK.150), materialised
    * as `ANYCODE_MAX_OUTPUT_TOKENS` on the fork env — so an env value set by the
    * launching shell still wins, exactly like `reasoningEffort`.
@@ -440,6 +454,8 @@ export interface ActiveProviderView {
    */
   proxyUrl?: string;
   reasoningEffort?: ReasoningEffort;
+  /** The active connection's opt-in prompt-cache policy (GitHub #15); absent = Off. */
+  promptCache?: ImplicitPromptCache;
   /** The active connection's explicit output-token ceiling (TASK.150); absent = catalog/default. */
   maxOutputTokens?: number;
   /** The active connection's per-model context-window override (TASK.142) and the model it binds to; absent = catalog/assumed fallback. */
@@ -1191,6 +1207,12 @@ export interface ConnectionCreateRequest {
    */
   proxyRef?: string;
   reasoningEffort?: ReasoningEffort;
+  /**
+   * Opt-in prompt-cache policy (GitHub #15). Omitted = Off (no cache options
+   * on the wire); an enabled object = set it. Create has no `""` sentinel
+   * (omission already means Off).
+   */
+  promptCache?: ImplicitPromptCache;
   /** Output-token ceiling (see `ProviderConnection.maxOutputTokens`); omitted = catalog/default. */
   maxOutputTokens?: number;
   /**
@@ -1250,6 +1272,13 @@ export interface ConnectionUpdateRequest {
    */
   proxyRef?: string;
   reasoningEffort?: ReasoningEffort;
+  /**
+   * Opt-in prompt-cache policy (GitHub #15) with the same `""` clear sentinel
+   * as `maxOutputTokens` below: absent = keep the current value, the enabled
+   * object = set it, `""` = clear it back to Off. `""` is never persisted —
+   * the handler deletes the key.
+   */
+  promptCache?: ImplicitPromptCache | "";
   /**
    * Output-token ceiling (TASK.150) with the same `""` clear sentinel as
    * `transport`/`proxyRef` above: absent = keep the current value, a positive
@@ -1477,6 +1506,7 @@ export function activeProviderView(settings: AnycodeSettings): ActiveProviderVie
     transport: connection.transport,
     proxyUrl: connection.proxyUrl,
     reasoningEffort: connection.reasoningEffort,
+    promptCache: connection.promptCache,
     maxOutputTokens: connection.maxOutputTokens,
     contextWindowTokens: connection.contextWindowTokens,
     contextWindowModel: connection.contextWindowModel,

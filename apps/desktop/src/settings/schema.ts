@@ -193,6 +193,20 @@ const transportSchema = z.enum(["anthropic-messages", "openai-chat-completions",
 const reasoningEffortSchema = z.enum(["off", "low", "medium", "high", "max"]);
 
 /**
+ * Opt-in implicit prompt cache (GitHub #15). Strict on-disk shape: ONLY the
+ * enabled `{mode:"implicit",ttl:"30m"}` object is ever persisted — Off is
+ * absence, never a `mode:"off"` literal. `.strict()` at this boundary means a
+ * hand-edited extra field (or a 12h TTL the SDK does not accept) drops JUST
+ * this optional field via `.catch(undefined)`, never the whole document.
+ */
+const promptCacheSchema = z
+  .object({
+    mode: z.literal("implicit"),
+    ttl: z.literal("30m"),
+  })
+  .strict();
+
+/**
  * One `ProviderConnection` (TASK.45 settings v2). `id`/`providerId` are required;
  * every default is optional (a connection may exist with only a credential, or
  * only a remembered model). `lastHealth` is the advisory cache (W11 writes it).
@@ -228,6 +242,11 @@ const connectionSchema = z.object({
   // fail-soft as "direct for this connection" by `resolveProxyLadder`.
   proxyRef: z.string().optional(),
   reasoningEffort: reasoningEffortSchema.optional(),
+  // Opt-in prompt cache (GitHub #15). `.catch(undefined)` for the same reason
+  // `maxOutputTokens` below is fail-soft: `connections` is a plain `z.array`
+  // with no per-element tolerance, so a hand-edited bad value must drop just
+  // this optional field, never reset the whole document.
+  promptCache: promptCacheSchema.optional().catch(undefined),
   // Output-token ceiling (TASK.150). `.catch(undefined)` for the same reason
   // `proxyUrl` above is lenient: `connections` is a plain `z.array` with no
   // per-element tolerance, so a hand-edited `"lots"` here would fail the whole

@@ -621,7 +621,7 @@ export function buildCustomProviderCreateRequest(input: {
 // custom records (TASK.58) so they appear in the ConnectionDrawer's provider
 // picker with the right transport constraints. ──
 
-const CUSTOM_KIND_DEFAULT_TRANSPORT: Record<CustomProviderRecord["kind"], ProviderTransportId> = {
+export const CUSTOM_KIND_DEFAULT_TRANSPORT: Record<CustomProviderRecord["kind"], ProviderTransportId> = {
   "openai-compatible": "openai-chat-completions",
   openai: "openai-responses",
   anthropic: "anthropic-messages",

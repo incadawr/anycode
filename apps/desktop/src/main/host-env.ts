@@ -140,6 +140,16 @@ export const ENV_PROVIDER_TRANSPORT = "ANYCODE_PROVIDER_TRANSPORT";
  */
 export const ENV_INCLUDE_USAGE = "ANYCODE_INCLUDE_USAGE";
 /**
+ * Opt-in prompt-cache override (GitHub #15). Literal mirror of core's
+ * `provider/env.ts` ENV_PROMPT_CACHE_OPTIONS — same local-literal convention
+ * as every var above (host-env stays core-free). Carries the ACTIVE
+ * connection's persisted policy as JSON (`{"mode":"implicit","ttl":"30m"}`);
+ * a launching shell's own value always wins (fillFromSettings never
+ * overwrites a boot-provided slot), and an explicit shell `off` is
+ * authoritative — the host parses it as "disabled", not "unset".
+ */
+export const ENV_PROMPT_CACHE_OPTIONS = "ANYCODE_PROMPT_CACHE_OPTIONS";
+/**
  * The provider connection pinned to a tab's session (TASK.45 W10). Informational
  * for the host: it is NOT a secret and NOT a credential — the resolved
  * credential rides ANYCODE_API_KEY as before. The host only reads this to persist
@@ -456,6 +466,7 @@ const PROVIDER_ENV_KEYS: readonly string[] = [
   ENV_CONTEXT_WINDOW_MODEL,
   ENV_PROVIDER_TRANSPORT,
   ENV_INCLUDE_USAGE,
+  ENV_PROMPT_CACHE_OPTIONS,
   ENV_GREP_BACKEND,
   ENV_PERMISSION_CLASSIFIER,
   // 4088-on-4118 integration: ENV_IMAGE_INPUT_MODELS is GONE — the live
@@ -1227,6 +1238,15 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // active connection's last chosen effort instead of hardcoded `off`. Env still
   // wins by construction (fillFromSettings).
   fillFromSettings(env, ENV_REASONING_EFFORT, view.reasoningEffort);
+  // Opt-in prompt cache (GitHub #15): the active connection's persisted policy
+  // rides as one JSON value; absent = no env entry (Off). A launching shell's
+  // ANYCODE_PROMPT_CACHE_OPTIONS always wins, including a literal `off` — core's
+  // readPromptCacheOptions treats `off` as authoritative disable, never unset.
+  fillFromSettings(
+    env,
+    ENV_PROMPT_CACHE_OPTIONS,
+    view.promptCache === undefined ? undefined : JSON.stringify(view.promptCache),
+  );
   // Output-token ceiling (TASK.150): the same F14 §2.4 inheritance rung as
   // ENV_REASONING_EFFORT above. `fillFromSettings` only fills a slot the boot
   // snapshot left blank, so a launching shell's own ANYCODE_MAX_OUTPUT_TOKENS

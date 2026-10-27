@@ -65,6 +65,7 @@ import type { ModelStreamEvent } from "../types/events.js";
 import { linkAbortSignal } from "../util/abort.js";
 import type { ProviderTransport } from "./catalog.js";
 import type { EndpointConfig } from "./endpoint.js";
+import type { ImplicitPromptCache } from "../types/config.js";
 import { classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
 import { createLanguageModel } from "./language-model.js";
 import type { ProviderQuotaUpdate } from "./quota.js";
@@ -97,7 +98,9 @@ interface AnthropicReasoningOptions {
  */
 interface OpenAICompatibleReasoningOptions {
   maxOutputTokens?: number;
-  providerOptions?: { openaiCompatible: { reasoningEffort: string } };
+  providerOptions?: {
+    openaiCompatible: { reasoningEffort?: string; prompt_cache_options?: ImplicitPromptCache };
+  };
 }
 
 /**
@@ -112,7 +115,7 @@ interface OpenAICompatibleReasoningOptions {
  */
 interface OpenAIResponsesReasoningOptions {
   maxOutputTokens?: number;
-  providerOptions: { openai: { store: false; reasoningEffort?: string } };
+  providerOptions: { openai: { store: false; reasoningEffort?: string; promptCacheOptions?: ImplicitPromptCache } };
 }
 
 type ReasoningOptions = AnthropicReasoningOptions | OpenAICompatibleReasoningOptions | OpenAIResponsesReasoningOptions;
@@ -172,26 +175,31 @@ export function reasoningRequestOptions(
   request: ModelRequest,
   providerName?: string,
   transport?: "anthropic-messages",
+  promptCache?: ImplicitPromptCache,
 ): AnthropicReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
   providerName: string | undefined,
   transport: "openai-chat-completions",
+  promptCache?: ImplicitPromptCache,
 ): OpenAICompatibleReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
   providerName: string | undefined,
   transport: "openai-responses",
+  promptCache?: ImplicitPromptCache,
 ): OpenAIResponsesReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
   providerName: string | undefined,
   transport: ProviderTransport,
+  promptCache?: ImplicitPromptCache,
 ): ReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
   providerName?: string,
   transport: ProviderTransport = "anthropic-messages",
+  promptCache?: ImplicitPromptCache,
 ): ReasoningOptions {
   const effort = request.reasoningEffort;
 
@@ -199,28 +207,54 @@ export function reasoningRequestOptions(
     // store:false is unconditional (§0.2): AnyCode owns history end-to-end, and
     // leaving `store` absent defaults the real API to `store: true` server-side
     // — a hidden second persistence this transport must never create.
+    // `promptCacheOptions` (GitHub #15) is spread conditionally and must
+    // coexist with `store:false` and any existing reasoning effort.
     if (effort === undefined || effort === "off") {
       return {
         ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
-        providerOptions: { openai: { store: false } },
+        providerOptions: {
+          openai: {
+            store: false,
+            ...(promptCache !== undefined ? { promptCacheOptions: promptCache } : {}),
+          },
+        },
       };
     }
     return {
       ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
-      providerOptions: { openai: { store: false, reasoningEffort: effort } },
+      providerOptions: {
+        openai: {
+          store: false,
+          reasoningEffort: effort,
+          ...(promptCache !== undefined ? { promptCacheOptions: promptCache } : {}),
+        },
+      },
     };
   }
 
   if (transport === "openai-chat-completions") {
     if (effort === undefined || effort === "off") {
-      return request.maxOutputTokens === undefined ? {} : { maxOutputTokens: request.maxOutputTokens };
+      if (request.maxOutputTokens === undefined && promptCache === undefined) {
+        return {};
+      }
+      return {
+        ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
+        ...(promptCache !== undefined
+          ? { providerOptions: { openaiCompatible: { prompt_cache_options: promptCache } } }
+          : {}),
+      };
     }
     // reasoning_effort is an enum, not a token budget: no maxOutputTokens arithmetic.
     // "max" has no chat-completions equivalent; collapse to "high" (§4.3).
     const mapped = effort === "max" ? "high" : effort;
     return {
       ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
-      providerOptions: { openaiCompatible: { reasoningEffort: mapped } },
+      providerOptions: {
+        openaiCompatible: {
+          reasoningEffort: mapped,
+          ...(promptCache !== undefined ? { prompt_cache_options: promptCache } : {}),
+        },
+      },
     };
   }
 
@@ -822,7 +856,7 @@ export class AiSdkModelPort implements ModelPort {
           // transport carries one (`message_start.message.model`); the flag
           // stays off elsewhere so no other transport pays for duplicate parts.
           ...(this.config.transport === "anthropic-messages" ? { includeRawChunks: true } : {}),
-          ...reasoningRequestOptions(request, this.config.providerName, this.config.transport),
+          ...reasoningRequestOptions(request, this.config.providerName, this.config.transport, this.config.promptCache),
           temperature: request.temperature,
         });
 

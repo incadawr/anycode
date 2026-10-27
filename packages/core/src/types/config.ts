@@ -6,6 +6,15 @@ import type { ToolResultBudget } from "./tools.js";
 
 export type ReasoningEffort = "off" | "low" | "medium" | "high" | "max";
 
+/**
+ * Opt-in implicit prompt caching for OpenAI transports (GitHub #15). This is
+ * the ONLY enabled value this build emits — a fixed `30m` TTL, never a
+ * `mode:"off"` literal on the wire (Off is absence). The SDK accepts no other
+ * TTL today (`@ai-sdk/openai` 4.0.14 validates `promptCacheOptions` against
+ * exactly `30m`), so the shape is deliberately closed rather than a union.
+ */
+export type ImplicitPromptCache = { mode: "implicit"; ttl: "30m" };
+
 /** Resolved runtime configuration sourced from environment variables. */
 export interface CoreEnvConfig {
   /**
@@ -59,6 +68,12 @@ export interface CoreEnvConfig {
   maxOutputTokens?: number;
   /** Opt-in reasoning budget (ANYCODE_REASONING_EFFORT). */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * Opt-in implicit prompt caching (ANYCODE_PROMPT_CACHE_OPTIONS, GitHub #15).
+   * Absent = no cache options are emitted (byte-identical to today). Only the
+   * closed `{ mode: "implicit", ttl: "30m" }` enabled value is ever set here.
+   */
+  promptCache?: ImplicitPromptCache;
   /** Context window override in tokens (ANYCODE_CONTEXT_WINDOW). */
   contextWindowTokens?: number;
   /** Stream retry budget for the provider adapter; 0 disables retries (ANYCODE_MAX_RETRIES). */

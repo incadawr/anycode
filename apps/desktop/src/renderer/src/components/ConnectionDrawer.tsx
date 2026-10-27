@@ -34,6 +34,7 @@ import type {
   ConnectionCreateRequest,
   ConnectionUpdateRequest,
   CustomProviderRecord,
+  ImplicitPromptCache,
   ProviderConnection,
   ProviderTransportId,
   SecretStatus,
@@ -47,6 +48,7 @@ import { connectionSecretKey, customProviderSecretKey, isCustomRecordProviderId 
 import { PROXY_REF_INHERIT, ProxyRefPicker, connectionCreateProxyRefField, proxyRefInitialValue } from "./ProxyRefPicker.js";
 import {
   OAuthCredentialBlock,
+  CUSTOM_KIND_DEFAULT_TRANSPORT,
   TRANSPORT_LABEL,
   buildCustomProviderCreateRequest,
   customProviderKindLabel,
@@ -315,6 +317,40 @@ export function resolveDrawerOAuthStartArgs(
  */
 
 /**
+ * The ONE enabled prompt-cache value this build can persist (GitHub #15):
+ * implicit mode, fixed 30-minute TTL — the only shape both SDKs accept and the
+ * only shape main's strict IPC schema admits. Off is ABSENCE, never a
+ * `mode:"off"` literal.
+ */
+export const IMPLICIT_PROMPT_CACHE: ImplicitPromptCache = { mode: "implicit", ttl: "30m" };
+
+/** Visible one-liner under the prompt-caching select (full copy in the tooltip). */
+export const PROMPT_CACHE_ONELINER = "Cache writes may cost extra.";
+export const PROMPT_CACHE_HELP =
+  "For endpoints that support prompt_cache_options. Cache writes may cost extra. Applies to new or reopened sessions.";
+
+/** Whether the edited connection opens with the cache ON (GitHub #15): only a persisted enabled policy does. */
+export function promptCacheInitialEnabled(connection: ProviderConnection | undefined): boolean {
+  return connection?.promptCache !== undefined;
+}
+
+/**
+ * Whether the prompt-caching control belongs on screen (GitHub #15): only the
+ * two OpenAI transports send the option, so an Anthropic connection would be
+ * offering a switch with no effect. The transport resolves through the
+ * selected catalog entry's own default — an empty local `transport` means
+ * "provider default", NOT Anthropic. Exported for direct testing (no jsdom in
+ * this package's vitest config, see file docstring).
+ */
+export function promptCacheVisible(
+  transport: ProviderTransportId | "",
+  defaultTransport: ProviderTransportId | undefined,
+): boolean {
+  const resolved = transport !== "" ? transport : (defaultTransport ?? "anthropic-messages");
+  return resolved === "openai-chat-completions" || resolved === "openai-responses";
+}
+
+/**
  * The connection-update payload the unified `save` sends (TASK.45 W12-FIX §3;
  * TASK.58 folded the former separate `saveMetadata` into `save`):
  * `transport` is sent UNCONDITIONALLY (never omitted) — the local state
@@ -342,6 +378,7 @@ export function buildConnectionUpdatePayload(params: {
   maxOutputTokens: number | "";
   contextWindowTokens: number | "";
   imageInput: ImageInputSelection;
+  promptCacheEnabled: boolean;
 }): ConnectionUpdateRequest {
   return {
     id: params.connectionId,
@@ -374,8 +411,15 @@ export function buildConnectionUpdatePayload(params: {
     // persist it. The model binding is derived SERVER-SIDE, exactly like the
     // context-window pair.
     imageInputOverride: imageInputToPayload(params.imageInput),
+    // Sent unconditionally (GitHub #15), same rationale as `transport`: the
+    // enabled object SETS the policy and `""` CLEARS it (main deletes the key,
+    // because Off is absence on the wire). Also sent while the field is hidden
+    // — a transport switch to Anthropic must not drop a saved OpenAI policy,
+    // which is exactly what an omitted value would do.
+    promptCache: params.promptCacheEnabled ? IMPLICIT_PROMPT_CACHE : "",
   };
 }
+
 
 /**
  * Validates the "Max output tokens" field's raw string (TASK.150): main
@@ -526,6 +570,8 @@ export function advancedHasValues(v: {
   imageInput: "auto" | "on" | "off";
   proxyRef: string;
   label?: string;
+  /** A saved opt-in prompt-cache policy (GitHub #15) must be visible on open, like every other tuned value. */
+  promptCache: boolean;
 }): boolean {
   return (
     v.transport !== "" ||
@@ -533,6 +579,7 @@ export function advancedHasValues(v: {
     v.contextWindowRaw.trim() !== "" ||
     v.imageInput !== "auto" ||
     v.proxyRef !== PROXY_REF_INHERIT ||
+    v.promptCache ||
     (v.label !== undefined && v.label.trim() !== "")
   );
 }
@@ -1162,6 +1209,11 @@ export function ConnectionDrawerFields({
   );
   // UI-only (never saved): the user picked the Custom segment of Max output tokens.
   const [maxOutputCustom, setMaxOutputCustom] = useState(false);
+  // GitHub #15: opt-in prompt caching, prefilled from the connection's saved
+  // policy. Kept as its own state even while the control is hidden for an
+  // Anthropic transport, so switching transport back and forth never silently
+  // drops a saved OpenAI policy.
+  const [promptCacheEnabled, setPromptCacheEnabled] = useState(() => promptCacheInitialEnabled(editConnection));
   // The Advanced disclosure is controlled: open from the start only when a
   // tuning value is already set (evaluated once, from the initial state), and
   // forced open by a rejected Advanced field on save/create.
@@ -1171,6 +1223,7 @@ export function ConnectionDrawerFields({
     contextWindowRaw: contextWindow.raw,
     imageInput,
     proxyRef,
+    promptCache: promptCacheEnabled,
     ...(simplified ? { label } : {}),
   }));
   const [secretValue, dispatchSecret] = useReducer(secretFieldReducer, "");
@@ -1226,6 +1279,12 @@ export function ConnectionDrawerFields({
   // endpoint's own record baseUrl, which has its own field below.
   const showBaseUrl = shouldShowBaseUrlField(selectedEntry) && !isNewCustomEndpoint;
   const transportChoices = transportOptions(selectedEntry);
+  // GitHub #15: the field only applies to the two OpenAI transports. The
+  // A new custom endpoint uses its selected kind as its provider default.
+  const promptCacheShown = promptCacheVisible(
+    transport,
+    isNewCustomEndpoint ? CUSTOM_KIND_DEFAULT_TRANSPORT[customKind] : selectedEntry?.defaultTransport,
+  );
   const authKind = selectedEntry?.authKind ?? "api_key";
   // A custom:<id> connection's credential lives on the custom provider's OWN
   // shared vault key (exactly what main reads for it); everything else uses its
@@ -1374,6 +1433,7 @@ export function ConnectionDrawerFields({
           // omitting it here silently dropped the choice for every new custom
           // endpoint.
           ...connectionCreateProxyRefField(proxyRef),
+          ...(promptCacheEnabled ? { promptCache: IMPLICIT_PROMPT_CACHE } : {}),
         },
         createModel ?? null,
       );
@@ -1478,6 +1538,9 @@ export function ConnectionDrawerFields({
           // schema has no "" sentinel — omission already means "auto"); only an
           // explicit choice travels, and the binding is server-derived.
           ...(imageInput !== "auto" ? { imageInputOverride: imageInput } : {}),
+          // GitHub #15: create keeps the conditional-spread form (create's
+          // schema has no "" sentinel — omission already means Off).
+          ...(promptCacheEnabled ? { promptCache: IMPLICIT_PROMPT_CACHE } : {}),
         },
         createModel !== "" ? createModel : null,
       );
@@ -1601,6 +1664,7 @@ export function ConnectionDrawerFields({
           maxOutputTokens: mot.value,
           contextWindowTokens: cw.value,
           imageInput,
+          promptCacheEnabled,
         }), pricing },
         selectedModelId,
       );
@@ -1800,6 +1864,32 @@ export function ConnectionDrawerFields({
           ))}
         </select>
       </label>
+
+      {/* GitHub #15: opt-in implicit prompt caching, shown only for the two
+          OpenAI transports — Anthropic ignores the field at the model port, so
+          offering it there would be a switch with no effect. A hidden field
+          still keeps its state (`promptCacheEnabled`), so switching transport
+          back restores the selection and a saved policy is never dropped by a
+          transport edit. */}
+      {promptCacheShown && (
+        <>
+          <label className="settings-field">
+            <span className="settings-field-label">
+              Prompt caching <FieldHelp text={PROMPT_CACHE_HELP} />
+            </span>
+            <select
+              className="settings-field-select"
+              value={promptCacheEnabled ? "implicit" : "off"}
+              disabled={readOnly}
+              onChange={(e) => setPromptCacheEnabled(e.target.value === "implicit")}
+            >
+              <option value="off">Off (default)</option>
+              <option value="implicit">Implicit · 30 minutes</option>
+            </select>
+          </label>
+          <div className="settings-field-hint">{PROMPT_CACHE_ONELINER}</div>
+        </>
+      )}
 
       {/* TASK.150 / TASK.159: one segmented control. Default writes "" (the
           provider default), the presets write the same values the chips did,

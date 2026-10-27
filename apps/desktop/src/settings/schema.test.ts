@@ -1269,6 +1269,80 @@ describe("connection.maxOutputTokens (TASK.150) — persisted schema stays LENIE
   );
 });
 
+describe("connection.promptCache (GitHub #15) — persisted schema stays LENIENT on purpose", () => {
+  it("prompt cache survives settings v2 round trip and invalid cache does not erase connections", () => {
+    const valid = {
+      ...cloneDefaults(),
+      provider: {
+        activeConnectionId: "c1",
+        connections: [
+          {
+            id: "c1",
+            providerId: "z-ai",
+            label: "Work",
+            transport: "openai-chat-completions",
+            promptCache: { mode: "implicit", ttl: "30m" },
+          },
+        ],
+      },
+    };
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(valid)));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      // Survives the round trip verbatim — the exact object the wire uses.
+      expect(parsed.data.provider.connections[0]?.promptCache).toEqual({ mode: "implicit", ttl: "30m" });
+      expect(JSON.stringify(parsed.data)).toContain('"promptCache":{"mode":"implicit","ttl":"30m"}');
+    }
+
+    // A hand-edited bad field drops JUST this optional field: `connections` is
+    // a plain z.array with no per-element tolerance, so without
+    // `.catch(undefined)` any of these would fail the WHOLE document.
+    for (const garbage of [
+      { mode: "off" },
+      { mode: "explicit", ttl: "30m" },
+      { mode: "implicit", ttl: "12h" },
+      { mode: "implicit", ttl: "30m", cache_control: { type: "ephemeral" } },
+      "on",
+      true,
+    ]) {
+      const parsedGarbage = settingsSchema.safeParse({
+        version: 2,
+        provider: {
+          activeConnectionId: "c1",
+          connections: [
+            { id: "c1", providerId: "z-ai", label: "Work", promptCache: garbage },
+            { id: "c2", providerId: "openai", model: "gpt-5" },
+          ],
+        },
+        tools: { maxTurns: 7 },
+        permissions: { alwaysAllow: [{ toolName: "Bash", pattern: "git *" }] },
+        ui: { theme: "dark" },
+        security: { allowWeakSecretStorage: false },
+      });
+      expect(parsedGarbage.success).toBe(true);
+      if (parsedGarbage.success) {
+        expect(parsedGarbage.data.provider.connections[0]?.promptCache).toBeUndefined();
+        expect(JSON.stringify(parsedGarbage.data.provider.connections[0])).not.toContain("promptCache");
+        expect(parsedGarbage.data.provider.connections[0]?.label).toBe("Work");
+        expect(parsedGarbage.data.provider.connections[1]).toEqual({ id: "c2", providerId: "openai", model: "gpt-5" });
+        expect(parsedGarbage.data.tools).toEqual({ maxTurns: 7 });
+        expect(parsedGarbage.data.permissions).toEqual({ alwaysAllow: [{ toolName: "Bash", pattern: "git *" }] });
+        expect(parsedGarbage.data.ui).toEqual({ theme: "dark" });
+      }
+    }
+  });
+
+  it("a connection with no promptCache reads back with the key absent (no default-enabled policy)", () => {
+    const parsed = settingsSchema.safeParse(
+      JSON.parse(JSON.stringify({ ...cloneDefaults(), provider: providerV2({ id: "z-ai" }) })),
+    );
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect("promptCache" in (parsed.data.provider.connections[0] ?? {})).toBe(false);
+    }
+  });
+});
+
 describe("provider.custom (cut §9.2) — round-trip + zod-granularity", () => {
   it("reads a file with no provider.custom, round-tripping byte-identically", () => {
     const base = cloneDefaults();

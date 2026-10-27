@@ -1,7 +1,7 @@
 /** Environment-based configuration for the Phase 0 single-provider setup. */
 
 import type { ProviderTransport } from "./catalog.js";
-import type { CoreEnvConfig, ReasoningEffort } from "../types/config.js";
+import type { CoreEnvConfig, ImplicitPromptCache, ReasoningEffort } from "../types/config.js";
 import type { ImageInputOverride } from "./capabilities.js";
 
 export const ENV_API_KEY = "ANYCODE_API_KEY";
@@ -73,6 +73,13 @@ export const ENV_IMAGE_INPUT = "ANYCODE_IMAGE_INPUT";
 export const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE";
 export const ENV_PROVIDER_TRANSPORT = "ANYCODE_PROVIDER_TRANSPORT";
 export const ENV_INCLUDE_USAGE = "ANYCODE_INCLUDE_USAGE";
+/**
+ * Opt-in prompt-cache override (GitHub #15): JSON of the enabled value
+ * (`{"mode":"implicit","ttl":"30m"}` or `{"mode":"implicit"}`) or the literal
+ * `off` to disable. Env wins over connection settings like the other provider
+ * controls. Absent/blank = no override.
+ */
+export const ENV_PROMPT_CACHE_OPTIONS = "ANYCODE_PROMPT_CACHE_OPTIONS";
 /** TASK.4721: adaptive turn budget (boolean; mirror of `tools.adaptiveTurnBudget`). */
 export const ENV_ADAPTIVE_TURN_BUDGET = "ANYCODE_ADAPTIVE_TURN_BUDGET";
 
@@ -185,6 +192,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
   const reasoningEffort = readReasoningEffort(env);
   const includeUsage = readOptionalBoolean(env, ENV_INCLUDE_USAGE);
   const adaptiveTurnBudget = readOptionalBoolean(env, ENV_ADAPTIVE_TURN_BUDGET);
+  const promptCache = readPromptCacheOptions(env);
 
   return {
     apiKey,
@@ -197,6 +205,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
     supervisorIdleMs,
     maxOutputTokens,
     reasoningEffort,
+    promptCache,
     contextWindowTokens,
     contextWindowModel,
     exploreModel,
@@ -211,6 +220,52 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
     providerTransport,
     includeUsage,
   };
+}
+
+/**
+ * Parses ANYCODE_PROMPT_CACHE_OPTIONS (GitHub #15). Non-fatal and fail-closed:
+ * a malformed NONBLANK value warns (without echoing the raw input — it may be
+ * an oversized/garbage value) and returns undefined, which means "no override",
+ * never a default-enabled policy. Accepted inputs:
+ *   - blank/absent              -> undefined (no override)
+ *   - literal `off`             -> undefined (authoritative disable)
+ *   - `{"mode":"implicit"}`     -> `{ mode:"implicit", ttl:"30m" }` (ttl filled)
+ *   - `{"mode":"implicit","ttl":"30m"}` -> that exact object
+ * Anything else (explicit mode, 12h/other TTL, non-object, bad JSON) -> warn + undefined.
+ */
+export function readPromptCacheOptions(env: NodeJS.ProcessEnv): ImplicitPromptCache | undefined {
+  // One generic diagnostic for every rejection: it names the VARIABLE and the
+  // accepted shapes, never the supplied value (which may be arbitrary input).
+  const invalid = (): undefined => {
+    console.warn(`Invalid ${ENV_PROMPT_CACHE_OPTIONS}: expected {"mode":"implicit","ttl":"30m"} or "off" — prompt caching disabled`);
+    return undefined;
+  };
+  const raw = env[ENV_PROMPT_CACHE_OPTIONS];
+  if (raw === undefined || raw.trim() === "") {
+    return undefined;
+  }
+  if (raw.trim() === "off") {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return invalid();
+  }
+  if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+    const obj = parsed as Record<string, unknown>;
+    // Closed shape: unknown keys are rejected rather than silently forwarded
+    // into the outgoing request body, exactly like the strict schemas at the
+    // desktop trust boundary.
+    const keys = Object.keys(obj);
+    const closed =
+      keys.every((key) => key === "mode" || key === "ttl") && obj.mode === "implicit" && (obj.ttl === undefined || obj.ttl === "30m");
+    if (closed) {
+      return { mode: "implicit", ttl: "30m" };
+    }
+  }
+  return invalid();
 }
 
 /**
