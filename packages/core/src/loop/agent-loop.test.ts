@@ -4771,7 +4771,7 @@ describe("AgentLoop.runTurn — stale todo reminder (Taskana 4665)", () => {
   function makeReminderLoop(steps: ModelStreamEvent[][], todoReminder: AgentLoopConfig["todoReminder"]): AgentLoop {
     return makeLoop({
       modelPort: new MockModelPort(steps),
-      registry: makeRegistry({ Edit: { ...makeTool(), metadata: { ...baseMetadata, name: "Edit" } }, TodoWrite: todoWriteTool }),
+      registry: makeRegistry({ Edit: { ...makeTool(), metadata: { ...baseMetadata, name: "Edit" } }, Read: { ...makeTool(), metadata: { ...baseMetadata, name: "Read" } }, TodoWrite: todoWriteTool }),
       ports: { todos: new InMemoryTodoStore() } as unknown as CorePorts,
       todoReminder,
     });
@@ -4789,6 +4789,22 @@ describe("AgentLoop.runTurn — stale todo reminder (Taskana 4665)", () => {
       (e): e is Extract<AgentEvent, { type: "tool_result" }> => e.type === "tool_result" && e.outcome.toolName === "Edit",
     );
   }
+
+  it("ignores read-heavy work, synchronizes snapshots, and applies a switched threshold", async () => {
+    const readSteps: ModelStreamEvent[][] = Array.from({ length: 25 }, (_, i) => [
+      { type: "start" },
+      { type: "tool_call", toolCall: { id: `read-${i}`, name: "Read", input: { value: "x" } } },
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ]);
+    const loop = makeReminderLoop([todoStep(...openPlan), ...readSteps, mockStep("m1"), stopStep], { everyToolCalls: 20 });
+    const events = await collect(loop.runTurn("go"));
+    expect(toolTexts(loop).every((text) => !text.includes("<system-reminder>"))).toBe(true);
+    expect(events.filter((event) => event.type === "todo_reminder_state").at(-1)).toEqual({
+      type: "todo_reminder_state", count: 1, threshold: 20,
+    });
+    loop.setTodoReminderEvery(undefined);
+    expect(loop.todoReminderSnapshot()).toEqual({ count: 1, threshold: 10 });
+  });
 
   it("fires on the last tool result of the due step; earlier results and the yielded event stay clean", async () => {
     const loop = makeReminderLoop(
@@ -4828,7 +4844,7 @@ describe("AgentLoop.runTurn — stale todo reminder (Taskana 4665)", () => {
     expect(texts[1]).not.toContain("<system-reminder>");
     expect(texts[2]).not.toContain("<system-reminder>");
     expect(texts[3]).toContain("<system-reminder>");
-    expect(texts[3]).toContain("3 tool calls");
+    expect(texts[3]).toContain("3 mutating tool calls");
   });
 
   it("no plan in this loop's store: never fires", async () => {
@@ -4893,7 +4909,7 @@ describe("AgentLoop.runTurn — stale todo reminder (Taskana 4665)", () => {
     const withReminder = texts.filter((t) => t.includes("<system-reminder>"));
     expect(withReminder).toHaveLength(1);
     expect(withReminder[0]).toBe(texts[10]); // the 10th Mock result
-    expect(withReminder[0]).toContain("10 tool calls");
+    expect(withReminder[0]).toContain("10 mutating tool calls");
   });
 });
 

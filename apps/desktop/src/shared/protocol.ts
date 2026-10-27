@@ -532,6 +532,7 @@ export interface WorktreeProjection {
 }
 
 export type HostToUiMessage =
+  | { type: "todo_reminder_snapshot"; state: { count: number; threshold: number } | null }
   // Phase-2 §3.3: `sessionId` added (host knows it at boot); renderer binds the
   // tab to its session (badge, picker annotation). Additive on the wire.
   | {

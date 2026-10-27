@@ -57,6 +57,10 @@ export class CoreEngine implements SessionEngine {
     this.switchModel = options.switchModelImpl;
   }
 
+  todoReminderSnapshot() {
+    return this.options.loop.todoReminderSnapshot();
+  }
+
   mode() {
     return this.options.config.mode;
   }
