@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.46] — 2026-10-27
+
 ### Added
 
 - The context popover shows durable per-step and session cost estimates, cache savings, and separate subagent costs. Connections can use custom rates or subscription pricing; unknown prices stay unknown (Taskana 4889).
