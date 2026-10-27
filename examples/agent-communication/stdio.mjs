@@ -4,22 +4,44 @@ import { readFile, lstat } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 const discoveryPath = process.argv[2];
 if (!discoveryPath) throw new Error('Usage: node stdio.mjs /absolute/path/to/communication.json');
-const metadata = await lstat(discoveryPath);
-if (!metadata.isFile() || (metadata.mode & 0o077)) throw new Error('Discovery must be a private regular file (0600)');
-const discovery = JSON.parse(await readFile(discoveryPath, 'utf8'));
-const endpoint = new URL(discovery.url);
-if (endpoint.protocol !== 'http:' || endpoint.hostname !== '127.0.0.1' || endpoint.pathname !== '/mcp') throw new Error('Only loopback AnyCode endpoints are allowed');
-if (typeof discovery.token !== 'string' || discovery.token.length < 32) throw new Error('Invalid discovery token');
+async function loadDiscovery() {
+  const metadata = await lstat(discoveryPath);
+  if (!metadata.isFile() || (metadata.mode & 0o077)) throw new Error('Discovery must be a private regular file (0600)');
+  const discovery = JSON.parse(await readFile(discoveryPath, 'utf8'));
+  const endpoint = new URL(discovery.url);
+  if (endpoint.protocol !== 'http:' || endpoint.hostname !== '127.0.0.1' || endpoint.pathname !== '/mcp') throw new Error('Only loopback AnyCode endpoints are allowed');
+  if (typeof discovery.token !== 'string' || discovery.token.length < 32) throw new Error('Invalid discovery token');
+  return { discovery, endpoint };
+}
+let { discovery, endpoint } = await loadDiscovery();
+async function post(request) {
+  return fetch(endpoint, {
+    method: 'POST', headers: { Authorization: `Bearer ${discovery.token}`, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-11-25' },
+    body: JSON.stringify(request), signal: AbortSignal.timeout(30000),
+  });
+}
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 for await (const line of lines) {
   if (!line.trim()) continue;
   let request;
   try {
     request = JSON.parse(line);
-    const response = await fetch(endpoint, {
-      method: 'POST', headers: { Authorization: `Bearer ${discovery.token}`, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-11-25' },
-      body: JSON.stringify(request), signal: AbortSignal.timeout(30000),
-    });
+    let response;
+    let retried = false;
+    try {
+      response = await post(request);
+    } catch (error) {
+      // A refused connection cannot have delivered the request. Other failures
+      // (including timeouts and resets) may occur after the server acted.
+      if (error?.cause?.code !== 'ECONNREFUSED') throw error;
+      retried = true;
+      ({ discovery, endpoint } = await loadDiscovery());
+      response = await post(request);
+    }
+    if (!retried && response.status === 401) {
+      ({ discovery, endpoint } = await loadDiscovery());
+      response = await post(request);
+    }
     if (!response.ok) throw new Error(`AnyCode endpoint returned HTTP ${response.status}`);
     const body = await response.text();
     if (body) process.stdout.write(`${JSON.stringify(JSON.parse(body))}\n`);

@@ -22,6 +22,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - DeepSeek session titles reject tool-call markup and fall back to the first user message; title requests use low reasoning effort (Taskana 4893).
 - The context popover labels native Claude result costs as turn totals, rather than individual model steps (Taskana 4889).
 - Claude usage snapshots keep reported token totals when cache-write counts are omitted, and subagent cost rollups flag missing child usage, including unattributed native Claude children (Taskana 4889).
+- The Sessions API stdio adapter reloads its endpoint and token after a refused connection or HTTP 401, so it can reconnect after AnyCode restarts or the token changes (Taskana 4887).
 - Settings → Sessions API step 2 no longer collapses after "Copy config": the step's content (title, agent picker, Copy button, node hint and the "Copied the … config" notice) stays in its column under the step number, and the long `claude mcp add …` command scrolls inside its own box instead of running off the pane (Taskana 4897).
 
 ## [0.0.45] — 2026-10-26
