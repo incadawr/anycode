@@ -567,12 +567,14 @@ describe("minimap.css contract (clipping and gutter geometry)", () => {
     const gutterPx = ROOT_REM_PX * parseRem(declaration(ruleBody(".message-list-has-rail"), "padding-left")!);
     const margin = declaration(ruleBody(".message-list-has-rail .minimap-slot"), "margin-left");
     expect(margin).toBeDefined();
-    expect(margin).toBe("calc(var(--sp-2) - 2.75rem)");
+    const counterMargin = /^calc\(var\(--sp-2\) - ([\d.]+rem)\)$/.exec(margin!);
+    expect(counterMargin).toBeTruthy();
+    const counterMarginPx = ROOT_REM_PX * parseRem(counterMargin![1]!);
 
     const sp2Px = ROOT_REM_PX * parseRem(tokenValue("--sp-2"));
     // In-flow sticky child: static position = content edge (gutter), then the
     // negative margin shifts it left, so the rail begins at --sp-2.
-    const railLeft = gutterPx + (sp2Px - gutterPx);
+    const railLeft = gutterPx + (sp2Px - counterMarginPx);
     expect(railLeft).toBeGreaterThanOrEqual(0);
 
     const hitRight = railLeft + hitWidthPx;
