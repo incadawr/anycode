@@ -362,7 +362,10 @@ async function findRow(
   const workspace = resolveWorkspace(deps, tabId);
   const hasWorkspace = workspace !== undefined;
   const effectiveWorkspace = workspace ?? home;
-  const scan = await scanAgentProfilesAdmin(deps.fs, { workspace: effectiveWorkspace, home });
+  // Same discovery options as buildSnapshot: the fresh scan that resolves a
+  // mutator's row must see the same plugin world (and the same disabled set)
+  // as the list the user clicked in.
+  const scan = await scanAgentProfilesAdmin(deps.fs, { workspace: effectiveWorkspace, home, ...deps.pluginDiscoveryOptions?.(home, effectiveWorkspace) });
   const row = scan.rows.find((r) => r.name === name);
   if (row === undefined) {
     return undefined;
