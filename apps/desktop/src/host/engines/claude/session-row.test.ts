@@ -10,7 +10,12 @@
  * reference, with no way for the user to tell why.
  */
 
+import { mkdtempSync, rmSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { SqlitePersistenceAdapter } from "@anycode/core";
 import {
   ClaudeSessionRowWriter,
   type ClaudePendingChildReportsPort,
@@ -553,5 +558,47 @@ describe("ClaudeSessionRowWriter — a title write its caller must confirm", () 
 
     expect(rec.order).toEqual(["create", "touch:title"]);
     expect(rec.touches).toEqual([{ id: "row-1", patch: { title: "worker-1" } }]);
+  });
+
+  // The gap a buffered-write rejection left open: after the INSERT fails, the
+  // row never exists, and the REAL store's UPDATE simply matches zero rows —
+  // it resolves. A retry of the same title therefore passed for a durable one
+  // until the row-creation failure was retained. Driven through
+  // `SqlitePersistenceAdapter`, not a hand-rolled callback.
+  it("rejects a title RETRIED after a failed CREATE (the store's zero-row UPDATE is not a commit)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "anycode-claude-row-"));
+    const path = join(dir, "sessions.db");
+    const persistence = new SqlitePersistenceAdapter(path);
+    try {
+      // A real failed INSERT: open (and migrate) the store first, then abort
+      // every INSERT with a trigger, so no row can exist.
+      expect(await persistence.getSessionById("row-1")).toBeNull();
+      const db = new DatabaseSync(path);
+      db.exec("CREATE TRIGGER row_insert_fails BEFORE INSERT ON sessions BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END");
+      db.close();
+
+      const writer = new ClaudeSessionRowWriter({
+        rowId: "row-1",
+        identity: IDENTITY,
+        rowExists: false,
+        port: {
+          create: (id, row) => persistence.createSession({ id, ...row } as Parameters<SqlitePersistenceAdapter["createSession"]>[0]),
+          touch: (id, patch) => persistence.touchSession(id, patch as Parameters<SqlitePersistenceAdapter["touchSession"]>[1]),
+        },
+        onError: () => {},
+      });
+      writer.materialize({ model: "haiku", mode: "ask" });
+      await writer.settled();
+      expect(await persistence.getSessionById("row-1")).toBeNull();
+
+      // The retry main performs on the tab's next host generation: still not
+      // acknowledged, because there is still no row to hold the title.
+      await expect(writer.commitTitle("worker-1")).rejects.toThrow(/disk I\/O error/);
+      await expect(writer.commitTitle("worker-1")).rejects.toThrow(/disk I\/O error/);
+      expect(await persistence.getSessionById("row-1")).toBeNull();
+    } finally {
+      await persistence.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
