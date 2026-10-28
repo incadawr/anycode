@@ -565,6 +565,9 @@ const agentTitlePushes: AgentTitlePushes = createAgentTitlePushes({
     return manager.communicationRequest(sessionId, "set_agent_title", title);
   },
   warn: (message, error) => console.warn(message, error),
+  // Durable marker: this session's stored title is the handle a host committed.
+  // Recorded only after the RPC resolved, so it never claims a failed write.
+  confirmed: (sessionId, title) => communicationSessions?.confirmTitle(sessionId, title),
   // A push can lose its host while the tab boots and no new generation may
   // come for hours; the retained title retries itself until a host commits it.
   retryDelayMs: () => AGENT_TITLE_RETRY_MS,
@@ -2383,6 +2386,7 @@ void app.whenReady().then(async () => {
     file: join(app.getPath("userData"), "communication-sessions.json"),
     defaultOn: () => defaultSessionAccessFromSettingsFile(settingsPath),
     handlesFile: join(app.getPath("userData"), "communication-handles.json"),
+    titleConfirmationsFile: join(app.getPath("userData"), "communication-agent-titles.json"),
   });
   communicationApprovals = createSessionAccessStore({
     file: join(app.getPath("userData"), "communication-approvals.json"),
@@ -2492,6 +2496,7 @@ void app.whenReady().then(async () => {
       void recoverAgentSessionTitle({
         sessionId: info.sessionId,
         savedHandle: () => communicationSessions?.getHandle(info.sessionId),
+        confirmedTitle: () => communicationSessions?.getConfirmedTitle(info.sessionId),
         readPersistedTitle: async () => (await persistence?.getSessionById(info.sessionId))?.title,
         adopt: (title) => {
           agentSessionTitles.set(info.sessionId, title);

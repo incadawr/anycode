@@ -27,6 +27,14 @@ export interface SessionAccessStoreDeps {
    * Absent = handles are kept in memory only.
    */
   handlesFile?: string;
+  /**
+   * Absolute path of the title-confirmation file (a THIRD private file): for
+   * each session whose handle a host confirmed as the stored title, the title
+   * that was confirmed. This is the durable marker that tells a title the agent
+   * wrote apart from a title chosen later by the user — a resume-time repair
+   * must never overwrite the latter. Absent = in memory only.
+   */
+  titleConfirmationsFile?: string;
 }
 
 export type SetHandleFailure = "unknown_session" | "invalid" | "duplicate" | "io_error";
@@ -49,6 +57,18 @@ export interface SessionAccessStore {
   setHandle(sessionId: string, handle: string | null, isLive: (sessionId: string) => boolean): { ok: true } | { ok: false; reason: SetHandleFailure };
   /** The live session currently holding `handle`, if any. */
   sessionIdByHandle(handle: string, isLive: (sessionId: string) => boolean): string | undefined;
+  /**
+   * The title a host CONFIRMED for this session — recorded the moment a title
+   * write committed. Durable, so a later resume can tell "the agent's title is
+   * still the stored one" from "something else wrote a title afterwards".
+   */
+  getConfirmedTitle(sessionId: string): string | undefined;
+  /**
+   * Records that `title` is now the stored title of this session (called after
+   * the host acknowledged the write). Best effort: a failed file write keeps the
+   * in-memory marker, and never undoes the acknowledgement.
+   */
+  confirmTitle(sessionId: string, title: string): void;
 }
 
 /** Session handle: lowercase letters, digits and `_ . @ -`; first char alphanumeric; 1..64 chars. No case folding. */
@@ -72,6 +92,25 @@ function loadHandles(file: string | undefined): Map<string, string> {
   try {
     const parsed = fileSchema.safeParse(JSON.parse(readFileSync(file, "utf8")));
     if (parsed.success) for (const [id, value] of Object.entries(parsed.data)) if (typeof value === "string" && HANDLE_PATTERN.test(value)) map.set(id, value);
+  } catch { /* corrupt or absent: empty */ }
+  return map;
+}
+
+/**
+ * The title-confirmation marker: sessionId -> the title a host committed last.
+ * Any non-empty string is a valid title, so the only validation is the shape of
+ * the file itself (a record of strings); a corrupt file reads as empty.
+ */
+function loadConfirmations(file: string | undefined): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!file) return map;
+  try {
+    const parsed = fileSchema.safeParse(JSON.parse(readFileSync(file, "utf8")));
+    if (parsed.success) {
+      for (const [id, value] of Object.entries(parsed.data)) {
+        if (typeof value === "string" && value.length > 0) map.set(id, value);
+      }
+    }
   } catch { /* corrupt or absent: empty */ }
   return map;
 }
@@ -101,6 +140,22 @@ function persist(file: string, map: Map<string, unknown>): void {
 export function createSessionAccessStore(deps: SessionAccessStoreDeps): SessionAccessStore {
   const map = load(deps.file);
   const handles = loadHandles(deps.handlesFile);
+  const confirmations = loadConfirmations(deps.titleConfirmationsFile);
+  /**
+   * Fail closed, like the other private files: a write that did not land is
+   * rolled back, so the marker never claims something the file does not hold.
+   */
+  const persistConfirmations = (sessionId: string, title: string): void => {
+    if (deps.titleConfirmationsFile === undefined) return;
+    const previous = confirmations.get(sessionId);
+    confirmations.set(sessionId, title);
+    try {
+      persist(deps.titleConfirmationsFile, confirmations);
+    } catch {
+      if (previous === undefined) confirmations.delete(sessionId);
+      else confirmations.set(sessionId, previous);
+    }
+  };
   return {
     getHandle(sessionId) {
       return handles.get(sessionId);
@@ -114,6 +169,15 @@ export function createSessionAccessStore(deps: SessionAccessStoreDeps): SessionA
         for (const [other, value] of handles) if (value === handle && other !== sessionId && isLive(other)) return { ok: false, reason: "duplicate" };
       }
       if (handle === null) handles.delete(sessionId); else handles.set(sessionId, handle);
+      // A cleared handle makes its confirmation meaningless: the marker only
+      // says which handle a host stored. A stale marker left on disk is
+      // harmless (it only ever suppresses a repair), so this is best effort.
+      if (handle === null) {
+        confirmations.delete(sessionId);
+        if (deps.titleConfirmationsFile !== undefined) {
+          try { persist(deps.titleConfirmationsFile, confirmations); } catch { /* stale marker is harmless */ }
+        }
+      }
       if (deps.handlesFile) {
         try {
           persist(deps.handlesFile, handles);
@@ -129,6 +193,13 @@ export function createSessionAccessStore(deps: SessionAccessStoreDeps): SessionA
       for (const [id, value] of handles) if (value === handle && isLive(id)) return id;
       return undefined;
     },
+    getConfirmedTitle(sessionId) {
+      return confirmations.get(sessionId);
+    },
+    confirmTitle(sessionId, title) {
+      if (confirmations.get(sessionId) === title) return;
+      persistConfirmations(sessionId, title);
+    },
     isExposed(sessionId) {
       return map.get(sessionId) === true;
     },
@@ -143,8 +214,10 @@ export function createSessionAccessStore(deps: SessionAccessStoreDeps): SessionA
     remove(sessionId) {
       map.delete(sessionId);
       handles.delete(sessionId);
+      confirmations.delete(sessionId);
       try { persist(deps.file, map); } catch { /* best effort */ }
       if (deps.handlesFile) try { persist(deps.handlesFile, handles); } catch { /* best effort */ }
+      if (deps.titleConfirmationsFile) try { persist(deps.titleConfirmationsFile, confirmations); } catch { /* best effort */ }
     },
     set(sessionId, enabled) {
       if (!map.has(sessionId)) return false;

@@ -127,6 +127,8 @@ function rig(options: { failPrimingFor?: string; blocked?: () => boolean; pendin
     getHandle: () => undefined,
     setHandle: () => ({ ok: true }),
     sessionIdByHandle: () => undefined,
+    getConfirmedTitle: () => undefined,
+    confirmTitle: () => undefined,
   };
   const deps = (overrides: Partial<CreateSessionByAgentDeps> = {}): CreateSessionByAgentDeps => ({
     projects: { isAllowed: () => true },
