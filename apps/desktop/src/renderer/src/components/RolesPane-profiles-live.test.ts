@@ -2,6 +2,8 @@
 /**
  * Settings → Roles, mounted in a DOM and driven the way a user drives it.
  *
+ * - The editor must show the routes of the profile that is now selected: its
+ *   draft survives rerenders, so changing the selection has to remount it.
  * - Create/Duplicate must not treat the name prefill as a name the user typed:
  *   clicking them repeatedly without typing yields distinct names, while a
  *   typed name is still used verbatim.
@@ -125,6 +127,43 @@ function settingsWithProfile(name: string): AnycodeSettings {
 function profileNames(settings: AnycodeSettings): string[] {
   return settings.roleProfiles?.profiles.map((profile) => profile.name) ?? [];
 }
+
+describe("Editor follows the selected profile", () => {
+  it("shows the selected profile's routes, even when its id is \"default\"", async () => {
+    const initial = cloneDefaults();
+    // Nothing is selected (the active id names a profile that no longer
+    // exists), so the editor starts from the built-in preset — which is what
+    // the stale-draft bug used to keep on screen after selecting "Default".
+    initial.roleProfiles = {
+      profiles: [{ id: "default", name: "Default", roles: { executor: { primary: { engine: "claude" } } } }],
+      activeId: "gone",
+      projects: [],
+    };
+    const bridge = installBridge(initial);
+    await mount();
+
+    const routeSelect = (): HTMLSelectElement | null => container.querySelector<HTMLSelectElement>(
+      '[data-testid="role-picker-role-executor"] [aria-label="Primary route"]',
+    );
+    // The preset the pane seeds while nothing is selected routes executor to Codex.
+    expect(routeSelect()?.value).toBe("engine:codex");
+
+    const select = container.querySelector<HTMLSelectElement>('[aria-label="Global role profile"]');
+    expect(select?.value).toBe("");
+    expect(select?.querySelector('option[value="default"]')?.textContent).toBe("Default");
+    if (select === null) throw new Error("no global profile select");
+    await act(async () => {
+      select.value = "default";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(bridge.current().roleProfiles?.activeId).toBe("default");
+    // The editor now shows the profile's own route, not the preset draft.
+    expect(routeSelect()?.value).toBe("engine:claude");
+    // With a profile active, the built-in defaults are no longer offered.
+    expect(container.querySelector('[aria-label="Global role profile"] [value=""]')).toBeNull();
+  });
+});
 
 describe("Create/Duplicate without typing a name", () => {
   it("four repeated clicks yield four distinct names", async () => {
