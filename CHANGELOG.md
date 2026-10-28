@@ -19,10 +19,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - A Claude session's failed MCP server row says Claude does not report the reason and points at `claude mcp list` (#3).
 - The MCP pane follows every Claude turn, so a server that stops working after the first turn no longer shows as connected (#3).
 - A malformed MCP config file is reported without quoting its contents (#3).
-- A plugin you turned off no longer shows a "Problems" badge or a duplicate line, and no longer raises warnings in Settings → MCP, Skills or Subagents (#13).
-- A plugin you turned off no longer shows a "Problems" badge when its manifest asks for a newer AnyCode (#13).
-- A plugin you turned off no longer shows a "Problems" badge for an escaping skills, agents or workflows directory (#13).
-- A plugin you turned off is treated as a state, not a problem: no duplicate "Problems" line and no warning in Settings → MCP, Skills or Subagents, even when its manifest asks for a newer AnyCode or declares an escaping skills, agents or workflows directory (#13).
+- A plugin you turned off is treated as a state, not a problem: no duplicate "Problems" line and no warning in Settings → MCP, Skills or Subagents, even when its manifest asks for a newer AnyCode or declares an escaping skills, agents or workflows directory.
 - Settings → Sessions API → Advanced shows an allowed project as "On" with a "Turn off" action, spaces its rows, and labels the port field.
 
 ## [0.0.49] — 2026-10-28
