@@ -30,6 +30,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - The MCP pane follows every Claude turn, so a server that stops working after the first turn no longer shows as connected (#3).
 - A malformed MCP config file is reported without quoting its contents (#3).
 - A plugin you turned off is treated as a state, not a problem: no duplicate "Problems" line and no warning in Settings → MCP, Skills or Subagents, even when its manifest asks for a newer AnyCode or declares an escaping skills, agents or workflows directory.
+- The Sessions API starts even when a folder in its allowed list was deleted; the other folders keep working and the folder is allowed again once it is back.
 - Settings → Sessions API → Advanced shows an allowed project as "On" with a "Turn off" action, spaces its rows, and labels the port field.
 - Settings → Roles and the first-run role dialog name every connection by its label or provider name instead of showing a raw connection id.
 - Skipping the first-run role dialog now starts the orchestration task on the built-in defaults instead of doing nothing.

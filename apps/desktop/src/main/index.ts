@@ -2455,7 +2455,7 @@ void app.whenReady().then(async () => {
   communicationController = createCommunicationController({
     manager: () => manager,
     userData: app.getPath("userData"),
-    logger: { error: (message) => console.error(message) },
+    logger: { warn: (message) => console.warn(message), error: (message) => console.error(message) },
     env: () => process.env.ANYCODE_COMMUNICATION_CONFIG,
     isSessionExposed: (sessionId) => communicationSessions?.isExposed(sessionId) ?? false,
     handleOf: (sessionId) => communicationSessions?.getHandle(sessionId),

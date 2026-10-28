@@ -26,7 +26,7 @@ export interface CommunicationControllerDeps {
   /** The live tab manager, or null before boot wires it. */
   manager(): CommunicationManager | null;
   userData: string;
-  logger: { error(message: string): void };
+  logger: { error(message: string): void; warn?(message: string): void };
   /** Injected for tests; defaults to the real server. */
   startServer?: StartFn;
   /** The legacy env override (ANYCODE_COMMUNICATION_CONFIG), read once per apply. */
@@ -94,6 +94,8 @@ export function createCommunicationController(deps: CommunicationControllerDeps)
     if (handle) await handle.close();
   }
 
+  const warn = deps.logger.warn ? (message: string) => deps.logger.warn?.(message) : undefined;
+
   async function startSettings(input: CommunicationApplyInput): Promise<CommunicationStatus> {
     const manager = deps.manager();
     if (!manager) return { state: "error", reason: "start_failed", detail: "host not ready", workspaces: input.workspaces.length, sessions: sessionCount() };
@@ -102,6 +104,7 @@ export function createCommunicationController(deps: CommunicationControllerDeps)
         manager,
         userData: deps.userData,
         config: { workspaces: input.workspaces, port: input.port ?? 0 },
+        ...(warn ? { warn } : {}),
         isSessionExposed: (sessionId) => deps.isSessionExposed(sessionId),
         handleOf: deps.handleOf ? (sessionId) => deps.handleOf?.(sessionId) : undefined,
         ...(deps.agentOpenedSessions ? { agentOpenedSessions: deps.agentOpenedSessions } : {}),
@@ -125,7 +128,7 @@ export function createCommunicationController(deps: CommunicationControllerDeps)
         const manager = deps.manager();
         if (!manager) return failed(new Error("host not ready"), 0);
         try {
-          running = await startServer({ manager, userData: deps.userData, configFile: envConfig, handleOf: deps.handleOf ? (sessionId) => deps.handleOf?.(sessionId) : undefined });
+          running = await startServer({ manager, userData: deps.userData, configFile: envConfig, ...(warn ? { warn } : {}), handleOf: deps.handleOf ? (sessionId) => deps.handleOf?.(sessionId) : undefined });
           mode = "env";
           current = listening("env", running, 0);
         } catch (error) {
