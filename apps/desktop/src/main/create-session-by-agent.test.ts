@@ -20,7 +20,7 @@ import { join } from "node:path";
 import { createSessionAccessStore } from "./communication-sessions.js";
 import { createAgentProjectsStore } from "./communication-agent-projects.js";
 import { handleSetSessionHandle, type CommunicationIpcDeps } from "./communication-ipc.js";
-import { createAgentTitlePushes, recoverAgentSessionTitleOnRegister, type AgentTitleRecoveryDeps } from "./agent-session-title.js";
+import { createAgentTitlePushes, createAgentTitleRecoveryDeps, recoverAgentSessionTitleOnRegister } from "./agent-session-title.js";
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { MessagePortMain, UtilityProcess } from "electron";
@@ -443,9 +443,14 @@ describe("Sessions API create_session — the deferred first fork (GitHub #6)", 
  * The resume wiring, driven end to end: a session created by the production
  * `create_session` path (agent-opened, with a handle), its row holding the
  * host's OWN automatic title, the handle renamed through the production IPC
- * handler, then a restart and a resume. `onSessionRegistered` here is main's
- * real callback (`recoverAgentSessionTitleOnRegister`, same store + row reads),
- * not the pure decision function.
+ * handler, then a restart and a resume.
+ *
+ * Both boots build the repair dependencies with `createAgentTitleRecoveryDeps`
+ * — the one factory `main/index.ts` uses — and register through
+ * `recoverAgentSessionTitleOnRegister`, main's own `onSessionRegistered` title
+ * step, instead of re-shaping either by hand here: a regression in main's
+ * wiring of the store, the row reader or the adopted title is a regression in
+ * this test too.
  *
  * Why the row's title is an automatic one and not the handle: the handle push
  * never landed (a booting host). The previous repair overwrote ANY non-handle
@@ -480,16 +485,11 @@ describe("agent title resume wiring (production create_session → handle rename
     let sessions = createSessionAccessStore(storeFiles);
     try {
       await persistence.createSession({ id: "sess-1", workspace: "/ws", model: "scripted-model", mode: "edit" });
-      /** Main's recovery deps for one boot. */
-      const recoveryFor = (store: SessionAccessStore, titles: Map<string, string>, pushes: ReturnType<typeof createAgentTitlePushes>): AgentTitleRecoveryDeps => ({
-        handleOf: (sessionId) => store.getHandle(sessionId),
-        confirmedTitleOf: (sessionId) => store.getConfirmedTitle(sessionId),
-        readPersistedTitle: async (sessionId) => (await persistence.getSessionById(sessionId))?.title,
-        adopt: (sessionId, title) => { titles.set(sessionId, title); pushes.retain(sessionId); },
-        warn: () => {},
-      });
 
       // ---- boot 1: create_session, then a handle rename ----
+      /** This boot's store and row reader, as main's thunks read them. */
+      const sessionsA = sessions;
+      const persistenceA = persistence;
       const titlesA = new Map<string, string>();
       const pushedA: string[] = [];
       const pushesA = createAgentTitlePushes({
@@ -497,16 +497,27 @@ describe("agent title resume wiring (production create_session → handle rename
         // The host is still booting: the handle never lands, so the row keeps
         // whatever the host's own automatic titling wrote.
         request: async (_sessionId, title) => { pushedA.push(title); throw new Error("host booting"); },
-        confirmed: (sessionId, title) => sessions.confirmTitle(sessionId, title),
+        confirmed: (sessionId, title) => sessionsA.confirmTitle(sessionId, title),
         warn: () => {},
       });
       const createdRecoveries: Promise<unknown>[] = [];
       const boot1 = rig({
-        sessions,
+        sessions: sessionsA,
         sessionId: "sess-1",
         onSessionRegistered: (info) => {
-          sessions.register(info);
-          createdRecoveries.push(recoverAgentSessionTitleOnRegister(recoveryFor(sessions, titlesA, pushesA), info));
+          sessionsA.register(info);
+          createdRecoveries.push(
+            recoverAgentSessionTitleOnRegister(
+              createAgentTitleRecoveryDeps({
+                sessions: () => sessionsA,
+                persistence: () => persistenceA,
+                titles: titlesA,
+                pushes: pushesA,
+                warn: () => {},
+              }),
+              info,
+            ),
+          );
         },
       });
       const created = await createSessionForAgent(
@@ -552,6 +563,8 @@ describe("agent title resume wiring (production create_session → handle rename
       sessions = createSessionAccessStore(storeFiles);
       expect(sessions.getHandle("sess-1")).toBe("worker-2");
 
+      const sessionsB = sessions;
+      const persistenceB = persistence;
       const titlesB = new Map<string, string>();
       const pushedB: string[] = [];
       /** Commits of an accepted resume push (the push itself is fire-and-forget). */
@@ -560,17 +573,28 @@ describe("agent title resume wiring (production create_session → handle rename
         titleOf: (sessionId) => titlesB.get(sessionId),
         request: async (sessionId, title) => {
           pushedB.push(title);
-          pushWrites.push(persistence.touchSession(sessionId, { title }));
+          pushWrites.push(persistenceB.touchSession(sessionId, { title }));
         },
-        confirmed: (sessionId, title) => sessions.confirmTitle(sessionId, title),
+        confirmed: (sessionId, title) => sessionsB.confirmTitle(sessionId, title),
         warn: () => {},
       });
       const resumeRecoveries: Promise<unknown>[] = [];
       const boot2 = rig({
-        sessions,
+        sessions: sessionsB,
         onSessionRegistered: (info) => {
-          sessions.register(info);
-          resumeRecoveries.push(recoverAgentSessionTitleOnRegister(recoveryFor(sessions, titlesB, pushesB), info));
+          sessionsB.register(info);
+          resumeRecoveries.push(
+            recoverAgentSessionTitleOnRegister(
+              createAgentTitleRecoveryDeps({
+                sessions: () => sessionsB,
+                persistence: () => persistenceB,
+                titles: titlesB,
+                pushes: pushesB,
+                warn: () => {},
+              }),
+              info,
+            ),
+          );
         },
       });
       // The resume the renderer triggers: an already-persisted session, --resume.

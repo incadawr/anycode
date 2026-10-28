@@ -224,6 +224,56 @@ export interface AgentTitleRecoveryDeps {
   warn(message: string, error: unknown): void;
 }
 
+/** The handles + confirmation store the repair reads, as far as it needs them. */
+export interface AgentTitleHandleSource {
+  getHandle(sessionId: string): string | undefined;
+  getConfirmedTitle(sessionId: string): string | undefined;
+}
+
+/** The session-row reader the repair uses for the stored title. */
+export interface AgentTitleRowSource {
+  getSessionById(id: string): Promise<{ title?: string } | null>;
+}
+
+/**
+ * What main actually owns when it wires the repair: the live stores (both may
+ * be null before boot wires them), the in-memory titles a repair adopts into,
+ * the retained push queue and the logger. Exactly one place builds these —
+ * `createAgentTitleRecoveryDeps` — so a test drives the same construction main
+ * boots with instead of a hand-rolled copy that a wiring regression could leave
+ * passing.
+ */
+export interface AgentTitleRecoveryWiring {
+  /** The handles + confirmation store, read live (null before boot wires it). */
+  sessions(): AgentTitleHandleSource | null;
+  /** The session-row reader, read live (null before boot wires it). */
+  persistence(): AgentTitleRowSource | null;
+  /** The tab titles kept for the session's lifetime; a repair adopts into it. */
+  titles: Map<string, string>;
+  /** The retained push queue a repaired title is pushed through. */
+  pushes: AgentTitlePushes;
+  /** Best-effort diagnostics; never rethrown. */
+  warn(message: string, error: unknown): void;
+}
+
+/**
+ * Build main's `AgentTitleRecoveryDeps` from its live inputs. Both stores are
+ * read through a thunk (not captured) so a dep built before boot still sees the
+ * store once boot assigns it.
+ */
+export function createAgentTitleRecoveryDeps(wiring: AgentTitleRecoveryWiring): AgentTitleRecoveryDeps {
+  return {
+    handleOf: (sessionId) => wiring.sessions()?.getHandle(sessionId),
+    confirmedTitleOf: (sessionId) => wiring.sessions()?.getConfirmedTitle(sessionId),
+    readPersistedTitle: async (sessionId) => (await wiring.persistence()?.getSessionById(sessionId))?.title,
+    adopt: (sessionId, title) => {
+      wiring.titles.set(sessionId, title);
+      wiring.pushes.retain(sessionId);
+    },
+    warn: (message, error) => wiring.warn(message, error),
+  };
+}
+
 /**
  * The SESSION-REGISTRATION wiring for the repair — the callback `main/index.ts`
  * hands to `TabHostManager` as `onSessionRegistered`, run for every tab create

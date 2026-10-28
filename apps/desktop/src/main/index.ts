@@ -110,7 +110,7 @@ import { activeConnection, activeProviderView, connectionById, resolveProviderCo
 // CONNECTION (the core engine has no engine-model argv), never a silent fallback.
 import { primeNewSessionPin } from "./session-pin.js";
 import { createSessionForAgent as createSessionForAgentImpl, type CreateSessionByAgentDeps } from "./create-session-by-agent.js";
-import { createAgentTitlePushes, recoverAgentSessionTitleOnRegister, type AgentTitlePushes, type AgentTitleRecoveryDeps } from "./agent-session-title.js";
+import { createAgentTitlePushes, createAgentTitleRecoveryDeps, recoverAgentSessionTitleOnRegister, type AgentTitlePushes, type AgentTitleRecoveryDeps } from "./agent-session-title.js";
 import { rebuildHostEnvCache } from "./host-env-cache.js";
 import { recordHostFailure } from "../host/error-diagnostics.js";
 import {
@@ -582,16 +582,13 @@ const agentTitlePushes: AgentTitlePushes = createAgentTitlePushes({
  * is) without stating anything about the session beyond what the handles file,
  * the confirmation marker and the row itself already say.
  */
-const agentTitleRecovery: AgentTitleRecoveryDeps = {
-  handleOf: (sessionId) => communicationSessions?.getHandle(sessionId),
-  confirmedTitleOf: (sessionId) => communicationSessions?.getConfirmedTitle(sessionId),
-  readPersistedTitle: async (sessionId) => (await persistence?.getSessionById(sessionId))?.title,
-  adopt: (sessionId, title) => {
-    agentSessionTitles.set(sessionId, title);
-    agentTitlePushes.retain(sessionId);
-  },
+const agentTitleRecovery: AgentTitleRecoveryDeps = createAgentTitleRecoveryDeps({
+  sessions: () => communicationSessions,
+  persistence: () => persistence,
+  titles: agentSessionTitles,
+  pushes: agentTitlePushes,
   warn: (message, error) => console.warn(message, error),
-};
+});
 // Taskana 4759: the per-session "Full browser access" switch and the notifier that pushes
 // each tab's EFFECTIVE value (renderer + host flag) exactly once per change.
 let browserAccessStore: BrowserAccessStore | null = null;
