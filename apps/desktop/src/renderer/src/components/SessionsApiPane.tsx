@@ -15,6 +15,8 @@ import {
   SESSIONS_API_AGENT_PROJECTS_EMPTY,
   SESSIONS_API_AGENT_PROJECTS_HINT,
   SESSIONS_API_AGENT_PROJECTS_LABEL,
+  SESSIONS_API_AGENT_PROJECT_ON,
+  SESSIONS_API_AGENT_PROJECT_TURN_OFF,
   SESSIONS_API_ENABLE_LABEL,
   SESSIONS_API_ENV_NOTE,
   SESSIONS_API_FOLDER_HINT,
@@ -216,15 +218,21 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
               {view.agentProjects.map((project) => (
                 <li key={project.key}>
                   <span className="sessions-api-folder-path" title={project.displayPath}>{project.name} · {project.displayPath}</span>
-                  <button
-                    type="button"
-                    className="settings-button"
-                    aria-label={`Turn off agents opening tasks in ${project.name}`}
-                    disabled={!editable}
-                    onClick={() => props.onAgentProjectOff(project.key)}
-                  >
-                    Off
-                  </button>
+                  <span className="sessions-api-row-control">
+                    {/* The state first, then the action that changes it — a bare "Off" read as the state. */}
+                    <span className="settings-secret-status settings-secret-status-ok sessions-api-agent-project-state">
+                      {SESSIONS_API_AGENT_PROJECT_ON}
+                    </span>
+                    <button
+                      type="button"
+                      className="settings-button"
+                      aria-label={`Turn off agents opening tasks in ${project.name}`}
+                      disabled={!editable}
+                      onClick={() => props.onAgentProjectOff(project.key)}
+                    >
+                      {SESSIONS_API_AGENT_PROJECT_TURN_OFF}
+                    </button>
+                  </span>
                 </li>
               ))}
             </ul>
@@ -235,20 +243,20 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
         </div>
 
         <div className="sessions-api-row">
-          <div className="sessions-api-row-main">
+          {/* Label and input stay in ONE control group: with `space-between` the
+              label drifted to the far left and the empty input read as unlabelled. */}
+          <div className="sessions-api-row-control">
             <label className="settings-field-label" htmlFor="sessions-api-port">Port</label>
-            <div className="sessions-api-row-control">
-              <input
-                id="sessions-api-port"
-                className="settings-field-input sessions-api-port-input"
-                type="text"
-                inputMode="numeric"
-                value={portText}
-                disabled={!editable}
-                onChange={(event) => props.onPortText(event.target.value)}
-              />
-              <button type="button" className="settings-button" disabled={!editable} onClick={() => props.onApplyPort()}>Apply</button>
-            </div>
+            <input
+              id="sessions-api-port"
+              className="settings-field-input sessions-api-port-input"
+              type="text"
+              inputMode="numeric"
+              value={portText}
+              disabled={!editable}
+              onChange={(event) => props.onPortText(event.target.value)}
+            />
+            <button type="button" className="settings-button" disabled={!editable} onClick={() => props.onApplyPort()}>Apply</button>
           </div>
           <p className="settings-field-hint">{SESSIONS_API_PORT_HINT}</p>
         </div>
