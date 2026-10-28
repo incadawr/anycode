@@ -80,3 +80,49 @@ describe("main tab-close notification (Taskana 4880)", () => {
     } finally { vi.unstubAllGlobals(); }
   });
 });
+
+
+describe("port — GitHub #6 missing workspace envelope", () => {
+  it("routes a missing-workspace delivery into the stopped state with the folder path", () => {
+    const listeners = new Set<(event: unknown) => void>();
+    vi.stubGlobal("window", {
+      addEventListener: (_name: string, cb: (event: unknown) => void) => listeners.add(cb),
+      removeEventListener: (_name: string, cb: (event: unknown) => void) => listeners.delete(cb),
+    });
+    const registry = { registerPort: vi.fn(() => true), registerTerminalPort: vi.fn(() => true), markHostExited: vi.fn() };
+    try {
+      const stop = startConnectionManager(registry);
+      for (const cb of listeners) {
+        cb({
+          data: { type: "anycode:port", tabId: "tab", workspace: "/missing", missingWorkspace: true },
+          ports: [{}],
+        });
+      }
+      expect(registry.markHostExited).toHaveBeenCalledWith("tab", "/missing");
+      stop();
+      expect(listeners.size).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not fold an ordinary port delivery into the stopped state", () => {
+    const listeners = new Set<(event: unknown) => void>();
+    vi.stubGlobal("window", {
+      addEventListener: (_name: string, cb: (event: unknown) => void) => listeners.add(cb),
+      removeEventListener: (_name: string, cb: (event: unknown) => void) => listeners.delete(cb),
+    });
+    const registry = { registerPort: vi.fn(() => true), registerTerminalPort: vi.fn(() => true), markHostExited: vi.fn() };
+    try {
+      const stop = startConnectionManager(registry);
+      for (const cb of listeners) {
+        cb({ data: { type: "anycode:port", tabId: "tab", workspace: "/ws" }, ports: [{}] });
+      }
+      expect(registry.registerPort).toHaveBeenCalled();
+      expect(registry.markHostExited).not.toHaveBeenCalled();
+      stop();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

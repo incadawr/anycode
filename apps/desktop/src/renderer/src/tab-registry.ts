@@ -151,8 +151,13 @@ export interface TabRegistry {
    * entry is flipped to `live: false` instead (main's reap-on-terminal
    * verdict, §0: a terminated child host never respawns, so this is a
    * one-way flip, not a "wait for reconnect" state like a root tab's).
+   *
+   * `missingWorkspacePath` marks the GitHub #6 case: main could not start a
+   * host because the tab's workspace folder is gone. The store's `lastFatal`
+   * then names the folder and the way out, so the surface shows an error
+   * instead of a connecting state that never resolves.
    */
-  markHostExited(tabId: string): void;
+  markHostExited(tabId: string, missingWorkspacePath?: string): void;
   /**
    * Tears the tab down completely: unsubscribes its message listener, drops
    * the entry from the map, and removes it from the tabs-store. Marks the
@@ -672,7 +677,7 @@ export function createTabRegistry(
       return true;
     },
 
-    markHostExited(tabId): void {
+    markHostExited(tabId, missingWorkspacePath): void {
       const entry = entries.get(tabId);
       if (!entry) {
         return;
@@ -681,6 +686,12 @@ export function createTabRegistry(
       entry.unsubscribeMessages = null;
       entry.connection = null;
       entry.store.getState().setHostExited();
+      if (missingWorkspacePath !== undefined) {
+        entry.store.getState().applyHostMessage({
+          type: "fatal",
+          message: `Workspace folder does not exist: ${missingWorkspacePath}. Close this tab and choose another folder.`,
+        });
+      }
 
       if (entry.isChild) {
         // TASK.102 CUT-S2 §0/§2.5: no root-tab banner to paint (a child was

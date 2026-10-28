@@ -46,6 +46,8 @@ export interface PortEnvelope {
   tabId: string;
   /** The tab's workspace (= host cwd), known before the host forks. */
   workspace: string;
+  /** The host could not start because its workspace no longer exists. */
+  missingWorkspace?: boolean;
   /**
    * The provider connection this tab is pinned to (TASK.45 W10-FIX F2), so the
    * renderer's ModelPill can target the PINNED connection's catalog + write-target

@@ -17,7 +17,7 @@ import type { AgentDelivery } from "../shared/communication.js";
  */
 
 import { randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import type { MessagePortMain, UtilityProcess } from "electron";
 import type { PermissionMode, ReasoningEffort } from "@anycode/core";
 import type { AgentEnvelope } from "../shared/communication.js";
@@ -348,6 +348,22 @@ function argvId(value: string | undefined): string | null {
   return trimmed;
 }
 
+/**
+ * GitHub #6: true when a tab's workspace folder is gone (deleted, moved, or
+ * replaced by a non-directory) — the one case where forking the host is
+ * pointless: the fork's cwd does not exist, so the host can never boot. Only
+ * ENOENT/ENOTDIR mean "gone": any other stat error (EACCES, ELOOP, ...) keeps
+ * the old fail-open path, where the fork outcome itself is the verdict.
+ */
+export function workspaceMissing(workspace: string): boolean {
+  try {
+    return !statSync(workspace).isDirectory();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR";
+  }
+}
+
 export function canonicalWorkspace(value: string): string {
   try {
     return realpathSync(value);
@@ -362,6 +378,12 @@ export interface TabHost {
   tabId: string;
   /** = host cwd, known before fork. */
   workspace: string;
+  /**
+   * GitHub #6: the workspace folder was gone when a host spawn was attempted,
+   * so no host was forked. Sticky until a later spawn actually reaches a fork;
+   * it turns the tab's port delivery into an error the renderer can show.
+   */
+  missingWorkspace?: boolean;
   /** Stable project grouping identity while workspace may relocate. */
   projectRoot: string;
   worktree?: WorktreeIdentity;
@@ -636,6 +658,12 @@ export interface TabHostManagerDeps {
   onSessionRegistered?: (info: { sessionId: string; parentSessionId?: string }) => void | (() => void);
   /** utilityProcess.fork (or a fake). */
   fork: HostForkFn;
+  /**
+   * GitHub #6: reports whether the tab's workspace folder is gone (default:
+   * never — a spawn always reaches the fork). Production passes `tabs.ts`'s
+   * own `workspaceMissing`; tests opt in.
+   */
+  workspaceMissing?: (workspace: string) => boolean;
   /**
    * Taskana 4736: the in-memory "trust once" hash approved for a workspace in this
    * app run (never persisted). Stamped into the fork env as
@@ -1255,6 +1283,18 @@ export class TabHostManager {
 
    */
   private spawnTabHost(tab: TabHost, opts: { firstSpawn: boolean; onDeferredInitialSpawn?: () => void; onDeferredFinished?: () => void }): void | false | "deferred" {
+    // GitHub #6: never fork into a cwd that does not exist — the host could not
+    // boot, and the tab would sit in "Connecting to host…" with no error. The
+    // tab stays (so the user can see which folder is gone and close it) and
+    // `deliverTabPort` hands the renderer an error to show instead of a host.
+    if (this.deps.workspaceMissing?.(tab.workspace)) {
+      this.logger.error(`[main] tab ${tab.tabId} workspace folder is missing (${tab.workspace}); refusing to spawn`);
+      tab.missingWorkspace = true;
+      tab.state = "crash_looped";
+      tab.proc = null;
+      return;
+    }
+    delete tab.missingWorkspace;
     const attempt = (this.spawnAttempts.get(tab) ?? 0) + 1;
     this.spawnAttempts.set(tab, attempt);
     if (!opts.firstSpawn) this.deferredRegistrationRollbacks.delete(tab.tabId);
@@ -3248,7 +3288,10 @@ export class TabHostManager {
    * host stays tab-agnostic on the term channel — no tabId travels on it.
    */
   deliverTabPort(tab: TabHost): void {
-    if (tab.proc === null) {
+    // GitHub #6: a missing-workspace tab has no proc and never will, yet its
+    // renderer still needs a delivery — that is how it learns the folder is
+    // gone. Every other proc-less tab is the old "nothing to deliver" case.
+    if (tab.proc === null && !tab.missingWorkspace) {
       this.logger.warn(`[main] deliverTabPort skipped: tab ${tab.tabId} has no host`);
       return;
     }
@@ -3258,7 +3301,9 @@ export class TabHostManager {
       return;
     }
     const channel = this.deps.createChannel();
-    tab.proc.postMessage({ type: HOST_INIT_MESSAGE_TYPE }, [channel.port1]);
+    if (tab.proc !== null) {
+      tab.proc.postMessage({ type: HOST_INIT_MESSAGE_TYPE }, [channel.port1]);
+    }
     // TASK.45 W10-FIX F2: additive control-plane pin metadata. Both fields ride
     // together or not at all — a since-deleted pin (describeConnection -> undefined)
     // omits both so the renderer falls back to the active connection rather than
@@ -3270,6 +3315,7 @@ export class TabHostManager {
       {
         tabId: tab.tabId,
         workspace: tab.workspace,
+        ...(tab.missingWorkspace ? { missingWorkspace: true } : {}),
         ...(tab.connectionId !== undefined && pin !== undefined
           ? { connectionId: tab.connectionId, providerId: pin.providerId }
           : {}),
@@ -3295,6 +3341,9 @@ export class TabHostManager {
     );
     this.logger.log(`[main] delivered fresh MessageChannel to tab ${tab.tabId}`);
 
+    // Everything below binds the term channel to `tab.proc`; an error tab got
+    // its whole delivery (the UI envelope above) and has no PTY to attach.
+    if (tab.proc === null) return;
     if (tab.childOf !== undefined) {
       // TASK.102 CUT-S2 §2.5: "Терминальный порт ребёнку НЕ доставляется" — a
       // child session has no PTY-backed tab surface, so main simply never
@@ -3311,10 +3360,14 @@ export class TabHostManager {
     this.logger.log(`[main] delivered fresh terminal MessageChannel to tab ${tab.tabId}`);
   }
 
-  /** Fresh channel to EVERY live host (design §2.2, on did-finish-load). */
+  /**
+   * Fresh channel to EVERY live host (design §2.2, on did-finish-load) — plus
+   * every missing-workspace tab, whose reload needs the same error envelope
+   * (GitHub #6).
+   */
   deliverAllTabPorts(): void {
     for (const tab of this.tabs.values()) {
-      if (tab.proc !== null) {
+      if (tab.proc !== null || tab.missingWorkspace) {
         this.deliverTabPort(tab);
       }
     }

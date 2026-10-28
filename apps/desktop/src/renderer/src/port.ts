@@ -94,6 +94,7 @@ export function connectTerminal(port: MessagePort): TerminalConnection {
 export interface HostPortMeta {
   tabId: string;
   workspace: string;
+  missingWorkspace?: boolean;
   /**
    * TASK.45 W10-FIX F2: the tab's pinned provider connection (additive control
    * plane). Absent for an unpinned/legacy tab — the ModelPill then falls back to
@@ -173,6 +174,7 @@ export function onHostPort(cb: (port: MessagePort, meta: HostPortMeta) => void):
       const envelope = data as {
         tabId?: unknown;
         workspace?: unknown;
+        missingWorkspace?: unknown;
         connectionId?: unknown;
         providerId?: unknown;
         child?: unknown;
@@ -194,6 +196,7 @@ export function onHostPort(cb: (port: MessagePort, meta: HostPortMeta) => void):
       cb(port, {
         tabId,
         workspace: wsFromEnvelope,
+        ...(envelope.missingWorkspace === true ? { missingWorkspace: true } : {}),
         ...(pinnedConnection !== undefined ? { pinnedConnection } : {}),
         ...(child !== undefined ? { child } : {}),
         ...(typeof envelope.agentTitle === "string" ? { agentTitle: envelope.agentTitle } : {}),
@@ -283,8 +286,13 @@ export interface ConnectionRegistry {
     openedByAgent?: boolean,
     agentTitle?: string,
   ): boolean;
-  /** Flips the given tab's connection/banner state to host-exited; a no-op for a tab that isn't registered. */
-  markHostExited(tabId: string): void;
+  /**
+   * Flips the given tab's connection/banner state to host-exited; a no-op for
+   * a tab that isn't registered. `missingWorkspacePath` names the folder main
+   * found gone, so the surface can show that error instead of a connecting
+   * state (GitHub #6).
+   */
+  markHostExited(tabId: string, missingWorkspacePath?: string): void;
   disposeTab?(tabId: string): void;
   /**
    * Attaches a fresh term-port for `tabId` (design slice-2.4-cut.md §4).
@@ -315,6 +323,13 @@ export function startConnectionManager(registry: ConnectionRegistry): () => void
       return;
     }
     const attached = registry.registerPort(meta.tabId, meta.workspace, port, meta.pinnedConnection, meta.child, meta.openedByAgent, meta.agentTitle);
+    // GitHub #6: main delivers this tab's port without ever starting a host —
+    // its workspace folder is gone. Mark the tab exited with that path so the
+    // surface shows an error naming the folder instead of sitting in
+    // "Connecting to host…" forever.
+    if (attached && meta.missingWorkspace) {
+      registry.markHostExited(meta.tabId, meta.workspace);
+    }
     if (!attached) {
       console.warn("[port] dropping port for a closed/unknown tab", meta.tabId);
     }

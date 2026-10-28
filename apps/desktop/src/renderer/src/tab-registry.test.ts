@@ -2064,3 +2064,28 @@ describe("tab-registry — provider-switch marker restore at the session_history
     vi.unstubAllGlobals();
   });
 });
+
+
+describe("tab-registry — GitHub #6 missing workspace", () => {
+  it("surfaces a missing workspace as a stopped tab with an actionable error", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    registry.registerPort("missing", "/missing/folder", asPort(new FakeMessagePort()));
+    registry.markHostExited("missing", "/missing/folder");
+    const state = registry.getStore("missing")!.getState();
+    expect(state.connection).toBe("host_exited");
+    expect(state.lastFatal).toBe(
+      "Workspace folder does not exist: /missing/folder. Close this tab and choose another folder.",
+    );
+  });
+
+  it("leaves lastFatal alone for an ordinary host exit", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    registry.registerPort("plain", "/ws", asPort(new FakeMessagePort()));
+    registry.markHostExited("plain");
+    const state = registry.getStore("plain")!.getState();
+    expect(state.connection).toBe("host_exited");
+    expect(state.lastFatal).toBeNull();
+  });
+});

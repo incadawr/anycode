@@ -671,6 +671,7 @@ ipcRenderer.on(
       // Taskana 4768: relayed untouched (root tabs a Sessions API agent opened).
       openedByAgent?: PortEnvelope["openedByAgent"];
       agentTitle?: string;
+      missingWorkspace?: boolean;
     },
   ) => {
     // TASK.45 W10-FIX F2: forward the additive pin metadata (connectionId/providerId)
@@ -681,6 +682,7 @@ ipcRenderer.on(
         type: PORT_ENVELOPE_TYPE,
         tabId: payload.tabId,
         workspace: payload.workspace,
+        ...(payload.missingWorkspace === true ? { missingWorkspace: true } : {}),
         ...(payload.connectionId !== undefined && payload.providerId !== undefined
           ? { connectionId: payload.connectionId, providerId: payload.providerId }
           : {}),

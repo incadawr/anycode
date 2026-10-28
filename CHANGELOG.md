@@ -26,6 +26,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Creating a role profile without typing a name gives it a unique name (no more duplicate “New profile”), and Rename works for the selected custom profile.
 - The Roles save result appears next to “Save roles”, and the pane description matches the single global parallel-children limit.
 - The Roles project picker shows the folder name, with the full path as its tooltip.
+- Show an actionable error when a tab’s workspace folder is missing. (#6)
 
 ## [0.0.49] — 2026-10-28
 
