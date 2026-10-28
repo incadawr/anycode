@@ -1687,8 +1687,10 @@ export class TabHostManager {
           }
           // GitHub #6: the envelope built here is the FIRST one the renderer
           // sees, and it carries whatever attribution is registered by now.
-          opts.beforeDeferredPortDelivery?.(tab);
-          this.deliverTabPort(tab);
+          if (!this.unpublishedTabs.has(tab.tabId)) {
+            opts.beforeDeferredPortDelivery?.(tab);
+            this.deliverTabPort(tab);
+          }
           opts.onDeferredFinished?.();
         }).catch((error) => {
           if (this.spawnAttempts.get(tab) !== attempt || this.tabs.get(tab.tabId) !== tab || tab.state !== "running") {

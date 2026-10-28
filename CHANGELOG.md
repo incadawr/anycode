@@ -49,6 +49,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - A message still being handed to a new session is no longer shown to it as an earlier delivery, so the first turn always starts. (#21)
 - A message that cannot be dispatched is reported as failed at its own 20-second deadline, not up to a second later. (#21)
 - A failed session preparation no longer deletes the session row while its host may still be running.
+- Deferred session creation keeps agent attribution private until the requested reasoning effort is accepted.
 - Picking a reasoning effort right after switching to another native model is no longer ignored.
 - An effort chosen for a newly selected native model is kept and shown as the selected value instead of reverting to Default when it matches the previous model's effort.
 - The native model menu shows its effort row even when the session has not reported an applied effort yet.
