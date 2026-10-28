@@ -110,7 +110,7 @@ import { activeConnection, activeProviderView, connectionById, resolveProviderCo
 // CONNECTION (the core engine has no engine-model argv), never a silent fallback.
 import { primeNewSessionPin } from "./session-pin.js";
 import { createSessionForAgent as createSessionForAgentImpl, type CreateSessionByAgentDeps } from "./create-session-by-agent.js";
-import { createAgentTitlePushes, recoverAgentSessionTitle, type AgentTitlePushes } from "./agent-session-title.js";
+import { createAgentTitlePushes, recoverAgentSessionTitleOnRegister, type AgentTitlePushes, type AgentTitleRecoveryDeps } from "./agent-session-title.js";
 import { rebuildHostEnvCache } from "./host-env-cache.js";
 import { recordHostFailure } from "../host/error-diagnostics.js";
 import {
@@ -576,6 +576,22 @@ const agentTitlePushes: AgentTitlePushes = createAgentTitlePushes({
     return () => clearTimeout(timer);
   },
 });
+/**
+ * The resume-time repair wiring: `onSessionRegistered` runs it for every tab
+ * create, so a resumed session is repaired (only a raw delivery-envelope title
+ * is) without stating anything about the session beyond what the handles file,
+ * the confirmation marker and the row itself already say.
+ */
+const agentTitleRecovery: AgentTitleRecoveryDeps = {
+  handleOf: (sessionId) => communicationSessions?.getHandle(sessionId),
+  confirmedTitleOf: (sessionId) => communicationSessions?.getConfirmedTitle(sessionId),
+  readPersistedTitle: async (sessionId) => (await persistence?.getSessionById(sessionId))?.title,
+  adopt: (sessionId, title) => {
+    agentSessionTitles.set(sessionId, title);
+    agentTitlePushes.retain(sessionId);
+  },
+  warn: (message, error) => console.warn(message, error),
+};
 // Taskana 4759: the per-session "Full browser access" switch and the notifier that pushes
 // each tab's EFFECTIVE value (renderer + host flag) exactly once per change.
 let browserAccessStore: BrowserAccessStore | null = null;
@@ -2496,16 +2512,7 @@ void app.whenReady().then(async () => {
       // but only when the stored title is still the raw delivery header, never a
       // title that was chosen (in particular not after the user changed the
       // handle of an agent-opened session).
-      void recoverAgentSessionTitle({
-        sessionId: info.sessionId,
-        savedHandle: () => communicationSessions?.getHandle(info.sessionId),
-        confirmedTitle: () => communicationSessions?.getConfirmedTitle(info.sessionId),
-        readPersistedTitle: async () => (await persistence?.getSessionById(info.sessionId))?.title,
-        adopt: (title) => {
-          agentSessionTitles.set(info.sessionId, title);
-          agentTitlePushes.retain(info.sessionId);
-        },
-      }).catch((error: unknown) => console.warn("[main] agent title recovery failed", error));
+      void recoverAgentSessionTitleOnRegister(agentTitleRecovery, info);
       return () => {
         if (sessionsAdded) communicationSessions?.remove(info.sessionId);
         if (approvalsAdded) communicationApprovals?.remove(info.sessionId);
