@@ -201,6 +201,9 @@ describe("resume-time agent title recovery", () => {
       run: () => recoverAgentSessionTitle({
         sessionId: "s1",
         savedHandle: () => "worker-1",
+        // Not an agent-opened tab: a saved handle alone proves nothing, since the
+        // user can assign one to an ordinary shared session.
+        openedByAgent: () => false,
         // No marker on record: the pre-fix shape (nothing recorded which title
         // the agent wrote, so none was ever confirmed).
         confirmedTitle: () => undefined,
@@ -211,24 +214,43 @@ describe("resume-time agent title recovery", () => {
     };
   };
 
-  it("repairs a pre-fix session whose persisted title is the payload fallback", async () => {
+  it("repairs a pre-fix session whose persisted title is the raw envelope header", async () => {
     const { adopted, run } = recover();
     expect(await run()).toBe(true);
     expect(adopted).toEqual(["worker-1"]);
   });
 
-  // The finding this covers: the payload prefix is not the only automatically
-  // generated title. A pre-fix session could hold the first message's own line
-  // or a model-refined title, with its handle still saved, and every build that
-  // wrote such a row has exactly one writer of session titles — the app.
-  it("repairs a pre-fix session whose title came from the message rather than the envelope", async () => {
-    const { adopted, run } = recover({ readPersistedTitle: async () => "Fix the sidebar" });
+  // The lead constraint on the repair: a saved handle is NOT evidence that an
+  // agent opened the tab (the Sessions API row lets the user give an ordinary
+  // session a handle too), so a row written before the durable agent-opened
+  // marker can only be repaired when its title is the raw envelope header —
+  // the one title text that is never user-chosen.
+  it("leaves a pre-fix session's plain-text title alone (a saved handle is not proof of an agent-opened tab)", async () => {
+    const { adopted, run } = recover({ readPersistedTitle: async () => "Sidebar layout and focus" });
+    expect(await run()).toBe(false);
+    expect(adopted).toEqual([]);
+  });
+
+  it("leaves a title alone that the user chose on a session whose handle was assigned by hand", async () => {
+    const { adopted, run } = recover({ readPersistedTitle: async () => "Company profile design" });
+    expect(await run()).toBe(false);
+    expect(adopted).toEqual([]);
+  });
+
+  // Rows written from this version on: `create_session` records a durable
+  // agent-opened marker, which is enough to know the stored title (when it is
+  // not the handle) was produced by the app's automatic titling.
+  it("repairs a session created by this version whose automatic title is not the handle", async () => {
+    const { adopted, run } = recover({
+      openedByAgent: () => true,
+      readPersistedTitle: async () => "Fix the sidebar",
+    });
     expect(await run()).toBe(true);
     expect(adopted).toEqual(["worker-1"]);
   });
 
-  it("repairs a pre-fix session whose title a model refinement replaced", async () => {
-    const { adopted, run } = recover({ readPersistedTitle: async () => "Sidebar layout and focus" });
+  it("repairs an agent-opened session whose stored title is still the envelope header", async () => {
+    const { adopted, run } = recover({ openedByAgent: () => true });
     expect(await run()).toBe(true);
     expect(adopted).toEqual(["worker-1"]);
   });

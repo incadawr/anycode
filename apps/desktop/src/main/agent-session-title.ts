@@ -18,14 +18,18 @@
  *   the title a host committed), so a later resume can tell the title the agent
  *   wrote apart from a title something else wrote afterwards;
  * - a RESUME-TIME repair: a session created before this existed still carries
- *   an automatically generated title in SQLite (the payload envelope, the
- *   first message's line, or a model-refined one) while its handle sits in the
- *   handles file. With no confirmed title on record, the saved handle replaces
- *   it — a title written after the agent's own write is left alone.
+ *   an automatically generated title in SQLite (the raw delivery envelope)
+ *   while its handle sits in the handles file, and a session this version
+ *   creates whose title push never landed carries whatever the store held.
+ *   The saved handle replaces such a title — but only when the row is KNOWN to
+ *   have been titled by the app rather than by the user (see
+ *   `recoverAgentSessionTitle`).
  *
  * The host acknowledges `set_agent_title` only after its persistence write
  * committed, so "not retained any more" means "a later boot reads this title".
  */
+
+import { AGENT_MESSAGE_HEADER_PREFIX } from "../shared/communication.js";
 
 export interface AgentTitlePushDeps {
   /** The retained title of a session, if one is known. */
@@ -156,6 +160,13 @@ export interface RecoverAgentTitleDeps {
   /** The handle saved in the handles file (durable across restarts). */
   savedHandle(): string | undefined;
   /**
+   * True only when a DURABLE marker says an agent opened this session through
+   * `create_session` (written at creation time). A saved handle is not enough:
+   * the user can assign one to an ordinary session from the environment menu,
+   * and that session's title is not the agent's to replace.
+   */
+  openedByAgent(): boolean;
+  /**
    * The title a host last confirmed for this session — the durable marker that
    * says which title the agent itself wrote. Absent for a session created
    * before that marker existed, and for one whose write never landed.
@@ -173,19 +184,20 @@ export interface RecoverAgentTitleDeps {
  *
  * The decision, in order:
  *
- * 1. No saved handle — not an agent-opened session: never touch the title.
- * 2. A confirmed title that is NOT this handle — the stored title was written
- *    after the agent's own write and confirmed again, so it is someone else's
- *    choice (a user rename): leave it.
- * 3. A confirmed title that IS this handle — the agent's title is already the
- *    stored one: nothing to do, and no database read at all.
- * 4. No confirmed title on record — the row's title was produced entirely by
- *    the app's automatic titling: the payload fallback, the first message's
- *    line, or a model refinement. Every build that wrote such a row has one
- *    writer of session titles (there is no rename affordance and nothing
- *    records one), so the handle is the honest title and replaces it. This is
- *    the part that cannot be verified row-by-row for pre-fix data; the marker
- *    above makes every row written from now on exact.
+ * 1. No saved handle — not a session whose title the handle owns: never touch
+ *    the title.
+ * 2. A confirmed title on record — the stored title was written after the
+ *    agent's own write and confirmed again, so it is someone else's choice (or
+ *    already the handle): leave it, without even a database read.
+ * 3. A stored title that IS the handle — nothing to do.
+ * 4. Otherwise the title may be repaired ONLY when the app is known to have
+ *    written it:
+ *      - the session carries the durable agent-opened marker (rows written
+ *        from this version on), or
+ *      - the stored title begins with the raw delivery-envelope header, the one
+ *        title text no user can have chosen (rows written before it).
+ *    Anything else — in particular an ordinary session whose handle the user
+ *    assigned by hand — keeps the title it has.
  */
 export async function recoverAgentSessionTitle(deps: RecoverAgentTitleDeps): Promise<boolean> {
   const handle = deps.savedHandle();
@@ -200,6 +212,12 @@ export async function recoverAgentSessionTitle(deps: RecoverAgentTitleDeps): Pro
     return false;
   }
   if (persisted === handle) return false;
+  // Repair only a title the app is known to have generated: the durable
+  // agent-opened marker this version writes at create_session time, or (for
+  // rows written before it) the raw envelope header, which is never a title a
+  // user chose.
+  const automatic = deps.openedByAgent() || (persisted !== undefined && persisted.startsWith(AGENT_MESSAGE_HEADER_PREFIX));
+  if (!automatic) return false;
   deps.adopt(handle);
   return true;
 }

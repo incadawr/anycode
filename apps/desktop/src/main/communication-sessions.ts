@@ -35,6 +35,15 @@ export interface SessionAccessStoreDeps {
    * must never overwrite the latter. Absent = in memory only.
    */
   titleConfirmationsFile?: string;
+  /**
+   * Absolute path of the agent-opened marker file (a FOURTH private file): the
+   * sessions an agent opened through `create_session`, recorded the moment the
+   * tab was created. A resume-time title repair needs it, because a saved
+   * handle alone is NOT evidence of an agent-opened tab — the user can assign
+   * a handle to any shared session from the environment menu, and that title
+   * must survive. Absent = in memory only.
+   */
+  agentOpenedFile?: string;
 }
 
 export type SetHandleFailure = "unknown_session" | "invalid" | "duplicate" | "io_error";
@@ -57,6 +66,14 @@ export interface SessionAccessStore {
   setHandle(sessionId: string, handle: string | null, isLive: (sessionId: string) => boolean): { ok: true } | { ok: false; reason: SetHandleFailure };
   /** The live session currently holding `handle`, if any. */
   sessionIdByHandle(handle: string, isLive: (sessionId: string) => boolean): string | undefined;
+  /**
+   * Records that an agent opened this session through `create_session`. Durable
+   * across restarts; best effort (a failed write only means a later resume will
+   * not repair the title, which is the pre-fix behaviour — never a wrong one).
+   */
+  markAgentOpened(sessionId: string): void;
+  /** True when an agent opened this session (durable marker, see `agentOpenedFile`). */
+  isAgentOpened(sessionId: string): boolean;
   /**
    * The title a host CONFIRMED for this session — recorded the moment a title
    * write committed. Durable, so a later resume can tell "the agent's title is
@@ -115,6 +132,23 @@ function loadConfirmations(file: string | undefined): Map<string, string> {
   return map;
 }
 
+/**
+ * The agent-opened marker: sessionId -> true for every session an agent created
+ * through `create_session`. Any other value is dropped, like every other private
+ * file here (fail closed).
+ */
+function loadAgentOpened(file: string | undefined): Set<string> {
+  const sessions = new Set<string>();
+  if (!file) return sessions;
+  try {
+    const parsed = fileSchema.safeParse(JSON.parse(readFileSync(file, "utf8")));
+    if (parsed.success) {
+      for (const [id, value] of Object.entries(parsed.data)) if (value === true) sessions.add(id);
+    }
+  } catch { /* corrupt or absent: empty */ }
+  return sessions;
+}
+
 function load(file: string): Map<string, boolean> {
   try {
     const parsed = fileSchema.safeParse(JSON.parse(readFileSync(file, "utf8")));
@@ -126,11 +160,12 @@ function load(file: string): Map<string, boolean> {
   }
 }
 
-function persist(file: string, map: Map<string, unknown>): void {
+function persist(file: string, values: ReadonlyMap<string, unknown> | ReadonlySet<string>): void {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  const record = values instanceof Map ? Object.fromEntries(values) : Object.fromEntries([...values].map((id) => [id, true]));
   const temporary = `${file}.${randomUUID()}.tmp`;
   try {
-    writeFileSync(temporary, JSON.stringify(Object.fromEntries(map)), { mode: 0o600, flag: "wx" });
+    writeFileSync(temporary, JSON.stringify(record), { mode: 0o600, flag: "wx" });
     renameSync(temporary, file);
   } finally {
     rmSync(temporary, { force: true });
@@ -141,6 +176,7 @@ export function createSessionAccessStore(deps: SessionAccessStoreDeps): SessionA
   const map = load(deps.file);
   const handles = loadHandles(deps.handlesFile);
   const confirmations = loadConfirmations(deps.titleConfirmationsFile);
+  const agentOpened = loadAgentOpened(deps.agentOpenedFile);
   /**
    * Fail closed, like the other private files: a write that did not land is
    * rolled back, so the marker never claims something the file does not hold.
@@ -196,6 +232,16 @@ export function createSessionAccessStore(deps: SessionAccessStoreDeps): SessionA
     getConfirmedTitle(sessionId) {
       return confirmations.get(sessionId);
     },
+    markAgentOpened(sessionId) {
+      if (agentOpened.has(sessionId)) return;
+      agentOpened.add(sessionId);
+      if (deps.agentOpenedFile !== undefined) {
+        try { persist(deps.agentOpenedFile, agentOpened); } catch { /* best effort: no marker, no repair */ }
+      }
+    },
+    isAgentOpened(sessionId) {
+      return agentOpened.has(sessionId);
+    },
     confirmTitle(sessionId, title) {
       if (confirmations.get(sessionId) === title) return;
       persistConfirmations(sessionId, title);
@@ -215,9 +261,11 @@ export function createSessionAccessStore(deps: SessionAccessStoreDeps): SessionA
       map.delete(sessionId);
       handles.delete(sessionId);
       confirmations.delete(sessionId);
+      agentOpened.delete(sessionId);
       try { persist(deps.file, map); } catch { /* best effort */ }
       if (deps.handlesFile) try { persist(deps.handlesFile, handles); } catch { /* best effort */ }
       if (deps.titleConfirmationsFile) try { persist(deps.titleConfirmationsFile, confirmations); } catch { /* best effort */ }
+      if (deps.agentOpenedFile) try { persist(deps.agentOpenedFile, agentOpened); } catch { /* best effort */ }
     },
     set(sessionId, enabled) {
       if (!map.has(sessionId)) return false;
