@@ -2493,7 +2493,8 @@ void app.whenReady().then(async () => {
     listTabs: () => manager?.listTabs() ?? [],
     // A prepared creation that fails after the host forked drops the row it
     // just allocated, so the picker never shows a session nobody can reach.
-    // Called only after the host has been reaped (the ordering lives in
+    // Called only after the host is gone — deferred to its real exit event when
+    // it outlives the abort's reap deadlines (the ordering lives in
     // create-session-by-agent.ts).
     deleteSessionRow: async (sessionId) => {
       if (persistence === null) return;
