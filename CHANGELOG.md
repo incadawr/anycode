@@ -10,6 +10,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - The transcript tick rail stays clear of message text in narrow panes, including when a side panel is open (#16).
+- The test suite no longer adds phantom projects to the developer's own AnyCode sidebar.
 
 ## [0.0.49] — 2026-10-28
 
