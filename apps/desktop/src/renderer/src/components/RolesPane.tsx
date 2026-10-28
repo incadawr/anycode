@@ -16,6 +16,12 @@ import { deriveRolePresets, presetApplicable, ROLE_PRESET_ROLES, type PresetRole
 import type { RoleConfig } from "../../../shared/settings.js";
 import { roleProfiles } from "../../../shared/role-profiles.js";
 import { claimedRoleOverrides, type RoleProfileOverride } from "../role-profile-overrides.js";
+import {
+  canRenameProfile,
+  createProfileName,
+  duplicateProfileName,
+  projectFolderName,
+} from "../role-profile-controls.js";
 import { RolePickerDialog } from "./RolePickerDialog.js";
 
 export interface RolesPaneProps {
@@ -101,16 +107,22 @@ export function RolesPane({ tabId }: RolesPaneProps = {}): React.JSX.Element {
   const [maxParallelChildren, setMaxParallelChildren] = useState<string>(persistedRoles?.maxParallelChildren?.toString() ?? "");
   const [projectRoot, setProjectRoot] = useState("");
   const projects = [...new Set([...tabs.map((tab) => tab.projectRoot ?? tab.workspace), ...sessionProjects, ...registry.projects.map((p) => p.projectRoot)])];
-  const [profileName, setProfileName] = useState("");
+  const [profileName, setProfileName] = useState<string>(() => selected?.name ?? "");
   const projectProfileId = registry.projects.find((p) => p.projectRoot === projectRoot)?.profileId;
   useEffect(() => { setMaxParallelChildren(selected?.roles.maxParallelChildren?.toString() ?? ""); }, [selected?.id, selected?.roles.maxParallelChildren]);
+  // The name field drives Create/Rename/Duplicate; it follows the selected
+  // profile so Rename starts from the current name instead of a dead empty box.
+  useEffect(() => { setProfileName(selected?.name ?? ""); }, [selected?.id, selected?.name]);
   async function saveRegistry(next: typeof registry): Promise<void> {
     const result = await setPatch({ roleProfiles: next });
     setSavedNotice({ ok: result.ok, message: result.ok ? "Profiles saved." : "Saving profiles failed." });
   }
   function addProfile(copy: boolean): void {
     const id = crypto.randomUUID();
-    const name = profileName.trim() || (copy ? "Copy" : "New profile");
+    const existingNames = registry.profiles.map((profile) => profile.name);
+    const name = copy
+      ? duplicateProfileName(profileName, existingNames, selected?.name)
+      : createProfileName(profileName, existingNames);
     const roles = copy ? (persistedRoles ?? {}) : {};
     void saveRegistry({ ...registry, profiles: [...registry.profiles, { id, name, roles }], activeId: id });
   }
@@ -166,20 +178,35 @@ export function RolesPane({ tabId }: RolesPaneProps = {}): React.JSX.Element {
     <div className="settings-pane" data-testid="settings-roles-pane">
       <label className="settings-field"><span className="settings-field-label">Global role profile</span>
         <select aria-label="Global role profile" value={selected?.id ?? ""} onChange={(event) => void saveRegistry({ ...registry, activeId: event.target.value })}>
-          {!selected && <option value="">Built-in defaults</option>}
+          {/* Always offered: with a profile active this used to disappear, leaving no way back to the built-ins. */}
+          <option value="">Built-in defaults</option>
           {registry.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
       </label>
       <label className="settings-field"><span className="settings-field-label">Profile name</span><input aria-label="Profile name" value={profileName} onChange={(event) => setProfileName(event.target.value)} /></label>
       <button type="button" onClick={() => addProfile(false)}>Create profile</button>
       <button type="button" onClick={() => addProfile(true)}>Duplicate profile</button>
-      <button type="button" disabled={!selected || !profileName.trim()} onClick={() => { if (selected) void saveRegistry({ ...registry, profiles: registry.profiles.map((p) => p.id === selected.id ? { ...p, name: profileName.trim() } : p) }); }}>Rename profile</button>
+      <button type="button" disabled={!canRenameProfile(selected?.name, profileName)} onClick={() => { if (selected) void saveRegistry({ ...registry, profiles: registry.profiles.map((p) => p.id === selected.id ? { ...p, name: profileName.trim() } : p) }); }}>Rename profile</button>
       <button type="button" disabled={!selected} onClick={() => { if (selected) { const profiles = registry.profiles.filter((p) => p.id !== selected.id); void saveRegistry({ profiles, activeId: profiles[0]?.id ?? "default", projects: registry.projects.filter((p) => p.profileId !== selected.id) }); } }}>Delete profile</button>
-      <label className="settings-field"><span className="settings-field-label">Project</span><select aria-label="Project" value={projectRoot} onChange={(event) => setProjectRoot(event.target.value)}><option value="">Select a project</option>{projects.map((path) => <option key={path} value={path}>{path}</option>)}</select></label>
+      <label className="settings-field"><span className="settings-field-label">Project</span><select aria-label="Project" title={projectRoot === "" ? undefined : projectRoot} value={projectRoot} onChange={(event) => setProjectRoot(event.target.value)}><option value="">Select a project</option>{projects.map((path) => <option key={path} value={path} title={path}>{projectFolderName(path)}</option>)}</select></label>
       <label className="settings-field"><span className="settings-field-label">Project role profile</span>
         <select aria-label="Project role profile" disabled={!projectRoot} value={projectProfileId ?? ""} onChange={(event) => void saveRegistry({ ...registry, projects: [...registry.projects.filter((p) => p.projectRoot !== projectRoot), ...(event.target.value ? [{ projectRoot, profileId: event.target.value }] : [])] })}>
           <option value="">Use global profile</option>{projectProfileId && !registry.profiles.some((p) => p.id === projectProfileId) && <option value={projectProfileId}>Missing profile (using global)</option>}{registry.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
+      </label>
+      {/* One global limit for every role, directly above the editor it saves with. */}
+      <label className="settings-field">
+        <span className="settings-field-label">Max parallel children</span>
+        <input
+          type="text"
+          inputMode="numeric"
+          value={maxParallelChildren}
+          aria-label="Max parallel children"
+          onChange={(event) => setMaxParallelChildren(event.target.value)}
+        />
+        <span className="settings-field-hint">
+          Optional lower limit (1–16) for all roles; blank uses the session limit, default 3. The lower of both limits applies.
+        </span>
       </label>
       <RolePickerDialog
         key={selected?.id ?? "default"}
@@ -192,28 +219,12 @@ export function RolesPane({ tabId }: RolesPaneProps = {}): React.JSX.Element {
         engines={engines}
         initialRoles={initialRoles}
         profileOverrides={profileOverrides}
+        // The save result belongs beside the Save roles button, not below the last field.
+        actionsNotice={savedNotice !== null ? <RolesSaveNotice ok={savedNotice.ok} message={savedNotice.message} /> : undefined}
         onSave={(roles) => {
           void handleSave(roles);
         }}
       />
-
-      <label className="settings-field">
-        <span className="settings-field-label">Max parallel children</span>
-        <input
-          type="text"
-          inputMode="numeric"
-          value={maxParallelChildren}
-          aria-label="Max parallel children"
-          onChange={(event) => setMaxParallelChildren(event.target.value)}
-        />
-        <span className="settings-field-hint">
-          Optional lower limit (1–16); blank uses the session limit, default 3. The lower of both limits applies.
-        </span>
-      </label>
-
-      {savedNotice !== null && (
-        <RolesSaveNotice ok={savedNotice.ok} message={savedNotice.message} />
-      )}
     </div>
   );
 }

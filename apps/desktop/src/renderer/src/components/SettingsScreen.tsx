@@ -206,7 +206,7 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; section: Settin
     id: "roles", section: "agent",
     label: "Roles",
     description:
-      "Which engine or connection each orchestration role runs on, with ordered fallbacks, a per-role parallel-children cap for the Agent tool, and per-role turn budgets. Changes apply to new spawns.",
+      "Which engine or connection each orchestration role runs on, with ordered fallbacks. The optional Max parallel children limit applies to every role. Changes apply to new spawns.",
     icon: Robot,
   },
   { id: "mcp", section: "integrations", label: "MCP", description: "Manage MCP servers for this project and your user profile.", icon: ServerStack },
