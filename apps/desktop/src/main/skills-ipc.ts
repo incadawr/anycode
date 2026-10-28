@@ -43,6 +43,7 @@ import {
   scanHarnessSkills,
   scanSkillsAdmin,
   setSkillEnabled,
+  type HarnessPluginWorld,
   type HarnessSkillCandidate,
   type ScanSkillsAdminOptions,
   type SkillAdminRow,
@@ -329,12 +330,17 @@ function scanOptions(deps: SkillsIpcDeps, home: string, workspace: string): Scan
 
 /**
  * The plugin world the import catalog join needs (`scanHarnessSkills`'s
- * `alreadyPresent` check): only the disabled set matters there, and it lives in
- * the same state file the panes read.
+ * `alreadyPresent` check). It is the SAME options bag the admin scan gets — a
+ * state path alone is not enough: an enabled plugin this app version excludes
+ * (or one whose skills a reserved builtin name shadows) is absent from the pane,
+ * so its skills must not mark an import candidate as already present either.
  */
-function pluginWorldFor(deps: SkillsIpcDeps, home: string, workspace: string): { pluginStatePath?: string } {
-  const options = deps.pluginDiscoveryOptions?.(home, workspace || home);
-  return options?.pluginStatePath !== undefined ? { pluginStatePath: options.pluginStatePath } : {};
+function pluginWorldFor(
+  deps: SkillsIpcDeps,
+  home: string,
+  workspace: string,
+): HarnessPluginWorld | undefined {
+  return deps.pluginDiscoveryOptions?.(home, workspace || home);
 }
 
 /**

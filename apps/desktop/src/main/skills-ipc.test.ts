@@ -589,4 +589,30 @@ describe("handleSkillsList — the user's disabled plugins are a state, not prob
     const on = await handleSkillsImportScan(storeDeps(ws, home), { tabId: TAB_ID });
     expect(on.candidates.find((c) => c.name === "personal")).toMatchObject({ alreadyPresent: true });
   });
+
+  it("does not call an import candidate 'already present' because of a plugin this app version excludes", async () => {
+    const ws = await tmp();
+    const home = await tmp();
+    await seed(join(home, ".claude/skills/toolsmith/SKILL.md"), "---\nname: toolsmith\ndescription: from claude\n---\nbody\n");
+    // Enabled, but its `engines.anycode` range excludes this app: the Skills
+    // pane never lists it, so neither skill nor name is part of the catalog.
+    await seedUserPlugin(home, "acc-future", {
+      name: "acc-future",
+      engines: { anycode: ">=99.0.0" },
+      skills: ["skills"],
+    });
+    await seed(
+      join(home, ".anycode/plugins/acc-future/skills/toolsmith/SKILL.md"),
+      "---\nname: toolsmith\ndescription: P\n---\nbody\n",
+    );
+    await seedState(home, []);
+
+    const snapshot = await handleSkillsList(storeDeps(ws, home), { tabId: TAB_ID });
+    expect(snapshot.rows.map((r) => r.name)).not.toContain("toolsmith");
+
+    // The import catalog applies the SAME gates as the pane: "already present"
+    // would hide the candidate (and the import would land under a suffixed name).
+    const scan = await handleSkillsImportScan(storeDeps(ws, home), { tabId: TAB_ID });
+    expect(scan.candidates.find((c) => c.name === "toolsmith")).toMatchObject({ alreadyPresent: false });
+  });
 });
