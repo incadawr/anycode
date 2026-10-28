@@ -4514,11 +4514,11 @@ body {
   transition: width var(--dur-2) var(--ease-out);
 }
 
-
-   meter classes"): `.composer-ctx-meter-warning`/`-danger` already set
-   `color` (see above) — applying those SAME classes to `.ctx-popover` lets
-   the fill switch to `currentColor` and inherit that color for free, no new
-   color tokens introduced. */
+/* Tint the usage bar from the trigger's warning/danger class rather than
+   from a parallel set of `ctx-popover-meter-*` classes: `.composer-ctx-meter-warning`
+   /`-danger` already set `color` (see above) — applying those SAME classes
+   to `.ctx-popover` lets the fill switch to `currentColor` and inherit that
+   color for free, no new color tokens introduced. */
 .ctx-popover.composer-ctx-meter-warning .ctx-popover-bar-fill,
 .ctx-popover.composer-ctx-meter-danger .ctx-popover-bar-fill {
   background: currentColor;
@@ -6337,7 +6337,7 @@ body {
 
 /* ── GUI-git (design /working-docs/build/design/slice-5.8-cut.md §2.6) ──
    Quiet environment context + right Review panel (changes/history/diff) + confirm
-   dialog. Reuses the diff-line-*/diff-hunk-* classes above verbatim
+   dialog. Reuses the `diff-line-*`/`diff-hunk-*` classes above verbatim
    (GitDiffPane.tsx renders the same recipe as DiffView.tsx) — only the
    git-diff-pane wrapper classes below are new. ── */
 

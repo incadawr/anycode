@@ -2244,7 +2244,7 @@
 }
 
 /* ── Skills pane (P7.20/F23 W3, design/slice-P7.20-cut.md §1/§5 W3): reuses
-   the F22 mcp-*/settings-* row/badge/toggle/dialog vocabulary above wholesale
+   the F22 `mcp-*`/`settings-*` row/badge/toggle/dialog vocabulary above wholesale
    (rows carry BOTH a "skills-*" and the matching "mcp-*" class — presentation
    is shared, "skills-*" exists for anything that needs its own hook/tweak).
    Only genuinely skills-shaped rules are additive here. ── */
@@ -2391,7 +2391,7 @@
 }
 
 /* ── Subagents pane (P7.21/F21 W3, design/slice-P7.21-cut.md §1/§4 W3): reuses
-   the F22/F23 mcp-*/settings-*/skills-* row/badge/dialog vocabulary above
+   the F22/F23 `mcp-*`/`settings-*`/`skills-*` row/badge/dialog vocabulary above
    wholesale (rows carry the shared "skills-row mcp-row" class family) — only
    genuinely subagent-shaped rules are additive here. ── */
 
