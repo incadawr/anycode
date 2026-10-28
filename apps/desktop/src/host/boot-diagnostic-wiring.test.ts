@@ -9,15 +9,22 @@ vi.mock("./workspace-trust.js", () => ({
 
 it("records a failure from the real host boot catch", async () => {
   const dir = await mkdtemp(join(tmpdir(), "host-boot-diagnostic-"));
-  const oldEnv = { ...process.env };
   const oldArgv = process.argv;
   const oldPort = Object.getOwnPropertyDescriptor(process, "parentPort");
   try {
-    process.env.HOME = dir;
-    process.env.USERPROFILE = dir;
-    process.env.XDG_CONFIG_HOME = join(dir, "config");
-    process.env.XDG_CACHE_HOME = join(dir, "cache");
-    process.env.ANYCODE_DIAGNOSTICS_DIR = dir;
+    // vi.stubEnv writes through `process.env[name]` (a REAL mutation, so
+    // os.homedir() follows it); `process.env = {...}` would only swap the JS
+    // object and leave the host pointed at the developer's real ~/.anycode.
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith("ANYCODE_")) vi.stubEnv(key, undefined);
+    }
+    vi.stubEnv("HOME", dir);
+    vi.stubEnv("USERPROFILE", dir);
+    vi.stubEnv("XDG_CONFIG_HOME", join(dir, "config"));
+    vi.stubEnv("XDG_CACHE_HOME", join(dir, "cache"));
+    vi.stubEnv("ANYCODE_DIAGNOSTICS_DIR", dir);
+    vi.stubEnv("ANYCODE_DB_PATH", join(dir, "anycode.sqlite"));
+    vi.stubEnv("ANYCODE_SETTINGS_PATH", join(dir, "settings.json"));
     process.argv = [process.execPath, "host", "--session", "boot-test"];
     Object.defineProperty(process, "parentPort", { configurable: true, value: { on: () => {}, postMessage: () => {} } });
     await import("./index.js");
@@ -27,7 +34,7 @@ it("records a failure from the real host boot catch", async () => {
     }
     expect(JSON.parse(diagnostic)).toMatchObject({ code: "auth" });
   } finally {
-    process.env = oldEnv;
+    vi.unstubAllEnvs();
     process.argv = oldArgv;
     if (oldPort) Object.defineProperty(process, "parentPort", oldPort);
     else Reflect.deleteProperty(process, "parentPort");
