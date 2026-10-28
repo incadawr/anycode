@@ -42,9 +42,12 @@ export function isAuthenticatedAgentMessage(block: UserTextBlock): boolean {
 }
 
 /**
- * The bare message body: the structured payload when the block has one,
- * otherwise the wrapper text minus its metadata line. History payloads can end
- * in delivery-like text, so that text cannot safely be treated as metadata.
+ * The bare message body — THE one unwrapping rule, shared by the collapsed
+ * preview and the expanded card so a live delivery and its reloaded twin read
+ * the same. The structured payload wins when present (the live shape carries
+ * it verbatim); otherwise it is the wrapper text minus its envelope header
+ * line. History payloads can end in delivery-like text, so that text cannot
+ * safely be treated as metadata — only the header line is stripped there.
  */
 export function agentMessageBody(block: UserTextBlock): string {
   if (block.agentMessagePayload !== undefined) {

@@ -32,6 +32,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Restoring a missing folder after a failed resume still opens on the imported task’s chosen model. (#6)
 - A failed turn or compaction no longer hides that the host is reconnecting. (#6)
 - Sessions API tabs keep their agent handle as the title after closing the tab, restarting AnyCode and resuming the session. A session that was restored with its message text as the title is repaired from the saved handle on resume.
+- An agent message reads the same in the live transcript as it does after a reload: the delivery wrapper, its JSON header and the delivery line no longer appear, and the message body is not shown twice.
 
 ## [0.0.49] — 2026-10-28
 
