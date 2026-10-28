@@ -27,6 +27,7 @@ import type { HistoryItem } from "@anycode/core";
 import type { HostToUiMessage } from "../shared/protocol.js";
 import { parseHostArgs, repairDanglingToolCalls, resolveBootSession } from "./boot.js";
 import { deriveSessionTitle } from "./session.js";
+import { createCoreSessionTitlePersistence } from "./session-title-persistence.js";
 import { createHarness, textStep } from "./test-harness.js";
 
 type Of<T extends HostToUiMessage["type"]> = Extract<HostToUiMessage, { type: T }>;
@@ -437,11 +438,16 @@ describe("Session — title derivation", () => {
     const dir = mkdtempSync(join(tmpdir(), "anycode-title-fail-"));
     const path = join(dir, "sessions.db");
     const persistence = new SqlitePersistenceAdapter(path);
+    // The PRODUCTION core-boot seam (host/index.ts uses the same factory): the
+    // strict title ack writes through the adapter and does not swallow failure.
+    const titleSeam = createCoreSessionTitlePersistence({
+      adapter: () => persistence,
+      sessionId: "test-session",
+      onError: () => {},
+    });
     const h = createHarness({
       steps: [textStep("a")],
-      // The production wiring: the strict title seam writes through the adapter
-      // and does not swallow its failure.
-      onCommitTitle: (title) => persistence.touchSession("test-session", { title }),
+      onCommitTitle: (title) => titleSeam.commitTitle!(title),
     });
     try {
       await resolveBootSession(persistence, {
