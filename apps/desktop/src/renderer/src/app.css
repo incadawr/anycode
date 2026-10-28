@@ -8087,6 +8087,24 @@ body {
   gap: var(--sp-1);
 }
 
+/* Advanced row rhythm: without it the switch of "New sessions shared by
+   default" and the "Regenerate token" button of the next row visually touch. */
+.sessions-api-advanced > .sessions-api-row + .sessions-api-row {
+  margin-top: var(--sp-4);
+}
+
+/* A hint belongs to the row it explains: drop the UA paragraph margin so it
+   sits one gap under the heading instead of floating a line away from it. */
+.sessions-api-row .settings-field-hint {
+  margin: 0;
+}
+
+/* The agent-project row's state chip ("On"); the pill look comes from
+   `.settings-secret-status`, this only keeps it from shrinking. */
+.sessions-api-agent-project-state {
+  flex-shrink: 0;
+}
+
 .sessions-api-row-main {
   display: flex;
   flex-wrap: wrap;

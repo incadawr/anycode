@@ -8,7 +8,12 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { SessionsApiPaneView, type SessionsApiPaneViewProps } from "./SessionsApiPane.js";
-import { SESSIONS_API_DESCRIPTION, SESSIONS_API_FOLDER_HINT } from "./sessions-api-model.js";
+import {
+  SESSIONS_API_AGENT_PROJECT_ON,
+  SESSIONS_API_AGENT_PROJECT_TURN_OFF,
+  SESSIONS_API_DESCRIPTION,
+  SESSIONS_API_FOLDER_HINT,
+} from "./sessions-api-model.js";
 import type { CommunicationView } from "../../../shared/communication-config.js";
 
 const TOKEN = "deadbeef".repeat(8);
@@ -191,6 +196,38 @@ describe("SessionsApiPaneView agent projects (Taskana 4768)", () => {
     expect(render(props({ envControlled: true, view: base({ agentProjects: [{ key: "/srv/api", name: "api", displayPath: "/srv/api" }] }) }))).toMatch(/<button[^>]*aria-label="Turn off agents opening tasks in api"[^>]*disabled=""/);
     const source = readFileSync(new URL("./SessionsApiPane.tsx", import.meta.url), "utf8");
     expect(source).toMatch(/bridge\.agentProjectsOff\(key\)/);
+  });
+
+  it("an allowed project reads as ON with a Turn off action — never a button labelled with a state", () => {
+    const html = render(props({ view: base({ agentProjects: [{ key: "/srv/api", name: "api", displayPath: "/srv/api" }] }) }));
+    const row = html.match(/<li><span class="sessions-api-folder-path"[^>]*>[\s\S]*?<\/li>/)![0];
+    // The state is stated, and it is the ON state (every listed project is allowed).
+    expect(row).toContain(SESSIONS_API_AGENT_PROJECT_ON);
+    expect(row).toMatch(/class="settings-secret-status settings-secret-status-ok sessions-api-agent-project-state">On</);
+    // The button is an ACTION with its own words, not a bare "Off" that reads as state.
+    expect(buttonTag(row, SESSIONS_API_AGENT_PROJECT_TURN_OFF)).toContain('aria-label="Turn off agents opening tasks in api"');
+    expect(row).not.toMatch(/>Off</);
+  });
+});
+
+describe("SessionsApiPane Advanced layout (regression: state labels and spacing)", () => {
+  const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
+
+  it("the port field's label shares one control group with its input (it used to sit at the far edge of the row)", () => {
+    const html = render(props({ view: base({ enabled: true }) }));
+    const group = html.match(/<div class="sessions-api-row-control">(?:(?!<\/div>)[\s\S])*?id="sessions-api-port"[\s\S]*?<\/div>/)![0];
+    expect(group).toContain('<label class="settings-field-label" for="sessions-api-port">Port</label>');
+    // Immediate siblings: label, then the input (no wrapper container in between).
+    expect(group).toMatch(/for="sessions-api-port">Port<\/label><input id="sessions-api-port"/);
+    expect(buttonTag(group, "Apply")).toContain("settings-button");
+  });
+
+  it("adjacent Advanced rows are separated by an explicit row rhythm", () => {
+    expect(cssRule(css, ".sessions-api-advanced > .sessions-api-row + .sessions-api-row")).toMatch(/margin-top:\s*var\(--sp-4\)/);
+  });
+
+  it("a row's hint hugs its heading (no UA paragraph margin inside the row)", () => {
+    expect(cssRule(css, ".sessions-api-row .settings-field-hint")).toMatch(/margin:\s*0;/);
   });
 });
 
