@@ -1385,6 +1385,11 @@ export class TabHostManager {
     this.spawnAttempts.set(tab, attempt);
     if (!opts.firstSpawn) this.deferredRegistrationRollbacks.delete(tab.tabId);
     const resume = tab.initialResume || !opts.firstSpawn;
+    // GitHub #6: `firstSpawn` is also true for a resume/reopen — it means "this
+    // tab's first fork", not "this fork creates the session". Only a session
+    // this very tab is creating has nothing to show a missing-folder error
+    // against, so only it may be rolled back to keep the caller's draft.
+    const newSession = !resume;
     const args = resume ? ["--resume", tab.sessionId] : ["--session", tab.sessionId];
     // TASK.39: the draft choice rides argv only on the spawn that CREATES the
     // session. Every later spawn is a `--resume`, where the persisted session row
@@ -1449,6 +1454,8 @@ export class TabHostManager {
           }
           const result = this.spawnTabHost(tab, opts);
           if (result === false) {
+            // A fork that cannot run at all leaves no tab to retry against (the
+            // binding would answer `already_open`), resume included.
             if (opts.firstSpawn) this.rollbackDeferredCreation(tab);
             this.settleDeferredInitialSpawn(tab.tabId, { ok: false, reason: "not_ready" });
             opts.onDeferredFinished?.();
@@ -1460,8 +1467,10 @@ export class TabHostManager {
           // fork and marks the tab `missingWorkspace`; a NEW session has nothing
           // to show that error against and its caller is still awaiting this
           // outcome. Roll the tab, its binding and its registration back and
-          // report the missing folder, exactly like the synchronous path.
-          if (opts.firstSpawn && tab.missingWorkspace === true) {
+          // report the missing folder, exactly like the synchronous path. A
+          // RESUME falls through to `deliverTabPort` below, which is how its
+          // renderer learns the folder is gone instead of the tab vanishing.
+          if (newSession && tab.missingWorkspace === true) {
             this.logger.error(`[main] tab ${tab.tabId} workspace folder is missing (${tab.workspace}); refusing the new session`);
             const workspace = tab.workspace;
             this.rollbackDeferredCreation(tab);
