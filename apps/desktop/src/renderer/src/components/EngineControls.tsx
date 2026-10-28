@@ -142,16 +142,24 @@ export function engineSelectedModel(model: EngineModelMenuProps["model"], pendin
 }
 
 /**
- * The effort a native pick must be compared against: the effort OF THE SELECTED
- * MODEL for the next turn, and NOTHING when it is unknown. Comparing against
- * the applied model's effort instead swallowed a pick right after a model
- * switch (A applied `medium`, B queued with no known effort: picking `medium`
- * for B matched A's applied value, the menu closed, and the next turn ran with
- * whatever B defaulted to). An unknown value is unequal to every level, so
- * every pick is sent. Exported for unit testing.
+ * The effort a native pick must be compared against, and the level the effort
+ * page ticks: the effort OF THE SELECTED MODEL for the next turn, and NOTHING
+ * when it is unknown. Comparing against the applied model's effort instead
+ * swallowed a pick right after a model switch (A applied `medium`, B queued
+ * with no known effort: picking `medium` for B matched A's applied value, the
+ * menu closed, and the next turn ran with whatever B defaulted to). An unknown
+ * value is unequal to every level, so every pick is sent.
+ *
+ * `current` is the fallback when the caller has no separate `selected`: a New
+ * Session draft has no live session to report an applied effort, so its single
+ * source of truth is the draft's own pick — without this fallback the draft
+ * menu ticked nothing at all, even right after a choice, and read as
+ * "Default". The fallback cannot resurrect a stale applied value after a model
+ * switch on a LIVE session, because that path omits `current` entirely for a
+ * pending model (see `engineEffortControlState`). Exported for unit testing.
  */
 export function engineSelectedEffort(effort?: EngineEffortState): string | undefined {
-  return effort?.selected;
+  return effort?.selected ?? effort?.current;
 }
 
 /**
@@ -411,7 +419,9 @@ export interface EngineModelMenuProps {
    * alone, so the row must appear as soon as the vocabulary is nonempty.
    * `selected` is the NEXT-TURN effort of the selected model and may also be
    * unknown; a pick is compared against IT, never against the applied model's
-   * effort (see `engineSelectedEffort`).
+   * effort (see `engineSelectedEffort`). A caller with no separate selection
+   * (the New Session draft, whose pick IS the value `current` carries) may
+   * omit `selected` — the tick then follows `current`.
    */
   effort?: EngineEffortState & { onPick(effort: string): void };
 }
@@ -434,7 +444,7 @@ export function EngineModelMenu({ model, pendingModel, disabled, onPick, effort 
   const itemCount = page === "root" ? (showEffort ? 2 : 1) : page === "model" ? items.length : efforts.length;
   // Seeded on the same row that carries the tick: the applied model, and the
   // effort the next turn will use (see the item rendering below).
-  const currentIndex = page === "model" ? Math.max(0, items.findIndex((item) => item.id === model.current)) : page === "effort" ? Math.max(0, efforts.indexOf(effort?.selected ?? "")) : 0;
+  const currentIndex = page === "model" ? Math.max(0, items.findIndex((item) => item.id === model.current)) : page === "effort" ? Math.max(0, efforts.indexOf(engineSelectedEffort(effort) ?? "")) : 0;
 
   const menu = useEngineMenuState(itemCount, currentIndex, disabled);
   const chipLabel = engineMenuChipLabel(model, pendingModel, effort);
@@ -501,7 +511,7 @@ export function EngineModelMenu({ model, pendingModel, disabled, onPick, effort 
           // host accepted a choice. `queued` (the "next turn" tag) keeps the
           // difference between a ticked-and-in-force value and a ticked-and-
           // merely-chosen one visible.
-          const checked = page === "model" ? item.id === model.current : item.id === (effort?.selected ?? null);
+          const checked = page === "model" ? item.id === model.current : item.id === engineSelectedEffort(effort);
           const queued = page === "model" ? item.id === pendingModel : item.id === effort?.pending;
           return (
             <button
