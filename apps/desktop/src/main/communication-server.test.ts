@@ -1,14 +1,21 @@
 import { mkdtemp, mkdir, writeFile, readFile, stat, rm } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer as createNetServer } from "node:net";
 import { EventEmitter } from "node:events";
-import { TabHostManager } from "./tabs.js";
+import { TabHostManager, type HostForkFn } from "./tabs.js";
+import type { MessagePortMain, UtilityProcess } from "electron";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, StreamableHTTPClientTransport, StdioClientTransport } from "@anycode/core/communication-mcp";
+import { canonicalWorkspaceKey } from "@anycode/core/workspace-trust";
 import { startCommunicationServer, writePrivateFile, type CloseSessionOutcome, type CreateSessionOutcome, type CreateSessionRequest } from "./communication-server.js";
-import type { AgentEnvelope } from "../shared/communication.js";
+import { createSessionForAgent, type CreateSessionByAgentDeps } from "./create-session-by-agent.js";
+import { createSessionAccessStore } from "./communication-sessions.js";
+import { primeNewSessionPin } from "./session-pin.js";
+import type { AgentDelivery, AgentEnvelope } from "../shared/communication.js";
+import type { AnycodeSettings } from "../shared/settings.js";
 import { createHarness, finishStep, ScriptedModelPort } from "../host/test-harness.js";
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
@@ -1061,64 +1068,205 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     } finally { h.close(); }
   }, 15000);
 
-  it("delivers the first turn when a reconciliation sweep runs between the durable write and the envelope post", async () => {
-    // GitHub #21, the live ordering: the ledger record is durable right after the
-    // host's first readiness answer and the envelope is posted next. A 1 s
-    // reconciliation sweep that lands in that window used to restore the still
-    // unposted record into the host, which then answered the real envelope with
-    // that record ("unknown / Dispatch pending") and never started a turn. The two
-    // milliseconds of the live trace are widened here by holding the durable write
-    // open until a full sweep has run inside the window.
-    const h = createHarness({ steps: [finishStep()] });
-    try {
-      const order: string[] = [];
-      let releaseWrite!: () => void;
-      const writeHeld = new Promise<void>((resolve) => { releaseWrite = resolve; });
-      let gateEntered!: () => void;
-      const atGate = new Promise<void>((resolve) => { gateEntered = resolve; });
-      let holdFirstMessage = true;
-      const f = await createFixture({
-        creator: async (input, tabs) => {
-          if (!tabs.length) tabs.push({ sessionId: "test-session", workspace: input.workspace, state: "running", pid: 101 });
-          return { ok: true, sessionId: "test-session", tabId: "tab-1" };
-        },
-        writeLedger: async (path, text) => {
-          if (holdFirstMessage && text.includes("first turn") && text.includes("Dispatch pending")) {
-            holdFirstMessage = false; order.push("write"); gateEntered(); await writeHeld;
+  /**
+   * A host process stand-in that answers main's communication channel the way
+   * `host/index.ts` does: nothing is answered before the boot `ready` resolves;
+   * `send_message` returns the delivery the session ALREADY holds for that
+   * messageId (a restored record makes the real envelope a no-op and starts no
+   * turn); `restore_agent_messages` only inserts ids the session has not seen.
+   * Boot time is the test's (`boot()`), so readiness lands after the spawn
+   * rather than at it, and every operation is recorded in send order.
+   */
+  function controllableHost(pidValue: number) {
+    const order: string[] = [];
+    const events: Array<{ op: "restore" | "send"; ids: string[]; payload?: string }> = [];
+    /** Session.agentDeliveries: what this host generation already knows. */
+    const known = new Map<string, AgentDelivery>();
+    const turns: string[] = [];
+    const proc = Object.assign(new EventEmitter(), { pid: pidValue, kill: () => true }) as EventEmitter & {
+      pid: number; kill: () => boolean; postMessage: (message: unknown) => void;
+    };
+    let boot!: () => void;
+    const booted = new Promise<void>((resolve) => { boot = resolve; });
+    let sawProbe!: () => void;
+    const probeSeen = new Promise<void>((resolve) => { sawProbe = resolve; });
+    const reply = (requestId: unknown, result: unknown) => proc.emit("message", { type: "communication_response", requestId, result });
+    const deliver = (delivery: AgentDelivery) => proc.emit("message", { type: "communication_delivery", delivery });
+    proc.postMessage = (raw: unknown) => {
+      const message = raw as { requestId?: string; operation?: string; payload?: unknown };
+      void (async () => {
+        switch (message.operation) {
+          case "get_session_status":
+            // The host routes its whole communication channel through
+            // `ready.then(...)`: before boot a probe gets no answer at all.
+            sawProbe();
+            await booted;
+            order.push("ready");
+            reply(message.requestId, { engine: "core", state: "idle" });
+            return;
+          case "restore_agent_messages": {
+            const deliveries = message.payload as AgentDelivery[];
+            events.push({ op: "restore", ids: deliveries.map((entry) => entry.envelope.messageId) });
+            for (const entry of deliveries) if (!known.has(entry.envelope.messageId)) known.set(entry.envelope.messageId, entry);
+            reply(message.requestId, {});
+            return;
           }
-          await writePrivateFile(path, text);
-        },
-      });
-      f.request.mockImplementation(async (_session: string, op: string, payload: any): Promise<any> => {
-        if (op === "get_session_status") { order.push("ready"); return { engine: "core", state: "idle" }; }
-        if (op === "restore_agent_messages") { order.push("restore"); h.session.restoreAgentMessages(payload); return {}; }
-        if (op === "send_message") { order.push("send"); return await h.session.receiveAgentMessage(payload); }
-        return undefined;
-      });
-      const created = f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, firstMessage: "first turn" } });
-      await atGate;
-      // While the write is open the dispatch is parked inside `persist`, so every
-      // `listTabs` call comes from a reconciliation sweep (one per pass): two calls
-      // mean one sweep completed and the next started, inside this window.
-      let sweeps = 0;
-      let sweepPassed!: () => void;
-      const fullSweep = new Promise<void>((resolve) => { sweepPassed = resolve; });
-      const bareListTabs = f.manager.listTabs;
-      f.manager.listTabs = () => { sweeps += 1; if (sweeps >= 2) sweepPassed(); return bareListTabs(); };
-      await fullSweep;
-      releaseWrite();
-      const result = await created;
-      expect((result as { isError?: boolean }).isError).toBeFalsy();
-      // Nothing may be restored before the envelope is posted.
-      expect(order.slice(0, order.indexOf("send"))).toEqual(["ready", "write"]);
-      const messageId = value(result).messageId as string;
-      expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
-      // The turn the model ran is the firstMessage's — exactly one.
-      await vi.waitFor(() => expect((h.config.modelPort as ScriptedModelPort).requests).toHaveLength(1));
-      expect(JSON.stringify((h.config.modelPort as ScriptedModelPort).requests[0])).toContain("first turn");
-      const ledger = JSON.parse(await readFile(join(f.dir, "communication.json.messages"), "utf8"));
-      expect(ledger.find((r: any) => r.envelope.messageId === messageId)).toMatchObject({ state: "acknowledged", detail: "Host started a next turn; model application unverified" });
-    } finally { h.close(); }
+          case "send_message": {
+            const envelope = message.payload as AgentEnvelope;
+            events.push({ op: "send", ids: [envelope.messageId], payload: envelope.payload });
+            order.push("send");
+            const existing = known.get(envelope.messageId);
+            if (existing) { reply(message.requestId, existing); return; }
+            const settled: AgentDelivery = { envelope, state: "acknowledged", detail: "Host started a next turn; model application unverified" };
+            known.set(envelope.messageId, { envelope, state: "queued" });
+            deliver({ envelope, state: "queued" });
+            known.set(envelope.messageId, settled);
+            turns.push(envelope.payload);
+            deliver(settled);
+            reply(message.requestId, settled);
+            return;
+          }
+          case "get_message_status":
+            reply(message.requestId, known.get(String(message.payload)));
+            return;
+          default:
+            reply(message.requestId, undefined);
+        }
+      })();
+    };
+    return { proc, order, events, turns, boot: () => boot(), probeSeen };
+  }
+
+  it("create_session firstMessage: the production creation path starts exactly one turn in a host that becomes ready after spawn", async () => {
+    // GitHub #21 on the wiring main actually uses: the `create_session` hook is
+    // `createSessionForAgent` over a REAL TabHostManager, the ledger and the
+    // session switch are the real files, and the host spawns at once but answers
+    // only when it boots (a few ms later, on the test's word). The pre-dispatch
+    // ledger write of the firstMessage is held open, so a full reconciliation
+    // sweep runs in the production window between "record durable" and "envelope
+    // posted" instead of hoping to hit its few milliseconds. The held write also
+    // outlives the record's own dispatch deadline, which rewrites the displayed
+    // detail while the dispatch is still open — the exact shape in which a
+    // detail-based eligibility rule re-reads an unposted record as restorable.
+    const dir = await mkdtemp(join(tmpdir(), "anycode-create-prod-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const discoveryFile = join(dir, "communication.json");
+    const key = canonicalWorkspaceKey(dir, realpathSync);
+    const host = controllableHost(4242);
+    const sessions = createSessionAccessStore({ file: join(dir, "access.json"), handlesFile: join(dir, "handles.json"), defaultOn: () => false });
+    const agentOpenedSessions = new Set<string>();
+    const manager = new TabHostManager({
+      fork: (() => {
+        queueMicrotask(() => host.proc.emit("spawn"));
+        return host.proc as unknown as UtilityProcess;
+      }) as HostForkFn,
+      hostEntry: "/fake/host.js",
+      createChannel: () => ({ port1: {} as MessagePortMain, port2: {} as MessagePortMain }),
+      getWindow: () => null,
+      env: () => ({ PATH: "/fake" }),
+      engineEnv: () => ({}),
+      engineReady: () => true,
+      logger: { log: () => {}, warn: () => {}, error: () => {} },
+      limits: {},
+      onSessionRegistered: ({ sessionId }) => (sessions.register({ sessionId }) ? () => sessions.remove(sessionId) : undefined),
+    });
+    const settings: AnycodeSettings = {
+      version: 2,
+      provider: { connections: [{ id: "conn-active", providerId: "custom", model: "deepseek-flash", authOptional: true }], activeConnectionId: "conn-active" },
+      tools: {},
+      permissions: { alwaysAllow: [] },
+      ui: { theme: "system" },
+      security: { allowWeakSecretStorage: false },
+    };
+    const deps: CreateSessionByAgentDeps = {
+      projects: { isAllowed: () => true },
+      manager: () => manager,
+      sessions: () => sessions,
+      realpathSync,
+      readTrustStore: async () => ({ version: 1, folders: { [key]: { decision: "trusted", hash: "h", decidedAt: "2026-10-26T00:00:00.000Z" } } }),
+      mcpSecretPrime: async () => {},
+      currentSettings: () => settings,
+      primeNewSessionPin,
+      resolveResumePin: async () => ({ ok: true, release: () => {} }),
+      randomUUID: () => "production-session-1",
+      agentOpenedSessions,
+      agentSessionTitles: new Map<string, string>(),
+      listTabs: () => manager.listTabs(),
+    };
+    let holding = false;
+    let atGate!: () => void;
+    const atWrite = new Promise<void>((resolve) => { atGate = resolve; });
+    let releaseWrite!: () => void;
+    const writeReleased = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const snapshots: string[] = [];
+    const service = await startCommunicationServer({
+      manager,
+      userData: dir,
+      config: { workspaces: [dir], discoveryFile },
+      createSessionByAgent: (request) => createSessionForAgent(request, deps),
+      isSessionExposed: (sessionId) => sessions.isExposed(sessionId),
+      agentOpenedSessions,
+      readyTimeoutMs: 5_000,
+      readyPollMs: 10,
+      dispatchTimeoutMs: 60,
+      writeLedger: async (path, text) => {
+        snapshots.push(text);
+        // The FIRST durable snapshot carrying the firstMessage is the pre-dispatch
+        // one: park it there, exactly where production awaits its ledger write.
+        if (!holding && text.includes("first turn")) { holding = true; host.order.push("write"); atGate(); await writeReleased; }
+        await writePrivateFile(path, text);
+      },
+    });
+    cleanups.push(() => service.close());
+    const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string };
+    const client = new Client({ name: "create-production-path", version: "1" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(discovery.url), { requestInit: { headers: { Authorization: `Bearer ${discovery.token}` } } }));
+    cleanups.push(() => client.close());
+
+    const created = client.callTool({ name: "create_session", arguments: { workspace: dir, firstMessage: "first turn" } });
+    // Spawn already returned, but the host has not booted: the readiness probe
+    // waits inside the host and no turn, ledger write or envelope exists yet.
+    await host.probeSeen;
+    expect(host.order).toEqual([]);
+    expect(host.turns).toEqual([]);
+    host.boot();
+    await atWrite;
+    expect(host.order).toEqual(["ready", "write"]);
+
+    // A reconciliation pass must run inside the open window. While the write is
+    // held the dispatch is parked in `persist`, so the only `listTabs` reads come
+    // from sweeps (one per pass): two means one pass finished and the next began.
+    let counting = false;
+    let passes = 0;
+    let sweepDone!: () => void;
+    const swept = new Promise<void>((resolve) => { sweepDone = resolve; });
+    const listTabs = manager.listTabs.bind(manager);
+    manager.listTabs = () => { if (counting) { passes += 1; if (passes >= 2) sweepDone(); } return listTabs(); };
+    counting = true;
+    await swept;
+    releaseWrite();
+
+    const result = await created;
+    expect((result as { isError?: boolean }).isError).toBeFalsy();
+    const messageId = value(result).messageId as string;
+    expect(messageId).toBeTruthy();
+    // Exactly one envelope, and the one turn the host started is the firstMessage's.
+    expect(host.events.filter((event) => event.op === "send")).toHaveLength(1);
+    expect(host.turns).toEqual(["first turn"]);
+    // The record's own dispatch deadline passed while its envelope was still
+    // unposted (the displayed detail was rewritten), and the delivery still
+    // settled after it.
+    const expired = snapshots.findIndex((text) => text.includes("first turn") && text.includes("Host response unavailable; do not blindly resend"));
+    const accepted = snapshots.findIndex((text) => text.includes("first turn") && text.includes("Host started a next turn"));
+    expect(expired).toBeGreaterThan(-1);
+    expect(accepted).toBeGreaterThan(expired);
+    // Nothing may be restored into this host before its envelope is posted.
+    const postedAt = host.events.findIndex((event) => event.op === "send");
+    expect(host.events.slice(0, postedAt).filter((event) => event.op === "restore" && event.ids.includes(messageId))).toEqual([]);
+    // The delivery is settled, never unknown / "Dispatch pending" — in the durable
+    // ledger and through the status tool the reporter used.
+    const ledger = JSON.parse(await readFile(`${discoveryFile}.messages`, "utf8")) as Array<{ envelope: AgentEnvelope; state: string; detail?: string }>;
+    expect(ledger.find((record) => record.envelope.messageId === messageId)).toMatchObject({ state: "acknowledged", detail: "Host started a next turn; model application unverified" });
+    expect(value(await client.callTool({ name: "get_message_status", arguments: { messageId } }))).toMatchObject({ state: "acknowledged", detail: "Host started a next turn; model application unverified" });
   }, 20000);
 
   it("keeps an in-flight record out of restoration after its dispatch deadline rewrote the detail", async () => {
