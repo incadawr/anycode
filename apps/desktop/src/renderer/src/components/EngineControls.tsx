@@ -432,7 +432,9 @@ export function EngineModelMenu({ model, pendingModel, disabled, onPick, effort 
   const showEffort = efforts.length > 0;
   const [page, setPage] = useState<"root" | "model" | "effort">("root");
   const itemCount = page === "root" ? (showEffort ? 2 : 1) : page === "model" ? items.length : efforts.length;
-  const currentIndex = page === "model" ? Math.max(0, items.findIndex((item) => item.id === model.current)) : page === "effort" ? Math.max(0, efforts.indexOf(effort?.current ?? "")) : 0;
+  // Seeded on the same row that carries the tick: the applied model, and the
+  // effort the next turn will use (see the item rendering below).
+  const currentIndex = page === "model" ? Math.max(0, items.findIndex((item) => item.id === model.current)) : page === "effort" ? Math.max(0, efforts.indexOf(effort?.selected ?? "")) : 0;
 
   const menu = useEngineMenuState(itemCount, currentIndex, disabled);
   const chipLabel = engineMenuChipLabel(model, pendingModel, effort);
@@ -491,7 +493,15 @@ export function EngineModelMenu({ model, pendingModel, disabled, onPick, effort 
       {menu.open && page !== "root" && <div className="model-pill-popover" role="menu" aria-label={page === "model" ? "Engine model" : "Engine reasoning effort"} data-model-pill-page={page} onKeyDown={(event) => menu.onMenuKeyDown(event, (index) => { if (page === "model") { const item = items[index]; if (item) pick(item.id); } else { const value = efforts[index]; if (value) pickEffort(value); } })} style={menu.anchor ? { left: menu.anchor.left, bottom: menu.anchor.bottom } : undefined}>
         <button type="button" className="model-pill-back" onClick={() => setPage("root")}><Chevron className="model-pill-back-chevron" />{page === "model" ? "Model" : "Effort"}</button>
         {(page === "model" ? items : efforts.map((value) => ({ id: value, label: value }))).map((item, index) => {
-          const current = page === "model" ? item.id === model.current : item.id === (effort?.current ?? null);
+          // What the tick means per page: on the MODEL page it is the applied
+          // model, on the EFFORT page the level the next turn will use. The
+          // effort page cannot tick the applied value alone — right after a
+          // model switch the selected model has no applied effort at all, and
+          // a menu with no tick anywhere reads as "Default" even though the
+          // host accepted a choice. `queued` (the "next turn" tag) keeps the
+          // difference between a ticked-and-in-force value and a ticked-and-
+          // merely-chosen one visible.
+          const checked = page === "model" ? item.id === model.current : item.id === (effort?.selected ?? null);
           const queued = page === "model" ? item.id === pendingModel : item.id === effort?.pending;
           return (
             <button
@@ -499,16 +509,16 @@ export function EngineModelMenu({ model, pendingModel, disabled, onPick, effort 
               ref={(el) => { menu.itemRefs.current[index] = el; }}
               type="button"
               role="menuitemradio"
-              aria-checked={current}
+              aria-checked={checked}
               tabIndex={index === menu.focusIndex ? 0 : -1}
-              className={`model-pill-item${current ? " model-pill-item-current" : ""}`}
+              className={`model-pill-item${checked ? " model-pill-item-current" : ""}`}
               // Stable identity stamps for the automation facade: raw attribute
               // values, never a position derived from a catalog that may disagree
               // with what is rendered.
               {...(page === "model" ? { "data-model-id": item.id } : { "data-effort": item.id })}
               onClick={() => page === "model" ? pick(item.id) : pickEffort(item.id)}
             >
-              <span className="model-pill-item-check" aria-hidden="true">{current ? <Check /> : null}</span>
+              <span className="model-pill-item-check" aria-hidden="true">{checked ? <Check /> : null}</span>
               <span className="model-pill-item-name">{item.label}</span>
               {queued && <span className="engine-menu-item-pending">next turn</span>}
             </button>

@@ -993,6 +993,10 @@ export interface RetryOffer {
  * actually accepted by the server — has not landed since). Both fields are
  * independent — a model pick pending while the preset stays confirmed leaves
  * `activePresetId` absent, and vice versa.
+ *
+ * `effort` belongs to the model it was chosen for: while `model` is pending,
+ * an effort equal to the APPLIED model's effort is still a real choice for the
+ * new model and is kept here.
  */
 export interface PendingEngineChange {
   model?: string;
@@ -5045,7 +5049,18 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                 }
                 if (message.effort !== undefined) {
                   touched = true;
-                  if (message.effort === state.engine.model?.effort) delete nextPending.effort;
+                  // Compare the pick against the applied effort of the model
+                  // that will actually RUN, which is the queued one while a
+                  // switch is pending (`nextPending.model`, just written
+                  // above), never the applied model. Its applied effort says
+                  // nothing about the new model: with A applied at `xhigh`,
+                  // switching to B and choosing `xhigh` used to look like a
+                  // no-op and dropped the choice, so the menu fell back to
+                  // Default although the host had accepted B's `xhigh`.
+                  const appliedModel = state.engine.model?.current;
+                  const selectedModel = nextPending.model ?? appliedModel;
+                  const appliedEffort = selectedModel === appliedModel ? state.engine.model?.effort : undefined;
+                  if (appliedEffort !== undefined && message.effort === appliedEffort) delete nextPending.effort;
                   else nextPending.effort = message.effort;
                 }
                 if (!touched) {
