@@ -11,6 +11,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - The transcript tick rail stays clear of message text in narrow panes, including when a side panel is open (#16).
 - The test suite no longer adds phantom projects to the developer's own AnyCode sidebar.
+- A host test that times out no longer hands a late boot the developer's real profile: the test stops the host before restoring the environment.
+- Test cleanup removes the session variables a host boot creates, so later tests no longer inherit a deleted session.
+- Host tests ignore the shell's proxy settings, so a credentialed proxy cannot shape a test run.
 
 ## [0.0.49] — 2026-10-28
 
