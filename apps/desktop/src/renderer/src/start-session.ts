@@ -26,6 +26,16 @@ import type { SessionDraft } from "./tabs-store.js";
 
 export type StartSubmitResult = { ok: true; tabId: string } | { ok: false; message: string };
 
+/**
+ * How one start-composer send is submitted.
+ * - `skipRoleGate` — the first-run dialog's Skip: proceed with the built-in
+ *   defaults instead of refusing for unconfigured roles. Every other send
+ *   keeps the shared first-run gate.
+ */
+export interface StartSubmitOptions {
+  skipRoleGate?: boolean;
+}
+
 export interface StartSubmitDeps {
   /** Default: `window.anycode.createTab`. */
   createTab(req: CreateTabRequest): Promise<CreateTabResult>;
@@ -96,6 +106,7 @@ export function createStartTabRequest(
 
 export async function submitStartDraft(
   deps: StartSubmitDeps = defaultStartSubmitDeps(),
+  options: StartSubmitOptions = {},
 ): Promise<StartSubmitResult> {
   const draft = deps.tabsStore.getState().draft;
   if (draft === null) {
@@ -118,7 +129,7 @@ export async function submitStartDraft(
     return { ok: false, message: "Type a message to send." };
   }
   const rolesConfigured = deps.rolesConfigured ?? settingsHaveRoles;
-  if (plan.orchestrate && !rolesConfigured(workspace)) {
+  if (options.skipRoleGate !== true && plan.orchestrate && !rolesConfigured(workspace)) {
     return { ok: false, message: "Set up orchestration roles first." };
   }
   // TASK.241: decide the Codex draft model BEFORE creating anything — a

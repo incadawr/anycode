@@ -113,6 +113,32 @@ describe("submitStartDraft — Orchestrate (start screen)", () => {
     expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "map the modules", undefined, "build", undefined, undefined, undefined, true);
   });
 
+  it("Skip of the first-run dialog starts the task on the built-in defaults", async () => {
+    // Regression: Skip closed the dialog and sent nothing — no tab, no message,
+    // the text stayed in the composer. Save started the task; Skip must too.
+    const { deps, tabsStore, createTab, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    deps.rolesConfigured = () => false;
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("/orchestrate say hi");
+
+    const skipped = await submitStartDraft(deps, { skipRoleGate: true });
+
+    expect(skipped).toEqual({ ok: true, tabId: "t1" });
+    expect(createTab).toHaveBeenCalledTimes(1);
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "say hi", undefined, "build", undefined, undefined, undefined, true);
+    expect(tabsStore.getState().draft).toBeNull();
+  });
+
+  it("only Skip bypasses the gate: a plain send with no roles still refuses", async () => {
+    const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    deps.rolesConfigured = () => false;
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("/orchestrate say hi");
+
+    expect(await submitStartDraft(deps)).toEqual({ ok: false, message: "Set up orchestration roles first." });
+    expect(createTab).not.toHaveBeenCalled();
+  });
+
   it("a bare /orchestrate is refused with a task prompt, never created", async () => {
     const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     deps.rolesConfigured = () => true;

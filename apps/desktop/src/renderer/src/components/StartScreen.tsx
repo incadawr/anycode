@@ -629,7 +629,8 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const submitGuardRef = useRef(false);
   // Orchestrate first-run gate (orchestrate-start.ts): a send that orchestrates
   // with no roles configured opens the same RolePickerDialog the in-tab
-  // `/orchestrate` uses. Skip/cancel closes it and sends nothing (draft kept).
+  // `/orchestrate` uses. Save writes the roles, Skip keeps the built-in
+  // defaults — both then start the task.
   const [startRolePickerOpen, setStartRolePickerOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // TASK.81: image attach state. The attachment LIST itself is store-backed
@@ -1118,8 +1119,9 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const claudeDraftEffort = resolveDraftEngineEffort(draft.engineEffort, claudeDraftEfforts);
   const showProjectHint = draft.workspace !== null && (projectHintVisible || projectHintHovered);
 
-  async function submit(): Promise<void> {
-    if (draft !== null) {
+  /** One start-composer send; `skipRoleGate` is the first-run dialog's Skip path (built-in defaults). */
+  async function submit(skipRoleGate = false): Promise<void> {
+    if (!skipRoleGate && draft !== null) {
       const plan = resolveStartOrchestrate(draft.engine, draft.orchestrate, draft.prompt);
       if (startSendNeedsRolePicker(plan, resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}, draft.workspace ?? undefined))) {
         setStartRolePickerOpen(true);
@@ -1130,7 +1132,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
       canSend,
       guard: submitGuardRef,
       setSubmitting,
-      submit: submitStartDraft,
+      submit: () => submitStartDraft(undefined, skipRoleGate ? { skipRoleGate: true } : undefined),
       onToast,
     });
   }
@@ -1624,7 +1626,13 @@ export function StartScreen({ onToast }: StartScreenProps) {
             codexReady: useTabsStore.getState().availableEngines.includes("codex"),
           }}
           onSave={(roles) => void saveStartRolesAndSubmit(roles)}
-          onSkip={() => setStartRolePickerOpen(false)}
+          onSkip={() => {
+            // Skip writes nothing: the task starts on the built-in defaults,
+            // exactly like Save's own proceed step (it used to close the
+            // dialog and send nothing at all).
+            setStartRolePickerOpen(false);
+            void submit(true);
+          }}
         />
         {/* TASK.81: image attachments, Composer.tsx's `.composer-pills` grammar
             verbatim — attach/paste only (no drag-and-drop: out of this
