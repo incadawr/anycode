@@ -848,6 +848,12 @@ export interface TabHostManagerDeps {
 }
 
 export type CreateTabResult =
+  /**
+   * `deferred` means the first fork is parked in `waitForHostEnv` (a provider
+   * refresh) and has not run yet. `createTabAwaitingInitialSpawn` resolves it
+   * before reporting (GitHub #6) — that is the entry point every NEW-session
+   * caller uses; only `createTab` returns it unresolved.
+   */
   | { ok: true; tab: TabHost; deferred?: boolean }
   | {
       ok: false;
@@ -858,6 +864,41 @@ export type CreateTabResult =
       /** folder_not_found: the workspace path whose directory is gone (GitHub #6). */
       workspace?: string;
     };
+
+/**
+ * GitHub #6: how a NEW session's deferred first fork ended. A deferred fork is
+ * the one createTab used to report as an immediate success, which let the
+ * workspace folder disappear during the provider refresh without anyone
+ * noticing in time to keep the caller's draft (or the Sessions API's answer).
+ */
+export type DeferredInitialSpawnOutcome =
+  | { ok: true; tab: TabHost }
+  | { ok: false; reason: "folder_not_found" | "not_ready"; workspace?: string };
+
+/** The arguments of `createTab` / `createTabAwaitingInitialSpawn`. */
+export interface CreateTabParams {
+  workspace: string;
+  projectRoot?: string;
+  worktree?: WorktreeIdentity;
+  sessionId: string;
+  resume: boolean;
+  engine?: EngineId;
+  /** Draft engine model/preset ids. Opaque here; the host validates them. */
+  engineModel?: string;
+  enginePreset?: string;
+  /**
+   * Resolved Codex profile argv values (`codex-profiles`) — id plus, when the
+   * registry says so, a linkedHome path (`home`) or an auth-link target.
+   * Already resolved/validated by main's registry; the host re-validates
+   * fail-closed. See TabHost.codexProfile.
+   */
+  codexProfile?: { id?: string; home?: string; authLink?: string };
+  /** Pinned provider connection (core only); stamped into the fork env + persisted by the host. */
+  connectionId?: string;
+  /** Per-fork ANYCODE_MODEL override (S4-1 arm 2): the imported-session model pick; see TabHost.modelOverride. */
+  modelOverride?: string;
+  onDeferredInitialSpawn?: () => void;
+}
 
 export type { CloseTabResult };
 
@@ -993,6 +1034,13 @@ export class TabHostManager {
   private readonly drainingParents = new Map<string, number>();
   private readonly rebindings = new Set<string>();
   private readonly deferredRegistrationRollbacks = new Map<string, () => void>();
+  /**
+   * GitHub #6: one waiter per NEW session whose first fork is parked in
+   * `waitForHostEnv` — resolved by that fork's own completion (success, refusal
+   * or a folder that vanished during the wait) so `createTabAwaitingInitialSpawn`
+   * reports the real outcome instead of a premature success.
+   */
+  private readonly deferredInitialSpawnWaiters = new Map<string, (outcome: DeferredInitialSpawnOutcome) => void>();
   private readonly spawnAttempts = new WeakMap<TabHost, number>();
   /**
    * `UtilityProcess` references whose `shutdownTabHost` call hit its
@@ -1206,29 +1254,7 @@ export class TabHostManager {
    * session->tab binding (already_open) and MAX_TABS. Does NOT deliver the port
    * — the caller does that once (createTab flow) after the renderer exists.
    */
-  createTab(params: {
-    workspace: string;
-    projectRoot?: string;
-    worktree?: WorktreeIdentity;
-    sessionId: string;
-    resume: boolean;
-    engine?: EngineId;
-    /** Draft engine model/preset ids (TASK.39). Opaque here; the host validates them. */
-    engineModel?: string;
-    enginePreset?: string;
-    /**
-     * Resolved Codex profile argv values (codex-profiles TASK.50) — id plus,
-     * when the registry says so, a linkedHome path (`home`) or an auth-link
-     * target. Already resolved/validated by main's registry; the host
-     * re-validates fail-closed. See TabHost.codexProfile.
-     */
-    codexProfile?: { id?: string; home?: string; authLink?: string };
-    /** Pinned provider connection (TASK.45 W10, core only); stamped into the fork env + persisted by the host. */
-    connectionId?: string;
-    /** Per-fork ANYCODE_MODEL override (S4-1 arm 2): the imported-session model pick; see TabHost.modelOverride. */
-    modelOverride?: string;
-    onDeferredInitialSpawn?: () => void;
-  }): CreateTabResult {
+  createTab(params: CreateTabParams): CreateTabResult {
 
     // secret-clear on an open window lets `+` spawn a host with no provider key.
     const engine = params.engine ?? "core";
@@ -1296,6 +1322,45 @@ export class TabHostManager {
     const rollback = this.deps.onSessionRegistered?.({ sessionId: params.sessionId });
     if (spawn === "deferred" && rollback) this.deferredRegistrationRollbacks.set(tab.tabId, rollback);
     return { ok: true, tab, ...(spawn === "deferred" ? { deferred: true } : {}) };
+  }
+
+  /**
+   * GitHub #6: `createTab` for a NEW session, with the deferred first fork
+   * RESOLVED before reporting. A provider refresh can park that fork in
+   * `waitForHostEnv` for as long as the refresh takes; the folder can be deleted
+   * or moved inside that window. Reporting success there made both callers act
+   * on a session that could never boot: the start screen queued the first prompt
+   * (and its attachments) into it and discarded the user's draft, and the
+   * Sessions API registered and answered with a session that had no host while
+   * spending a creation slot. Awaiting the fork's own outcome means the folder
+   * check runs at the moment that matters and `folder_not_found` comes back
+   * exactly like the synchronous path (tab, binding and registration rolled
+   * back). A resume is never awaited — an existing session keeps its error tab.
+   *
+   * The wait is the one the fork itself would already perform (the
+   * `waitForHostEnv` promise settles when the provider refresh does); no fork
+   * runs and no port is delivered while it is pending. On success the caller
+   * must NOT deliver the port again: the deferred completion already did, which
+   * `deferred: true` in the returned result records.
+   */
+  async createTabAwaitingInitialSpawn(params: CreateTabParams): Promise<CreateTabResult> {
+    const result = this.createTab(params);
+    if (!result.ok || result.deferred !== true) return result;
+    const outcome = await new Promise<DeferredInitialSpawnOutcome>((resolve) => {
+      // Registered in the same synchronous turn the deferred fork was armed in,
+      // so its continuation (a microtask) can never settle before this waiter
+      // exists.
+      this.deferredInitialSpawnWaiters.set(result.tab.tabId, resolve);
+    });
+    return outcome.ok ? { ok: true, tab: outcome.tab, deferred: true } : outcome;
+  }
+
+  /** Resolves (and forgets) the one waiter a deferred NEW-session fork may have. */
+  private settleDeferredInitialSpawn(tabId: string, outcome: DeferredInitialSpawnOutcome): void {
+    const waiter = this.deferredInitialSpawnWaiters.get(tabId);
+    if (waiter === undefined) return;
+    this.deferredInitialSpawnWaiters.delete(tabId);
+    waiter(outcome);
   }
 
   /**
@@ -1375,27 +1440,54 @@ export class TabHostManager {
       const pending = this.deps.waitForHostEnv?.(tab.connectionId);
       if (pending) {
         void pending.then(() => {
-          if (this.spawnAttempts.get(tab) !== attempt || this.quitting || this.tabs.get(tab.tabId) !== tab || tab.state !== "running" || tab.proc !== null) { opts.onDeferredFinished?.(); return; }
+          if (this.spawnAttempts.get(tab) !== attempt || this.quitting || this.tabs.get(tab.tabId) !== tab || tab.state !== "running" || tab.proc !== null) {
+            // Nothing else will ever run this fork, so an awaited new session
+            // must not be left waiting on it (GitHub #6).
+            this.settleDeferredInitialSpawn(tab.tabId, { ok: false, reason: "not_ready" });
+            opts.onDeferredFinished?.();
+            return;
+          }
           const result = this.spawnTabHost(tab, opts);
           if (result === false) {
             if (opts.firstSpawn) this.rollbackDeferredCreation(tab);
+            this.settleDeferredInitialSpawn(tab.tabId, { ok: false, reason: "not_ready" });
             opts.onDeferredFinished?.();
             return;
           }
           if (result === "deferred") return;
+          // GitHub #6: the folder can be deleted or moved WHILE this refresh is
+          // pending — the whole window this wait opens. The retry then refuses to
+          // fork and marks the tab `missingWorkspace`; a NEW session has nothing
+          // to show that error against and its caller is still awaiting this
+          // outcome. Roll the tab, its binding and its registration back and
+          // report the missing folder, exactly like the synchronous path.
+          if (opts.firstSpawn && tab.missingWorkspace === true) {
+            this.logger.error(`[main] tab ${tab.tabId} workspace folder is missing (${tab.workspace}); refusing the new session`);
+            const workspace = tab.workspace;
+            this.rollbackDeferredCreation(tab);
+            this.settleDeferredInitialSpawn(tab.tabId, { ok: false, reason: "folder_not_found", workspace });
+            opts.onDeferredFinished?.();
+            return;
+          }
           if (opts.firstSpawn && tab.proc !== null) {
             this.deferredRegistrationRollbacks.delete(tab.tabId);
             opts.onDeferredInitialSpawn?.();
+            this.settleDeferredInitialSpawn(tab.tabId, { ok: true, tab });
           }
           this.deliverTabPort(tab);
           opts.onDeferredFinished?.();
         }).catch((error) => {
-          if (this.spawnAttempts.get(tab) !== attempt || this.tabs.get(tab.tabId) !== tab || tab.state !== "running") { opts.onDeferredFinished?.(); return; }
+          if (this.spawnAttempts.get(tab) !== attempt || this.tabs.get(tab.tabId) !== tab || tab.state !== "running") {
+            this.settleDeferredInitialSpawn(tab.tabId, { ok: false, reason: "not_ready" });
+            opts.onDeferredFinished?.();
+            return;
+          }
           this.logger.error(`[main] tab ${tab.tabId} host environment refresh failed`, error);
           tab.state = "crash_looped";
           this.deps.recordHostFailure?.(tab.sessionId, "connection_env_unavailable");
           this.notifyHostExited(tab.tabId);
           if (opts.firstSpawn) this.rollbackDeferredCreation(tab);
+          this.settleDeferredInitialSpawn(tab.tabId, { ok: false, reason: "not_ready" });
           opts.onDeferredFinished?.();
         });
         return "deferred";
@@ -3493,6 +3585,10 @@ export class TabHostManager {
     // `childrenByParentTab` and is swept by the drain below.
     this.closingTabs.add(tabId);
     tab.state = "closing";
+    // GitHub #6: a close while the first fork is still parked in the env wait
+    // must not leave that fork's awaiting caller hanging — report the same clean
+    // refusal a dead deferred fork gets.
+    this.settleDeferredInitialSpawn(tabId, { ok: false, reason: "not_ready" });
     await this.drainChildren(tab);
     await this.shutdownTabHost(tab);
     this.tabs.delete(tabId);

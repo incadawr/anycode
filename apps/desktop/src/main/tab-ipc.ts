@@ -719,7 +719,14 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     // change).
     const newConnectionId = engine === "core" ? (explicitConnectionId ?? deps.activeConnectionId?.()) : undefined;
     await deps.primeMcpSecrets?.(workspace);
-    const result = deps.manager.createTab({
+    // GitHub #6: a first fork parked in a provider refresh is AWAITED here. Until
+    // it resolves this new session does not exist yet, so reporting success would
+    // add a tab, queue the first prompt (and its attachments) into a host that may
+    // never boot and discard the draft if the folder vanished during the wait.
+    // The deferred completion refuses `folder_not_found` and rolls everything
+    // back, exactly like the synchronous path; the start screen then keeps the
+    // draft intact and says which folder is gone.
+    const result = await deps.manager.createTabAwaitingInitialSpawn({
       workspace,
       sessionId: randomUUID(),
       resume: false,
@@ -735,7 +742,10 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     if (!result.ok) {
       return result;
     }
-    deps.manager.deliverTabPort(result.tab);
+    // A deferred first fork delivered its port from its own completion before
+    // this awaited result resolved (GitHub #6) — delivering again would hand the
+    // running host a second UI channel for no reason.
+    if (result.deferred !== true) deps.manager.deliverTabPort(result.tab);
     return { ok: true, tabId: result.tab.tabId, workspace: result.tab.workspace };
   }
 

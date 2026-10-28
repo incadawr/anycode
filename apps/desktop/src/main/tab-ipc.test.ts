@@ -58,15 +58,21 @@ function makeManager(
   const deliverTabPort = vi.fn(() => {
     order.push("deliverTabPort");
   });
+  // GitHub #6: the new-session path awaits the deferred first fork, so the fake
+  // routes it through the same createTab the order/assertions above inspect.
+  const createTabAwaitingInitialSpawn = vi.fn(async (params: { workspace: string; sessionId: string; resume: boolean }) =>
+    createTab(params),
+  );
   const sessionOpenInTab = vi.fn(() => undefined);
   const manager = {
     canSpawn,
     atCapacity,
     createTab,
+    createTabAwaitingInitialSpawn,
     deliverTabPort,
     sessionOpenInTab,
   } as unknown as TabHostManager;
-  return { manager, canSpawn, atCapacity, createTab, deliverTabPort };
+  return { manager, canSpawn, atCapacity, createTab, createTabAwaitingInitialSpawn, deliverTabPort };
 }
 
 /** Fake dialog.showOpenDialog with a configurable result. */
@@ -1213,6 +1219,7 @@ describe("handleCreate — readiness gate keys on the PICKED Codex profile (S3-1
       canSpawn,
       atCapacity: vi.fn(() => false),
       createTab,
+      createTabAwaitingInitialSpawn: createTab,
       deliverTabPort: vi.fn(),
       sessionOpenInTab: vi.fn(() => undefined),
     } as unknown as TabHostManager;
@@ -1354,6 +1361,7 @@ describe("handleCreate — unknown-readiness hydration (TASK.64)", () => {
       canSpawn,
       atCapacity: vi.fn(() => false),
       createTab,
+      createTabAwaitingInitialSpawn: async (params: { workspace: string; sessionId: string; resume: boolean }) => createTab(params),
       deliverTabPort: vi.fn(),
       sessionOpenInTab: vi.fn(() => undefined),
     } as unknown as TabHostManager;
@@ -2629,5 +2637,94 @@ describe("handleCreate — TASK.109 re-pin matrix (dead pin → replacement, old
 
     expect(res.ok).toBe(true);
     expect(createTab).toHaveBeenCalledWith(expect.objectContaining({ resume: true, connectionId: "conn-dead" }));
+  });
+});
+
+describe("handleCreate — a deferred first fork (GitHub #6)", () => {
+  /** A real manager whose first fork is parked in `waitForHostEnv` while `blocked()`. */
+  async function deferredManager(
+    blocked: () => boolean,
+    pending: Promise<void>,
+    opts: { missing?: () => boolean; onParked?: () => void } = {},
+  ) {
+    const { TabHostManager } = await import("./tabs.js");
+    const forked: string[] = [];
+    const manager = new TabHostManager({
+      fork: ((entry: string) => {
+        forked.push(entry);
+        return Object.assign(new EventEmitter(), { pid: 4242, postMessage: () => {}, kill: () => true });
+      }) as unknown as import("./tabs.js").HostForkFn,
+      hostEntry: "/fake/host.js",
+      createChannel: () => ({ port1: {}, port2: {} }) as unknown as import("./tabs.js").TabChannel,
+      getWindow: () => null,
+      env: () => (blocked() ? undefined : {}),
+      waitForHostEnv: () => {
+        if (!blocked()) return undefined;
+        // The fork is parked from here on — the window the defect lives in.
+        opts.onParked?.();
+        return pending;
+      },
+      engineReady: () => true,
+      workspaceMissing: () => opts.missing?.() ?? false,
+    });
+    return { manager, forked };
+  }
+
+  it("a new session whose folder vanishes during the provider refresh refuses folder_not_found and leaves no tab behind", async () => {
+    // The start screen's create: main used to answer `{ok:true, deferred:true}`
+    // here, so the renderer added a tab, queued the first prompt (and its
+    // attachments) into a host that never booted and discarded the draft.
+    let blocked = true;
+    let missing = false;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    let parked!: () => void;
+    const parkedOnce = new Promise<void>((resolve) => { parked = resolve; });
+    const { manager, forked } = await deferredManager(() => blocked, pending, {
+      missing: () => missing,
+      // The folder is there when createTab checks it and gone while the fork
+      // waits for the provider refresh — the deferred race, not the sync one.
+      onParked: () => { missing = true; parked(); },
+    });
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog };
+
+    const call = handleCreate(deps, { kind: "new", workspace: "/ws/gone" });
+    // Only once the first fork is actually parked may the refresh land.
+    await parkedOnce;
+    blocked = false;
+    release();
+
+    expect(await call).toEqual({ ok: false, reason: "folder_not_found", workspace: "/ws/gone" });
+    // Nothing forked, no tab and no binding left behind: the draft is the user's.
+    expect(forked).toHaveLength(0);
+    expect(manager.listTabs()).toHaveLength(0);
+  });
+
+  it("the normal deferred case (folder present) still opens the tab and reports it once", async () => {
+    let blocked = true;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const { manager, forked } = await deferredManager(() => blocked, pending);
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog };
+
+    let answered = false;
+    const call = handleCreate(deps, { kind: "new", workspace: "/ws" }).then((result) => { answered = true; return result; });
+    // Still parked: the start screen must not be told the session exists yet
+    // (the tab is held internally but has no host).
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(answered).toBe(false);
+    expect(forked).toHaveLength(0);
+    expect(manager.listTabs().every((tab) => tab.pid === null)).toBe(true);
+
+    blocked = false;
+    release();
+    const result = await call;
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(forked).toHaveLength(1);
+    expect(manager.listTabs()).toHaveLength(1);
+    expect(manager.getTab(result.tabId)?.proc).not.toBeNull();
   });
 });
