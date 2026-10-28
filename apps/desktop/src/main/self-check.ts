@@ -132,7 +132,7 @@ export interface ReloadMenuItem {
   role?: string;
   accelerator?: string | null;
   label?: string;
-  submenu?: ReloadMenu | ReloadMenuItem[];
+  submenu?: ReloadMenu | ReloadMenuItem[] | null;
 }
 export interface ReloadMenu {
   items: ReloadMenuItem[];
@@ -151,7 +151,7 @@ export interface ReloadCheckWindow {
 
 type ReloadModifier = NonNullable<KeyboardInputEvent["modifiers"]>[number];
 
-const FORBIDDEN_MENU_ROLES = new Set(["reload", "forceReload", "toggleDevTools", "viewMenu"]);
+const FORBIDDEN_MENU_ROLES = new Set(["reload", "forcereload", "toggledevtools", "viewmenu"]);
 
 /** Detects the two reload accelerators in their common string spellings. */
 export function isReloadAcceleratorText(accelerator: string | null | undefined): boolean {
@@ -161,12 +161,12 @@ export function isReloadAcceleratorText(accelerator: string | null | undefined):
 }
 
 function collectForbiddenMenuItems(item: ReloadMenuItem, into: string[]): void {
-  if (item.role !== undefined && FORBIDDEN_MENU_ROLES.has(item.role)) into.push(`role:${item.role}`);
+  if (item.role !== undefined && FORBIDDEN_MENU_ROLES.has(item.role.toLowerCase())) into.push(`role:${item.role}`);
   if (isReloadAcceleratorText(item.accelerator)) into.push(`accelerator:${item.accelerator}`);
   const submenu = item.submenu;
   if (Array.isArray(submenu)) {
     for (const child of submenu) collectForbiddenMenuItems(child, into);
-  } else if (submenu !== undefined && Array.isArray(submenu.items)) {
+  } else if (submenu != null && Array.isArray(submenu.items)) {
     for (const child of submenu.items) collectForbiddenMenuItems(child, into);
   }
 }

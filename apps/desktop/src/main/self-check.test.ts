@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { buildApplicationMenuTemplate } from "./application-menu.js";
+import type { MenuItemConstructorOptions } from "electron";
 import { existsSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SELF_CHECK_MIN_SETTINGS_PANES, checkSettingsPanes, runSelfCheck, createSelfCheckProfile, selfCheckEnvironment, selfCheckBinaryFs, checkReloadProtection, isReloadAcceleratorText } from "./self-check.js";
@@ -167,6 +169,30 @@ describe("checkReloadProtection (GitHub #19 packaged reload-shortcut check)", ()
   }
 
   const safeMenu = { items: [{ label: "File", submenu: { items: [{ role: "close" }] } }] };
+
+  it("accepts the production menu with Electron-style null submenus", async () => {
+    const convert = (items: MenuItemConstructorOptions[]): { items: import("./self-check.js").ReloadMenuItem[] } => ({
+      items: items.map((item) => ({
+        role: item.role?.toLowerCase(),
+        label: item.label,
+        accelerator: item.accelerator ?? null,
+        submenu: Array.isArray(item.submenu) ? convert(item.submenu) : null,
+      })),
+    });
+    for (const platform of ["darwin", "linux", "win32"] as const) {
+      const menu = convert(buildApplicationMenuTemplate({
+        platform, development: false, onReload: () => {}, onForceReload: () => {}, onToggleDevTools: () => {},
+      }));
+      await checkReloadProtection(fakeWin().win as never, menu, platform);
+    }
+  });
+
+  it.each(["reload", "forcereload", "toggledevtools", "viewmenu", "forceReload"])(
+    "rejects forbidden Electron role %s", async (role) => {
+      await expect(checkReloadProtection(fakeWin().win as never, { items: [{ role }] }, "linux"))
+        .rejects.toThrow(`role:${role}`);
+    },
+  );
 
   it("rejects a missing application menu", async () => {
     const { win } = fakeWin();
