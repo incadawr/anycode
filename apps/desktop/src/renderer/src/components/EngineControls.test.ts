@@ -9,6 +9,7 @@ import {
   activeEnginePreset,
   engineChipLabel,
   engineControlDisabled,
+  engineEffortControlState,
   engineEffortOptions,
   engineEffortSummary,
   engineMenuChipLabel,
@@ -147,22 +148,44 @@ describe("engineEffortOptions", () => {
     // The ACTIVE value always reads first; the queued target is explicitly
     // marked, so a pending pick can never masquerade as applied.
     expect(engineEffortSummary({ current: "high", pending: "xhigh" })).toBe("high → xhigh (next turn)");
-    expect(engineMenuChipLabel(nativeModel, "plain", { current: "high" })).toBe("GPT-6.1 Terra → Plain (next turn) · high");
     // Adding an effort row must NOT suppress a pending model label.
     expect(engineMenuChipLabel(nativeModel, "plain", { current: "xhigh", pending: "low" })).toBe(
       "GPT-6.1 Terra → Plain (next turn) · xhigh → low (next turn)",
     );
+    // While a model switch is queued the applied effort belongs to the OLD
+    // model: the selected model's effort is unknown, so it reads `Default`
+    // rather than borrowing `high` from the model being switched away from.
+    const switching = {
+      current: "gpt-6.1-terra",
+      available: [...nativeModel.available, { id: "codex-2", label: "Codex 2", efforts: ["low", "medium", "high"] }],
+      effort: "high",
+    };
+    expect(engineMenuChipLabel(switching, "codex-2", engineEffortControlState(switching, "codex-2", undefined))).toBe(
+      "GPT-6.1 Terra → Codex 2 (next turn) · Default",
+    );
     expect(engineMenuChipLabel(nativeModel, undefined, undefined)).toBe("GPT-6.1 Terra");
   });
 
-  it("compares a pick against the NEXT-TURN choice, not the applied one", () => {
+  it("compares a pick against the NEXT-TURN effort of the SELECTED model", () => {
     // The applied model/effort is what a pick must be able to CANCEL: with
     // `xhigh` queued and `medium` applied, picking `medium` is a change.
     expect(engineSelectedModel(nativeModel, undefined)).toBe("gpt-6.1-terra");
     expect(engineSelectedModel(nativeModel, "plain")).toBe("plain");
-    expect(engineSelectedEffort({ current: "medium" })).toBe("medium");
-    expect(engineSelectedEffort({ current: "medium", pending: "xhigh" })).toBe("xhigh");
+    expect(engineSelectedEffort({ current: "medium", selected: "medium" })).toBe("medium");
+    expect(engineSelectedEffort({ current: "medium", selected: "xhigh", pending: "xhigh" })).toBe("xhigh");
     expect(engineSelectedEffort({ current: undefined })).toBeUndefined();
+    // A queued model switch leaves the selected effort UNKNOWN: the applied
+    // model's value must never stand in for it, or the pick for the new model
+    // is swallowed as "no change". Unknown is unequal to every level.
+    const switching = {
+      current: "gpt-6.1-terra",
+      available: [...nativeModel.available, { id: "codex-2", label: "Codex 2", efforts: ["low", "medium", "high"] }],
+      effort: "medium",
+    };
+    const switched = engineEffortControlState(switching, "codex-2", undefined);
+    expect(switched).toBeDefined();
+    expect(switched?.current).toBeUndefined();
+    expect(engineSelectedEffort(switched)).toBeUndefined();
   });
 
   it("supplies the effort control from the vocabulary, without a known current effort", () => {
@@ -170,6 +193,7 @@ describe("engineEffortOptions", () => {
     const control = nativeEffortControl(nativeModel, undefined, "xhigh", () => {});
     expect(control).toBeDefined();
     expect(control?.current).toBeUndefined();
+    expect(control?.selected).toBe("xhigh");
     expect(control?.pending).toBe("xhigh");
     // A model with no advertised levels gets no control.
     expect(nativeEffortControl({ current: "plain", available: nativeModel.available }, undefined, undefined, () => {})).toBeUndefined();

@@ -64,6 +64,7 @@ import {
 import { PROFILE_PERIODS, type ProfilePeriod } from "./components/ProfilePane.js";
 import {
   engineControlDisabled,
+  engineEffortControlState,
   engineEffortOptions,
   engineMenuChipLabel,
   engineModelItems,
@@ -8471,15 +8472,14 @@ export function createAutomationFacade(
         const engineModel = state.engine.model;
         const pending = state.pendingEngineChange;
         const efforts = engineEffortOptions(engineModel, pending?.model);
+        // Same applied/selected split the rendered control uses: a queued model
+        // switch has no applied effort yet, so it is not reported as one.
+        const effortState = engineEffortControlState(engineModel, pending?.model, pending?.effort);
         const menuOpen = modelPillDom.popoverOpen();
         return {
           ok: true,
           present: true,
-          label: engineMenuChipLabel(
-            engineModel,
-            pending?.model,
-            efforts.length > 0 ? { current: engineModel.effort, ...(pending?.effort !== undefined ? { pending: pending.effort } : {}) } : undefined,
-          ),
+          label: engineMenuChipLabel(engineModel, pending?.model, effortState),
           menuOpen,
           page: menuOpen ? (modelPillDom.native?.page() ?? modelPillDom.currentPage()) : "root",
           // Capability is the advertised vocabulary, not the presence of a
@@ -8488,7 +8488,7 @@ export function createAutomationFacade(
           modelItems: engineModelItems(engineModel.current, engineModel.available).map((item) => ({ id: item.id, name: item.label })),
           effortItems: [...efforts],
           currentModel: engineModel.current,
-          currentEffort: engineModel.effort ?? null,
+          currentEffort: effortState?.current ?? null,
           // The matching component's OWN predicate (the native menu has no
           // core-only mid-turn allowance).
           modelPickDisabled: engineControlDisabled(state.turn.status, state.queueInFlight, state.connection === "ready"),
