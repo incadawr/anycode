@@ -224,7 +224,9 @@ export async function scanPluginsAdmin(
       tier: candidate.tier,
       disabled: disabled.has(candidate.name) || candidate.reason === "disabled",
       status: candidate.reason === "disabled" ? "disabled" : "inactive",
-      problems: [candidate.problem],
+      // A user-disabled plugin carries NO problem line (it is a state, not a
+      // failure); every other skip reason still explains itself on the row.
+      problems: candidate.problem !== undefined ? [candidate.problem] : [],
       source: { kind: "dir" },
       ...(candidate.dir !== undefined ? { root: candidate.dir } : {}),
       mcpServerNames: [],
@@ -301,11 +303,15 @@ export async function scanPluginsAdmin(
     }
   }
 
-  // ── Attribution: discovery problems that name a plugin land on its row. ──
+  // ── Attribution: discovery problems that name a plugin land on its row
+  // (once — a skipped row may already carry the same line from its candidate). ──
   for (const problem of discovery.problems) {
     for (const name of rows.keys()) {
       if (problem.includes(`"${name}"`)) {
-        rows.get(name)!.problems.push(problem);
+        const rowProblems = rows.get(name)!.problems;
+        if (!rowProblems.includes(problem)) {
+          rowProblems.push(problem);
+        }
         break;
       }
     }

@@ -27,7 +27,9 @@
  *  - `manifestVersion > MANIFEST_VERSION` → skip, problem "requires newer
  *    AnyCode" (the schema accepts the int; a future manifest never crashes
  *    an older app);
- *  - name in state.json `disabled` (user-global by name) → skip, problem;
+ *  - name in state.json `disabled` (user-global by name) → skip with a
+ *    `skipped[]` entry but NO problem: it is the user's own OFF switch, not a
+ *    load failure, so panes must not warn about it;
  *  - `engines.anycode` unsatisfied by `appVersion` (when provided) → plugin
  *    stays installed but INACTIVE: skip, problem "incompatible with AnyCode
  *    X (needs R)";
@@ -160,8 +162,11 @@ export interface SkippedPlugin {
   tier: PluginTier;
   /** Short machine reason ("disabled" | "incompatible" | "newer-manifest" | "conflict" | "cap"). */
   reason: string;
-  /** The full problem string (also present in problems[]). */
-  problem: string;
+  /**
+   * The full problem string (also present in problems[]). ABSENT for
+   * `reason: "disabled"`: a user-chosen OFF state is not a problem.
+   */
+  problem?: string;
 }
 
 interface AcceptedPlugin {
@@ -495,9 +500,10 @@ export async function discoverPlugins(
     }
 
     if (disabled.has(manifest.name)) {
-      const problem = `Plugin "${manifest.name}" at ${pluginDir} is disabled (skipped)`;
-      problems.push(problem);
-      skipped.push({ name: manifest.name, dir: pluginDir, tier, reason: "disabled", problem });
+      // A user-disabled plugin is a STATE, not a load failure: record the skip
+      // (the Plugins pane still rows it as OFF) but never a problem, so the
+      // MCP/Skills/Subagents panes do not warn about it.
+      skipped.push({ name: manifest.name, dir: pluginDir, tier, reason: "disabled" });
       return;
     }
 

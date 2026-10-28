@@ -196,7 +196,7 @@ describe("discoverPlugins — tier precedence (project > official > third-party 
 });
 
 describe("discoverPlugins — disabled set (user-global by name)", () => {
-  it("a state-disabled plugin is skipped with a problem, regardless of tier or directory", async () => {
+  it("a state-disabled plugin is skipped WITHOUT a problem, regardless of tier or directory", async () => {
     const fs = makeFs({
       dirs: { [USER_PLUGINS]: ["legacy-plugin"] },
       files: {
@@ -210,7 +210,32 @@ describe("discoverPlugins — disabled set (user-global by name)", () => {
     });
     const result = await discoverPlugins(fs, { ...base(), pluginStatePath: STATE_PATH });
     expect(result.skillRoots).toEqual([]);
-    expect(result.problems.filter((p) => p.includes("disabled"))).toHaveLength(2);
+    // A user-chosen OFF state is a state, not a failure: no problem anywhere.
+    expect(result.problems).toEqual([]);
+    // The skip is still recorded so the Plugins pane can row them as OFF.
+    expect(result.skipped.map((s) => s.reason).sort()).toEqual(["disabled", "disabled"]);
+    expect(result.skipped.map((s) => s.name).sort()).toEqual(["legacy-plugin", "off"]);
+    expect(result.skipped.every((s) => s.problem === undefined)).toBe(true);
+  });
+
+  it("a real load failure of an ENABLED plugin still surfaces a problem next to a disabled one", async () => {
+    const fs = makeFs({
+      dirs: { [USER_PLUGINS]: ["future", "turned-off"] },
+      files: {
+        ...stateWith({}, { disabled: ["turned-off"] }),
+        ...manifestAt(`${USER_PLUGINS}/future`, {
+          name: "future",
+          engines: { anycode: ">=99.0.0" },
+          skills: ["s"],
+          agents: [],
+        }),
+        ...manifestAt(`${USER_PLUGINS}/turned-off`, { name: "turned-off", skills: ["s2"], agents: [] }),
+      },
+    });
+    const result = await discoverPlugins(fs, { ...base(), appVersion: "0.1.7", pluginStatePath: STATE_PATH });
+    expect(result.problems).toHaveLength(1);
+    expect(result.problems[0]).toMatch(/Plugin "future" .*is installed but inactive: incompatible/);
+    expect(result.problems.some((p) => p.includes("turned-off"))).toBe(false);
   });
 });
 
