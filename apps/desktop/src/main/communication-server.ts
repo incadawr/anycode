@@ -74,7 +74,7 @@ export type CreateSessionRequest = { workspace: string; engine?: "core" | "codex
  * human-readable (the `invalid_model` candidate list). It is appended after the
  * fixed code text, never in place of it.
  */
-export type CreateSessionOutcome = { ok: true; sessionId: string; tabId: string; handle?: string } | { ok: false; reason: Exclude<CreateSessionRefusal, "rate_limited" | "folder_not_found">; detail?: string };
+export type CreateSessionOutcome = { ok: true; sessionId: string; tabId: string; handle?: string } | { ok: false; reason: Exclude<CreateSessionRefusal, "rate_limited">; detail?: string };
 const CREATE_REFUSAL_TEXT: { [K in CreateSessionRefusal]: string } = {
   not_allowed: "the project does not allow agents to open tasks (sidebar project menu, off by default)",
   not_trusted: "the folder is not trusted in AnyCode",

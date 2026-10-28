@@ -124,7 +124,16 @@ export async function createSessionForAgent(
   } finally {
     releasePin();
   }
-  if (!created.ok) return { ok: false, reason: created.reason === "max_tabs" ? ("too_many" as const) : ("not_ready" as const) };
+  if (!created.ok) {
+    // GitHub #6: the folder can vanish between the server's realpath check and
+    // this asynchronous preparation (trust, secrets, connection priming). Main's
+    // createTab then rolls the half-made tab (and its binding) back instead of
+    // reporting a session that can never receive a message; propagate that as
+    // the folder refusal, not the generic not_ready. Nothing was registered and
+    // the caller's rate budget stays unspent (only `ok` creations count).
+    if (created.reason === "folder_not_found") return { ok: false, reason: "folder_not_found" };
+    return { ok: false, reason: created.reason === "max_tabs" ? ("too_many" as const) : ("not_ready" as const) };
+  }
   const sessionId = created.tab.sessionId;
   deps.agentOpenedSessions.add(sessionId);
   // Registered synchronously by createTab (onSessionRegistered); "shared immediately".
