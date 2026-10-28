@@ -7951,9 +7951,16 @@ body {
 
 .role-picker-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: var(--sp-2);
   padding: var(--sp-3) var(--sp-4) var(--sp-4);
+}
+
+/* The save result sits in the actions row itself (left of the buttons). */
+.role-picker-actions .settings-notice-ok,
+.role-picker-actions .settings-notice {
+  margin: 0 auto 0 0;
 }
 
 .role-picker-skip,

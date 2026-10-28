@@ -21,6 +21,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - A malformed MCP config file is reported without quoting its contents (#3).
 - A plugin you turned off is treated as a state, not a problem: no duplicate "Problems" line and no warning in Settings → MCP, Skills or Subagents, even when its manifest asks for a newer AnyCode or declares an escaping skills, agents or workflows directory.
 - Settings → Sessions API → Advanced shows an allowed project as "On" with a "Turn off" action, spaces its rows, and labels the port field.
+- Settings → Roles and the first-run role dialog name every connection by its label or provider name instead of showing a raw connection id.
+- Skipping the first-run role dialog now starts the orchestration task on the built-in defaults instead of doing nothing.
+- Creating a role profile with an empty name gets a unique name, Rename works for the selected custom profile, and “Built-in defaults” stays selectable in the global profile list.
+- The Roles save result appears next to “Save roles”, and the pane description matches the single global parallel-children limit.
+- The Roles project picker shows the folder name, with the full path as its tooltip.
 
 ## [0.0.49] — 2026-10-28
 
