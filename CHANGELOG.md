@@ -15,6 +15,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Test cleanup removes the session variables a host boot creates, so later tests no longer inherit a deleted session.
 - Host tests ignore the shell's proxy settings, so a credentialed proxy cannot shape a test run.
 - MCP servers use the login shell PATH and show startup and configuration failures in Settings (#3).
+- MCP failure diagnostics redact credential values a server inherits from the environment, so its stderr can no longer expose them (#3).
+- A Claude session's failed MCP server row says Claude does not report the reason and points at `claude mcp list` (#3).
+- The MCP pane follows every Claude turn, so a server that stops working after the first turn no longer shows as connected (#3).
+- A malformed MCP config file is reported without quoting its contents (#3).
 
 ## [0.0.49] — 2026-10-28
 

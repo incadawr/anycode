@@ -347,6 +347,35 @@ describe("loadMcpServerSpecs — stdio env assembly", () => {
     }
   });
 
+  it("inheritEnv:true collects inherited SENSITIVE-NAMED values as redaction inputs (GitHub #3)", async () => {
+    vi.stubEnv("GH3_REVIEW_API_TOKEN", "inherited-token-value-1");
+    vi.stubEnv("GH3_REVIEW_GITHUB_KEY", "inherited-key-value-2");
+    vi.stubEnv("gh3_review_session_cookie", "inherited-cookie-value-3");
+    vi.stubEnv("GH3_REVIEW_LABEL", "not-sensitive");
+    const { fs } = makeFs({
+      [PROJECT_CONFIG]: JSON.stringify({
+        mcpServers: { srv: { command: "node", inheritEnv: true } },
+      }),
+    });
+    const { specs, problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME);
+    expect(problems).toEqual([]);
+    const secretValues = asStdio(specs[0]).secretValues ?? [];
+    expect(secretValues).toContain("inherited-token-value-1");
+    expect(secretValues).toContain("inherited-key-value-2");
+    expect(secretValues).toContain("inherited-cookie-value-3"); // name match is case-insensitive
+    expect(secretValues).not.toContain("not-sensitive");
+  });
+
+  it("without inheritEnv, an unrelated process.env value is not a redaction input", async () => {
+    vi.stubEnv("GH3_REVIEW_API_TOKEN", "inherited-token-value-1");
+    const { fs } = makeFs({
+      [PROJECT_CONFIG]: JSON.stringify({ mcpServers: { srv: { command: "node" } } }),
+    });
+    const { specs } = await loadMcpServerSpecs(fs, WORKSPACE, HOME);
+    expect(asStdio(specs[0]).env.GH3_REVIEW_API_TOKEN).toBeUndefined();
+    expect(asStdio(specs[0]).secretValues ?? []).not.toContain("inherited-token-value-1");
+  });
+
   it("without inheritEnv, an unset minimal-base key is simply omitted (never an empty string)", async () => {
     vi.stubEnv("PATH", "/usr/bin");
     vi.stubEnv("HOME", undefined);
@@ -577,9 +606,27 @@ it("uses the discovered login PATH without inheriting unrelated environment", as
   expect(asStdio(specs[0]).env.MCP_PRIVATE_TEST).toBeUndefined();
 });
 
-it("does not expose malformed JSON content in diagnostics", async () => {
-  const { fs } = makeFs({ [PROJECT_CONFIG]: '{"mcpServers": "TOKEN_JSON_SHOULD_STAY_PRIVATE" x}' });
-  const { problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME);
-  expect(problems[0]).toContain("Invalid JSON");
-  expect(JSON.stringify(problems)).not.toContain("TOKEN_JSON_SHOULD_STAY_PRIVATE");
+it("never forwards the JSON parser's own message (which can quote the file) to diagnostics", async () => {
+  const FRAGMENT = "gh3-private-config-fragment";
+  const raw = `{"mcpServers": {"srv": {"command": "${FRAGMENT}"}}`;
+  // This runtime's SyntaxError quotes no file text for malformed input (V8
+  // reports a position only), so a plain malformed file would pass even if the
+  // raw parser message were forwarded verbatim — the reason this test injects a
+  // content-bearing one instead. The message below is the shape a runtime that
+  // echoes the offending line produces; the loader must report the file, never
+  // the parser's words.
+  const parser = vi.spyOn(JSON, "parse").mockImplementationOnce(() => {
+    throw new SyntaxError(`Unexpected token '}', ...{"command": "${FRAGMENT}"}... is not valid JSON`);
+  });
+  try {
+    const { fs } = makeFs({ [PROJECT_CONFIG]: raw });
+    const { specs, problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME);
+    expect(specs).toEqual([]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("Invalid JSON");
+    expect(problems[0]).toContain(PROJECT_CONFIG);
+    expect(JSON.stringify(problems)).not.toContain(FRAGMENT);
+  } finally {
+    parser.mockRestore();
+  }
 });

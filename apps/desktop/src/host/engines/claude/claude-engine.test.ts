@@ -25,6 +25,7 @@ import {
   CLAUDE_PRESET_IDS,
   ClaudeEngine,
   type ClaudeEngineTimeouts,
+  type ClaudeInitMcpServerStatus,
   type ClaudeTransport,
 } from "./claude-engine.js";
 import { ClaudeModelCatalog } from "./models.js";
@@ -1772,6 +1773,79 @@ describe("ClaudeEngine — Taskana 4238: a failed MCP server is visible in the t
 
     const events = await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
     expect(events.filter((event) => event.type === "engine_notice")).toHaveLength(0);
+  });
+});
+
+/**
+ * GitHub #3: the CLI re-emits `system/init` on every turn, and that report is
+ * per-turn news. A live view (the host's MCP pane) that latched the FIRST init
+ * kept showing a server as connected after a later init reported it failed.
+ */
+describe("ClaudeEngine — the MCP report follows EVERY system/init (GitHub #3)", () => {
+  const RESULT: ClaudeStreamMessage = {
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    num_turns: 1,
+    duration_ms: 1,
+    duration_api_ms: 1,
+    total_cost_usd: 0,
+  } as unknown as ClaudeStreamMessage;
+
+  function initWithServers(mcpServers: unknown[]): ClaudeStreamMessage {
+    return {
+      type: "system",
+      subtype: "init",
+      session_id: "native-session-1",
+      model: "model-x",
+      permissionMode: "plan",
+      cwd: "/work",
+      tools: [],
+      mcp_servers: mcpServers,
+      slash_commands: [],
+      skills: [],
+      capabilities: ["interrupt_receipt_v1"],
+      claude_code_version: "2.1.288",
+    } as unknown as ClaudeStreamMessage;
+  }
+
+  it("announces a connected → failed transition across two inits", async () => {
+    const transport = new FakeTransport({
+      frames: [initWithServers([{ name: "docs", status: "connected" }]), RESULT],
+    });
+    const engine = engineWith(transport);
+    const seen: ClaudeInitMcpServerStatus[][] = [];
+    engine.onEverySystemInit((init) => seen.push(init.mcpServerStatuses));
+
+    await collect(engine.runTurn("one", { signal: new AbortController().signal }));
+    expect(seen).toEqual([[{ name: "docs", status: "connected" }]]);
+
+    // The SAME server dies on the next turn and only says so in that init.
+    transport.enqueue(initWithServers([{ name: "docs", status: "failed" }]));
+    transport.enqueue(RESULT);
+    await collect(engine.runTurn("two", { signal: new AbortController().signal }));
+
+    expect(seen).toEqual([
+      [{ name: "docs", status: "connected" }],
+      [{ name: "docs", status: "failed" }],
+    ]);
+  });
+
+  it("does not replay a previous init to a listener registered mid-session (next init only)", async () => {
+    const transport = new FakeTransport({
+      frames: [initWithServers([{ name: "docs", status: "connected" }]), RESULT],
+    });
+    const engine = engineWith(transport);
+    await collect(engine.runTurn("one", { signal: new AbortController().signal }));
+
+    const seen: ClaudeInitMcpServerStatus[][] = [];
+    engine.onEverySystemInit((init) => seen.push(init.mcpServerStatuses));
+    expect(seen).toEqual([]);
+
+    transport.enqueue(initWithServers([{ name: "docs", status: "failed" }]));
+    transport.enqueue(RESULT);
+    await collect(engine.runTurn("two", { signal: new AbortController().signal }));
+    expect(seen).toEqual([[{ name: "docs", status: "failed" }]]);
   });
 });
 

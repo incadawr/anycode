@@ -237,6 +237,32 @@ function missingRefMessage(name: string, path: string, missing: { kind: "env" | 
 
 const MINIMAL_ENV_KEYS = ["PATH", "HOME", "LANG"] as const;
 
+/**
+ * Env-var NAMES whose inherited value counts as a diagnostic secret when the
+ * child receives it by inheritance (`inheritEnv: true`). With inheritance the
+ * loader never sees the value in the config, so the name is the only signal
+ * available — and a child that echoes an inherited token to stderr must not
+ * have that token forwarded in `status.error` (GitHub #3).
+ */
+const SENSITIVE_ENV_NAME_RE = /TOKEN|KEY|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIAL|COOKIE|SESSION/i;
+
+/**
+ * Values of `env` whose NAME looks sensitive (see SENSITIVE_ENV_NAME_RE).
+ *
+ * DELIBERATE LIMIT: these values reach `redactSecrets` as-is, so one shorter
+ * than its 4-character floor stays unredacted. Lowering the floor is not an
+ * option — a 1-3 character value (a flag, a port, a digit) would shred unrelated
+ * text such as exit codes and paths — so a short inherited credential can still
+ * appear verbatim in a failure diagnostic. Kept as a documented trade-off.
+ */
+function sensitiveEnvValues(env: Record<string, string>): string[] {
+  const values: string[] = [];
+  for (const [name, value] of Object.entries(env)) {
+    if (SENSITIVE_ENV_NAME_RE.test(name)) values.push(value);
+  }
+  return values;
+}
+
 function buildStdioEnv(configEnv: Record<string, string>, inheritEnv: boolean, loginPath?: string): Record<string, string> {
   const base: Record<string, string> = {};
   if (inheritEnv) {
@@ -300,15 +326,24 @@ function resolveEntry(
       problems.push(missingRefMessage(name, path, envResolved.missing));
       return undefined;
     }
+    const env = buildStdioEnv(envResolved.value ?? {}, entry.inheritEnv ?? false, loginPath);
     const spec: McpStdioServerSpec = {
       kind: "stdio",
       name,
       command: entry.command!,
       args: entry.args ?? [],
-      env: buildStdioEnv(envResolved.value ?? {}, entry.inheritEnv ?? false, loginPath),
+      env,
     };
-    if (envResolved.secretValues.length > 0) {
-      spec.secretValues = envResolved.secretValues;
+    // Config env values are collected as they are resolved (literal or
+    // `${env:}/${secret:}`-expanded). An `inheritEnv: true` child additionally
+    // receives values the config never mentioned, so the sensitive-looking
+    // NAMES in the env we actually hand the child join the same redaction set
+    // (short values stay subject to redact.ts's floor — see sensitiveEnvValues).
+    const secretValues = entry.inheritEnv === true
+      ? [...envResolved.secretValues, ...sensitiveEnvValues(env)]
+      : envResolved.secretValues;
+    if (secretValues.length > 0) {
+      spec.secretValues = secretValues;
     }
     if (entry.cwd !== undefined) {
       spec.cwd = entry.cwd;

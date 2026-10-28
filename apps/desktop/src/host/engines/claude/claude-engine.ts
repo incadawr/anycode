@@ -227,6 +227,18 @@ export interface ClaudeInitMcpServerStatus {
 }
 
 /**
+ * The turn-scoped facts a `system/init` frame carries that the host acts on —
+ * the payload of `onFirstSystemInit` and of the every-init `onEverySystemInit`.
+ */
+export interface ClaudeSystemInitReport {
+  sessionId: string;
+  model: string;
+  permissionMode: ClaudeWirePermissionMode;
+  mcpServerNames: string[];
+  mcpServerStatuses: ClaudeInitMcpServerStatus[];
+}
+
+/**
  * Taskana 4238: names WITH status (`connected`/`failed`/`needs-auth`/
  * `pending`/…); bare strings => status null. Same tolerance rules as
  * `parseClaudeInitMcpServerNames` — junk entries are skipped, never thrown.
@@ -751,9 +763,9 @@ export class ClaudeEngine implements SessionEngine {
   private livePermissionMode: ClaudeWirePermissionMode | null = null;
   /** Latch + one-shot observers for the FIRST turn-scoped `system/init` (`onFirstSystemInit`). */
   private firstInitSeen = false;
-  private readonly firstInitListeners = new Set<
-    (init: { sessionId: string; model: string; permissionMode: ClaudeWirePermissionMode; mcpServerNames: string[]; mcpServerStatuses: ClaudeInitMcpServerStatus[] }) => void
-  >();
+  private readonly firstInitListeners = new Set<(init: ClaudeSystemInitReport) => void>();
+  /** Observers of EVERY turn-scoped `system/init` (`onEverySystemInit`). */
+  private readonly everyInitListeners = new Set<(init: ClaudeSystemInitReport) => void>();
   /** TASK.182: names from the first observed `system/init`'s mcp_servers[]. */
   private liveMcpServerNames: string[] | null = null;
   /** Taskana 4238: statuses from the most recent `system/init`'s mcp_servers[] (latched for `onFirstSystemInit`). */
@@ -1812,17 +1824,29 @@ export class ClaudeEngine implements SessionEngine {
       this.mcpStatusNotices.push(...mcpServerFailureNotices([entry]));
     }
     this.reconcileFromInit(init);
+    // GitHub #3: a server can connect on one turn and fail on a later one, so
+    // every init is news. Observers get the same payload as the first-init latch
+    // below, once per init — BEFORE the latch so a one-shot listener's failure
+    // (it is wrapped, but still) can never swallow the live update.
+    const report: ClaudeSystemInitReport = {
+      sessionId: init.session_id,
+      model: init.model,
+      permissionMode: init.permissionMode,
+      mcpServerNames: this.liveMcpServerNames,
+      mcpServerStatuses: this.liveMcpServerStatuses,
+    };
+    for (const listener of this.everyInitListeners) {
+      try {
+        listener(report);
+      } catch {
+        // A status observer is a side-channel; it can never fail a turn.
+      }
+    }
     if (!this.firstInitSeen) {
       this.firstInitSeen = true;
       for (const listener of this.firstInitListeners) {
         try {
-          listener({
-            sessionId: init.session_id,
-            model: init.model,
-            permissionMode: init.permissionMode,
-            mcpServerNames: this.liveMcpServerNames,
-            mcpServerStatuses: this.liveMcpServerStatuses,
-          });
+          listener(report);
         } catch {
           // A first-init observer is a side-channel (row materialization,
           // resume settle); it can never fail a turn.
@@ -1868,7 +1892,7 @@ export class ClaudeEngine implements SessionEngine {
    * registered after the first init has already been seen is invoked
    * immediately with the latched values.
    */
-  onFirstSystemInit(listener: (init: { sessionId: string; model: string; permissionMode: ClaudeWirePermissionMode; mcpServerNames: string[]; mcpServerStatuses: ClaudeInitMcpServerStatus[] }) => void): void {
+  onFirstSystemInit(listener: (init: ClaudeSystemInitReport) => void): void {
     if (this.firstInitSeen) {
       if (this.sessionId !== null && this.liveModel !== null && this.livePermissionMode !== null) {
         listener({
@@ -1882,6 +1906,18 @@ export class ClaudeEngine implements SessionEngine {
       return;
     }
     this.firstInitListeners.add(listener);
+  }
+
+  /**
+   * Fires on EVERY turn-scoped `system/init`, with that frame's own facts. The
+   * CLI re-emits init each turn (probe #1), and its MCP report is per-turn news:
+   * a server that connected on the first turn and died on a later one only says
+   * so in the later init. A live view (the host's MCP pane) must therefore
+   * follow this hook, not `onFirstSystemInit`. Unlike the first-init latch this
+   * never replays — a listener registered mid-session sees the next init.
+   */
+  onEverySystemInit(listener: (init: ClaudeSystemInitReport) => void): void {
+    this.everyInitListeners.add(listener);
   }
 
   /**

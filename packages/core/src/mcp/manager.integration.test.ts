@@ -14,12 +14,17 @@
  * promise.
  */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { NodeFileSystemAdapter } from "../adapters/node/node-file-system.js";
 import { NodeMcpTransportFactory, NodeStdioMcpTransport } from "../adapters/node/node-mcp-transport.js";
 import { ToolRegistry } from "../tools/registry.js";
 import type { McpServerSpec, McpTransportFactory, McpWireTransport } from "../ports/mcp.js";
 import type { ToolContext } from "../types/tools.js";
+import { loadMcpServerSpecs } from "./config.js";
 import { McpManager } from "./manager.js";
 
 const FIXTURE = fileURLToPath(new URL("./fixtures/fixture-server.mjs", import.meta.url));
@@ -166,6 +171,75 @@ describe("McpManager + real stdio child (manager-level dispose-reap)", () => {
       expect(pid).toBeTruthy();
       await waitForDead(pid!);
       expect(isPidAlive(pid!)).toBe(false);
+    },
+    20_000,
+  );
+});
+
+/**
+ * GitHub #3 review round 2: with `inheritEnv: true` the child receives env
+ * values the config never named, so only the NAME can mark them as secrets.
+ * This is the full path — a real config file, the real loader, the real stdio
+ * transport, a real child echoing its inherited credential to stderr on the way
+ * out — and the credential must not survive into `status.error`.
+ */
+describe("McpManager + an inherited credential printed on stderr", () => {
+  const TOKEN = "gh3-inherited-credential-value-9f2c";
+  let manager: McpManager | undefined;
+  let dir: string | undefined;
+
+  afterEach(async () => {
+    if (manager) {
+      await manager.dispose();
+      manager = undefined;
+    }
+    if (dir) {
+      rmSync(dir, { recursive: true, force: true });
+      dir = undefined;
+    }
+    vi.unstubAllEnvs();
+  });
+
+  it(
+    "a failing server's stderr token never reaches status.error (redacted, not silent)",
+    async () => {
+      vi.stubEnv("GH3_REVIEW_API_TOKEN", TOKEN);
+      dir = mkdtempSync(join(tmpdir(), "mcp-inherit-"));
+      mkdirSync(join(dir, ".anycode"), { recursive: true });
+      writeFileSync(
+        join(dir, ".anycode", "config.json"),
+        JSON.stringify({
+          mcpServers: {
+            leaker: {
+              command: process.execPath,
+              args: [
+                "-e",
+                "process.stderr.write(`auth failed for token ${process.env.GH3_REVIEW_API_TOKEN}\\n`); process.exit(3);",
+              ],
+              inheritEnv: true,
+            },
+          },
+        }),
+      );
+
+      const { specs, problems } = await loadMcpServerSpecs(
+        new NodeFileSystemAdapter(),
+        dir,
+        join(dir, "home"),
+      );
+      expect(problems).toEqual([]);
+      expect(specs).toHaveLength(1);
+
+      manager = new McpManager({ registry: new ToolRegistry(), transports: new NodeMcpTransportFactory() });
+      await manager.start(specs);
+
+      const status = manager.status()[0]!;
+      expect(status.state).toBe("failed");
+      // The diagnostic itself is kept — the exit is reported, only the value is gone.
+      expect(status.error).toContain("exited unexpectedly");
+      expect(status.error).toContain("[redacted]");
+      expect(status.error).not.toContain(TOKEN);
+      expect(JSON.stringify(manager.status())).not.toContain(TOKEN);
     },
     20_000,
   );

@@ -3224,3 +3224,46 @@ describe("host boot bridge shapes (Taskana 4764)", () => {
     expect(child.bridge).toBe(false);
   });
 });
+
+// ── GitHub #3: the Claude MCP snapshot follows every system/init ──────────
+//
+// The CLI re-emits `system/init` on every turn and its MCP report is per-turn
+// news, so a pane that latched the FIRST init kept a server it lost on a later
+// turn showing as connected. index.ts is not importable in a test (module-scope
+// process.parentPort — file header), so this pins WHERE the snapshot is
+// published by reading the real source, the same idiom as the port-bind suite
+// above: reverting the wiring moves the publish back into the first-init latch
+// and these assertions fail on behaviour, not on a missing anchor alone.
+describe("host Claude MCP status wiring — one snapshot per system/init (GitHub #3)", () => {
+  async function readHostSource(): Promise<string> {
+    return readFile(new URL("./index.ts", import.meta.url), "utf8");
+  }
+
+  /** The body of the `claudeEngine.<hook>(` callback: anchor through its closing `  });`. */
+  function hookBody(source: string, anchor: string): string {
+    const start = source.indexOf(anchor);
+    if (start === -1) {
+      throw new Error(`${anchor} not found — index.ts's Claude MCP wiring moved`);
+    }
+    if (source.indexOf(anchor, start + 1) !== -1) {
+      throw new Error(`${anchor} is no longer unique — pick a new anchor`);
+    }
+    const end = source.indexOf("\n  });", start);
+    if (end === -1) {
+      throw new Error(`unterminated callback after ${anchor}`);
+    }
+    return source.slice(start, end);
+  }
+
+  it("publishes a fresh status snapshot from the every-init hook", async () => {
+    const body = hookBody(await readHostSource(), "claudeEngine.onEverySystemInit(");
+    expect(body).toContain("engineMcpStatuses = claudeMcpStatuses(");
+    expect(body).toContain("publishEngineMcpStatuses()");
+  });
+
+  it("no longer latches the snapshot to the first init", async () => {
+    const body = hookBody(await readHostSource(), "claudeEngine.onFirstSystemInit(");
+    expect(body).not.toContain("publishEngineMcpStatuses()");
+    expect(body).not.toContain("engineMcpStatuses =");
+  });
+});

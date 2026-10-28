@@ -2488,6 +2488,22 @@ async function bootClaudeSession(
     },
   });
 
+  // GitHub #3: the Claude path spawns the forwarded servers itself, so their
+  // startup outcome never reaches `McpManager` — translate the CLI's own
+  // `system/init` report into status rows instead (missing forwarded servers
+  // included, via the same reconciliation the warning loop below uses). Claude
+  // re-emits init on EVERY turn, so this rides `onEverySystemInit`: a server
+  // that connected on the first turn and died later must stop reading as
+  // connected in the pane (the first-init latch below would freeze it there).
+  claudeEngine.onEverySystemInit((init) => {
+    engineMcpStatuses = claudeMcpStatuses(
+      init.mcpServerStatuses,
+      missingForwardedMcpServerNames(init.mcpServerNames, mcpForward.claudeNames, false),
+      mcpForward.specs,
+    );
+    publishEngineMcpStatuses();
+  });
+
   // The first turn-scoped `system/init` is the earliest proof the native
   // session exists — and the only honest source of the POSTURE. `ClaudeEngine`
   // has by now reconciled its settings against that init, so `snapshot()`
@@ -2495,16 +2511,6 @@ async function bootClaudeSession(
   // CLI reports (`claude-opus-4-8`); persisting the latter would fail
   // `catalog.has()` on the next resume and fall back to the default model.
   claudeEngine.onFirstSystemInit((init) => {
-    // GitHub #3: the Claude path spawns the forwarded servers itself, so their
-    // startup outcome never reaches `McpManager` — translate the CLI's own
-    // `system/init` report into status rows instead (missing forwarded servers
-    // included, via the same reconciliation the warning loop below uses).
-    engineMcpStatuses = claudeMcpStatuses(
-      init.mcpServerStatuses,
-      missingForwardedMcpServerNames(init.mcpServerNames, mcpForward.claudeNames, false),
-      mcpForward.specs,
-    );
-    publishEngineMcpStatuses();
     const settled = claudeEngine.snapshot();
     // The `mode` TEXT column stores the Claude preset id verbatim, the same
     // no-migration arrangement codex uses (cut §2(k).4). Nothing reads this
