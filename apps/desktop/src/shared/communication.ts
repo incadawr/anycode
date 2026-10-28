@@ -15,8 +15,15 @@ export interface AgentDelivery {
   state: "queued" | "acknowledged" | "rejected" | "unknown";
   detail?: string;
 }
+/**
+ * The delivery wrapper's first line prefix: the only title text that is never
+ * user-chosen, so a stored title that starts with it can be repaired back to
+ * the session's handle without guessing. Shared so the writer and the repair
+ * cannot drift apart.
+ */
+export const AGENT_MESSAGE_HEADER_PREFIX = "[AnyCode authenticated agent message ";
 export function agentMessageText(e: AgentEnvelope): string {
-  return `[AnyCode authenticated agent message ${JSON.stringify({ messageId: e.messageId, sender: e.sender, recipientSessionId: e.recipientSessionId, kind: e.kind, correlationId: e.correlationId, replyTo: e.replyTo })}]\n${e.payload}`;
+  return `${AGENT_MESSAGE_HEADER_PREFIX}${JSON.stringify({ messageId: e.messageId, sender: e.sender, recipientSessionId: e.recipientSessionId, kind: e.kind, correlationId: e.correlationId, replyTo: e.replyTo })}]\n${e.payload}`;
 }
 
 /** Public assistant text only; no reasoning, tool payloads, or transcript export. */

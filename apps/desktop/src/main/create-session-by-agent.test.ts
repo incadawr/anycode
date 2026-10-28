@@ -127,6 +127,8 @@ function rig(options: { failPrimingFor?: string; blocked?: () => boolean; pendin
     getHandle: () => undefined,
     setHandle: () => ({ ok: true }),
     sessionIdByHandle: () => undefined,
+    markAgentOpened: () => {},
+    isAgentOpened: () => false,
     getConfirmedTitle: () => undefined,
     confirmTitle: () => undefined,
   };
@@ -270,6 +272,30 @@ describe("create_session — the production creation path primes a non-active co
 
 
 describe("deferred agent session registration", () => {
+  // The title repair at resume needs PROOF that the tab was opened by an agent:
+  // a saved handle also matches one the user assigned by hand, so the proof is
+  // a durable marker written right here, at creation time.
+  it("records the durable agent-opened marker at creation, not only for a handled session", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "anycode-agent-opened-test-"));
+    try {
+      const openedFile = join(dir, "opened.json");
+      const sessions = createSessionAccessStore({ file: join(dir, "access.json"), handlesFile: join(dir, "handles.json"), agentOpenedFile: openedFile, defaultOn: () => false });
+      const r = rig({ sessions });
+      const withHandle = await createSessionForAgent({ workspace: "/ws", handle: "agent-one" }, r.deps());
+      const withoutHandle = await createSessionForAgent({ workspace: "/ws" }, r.deps());
+      if (!withHandle.ok || !withoutHandle.ok) throw new Error("create refused");
+      // A fresh store is a restart: the marker must be on disk.
+      const reopened = createSessionAccessStore({ file: join(dir, "access.json"), handlesFile: join(dir, "handles.json"), agentOpenedFile: openedFile, defaultOn: () => false });
+      expect(reopened.isAgentOpened(withHandle.sessionId)).toBe(true);
+      expect(reopened.isAgentOpened(withoutHandle.sessionId)).toBe(true);
+      // An ordinary tab (never went through create_session) is not marked.
+      const userTab = createSessionAccessStore({ file: join(dir, "other-access.json"), agentOpenedFile: join(dir, "other-opened.json"), defaultOn: () => false });
+      userTab.register({ sessionId: "user-tab" });
+      userTab.setHandle("user-tab", "mine", () => true);
+      expect(createSessionAccessStore({ file: join(dir, "other-access.json"), agentOpenedFile: join(dir, "other-opened.json"), defaultOn: () => false }).isAgentOpened("user-tab")).toBe(false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it("answers only once the deferred first fork ran, then shares the session and keeps its handle (GitHub #6)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "anycode-access-test-"));
     try {
