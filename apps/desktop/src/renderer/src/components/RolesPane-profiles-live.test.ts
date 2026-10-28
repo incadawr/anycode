@@ -9,6 +9,8 @@
  * - Create/Duplicate must not treat the name prefill as a name the user typed:
  *   clicking them repeatedly without typing yields distinct names, while a
  *   typed name is still used verbatim.
+ * - The pane's own save must surface its feedback in the actions row (a test
+ *   that injects a notice into the dialog directly cannot see that wire break).
  */
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -191,5 +193,22 @@ describe("Create/Duplicate without typing a name", () => {
     await click(buttonByText("Create profile"));
 
     expect(profileNames(bridge.current())).toEqual(["Team", "Reviewers"]);
+  });
+});
+
+describe("Save from the pane", () => {
+  it("shows the save feedback from the pane's own save path inside the actions row", async () => {
+    const bridge = installBridge(settingsWithProfile("Team"));
+    await mount();
+
+    await click(buttonByText("Save roles"));
+
+    expect(bridge.set).toHaveBeenCalled();
+    const actions = container.querySelector(".role-picker-actions");
+    expect(actions?.textContent).toContain("Roles saved.");
+    expect(actions?.querySelector('[role="status"]')).not.toBeNull();
+    // The persisted profile is the selected one, not a fresh "default" row.
+    expect(profileNames(bridge.current())).toEqual(["Team"]);
+    expect(bridge.current().roleProfiles?.activeId).toBe("p");
   });
 });
