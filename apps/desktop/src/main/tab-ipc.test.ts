@@ -8,6 +8,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import { homedir, tmpdir } from "node:os";
 import { mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
@@ -490,6 +491,53 @@ describe("handleCreate — imported-session model override (codex-profiles S4-1 
     expect(consumePendingImportModel).not.toHaveBeenCalled();
     const params = createTab.mock.calls[createTab.mock.calls.length - 1]![0] as Record<string, unknown>;
     expect("modelOverride" in params).toBe(false);
+  });
+
+  it("a missing-folder resume forks nothing, so the pick survives for the retry (GitHub #6)", async () => {
+    // GitHub #6: a resume whose workspace folder is gone keeps its tab (so the
+    // surface can show the error) and never forks. The pick must NOT be spent —
+    // it belongs to the fork that has not happened yet.
+    const { TabHostManager } = await import("./tabs.js");
+    let missing = true;
+    const forked: string[] = [];
+    const manager = new TabHostManager({
+      fork: ((entry: string) => {
+        forked.push(entry);
+        const child = Object.assign(new EventEmitter(), {
+          pid: 4242,
+          postMessage: () => {},
+          kill: () => true,
+        });
+        return child;
+      }) as unknown as import("./tabs.js").HostForkFn,
+      hostEntry: "/fake/host.js",
+      createChannel: () => ({ port1: {}, port2: {} }) as unknown as import("./tabs.js").TabChannel,
+      getWindow: () => null,
+      env: () => ({}),
+      engineReady: () => true,
+      workspaceMissing: () => missing,
+    });
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const { pending, peekPendingImportModel, consumePendingImportModel } = makeImportModelPlane([["s-import", "pick-x"]]);
+    const deps: TabIpcDeps = { manager, persistence: importPersistence(), dialog, peekPendingImportModel, consumePendingImportModel };
+
+    const first = await handleCreate(deps, { kind: "resume", sessionId: "s-import" });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(forked).toHaveLength(0);
+    // The regression: a successful-looking resume burned the pick even though no
+    // host ever started, so restoring the folder and retrying lost the model.
+    expect(consumePendingImportModel).not.toHaveBeenCalled();
+    expect(pending.get("s-import")).toBe("pick-x");
+
+    // The user closes the error tab and restores the folder, then retries.
+    await manager.closeTab(first.tabId);
+    missing = false;
+    const retry = await handleCreate(deps, { kind: "resume", sessionId: "s-import" });
+    expect(retry.ok).toBe(true);
+    expect(forked).toHaveLength(1);
+    expect(consumePendingImportModel).toHaveBeenCalledTimes(1);
+    expect(pending.has("s-import")).toBe(false);
   });
 });
 

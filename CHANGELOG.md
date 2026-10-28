@@ -29,6 +29,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Show an actionable error when a tab’s workspace folder is missing. (#6)
 - Starting a task in a deleted folder now refuses and keeps the typed message and attachments instead of losing them in a tab that never connects. (#6)
 - The Sessions API reports a missing folder instead of a started session when the folder disappears while the session is being prepared. (#6)
+- Restoring a missing folder after a failed resume still opens on the imported task’s chosen model. (#6)
 
 ## [0.0.49] — 2026-10-28
 

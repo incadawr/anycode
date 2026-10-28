@@ -844,8 +844,11 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     if (!result.ok) {
       return result;
     }
-    // A synchronous successful fork has applied the pick.
-    if (!result.deferred) deps.consumePendingImportModel?.(req.sessionId);
+    // A synchronous successful fork has applied the pick. GitHub #6: a resume
+    // whose workspace folder is gone does NOT fork — main keeps the tab so the
+    // surface can show the error, and the pick must stay pending so the retry
+    // after the folder is restored still boots on it.
+    if (!result.deferred && result.tab.missingWorkspace !== true) deps.consumePendingImportModel?.(req.sessionId);
     deps.manager.deliverTabPort(result.tab);
     return { ok: true, tabId: result.tab.tabId, workspace: result.tab.workspace };
   } finally {
