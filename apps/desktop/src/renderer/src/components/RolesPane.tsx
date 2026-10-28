@@ -217,7 +217,11 @@ export function RolesPane({ tabId }: RolesPaneProps = {}): React.JSX.Element {
         </span>
       </label>
       <RolePickerDialog
-        key={selected?.id ?? "default"}
+        // The editor keeps its draft until `open` changes, so the key must change
+        // whenever the selection does. `profile:` distinguishes a saved profile
+        // (even one whose id is literally "default") from the no-profile state,
+        // which otherwise reused the same instance and showed stale routes.
+        key={selected === undefined ? "built-ins" : `profile:${selected.id}`}
         open
         inline
         skippable={false}
