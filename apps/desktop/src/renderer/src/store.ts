@@ -1143,6 +1143,15 @@ export interface DesktopState {
   /** Last fatal message from the host (e.g. sanitizer failure); null once nothing has fired yet. */
   lastFatal: string | null;
   /**
+   * GitHub #6: the tab is stopped for good because its workspace folder is gone
+   * (main checked before forking and delivered an error instead of a host). Part
+   * of the session slice so a real `host_ready` — the folder came back and a
+   * host finally booted — clears it. Only this terminal condition may hide the
+   * connection lines; an ordinary fatal leaves them alone (a failed turn or
+   * compaction does not stop the host from reconnecting).
+   */
+  workspaceMissing: boolean;
+  /**
    * Latest MCP server status snapshot (design slice-3.2-cut.md §3.5/§6, task
    * 3.2.4): mirrors the host's `mcp_status` message verbatim — a full
    * replacement of the array on every change, never merged. Empty before the
@@ -1321,8 +1330,13 @@ export interface DesktopState {
   setAwaitingPort(): void;
   /** Marks the handshake in flight: port received and ui_ready sent, host_ready not yet received. */
   setAwaitingHostReady(): void;
-  /* */
-  setHostExited(): void;
+  /**
+   * GitHub #6: `missingWorkspace` marks the terminal case where main refused to
+   * start a host because the tab's folder is gone — the banner then shows the
+   * error instead of a reconnecting state that can never resolve. Defaults to
+   * false: every ordinary exit keeps the connection lines.
+   */
+  setHostExited(missingWorkspace?: boolean): void;
   /** Records the tab's pinned connection from the tab-port envelope (TASK.45 W10-FIX F2). */
   setPinnedConnection(pinnedConnection: { connectionId: string; providerId: string }): void;
   /** Marks this tab's store as a child surface (TASK.102 CUT-S2 §10.15.1); set once, never cleared. */
@@ -1515,6 +1529,8 @@ interface SessionSlice {
   notice: Notice | null;
   /** Taskana 4772: see DesktopState.waitingForNetwork. */
   waitingForNetwork: boolean;
+  /** GitHub #6: see DesktopState.workspaceMissing. */
+  workspaceMissing: boolean;
   /** Taskana 4772 review F2: see DesktopState.networkWaitEpisodes. */
   networkWaitEpisodes: { parent: number; subagent: number };
   contextUsage: ContextUsage | null;
@@ -1583,6 +1599,9 @@ function initialSessionSlice(): SessionSlice {
     waitingSubagents: new Set<string>(),
     notice: null,
     waitingForNetwork: false,
+    // GitHub #6: cleared by every respawn/reset — a folder that came back and
+    // got a real host must not keep the missing-workspace banner.
+    workspaceMissing: false,
     // Taskana 4772 review F2: per-source count of open waiting episodes
     // (parent + inline-subagent children share one network, so both can park
     // at once). waitingForNetwork is its `sum > 0` projection.
@@ -5265,7 +5284,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         set({ childSurface: true });
       },
 
-      setHostExited(): void {
+      setHostExited(missingWorkspace = false): void {
         // Slice P7.14: the host dying is an anomalous end — hold a non-empty
         // queue paused so nothing drains silently once a new host connects.
         // The connection flip AWAY from "ready" already disables the drainer,
@@ -5282,6 +5301,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             state.queueInFlight !== null ? [state.queueInFlight.item, ...state.promptQueue] : state.promptQueue;
           return {
             connection: "host_exited",
+            // GitHub #6: only the missing-folder refusal is terminal; every other
+            // exit keeps the reconnecting path open, so the flag follows the call.
+            workspaceMissing: missingWorkspace,
             queueInFlight: null,
             promptQueue,
             // Taskana 4772 review F3: the host is gone, so the turn is

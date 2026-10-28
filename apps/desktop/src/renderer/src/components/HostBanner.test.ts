@@ -3,8 +3,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { HostBanner } from "./HostBanner.js";
 
-function render(connection: "awaiting_port" | "awaiting_host_ready" | "ready" | "host_exited", lastFatal: string | null): string {
-  return renderToStaticMarkup(createElement(HostBanner, { connection, lastFatal }));
+function render(
+  connection: "awaiting_port" | "awaiting_host_ready" | "ready" | "host_exited",
+  lastFatal: string | null,
+  workspaceMissing = false,
+): string {
+  return renderToStaticMarkup(createElement(HostBanner, { connection, lastFatal, workspaceMissing }));
 }
 
 describe("HostBanner — GitHub #6 missing workspace", () => {
@@ -12,6 +16,7 @@ describe("HostBanner — GitHub #6 missing workspace", () => {
     const html = render(
       "host_exited",
       "Workspace folder does not exist: /missing/folder. Close this tab and choose another folder.",
+      true,
     );
     expect(html).toContain("Workspace folder does not exist: /missing/folder");
     expect(html).toContain("Close this tab and choose another folder");
@@ -24,5 +29,21 @@ describe("HostBanner — GitHub #6 missing workspace", () => {
     expect(render("awaiting_host_ready", null)).toContain("Connecting to host");
     expect(render("host_exited", null)).toContain("Host process exited — reconnecting…");
     expect(render("ready", null)).toBe("");
+  });
+
+  it("keeps the reconnecting state for an ORDINARY fatal — a failed turn does not stop a respawn", () => {
+    // The regression this guards: suppressing every `lastFatal` left an old
+    // fatal on screen through an exit+respawn, so the user could not tell that
+    // the host was coming back.
+    const html = render("host_exited", "Turn failed: upstream 500");
+    expect(html).toContain("Host fatal: Turn failed: upstream 500");
+    expect(html).toContain("Host process exited — reconnecting…");
+  });
+
+  it("an ordinary fatal over a live connection adds no connection line", () => {
+    const html = render("ready", "Compaction failed");
+    expect(html).toContain("Host fatal: Compaction failed");
+    expect(html).not.toContain("reconnecting");
+    expect(html).not.toContain("Connecting to host");
   });
 });

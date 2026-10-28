@@ -5,34 +5,41 @@ import type { ConnectionPhase } from "../store.js";
  * Extracted from `App.tsx`'s `SessionSurface` so the states can be asserted
  * without mounting the whole surface.
  *
- * `lastFatal` wins over the connection-phase lines: when the cause is known,
- * the surface must not also claim it is "reconnecting…" — the GitHub #6 shape
- * (a workspace folder that no longer exists never gets a host, so no amount of
- * waiting brings the tab back).
+ * A fatal message is always shown. Only `workspaceMissing` — the terminal
+ * GitHub #6 condition, where main refused to fork because the tab's folder no
+ * longer exists — also suppresses the connection lines: no amount of waiting
+ * brings that host back, so "reconnecting…" would be a lie. Every OTHER fatal
+ * (a failed turn, a failed compaction) leaves a live host that may well exit
+ * and respawn, so the connection status must keep showing.
  */
 export function HostBanner({
   connection,
   lastFatal,
+  workspaceMissing,
 }: {
   connection: ConnectionPhase;
   lastFatal: string | null;
+  /** The tab is stopped for good: its workspace folder is gone (GitHub #6). */
+  workspaceMissing: boolean;
 }) {
-  if (lastFatal !== null) {
-    return (
-      <div className="banner banner-fatal" role="alert">
-        Host fatal: {lastFatal}
-      </div>
-    );
-  }
   return (
     <>
-      {connection === "host_exited" && (
-        <div className="banner banner-host-exited" role="alert">
-          Host process exited — reconnecting…
+      {!workspaceMissing && (
+        <>
+          {connection === "host_exited" && (
+            <div className="banner banner-host-exited" role="alert">
+              Host process exited — reconnecting…
+            </div>
+          )}
+          {connection === "awaiting_port" && <div className="banner banner-info">Waiting for the host connection…</div>}
+          {connection === "awaiting_host_ready" && <div className="banner banner-info">Connecting to host…</div>}
+        </>
+      )}
+      {lastFatal !== null && (
+        <div className="banner banner-fatal" role="alert">
+          Host fatal: {lastFatal}
         </div>
       )}
-      {connection === "awaiting_port" && <div className="banner banner-info">Waiting for the host connection…</div>}
-      {connection === "awaiting_host_ready" && <div className="banner banner-info">Connecting to host…</div>}
     </>
   );
 }

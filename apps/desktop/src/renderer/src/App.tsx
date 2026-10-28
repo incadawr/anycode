@@ -361,6 +361,9 @@ export function SessionSurface({ tabId, onToast, suppressPermissionModal = false
   const todoReminderState = useTabStore((state) => state.todoReminderState);
   const turn = useTabStore((state) => state.turn);
   const lastFatal = useTabStore((state) => state.lastFatal);
+  // GitHub #6: the terminal missing-folder condition — the only case where the
+  // banner drops the connection lines instead of reporting a reconnect.
+  const workspaceMissing = useTabStore((state) => state.workspaceMissing);
   const workspace = useTabStore((state) => state.workspace);
   // Taskana 4736 xfix D4: a child surface never shows the workspace-trust
   // dialog — the child shares the parent's workspace and booted with the
@@ -436,7 +439,7 @@ export function SessionSurface({ tabId, onToast, suppressPermissionModal = false
   return (
     <>
       <div className="session-conversation">
-        <HostBanner connection={connection} lastFatal={lastFatal} />
+        <HostBanner connection={connection} lastFatal={lastFatal} workspaceMissing={workspaceMissing} />
 
         <MessageList
           key={tabId}
