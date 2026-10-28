@@ -9,14 +9,14 @@ send them a message. It is a local MCP endpoint that runs while AnyCode is open.
 | Tool | What it does |
 |---|---|
 | `list_sessions` | Lists the shared sessions. No transcript or credentials. |
-| `get_session_status` | Engine and running/idle state of a shared session. |
+| `get_session_status` | Engine, running/idle state, the selected model and effort, the model's supported effort levels and whether an effort change is still pending. |
 | `get_session_result` | Latest completed public answer and its turn identity. No reasoning. |
 | `send_message` | Sends a message. `mode: next_turn` queues it for the next turn; `mode: steer` steers an active Codex turn. |
 | `get_message_status` | Delivery state of a message you sent. |
 | `wait_for_result` | Waits (up to 120 s per call) until the turn that took your message finishes, then returns its answer. Returns `pending` on timeout; call it again. |
 | `cancel_turn` | Stops the running turn of a shared session, like the Stop button. Queued messages are rejected and parked approvals are denied. An idle session answers `cancelled: false`, which is not an error. |
 | `close_session` | Closes a shared tab opened by `create_session`; stop a running turn with `cancel_turn` first. |
-| `create_session` | Opens a new tab in a project where you switched on **Allow agents to open tasks here**. See "Let agents open tasks" below. |
+| `create_session` | Opens a new tab in a project where you switched on **Allow agents to open tasks here**, optionally with a validated reasoning effort. See "Let agents open tasks" below. |
 | `list_pending_approvals` | Lists tool requests waiting for an answer. Only sessions with **External approvals** on. See below. |
 | `answer_approval` | Allows or denies one pending request of a session with **External approvals** on. See below. |
 
@@ -78,7 +78,7 @@ Settings → Sessions API → Advanced lists the projects that allow it and has 
 **Off** button for each; turning one on is only done in the sidebar.
 
 Input: `workspace` (absolute path, required); optional `engine` (`core`,
-`codex`, `claude`), `model`, `handle` and `firstMessage`. The new session is
+`codex`, `claude`), `model`, `effort`, `handle` and `firstMessage`. The new session is
 shared immediately. An accepted `handle` becomes the tab title: it replaces the
 title the first message would have produced and stays fixed through automatic
 titling, closing the tab, restarting AnyCode and resuming the session.
@@ -130,6 +130,70 @@ changed while the tab was opening), `firstMessage` is refused with
 - For `engine: "codex"` or `engine: "claude"`, `model` is the model that engine
   runs.
 
+### Set the reasoning effort
+
+`effort` sets the new session's reasoning effort for the whole session:
+
+```json
+{
+  "workspace": "/path/to/project",
+  "engine": "codex",
+  "model": "gpt-6.1-terra",
+  "effort": "xhigh",
+  "firstMessage": "Reply with READY."
+}
+```
+
+- The allowed values are **model-dependent**, so the schema declares a plain
+  string and the engine's own list is the authority. A Codex model reports the
+  levels its `model/list` entry advertises (which can include levels AnyCode
+  itself does not use, such as `xhigh`, and future ones), Claude reports the
+  levels its session catalog advertises, and for core the configured provider
+  connection's model decides.
+- The value must match one of those levels **exactly**: no surrounding spaces,
+  no different case, no nearest-level substitution. A value that is not
+  advertised, an empty or whitespace-only value, or a non-string is refused.
+- The effort is configured **before** the tab is shared, before any handle is
+  assigned and before `firstMessage` is delivered, so the very first turn runs
+  at the effort you asked for.
+- Omit `effort` to keep the engine's own default. The override applies to this
+  session only; it never changes the connection's saved model settings, and it
+  is not remembered for a later session.
+- A model that advertises no effort levels at all refuses every explicit
+  effort: nothing is silently downgraded to a default and reported as success.
+- The chosen effort survives a turn. Selecting a new effort from the tab's own
+  model menu still works as before; a Codex/Claude pick becomes effective on the
+  next turn and the status shows it as pending until then.
+
+Refusal example:
+
+```text
+create_session invalid_effort: reasoning effort is not supported — engine=codex; model="gpt-6.1-terra"; effort="turbo"; allowed=["low","medium","high","xhigh"]; reason=not_advertised
+```
+
+The code is always `invalid_effort`, and the text names the engine, the selected
+model, the requested value and the complete allowed list, so a client can retry
+with a value from that list. `reason` is one of `invalid_type` (not a non-empty
+string), `no_supported_levels` (the model advertises none) or `not_advertised`
+(the value is not in the list). A session whose effort could not be confirmed in
+time is refused with `not_ready` instead, and no tab is left behind.
+
+### Session status
+
+`get_session_status` answers the engine, the running/idle state and these
+effort fields:
+
+| Field | Meaning |
+|---|---|
+| `model` | The model selected for the next turn. |
+| `effort` | The effort selected for the next turn, or `null` when the session has not reported one. |
+| `supportedEfforts` | The selected model's own advertised levels, in the engine's order. Empty means the model advertises none, so no explicit effort can be set. |
+| `appliedEffort` | The effort the current applied setting actually carries, or `null`. |
+| `effortPending` | `true` while the selected pair differs from the applied pair — a chosen effort that a Codex or Claude session has not applied yet. |
+
+A model default is never invented: `null` means "unknown or absent", not
+"the model's default".
+
 Rules and limits:
 
 - The folder must be trusted in AnyCode (Settings → Permissions).
@@ -141,8 +205,11 @@ Rules and limits:
 - A refusal is an error whose text starts with a code: `not_allowed` (the
   project switch is off, or the folders list excludes it), `not_trusted`,
   `folder_not_found`, `rate_limited`, `too_many`, `not_ready` (the engine is not
-  signed in, or the tab limit is reached), `invalid_model` (`model` does not
-  select exactly one provider connection; the text lists the candidates).
+  signed in, or the tab limit is reached, or the new session could not confirm
+  its effort), `invalid_model` (`model` does not select exactly one provider
+  connection; the text lists the candidates), `invalid_effort` (the requested
+  effort is not one the selected model advertises; the text lists the allowed
+  values).
 - Tabs an agent opened carry an **agent** marker in the sidebar row and in the
   session header. Agent-opened marking is in memory: after an app restart,
   restored tabs have no agent marker and cannot be closed by agents
@@ -267,6 +334,7 @@ Services that bridge an outside channel use the same tools. See the
 | `create_session` says `not_trusted` | Trust the folder first (Settings → Permissions). |
 | `create_session` says `rate_limited` or `too_many` | At most 5 per minute and 8 agent-opened tabs alive. Wait, or close some. |
 | `create_session` says `invalid_model` | The `model` value matches no configured provider connection, or more than one. The error lists the connections; retry with a connection id, its label, `<providerId>/<model>`, or omit `model`. |
+| `create_session` says `invalid_effort` | The selected model does not advertise that effort. The error lists the allowed values for that engine and model; retry with one of them, or omit `effort` to use the engine default. |
 | Copy buttons are disabled | The endpoint is not listening. Fix the status first. |
 | Copied config says the adapter was not found | This build does not include the adapter. Install an official build. |
 | `401` after you regenerate the token | Check that the discovery file is private and current, then retry the call or restart the MCP connection. |

@@ -9,9 +9,15 @@ import {
   activeEnginePreset,
   engineChipLabel,
   engineControlDisabled,
+  engineEffortOptions,
+  engineEffortSummary,
+  engineMenuChipLabel,
   engineModelDisplayName,
   engineModelItems,
   enginePresetTooltip,
+  engineSelectedEffort,
+  engineSelectedModel,
+  nativeEffortControl,
 } from "./EngineControls.js";
 
 describe("engineControlDisabled", () => {
@@ -104,5 +110,70 @@ describe("enginePresetTooltip", () => {
     expect(enginePresetTooltip("Ask", "Codex asks before running commands or changing files (default).", "Read-only")).toBe(
       'Codex asks before running commands or changing files (default). Switching to "Read-only" — applies from the next turn.',
     );
+  });
+});
+
+// ── Native effort gating ─────────────────────────────────────────────────
+// Capability comes from the SELECTED model's advertised vocabulary — never
+// from the existence of a current effort value, and never from AnyCode's
+// provider catalog (the synthetic model below has no catalog entry at all).
+describe("engineEffortOptions", () => {
+  const nativeModel = {
+    current: "gpt-6.1-terra",
+    available: [
+      { id: "gpt-6.1-terra", label: "GPT-6.1 Terra", efforts: ["low", "medium", "high", "xhigh"] },
+      { id: "plain", label: "Plain" },
+    ],
+  };
+
+  it("offers native effort without a known current effort", () => {
+    // No `effort.current` is supplied anywhere: the row must still be offered.
+    expect(engineEffortOptions(nativeModel)).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(engineEffortSummary({ current: undefined })).toBe("Default");
+    expect(engineEffortSummary(undefined)).toBe("Default");
+    expect(engineMenuChipLabel(nativeModel, undefined, { current: undefined })).toBe("GPT-6.1 Terra · Default");
+  });
+
+  it("uses the pending model's vocabulary while a model switch is queued", () => {
+    expect(engineEffortOptions(nativeModel, "plain")).toEqual([]);
+    expect(engineEffortOptions(nativeModel, "gpt-6.1-terra")).toEqual(["low", "medium", "high", "xhigh"]);
+  });
+
+  it("offers nothing for a model the catalog does not list (no invented vocabulary)", () => {
+    expect(engineEffortOptions({ current: "not-in-catalog", available: [{ id: "other", efforts: ["high"] }] })).toEqual([]);
+  });
+
+  it("shows active and pending model and effort separately", () => {
+    // The ACTIVE value always reads first; the queued target is explicitly
+    // marked, so a pending pick can never masquerade as applied.
+    expect(engineEffortSummary({ current: "high", pending: "xhigh" })).toBe("high → xhigh (next turn)");
+    expect(engineMenuChipLabel(nativeModel, "plain", { current: "high" })).toBe("GPT-6.1 Terra → Plain (next turn) · high");
+    // Adding an effort row must NOT suppress a pending model label.
+    expect(engineMenuChipLabel(nativeModel, "plain", { current: "xhigh", pending: "low" })).toBe(
+      "GPT-6.1 Terra → Plain (next turn) · xhigh → low (next turn)",
+    );
+    expect(engineMenuChipLabel(nativeModel, undefined, undefined)).toBe("GPT-6.1 Terra");
+  });
+
+  it("compares a pick against the NEXT-TURN choice, not the applied one", () => {
+    // The applied model/effort is what a pick must be able to CANCEL: with
+    // `xhigh` queued and `medium` applied, picking `medium` is a change.
+    expect(engineSelectedModel(nativeModel, undefined)).toBe("gpt-6.1-terra");
+    expect(engineSelectedModel(nativeModel, "plain")).toBe("plain");
+    expect(engineSelectedEffort({ current: "medium" })).toBe("medium");
+    expect(engineSelectedEffort({ current: "medium", pending: "xhigh" })).toBe("xhigh");
+    expect(engineSelectedEffort({ current: undefined })).toBeUndefined();
+  });
+
+  it("supplies the effort control from the vocabulary, without a known current effort", () => {
+    // No `effort` value at all: the control still exists (capability, not a value).
+    const control = nativeEffortControl(nativeModel, undefined, "xhigh", () => {});
+    expect(control).toBeDefined();
+    expect(control?.current).toBeUndefined();
+    expect(control?.pending).toBe("xhigh");
+    // A model with no advertised levels gets no control.
+    expect(nativeEffortControl({ current: "plain", available: nativeModel.available }, undefined, undefined, () => {})).toBeUndefined();
+    // The SELECTED (queued) model's vocabulary decides.
+    expect(nativeEffortControl(nativeModel, "plain", undefined, () => {})).toBeUndefined();
   });
 });

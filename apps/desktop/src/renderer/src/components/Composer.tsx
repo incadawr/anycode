@@ -35,7 +35,7 @@ import {
 } from "../paste.js";
 import { ModeMenu, modeChangeDisabled } from "./ModeMenu.js";
 import { ModelPill, modelPickDisabled } from "./ModelPill.js";
-import { EngineModelMenu, EnginePresetMenu, engineControlDisabled } from "./EngineControls.js";
+import { EngineModelMenu, EnginePresetMenu, engineControlDisabled, nativeEffortControl } from "./EngineControls.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
 import { BackgroundAgents } from "./BackgroundAgents.js";
 import { PromptQueue } from "./PromptQueue.js";
@@ -1892,6 +1892,12 @@ export function Composer() {
       ? "⏎ send · ⇧⏎ newline"
       : "Enter send · Shift+Enter newline";
   const hintHidden = !ready || (running ? !hasDraft : hasDraft);
+  // Capability, not a current value: the effort row is offered whenever the
+  // SELECTED native model advertises levels (`engineEffortOptions`), even if
+  // this session has not reported an applied effort yet.
+  const nativeEffort = engine?.model !== undefined
+    ? nativeEffortControl(engine.model, pendingEngineChange?.model, pendingEngineChange?.effort, handleEngineEffortPick)
+    : undefined;
   const sendDisabledReason = !ready
     ? "Waiting for the session to connect"
     : attachmentsBlockedByModel
@@ -2099,7 +2105,7 @@ export function Composer() {
               catalog — ModelPill (settings-store-backed) is core-only. */}
           {supportsModelSelection &&
             (engine?.model ? (
-              <EngineModelMenu model={engine.model} pendingModel={pendingEngineChange?.model} disabled={engineControlDisabled(turn.status, queueInFlight, ready)} onPick={handleEngineModelPick} {...(engine.model.effort !== undefined ? { effort: { current: engine.model.effort, pending: pendingEngineChange?.effort, onPick: handleEngineEffortPick } } : {})} />
+              <EngineModelMenu model={engine.model} pendingModel={pendingEngineChange?.model} disabled={engineControlDisabled(turn.status, queueInFlight, ready)} onPick={handleEngineModelPick} {...(nativeEffort !== undefined ? { effort: nativeEffort } : {})} />
             ) : (
               <ModelPill />
             ))}

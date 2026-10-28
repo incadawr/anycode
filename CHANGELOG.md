@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Choose reasoning effort for native Codex models, including models outside the built-in catalog, and set validated effort when creating sessions through the Sessions API. Session status reports the selected effort and supported levels.
+
 ### Fixed
 
 - The context popover's session spend line wraps instead of clipping the subagent share and the price qualifiers.

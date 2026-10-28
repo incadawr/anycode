@@ -90,6 +90,98 @@ export function engineChipLabel(activeLabel: string, pendingLabel: string | unde
 }
 
 /**
+ * The native menu's effort vocabulary for the model that is actually selected:
+ * the pending model when a switch is queued, otherwise the current one. PURE
+ * and derived from `model.available` ONLY — a native engine's own catalog,
+ * never AnyCode's provider catalog and never core's closed effort union. A
+ * model absent from the catalog advertises nothing (`[]`), which is the honest
+ * answer: the menu must not offer levels nobody can validate downstream.
+ * Exported for unit testing (and reused by the automation facade).
+ */
+export function engineEffortOptions(
+  model: EngineModelMenuProps["model"],
+  pendingModel?: string,
+): readonly string[] {
+  const id = pendingModel ?? model.current;
+  return model.available.find((item) => item.id === id)?.efforts ?? [];
+}
+
+/**
+ * The effort row's value text. `current` is the APPLIED effort (absent when the
+ * session has not reported one — shown as `Default`, never as an invented
+ * level); `pending` is the chosen-but-not-yet-applied level and is marked as
+ * applying on the next turn, so it can never read as already active.
+ * Exported for unit testing.
+ */
+export function engineEffortSummary(effort?: { current?: string; pending?: string }): string {
+  if (effort === undefined) {
+    return "Default";
+  }
+  const current = effort.current ?? "Default";
+  return effort.pending !== undefined ? `${current} → ${effort.pending} (next turn)` : current;
+}
+
+/**
+ * The model a native pick must be compared against: the NEXT-TURN choice. A
+ * queued pick is the selection in force from the next turn on, so choosing the
+ * applied model to CANCEL it is a change and must still be sent.
+ * Exported for unit testing.
+ */
+export function engineSelectedModel(model: EngineModelMenuProps["model"], pendingModel: string | undefined): string {
+  return pendingModel ?? model.current;
+}
+
+/**
+ * The effort a native pick must be compared against — the same next-turn rule
+ * as {@link engineSelectedModel}. Comparing against the applied effort instead
+ * swallowed a pick that cancels a pending choice (applied `medium`, pending
+ * `xhigh`, user picks `medium`: the menu closed and the next turn still ran at
+ * `xhigh`). Exported for unit testing.
+ */
+export function engineSelectedEffort(effort?: { current?: string; pending?: string }): string | undefined {
+  return effort?.pending ?? effort?.current;
+}
+
+/**
+ * The effort control Composer hands to `EngineModelMenu` — present whenever the
+ * SELECTED model advertises levels, and absent otherwise. Capability is the
+ * vocabulary (`engineEffortOptions`), never the presence of a current effort
+ * value: a session that has not reported one yet still gets the row.
+ * Exported for unit testing (the mounted DOM test builds its props with it).
+ */
+export function nativeEffortControl(
+  model: { readonly current: string; readonly available: readonly EngineModelChoice[]; readonly effort?: string },
+  pendingModel: string | undefined,
+  pendingEffort: string | undefined,
+  onPick: (effort: string) => void,
+): EngineModelMenuProps["effort"] {
+  if (engineEffortOptions(model, pendingModel).length === 0) {
+    return undefined;
+  }
+  return { current: model.effort, pending: pendingEffort, onPick };
+}
+
+/**
+ * The native chip's full label: the model half keeps ALL of `engineChipLabel`'s
+ * pending-model semantics (active first, queued target marked), and the effort
+ * half is the same applied-then-queued summary the effort row shows — appended
+ * rather than replacing it, so adding effort must not suppress a pending model
+ * (and a queued effort must not read as applied).
+ * Exported for unit testing.
+ */
+export function engineMenuChipLabel(
+  model: EngineModelMenuProps["model"],
+  pendingModel: string | undefined,
+  effort?: { current?: string; pending?: string },
+): string {
+  const base = engineChipLabel(
+    engineModelDisplayName(model.current, model.available),
+    pendingModel !== undefined ? engineModelDisplayName(pendingModel, model.available) : undefined,
+  );
+  return effort === undefined ? base : `${base} · ${engineEffortSummary(effort)}`;
+}
+
+/**
  * The active preset in the engine's own catalog, by id. `undefined` only for
  * a malformed/stale presentation (a persisted-but-removed preset id) — the
  * chip falls back to the raw id in that case. Exported for unit testing.
@@ -272,7 +364,17 @@ export interface EngineModelMenuProps {
   pendingModel: string | undefined;
   disabled: boolean;
   onPick(modelId: string): void;
-  effort?: { current: string; pending?: string; onPick(effort: string): void };
+  /**
+   * The effort control. `current` is OPTIONAL on purpose: an
+   * unknown current effort means "this session has not reported one yet", not
+   * "this model has no effort capability" — capability is `model.available`
+   * alone, so the row must appear as soon as the vocabulary is nonempty.
+   */
+  effort?: {
+    current?: string;
+    pending?: string;
+    onPick(effort: string): void;
+  };
 }
 
 /**
@@ -284,13 +386,18 @@ export function EngineModelMenu({ model, pendingModel, disabled, onPick, effort 
   const items = engineModelItems(model.current, model.available);
   const activeLabel = engineModelDisplayName(model.current, model.available);
   const pendingLabel = pendingModel !== undefined ? engineModelDisplayName(pendingModel, model.available) : undefined;
-  const efforts = effort === undefined ? [] : (model.available.find((item) => item.id === model.current)?.efforts ?? []);
+  // Capability comes from the engine's own advertised vocabulary for the
+  // SELECTED (possibly pending) model — never from the existence of a current
+  // effort value, and never from AnyCode's provider catalog.
+  const efforts = engineEffortOptions(model, pendingModel);
+  const showEffort = efforts.length > 0;
   const [page, setPage] = useState<"root" | "model" | "effort">("root");
-  const itemCount = page === "root" ? (efforts.length > 0 ? 2 : 1) : page === "model" ? items.length : efforts.length;
+  const itemCount = page === "root" ? (showEffort ? 2 : 1) : page === "model" ? items.length : efforts.length;
   const currentIndex = page === "model" ? Math.max(0, items.findIndex((item) => item.id === model.current)) : page === "effort" ? Math.max(0, efforts.indexOf(effort?.current ?? "")) : 0;
 
   const menu = useEngineMenuState(itemCount, currentIndex, disabled);
-  const chipLabel = effort === undefined ? engineChipLabel(activeLabel, pendingLabel) : `${activeLabel} · ${effort.current}`;
+  const chipLabel = engineMenuChipLabel(model, pendingModel, effort);
+  const effortSummary = engineEffortSummary(effort);
   useEffect(() => {
     if (!menu.open) setPage("root");
   }, [menu.open]);
@@ -299,14 +406,18 @@ export function EngineModelMenu({ model, pendingModel, disabled, onPick, effort 
     if (disabled) {
       return;
     }
-    if (id !== model.current) {
+    // Compared against the NEXT-TURN choice: picking the applied model while
+    // another switch is queued is what CANCELS that switch, so it must be sent.
+    if (id !== engineSelectedModel(model, pendingModel)) {
       onPick(id);
     }
     menu.close(true);
   }
 
   function pickEffort(value: string): void {
-    if (!disabled && value !== effort?.current) effort?.onPick(value);
+    // Same rule as `pick`: cancelling a queued effort by re-picking the applied
+    // one is a real change to the next turn and must reach the host.
+    if (!disabled && effort !== undefined && value !== engineSelectedEffort(effort)) effort.onPick(value);
     menu.close(true);
   }
 
@@ -315,7 +426,7 @@ export function EngineModelMenu({ model, pendingModel, disabled, onPick, effort 
       <EngineMenuChip
         label={chipLabel}
         tooltip={chipLabel}
-        ariaLabel="Codex model and effort"
+        ariaLabel="Engine model and effort"
         disabled={disabled}
         open={menu.open}
         chipRef={menu.chipRef}
@@ -326,20 +437,44 @@ export function EngineModelMenu({ model, pendingModel, disabled, onPick, effort 
         <div
           className="model-pill-popover"
           role="menu"
-          aria-label="Codex model and effort"
+          aria-label="Engine model and effort"
+          data-model-pill-page="root"
           onKeyDown={(event) => menu.onMenuKeyDown(event, (index) => {
             if (index === 0) setPage("model");
-            else if (efforts.length > 0) setPage("effort");
+            else if (showEffort) setPage("effort");
           })}
           style={menu.anchor ? { left: menu.anchor.left, bottom: menu.anchor.bottom } : undefined}
         >
           <button ref={(el) => { menu.itemRefs.current[0] = el; }} type="button" role="menuitem" tabIndex={menu.focusIndex === 0 ? 0 : -1} className="model-pill-row" onClick={() => setPage("model")}><span className="model-pill-row-name">Model</span><span className="model-pill-row-value">{engineChipLabel(activeLabel, pendingLabel)}</span><Chevron className="model-pill-row-chevron" /></button>
-          {efforts.length > 0 && <button ref={(el) => { menu.itemRefs.current[1] = el; }} type="button" role="menuitem" tabIndex={menu.focusIndex === 1 ? 0 : -1} className="model-pill-row" onClick={() => setPage("effort")}><span className="model-pill-row-name">Effort</span><span className="model-pill-row-value">{effort?.current}{effort?.pending !== undefined ? ` → ${effort.pending}` : ""}</span><Chevron className="model-pill-row-chevron" /></button>}
+          {showEffort && <button ref={(el) => { menu.itemRefs.current[1] = el; }} type="button" role="menuitem" tabIndex={menu.focusIndex === 1 ? 0 : -1} className="model-pill-row" onClick={() => setPage("effort")}><span className="model-pill-row-name">Effort</span><span className="model-pill-row-value">{effortSummary}</span><Chevron className="model-pill-row-chevron" /></button>}
         </div>
       )}
-      {menu.open && page !== "root" && <div className="model-pill-popover" role="menu" aria-label={page === "model" ? "Codex model" : "Codex reasoning effort"} onKeyDown={(event) => menu.onMenuKeyDown(event, (index) => { if (page === "model") { const item = items[index]; if (item) pick(item.id); } else { const value = efforts[index]; if (value) pickEffort(value); } })} style={menu.anchor ? { left: menu.anchor.left, bottom: menu.anchor.bottom } : undefined}>
+      {menu.open && page !== "root" && <div className="model-pill-popover" role="menu" aria-label={page === "model" ? "Engine model" : "Engine reasoning effort"} data-model-pill-page={page} onKeyDown={(event) => menu.onMenuKeyDown(event, (index) => { if (page === "model") { const item = items[index]; if (item) pick(item.id); } else { const value = efforts[index]; if (value) pickEffort(value); } })} style={menu.anchor ? { left: menu.anchor.left, bottom: menu.anchor.bottom } : undefined}>
         <button type="button" className="model-pill-back" onClick={() => setPage("root")}><Chevron className="model-pill-back-chevron" />{page === "model" ? "Model" : "Effort"}</button>
-        {(page === "model" ? items : efforts.map((value) => ({ id: value, label: value }))).map((item, index) => { const current = page === "model" ? item.id === model.current : item.id === effort?.current; const queued = page === "model" ? item.id === pendingModel : item.id === effort?.pending; return <button key={item.id} ref={(el) => { menu.itemRefs.current[index] = el; }} type="button" role="menuitemradio" aria-checked={current} tabIndex={index === menu.focusIndex ? 0 : -1} className={`model-pill-item${current ? " model-pill-item-current" : ""}`} onClick={() => page === "model" ? pick(item.id) : pickEffort(item.id)}><span className="model-pill-item-check" aria-hidden="true">{current ? <Check /> : null}</span><span className="model-pill-item-name">{item.label}</span>{queued && <span className="engine-menu-item-pending">next turn</span>}</button>; })}
+        {(page === "model" ? items : efforts.map((value) => ({ id: value, label: value }))).map((item, index) => {
+          const current = page === "model" ? item.id === model.current : item.id === (effort?.current ?? null);
+          const queued = page === "model" ? item.id === pendingModel : item.id === effort?.pending;
+          return (
+            <button
+              key={item.id}
+              ref={(el) => { menu.itemRefs.current[index] = el; }}
+              type="button"
+              role="menuitemradio"
+              aria-checked={current}
+              tabIndex={index === menu.focusIndex ? 0 : -1}
+              className={`model-pill-item${current ? " model-pill-item-current" : ""}`}
+              // Stable identity stamps for the automation facade: raw attribute
+              // values, never a position derived from a catalog that may disagree
+              // with what is rendered.
+              {...(page === "model" ? { "data-model-id": item.id } : { "data-effort": item.id })}
+              onClick={() => page === "model" ? pick(item.id) : pickEffort(item.id)}
+            >
+              <span className="model-pill-item-check" aria-hidden="true">{current ? <Check /> : null}</span>
+              <span className="model-pill-item-name">{item.label}</span>
+              {queued && <span className="engine-menu-item-pending">next turn</span>}
+            </button>
+          );
+        })}
       </div>}
     </div>
   );
