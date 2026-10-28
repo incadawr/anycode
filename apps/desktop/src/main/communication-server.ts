@@ -106,7 +106,7 @@ const tools = [
   { name: "list_pending_approvals", description: "List tool requests waiting for an answer, for sessions whose External approvals switch is on. Shows tool and a short scrubbed description, never file contents or raw input. Omit sessionId to list every approving session. Asks that need a human reading or typing (ExitPlanMode, AskUserQuestion) are listed with answerable:false.", inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, additionalProperties: false } },
   { name: "answer_approval", description: "Allow or deny one pending tool request of a session whose External approvals switch is on. First answer wins (UI or this tool); a later answer reports already_answered. No 'always allow' from outside AnyCode.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, approvalId: { type: "string", minLength: 1, maxLength: 100 }, decision: { enum: ["allow", "deny"] } }, required: ["sessionId", "approvalId", "decision"], additionalProperties: false } },
   { name: "cancel_turn", description: "Stop the running turn of an allowed session, like the Stop button: queued agent messages are rejected and parked approvals are denied. Idle is not an error (cancelled:false, reason:idle). Needs only the Sessions API switch.", inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, required: ["sessionId"], additionalProperties: false } },
-  { name: "create_session", description: "Open a new tab in a project where the user switched on 'Allow agents to open tasks here' (sidebar project menu, off by default; trusted folders only; at most 5 per minute and 8 agent-opened alive; only successful creations count towards the per-minute limit). The new session is shared immediately. model picks what the new session runs: for engine \"core\" (the default) it selects the configured provider connection — by connection id, its label, providerId/model, or a model id that connection offers — and an unknown or ambiguous value is refused with invalid_model, whose text lists the candidates; omit model to use the active connection. For \"codex\"/\"claude\" model is passed to that engine. Optional firstMessage is delivered like send_message next_turn and returns messageId (omitted if the host was not ready within 10 s; then use send_message; refused with not_allowed, naming the tab ids, if the new tab is outside the folders list). Errors start with a code: not_allowed, not_trusted, folder_not_found, rate_limited, too_many, not_ready, invalid_model.", inputSchema: { type: "object", properties: { workspace: { type: "string", minLength: 1, maxLength: 4096 }, engine: { enum: ["core", "codex", "claude"] }, model: { type: "string", minLength: 1, maxLength: 128 }, handle: { type: "string", maxLength: 200 }, firstMessage: { type: "string", minLength: 1, maxLength: 32000 } }, required: ["workspace"], additionalProperties: false } },
+  { name: "create_session", description: "Open a new tab in a project where the user switched on 'Allow agents to open tasks here' (sidebar project menu, off by default; trusted folders only; at most 5 per minute and 8 agent-opened alive; only successful creations count towards the per-minute limit). The new session is shared immediately. model picks what the new session runs: for engine \"core\" (the default) it selects the configured provider connection — by connection id, its label, providerId/model, or a model id that connection offers — and an unknown or ambiguous value is refused with invalid_model, whose text lists the candidates; omit model to use the active connection. For \"codex\"/\"claude\" model is passed to that engine. Optional firstMessage is delivered like send_message next_turn and returns messageId (explicit error if the host was not ready within 10 s; refused with not_allowed, naming the tab ids, if the new tab is outside the folders list). Errors start with a code: not_allowed, not_trusted, folder_not_found, rate_limited, too_many, not_ready, invalid_model.", inputSchema: { type: "object", properties: { workspace: { type: "string", minLength: 1, maxLength: 4096 }, engine: { enum: ["core", "codex", "claude"] }, model: { type: "string", minLength: 1, maxLength: 128 }, handle: { type: "string", maxLength: 200 }, firstMessage: { type: "string", minLength: 1, maxLength: 32000 } }, required: ["workspace"], additionalProperties: false } },
   { name: "close_session", description: "Close a shared tab opened by create_session, through the same path as closing it in the UI. A running turn must be stopped with cancel_turn first. Errors start with a code: not_allowed (including env-file mode), not_found (unknown, closing or not shared), not_agent_opened (user tab), busy (running turn or host not ready), last_tab (open another tab first).", inputSchema: { type: "object", properties: { sessionId: { type: "string", minLength: 1 } }, required: ["sessionId"], additionalProperties: false } },
 ];
 
@@ -176,7 +176,10 @@ export async function startCommunicationServer(options: CommunicationServerOptio
       // runtime restarted — acknowledged/rejected/unknown (and their detail)
       // survive unchanged. Only a LOST host generation downgrades a still-
       // queued record later, in `reconcile` (no automatic model replay).
-      if (record.envelope?.messageId) messages.set(record.envelope.messageId, record);
+      if (record.envelope?.messageId) {
+        if (record.detail === "Dispatch pending") { record.state = "unknown"; record.detail = "Host response unavailable; do not blindly resend"; }
+        messages.set(record.envelope.messageId, record);
+      }
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -285,8 +288,9 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     await persist(); // Durable acceptance BEFORE any delivery side effect.
     try {
       const response = await options.manager.communicationRequest(input.sessionId, "send_message", envelope, recipient.workspace) as AgentDelivery;
-      record.state = response.state; record.detail = response.detail;
+      record.state = response.state; record.detail = response.detail === "Dispatch pending" ? "Host response unavailable; do not blindly resend" : response.detail;
     } catch { record.state = "unknown"; record.detail = "Host response unavailable; do not blindly resend"; }
+    await markLostGeneration(record);
     await persist(); return record;
   };
   // Every in-flight wait, so close() can abort them all (no leaked timers or hosts polled after close).
@@ -479,13 +483,17 @@ export async function startCommunicationServer(options: CommunicationServerOptio
           const deadline = Date.now() + (options.readyTimeoutMs ?? 10_000);
           const step = options.readyPollMs ?? 250;
           for (;;) {
-            if (closing || signal.aborted) break;
-            try {
-              await options.manager.communicationRequest(outcome.sessionId, "get_session_status", undefined, resolved);
-              messageId = (await sendMessage({ sessionId: outcome.sessionId, payload: input.firstMessage, mode: "next_turn", kind: "agent_message" })).envelope.messageId;
+            if (closing || signal.aborted) throw new Error("create_session firstMessage delivery aborted");
+            let ready = false;
+            try { await options.manager.communicationRequest(outcome.sessionId, "get_session_status", undefined, resolved); ready = true; }
+            catch { /* host still booting */ }
+            if (ready) {
+              const delivery = await sendMessage({ sessionId: outcome.sessionId, payload: input.firstMessage, mode: "next_turn", kind: "agent_message" });
+              if (delivery.state !== "queued" && delivery.state !== "acknowledged") throw new Error(`create_session firstMessage delivery failed: ${delivery.detail ?? delivery.state}; sessionId ${outcome.sessionId}, tabId ${outcome.tabId}`);
+              messageId = delivery.envelope.messageId;
               break;
-            } catch { /* host still booting, or the tab is not visible yet: poll */ }
-            if (Date.now() >= deadline) break;
+            }
+            if (Date.now() >= deadline) throw new Error(`create_session not_ready: firstMessage not delivered; sessionId ${outcome.sessionId}, tabId ${outcome.tabId}`);
             await sleep(step, signal).catch(() => {});
           }
         }
@@ -502,7 +510,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
             const tab = await requireSession(record.envelope.recipientSessionId);
             const wasQueued = record.state === "queued";
             const current = await options.manager.communicationRequest(record.envelope.recipientSessionId, name, messageId, tab.workspace) as AgentDelivery | undefined;
-            if ((!wasQueued || record.state === "queued") && !await markLostGeneration(record) && current) { record.state = current.state; record.detail = current.detail; await persist(); }
+            if ((!wasQueued || record.state === "queued") && !await markLostGeneration(record) && current && current.detail !== "Dispatch pending") { record.state = current.state; record.detail = current.detail; await persist(); }
           } catch { await markLostGeneration(record); }
         }
         return record;
@@ -515,8 +523,8 @@ export async function startCommunicationServer(options: CommunicationServerOptio
       const tab = await requireSession(sessionId);
       const workspace = await realpath(tab.workspace);
       const existing = messages.get(delivery.envelope.messageId);
-      if (existing) { existing.state = delivery.state; existing.detail = delivery.detail; }
-      else if (messages.size < 10000) { messages.set(delivery.envelope.messageId, { ...delivery, workspace, hostPid: tab.pid }); }
+      if (existing && delivery.detail !== "Dispatch pending") { existing.state = delivery.state; existing.detail = delivery.detail; }
+      else if (!existing && messages.size < 10000) { messages.set(delivery.envelope.messageId, { ...delivery, workspace, hostPid: tab.pid }); }
       await persist();
     })().catch(() => { /* closing or no longer authorized */ });
   });
@@ -528,9 +536,14 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     if (reconciling) return;
     reconciling = true;
     try {
-      for (const record of messages.values()) await markLostGeneration(record);
+      for (const record of messages.values()) {
+        if (record.detail === "Dispatch pending" && Date.now() - Date.parse(record.envelope.createdAt) >= 20_000) {
+          record.state = "unknown"; record.detail = "Host response unavailable; do not blindly resend"; await persist();
+        }
+        await markLostGeneration(record);
+      }
       for (const tab of await tabs()) {
-        const records = [...messages.values()].filter((r) => r.envelope.recipientSessionId === tab.sessionId);
+        const records = [...messages.values()].filter((r) => r.envelope.recipientSessionId === tab.sessionId && r.detail !== "Dispatch pending");
         if (!records.length) continue;
         const key = `${tab.sessionId}:${tab.pid}`;
         if (!restoredHosts.has(key)) {
