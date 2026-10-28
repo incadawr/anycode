@@ -152,6 +152,7 @@ function resolveRefs(value: string, secrets: McpSecretResolver | undefined): Ref
         missing = { kind: "env", name: envName };
         return "";
       }
+      secretValues.push(resolvedValue);
       return resolvedValue;
     }
     const secretValue = secretName === undefined ? undefined : secrets?.(secretName);
@@ -205,7 +206,7 @@ function resolveEnvRecord(
       return { ok: false, missing: resolved.missing };
     }
     result[key] = resolved.value;
-    secretValues.push(...resolved.secretValues);
+    secretValues.push(...resolved.secretValues, resolved.value);
   }
   return { ok: true, value: result, secretValues };
 }
@@ -390,7 +391,7 @@ async function loadSource(
   try {
     parsedJson = JSON.parse(raw);
   } catch (error) {
-    problems.push(`Invalid JSON in MCP config ${path}: ${describeError(error)}`);
+    problems.push(`Invalid JSON in MCP config ${path}`);
     return;
   }
 

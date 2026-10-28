@@ -31,6 +31,7 @@ export interface PrepareEngineMcpForwardOptions {
   projectTrusted?: boolean;
   /** Taskana 4752 part C: the host's `${secret:NAME}` resolver (values were handed over at fork time). */
   secrets?: McpSecretResolver;
+  loginPath?: string;
 }
 
 export interface PreparedEngineMcpForward {
@@ -45,6 +46,9 @@ export interface PreparedEngineMcpForward {
   codexNames: string[];
   /** Controlled, secret-free warnings to drain on the first turn. */
   notices: AgentEvent[];
+  specs: McpServerSpec[];
+  loaderProblems: string[];
+  forwardProblems: McpForwardProblem[];
   /** Idempotent cleanup for the materialized Claude file (no-op when null). */
   cleanupFile: () => void;
 }
@@ -61,13 +65,17 @@ export async function prepareEngineMcpForward(
 ): Promise<PreparedEngineMcpForward> {
   const specs: McpServerSpec[] = [];
   let loaderProblemCount = 0;
+  let loaderProblems: string[] = [];
   try {
     const loaded = await loadMcpServerSpecs(opts.fs, opts.workspace, opts.home, {
       projectTrusted: opts.projectTrusted,
+      loginPath: opts.loginPath,
+      reportDisabled: true,
       ...(opts.secrets !== undefined ? { secrets: opts.secrets } : {}),
     });
     specs.push(...loaded.specs);
-    loaderProblemCount = loaded.problems.length;
+    loaderProblems = loaded.problems;
+    loaderProblemCount = loaded.problems.filter((problem) => !problem.includes("disabled — server skipped")).length;
   } catch {
     // The loader is fail-soft by contract; an unexpected throw is still just
     // "some configured MCP servers could not be loaded".
@@ -110,6 +118,9 @@ export async function prepareEngineMcpForward(
     claudeNames: claude?.names ?? [],
     codexNames: codex?.names ?? [],
     notices,
+    specs,
+    loaderProblems,
+    forwardProblems: problems,
     cleanupFile,
   };
 }

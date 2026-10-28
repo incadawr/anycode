@@ -3300,6 +3300,15 @@ describe("startCodexEngine/resumeCodexEngine — bootNotices forwarding (TASK.18
     return events;
   }
 
+  it.each(["start", "resume"] as const)("%s forwards startup failure notifications during boot", async (mode) => {
+    const seen: JsonRpcNotification[] = [];
+    const opts = { ...wrapperOptions(), mcpForward: { servers: { broken: { command: "missing" } } }, onMcpNotification: (notification: JsonRpcNotification) => seen.push(notification) };
+    const connected = mode === "start" ? await startCodexEngine(opts) : await resumeCodexEngine({ ...opts, externalSessionRef: "thread-180" });
+    try {
+      expect(seen).toContainEqual(expect.objectContaining({ method: "mcpServer/startupStatus/updated", params: expect.objectContaining({ name: "broken", status: "failed", error: "spawn failed" }) }));
+    } finally { await connected.engine.dispose("session-close"); }
+  });
+
   it("startCodexEngine forwards bootNotices — the warning appears once on the first turn", async () => {
     const connected = await startCodexEngine(wrapperOptions([BUDGET_NOTICE]));
     try {

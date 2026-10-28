@@ -1,7 +1,10 @@
 /**
  * Redaction for MCP diagnostics (Taskana 4752, part C). A resolved `${secret:}`
- * value must never reach `status.error`, a problem, or a log. Values shorter than
- * 4 characters are not redacted: they match too much unrelated text to be useful.
+ * value — or, since the stderr diagnostic was widened, any configured
+ * environment/header value, literal or `${env:}`-expanded — must never reach
+ * `status.error`, a problem, or a log. Values shorter than 4 characters are not
+ * redacted: they match too much unrelated text to be useful (a 1-character
+ * value would shred an exit code or a path).
  */
 
 const MIN_REDACT_LENGTH = 4;

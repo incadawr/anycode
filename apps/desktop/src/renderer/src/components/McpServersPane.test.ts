@@ -45,6 +45,8 @@ import {
   splitArgsText,
   toolsBadgeText,
   McpPluginRowItem,
+  McpDiagnosticRows,
+  unmatchedMcpStatuses,
 } from "./McpServersPane.js";
 
 const SENTINEL_VALUE = "SENTINEL_MCP_SECRET_93F1_do_not_render";
@@ -654,5 +656,79 @@ describe("McpFormDialog — the env hint names both references (Taskana 4752, pa
     );
     expect(html).toContain("${secret:NAME}");
     expect(html).toContain("${env:NAME}");
+  });
+});
+
+/**
+ * GitHub #3, gap 2: a server that never started must still be VISIBLE. This is
+ * the loader → host status → pane path, end to end: `loadMcpServerSpecs`
+ * reports a skipped entry, the host turns the problem into a status row
+ * (`mcpProblemStatuses`), and the pane must render it even though the config
+ * snapshot — parsed separately, and stricter about shapes — has no row for it.
+ */
+describe("GitHub #3 — a startup or configuration failure is never silent", () => {
+  async function loadStatuses(config: unknown) {
+    const { loadMcpServerSpecs } = await import("@anycode/core");
+    const { mcpProblemStatuses } = await import("../../../host/mcp-login-path.js");
+    const path = "/project/.anycode/config.json";
+    const raw = typeof config === "string" ? config : JSON.stringify(config);
+    const fs = {
+      exists: async (p: string) => p === path,
+      readFile: async () => raw,
+      writeFile: async () => {},
+      stat: async () => ({ size: 0, mtimeMs: 0, isFile: true, isDirectory: false }),
+      mkdir: async () => {},
+      readdir: async () => [],
+    };
+    const loaded = await loadMcpServerSpecs(fs, "/project", "/home/user");
+    return { loaded, statuses: mcpProblemStatuses(loaded.problems) };
+  }
+
+  it("renders a skipped entry that the config view has no row for", async () => {
+    // An `env` value that is not a string: the loader skips the server, and the
+    // config snapshot's own parser omits the malformed entry entirely.
+    const { loaded, statuses } = await loadStatuses({ mcpServers: { malformed: { command: "node", env: { TOKEN: 123 } } } });
+    expect(loaded.specs).toEqual([]);
+    const html = renderToStaticMarkup(
+      createElement(McpDiagnosticRows, { servers: unmatchedMcpStatuses([], [], statuses) }),
+    );
+    expect(html).toContain("Startup problems");
+    expect(html).toContain("malformed");
+    expect(html).toContain("invalid entry");
+  });
+
+  it("renders a file-level problem that names no server at all", async () => {
+    const { statuses } = await loadStatuses('{"mcpServers": ');
+    const html = renderToStaticMarkup(
+      createElement(McpDiagnosticRows, { servers: unmatchedMcpStatuses([], [], statuses) }),
+    );
+    expect(html).toContain("MCP config");
+    expect(html).toContain("Invalid JSON");
+  });
+
+  it("does not repeat a failure that already has a config row", async () => {
+    const statuses = [status({ name: "live", state: "failed", error: "spawn ENOENT" })];
+    expect(unmatchedMcpStatuses([entry({ name: "live" })], [], statuses)).toEqual([]);
+    // A shadowed row must not swallow the winner's diagnostic either.
+    expect(unmatchedMcpStatuses([entry({ name: "live", shadowed: true })], [], statuses)).toEqual(statuses);
+    // …and only failures are repeated in this section.
+    expect(unmatchedMcpStatuses([], [], [status({ name: "ok", state: "connected" })])).toEqual([]);
+  });
+
+  it("shows a plugin server's startup failure on its own row", async () => {
+    const plugin: McpPluginServerView = {
+      name: "plugin_demo_tool",
+      pluginName: "demo",
+      transport: "stdio",
+      commandLine: "node",
+      consentGranted: true,
+      shadowed: false,
+      pluginRoot: "",
+    };
+    const failure = status({ name: plugin.name, state: "failed", error: "spawn ENOENT" });
+    expect(unmatchedMcpStatuses([], [plugin], [failure])).toEqual([]);
+    expect(renderToStaticMarkup(createElement(McpPluginRowItem, { server: plugin, status: failure }))).toContain(
+      "spawn ENOENT",
+    );
   });
 });

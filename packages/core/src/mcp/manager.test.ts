@@ -586,3 +586,43 @@ it("reports a stdio exit code and stderr in status", async () => {
   expect(manager.status()[0]).toMatchObject({ name: "broken", state: "failed", error: expect.stringMatching(/code=0.*startup failed/s) });
   await manager.dispose();
 });
+
+// GitHub #3: a server that echoes its own configuration on stderr must not leak
+// it. Both halves are covered — a LITERAL `env` value and an EXPANDED
+// `${env:VAR}` one — because the exit diagnostic now forwards stderr verbatim.
+it("redacts literal and expanded configured environment values from child stderr", async () => {
+  const { NodeMcpTransportFactory } = await import("../adapters/node/node-mcp-transport.js");
+  const literal = "literal-secret-8321";
+  const expanded = "expanded-secret-7492";
+  process.env.MCP_REDACT_TEST = expanded;
+  try {
+    const path = "/proj/.anycode/config.json";
+    const config = JSON.stringify({
+      mcpServers: {
+        bad: {
+          command: process.execPath,
+          args: ["-e", "console.error(process.env.LITERAL, process.env.EXPANDED); process.exit(3)"],
+          env: { LITERAL: literal, EXPANDED: "prefix-${env:MCP_REDACT_TEST}" },
+        },
+      },
+    });
+    const fs = {
+      exists: async (p: string) => p === path,
+      readFile: async () => config,
+      writeFile: async () => {},
+      stat: async () => ({ size: 0, mtimeMs: 0, isFile: true, isDirectory: false }),
+      mkdir: async () => {},
+      readdir: async () => [],
+    };
+    const loaded = await loadMcpServerSpecs(fs, "/proj", "/home/u");
+    const manager = new McpManager({ registry: new ToolRegistry(), transports: new NodeMcpTransportFactory() });
+    await manager.start(loaded.specs);
+    const error = manager.status()[0]?.error ?? "";
+    expect(error).toContain("[redacted]");
+    expect(error).not.toContain(literal);
+    expect(error).not.toContain(expanded);
+    await manager.dispose();
+  } finally {
+    delete process.env.MCP_REDACT_TEST;
+  }
+});

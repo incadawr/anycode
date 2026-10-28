@@ -328,3 +328,12 @@ describe("prepareEngineMcpForward — ${secret:} via the host resolver (Taskana 
     expect(JSON.stringify(forward.notices)).not.toContain(SECRET_VALUE);
   });
 });
+
+it("forwards the discovered launcher PATH to both engines and reports skipped entries", async () => {
+  const files = { "/ws/.anycode/config.json": JSON.stringify({ mcpServers: { live: { command: "launcher" }, bad: { env: { TOKEN: 123 } } } }) };
+  const result = await prepareEngineMcpForward({ fs: memFs(files), workspace: "/ws", home: "/other", tmpDir: freshTmp(), pid: process.pid, engines: ["codex", "claude"], loginPath: "/startup-only/bin:/usr/bin" });
+  expect(JSON.stringify(result.codexServers)).toContain("/startup-only/bin:/usr/bin");
+  expect(result.claudeJson).toContain("/startup-only/bin:/usr/bin");
+  expect(result.loaderProblems[0]).toContain("bad");
+  result.cleanupFile();
+});

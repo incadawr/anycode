@@ -1,4 +1,4 @@
-import { discoverLoginPath, mcpProblemStatuses } from "./mcp-login-path.js";
+import { discoverLoginPath, mcpProblemStatuses, codexMcpStatus, claudeMcpStatuses, forwardProblemStatuses } from "./mcp-login-path.js";
 import { readRoleSettings } from "./role-settings.js";
 import { SqliteCodexAgentCardLog } from "./engines/codex/agent-card-log.js";
 import { CodexDynamicToolBridge, codexAgentPermissionMode } from "./engines/codex/dynamic-tool-bridge.js";
@@ -1190,6 +1190,11 @@ function foreignUsageAudit(sessionId: string, beforeWrite: () => Promise<void> =
 // null if it fails-soft) — every reader below guards on this (design §6).
 let mcpManager: McpManager | null = null;
 let mcpConfigStatuses: import("@anycode/core").McpServerStatus[] = [];
+let engineMcpStatuses: import("@anycode/core").McpServerStatus[] = [];
+let hostMcpLoginPath: string | undefined;
+function publishEngineMcpStatuses(): void {
+  emit({ type: "mcp_status", servers: [...engineMcpStatuses, ...mcpConfigStatuses] });
+}
 // null until boot() resolves an opt-in, enabled telemetry config (slice 6.6,
 // default-OFF) — every reader below guards on this, same idiom as mcpManager.
 let telemetry: { port: TelemetryPort; session: string } | null = null;
@@ -1494,9 +1499,11 @@ async function bootCodexSession(
     tmpDir: tmpdir(),
     pid: process.pid,
     engines: ["codex"],
+    loginPath: hostMcpLoginPath,
     projectTrusted: hostWorkspaceTrust.projectTrusted,
     secrets: mcpSecrets,
   });
+  mcpConfigStatuses = [...mcpProblemStatuses(codexMcpForward.loaderProblems), ...forwardProblemStatuses(codexMcpForward.forwardProblems)];
   if (codexMcpForward.codexNames.length > 0) {
     console.log(`[host] codex mcp forward: ${codexMcpForward.codexNames.length} server(s): ${codexMcpForward.codexNames.join(", ")}`);
   }
@@ -1631,7 +1638,11 @@ async function bootCodexSession(
       : {}),
     ...(codexAgentBridge ? { agentBridge: codexAgentBridge } : {}),
     agentCardLog,
-    sourceEnv: process.env,
+    onMcpNotification: (notification: import("./engines/codex/protocol.js").JsonRpcNotification) => {
+      const status = codexMcpStatus(notification, codexMcpForward.specs);
+      if (status) { engineMcpStatuses = [...engineMcpStatuses.filter((item) => item.name !== status.name), status]; publishEngineMcpStatuses(); }
+    },
+    sourceEnv: { ...process.env, PATH: hostMcpLoginPath ?? process.env.PATH },
     shadowLog,
     // TASK.103: per-call re-read so a consent granted or revoked mid-session
     // is honored by the very next spawn gate (D-S4-4) — main is the sole
@@ -2281,9 +2292,11 @@ async function bootClaudeSession(
     tmpDir: tmpdir(),
     pid: process.pid,
     engines: ["claude"],
+    loginPath: hostMcpLoginPath,
     projectTrusted: hostWorkspaceTrust.projectTrusted,
     secrets: mcpSecrets,
   });
+  mcpConfigStatuses = [...mcpProblemStatuses(mcpForward.loaderProblems), ...forwardProblemStatuses(mcpForward.forwardProblems)];
   if (mcpForward.claudeNames.length > 0) {
     console.log(`[host] claude mcp forward: ${mcpForward.claudeNames.length} server(s): ${mcpForward.claudeNames.join(", ")}`);
   }
@@ -2316,7 +2329,7 @@ async function bootClaudeSession(
     // sets no `CLAUDE_CONFIG_DIR` at all and the CLI resolves the SAME
     // `~/.claude` main's doctor diagnosed before it let this tab spawn.
     profileDir: resolveClaudeConfigDir(),
-    sourceEnv: process.env,
+    sourceEnv: { ...process.env, PATH: hostMcpLoginPath ?? process.env.PATH },
     // TASK.103: mirror of the codex closure above — same per-call re-read
     // rationale (D-S4-4).
     binaryTrust: (path: string) => checkClaudeBinaryTrustOnDisk(path, process.platform, readTrustedBinaryConsentsSync(hostSettingsPathOverride())),
@@ -2482,6 +2495,16 @@ async function bootClaudeSession(
   // CLI reports (`claude-opus-4-8`); persisting the latter would fail
   // `catalog.has()` on the next resume and fall back to the default model.
   claudeEngine.onFirstSystemInit((init) => {
+    // GitHub #3: the Claude path spawns the forwarded servers itself, so their
+    // startup outcome never reaches `McpManager` — translate the CLI's own
+    // `system/init` report into status rows instead (missing forwarded servers
+    // included, via the same reconciliation the warning loop below uses).
+    engineMcpStatuses = claudeMcpStatuses(
+      init.mcpServerStatuses,
+      missingForwardedMcpServerNames(init.mcpServerNames, mcpForward.claudeNames, false),
+      mcpForward.specs,
+    );
+    publishEngineMcpStatuses();
     const settled = claudeEngine.snapshot();
     // The `mode` TEXT column stores the Claude preset id verbatim, the same
     // no-migration arrangement codex uses (cut §2(k).4). Nothing reads this
@@ -2896,6 +2919,12 @@ async function boot(): Promise<void> {
     // gate can see child-mode boots — the same parse the core path repeats
     // below unchanged (parseHostArgs is pure; the duplicate is harmless).
     const bootArgs = parseHostArgs(process.argv.slice(2));
+    // GitHub #3: the login-shell PATH is needed by EVERY engine path (both
+    // engines spawn their own MCP servers) and by the core path below, so it is
+    // resolved once, here. Started before the trust gate so the shell probe's
+    // cost overlaps that I/O, and fail-soft by contract (discovery never
+    // rejects; a broken shell yields the conventional-directory fallback).
+    const loginPathProbe = discoverLoginPath();
     hostWorkspaceTrust = await establishHostWorkspaceTrust(new NodeFileSystemAdapter(), {
       workspace,
       home: homedir(),
@@ -2914,6 +2943,7 @@ async function boot(): Promise<void> {
         hash: hostWorkspaceTrust.pending.hash,
       });
     }
+    hostMcpLoginPath = await loginPathProbe;
     const plugin = selectEnginePlugin(process.env);
     engineBootstrap = await beginEngineBootstrap(plugin);
     if (engineBootstrap.id === "codex") {
@@ -3639,7 +3669,7 @@ async function boot(): Promise<void> {
     // wins over a plugin declaring the same name. Fail-soft (mirrors the
     // hook-config block above): a loader failure here must not abort boot —
     // the host just proceeds with zero explicit MCP servers.
-    const mcpLoginPath = await discoverLoginPath();
+    const mcpLoginPath = hostMcpLoginPath;
     let mcpSpecs: McpServerSpec[] = [];
     let mcpProblems: string[] = [];
     try {
@@ -5177,6 +5207,8 @@ process.parentPort.on("message", (event) => {
         // servers — nothing new to tell a late-attaching renderer).
         if (mcpManager) {
           outbound.sendDirect({ type: "mcp_status", servers: [...mcpManager.status(), ...mcpConfigStatuses] });
+        } else if (engineMcpStatuses.length || mcpConfigStatuses.length) {
+          outbound.sendDirect({ type: "mcp_status", servers: [...engineMcpStatuses, ...mcpConfigStatuses] });
         }
       } else {
         // Degraded mode (boot() failed; initFailure is always set by the

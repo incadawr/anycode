@@ -146,6 +146,70 @@ export function joinMcpRows(
   });
 }
 
+/**
+ * A failure the config view cannot show (GitHub #3): the loader skipped the
+ * entry, so it has no row of its own, and a file-level problem has no server
+ * name at all. Only non-shadowed names claimed by a rendered row are excluded —
+ * those already carry the same or a better reason.
+ */
+export function unmatchedMcpStatuses(
+  entries: readonly McpConfigEntryView[],
+  plugins: readonly McpPluginServerView[],
+  servers: readonly McpServerStatus[],
+): McpServerStatus[] {
+  const claimed = new Set([
+    ...entries.filter((entry) => !entry.shadowed).map((entry) => entry.name),
+    ...plugins.filter((plugin) => !plugin.shadowed).map((plugin) => plugin.name),
+  ]);
+  const seen = new Set<string>();
+  return servers.filter((server) => {
+    if (server.state !== "failed" || claimed.has(server.name)) {
+      return false;
+    }
+    const key = `${server.name}\u0000${server.error ?? ""}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+/** Diagnostic rows for failures with no config row of their own — never silence. */
+export function McpDiagnosticRows({ servers }: { servers: readonly McpServerStatus[] }) {
+  if (servers.length === 0) {
+    return null;
+  }
+  return (
+    <div className="mcp-section">
+      <div className="mcp-section-title">
+        Startup problems <span className="mcp-section-count">{servers.length} item{servers.length === 1 ? "" : "s"}</span>
+      </div>
+      <ul className="mcp-row-list">
+        {servers.map((server, index) => (
+          <li
+            className="mcp-row mcp-dot-failed"
+            key={`${server.name}-${index}`}
+            data-mcp-name={server.name}
+          >
+            <div className="mcp-row-main">
+              <span className="mcp-dot" aria-hidden="true" />
+              <div className="mcp-row-lines">
+                <div className="mcp-row-line1">
+                  <span className="mcp-row-name settings-mcp-name">{server.name}</span>
+                </div>
+                <div className="mcp-row-hint" title={describeMcpServer(server).detail}>
+                  {describeMcpServer(server).detail}
+                </div>
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export interface McpRowSections {
   configured: McpJoinedRow[];
   compat: McpJoinedRow[];
@@ -804,6 +868,8 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
         </div>
       ))}
 
+      <McpDiagnosticRows servers={unmatchedMcpStatuses(snapshot?.entries ?? [], snapshot?.pluginServers ?? [], servers).filter((server) => server.name.toLowerCase().includes(searchQuery.trim().toLowerCase()))} />
+
       {!snapshot ? (
         <div className="settings-mcp-empty">Loading MCP servers…</div>
       ) : (
@@ -892,7 +958,7 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
               </div>
               <ul className="mcp-row-list">
                 {(snapshot.pluginServers ?? []).map((server) => (
-                  <McpPluginRowItem key={server.name} server={server} />
+                  <McpPluginRowItem key={server.name} server={server} status={server.shadowed ? undefined : servers.find((item) => item.name === server.name)} />
                 ))}
               </ul>
             </div>
@@ -970,7 +1036,7 @@ function McpRowItem({
           <div className="mcp-row-line2" title={entry.commandLine}>
             {entry.transport} · {entry.commandLine}
           </div>
-          {dotKind === "neutral" && <div className="mcp-row-hint">{detail}</div>}
+          {(dotKind === "neutral" || dotKind === "failed") && <div className="mcp-row-hint">{detail}</div>}
         </div>
       </div>
 
@@ -1397,7 +1463,7 @@ function McpImportDialog({
  * no delete (enable/consent are plugin-scoped, user-global, and live in
  * Settings → Plugins; a `shadowed` row adds "overridden by your config").
  */
-export function McpPluginRowItem({ server }: { server: McpPluginServerView }) {
+export function McpPluginRowItem({ server, status }: { server: McpPluginServerView; status?: McpServerStatus }) {
   return (
     <li className="mcp-row mcp-row-plugin" data-mcp-plugin-server={server.name}>
       <div className="mcp-row-main">
@@ -1410,6 +1476,7 @@ export function McpPluginRowItem({ server }: { server: McpPluginServerView }) {
           <div className="mcp-row-line2" title={server.pluginRoot !== "" ? server.pluginRoot : undefined}>
             {server.commandLine}
           </div>
+          {status && <div className="mcp-row-hint">{describeMcpServer(status).detail}</div>}
           {!server.consentGranted && (
             <div className="mcp-row-hint plugins-mcp-approve">
               Needs approval —{" "}
