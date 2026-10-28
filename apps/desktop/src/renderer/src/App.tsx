@@ -43,6 +43,7 @@ import { Sidebar, SIDEBAR_SEARCH_EVENT } from "./components/Sidebar.js";
 import { WindowControls } from "./components/WindowControls.js";
 import { SessionHeader } from "./components/SessionHeader.js";
 import { MessageList } from "./components/MessageList.js";
+import { HostBanner } from "./components/HostBanner.js";
 import { Composer, shouldEnqueue } from "./components/Composer.js";
 import type { UiToHostMessage } from "../../shared/protocol.js";
 import { FOCUS_MODE_MENU_EVENT } from "./components/ModeMenu.js";
@@ -435,20 +436,7 @@ export function SessionSurface({ tabId, onToast, suppressPermissionModal = false
   return (
     <>
       <div className="session-conversation">
-        {connection === "host_exited" && (
-          <div className="banner banner-host-exited" role="alert">
-            Host process exited — reconnecting…
-          </div>
-        )}
-        {connection === "awaiting_port" && (
-          <div className="banner banner-info">Waiting for the host connection…</div>
-        )}
-        {connection === "awaiting_host_ready" && <div className="banner banner-info">Connecting to host…</div>}
-        {lastFatal && (
-          <div className="banner banner-fatal" role="alert">
-            Host fatal: {lastFatal}
-          </div>
-        )}
+        <HostBanner connection={connection} lastFatal={lastFatal} />
 
         <MessageList
           key={tabId}

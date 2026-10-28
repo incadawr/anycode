@@ -229,7 +229,7 @@ import {
   type SettingsIpcDeps,
 } from "./settings-ipc.js";
 import type { ProviderHealthEvent } from "../shared/provider-health.js";
-import { TabHostManager, createPinReservations } from "./tabs.js";
+import { TabHostManager, createPinReservations, workspaceMissing } from "./tabs.js";
 import { createChildConnectionPreparer } from "./child-connection-preparation.js";
 import { TokenBroker, resolveProviderSelection, type CatalogSelectionInfo } from "./token-broker.js";
 import { registerTabIpc, type ResolveCodexProfileResult } from "./tab-ipc.js";
@@ -2471,6 +2471,7 @@ void app.whenReady().then(async () => {
       return on;
     },
     onWorkspaceTrustPending: (tabId) => browserAccessNotifier?.refresh(tabId),
+    workspaceMissing,
     fork: (entry, args, opts) => utilityProcess.fork(entry, [...args], opts),
     workspaceTrustOnce: (workspace) => workspaceTrustOnceFor(workspaceTrustOnceApprovals, workspace, realpathSync),
     mcpSecretsEnv: (workspace) => mcpSecretCache.get(workspace),

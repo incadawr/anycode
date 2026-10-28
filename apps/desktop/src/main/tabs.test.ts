@@ -11,7 +11,8 @@
 
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { recordHostFailure } from "../host/error-diagnostics.js";
@@ -57,6 +58,7 @@ import { RECOGNIZER_CONFIG_CHANGED_TYPE, type RecognizerConfigChanged } from "..
 import {
   DEFAULT_BREAKER_LIMITS,
   TabHostManager,
+  workspaceMissing,
   createPinReservations,
   decideRespawn,
   type HostForkFn,
@@ -7498,5 +7500,79 @@ describe("TabHostManager — detached spawns are refused at the cap, never parke
     const events = childRunEvents(rootHost);
     expect(events.some((e) => e.kind === "terminal")).toBe(false);
     for (const childTabId of childTabIds) expect(manager.getTab(childTabId)).toBeDefined();
+  });
+});
+
+
+describe("GitHub #6 — a missing workspace folder fails fast instead of connecting forever", () => {
+  it.each([false, true])(
+    "createTab never forks, lands in crash_looped and delivers the error on create and on reload (resume=%s)",
+    (resume) => {
+      const rig = liveForkRig();
+      const win = windowRig();
+      const manager = new TabHostManager({
+        fork: rig.fork,
+        hostEntry: "/fake",
+        createChannel: fakeChannel,
+        getWindow: () => win.window,
+        env: () => ({}),
+        logger: silentLogger,
+        workspaceMissing,
+      });
+      const workspace = join(tmpdir(), `anycode-missing-${randomUUID()}`);
+      const result = manager.createTab({ workspace, sessionId: "missing", resume });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      // The regression: without the pre-fork check this fake fork runs and the
+      // tab waits for a host that can never boot.
+      expect(rig.hosts).toHaveLength(0);
+      expect(result.tab.state).toBe("crash_looped");
+      manager.deliverTabPort(result.tab);
+      manager.deliverAllTabPorts();
+      expect(win.posted).toHaveLength(2);
+      for (const posted of win.posted) {
+        expect(posted.channel).toBe(PORT_ENVELOPE_TYPE);
+        expect(posted.payload).toMatchObject({ tabId: result.tab.tabId, workspace, missingWorkspace: true });
+      }
+    },
+  );
+
+  it("a folder deleted under a live tab makes the respawn refuse to fork and deliver the error", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "anycode-ws-"));
+    const rig = liveForkRig();
+    const win = windowRig();
+    const manager = new TabHostManager({
+      fork: rig.fork,
+      hostEntry: "/fake",
+      createChannel: fakeChannel,
+      getWindow: () => win.window,
+      env: () => ({}),
+      logger: silentLogger,
+      workspaceMissing,
+    });
+    const created = manager.createTab({ workspace, sessionId: "vanished", resume: false });
+    if (!created.ok) throw new Error("create failed");
+    expect(rig.hosts).toHaveLength(1);
+    await rm(workspace, { recursive: true, force: true });
+    rig.hosts[0]!.emit("exit", 1);
+    expect(manager.getTab(created.tab.tabId)?.state).toBe("crash_looped");
+    expect(manager.getTab(created.tab.tabId)?.proc).toBeNull();
+    expect(rig.hosts).toHaveLength(1);
+    const delivered = win.posted.filter((posted) => posted.channel === PORT_ENVELOPE_TYPE);
+    expect(delivered.at(-1)?.payload).toMatchObject({ tabId: created.tab.tabId, missingWorkspace: true });
+  });
+
+  it("the probe only calls a vanished or non-directory path missing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-probe-"));
+    try {
+      expect(workspaceMissing(dir)).toBe(false);
+      await writeFile(join(dir, "file"), "");
+      expect(workspaceMissing(join(dir, "file"))).toBe(true);
+      expect(workspaceMissing(join(dir, "file", "nested"))).toBe(true);
+      await rm(dir, { recursive: true, force: true });
+      expect(workspaceMissing(dir)).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
