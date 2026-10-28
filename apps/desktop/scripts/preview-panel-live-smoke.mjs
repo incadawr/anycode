@@ -746,8 +746,8 @@ const PROBE_HEIGHT = 180;
 const PROBE_MATCH_TOLERANCE = 25;
 const PROBE_MATCH_MIN_PIXELS = 500;
 
-const DOC_MD_HEADING = "Doc heading — TASK.99 M5 probe";
-const NEXT_MD_MARKER = "NAVIGATED-TO content, distinct from doc.md — TASK.99 M5";
+const DOC_MD_HEADING = "Doc heading — preview probe";
+const NEXT_MD_MARKER = "NAVIGATED-TO content, distinct from doc.md — preview probe";
 const OVERSIZED_MD_BYTES = 2 * 1024 * 1024 + 4096; // MD_PREVIEW_MAX_SOURCE_BYTES (2 MiB) + headroom
 
 function docMdSource() {

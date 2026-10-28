@@ -110,7 +110,7 @@ const MODEL_A = "glm-5.2"; // reasoning-capable, same model subagent-card-smoke 
 const WORKFLOW_NAME = "smoke-map-flow";
 const WORKFLOW_DEFINITION = {
   name: WORKFLOW_NAME,
-  description: "Taskana 4161 smoke: a 3-step diamond whose map and tick strip a live run must paint.",
+  description: "A 3-step diamond whose map and tick strip a live run must paint.",
   steps: [
     {
       id: "gather-berries",

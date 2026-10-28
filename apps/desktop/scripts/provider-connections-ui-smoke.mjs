@@ -727,7 +727,7 @@ async function step8GridShowsTwoSameProviderConnections(ctx) {
   }
 
   await saveScreenshot(ctx, 8, "03-grid-two-same-provider-connections");
-  pass(8, `two independent "anthropic" connections coexist in the grid with distinct ids/labels/models and independent vault keys — one provider, two credentials (TASK.45 DoD #1)`);
+  pass(8, `two independent "anthropic" connections coexist in the grid with distinct ids/labels/models and independent vault keys — one provider, two credentials`);
 }
 
 async function step9EditConnectionBNoOp(ctx) {
@@ -898,7 +898,7 @@ async function step13SelectConnectionCIndependence(ctx) {
   const settingsDisk = readJsonDisk(13, ctx.settingsPath, "settings.json");
   assert(13, settingsDisk.provider.activeConnectionId === ctx.connCId, `expected activeConnectionId=${ctx.connCId} persisted on disk, got ${settingsDisk.provider.activeConnectionId}`);
 
-  pass(13, `selecting connection C as default flips ONLY its own selected marker; A/B statuses and vault entries untouched (independence, TASK.45 DoD)`);
+  pass(13, `selecting connection C as default flips ONLY its own selected marker; A/B statuses and vault entries untouched`);
 }
 
 async function step14CreateTab(ctx) {
@@ -956,7 +956,7 @@ async function step15E2ECredentialPickup(ctx) {
   await saveScreenshot(ctx, 15, "04-e2e-connect-refused-proof");
   pass(
     15,
-    `SNAPSHOT PROOF (TASK.45 W12 "снятие шва"): a real host fork dispatched a real HTTP request to connection C's OWN baseUrl (http://127.0.0.1:${ctx.refusedPort}, unique to this run) and failed with code="${errorBlock.retry.code}" (ECONNREFUSED under the hood) — the credential+endpoint came ONLY from drawer -> connection-create/update + secret-set IPC, zero legacy write-seam involved`,
+    `SNAPSHOT PROOF: a real host fork dispatched a real HTTP request to connection C's OWN baseUrl (http://127.0.0.1:${ctx.refusedPort}, unique to this run) and failed with code="${errorBlock.retry.code}" (ECONNREFUSED under the hood) — the credential+endpoint came ONLY from drawer -> connection-create/update + secret-set IPC, zero legacy write-seam involved`,
   );
 }
 
@@ -995,7 +995,7 @@ async function step18EnvBannerZeroConnections(ctx) {
   );
 
   await saveScreenshot(ctx, 18, "05-env-override-banner-zero-connections");
-  pass(18, `env-override banner renders with ZERO stored connections — banner visibility is driven by env presence alone, not by connection count (TASK.45 DoD §5)`);
+  pass(18, `env-override banner renders with ZERO stored connections — banner visibility is driven by env presence alone, not by connection count`);
 }
 
 async function step19EnvBannerIndependentOfConnectionHealth(ctx) {

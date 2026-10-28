@@ -82,7 +82,7 @@ const CREATE_REFUSAL_TEXT: { [K in CreateSessionRefusal]: string } = {
   rate_limited: `at most ${CREATE_SESSION_RATE_LIMIT} sessions per minute`,
   too_many: `at most ${MAX_AGENT_OPENED_TABS} agent-opened sessions alive at once`,
   not_ready: "AnyCode could not open the tab right now (engine not signed in or tab limit reached)",
-  invalid_model: "the requested model does not select exactly one provider connection (Taskana 4888: for the core engine, model picks the connection — by connection id, its label, providerId/model, or a model id the connection offers)",
+  invalid_model: "the requested model does not select exactly one provider connection (for the core engine, model picks the connection — by connection id, its label, providerId/model, or a model id the connection offers)",
 };
 const createRefusal = (code: CreateSessionRefusal, detail?: string) =>
   new Error(`create_session ${code}: ${CREATE_REFUSAL_TEXT[code]}${detail === undefined || detail === "" ? "" : ` — ${detail}`}`);

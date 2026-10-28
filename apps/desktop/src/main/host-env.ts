@@ -255,12 +255,12 @@ export const SECRET_KEYS: readonly SecretKey[] = ["provider.apiKey"];
 export function secretEnvFor(key: SecretKey): SecretEnvKey {
   if (isMcpSecretKey(key)) {
     throw new Error(
-      `secretEnvFor refuses an MCP secret key (${key}) — an MCP secret reaches a host only through ANYCODE_MCP_SECRETS (Taskana 4752)`,
+      `secretEnvFor refuses an MCP secret key (${key}) — an MCP secret reaches a host only through ANYCODE_MCP_SECRETS`,
     );
   }
   if (isProxyProfileSecretKey(key)) {
     throw new Error(
-      `secretEnvFor refuses a proxy-profile key (${key}) — a proxy password has no host-env materialisation (TASK.141 §5)`,
+      `secretEnvFor refuses a proxy-profile key (${key}) — a proxy password has no host-env materialisation`,
     );
   }
   return "ANYCODE_API_KEY";

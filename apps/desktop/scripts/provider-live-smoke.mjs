@@ -447,7 +447,7 @@ async function runLocalNoAuthCell(cellId, label) {
 // ── main ──
 
 async function main() {
-  console.log("[provider-live-smoke] TASK.43 W6 live matrix — every cell without env creds reports OWNER-GATED, never a fail.");
+  console.log("[provider-live-smoke] Live matrix — every cell without env creds reports OWNER-GATED, never a fail.");
 
   await runGlmAnthropicCell(
     "(a1)",

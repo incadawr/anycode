@@ -633,7 +633,7 @@ export async function resolveProxyRelay(
         if (generation === registryGeneration) {
           refusedUpstreams.add(key);
         }
-        console.warn(`[proxy-relay] credentialed proxy cannot be relayed (${reason}); children fall back to TASK.135's direct behaviour`);
+        console.warn(`[proxy-relay] credentialed proxy cannot be relayed (${reason}); children fall back to direct behaviour`);
       },
     });
     if (relay !== undefined && generation !== registryGeneration) {
