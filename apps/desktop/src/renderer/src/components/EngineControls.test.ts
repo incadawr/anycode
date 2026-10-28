@@ -173,6 +173,10 @@ describe("engineEffortOptions", () => {
     expect(engineSelectedModel(nativeModel, "plain")).toBe("plain");
     expect(engineSelectedEffort({ current: "medium", selected: "medium" })).toBe("medium");
     expect(engineSelectedEffort({ current: "medium", selected: "xhigh", pending: "xhigh" })).toBe("xhigh");
+    // A caller with no separate selection (the New Session draft) states its
+    // one honest value as `current` — that IS what it will send, so it is what
+    // the page ticks and what a pick is compared against.
+    expect(engineSelectedEffort({ current: "medium" })).toBe("medium");
     expect(engineSelectedEffort({ current: undefined })).toBeUndefined();
     // A queued model switch leaves the selected effort UNKNOWN: the applied
     // model's value must never stand in for it, or the pick for the new model
