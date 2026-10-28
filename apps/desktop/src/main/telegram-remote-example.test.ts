@@ -425,6 +425,25 @@ describe("telegram-remote example (Taskana 4751)", () => {
 
   // ── security ──
 
+  it("publishes update progress only after its state is saved", async () => {
+    let release!: () => void;
+    let saving = false;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const h = await harness({ bridge: { store: {
+      load: async () => ({ lastUpdateId: 0, chats: {}, pending: [], approvals: [], tokenSeq: 0 }),
+      save: async (state: { offset?: number }) => { if (state.offset === 9) { saving = true; await gate; } },
+    } } });
+    try {
+      h.tg.push(msg(8, "/sessions", 999));
+      await waitFor(() => saving);
+      expect(h.bridge.state().lastUpdateId).toBe(0);
+      expect(h.bridge.state().offset).toBeUndefined();
+      release();
+      await waitFor(() => h.bridge.state().offset === 9);
+      expect(h.bridge.state().lastUpdateId).toBe(8);
+    } finally { release(); }
+  });
+
   it("T11 only a private message from an allowlisted owner reaches the bridge; the rest is dropped before parsing", async () => {
     const h = await harness();
     h.tg.push(msg(1, "/sessions", 999));
@@ -1112,7 +1131,7 @@ describe("telegram-remote store and shutdown (Taskana 4785)", () => {
     cleanups.push(() => bridge.stop());
     const runP = bridge.run();
     h.tg.push(msg(100, "/help"));
-    await waitFor(() => bridge.state().lastUpdateId === 100);
+    await waitFor(() => started > completed);
     expect(started).toBeGreaterThan(completed);
     stopping = true;
     await bridge.stop();

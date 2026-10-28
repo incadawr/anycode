@@ -241,6 +241,17 @@ export function createBridge(options = {}) {
     await write;
   }
 
+  // Publish polling progress only after the corresponding state is durable.
+  async function persistProgress(lastUpdateId, offset) {
+    const write = writeTail.then(async () => {
+      await store.save({ ...state, lastUpdateId, offset });
+      state.lastUpdateId = lastUpdateId;
+      state.offset = offset;
+    });
+    writeTail = write.catch(() => {});
+    await write;
+  }
+
   // ── Telegram transport ──
 
   async function tg(method, body, timeoutMs) {
@@ -881,11 +892,10 @@ export function createBridge(options = {}) {
           } catch (error) {
             log(`[err] dispatch failed: ${error instanceof Error ? error.message : String(error)}`);
           }
-          state.lastUpdateId = update.update_id;
         }
-        state.offset = update.update_id + 1;
+        const lastUpdateId = Math.max(state.lastUpdateId, update.update_id);
         // A save that fails because stop() already began (state dir gone, shutdown) is not a poll failure.
-        await persist().catch((error) => {
+        await persistProgress(lastUpdateId, update.update_id + 1).catch((error) => {
           if (!stopped) throw error;
         });
       }
