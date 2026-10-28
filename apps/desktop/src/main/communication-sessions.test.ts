@@ -249,6 +249,43 @@ describe("session handles (Taskana 4750b)", () => {
     expect(s.setHandle("a", "mem", alwaysLive)).toEqual({ ok: true });
     expect(handleStore(false).getHandle("a")).toBeUndefined();
   });
+
+  // The durable marker that a resume-time repair relies on: which title a host
+  // actually committed for this session, so an automatically generated title
+  // can be told apart from one written later.
+  it("remembers the confirmed title across a restart, and drops it with the handle", () => {
+    const markers = () => join(dir, "communication-agent-titles.json");
+    const withMarkers = () => createSessionAccessStore({
+      file, defaultOn: () => false, handlesFile: handlesFile(), titleConfirmationsFile: markers(),
+    });
+    const s = withMarkers();
+    s.register({ sessionId: "a" });
+    s.setHandle("a", "build-bot", alwaysLive);
+    expect(s.getConfirmedTitle("a")).toBeUndefined();
+
+    s.confirmTitle("a", "build-bot");
+    expect(s.getConfirmedTitle("a")).toBe("build-bot");
+    // Durable: a fresh store (a restart) reads the marker back.
+    expect(withMarkers().getConfirmedTitle("a")).toBe("build-bot");
+
+    // Clearing the handle makes the marker meaningless.
+    expect(s.setHandle("a", null, alwaysLive)).toEqual({ ok: true });
+    expect(s.getConfirmedTitle("a")).toBeUndefined();
+  });
+
+  it("writes the confirmed-title file with mode 0600 and ignores corrupt entries", async () => {
+    const markers = join(dir, "communication-agent-titles.json");
+    const store = () => createSessionAccessStore({ file, defaultOn: () => false, titleConfirmationsFile: markers });
+    store().confirmTitle("a", "build-bot");
+    expect((await stat(markers)).mode & 0o777).toBe(0o600);
+    await writeFile(markers, JSON.stringify({ a: "kept", b: 7, c: "" }));
+    const read = store();
+    expect(read.getConfirmedTitle("a")).toBe("kept");
+    expect(read.getConfirmedTitle("b")).toBeUndefined();
+    expect(read.getConfirmedTitle("c")).toBeUndefined();
+    await writeFile(markers, "{not json");
+    expect(store().getConfirmedTitle("a")).toBeUndefined();
+  });
 });
 
 describe("External approvals store (Taskana 4763)", () => {

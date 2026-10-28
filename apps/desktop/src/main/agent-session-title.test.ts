@@ -1,12 +1,32 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  createAgentTitlePushes,
-  isEnvelopeDerivedTitle,
-  recoverAgentSessionTitle,
-} from "./agent-session-title.js";
+import { SqlitePersistenceAdapter } from "@anycode/core";
+import { createAgentTitlePushes, recoverAgentSessionTitle } from "./agent-session-title.js";
 
 /** Lets the retainer's fire-and-forget push settle. */
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+
+/**
+ * Makes every `sessions.title` UPDATE fail at the SQLite level — a real write
+ * failure (the shape a full disk or a corrupt file produces), not a stubbed
+ * adapter. Dropped again so the retry can land.
+ */
+function blockTitleWrites(path: string, blocked: boolean): void {
+  const db = new DatabaseSync(path);
+  try {
+    db.exec(
+      blocked
+        ? "CREATE TRIGGER title_write_fails BEFORE UPDATE OF title ON sessions BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END"
+        : "DROP TRIGGER IF EXISTS title_write_fails",
+    );
+  } finally {
+    db.close();
+  }
+}
 
 describe("agent title pushes", () => {
   it("retains a title whose push lost its host and retries it on the next host generation", async () => {
@@ -108,6 +128,39 @@ describe("agent title pushes", () => {
     expect(scheduled).toHaveLength(1);
   });
 
+  // The retry queue is only honest if "acknowledged" means "a later boot reads
+  // this title": driven here through the REAL session store, where the failed
+  // UPDATE rejects and only a committed one clears the retained handle.
+  it("keeps a title whose SQLite write failed, stores it on the retry, and only then acknowledges", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "anycode-title-retry-"));
+    const path = join(dir, "sessions.db");
+    const persistence = new SqlitePersistenceAdapter(path);
+    try {
+      await persistence.createSession({ id: "s1", workspace: "/ws", model: "scripted-model", mode: "edit" });
+      const pushes = createAgentTitlePushes({
+        titleOf: () => "worker-1",
+        request: (_sessionId, title) => persistence.touchSession("s1", { title }),
+        warn: vi.fn(),
+      });
+
+      blockTitleWrites(path, true);
+      pushes.retain("s1");
+      await settle();
+      // NOT acknowledged: the row still has no title, so the handle is retained.
+      expect(pushes.pendingSessions()).toEqual(["s1"]);
+      expect((await persistence.getSessionById("s1"))?.title).toBeUndefined();
+
+      blockTitleWrites(path, false);
+      pushes.retry("s1");
+      await settle();
+      expect(pushes.pendingSessions()).toEqual([]);
+      expect((await persistence.getSessionById("s1"))?.title).toBe("worker-1");
+    } finally {
+      await persistence.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does not push the same session twice while one attempt is in flight", async () => {
     let release!: (value: unknown) => void;
     const request = vi.fn(() => new Promise((resolve) => { release = resolve; }));
@@ -141,60 +194,111 @@ describe("resume-time agent title recovery", () => {
   // A payload-derived title is the envelope's first line CAPPED, so it is a
   // prefix of the header and not a whole envelope.
   const FALLBACK_TITLE = '[AnyCode authenticated agent message {"messageId":"m1","sender":"supervisor"'.slice(0, 80);
+  const recover = (overrides: Partial<Parameters<typeof recoverAgentSessionTitle>[0]> = {}) => {
+    const adopted: string[] = [];
+    return {
+      adopted,
+      run: () => recoverAgentSessionTitle({
+        sessionId: "s1",
+        savedHandle: () => "worker-1",
+        // No marker on record: the pre-fix shape (nothing recorded which title
+        // the agent wrote, so none was ever confirmed).
+        confirmedTitle: () => undefined,
+        readPersistedTitle: async () => FALLBACK_TITLE,
+        adopt: (title) => adopted.push(title),
+        ...overrides,
+      }),
+    };
+  };
 
   it("repairs a pre-fix session whose persisted title is the payload fallback", async () => {
-    const adopted: string[] = [];
-    const repaired = await recoverAgentSessionTitle({
-      sessionId: "s1",
-      savedHandle: () => "worker-1",
-      readPersistedTitle: async () => FALLBACK_TITLE,
-      adopt: (title) => adopted.push(title),
-    });
-    expect(repaired).toBe(true);
+    const { adopted, run } = recover();
+    expect(await run()).toBe(true);
     expect(adopted).toEqual(["worker-1"]);
   });
 
-  it("leaves a title the user chose alone", async () => {
-    const adopted: string[] = [];
-    const repaired = await recoverAgentSessionTitle({
-      sessionId: "s1",
-      savedHandle: () => "worker-1",
-      readPersistedTitle: async () => "Company profile design",
-      adopt: (title) => adopted.push(title),
+  // The finding this covers: the payload prefix is not the only automatically
+  // generated title. A pre-fix session could hold the first message's own line
+  // or a model-refined title, with its handle still saved, and every build that
+  // wrote such a row has exactly one writer of session titles — the app.
+  it("repairs a pre-fix session whose title came from the message rather than the envelope", async () => {
+    const { adopted, run } = recover({ readPersistedTitle: async () => "Fix the sidebar" });
+    expect(await run()).toBe(true);
+    expect(adopted).toEqual(["worker-1"]);
+  });
+
+  it("repairs a pre-fix session whose title a model refinement replaced", async () => {
+    const { adopted, run } = recover({ readPersistedTitle: async () => "Sidebar layout and focus" });
+    expect(await run()).toBe(true);
+    expect(adopted).toEqual(["worker-1"]);
+  });
+
+  it("does not rewrite a title that already is the handle", async () => {
+    const { adopted, run } = recover({ readPersistedTitle: async () => "worker-1" });
+    expect(await run()).toBe(false);
+    expect(adopted).toEqual([]);
+  });
+
+  // The durable marker: once a host confirmed the handle as the stored title,
+  // a row that holds something else has had its title written by someone else
+  // afterwards — that choice wins, and no database read is even needed.
+  it("leaves a title alone that was written after the agent's confirmed one", async () => {
+    const readPersistedTitle = vi.fn(async () => "Company profile design");
+    const { adopted, run } = recover({
+      confirmedTitle: () => "worker-1",
+      readPersistedTitle,
     });
-    expect(repaired).toBe(false);
+    expect(await run()).toBe(false);
+    expect(adopted).toEqual([]);
+    expect(readPersistedTitle).not.toHaveBeenCalled();
+  });
+
+  it("leaves a confirmed title alone that is no longer the handle", async () => {
+    const { adopted, run } = recover({ confirmedTitle: () => "someone-elses-title" });
+    expect(await run()).toBe(false);
     expect(adopted).toEqual([]);
   });
 
   it("does nothing for a session without a saved handle", async () => {
-    const adopt = vi.fn();
-    const repaired = await recoverAgentSessionTitle({
-      sessionId: "s1",
-      savedHandle: () => undefined,
-      readPersistedTitle: async () => FALLBACK_TITLE,
-      adopt,
-    });
-    expect(repaired).toBe(false);
-    expect(adopt).not.toHaveBeenCalled();
+    const { adopted, run } = recover({ savedHandle: () => undefined });
+    expect(await run()).toBe(false);
+    expect(adopted).toEqual([]);
   });
 
   it("does nothing (and never blocks a resume) when the session row cannot be read", async () => {
-    const adopt = vi.fn();
-    const repaired = await recoverAgentSessionTitle({
-      sessionId: "s1",
-      savedHandle: () => "worker-1",
-      readPersistedTitle: async () => { throw new Error("SQLITE_BUSY"); },
-      adopt,
-    });
-    expect(repaired).toBe(false);
-    expect(adopt).not.toHaveBeenCalled();
+    const { adopted, run } = recover({ readPersistedTitle: async () => { throw new Error("SQLITE_BUSY"); } });
+    expect(await run()).toBe(false);
+    expect(adopted).toEqual([]);
   });
 
-  it("recognises only the envelope header prefix as a payload-derived title", () => {
-    expect(isEnvelopeDerivedTitle(FALLBACK_TITLE)).toBe(true);
-    expect(isEnvelopeDerivedTitle('[AnyCode authenticated agent message {"a":1}]\nFix the sidebar')).toBe(true);
-    expect(isEnvelopeDerivedTitle("Fix the sidebar")).toBe(false);
-    expect(isEnvelopeDerivedTitle("AnyCode authenticated agent message")).toBe(false);
-    expect(isEnvelopeDerivedTitle(undefined)).toBe(false);
+  // Every acknowledged title leaves a durable marker, so a later resume never
+  // has to guess what wrote the stored title.
+  it("records the confirmed title once a host acknowledges the write", async () => {
+    const confirmed = vi.fn();
+    const pushes = createAgentTitlePushes({
+      titleOf: () => "worker-1",
+      request: vi.fn().mockResolvedValue({}),
+      warn: vi.fn(),
+      confirmed,
+    });
+    pushes.retain("s1");
+    await settle();
+    expect(confirmed).toHaveBeenCalledWith("s1", "worker-1");
+    expect(pushes.pendingSessions()).toEqual([]);
+  });
+
+  it("never lets a failed marker write fail the acknowledgement", async () => {
+    const warn = vi.fn();
+    const pushes = createAgentTitlePushes({
+      titleOf: () => "worker-1",
+      request: vi.fn().mockResolvedValue({}),
+      warn,
+      confirmed: () => { throw new Error("EACCES"); },
+    });
+    pushes.retain("s1");
+    await settle();
+    // Warned, but the committed title is still acknowledged: no retry storm.
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(pushes.pendingSessions()).toEqual([]);
   });
 });

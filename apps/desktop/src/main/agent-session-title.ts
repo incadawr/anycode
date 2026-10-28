@@ -8,38 +8,36 @@
  * ran and vanished on the next boot, when the payload title from SQLite came
  * back.
  *
- * This module owns the two halves that make the handle durable:
+ * This module owns the three pieces that make the handle durable:
  *
  * - a RETAINED push queue: `create_session` never fails because the host could
  *   not take the title yet (a booting, exiting or respawning host), so a
  *   rejected push stays retained and is retried on the tab's next host
  *   generation (every `deliverTabPort` — spawn, respawn, resume);
+ * - a DURABLE title marker: every acknowledged title is recorded (sessionId ->
+ *   the title a host committed), so a later resume can tell the title the agent
+ *   wrote apart from a title something else wrote afterwards;
  * - a RESUME-TIME repair: a session created before this existed still carries
- *   the payload title in SQLite while its handle sits in the handles file.
- *   When the persisted title is exactly that envelope-derived fallback, the
- *   saved handle replaces it — a title the user renamed is left alone.
+ *   an automatically generated title in SQLite (the payload envelope, the
+ *   first message's line, or a model-refined one) while its handle sits in the
+ *   handles file. With no confirmed title on record, the saved handle replaces
+ *   it — a title written after the agent's own write is left alone.
  *
  * The host acknowledges `set_agent_title` only after its persistence write
  * committed, so "not retained any more" means "a later boot reads this title".
  */
-
-/** Prefix of the model-facing envelope line `agentMessageText()` writes. */
-export const ENVELOPE_TITLE_PREFIX = "[AnyCode authenticated agent message ";
-
-/**
- * True when a persisted session title is the payload-derived fallback of an
- * agent delivery — i.e. exactly the title this fix repairs. A title the user
- * renamed (or any other title) never matches.
- */
-export function isEnvelopeDerivedTitle(title: string | undefined): boolean {
-  return title !== undefined && title.startsWith(ENVELOPE_TITLE_PREFIX);
-}
 
 export interface AgentTitlePushDeps {
   /** The retained title of a session, if one is known. */
   titleOf(sessionId: string): string | undefined;
   /** Host RPC; resolves only once the host committed the title. */
   request(sessionId: string, title: string): Promise<unknown>;
+  /**
+   * Durable marker, recorded once a host confirmed `title` as this session's
+   * stored title. Best effort by contract: it must never turn a successful
+   * acknowledgement into a failed one.
+   */
+  confirmed?(sessionId: string, title: string): void;
   /** Best-effort diagnostics; never rethrown. */
   warn(message: string, error: unknown): void;
   /**
@@ -109,6 +107,13 @@ export function createAgentTitlePushes(deps: AgentTitlePushDeps): AgentTitlePush
     void (async () => {
       try {
         await deps.request(sessionId, title);
+        // Record WHY this title is the stored one before dropping the retry:
+        // a later resume then knows the row holds an agent-chosen title.
+        try {
+          deps.confirmed?.(sessionId, title);
+        } catch (error) {
+          deps.warn(`[main] failed to record the confirmed agent title for ${sessionId}`, error);
+        }
         // The host committed the title: nothing left to retry.
         pending.delete(sessionId);
         cancelTimer(sessionId);
@@ -150,6 +155,12 @@ export interface RecoverAgentTitleDeps {
   sessionId: string;
   /** The handle saved in the handles file (durable across restarts). */
   savedHandle(): string | undefined;
+  /**
+   * The title a host last confirmed for this session — the durable marker that
+   * says which title the agent itself wrote. Absent for a session created
+   * before that marker existed, and for one whose write never landed.
+   */
+  confirmedTitle(): string | undefined;
   /** The title SQLite holds for this session, if the row is readable. */
   readPersistedTitle(): Promise<string | undefined>;
   /** Adopt the handle as this session's title (in-memory map + retained push). */
@@ -157,13 +168,30 @@ export interface RecoverAgentTitleDeps {
 }
 
 /**
- * Resume-time repair of a pre-fix agent tab: only rewrites a title that is the
- * payload-derived fallback, and only when the handles file still has a handle
- * for that session. Returns whether a repair was started.
+ * Resume-time repair of an agent-opened tab whose stored title is not its
+ * handle. Returns whether a repair was started.
+ *
+ * The decision, in order:
+ *
+ * 1. No saved handle — not an agent-opened session: never touch the title.
+ * 2. A confirmed title that is NOT this handle — the stored title was written
+ *    after the agent's own write and confirmed again, so it is someone else's
+ *    choice (a user rename): leave it.
+ * 3. A confirmed title that IS this handle — the agent's title is already the
+ *    stored one: nothing to do, and no database read at all.
+ * 4. No confirmed title on record — the row's title was produced entirely by
+ *    the app's automatic titling: the payload fallback, the first message's
+ *    line, or a model refinement. Every build that wrote such a row has one
+ *    writer of session titles (there is no rename affordance and nothing
+ *    records one), so the handle is the honest title and replaces it. This is
+ *    the part that cannot be verified row-by-row for pre-fix data; the marker
+ *    above makes every row written from now on exact.
  */
 export async function recoverAgentSessionTitle(deps: RecoverAgentTitleDeps): Promise<boolean> {
   const handle = deps.savedHandle();
   if (handle === undefined) return false;
+  const confirmed = deps.confirmedTitle();
+  if (confirmed !== undefined) return false;
   let persisted: string | undefined;
   try {
     persisted = await deps.readPersistedTitle();
@@ -171,7 +199,7 @@ export async function recoverAgentSessionTitle(deps: RecoverAgentTitleDeps): Pro
     // An unreadable row must never block a resume; the next host generation retries.
     return false;
   }
-  if (!isEnvelopeDerivedTitle(persisted)) return false;
+  if (persisted === handle) return false;
   deps.adopt(handle);
   return true;
 }
