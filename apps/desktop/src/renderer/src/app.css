@@ -4495,7 +4495,12 @@ body {
   white-space: nowrap;
 }
 
+/* Fixed-height, text-less children of the scrolling column: without an
+   explicit `flex-shrink: 0` the flex algorithm is free to squeeze them to
+   0px once a long expanded turn overflows the body, which silently removed
+   the usage bar (and its divider) from a short window. */
 .ctx-popover-bar {
+  flex-shrink: 0;
   height: 4px;
   border-radius: var(--r-full);
   background: var(--border);
@@ -4567,6 +4572,7 @@ body {
 }
 
 .ctx-popover-divider {
+  flex-shrink: 0;
   height: 1px;
   background: var(--border);
 }
