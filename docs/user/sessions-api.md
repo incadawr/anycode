@@ -86,22 +86,26 @@ titling, closing the tab, restarting AnyCode and resuming the session.
 `create_session` does **not** wait for that title to be stored. It answers as
 soon as the tab exists — the tab's process may still be starting, or may have
 just been replaced — and the confirmed handle is written to the session store
-afterwards: on the tab's next process generation and every 5 seconds while the
-tab lives, until a host reports the write committed. Only a committed write is
-one a restart reads back. If every attempt fails (for example the session store
-cannot be written), the tab keeps showing the handle for this run and the next
-resume shows whatever title the store holds.
+afterwards: on the tab's next process generation, and every 5 seconds while the
+tab lives, for at most 12 attempts in a row. After those 12 the tab stops
+asking; the next process generation (a restart, or a respawned host) starts the
+count again. Only a committed write is one a restart reads back. If every
+attempt fails (for example the session store cannot be written), the tab keeps
+showing the handle for this run and the next resume shows whatever title the
+store holds.
 
 Sessions an agent opened before this version kept the automatically generated
 title in the session store while the handle was saved separately, so resuming one
 replaced nothing and the tab came back titled from the first message. Resuming
-such a session now rewrites the stored title from its saved handle. Rows written
-before this version carry no record of which title the agent itself wrote, so the
-repair cannot tell them apart row by row; what makes it safe is that every title
-those versions could store was written by AnyCode's own titling (the app has no
-control for naming a session and nothing records such a name). From this version
-on, every title a host confirms is recorded with the handle: a title written
-after it is recognised as someone else's and left exactly as it is.
+such a session now rewrites the stored title from its saved handle, but only when
+that stored title is the raw delivery header (`[AnyCode authenticated agent
+message …`) — the one title text nobody chooses. Any other title an older version
+stored is left exactly as it is, because a handle can also be assigned to an
+ordinary session from the environment menu and that session's title is not the
+agent's to replace. From this version on, `create_session` also records that it
+opened the session, so a resume repairs that session's title whenever it is not
+the handle; and every title a host confirms is recorded with the handle, so a
+title written after it is recognised as someone else's and left alone.
 
 Without a handle the title comes from the message payload, whose delivery wrapper
 AnyCode strips first. `firstMessage` is delivered like `send_message` with
