@@ -556,6 +556,8 @@ const agentOpenedSessions = new Set<string>();
  * repaired from the handles file when it is resumed (`recoverAgentSessionTitle`).
  */
 const agentSessionTitles = new Map<string, string>();
+/** Delay before a retained agent title is pushed again (see `agentTitlePushes`). */
+const AGENT_TITLE_RETRY_MS = 5_000;
 const agentTitlePushes: AgentTitlePushes = createAgentTitlePushes({
   titleOf: (sessionId) => agentSessionTitles.get(sessionId),
   request: (sessionId, title) => {
@@ -563,6 +565,13 @@ const agentTitlePushes: AgentTitlePushes = createAgentTitlePushes({
     return manager.communicationRequest(sessionId, "set_agent_title", title);
   },
   warn: (message, error) => console.warn(message, error),
+  // A push can lose its host while the tab boots and no new generation may
+  // come for hours; the retained title retries itself until a host commits it.
+  retryDelayMs: () => AGENT_TITLE_RETRY_MS,
+  schedule: (run, delayMs) => {
+    const timer = setTimeout(run, delayMs);
+    return () => clearTimeout(timer);
+  },
 });
 // Taskana 4759: the per-session "Full browser access" switch and the notifier that pushes
 // each tab's EFFECTIVE value (renderer + host flag) exactly once per change.
@@ -2734,6 +2743,16 @@ void app.whenReady().then(async () => {
         if (!liveSessions.has(id)) {
           agentOpenedSessions.delete(id);
           agentSessionTitles.delete(id);
+          agentTitlePushes.forget(id);
+        }
+      }
+      // A repaired (resumed) tab is titled without being in `agentOpenedSessions`,
+      // so its retained title is dropped here too — a closed tab has no host to
+      // acknowledge it, and retrying forever would be pure noise.
+      for (const id of [...agentSessionTitles.keys()]) {
+        if (!liveSessions.has(id)) {
+          agentSessionTitles.delete(id);
+          agentTitlePushes.forget(id);
         }
       }
       previewHost?.closeForTab(tabId);

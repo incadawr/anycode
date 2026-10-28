@@ -42,6 +42,21 @@ export interface AgentTitlePushDeps {
   request(sessionId: string, title: string): Promise<unknown>;
   /** Best-effort diagnostics; never rethrown. */
   warn(message: string, error: unknown): void;
+  /**
+   * How long to wait before trying a retained title again (milliseconds), or 0
+   * for no timer at all. A push can fail while the tab's process is still
+   * booting; the next host generation is not guaranteed to come (a tab can
+   * live for hours), so a retained title also retries on its own.
+   */
+  retryDelayMs?(): number;
+  /** Timer seam; defaults to setTimeout, returns a cancel. */
+  schedule?(run: () => void, delayMs: number): () => void;
+  /**
+   * Cap on consecutive self-scheduled attempts before the timer gives up (a
+   * crash-looped tab has no host to answer). The title stays retained: the
+   * next host generation still retries it. Default 12 (about a minute).
+   */
+  maxRetryAttempts?: number;
 }
 
 export interface AgentTitlePushes {
@@ -62,6 +77,30 @@ export function createAgentTitlePushes(deps: AgentTitlePushDeps): AgentTitlePush
   const pending = new Set<string>();
   /** In-flight per session, so one generation's attempt never doubles up. */
   const inFlight = new Set<string>();
+  /** One scheduled retry per session while its title is still pending. */
+  const timers = new Map<string, () => void>();
+  /** Consecutive timer-driven attempts per session (reset by a generation retry). */
+  const timerAttempts = new Map<string, number>();
+  const maxTimerAttempts = deps.maxRetryAttempts ?? 12;
+
+  const cancelTimer = (sessionId: string): void => {
+    timers.get(sessionId)?.();
+    timers.delete(sessionId);
+  };
+
+  const scheduleRetry = (sessionId: string): void => {
+    const schedule = deps.schedule;
+    const delayMs = deps.retryDelayMs?.() ?? 0;
+    if (schedule === undefined || delayMs <= 0 || timers.has(sessionId)) return;
+    const attempts = timerAttempts.get(sessionId) ?? 0;
+    if (attempts >= maxTimerAttempts) return;
+    timerAttempts.set(sessionId, attempts + 1);
+    const cancel = schedule(() => {
+      timers.delete(sessionId);
+      if (pending.has(sessionId)) push(sessionId);
+    }, delayMs);
+    timers.set(sessionId, cancel);
+  };
 
   const push = (sessionId: string): void => {
     const title = deps.titleOf(sessionId);
@@ -70,10 +109,13 @@ export function createAgentTitlePushes(deps: AgentTitlePushDeps): AgentTitlePush
     void (async () => {
       try {
         await deps.request(sessionId, title);
+        // The host committed the title: nothing left to retry.
         pending.delete(sessionId);
+        cancelTimer(sessionId);
       } catch (error) {
         pending.add(sessionId);
         deps.warn(`[main] failed to push agent session title for ${sessionId}`, error);
+        scheduleRetry(sessionId);
       } finally {
         inFlight.delete(sessionId);
       }
@@ -87,10 +129,16 @@ export function createAgentTitlePushes(deps: AgentTitlePushDeps): AgentTitlePush
     },
     forget(sessionId) {
       pending.delete(sessionId);
+      timerAttempts.delete(sessionId);
+      cancelTimer(sessionId);
     },
     push,
     retry(sessionId) {
-      if (pending.has(sessionId)) push(sessionId);
+      if (!pending.has(sessionId)) return;
+      // A new host generation is a fresh, better chance: restart the budget.
+      timerAttempts.delete(sessionId);
+      cancelTimer(sessionId);
+      push(sessionId);
     },
     pendingSessions() {
       return [...pending];

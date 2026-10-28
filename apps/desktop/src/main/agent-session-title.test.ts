@@ -32,6 +32,82 @@ describe("agent title pushes", () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
+  it("retries a retained title on its own when no new host generation arrives", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Host response timed out; delivery unknown"))
+      .mockResolvedValueOnce({});
+    const scheduled: (() => void)[] = [];
+    let delayMs: number | undefined;
+    const pushes = createAgentTitlePushes({
+      titleOf: () => "worker-1",
+      request,
+      warn: vi.fn(),
+      retryDelayMs: () => 5_000,
+      schedule: (run, delay) => { delayMs = delay; scheduled.push(run); return () => {}; },
+    });
+
+    pushes.retain("s1");
+    await settle();
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(delayMs).toBe(5_000);
+    expect(scheduled).toHaveLength(1);
+
+    // The same tab process lives on: only the timer can retry the title.
+    scheduled[0]!();
+    await settle();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(pushes.pendingSessions()).toEqual([]);
+  });
+
+  it("cancels a scheduled retry once the session is gone", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("Host disconnected; delivery unknown"));
+    const cancel = vi.fn();
+    const pushes = createAgentTitlePushes({
+      titleOf: () => "worker-1",
+      request,
+      warn: vi.fn(),
+      retryDelayMs: () => 5_000,
+      schedule: () => cancel,
+    });
+
+    pushes.retain("s1");
+    await settle();
+    expect(pushes.pendingSessions()).toEqual(["s1"]);
+    pushes.forget("s1");
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops the self-scheduled attempts after the cap, but keeps the title retained for the next host generation", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("Session host unavailable"));
+    const scheduled: (() => void)[] = [];
+    const pushes = createAgentTitlePushes({
+      titleOf: () => "worker-1",
+      request,
+      warn: vi.fn(),
+      retryDelayMs: () => 5_000,
+      schedule: (run) => { scheduled.push(run); return () => {}; },
+      maxRetryAttempts: 2,
+    });
+
+    pushes.retain("s1");
+    await settle();
+    scheduled.shift()!();
+    await settle();
+    scheduled.shift()!();
+    await settle();
+    expect(request).toHaveBeenCalledTimes(3);
+    // Capped: no further timer, the title is still retained.
+    expect(scheduled).toHaveLength(0);
+    expect(pushes.pendingSessions()).toEqual(["s1"]);
+
+    // A fresh host generation restarts the budget and pushes again.
+    pushes.retry("s1");
+    await settle();
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(scheduled).toHaveLength(1);
+  });
+
   it("does not push the same session twice while one attempt is in flight", async () => {
     let release!: (value: unknown) => void;
     const request = vi.fn(() => new Promise((resolve) => { release = resolve; }));
