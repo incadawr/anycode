@@ -333,7 +333,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         return { status: "done", ...base, availability: "available", activeTurnId: null, latestResult: done.latestResult, limitation: done.limitation };
       }
       if (current.state === "rejected") return { status: "rejected", ...base, detail: current.detail };
-      if (current.state === "unknown") return { status: "unknown", ...base, detail: current.detail };
+      if (current.state === "unknown") return { status: "unknown", ...base, detail: current.detail === "Dispatch pending" && target.detail !== "Dispatch pending" ? target.detail : current.detail };
       if (current.state === "unknown_message") return { status: "unknown", ...base, detail: target.detail };
       if (Date.now() >= deadline) return { status: "pending", ...base };
       await sleep(Math.max(0, Math.min(pollMs, deadline - Date.now())), signal);
@@ -536,12 +536,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     if (reconciling) return;
     reconciling = true;
     try {
-      for (const record of messages.values()) {
-        if (record.detail === "Dispatch pending" && Date.now() - Date.parse(record.envelope.createdAt) >= 20_000) {
-          record.state = "unknown"; record.detail = "Host response unavailable; do not blindly resend"; await persist();
-        }
-        await markLostGeneration(record);
-      }
+      for (const record of messages.values()) await markLostGeneration(record);
       for (const tab of await tabs()) {
         const records = [...messages.values()].filter((r) => r.envelope.recipientSessionId === tab.sessionId && r.detail !== "Dispatch pending");
         if (!records.length) continue;
@@ -590,8 +585,19 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   const url = `http://127.0.0.1:${address.port}/mcp`;
   try { await writePrivateFile(discoveryFile, JSON.stringify({ url, token, workspaces: [...allowed] })); }
   catch (error) { http.closeAllConnections(); http.close(); throw error; }
+  // Expiry must not wait for reconciliation's host requests to finish.
+  const expiryTimer = setInterval(() => {
+    let changed = false;
+    for (const record of messages.values()) {
+      if (record.detail === "Dispatch pending" && Date.now() - Date.parse(record.envelope.createdAt) >= 20_000) {
+        record.state = "unknown"; record.detail = "Host response unavailable; do not blindly resend"; changed = true;
+      }
+    }
+    if (changed) void persist().catch(() => {});
+  }, 1000);
+  expiryTimer.unref();
   const reconcileTimer = setInterval(() => { void reconcile(); }, 1000);
   reconcileTimer.unref();
   let closed = false;
-  return { url, discoveryFile, async close() { if (closed) return; closed = true; closing = true; for (const waiter of waiters) waiter.abort(); unsubscribe?.(); clearInterval(reconcileTimer); http.closeAllConnections(); await new Promise<void>((resolve) => http.close(() => resolve())); await writes; try { const current = JSON.parse(await readFile(discoveryFile, "utf8")); if (current.token === token) await rm(discoveryFile, { force: true }); } catch { /* already removed or replaced */ } } };
+  return { url, discoveryFile, async close() { if (closed) return; closed = true; closing = true; for (const waiter of waiters) waiter.abort(); unsubscribe?.(); clearInterval(reconcileTimer); clearInterval(expiryTimer); http.closeAllConnections(); await new Promise<void>((resolve) => http.close(() => resolve())); await writes; try { const current = JSON.parse(await readFile(discoveryFile, "utf8")); if (current.token === token) await rm(discoveryFile, { force: true }); } catch { /* already removed or replaced */ } } };
 }
