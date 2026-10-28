@@ -185,7 +185,7 @@ import { createPluginsScheduler, type PluginsScheduler } from "./plugins/schedul
 import { isOfficialChannelConfigured } from "../shared/plugin-trust.js";
 import { buildHostBuiltinSkills } from "../host/builtin-skills.js";
 import { listPersonaNames } from "@anycode/core/subagents-admin";
-import { pluginsDiscoveryWiring } from "../host/plugin-wiring.js";
+import { pluginsDiscoveryWiring, skillsPaneDiscoveryOptions } from "../host/plugin-wiring.js";
 import { NodeSubagentsFs, registerSubagentsIpc } from "./subagents-ipc.js";
 import {
   ArtifactConsentStore,
@@ -3462,18 +3462,21 @@ void app.whenReady().then(async () => {
   // testable off a plain deps bag.
 
   // Settings panes that render a plugin-contributed catalog (Skills,
-  // Subagents) discover plugins through THIS helper, so a pane sees the same
+  // Subagents) discover plugins through THIS wiring, so a pane sees the same
   // plugin world as the host runtime: the managed store the user installed
   // from, the app version that gates compatibility, the builtin names a
   // non-official plugin may not shadow — and, load-bearing here, the
   // user-global disabled set from the store's state.json. Without that state
   // path a pane scanned a state-less plugin world and a plugin the user turned
   // OFF kept reporting its problems (MCP had already wired the same options).
+  const paneBuiltinSkillNames = (workspace: string) =>
+    buildHostBuiltinSkills({ worktreeAvailable: existsSync(join(workspace, ".git")), previewAvailable: true, anycodeSetupDocs: { kind: "remote", ref: "latest" } }).map((skill) => skill.name);
+
   const pluginPaneDiscoveryOptions = (home: string, workspace: string) => ({
     ...pluginsDiscoveryWiring({
       home,
       pluginsSettings: settings?.plugins,
-      builtinSkillNames: buildHostBuiltinSkills({ worktreeAvailable: existsSync(join(workspace, ".git")), previewAvailable: true, anycodeSetupDocs: { kind: "remote", ref: "latest" } }).map((skill) => skill.name),
+      builtinSkillNames: paneBuiltinSkillNames(workspace),
       builtinPersonaNames: listPersonaNames(),
     }),
     appVersion: app.getVersion(),
@@ -3483,18 +3486,20 @@ void app.whenReady().then(async () => {
     home: () => (selfCheckProfile ?? resolveSkillsImportHome(process.env, app.isPackaged)) ?? homedir(),
     workspaceForTab: (ref) => scopeRegistry.resolve(ref, (tabId) => manager?.getTab(tabId)?.workspace),
     fs: new NodeSkillsFs(),
-    // mcpConsent is deliberately NOT forwarded: an un-granted plugin MCP server
-    // is the MCP pane's problem, and passing the consent gate here would turn
-    // "needs approval" into a Skills-pane warning.
-    pluginDiscoveryOptions: (home, workspace) => {
-      const wiring = pluginPaneDiscoveryOptions(home, workspace);
-      return {
-        pluginStatePath: wiring.pluginStatePath,
-        appVersion: wiring.appVersion,
-        reservedSkillNames: wiring.reservedSkillNames,
-        reservedAgentNames: wiring.reservedAgentNames,
-      };
-    },
+    // The pane's plugin world comes from the exported, unit-tested wiring
+    // (`skillsPaneDiscoveryOptions`), not from an inline copy — the managed
+    // state path there is load-bearing (a plugin the user turned OFF must stay
+    // out of the pane), and `mcpConsent` is deliberately NOT forwarded: an
+    // un-granted plugin MCP server is the MCP pane's problem, and passing the
+    // consent gate here would turn "needs approval" into a Skills-pane warning.
+    pluginDiscoveryOptions: (home, workspace) =>
+      skillsPaneDiscoveryOptions({
+        home,
+        pluginsSettings: settings?.plugins,
+        builtinSkillNames: paneBuiltinSkillNames(workspace),
+        builtinPersonaNames: listPersonaNames(),
+        appVersion: app.getVersion(),
+      }),
     reveal: (path) => shell.showItemInFolder(path),
   });
 

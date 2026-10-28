@@ -40,3 +40,38 @@ export function pluginsDiscoveryWiring(input: PluginsDiscoveryWiringInput): Plug
     reservedAgentNames: new Set(input.builtinPersonaNames),
   };
 }
+
+/** What the Skills pane's `registerSkillsIpc` dependency hands plugin discovery. */
+export interface SkillsPaneDiscoveryOptions {
+  pluginStatePath: string;
+  appVersion: string;
+  reservedSkillNames: ReadonlySet<string>;
+  reservedAgentNames: ReadonlySet<string>;
+}
+
+export interface SkillsPaneDiscoveryInput extends PluginsDiscoveryWiringInput {
+  /** The running app's version — gates `engines.anycode`. */
+  appVersion: string;
+}
+
+/**
+ * The plugin discovery options the Skills pane registers with
+ * `registerSkillsIpc` (main/index.ts). Extracted so the PRODUCTION wiring is
+ * covered by a test instead of being re-implemented next to it: the state path
+ * is load-bearing — drop it and a plugin the user switched OFF starts reporting
+ * its problems in the Skills pane again, while every handler-level test that
+ * builds its own options still passes.
+ *
+ * `mcpConsent` is deliberately dropped: an un-granted plugin MCP server is the
+ * MCP pane's problem, and forwarding the consent gate here would turn "needs
+ * approval" into a Skills-pane warning.
+ */
+export function skillsPaneDiscoveryOptions(input: SkillsPaneDiscoveryInput): SkillsPaneDiscoveryOptions {
+  const wiring = pluginsDiscoveryWiring(input);
+  return {
+    pluginStatePath: wiring.pluginStatePath,
+    appVersion: input.appVersion,
+    reservedSkillNames: wiring.reservedSkillNames,
+    reservedAgentNames: wiring.reservedAgentNames,
+  };
+}

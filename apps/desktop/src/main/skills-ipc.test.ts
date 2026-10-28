@@ -24,6 +24,7 @@ import {
   NodeSkillsFs,
   type SkillsIpcDeps,
 } from "./skills-ipc.js";
+import { skillsPaneDiscoveryOptions } from "../host/plugin-wiring.js";
 
 const TAB_ID = "tab-1";
 const fs = new NodeSkillsFs();
@@ -517,19 +518,22 @@ describe("handleSkillsList — the user's disabled plugins are a state, not prob
   }
 
   /**
-   * Exactly the deps main/index.ts registers: the plugin discovery options the
-   * host runtime and the Subagents/MCP panes already receive (state path + app
-   * version + builtin name sets).
+   * The PRODUCTION wiring: `main/index.ts` hands `registerSkillsIpc` exactly what
+   * `skillsPaneDiscoveryOptions` returns, so building the deps through it (never
+   * through a locally re-typed options bag) is what keeps this suite honest —
+   * a registration that stopped passing the managed state path fails here.
    */
   function storeDeps(ws: string, home: string): SkillsIpcDeps {
     return {
       ...makeDeps(ws, home),
-      pluginDiscoveryOptions: (h) => ({
-        pluginStatePath: join(h, ".anycode/plugins/state.json"),
-        appVersion: "0.0.49",
-        reservedSkillNames: new Set<string>(),
-        reservedAgentNames: new Set<string>(),
-      }),
+      pluginDiscoveryOptions: (h) =>
+        skillsPaneDiscoveryOptions({
+          home: h,
+          pluginsSettings: undefined,
+          builtinSkillNames: [],
+          builtinPersonaNames: [],
+          appVersion: "0.0.49",
+        }),
     };
   }
 
