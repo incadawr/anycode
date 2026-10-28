@@ -292,6 +292,31 @@ describe("create_session — the production creation path primes a non-active co
 
 
 describe("deferred agent session registration", () => {
+  it.each([false, true])("pushes the recorded title before first port delivery (deferred=%s)", async (deferred) => {
+    let blocked = deferred;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const r = rig({ blocked: () => blocked, pending, window: true });
+    const observations: Array<{ sessionId: string; title: string | undefined; deliveries: number }> = [];
+    const creation = createSessionForAgent({ workspace: "/ws", handle: "worker-1" }, r.deps({
+      pushAgentTitle: (sessionId) => observations.push({
+        sessionId,
+        title: r.agentSessionTitles.get(sessionId),
+        deliveries: r.posted.length,
+      }),
+    }));
+    if (deferred) {
+      await vi.waitFor(() => expect(r.manager.listTabs()).toHaveLength(1));
+      expect(observations).toEqual([]);
+      blocked = false;
+      release();
+    }
+    const outcome = await creation;
+    if (!outcome.ok) throw new Error("create refused");
+    expect(observations).toEqual([{ sessionId: outcome.sessionId, title: "worker-1", deliveries: 0 }]);
+    expect(r.posted.some((entry) => entry.channel === PORT_ENVELOPE_TYPE)).toBe(true);
+  });
+
   it("answers only once the deferred first fork ran, then shares the session and keeps its handle (GitHub #6)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "anycode-access-test-"));
     try {
