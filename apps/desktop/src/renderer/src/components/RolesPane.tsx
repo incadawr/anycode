@@ -14,7 +14,7 @@ import { useSettingsStore } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
 import { deriveRolePresets, presetApplicable, ROLE_PRESET_ROLES, type PresetRole } from "../role-presets.js";
 import type { RoleConfig } from "../../../shared/settings.js";
-import { roleProfiles } from "../../../shared/role-profiles.js";
+import { roleProfiles, BUILT_IN_PROFILE_ID } from "../../../shared/role-profiles.js";
 import { claimedRoleOverrides, type RoleProfileOverride } from "../role-profile-overrides.js";
 import {
   canRenameProfile,
@@ -108,11 +108,17 @@ export function RolesPane({ tabId }: RolesPaneProps = {}): React.JSX.Element {
   const [projectRoot, setProjectRoot] = useState("");
   const projects = [...new Set([...tabs.map((tab) => tab.projectRoot ?? tab.workspace), ...sessionProjects, ...registry.projects.map((p) => p.projectRoot)])];
   const [profileName, setProfileName] = useState<string>(() => selected?.name ?? "");
+  // The name field is prefilled from the selection so Rename starts from the
+  // current name, but a prefilled value is NOT a name the user typed for
+  // Create/Duplicate. Without this distinction, clicking either button right
+  // after selecting a profile read the prefill as an explicit name and piled up
+  // identically named profiles.
+  const [nameEdited, setNameEdited] = useState(false);
   const projectProfileId = registry.projects.find((p) => p.projectRoot === projectRoot)?.profileId;
   useEffect(() => { setMaxParallelChildren(selected?.roles.maxParallelChildren?.toString() ?? ""); }, [selected?.id, selected?.roles.maxParallelChildren]);
   // The name field drives Create/Rename/Duplicate; it follows the selected
   // profile so Rename starts from the current name instead of a dead empty box.
-  useEffect(() => { setProfileName(selected?.name ?? ""); }, [selected?.id, selected?.name]);
+  useEffect(() => { setProfileName(selected?.name ?? ""); setNameEdited(false); }, [selected?.id, selected?.name]);
   async function saveRegistry(next: typeof registry): Promise<void> {
     const result = await setPatch({ roleProfiles: next });
     setSavedNotice({ ok: result.ok, message: result.ok ? "Profiles saved." : "Saving profiles failed." });
@@ -120,9 +126,12 @@ export function RolesPane({ tabId }: RolesPaneProps = {}): React.JSX.Element {
   function addProfile(copy: boolean): void {
     const id = crypto.randomUUID();
     const existingNames = registry.profiles.map((profile) => profile.name);
+    // An untouched prefill is not a name for THIS operation: fall back to the
+    // unique default series so repeated clicks never create duplicates.
+    const typedName = nameEdited ? profileName : "";
     const name = copy
-      ? duplicateProfileName(profileName, existingNames, selected?.name)
-      : createProfileName(profileName, existingNames);
+      ? duplicateProfileName(typedName, existingNames, selected?.name)
+      : createProfileName(typedName, existingNames);
     const roles = copy ? (persistedRoles ?? {}) : {};
     void saveRegistry({ ...registry, profiles: [...registry.profiles, { id, name, roles }], activeId: id });
   }
@@ -177,13 +186,13 @@ export function RolesPane({ tabId }: RolesPaneProps = {}): React.JSX.Element {
   return (
     <div className="settings-pane" data-testid="settings-roles-pane">
       <label className="settings-field"><span className="settings-field-label">Global role profile</span>
-        <select aria-label="Global role profile" value={selected?.id ?? ""} onChange={(event) => void saveRegistry({ ...registry, activeId: event.target.value })}>
+        <select aria-label="Global role profile" value={selected?.id ?? ""} onChange={(event) => void saveRegistry({ ...registry, activeId: event.target.value === "" ? BUILT_IN_PROFILE_ID : event.target.value })}>
           {/* Always offered: with a profile active this used to disappear, leaving no way back to the built-ins. */}
           <option value="">Built-in defaults</option>
           {registry.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
       </label>
-      <label className="settings-field"><span className="settings-field-label">Profile name</span><input aria-label="Profile name" value={profileName} onChange={(event) => setProfileName(event.target.value)} /></label>
+      <label className="settings-field"><span className="settings-field-label">Profile name</span><input aria-label="Profile name" value={profileName} onChange={(event) => { setProfileName(event.target.value); setNameEdited(true); }} /></label>
       <button type="button" onClick={() => addProfile(false)}>Create profile</button>
       <button type="button" onClick={() => addProfile(true)}>Duplicate profile</button>
       <button type="button" disabled={!canRenameProfile(selected?.name, profileName)} onClick={() => { if (selected) void saveRegistry({ ...registry, profiles: registry.profiles.map((p) => p.id === selected.id ? { ...p, name: profileName.trim() } : p) }); }}>Rename profile</button>
