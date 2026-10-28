@@ -4,7 +4,11 @@
  * environment/header value, literal or `${env:}`-expanded — must never reach
  * `status.error`, a problem, or a log. Values shorter than 4 characters are not
  * redacted: they match too much unrelated text to be useful (a 1-character
- * value would shred an exit code or a path).
+ * value would shred an exit code or a path). That floor is a DELIBERATE limit
+ * for inherited credentials as well (config.ts feeds the values of
+ * sensitive-named inherited env vars in under `inheritEnv: true`): a short
+ * inherited token stays visible rather than corrupt every diagnostic —
+ * lowering the floor would redact exit codes and paths for every server.
  */
 
 const MIN_REDACT_LENGTH = 4;

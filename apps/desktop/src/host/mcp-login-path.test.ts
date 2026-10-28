@@ -143,7 +143,7 @@ describe("claudeMcpStatuses — Claude sessions surface forwarded-server failure
         state: "failed",
         toolCount: 0,
         toolsTruncated: false,
-        error: "Claude reported this server as failed",
+        error: "Claude could not start this server (Claude does not report the reason; run `claude mcp list` to see it)",
       },
       {
         name: "api",
@@ -151,7 +151,7 @@ describe("claudeMcpStatuses — Claude sessions surface forwarded-server failure
         state: "failed",
         toolCount: 0,
         toolsTruncated: false,
-        error: "Claude needs authentication for this server",
+        error: "Claude needs authentication for this server (run `claude mcp list` to see it)",
       },
       { name: "unknown", transport: "stdio", state: "connecting", toolCount: 0, toolsTruncated: false },
     ]);
@@ -167,9 +167,22 @@ describe("claudeMcpStatuses — Claude sessions surface forwarded-server failure
         state: "failed",
         toolCount: 0,
         toolsTruncated: false,
-        error: "Claude did not report this server",
+        error: "Claude did not start this server (Claude does not report the reason; run `claude mcp list` to see it)",
       },
     ]);
+  });
+
+  // The Claude CLI's `system/init` carries no error text at all, so a row that
+  // claimed a reason would be inventing one. Both templates must state the
+  // limitation and name the command that does show the reason.
+  it("never claims a reason the CLI does not report, and names the command that does", () => {
+    const failed = claudeMcpStatuses([{ name: "remote", status: "failed" }], ["silent"], [stdio("remote"), stdio("silent")]);
+    expect(failed).toHaveLength(2);
+    for (const row of failed) {
+      expect(row.error).toContain("Claude does not report the reason");
+      expect(row.error).toContain("`claude mcp list`");
+      expect(row.error).not.toMatch(/exited with code|stderr|spawn/i);
+    }
   });
 });
 

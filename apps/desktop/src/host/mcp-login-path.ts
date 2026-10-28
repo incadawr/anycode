@@ -156,11 +156,20 @@ export function codexMcpStatus(
 }
 
 /**
- * Claude's first `system/init` MCP report → status rows (GitHub #3). The CLI
- * reports a status for every server it started, and simply omits the ones it
- * could not start — the `missing` list (computed from `mcpServerNames` against
- * what we forwarded) covers that half. Claude's report carries no error text,
- * so the row says what is known and nothing more.
+ * The one ACTIONABLE next step for a Claude-side MCP failure. The CLI's
+ * `system/init` names a status per server and nothing else — no spawn error, no
+ * exit code, no stderr — so AnyCode cannot report a reason it never receives.
+ * The row says exactly that and points at the CLI's own listing, which does.
+ */
+const CLAUDE_MCP_SEE_REASON = "Claude does not report the reason; run `claude mcp list` to see it";
+
+/**
+ * Claude's `system/init` MCP report → status rows (GitHub #3). The CLI reports a
+ * status for every server it started, and simply omits the ones it could not
+ * start — the `missing` list (computed from `mcpServerNames` against what we
+ * forwarded) covers that half. Claude's report carries no error text, so the row
+ * states what is known (the server is not running) and where the reason lives,
+ * rather than implying a diagnostic we do not have.
  */
 export function claudeMcpStatuses(
   reported: readonly { name: string; status: string | null }[],
@@ -176,7 +185,12 @@ export function claudeMcpStatuses(
       toolCount: 0,
       toolsTruncated: false,
       ...(failed
-        ? { error: status === "needs-auth" ? "Claude needs authentication for this server" : "Claude reported this server as failed" }
+        ? {
+            error:
+              status === "needs-auth"
+                ? "Claude needs authentication for this server (run `claude mcp list` to see it)"
+                : `Claude could not start this server (${CLAUDE_MCP_SEE_REASON})`,
+          }
         : {}),
     };
   });
@@ -187,7 +201,7 @@ export function claudeMcpStatuses(
       state: "failed",
       toolCount: 0,
       toolsTruncated: false,
-      error: "Claude did not report this server",
+      error: `Claude did not start this server (${CLAUDE_MCP_SEE_REASON})`,
     });
   }
   return rows;
