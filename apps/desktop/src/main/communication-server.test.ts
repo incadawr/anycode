@@ -17,6 +17,7 @@ import { primeNewSessionPin } from "./session-pin.js";
 import type { AgentDelivery, AgentEnvelope } from "../shared/communication.js";
 import type { AnycodeSettings } from "../shared/settings.js";
 import { createHarness, finishStep, ScriptedModelPort } from "../host/test-harness.js";
+import type { Session } from "../host/session.js";
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
 async function fixture() {
@@ -1070,19 +1071,19 @@ describe("Sessions API create_session (Taskana 4768)", () => {
 
   /**
    * A host process stand-in that answers main's communication channel the way
-   * `host/index.ts` does: nothing is answered before the boot `ready` resolves;
-   * `send_message` returns the delivery the session ALREADY holds for that
-   * messageId (a restored record makes the real envelope a no-op and starts no
-   * turn); `restore_agent_messages` only inserts ids the session has not seen.
+   * `host/index.ts` does: nothing is answered before the boot `ready` resolves,
+   * and every operation is forwarded to a REAL host `Session` (built by the
+   * harness around a scripted model provider). Nothing here invents a delivery:
+   * `send_message` returns whatever that session's own `receiveAgentMessage`
+   * answered, so an acknowledged record is only possible because a turn really
+   * started, and `restore_agent_messages` uses the session's own dedupe — a
+   * restored record makes the real envelope a no-op and starts no turn.
    * Boot time is the test's (`boot()`), so readiness lands after the spawn
    * rather than at it, and every operation is recorded in send order.
    */
-  function controllableHost(pidValue: number) {
+  function controllableHost(pidValue: number, session: Session) {
     const order: string[] = [];
     const events: Array<{ op: "restore" | "send"; ids: string[]; payload?: string }> = [];
-    /** Session.agentDeliveries: what this host generation already knows. */
-    const known = new Map<string, AgentDelivery>();
-    const turns: string[] = [];
     const proc = Object.assign(new EventEmitter(), { pid: pidValue, kill: () => true }) as EventEmitter & {
       pid: number; kill: () => boolean; postMessage: (message: unknown) => void;
     };
@@ -1091,7 +1092,9 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     let sawProbe!: () => void;
     const probeSeen = new Promise<void>((resolve) => { sawProbe = resolve; });
     const reply = (requestId: unknown, result: unknown) => proc.emit("message", { type: "communication_response", requestId, result });
-    const deliver = (delivery: AgentDelivery) => proc.emit("message", { type: "communication_delivery", delivery });
+    // Mirror the host's own delivery observation (host/index.ts forwards each
+    // delivery to main): the session's REAL state transitions drive the ledger.
+    session.observeAgentDeliveries((delivery) => proc.emit("message", { type: "communication_delivery", delivery }));
     proc.postMessage = (raw: unknown) => {
       const message = raw as { requestId?: string; operation?: string; payload?: unknown };
       void (async () => {
@@ -1102,12 +1105,12 @@ describe("Sessions API create_session (Taskana 4768)", () => {
             sawProbe();
             await booted;
             order.push("ready");
-            reply(message.requestId, { engine: "core", state: "idle" });
+            reply(message.requestId, session.communicationStatus());
             return;
           case "restore_agent_messages": {
             const deliveries = message.payload as AgentDelivery[];
             events.push({ op: "restore", ids: deliveries.map((entry) => entry.envelope.messageId) });
-            for (const entry of deliveries) if (!known.has(entry.envelope.messageId)) known.set(entry.envelope.messageId, entry);
+            session.restoreAgentMessages(deliveries);
             reply(message.requestId, {});
             return;
           }
@@ -1115,26 +1118,18 @@ describe("Sessions API create_session (Taskana 4768)", () => {
             const envelope = message.payload as AgentEnvelope;
             events.push({ op: "send", ids: [envelope.messageId], payload: envelope.payload });
             order.push("send");
-            const existing = known.get(envelope.messageId);
-            if (existing) { reply(message.requestId, existing); return; }
-            const settled: AgentDelivery = { envelope, state: "acknowledged", detail: "Host started a next turn; model application unverified" };
-            known.set(envelope.messageId, { envelope, state: "queued" });
-            deliver({ envelope, state: "queued" });
-            known.set(envelope.messageId, settled);
-            turns.push(envelope.payload);
-            deliver(settled);
-            reply(message.requestId, settled);
+            reply(message.requestId, await session.receiveAgentMessage(envelope));
             return;
           }
           case "get_message_status":
-            reply(message.requestId, known.get(String(message.payload)));
+            reply(message.requestId, session.agentMessageStatus(String(message.payload)));
             return;
           default:
             reply(message.requestId, undefined);
         }
       })();
     };
-    return { proc, order, events, turns, boot: () => boot(), probeSeen };
+    return { proc, order, events, boot: () => boot(), probeSeen };
   }
 
   it("create_session firstMessage: the production creation path starts exactly one turn in a host that becomes ready after spawn", async () => {
@@ -1151,7 +1146,12 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     const dir = await mkdtemp(join(tmpdir(), "anycode-create-prod-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
     const discoveryFile = join(dir, "communication.json");
     const key = canonicalWorkspaceKey(dir, realpathSync);
-    const host = controllableHost(4242);
+    // The host side of the stand-in is a REAL Session (real core loop, real
+    // delivery bookkeeping) whose only substitute is the scripted model: what
+    // lands there is what the model really receives.
+    const h = createHarness({ steps: [finishStep()] });
+    cleanups.push(async () => h.close());
+    const host = controllableHost(4242, h.session);
     const sessions = createSessionAccessStore({ file: join(dir, "access.json"), handlesFile: join(dir, "handles.json"), defaultOn: () => false });
     const agentOpenedSessions = new Set<string>();
     const manager = new TabHostManager({
@@ -1187,7 +1187,10 @@ describe("Sessions API create_session (Taskana 4768)", () => {
       currentSettings: () => settings,
       primeNewSessionPin,
       resolveResumePin: async () => ({ ok: true, release: () => {} }),
-      randomUUID: () => "production-session-1",
+      // The host side is the harness Session, whose id is fixed: minting the
+      // tab under that id is what makes the stand-in genuinely the host of the
+      // session main just created (envelopes are addressed by this id).
+      randomUUID: () => "test-session",
       agentOpenedSessions,
       agentSessionTitles: new Map<string, string>(),
       listTabs: () => manager.listTabs(),
@@ -1227,7 +1230,7 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     // waits inside the host and no turn, ledger write or envelope exists yet.
     await host.probeSeen;
     expect(host.order).toEqual([]);
-    expect(host.turns).toEqual([]);
+    expect((h.config.modelPort as ScriptedModelPort).requests).toEqual([]);
     host.boot();
     await atWrite;
     expect(host.order).toEqual(["ready", "write"]);
@@ -1249,9 +1252,16 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     expect((result as { isError?: boolean }).isError).toBeFalsy();
     const messageId = value(result).messageId as string;
     expect(messageId).toBeTruthy();
-    // Exactly one envelope, and the one turn the host started is the firstMessage's.
+    // Exactly one envelope, and the turn it started is the firstMessage's — read
+    // on the MODEL side, where a session that stopped starting a turn (or
+    // stopped forwarding the payload) shows up as zero requests or a miss.
     expect(host.events.filter((event) => event.op === "send")).toHaveLength(1);
-    expect(host.turns).toEqual(["first turn"]);
+    const requests = (h.config.modelPort as ScriptedModelPort).requests;
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    const userText = requests[0]!.messages.flatMap((message) => (message.role === "user" ? [message.content] : [])).join("\n");
+    expect(userText).toContain("first turn");
+    await h.flush();
+    expect(requests).toHaveLength(1); // one turn: not a retry and not a second dispatch
     // The record's own dispatch deadline passed while its envelope was still
     // unposted (the displayed detail was rewritten), and the delivery still
     // settled after it.
@@ -1263,9 +1273,13 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     const postedAt = host.events.findIndex((event) => event.op === "send");
     expect(host.events.slice(0, postedAt).filter((event) => event.op === "restore" && event.ids.includes(messageId))).toEqual([]);
     // The delivery is settled, never unknown / "Dispatch pending" — in the durable
-    // ledger and through the status tool the reporter used.
-    const ledger = JSON.parse(await readFile(`${discoveryFile}.messages`, "utf8")) as Array<{ envelope: AgentEnvelope; state: string; detail?: string }>;
-    expect(ledger.find((record) => record.envelope.messageId === messageId)).toMatchObject({ state: "acknowledged", detail: "Host started a next turn; model application unverified" });
+    // ledger and through the status tool the reporter used. A real host publishes
+    // queued and then acknowledged, and each delivery observation persists on its
+    // own, so the durable snapshot is read after those writes flush.
+    await vi.waitFor(async () => {
+      const ledger = JSON.parse(await readFile(`${discoveryFile}.messages`, "utf8")) as Array<{ envelope: AgentEnvelope; state: string; detail?: string }>;
+      expect(ledger.find((record) => record.envelope.messageId === messageId)).toMatchObject({ state: "acknowledged", detail: "Host started a next turn; model application unverified" });
+    }, { timeout: 4000, interval: 20 });
     expect(value(await client.callTool({ name: "get_message_status", arguments: { messageId } }))).toMatchObject({ state: "acknowledged", detail: "Host started a next turn; model application unverified" });
   }, 20000);
 
