@@ -780,6 +780,55 @@ describe("create_session — effort preparation before publication", () => {
     expect(delivered).toEqual([{ published: true, exposed: true }]);
   });
 
+  it("keeps deferred effort creation private until the requested effort is accepted", async () => {
+    let blocked = true;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    let parked = false;
+    const sequence: string[] = [];
+    const r = rig({ blocked: () => blocked, pendingFactory: () => { parked = true; return pending; }, window: true, sequence,
+      respond: (operation, payload) => {
+        if (operation === "get_session_status") return { result: IDLE_STATUS };
+        if (operation === "set_session_effort") {
+          expect(payload).toEqual({ effort: "xhigh" });
+          sequence.push("effort-configured");
+          return { result: { ok: true, status: { ...IDLE_STATUS, effort: "xhigh" } } };
+        }
+        return undefined;
+      },
+    });
+    const creation = createSessionForAgent({ workspace: "/ws", engine: "codex", effort: "xhigh", handle: "worker" }, r.deps());
+    await vi.waitFor(() => expect(parked).toBe(true));
+    blocked = false;
+    release();
+    const outcome = await creation;
+    expect(outcome.ok).toBe(true);
+    expect(sequence).toEqual(["effort-configured", "registered"]);
+    expect(r.posted.filter((entry) => entry.channel === PORT_ENVELOPE_TYPE)).toHaveLength(1);
+    expect(r.agentOpenedSessions.size).toBe(1);
+  });
+
+  it("does not register attribution when a deferred effort is refused", async () => {
+    let blocked = true;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    let parked = false;
+    const r = rig({ blocked: () => blocked, pendingFactory: () => { parked = true; return pending; }, window: true,
+      respond: (operation) => operation === "get_session_status" ? { result: IDLE_STATUS }
+        : operation === "set_session_effort" ? { result: { ok: false, reason: "invalid_effort", detail: "invalid" } } : undefined,
+    });
+    const creation = createSessionForAgent({ workspace: "/ws", engine: "codex", effort: "bad", handle: "worker" }, r.deps());
+    await vi.waitFor(() => expect(parked).toBe(true));
+    blocked = false;
+    release();
+    const outcome = await creation;
+    expect(outcome).toMatchObject({ ok: false, reason: "invalid_effort" });
+    expect(r.agentOpenedSessions.size).toBe(0);
+    expect(r.agentSessionTitles.size).toBe(0);
+    expect(r.posted).toHaveLength(0);
+    expect(r.manager.listTabs()).toHaveLength(0);
+  });
+
   it("aborts invalid effort creation without leaving a tab or session row", async () => {
     const sequence: string[] = [];
     const exposed = new Map<string, boolean>();
