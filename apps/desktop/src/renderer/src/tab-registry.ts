@@ -685,7 +685,9 @@ export function createTabRegistry(
       entry.unsubscribeMessages?.();
       entry.unsubscribeMessages = null;
       entry.connection = null;
-      entry.store.getState().setHostExited();
+      // GitHub #6: the path argument is the terminal missing-folder condition, and
+      // only that one may hide the surface's connection lines (HostBanner).
+      entry.store.getState().setHostExited(missingWorkspacePath !== undefined);
       if (missingWorkspacePath !== undefined) {
         entry.store.getState().applyHostMessage({
           type: "fatal",
