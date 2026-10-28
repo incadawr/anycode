@@ -11794,6 +11794,28 @@ describe("automation facade — native engine effort", () => {
     expect(pill.modelPickDisabled).toBe(false);
   });
 
+  it("keeps the effort chosen for a newly selected model in the reported label", () => {
+    const models = [
+      { id: "model-a", label: "Model A", efforts: ["low", "medium", "high", "xhigh"] },
+      { id: "model-b", label: "Model B", efforts: ["low", "medium", "high", "xhigh"] },
+    ];
+    const { dom } = nativeMenuDom();
+    const { facade, port, tabId } = nativeFacade(dom, { current: "model-a", available: models, effort: "xhigh" });
+
+    // The host accepts the switch to B, then `xhigh` FOR B — a different
+    // model's choice that merely repeats A's applied level.
+    port.emit({ type: "engine_settings_changed", model: "model-b", state: "pending", appliesFrom: "next_turn" });
+    port.emit({ type: "engine_settings_changed", model: "model-b", effort: "xhigh", state: "pending", appliesFrom: "next_turn" });
+
+    const pill = facade.modelPillState(tabId);
+    if (!pill.ok || !("present" in pill)) throw new Error("expected a state reading");
+    // The chosen effort is reported, never silently replaced by Default; the
+    // applied effort stays unknown because it belongs to the OLD model.
+    expect(pill.label).toBe("Model A → Model B (next turn) · Default → xhigh (next turn)");
+    expect(pill.currentEffort).toBeNull();
+    expect(pill.effortItems).toEqual(["low", "medium", "high", "xhigh"]);
+  });
+
   it("picks native xhigh through the effort page", async () => {
     const { dom, state } = nativeMenuDom();
     const { facade, port, tabId } = nativeFacade(dom, TERRA);

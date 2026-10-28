@@ -92,10 +92,13 @@ describe("EngineModelMenu — rendered effort row", () => {
       const items = [...page.querySelectorAll<HTMLButtonElement>("button.model-pill-item")];
       const applied = items.find((item) => item.getAttribute("data-effort") === "medium")!;
       const queued = items.find((item) => item.getAttribute("data-effort") === "xhigh")!;
-      // Applied and queued are distinguishable in the rendered menu.
-      expect(applied.getAttribute("aria-checked")).toBe("true");
-      expect(queued.getAttribute("aria-checked")).toBe("false");
+      // Applied and queued are distinguishable in the rendered menu: the tick
+      // marks the level the NEXT turn uses, the "next turn" tag marks it as not
+      // yet in force (so a queued pick never reads as already applied).
+      expect(queued.getAttribute("aria-checked")).toBe("true");
       expect(queued.textContent).toContain("next turn");
+      expect(applied.getAttribute("aria-checked")).toBe("false");
+      expect(applied.textContent).not.toContain("next turn");
 
       // Picking the APPLIED effort is the gesture that cancels `xhigh`: it must
       // reach the host, or the next turn silently still runs at `xhigh`.
