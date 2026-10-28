@@ -31,7 +31,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - The Sessions API reports a missing folder instead of a started session when the folder disappears while the session is being prepared or while a provider refresh delays its start. (#6)
 - Restoring a missing folder after a failed resume still opens on the imported task’s chosen model. (#6)
 - A failed turn or compaction no longer hides that the host is reconnecting. (#6)
-- Sessions API tabs keep their agent handle as the title after closing the tab, restarting AnyCode and resuming the session. A session an agent opened is repaired from its saved handle on resume; a tab from an older version is repaired only when its title is still the raw delivery header, and a session whose handle you set yourself keeps its title.
+- Sessions API tabs keep their agent handle as the title after closing the tab, restarting AnyCode and resuming the session; a title from an older version is repaired on resume only while it is still the raw delivery header, and a title you chose — including after changing the handle later — is left alone.
 - An agent message reads the same in the live transcript as it does after a reload: the delivery wrapper, its JSON header and the delivery line no longer appear, and the message body is not shown twice.
 - A background child's report is labelled "Background subagent completed" instead of repeating the word "subagent".
 - An agent handle is only acknowledged as stored once the session store actually holds it: a failed write — including a session row that could not be created at all — is retried instead of silently forfeited, so the title survives the next restart.

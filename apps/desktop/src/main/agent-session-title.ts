@@ -18,11 +18,10 @@
  *   the title a host committed), so a later resume can tell the title the agent
  *   wrote apart from a title something else wrote afterwards;
  * - a RESUME-TIME repair: a session created before this existed still carries
- *   an automatically generated title in SQLite (the raw delivery envelope)
- *   while its handle sits in the handles file, and a session this version
- *   creates whose title push never landed carries whatever the store held.
- *   The saved handle replaces such a title — but only when the row is KNOWN to
- *   have been titled by the app rather than by the user (see
+ *   an automatically generated title in SQLite — the raw delivery envelope —
+ *   while its handle sits in the handles file. The saved handle replaces such
+ *   a title, and NOTHING ELSE is repaired on resume: every other stored title
+ *   stays as written, whichever session it belongs to (see
  *   `recoverAgentSessionTitle`).
  *
  * The host acknowledges `set_agent_title` only after its persistence write
@@ -160,13 +159,6 @@ export interface RecoverAgentTitleDeps {
   /** The handle saved in the handles file (durable across restarts). */
   savedHandle(): string | undefined;
   /**
-   * True only when a DURABLE marker says an agent opened this session through
-   * `create_session` (written at creation time). A saved handle is not enough:
-   * the user can assign one to an ordinary session from the environment menu,
-   * and that session's title is not the agent's to replace.
-   */
-  openedByAgent(): boolean;
-  /**
    * The title a host last confirmed for this session — the durable marker that
    * says which title the agent itself wrote. Absent for a session created
    * before that marker existed, and for one whose write never landed.
@@ -182,22 +174,16 @@ export interface RecoverAgentTitleDeps {
  * Resume-time repair of an agent-opened tab whose stored title is not its
  * handle. Returns whether a repair was started.
  *
- * The decision, in order:
+ * A saved handle is not by itself evidence that the tab was opened by an agent
+ * (the user can give an ordinary shared session a handle too), so the ONE title
+ * this repairs is the raw delivery envelope, which no user chose:
  *
- * 1. No saved handle — not a session whose title the handle owns: never touch
- *    the title.
- * 2. A confirmed title on record — the stored title was written after the
- *    agent's own write and confirmed again, so it is someone else's choice (or
- *    already the handle): leave it, without even a database read.
- * 3. A stored title that IS the handle — nothing to do.
- * 4. Otherwise the title may be repaired ONLY when the app is known to have
- *    written it:
- *      - the session carries the durable agent-opened marker (rows written
- *        from this version on), or
- *      - the stored title begins with the raw delivery-envelope header, the one
- *        title text no user can have chosen (rows written before it).
- *    Anything else — in particular an ordinary session whose handle the user
- *    assigned by hand — keeps the title it has.
+ * 1. No saved handle, or a confirmed title on record (the stored title was
+ *    written after the agent's own, confirmed one — someone else's choice):
+ *    leave the row alone, without even a database read.
+ * 2. A stored title that IS the handle, or any title that does not begin with
+ *    the raw delivery-envelope header: nothing to do.
+ * 3. A stored title that begins with the envelope header: adopt the handle.
  */
 export async function recoverAgentSessionTitle(deps: RecoverAgentTitleDeps): Promise<boolean> {
   const handle = deps.savedHandle();
@@ -211,13 +197,10 @@ export async function recoverAgentSessionTitle(deps: RecoverAgentTitleDeps): Pro
     // An unreadable row must never block a resume; the next host generation retries.
     return false;
   }
-  if (persisted === handle) return false;
-  // Repair only a title the app is known to have generated: the durable
-  // agent-opened marker this version writes at create_session time, or (for
-  // rows written before it) the raw envelope header, which is never a title a
-  // user chose.
-  const automatic = deps.openedByAgent() || (persisted !== undefined && persisted.startsWith(AGENT_MESSAGE_HEADER_PREFIX));
-  if (!automatic) return false;
+  if (persisted === undefined || persisted === handle) return false;
+  // Only a title the app generated from the delivery envelope is repaired: its
+  // first line is the one title text nobody types.
+  if (!persisted.startsWith(AGENT_MESSAGE_HEADER_PREFIX)) return false;
   deps.adopt(handle);
   return true;
 }

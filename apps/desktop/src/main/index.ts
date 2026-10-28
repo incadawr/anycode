@@ -2387,7 +2387,6 @@ void app.whenReady().then(async () => {
     defaultOn: () => defaultSessionAccessFromSettingsFile(settingsPath),
     handlesFile: join(app.getPath("userData"), "communication-handles.json"),
     titleConfirmationsFile: join(app.getPath("userData"), "communication-agent-titles.json"),
-    agentOpenedFile: join(app.getPath("userData"), "communication-agent-opened.json"),
   });
   communicationApprovals = createSessionAccessStore({
     file: join(app.getPath("userData"), "communication-approvals.json"),
@@ -2494,13 +2493,12 @@ void app.whenReady().then(async () => {
       const browserAdded = browserAccessStore?.register(info);
       // A session created before handles were persisted keeps the payload-derived
       // title in SQLite; the saved handle repairs it as soon as its tab is back —
-      // only when the row is known to have been titled automatically (a durable
-      // agent-opened marker, or the raw envelope header on older rows), never for
-      // a title of a session whose handle the user assigned by hand.
+      // but only when the stored title is still the raw delivery header, never a
+      // title that was chosen (in particular not after the user changed the
+      // handle of an agent-opened session).
       void recoverAgentSessionTitle({
         sessionId: info.sessionId,
         savedHandle: () => communicationSessions?.getHandle(info.sessionId),
-        openedByAgent: () => communicationSessions?.isAgentOpened(info.sessionId) ?? false,
         confirmedTitle: () => communicationSessions?.getConfirmedTitle(info.sessionId),
         readPersistedTitle: async () => (await persistence?.getSessionById(info.sessionId))?.title,
         adopt: (title) => {
