@@ -25,9 +25,10 @@ import { Client, StreamableHTTPClientTransport } from "@anycode/core/communicati
 import { startCommunicationServer } from "./communication-server.js";
 import { createSessionForAgent, type CreateSessionByAgentDeps } from "./create-session-by-agent.js";
 import { primeNewSessionPin, type ResumePinResult } from "./session-pin.js";
-import { TabHostManager, type HostForkFn } from "./tabs.js";
+import { TabHostManager, type HostForkFn, type WindowLike } from "./tabs.js";
 import type { SessionAccessStore } from "./communication-sessions.js";
 import type { AnycodeSettings } from "../shared/settings.js";
+import { PORT_ENVELOPE_TYPE } from "../shared/envelopes.js";
 
 class FakeHost extends EventEmitter {
   readonly pid = 4242;
@@ -57,7 +58,7 @@ function settings(): AnycodeSettings {
   };
 }
 
-function rig(options: { failPrimingFor?: string; blocked?: () => boolean; pending?: Promise<void>; pendingFactory?: () => Promise<void>; failFork?: boolean; sessions?: SessionAccessStore; workspaceMissing?: (workspace: string) => boolean } = {}) {
+function rig(options: { failPrimingFor?: string; blocked?: () => boolean; pending?: Promise<void>; pendingFactory?: () => Promise<void>; failFork?: boolean; sessions?: SessionAccessStore; workspaceMissing?: (workspace: string) => boolean; window?: boolean } = {}) {
   // Mirrors main/index.ts: `hostEnvByConnection`, filled ONLY by ensurePinnedEnv
   // (through resolveResumePin) and read fail-closed by the fork's `env`.
   const cache = new Map<string, NodeJS.ProcessEnv>();
@@ -79,6 +80,20 @@ function rig(options: { failPrimingFor?: string; blocked?: () => boolean; pendin
     cache.set(id, { PATH: "/base", ANYCODE_API_KEY: `${id}-key` });
     return { ok: true, connectionId: id, release: vi.fn() };
   };
+  // The attribution registries main wires into the manager (main/index.ts) —
+  // shared with the deps bag below, so the port envelope a deferred fork
+  // delivers is built from the very state the hook writes.
+  const agentOpenedSessions = new Set<string>();
+  const agentSessionTitles = new Map<string, string>();
+  /** Every `webContents.postMessage` the delivered port envelopes go through. */
+  const posted: Array<{ channel: string; payload: unknown }> = [];
+  const window = {
+    isDestroyed: () => false,
+    webContents: {
+      postMessage: (channel: string, payload: unknown) => posted.push({ channel, payload }),
+      send: () => {},
+    },
+  };
   const manager = new TabHostManager({
     fork,
     onSessionRegistered: ({ sessionId }) => {
@@ -88,7 +103,11 @@ function rig(options: { failPrimingFor?: string; blocked?: () => boolean; pendin
     waitForHostEnv: () => options.blocked?.() ? (options.pendingFactory?.() ?? options.pending) : undefined,
     hostEntry: "/fake/host.js",
     createChannel: fakeChannel,
-    getWindow: () => null,
+    // Only the envelope assertions need a window; the rest keep the historical
+    // no-window rig (deliveries are no-ops there).
+    getWindow: () => (options.window === true ? (window as unknown as WindowLike) : null),
+    isAgentOpenedSession: (sessionId) => agentOpenedSessions.has(sessionId),
+    agentTitleOf: (sessionId) => agentSessionTitles.get(sessionId),
     // fail-closed: an unprimed non-active pin refuses the fork.
     env: (connectionId) =>
       options.blocked?.() ? undefined : connectionId === undefined || connectionId === "conn-active" ? { PATH: "/active" } : cache.get(connectionId),
@@ -123,12 +142,12 @@ function rig(options: { failPrimingFor?: string; blocked?: () => boolean; pendin
     primeNewSessionPin,
     resolveResumePin,
     randomUUID: () => `sess-${forkEnvs.length}`,
-    agentOpenedSessions: new Set<string>(),
-    agentSessionTitles: new Map<string, string>(),
+    agentOpenedSessions,
+    agentSessionTitles,
     listTabs: () => manager.listTabs(),
     ...overrides,
   });
-  return { manager, deps, forkEnvs, sessions, exposed };
+  return { manager, deps, forkEnvs, sessions, exposed, posted, agentOpenedSessions, agentSessionTitles };
 }
 
 describe("create_session — the production creation path primes a non-active connection before the fork", () => {
@@ -248,6 +267,37 @@ describe("deferred agent session registration", () => {
       expect(r.forkEnvs).toHaveLength(1);
       expect(sessions.isExposed(outcome.sessionId)).toBe(true);
       expect(sessions.getHandle(outcome.sessionId)).toBe("agent-one");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("a deferred first fork's FIRST envelope already carries the agent attribution and handle title (GitHub #6)", async () => {
+    // A deferred fork delivers its port from its own completion — strictly
+    // before `createTabAwaitingInitialSpawn` reports. Attribution registered
+    // only after that await misses the first envelope: no agent badge, and the
+    // sidebar shows the auto title instead of the requested handle.
+    const dir = mkdtempSync(join(tmpdir(), "anycode-deferred-attribution-"));
+    try {
+      const sessions = createSessionAccessStore({ file: join(dir, "access.json"), handlesFile: join(dir, "handles.json"), defaultOn: () => false });
+      let blocked = true;
+      const deferrals: Array<() => void> = [];
+      const r = rig({
+        sessions,
+        blocked: () => blocked,
+        pendingFactory: () => new Promise<void>((resolve) => { deferrals.push(resolve); }),
+        window: true,
+      });
+      const creation = createSessionForAgent({ workspace: "/ws", handle: "agent-two" }, r.deps());
+      await vi.waitFor(() => expect(deferrals).toHaveLength(1));
+      // Still parked: nothing has been delivered to the renderer yet.
+      expect(r.posted).toHaveLength(0);
+      blocked = false;
+      deferrals[0]!();
+      const outcome = await creation;
+      if (!outcome.ok) throw new Error("create refused");
+      expect(outcome.handle).toBe("agent-two");
+      const envelope = r.posted.find((entry) => entry.channel === PORT_ENVELOPE_TYPE);
+      expect(envelope?.payload).toMatchObject({ tabId: outcome.tabId, workspace: "/ws", openedByAgent: true, agentTitle: "agent-two" });
+      expect(sessions.getHandle(outcome.sessionId)).toBe("agent-two");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
