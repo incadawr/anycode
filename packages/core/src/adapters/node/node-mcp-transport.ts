@@ -131,7 +131,7 @@ export class NodeStdioMcpTransport implements McpWireTransport {
       });
       child.on("close", (code, signal) => {
         this.child = undefined;
-        if (!this.closing && code !== 0 && code !== null) {
+        if (!this.closing && (code !== null || signal !== null)) {
           this.onerror?.(
             new Error(
               `MCP stdio server "${this.spec.name}" exited unexpectedly (code=${code}, signal=${String(signal)})` +

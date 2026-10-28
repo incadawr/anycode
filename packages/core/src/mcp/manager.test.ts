@@ -578,3 +578,11 @@ class ScriptedModelPort implements ModelPort {
 
 // Silence the intentional duplicate-registration / collision warnings in these tests.
 vi.spyOn(console, "warn").mockImplementation(() => {});
+
+it("reports a stdio exit code and stderr in status", async () => {
+  const { NodeMcpTransportFactory } = await import("../adapters/node/node-mcp-transport.js");
+  const manager = new McpManager({ registry: new ToolRegistry(), transports: new NodeMcpTransportFactory() });
+  await manager.start([{ kind: "stdio", name: "broken", command: process.execPath, args: ["-e", "console.error('startup failed'); process.exit(0)"], env: {} }]);
+  expect(manager.status()[0]).toMatchObject({ name: "broken", state: "failed", error: expect.stringMatching(/code=0.*startup failed/s) });
+  await manager.dispose();
+});
