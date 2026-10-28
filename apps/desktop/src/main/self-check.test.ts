@@ -130,12 +130,13 @@ describe("runSelfCheck capture under Xvfb", () => {
 });
 
 describe("checkReloadProtection (GitHub #19 packaged reload-shortcut check)", () => {
-  function fakeWin(overrides: Partial<{ clearOnKey: boolean; loadOnKey: boolean }> = {}) {
+  function fakeWin(overrides: Partial<{ clearOnKey: boolean; loadOnKey: boolean; undelivered: boolean; dropShift: boolean }> = {}) {
     const state = {
       sentinel: null as string | null,
       loadStarts: 0,
       sentEvents: [] as Array<{ type: string; keyCode: string; modifiers: string[] }>,
       listener: undefined as (() => void) | undefined,
+      inputListener: undefined as ((event: unknown, input: unknown) => void) | undefined,
     };
     const executeJavaScript = vi.fn(async (expression: string): Promise<unknown> => {
       if (expression.includes("dataset.anycodeReloadSentinel =")) {
@@ -148,13 +149,26 @@ describe("checkReloadProtection (GitHub #19 packaged reload-shortcut check)", ()
     return {
       state,
       win: {
+        show: vi.fn(),
         focus: vi.fn(),
+        isFocused: vi.fn(() => true),
         webContents: {
-          on: vi.fn((_event: string, listener: () => void) => { state.listener = listener; }),
-          removeListener: vi.fn(() => { state.listener = undefined; }),
+          focus: vi.fn(),
+          isFocused: vi.fn(() => true),
+          on: vi.fn((event: string, listener: (...args: never[]) => void) => {
+            if (event === "did-start-loading") state.listener = listener;
+            else state.inputListener = listener as (event: unknown, input: unknown) => void;
+          }),
+          removeListener: vi.fn((event: string) => {
+            if (event === "did-start-loading") state.listener = undefined;
+            else state.inputListener = undefined;
+          }),
           sendInputEvent: vi.fn((event: { type: string; keyCode: string; modifiers: string[] }) => {
             state.sentEvents.push(event);
             if (event.type === "keyDown") {
+              if (!overrides.undelivered && !(overrides.dropShift && event.modifiers.includes("shift"))) {
+                state.inputListener?.({}, { type: event.type, key: event.keyCode, meta: event.modifiers.includes("command"), control: event.modifiers.includes("control"), shift: event.modifiers.includes("shift"), alt: false });
+              }
               if (overrides.clearOnKey) state.sentinel = null;
               if (overrides.loadOnKey) {
                 state.loadStarts += 1;
@@ -170,19 +184,38 @@ describe("checkReloadProtection (GitHub #19 packaged reload-shortcut check)", ()
 
   const safeMenu = { items: [{ label: "File", submenu: { items: [{ role: "close" }] } }] };
 
-  it("accepts the production menu with Electron-style null submenus", async () => {
-    const convert = (items: MenuItemConstructorOptions[]): { items: import("./self-check.js").ReloadMenuItem[] } => ({
-      items: items.map((item) => ({
-        role: item.role?.toLowerCase(),
-        label: item.label,
-        accelerator: item.accelerator ?? null,
-        submenu: Array.isArray(item.submenu) ? convert(item.submenu) : null,
-      })),
+  it("accepts the production menu with Electron-style null defaults", async () => {
+    // Electron 43 supplies role-specific accelerators and submenus before
+    // replacing absent values with null. Only fields traversed by the check
+    // need to be modeled here.
+    const convert = (items: MenuItemConstructorOptions[], platform: NodeJS.Platform): { items: import("./self-check.js").ReloadMenuItem[] } => ({
+      items: items.map((item) => {
+        const role = item.role?.toLowerCase() ?? null;
+        const accelerators: Record<string, string | null> = {
+          close: "CommandOrControl+W", quit: platform === "win32" ? null : "CommandOrControl+Q",
+          undo: "CommandOrControl+Z", redo: platform === "win32" ? "Control+Y" : "Shift+CommandOrControl+Z",
+          cut: "CommandOrControl+X", copy: "CommandOrControl+C", paste: "CommandOrControl+V",
+          selectall: "CommandOrControl+A", resetzoom: "CommandOrControl+0",
+          zoomin: "CommandOrControl+Plus", zoomout: "CommandOrControl+-",
+          togglefullscreen: platform === "darwin" ? "Control+Command+F" : "F11",
+          minimize: "CommandOrControl+M", hide: "Command+H", hideothers: "Command+Alt+H",
+        };
+        const defaults: Record<string, MenuItemConstructorOptions[]> = {
+          windowmenu: [{ role: "minimize" }, { role: "zoom" }, ...(platform === "darwin" ? [{ type: "separator" as const }, { role: "front" as const }] : [{ role: "close" as const }])],
+          appmenu: [{ role: "about" }, { type: "separator" }, { role: "services" }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { role: "quit" }],
+        };
+        const children = Array.isArray(item.submenu) ? item.submenu : role ? defaults[role] : undefined;
+        return {
+          role,
+          accelerator: item.accelerator ?? (role ? accelerators[role] : undefined) ?? null,
+          submenu: children ? convert(children, platform) : null,
+        };
+      }),
     });
     for (const platform of ["darwin", "linux", "win32"] as const) {
       const menu = convert(buildApplicationMenuTemplate({
         platform, development: false, onReload: () => {}, onForceReload: () => {}, onToggleDevTools: () => {},
-      }));
+      }), platform);
       await checkReloadProtection(fakeWin().win as never, menu, platform);
     }
   });
@@ -231,6 +264,13 @@ describe("checkReloadProtection (GitHub #19 packaged reload-shortcut check)", ()
     await checkReloadProtection(win as never, safeMenu, "win32");
     expect(state.sentEvents[0]).toMatchObject({ type: "keyDown", keyCode: "R", modifiers: ["control"] });
     expect(state.sentEvents[2]).toMatchObject({ modifiers: ["control", "shift"] });
+  });
+
+  it.each([{ undelivered: true }, { dropShift: true }])("fails when shortcut key events are not delivered: %o", async (overrides) => {
+    const { win, state } = fakeWin(overrides);
+    await expect(checkReloadProtection(win as never, safeMenu, "darwin")).rejects.toThrow("reload shortcut events were not delivered");
+    expect(state.listener).toBeUndefined();
+    expect(state.inputListener).toBeUndefined();
   });
 
   it("fails when a synthetic reload clears the sentinel, and detaches the listener", async () => {
