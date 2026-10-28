@@ -169,7 +169,20 @@ export interface CommunicationServerOptions {
   dispatchTimeoutMs?: number;
   /** Seam for the durable ledger write; tests hold it open to reproduce a slow disk between the record and the envelope post. */
   writeLedger?: (path: string, text: string) => Promise<void>;
+  /** Main's log, used for the one startup warning about allowed folders that are missing right now. */
+  warn?: (message: string) => void;
 }
+
+/**
+ * A listed folder that is not there right now (deleted, renamed, or a removed
+ * git worktree). Only these codes are tolerated at startup: the folder is a
+ * separate, self-healing problem. Any other `realpath` failure (EACCES, ELOOP,
+ * EIO) still fails the start, because a listed folder that exists but cannot be
+ * resolved is a broken configuration the user has to see.
+ */
+const MISSING_FOLDER_CODES = new Set(["ENOENT", "ENOTDIR"]);
+const isMissingFolder = (error: unknown): boolean =>
+  MISSING_FOLDER_CODES.has(String((error as NodeJS.ErrnoException | undefined)?.code));
 
 /** Exactly one source: an env config FILE (legacy) or a live config OBJECT (Settings). */
 export type CommunicationServerSource = { configFile: string } | { config: LiveCommunicationConfig };
@@ -181,7 +194,44 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   if (hasFile && config.workspaces.length === 0) throw new Error("Communication workspaces must not be empty");
   if (config.workspaces.some((path) => !isAbsolute(path))) throw new Error("Communication workspaces must be absolute");
   const restricted = config.workspaces.length > 0;
-  const allowed = new Set(await Promise.all(config.workspaces.map((path) => realpath(path))));
+  /**
+   * The allowed set compares CANONICAL paths only. A listed folder that does not
+   * resolve right now is kept aside in `unresolved` (its raw string, used only
+   * as a candidate to resolve again) instead of failing the whole server: one
+   * deleted folder must not take the Sessions API down for every other folder.
+   * It grants nothing while it is missing — there is no path-string fallback, so
+   * a folder later created (or symlinked) at that same string is authorised only
+   * if its canonical path is in `allowed`. Unresolved entries are retried lazily
+   * at check time (no timer), so a folder that comes back works again in the
+   * same server instance, without a restart.
+   */
+  const allowed = new Set<string>();
+  const unresolved = new Set<string>();
+  for (const path of config.workspaces) {
+    try { allowed.add(await realpath(path)); }
+    catch (error) {
+      if (!isMissingFolder(error)) throw error;
+      unresolved.add(path);
+    }
+  }
+  if (unresolved.size > 0) {
+    // One line per start, count plus the local paths: enough to fix the list, no token.
+    options.warn?.(`[main] Sessions API: ${unresolved.size} of ${config.workspaces.length} allowed folders are missing (${[...unresolved].join(", ")}); the other folders keep working, and a folder is allowed again once it is back`);
+  }
+  /** Re-resolves missing entries; a no-op (no syscall) once every entry is present again. */
+  const resolveMissing = async (): Promise<void> => {
+    for (const path of [...unresolved]) {
+      try { allowed.add(await realpath(path)); unresolved.delete(path); }
+      catch { /* still missing: still grants nothing */ }
+    }
+  };
+  /** Canonical-path membership; a missing entry is retried only while one remains. */
+  const isAllowed = async (canonical: string): Promise<boolean> => {
+    if (allowed.has(canonical)) return true;
+    if (unresolved.size === 0) return false;
+    await resolveMissing();
+    return allowed.has(canonical);
+  };
   const discoveryFile = config.discoveryFile ?? `${options.userData}/communication.json`;
   if (!isAbsolute(discoveryFile)) throw new Error("Communication discoveryFile must be absolute");
   const ledgerFile = `${discoveryFile}.messages`;
@@ -265,6 +315,8 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   };
   const tabs = async () => {
     const result = [];
+    // One re-resolution per request at most, and none while every entry is present.
+    if (unresolved.size > 0) await resolveMissing();
     for (const tab of options.manager.listTabs()) {
       if (options.isSessionExposed && !options.isSessionExposed(tab.sessionId)) continue;
       if (!restricted) { result.push(tab); continue; }
@@ -516,7 +568,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         if (!isAbsolute(input.workspace)) throw createRefusal("folder_not_found");
         let resolved: string;
         try { resolved = await realpath(input.workspace); } catch { throw createRefusal("folder_not_found"); }
-        if (restricted && !allowed.has(resolved)) throw createRefusal("not_allowed");
+        if (restricted && !(await isAllowed(resolved))) throw createRefusal("not_allowed");
         const outcome = await inCreationSection(async () => {
           const at = now();
           while (creationTimes.length > 0 && creationTimes[0]! <= at - CREATE_SESSION_RATE_WINDOW_MS) creationTimes.shift();
@@ -545,7 +597,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
           if (tabWorkspace !== undefined) {
             let landed: string;
             try { landed = await realpath(tabWorkspace); } catch { landed = tabWorkspace; }
-            if (restricted && !allowed.has(landed)) {
+            if (restricted && !(await isAllowed(landed))) {
               throw new Error(`create_session not_allowed: the new session landed outside the Sessions API folders list, so firstMessage cannot be delivered; the tab exists — sessionId ${outcome.sessionId}, tabId ${outcome.tabId}`);
             }
           }
@@ -572,7 +624,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         const { messageId } = statusSchema.parse(raw); const record = messages.get(messageId);
         if (!record) throw new Error("Message unavailable");
         if (options.isSessionExposed && !options.isSessionExposed(record.envelope.recipientSessionId)) throw new Error("Message unavailable");
-        if (record.workspace) { if (restricted && !allowed.has(record.workspace)) throw new Error("Message outside authorized workspace"); }
+        if (record.workspace) { if (restricted && !(await isAllowed(record.workspace))) throw new Error("Message outside authorized workspace"); }
         else await requireSession(record.envelope.recipientSessionId);
         if (!await markLostGeneration(record)) {
           try {

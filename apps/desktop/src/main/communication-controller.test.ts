@@ -178,6 +178,29 @@ describe("communication controller (Taskana 4747) — settings-driven live serve
   });
 });
 
+describe("missing allowed folder warning wiring", () => {
+  it("routes the server's missing-folder warning to the main log in both modes, and stays silent without one", async () => {
+    const warnings: string[] = [];
+    const settings = deps({ logger: { error: () => {}, warn: (message: string) => warnings.push(message) } });
+    await createCommunicationController(settings.d).apply({ enabled: true, workspaces: ["/abs/one"], port: 0 });
+    const options = settings.server.starts[0] as { warn?: (message: string) => void };
+    expect(typeof options.warn).toBe("function");
+    options.warn!("[main] Sessions API: 1 of 2 allowed folders are missing");
+    expect(warnings).toEqual(["[main] Sessions API: 1 of 2 allowed folders are missing"]);
+
+    // The legacy env-file mode logs the same warning: it tolerates a missing folder too.
+    const env = deps({ logger: { error: () => {}, warn: (message: string) => warnings.push(message) }, env: () => "/abs/config.json" });
+    await createCommunicationController(env.d).apply({ enabled: false, workspaces: [] });
+    (env.server.starts[0] as { warn?: (message: string) => void }).warn?.("env warning");
+    expect(warnings).toEqual(["[main] Sessions API: 1 of 2 allowed folders are missing", "env warning"]);
+
+    // A logger without warn leaves the option absent (no warning channel, no crash).
+    const plain = deps();
+    await createCommunicationController(plain.d).apply({ enabled: true, workspaces: [], port: 0 });
+    expect(plain.server.starts[0]).not.toHaveProperty("warn");
+  });
+});
+
 describe("External approvals wiring (Taskana 4763)", () => {
   it("T28 isExternalApprovalEnabled reaches startServer in the settings path; the legacy env path passes none", async () => {
     const live = deps({ isExternalApprovalEnabled: (id: string) => id === "a" });

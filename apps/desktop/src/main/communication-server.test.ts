@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, readFile, stat, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, stat, rm, realpath } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -358,6 +358,72 @@ describe("live config option and session exposure (Taskana 4747)", () => {
     const again = await startCommunicationServer({ manager: first.manager, userData: first.dir, config: { workspaces: [], port, discoveryFile: first.discoveryFile } });
     expect(again.url).toBe(`http://127.0.0.1:${port}/mcp`);
     await again.close();
+  });
+});
+
+describe("a listed folder that is missing (live config)", () => {
+  async function missingFixture() {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-missing-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const present = join(dir, "present"); const missing = join(dir, "gone");
+    await mkdir(present);
+    const discoveryFile = join(dir, "communication.json");
+    const request = vi.fn(async (_session: string, op: string, payload?: unknown) => {
+      if (op === "send_message") return { envelope: payload, state: "queued" };
+      if (op === "get_session_status") return { engine: "core", state: "idle" };
+      return undefined;
+    });
+    const tabs = [
+      { sessionId: "present", workspace: present, state: "running", pid: 1 },
+      { sessionId: "gone", workspace: missing, state: "running", pid: 2 },
+      { sessionId: "outside", workspace: tmpdir(), state: "running", pid: 3 },
+    ];
+    const warn = vi.fn();
+    const create = vi.fn(async () => ({ ok: true as const, sessionId: "created", tabId: "tab-created" }));
+    const manager = { listTabs: () => tabs, communicationRequest: request };
+    // The missing folder is listed FIRST: the start must survive hitting it first.
+    const service = await startCommunicationServer({ manager, userData: dir, config: { workspaces: [missing, present], port: 0, discoveryFile }, warn, createSessionByAgent: create });
+    cleanups.push(() => service.close());
+    const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string; workspaces: string[] };
+    const client = new Client({ name: "missing-folder", version: "1" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(discovery.url), { requestInit: { headers: { Authorization: `Bearer ${discovery.token}` } } }));
+    cleanups.push(() => client.close());
+    const ids = async () => value(await client.callTool({ name: "list_sessions", arguments: {} })).sessions.map((s: { sessionId: string }) => s.sessionId) as string[];
+    return { dir, present, missing, discoveryFile, discovery, client, request, warn, create, ids };
+  }
+
+  it("starts and serves the folders that exist, without granting the missing one", async () => {
+    const f = await missingFixture();
+    // The discovery file keeps the canonical paths of the folders that resolved.
+    expect(f.discovery.workspaces).toEqual([await realpath(f.present)]);
+    expect(await f.ids()).toEqual(["present"]);
+    expect(value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "present" } })).state).toBe("idle");
+    expect(value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "present", payload: "hello", mode: "next_turn" } })).state).toBe("queued");
+    // A tab whose workspace string IS the missing entry stays unauthorised: the check
+    // compares canonical paths only, so the stored string never authorises anything.
+    expect(errorText(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "gone" } }))).toBe("Session unavailable or outside authorized workspace");
+    expect(errorText(await f.client.callTool({ name: "send_message", arguments: { sessionId: "gone", payload: "no", mode: "next_turn" } }))).toBe("Session unavailable or outside authorized workspace");
+    expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.missing } }))).toMatch(/^create_session folder_not_found/);
+    expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatch(/^create_session not_allowed/);
+    // The folder that does exist is still allowed through the same check.
+    expect(value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.present } })).sessionId).toBe("created");
+    // One warning at startup naming how many listed folders are missing.
+    expect(f.warn).toHaveBeenCalledTimes(1);
+    expect(f.warn.mock.calls[0]![0]).toContain("1 of 2 allowed folders are missing");
+    expect(f.warn.mock.calls[0]![0]).toContain(f.missing);
+  });
+
+  it("allows the folder again once it is back, without restarting the server", async () => {
+    const f = await missingFixture();
+    expect(await f.ids()).toEqual(["present"]);
+    await mkdir(f.missing);
+    // No restart and no timer: the next authorisation check resolves the entry again.
+    expect(await f.ids()).toEqual(["present", "gone"]);
+    expect(value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "gone" } })).state).toBe("idle");
+    expect(value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "gone", payload: "welcome back", mode: "next_turn" } })).state).toBe("queued");
+    // The same instance is still serving: same URL, same token, one warning in total.
+    const after = JSON.parse(await readFile(f.discoveryFile, "utf8")) as { url: string; token: string };
+    expect(after).toMatchObject({ url: f.discovery.url, token: f.discovery.token });
+    expect(f.warn).toHaveBeenCalledTimes(1);
   });
 });
 
