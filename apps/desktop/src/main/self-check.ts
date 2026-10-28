@@ -129,9 +129,9 @@ export const selfCheckBinaryFs = {
 
 /** Minimal structural menu shapes (compatible with a real Electron `Menu`). */
 export interface ReloadMenuItem {
-  role?: string;
+  role?: string | null;
   accelerator?: string | null;
-  label?: string;
+  label?: string | null;
   submenu?: ReloadMenu | ReloadMenuItem[] | null;
 }
 export interface ReloadMenu {
@@ -140,8 +140,14 @@ export interface ReloadMenu {
 
 /** The isolated-window surface `checkReloadProtection` needs (satisfied by a real BrowserWindow). */
 export interface ReloadCheckWindow {
+  show(): void;
   focus(): void;
+  isFocused(): boolean;
   webContents: {
+    focus(): void;
+    isFocused(): boolean;
+    on(event: "before-input-event", listener: (event: Electron.Event, input: Electron.Input) => void): void;
+    removeListener(event: "before-input-event", listener: (event: Electron.Event, input: Electron.Input) => void): void;
     on(event: "did-start-loading", listener: () => void): void;
     removeListener(event: "did-start-loading", listener: () => void): void;
     sendInputEvent(event: KeyboardInputEvent): void;
@@ -161,7 +167,7 @@ export function isReloadAcceleratorText(accelerator: string | null | undefined):
 }
 
 function collectForbiddenMenuItems(item: ReloadMenuItem, into: string[]): void {
-  if (item.role !== undefined && FORBIDDEN_MENU_ROLES.has(item.role.toLowerCase())) into.push(`role:${item.role}`);
+  if (item.role != null && FORBIDDEN_MENU_ROLES.has(item.role.toLowerCase())) into.push(`role:${item.role}`);
   if (isReloadAcceleratorText(item.accelerator)) into.push(`accelerator:${item.accelerator}`);
   const submenu = item.submenu;
   if (Array.isArray(submenu)) {
@@ -205,7 +211,15 @@ export async function checkReloadProtection(
     throw new Error(`Reload shortcuts exposed in application menu: ${forbidden.join(", ")}`);
   }
 
+  win.show();
   win.focus();
+  win.webContents.focus();
+  const focusDeadline = Date.now() + 3_000;
+  while (!win.isFocused() && !win.webContents.isFocused() && Date.now() < focusDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  // A window manager may not grant OS focus under Xvfb. Delivery below is the
+  // final authority even if neither focus signal becomes true.
   const sentinel = `anycode-reload-sentinel-${Math.random().toString(36).slice(2)}`;
   const setExpression = `document.documentElement.dataset.anycodeReloadSentinel = ${JSON.stringify(sentinel)}; ${JSON.stringify(sentinel)}`;
   const initial = await win.webContents.executeJavaScript(setExpression);
@@ -217,9 +231,19 @@ export async function checkReloadProtection(
   const onLoadStart = (): void => {
     loadStarts += 1;
   };
+  let delivered = false;
+  let expectedShift = false;
+  const onInput = (_event: Electron.Event, input: Electron.Input): void => {
+    if (input.type === "keyDown" && input.key.toLowerCase() === "r" &&
+        (platform === "darwin" ? input.meta : input.control) &&
+        input.shift === expectedShift && !input.alt) delivered = true;
+  };
   win.webContents.on("did-start-loading", onLoadStart);
+  win.webContents.on("before-input-event", onInput);
   try {
     for (const withShift of [false, true]) {
+      delivered = false;
+      expectedShift = withShift;
       win.webContents.sendInputEvent(reloadKeyInput(platform, withShift));
       win.webContents.sendInputEvent({ ...reloadKeyInput(platform, withShift), type: "keyUp" });
       await new Promise((resolve) => setTimeout(resolve, RELOAD_SETTLE_MS));
@@ -232,8 +256,10 @@ export async function checkReloadProtection(
       if (loadStarts !== 0) {
         throw new Error(`Reload shortcut started ${loadStarts} load(s)`);
       }
+      if (!delivered) throw new Error("reload shortcut events were not delivered");
     }
   } finally {
     win.webContents.removeListener("did-start-loading", onLoadStart);
+    win.webContents.removeListener("before-input-event", onInput);
   }
 }
