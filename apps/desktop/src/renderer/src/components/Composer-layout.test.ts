@@ -148,6 +148,25 @@ describe("cost popover layout", () => {
         const rows = [...pop.querySelectorAll('.ctx-popover-step-row')];
         const popTop = popBox.top;
         const headerVisibleAtTop = header.getBoundingClientRect().top >= popBox.top - 1;
+        // The usage bar and its divider are text-less flex children with a
+        // fixed height: they must keep that height instead of being squeezed
+        // to 0px while the long turn overflows the body. Their natural height
+        // is measured from the same markup in an unconstrained column, so the
+        // assertion does not hard-code 4px / 1px.
+        const bar = pop.querySelector('.ctx-popover-bar');
+        const divider = pop.querySelector('.ctx-popover-divider');
+        const natural = document.createElement('div');
+        natural.className = 'ctx-popover-body';
+        natural.style.cssText = 'position:fixed;top:0;left:0;width:280px;height:auto;overflow:visible;z-index:-1';
+        natural.innerHTML = '<div class="ctx-popover-bar"></div><div class="ctx-popover-divider"></div>';
+        document.body.appendChild(natural);
+        const naturalBarHeight = natural.querySelector('.ctx-popover-bar').getBoundingClientRect().height;
+        const naturalDividerHeight = natural.querySelector('.ctx-popover-divider').getBoundingClientRect().height;
+        natural.remove();
+        const barBox = bar.getBoundingClientRect();
+        const bodyBoxAtRest = body.getBoundingClientRect();
+        const barFillHeight = bar.querySelector('.ctx-popover-bar-fill').getBoundingClientRect().height;
+        const dividerHeight = divider.getBoundingClientRect().height;
         body.scrollTop = body.scrollHeight;
         const bodyBox = body.getBoundingClientRect();
         const lastRow = rows[rows.length - 1].getBoundingClientRect();
@@ -163,6 +182,9 @@ describe("cost popover layout", () => {
           headerVisibleAfterScroll: header.getBoundingClientRect().top >= popBox.top - 1,
           lastRowReachable: lastRow.bottom <= bodyBox.bottom + 1 && lastRow.top >= bodyBox.top - 1,
           rowCount: rows.length,
+          barHeight: barBox.height, barTop: barBox.top, barBottom: barBox.bottom,
+          barFillHeight, dividerHeight, naturalBarHeight, naturalDividerHeight,
+          bodyTopAtRest: bodyBoxAtRest.top, bodyBottomAtRest: bodyBoxAtRest.bottom,
         });
       </script>`);
       const result = dump(file) as {
@@ -171,6 +193,9 @@ describe("cost popover layout", () => {
         maxHeight: number; overflowY: string; scrollHeight: number; clientHeight: number;
         scrollTopAfterScroll: number; headerVisibleAtTop: boolean; headerVisibleAfterScroll: boolean;
         lastRowReachable: boolean; rowCount: number;
+        barHeight: number; barTop: number; barBottom: number; barFillHeight: number;
+        dividerHeight: number; naturalBarHeight: number; naturalDividerHeight: number;
+        bodyTopAtRest: number; bodyBottomAtRest: number;
       };
       // A short window: the 480px-class minimum, not the 600px default.
       expect(result.viewport.height).toBeLessThanOrEqual(480);
@@ -183,6 +208,16 @@ describe("cost popover layout", () => {
       expect(result.popBottom).toBeLessThanOrEqual(result.triggerTop);
       expect(result.popHeight).toBeLessThanOrEqual(result.maxHeight + 1);
       expect(result.maxHeight).toBeGreaterThan(0);
+      // The usage bar and its divider keep their natural height (4px / 1px):
+      // a long expanded turn must not squeeze them out of existence.
+      expect(result.naturalBarHeight).toBeCloseTo(4, 1);
+      expect(result.barHeight).toBeCloseTo(result.naturalBarHeight, 1);
+      expect(result.barFillHeight).toBeCloseTo(result.barHeight, 1);
+      expect(result.naturalDividerHeight).toBeCloseTo(1, 1);
+      expect(result.dividerHeight).toBeCloseTo(result.naturalDividerHeight, 1);
+      // …and the bar is visible at the top of the scroll, inside the body.
+      expect(result.barTop).toBeGreaterThanOrEqual(result.bodyTopAtRest - 1);
+      expect(result.barBottom).toBeLessThanOrEqual(result.bodyBottomAtRest + 1);
       // Overflow goes into a vertical scroll inside the body; the header
       // stays pinned and every expanded step is reachable.
       expect(result.overflowY).toBe("auto");
