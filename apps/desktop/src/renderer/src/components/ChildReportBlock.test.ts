@@ -57,7 +57,7 @@ describe("single agent-message card (GitHub #19)", () => {
     expect(html).not.toContain("AnyCode authenticated agent message");
   });
 
-  it("an expanded card shows the full original text, preview included", () => {
+  it("an expanded card shows the clean payload, never the envelope or the delivery line", () => {
     const block: UserTextBlock = {
       kind: "user_text",
       id: "agent-message:agent-1",
@@ -69,9 +69,42 @@ describe("single agent-message card (GitHub #19)", () => {
     };
     const html = render(block, true);
     expect(html).toContain('aria-expanded="true"');
+    // The state stays visible on the card header; the body is the message only.
     expect(html).toContain("Agent message · rejected");
-    expect(html).toContain('class="agent-message-preview"');
-    expect(html).toContain("Delivery: rejected — steering refused");
+    expect(html).toContain(">full payload body</pre>");
+    expect(html).not.toContain("AnyCode authenticated agent message");
+    expect(html).not.toContain("Delivery: rejected");
+    // The collapsed preview is replaced by the full body, never stacked on top of it.
+    expect(html).not.toContain('class="agent-message-preview"');
+  });
+
+  it("renders a live delivery and its reloaded twin identically", () => {
+    const body = "Fix the sidebar\nand rerun the tests";
+    const live: UserTextBlock = {
+      kind: "user_text",
+      id: "agent-message:agent-1",
+      origin: "system",
+      agentMessage: true,
+      agentMessagePayload: body,
+      agentMessageState: "acknowledged",
+      text: `${agentMessageText(envelope(body))}\nDelivery: acknowledged`,
+    };
+    const store = createDesktopStore();
+    store.getState().applyHostMessage({
+      type: "session_history", sessionId: "s", truncated: false,
+      items: [{ id: "native-user-item", createdAt: 0, origin: "system", message: { role: "user", content: agentMessageText(envelope(body)) } }],
+    });
+    const restored = store.getState().transcript[0];
+    if (!restored || restored.kind !== "user_text") throw new Error("Missing hydrated user block");
+    const bodyOf = (html: string): string => /<pre[^>]*class="child-report-text"[^>]*>([\s\S]*?)<\/pre>/.exec(html)?.[1] ?? "";
+    const liveHtml = render(live, true);
+    const restoredHtml = render(restored, true);
+    expect(bodyOf(liveHtml)).toBe(body);
+    expect(bodyOf(restoredHtml)).toBe(body);
+    for (const html of [liveHtml, restoredHtml]) {
+      expect(html).not.toContain("AnyCode authenticated agent message");
+      expect(html).not.toContain("Delivery:");
+    }
   });
 
   it("leaves an ordinary detached-child report's presentation unchanged", () => {

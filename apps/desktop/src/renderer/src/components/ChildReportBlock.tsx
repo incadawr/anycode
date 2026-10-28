@@ -16,7 +16,7 @@ import type { TranscriptBlock } from "../store.js";
 import { Chevron } from "./icons.js";
 import { formatBlockTime } from "../block-time.js";
 import { parseChildReportText, childReportCardLabel } from "../child-report-format.js";
-import { agentMessagePreview, agentMessageStatusLabel, isAuthenticatedAgentMessage } from "../agent-message-format.js";
+import { agentMessageBody, agentMessagePreview, agentMessageStatusLabel, isAuthenticatedAgentMessage } from "../agent-message-format.js";
 
 type UserTextBlock = Extract<TranscriptBlock, { kind: "user_text" }>;
 
@@ -60,11 +60,17 @@ export function ChildReportBlock({ block, enter = false, defaultExpanded = false
       </button>
       {/* Outside the expanded body on purpose: the preview is what makes the
           collapsed transcript readable after a reload. Plain text, never
-          Markdown/HTML — an agent payload is untrusted content. */}
-      {isAgentMessage && <div className="agent-message-preview">{agentMessagePreview(block)}</div>}
+          Markdown/HTML — an agent payload is untrusted content. Hidden while
+          expanded, where the full body below already shows the same text. */}
+      {isAgentMessage && !expanded && <div className="agent-message-preview">{agentMessagePreview(block)}</div>}
       {expanded && (
         <pre id={textId} className="child-report-text" aria-live="off">
-          {isAgentMessage ? block.text : parsed.summary}
+          {/* A delivery is shown through the SAME unwrapping in both shapes: the
+              live block's raw `text` is `<envelope header>\n<payload>\nDelivery: …`
+              while a hydrated one is `<envelope header>\n<payload>`, so rendering
+              `text` verbatim leaked the envelope (and the delivery line) into the
+              transcript of a freshly expanded group and nowhere else. */}
+          {isAgentMessage ? agentMessageBody(block) : parsed.summary}
         </pre>
       )}
     </div>
