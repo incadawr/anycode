@@ -166,6 +166,99 @@ describe("ClaudeSettingsSeam (cut §1.5 D3, hazard (д))", () => {
 });
 
 /**
+ * The ACKNOWLEDGED effort path (`selectEffortAndWait`, used by the Sessions
+ * API's session preparation): a created session must not be published before
+ * the CLI has actually adopted the effort, so this method resolves only on the
+ * control-ack — never when the request merely started.
+ */
+describe("ClaudeSettingsSeam — acknowledged effort selection", () => {
+  function effortCatalog(): ClaudeModelCatalog {
+    return ClaudeModelCatalog.fromInitialize([
+      {
+        value: "model-a",
+        resolvedModel: "model-a",
+        displayName: "A",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "medium", "high", "xhigh"],
+      },
+      { value: "model-b", resolvedModel: "model-b", displayName: "B" },
+    ]);
+  }
+
+  function effortEngine(transport: ClaudeTransport): ClaudeEngine {
+    return new ClaudeEngine(transport, "session-ref-1", undefined, {
+      catalog: effortCatalog(),
+      model: "model-a",
+      preset: findClaudePreset("ask")!,
+      effortsByModel: new Map(),
+      notices: [],
+    });
+  }
+
+  it("waits for effort acknowledgement before reporting success", async () => {
+    const transport = new ControlledTransport();
+    const engine = effortEngine(transport);
+    const seam = new ClaudeSettingsSeam(engine);
+    const applied = vi.fn();
+    seam.onSettingsApplied(applied);
+
+    let settled = false;
+    const awaiting = seam.selectEffortAndWait("xhigh").then((result) => {
+      settled = true;
+      return result;
+    });
+    await flushMicrotasks();
+
+    // The control request is still in flight: no success, no applied event, and
+    // the choice is honestly pending.
+    expect(settled).toBe(false);
+    expect(applied).not.toHaveBeenCalled();
+    expect(seam.pendingSnapshot()).toEqual({ model: "model-a", activePresetId: "ask", effort: "xhigh" });
+
+    transport.settleControl();
+    const result = await awaiting;
+
+    expect(settled).toBe(true);
+    expect(result).toEqual({ ok: true, model: "model-a", activePresetId: "ask", effort: "xhigh" });
+    expect(applied).toHaveBeenCalledTimes(1);
+    expect(applied).toHaveBeenCalledWith({ model: "model-a", activePresetId: "ask", effort: "xhigh" });
+    expect(seam.pendingSnapshot()).toBeNull();
+  });
+
+  it("retains the applied effort when the control request fails", async () => {
+    const transport = new ControlledTransport();
+    const engine = effortEngine(transport);
+    const seam = new ClaudeSettingsSeam(engine);
+    const applied = vi.fn();
+    seam.onSettingsApplied(applied);
+
+    const awaiting = seam.selectEffortAndWait("high");
+    transport.rejectControl("claude refused the effort");
+    const result = await awaiting;
+
+    expect(result).toEqual({ ok: false, reason: "claude refused the effort" });
+    // No applied event, no stale pending badge, and the engine's own effort is
+    // exactly what it was before the attempt.
+    expect(applied).not.toHaveBeenCalled();
+    expect(seam.pendingSnapshot()).toBeNull();
+    expect(engine.snapshot().effort).toBeUndefined();
+  });
+
+  it("refuses a level the model does not advertise without sending a control request", async () => {
+    const transport = new ControlledTransport();
+    const spy = vi.spyOn(transport, "controlRequest");
+    const seam = new ClaudeSettingsSeam(effortEngine(transport));
+
+    await expect(seam.selectEffortAndWait("turbo")).resolves.toEqual({
+      ok: false,
+      reason: 'Claude effort "turbo" is not available for model "model-a".',
+    });
+    expect(spy).not.toHaveBeenCalled();
+    expect(seam.pendingSnapshot()).toBeNull();
+  });
+});
+
+/**
  * Concurrent changes. Each Claude control is a SEPARATE in-flight request, so
  * two quick picks (model B, then preset Workspace) are genuinely overlapping
  * and can acknowledge in either order.

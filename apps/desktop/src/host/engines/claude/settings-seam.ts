@@ -102,7 +102,7 @@ export class ClaudeSettingsSeam implements EngineSettingsSeam {
     }
     const current = this.engine.snapshot();
     const next: SettingsSnapshot = { model: id, activePresetId: current.activePresetId, ...(current.effort !== undefined ? { effort: current.effort } : {}) };
-    this.beginPending(next, () => this.engine.selectModel(id));
+    void this.beginPending(next, () => this.engine.selectModel(id));
     return { ok: true, ...next };
   }
 
@@ -113,20 +113,46 @@ export class ClaudeSettingsSeam implements EngineSettingsSeam {
     }
     const current = this.engine.snapshot();
     const next: SettingsSnapshot = { model: current.model, activePresetId: id, ...(current.effort !== undefined ? { effort: current.effort } : {}) };
-    this.beginPending(next, () => this.engine.selectPreset(id));
+    void this.beginPending(next, () => this.engine.selectPreset(id));
     return { ok: true, ...next };
   }
 
   selectEffort(effort: string): EngineSettingsChange {
+    const rejected = this.validateEffort(effort);
+    if (rejected !== null) return rejected;
     const current = this.engine.snapshot();
-    const model = current.model;
+    const next: SettingsSnapshot = { model: current.model, activePresetId: current.activePresetId, effort };
+    void this.beginPending(next, () => this.engine.selectEffort(effort));
+    return { ok: true, ...next };
+  }
+
+  /**
+   * The ACKNOWLEDGED form (host/session.ts `set_session_effort`): the same
+   * validation and the same `beginPending` machinery as `selectEffort` — this
+   * only waits on the settlement that already existed. It exists because a
+   * session created with an explicit effort must not be published before the
+   * CLI has actually adopted it.
+   *
+   * A CLI refusal or a control timeout resolves `{ ok: false }` with the same
+   * rollback `selectEffort` already guarantees: pending cleared, no applied
+   * event, the prior applied effort untouched.
+   */
+  async selectEffortAndWait(effort: string): Promise<EngineSettingsChange> {
+    const rejected = this.validateEffort(effort);
+    if (rejected !== null) return rejected;
+    const current = this.engine.snapshot();
+    const next: SettingsSnapshot = { model: current.model, activePresetId: current.activePresetId, effort };
+    return this.beginPending(next, () => this.engine.selectEffort(effort));
+  }
+
+  /** Host-side membership check shared by both effort entry points — never a guess about the account's vocabulary. */
+  private validateEffort(effort: string): EngineSettingsChange | null {
+    const model = this.engine.snapshot().model;
     const supported = this.engine.models().find((choice) => choice.id === model)?.efforts ?? [];
     if (!supported.includes(effort)) {
       return { ok: false, reason: `Claude effort "${effort}" is not available for model "${model}".` };
     }
-    const next: SettingsSnapshot = { model, activePresetId: current.activePresetId, effort };
-    this.beginPending(next, () => this.engine.selectEffort(effort));
-    return { ok: true, ...next };
+    return null;
   }
 
   onSettingsApplied(listener: (snapshot: SettingsSnapshot) => void): () => void {
@@ -157,25 +183,28 @@ export class ClaudeSettingsSeam implements EngineSettingsSeam {
    *     check). An older request settling second must not drop the badge for
    *     a change still in flight.
    */
-  private beginPending(next: SettingsSnapshot, fire: () => Promise<{ ok: true } | { ok: false; reason: string }>): void {
+  private beginPending(next: SettingsSnapshot, fire: () => Promise<{ ok: true } | { ok: false; reason: string }>): Promise<EngineSettingsChange> {
     const generation = ++this.generation;
     this.pending = next;
     const settle = (): void => {
       if (generation === this.generation) this.pending = null;
     };
-    void fire()
-      .then((result) => {
+    return fire()
+      .then((result): EngineSettingsChange => {
         settle();
         if (result.ok) {
-          this.notify(this.engine.snapshot());
-        } else {
-          this.engine.queueNotice(warningNotice(result.reason));
+          const applied = this.engine.snapshot();
+          this.notify(applied);
+          return { ok: true, ...applied };
         }
+        this.engine.queueNotice(warningNotice(result.reason));
+        return { ok: false, reason: result.reason };
       })
-      .catch((error: unknown) => {
+      .catch((error: unknown): EngineSettingsChange => {
         settle();
         const message = error instanceof Error ? error.message : String(error);
         this.engine.queueNotice(warningNotice(`Claude settings change failed: ${message}`));
+        return { ok: false, reason: message };
       });
   }
 

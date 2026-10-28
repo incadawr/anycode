@@ -423,6 +423,13 @@ export interface HarnessOptions {
   /** Slice P7.15 (F14): user-selected effort tier tracked across a model switch. */
   selectedEffort?: ReasoningEffort;
   /**
+   * Core's own effort resolution (host/index.ts's `resolveEffortLevels` +
+   * `resolveReasoningEffort` wiring). Threaded VERBATIM into Session so the
+   * status projection can be exercised against the real resolution rules.
+   * Omitted -> seam absent (legacy, vocabulary taken at face value).
+   */
+  effortResolution?: SessionOptions["effortResolution"];
+  /**
    * Slice P7.15 (F14): mid-session model-switch callback threaded to Session.
    * Omitted -> `set_model` is a silent no-op (byte-identical to pre-P7.15 for
    * every existing test). A test supplies a scripted switcher to exercise the
@@ -820,6 +827,7 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(options.reasoningSupported !== undefined ? { reasoningSupported: options.reasoningSupported } : {}),
     ...(options.availableEffortLevels !== undefined ? { availableEffortLevels: options.availableEffortLevels } : {}),
     ...(options.selectedEffort !== undefined ? { selectedEffort: options.selectedEffort } : {}),
+    ...(options.effortResolution !== undefined ? { effortResolution: options.effortResolution } : {}),
     ...(options.worktreeExitNoticePending !== undefined
       ? { worktreeExitNoticePending: options.worktreeExitNoticePending }
       : {}),

@@ -4841,6 +4841,14 @@ async function boot(): Promise<void> {
       model: currentModel,
       reasoningSupported: bootEffortLevels !== undefined,
       ...(bootEffortLevels !== undefined ? { availableEffortLevels: bootEffortLevels } : {}),
+      // The SAME two resolvers this composition root already uses for the boot
+      // vocabulary and for every model switch, so the status projection and
+      // `set_session_effort` validation can describe the SELECTED model (a
+      // queued change included) exactly as core will resolve it.
+      effortResolution: {
+        levels: (id) => resolveEffortLevels(id, catalogEntry, liveCapsFor(id)),
+        effective: (id, tier) => resolveReasoningEffort(id, catalogEntry, tier, liveCapsFor(id)),
+      },
       // Slice P7.15 (F14): the user-selected effort tier, threaded so Session can
       // re-resolve effort against the NEW model on a switch (mirror of the CLI's
       // selectedReasoningEffort seed). set_reasoning_effort keeps it in sync.
@@ -5257,6 +5265,11 @@ process.parentPort.on("message", (event) => {
             await session.setAgentTitle(communication.payload); result = {}; break;
           case "get_session_result": result = session.communicationResult(); break;
           case "get_session_status": result = session.communicationStatus(); break;
+          // Internal main→host (never a public MCP tool): configures the
+          // session-wide effort before a freshly created session is published.
+          // Structured failures (invalid_effort / not_ready) are returned as
+          // RESULTS so their code survives the IPC boundary intact.
+          case "set_session_effort": result = await session.communicationSetEffort(communication.payload); break;
           case "send_message": result = await session.receiveAgentMessage(communication.payload as import("../shared/communication.js").AgentEnvelope); break;
           case "restore_agent_messages": session.restoreAgentMessages(communication.payload as import("../shared/communication.js").AgentDelivery[]); result = {}; break;
           case "get_message_status": result = session.agentMessageStatus(String(communication.payload)); break;

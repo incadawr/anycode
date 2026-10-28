@@ -111,6 +111,7 @@ import { activeConnection, activeProviderView, connectionById, resolveProviderCo
 import { primeNewSessionPin } from "./session-pin.js";
 import { createSessionForAgent as createSessionForAgentImpl, type CreateSessionByAgentDeps } from "./create-session-by-agent.js";
 import { createAgentTitlePushes, createAgentTitleRecoveryDeps, recoverAgentSessionTitleOnRegister, type AgentTitlePushes, type AgentTitleRecoveryDeps } from "./agent-session-title.js";
+import type { CreateSessionRequest } from "./communication-server.js";
 import { rebuildHostEnvCache } from "./host-env-cache.js";
 import { recordHostFailure } from "../host/error-diagnostics.js";
 import {
@@ -2490,8 +2491,16 @@ void app.whenReady().then(async () => {
     agentSessionTitles,
     pushAgentTitle: (sessionId) => agentTitlePushes.retain(sessionId),
     listTabs: () => manager?.listTabs() ?? [],
+    // A prepared creation that fails after the host forked drops the row it
+    // just allocated, so the picker never shows a session nobody can reach.
+    // Called only after the host has been reaped (the ordering lives in
+    // create-session-by-agent.ts).
+    deleteSessionRow: async (sessionId) => {
+      if (persistence === null) return;
+      await persistence.deleteSession(sessionId);
+    },
   };
-  const createSessionForAgent = (request: { workspace: string; engine?: "core" | "codex" | "claude"; model?: string; handle?: string }) =>
+  const createSessionForAgent = (request: CreateSessionRequest) =>
     createSessionForAgentImpl(request, createSessionDeps);
 
   manager = new TabHostManager({
