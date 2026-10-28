@@ -11,8 +11,10 @@ import { resolveCodexDraftModel } from "./codex-draft-model.js";
 import { createSettingsStore, useSettingsStore } from "./settings-store.js";
 import { cloneDefaults } from "../../settings/schema.js";
 import { guardedSubmit, selectStartModelRow } from "./components/StartScreen.js";
+import { createTabRegistry } from "./tab-registry.js";
 import type { CreateTabResult } from "../../shared/tabs.js";
 import type { SettingsSnapshot } from "../../shared/settings.js";
+import type { HostToUiMessage, UiToHostMessage } from "../../shared/protocol.js";
 
 function makeDeps(createTabResult: CreateTabResult, order: string[] = []) {
   const tabsStore = createTabsStore();
@@ -663,5 +665,61 @@ describe("submitStartDraft — TASK.241 codex draft-model agreement", () => {
     await submitStartDraft(unset.deps);
     const req = (unset.createTab.mock.calls as unknown as [Record<string, unknown>[]])[0]![0]!;
     expect(req.engineModel).toBeUndefined();
+  });
+});
+
+/**
+ * GitHub #6: main now AWAITS a deferred first fork (a provider refresh) before
+ * answering the createTab IPC, so the port for that tab is delivered BEFORE the
+ * renderer learns the tab exists. The draft was typed into the start screen
+ * before any of that; its prompt must still reach the host exactly once, on the
+ * first `host_ready` — the queue, not the delivery, is what waits.
+ */
+class FakeUiPort {
+  onmessage: ((event: MessageEvent<HostToUiMessage>) => void) | null = null;
+  readonly sent: UiToHostMessage[] = [];
+
+  postMessage(message: UiToHostMessage): void {
+    this.sent.push(message);
+  }
+
+  emit(message: HostToUiMessage): void {
+    this.onmessage?.({ data: message } as MessageEvent<HostToUiMessage>);
+  }
+}
+
+describe("submitStartDraft — a deferred first fork (GitHub #6)", () => {
+  it("delivers the prompt typed before the parked first fork resolved exactly once, when its host becomes ready", async () => {
+    const tabsStore = createTabsStore();
+    const registry = createTabRegistry(tabsStore);
+    let resolveCreate!: (result: CreateTabResult) => void;
+    const createTab = vi.fn(() => new Promise<CreateTabResult>((resolve) => { resolveCreate = resolve; }));
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("hello deferred");
+
+    const submission = submitStartDraft({ createTab, registry, tabsStore });
+
+    // Parked: main has not answered yet, so there is no tab and nothing to send.
+    expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a" });
+    expect(tabsStore.getState().tabs).toHaveLength(0);
+
+    // The deferred fork's own completion delivers the port from inside main,
+    // i.e. BEFORE the createTab IPC reply this test still holds.
+    const port = new FakeUiPort();
+    expect(registry.registerPort("t1", "/ws/a", port as unknown as MessagePort)).toBe(true);
+
+    resolveCreate({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    expect(await submission).toEqual({ ok: true, tabId: "t1" });
+    // Queued, not sent: the host has not reported ready yet…
+    expect(port.sent.filter((message) => message.type === "user_message")).toHaveLength(0);
+    // …and the draft was consumed only once the create actually succeeded.
+    expect(tabsStore.getState().draft).toBeNull();
+
+    port.emit({ type: "host_ready", workspace: "/ws/a", mode: "build", model: "m1", sessionId: "sess-a" });
+
+    // …the first prompt goes out once, verbatim.
+    const prompts = port.sent.filter((message) => message.type === "user_message");
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toMatchObject({ type: "user_message", text: "hello deferred" });
   });
 });
