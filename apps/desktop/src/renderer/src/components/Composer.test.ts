@@ -271,8 +271,23 @@ describe("ctxPopoverBodyState — unsupported breakdown (codex-profiles cut §5.
 });
 
 describe("ctxPopoverAnchorFromRect (P7.17 W3-FIX P2-b — resize re-clamp fix)", () => {
-  it("computes left (right-edge-anchored, offset by the popover width) and bottom (above the trigger)", () => {
-    expect(ctxPopoverAnchorFromRect({ right: 800, top: 700 }, 1200, 800)).toEqual({ left: 520, bottom: 108 });
+  it("computes left (right-edge-anchored, offset by the popover width), bottom (above the trigger) and the room above the trigger", () => {
+    expect(ctxPopoverAnchorFromRect({ right: 800, top: 700 }, 1200, 800)).toEqual({ left: 520, bottom: 108, maxHeight: 684 });
+  });
+
+  it("keeps the box inside a short window: the height ceiling leaves a margin above the trigger's top edge", () => {
+    // 480px tall window, trigger near the bottom (the real composer footer
+    // placement): without a ceiling the popover grew upward off-screen and
+    // took its header and spend total with it.
+    const anchor = ctxPopoverAnchorFromRect({ right: 800, top: 440 }, 1000, 480);
+    expect(anchor.maxHeight).toBe(424);
+    expect(anchor.bottom).toBe(48);
+    // top edge = trigger top - gap - maxHeight, i.e. the 8px viewport margin.
+    expect(440 - 8 - anchor.maxHeight).toBe(8);
+    // The ceiling never collapses to nothing when the trigger sits high...
+    expect(ctxPopoverAnchorFromRect({ right: 800, top: 20 }, 1000, 480).maxHeight).toBe(4);
+    // ...and it is a height limit, not a width one.
+    expect(anchor.left).toBe(520);
   });
 
   it("re-clamps left to stay on-screen when the viewport narrows after open (the resize regression)", () => {

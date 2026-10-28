@@ -862,6 +862,12 @@ export function buildQuotaPopoverView(quota: CodexRateLimitsWire | null, now: nu
 /** Nominal popover width (px) for the right-edge-anchored viewport clamp — mirrors ModelPill's `MODEL_PILL_POPOVER_WIDTH` (matches `.ctx-popover`'s CSS `width`). */
 const CTX_POPOVER_WIDTH = 280;
 
+/** Gap (px) between the trigger's top edge and the bottom-anchored popover. */
+const CTX_POPOVER_GAP = 8;
+
+/** Minimum breathing room (px) between the popover's top edge and the window top, so the rounded box never sits flush against it. */
+const CTX_POPOVER_VIEWPORT_MARGIN = 8;
+
 /** Hover-intent delay (design §2.3) before the popover opens on mouseenter, so a cursor merely passing over the meter doesn't flash it open. */
 const CTX_POPOVER_HOVER_DELAY_MS = 150;
 
@@ -877,17 +883,26 @@ const CTX_POPOVER_LOAD_TIMEOUT_MS = 6000;
  * Fixed-position anchor formula shared by the on-open effect and the
  * on-resize re-clamp (P2-b robustness fix): right edge clamped inside the
  * viewport (`clampMenuLeft`, same as ModelPill's popover), bottom pinned
- * just above the trigger. Pure so both call sites share one formula instead
- * of duplicating the offset/clamp math. Exported for unit testing.
+ * just above the trigger, and a `maxHeight` equal to the room actually above
+ * the trigger. Pure so both call sites share one formula instead of
+ * duplicating the offset/clamp math. Exported for unit testing.
+ *
+ * `maxHeight` is what keeps an expanded step list usable: the popover is
+ * bottom-anchored, so without it a long turn grows upward past the window top
+ * (the window can be as short as 480 px) and the header, spend total and
+ * qualifiers become unreachable. The returned height leaves the whole box on
+ * screen — the body scrolls instead of the box growing upward.
  */
 export function ctxPopoverAnchorFromRect(
   rect: { right: number; top: number },
   viewportWidth: number,
   viewportHeight: number,
-): { left: number; bottom: number } {
+): { left: number; bottom: number; maxHeight: number } {
+  const roomAbove = rect.top - CTX_POPOVER_GAP - CTX_POPOVER_VIEWPORT_MARGIN;
   return {
     left: clampMenuLeft(rect.right - CTX_POPOVER_WIDTH, CTX_POPOVER_WIDTH, viewportWidth),
-    bottom: viewportHeight - rect.top + 8,
+    bottom: viewportHeight - rect.top + CTX_POPOVER_GAP,
+    maxHeight: Math.max(Math.floor(roomAbove), 0),
   };
 }
 
@@ -969,7 +984,7 @@ function CtxPopover({
 }) {
   const sendToHost = useTabSend();
   const [open, setOpen] = useState(false);
-  const [anchor, setAnchor] = useState<{ left: number; bottom: number } | null>(null);
+  const [anchor, setAnchor] = useState<{ left: number; bottom: number; maxHeight: number } | null>(null);
   const [timedOut, setTimedOut] = useState(false);
   /** Per-step list starts collapsed and returns to collapsed on every close. */
   const [stepsExpanded, setStepsExpanded] = useState(false);
@@ -1145,51 +1160,59 @@ function CtxPopover({
           className={`ctx-popover${tint}`}
           role="dialog"
           aria-label="Context window breakdown"
-          style={anchor ? { left: anchor.left, bottom: anchor.bottom } : undefined}
+          style={anchor ? { left: anchor.left, bottom: anchor.bottom, maxHeight: anchor.maxHeight } : undefined}
         >
           <div className="ctx-popover-header">
             <span className="ctx-popover-title">Context window</span>
             {headline !== null && <span className="ctx-popover-headline">{headline}</span>}
           </div>
-          {contextWindowAssumed && <div className="ctx-popover-assumed">{CTX_WINDOW_ASSUMED_HINT}</div>}
-          <div className="ctx-popover-bar">
-            <div className="ctx-popover-bar-fill" style={{ width: `${fillPercent}%` }} />
+          {/* The only scrolling part: the header stays pinned so the title and
+              the token headline remain readable while a long expanded turn is
+              scrolled. `maxHeight` on the popover (from the anchor) bounds the
+              whole box to the room above the trigger. `tabIndex` gives the
+              scroll region keyboard access (arrow/PageDown) on top of the
+              browser's scroll-into-view for the focusable rows inside. */}
+          <div className="ctx-popover-body" tabIndex={0}>
+            {contextWindowAssumed && <div className="ctx-popover-assumed">{CTX_WINDOW_ASSUMED_HINT}</div>}
+            <div className="ctx-popover-bar">
+              <div className="ctx-popover-bar-fill" style={{ width: `${fillPercent}%` }} />
+            </div>
+            {bodyState === "skeleton" && (
+              <div className="ctx-popover-skeleton" aria-label="Loading context breakdown">
+                <div className="ctx-popover-skeleton-row" />
+                <div className="ctx-popover-skeleton-row" />
+                <div className="ctx-popover-skeleton-row" />
+              </div>
+            )}
+            {bodyState === "empty" && (
+              <div className="ctx-popover-empty">Breakdown unavailable</div>
+            )}
+            {bodyState === "unsupported" && (
+              <div className="ctx-popover-empty">Breakdown is not available for this engine</div>
+            )}
+            {bodyState === "rows" && (
+              <div className="ctx-popover-rows">
+                {rows.map((row) => (
+                  <div className="ctx-popover-row" key={row.label}>
+                    <span className="ctx-popover-row-label">{row.label}</span>
+                    <span className="ctx-popover-row-percent">{row.percent.toFixed(1)}%</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="ctx-popover-divider" />
+            <UsageCostBlock ledger={ledger} turnSummary={turnStepSummary} turnSteps={turnSteps} expanded={stepsExpanded} onToggle={() => setStepsExpanded((value) => !value)} />
+            {usageAudit.list === null && usageAudit.totalSteps > 0 && (
+              <div className="ctx-popover-session">Step history: {usageAudit.totalSteps} records — reopen to load</div>
+            )}
+            {quotaView !== null && (
+              <>
+                {quotaView.primaryLine !== null && <div className="ctx-popover-session">{quotaView.primaryLine}</div>}
+                {quotaView.secondaryLine !== null && <div className="ctx-popover-session">{quotaView.secondaryLine}</div>}
+                {quotaView.creditsLine !== null && <div className="ctx-popover-session">{quotaView.creditsLine}</div>}
+              </>
+            )}
           </div>
-          {bodyState === "skeleton" && (
-            <div className="ctx-popover-skeleton" aria-label="Loading context breakdown">
-              <div className="ctx-popover-skeleton-row" />
-              <div className="ctx-popover-skeleton-row" />
-              <div className="ctx-popover-skeleton-row" />
-            </div>
-          )}
-          {bodyState === "empty" && (
-            <div className="ctx-popover-empty">Breakdown unavailable</div>
-          )}
-          {bodyState === "unsupported" && (
-            <div className="ctx-popover-empty">Breakdown is not available for this engine</div>
-          )}
-          {bodyState === "rows" && (
-            <div className="ctx-popover-rows">
-              {rows.map((row) => (
-                <div className="ctx-popover-row" key={row.label}>
-                  <span className="ctx-popover-row-label">{row.label}</span>
-                  <span className="ctx-popover-row-percent">{row.percent.toFixed(1)}%</span>
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="ctx-popover-divider" />
-          <UsageCostBlock ledger={ledger} turnSummary={turnStepSummary} turnSteps={turnSteps} expanded={stepsExpanded} onToggle={() => setStepsExpanded((value) => !value)} />
-          {usageAudit.list === null && usageAudit.totalSteps > 0 && (
-            <div className="ctx-popover-session">Step history: {usageAudit.totalSteps} records — reopen to load</div>
-          )}
-          {quotaView !== null && (
-            <>
-              {quotaView.primaryLine !== null && <div className="ctx-popover-session">{quotaView.primaryLine}</div>}
-              {quotaView.secondaryLine !== null && <div className="ctx-popover-session">{quotaView.secondaryLine}</div>}
-              {quotaView.creditsLine !== null && <div className="ctx-popover-session">{quotaView.creditsLine}</div>}
-            </>
-          )}
         </div>
       )}
     </div>
