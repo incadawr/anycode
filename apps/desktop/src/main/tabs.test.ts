@@ -431,6 +431,61 @@ describe("TabHostManager — host spawn", () => {
     expect(logError).toHaveBeenCalledWith(expect.stringContaining("host spawn failed"), error);
   });
 
+  it("a NEW session's awaited deferred fork refuses folder_not_found for a folder that vanished during the wait (GitHub #6)", async () => {
+    let blocked = true;
+    let missing = false;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const registered = vi.fn(() => () => {});
+    const closed = vi.fn();
+    const window = windowRig().window;
+    const manager = new TabHostManager({
+      fork: shutdownableForkRig().fork, hostEntry: "/fake/host.js", createChannel: fakeChannel,
+      getWindow: () => window, env: () => blocked ? undefined : {},
+      waitForHostEnv: () => blocked ? pending : undefined,
+      workspaceMissing: () => missing,
+      onSessionRegistered: registered, onTabClosed: closed, logger: silentLogger,
+    });
+    const created = manager.createTabAwaitingInitialSpawn({ workspace: "/ws/gone", sessionId: "deferred-gone", connectionId: "old", resume: false });
+    // The folder is there when createTab checks it and gone by the time the
+    // parked first fork is released.
+    missing = true;
+    blocked = false;
+    release();
+    expect(await created).toEqual({ ok: false, reason: "folder_not_found", workspace: "/ws/gone" });
+    // Tab, binding and registration are all rolled back: nothing left to queue a
+    // first prompt into, and the caller keeps the user's draft.
+    expect(manager.listTabs()).toHaveLength(0);
+    expect(manager.sessionOpenInTab("deferred-gone")).toBeUndefined();
+    expect(manager.pinnedConnectionIds().has("old")).toBe(false);
+    expect(closed).toHaveBeenCalledTimes(1);
+  });
+
+  it("a NEW session's awaited deferred fork still opens the tab and delivers its port when the folder is there (GitHub #6)", async () => {
+    const rig = shutdownableForkRig();
+    let blocked = true;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const { window, posted } = windowRig();
+    const manager = new TabHostManager({
+      fork: rig.fork, hostEntry: "/fake/host.js", createChannel: fakeChannel,
+      getWindow: () => window, env: () => blocked ? undefined : {},
+      waitForHostEnv: () => blocked ? pending : undefined, logger: silentLogger,
+    });
+    const created = manager.createTabAwaitingInitialSpawn({ workspace: "/ws", sessionId: "deferred-ok", connectionId: "old", resume: false });
+    blocked = false;
+    release();
+    const result = await created;
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.deferred).toBe(true);
+    expect(rig.hosts).toHaveLength(1);
+    expect(result.tab.proc).not.toBeNull();
+    expect(result.tab.state).toBe("running");
+    // The port the caller would otherwise deliver a second time was already sent.
+    expect(posted.filter((entry) => entry.channel === PORT_ENVELOPE_TYPE)).toHaveLength(1);
+  });
+
   it("refuses IPC rebind when the replacement fork throws without persisting the pin", async () => {
     const rig = shutdownableForkRig();
     const error = new Error("replacement fork failed");

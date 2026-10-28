@@ -110,9 +110,13 @@ export async function createSessionForAgent(
       : { ok: false, reason: "not_ready", detail: pin.detail };
   }
   const releasePin = pin.release;
-  let created: ReturnType<TabHostManager["createTab"]>;
+  let created: Awaited<ReturnType<TabHostManager["createTabAwaitingInitialSpawn"]>>;
   try {
-    created = tabs.createTab({
+    // GitHub #6: the first fork can be parked in a provider refresh. Await its
+    // outcome — reporting the session as created before that fork ran let the
+    // folder vanish during the wait while the API had already answered with a
+    // session that could never receive a message (and spent its creation slot).
+    created = await tabs.createTabAwaitingInitialSpawn({
       workspace: key,
       sessionId: deps.randomUUID(),
       resume: false,
@@ -126,11 +130,12 @@ export async function createSessionForAgent(
   }
   if (!created.ok) {
     // GitHub #6: the folder can vanish between the server's realpath check and
-    // this asynchronous preparation (trust, secrets, connection priming). Main's
-    // createTab then rolls the half-made tab (and its binding) back instead of
-    // reporting a session that can never receive a message; propagate that as
-    // the folder refusal, not the generic not_ready. Nothing was registered and
-    // the caller's rate budget stays unspent (only `ok` creations count).
+    // this asynchronous preparation (trust, secrets, connection priming) — or
+    // while the first fork is parked in a provider refresh. Main then rolls the
+    // half-made tab (and its binding) back instead of reporting a session that
+    // can never receive a message; propagate that as the folder refusal, not the
+    // generic not_ready. Nothing was registered and the caller's rate budget
+    // stays unspent (only `ok` creations count).
     if (created.reason === "folder_not_found") return { ok: false, reason: "folder_not_found" };
     return { ok: false, reason: created.reason === "max_tabs" ? ("too_many" as const) : ("not_ready" as const) };
   }
@@ -147,6 +152,8 @@ export async function createSessionForAgent(
     }
   }
   if (handle !== undefined) deps.agentSessionTitles.set(sessionId, handle);
-  tabs.deliverTabPort(created.tab);
+  // A deferred first fork delivered its own port from its completion before this
+  // awaited result resolved (GitHub #6); only the synchronous fork needs it here.
+  if (created.deferred !== true) tabs.deliverTabPort(created.tab);
   return { ok: true, sessionId, tabId: created.tab.tabId, ...(handle !== undefined ? { handle } : {}) };
 }

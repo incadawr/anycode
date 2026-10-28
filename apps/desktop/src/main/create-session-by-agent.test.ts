@@ -13,13 +13,16 @@
  * active one and a non-active "GLM" one that only works when its env is primed
  * before `createTab`.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSessionAccessStore } from "./communication-sessions.js";
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { MessagePortMain, UtilityProcess } from "electron";
+import { Client, StreamableHTTPClientTransport } from "@anycode/core/communication-mcp";
+import { startCommunicationServer } from "./communication-server.js";
 import { createSessionForAgent, type CreateSessionByAgentDeps } from "./create-session-by-agent.js";
 import { primeNewSessionPin, type ResumePinResult } from "./session-pin.js";
 import { TabHostManager, type HostForkFn } from "./tabs.js";
@@ -54,7 +57,7 @@ function settings(): AnycodeSettings {
   };
 }
 
-function rig(options: { failPrimingFor?: string; blocked?: () => boolean; pending?: Promise<void>; failFork?: boolean; sessions?: SessionAccessStore; workspaceMissing?: (workspace: string) => boolean } = {}) {
+function rig(options: { failPrimingFor?: string; blocked?: () => boolean; pending?: Promise<void>; pendingFactory?: () => Promise<void>; failFork?: boolean; sessions?: SessionAccessStore; workspaceMissing?: (workspace: string) => boolean } = {}) {
   // Mirrors main/index.ts: `hostEnvByConnection`, filled ONLY by ensurePinnedEnv
   // (through resolveResumePin) and read fail-closed by the fork's `env`.
   const cache = new Map<string, NodeJS.ProcessEnv>();
@@ -82,7 +85,7 @@ function rig(options: { failPrimingFor?: string; blocked?: () => boolean; pendin
       const added = options.sessions?.register({ sessionId });
       return () => { if (added) options.sessions?.remove(sessionId); };
     },
-    waitForHostEnv: () => options.blocked?.() ? options.pending : undefined,
+    waitForHostEnv: () => options.blocked?.() ? (options.pendingFactory?.() ?? options.pending) : undefined,
     hostEntry: "/fake/host.js",
     createChannel: fakeChannel,
     getWindow: () => null,
@@ -182,32 +185,157 @@ describe("create_session — the production creation path primes a non-active co
     expect(r.manager.listTabs()).toHaveLength(0);
     expect(r.exposed.size).toBe(0);
   });
+
+  it("a folder that disappears while the first fork is parked in a provider refresh refuses folder_not_found and registers nothing (GitHub #6)", async () => {
+    // The deferred half of the same window: the folder exists when createTab
+    // starts, the first fork is parked in `waitForHostEnv`, and the folder is
+    // gone by the time the refresh releases. Reporting success there answered
+    // the API with a session that had no host and spent a creation slot.
+    const dir = mkdtempSync(join(tmpdir(), "anycode-deferred-refusal-"));
+    try {
+      const sessions = createSessionAccessStore({ file: join(dir, "access.json"), handlesFile: join(dir, "handles.json"), defaultOn: () => false });
+      let blocked = true;
+      let gone = false;
+      let release!: () => void;
+      const pending = new Promise<void>((resolve) => { release = resolve; });
+      const r = rig({
+        sessions,
+        blocked: () => blocked,
+        // The folder is still there when createTab checks it; it disappears while
+        // the first fork waits for the provider refresh.
+        pendingFactory: () => { gone = true; return pending; },
+        workspaceMissing: () => gone,
+      });
+      const deps = r.deps();
+      const creation = createSessionForAgent({ workspace: "/ws" }, deps);
+      await vi.waitFor(() => expect(gone).toBe(true));
+      // The refresh then lands with the folder already gone.
+      blocked = false;
+      release();
+      expect(await creation).toEqual({ ok: false, reason: "folder_not_found" });
+      // Nothing forked, nothing registered, no agent-owned session left behind.
+      expect(r.forkEnvs).toHaveLength(0);
+      expect(r.manager.listTabs()).toHaveLength(0);
+      expect(deps.agentOpenedSessions.size).toBe(0);
+      expect(sessions.set("sess-0", true)).toBe(false);
+      expect(sessions.getHandle("sess-0")).toBeUndefined();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
 });
 
 
 describe("deferred agent session registration", () => {
-  it.each([false, true])("keeps sharing and handle on success and removes them on failure (failure=%s)", async (failFork) => {
+  it("answers only once the deferred first fork ran, then shares the session and keeps its handle (GitHub #6)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "anycode-access-test-"));
     try {
       const sessions = createSessionAccessStore({ file: join(dir, "access.json"), handlesFile: join(dir, "handles.json"), defaultOn: () => false });
       let blocked = true;
       let release!: () => void;
       const pending = new Promise<void>((resolve) => { release = resolve; });
-      const r = rig({ sessions, blocked: () => blocked, pending, failFork });
-      const outcome = await createSessionForAgent({ workspace: "/ws", handle: "agent-one" }, r.deps());
-      if (!outcome.ok) throw new Error("create refused");
-      expect(sessions.isExposed(outcome.sessionId)).toBe(true);
-      expect(sessions.getHandle(outcome.sessionId)).toBe("agent-one");
+      const r = rig({ sessions, blocked: () => blocked, pending });
+      let answered = false;
+      const creation = createSessionForAgent({ workspace: "/ws", handle: "agent-one" }, r.deps())
+        .then((outcome) => { answered = true; return outcome; });
+      // NB: create_session must NOT answer while the first fork is still parked.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(answered).toBe(false);
+      expect(r.forkEnvs).toHaveLength(0);
+      expect(r.manager.listTabs().every((tab) => tab.pid === null)).toBe(true);
       blocked = false;
       release();
-      if (failFork) {
-        await vi.waitFor(() => expect(r.manager.getTab(outcome.tabId)).toBeUndefined());
-        expect(sessions.set(outcome.sessionId, true)).toBe(false);
-        expect(sessions.getHandle(outcome.sessionId)).toBeUndefined();
-      } else {
-        await vi.waitFor(() => expect(r.forkEnvs).toHaveLength(1));
-        expect(sessions.isExposed(outcome.sessionId)).toBe(true);
-        expect(sessions.getHandle(outcome.sessionId)).toBe("agent-one");
+      const outcome = await creation;
+      if (!outcome.ok) throw new Error("create refused");
+      expect(r.forkEnvs).toHaveLength(1);
+      expect(sessions.isExposed(outcome.sessionId)).toBe(true);
+      expect(sessions.getHandle(outcome.sessionId)).toBe("agent-one");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("a deferred first fork that cannot run refuses not_ready and registers nothing (GitHub #6)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "anycode-access-test-"));
+    try {
+      const sessions = createSessionAccessStore({ file: join(dir, "access.json"), handlesFile: join(dir, "handles.json"), defaultOn: () => false });
+      let blocked = true;
+      const deferrals: Array<() => void> = [];
+      const r = rig({
+        sessions,
+        blocked: () => blocked,
+        pendingFactory: () => new Promise<void>((resolve) => { deferrals.push(resolve); }),
+        failFork: true,
+      });
+      const creation = createSessionForAgent({ workspace: "/ws", handle: "agent-one" }, r.deps());
+      await vi.waitFor(() => expect(deferrals).toHaveLength(1));
+      blocked = false;
+      deferrals[0]!();
+      const outcome = await creation;
+      expect(outcome).toEqual({ ok: false, reason: "not_ready" });
+      expect(r.manager.listTabs()).toHaveLength(0);
+      // Nothing to share, no handle reserved, no agent-owned session left behind.
+      expect(sessions.set("sess-0", true)).toBe(false);
+      expect(sessions.getHandle("sess-0")).toBeUndefined();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe("Sessions API create_session — the deferred first fork (GitHub #6)", () => {
+  it("a folder lost during the deferred fork is folder_not_found and spends none of the per-minute creation budget", async () => {
+    // Driven through the REAL server + the real creation hook + a real
+    // TabHostManager: five refusals must leave the 5/min window empty, so the
+    // sixth attempt (folder back) is a normal success, not `rate_limited`.
+    const dir = mkdtempSync(join(tmpdir(), "anycode-deferred-api-"));
+    try {
+      // The server realpath-checks the folder, so it must really exist.
+      const workspace = mkdtempSync(join(dir, "ws-"));
+      const resolved = realpathSync(workspace);
+      let blocked = false;
+      let gone = false;
+      const deferrals: Array<() => void> = [];
+      const r = rig({
+        blocked: () => blocked,
+        pendingFactory: () => new Promise<void>((resolve) => { deferrals.push(resolve); }),
+        workspaceMissing: () => gone,
+      });
+      const deps = r.deps({
+        readTrustStore: async () => ({
+          version: 1,
+          folders: { [resolved]: { decision: "trusted" as const, hash: "h", decidedAt: "2026-10-26T00:00:00.000Z" } },
+        }),
+      });
+      const discoveryFile = join(dir, "communication.json");
+      const service = await startCommunicationServer({
+        manager: { listTabs: () => r.manager.listTabs(), communicationRequest: async () => ({ engine: "core", state: "idle" }) },
+        userData: dir,
+        config: { workspaces: [], discoveryFile },
+        createSessionByAgent: (request) => createSessionForAgent(request, deps),
+        readyTimeoutMs: 50,
+        readyPollMs: 5,
+      });
+      const client = new Client({ name: "deferred-create", version: "1" });
+      const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string };
+      await client.connect(new StreamableHTTPClientTransport(new URL(discovery.url), { requestInit: { headers: { Authorization: `Bearer ${discovery.token}` } } }));
+      try {
+        const errorText = (result: unknown) => (result as { isError?: boolean; content: Array<{ text: string }> }).content[0]!.text;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          blocked = true;
+          gone = false;
+          const call = client.callTool({ name: "create_session", arguments: { workspace: resolved } });
+          await vi.waitFor(() => expect(deferrals).toHaveLength(attempt + 1));
+          // The folder disappears while the provider refresh is still pending.
+          gone = true;
+          blocked = false;
+          deferrals[attempt]!();
+          expect(errorText(await call)).toMatch(/^create_session folder_not_found:/);
+        }
+        // The window is still empty: the sixth creation is NOT rate_limited.
+        gone = false;
+        blocked = false;
+        const created = await client.callTool({ name: "create_session", arguments: { workspace: resolved } });
+        expect(created.isError ?? false).toBe(false);
+        expect(r.manager.listTabs()).toHaveLength(1);
+        expect(r.forkEnvs).toHaveLength(1);
+      } finally {
+        await client.close();
+        await service.close();
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
