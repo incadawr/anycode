@@ -253,6 +253,40 @@ describe("scanPluginsAdmin", () => {
     expect(row.problems.some((p) => p.includes("incompatible"))).toBe(true);
   });
 
+  it("a user-disabled plugin rows as OFF with NO problem line, while a real failure keeps exactly one", async () => {
+    const fs = makeFs({
+      dirs: { [USER_PLUGINS]: ["turned-off"], [`${WORKSPACE}/.anycode/plugins`]: ["future"] },
+      files: {
+        [STATE_PATH]: JSON.stringify({
+          version: 1,
+          plugins: {},
+          removedDefaults: [],
+          disabled: ["turned-off"],
+        }),
+        ...manifestAt(`${USER_PLUGINS}/turned-off`, { name: "turned-off", skills: [], agents: [], workflows: [] }),
+        ...manifestAt(`${WORKSPACE}/.anycode/plugins/future`, {
+          name: "future",
+          engines: { anycode: ">=99.0.0" },
+          skills: [],
+          agents: [],
+          workflows: [],
+        }),
+      },
+    });
+    const result = await scanPluginsAdmin(fs, { workspace: WORKSPACE, home: HOME, appVersion: "0.1.7" });
+    const off = result.rows.find((r) => r.name === "turned-off")!;
+    expect(off.status).toBe("disabled");
+    expect(off.disabled).toBe(true);
+    // Not a failure: neither the row nor the scan warns about the user's own OFF switch.
+    expect(off.problems).toEqual([]);
+    expect(result.problems.some((p) => p.includes("turned-off"))).toBe(false);
+
+    // An enabled plugin's real load failure still surfaces — and only once.
+    const future = result.rows.find((r) => r.name === "future")!;
+    expect(future.problems).toHaveLength(1);
+    expect(future.problems[0]).toMatch(/incompatible with AnyCode 0\.1\.7/);
+  });
+
   it("empty world: zero rows, zero problems", async () => {
     const result = await scanPluginsAdmin(makeFs({}), { workspace: WORKSPACE, home: HOME });
     expect(result.rows).toEqual([]);
