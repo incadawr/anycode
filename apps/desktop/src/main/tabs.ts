@@ -898,6 +898,16 @@ export interface CreateTabParams {
   /** Per-fork ANYCODE_MODEL override (S4-1 arm 2): the imported-session model pick; see TabHost.modelOverride. */
   modelOverride?: string;
   onDeferredInitialSpawn?: () => void;
+  /**
+   * GitHub #6: runs synchronously immediately BEFORE a deferred first fork
+   * delivers its port. `deliverTabPort` builds that envelope from live state
+   * (`isAgentOpenedSession`/`agentTitleOf`), so attribution a caller registers
+   * only after `createTabAwaitingInitialSpawn` reports would miss the FIRST
+   * envelope — no agent badge, wrong sidebar title. Registering it here puts it
+   * in that envelope without moving the delivery (the await resolves a microtask
+   * later, strictly after the port already went out).
+   */
+  beforeDeferredPortDelivery?: (tab: TabHost) => void;
 }
 
 export type { CloseTabResult };
@@ -1299,7 +1309,11 @@ export class TabHostManager {
     };
     this.tabs.set(tab.tabId, tab);
     this.bindings.set(params.sessionId, tab.tabId);
-    const spawn = this.spawnTabHost(tab, { firstSpawn: true, onDeferredInitialSpawn: params.onDeferredInitialSpawn });
+    const spawn = this.spawnTabHost(tab, {
+      firstSpawn: true,
+      onDeferredInitialSpawn: params.onDeferredInitialSpawn,
+      beforeDeferredPortDelivery: params.beforeDeferredPortDelivery,
+    });
     if (spawn === false) {
       this.tabs.delete(tab.tabId);
       this.bindings.delete(params.sessionId);
@@ -1368,7 +1382,15 @@ export class TabHostManager {
    * of a new session uses `--session <id>`, a resume or ANY respawn uses
 
    */
-  private spawnTabHost(tab: TabHost, opts: { firstSpawn: boolean; onDeferredInitialSpawn?: () => void; onDeferredFinished?: () => void }): void | false | "deferred" {
+  private spawnTabHost(
+    tab: TabHost,
+    opts: {
+      firstSpawn: boolean;
+      onDeferredInitialSpawn?: () => void;
+      onDeferredFinished?: () => void;
+      beforeDeferredPortDelivery?: (tab: TabHost) => void;
+    },
+  ): void | false | "deferred" {
     // GitHub #6: never fork into a cwd that does not exist — the host could not
     // boot, and the tab would sit in "Connecting to host…" with no error. The
     // tab stays (so the user can see which folder is gone and close it) and
@@ -1483,6 +1505,9 @@ export class TabHostManager {
             opts.onDeferredInitialSpawn?.();
             this.settleDeferredInitialSpawn(tab.tabId, { ok: true, tab });
           }
+          // GitHub #6: the envelope built here is the FIRST one the renderer
+          // sees, and it carries whatever attribution is registered by now.
+          opts.beforeDeferredPortDelivery?.(tab);
           this.deliverTabPort(tab);
           opts.onDeferredFinished?.();
         }).catch((error) => {

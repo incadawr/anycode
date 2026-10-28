@@ -110,6 +110,30 @@ export async function createSessionForAgent(
       : { ok: false, reason: "not_ready", detail: pin.detail };
   }
   const releasePin = pin.release;
+  const sessionId = deps.randomUUID();
+  let handle: string | undefined;
+  /**
+   * Registers everything the FIRST port envelope (and the sidebar) attributes
+   * this session by: agent ownership, the shared/exposed flag, and the handle
+   * that doubles as the tab title. `deliverTabPort` builds that envelope from
+   * live state, so this must run BEFORE the port is delivered — for a deferred
+   * first fork that delivery happens inside the fork's own completion, before
+   * `createTabAwaitingInitialSpawn` reports (GitHub #6). A SYNCHRONOUS fork has
+   * not delivered anything yet at that point, so the success path below calls
+   * it before delivering itself.
+   */
+  const registerAttribution = (): void => {
+    deps.agentOpenedSessions.add(sessionId);
+    // Registered synchronously by createTab (onSessionRegistered); "shared immediately".
+    sessions.set(sessionId, true);
+    if (request.handle === undefined) return;
+    const normalized = normalizeHandle(request.handle);
+    if (!normalized.ok || normalized.handle === null) return;
+    const isLive = (id: string) => deps.listTabs().some((tab) => tab.sessionId === id);
+    if (!sessions.setHandle(sessionId, normalized.handle, isLive).ok) return;
+    handle = normalized.handle;
+    deps.agentSessionTitles.set(sessionId, handle);
+  };
   let created: Awaited<ReturnType<TabHostManager["createTabAwaitingInitialSpawn"]>>;
   try {
     // GitHub #6: the first fork can be parked in a provider refresh. Await its
@@ -118,12 +142,16 @@ export async function createSessionForAgent(
     // session that could never receive a message (and spent its creation slot).
     created = await tabs.createTabAwaitingInitialSpawn({
       workspace: key,
-      sessionId: deps.randomUUID(),
+      sessionId,
       resume: false,
       engine,
       ...(engine !== "core" && request.model !== undefined ? { engineModel: request.model } : {}),
       ...(modelOverride !== undefined ? { modelOverride } : {}),
       ...(connectionId !== undefined ? { connectionId } : {}),
+      // GitHub #6: a deferred fork delivers its port from its own completion,
+      // i.e. before this await resolves — the attribution must already be
+      // registered for that first envelope to carry the agent badge + title.
+      beforeDeferredPortDelivery: () => registerAttribution(),
     });
   } finally {
     releasePin();
@@ -139,21 +167,12 @@ export async function createSessionForAgent(
     if (created.reason === "folder_not_found") return { ok: false, reason: "folder_not_found" };
     return { ok: false, reason: created.reason === "max_tabs" ? ("too_many" as const) : ("not_ready" as const) };
   }
-  const sessionId = created.tab.sessionId;
-  deps.agentOpenedSessions.add(sessionId);
-  // Registered synchronously by createTab (onSessionRegistered); "shared immediately".
-  sessions.set(sessionId, true);
-  let handle: string | undefined;
-  if (request.handle !== undefined) {
-    const normalized = normalizeHandle(request.handle);
-    if (normalized.ok && normalized.handle !== null) {
-      const isLive = (id: string) => deps.listTabs().some((tab) => tab.sessionId === id);
-      if (sessions.setHandle(sessionId, normalized.handle, isLive).ok) handle = normalized.handle;
-    }
+  // A deferred first fork already registered its attribution and delivered its
+  // own port from its completion (GitHub #6); a synchronous one has done
+  // neither yet. Both must precede the delivery.
+  if (created.deferred !== true) {
+    registerAttribution();
+    tabs.deliverTabPort(created.tab);
   }
-  if (handle !== undefined) deps.agentSessionTitles.set(sessionId, handle);
-  // A deferred first fork delivered its own port from its completion before this
-  // awaited result resolved (GitHub #6); only the synchronous fork needs it here.
-  if (created.deferred !== true) tabs.deliverTabPort(created.tab);
   return { ok: true, sessionId, tabId: created.tab.tabId, ...(handle !== undefined ? { handle } : {}) };
 }
