@@ -469,6 +469,7 @@ import { readHostProcessOwnership as readClaudeHostProcessOwnership } from "./en
 import { ClaudeSettingsSeam } from "./engines/claude/settings-seam.js";
 import { ClaudeShadowTranscriptEngine, SqliteClaudeShadowTranscript } from "./engines/claude/shadow-transcript.js";
 import { ClaudeSessionRowWriter } from "./engines/claude/session-row.js";
+import { createCodexSessionTitlePersistence, createCoreSessionTitlePersistence } from "./session-title-persistence.js";
 import { claudeAgentPermissionMode, claudeChildPresetId, codexChildAutoAcceptsWorkspacePatches, codexChildPosture } from "./engines/child-permission-map.js";
 import { checkClaudeBinaryTrustOnDisk, CLAUDE_AGENT_BRIDGE_PROMPT } from "./engines/claude/claude-client.js";
 import { createEngineChildRunner } from "./engine-children.js";
@@ -1978,31 +1979,11 @@ async function bootCodexSession(
     imageInputEnabled: () => connected.engine.imageInputEnabled(),
     git: gitBridge,
     shell,
-    persistence: {
-      touch(patch) {
-        // The persistence boundary is where a Codex preset id becomes the `mode`
-        // TEXT column (cut §2(k).4). Session keeps the two vocabularies apart in
-        // its own types; the column is shared, and the cast lives here, once.
-        const { enginePreset, ...rest } = patch;
-        const row = { ...rest, ...(enginePreset !== undefined ? { mode: enginePreset as PermissionMode } : {}) };
-        // Returned (not just fired) so a caller that promises persistence — the
-        // Sessions API title ack — waits for the real write to land.
-        return persistence?.touchSession(connected.sessionMeta.id, row).catch((error) => {
-          console.error(`[host] touchSession failed: ${describeError(error)}`);
-        });
-      },
-      /**
-       * The Sessions API title ack for a Codex tab: NEVER swallowed, so a failed
-       * write rejects the `set_agent_title` RPC and main retries the handle. The
-       * turn paths above stay fail-soft.
-       */
-      commitTitle(title) {
-        if (!persistence) {
-          return Promise.reject(new Error("No persistence port"));
-        }
-        return persistence.touchSession(connected.sessionMeta.id, { title });
-      },
-    },
+    persistence: createCodexSessionTitlePersistence({
+      adapter: () => persistence,
+      sessionId: connected.sessionMeta.id,
+      onError: (error) => console.error(`[host] touchSession failed: ${describeError(error)}`),
+    }),
     postPreviewArtifacts: sendPreviewArtifacts,
     // TASK.159 INVARIANT: this is a foreign-engine boot — CodexEngine never
     // instantiates AgentLoop, so there is no AgentLoopConfig.eventTap anywhere
@@ -5009,30 +4990,13 @@ async function boot(): Promise<void> {
       applyRecognizerConfig: applyRecognizerEndpoint,
       // Narrow persistence callback (§4.2): Session persists title/mode patches
       // without ever holding the whole port. Fire-and-forget for the turn
-      // paths, never blocks a turn.
-      persistence: {
-        touch(patch) {
-          if (!persistence) {
-            return;
-          }
-          return persistence.touchSession(sessionId, patch).catch((error) => {
-            console.error(`[host] touchSession failed: ${describeError(error)}`);
-          });
-        },
-        /**
-         * The Sessions API title ack: DELIBERATELY not caught. A rejected write
-         * (a closed database, SQLITE_BUSY past busy_timeout) must reach main as
-         * a failed RPC so the handle stays retained and is retried, instead of
-         * being dropped against a title no boot can read back. Ordinary turn
-         * writes above keep their fail-soft posture.
-         */
-        commitTitle(title) {
-          if (!persistence) {
-            return Promise.reject(new Error("No persistence port"));
-          }
-          return persistence.touchSession(sessionId, { title });
-        },
-      },
+      // paths, never blocks a turn; the strict `commitTitle` twin is the
+      // Sessions API ack (see session-title-persistence.ts).
+      persistence: createCoreSessionTitlePersistence({
+        adapter: () => persistence,
+        sessionId,
+        onError: (error) => console.error(`[host] touchSession failed: ${describeError(error)}`),
+      }),
       // Taskana 4083 / TASK.34: the persistent per-step provider-usage audit,
       // CORE-ONLY wiring (codex/claude boots above pass nothing — their usage
       // arrives as cumulative REPLACE snapshots, not per-step finishes).
