@@ -128,8 +128,10 @@ it("renders provider names in every route and preserves route values", () => {
   expect(html.match(/test · DeepSeek/g)).toHaveLength(6);
   expect(html.match(/local · Local provider/g)).toHaveLength(6);
   expect(html).toContain('value="connection:c">other · unknown</option>');
-  expect(html).toContain('value="connection:d">d</option>');
+  expect(html).not.toContain('value="connection:d">d</option>');
   expect(html).toContain('value="connection:active" selected="">Session&#x27;s connection</option>');
+  // The unlabeled DeepSeek connection reads as its provider, never as `d`.
+  expect(html).toContain('value="connection:d">DeepSeek</option>');
   expect(html).toContain('>Current connection</button>');
   expect(html).not.toContain('>This connection</');
 });
@@ -255,5 +257,49 @@ describe("Max parallel children input (GitHub #17 slice B)", () => {
     for (const raw of ["0", "17", "2.5"]) {
       expect(buildRoleProfileRoles({ maxParallelChildren: 4 }, raw)).toEqual({ valid: false });
     }
+  });
+});
+
+/**
+ * B1 regression: 0.0.46 promised every role route is identified by provider.
+ * A connection with no custom label regressed to a raw `conn-<uuid>` id in the
+ * option text AND in the displayed selection, in both editor entry points. The
+ * option must read as the provider's display name.
+ */
+describe("Route selects name connections, never raw connection ids", () => {
+  const connectionId = "conn-76796d43-742b-4f0e-b08f-0ce36d93ccd9";
+  const connections = [
+    { id: connectionId, providerId: "z-ai" },
+    { id: "conn-2", providerId: "z-ai" },
+    { id: "conn-3", providerId: "custom:lab" },
+  ];
+  const snapshot = {
+    settings: {
+      version: 2,
+      provider: {
+        connections,
+        activeConnectionId: connectionId,
+        custom: [{ id: "custom:lab", name: "Lab endpoint", baseUrl: "http://localhost:1234", kind: "openai-compatible", models: [] }],
+      },
+      tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false },
+    },
+    secrets: [], providerReady: true, envOverrides: [], readOnly: false,
+    catalog: [{ id: "z-ai", name: "Z.AI (GLM)", authKind: "api_key", models: [] }],
+  } satisfies SettingsSnapshot;
+
+  it.each(["settings", "dialog"] as const)("%s: the stored connection renders as its provider name", (surface) => {
+    useSettingsStore.setState({ snapshot });
+    const html = renderToStaticMarkup(surface === "settings" ? createElement(RolesPane) : createElement(RolePickerDialog, {
+      ...base, connections, activeConnectionId: connectionId,
+      initialRoles: { executor: { primary: { connection: connectionId } } },
+    }));
+    // No option text is a bare id (the value attribute keeps the id; the text must not).
+    expect(html).not.toMatch(/>conn-[0-9a-f-]+/);
+    expect(html).toMatch(/<option value="connection:conn-76796d43-742b-4f0e-b08f-0ce36d93ccd9"[^>]*>Z\.AI \(GLM\)<\/option>/);
+    if (surface === "dialog") {
+      expect(html).toContain('<option value="connection:conn-76796d43-742b-4f0e-b08f-0ce36d93ccd9" selected="">Z.AI (GLM)</option>');
+    }
+    expect(html).toContain('>Z.AI (GLM) 2</option>');
+    expect(html).toContain('>Lab endpoint</option>');
   });
 });

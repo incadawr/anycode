@@ -14,6 +14,7 @@
  * inline buttons.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type { RoleConfig, ProviderConnection } from "../../../shared/settings.js";
 import {
   autoSelectPreset,
@@ -41,6 +42,7 @@ import { useSettingsStore } from "../settings-store.js";
 import { resolveRoleModels, roleModelSelection, routePatch, nextCustomMode, type RoleModelSources } from "../role-model-options.js";
 import { roleOverrideNotice, type RoleProfileOverride } from "../role-profile-overrides.js";
 import { useRoleEngineModels } from "../use-role-engine-models.js";
+import { connectionRouteLabels } from "../role-routes.js";
 import { Check, Chevron, Plus, X } from "./icons.js";
 
 export interface RolePickerDialogProps {
@@ -70,6 +72,12 @@ export interface RolePickerDialogProps {
    * never applies.
    */
   profileOverrides?: Partial<Record<PresetRole, RoleProfileOverride>>;
+  /**
+   * Save-result feedback rendered INSIDE the actions row, next to the buttons.
+   * The Settings pane passes its notice here — a notice below the last field
+   * sat off screen under the Save button.
+   */
+  actionsNotice?: ReactNode;
   onSave(roles: Partial<Record<PresetRole, RoleConfig>>): void;
   onSkip?(): void;
 }
@@ -84,6 +92,7 @@ export function RolePickerDialog({
   skippable = true,
   inline = false,
   profileOverrides,
+  actionsNotice,
   onSave,
   onSkip,
 }: RolePickerDialogProps) {
@@ -221,6 +230,7 @@ export function RolePickerDialog({
         )}
 
         <div className="role-picker-actions">
+          {actionsNotice}
           {skippable && (
             <button type="button" className="role-picker-skip" data-testid="role-picker-skip" onClick={() => onSkip?.()}>
               Skip
@@ -260,18 +270,18 @@ interface EntryRowProps {
   onMove?(delta: -1 | 1): void;
 }
 
-function connectionRouteLabel(connection: ProviderConnection, sources: RoleModelSources): string {
-  if (!connection.label) return connection.id;
-  const providerName = sources.catalog?.find((provider) => provider.id === connection.providerId)?.name
-    ?? sources.custom?.find((provider) => provider.id === connection.providerId)?.name
-    ?? connection.providerId;
-  return `${connection.label} · ${providerName}`;
-}
-
+/**
+ * Route labels for the connection options: a display name, never the raw
+ * `conn-<uuid>` storage id (role-routes.ts owns the rule).
+ */
 function EntryRow({ label, entry, connections, modelSources, onChange, onRemove, onMove }: EntryRowProps) {
   const route = entry.engine !== "" ? `engine:${entry.engine}` : entry.connection.trim() !== "" ? `connection:${entry.connection}` : "connection:active";
   const models = resolveRoleModels(entry, modelSources);
   const selection = nextCustomMode(entry.customModel === true, entry.model, models) ? "custom" : roleModelSelection(entry.model, models, entry.engine);
+  const routeLabels = useMemo(
+    () => connectionRouteLabels(connections, modelSources.catalog, modelSources.custom),
+    [connections, modelSources.catalog, modelSources.custom],
+  );
   return (
     <div className="role-picker-entry" data-route={route}>
       <span className="role-picker-entry-label">{label}</span>
@@ -286,7 +296,7 @@ function EntryRow({ label, entry, connections, modelSources, onChange, onRemove,
         <option value="connection:active">Session's connection</option>
         {connections.map((connection) => (
           <option key={connection.id} value={`connection:${connection.id}`}>
-            {connectionRouteLabel(connection, modelSources)}
+            {routeLabels.get(connection.id) ?? "Connection"}
           </option>
         ))}
       </select>

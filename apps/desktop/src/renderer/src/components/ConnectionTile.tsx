@@ -19,6 +19,10 @@ import { Check, Ellipsis, Pencil, Trash } from "./icons.js";
 import { formatAge } from "./Sidebar.js";
 import { quotaWindowLabel } from "./Composer.js";
 import { nextRovingIndex } from "./ModeMenu.js";
+import { connectionDisplayName } from "../connection-name.js";
+
+/** Re-exported: the tile grid and the role route selects share ONE naming rule. */
+export { connectionDisplayName };
 
 /** Short, human status text for each `ProviderHealthStatus` (task §3 table) — status is ALWAYS paired with this text, never color alone. */
 export const HEALTH_LABEL: Record<ProviderHealthStatus, string> = {
@@ -183,25 +187,6 @@ export function connectionCredentialKey(
   return isCustomRecordProviderId(providerId)
     ? customProviderSecretKey(providerId)
     : connectionSecretKey(connectionId, authKind);
-}
-
-/**
- * Auto-naming (task §"Компактная сетка"): a custom `label` always wins;
- * otherwise the catalog/template name, disambiguated with a trailing ordinal
- * ("OpenAI", "OpenAI 2", …) among UNLABELED connections of the SAME
- * `providerId`, in their array order — matches the task's own example.
- */
-export function connectionDisplayName(
-  connection: ProviderConnection,
-  catalogName: string,
-  allConnections: readonly ProviderConnection[],
-): string {
-  if (connection.label) {
-    return connection.label;
-  }
-  const sameProviderUnlabeled = allConnections.filter((c) => c.providerId === connection.providerId && !c.label);
-  const index = sameProviderUnlabeled.findIndex((c) => c.id === connection.id);
-  return index <= 0 ? catalogName : `${catalogName} ${index + 1}`;
 }
 
 /**
