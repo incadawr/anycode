@@ -423,6 +423,7 @@ describe("a listed folder that is missing (live config)", () => {
   it("allows the folder again once it is back, without restarting the server", async () => {
     const f = await missingFixture();
     expect(await f.ids()).toEqual(["present"]);
+    const before = await readFile(f.discoveryFile, "utf8");
     await mkdir(f.missing);
     // No restart and no timer: the next authorisation check resolves the entry again.
     expect(await f.ids()).toEqual(["present", "gone"]);
@@ -431,8 +432,10 @@ describe("a listed folder that is missing (live config)", () => {
     // The same instance is still serving: same URL, same token, one warning in total.
     const after = JSON.parse(await readFile(f.discoveryFile, "utf8")) as { url: string; token: string; workspaces: string[] };
     expect(after).toMatchObject({ url: f.discovery.url, token: f.discovery.token });
-    // The discovery file names the recovered folder too, so clients stop believing it is gone.
-    expect([...after.workspaces].sort()).toEqual([await realpath(f.present), await realpath(f.missing)].sort());
+    // The discovery file is written at startup only: recovery authorises the folder but
+    // leaves the file byte-identical, so no write of this server can outlive close().
+    expect(await readFile(f.discoveryFile, "utf8")).toBe(before);
+    expect(after.workspaces).toEqual([await realpath(f.present)]);
     expect(f.warn).toHaveBeenCalledTimes(1);
   });
 

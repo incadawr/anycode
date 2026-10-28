@@ -209,13 +209,13 @@ export async function startCommunicationServer(options: CommunicationServerOptio
    * if its canonical path is in `allowed`. Unresolved entries are retried lazily
    * at request-time authorisation checks only (never from the reconciliation
    * timer), so a folder that comes back works again in the same server
-   * instance, without a restart.
+   * instance, without a restart. The discovery file is written at startup only
+   * (canonical paths as resolved then), so a recovery never writes it after
+   * close() and cannot overwrite the next server's URL and token.
    */
   const resolvePath = options.realpath ?? realpath;
   const allowed = new Set<string>();
   const unresolved = new Set<string>();
-  /** Rewritten when a listed folder comes back; set once the listener URL is known. */
-  let publishDiscovery: (() => Promise<void>) | undefined;
   for (const path of config.workspaces) {
     try { allowed.add(await resolvePath(path)); }
     catch (error) {
@@ -239,19 +239,14 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     if (resolving) return resolving;
     if (unresolved.size === 0) return Promise.resolve();
     const pass = (async () => {
-      let recovered = false;
       for (const path of [...unresolved]) {
         try {
           const canonical = await resolvePath(path);
           if (!unresolved.has(path)) continue; // settled meanwhile: the other target is not authorised
           allowed.add(canonical);
           unresolved.delete(path);
-          recovered = true;
         } catch { /* still missing: still grants nothing */ }
       }
-      // Clients that read the discovery file see the recovered folder too; the
-      // URL and token stay the same. A failed rewrite never revokes authorisation.
-      if (recovered && publishDiscovery) { try { await publishDiscovery(); } catch { /* next change retries */ } }
     })();
     resolving = pass;
     pass.then(() => { resolving = undefined; }, () => { resolving = undefined; });
@@ -745,14 +740,10 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   const address = http.address();
   if (!address || typeof address === "string") throw new Error("Communication listener unavailable");
   const url = `http://127.0.0.1:${address.port}/mcp`;
-  const writeDiscovery = () => writePrivateFile(discoveryFile, JSON.stringify({ url, token, workspaces: [...allowed] }));
-  try { await writeDiscovery(); }
+  try { await writePrivateFile(discoveryFile, JSON.stringify({ url, token, workspaces: [...allowed] })); }
   catch (error) { http.closeAllConnections(); http.close(); throw error; }
   // Each record carries its own dispatch deadline (see `scheduleExpiry`), so
   // expiry never waits for reconciliation's host requests to finish.
-  // A recovered folder also lands in the private discovery file (same URL and token);
-  // never after close, so the removed file cannot reappear.
-  publishDiscovery = async () => { if (!closing) await writeDiscovery(); };
   const reconcileTimer = setInterval(() => { void reconcile(); }, 1000);
   reconcileTimer.unref();
   let closed = false;
