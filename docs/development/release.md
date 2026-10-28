@@ -101,6 +101,19 @@ invisible to users, until a human reviews it and presses Publish. Running the
 workflow manually (`workflow_dispatch`) is always a dry run: it builds and
 touches no release.
 
+## When a release run fails
+
+A version tagged but never published is not burned. Fix the cause on `next`
+with normal review and land the fix on `master`. Delete the tag on the remote
+and locally (`git push origin :refs/tags/v<version>`, `git tag -d v<version>`),
+along with any draft release for it. Then create the annotated tag `v<version>`
+again on the fixed commit and push it. The manifests already carry the version,
+so there is no new bump; add any user-visible fix to that version's existing
+`CHANGELOG.md` section.
+
+Once a release is published, its tag is never moved or deleted. A problem found
+after publishing gets the next version.
+
 Publishing is also what announces: `.github/workflows/announce.yml` fires on
 the `published` release event and posts the version, the release notes (the
 same CHANGELOG section that fills the release body, code-point-truncated to
