@@ -70,10 +70,19 @@ const STATUS_LABEL: Record<ParsedChildReportStatus, string> = {
   unknown: "finished",
 };
 
+/**
+ * The placeholder a report without a `<subagent-type>` field parses to (see
+ * `parseChildReportText`). Interpolating it again would read "Background
+ * subagent subagent finished" — the duplicate word a running child's first
+ * report showed — so a placeholder type is simply left out of the label.
+ */
+const UNKNOWN_SUBAGENT_TYPE = "subagent";
+
 /** The compact card's one-line summary — "Background subagent <type> <status-label>". */
 export function childReportCardLabel(parsed: ParsedChildReport): string {
+  const typed = parsed.subagentType === UNKNOWN_SUBAGENT_TYPE ? "" : `${parsed.subagentType} `;
   if (parsed.status === "cancelled" && parsed.cancelledBy === "user") {
-    return `Background subagent ${parsed.subagentType} stopped by you`;
+    return `Background subagent ${typed}stopped by you`;
   }
-  return `Background subagent ${parsed.subagentType} ${STATUS_LABEL[parsed.status]}`;
+  return `Background subagent ${typed}${STATUS_LABEL[parsed.status]}`;
 }

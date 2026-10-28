@@ -85,10 +85,19 @@ describe("childReportCardLabel", () => {
     );
   });
 
-  it("renders 'finished' for the unknown-status fallback", () => {
+  it("renders 'finished' for the unknown-status fallback without repeating the placeholder type", () => {
     expect(childReportCardLabel({ subagentType: "subagent", status: "unknown", summary: "" })).toBe(
-      "Background subagent subagent finished",
+      "Background subagent finished",
     );
+  });
+
+  it("labels a report that carries no <subagent-type> at all without a duplicated word", () => {
+    // A running background child's first report has no type field; it parses to
+    // the placeholder, and the card used to read "Background subagent subagent …".
+    const text = "[SYSTEM NOTIFICATION - NOT USER INPUT]\n<task-notification>\n<status>running</status>\n<summary>started</summary>\n</task-notification>";
+    const label = childReportCardLabel(parseChildReportText(text));
+    expect(label).toBe("Background subagent finished");
+    expect(label).not.toContain("subagent subagent");
   });
 });
 
