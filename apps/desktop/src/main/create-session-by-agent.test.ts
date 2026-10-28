@@ -18,11 +18,16 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSessionAccessStore } from "./communication-sessions.js";
+import { createAgentProjectsStore } from "./communication-agent-projects.js";
+import { handleSetSessionHandle, type CommunicationIpcDeps } from "./communication-ipc.js";
+import { createAgentTitlePushes, recoverAgentSessionTitleOnRegister, type AgentTitleRecoveryDeps } from "./agent-session-title.js";
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { MessagePortMain, UtilityProcess } from "electron";
 import { Client, StreamableHTTPClientTransport } from "@anycode/core/communication-mcp";
 import { startCommunicationServer } from "./communication-server.js";
+import { SqlitePersistenceAdapter } from "@anycode/core";
+import { AGENT_MESSAGE_HEADER_PREFIX } from "../shared/communication.js";
 import { createSessionForAgent, type CreateSessionByAgentDeps } from "./create-session-by-agent.js";
 import { primeNewSessionPin, type ResumePinResult } from "./session-pin.js";
 import { TabHostManager, type HostForkFn, type WindowLike } from "./tabs.js";
@@ -58,7 +63,24 @@ function settings(): AnycodeSettings {
   };
 }
 
-function rig(options: { failPrimingFor?: string; blocked?: () => boolean; pending?: Promise<void>; pendingFactory?: () => Promise<void>; failFork?: boolean; sessions?: SessionAccessStore; workspaceMissing?: (workspace: string) => boolean; window?: boolean } = {}) {
+function rig(options: {
+  failPrimingFor?: string;
+  blocked?: () => boolean;
+  pending?: Promise<void>;
+  pendingFactory?: () => Promise<void>;
+  workspaceMissing?: (workspace: string) => boolean;
+  window?: boolean;
+  failFork?: boolean;
+  sessions?: SessionAccessStore;
+  /** The session id `create_session` assigns (deterministic when a row is pre-seeded). */
+  sessionId?: string;
+  /**
+   * Replaces the registration callback main uses. The title test needs main's
+   * REAL callback (store registration + resume-time recovery), so it passes one
+   * here instead of re-implementing the manager wiring in the test body.
+   */
+  onSessionRegistered?: (info: { sessionId: string; parentSessionId?: string }) => void | (() => void);
+} = {}) {
   // Mirrors main/index.ts: `hostEnvByConnection`, filled ONLY by ensurePinnedEnv
   // (through resolveResumePin) and read fail-closed by the fork's `env`.
   const cache = new Map<string, NodeJS.ProcessEnv>();
@@ -96,10 +118,10 @@ function rig(options: { failPrimingFor?: string; blocked?: () => boolean; pendin
   };
   const manager = new TabHostManager({
     fork,
-    onSessionRegistered: ({ sessionId }) => {
+    onSessionRegistered: options.onSessionRegistered ?? (({ sessionId }) => {
       const added = options.sessions?.register({ sessionId });
       return () => { if (added) options.sessions?.remove(sessionId); };
-    },
+    }),
     waitForHostEnv: () => options.blocked?.() ? (options.pendingFactory?.() ?? options.pending) : undefined,
     hostEntry: "/fake/host.js",
     createChannel: fakeChannel,
@@ -143,7 +165,7 @@ function rig(options: { failPrimingFor?: string; blocked?: () => boolean; pendin
     currentSettings: settings,
     primeNewSessionPin,
     resolveResumePin,
-    randomUUID: () => `sess-${forkEnvs.length}`,
+    randomUUID: () => options.sessionId ?? `sess-${forkEnvs.length}`,
     agentOpenedSessions,
     agentSessionTitles,
     listTabs: () => manager.listTabs(),
@@ -414,5 +436,178 @@ describe("Sessions API create_session — the deferred first fork (GitHub #6)", 
         await service.close();
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+/**
+ * The resume wiring, driven end to end: a session created by the production
+ * `create_session` path (agent-opened, with a handle), its row holding the
+ * host's OWN automatic title, the handle renamed through the production IPC
+ * handler, then a restart and a resume. `onSessionRegistered` here is main's
+ * real callback (`recoverAgentSessionTitleOnRegister`, same store + row reads),
+ * not the pure decision function.
+ *
+ * Why the row's title is an automatic one and not the handle: the handle push
+ * never landed (a booting host). The previous repair overwrote ANY non-handle
+ * title of a session whose handle was saved, so this resume replaced the
+ * host's automatic title with the handle the user had since renamed — the
+ * defect this pins down.
+ */
+describe("agent title resume wiring (production create_session → handle rename → resume)", () => {
+  /** What an automatic titling pass leaves in the row (never the delivery header). */
+  const AUTOMATIC_TITLE = "Sidebar layout and focus";
+  /** A pre-fix row's payload-derived title: the envelope header, capped. */
+  const ENVELOPE_TITLE = `${AGENT_MESSAGE_HEADER_PREFIX}{"messageId":"m1","sender":"supervisor"`.slice(0, 80);
+
+  /** Lets a fire-and-forget title push settle. */
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+  /**
+   * One boot cycle: creation + rename happen on the first boot, the resume on
+   * the second, over the SAME access/handles/confirmation files and the SAME
+   * SQLite database — the durability the resume path depends on.
+   */
+  async function scenario(storedTitle: string) {
+    const dir = mkdtempSync(join(tmpdir(), "anycode-title-resume-"));
+    const dbPath = join(dir, "sessions.db");
+    const storeFiles = {
+      file: join(dir, "access.json"),
+      handlesFile: join(dir, "handles.json"),
+      titleConfirmationsFile: join(dir, "agent-titles.json"),
+      defaultOn: () => false,
+    };
+    let persistence = new SqlitePersistenceAdapter(dbPath);
+    let sessions = createSessionAccessStore(storeFiles);
+    try {
+      await persistence.createSession({ id: "sess-1", workspace: "/ws", model: "scripted-model", mode: "edit" });
+      /** Main's recovery deps for one boot. */
+      const recoveryFor = (store: SessionAccessStore, titles: Map<string, string>, pushes: ReturnType<typeof createAgentTitlePushes>): AgentTitleRecoveryDeps => ({
+        handleOf: (sessionId) => store.getHandle(sessionId),
+        confirmedTitleOf: (sessionId) => store.getConfirmedTitle(sessionId),
+        readPersistedTitle: async (sessionId) => (await persistence.getSessionById(sessionId))?.title,
+        adopt: (sessionId, title) => { titles.set(sessionId, title); pushes.retain(sessionId); },
+        warn: () => {},
+      });
+
+      // ---- boot 1: create_session, then a handle rename ----
+      const titlesA = new Map<string, string>();
+      const pushedA: string[] = [];
+      const pushesA = createAgentTitlePushes({
+        titleOf: (sessionId) => titlesA.get(sessionId),
+        // The host is still booting: the handle never lands, so the row keeps
+        // whatever the host's own automatic titling wrote.
+        request: async (_sessionId, title) => { pushedA.push(title); throw new Error("host booting"); },
+        confirmed: (sessionId, title) => sessions.confirmTitle(sessionId, title),
+        warn: () => {},
+      });
+      const createdRecoveries: Promise<unknown>[] = [];
+      const boot1 = rig({
+        sessions,
+        sessionId: "sess-1",
+        onSessionRegistered: (info) => {
+          sessions.register(info);
+          createdRecoveries.push(recoverAgentSessionTitleOnRegister(recoveryFor(sessions, titlesA, pushesA), info));
+        },
+      });
+      const created = await createSessionForAgent(
+        { workspace: "/ws", handle: "worker-1" },
+        boot1.deps({ agentSessionTitles: titlesA, pushAgentTitle: (sessionId) => pushesA.retain(sessionId) }),
+      );
+      if (!created.ok) throw new Error(`create_session refused: ${JSON.stringify(created)}`);
+      await Promise.all(createdRecoveries);
+      expect(created).toMatchObject({ sessionId: "sess-1", handle: "worker-1" });
+      expect(pushedA).toContain("worker-1");
+
+      // The host's automatic title is what the row holds.
+      await persistence.touchSession("sess-1", { title: storedTitle });
+
+      // The user renames the handle through the production IPC handler.
+      const status = { state: "off" as const, workspaces: 0, sessions: 0 };
+      const ipc: CommunicationIpcDeps = {
+        settingsPath: join(dir, "settings.json"),
+        logger: silentLogger,
+        controller: {
+          apply: async () => status,
+          regenerateToken: async () => ({ ok: false as const, reason: "not_running" as const }),
+          status: () => status,
+          discoveryFile: () => undefined,
+        },
+        sessions,
+        approvals: createSessionAccessStore({ file: join(dir, "approvals.json"), defaultOn: () => false }),
+        tabs: () => [{ tabId: created.tabId, sessionId: "sess-1" }],
+        env: () => undefined,
+        pickFolder: async () => undefined,
+        stdioScriptPath: () => null,
+        realpath: async (path) => path,
+        agentProjects: createAgentProjectsStore({ file: join(dir, "projects.json"), realpathSync: (path) => path }),
+        realpathSync: (path) => path,
+        homedir: () => dir,
+        stat: async () => ({ isDirectory: () => true }),
+      };
+      expect((await handleSetSessionHandle(ipc, { tabId: created.tabId, handle: "worker-2" })).ok).toBe(true);
+
+      // ---- boot 2: a real restart re-reads the files and resumes ----
+      await persistence.close();
+      persistence = new SqlitePersistenceAdapter(dbPath);
+      sessions = createSessionAccessStore(storeFiles);
+      expect(sessions.getHandle("sess-1")).toBe("worker-2");
+
+      const titlesB = new Map<string, string>();
+      const pushedB: string[] = [];
+      /** Commits of an accepted resume push (the push itself is fire-and-forget). */
+      const pushWrites: Promise<unknown>[] = [];
+      const pushesB = createAgentTitlePushes({
+        titleOf: (sessionId) => titlesB.get(sessionId),
+        request: async (sessionId, title) => {
+          pushedB.push(title);
+          pushWrites.push(persistence.touchSession(sessionId, { title }));
+        },
+        confirmed: (sessionId, title) => sessions.confirmTitle(sessionId, title),
+        warn: () => {},
+      });
+      const resumeRecoveries: Promise<unknown>[] = [];
+      const boot2 = rig({
+        sessions,
+        onSessionRegistered: (info) => {
+          sessions.register(info);
+          resumeRecoveries.push(recoverAgentSessionTitleOnRegister(recoveryFor(sessions, titlesB, pushesB), info));
+        },
+      });
+      // The resume the renderer triggers: an already-persisted session, --resume.
+      const resumed = boot2.manager.createTab({ workspace: "/ws", sessionId: "sess-1", resume: true });
+      expect(resumed.ok).toBe(true);
+      await Promise.all(resumeRecoveries);
+      await settle();
+      // The accepted push commits on its own; wait for that write, not for a timer.
+      await Promise.all(pushWrites);
+      return {
+        titlesB,
+        pushedB,
+        storedTitle: (await persistence.getSessionById("sess-1"))?.title,
+        confirmedTitle: sessions.getConfirmedTitle("sess-1"),
+      };
+    } finally {
+      await persistence.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("keeps the stored automatic title when a resumed agent session's handle was renamed", async () => {
+    const result = await scenario(AUTOMATIC_TITLE);
+    // No adoption: the in-memory title and the retained push stay empty…
+    expect(result.titlesB.size).toBe(0);
+    // …so nothing replaces the row's title on the resume.
+    expect(result.pushedB).toEqual([]);
+    expect(result.storedTitle).toBe(AUTOMATIC_TITLE);
+    expect(result.confirmedTitle).toBeUndefined();
+  });
+
+  it("repairs a stored raw-envelope title with the saved handle on resume", async () => {
+    const result = await scenario(ENVELOPE_TITLE);
+    // The one title nobody typed is replaced by the current saved handle…
+    expect(result.titlesB.get("sess-1")).toBe("worker-2");
+    expect(result.pushedB).toEqual(["worker-2"]);
+    // …and the push lands, so a later boot reads the handle.
+    expect(result.storedTitle).toBe("worker-2");
   });
 });

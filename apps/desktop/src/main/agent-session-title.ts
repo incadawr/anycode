@@ -204,3 +204,47 @@ export async function recoverAgentSessionTitle(deps: RecoverAgentTitleDeps): Pro
   deps.adopt(handle);
   return true;
 }
+
+/**
+ * What main's `onSessionRegistered` callback needs to run the repair for the
+ * session a tab just registered (a resume included). Extracted so the test can
+ * drive the callback main actually registers, against the real session store
+ * and the real SQLite row — not only the pure decision above.
+ */
+export interface AgentTitleRecoveryDeps {
+  /** The handle saved in the handles file for this session. */
+  handleOf(sessionId: string): string | undefined;
+  /** The title a host last confirmed for this session, if one was recorded. */
+  confirmedTitleOf(sessionId: string): string | undefined;
+  /** The title SQLite holds for this session. */
+  readPersistedTitle(sessionId: string): Promise<string | undefined>;
+  /** Adopt `title` as this session's title (in-memory map + retained push). */
+  adopt(sessionId: string, title: string): void;
+  /** Best-effort diagnostics; never rethrown. */
+  warn(message: string, error: unknown): void;
+}
+
+/**
+ * The SESSION-REGISTRATION wiring for the repair — the callback `main/index.ts`
+ * hands to `TabHostManager` as `onSessionRegistered`, run for every tab create
+ * and therefore for every resume. Fire-and-forget by contract: a boot, a resume
+ * and a title repair in progress never block one another, and a failure only
+ * warns (the next host generation retries).
+ */
+export async function recoverAgentSessionTitleOnRegister(
+  deps: AgentTitleRecoveryDeps,
+  info: { sessionId: string },
+): Promise<boolean> {
+  try {
+    return await recoverAgentSessionTitle({
+      sessionId: info.sessionId,
+      savedHandle: () => deps.handleOf(info.sessionId),
+      confirmedTitle: () => deps.confirmedTitleOf(info.sessionId),
+      readPersistedTitle: () => deps.readPersistedTitle(info.sessionId),
+      adopt: (title) => deps.adopt(info.sessionId, title),
+    });
+  } catch (error) {
+    deps.warn("[main] agent title recovery failed", error);
+    return false;
+  }
+}
