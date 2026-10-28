@@ -112,6 +112,8 @@ function rig(options: {
    */
   stubbornHost?: boolean;
   killExitDelayMs?: number;
+  /** Even the force kill does not land the host: only the test's own `host.emit("exit")` does. */
+  holdKillExit?: boolean;
 } = {}) {
   // Mirrors main/index.ts: `hostEnvByConnection`, filled ONLY by ensurePinnedEnv
   // (through resolveResumePin) and read fail-closed by the fork's `env`.
@@ -158,7 +160,7 @@ function rig(options: {
     if (options.stubbornHost === true) {
       // The only thing that lands this host is the reaper's force kill.
       host.kill.mockImplementation(() => {
-        setTimeout(() => host.emit("exit", 0), options.killExitDelayMs ?? 0);
+        if (options.holdKillExit !== true) setTimeout(() => host.emit("exit", 0), options.killExitDelayMs ?? 0);
         return true;
       });
     }
@@ -856,6 +858,49 @@ describe("create_session — effort preparation before publication", () => {
     expect(outcome).toEqual({ ok: false, reason: "invalid_effort", detail });
     expect(sequence).toEqual(["host-shutdown", "host-exit", "row-deleted:sess-0"]);
     expect(r.manager.listTabs()).toEqual([]);
+  });
+
+  it("keeps the failed session row until a host that outlives both reap deadlines really exits", async () => {
+    // The hung host survives the shutdown deadline AND the post-kill exit
+    // deadline. The refusal may return, but deleting the row here would free a
+    // live server to write it straight back: the deletion has to wait for the
+    // real exit event.
+    const sequence: string[] = [];
+    const detail = 'engine=codex; model="gpt-6.1-terra"; effort="turbo"; allowed=["low","xhigh"]; reason=not_advertised';
+    const r = rig({
+      sequence,
+      limits: { exitDeadlineMs: 40 },
+      stubbornHost: true,
+      holdKillExit: true,
+      respond: (operation) => {
+        if (operation === "get_session_status") return { result: IDLE_STATUS };
+        if (operation === "set_session_effort") return { result: { ok: false, reason: "invalid_effort", detail } };
+        return undefined;
+      },
+    });
+
+    const deleted: string[] = [];
+    const outcome = await createSessionForAgent(
+      { workspace: "/ws", engine: "codex", model: "gpt-6.1-terra", effort: "turbo" },
+      r.deps({ deleteSessionRow: async (sessionId) => { sequence.push(`row-deleted:${sessionId}`); deleted.push(sessionId); } }),
+    );
+
+    expect(outcome).toEqual({ ok: false, reason: "invalid_effort", detail });
+    expect(r.hosts[0]!.kill).toHaveBeenCalled();
+    // Still alive, so no row deletion and no respawn: the tab keeps its slot.
+    expect(r.manager.listTabs()).toEqual([]);
+    expect(deleted).toEqual([]);
+    expect(sequence).not.toContain("row-deleted:sess-0");
+    expect(r.hosts).toHaveLength(1);
+
+    r.hosts[0]!.emit("exit", 0);
+    await vi.waitFor(() => expect(deleted).toEqual(["sess-0"]));
+    // Exactly once, and only after the exit landed.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(deleted).toEqual(["sess-0"]);
+    expect(sequence).toEqual(["host-shutdown", "host-exit", "row-deleted:sess-0"]);
+    expect(r.manager.sessionOpenInTab("sess-0")).toBeUndefined();
+    expect(r.hosts).toHaveLength(1);
   });
 
   it("waits for Claude effort acknowledgement before publication", async () => {

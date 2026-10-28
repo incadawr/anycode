@@ -48,6 +48,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Deliver the first message to newly created sessions reliably and report delivery failures. (#21)
 - A message still being handed to a new session is no longer shown to it as an earlier delivery, so the first turn always starts. (#21)
 - A message that cannot be dispatched is reported as failed at its own 20-second deadline, not up to a second later. (#21)
+- A failed session preparation no longer deletes the session row while its host may still be running.
 
 ## [0.0.49] — 2026-10-28
 

@@ -7837,6 +7837,45 @@ describe("TabHostManager — prepared (unpublished) tabs", () => {
     expect(r.manager.listTabs()).toEqual([]);
   });
 
+  it("keeps a prepared tab tracked, and its cleanup deferred, when the host outlives both reap deadlines", async () => {
+    // A hung host: the shutdown deadline passes, the force kill does NOT land
+    // it either. Releasing the tab (and thereby letting the caller delete the
+    // session row) here would leave a live server free to write it back.
+    const r = preparedRig({ exitDeadlineMs: 40 });
+    const created = r.manager.createTab({ workspace: "/ws", sessionId: "s-hung", resume: false, deferPublication: true });
+    if (!created.ok) throw new Error("prepared creation refused");
+    const host = r.hosts[0]!;
+    host.kill.mockImplementation(() => true);
+    const cleaned: string[] = [];
+
+    const aborted = await r.manager.abortPreparedTab(created.tab.tabId, () => { cleaned.push("row"); });
+    // Both deadlines are behind us and the abort itself is settled...
+    expect(aborted).toBe(false);
+    expect(host.kill).toHaveBeenCalled();
+    // ...but the host may still be alive: the tab holds its slot and binding,
+    // stays hidden, was never respawned, and its cleanup has NOT run.
+    expect(r.manager.getTab(created.tab.tabId)).toBeDefined();
+    expect(r.manager.sessionOpenInTab("s-hung")).toBe(created.tab.tabId);
+    expect(r.manager.atCapacity()).toBe(true);
+    expect(r.manager.listTabs()).toEqual([]);
+    expect(r.hosts).toHaveLength(1);
+    expect(cleaned).toEqual([]);
+
+    // The real exit is what releases everything — exactly once, no respawn.
+    host.emit("exit", 0);
+    await flush();
+    expect(r.manager.getTab(created.tab.tabId)).toBeUndefined();
+    expect(r.manager.sessionOpenInTab("s-hung")).toBeUndefined();
+    expect(r.manager.atCapacity()).toBe(false);
+    expect(r.manager.listTabs()).toEqual([]);
+    expect(r.hosts).toHaveLength(1);
+    expect(cleaned).toEqual(["row"]);
+    // A pending exit that never arrives must not leak a second cleanup on a
+    // later, unrelated teardown either.
+    expect(r.opened).toEqual([]);
+    expect(r.registered).toEqual([]);
+  });
+
   it("waits for the host's real exit before the abort reports itself finished", async () => {
     // Short reap deadline so the force-kill path (the one that used to return
     // without waiting) is reached quickly.

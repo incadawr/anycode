@@ -1453,17 +1453,27 @@ export class TabHostManager {
    * reads — a host that exits during the drain is therefore neither
    * respawned nor reported as a crash.
    *
-   * Resolves only once the host is actually GONE. `shutdownTabHost` stops
-   * waiting at its deadline and force-kills, but the exit itself lands after
-   * that; the caller deletes this session's database row right afterwards, so
-   * a still-live host writing late would recreate the row it just deleted.
+   * `onExited` runs exactly ONCE and only when the host process is CONFIRMED
+   * gone: immediately when it was already dead (or the shutdown drained it),
+   * otherwise from a one-shot exit handler registered here. A hung host can
+   * outlive BOTH reap deadlines (its force kill included), and the caller
+   * deletes this session's database row in that callback — so the row must
+   * never go before the exit, however long it takes. Until then the tab stays
+   * TRACKED (capacity, session binding, unpublished marker, `closing` state),
+   * which also keeps `handleExit` from respawning it.
+   *
+   * Resolves with `true` once the abort is settled AND the host is gone (so
+   * `onExited` has already run), `false` when only the deferred exit handler
+   * is left to finish it.
    */
-  async abortPreparedTab(tabId: string): Promise<void> {
+  async abortPreparedTab(tabId: string, onExited?: () => void | Promise<void>): Promise<boolean> {
     const tab = this.tabs.get(tabId);
-    if (!this.unpublishedTabs.has(tabId) || tab === undefined) {
-      this.unpublishedTabs.delete(tabId);
-      return;
+    if (tab === undefined) {
+      // Nothing tracked can write any more: there is no host left to defer to.
+      await this.settlePreparedTab(tabId, null, onExited);
+      return true;
     }
+    if (!this.unpublishedTabs.has(tabId)) return false;
     const child = tab.proc;
     let exited = child === null;
     // Registered before ANY await: the process can exit while the child drain
@@ -1479,6 +1489,12 @@ export class TabHostManager {
       });
     this.closingTabs.add(tabId);
     tab.state = "closing";
+    let released = false;
+    const release = async (): Promise<void> => {
+      if (released) return;
+      released = true;
+      await this.settlePreparedTab(tabId, tab.sessionId, onExited);
+    };
     try {
       await this.drainChildren(tab);
       // An already-exited host has nothing left to signal — and asking
@@ -1488,8 +1504,9 @@ export class TabHostManager {
         await this.shutdownTabHost(tab);
       }
       // A graceful exit already resolved `exit` above; only the force-killed
-      // case gets here still waiting. Bounded like every other reap, and
-      // reported honestly when even that is not enough.
+      // case gets here still waiting. Bounded like every other reap — and if
+      // even that bound expires, the exit handler below stays armed instead of
+      // releasing the tab (and the caller's row) while the host may live.
       if (exit !== null && !exited) {
         let timer: ReturnType<typeof setTimeout> | undefined;
         const deadline = new Promise<"timeout">((resolve) => {
@@ -1499,16 +1516,44 @@ export class TabHostManager {
         if (timer !== undefined) clearTimeout(timer);
         if (result === "timeout") {
           this.logger.warn(
-            `[main] prepared tab ${tabId} host still had not exited ${this.limits.exitDeadlineMs}ms after the force kill; abandoning it`,
+            `[main] prepared tab ${tabId} host still had not exited ${this.limits.exitDeadlineMs}ms after the force kill; keeping it tracked until the real exit`,
           );
+          void exit.then(release);
+          return false;
         }
       }
-    } finally {
-      this.tabs.delete(tabId);
-      this.bindings.delete(tab.sessionId);
-      this.deferredRegistrationRollbacks.delete(tabId);
-      this.closingTabs.delete(tabId);
-      this.unpublishedTabs.delete(tabId);
+    } catch (error) {
+      this.logger.warn(`[main] prepared tab ${tabId} teardown failed`, error);
+      if (exit !== null && !exited) {
+        void exit.then(release);
+        return false;
+      }
+    }
+    await release();
+    return true;
+  }
+
+  /**
+   * Releases a prepared tab's bookkeeping, then (exactly once per abort) runs
+   * the caller's host-gone callback. Split out so the deferred path — the host
+   * exits long after `abortPreparedTab` returned — releases exactly what the
+   * immediate path releases.
+   */
+  private async settlePreparedTab(
+    tabId: string,
+    sessionId: string | null,
+    onExited?: () => void | Promise<void>,
+  ): Promise<void> {
+    this.tabs.delete(tabId);
+    if (sessionId !== null) this.bindings.delete(sessionId);
+    this.deferredRegistrationRollbacks.delete(tabId);
+    this.closingTabs.delete(tabId);
+    this.unpublishedTabs.delete(tabId);
+    if (onExited === undefined) return;
+    try {
+      await onExited();
+    } catch (error) {
+      this.logger.warn(`[main] prepared tab ${tabId} exit cleanup failed`, error);
     }
   }
 

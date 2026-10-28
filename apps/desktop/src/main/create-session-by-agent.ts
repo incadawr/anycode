@@ -63,10 +63,11 @@ export interface CreateSessionByAgentDeps {
    * Deletes the database row of a session this attempt just allocated, when
    * preparation fails after the host forked (an abandoned prepared session
    * must not leave a picker entry behind). Called only AFTER the host is really
-   * gone — `abortPreparedTab` does not resolve until the process exit has
-   * landed, force-kill included — so a late host write cannot recreate the row;
-   * only the fresh id this attempt minted is ever passed. Absent in legacy rigs
-   * -> nothing is deleted (the pre-effort behavior).
+   * gone — registration is deferred to the host's own exit event when a hung
+   * process outlives the abort's reap deadlines — so a late host write can
+   * never recreate the row. Only the fresh id this attempt minted is ever
+   * passed. Absent in legacy rigs -> nothing is deleted (the pre-effort
+   * behavior).
    */
   deleteSessionRow?(sessionId: string): Promise<void>;
   /** Overall deadline for preparing a created session's effort (tests shorten it). */
@@ -214,22 +215,25 @@ export async function createSessionForAgent(
 
   /**
    * Discards a prepared session whose effort could not be configured. Order is
-   * load-bearing: the host is reaped FIRST, so a late host write cannot
-   * recreate the row we then delete. Only the id minted by this attempt is
-   * ever deleted.
+   * load-bearing: the row is deleted only from the host-gone callback, so a
+   * late host write cannot recreate the row we delete. When the host outlives
+   * the reaper's deadlines that callback is armed for its real exit and the
+   * refusal returns first — the deletion still happens, just later. Only the
+   * id minted by this attempt is ever deleted.
    */
   const abortPrepared = async (
     reason: "invalid_effort" | "not_ready",
     detail?: string,
   ): Promise<CreateSessionOutcome> => {
-    await tabs.abortPreparedTab(tab.tabId);
-    if (deps.deleteSessionRow !== undefined) {
+    const deleteRow = async (): Promise<void> => {
+      if (deps.deleteSessionRow === undefined) return;
       try {
         await deps.deleteSessionRow(sessionId);
       } catch {
         // A leftover picker row must never turn the refusal into an error.
       }
-    }
+    };
+    await tabs.abortPreparedTab(tab.tabId, deleteRow);
     return { ok: false, reason, ...(detail !== undefined ? { detail } : {}) };
   };
 
