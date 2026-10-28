@@ -3460,10 +3460,41 @@ void app.whenReady().then(async () => {
   // `reveal` injects the one Electron primitive (`shell.showItemInFolder`) the
   // handlers need, so `main/skills-ipc.ts` itself stays Electron-free and unit-
   // testable off a plain deps bag.
+
+  // Settings panes that render a plugin-contributed catalog (Skills,
+  // Subagents) discover plugins through THIS helper, so a pane sees the same
+  // plugin world as the host runtime: the managed store the user installed
+  // from, the app version that gates compatibility, the builtin names a
+  // non-official plugin may not shadow — and, load-bearing here, the
+  // user-global disabled set from the store's state.json. Without that state
+  // path a pane scanned a state-less plugin world and a plugin the user turned
+  // OFF kept reporting its problems (MCP had already wired the same options).
+  const pluginPaneDiscoveryOptions = (home: string, workspace: string) => ({
+    ...pluginsDiscoveryWiring({
+      home,
+      pluginsSettings: settings?.plugins,
+      builtinSkillNames: buildHostBuiltinSkills({ worktreeAvailable: existsSync(join(workspace, ".git")), previewAvailable: true, anycodeSetupDocs: { kind: "remote", ref: "latest" } }).map((skill) => skill.name),
+      builtinPersonaNames: listPersonaNames(),
+    }),
+    appVersion: app.getVersion(),
+  });
+
   registerSkillsIpc({
     home: () => (selfCheckProfile ?? resolveSkillsImportHome(process.env, app.isPackaged)) ?? homedir(),
     workspaceForTab: (ref) => scopeRegistry.resolve(ref, (tabId) => manager?.getTab(tabId)?.workspace),
     fs: new NodeSkillsFs(),
+    // mcpConsent is deliberately NOT forwarded: an un-granted plugin MCP server
+    // is the MCP pane's problem, and passing the consent gate here would turn
+    // "needs approval" into a Skills-pane warning.
+    pluginDiscoveryOptions: (home, workspace) => {
+      const wiring = pluginPaneDiscoveryOptions(home, workspace);
+      return {
+        pluginStatePath: wiring.pluginStatePath,
+        appVersion: wiring.appVersion,
+        reservedSkillNames: wiring.reservedSkillNames,
+        reservedAgentNames: wiring.reservedAgentNames,
+      };
+    },
     reveal: (path) => shell.showItemInFolder(path),
   });
 
@@ -3480,7 +3511,7 @@ void app.whenReady().then(async () => {
     home: () => (selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged)) ?? homedir(),
     workspaceForTab: (ref) => scopeRegistry.resolve(ref, (tabId) => manager?.getTab(tabId)?.workspace),
     fs: new NodeSubagentsFs(),
-    pluginDiscoveryOptions: (home, workspace) => ({ ...pluginsDiscoveryWiring({ home, pluginsSettings: settings?.plugins, builtinSkillNames: buildHostBuiltinSkills({ worktreeAvailable: existsSync(join(workspace, ".git")), previewAvailable: true, anycodeSetupDocs: { kind: "remote", ref: "latest" } }).map((skill) => skill.name), builtinPersonaNames: listPersonaNames() }), appVersion: app.getVersion() }),
+    pluginDiscoveryOptions: (home, workspace) => pluginPaneDiscoveryOptions(home, workspace),
     reveal: (path) => shell.showItemInFolder(path),
   });
 

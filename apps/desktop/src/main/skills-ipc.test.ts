@@ -497,3 +497,92 @@ describe("skills scope reference (Taskana 4758)", () => {
     expect(await exists(join(home, ".anycode/skills/ghostskill/SKILL.md"))).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+
+describe("handleSkillsList — the user's disabled plugins are a state, not problems", () => {
+  /** A legacy-tier user plugin, hand-dropped under `~/.anycode/plugins/<dir>`. */
+  async function seedUserPlugin(home: string, dir: string, manifest: Record<string, unknown>): Promise<void> {
+    const root = join(home, ".anycode/plugins", dir);
+    await mkdir(join(root, ".anycode-plugin"), { recursive: true });
+    await writeFile(join(root, ".anycode-plugin/plugin.json"), JSON.stringify(manifest), "utf-8");
+  }
+
+  /** The managed store's state file — the ONLY carrier of the user-global disabled set. */
+  async function seedState(home: string, disabled: string[]): Promise<void> {
+    await seed(
+      join(home, ".anycode/plugins/state.json"),
+      JSON.stringify({ version: 1, plugins: {}, disabled }),
+    );
+  }
+
+  /**
+   * Exactly the deps main/index.ts registers: the plugin discovery options the
+   * host runtime and the Subagents/MCP panes already receive (state path + app
+   * version + builtin name sets).
+   */
+  function storeDeps(ws: string, home: string): SkillsIpcDeps {
+    return {
+      ...makeDeps(ws, home),
+      pluginDiscoveryOptions: (h) => ({
+        pluginStatePath: join(h, ".anycode/plugins/state.json"),
+        appVersion: "0.0.49",
+        reservedSkillNames: new Set<string>(),
+        reservedAgentNames: new Set<string>(),
+      }),
+    };
+  }
+
+  /** One healthy plugin plus the two broken shapes a live audit found: a newer manifest and an escaping skills dir. */
+  async function seedPlugins(home: string): Promise<void> {
+    await seedUserPlugin(home, "acc-good", { name: "acc-good", skills: ["skills"] });
+    await seed(join(home, ".anycode/plugins/acc-good/skills/goodskill/SKILL.md"), "---\nname: goodskill\ndescription: G\n---\nbody\n");
+    await seedUserPlugin(home, "acc-newer", { name: "acc-newer", manifestVersion: 99 });
+    await seedUserPlugin(home, "acc-escape", { name: "acc-escape", skills: ["../outside"] });
+  }
+
+  it("shows neither problems nor their skills while those plugins are switched off", async () => {
+    const ws = await tmp();
+    const home = await tmp();
+    await seedPlugins(home);
+    await seedState(home, ["acc-good", "acc-newer", "acc-escape"]);
+
+    const snapshot = await handleSkillsList(storeDeps(ws, home), { tabId: TAB_ID });
+
+    // The pane's amber strip: a disabled plugin is a state, so none of its
+    // problems (newer manifest, escaping skills dir) may reach it.
+    expect(snapshot.problems).toEqual([]);
+    // And the catalog matches the runtime: a switched-off plugin contributes no skills.
+    expect(snapshot.rows.map((r) => r.name)).not.toContain("goodskill");
+  });
+
+  it("still reports those problems while the same plugins are enabled", async () => {
+    const ws = await tmp();
+    const home = await tmp();
+    await seedPlugins(home);
+    await seedState(home, []);
+
+    const snapshot = await handleSkillsList(storeDeps(ws, home), { tabId: TAB_ID });
+    const joined = snapshot.problems.join("\n");
+
+    expect(joined).toMatch(/manifest version 99/);
+    expect(joined).toMatch(/escapes the plugin root/);
+    expect(snapshot.rows.find((r) => r.name === "goodskill")).toMatchObject({ sourceKind: "plugin", pluginName: "acc-good" });
+  });
+
+  it("does not call an import candidate 'already present' just because a disabled plugin provides it", async () => {
+    const ws = await tmp();
+    const home = await tmp();
+    await seed(join(home, ".claude/skills/personal/SKILL.md"), "---\nname: personal\ndescription: from claude\n---\nbody\n");
+    await seedUserPlugin(home, "acc-good", { name: "acc-good", skills: ["skills"] });
+    await seed(join(home, ".anycode/plugins/acc-good/skills/personal/SKILL.md"), "---\nname: personal\ndescription: P\n---\nbody\n");
+
+    await seedState(home, ["acc-good"]);
+    const off = await handleSkillsImportScan(storeDeps(ws, home), { tabId: TAB_ID });
+    expect(off.candidates.find((c) => c.name === "personal")).toMatchObject({ alreadyPresent: false });
+
+    await seedState(home, []);
+    const on = await handleSkillsImportScan(storeDeps(ws, home), { tabId: TAB_ID });
+    expect(on.candidates.find((c) => c.name === "personal")).toMatchObject({ alreadyPresent: true });
+  });
+});

@@ -44,6 +44,7 @@ import {
   scanSkillsAdmin,
   setSkillEnabled,
   type HarnessSkillCandidate,
+  type ScanSkillsAdminOptions,
   type SkillAdminRow,
 } from "@anycode/core/skills-admin";
 import {
@@ -172,6 +173,14 @@ export class NodeSkillsFs implements SkillsFs {
 export interface SkillsIpcDeps {
   /** `os.homedir()` in production; `ANYCODE_SKILLS_IMPORT_HOME`-overridable at the main/index.ts wiring site (dev/test only, mirrors ANYCODE_MCP_IMPORT_HOME). */
   home(): string;
+  /**
+   * Plugin-world passthroughs for the admin scan — the SAME discovery options
+   * the host runtime and the Subagents/MCP panes hand `discoverPlugins`.
+   * Without them the scan ran discovery with no state path, so it never saw
+   * the user's disabled set (a plugin the user turned OFF kept reporting its
+   * problems in the Skills pane) nor the managed store the runtime loads.
+   */
+  pluginDiscoveryOptions?: (home: string, workspace: string) => Omit<ScanSkillsAdminOptions, "workspace" | "home">;
   /** Scope reference resolver (Taskana 4758): a tab id (legacy) or a workspace id `ws_<16 hex>`, resolved main-side — never a renderer-supplied path. */
   workspaceForTab(tabId: string): string | undefined;
   fs: SkillsFs;
@@ -309,6 +318,26 @@ function toRowView(row: SkillAdminRow, hasWorkspace: boolean): SkillRowView {
 }
 
 /**
+ * The discovery options every admin scan here uses. Plugins are discovered
+ * once, main-side, with the state path the runtime uses, so the pane shows the
+ * same catalog AND the same set of problems as the session it mirrors: a
+ * plugin the user disabled contributes neither skills nor problem lines.
+ */
+function scanOptions(deps: SkillsIpcDeps, home: string, workspace: string): ScanSkillsAdminOptions {
+  return { workspace, home, ...deps.pluginDiscoveryOptions?.(home, workspace) };
+}
+
+/**
+ * The plugin world the import catalog join needs (`scanHarnessSkills`'s
+ * `alreadyPresent` check): only the disabled set matters there, and it lives in
+ * the same state file the panes read.
+ */
+function pluginWorldFor(deps: SkillsIpcDeps, home: string, workspace: string): { pluginStatePath?: string } {
+  const options = deps.pluginDiscoveryOptions?.(home, workspace || home);
+  return options?.pluginStatePath !== undefined ? { pluginStatePath: options.pluginStatePath } : {};
+}
+
+/**
  * Builds the joined catalog snapshot. No resolvable workspace ⇒ scans with
  * `workspace===home` (buildSkillRoots' own "load once" collapse), which
  * `toRowView`/`classifyRow` in turn relabel as user-only rows.
@@ -319,7 +348,7 @@ async function buildSnapshot(deps: SkillsIpcDeps, tabId: string | undefined): Pr
   const hasWorkspace = workspace !== undefined;
   const effectiveWorkspace = workspace ?? home;
 
-  const scan = await scanSkillsAdmin(deps.fs, { workspace: effectiveWorkspace, home });
+  const scan = await scanSkillsAdmin(deps.fs, scanOptions(deps, home, effectiveWorkspace));
   return {
     rows: scan.rows.map((row) => toRowView(row, hasWorkspace)),
     problems: scan.problems,
@@ -336,7 +365,7 @@ async function findRow(
   const workspace = resolveWorkspace(deps, tabId);
   const hasWorkspace = workspace !== undefined;
   const effectiveWorkspace = workspace ?? home;
-  const scan = await scanSkillsAdmin(deps.fs, { workspace: effectiveWorkspace, home });
+  const scan = await scanSkillsAdmin(deps.fs, scanOptions(deps, home, effectiveWorkspace));
   const row = scan.rows.find((r) => r.name === name);
   if (row === undefined) {
     return undefined;
@@ -534,7 +563,7 @@ export async function handleSkillsImportScan(deps: SkillsIpcDeps, raw: unknown):
   const tabId = parsed.success ? parsed.data.tabId : undefined;
   const workspace = resolveWorkspace(deps, tabId) ?? "";
   const home = deps.home();
-  const candidates = await scanHarnessSkills(deps.fs, home, workspace);
+  const candidates = await scanHarnessSkills(deps.fs, home, workspace, pluginWorldFor(deps, home, workspace));
   return { candidates: candidates.map(toCandidateView), problems: [] };
 }
 
@@ -585,7 +614,7 @@ export async function handleSkillsImportApply(deps: SkillsIpcDeps, raw: unknown)
 
   let results: SkillsImportApplyResultItem[];
   try {
-    const scan = await scanHarnessSkills(deps.fs, home, scanWorkspace);
+    const scan = await scanHarnessSkills(deps.fs, home, scanWorkspace, pluginWorldFor(deps, home, scanWorkspace));
     const selected = scan.filter((c) => idSet.has(c.id));
     // P1-c: pass the own-catalog roots so applySkillImport proves targetRoot is a
     // REAL own root (symlink-resolved) before writing — a symlinked

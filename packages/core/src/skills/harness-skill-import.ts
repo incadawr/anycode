@@ -589,11 +589,17 @@ async function scanClaudePlugins(ctx: ScanContext, home: string): Promise<void> 
  * Scans the FIXED §3 allowlist of foreign skill catalogs and returns classified
  * candidates. `alreadyPresent` is computed against OUR current post-dedup
  * catalog (project+user+plugin). Never throws; a missing catalog is a no-op.
+ *
+ * `pluginWorld` carries the same discovery options the host runtime uses. The
+ * disabled set is load-bearing here: a plugin the user turned OFF contributes
+ * no skills to the live catalog, so its skills must not mark a foreign skill as
+ * `alreadyPresent` (which would make the import list it as unavailable).
  */
 export async function scanHarnessSkills(
   fs: FileSystemPort,
   home: string,
   workspace: string,
+  pluginWorld?: { pluginStatePath?: string },
 ): Promise<HarnessSkillCandidate[]> {
   const h = stripTrailingSep(home);
   const ws = stripTrailingSep(workspace);
@@ -601,7 +607,12 @@ export async function scanHarnessSkills(
   // Our own catalog names (for the alreadyPresent flag).
   const ourNames = new Set<string>();
   try {
-    const plugins = await discoverPlugins(fs, { workspace: ws, home: h, claimedMcpNames: new Set() });
+    const plugins = await discoverPlugins(fs, {
+      workspace: ws,
+      home: h,
+      claimedMcpNames: new Set(),
+      ...(pluginWorld?.pluginStatePath !== undefined ? { pluginStatePath: pluginWorld.pluginStatePath } : {}),
+    });
     const roots = buildSkillRoots(ws, h, plugins.skillRoots);
     const discovery = await discoverSkills(fs, roots);
     for (const meta of discovery.metas) {
