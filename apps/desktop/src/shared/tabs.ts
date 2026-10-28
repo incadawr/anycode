@@ -203,6 +203,11 @@ export type CreateTabResult =
         | "already_open"
         | "not_ready"
         | "worktree_unavailable"
+        // The workspace folder no longer exists (GitHub #6): a NEW session cannot
+        // be started there at all, so main refuses instead of opening a tab that
+        // could never get a host. `workspace` names the missing path so the
+        // start screen can keep the user's draft and say which folder is gone.
+        | "folder_not_found"
         // The session was pinned to a provider connection that has since been
         // deleted (TASK.45 W10). Resume must NOT silently fall back to the current
         // default — the renderer offers a replacement instead. `connectionId` is
@@ -210,6 +215,7 @@ export type CreateTabResult =
         | "connection_missing";
       focusTabId?: string; // already_open -> renderer focuses this tab
       worktreePath?: string; // actionable recovery detail for worktree_unavailable
+      workspace?: string; // folder_not_found -> the path whose directory is gone
       openTabs?: number;  // max_tabs -> live root-tab count at refusal (TASK.119)
       maxTabs?: number;   // max_tabs -> the effective ceiling at refusal
       connectionId?: string; // connection_missing -> the deleted pin

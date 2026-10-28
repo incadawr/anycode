@@ -849,7 +849,15 @@ export interface TabHostManagerDeps {
 
 export type CreateTabResult =
   | { ok: true; tab: TabHost; deferred?: boolean }
-  | { ok: false; reason: "max_tabs" | "already_open" | "not_ready"; focusTabId?: string; openTabs?: number; maxTabs?: number };
+  | {
+      ok: false;
+      reason: "max_tabs" | "already_open" | "not_ready" | "folder_not_found";
+      focusTabId?: string;
+      openTabs?: number;
+      maxTabs?: number;
+      /** folder_not_found: the workspace path whose directory is gone (GitHub #6). */
+      workspace?: string;
+    };
 
 export type { CloseTabResult };
 
@@ -1270,6 +1278,19 @@ export class TabHostManager {
       this.tabs.delete(tab.tabId);
       this.bindings.delete(params.sessionId);
       return { ok: false, reason: "not_ready" };
+    }
+    // GitHub #6: a NEW session whose folder is already gone has nothing to show
+    // an error against — no session exists yet, so keeping a dead tab would only
+    // make the caller queue its first prompt (and drop the user's draft) into a
+    // host that never boots. Roll the half-made tab and its binding back and
+    // report the missing folder instead. A RESUME keeps its tab: that session
+    // already exists, and the error tab is how restore tells the user the folder
+    // moved (#6's original symptom).
+    if (!params.resume && tab.missingWorkspace === true) {
+      this.logger.error(`[main] tab ${tab.tabId} workspace folder is missing (${workspace}); refusing the new session`);
+      this.tabs.delete(tab.tabId);
+      this.bindings.delete(params.sessionId);
+      return { ok: false, reason: "folder_not_found", workspace };
     }
     this.deps.onTabOpened?.(tab.tabId);
     const rollback = this.deps.onSessionRegistered?.({ sessionId: params.sessionId });

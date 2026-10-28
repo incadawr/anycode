@@ -505,6 +505,32 @@ describe("submitStartDraft — refusal keeps the draft (§3-D8)", () => {
     expect(queueInitialPrompt).not.toHaveBeenCalled();
   });
 
+  it("folder_not_found -> {ok:false} naming the folder, with the submitted prompt AND attachments still in the draft", async () => {
+    // GitHub #6: main refuses a new session whose folder is gone and rolls the
+    // half-made tab back. The regression was that a success-shaped answer made
+    // this path add a dead tab, queue the first prompt into it and discard the
+    // draft — the typed message and its images were gone for good.
+    const { deps, tabsStore, queueInitialPrompt } = makeDeps({
+      ok: false,
+      reason: "folder_not_found",
+      workspace: "/ws/gone",
+    });
+    const image = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+    tabsStore.getState().openDraft("/ws/gone");
+    tabsStore.getState().setDraftPrompt("keep me");
+    tabsStore.getState().setDraftImages([image]);
+
+    const res = await submitStartDraft(deps);
+
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.message).toContain("/ws/gone");
+    expect(queueInitialPrompt).not.toHaveBeenCalled();
+    expect(tabsStore.getState().tabs).toHaveLength(0);
+    expect(tabsStore.getState().draft).toMatchObject({ workspace: "/ws/gone", prompt: "keep me", images: [image] });
+    expect(tabsStore.getState().draftActive).toBe(true);
+  });
+
   it("not_ready -> {ok:false}, draft intact", async () => {
     const { deps, tabsStore } = makeDeps({ ok: false, reason: "not_ready" });
     tabsStore.getState().openDraft("/ws/a");

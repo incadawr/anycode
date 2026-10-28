@@ -80,6 +80,11 @@ export function describeCreateTabFailure(
       return "Configure a provider (API key + model) before opening a tab.";
     case "worktree_unavailable":
       return `This session's worktree is missing or no longer registered${result.worktreePath ? `: ${result.worktreePath}` : ""}. Restore or re-register that path with Git before resuming.`;
+    case "folder_not_found":
+      // GitHub #6: main checked the folder before forking, found it gone, and
+      // rolled the half-made tab back. Nothing was created, so the draft the
+      // user typed is still theirs to retry once the folder is back.
+      return `The folder${result.workspace ? ` ${result.workspace}` : ""} no longer exists. Restore or pick another folder, then send again.`;
     case "connection_missing":
       // TASK.45 W10-FIX F1: the pinned provider connection was deleted. Resume must
       // NOT silently switch this session to the current default — the Sidebar turns

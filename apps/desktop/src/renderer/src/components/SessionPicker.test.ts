@@ -24,11 +24,16 @@ describe("describeCreateTabFailure", () => {
       "max_tabs",
       "session_not_found",
       "already_open",
+      "folder_not_found",
       "connection_missing",
     ];
     for (const reason of reasons) {
       expect(describeCreateTabFailure({ ok: false, reason }).length).toBeGreaterThan(0);
     }
+  });
+
+  it("folder_not_found names the missing folder so the notice is actionable (GitHub #6)", () => {
+    expect(describeCreateTabFailure({ ok: false, reason: "folder_not_found", workspace: "/ws/gone" })).toContain("/ws/gone");
   });
 
   describe("not_ready, engine-parameterized (S1b-1)", () => {
