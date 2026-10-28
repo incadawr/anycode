@@ -2860,13 +2860,13 @@ describe("host degraded-mode port bind — immediate fatal (TASK.207, GitHub #4)
    * that guards it: the guard appears twice in this file (the boot-time MCP
    * wiring has one too), and `indexOf` would take the earlier one, leaving
    * the extraction to depend on no `} else {` happening to sit in between.
-   * `servers: mcpManager.status()` occurs exactly once. It also lives in the
+   * `servers: [...mcpManager.status(), ...mcpConfigStatuses]` occurs exactly once. It also lives in the
    * HEALTHY branch, so reverting the fix under test cannot disturb it — a
    * revert then fails these tests on behaviour, which is the point, instead
    * of throwing here for a missing anchor.
    */
   function extractDegradedElseBlock(source: string): string {
-    const mcpAnchor = "servers: mcpManager.status()";
+    const mcpAnchor = "servers: [...mcpManager.status(), ...mcpConfigStatuses]";
     const mcpIdx = source.indexOf(mcpAnchor);
     if (mcpIdx === -1) {
       throw new Error("mcp_status anchor not found — index.ts's port-bind handler moved");

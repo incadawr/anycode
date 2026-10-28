@@ -428,6 +428,7 @@ function resolvePluginMcpServers(
   claimedMcpNames: Set<string>,
   consent: { allowed: boolean; hash: string },
   secrets: McpResolveOptions["secrets"],
+  loginPath: McpResolveOptions["loginPath"],
 ): { specs: McpServerSpec[]; problems: string[] } {
   const entries = plugin.manifest.mcpServers;
   if (!entries || Object.keys(entries).length === 0) {
@@ -458,6 +459,7 @@ function resolvePluginMcpServers(
     sourceLabel: `plugin:${plugin.manifest.name}`,
     claimed: claimedMcpNames,
     secrets,
+    loginPath,
   });
 }
 
@@ -631,6 +633,7 @@ export async function discoverPlugins(
       opts.claimedMcpNames,
       { allowed: consentAllowed, hash },
       opts.secrets,
+      opts.loginPath,
     );
     mcpServerSpecs.push(...resolvedServers.specs);
     problems.push(...resolvedServers.problems);

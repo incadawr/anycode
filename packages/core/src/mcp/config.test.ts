@@ -7,6 +7,10 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, writeFileSync, chmodSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { collectSecretRefs, loadMcpServerSpecs } from "./config.js";
 import type { FileSystemPort } from "../ports/file-system.js";
 import type { McpHttpServerSpec, McpStdioServerSpec } from "../ports/mcp.js";
@@ -179,7 +183,7 @@ describe("loadMcpServerSpecs — ${env:VAR} substitution", () => {
 // enabled:false
 
 describe("loadMcpServerSpecs — enabled:false", () => {
-  it("skips a disabled server silently (no problem)", async () => {
+  it("reports a disabled server", async () => {
     const { fs } = makeFs({
       [PROJECT_CONFIG]: JSON.stringify({
         mcpServers: {
@@ -188,9 +192,9 @@ describe("loadMcpServerSpecs — enabled:false", () => {
         },
       }),
     });
-    const { specs, problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME);
+    const { specs, problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME, { reportDisabled: true });
     expect(specs.map((s) => s.name)).toEqual(["on"]);
-    expect(problems).toEqual([]);
+    expect(problems[0]).toMatch(/off.*disabled/);
   });
 
   it("a disabled server claims its name — a lower-priority source is NOT consulted as a fallback", async () => {
@@ -198,9 +202,9 @@ describe("loadMcpServerSpecs — enabled:false", () => {
       [PROJECT_CONFIG]: JSON.stringify({ mcpServers: { srv: { command: "node", enabled: false } } }),
       [USER_CONFIG]: JSON.stringify({ mcpServers: { srv: { command: "node" } } }),
     });
-    const { specs, problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME);
+    const { specs, problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME, { reportDisabled: true });
     expect(specs).toEqual([]);
-    expect(problems).toEqual([]);
+    expect(problems[0]).toMatch(/srv.*disabled/);
   });
 });
 
@@ -219,7 +223,7 @@ describe("loadMcpServerSpecs — fail-soft malformed sources", () => {
     expect(problems[0]).toMatch(/Invalid JSON in MCP config \/proj\/\.anycode\/config\.json/);
   });
 
-  it("records a problem and skips ALL servers of a source that fails schema validation", async () => {
+  it("reports a malformed entry and loads its valid sibling", async () => {
     const { fs } = makeFs({
       [PROJECT_CONFIG]: JSON.stringify({
         mcpServers: {
@@ -230,9 +234,9 @@ describe("loadMcpServerSpecs — fail-soft malformed sources", () => {
       [USER_CONFIG]: JSON.stringify({ mcpServers: { srv: { command: "node" } } }),
     });
     const { specs, problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME);
-    expect(specs.map((s) => s.name)).toEqual(["srv"]);
+    expect(specs.map((s) => s.name)).toEqual(["alsoDropped", "srv"]);
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toMatch(/Invalid MCP config \/proj\/\.anycode\/config\.json/);
+    expect(problems[0]).toMatch(/bad.*invalid entry/);
   });
 
   it("records a problem when an entry has neither command nor url", async () => {
@@ -557,4 +561,18 @@ describe("collectSecretRefs (Taskana 4752, C-9)", () => {
   it("returns an empty list when nothing is referenced", () => {
     expect(collectSecretRefs({ a: { command: "node", env: { X: "plain" } } })).toEqual([]);
   });
+});
+
+it("uses the discovered login PATH without inheriting unrelated environment", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mcp-path-"));
+  writeFileSync(join(dir, "launcher"), "#!/bin/sh\nprintf ok\n");
+  chmodSync(join(dir, "launcher"), 0o755);
+  vi.stubEnv("PATH", "/usr/bin:/bin");
+  vi.stubEnv("MCP_PRIVATE_TEST", "private-value");
+  const { fs } = makeFs({ [PROJECT_CONFIG]: JSON.stringify({ mcpServers: { tool: { command: "launcher" } } }) });
+  const { specs } = await loadMcpServerSpecs(fs, WORKSPACE, HOME, { loginPath: `${dir}:/usr/bin:/bin` });
+  expect(asStdio(specs[0]).env.PATH).toBe(`${dir}:/usr/bin:/bin`);
+  expect(spawnSync("launcher", [], { env: asStdio(specs[0]).env, encoding: "utf8" }).stdout).toBe("ok");
+  rmSync(dir, { recursive: true, force: true });
+  expect(asStdio(specs[0]).env.MCP_PRIVATE_TEST).toBeUndefined();
 });

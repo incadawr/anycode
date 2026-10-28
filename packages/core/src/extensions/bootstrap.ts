@@ -267,6 +267,7 @@ export async function discoverExtensions(
       ...(opts.mcpConsent !== undefined ? { mcpConsent: opts.mcpConsent } : {}),
       projectTrusted: opts.projectTrusted,
       ...(opts.secrets !== undefined ? { secrets: opts.secrets } : {}),
+      loginPath: opts.loginPath,
     });
     pluginSkillRoots = result.skillRoots;
     pluginAgentRoots = result.agentRoots;

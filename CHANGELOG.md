@@ -14,6 +14,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - A host test that times out no longer hands a late boot the developer's real profile: the test stops the host before restoring the environment.
 - Test cleanup removes the session variables a host boot creates, so later tests no longer inherit a deleted session.
 - Host tests ignore the shell's proxy settings, so a credentialed proxy cannot shape a test run.
+- MCP servers use the login shell PATH and show startup and configuration failures in Settings (#3).
 
 ## [0.0.49] — 2026-10-28
 

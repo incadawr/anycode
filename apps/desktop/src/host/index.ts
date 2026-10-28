@@ -1,3 +1,4 @@
+import { discoverLoginPath, mcpProblemStatuses } from "./mcp-login-path.js";
 import { readRoleSettings } from "./role-settings.js";
 import { SqliteCodexAgentCardLog } from "./engines/codex/agent-card-log.js";
 import { CodexDynamicToolBridge, codexAgentPermissionMode } from "./engines/codex/dynamic-tool-bridge.js";
@@ -1188,6 +1189,7 @@ function foreignUsageAudit(sessionId: string, beforeWrite: () => Promise<void> =
 // null until the MCP boot block below successfully constructs one (or forever
 // null if it fails-soft) — every reader below guards on this (design §6).
 let mcpManager: McpManager | null = null;
+let mcpConfigStatuses: import("@anycode/core").McpServerStatus[] = [];
 // null until boot() resolves an opt-in, enabled telemetry config (slice 6.6,
 // default-OFF) — every reader below guards on this, same idiom as mcpManager.
 let telemetry: { port: TelemetryPort; session: string } | null = null;
@@ -3637,15 +3639,19 @@ async function boot(): Promise<void> {
     // wins over a plugin declaring the same name. Fail-soft (mirrors the
     // hook-config block above): a loader failure here must not abort boot —
     // the host just proceeds with zero explicit MCP servers.
+    const mcpLoginPath = await discoverLoginPath();
     let mcpSpecs: McpServerSpec[] = [];
     let mcpProblems: string[] = [];
     try {
       const loaded = await loadMcpServerSpecs(fsAdapter, workspace, homedir(), {
         projectTrusted: hostWorkspaceTrust.projectTrusted,
         secrets: mcpSecrets,
+        loginPath: mcpLoginPath,
+        reportDisabled: true,
       });
       mcpSpecs = loaded.specs;
       mcpProblems = loaded.problems;
+      mcpConfigStatuses = mcpProblemStatuses(mcpProblems);
     } catch (error) {
       console.error(`[host] failed to load MCP config; continuing with zero explicit MCP servers: ${describeError(error)}`);
     }
@@ -3691,6 +3697,7 @@ async function boot(): Promise<void> {
         workspace,
         home: resolveExtensionsHomeOverride(process.env) ?? homedir(),
         claimedMcpNames: new Set(mcpSpecs.map((spec) => spec.name)),
+        loginPath: mcpLoginPath,
         repoMapConfig,
         projectTrusted: hostWorkspaceTrust.projectTrusted,
         secrets: mcpSecrets,
@@ -3741,7 +3748,7 @@ async function boot(): Promise<void> {
         registry,
         transports: new NodeMcpTransportFactory(),
         onStatusChange: (statuses) => {
-          emit({ type: "mcp_status", servers: statuses });
+          emit({ type: "mcp_status", servers: [...statuses, ...mcpConfigStatuses] });
         },
       });
       await mcpManager.start([...mcpSpecs, ...ext.pluginMcpServerSpecs]);
@@ -5169,7 +5176,7 @@ process.parentPort.on("message", (event) => {
         // no-op when MCP never started (fail-soft boot, or zero configured
         // servers — nothing new to tell a late-attaching renderer).
         if (mcpManager) {
-          outbound.sendDirect({ type: "mcp_status", servers: mcpManager.status() });
+          outbound.sendDirect({ type: "mcp_status", servers: [...mcpManager.status(), ...mcpConfigStatuses] });
         }
       } else {
         // Degraded mode (boot() failed; initFailure is always set by the

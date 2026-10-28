@@ -122,6 +122,8 @@ export type McpSecretResolver = (name: string) => string | undefined;
 /** Options shared by every loader that resolves MCP server entries. */
 export interface McpResolveOptions {
   secrets?: McpSecretResolver;
+  loginPath?: string;
+  reportDisabled?: boolean;
 }
 
 /**
@@ -234,7 +236,7 @@ function missingRefMessage(name: string, path: string, missing: { kind: "env" | 
 
 const MINIMAL_ENV_KEYS = ["PATH", "HOME", "LANG"] as const;
 
-function buildStdioEnv(configEnv: Record<string, string>, inheritEnv: boolean): Record<string, string> {
+function buildStdioEnv(configEnv: Record<string, string>, inheritEnv: boolean, loginPath?: string): Record<string, string> {
   const base: Record<string, string> = {};
   if (inheritEnv) {
     for (const [key, value] of Object.entries(process.env)) {
@@ -253,7 +255,7 @@ function buildStdioEnv(configEnv: Record<string, string>, inheritEnv: boolean): 
         out[key] = value;
       }
     }
-    return { ...out, ...configEnv };
+    return { ...out, ...(loginPath ? { PATH: loginPath } : {}), ...configEnv };
   }
   for (const key of MINIMAL_ENV_KEYS) {
     const value = process.env[key];
@@ -261,7 +263,7 @@ function buildStdioEnv(configEnv: Record<string, string>, inheritEnv: boolean): 
       base[key] = value;
     }
   }
-  return { ...base, ...configEnv };
+  return { ...base, ...(loginPath ? { PATH: loginPath } : {}), ...configEnv };
 }
 
 // ---------------------------------------------------------------------------
@@ -274,9 +276,15 @@ function resolveEntry(
   path: string,
   problems: string[],
   secrets: McpSecretResolver | undefined,
+  loginPath?: string,
+  reportDisabled?: boolean,
 ): McpServerSpec | undefined {
   const hasCommand = entry.command !== undefined;
   const hasUrl = entry.url !== undefined;
+  if ((entry.enabled ?? true) === false) {
+    if (reportDisabled) problems.push(`MCP server '${name}' in ${path}: disabled — server skipped`);
+    return undefined;
+  }
   if (hasCommand === hasUrl) {
     problems.push(
       `MCP server '${name}' in ${path}: must have exactly one of "command" (stdio) or "url" (http)`,
@@ -284,9 +292,6 @@ function resolveEntry(
     return undefined;
   }
 
-  if ((entry.enabled ?? true) === false) {
-    return undefined;
-  }
 
   if (hasCommand) {
     const envResolved = resolveEnvRecord(entry.env, secrets);
@@ -299,7 +304,7 @@ function resolveEntry(
       name,
       command: entry.command!,
       args: entry.args ?? [],
-      env: buildStdioEnv(envResolved.value ?? {}, entry.inheritEnv ?? false),
+      env: buildStdioEnv(envResolved.value ?? {}, entry.inheritEnv ?? false, loginPath),
     };
     if (envResolved.secretValues.length > 0) {
       spec.secretValues = envResolved.secretValues;
@@ -345,7 +350,7 @@ export function resolveMcpServerEntries(
       continue;
     }
     opts.claimed.add(name);
-    const spec = resolveEntry(name, entry, opts.sourceLabel, problems, opts.secrets);
+    const spec = resolveEntry(name, entry, opts.sourceLabel, problems, opts.secrets, opts.loginPath, opts.reportDisabled);
     if (spec) {
       specs.push(spec);
     }
@@ -366,6 +371,8 @@ async function loadSource(
   specs: McpServerSpec[],
   problems: string[],
   secrets: McpSecretResolver | undefined,
+  loginPath?: string,
+  reportDisabled?: boolean,
 ): Promise<void> {
   if (!(await fs.exists(path))) {
     return;
@@ -387,20 +394,23 @@ async function loadSource(
     return;
   }
 
-  const result = mcpConfigFileSchema.safeParse(parsedJson);
-  if (!result.success) {
-    problems.push(`Invalid MCP config ${path}: ${formatZodError(result.error)}`);
+  const root = z.object({ mcpServers: z.record(z.string(), z.unknown()).optional() }).safeParse(parsedJson);
+  if (!root.success) {
+    problems.push(`Invalid MCP config ${path}: ${formatZodError(root.error)}`);
     return;
   }
-
-  const servers = result.data.mcpServers;
-  if (!servers) {
-    return;
+  for (const [name, rawEntry] of Object.entries(root.data.mcpServers ?? {})) {
+    if (claimed.has(name)) continue;
+    const entry = mcpServerEntrySchema.safeParse(rawEntry);
+    if (!entry.success) {
+      claimed.add(name);
+      problems.push(`MCP server '${name}' in ${path}: invalid entry: ${formatZodError(entry.error)}`);
+      continue;
+    }
+    const resolved = resolveMcpServerEntries({ [name]: entry.data }, { sourceLabel: path, claimed, secrets, loginPath, reportDisabled });
+    specs.push(...resolved.specs);
+    problems.push(...resolved.problems);
   }
-
-  const resolved = resolveMcpServerEntries(servers, { sourceLabel: path, claimed, secrets });
-  specs.push(...resolved.specs);
-  problems.push(...resolved.problems);
 }
 
 /**
@@ -440,7 +450,7 @@ export async function loadMcpServerSpecs(
       }
       continue;
     }
-    await loadSource(fs, path, claimed, specs, problems, opts?.secrets);
+    await loadSource(fs, path, claimed, specs, problems, opts?.secrets, opts?.loginPath, opts?.reportDisabled);
   }
 
   return { specs, problems };
