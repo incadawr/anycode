@@ -38,7 +38,7 @@ import { fileURLToPath } from "node:url";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(scriptDir, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
-const EVIDENCE_DIR = join(repoRoot, "working-docs", "evidence", "taskana-4704");
+const EVIDENCE_DIR = join(repoRoot, "working-docs", "evidence", "orchestrate-mode");
 const DISCOVERY_PATH_DEFAULT = join(repoRoot, ".anycode", "automation.json");
 
 const LAUNCH_TIMEOUT_MS = 180_000;
