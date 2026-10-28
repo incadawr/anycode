@@ -7,7 +7,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.0.48] — 2026-10-28
+## [0.0.49] — 2026-10-28
 
 ### Added
 
@@ -32,9 +32,13 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Orchestrator tabs delegate through configured roles instead of automatically choosing engine-named project profiles.
 - Cost rows in the context popover no longer grow a visible scrollbar on Windows and Linux.
 
+## [0.0.48] — 2026-10-28
+
+Tagged but not published: the packaged build failed its release self-check. All of its changes ship in 0.0.49.
+
 ## [0.0.47] — 2026-10-28
 
-Tagged but not published: the release build failed its Linux test run. All of its changes ship in 0.0.48.
+Tagged but not published: the release build failed its Linux test run. All of its changes ship in 0.0.49.
 
 ## [0.0.46] — 2026-10-27
 
