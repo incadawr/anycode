@@ -1058,6 +1058,57 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     } finally { h.close(); }
   }, 15000);
 
+  it("delivers a firstMessage dispatched milliseconds after session_start", async () => {
+    // The live report: the host emits session_start and main dispatches 3 ms later,
+    // before the host has answered anything else; the message then never started a
+    // turn and the caller was left with "unknown — Dispatch pending". The order
+    // below is forced: the first readiness probe still fails (host booting) and the
+    // session appears exactly then, so the dispatch lands immediately after it.
+    const h = createHarness({ steps: [finishStep()] });
+    try {
+      const order: string[] = [];
+      const at: { sessionStart?: number; dispatch?: number } = {};
+      let probes = 0;
+      const f = await createFixture({ creator: async (input, tabs) => {
+        if (!tabs.length) tabs.push({ sessionId: "test-session", workspace: input.workspace, state: "running", pid: 101 });
+        return { ok: true, sessionId: "test-session", tabId: "tab-1" };
+      } });
+      await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } });
+      f.request.mockImplementation(async (_session, op, payload: any) => {
+        if (op === "get_session_status") {
+          probes += 1;
+          if (probes === 1) {
+            // The host finishes booting here: session_start is the immediate
+            // precursor of the envelope that must not be lost.
+            order.push("session_start"); at.sessionStart = Date.now();
+            throw new Error("Session host unavailable");
+          }
+          order.push("host-ready");
+          return { engine: "core", state: "idle" };
+        }
+        if (op === "send_message") {
+          if (payload.payload !== "first turn") return { envelope: payload, state: "rejected" };
+          order.push("dispatch"); at.dispatch = Date.now();
+          return await h.session.receiveAgentMessage(payload);
+        }
+        return undefined;
+      });
+      const result = value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, firstMessage: "first turn" } }));
+      expect(order).toEqual(["session_start", "host-ready", "dispatch"]);
+      expect(at.dispatch! - at.sessionStart!).toBeLessThan(2000);
+      expect(result.messageId).toBeTruthy();
+      expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
+      // The turn that the model actually ran is the firstMessage's.
+      await vi.waitFor(() => expect((h.config.modelPort as ScriptedModelPort).requests).toHaveLength(1));
+      expect(JSON.stringify((h.config.modelPort as ScriptedModelPort).requests[0])).toContain("first turn");
+      const raw = await readFile(join(f.dir, "communication.json.messages"), "utf8");
+      expect(raw).not.toContain("Dispatch pending");
+      const ledger = JSON.parse(raw);
+      expect(ledger.find((r: any) => r.envelope.messageId === result.messageId)).toMatchObject({ state: "acknowledged" });
+      expect(value(await f.client.callTool({ name: "get_message_status", arguments: { messageId: result.messageId } })).state).toBe("acknowledged");
+    } finally { h.close(); }
+  }, 15000);
+
   it("expires pending dispatch while reconciliation is blocked on a host", async () => {
     const f = await createFixture();
     await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } });
