@@ -27,6 +27,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - The Roles save result appears next to “Save roles”, and the pane description matches the single global parallel-children limit.
 - The Roles project picker shows the folder name, with the full path as its tooltip.
 - Show an actionable error when a tab’s workspace folder is missing. (#6)
+- Starting a task in a deleted folder now refuses and keeps the typed message and attachments instead of losing them in a tab that never connects. (#6)
 
 ## [0.0.49] — 2026-10-28
 

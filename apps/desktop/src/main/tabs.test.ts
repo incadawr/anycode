@@ -7505,37 +7505,65 @@ describe("TabHostManager — detached spawns are refused at the cap, never parke
 
 
 describe("GitHub #6 — a missing workspace folder fails fast instead of connecting forever", () => {
-  it.each([false, true])(
-    "createTab never forks, lands in crash_looped and delivers the error on create and on reload (resume=%s)",
-    (resume) => {
-      const rig = liveForkRig();
-      const win = windowRig();
-      const manager = new TabHostManager({
-        fork: rig.fork,
-        hostEntry: "/fake",
-        createChannel: fakeChannel,
-        getWindow: () => win.window,
-        env: () => ({}),
-        logger: silentLogger,
-        workspaceMissing,
-      });
-      const workspace = join(tmpdir(), `anycode-missing-${randomUUID()}`);
-      const result = manager.createTab({ workspace, sessionId: "missing", resume });
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      // The regression: without the pre-fork check this fake fork runs and the
-      // tab waits for a host that can never boot.
-      expect(rig.hosts).toHaveLength(0);
-      expect(result.tab.state).toBe("crash_looped");
-      manager.deliverTabPort(result.tab);
-      manager.deliverAllTabPorts();
-      expect(win.posted).toHaveLength(2);
-      for (const posted of win.posted) {
-        expect(posted.channel).toBe(PORT_ENVELOPE_TYPE);
-        expect(posted.payload).toMatchObject({ tabId: result.tab.tabId, workspace, missingWorkspace: true });
-      }
-    },
-  );
+  it("a NEW session refuses with folder_not_found, rolls the tab back and leaves no binding", () => {
+    const rig = liveForkRig();
+    const win = windowRig();
+    const opened = vi.fn();
+    const registered = vi.fn();
+    const manager = new TabHostManager({
+      fork: rig.fork,
+      hostEntry: "/fake",
+      createChannel: fakeChannel,
+      getWindow: () => win.window,
+      env: () => ({}),
+      logger: silentLogger,
+      onTabOpened: opened,
+      onSessionRegistered: registered,
+      workspaceMissing,
+    });
+    const workspace = join(tmpdir(), `anycode-missing-${randomUUID()}`);
+    const result = manager.createTab({ workspace, sessionId: "missing-new", resume: false });
+
+    // The regression: without the folder check this fake fork runs and the
+    // caller sees a success it can queue a first prompt into — a host that can
+    // never boot, so the prompt (and the start screen's draft) is lost.
+    expect(rig.hosts).toHaveLength(0);
+    expect(result).toEqual({ ok: false, reason: "folder_not_found", workspace });
+    // Rolled back: no tab, no session->tab binding, nothing opened/registered,
+    // and nothing handed to the renderer.
+    expect(manager.listTabs()).toHaveLength(0);
+    expect(manager.sessionOpenInTab("missing-new")).toBeUndefined();
+    expect(opened).not.toHaveBeenCalled();
+    expect(registered).not.toHaveBeenCalled();
+    expect(win.posted).toHaveLength(0);
+  });
+
+  it("a RESUME keeps the error tab and delivers the error on create and on reload", () => {
+    const rig = liveForkRig();
+    const win = windowRig();
+    const manager = new TabHostManager({
+      fork: rig.fork,
+      hostEntry: "/fake",
+      createChannel: fakeChannel,
+      getWindow: () => win.window,
+      env: () => ({}),
+      logger: silentLogger,
+      workspaceMissing,
+    });
+    const workspace = join(tmpdir(), `anycode-missing-${randomUUID()}`);
+    const result = manager.createTab({ workspace, sessionId: "missing", resume: true });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(rig.hosts).toHaveLength(0);
+    expect(result.tab.state).toBe("crash_looped");
+    manager.deliverTabPort(result.tab);
+    manager.deliverAllTabPorts();
+    expect(win.posted).toHaveLength(2);
+    for (const posted of win.posted) {
+      expect(posted.channel).toBe(PORT_ENVELOPE_TYPE);
+      expect(posted.payload).toMatchObject({ tabId: result.tab.tabId, workspace, missingWorkspace: true });
+    }
+  });
 
   it("a folder deleted under a live tab makes the respawn refuse to fork and deliver the error", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "anycode-ws-"));
