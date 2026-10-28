@@ -121,14 +121,23 @@ export interface EngineEffortState {
  * model (absent when the session has not reported one — shown as `Default`,
  * never as an invented level); `pending` is the chosen-but-not-yet-applied
  * level and is marked as applying on the next turn, so it can never read as
- * already active. Exported for unit testing.
+ * already active. A caller with no live session to report an applied value (a
+ * New Session draft) has only its own `selected` pick, which is what it will
+ * send, so that is what the row shows — and with neither, `Default` is the
+ * honest answer: the caller stores nothing and the host's own default applies.
+ * Exported for unit testing.
  */
 export function engineEffortSummary(effort?: EngineEffortState): string {
   if (effort === undefined) {
     return "Default";
   }
-  const current = effort.current ?? "Default";
-  return effort.pending !== undefined ? `${current} → ${effort.pending} (next turn)` : current;
+  // The half before any arrow names what is IN FORCE: the APPLIED value when
+  // the session knows it, else — with nothing queued — simply the selection
+  // (a draft's own pick, which the first turn sends). A queued value is
+  // explicitly not applied, so it never fills that half: unknown stays
+  // `Default` and the arrow carries the choice.
+  const inForce = effort.current ?? (effort.pending === undefined ? effort.selected : undefined) ?? "Default";
+  return effort.pending !== undefined ? `${inForce} → ${effort.pending} (next turn)` : inForce;
 }
 
 /**
@@ -150,16 +159,18 @@ export function engineSelectedModel(model: EngineModelMenuProps["model"], pendin
  * menu closed, and the next turn ran with whatever B defaulted to). An unknown
  * value is unequal to every level, so every pick is sent.
  *
- * `current` is the fallback when the caller has no separate `selected`: a New
- * Session draft has no live session to report an applied effort, so its single
- * source of truth is the draft's own pick — without this fallback the draft
- * menu ticked nothing at all, even right after a choice, and read as
- * "Default". The fallback cannot resurrect a stale applied value after a model
- * switch on a LIVE session, because that path omits `current` entirely for a
- * pending model (see `engineEffortControlState`). Exported for unit testing.
+ * Only a REAL value counts, and `selected` is the one place callers state it:
+ * the next-turn pick of a live session, or — for a New Session draft — the
+ * draft's own stored `engineEffort`. `current` is NEVER consulted here: it is
+ * the display fallback some callers can only guess (a draft's first advertised
+ * level), and treating a guess as the selection made clicking exactly that
+ * level read as "no change" — the pick was dropped and the first turn ran at
+ * the host's default instead of the level the user clicked. An unselected
+ * value must therefore stay unknown, which also keeps the tick honest (nothing
+ * ticked until the draft actually holds a pick). Exported for unit testing.
  */
 export function engineSelectedEffort(effort?: EngineEffortState): string | undefined {
-  return effort?.selected ?? effort?.current;
+  return effort?.selected;
 }
 
 /**
@@ -417,11 +428,13 @@ export interface EngineModelMenuProps {
    * unknown current effort means "this session has not reported one yet", not
    * "this model has no effort capability" — capability is `model.available`
    * alone, so the row must appear as soon as the vocabulary is nonempty.
-   * `selected` is the NEXT-TURN effort of the selected model and may also be
-   * unknown; a pick is compared against IT, never against the applied model's
-   * effort (see `engineSelectedEffort`). A caller with no separate selection
-   * (the New Session draft, whose pick IS the value `current` carries) may
-   * omit `selected` — the tick then follows `current`.
+   * `selected` is the REAL next-turn effort of the selected model and may be
+   * unknown; a pick is compared against IT and the page ticks IT, never the
+   * applied model's effort and never a display fallback (see
+   * `engineSelectedEffort`). Every caller states its real value there: a live
+   * session's queued-or-applied effort, or the New Session draft's own stored
+   * pick. A draft with no pick passes NO `selected`, so clicking any level —
+   * including the first advertised one — is a change and gets stored.
    */
   effort?: EngineEffortState & { onPick(effort: string): void };
 }
@@ -508,9 +521,12 @@ export function EngineModelMenu({ model, pendingModel, disabled, onPick, effort 
           // effort page cannot tick the applied value alone — right after a
           // model switch the selected model has no applied effort at all, and
           // a menu with no tick anywhere reads as "Default" even though the
-          // host accepted a choice. `queued` (the "next turn" tag) keeps the
-          // difference between a ticked-and-in-force value and a ticked-and-
-          // merely-chosen one visible.
+          // host accepted a choice. It follows the REAL selection only, so a
+          // draft that has stored nothing ticks nothing rather than claiming
+          // the display fallback level it would not actually send. `queued`
+          // (the "next turn" tag) keeps the difference between a
+          // ticked-and-in-force value and a ticked-and-merely-chosen one
+          // visible.
           const checked = page === "model" ? item.id === model.current : item.id === engineSelectedEffort(effort);
           const queued = page === "model" ? item.id === pendingModel : item.id === effort?.pending;
           return (

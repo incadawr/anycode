@@ -148,6 +148,11 @@ describe("engineEffortOptions", () => {
     // The ACTIVE value always reads first; the queued target is explicitly
     // marked, so a pending pick can never masquerade as applied.
     expect(engineEffortSummary({ current: "high", pending: "xhigh" })).toBe("high → xhigh (next turn)");
+    // A caller with no applied value of its own (the New Session draft) shows
+    // the pick it would send, and `Default` while it holds no pick at all.
+    expect(engineEffortSummary({ selected: "high" })).toBe("high");
+    expect(engineEffortSummary({ selected: undefined })).toBe("Default");
+    expect(engineMenuChipLabel(nativeModel, undefined, { selected: "high" })).toBe("GPT-6.1 Terra · high");
     // Adding an effort row must NOT suppress a pending model label.
     expect(engineMenuChipLabel(nativeModel, "plain", { current: "xhigh", pending: "low" })).toBe(
       "GPT-6.1 Terra → Plain (next turn) · xhigh → low (next turn)",
@@ -173,11 +178,15 @@ describe("engineEffortOptions", () => {
     expect(engineSelectedModel(nativeModel, "plain")).toBe("plain");
     expect(engineSelectedEffort({ current: "medium", selected: "medium" })).toBe("medium");
     expect(engineSelectedEffort({ current: "medium", selected: "xhigh", pending: "xhigh" })).toBe("xhigh");
-    // A caller with no separate selection (the New Session draft) states its
-    // one honest value as `current` — that IS what it will send, so it is what
-    // the page ticks and what a pick is compared against.
-    expect(engineSelectedEffort({ current: "medium" })).toBe("medium");
+    // A display fallback is NOT a selection. A New Session draft that has
+    // stored nothing can only offer a guessed level as `current`; treating it
+    // as the selection made clicking exactly that level a no-op, so the pick
+    // was dropped and the first turn ran at the host's default.
+    expect(engineSelectedEffort({ current: "medium" })).toBeUndefined();
     expect(engineSelectedEffort({ current: undefined })).toBeUndefined();
+    // ...while a caller that really selected something states it as
+    // `selected`, with no applied value to pair it with (the draft's pick).
+    expect(engineSelectedEffort({ selected: "medium" })).toBe("medium");
     // A queued model switch leaves the selected effort UNKNOWN: the applied
     // model's value must never stand in for it, or the pick for the new model
     // is swallowed as "no change". Unknown is unequal to every level.

@@ -487,26 +487,25 @@ export function draftModelEfforts(modelId: string, available: readonly EngineMod
 }
 
 /**
- * Resolves the draft's displayed/selected effort for a non-core engine
- * (TASK.81) — the SAME "trust an explicit pick only while it stays valid,
- * else fall back to the catalog's first entry" rule
- * `resolveCodexDraftModel`/`resolveClaudeDraftModel` already use for the
- * model chip, applied to effort: a leftover pick from a since-switched model
- * (or a different engine entirely — `engineEffort` is never reset on an
- * engine switch, mirroring `enginePreset`) is harmless because it is only
- * ever trusted when the CURRENT model's vocabulary still contains it.
- * `EngineModelMenu`'s `effort.current` prop is required (not optional), so
- * the caller needs SOME value to show whenever the row is visible at all —
- * `undefined` only when the model has no effort vocabulary, which the
- * caller reads as "hide the row" (never sent anywhere unless the user picks
- * a row and `setDraftEngineEffort` actually fires). Exported for unit
- * testing.
+ * Resolves the draft's OWN effort pick for a non-core engine: the
+ * draft's `engineEffort` verbatim while the CURRENT model's vocabulary still
+ * contains it, else NOTHING. A leftover pick from a since-switched model (or a
+ * different engine entirely — `engineEffort` is never reset on an engine
+ * switch, mirroring `enginePreset`) is harmless because it is only ever
+ * trusted while it stays valid.
+ *
+ * Deliberately NO fallback to the vocabulary's first entry. A draft that has
+ * not picked anything stores nothing and sends nothing, so the first turn runs
+ * at the host's own default; showing a guessed level instead would claim an
+ * effort the draft will not send AND — because the menu treats its own
+ * displayed value as "already selected" — swallow a click on exactly that
+ * level. `undefined` therefore means "the draft has no effort of its own", the
+ * same state the menu renders as `Default` with nothing ticked; it does NOT
+ * mean "hide the row" (capability comes from `draftModelEfforts`). Exported
+ * for unit testing.
  */
 export function resolveDraftEngineEffort(draftEffort: string | undefined, efforts: readonly string[]): string | undefined {
-  if (draftEffort !== undefined && efforts.includes(draftEffort)) {
-    return draftEffort;
-  }
-  return efforts[0];
+  return draftEffort !== undefined && efforts.includes(draftEffort) ? draftEffort : undefined;
 }
 
 /** One selectable row in the Codex account-profile chip's dropdown. */
@@ -811,7 +810,10 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // TASK.81: the effort row only ever shows for a model that actually
   // declares a vocabulary (EngineModelMenu's own internal gate, mirrored
   // here to decide whether to pass the `effort` prop at all — see
-  // `draftModelEfforts`'s doc comment).
+  // `draftModelEfforts`'s doc comment). The value itself is the draft's own
+  // pick or nothing (see `resolveDraftEngineEffort`): the menu compares a
+  // click against it, so a guessed default would make clicking that default
+  // a no-op.
   const codexDraftEfforts = draftModelEfforts(codexDraftModel, codexModels);
   const codexDraftEffort = resolveDraftEngineEffort(draft?.engineEffort, codexDraftEfforts);
   // W3 join: displays the draft's own pick once made; falls back to the same
@@ -1732,7 +1734,11 @@ export function StartScreen({ onToast }: StartScreenProps) {
                     {...(codexDraftEfforts.length > 0
                       ? {
                           effort: {
-                            current: codexDraftEffort,
+                            // The draft's REAL pick, never a fallback: this is
+                            // what the menu ticks and what it compares a click
+                            // against (start-session.ts sends exactly this
+                            // value on the first turn).
+                            ...(codexDraftEffort !== undefined ? { selected: codexDraftEffort } : {}),
                             onPick: (effort: string) => useTabsStore.getState().setDraftEngineEffort(effort),
                           },
                         }
@@ -1761,7 +1767,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
                   {...(claudeDraftEfforts.length > 0
                     ? {
                         effort: {
-                          current: claudeDraftEffort,
+                          ...(claudeDraftEffort !== undefined ? { selected: claudeDraftEffort } : {}),
                           onPick: (effort: string) => useTabsStore.getState().setDraftEngineEffort(effort),
                         },
                       }

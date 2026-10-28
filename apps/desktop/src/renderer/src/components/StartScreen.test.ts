@@ -389,12 +389,14 @@ describe("resolveDraftEngineEffort (TASK.81)", () => {
     expect(resolveDraftEngineEffort("high", efforts)).toBe("high");
   });
 
-  it("falls back to the vocabulary's first entry when no pick has been made yet", () => {
-    expect(resolveDraftEngineEffort(undefined, efforts)).toBe("low");
+  it("returns undefined while no pick has been made — a draft that stored nothing must not look like the first level", () => {
+    // A guessed default would be sent nowhere AND would be read by the menu as
+    // "already selected", so clicking exactly that level would be dropped.
+    expect(resolveDraftEngineEffort(undefined, efforts)).toBeUndefined();
   });
 
-  it("falls back to the vocabulary's first entry when the pick is STALE (left over from a since-switched model/engine)", () => {
-    expect(resolveDraftEngineEffort("xhigh", efforts)).toBe("low");
+  it("drops a STALE pick (left over from a since-switched model/engine) instead of guessing another level", () => {
+    expect(resolveDraftEngineEffort("xhigh", efforts)).toBeUndefined();
   });
 
   it("returns undefined when the model has no effort vocabulary at all (caller hides the row)", () => {

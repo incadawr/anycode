@@ -5,16 +5,20 @@
  * actually hands the shared menu are the ones under test. A draft has no live
  * session and therefore no applied model reading: its single source of truth
  * is the draft's own pick (`draft.engineEffort`), which the screen passes as
- * `effort.current`. The effort page must still tick that level — closing the
- * menu with nothing ticked anywhere reads as "Default" and hides a choice the
- * host will actually honour on the first turn.
+ * `effort.selected` — and ONLY when such a pick exists. The effort page must
+ * tick that level (closing the menu with nothing ticked hides a choice the host
+ * will honour on the first turn), while a draft that has stored nothing must
+ * read as `Default` with no tick: any level clicked then, INCLUDING the first
+ * advertised one, is a real change that has to be stored and sent, not
+ * swallowed as "already selected".
  */
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StartScreen } from "./StartScreen.js";
 import { useTabsStore } from "../tabs-store.js";
+import { tabRegistry } from "../tab-registry.js";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -22,8 +26,9 @@ import { useTabsStore } from "../tabs-store.js";
 const CODEX_MODELS = [{ id: "gpt-6.1-terra", label: "Terra", efforts: ["low", "medium", "high", "xhigh"] }];
 
 /**
- * Minimal preload bridge: only the channels StartScreen subscribes to on mount
- * (session recents, the engine list, the Codex draft catalog and profile chip).
+ * Minimal preload bridge: the channels StartScreen subscribes to on mount
+ * (session recents, the engine list, the Codex draft catalog and profile chip)
+ * plus the one create call the Send button makes.
  */
 function stubBridge(): void {
   const bridge = {
@@ -32,6 +37,7 @@ function stubBridge(): void {
     listAvailableEngines: () => Promise.resolve({ engineIds: ["core", "codex", "claude"] }),
     onEnginesChanged: () => () => {},
     pickWorkspace: () => Promise.resolve({ picked: null }),
+    createTab: () => Promise.resolve({ ok: true, tabId: "t1", workspace: "/ws" }),
     codex: {
       recheck: () => Promise.resolve({ report: { status: "ready", models: CODEX_MODELS } }),
       listProfiles: () => Promise.resolve({ profiles: [] }),
@@ -50,6 +56,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   document.body.replaceChildren();
   useTabsStore.setState({ draft: null, draftActive: false, codexModels: [] });
 });
@@ -114,12 +121,59 @@ describe("StartScreen — Codex draft effort menu", () => {
     }
   });
 
+  it("ticks nothing and reads Default while the draft has no pick of its own", async () => {
+    const { container, root } = await mountStartScreen();
+    try {
+      // The chip is the honest summary: the draft stores nothing, so the first
+      // turn runs at the host's default. Claiming the first advertised level
+      // here is what made clicking it a no-op.
+      const chip = container.querySelector<HTMLButtonElement>('button[aria-label="Engine model and effort"]');
+      expect(chip?.textContent).toContain("Default");
+
+      const page = await openEffortPage(container);
+      expect(checkedLevels(page)).toEqual([]);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("stores the FIRST advertised level when the draft has no pick yet, and sends it on the first turn", async () => {
+    // Regression: the draft hands the menu no `selected`, so the first level
+    // in the vocabulary is NOT a pre-selection. Clicking it has to reach the
+    // draft store — and then the first turn — exactly like any other level.
+    const queueInitialPrompt = vi.spyOn(tabRegistry, "queueInitialPrompt");
+    const { container, root } = await mountStartScreen();
+    try {
+      const page = await openEffortPage(container);
+      const first = page.querySelector<HTMLButtonElement>('button.model-pill-item[data-effort="low"]');
+      expect(first, "the first advertised level must be offered").not.toBeNull();
+      await act(async () => first!.click());
+
+      expect(useTabsStore.getState().draft?.engineEffort).toBe("low");
+
+      // The same value rides the first turn: the Send button's own path
+      // (submitStartDraft) is what queues it, so drive that button.
+      await act(async () => useTabsStore.getState().setDraftPrompt("hello"));
+      const send = [...container.querySelectorAll<HTMLButtonElement>('button[aria-label="Send"]')]
+        .find((button) => !button.disabled);
+      expect(send, "the draft must be sendable once it has a prompt").toBeDefined();
+      await act(async () => {
+        send!.click();
+        await Promise.resolve();
+      });
+
+      expect(queueInitialPrompt).toHaveBeenCalledTimes(1);
+      // Non-core drafts queue (tabId, text, model, mode, effort, images).
+      expect(queueInitialPrompt.mock.calls[0]?.[4]).toBe("low");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it("moves the tick to a freshly picked level", async () => {
     const { container, root } = await mountStartScreen();
     try {
       const page = await openEffortPage(container);
-      // Before any pick the menu shows the catalog default the draft submits.
-      expect(checkedLevels(page)).toEqual(["low"]);
 
       const high = [...page.querySelectorAll<HTMLButtonElement>("button.model-pill-item")]
         .find((item) => item.getAttribute("data-effort") === "high")!;
