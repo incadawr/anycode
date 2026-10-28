@@ -10,7 +10,10 @@ describe("session cost presentation", () => {
     await db.recordProviderUsage({ sessionId: "root", turnId: "own", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0 });
     await db.recordProviderUsage({ sessionId: "root", turnId: "child", step: 1, createdAt: 2, subagentId: "child", costUsd: 1, finishReason: "stop", transportRetries: 0 });
     const summary = await summarizeWithChildren(db, "root");
-    expect(formatUsageCostLedger(summary.totals, null).total).toContain("≥ $1.0000 · some steps price unknown");
+    const ledger = formatUsageCostLedger(summary.totals, null);
+    // The lower bound lives on the total; the qualifier is its own row.
+    expect(ledger.total).toBe("Spent in this session: ≥ $1.0000");
+    expect(ledger.qualifier).toBe("some steps price unknown");
     await db.close();
   });
 

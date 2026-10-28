@@ -528,9 +528,15 @@ function formatUsageMoney(value: number): string {
   return `$${value > 0 && value < 0.0001 ? value.toPrecision(2) : value.toFixed(4)}`;
 }
 
+/**
+ * A step's cost as it reads INSIDE a sentence ("step 1 · cost by subscription"),
+ * so it is sentence case everywhere in the popover — the same words are
+ * capitalised only where they start a label (the connection drawer's pricing
+ * option), never mid-sentence.
+ */
 function formatStepCost(step: WireUsageAuditStep | null): string {
-  if (step?.priceBasisId === "subscription") return "By subscription";
-  return step?.costUsd === undefined ? "Price unknown" : `≈ ${formatUsageMoney(step.costUsd)}`;
+  if (step?.priceBasisId === "subscription") return "by subscription";
+  return step?.costUsd === undefined ? "price unknown" : `≈ ${formatUsageMoney(step.costUsd)}`;
 }
 
 /** A visible ledger must follow completion of a turn or manual compaction. */
@@ -539,25 +545,31 @@ export function shouldRefreshUsageAudit(open: boolean, previous: TurnState["stat
 }
 
 /**
- * The popover's whole usage/cost block, in the three lines it is allowed to
- * take when collapsed:
+ * The popover's whole usage/cost block. Each fact gets its own line (the
+ * popover is a fixed 280 px column, and a clipped spend line hides the very
+ * numbers it reports):
  *
- *   total          "Spent in this session: ≈ $0.0053" — the headline number
- *   subagentSuffix "incl. subagents ≈ $0.0040"        (muted, same line)
- *   footnote       "Tokens in 142.8K · out 536 · cache saved ≈ $0.038 · estimates at peak rates"
+ *   total           "Spent in this session: ≈ $0.0271" — the headline number
+ *   qualifier       "some steps price unknown · plus subscription" (muted)
+ *   subagentSuffix  "incl. subagents ≈ $0.0041"                    (muted)
+ *   footnote        "Tokens in 142.8K · out 536 · cache saved ≈ $0.038 · estimates at peak rates"
  *
  * The total is the SESSION's, subagents INCLUDED (own priced steps + the
  * children's own sub-total) — that was the number the owner could not find.
- * The turn line lives between total and footnote and is built separately
- * (`formatTurnStepSummary`), so a "this turn" figure can never be mistaken for
- * the session's.
+ * The turn line lives between the qualifiers and the footnote and is built
+ * separately (`formatTurnStepSummary`), so a "this turn" figure can never be
+ * mistaken for the session's.
  *
  * Honesty rules are unchanged from the per-line era: any unpriced step makes
- * the figure a lower bound ("≥ … · some steps price unknown"); a session whose
- * steps are all subscription reads "By subscription" and a mixed one appends
- * "· plus subscription"; with nothing priced at all it reads "Price unknown";
- * and native Claude children, whose costs may already be inside the reported
- * total, keep their "may already be included" caveat right next to the number.
+ * the figure a lower bound ("≥ …" plus the "some steps price unknown"
+ * qualifier); a session whose steps are all subscription reads "by
+ * subscription" and a mixed one adds "plus subscription"; with nothing priced
+ * at all it reads "price unknown"; and native Claude children, whose costs may
+ * already be inside the reported total, keep their "may already be included"
+ * caveat right next to the number.
+ *
+ * Copy is sentence case inside a sentence: "by subscription" / "price unknown"
+ * mid-line, never "By subscription" / "Price unknown".
  *
  * Cost is a historical snapshot, never recalculated from current settings.
  * `tokens` is the LIVE session counter (preferred, because the audit totals are
@@ -566,6 +578,8 @@ export function shouldRefreshUsageAudit(open: boolean, previous: TurnState["stat
 export interface UsageCostLedger {
   /** The single prominent total line, including subagents. */
   total: string;
+  /** Muted qualifier of the total, on its own line; null when the total stands alone. */
+  qualifier: string | null;
   /** Muted suffix naming the subagent share; null when the session has none. */
   subagentSuffix: string | null;
   /** Quiet tokens/savings/provider footnote; null when nothing was reported. */
@@ -587,18 +601,19 @@ export function formatUsageCostLedger(
   const subSubscription = (totals?.subagentSubscription ?? 0) > 0;
 
   let total: string;
+  const qualifiers: string[] = [];
   if (!ownPriced && !subPriced) {
-    total = `Spent in this session: ${subscription || subSubscription ? "By subscription" : "Price unknown"}`;
+    total = `Spent in this session: ${subscription || subSubscription ? "by subscription" : "price unknown"}`;
     if (partial && (subscription || subSubscription)) {
-      total += " · some steps price unknown";
+      qualifiers.push("some steps price unknown");
     }
   } else {
     total = `Spent in this session: ${partial ? "≥" : "≈"} ${money(pricedTotal)}`;
     if (partial) {
-      total += " · some steps price unknown";
+      qualifiers.push("some steps price unknown");
     }
     if (subscription || subSubscription) {
-      total += " · plus subscription";
+      qualifiers.push("plus subscription");
     }
   }
 
@@ -642,16 +657,27 @@ export function formatUsageCostLedger(
   if (bases.some((id) => id !== "claude-cli-reported" && !id.startsWith("connection:") && !id.includes("-openai-") && !id.includes("-peak-") && !id.startsWith("claude-haiku-5-5-anthropic-"))) parts.push("standard-rate estimates");
   if (showsEstimate && bases.length === 0) parts.push("estimated rates");
 
-  return { total, subagentSuffix, footnote: parts.length > 0 ? parts.join(" · ") : null };
+  return { total, qualifier: qualifiers.length > 0 ? qualifiers.join(" · ") : null, subagentSuffix, footnote: parts.length > 0 ? parts.join(" · ") : null };
 }
 
-/** Taskana 4083 / TASK.34: one popover row per audited step, omitting absent cache/retry parts. */
-export function formatUsageAuditStepRow(step: WireUsageAuditStep): string {
+/**
+ * One popover row per audited step, as PARTS: every part but the last is
+ * followed by a " · " separator, and the last one is the money group
+ * ("cost ≈ $0.0021"), which the renderer keeps on one line (`.ctx-popover-step-cost`
+ * is `nowrap`) so a step row never splits between "cost ≈" and the amount.
+ */
+export function formatUsageAuditStepParts(step: WireUsageAuditStep): string[] {
   const inPart = step.inputTokens !== undefined ? `in ${formatCtxTokenCount(step.inputTokens)}` : null;
   const cachedPart = step.cachedInputTokens !== undefined ? `cached ${formatCtxTokenCount(step.cachedInputTokens)}` : null;
   const outPart = step.outputTokens !== undefined ? `out ${formatCtxTokenCount(step.outputTokens)}` : null;
   const retryPart = step.transportRetries > 0 ? `retry ${step.transportRetries}` : null;
-  return [step.finishReason === "result" ? "turn total" : "step " + step.step, inPart, cachedPart, outPart, retryPart, `cost ${formatStepCost(step)}`].filter((part) => part !== null).join(" · ");
+  return [step.finishReason === "result" ? "turn total" : "step " + step.step, inPart, cachedPart, outPart, retryPart, `cost ${formatStepCost(step)}`]
+    .filter((part): part is string => part !== null);
+}
+
+/** The same row as one string, for tests and tooltips. */
+export function formatUsageAuditStepRow(step: WireUsageAuditStep): string {
+  return formatUsageAuditStepParts(step).join(" · ");
 }
 
 /**
@@ -865,7 +891,13 @@ export function ctxPopoverAnchorFromRect(
   };
 }
 
-/** The collapsed cost summary uses three rows, with a wrapping footnote. */
+/**
+ * The collapsed cost summary: the total on its own row, the qualifiers
+ * ("some steps price unknown", "incl. subagents ≈ $0.0040") each on their own
+ * muted row, then the turn line and the footnote. Nothing here may be clipped:
+ * the total row wraps, and the qualifiers are separate lines rather than a
+ * " · "-joined tail that overflowed the 280 px popover.
+ */
 export function UsageCostBlock({ ledger, turnSummary, turnSteps, expanded, onToggle }: {
   ledger: UsageCostLedger;
   turnSummary: string | null;
@@ -873,15 +905,22 @@ export function UsageCostBlock({ ledger, turnSummary, turnSteps, expanded, onTog
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const total = ledger.total + (ledger.subagentSuffix !== null ? ` · ${ledger.subagentSuffix}` : "");
+  const total = [ledger.total, ledger.qualifier, ledger.subagentSuffix].filter((part): part is string => part !== null).join(" · ");
   return <div className="ctx-popover-cost-block">
-    <div className="ctx-popover-total ctx-popover-cost-line" tabIndex={0} title={total}>
-      {ledger.total}{ledger.subagentSuffix !== null && <span className="ctx-popover-total-sub"> · {ledger.subagentSuffix}</span>}
-    </div>
+    <div className="ctx-popover-total ctx-popover-cost-line" tabIndex={0} title={total}>{ledger.total}</div>
+    {ledger.qualifier !== null && <div className="ctx-popover-total-qualifier" title={ledger.qualifier}>{ledger.qualifier}</div>}
+    {ledger.subagentSuffix !== null && <div className="ctx-popover-total-sub" title={ledger.subagentSuffix}>{ledger.subagentSuffix}</div>}
     {turnSummary !== null && <>
       <button type="button" className="ctx-popover-steps-toggle ctx-popover-cost-line" aria-expanded={expanded} title={turnSummary} onClick={onToggle}>{turnSummary}</button>
       {expanded && <div className="ctx-popover-steps" role="group" aria-label="This turn's steps">
-        {turnSteps.map((step) => <div className="ctx-popover-session" key={`${step.turnId}:${step.step}`}>{formatUsageAuditStepRow(step)}</div>)}
+        {turnSteps.map((step) => {
+          const parts = formatUsageAuditStepParts(step);
+          const last = parts.length - 1;
+          return <div className="ctx-popover-session ctx-popover-step-row" key={`${step.turnId}:${step.step}`}>
+            {parts.slice(0, last).map((part, index) => <span key={index}>{part} · </span>)}
+            <span className="ctx-popover-step-cost">{parts[last]}</span>
+          </div>;
+        })}
       </div>}
     </>}
     {ledger.footnote !== null && <div className="ctx-popover-session ctx-popover-footnote" tabIndex={0} title={ledger.footnote}>{ledger.footnote}</div>}

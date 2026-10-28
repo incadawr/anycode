@@ -450,18 +450,18 @@ describe("formatUsageAuditStepRow (Taskana 4083 / TASK.34)", () => {
   it("omits cached/retry parts when undefined/0", () => {
     const base = { turnId: "t1", createdAt: 1, finishReason: "stop" };
     expect(formatUsageAuditStepRow({ ...base, step: 1, inputTokens: 10, outputTokens: 4, transportRetries: 0 })).toBe(
-      "step 1 · in 10 · out 4 · cost Price unknown",
+      "step 1 · in 10 · out 4 · cost price unknown",
     );
     expect(
       formatUsageAuditStepRow({ ...base, step: 2, inputTokens: 85_900, cachedInputTokens: 85_400, outputTokens: 500, transportRetries: 2 }),
-    ).toBe("step 2 · in 85.9K · cached 85.4K · out 500 · retry 2 · cost Price unknown");
+    ).toBe("step 2 · in 85.9K · cached 85.4K · out 500 · retry 2 · cost price unknown");
   });
 
   it("shows each stored step's price or subscription without inventing a price", () => {
     const step = { turnId: "t", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0 };
     expect(formatUsageAuditStepRow({ ...step, costUsd: 0.2 })).toBe("step 1 · cost ≈ $0.2000");
-    expect(formatUsageAuditStepRow({ ...step, priceBasisId: "subscription" })).toBe("step 1 · cost By subscription");
-    expect(formatUsageAuditStepRow(step)).toBe("step 1 · cost Price unknown");
+    expect(formatUsageAuditStepRow({ ...step, priceBasisId: "subscription" })).toBe("step 1 · cost by subscription");
+    expect(formatUsageAuditStepRow(step)).toBe("step 1 · cost price unknown");
   });
 });
 
@@ -474,7 +474,7 @@ describe("Claude result accounting", () => {
   });
   it("labels the reported aggregate as a turn, even when its price is unknown", () => {
     const turn = { turnId: "t", step: 1, createdAt: 1, finishReason: "result", transportRetries: 0, inputTokens: 100, cachedInputTokens: 80, outputTokens: 5 };
-    expect(formatUsageAuditStepRow(turn)).toBe("turn total · in 100 · cached 80 · out 5 · cost Price unknown");
+    expect(formatUsageAuditStepRow(turn)).toBe("turn total · in 100 · cached 80 · out 5 · cost price unknown");
     // The turn line reads its own cache percentage off such a row.
     expect(formatTurnStepSummary([{ ...turn, costUsd: 0.2 }])).toBe("This turn: 1 step · ≈ $0.2 · cache 80%");
   });
@@ -500,6 +500,7 @@ describe("formatUsageCostLedger (one session total, one footnote)", () => {
     );
     expect(ledger).toEqual({
       total: "Spent in this session: ≈ $0.0053",
+      qualifier: null,
       subagentSuffix: null,
       footnote: "Tokens in 142.8K · out 536 · cache saved ≈ $0.0378 · estimated rates",
     });
@@ -513,33 +514,39 @@ describe("formatUsageCostLedger (one session total, one footnote)", () => {
 
   it("shows an honest unknown instead of inventing a price", () => {
     expect(formatUsageCostLedger(null, null)).toEqual({
-      total: "Spent in this session: Price unknown",
+      total: "Spent in this session: price unknown",
+      qualifier: null,
       subagentSuffix: null,
       footnote: null,
     });
     // Tokens known, nothing priced: the tokens still render, no estimate claim.
     expect(formatUsageCostLedger(null, { input: 1_000, output: 20, total: 1_020 })).toEqual({
-      total: "Spent in this session: Price unknown",
+      total: "Spent in this session: price unknown",
+      qualifier: null,
       subagentSuffix: null,
       footnote: "Tokens in 1K · out 20",
     });
   });
 
   it("marks a lower bound when any parent or child step is unpriced", () => {
-    expect(formatUsageCostLedger({ ...base, costUsd: 0.2, unpricedSteps: 1 }, null).total)
-      .toBe("Spent in this session: ≥ $0.2000 · some steps price unknown");
+    // The qualifier is its own field (rendered on its own line), never a tail
+    // of the total that could overflow the popover.
+    expect(formatUsageCostLedger({ ...base, costUsd: 0.2, unpricedSteps: 1 }, null))
+      .toMatchObject({ total: "Spent in this session: ≥ $0.2000", qualifier: "some steps price unknown" });
     // An unpriced CHILD step makes the session figure a bound too.
-    expect(formatUsageCostLedger({ ...base, costUsd: 0.2, subagentCount: 1, subagentUnpriced: 1 }, null).total)
-      .toBe("Spent in this session: ≥ $0.2000 · some steps price unknown");
+    expect(formatUsageCostLedger({ ...base, costUsd: 0.2, subagentCount: 1, subagentUnpriced: 1 }, null))
+      .toMatchObject({ total: "Spent in this session: ≥ $0.2000", qualifier: "some steps price unknown" });
   });
 
-  it("keeps the subscription wording, alone and mixed", () => {
-    expect(formatUsageCostLedger({ ...base, subscriptionSteps: 1 }, null).total)
-      .toBe("Spent in this session: By subscription");
-    expect(formatUsageCostLedger({ ...base, subscriptionSteps: 1, unpricedSteps: 1 }, null).total)
-      .toBe("Spent in this session: By subscription · some steps price unknown");
-    expect(formatUsageCostLedger({ ...base, costUsd: 0.2, subscriptionSteps: 1 }, null).total)
-      .toBe("Spent in this session: ≈ $0.2000 · plus subscription");
+  it("keeps the subscription wording, alone and mixed, in sentence case", () => {
+    expect(formatUsageCostLedger({ ...base, subscriptionSteps: 1 }, null))
+      .toMatchObject({ total: "Spent in this session: by subscription", qualifier: null });
+    expect(formatUsageCostLedger({ ...base, subscriptionSteps: 1, unpricedSteps: 1 }, null))
+      .toMatchObject({ total: "Spent in this session: by subscription", qualifier: "some steps price unknown" });
+    expect(formatUsageCostLedger({ ...base, costUsd: 0.2, subscriptionSteps: 1 }, null))
+      .toMatchObject({ total: "Spent in this session: ≈ $0.2000", qualifier: "plus subscription" });
+    expect(formatUsageCostLedger({ ...base, costUsd: 0.2, subscriptionSteps: 1, unpricedSteps: 1 }, null).qualifier)
+      .toBe("some steps price unknown · plus subscription");
   });
 
   it("adds the subagent share to the total and names it in a muted suffix", () => {
@@ -563,7 +570,7 @@ describe("formatUsageCostLedger (one session total, one footnote)", () => {
     expect(formatUsageCostLedger({ ...base, costUsd: 0.5, subagentCount: 1, subagentUnpriced: 1 }, null))
       .toMatchObject({ subagentSuffix: "incl. subagents price unknown" });
     expect(formatUsageCostLedger({ ...base, costUsd: 0.5, subagentCount: 1, subagentSubscription: 1 }, null))
-      .toMatchObject({ total: "Spent in this session: ≈ $0.5000 · plus subscription", subagentSuffix: "incl. subagents by subscription" });
+      .toMatchObject({ total: "Spent in this session: ≈ $0.5000", qualifier: "plus subscription", subagentSuffix: "incl. subagents by subscription" });
   });
 
   it("says nothing about subagents when the session has none", () => {
@@ -577,10 +584,10 @@ describe("formatUsageCostLedger (one session total, one footnote)", () => {
     ).toBe("cache saved ≈ $0.1000 · some steps savings unknown · estimated rates");
   });
 
-  it("stays at most three lines collapsed: total (+ its suffix), turn, footnote", () => {
+  it("keeps one fact per field so the render never joins them into a clipping line", () => {
     const ledger = formatUsageCostLedger({ ...base, costUsd: 0.2, subagentCostUsd: 0.1, subagentCount: 1 }, null);
-    // Exactly the three fields the render maps onto those three lines.
-    expect(Object.keys(ledger).sort()).toEqual(["footnote", "subagentSuffix", "total"]);
+    // Exactly the fields the render maps onto separate rows.
+    expect(Object.keys(ledger).sort()).toEqual(["footnote", "qualifier", "subagentSuffix", "total"]);
   });
 });
 

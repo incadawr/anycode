@@ -4560,11 +4560,24 @@ body {
   color: var(--text-3);
 }
 
-/* Keep the total and turn summary on one line, with scrolling for long text. */
+/* Total and turn lines WRAP — never clip. The popover is a fixed 280px column,
+   so a single nowrap/scroll line silently hid "· incl. subagents ≈ $0.0041"
+   (the headline fact) behind a scrollbar-less overflow; every fact that used
+   to be a " · " tail of the total now gets its own row below. */
 .ctx-popover-cost-block { display: flex; flex-direction: column; min-width: 0; gap: var(--sp-2); }
-.ctx-popover-cost-line { max-width: 100%; min-width: 0; white-space: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.ctx-popover-cost-line { max-width: 100%; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .ctx-popover-footnote { min-width: 0; overflow-wrap: anywhere; }
-.ctx-popover-cost-line::-webkit-scrollbar { display: none; }
+
+/* The qualifiers ("some steps price unknown", "incl. subagents ≈ $0.0040")
+   sit under the total, muted, each on its own line. */
+.ctx-popover-total-qualifier,
+.ctx-popover-total-sub {
+  font-size: var(--fs-2xs);
+  font-weight: 400;
+  color: var(--text-3);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 
 /* The popover's headline answer: what this session has cost so far. One step
    up from the surrounding meta text in size, weight and contrast, so the
@@ -4574,13 +4587,6 @@ body {
   font-weight: 600;
   color: var(--text-1);
   font-variant-numeric: tabular-nums;
-}
-
-/* Its muted suffix ("incl. subagents ≈ $0.0040") — same line, no emphasis. */
-.ctx-popover-total-sub {
-  font-size: var(--fs-2xs);
-  font-weight: 400;
-  color: var(--text-3);
 }
 
 /* Tokens / cache savings / rate basis, folded into one quiet line. */
@@ -4619,6 +4625,16 @@ body {
   gap: 1px;
   padding-left: 6px;
   border-left: 1px solid var(--border);
+}
+
+/* One step row wraps between its facts, but the money group stays whole:
+   "cost ≈ $0.0021" never splits into "cost ≈" + "$0.0021". */
+.ctx-popover-step-row {
+  overflow-wrap: anywhere;
+}
+
+.ctx-popover-step-cost {
+  white-space: nowrap;
 }
 
 /* R7 ctx ring (slice-R7-cut §4.1): track = hairline, fill = currentColor so
