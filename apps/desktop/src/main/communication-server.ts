@@ -171,6 +171,11 @@ export interface CommunicationServerOptions {
   writeLedger?: (path: string, text: string) => Promise<void>;
   /** Main's log, used for the one startup warning about allowed folders that are missing right now. */
   warn?: (message: string) => void;
+  /**
+   * Canonical-path resolver for every authorisation check. Defaults to node's
+   * realpath; tests inject a controllable seam to order overlapping resolutions.
+   */
+  realpath?: (path: string) => Promise<string>;
 }
 
 /**
@@ -202,13 +207,17 @@ export async function startCommunicationServer(options: CommunicationServerOptio
    * It grants nothing while it is missing — there is no path-string fallback, so
    * a folder later created (or symlinked) at that same string is authorised only
    * if its canonical path is in `allowed`. Unresolved entries are retried lazily
-   * at check time (no timer), so a folder that comes back works again in the
-   * same server instance, without a restart.
+   * at request-time authorisation checks only (never from the reconciliation
+   * timer), so a folder that comes back works again in the same server
+   * instance, without a restart.
    */
+  const resolvePath = options.realpath ?? realpath;
   const allowed = new Set<string>();
   const unresolved = new Set<string>();
+  /** Rewritten when a listed folder comes back; set once the listener URL is known. */
+  let publishDiscovery: (() => Promise<void>) | undefined;
   for (const path of config.workspaces) {
-    try { allowed.add(await realpath(path)); }
+    try { allowed.add(await resolvePath(path)); }
     catch (error) {
       if (!isMissingFolder(error)) throw error;
       unresolved.add(path);
@@ -218,12 +227,35 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     // One line per start, count plus the local paths: enough to fix the list, no token.
     options.warn?.(`[main] Sessions API: ${unresolved.size} of ${config.workspaces.length} allowed folders are missing (${[...unresolved].join(", ")}); the other folders keep working, and a folder is allowed again once it is back`);
   }
-  /** Re-resolves missing entries; a no-op (no syscall) once every entry is present again. */
-  const resolveMissing = async (): Promise<void> => {
-    for (const path of [...unresolved]) {
-      try { allowed.add(await realpath(path)); unresolved.delete(path); }
-      catch { /* still missing: still grants nothing */ }
-    }
+  /**
+   * Re-resolves missing entries; a no-op (no syscall) once every entry is present
+   * again. Single-flight: concurrent request-time checks share one pass, so two
+   * overlapping resolutions of the same entry can never authorise two different
+   * canonical targets. A result is added only if its entry is still unresolved
+   * when it settles; an entry another pass already settled grants nothing more.
+   */
+  let resolving: Promise<void> | undefined;
+  const resolveMissing = (): Promise<void> => {
+    if (resolving) return resolving;
+    if (unresolved.size === 0) return Promise.resolve();
+    const pass = (async () => {
+      let recovered = false;
+      for (const path of [...unresolved]) {
+        try {
+          const canonical = await resolvePath(path);
+          if (!unresolved.has(path)) continue; // settled meanwhile: the other target is not authorised
+          allowed.add(canonical);
+          unresolved.delete(path);
+          recovered = true;
+        } catch { /* still missing: still grants nothing */ }
+      }
+      // Clients that read the discovery file see the recovered folder too; the
+      // URL and token stay the same. A failed rewrite never revokes authorisation.
+      if (recovered && publishDiscovery) { try { await publishDiscovery(); } catch { /* next change retries */ } }
+    })();
+    resolving = pass;
+    pass.then(() => { resolving = undefined; }, () => { resolving = undefined; });
+    return pass;
   };
   /** Canonical-path membership; a missing entry is retried only while one remains. */
   const isAllowed = async (canonical: string): Promise<boolean> => {
@@ -313,21 +345,26 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     await persist();
     return true;
   };
-  const tabs = async () => {
+  /**
+   * `retryMissing` is set by request-time authorisation checks only: the 1 s
+   * reconciliation timer passes false, so an idle server never resolves a
+   * missing path.
+   */
+  const tabs = async (retryMissing: boolean) => {
     const result = [];
     // One re-resolution per request at most, and none while every entry is present.
-    if (unresolved.size > 0) await resolveMissing();
+    if (retryMissing && unresolved.size > 0) await resolveMissing();
     for (const tab of options.manager.listTabs()) {
       if (options.isSessionExposed && !options.isSessionExposed(tab.sessionId)) continue;
       if (!restricted) { result.push(tab); continue; }
       let path: string;
-      try { path = await realpath(tab.workspace); } catch { continue; }
+      try { path = await resolvePath(tab.workspace); } catch { continue; }
       if (allowed.has(path)) result.push(tab);
     }
     return result;
   };
   const requireSession = async (sessionId: string) => {
-    const tab = (await tabs()).find((t) => t.sessionId === sessionId);
+    const tab = (await tabs(true)).find((t) => t.sessionId === sessionId);
     if (!tab) throw new Error("Session unavailable or outside authorized workspace");
     return tab;
   };
@@ -384,7 +421,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   /** Shared by `send_message` and `create_session`'s firstMessage: idempotency -> ledger -> persist -> deliver -> persist. */
   const sendMessage = async (input: z.infer<typeof messageSchema>): Promise<Record> => {
     const recipient = await requireSession(input.sessionId);
-    const workspace = await realpath(recipient.workspace);
+    const workspace = await resolvePath(recipient.workspace);
     if (input.idempotencyKey) {
       const existing = [...messages.values()].find((m) => m.idempotencyKey === input.idempotencyKey);
       if (existing) {
@@ -464,7 +501,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     switch (name) {
       case "list_sessions": {
         z.object({}).strict().parse(raw);
-        const sessions = await tabs();
+        const sessions = await tabs(true);
         // externalApproval is reported only when the switch is wired at all (Taskana 4763).
         const withApproval = (tab: (typeof sessions)[number]) => options.isExternalApprovalEnabled ? { ...tab, externalApproval: approvalOn(tab.sessionId) } : tab;
         if (!options.handleOf) return { sessions: sessions.map(withApproval) };
@@ -481,7 +518,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         // Aggregate: only sessions whose access AND approval switches are both on; a failing tab is skipped.
         const approvals: unknown[] = [];
         let truncated = false;
-        for (const tab of (await tabs()).filter((t) => approvalOn(t.sessionId))) {
+        for (const tab of (await tabs(true)).filter((t) => approvalOn(t.sessionId))) {
           let page: { items: unknown[]; truncated: boolean };
           try { page = await approvalsOf(tab, APPROVAL_LIMIT - approvals.length); } catch { continue; }
           approvals.push(...page.items);
@@ -567,7 +604,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         const createByAgent = options.createSessionByAgent;
         if (!isAbsolute(input.workspace)) throw createRefusal("folder_not_found");
         let resolved: string;
-        try { resolved = await realpath(input.workspace); } catch { throw createRefusal("folder_not_found"); }
+        try { resolved = await resolvePath(input.workspace); } catch { throw createRefusal("folder_not_found"); }
         if (restricted && !(await isAllowed(resolved))) throw createRefusal("not_allowed");
         const outcome = await inCreationSection(async () => {
           const at = now();
@@ -596,7 +633,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
           const tabWorkspace = options.manager.listTabs().find((t) => t.sessionId === outcome.sessionId)?.workspace;
           if (tabWorkspace !== undefined) {
             let landed: string;
-            try { landed = await realpath(tabWorkspace); } catch { landed = tabWorkspace; }
+            try { landed = await resolvePath(tabWorkspace); } catch { landed = tabWorkspace; }
             if (restricted && !(await isAllowed(landed))) {
               throw new Error(`create_session not_allowed: the new session landed outside the Sessions API folders list, so firstMessage cannot be delivered; the tab exists — sessionId ${outcome.sessionId}, tabId ${outcome.tabId}`);
             }
@@ -642,7 +679,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   const unsubscribe = options.manager.onCommunicationDelivery?.((sessionId, delivery) => {
     void (async () => {
       const tab = await requireSession(sessionId);
-      const workspace = await realpath(tab.workspace);
+      const workspace = await resolvePath(tab.workspace);
       const existing = messages.get(delivery.envelope.messageId);
       if (existing && delivery.detail !== "Dispatch pending") { existing.state = delivery.state; existing.detail = delivery.detail; }
       else if (!existing && messages.size < 10000) { messages.set(delivery.envelope.messageId, { ...delivery, workspace, hostPid: tab.pid }); }
@@ -658,7 +695,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     reconciling = true;
     try {
       for (const record of messages.values()) await markLostGeneration(record);
-      for (const tab of await tabs()) {
+      for (const tab of await tabs(false)) {
         // GitHub #21: a record still in flight (and any record still reading
         // "Dispatch pending", e.g. one whose pre-dispatch write failed) carries no
         // settled host outcome to display; restoring it would make the host treat
@@ -708,10 +745,14 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   const address = http.address();
   if (!address || typeof address === "string") throw new Error("Communication listener unavailable");
   const url = `http://127.0.0.1:${address.port}/mcp`;
-  try { await writePrivateFile(discoveryFile, JSON.stringify({ url, token, workspaces: [...allowed] })); }
+  const writeDiscovery = () => writePrivateFile(discoveryFile, JSON.stringify({ url, token, workspaces: [...allowed] }));
+  try { await writeDiscovery(); }
   catch (error) { http.closeAllConnections(); http.close(); throw error; }
   // Each record carries its own dispatch deadline (see `scheduleExpiry`), so
   // expiry never waits for reconciliation's host requests to finish.
+  // A recovered folder also lands in the private discovery file (same URL and token);
+  // never after close, so the removed file cannot reappear.
+  publishDiscovery = async () => { if (!closing) await writeDiscovery(); };
   const reconcileTimer = setInterval(() => { void reconcile(); }, 1000);
   reconcileTimer.unref();
   let closed = false;

@@ -362,7 +362,10 @@ describe("live config option and session exposure (Taskana 4747)", () => {
 });
 
 describe("a listed folder that is missing (live config)", () => {
-  async function missingFixture() {
+  type Tab = { sessionId: string; workspace: string; state: string; pid: number };
+  type FixtureSetup = { workspaces: string[]; tabs: Tab[]; realpath?: (path: string) => Promise<string> };
+  /** `setup` lets a test choose the listed folders, the live tabs and a resolver seam. */
+  async function missingFixture(setup?: (paths: { dir: string; present: string; missing: string }) => Promise<FixtureSetup>) {
     const dir = await mkdtemp(join(tmpdir(), "anycode-missing-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
     const present = join(dir, "present"); const missing = join(dir, "gone");
     await mkdir(present);
@@ -372,16 +375,21 @@ describe("a listed folder that is missing (live config)", () => {
       if (op === "get_session_status") return { engine: "core", state: "idle" };
       return undefined;
     });
-    const tabs = [
-      { sessionId: "present", workspace: present, state: "running", pid: 1 },
-      { sessionId: "gone", workspace: missing, state: "running", pid: 2 },
-      { sessionId: "outside", workspace: tmpdir(), state: "running", pid: 3 },
-    ];
+    const defaults: FixtureSetup = {
+      workspaces: [missing, present],
+      tabs: [
+        { sessionId: "present", workspace: present, state: "running", pid: 1 },
+        { sessionId: "gone", workspace: missing, state: "running", pid: 2 },
+        { sessionId: "outside", workspace: tmpdir(), state: "running", pid: 3 },
+      ],
+    };
+    const built: FixtureSetup = setup ? await setup({ dir, present, missing }) : defaults;
+    const tabs = built.tabs;
     const warn = vi.fn();
     const create = vi.fn(async () => ({ ok: true as const, sessionId: "created", tabId: "tab-created" }));
     const manager = { listTabs: () => tabs, communicationRequest: request };
     // The missing folder is listed FIRST: the start must survive hitting it first.
-    const service = await startCommunicationServer({ manager, userData: dir, config: { workspaces: [missing, present], port: 0, discoveryFile }, warn, createSessionByAgent: create });
+    const service = await startCommunicationServer({ manager, userData: dir, config: { workspaces: built.workspaces, port: 0, discoveryFile }, warn, createSessionByAgent: create, ...(built.realpath ? { realpath: built.realpath } : {}) });
     cleanups.push(() => service.close());
     const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string; workspaces: string[] };
     const client = new Client({ name: "missing-folder", version: "1" });
@@ -421,10 +429,80 @@ describe("a listed folder that is missing (live config)", () => {
     expect(value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "gone" } })).state).toBe("idle");
     expect(value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "gone", payload: "welcome back", mode: "next_turn" } })).state).toBe("queued");
     // The same instance is still serving: same URL, same token, one warning in total.
-    const after = JSON.parse(await readFile(f.discoveryFile, "utf8")) as { url: string; token: string };
+    const after = JSON.parse(await readFile(f.discoveryFile, "utf8")) as { url: string; token: string; workspaces: string[] };
     expect(after).toMatchObject({ url: f.discovery.url, token: f.discovery.token });
+    // The discovery file names the recovered folder too, so clients stop believing it is gone.
+    expect([...after.workspaces].sort()).toEqual([await realpath(f.present), await realpath(f.missing)].sort());
     expect(f.warn).toHaveBeenCalledTimes(1);
   });
+
+  it("overlapping re-resolutions of one entry authorise exactly one target", async () => {
+    // A listed folder that is missing at start, then appears as a symlink. Its two
+    // canonical targets are live tabs, so whichever target gets authorised shows up
+    // in list_sessions. The seam holds every re-resolution until the test releases it.
+    let link = "";
+    let targetA = ""; let targetB = "";
+    const gates: Array<(target: string) => void> = [];
+    let calls = 0; let settled: string | undefined;
+    const f = await missingFixture(async ({ dir, present, missing }) => {
+      link = missing; await mkdir(join(dir, "target-a")); await mkdir(join(dir, "target-b"));
+      // Canonical: the temp root itself is behind a symlink on macOS.
+      targetA = await realpath(join(dir, "target-a")); targetB = await realpath(join(dir, "target-b"));
+      return {
+        workspaces: [link, present],
+        tabs: [
+          { sessionId: "to-a", workspace: targetA, state: "running", pid: 1 },
+          { sessionId: "to-b", workspace: targetB, state: "running", pid: 2 },
+          { sessionId: "swapped", workspace: link, state: "running", pid: 3 },
+        ],
+        realpath: (path: string): Promise<string> => {
+          if (path !== link) return realpath(path);
+          calls += 1;
+          // Missing at startup: only the request-time retries are gated.
+          if (calls === 1) return Promise.reject(Object.assign(new Error("gone"), { code: "ENOENT" }));
+          if (settled !== undefined) return Promise.resolve(settled);
+          return new Promise<string>((release) => { gates.push((target) => { settled = target; release(target); }); });
+        },
+      };
+    });
+    // Two concurrent authorisation checks; both find the entry unresolved.
+    const first = f.ids(); const second = f.ids();
+    await vi.waitFor(() => expect(gates.length).toBeGreaterThanOrEqual(1), { timeout: 3000, interval: 5 });
+    // Without a shared in-flight pass the second request reaches the seam as well.
+    const until = Date.now() + 400;
+    while (gates.length < 2 && Date.now() < until) await new Promise((r) => setTimeout(r, 5));
+    const overlapping = gates.length;
+    // Release the first resolution, let it settle and delist the entry, then the second.
+    gates[0]!(targetA);
+    await new Promise((r) => setTimeout(r, 30));
+    if (gates[1]) gates[1](targetB);
+    const listed = new Set((await Promise.all([first, second])).flat());
+    expect(listed).not.toContain("to-b"); // the losing target was never authorised
+    expect(listed).toContain("to-a");
+    expect(listed).toContain("swapped");
+    expect(overlapping).toBe(1); // one pass shared by both concurrent requests
+  });
+
+  it("the reconciliation timer never re-resolves a missing folder", async () => {
+    const counts: string[] = [];
+    const f = await missingFixture(async ({ present, missing }) => ({
+      workspaces: [missing, present],
+      // No tab lives in the missing folder, so every count below is a retry pass.
+      tabs: [
+        { sessionId: "present", workspace: present, state: "running", pid: 1 },
+        { sessionId: "outside", workspace: tmpdir(), state: "running", pid: 3 },
+      ],
+      realpath: (path: string): Promise<string> => { counts.push(path); return realpath(path); },
+    }));
+    const resolves = () => counts.filter((path) => path === f.missing).length;
+    expect(resolves()).toBe(1); // the startup attempt
+    // More than the 1 s reconciliation interval: the timer must not touch the entry.
+    await new Promise((r) => setTimeout(r, 1300));
+    expect(resolves()).toBe(1);
+    // One request-time check performs one pass, and no more.
+    expect(await f.ids()).toEqual(["present"]);
+    expect(resolves()).toBe(2);
+  }, 10000);
 });
 
 describe("session handles and wait_for_result (Taskana 4750b)", () => {
