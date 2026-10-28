@@ -14,7 +14,7 @@ import { useSettingsStore } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
 import { deriveRolePresets, presetApplicable, ROLE_PRESET_ROLES, type PresetRole } from "../role-presets.js";
 import type { RoleConfig } from "../../../shared/settings.js";
-import { roleProfiles, BUILT_IN_PROFILE_ID } from "../../../shared/role-profiles.js";
+import { roleProfiles } from "../../../shared/role-profiles.js";
 import { claimedRoleOverrides, type RoleProfileOverride } from "../role-profile-overrides.js";
 import {
   canRenameProfile,
@@ -186,9 +186,8 @@ export function RolesPane({ tabId }: RolesPaneProps = {}): React.JSX.Element {
   return (
     <div className="settings-pane" data-testid="settings-roles-pane">
       <label className="settings-field"><span className="settings-field-label">Global role profile</span>
-        <select aria-label="Global role profile" value={selected?.id ?? ""} onChange={(event) => void saveRegistry({ ...registry, activeId: event.target.value === "" ? BUILT_IN_PROFILE_ID : event.target.value })}>
-          {/* Always offered: with a profile active this used to disappear, leaving no way back to the built-ins. */}
-          <option value="">Built-in defaults</option>
+        <select aria-label="Global role profile" value={selected?.id ?? ""} onChange={(event) => void saveRegistry({ ...registry, activeId: event.target.value })}>
+          {!selected && <option value="">Built-in defaults</option>}
           {registry.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
       </label>

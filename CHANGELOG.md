@@ -23,11 +23,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Settings → Sessions API → Advanced shows an allowed project as "On" with a "Turn off" action, spaces its rows, and labels the port field.
 - Settings → Roles and the first-run role dialog name every connection by its label or provider name instead of showing a raw connection id.
 - Skipping the first-run role dialog now starts the orchestration task on the built-in defaults instead of doing nothing.
-- Creating a role profile with an empty name gets a unique name, Rename works for the selected custom profile, and “Built-in defaults” stays selectable in the global profile list.
+- Creating a role profile without typing a name gives it a unique name (no more duplicate “New profile”), and Rename works for the selected custom profile.
 - The Roles save result appears next to “Save roles”, and the pane description matches the single global parallel-children limit.
 - The Roles project picker shows the folder name, with the full path as its tooltip.
-- “Built-in defaults” in Settings → Roles now selects the built-in role routes instead of being silently rejected.
-- Creating or duplicating role profiles without typing a name gives every profile a distinct name.
 
 ## [0.0.49] — 2026-10-28
 

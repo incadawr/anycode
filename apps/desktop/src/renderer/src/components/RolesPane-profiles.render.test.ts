@@ -1,9 +1,9 @@
 /**
  * Settings → Roles profile controls, rendered from a real settings snapshot:
- * - B4 regression: once any profile existed the global select lost "Built-in
- *   defaults", so there was no way back to the built-ins; the name field was
- *   a dead box for Rename (created profiles fell back to a shared "New
- *   profile" name).
+ * - B4: the profile name field follows the selection, so Rename starts from the
+ *   current name instead of a dead empty box.
+ * - The global select offers "Built-in defaults" only while no profile is
+ *   active — it is not a selectable target next to saved profiles.
  * - B7 regression: the Project select labelled options with the full absolute
  *   path instead of the folder name.
  */
@@ -40,15 +40,30 @@ const withProfile = {
   secrets: [], providerReady: true, envOverrides: [], readOnly: false, catalog: [],
 } satisfies SettingsSnapshot;
 
-describe("Global role profile always offers the built-in defaults", () => {
-  it("renders Built-in defaults as an option while a custom profile is active, and seeds the name field", () => {
+describe("Global role profile select", () => {
+  it("shows only saved profiles while one is active and seeds the name field", () => {
     useSettingsStore.setState({ snapshot: withProfile });
     const html = renderToStaticMarkup(createElement(RolesPane));
-    expect(html).toContain('<option value="">Built-in defaults</option>');
+    // With a profile active the built-in defaults are not a selectable target.
+    expect(html).not.toContain('<option value="">Built-in defaults</option>');
     expect(html).toContain('<option value="p" selected="">Profile 1</option>');
     // The name field follows the selection, so Rename starts from the current
     // name instead of an empty box (canRenameProfile covers the enable rule).
     expect(html).toContain('aria-label="Profile name" value="Profile 1"');
+  });
+
+  it("still offers the built-in defaults while no saved profile is active", () => {
+    useSettingsStore.setState({
+      snapshot: {
+        ...withProfile,
+        // A dangling activeId (the profile it named is gone): nothing is
+        // selected, so the select states that the built-ins are in effect.
+        settings: { ...withProfile.settings, roleProfiles: { ...withProfile.settings.roleProfiles, activeId: "gone" } },
+      },
+    });
+    const html = renderToStaticMarkup(createElement(RolesPane));
+    expect(html).toContain('<option value="" selected="">Built-in defaults</option>');
+    expect(html).toContain('<option value="p">Profile 1</option>');
   });
 });
 

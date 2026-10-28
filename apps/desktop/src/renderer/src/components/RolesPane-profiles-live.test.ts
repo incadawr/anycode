@@ -2,10 +2,6 @@
 /**
  * Settings → Roles, mounted in a DOM and driven the way a user drives it.
  *
- * - Selecting "Built-in defaults" must send a patch the REAL settings write
- *   gate accepts (the empty activeId the select used to send was refused, so
- *   the choice silently did nothing) and the committed snapshot must show the
- *   built-ins active again.
  * - Create/Duplicate must not treat the name prefill as a name the user typed:
  *   clicking them repeatedly without typing yields distinct names, while a
  *   typed name is still used verbatim.
@@ -18,7 +14,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RolesPane } from "./RolesPane.js";
 import { useSettingsStore } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
-import { BUILT_IN_PROFILE_ID, resolveProfileRoles } from "../../../shared/role-profiles.js";
 import { cloneDefaults, mergeSettings, roleProfilesWriteSchema, settingsSchema } from "../../../settings/schema.js";
 import type { AnycodeSettings, SettingsPatch, SettingsSnapshot } from "../../../shared/settings.js";
 
@@ -131,40 +126,6 @@ function profileNames(settings: AnycodeSettings): string[] {
   return settings.roleProfiles?.profiles.map((profile) => profile.name) ?? [];
 }
 
-describe("Global role profile → Built-in defaults", () => {
-  it("sends a patch the real write gate accepts and the reloaded snapshot shows the built-ins active", async () => {
-    const bridge = installBridge(settingsWithProfile("Team"));
-    await mount();
-    const select = container.querySelector<HTMLSelectElement>('[aria-label="Global role profile"]')!;
-    expect(select.value).toBe("p");
-
-    await act(async () => {
-      select.value = "";
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-
-    // One patch, through the same validation main runs, accepted.
-    const sent = bridge.set.mock.calls.at(-1)?.[0] as SettingsPatch;
-    expect(roleProfilesWriteSchema.safeParse(sent.roleProfiles).success).toBe(true);
-    expect(sent.roleProfiles?.activeId).toBe(BUILT_IN_PROFILE_ID);
-
-    // The snapshot main would ship after the write is committed and the pane
-    // re-renders: built-ins shown as selected, no failure notice, the saved
-    // profile still listed and re-selectable.
-    const reloaded = useSettingsStore.getState().snapshot?.settings;
-    expect(reloaded).toBeDefined();
-    const settings = reloaded as AnycodeSettings;
-    expect(settings.roleProfiles?.activeId).toBe(BUILT_IN_PROFILE_ID);
-    expect(resolveProfileRoles(settings, "/ws")).toBeUndefined();
-    expect(profileNames(settings)).toEqual(["Team"]);
-    const html = container.innerHTML;
-    expect(html).not.toContain("Saving profiles failed.");
-    expect(select.value).toBe("");
-    expect(container.querySelector<HTMLInputElement>('[aria-label="Profile name"]')?.value).toBe("");
-    expect(container.querySelector<HTMLSelectElement>('[aria-label="Global role profile"]')?.innerHTML).toContain('<option value="p">Team</option>');
-  });
-});
-
 describe("Create/Duplicate without typing a name", () => {
   it("four repeated clicks yield four distinct names", async () => {
     const bridge = installBridge(settingsWithProfile("Team"));
@@ -179,9 +140,10 @@ describe("Create/Duplicate without typing a name", () => {
     expect(names).toHaveLength(5);
     expect(new Set(names).size).toBe(5);
     expect(names).toEqual(["Team", "Profile 1", "Profile 2", "Profile 2 copy", "Profile 2 copy 2"]);
-    // The visible option list agrees with what was persisted.
+    // The visible option list agrees with what was persisted (a profile is
+    // active, so the built-in defaults are not offered here).
     const options = [...container.querySelectorAll('[aria-label="Global role profile"] option')].map((option) => option.textContent);
-    expect(options).toEqual(["Built-in defaults", ...names]);
+    expect(options).toEqual(names);
   });
 
   it("a typed name is still used as typed", async () => {
