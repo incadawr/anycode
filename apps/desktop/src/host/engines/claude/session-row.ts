@@ -82,6 +82,13 @@ export class ClaudeSessionRowWriter {
   private chain: Promise<void> | null;
   private readonly buffered: BufferedWrite[] = [];
   /**
+   * The failed row INSERT, kept forever: once the CREATE is lost the row never
+   * exists, so the fail-soft chain's later UPDATEs match ZERO rows and resolve.
+   * Without this, a title retried after that failure would be acknowledged
+   * against a row a restart cannot read back.
+   */
+  private createFailure: unknown = null;
+  /**
    * Taskana 4123 follow-up: the pending-child-reports snapshot saved before
    * the row exists. At most one entry is ever live (each save overwrites the
    * whole snapshot — `null` once the queue drains), so the buffer keeps only
@@ -143,10 +150,19 @@ export class ClaudeSessionRowWriter {
         });
       });
     }
-    const write = this.chain.then(() => this.options.port.touch(this.options.rowId, patch));
+    const write = this.chain.then(() => {
+      // Re-read at RUN time, not at enqueue time: the CREATE may still have been
+      // settling when this write was queued. A strict caller must never learn
+      // "committed" from an UPDATE that matched no row.
+      if (strict && this.createFailure !== null) return Promise.reject(this.createFailure);
+      return this.options.port.touch(this.options.rowId, patch);
+    });
     // The chain keeps the fail-soft posture (a rejected write is reported, and
     // the next queued write still runs); only a strict caller is told.
-    this.chain = write.then(() => undefined, (error: unknown) => this.options.onError(error, "touch"));
+    this.chain = write.then(() => undefined, (error: unknown) => {
+      // A missing-row rejection is the CREATE failure, already reported there.
+      if (error !== this.createFailure) this.options.onError(error, "touch");
+    });
     return strict ? write.then(() => undefined) : write.then(() => undefined, () => undefined);
   }
 
@@ -223,7 +239,10 @@ export class ClaudeSessionRowWriter {
     // `this.chain` never rejects (a failed create is swallowed into onError
     // so the boot survives it) — which is exactly why the flush below gates
     // on `created`'s OWN outcome, not on the chain settling.
-    this.chain = created.catch((error: unknown) => this.options.onError(error, "create"));
+    this.chain = created.catch((error: unknown) => {
+      this.createFailure = error;
+      this.options.onError(error, "create");
+    });
     // The buffered writes' own view of that outcome: a strict (title) write
     // cannot have landed if the INSERT never did, and must say so.
     const createFailure = created.then(() => null, (error: unknown) => error);
