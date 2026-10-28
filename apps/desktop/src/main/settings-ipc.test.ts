@@ -58,6 +58,7 @@ import {
   type VaultLike,
 } from "./settings-ipc.js";
 import { readSessionLimits } from "../shared/session-limits.js";
+import { BUILT_IN_PROFILE_ID, resolveProfileRoles } from "../shared/role-profiles.js";
 import type { SecretSetResult } from "./vault.js";
 import {
   type CatalogProviderEntry,
@@ -663,6 +664,34 @@ describe("handleSet — sessionLimits (TASK.119/TASK.147-с2)", () => {
     await handleSet(makeDeps(), { sessionLimits: { maxTabs: 12 } });
     const loaded = await loadSettings(settingsPath);
     expect(readSessionLimits(loaded.settings.sessionLimits).maxTabs).toBe(12);
+  });
+});
+
+describe("handleSet — global role profile selection", () => {
+  const registry = { profiles: [{ id: "team", name: "Team", roles: { maxParallelChildren: 2 } }], activeId: "team", projects: [] };
+
+  it("accepts built-in defaults as the active profile and a REAL reload resolves to them", async () => {
+    expect((await handleSet(makeDeps(), { roleProfiles: registry })).ok).toBe(true);
+    const selected = await handleSet(makeDeps(), { roleProfiles: { ...registry, activeId: BUILT_IN_PROFILE_ID } });
+    expect(selected.ok).toBe(true);
+
+    // A fresh read from disk is what the app sees on the next launch.
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.roleProfiles?.activeId).toBe(BUILT_IN_PROFILE_ID);
+    // `undefined` is exactly the "built-in defaults" contract every role
+    // consumer (first-run gate, child limits, orchestrator) reads.
+    expect(resolveProfileRoles(reloaded.settings, "/ws")).toBeUndefined();
+    // The saved profile survives, so the user can select it again.
+    expect(reloaded.settings.roleProfiles?.profiles.map((profile) => profile.name)).toEqual(["Team"]);
+    expect(reloaded.corruptBackupPath).toBeUndefined();
+  });
+
+  it("still refuses the empty id the select used to send, leaving the file unchanged", async () => {
+    await handleSet(makeDeps(), { roleProfiles: registry });
+    const before = await readFile(settingsPath, "utf8");
+    expect(await handleSet(makeDeps(), { roleProfiles: { ...registry, activeId: "" } })).toEqual({ ok: false, reason: "invalid" });
+    expect(await readFile(settingsPath, "utf8")).toBe(before);
+    expect((await loadSettings(settingsPath)).settings.roleProfiles?.activeId).toBe("team");
   });
 });
 

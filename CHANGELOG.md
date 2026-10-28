@@ -26,6 +26,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Creating a role profile with an empty name gets a unique name, Rename works for the selected custom profile, and “Built-in defaults” stays selectable in the global profile list.
 - The Roles save result appears next to “Save roles”, and the pane description matches the single global parallel-children limit.
 - The Roles project picker shows the folder name, with the full path as its tooltip.
+- “Built-in defaults” in Settings → Roles now selects the built-in role routes instead of being silently rejected.
+- Creating or duplicating role profiles without typing a name gives every profile a distinct name.
 
 ## [0.0.49] — 2026-10-28
 

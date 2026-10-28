@@ -38,6 +38,15 @@ export function createProfileName(typed: string, existing: readonly string[]): s
   return name === "" ? nextProfileName(existing) : name;
 }
 
+/**
+ * The name a copy series counts from: a trailing ` copy` / ` copy N` is
+ * stripped, so duplicating an untouched copy asks for the next free
+ * `<source> copy N` instead of chaining ` copy copy`.
+ */
+export function copySeriesBaseName(name: string): string {
+  return name.trim().replace(/(?: copy(?: \d+)?)+$/, "").trim();
+}
+
 /** Duplicate profile: the typed name, else a unique "<source> copy". */
 export function duplicateProfileName(
   typed: string,
@@ -48,7 +57,11 @@ export function duplicateProfileName(
   if (name !== "") {
     return name;
   }
-  return uniqueProfileName(existing, sourceName !== undefined && sourceName.trim() !== "" ? `${sourceName.trim()} copy` : "Copy");
+  if (sourceName === undefined || sourceName.trim() === "") {
+    return uniqueProfileName(existing, "Copy");
+  }
+  const base = copySeriesBaseName(sourceName);
+  return uniqueProfileName(existing, `${base === "" ? sourceName.trim() : base} copy`);
 }
 
 /**

@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canRenameProfile,
+  copySeriesBaseName,
   createProfileName,
   duplicateProfileName,
   nextProfileName,
@@ -35,6 +36,14 @@ describe("profile names", () => {
     expect(duplicateProfileName("Copied", [], "Profile 1")).toBe("Copied");
     expect(uniqueProfileName(["A"], "A")).toBe("A 2");
     expect(uniqueProfileName(["A", "A 2"], "A")).toBe("A 3");
+  });
+
+  it("duplicating an untouched copy continues the series instead of chaining ' copy copy'", () => {
+    expect(copySeriesBaseName("Team")).toBe("Team");
+    expect(copySeriesBaseName("Team copy")).toBe("Team");
+    expect(copySeriesBaseName("Team copy 2")).toBe("Team");
+    expect(duplicateProfileName("", ["Team", "Team copy"], "Team copy")).toBe("Team copy 2");
+    expect(duplicateProfileName("", ["Team", "Team copy", "Team copy 2"], "Team copy 2")).toBe("Team copy 3");
   });
 });
 

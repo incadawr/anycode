@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { roleProfiles, resolveProfileRoles, rolesPatch } from "./role-profiles.js";
-import { roleProfilesSchema, roleProfilesWriteSchema } from "../settings/schema.js";
+import { BUILT_IN_PROFILE_ID, roleProfiles, resolveProfileRoles, rolesPatch } from "./role-profiles.js";
+import { cloneDefaults, mergeSettings, roleProfilesSchema, roleProfilesWriteSchema, settingsSchema } from "../settings/schema.js";
 
 const legacy = { executor: { primary: { engine: "claude" as const } }, maxParallelChildren: 3 };
 const other = { executor: { primary: { engine: "codex" as const } } };
@@ -35,5 +35,21 @@ describe("role profiles", () => {
     expect(roleProfilesSchema.safeParse({ ...registry, projects: [{ projectRoot: "relative", profileId: "b" }] }).success).toBe(false);
     expect(roleProfilesSchema.safeParse({ ...registry, profiles: [registry.profiles[0], registry.profiles[0]] }).success).toBe(false);
     expect(rolesPatch({ roleProfiles: registry }, other).roleProfiles?.profiles.find((p) => p.id === "a")?.roles).toEqual(other);
+  });
+  it("selecting built-in defaults is a valid registry whose roles resolve to the built-ins", () => {
+    const builtIn = { ...registry, activeId: BUILT_IN_PROFILE_ID };
+    // The settings IPC's write gate AND the read-time whole-document gate both
+    // accept it (an empty activeId is what used to be refused).
+    expect(roleProfilesWriteSchema.safeParse(builtIn).success).toBe(true);
+    expect(roleProfilesSchema.safeParse(builtIn).success).toBe(true);
+    expect(settingsSchema.safeParse(mergeSettings(cloneDefaults(), { roleProfiles: builtIn })).success).toBe(true);
+    expect(roleProfiles({ roleProfiles: builtIn }).activeId).toBe(BUILT_IN_PROFILE_ID);
+    // No stored roles apply; every profile survives and stays re-selectable.
+    expect(resolveProfileRoles({ roleProfiles: builtIn }, "/other")).toBeUndefined();
+    expect(builtIn.profiles.map((p) => p.id)).toEqual(["a", "b"]);
+    // A project-specific profile still wins over the global built-ins.
+    expect(resolveProfileRoles({ roleProfiles: builtIn }, "/project")).toEqual(other);
+    // A profile whose id happens to equal the sentinel never becomes active.
+    expect(resolveProfileRoles({ roleProfiles: { profiles: [{ id: BUILT_IN_PROFILE_ID, name: "Trap", roles: other }], activeId: BUILT_IN_PROFILE_ID, projects: [] } })).toBeUndefined();
   });
 });
