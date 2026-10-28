@@ -62,6 +62,12 @@ import {
   resolvePillTarget,
 } from "./components/ModelPill.js";
 import { PROFILE_PERIODS, type ProfilePeriod } from "./components/ProfilePane.js";
+import {
+  engineControlDisabled,
+  engineEffortOptions,
+  engineMenuChipLabel,
+  engineModelItems,
+} from "./components/EngineControls.js";
 import type { ProfilePhase } from "./components/profile-loader.js";
 import { submitStartDraft, type StartSubmitDeps } from "./start-session.js";
 import { tabRegistry, type DesktopStoreApi, type TabRegistry } from "./tab-registry.js";
@@ -89,7 +95,7 @@ import { ruleDisplayPattern, ruleHasPattern, ruleRemoveAriaLabel } from "./compo
 import { slashQueryAt } from "./slash-menu.js";
 import { formatCheckpointReason, sortCheckpointsNewestFirst } from "./components/checkpoint-model.js";
 import { formatAge } from "./components/Sidebar.js";
-import type { GitCommand, RewindScopeWire, UiToHostMessage, WireEnvStatus } from "../../shared/protocol.js";
+import type { GitCommand, RewindScopeWire, UiToHostMessage, WireEnvStatus, EngineModelChoice } from "../../shared/protocol.js";
 import type { CreateTabRequest, CreateTabResult, CloseTabResult, SessionSummary } from "../../shared/tabs.js";
 import { ENGINE_IDS, isEngineId, type EngineId } from "../../shared/engines.js";
 import { activeProviderView } from "../../shared/settings.js";
@@ -562,9 +568,15 @@ export interface ModelPillState {
   page: "root" | "model" | "effort";
   effortRowVisible: boolean;
   modelItems: { id: string; name: string }[];
-  effortItems: ReasoningEffort[];
+  /**
+   * The SELECTED model's advertised effort vocabulary. Native engines advertise
+   * free-form strings (`xhigh`, or whatever a future binary adds), so this is a
+   * plain string list — core's closed `ReasoningEffort` union describes only
+   * core and must not be used to type a native menu.
+   */
+  effortItems: string[];
   currentModel: string | null;
-  currentEffort: ReasoningEffort | null;
+  currentEffort: string | null;
   modelPickDisabled: boolean;
   manageModelsDisabled: boolean;
 }
@@ -572,10 +584,42 @@ export interface ModelPillState {
 /**
  * A `modelPillPick` request (design §2.6 W4): `"open"` opens the popover;
  * `"model"`/`"effort"` drive a full pick (open the popover if needed,
- * navigate to that page if needed, then click the item matching `value` —
- * a model id for `"model"`, a `ReasoningEffort` literal for `"effort"`).
+ * navigate to that page if needed, then click the item matching `value` — a
+ * model id for `"model"`, an advertised effort string for `"effort"`). Native
+ * engines advertise their own vocabulary, so an effort value is a plain string
+ * rather than core's closed union.
  */
-export type ModelPillPick = { kind: "open" } | { kind: "model"; value: string } | { kind: "effort"; value: ReasoningEffort };
+export type ModelPillPick = { kind: "open" } | { kind: "model"; value: string } | { kind: "effort"; value: string };
+
+/**
+ * The native (engine-owned) menu rendered by `EngineControls.tsx`'s
+ * `EngineModelMenu`. Its pages are stamped `data-model-pill-page` and its items
+ * carry `data-model-id` / `data-effort`, so this surface is driven by RAW
+ * ATTRIBUTE IDENTITY — never by an index derived from a provider catalog (the
+ * two can disagree, and display names can collide).
+ *
+ * Optional on `ModelPillDom` so every pre-native fake stays valid.
+ */
+export interface NativeModelPillMenu {
+  /** Whether a native page (`.model-pill-popover[data-model-pill-page]`) is rendered. */
+  visible(): boolean;
+  /** The rendered native page, or null when none is. */
+  page(): "root" | "model" | "effort" | null;
+  /** Whether the root page's Effort row is on screen. */
+  effortRowVisible(): boolean;
+  /** The visible model rows' `data-model-id` values, in render order. */
+  models(): string[];
+  /** The visible effort rows' `data-effort` values, in render order. */
+  efforts(): string[];
+  /** A real click on the root row for this page; false when it is not rendered. */
+  clickRootRow(row: "model" | "effort"): boolean;
+  /** A real click on the sub-page's back button; false when none is rendered. */
+  clickBack(): boolean;
+  /** A real click on the model row with this exact id; false when absent. */
+  clickModel(id: string): boolean;
+  /** A real click on the effort row with this exact value; false when absent. */
+  clickEffort(value: string): boolean;
+}
 
 /**
  * DOM accessor DI for the model-pill probe/driver (design §2.6 W4), same
@@ -632,6 +676,12 @@ export interface ModelPillDom {
   clickDrillEffortRow?(): boolean;
   /** A real `.click()` on the effort-level item with this exact `data-effort`; `false` when no such row is rendered. */
   clickDrillEffort?(value: string): boolean;
+  /**
+   * The NATIVE engine menu surface (`EngineModelMenu`), present on the real
+   * accessor. Its pages/items are identified by their own `data-*` stamps, so
+   * a native pick never depends on the provider catalog the core menu uses.
+   */
+  native?: NativeModelPillMenu;
 }
 
 /**
@@ -3593,6 +3643,58 @@ export function realModelPillDom(): ModelPillDom {
   function popover(): HTMLDivElement | null {
     return root()?.querySelector<HTMLDivElement>(".model-pill-popover") ?? null;
   }
+  /** The native menu's row for a page, matched by its rendered NAME (the markup stamps no id on the two root rows). */
+  function nativeRootRow(row: "model" | "effort"): HTMLButtonElement | null {
+    const wanted = row === "model" ? "Model" : "Effort";
+    const rows = Array.from(popover()?.querySelectorAll<HTMLButtonElement>(".model-pill-row") ?? []);
+    return rows.find((candidate) => candidate.querySelector(".model-pill-row-name")?.textContent?.trim() === wanted) ?? null;
+  }
+  /** Attribute-identity click shared by the native model/effort pages — never an interpolated selector, never an index. */
+  function nativeClickByAttribute(attribute: "data-model-id" | "data-effort", selector: string, value: string): boolean {
+    const rows = Array.from(popover()?.querySelectorAll<HTMLButtonElement>(selector) ?? []);
+    const target = rows.find((candidate) => candidate.getAttribute(attribute) === value);
+    if (!target) {
+      return false;
+    }
+    target.click();
+    return true;
+  }
+  const native: NativeModelPillMenu = {
+    visible: () => nativePage() !== null,
+    page: () => nativePage(),
+    effortRowVisible: () => nativeRootRow("effort") !== null,
+    models: () =>
+      Array.from(popover()?.querySelectorAll<HTMLButtonElement>(".model-pill-item[data-model-id]") ?? []).map(
+        (item) => item.getAttribute("data-model-id") ?? "",
+      ),
+    efforts: () =>
+      Array.from(popover()?.querySelectorAll<HTMLButtonElement>(".model-pill-item[data-effort]") ?? []).map(
+        (item) => item.getAttribute("data-effort") ?? "",
+      ),
+    clickRootRow: (row) => {
+      const target = nativeRootRow(row);
+      if (!target) {
+        return false;
+      }
+      target.click();
+      return true;
+    },
+    clickBack: () => {
+      const back = popover()?.querySelector<HTMLButtonElement>(".model-pill-back");
+      if (!back) {
+        return false;
+      }
+      back.click();
+      return true;
+    },
+    clickModel: (id) => nativeClickByAttribute("data-model-id", ".model-pill-item[data-model-id]", id),
+    clickEffort: (value) => nativeClickByAttribute("data-effort", ".model-pill-item[data-effort]", value),
+  };
+  /** The native page currently rendered, read from the explicit attribute (never from back-button text). */
+  function nativePage(): "root" | "model" | "effort" | null {
+    const attr = popover()?.getAttribute("data-model-pill-page");
+    return attr === "root" || attr === "model" || attr === "effort" ? attr : null;
+  }
   return {
     mounted: () => root() !== null,
     popoverOpen: () => popover() !== null,
@@ -3600,6 +3702,13 @@ export function realModelPillDom(): ModelPillDom {
       const pop = popover();
       if (!pop) {
         return "root";
+      }
+      // The page identity is stamped explicitly by the NATIVE menu
+      // (`data-model-pill-page`) — read before any text-based fallback, so a
+      // relabelled back button can never change which page this reads.
+      const stamped = nativePage();
+      if (stamped !== null) {
+        return stamped;
       }
       // TASK.106 drill-down: when the popover renders the SHARED menu, the
       // level comes off its `data-level` attribute — group/effort mapped to
@@ -3714,6 +3823,7 @@ export function realModelPillDom(): ModelPillDom {
       row.click();
       return true;
     },
+    native,
   };
 }
 
@@ -5762,6 +5872,91 @@ async function waitUntil(predicate: () => boolean, deadlineMs: number): Promise<
 
 /** Deadline for `waitUntil` polls inside `modelPillPick` (design §2.6 W4 fix) — generous enough for a slow React commit under test/CI load, short enough to fail fast on a genuine no-op click. */
 const MODEL_PILL_COMMIT_DEADLINE_MS = 500;
+
+/**
+ * Drives a pick over the NATIVE engine menu (`EngineControls.tsx`). Everything
+ * is identified by the rendered `data-*` stamps — never by an index computed
+ * from AnyCode's provider catalog, which does not even describe a native
+ * engine's models. The vocabulary checked here is the engine's own, exactly
+ * what the component renders, so:
+ *  - `effort_row_hidden` means this menu has no effort capability at all;
+ *  - `unknown_value` means the row exists but this value is not in the
+ *    advertised vocabulary (nothing is clicked — an approximate pick would
+ *    change the session to a level the user did not ask for).
+ *
+ * Every level-changing click is followed by a bounded `waitUntil` poll for the
+ * DOM fact it should produce, the same commit-race discipline as the core path.
+ */
+async function nativeModelPillPick(
+  dom: NativeModelPillMenu,
+  model: { current: string; available: readonly EngineModelChoice[] },
+  pendingModel: string | undefined,
+  pick: { kind: "model" | "effort"; value: string },
+): Promise<FacadeResult> {
+  const deadline = MODEL_PILL_COMMIT_DEADLINE_MS;
+  const page = (): string | null => dom.page();
+
+  /** Backs out to the root page (the only page that links to either sub-page). */
+  const backToRoot = async (): Promise<boolean> => {
+    if (page() === "root") {
+      return true;
+    }
+    if (!dom.clickBack()) {
+      return false;
+    }
+    return waitUntil(() => page() === "root", deadline);
+  };
+
+  if (pick.kind === "effort") {
+    const efforts = engineEffortOptions(model, pendingModel);
+    if (efforts.length === 0) {
+      return { ok: false, reason: "effort_row_hidden" };
+    }
+    if (!efforts.includes(pick.value)) {
+      return { ok: false, reason: "unknown_value" };
+    }
+    if (!(await backToRoot())) {
+      return { ok: false, reason: "navigation_failed" };
+    }
+    if (!dom.effortRowVisible() || !dom.clickRootRow("effort")) {
+      return { ok: false, reason: "effort_row_hidden" };
+    }
+    if (!(await waitUntil(() => page() === "effort", deadline))) {
+      return { ok: false, reason: "navigation_failed" };
+    }
+    if (!dom.efforts().includes(pick.value)) {
+      return { ok: false, reason: "unknown_value" };
+    }
+    if (!dom.clickEffort(pick.value)) {
+      return { ok: false, reason: "unknown_value" };
+    }
+    return { ok: true };
+  }
+
+  // ── kind: "model" ────────────────────────────────────────────────────────
+  const models = engineModelItems(model.current, model.available).map((item) => item.id);
+  if (!models.includes(pick.value)) {
+    return { ok: false, reason: "unknown_value" };
+  }
+  if (!(await backToRoot())) {
+    return { ok: false, reason: "navigation_failed" };
+  }
+  if (!dom.clickRootRow("model")) {
+    return { ok: false, reason: "navigation_failed" };
+  }
+  if (!(await waitUntil(() => page() === "model", deadline))) {
+    return { ok: false, reason: "navigation_failed" };
+  }
+  // Match the rendered row by its own id: the model page also carries a
+  // "current model appended" defensive row that has no catalog entry.
+  if (!dom.models().includes(pick.value)) {
+    return { ok: false, reason: "unknown_value" };
+  }
+  if (!dom.clickModel(pick.value)) {
+    return { ok: false, reason: "unknown_value" };
+  }
+  return { ok: true };
+}
 
 /**
  * The pill's drill-down surface (`ModelPillDom`'s optional TASK.106 members),
@@ -8266,6 +8461,41 @@ export function createAutomationFacade(
         };
       }
       const state = store.getState();
+      // NATIVE engine presentation: the pill is `EngineControls.tsx`'s
+      // engine-owned menu, so its model/effort vocabulary and applied values
+      // come from `state.engine` and its queued choices from the store's own
+      // pending delta. Core's provider catalog and reasoning fields stay at
+      // their defaults here and MUST NOT be consulted — that is exactly the
+      // confusion this branch removes.
+      if (state.engine?.model !== undefined) {
+        const engineModel = state.engine.model;
+        const pending = state.pendingEngineChange;
+        const efforts = engineEffortOptions(engineModel, pending?.model);
+        const menuOpen = modelPillDom.popoverOpen();
+        return {
+          ok: true,
+          present: true,
+          label: engineMenuChipLabel(
+            engineModel,
+            pending?.model,
+            efforts.length > 0 ? { current: engineModel.effort, ...(pending?.effort !== undefined ? { pending: pending.effort } : {}) } : undefined,
+          ),
+          menuOpen,
+          page: menuOpen ? (modelPillDom.native?.page() ?? modelPillDom.currentPage()) : "root",
+          // Capability is the advertised vocabulary, not the presence of a
+          // current value: an unknown current effort still has a row.
+          effortRowVisible: efforts.length > 0,
+          modelItems: engineModelItems(engineModel.current, engineModel.available).map((item) => ({ id: item.id, name: item.label })),
+          effortItems: [...efforts],
+          currentModel: engineModel.current,
+          currentEffort: engineModel.effort ?? null,
+          // The matching component's OWN predicate (the native menu has no
+          // core-only mid-turn allowance).
+          modelPickDisabled: engineControlDisabled(state.turn.status, state.queueInFlight, state.connection === "ready"),
+          // The native menu has no "Manage models…" row at all.
+          manageModelsDisabled: true,
+        };
+      }
       // S5-1 fix (W4-findings-S5.md): the SAME pinned-aware, custom-aware
       // catalog resolution ModelPill.tsx renders with — see pillCatalogModels.
       const catalogModels = pillCatalogModels(state.pinnedConnection);
@@ -8305,13 +8535,15 @@ export function createAutomationFacade(
         return { ok: false, reason: "not_present" };
       }
       const state = store.getState();
-      // The exact client-side guard ModelPill.tsx itself computes (design
-      // §2.1's between-turns guard, renderer half) — a disabled chip refuses
-      // EVERY pick kind, including "open" (the real button is `disabled`, so
-      // a real click does nothing either). Stays synchronous and BEFORE any
-      // click: a real disabled button no-ops a real click too, so there is no
-      // commit to await here.
-      if (computeModelPickDisabled(state.turn.status, state.queueInFlight, state.connection === "ready", state.engine === null)) {
+      // The exact client-side guard the rendered chip computes: core's pill
+      // (ModelPill.tsx) vs the native engine menu (EngineControls.tsx). A
+      // disabled chip refuses EVERY pick kind, including "open" (the real
+      // button is `disabled`, so a real click does nothing either). Stays
+      // synchronous and BEFORE any click: a real disabled button no-ops a real
+      // click too, so there is no commit to await here.
+      if (state.engine?.model !== undefined
+        ? engineControlDisabled(state.turn.status, state.queueInFlight, state.connection === "ready")
+        : computeModelPickDisabled(state.turn.status, state.queueInFlight, state.connection === "ready", state.engine === null)) {
         return { ok: false, reason: "pick_disabled" };
       }
       if (!modelPillDom.popoverOpen()) {
@@ -8327,6 +8559,12 @@ export function createAutomationFacade(
       }
       if (pick.kind === "open") {
         return { ok: true };
+      }
+      // ── NATIVE engine menu (EngineModelMenu) ─────────────────────────────
+      // Its pages/items are identified by their own `data-*` stamps, and its
+      // effort vocabulary is the engine's own — never the provider catalog.
+      if (state.engine?.model !== undefined && modelPillDom.native !== undefined) {
+        return nativeModelPillPick(modelPillDom.native, state.engine.model, state.pendingEngineChange?.model, pick);
       }
       // ── TASK.106 drill-down path ─────────────────────────────────────────
       // When the popover renders the SHARED drill-down (`ModelDrillMenu`,

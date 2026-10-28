@@ -1729,7 +1729,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
                     pendingModel={undefined}
                     disabled={false}
                     onPick={(id) => useTabsStore.getState().setDraftModel(id)}
-                    {...(codexDraftEffort !== undefined
+                    {...(codexDraftEfforts.length > 0
                       ? {
                           effort: {
                             current: codexDraftEffort,
@@ -1758,7 +1758,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
                   pendingModel={undefined}
                   disabled={false}
                   onPick={(id) => useTabsStore.getState().setDraftModel(id)}
-                  {...(claudeDraftEffort !== undefined
+                  {...(claudeDraftEfforts.length > 0
                     ? {
                         effort: {
                           current: claudeDraftEffort,

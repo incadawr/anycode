@@ -11621,6 +11621,214 @@ describe("automation facade — replay* (TASK.188 S2)", () => {
 //    querySelector/querySelectorAll calls, so a stale class name
 //    (`.start-model-menu` → something else) fails HERE rather than in a live
 //    smoke.
+/**
+ * NATIVE engine menu. A non-core engine's pill is
+ * `EngineControls.tsx`'s own menu: its model/effort vocabulary comes from the
+ * host's `EnginePresentation`, its pending choices from `pendingEngineChange`,
+ * and its effort row exists whenever the selected model ADVERTISES levels —
+ * regardless of whether a current effort value is known. Core's provider
+ * catalog and `availableEffortLevels` must not leak into this branch.
+ */
+describe("automation facade — native engine effort", () => {
+  const noTranscriptN: TranscriptDom = { container: () => null, jumpButtonVisible: () => false };
+  const noTodoPanelN: TodoPanelDom = { panel: () => null };
+  const noStartScreenN: StartScreenDom = {
+    rendered: () => false,
+    recentCount: () => 0,
+    projectMenuOpen: () => false,
+    clickProjectChip: () => {},
+    modelMenuOpen: () => false,
+    clickModelChip: () => {},
+    modelMenuLevel: () => null,
+    modelMenuGroups: () => [],
+    clickModelGroup: () => false,
+    clickModelItem: () => false,
+  };
+
+  interface NativeModel {
+    current: string;
+    available: Array<{ id: string; label?: string; efforts?: string[] }>;
+    effort?: string;
+  }
+
+  const TERRA: NativeModel = {
+    current: "gpt-6.1-terra",
+    // A synthetic model that exists ONLY in the engine's own catalog.
+    available: [
+      { id: "gpt-6.1-terra", label: "GPT-6.1 Terra", efforts: ["low", "medium", "high", "xhigh"] },
+      { id: "plain", label: "Plain" },
+    ],
+    effort: "medium",
+  };
+
+  function nativeReady(model: NativeModel): HostToUiMessage {
+    return {
+      type: "host_ready",
+      workspace: "/ws/a",
+      mode: "build",
+      model: "m1",
+      sessionId: "sess-a",
+      engine: {
+        id: "codex",
+        capabilities: {
+          supportsCorePermissions: false,
+          supportsRewind: false,
+          supportsWorkflow: false,
+          supportsGitMutations: false,
+          supportsContextUsage: true,
+          supportsContextBreakdown: false,
+          supportsInteractiveApprovals: true,
+          costAccounting: false,
+          supportsModelSelection: true,
+          supportsReasoningEffort: true,
+          supportsImages: false,
+          supportsTasks: false,
+          supportsFileSnapshots: false,
+          supportsManualCompact: false,
+        },
+        model,
+        permissions: { presets: [{ id: "ask", label: "Ask", description: "" }], activePresetId: "ask" },
+      },
+    } as HostToUiMessage;
+  }
+
+  /**
+   * A fake native menu with DEFERRED commit semantics: a page-changing click
+   * flips the level on a later tick (exactly like a React commit), so the
+   * facade's bounded polls are genuinely exercised. Every terminal click is
+   * recorded by IDENTITY, which is what "no index mismatch" means here.
+   */
+  function nativeMenuDom(initial: "root" | "model" | "effort" = "root", effortRow = true) {
+    const state = { level: initial, clicks: [] as string[] };
+    const flip = (level: "root" | "model" | "effort") => {
+      setTimeout(() => {
+        state.level = level;
+      }, 0);
+    };
+    const dom: ModelPillDom = {
+      mounted: () => true,
+      popoverOpen: () => true,
+      currentPage: () => state.level,
+      manageDisabled: () => true,
+      clickChip: () => {},
+      clickRootRow: (row) => {
+        state.clicks.push(`legacy-root:${row}`);
+        flip(row);
+      },
+      clickItemAt: (index) => {
+        state.clicks.push(`legacy-item:${index}`);
+      },
+      native: {
+        visible: () => true,
+        page: () => state.level,
+        effortRowVisible: () => effortRow,
+        models: () => (state.level === "model" ? ["gpt-6.1-terra", "plain"] : []),
+        efforts: () => (state.level === "effort" ? ["low", "medium", "high", "xhigh"] : []),
+        clickRootRow: (row) => {
+          state.clicks.push(`root:${row}`);
+          flip(row);
+          return true;
+        },
+        clickBack: () => {
+          state.clicks.push("back");
+          flip("root");
+          return true;
+        },
+        clickModel: (id) => {
+          state.clicks.push(`model:${id}`);
+          return true;
+        },
+        clickEffort: (value) => {
+          state.clicks.push(`effort:${value}`);
+          return true;
+        },
+      },
+    };
+    return { dom, state };
+  }
+
+  function nativeFacade(dom: ModelPillDom, model: NativeModel) {
+    const tabsStore = createTabsStore();
+    const registry = createTabRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit(nativeReady(model));
+    tabsStore.getState().setActiveTab("tab-a");
+    const facade = createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      noTranscriptN,
+      noTodoPanelN,
+      noStartScreenN,
+      dom,
+      createSettingsStore(),
+    );
+    return { facade, registry, port, tabId: "tab-a" };
+  }
+
+  it("reads native effort instead of core effort fields", () => {
+    const { dom } = nativeMenuDom();
+    const { facade, registry, tabId } = nativeFacade(dom, TERRA);
+    const state = registry.getStore(tabId)!.getState();
+    // The core effort fields are untouched by a native presentation…
+    expect(state.availableEffortLevels).toBeUndefined();
+    expect(state.reasoningEffort).not.toBe("xhigh");
+
+    const pill = facade.modelPillState(tabId);
+    expect(pill).toMatchObject({
+      ok: true,
+      present: true,
+      // …yet the native vocabulary and applied effort are reported in full.
+      effortRowVisible: true,
+      effortItems: ["low", "medium", "high", "xhigh"],
+      currentModel: "gpt-6.1-terra",
+      currentEffort: "medium",
+      modelItems: [
+        { id: "gpt-6.1-terra", name: "GPT-6.1 Terra" },
+        { id: "plain", name: "Plain" },
+      ],
+    });
+    if (!pill.ok || !("present" in pill)) throw new Error("expected a state reading");
+    expect(pill.label).toBe("GPT-6.1 Terra · medium");
+    expect(pill.modelPickDisabled).toBe(false);
+  });
+
+  it("picks native xhigh through the effort page", async () => {
+    const { dom, state } = nativeMenuDom();
+    const { facade, port, tabId } = nativeFacade(dom, TERRA);
+
+    await expect(facade.modelPillPick(tabId, { kind: "effort", value: "xhigh" })).resolves.toEqual({ ok: true });
+    // The REAL menu rows were clicked, by identity: root effort row, then the
+    // xhigh item — never a position derived from a catalog.
+    expect(state.clicks).toEqual(["root:effort", "effort:xhigh"]);
+    // And nothing was sent to the host behind the menu's back.
+    expect(port.sent.filter((message) => (message as { type?: string }).type === "set_engine_effort")).toHaveLength(0);
+    expect(port.sent.filter((message) => (message as { type?: string }).type === "set_model")).toHaveLength(0);
+
+    // A value the model does not advertise is refused, with nothing clicked.
+    state.clicks.length = 0;
+    await expect(facade.modelPillPick(tabId, { kind: "effort", value: "turbo" })).resolves.toEqual({ ok: false, reason: "unknown_value" });
+    expect(state.clicks).toEqual([]);
+
+    // A model pick goes through the model page, again by raw id.
+    await expect(facade.modelPillPick(tabId, { kind: "model", value: "plain" })).resolves.toEqual({ ok: true });
+    expect(state.clicks).toEqual(["back", "root:model", "model:plain"]);
+  });
+
+  it("reports effort_row_hidden only when the model advertises no levels", async () => {
+    const { dom, state } = nativeMenuDom();
+    const { facade, tabId } = nativeFacade(dom, { current: "plain", available: [{ id: "plain", label: "Plain" }] });
+
+    expect(facade.modelPillState(tabId)).toMatchObject({ effortRowVisible: false, effortItems: [] });
+    await expect(facade.modelPillPick(tabId, { kind: "effort", value: "xhigh" })).resolves.toEqual({
+      ok: false,
+      reason: "effort_row_hidden",
+    });
+    expect(state.clicks).toEqual([]);
+  });
+});
+
 describe("automation facade — modelPillPick drill-down menu (TASK.106 shared picker)", () => {
   const noTranscriptDomD: TranscriptDom = { container: () => null, jumpButtonVisible: () => false };
   const noTodoPanelDomD: TodoPanelDom = { panel: () => null };
@@ -11900,6 +12108,101 @@ describe("automation facade — modelPillPick drill-down menu (TASK.106 shared p
     });
     return { real, doc, root, popover, menu, state, restore: () => vi.unstubAllGlobals() };
   }
+
+  /**
+   * NATIVE menu DOM regression: the real accessor must read the
+   * explicit `data-model-pill-page` stamp and find effort rows by their raw
+   * `data-effort` identity. The JSX gating fix means the effort row exists
+   * whenever the model advertises levels — including when no current effort is
+   * known — so the DOM itself (not just a pure helper) is checked here.
+   */
+  describe("native engine menu DOM", () => {
+    /** Builds the REAL `realModelPillDom()` over a stubbed document holding `EngineModelMenu`'s native markup. */
+    function buildNativeAccessor(
+      page: "root" | "model" | "effort",
+      opts: { effortRow?: boolean; backLabel?: string; efforts?: string[]; models?: string[] } = {},
+    ) {
+      function row(name: string): FakeEl {
+        const button = el("button", "model-pill-row");
+        append(button, el("span", "model-pill-row-name", {}, name));
+        return button;
+      }
+      const popover = el("div", "model-pill-popover", { "data-model-pill-page": page });
+      if (page === "root") {
+        append(popover, row("Model"));
+        if (opts.effortRow !== false) append(popover, row("Effort"));
+      } else {
+        append(popover, el("button", "model-pill-back", {}, opts.backLabel ?? (page === "effort" ? "Effort" : "Model")));
+        if (page === "effort") {
+          for (const value of opts.efforts ?? ["low", "xhigh"]) {
+            append(popover, el("button", "model-pill-item", { "data-effort": value }, value));
+          }
+        } else {
+          for (const id of opts.models ?? ["gpt-6.1-terra", "plain"]) {
+            append(popover, el("button", "model-pill-item", { "data-model-id": id }, id));
+          }
+        }
+      }
+      const root = el("div", "model-pill");
+      append(root, popover);
+      const doc = el("html", "", {}, "");
+      append(doc, root);
+      vi.stubGlobal("document", {
+        querySelector: (sel: string) => (fakeQuery(doc, sel).querySelector(sel) ?? null) as unknown as HTMLDivElement | null,
+        querySelectorAll: (sel: string) => fakeQuery(doc, sel).querySelectorAll(sel) as unknown as NodeListOf<HTMLButtonElement>,
+      });
+      return { real: realModelPillDom(), doc, popover };
+    }
+
+    it("reads the page stamp and the effort vocabulary from the native markup", () => {
+      try {
+        const root = buildNativeAccessor("root");
+        expect(root.real.popoverOpen()).toBe(true);
+        expect(root.real.currentPage()).toBe("root");
+        expect(root.real.native?.visible()).toBe(true);
+        expect(root.real.native?.page()).toBe("root");
+        // The effort row is present, so capability is reported from the DOM.
+        expect(root.real.native?.effortRowVisible()).toBe(true);
+        expect(root.real.native?.clickRootRow("effort")).toBe(true);
+        vi.unstubAllGlobals();
+
+        const effort = buildNativeAccessor("effort", { efforts: ["low", "xhigh"] });
+        expect(effort.real.currentPage()).toBe("effort");
+        expect(effort.real.native?.efforts()).toEqual(["low", "xhigh"]);
+        // Picked by raw attribute identity; an absent value never clicks.
+        expect(effort.real.native?.clickEffort("xhigh")).toBe(true);
+        expect(effort.real.native?.clickEffort("turbo")).toBe(false);
+
+        const model = buildNativeAccessor("model", { models: ["gpt-6.1-terra", "plain"] });
+        expect(model.real.currentPage()).toBe("model");
+        expect(model.real.native?.models()).toEqual(["gpt-6.1-terra", "plain"]);
+        expect(model.real.native?.clickModel("plain")).toBe(true);
+        expect(model.real.native?.clickModel("nope")).toBe(false);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("reports no effort capability when the model's vocabulary is empty", () => {
+      try {
+        const root = buildNativeAccessor("root", { effortRow: false });
+        expect(root.real.native?.effortRowVisible()).toBe(false);
+        expect(root.real.native?.clickRootRow("effort")).toBe(false);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("prefers the explicit page attribute over the back-button label", () => {
+      try {
+        // A relabelled back button must not be able to change which page this reads.
+        const model = buildNativeAccessor("model", { backLabel: "Effort" });
+        expect(model.real.currentPage()).toBe("model");
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+  });
 
   function readyFacade(dom: ModelPillDom, pinned?: { connectionId: string; providerId: string }) {
     const tabsStore: TabsStoreApi = createTabsStore();

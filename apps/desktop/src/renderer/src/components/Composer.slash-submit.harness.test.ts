@@ -184,6 +184,9 @@ vi.mock("./EngineControls.js", () => ({
   EnginePresetMenu: NullComponent,
   engineControlDisabled: (turnStatus: string, queueInFlight: unknown, ready: boolean): boolean =>
     (turnStatus !== "idle" || queueInFlight !== null) || !ready,
+  // Native effort control: not what this harness exercises (the native menu is
+  // a null component here) — present only so Composer's import resolves.
+  nativeEffortControl: (): undefined => undefined,
 }));
 
 vi.mock("./EnvironmentMenu.js", () => ({ EnvironmentMenu: NullComponent }));
