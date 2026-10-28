@@ -13,6 +13,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - A step row in the context popover keeps "cost ≈ $0.0021" on one line instead of splitting the money value.
 - Cost copy is sentence case inside a sentence ("by subscription", "price unknown") instead of mixing "By subscription" and "Price unknown".
 - The context popover fits above its trigger instead of growing past the window top, and its body scrolls when an expanded turn is long.
+- The context popover's usage bar turns the warning / danger colour near the limit instead of staying accent blue.
+- The Review panel and the Settings panes keep their layout and spacing: the stylesheets no longer lose the rules that followed two malformed comments.
 - The transcript tick rail stays clear of message text in narrow panes, including when a side panel is open (#16).
 - The test suite no longer adds phantom projects to the developer's own AnyCode sidebar.
 - A host test that times out no longer hands a late boot the developer's real profile: the test stops the host before restoring the environment.

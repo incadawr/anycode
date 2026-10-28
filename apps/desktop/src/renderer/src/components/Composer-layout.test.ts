@@ -228,4 +228,51 @@ describe("cost popover layout", () => {
       expect(result.lastRowReachable).toBe(true);
     } finally { rmSync(directory, { recursive: true, force: true }); }
   }, 60_000);
+
+  it.skipIf(!existsSync(chrome))("tints the usage bar warning / danger near the limit", () => {
+    // The fill is the accent by default; at ≥80% / ≥95% the popover carries
+    // the same warning/danger class as its trigger and the fill must resolve
+    // `currentColor` to that tint. The rule lives in app.css, so a comment
+    // above it that the parser does not treat as a comment silently drops it
+    // and the bar stays blue all the way to the limit.
+    const cssRoot = resolve(import.meta.dirname, "..");
+    const css = ["tokens.css", "app.css"].map((file) => readFileSync(resolve(cssRoot, file), "utf8")).join("\n");
+    const directory = mkdtempSync(resolve(tmpdir(), "anycode-ctx-bar-tint-"));
+    try {
+      const popover = (tint: string, percent: number): string =>
+        `<div class="ctx-popover${tint}" style="position:static;animation:none">` +
+        `<div class="ctx-popover-bar"><div class="ctx-popover-bar-fill" style="width:${percent}%"></div></div></div>`;
+      const file = resolve(directory, "meter-tint.html");
+      writeFileSync(file, `<!doctype html><html data-theme="dark"><head><meta charset="utf-8"><style>${css}</style></head><body>
+        ${popover("", 20)}
+        ${popover(" composer-ctx-meter-warning", 85)}
+        ${popover(" composer-ctx-meter-danger", 97)}
+        <div id="accent" style="background: var(--accent)"></div>
+        <pre id="result"></pre><script>
+          const read = pop => ({ color: getComputedStyle(pop).color, fill: getComputedStyle(pop.querySelector('.ctx-popover-bar-fill')).backgroundColor });
+          document.querySelector('#result').textContent = JSON.stringify({
+            cases: [...document.querySelectorAll('.ctx-popover')].map(read),
+            accent: getComputedStyle(document.querySelector('#accent')).backgroundColor,
+          });
+        </script></body></html>`);
+      const run = spawnSync(chrome, ["--headless", "--no-sandbox", "--disable-gpu", "--disable-background-networking", "--no-first-run", `--user-data-dir=${directory}/profile`, "--dump-dom", `file://${file}`], { encoding: "utf8", timeout: 30_000 });
+      expect(run.status, run.stderr).toBe(0);
+      const match = run.stdout.match(/<pre id="result">([^<]+)<\/pre>/);
+      expect(match).not.toBeNull();
+      const result = JSON.parse(match![1]!) as { cases: Array<{ color: string; fill: string }>; accent: string };
+      const [normal, warning, danger] = result.cases;
+      // The tokens resolve in a themed document: the accent is a real colour.
+      expect(result.accent).toMatch(/^rgb\(/);
+      // Below the limit the fill is the accent, not the inherited text colour.
+      expect(normal!.fill).toBe(result.accent);
+      expect(normal!.color).not.toBe(result.accent);
+      // At the limit it is the popover's own colour (currentColor), not the accent.
+      expect(warning!.fill).toBe(warning!.color);
+      expect(danger!.fill).toBe(danger!.color);
+      expect(warning!.fill).not.toBe(result.accent);
+      expect(danger!.fill).not.toBe(result.accent);
+      // …and the two tints stay distinct from each other.
+      expect(warning!.fill).not.toBe(danger!.fill);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  }, 40_000);
 });
