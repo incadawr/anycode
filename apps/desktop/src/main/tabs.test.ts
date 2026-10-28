@@ -7719,3 +7719,144 @@ describe("GitHub #6 — a missing workspace folder fails fast instead of connect
     }
   });
 });
+
+// ── Prepared (unpublished) tabs — the window a created session's effort is
+// configured in. A prepared tab is a fully forked host that is NOT yet part of
+// the application surface: it holds capacity and its binding, is invisible to
+// the public API, gets no renderer port, and runs none of the publication
+// hooks until main publishes it (or aborts it).
+describe("TabHostManager — prepared (unpublished) tabs", () => {
+  function preparedRig(limits: { maxTabs?: number; exitDeadlineMs?: number } = {}) {
+    const rig = liveForkRig();
+    const win = windowRig();
+    const opened: string[] = [];
+    const registered: string[] = [];
+    const manager = new TabHostManager({
+      fork: rig.fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => win.window,
+      env: () => ({}),
+      logger: silentLogger,
+      limits: { maxTabs: 1, ...limits },
+      onTabOpened: (tabId) => opened.push(tabId),
+      onSessionRegistered: ({ sessionId }) => { registered.push(sessionId); },
+    });
+    return { manager, hosts: rig.hosts, opened, registered, win };
+  }
+
+  it("prepared tabs reserve capacity without becoming public", async () => {
+    const r = preparedRig();
+    const created = r.manager.createTab({ workspace: "/ws", sessionId: "s-prepared", resume: false, deferPublication: true });
+    expect(created.ok).toBe(true);
+    if (!created.ok) throw new Error("prepared creation refused");
+
+    // Invisible publicly, but the slot and the session binding are held.
+    expect(r.manager.listTabs()).toEqual([]);
+    expect(r.manager.atCapacity()).toBe(true);
+    expect(r.manager.count()).toBe(1);
+    expect(r.manager.sessionOpenInTab("s-prepared")).toBe(created.tab.tabId);
+    // No publication side effect of any kind: no hooks, no renderer port.
+    expect(r.opened).toEqual([]);
+    expect(r.registered).toEqual([]);
+    expect(r.win.posted).toEqual([]);
+
+    // The INTERNAL control plane still reaches this host.
+    const pending = r.manager.communicationRequest("s-prepared", "get_session_status", undefined, "/ws");
+    await flush();
+    const host = r.hosts[0]!;
+    const request = host.postMessage.mock.calls
+      .map((call) => call[0] as { type?: string; requestId?: string })
+      .find((message) => message.type === "communication_request");
+    expect(request).toBeDefined();
+    host.emit("message", { type: "communication_response", requestId: request!.requestId, result: { state: "idle" } });
+    await expect(pending).resolves.toEqual({ state: "idle" });
+  });
+
+  it("publishes a prepared tab exactly once", async () => {
+    const r = preparedRig();
+    const created = r.manager.createTab({ workspace: "/ws", sessionId: "s-publish", resume: false, deferPublication: true });
+    if (!created.ok) throw new Error("prepared creation refused");
+
+    expect(r.manager.publishPreparedTab(created.tab.tabId)).toBe(true);
+    // Now public, and the normal creation hooks ran — once each.
+    expect(r.manager.listTabs().map((tab) => tab.sessionId)).toEqual(["s-publish"]);
+    expect(r.opened).toEqual([created.tab.tabId]);
+    expect(r.registered).toEqual(["s-publish"]);
+
+    // A second publication is a no-op: the hooks must never run twice.
+    expect(r.manager.publishPreparedTab(created.tab.tabId)).toBe(false);
+    expect(r.opened).toEqual([created.tab.tabId]);
+    expect(r.registered).toEqual(["s-publish"]);
+  });
+
+  it("aborts an unpublished last tab and reaps its host", async () => {
+    const r = preparedRig();
+    const created = r.manager.createTab({ workspace: "/ws", sessionId: "s-abort", resume: false, deferPublication: true });
+    if (!created.ok) throw new Error("prepared creation refused");
+    const host = r.hosts[0]!;
+    // A real host exits when it is told to shut down.
+    host.postMessage.mockImplementation((message: unknown) => {
+      if ((message as { type?: string }).type === "shutdown") queueMicrotask(() => host.emit("exit", 0));
+    });
+
+    // The public close path would refuse the last tab; abort must not.
+    await r.manager.abortPreparedTab(created.tab.tabId);
+
+    expect(r.manager.getTab(created.tab.tabId)).toBeUndefined();
+    expect(r.manager.sessionOpenInTab("s-abort")).toBeUndefined();
+    expect(r.manager.listTabs()).toEqual([]);
+    expect(r.manager.atCapacity()).toBe(false);
+    // The host was told to shut down and nothing was respawned.
+    expect(host.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "shutdown" }));
+    expect(r.hosts).toHaveLength(1);
+    // Nothing was published on the way out either.
+    expect(r.opened).toEqual([]);
+    expect(r.registered).toEqual([]);
+    expect(r.win.posted).toEqual([]);
+  });
+
+  it("stays hidden and un-respawned for the whole teardown, even if the host exits mid-teardown", async () => {
+    const r = preparedRig();
+    const created = r.manager.createTab({ workspace: "/ws", sessionId: "s-sealed", resume: false, deferPublication: true });
+    if (!created.ok) throw new Error("prepared creation refused");
+    const host = r.hosts[0]!;
+
+    const abort = r.manager.abortPreparedTab(created.tab.tabId);
+    // Sealed synchronously, before the first await: the tab is still hidden
+    // from the public API while its host is being drained.
+    expect(r.manager.listTabs()).toEqual([]);
+    // The host dies here — BEFORE the shutdown is even delivered, while the
+    // teardown is still running. It is not a crash: no respawn may be forked.
+    host.emit("exit", 1);
+    await abort;
+
+    expect(r.hosts).toHaveLength(1);
+    expect(r.manager.getTab(created.tab.tabId)).toBeUndefined();
+    // A deliberate teardown is never recorded as a host failure.
+    expect(r.manager.listTabs()).toEqual([]);
+  });
+
+  it("waits for the host's real exit before the abort reports itself finished", async () => {
+    // Short reap deadline so the force-kill path (the one that used to return
+    // without waiting) is reached quickly.
+    const r = preparedRig({ exitDeadlineMs: 60 });
+    const created = r.manager.createTab({ workspace: "/ws", sessionId: "s-wait", resume: false, deferPublication: true });
+    if (!created.ok) throw new Error("prepared creation refused");
+    const host = r.hosts[0]!;
+
+    let finished = false;
+    const abort = r.manager.abortPreparedTab(created.tab.tabId).then(() => { finished = true; });
+    // Past the shutdown deadline: the host has been force-killed but has not
+    // confirmed its exit yet. The caller deletes the session row right after
+    // this resolves, so it must NOT resolve here.
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    expect(finished).toBe(false);
+    expect(host.kill).toHaveBeenCalled();
+
+    host.emit("exit", 0);
+    await abort;
+    expect(finished).toBe(true);
+    expect(r.hosts).toHaveLength(1);
+  });
+});

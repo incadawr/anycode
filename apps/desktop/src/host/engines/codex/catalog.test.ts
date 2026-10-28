@@ -103,6 +103,45 @@ describe("CodexModelCatalog", () => {
     expect(catalog.supportsImages("not-in-the-catalog")).toBe(false);
   });
 
+  it("maps a model absent from the provider catalog with all advertised efforts", async () => {
+    // A synthetic id that exists ONLY in the engine's own `model/list` — the
+    // whole point being that AnyCode's provider catalog knows nothing about it.
+    const client = pagedClient([
+      {
+        data: [
+          {
+            id: "gpt-6.1-terra",
+            displayName: "GPT-6.1 Terra",
+            isDefault: true,
+            defaultReasoningEffort: "high",
+            // `xhigh` and a level no build of this host has ever heard of must
+            // both survive verbatim: this host is not the vocabulary's author.
+            supportedReasoningEfforts: [
+              { reasoningEffort: "low" },
+              { reasoningEffort: "medium" },
+              { reasoningEffort: "high" },
+              { reasoningEffort: "xhigh" },
+              { reasoningEffort: "turbo-9" },
+            ],
+          },
+        ],
+        nextCursor: null,
+      },
+    ]);
+    const catalog = await CodexModelCatalog.load(client);
+
+    expect(catalog.choices()).toEqual([
+      { id: "gpt-6.1-terra", label: "GPT-6.1 Terra", efforts: ["low", "medium", "high", "xhigh", "turbo-9"] },
+    ]);
+    expect(catalog.get("gpt-6.1-terra")?.defaultEffort).toBe("high");
+    // Default resolution and an explicit advertised pick both work for this id.
+    expect(catalog.resolveEffort("gpt-6.1-terra")).toBe("high");
+    expect(catalog.resolveEffort("gpt-6.1-terra", "xhigh")).toBe("xhigh");
+    expect(catalog.resolveEffort("gpt-6.1-terra", "turbo-9")).toBe("turbo-9");
+    // A level it does NOT advertise still falls back to its own default.
+    expect(catalog.resolveEffort("gpt-6.1-terra", "ultra")).toBe("high");
+  });
+
   describe("resolveEffort", () => {
     const catalog = CodexModelCatalog.of([
       { id: "wide", label: "Wide", efforts: ["low", "medium", "high"], defaultEffort: "medium", isDefault: true },

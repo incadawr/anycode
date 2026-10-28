@@ -1,11 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHarness, textStep } from "./test-harness.js";
+import { MessageChannel } from "node:worker_threads";
+import {
+  SessionPermissionRules,
+  resolveEffortLevels,
+  resolveReasoningEffort,
+  type AgentEvent,
+  type CatalogProviderEntry,
+  type ReasoningEffort,
+} from "@anycode/core";
+import { createHarness, textStep, toolStep, MemFs, nodeWirePort } from "./test-harness.js";
 import type { SessionEngine } from "./engines/session-engine.js";
 import { CORE_ENGINE_CAPABILITIES } from "./engines/session-engine.js";
+import { IpcPermissionBroker } from "./permission-broker.js";
+import { Outbound, Session, type EngineSettingsChange, type EngineSettingsSeam, type SessionOptions } from "./session.js";
 import type { AgentEnvelope } from "../shared/communication.js";
 import type { PermissionRequest } from "@anycode/core";
 import type { HostToUiMessage } from "../shared/protocol.js";
 const isHostReady = (m: HostToUiMessage): m is Extract<HostToUiMessage, { type: "host_ready" }> => m.type === "host_ready";
+const isPermissionRequest = (m: HostToUiMessage): m is Extract<HostToUiMessage, { type: "permission_request" }> => m.type === "permission_request";
+const isLoopEnd = (m: HostToUiMessage): m is Extract<HostToUiMessage, { type: "agent_event" }> => m.type === "agent_event" && m.event.type === "loop_end";
 const isAgentDelivery = (m: HostToUiMessage): m is Extract<HostToUiMessage, { type: "agent_message" }> => m.type === "agent_message";
 const envelope = (messageId: string, mode: "next_turn" | "steer" = "next_turn"): AgentEnvelope => ({ messageId, sender: "test-supervisor", recipientSessionId: "test-session", payload: "Follow this clarification", mode, kind: "agent_message", createdAt: new Date().toISOString() });
 function fixture() {
@@ -402,3 +415,341 @@ describe("Sessions API approvals (Taskana 4763)", () => {
   });
 });
 
+
+// ── Session-wide reasoning effort (Sessions API `set_session_effort` + status) ──
+//
+// The effort an agent asks for at creation time must be configured on the REAL
+// session before its first turn, and `get_session_status` must describe both the
+// SELECTED pair and what is actually applied. These tests drive the host
+// operation directly on a Session built with a native engine seam (the harness
+// is core-only) and on the core harness for the core branch.
+type SeamSnapshot = { model: string; activePresetId: string; effort?: string };
+
+/**
+ * A native engine + seam with the same two-phase contract the real ones have:
+ * `selectEffort` validates against the model's OWN advertised levels, records
+ * the choice, and sends nothing; the next `runTurn` is what applies it. The
+ * effort the turn actually ran with is recorded, which is the only honest
+ * evidence that the choice — not a default — reached the turn.
+ */
+class NativeEffortEngine implements SessionEngine, EngineSettingsSeam {
+  readonly id = "codex" as const;
+  readonly capabilities = { ...CORE_ENGINE_CAPABILITIES, supportsModelSelection: true };
+  readonly turnEfforts: string[] = [];
+  private applied: SeamSnapshot;
+  private chosen: SeamSnapshot;
+  private pending: SeamSnapshot | null = null;
+  private readonly listeners = new Set<(snapshot: SeamSnapshot) => void>();
+  private turns = 0;
+
+  constructor(private readonly catalog: Array<{ id: string; label?: string; efforts?: string[] }>, appliedEffort?: string) {
+    const model = catalog[0]!.id;
+    this.applied = { model, activePresetId: "ask", ...(appliedEffort !== undefined ? { effort: appliedEffort } : {}) };
+    this.chosen = { ...this.applied };
+  }
+
+  models() { return this.catalog.map((entry) => ({ id: entry.id, label: entry.label ?? entry.id, ...(entry.efforts !== undefined ? { efforts: [...entry.efforts] } : {}) })); }
+  presets() { return [{ id: "ask", label: "Ask", description: "asks before acting" }]; }
+  snapshot(): SeamSnapshot { return { ...this.applied }; }
+  pendingSnapshot(): SeamSnapshot | null { return this.pending === null ? null : { ...this.pending }; }
+
+  private markPending(): EngineSettingsChange {
+    const differs =
+      this.chosen.model !== this.applied.model ||
+      this.chosen.activePresetId !== this.applied.activePresetId ||
+      this.chosen.effort !== this.applied.effort;
+    this.pending = differs ? { ...this.chosen } : null;
+    return { ok: true, ...this.chosen };
+  }
+
+  selectModel(id: string): EngineSettingsChange {
+    if (!this.catalog.some((entry) => entry.id === id)) return { ok: false, reason: `Codex model "${id}" is not available for this account.` };
+    this.chosen = { ...this.chosen, model: id };
+    return this.markPending();
+  }
+
+  selectPreset(id: string): EngineSettingsChange {
+    if (id !== "ask") return { ok: false, reason: `Unknown Codex permission preset "${id}".` };
+    this.chosen = { ...this.chosen, activePresetId: id };
+    return this.markPending();
+  }
+
+  selectEffort(effort: string): EngineSettingsChange {
+    const entry = this.catalog.find((candidate) => candidate.id === this.chosen.model);
+    if (entry?.efforts === undefined || !entry.efforts.includes(effort)) {
+      return { ok: false, reason: `Codex effort "${effort}" is not available for model "${this.chosen.model}".` };
+    }
+    this.chosen = { ...this.chosen, effort };
+    return this.markPending();
+  }
+
+  onSettingsApplied(listener: (snapshot: SeamSnapshot) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  mode() { return "build" as const; }
+  reasoningEffort(): undefined { return undefined; }
+  setReasoningEffort(): void {}
+  historyItems() { return [] as const; }
+  dispose(): Promise<void> { return Promise.resolve(); }
+
+  async *runTurn(): AsyncIterable<AgentEvent> {
+    this.turns += 1;
+    // The turn/start carries the CHOSEN effort.
+    this.turnEfforts.push(this.chosen.effort ?? "default");
+    yield { type: "turn_start", turn: this.turns };
+    if (this.pending !== null) {
+      const applied = this.pending;
+      this.pending = null;
+      this.applied = applied;
+      for (const listener of this.listeners) listener({ ...applied });
+    }
+    yield { type: "loop_end", reason: "completed", turns: this.turns };
+  }
+}
+
+/** A Session wired to a native engine seam, plus a bounded poll helper (no harness here — the harness is core-only). */
+function nativeEffortSession(engine: NativeEffortEngine, sessionId = "native-session") {
+  const channel = new MessageChannel();
+  const session = new Session({
+    outbound: new Outbound(),
+    engine,
+    engineSettings: engine,
+    broker: new IpcPermissionBroker(() => {}),
+    fs: new MemFs(),
+    workspace: "/work",
+    model: engine.snapshot().model,
+    sessionId,
+    rules: new SessionPermissionRules(),
+  });
+  session.bindPort(nodeWirePort(channel.port2));
+  const envelopeFor = (messageId: string): AgentEnvelope => ({
+    messageId,
+    sender: "test-supervisor",
+    recipientSessionId: sessionId,
+    payload: "configured?",
+    mode: "next_turn",
+    kind: "agent_message",
+    createdAt: new Date().toISOString(),
+  });
+  return {
+    session,
+    envelopeFor,
+    async until(predicate: () => boolean, timeoutMs = 2000) {
+      const deadline = Date.now() + timeoutMs;
+      while (!predicate()) {
+        if (Date.now() >= deadline) throw new Error("condition not reached");
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    },
+    close() { channel.port1.close(); channel.port2.close(); },
+  };
+}
+
+describe("session effort configuration and status", () => {
+  it("configures native effort before the first agent turn", async () => {
+    const engine = new NativeEffortEngine([{ id: "gpt-6.1-terra", label: "Terra", efforts: ["low", "medium", "high", "xhigh"] }], "medium");
+    const f = nativeEffortSession(engine);
+    try {
+      expect(f.session.communicationStatus()).toMatchObject({
+        model: "gpt-6.1-terra",
+        effort: "medium",
+        appliedEffort: "medium",
+        supportedEfforts: ["low", "medium", "high", "xhigh"],
+        effortPending: false,
+      });
+
+      const outcome = await f.session.communicationSetEffort({ effort: "xhigh" });
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) throw new Error("expected the effort to be accepted");
+      // Selected for the next turn, honestly still pending.
+      expect(outcome.status).toMatchObject({ effort: "xhigh", appliedEffort: "medium", effortPending: true });
+      // Nothing was sent by the selection itself.
+      expect(engine.turnEfforts).toHaveLength(0);
+
+      expect((await f.session.receiveAgentMessage(f.envelopeFor("first"))).state).toBe("acknowledged");
+      await f.until(() => engine.turnEfforts.length === 1);
+      // The FIRST turn carried the configured choice, not the default.
+      expect(engine.turnEfforts[0]).toBe("xhigh");
+      await f.until(() => f.session.communicationStatus().appliedEffort === "xhigh");
+      expect(f.session.communicationStatus()).toMatchObject({ effort: "xhigh", appliedEffort: "xhigh", effortPending: false });
+    } finally { f.close(); }
+  });
+
+  it("reports model effort and supported levels in session status", async () => {
+    // core: provider-declared levels, the selected tier applied by the engine,
+    // nothing pending.
+    const core = createHarness({ steps: [], reasoningSupported: true, availableEffortLevels: ["off", "low", "high"], selectedEffort: "high" });
+    try {
+      // The engine's OWN applied value is the authority (host boot applies the
+      // resolved tier before the session exists); the selected tier alone is not.
+      core.engine.setSelectedReasoningEffort?.("high");
+      expect(core.session.communicationStatus()).toMatchObject({
+        engine: "core",
+        model: "scripted-model",
+        effort: "high",
+        appliedEffort: "high",
+        supportedEfforts: ["off", "low", "high"],
+        effortPending: false,
+      });
+    } finally { core.close(); }
+
+    // codex: the engine's own vocabulary, verbatim.
+    const codexEngine = new NativeEffortEngine([{ id: "gpt-6.1-terra", label: "Terra", efforts: ["low", "xhigh", "turbo-9"] }], "xhigh");
+    const codex = nativeEffortSession(codexEngine, "codex-session");
+    try {
+      expect(codex.session.communicationStatus()).toMatchObject({
+        engine: "codex",
+        model: "gpt-6.1-terra",
+        effort: "xhigh",
+        appliedEffort: "xhigh",
+        supportedEfforts: ["low", "xhigh", "turbo-9"],
+        effortPending: false,
+      });
+    } finally { codex.close(); }
+
+    // claude: a pending pick is reported as SELECTED, never as applied.
+    const claudeEngine = new NativeEffortEngine([{ id: "claude-1", label: "Claude", efforts: ["low", "medium", "high", "xhigh"] }], "high");
+    const claude = nativeEffortSession(claudeEngine, "claude-session");
+    try {
+      expect(claudeEngine.selectEffort("xhigh")).toMatchObject({ ok: true, effort: "xhigh" });
+      expect(claude.session.communicationStatus()).toMatchObject({
+        model: "claude-1",
+        effort: "xhigh",
+        appliedEffort: "high",
+        effortPending: true,
+        supportedEfforts: ["low", "medium", "high", "xhigh"],
+      });
+    } finally { claude.close(); }
+  });
+
+  it("refuses effort for a model without advertised levels", async () => {
+    // A model the engine has no vocabulary for: every explicit effort must be
+    // refused with the complete classified detail — never silently accepted as
+    // "the engine default" and reported as success.
+    const engine = new NativeEffortEngine([{ id: "plain-model", label: "Plain" }], "medium");
+    const f = nativeEffortSession(engine, "no-levels");
+    try {
+      const outcome = await f.session.communicationSetEffort({ effort: "high" });
+      expect(outcome).toEqual({
+        ok: false,
+        reason: "invalid_effort",
+        detail: 'engine=codex; model="plain-model"; effort="high"; allowed=[]; reason=no_supported_levels',
+      });
+      // No mutation of any kind.
+      expect(engine.pendingSnapshot()).toBeNull();
+      expect(engine.snapshot().effort).toBe("medium");
+      expect(engine.turnEfforts).toHaveLength(0);
+    } finally { f.close(); }
+  });
+
+  it("applies a core effort through the existing engine setter", async () => {
+    const h = createHarness({ steps: [], reasoningSupported: true, availableEffortLevels: ["off", "high", "max"], selectedEffort: "high" });
+    const setSelected = vi.spyOn(h.engine as unknown as { setSelectedReasoningEffort(effort: string): void }, "setSelectedReasoningEffort");
+    try {
+      const accepted = await h.session.communicationSetEffort({ effort: "max" });
+      expect(accepted.ok).toBe(true);
+      expect(setSelected).toHaveBeenCalledTimes(1);
+      expect(setSelected).toHaveBeenCalledWith("max");
+
+      // A value the provider did not advertise never reaches core's setter.
+      const refused = await h.session.communicationSetEffort({ effort: "turbo" });
+      expect(refused).toEqual({
+        ok: false,
+        reason: "invalid_effort",
+        detail: 'engine=core; model="scripted-model"; effort="turbo"; allowed=["off","high","max"]; reason=not_advertised',
+      });
+      expect(setSelected).toHaveBeenCalledTimes(1);
+    } finally { h.close(); }
+  });
+
+  it("reports the effort core will actually carry, never a retained tier the selected model rejects", () => {
+    // The model declares only `off`/`medium` and no explicit-off semantics.
+    // The user's retained tier is `high` — core deliberately KEEPS that tier
+    // across a model switch — but the next request carries nothing, so the
+    // status must not name it as selected or applied.
+    const entry = syntheticEntry([{ id: "scripted-model", reasoning: true, effortLevels: ["off", "medium"] }]);
+    const h = createHarness({
+      steps: [],
+      reasoningSupported: true,
+      availableEffortLevels: resolveEffortLevels("scripted-model", entry),
+      selectedEffort: "high",
+      effortResolution: coreEffortResolution(entry),
+    });
+    try {
+      expect(h.session.communicationStatus()).toMatchObject({
+        model: "scripted-model",
+        effort: null,
+        appliedEffort: null,
+        effortPending: false,
+        // `off` is advertised only where its semantics are known.
+        supportedEfforts: ["medium"],
+      });
+      // And the same resolution decides what may be configured at all.
+      const refused = h.session.communicationSetEffort({ effort: "high" });
+      expect(refused).resolves.toEqual({
+        ok: false,
+        reason: "invalid_effort",
+        detail: 'engine=core; model="scripted-model"; effort="high"; allowed=["medium"]; reason=not_advertised',
+      });
+    } finally { h.close(); }
+  });
+
+  it("reports a queued model change against the QUEUED model's vocabulary", async () => {
+    const entry = syntheticEntry([
+      { id: "scripted-model", reasoning: true, effortLevels: ["off", "high"] },
+      { id: "queued-model", reasoning: true, effortLevels: ["medium"] },
+    ]);
+    const h = createHarness({
+      steps: [toolStep("c1", "Write", { file_path: "/workspace/a.txt", content: "NEW" }), textStep("done")],
+      reasoningSupported: true,
+      availableEffortLevels: resolveEffortLevels("scripted-model", entry),
+      selectedEffort: "high",
+      switchModel: (id, selected) => ({
+        model: id,
+        reasoningEffort: resolveReasoningEffort(id, entry, selected) ?? "off",
+        ...(resolveEffortLevels(id, entry) !== undefined ? { availableEffortLevels: resolveEffortLevels(id, entry) } : {}),
+      }),
+      effortResolution: coreEffortResolution(entry),
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_reasoning_effort", effort: "high" });
+      await h.flush();
+      expect(h.session.communicationStatus()).toMatchObject({ model: "scripted-model", effort: "high", appliedEffort: "high", effortPending: false });
+
+      // A turn parked on an approval keeps the session busy, so the model pick
+      // is QUEUED — the live model, its vocabulary and its applied effort stay.
+      h.send({ type: "user_message", requestId: "r1", text: "write it" });
+      const ask = await h.waitFor(isPermissionRequest);
+      h.send({ type: "set_model", model: "queued-model" });
+      await h.flush();
+      expect(h.session.communicationStatus()).toMatchObject({
+        model: "queued-model",
+        // The queued model has no `high`: the next turn carries nothing.
+        effort: null,
+        appliedEffort: "high",
+        effortPending: true,
+        supportedEfforts: ["medium"],
+      });
+
+      h.send({ type: "permission_response", requestId: ask.requestId, behavior: "deny" });
+      await h.waitFor(isLoopEnd);
+    } finally { h.close(); }
+  });
+});
+
+/** A synthetic provider entry — the given models only, no catalog lookup. */
+function syntheticEntry(models: Array<{ id: string; reasoning?: boolean; effortLevels?: ReasoningEffort[]; supportsExplicitOff?: boolean }>): CatalogProviderEntry {
+  return { id: "synthetic", name: "Synthetic", baseUrl: "", models } as unknown as CatalogProviderEntry;
+}
+
+/** The composition root's own core effort resolution (host/index.ts), over one synthetic entry. */
+function coreEffortResolution(entry: CatalogProviderEntry): NonNullable<SessionOptions["effortResolution"]> {
+  return {
+    levels: (id) => resolveEffortLevels(id, entry),
+    effective: (id, tier) => resolveReasoningEffort(id, entry, tier),
+  };
+}

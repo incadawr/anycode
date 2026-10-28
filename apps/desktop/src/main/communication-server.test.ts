@@ -1510,6 +1510,85 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     expect(value(await client.callTool({ name: "create_session", arguments: { workspace: dir } })).sessionId).toBe("never");
   });
 
+  // ── create_session effort (Sessions API) ────────────────────────────────
+  it("advertises and forwards create_session effort", async () => {
+    const seen: CreateSessionRequest[] = [];
+    const f = await createFixture({
+      creator: async (input) => {
+        seen.push(input);
+        return { ok: true, sessionId: "effort-1", tabId: "tab-1" };
+      },
+    });
+    const tool = (await f.client.listTools()).tools.find((t) => t.name === "create_session")!;
+    // Advertised as a plain string: the allowed values are MODEL-dependent, so
+    // a static enum here would be a lie for every native engine.
+    expect(tool.inputSchema).toMatchObject({
+      properties: { effort: { type: "string" } },
+      additionalProperties: false,
+    });
+    expect((tool.inputSchema as unknown as { properties: Record<string, unknown> }).properties.effort).not.toHaveProperty("enum");
+
+    const created = value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, engine: "codex", model: "gpt-6.1-terra", effort: "xhigh" } }));
+    expect(created.sessionId).toBe("effort-1");
+    // Forwarded UNCHANGED — no trimming, no case folding, no enum check in main.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ engine: "codex", model: "gpt-6.1-terra", effort: "xhigh" });
+
+    // Omitting it stays an omission (the engine's own default applies).
+    value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }));
+    expect(seen[1]).not.toHaveProperty("effort");
+  });
+
+  it("returns invalid_effort with allowed levels verbatim", async () => {
+    const detail = 'engine=codex; model="gpt-6.1-terra"; effort="turbo"; allowed=["low","medium","high","xhigh"]; reason=not_advertised';
+    const f = await createFixture({ creator: async () => ({ ok: false, reason: "invalid_effort", detail }) });
+    const result = await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, engine: "codex", model: "gpt-6.1-terra", effort: "turbo" } });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    // The COMPLETE text, including the fixed code sentence and the host's own
+    // detail: the allowed list is what lets a client correct itself.
+    expect(errorText(result)).toBe(`create_session invalid_effort: reasoning effort is not supported — ${detail}`);
+  });
+
+  it("invalid effort refusals do not consume the creation rate budget", async () => {
+    const clock = { now: 1_000_000 };
+    let refuse = true;
+    const f = await createFixture({
+      clock,
+      creator: async () => (refuse
+        ? { ok: false, reason: "invalid_effort", detail: "engine=codex; model=\"gpt-6.1-terra\"; effort=\"turbo\"; allowed=[\"low\"]; reason=not_advertised" }
+        : { ok: true, sessionId: "after-refusals", tabId: "tab-after" }),
+    });
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const refused = await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, effort: "turbo" } });
+      expect((refused as { isError?: boolean }).isError).toBe(true);
+      expect(errorText(refused)).toMatch(/^create_session invalid_effort: /);
+    }
+    refuse = false;
+    // Eight refusals in the SAME window still leave the full budget: only a
+    // successful creation is charged.
+    expect(value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, effort: "high" } })).sessionId).toBe("after-refusals");
+  });
+
+  it("delivers firstMessage only after effort preparation succeeds", async () => {
+    // Invalid effort: the caller gets the classified refusal, and the message
+    // was never handed to a session that does not exist.
+    const detail = 'engine=codex; model="gpt-6.1-terra"; effort="turbo"; allowed=["low"]; reason=not_advertised';
+    const invalid = await createFixture({ creator: async () => ({ ok: false, reason: "invalid_effort", detail }) });
+    const refused = await invalid.client.callTool({ name: "create_session", arguments: { workspace: invalid.dir, effort: "turbo", firstMessage: "hello" } });
+    expect((refused as { isError?: boolean }).isError).toBe(true);
+    expect(invalid.request.mock.calls.filter((call) => call[1] === "send_message")).toHaveLength(0);
+
+    // Preparation that could not complete (a timeout/control failure on the
+    // host side) is not_ready — and equally delivers nothing.
+    const timedOut = await createFixture({ creator: async () => ({ ok: false, reason: "not_ready", detail: "the new session could not confirm its reasoning effort" }) });
+    const failed = await timedOut.client.callTool({ name: "create_session", arguments: { workspace: timedOut.dir, effort: "high", firstMessage: "hello" } });
+    expect((failed as { isError?: boolean }).isError).toBe(true);
+    expect(errorText(failed)).toMatch(/^create_session not_ready: /);
+    expect(timedOut.request.mock.calls.filter((call) => call[1] === "send_message")).toHaveLength(0);
+    expect(timedOut.tabs).toEqual([]);
+  });
+
   it("send_message schema errors name sessionId, payload and mode instead of a zod issue list", async () => {
     const f = await fixture();
     const result = await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed" } });

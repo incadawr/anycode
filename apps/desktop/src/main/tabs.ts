@@ -916,6 +916,7 @@ export interface CreateTabParams {
    * later, strictly after the port already went out).
    */
   beforeDeferredPortDelivery?: (tab: TabHost) => void;
+  deferPublication?: boolean;
 }
 
 export type { CloseTabResult };
@@ -976,6 +977,16 @@ export interface ChildRunSummary {
 export class TabHostManager {
   private readonly tabs = new Map<string, TabHost>();
   private readonly closingTabs = new Set<string>();
+  /**
+   * Tabs created with `deferPublication` (Sessions API session creation with an
+   * explicit effort): fully live hosts that are NOT yet part of the application
+   * or public API surface. They occupy capacity and hold their session binding,
+   * but are hidden from `listTabs()`, never get a renderer port, and never run
+   * the publication hooks — so no first message, restored prompt or renderer
+   * prompt can start before the effort is configured. Main publishes with
+   * `publishPreparedTab()` or discards with `abortPreparedTab()`.
+   */
+  private readonly unpublishedTabs = new Set<string>();
   /* */
   private readonly bindings = new Map<string, string>();
   /**
@@ -1147,13 +1158,22 @@ export class TabHostManager {
   }
 
   /** Narrow production RPC; pins both tab and process generation at dispatch. */
-  communicationRequest(sessionId: string, operation: string, payload?: unknown, expectedWorkspace?: string): Promise<unknown> {
+  communicationRequest(
+    sessionId: string,
+    operation: string,
+    payload?: unknown,
+    expectedWorkspace?: string,
+    // Optional per-request bound (session preparation must never outlive its
+    // own deadline by a single request's default timeout).
+    requestOptions?: { timeoutMs?: number },
+  ): Promise<unknown> {
     const tab = [...this.tabs.values()].find((t) => t.sessionId === sessionId);
     if (!tab?.proc || tab.state !== "running" || (expectedWorkspace !== undefined && tab.workspace !== expectedWorkspace)) return Promise.reject(new Error("Session host unavailable"));
     const proc = tab.proc;
     const requestId = randomUUID();
+    const timeoutMs = requestOptions?.timeoutMs !== undefined ? Math.max(1, requestOptions.timeoutMs) : 20000;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => finish(new Error("Host response timed out; delivery unknown")), 20000);
+      const timer = setTimeout(() => finish(new Error("Host response timed out; delivery unknown")), timeoutMs);
       const onMessage = (raw: unknown) => {
         const message = raw as { type?: string; requestId?: string; result?: unknown; error?: string };
         if (message?.type !== "communication_response" || message.requestId !== requestId) return;
@@ -1174,7 +1194,12 @@ export class TabHostManager {
   }
 
   listTabs(): ReadonlyArray<TabSummary> {
-    return [...this.tabs.values()].map((tab) => ({
+    return [...this.tabs.values()]
+      // A prepared (unpublished) tab is not a session anyone may see yet: the
+      // Sessions API must not be able to address it, and the renderer never
+      // received a port for it.
+      .filter((tab) => !this.unpublishedTabs.has(tab.tabId))
+      .map((tab) => ({
       tabId: tab.tabId,
       workspace: tab.workspace,
       sessionId: tab.sessionId,
@@ -1317,6 +1342,8 @@ export class TabHostManager {
     };
     this.tabs.set(tab.tabId, tab);
     this.bindings.set(params.sessionId, tab.tabId);
+    const deferPublication = params.deferPublication === true;
+    if (deferPublication) this.unpublishedTabs.add(tab.tabId);
     const spawn = this.spawnTabHost(tab, {
       firstSpawn: true,
       onDeferredInitialSpawn: params.onDeferredInitialSpawn,
@@ -1325,6 +1352,7 @@ export class TabHostManager {
     if (spawn === false) {
       this.tabs.delete(tab.tabId);
       this.bindings.delete(params.sessionId);
+      this.unpublishedTabs.delete(tab.tabId);
       return { ok: false, reason: "not_ready" };
     }
     // GitHub #6: a NEW session whose folder is already gone has nothing to show
@@ -1338,11 +1366,17 @@ export class TabHostManager {
       this.logger.error(`[main] tab ${tab.tabId} workspace folder is missing (${workspace}); refusing the new session`);
       this.tabs.delete(tab.tabId);
       this.bindings.delete(params.sessionId);
+      this.unpublishedTabs.delete(tab.tabId);
       return { ok: false, reason: "folder_not_found", workspace };
     }
-    this.deps.onTabOpened?.(tab.tabId);
-    const rollback = this.deps.onSessionRegistered?.({ sessionId: params.sessionId });
-    if (spawn === "deferred" && rollback) this.deferredRegistrationRollbacks.set(tab.tabId, rollback);
+    // Publication hooks are deferred for a prepared tab: the session switch, the
+    // browser-access registration and the renderer's tab list must not learn
+    // about a session that is still being configured.
+    if (!deferPublication) {
+      this.deps.onTabOpened?.(tab.tabId);
+      const rollback = this.deps.onSessionRegistered?.({ sessionId: params.sessionId });
+      if (spawn === "deferred" && rollback) this.deferredRegistrationRollbacks.set(tab.tabId, rollback);
+    }
     return { ok: true, tab, ...(spawn === "deferred" ? { deferred: true } : {}) };
   }
 
@@ -1383,6 +1417,99 @@ export class TabHostManager {
     if (waiter === undefined) return;
     this.deferredInitialSpawnWaiters.delete(tabId);
     waiter(outcome);
+  }
+
+  /**
+   * Publishes a tab created with `deferPublication`: runs the registration and
+   * open hooks the normal creation path runs, exactly once. Returns false when
+   * the tab is unknown, already published, or its host is not alive — the
+   * caller then aborts instead of publishing a dead session.
+   *
+   * The port is deliberately NOT delivered here: the creation path delivers it
+   * after its own bookkeeping (sharing, handle), mirroring the normal flow.
+   */
+  publishPreparedTab(tabId: string): boolean {
+    if (!this.unpublishedTabs.has(tabId)) return false;
+    const tab = this.tabs.get(tabId);
+    if (tab === undefined || tab.proc === null || tab.state !== "running") return false;
+    this.unpublishedTabs.delete(tabId);
+    this.deps.onTabOpened?.(tabId);
+    // The host is already alive, so the registration is permanent: there is no
+    // deferred-spawn rollback to hold on to.
+    this.deps.onSessionRegistered?.({ sessionId: tab.sessionId });
+    return true;
+  }
+
+  /**
+   * Discards an unpublished tab: shuts down and reaps its host, drops the
+   * binding and the deferred state. Deliberately NOT `closeTab`: there is no
+   * last-tab refusal here (an abandoned creation attempt must always be able
+   * to dispose of itself) and no renderer notification — the renderer never
+   * knew this tab existed.
+   *
+   * The teardown is SEALED synchronously, before any await: the prepared
+   * marker stays for the whole teardown (so `listTabs()` can never expose a
+   * half-dismantled session), and `closing` is what `handleExit`'s own guard
+   * reads — a host that exits during the drain is therefore neither
+   * respawned nor reported as a crash.
+   *
+   * Resolves only once the host is actually GONE. `shutdownTabHost` stops
+   * waiting at its deadline and force-kills, but the exit itself lands after
+   * that; the caller deletes this session's database row right afterwards, so
+   * a still-live host writing late would recreate the row it just deleted.
+   */
+  async abortPreparedTab(tabId: string): Promise<void> {
+    const tab = this.tabs.get(tabId);
+    if (!this.unpublishedTabs.has(tabId) || tab === undefined) {
+      this.unpublishedTabs.delete(tabId);
+      return;
+    }
+    const child = tab.proc;
+    let exited = child === null;
+    // Registered before ANY await: the process can exit while the child drain
+    // below is still running, and a listener attached afterwards would wait
+    // forever for an event that already fired.
+    const exit = child === null
+      ? null
+      : new Promise<void>((resolve) => {
+        child.once("exit", () => {
+          exited = true;
+          resolve();
+        });
+      });
+    this.closingTabs.add(tabId);
+    tab.state = "closing";
+    try {
+      await this.drainChildren(tab);
+      // An already-exited host has nothing left to signal — and asking
+      // `shutdownTabHost` would burn its whole deadline waiting for an exit
+      // that already landed.
+      if (exit === null || !exited) {
+        await this.shutdownTabHost(tab);
+      }
+      // A graceful exit already resolved `exit` above; only the force-killed
+      // case gets here still waiting. Bounded like every other reap, and
+      // reported honestly when even that is not enough.
+      if (exit !== null && !exited) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const deadline = new Promise<"timeout">((resolve) => {
+          timer = setTimeout(() => resolve("timeout"), this.limits.exitDeadlineMs);
+        });
+        const result = await Promise.race([exit.then(() => "exited" as const), deadline]);
+        if (timer !== undefined) clearTimeout(timer);
+        if (result === "timeout") {
+          this.logger.warn(
+            `[main] prepared tab ${tabId} host still had not exited ${this.limits.exitDeadlineMs}ms after the force kill; abandoning it`,
+          );
+        }
+      }
+    } finally {
+      this.tabs.delete(tabId);
+      this.bindings.delete(tab.sessionId);
+      this.deferredRegistrationRollbacks.delete(tabId);
+      this.closingTabs.delete(tabId);
+      this.unpublishedTabs.delete(tabId);
+    }
   }
 
   /**
@@ -3271,6 +3398,19 @@ export class TabHostManager {
     }
     tab.proc = null;
 
+    if (this.unpublishedTabs.has(tab.tabId)) {
+      // A prepared host died before anyone could use it. There is nothing to
+      // respawn: the creation attempt that owns this tab is still waiting on
+      // its own readiness probe, and a respawn loop inside that window would
+      // fork an unbounded number of doomed hosts. Mark it failed and leave the
+      // teardown to `abortPreparedTab` (the owner's failure path). No renderer
+      // notification — the tab was never announced there.
+      tab.state = "crash_looped";
+      this.logger.error(`[main] prepared tab ${tab.tabId} host exited before publication (code ${code}); not respawning`);
+      this.deps.recordHostFailure?.(tab.sessionId, "host_crash_loop", code, startupStderr, signal);
+      return;
+    }
+
     if (deliberate) {
       // Taskana 4736: a restart we asked for (a trust decision was recorded). Not a
       // crash: no rapid-respawn or storm accounting, and the same resume path re-forks.
@@ -3408,10 +3548,14 @@ export class TabHostManager {
 
   private rollbackDeferredCreation(tab: TabHost): void {
     if (this.tabs.get(tab.tabId) !== tab) return;
+    const unpublished = this.unpublishedTabs.delete(tab.tabId);
     this.tabs.delete(tab.tabId);
     this.bindings.delete(tab.sessionId);
     this.deferredRegistrationRollbacks.get(tab.tabId)?.();
     this.deferredRegistrationRollbacks.delete(tab.tabId);
+    // A prepared tab was never announced: there is nothing for the renderer to
+    // close and no publication hook to unwind.
+    if (unpublished) return;
     this.deps.onTabClosed?.(tab.tabId);
     const win = this.deps.getWindow();
     if (win !== null && !win.isDestroyed()) {
@@ -3443,9 +3587,13 @@ export class TabHostManager {
    * host stays tab-agnostic on the term channel — no tabId travels on it.
    */
   deliverTabPort(tab: TabHost): void {
-    // GitHub #6: a missing-workspace tab has no proc and never will, yet its
-    // renderer still needs a delivery — that is how it learns the folder is
-    // gone. Every other proc-less tab is the old "nothing to deliver" case.
+    // A prepared tab has no renderer surface yet: delivering a port would
+    // register a tab the application has not announced (and let the renderer
+    // send a prompt before the session is configured).
+    if (this.unpublishedTabs.has(tab.tabId)) {
+      this.logger.log(`[main] deliverTabPort deferred: tab ${tab.tabId} is not published yet`);
+      return;
+    }
     if (tab.proc === null && !tab.missingWorkspace) {
       this.logger.warn(`[main] deliverTabPort skipped: tab ${tab.tabId} has no host`);
       return;

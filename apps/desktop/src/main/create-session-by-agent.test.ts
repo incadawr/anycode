@@ -63,6 +63,22 @@ function settings(): AnycodeSettings {
   };
 }
 
+/** A scripted answer to one internal control-plane request from the fake host. */
+interface HostReply {
+  result?: unknown;
+  error?: string;
+  delayMs?: number;
+  /** Hold the answer until the test releases it (`deferredReplies[i].answer(...)`). */
+  defer?: boolean;
+}
+
+interface DeferredReply {
+  operation: string;
+  payload: unknown;
+  answer(result: unknown): void;
+  fail(error: string): void;
+}
+
 function rig(options: {
   failPrimingFor?: string;
   blocked?: () => boolean;
@@ -80,18 +96,72 @@ function rig(options: {
    * here instead of re-implementing the manager wiring in the test body.
    */
   onSessionRegistered?: (info: { sessionId: string; parentSessionId?: string }) => void | (() => void);
+  /**
+   * Answers the created host's internal control-plane requests. Every
+   * `communication_request` postMessage is answered on a microtask (or later,
+   * when the reply is deferred), which is exactly how a real host behaves.
+   */
+  respond?: (operation: string, payload: unknown) => HostReply | undefined;
+  /** Ordered breadcrumbs from the lifecycle the test cares about (registration, shutdown). */
+  sequence?: string[];
+  /** Reap deadline for the manager (tests shorten it to reach the force-kill branch). */
+  limits?: { exitDeadlineMs?: number };
+  /**
+   * A host that does NOT exit on the shutdown message: only `kill()` lands it,
+   * `killExitDelayMs` later. Models a hung host the reaper has to force-kill.
+   */
+  stubbornHost?: boolean;
+  killExitDelayMs?: number;
 } = {}) {
   // Mirrors main/index.ts: `hostEnvByConnection`, filled ONLY by ensurePinnedEnv
   // (through resolveResumePin) and read fail-closed by the fork's `env`.
   const cache = new Map<string, NodeJS.ProcessEnv>();
   const forkEnvs: Array<NodeJS.ProcessEnv | undefined> = [];
   const hosts: FakeHost[] = [];
+  /** Every internal control-plane operation the created hosts received, in order. */
+  const operations: string[] = [];
+  /** Answers waiting for the test to release them (deferred replies only). */
+  const deferredReplies: DeferredReply[] = [];
   const fork: HostForkFn = (_entry, _args, opts) => {
     if (options.failFork) throw new Error("fork failed");
     forkEnvs.push(opts?.env as NodeJS.ProcessEnv | undefined);
     const host = new FakeHost();
     hosts.push(host);
+    host.postMessage.mockImplementation((message: unknown) => {
+      const data = message as { type?: string; requestId?: string; operation?: string; payload?: unknown };
+      if (data?.type === "shutdown") {
+        options.sequence?.push("host-shutdown");
+        if (options.stubbornHost !== true) {
+          // A real host exits promptly on shutdown; the fake must too, or the
+          // reap would sit on the breaker deadline.
+          queueMicrotask(() => host.emit("exit", 0));
+        }
+        return;
+      }
+      if (data?.type !== "communication_request" || data.requestId === undefined) return;
+      const operation = data.operation ?? "";
+      operations.push(operation);
+      const reply = options.respond?.(operation, data.payload);
+      if (reply === undefined) return;
+      const answer = (result: unknown) => host.emit("message", { type: "communication_response", requestId: data.requestId, result });
+      const fail = (error: string) => host.emit("message", { type: "communication_response", requestId: data.requestId, error });
+      if (reply.defer === true) {
+        deferredReplies.push({ operation, payload: data.payload, answer, fail });
+        return;
+      }
+      const deliver = () => (reply.error !== undefined ? fail(reply.error) : answer(reply.result));
+      if (reply.delayMs !== undefined) setTimeout(deliver, reply.delayMs);
+      else queueMicrotask(deliver);
+    });
     queueMicrotask(() => host.emit("spawn"));
+    host.once("exit", () => options.sequence?.push("host-exit"));
+    if (options.stubbornHost === true) {
+      // The only thing that lands this host is the reaper's force kill.
+      host.kill.mockImplementation(() => {
+        setTimeout(() => host.emit("exit", 0), options.killExitDelayMs ?? 0);
+        return true;
+      });
+    }
     return host as unknown as UtilityProcess;
   };
   const resolveResumePin = async (meta: { connectionId?: string }): Promise<ResumePinResult> => {
@@ -119,6 +189,7 @@ function rig(options: {
   const manager = new TabHostManager({
     fork,
     onSessionRegistered: options.onSessionRegistered ?? (({ sessionId }) => {
+      options.sequence?.push("registered");
       const added = options.sessions?.register({ sessionId });
       return () => { if (added) options.sessions?.remove(sessionId); };
     }),
@@ -137,7 +208,7 @@ function rig(options: {
     engineReady: () => true,
     ...(options.workspaceMissing !== undefined ? { workspaceMissing: options.workspaceMissing } : {}),
     logger: silentLogger,
-    limits: {},
+    limits: { ...(options.limits ?? {}) },
   });
   const exposed = new Map<string, boolean>();
   const sessions: SessionAccessStore = options.sessions ?? {
@@ -171,7 +242,7 @@ function rig(options: {
     listTabs: () => manager.listTabs(),
     ...overrides,
   });
-  return { manager, deps, forkEnvs, sessions, exposed, posted, agentOpenedSessions, agentSessionTitles };
+  return { manager, deps, forkEnvs, sessions, exposed, posted, agentOpenedSessions, agentSessionTitles, hosts, operations, deferredReplies };
 }
 
 describe("create_session — the production creation path primes a non-active connection before the fork", () => {
@@ -658,5 +729,187 @@ describe("agent title resume wiring (production create_session → handle rename
     expect(result.pushedB).toEqual(["worker-2"]);
     // …and the push lands, so a later boot reads the handle.
     expect(result.storedTitle).toBe("worker-2");
+  });
+});
+
+/**
+ * Effort-bearing creation. The order is the contract: the new session's effort
+ * is configured on the REAL new host, BEFORE the tab becomes visible, is
+ * shared, gets a handle, or receives its renderer port — so no first message,
+ * restored prompt or renderer prompt can start a turn at the wrong effort.
+ */
+describe("create_session — effort preparation before publication", () => {
+  const IDLE_STATUS = { sessionId: "sess-1", engine: "codex", state: "idle", steering: { supported: true, ready: false }, model: "gpt-6.1-terra", effort: null, supportedEfforts: ["low", "xhigh"], appliedEffort: null, effortPending: false };
+
+  it("configures effort before sharing or delivering the tab", async () => {
+    const sequence: string[] = [];
+    const requests: Array<{ operation: string; payload: unknown }> = [];
+    const r = rig({
+      sequence,
+      respond: (operation, payload) => {
+        requests.push({ operation, payload });
+        if (operation === "get_session_status") return { result: IDLE_STATUS };
+        if (operation === "set_session_effort") {
+          sequence.push("effort-configured");
+          return { result: { ok: true, status: { ...IDLE_STATUS, effort: "xhigh" } } };
+        }
+        return undefined;
+      },
+    });
+    // Capture what the world looked like at the instant the port was delivered.
+    const delivered: Array<{ published: boolean; exposed: boolean }> = [];
+    vi.spyOn(r.manager, "deliverTabPort").mockImplementation((tab) => {
+      delivered.push({
+        published: r.manager.listTabs().some((entry) => entry.sessionId === tab.sessionId),
+        exposed: r.sessions.isExposed(tab.sessionId),
+      });
+      sequence.push("port-delivered");
+    });
+
+    const outcome = await createSessionForAgent({ workspace: "/ws", engine: "codex", model: "gpt-6.1-terra", effort: "xhigh" }, r.deps());
+    expect(outcome.ok).toBe(true);
+
+    // Readiness was probed first, then exactly one effort mutation carrying the
+    // RAW requested value.
+    expect(r.operations).toEqual(["get_session_status", "set_session_effort"]);
+    expect(requests[1]).toEqual({ operation: "set_session_effort", payload: { effort: "xhigh" } });
+    // Publication (registration) came after the effort, and the port last.
+    expect(sequence).toEqual(["effort-configured", "registered", "port-delivered"]);
+    expect(delivered).toEqual([{ published: true, exposed: true }]);
+  });
+
+  it("aborts invalid effort creation without leaving a tab or session row", async () => {
+    const sequence: string[] = [];
+    const exposed = new Map<string, boolean>();
+    const setHandle = vi.fn(() => ({ ok: true as const }));
+    const sessions: SessionAccessStore = {
+      isExposed: (id) => exposed.get(id) === true,
+      register: () => {},
+      remove: () => {},
+      set: (id, enabled) => (exposed.set(id, enabled), true),
+      exposedCount: () => exposed.size,
+      getHandle: () => undefined,
+      setHandle,
+      sessionIdByHandle: () => undefined,
+      getConfirmedTitle: () => undefined,
+      confirmTitle: () => {},
+    };
+    const detail = 'engine=codex; model="gpt-6.1-terra"; effort="turbo"; allowed=["low","xhigh"]; reason=not_advertised';
+    const r = rig({
+      sessions,
+      sequence,
+      respond: (operation) => {
+        if (operation === "get_session_status") return { result: IDLE_STATUS };
+        if (operation === "set_session_effort") return { result: { ok: false, reason: "invalid_effort", detail } };
+        return undefined;
+      },
+    });
+    const deleted: string[] = [];
+
+    const outcome = await createSessionForAgent(
+      { workspace: "/ws", engine: "codex", model: "gpt-6.1-terra", effort: "turbo", handle: "worker-1" },
+      r.deps({
+        deleteSessionRow: async (sessionId) => {
+          sequence.push(`row-deleted:${sessionId}`);
+          deleted.push(sessionId);
+        },
+      }),
+    );
+
+    // The host's classification and detail come back unchanged.
+    expect(outcome).toEqual({ ok: false, reason: "invalid_effort", detail });
+    // The host was reaped BEFORE its row was deleted (a late host write can no
+    // longer recreate it), and only the id this attempt minted was touched.
+    expect(sequence).toEqual(["host-shutdown", "host-exit", "row-deleted:sess-0"]);
+    expect(deleted).toEqual(["sess-0"]);
+    // Nothing survives: no tab, no binding, no sharing, no handle.
+    expect(r.manager.listTabs()).toEqual([]);
+    expect(r.manager.sessionOpenInTab("sess-0")).toBeUndefined();
+    expect(exposed.size).toBe(0);
+    expect(setHandle).not.toHaveBeenCalled();
+  });
+
+  it("deletes the failed session row only after a hung host has really exited", async () => {
+    // The host ignores the shutdown message and only the reaper's force kill
+    // lands it, well after the reap deadline. Deleting the row on the deadline
+    // instead of on the real exit would leave the session that host is still
+    // writing free to recreate the row.
+    const sequence: string[] = [];
+    const detail = 'engine=codex; model="gpt-6.1-terra"; effort="turbo"; allowed=["low","xhigh"]; reason=not_advertised';
+    const r = rig({
+      sequence,
+      limits: { exitDeadlineMs: 40 },
+      stubbornHost: true,
+      killExitDelayMs: 30,
+      respond: (operation) => {
+        if (operation === "get_session_status") return { result: IDLE_STATUS };
+        if (operation === "set_session_effort") return { result: { ok: false, reason: "invalid_effort", detail } };
+        return undefined;
+      },
+    });
+
+    const outcome = await createSessionForAgent(
+      { workspace: "/ws", engine: "codex", model: "gpt-6.1-terra", effort: "turbo" },
+      r.deps({ deleteSessionRow: async (sessionId) => { sequence.push(`row-deleted:${sessionId}`); } }),
+    );
+
+    expect(outcome).toEqual({ ok: false, reason: "invalid_effort", detail });
+    expect(sequence).toEqual(["host-shutdown", "host-exit", "row-deleted:sess-0"]);
+    expect(r.manager.listTabs()).toEqual([]);
+  });
+
+  it("waits for Claude effort acknowledgement before publication", async () => {
+    const r = rig({
+      respond: (operation) => {
+        if (operation === "get_session_status") return { result: { ...IDLE_STATUS, engine: "claude", model: "claude-1" } };
+        // Hold the acknowledgement, exactly like a control request still in flight.
+        if (operation === "set_session_effort") return { defer: true };
+        return undefined;
+      },
+    });
+    const delivered = vi.fn();
+    vi.spyOn(r.manager, "deliverTabPort").mockImplementation(delivered);
+
+    const creation = createSessionForAgent({ workspace: "/ws", engine: "claude", model: "claude-1", effort: "high" }, r.deps());
+    await vi.waitFor(() => expect(r.deferredReplies).toHaveLength(1));
+
+    // While the CLI has not acknowledged, the session does not exist for anyone.
+    expect(r.deferredReplies[0]!.payload).toEqual({ effort: "high" });
+    expect(r.manager.listTabs()).toEqual([]);
+    expect(r.sessions.isExposed("sess-0")).toBe(false);
+    expect(delivered).not.toHaveBeenCalled();
+
+    r.deferredReplies[0]!.answer({ ok: true, status: { ...IDLE_STATUS, effort: "high" } });
+    const outcome = await creation;
+
+    expect(outcome.ok).toBe(true);
+    expect(r.manager.listTabs().map((tab) => tab.sessionId)).toEqual(["sess-0"]);
+    expect(delivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps non-active connection priming before host spawn", async () => {
+    const sequence: string[] = [];
+    const r = rig({
+      sequence,
+      respond: (operation) => {
+        if (operation === "get_session_status") return { result: { ...IDLE_STATUS, engine: "core", model: "glm-5.3" } };
+        if (operation === "set_session_effort") {
+          sequence.push("effort-configured");
+          return { result: { ok: true, status: { ...IDLE_STATUS, engine: "core" } } };
+        }
+        return undefined;
+      },
+    });
+
+    const outcome = await createSessionForAgent({ workspace: "/ws", engine: "core", model: "glm-5.3", effort: "high" }, r.deps());
+
+    expect(outcome.ok).toBe(true);
+    // The pin was still primed and used for the fork BEFORE any effort
+    // configuration: the fork env is the GLM connection's, not the active one.
+    expect(r.forkEnvs).toHaveLength(1);
+    expect(r.forkEnvs[0]?.ANYCODE_API_KEY).toBe("conn-glm-key");
+    expect(r.forkEnvs[0]?.ANYCODE_CONNECTION_ID).toBe("conn-glm");
+    expect(sequence).toEqual(["effort-configured", "registered"]);
+    expect(r.operations).toEqual(["get_session_status", "set_session_effort"]);
   });
 });

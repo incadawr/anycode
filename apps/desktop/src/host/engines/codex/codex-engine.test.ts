@@ -1620,6 +1620,70 @@ describe("TASK.39 — posture enforcement on every turn (cut §2(k).1)", () => {
     expect(server.turnStartParams()[0]).toMatchObject({ model: "gpt-5.6-sol", effort: "high" });
   });
 
+  // A model the built-in catalog has never heard of, advertising a level range
+  // that includes `xhigh`: the selected level must reach the ACTUAL turn/start
+  // parameters, on the first turn and on every later one (the override is
+  // re-asserted per turn), never just the settings observable.
+  it("sends selected xhigh on the first and subsequent turns", async () => {
+    const server = new FakeAppServer();
+    server.modelPages[""]!.data = [
+      {
+        id: "gpt-6.1-terra",
+        displayName: "GPT-6.1 Terra",
+        isDefault: true,
+        defaultReasoningEffort: "medium",
+        supportedReasoningEfforts: [
+          { reasoningEffort: "low" },
+          { reasoningEffort: "medium" },
+          { reasoningEffort: "high" },
+          { reasoningEffort: "xhigh" },
+        ],
+      },
+    ];
+    const { engine } = await createNativeCodexSession(server, "/work", undefined, undefined, {
+      model: "gpt-6.1-terra",
+      origin: "draft",
+    });
+    expect(engine.selectEffort("xhigh")).toMatchObject({ ok: true, effort: "xhigh" });
+
+    await runTurn(server, engine);
+    await runTurn(server, engine, "again");
+
+    const starts = server.turnStartParams();
+    expect(starts).toHaveLength(2);
+    expect(starts[0]).toMatchObject({ model: "gpt-6.1-terra", effort: "xhigh" });
+    expect(starts[1]).toMatchObject({ model: "gpt-6.1-terra", effort: "xhigh" });
+  });
+
+  it("rejects an unsupported effort without issuing a turn", async () => {
+    const server = new FakeAppServer();
+    server.modelPages[""]!.data = [
+      {
+        id: "gpt-6.1-terra",
+        displayName: "GPT-6.1 Terra",
+        isDefault: true,
+        defaultReasoningEffort: "medium",
+        supportedReasoningEfforts: [{ reasoningEffort: "medium" }, { reasoningEffort: "xhigh" }],
+      },
+    ];
+    const { engine } = await createNativeCodexSession(server, "/work", undefined, undefined, {
+      model: "gpt-6.1-terra",
+      origin: "draft",
+    });
+    const applied = engine.snapshot();
+    const callsBefore = server.calls.length;
+
+    expect(engine.selectEffort("turbo")).toEqual({
+      ok: false,
+      reason: 'Codex effort "turbo" is not available for model "gpt-6.1-terra".',
+    });
+    // Nothing was recorded, nothing became pending, and no wire call was made.
+    expect(engine.snapshot()).toEqual(applied);
+    expect(engine.pendingSnapshot()).toBeNull();
+    expect(server.calls).toHaveLength(callsBefore);
+    expect(server.calls.filter((call) => call.method === "turn/start")).toHaveLength(0);
+  });
+
   // Profile `effort:` frontmatter rides the selection (draft `--engine-effort`):
   // the requested tier wins when the model supports it, and the actual
   // turn/start transport request carries the resolved tier — not just the

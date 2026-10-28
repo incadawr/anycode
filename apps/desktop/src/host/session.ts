@@ -1,4 +1,5 @@
-import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult } from "../shared/communication.js";
+import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult, type SessionStatus, type SetSessionEffortOutcome } from "../shared/communication.js";
+import { normalizeEffortLevels, validateSessionEffort } from "../shared/session-effort.js";
 import { safeFailureMessage } from "./safe-failure.js";
 import { claudeNativeChildRecord } from "./claude-usage.js";
 /**
@@ -214,6 +215,18 @@ export interface EngineSettingsSeam {
   selectModel(id: string): EngineSettingsChange;
   selectPreset(id: string): EngineSettingsChange;
   selectEffort?(effort: string): EngineSettingsChange;
+  /**
+   * The ACKNOWLEDGED form of `selectEffort`, for an engine that applies a
+   * change over its own control request (Claude). Resolves only once the
+   * engine has confirmed the change — the same settlement `selectEffort`'s
+   * fire-and-forget promise already runs on, just exposed. Absent for an
+   * engine whose change rides the next `turn/start` (codex), where "selected"
+   * IS the honest end of the operation.
+   *
+   * A rejection or timeout clears the pending choice, retains the prior
+   * applied effort, and resolves `{ ok: false }` — never a thrown error.
+   */
+  selectEffortAndWait?(effort: string): Promise<EngineSettingsChange>;
   onSettingsApplied(listener: (snapshot: { model: string; activePresetId: string; effort?: string }) => void): () => void;
   /**
    * The chosen-but-not-yet-applied delta, or null. Re-asserted on every
@@ -1052,6 +1065,21 @@ export interface SessionOptions {
   /** Effort levels the boot model supports (for the UI selector + set_reasoning_effort validation). */
   availableEffortLevels?: ReasoningEffort[];
   /**
+   * Core's own effort resolution, for the models `sessionEffortState()` has to
+   * describe (host/index.ts threads `resolveEffortLevels` +
+   * `resolveReasoningEffort`, the identical rules core applies). Needed because
+   * `availableEffortLevels` describes ONE model: a queued `set_model` and a
+   * selected tier the new model does not support must both be answered for the
+   * SELECTED model, not the running one. Absent in legacy tests -> the declared
+   * vocabulary is taken at face value.
+   */
+  effortResolution?: {
+    /** `resolveEffortLevels(model)` — undefined when the model has no reasoning support. */
+    levels(model: string): ReasoningEffort[] | undefined;
+    /** `resolveReasoningEffort(model, tier)` — what the engine would actually send, if anything. */
+    effective(model: string, tier: ReasoningEffort | undefined): ReasoningEffort | undefined;
+  };
+  /**
    * Slice P7.15 (F14): the user-selected effort tier at boot (mirror of the CLI's
    * selectedReasoningEffort seed). Tracked across a model switch so switching to
    * a non-reasoning model and back restores the tier. set_reasoning_effort keeps
@@ -1248,6 +1276,7 @@ export class Session {
   // Slice P7.15 (F14): mutable — re-resolved per new model on a set_model switch.
   private reasoningSupported: boolean;
   private availableEffortLevels: ReasoningEffort[] | undefined;
+  private readonly effortResolution: SessionOptions["effortResolution"];
   /** Slice P7.15 (F14): the user-selected effort tier, persisted across a model switch. */
   private selectedEffort: ReasoningEffort;
   /**
@@ -1667,6 +1696,7 @@ export class Session {
     this.refineTitle = options.refineTitle;
     this.reasoningSupported = options.reasoningSupported ?? true;
     this.availableEffortLevels = options.availableEffortLevels;
+    this.effortResolution = options.effortResolution;
     this.selectedEffort = options.selectedEffort ?? this.engine.reasoningEffort() ?? "off";
     this.sendPreviewArtifacts = options.postPreviewArtifacts;
     this.child = options.child;
@@ -1881,8 +1911,165 @@ export class Session {
   private readonly agentInbox: AgentEnvelope[] = [];
   private readonly agentDeliveries = new Map<string, AgentDelivery>();
 
-  communicationStatus(): { sessionId: string; engine: string; state: string; steering: { supported: boolean; ready: boolean; nativeTurnId?: string } } {
-    return { sessionId: this.sessionId, engine: this.engine.id, state: this.communicationState(), steering: this.engine.steeringStatus?.() ?? { supported: false, ready: false } };
+  communicationStatus(): SessionStatus {
+    const effort = this.sessionEffortState();
+    return {
+      sessionId: this.sessionId,
+      engine: this.engine.id,
+      state: this.communicationState(),
+      steering: this.engine.steeringStatus?.() ?? { supported: false, ready: false },
+      model: effort.model,
+      effort: effort.effort,
+      supportedEfforts: effort.supportedEfforts,
+      appliedEffort: effort.appliedEffort,
+      effortPending: effort.model !== effort.appliedModel || effort.effort !== effort.appliedEffort,
+    };
+  }
+
+  /**
+   * The ONE source of effort truth, read by both the status projection and the
+   * `set_session_effort` validation — they can never disagree about which model
+   * is selected or which vocabulary applies to it.
+   *
+   * Native branch (codex/claude): the seam's APPLIED snapshot plus its optional
+   * pending delta. The chosen pair is what the next turn carries; the applied
+   * effort is what the last applied snapshot carried. The vocabulary is the
+   * selected model's own advertised list — a model absent from the engine's
+   * catalog therefore reports an EMPTY vocabulary rather than a guessed one.
+   *
+   * Core branch: core has no seam. The selected model/effort are the live
+   * pending pick (a mid-turn queue) falling back to the effective values, and
+   * the vocabulary is the provider-declared level list. `off` is only ever part
+   * of that list when the provider actually declared it.
+   */
+  private sessionEffortState(): {
+    model: string;
+    effort: string | null;
+    appliedModel: string;
+    appliedEffort: string | null;
+    supportedEfforts: string[];
+  } {
+    if (this.engineSettings !== undefined) {
+      const applied = this.engineSettings.snapshot();
+      const pending = this.engineSettings.pendingSnapshot?.() ?? null;
+      const chosen = pending ?? applied;
+      const supportedEfforts = normalizeEffortLevels(
+        this.engineSettings.models().find((model) => model.id === chosen.model)?.efforts ?? [],
+      );
+      return {
+        model: chosen.model,
+        effort: chosen.effort ?? null,
+        appliedModel: applied.model,
+        appliedEffort: applied.effort ?? null,
+        supportedEfforts,
+      };
+    }
+    const supportedEfforts = normalizeEffortLevels(this.availableEffortLevels ?? []);
+    /**
+     * Core: the SELECTED pair is resolved against the SELECTED model's own
+     * capabilities, not reported as remembered. Core deliberately keeps the
+     * user's tier when a model does not support it (a switch to a lower-effort
+     * model must not discard the choice), so the remembered tier is NOT what
+     * the next request carries: `resolveReasoningEffort` may drop it entirely.
+     * `off` therefore survives only where the model's semantics really know it,
+     * and a queued model change reports the QUEUED model's vocabulary.
+     */
+    const model = this.pendingModel ?? this.model;
+    const levels = this.coreEffortLevelsFor(model);
+    const effective = this.coreEffectiveEffortFor(model, this.pendingEffort ?? this.selectedEffort);
+    return {
+      model,
+      effort: effective,
+      appliedModel: this.model,
+      // The engine's OWN applied value — never the remembered tier standing in
+      // for one the engine is not using.
+      appliedEffort: this.engine.reasoningEffort() ?? null,
+      supportedEfforts: this.coreApplicableEffortLevels(model, levels),
+    };
+  }
+
+  /** The vocabulary declared for `model` (the SELECTED one, which a queued switch may have moved). */
+  private coreEffortLevelsFor(model: string): ReasoningEffort[] | undefined {
+    if (this.effortResolution !== undefined) return this.effortResolution.levels(model);
+    // Unwired (legacy test): the boot vocabulary describes THIS model; nothing
+    // describes another one, so a queued change advertises nothing.
+    return model === this.model ? this.availableEffortLevels : undefined;
+  }
+
+  /**
+   * The levels that can actually be applied on `model`: the declared vocabulary
+   * minus anything the engine's own resolver would silently drop. `off` is the
+   * important case — it belongs to the legacy four only as a NAME, and is
+   * honoured solely by a model that declares explicit-off semantics.
+   */
+  private coreApplicableEffortLevels(model: string, levels: ReasoningEffort[] | undefined): string[] {
+    const declared = normalizeEffortLevels(levels ?? []);
+    if (this.effortResolution === undefined) return declared;
+    const resolution = this.effortResolution;
+    // The vocabulary is core's own literal list, so the cast names exactly what
+    // the resolver itself accepts.
+    return declared.filter((level) => resolution.effective(model, level as ReasoningEffort) !== undefined);
+  }
+
+  /** What the next turn on `model` will actually carry for the selected tier — `null` when nothing is carried. */
+  private coreEffectiveEffortFor(model: string, tier: ReasoningEffort | undefined): string | null {
+    if (this.effortResolution !== undefined) return this.effortResolution.effective(model, tier) ?? null;
+    if (tier === undefined) return null;
+    return this.coreEffortLevelsFor(model)?.includes(tier) === true ? tier : null;
+  }
+
+  /**
+   * The Sessions API's session-wide effort configuration (`set_session_effort`,
+   * internal main→host op). It exists so a session created with an explicit
+   * effort can be configured BEFORE anything (firstMessage, a restored prompt,
+   * the renderer) can start a turn.
+   *
+   * Refusals are structured, never thrown: `invalid_effort` carries the shared
+   * validator's complete detail, and everything the host cannot safely perform
+   * right now is `not_ready`. Nothing is mutated before validation passes, and
+   * a failed native mutation leaves the previously applied effort in place.
+   */
+  async communicationSetEffort(payload: unknown): Promise<SetSessionEffortOutcome> {
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload) || !("effort" in payload)) {
+      return { ok: false, reason: "not_ready", detail: "set_session_effort expects an effort value" };
+    }
+    const requested = (payload as { effort?: unknown }).effort;
+    if (this.shuttingDown) return { ok: false, reason: "not_ready", detail: "session is shutting down" };
+    if (this.relocating) return { ok: false, reason: "not_ready", detail: "session is relocating" };
+    if (this.busy) return { ok: false, reason: "not_ready", detail: "session is busy; stop the turn first" };
+    if (this.agentInbox.length > 0) {
+      return { ok: false, reason: "not_ready", detail: "a queued turn is waiting; stop it before changing effort" };
+    }
+    const state = this.sessionEffortState();
+    const validation = validateSessionEffort(requested, {
+      engine: this.engine.id,
+      model: state.model,
+      levels: state.supportedEfforts,
+    });
+    if (!validation.ok) return { ok: false, reason: "invalid_effort", detail: validation.detail };
+
+    if (this.engine.id === "core") {
+      // Membership was just proven against the provider-declared levels, so the
+      // string IS one of core's own literals here.
+      this.applyReasoningEffort(validation.effort as ReasoningEffort);
+      return { ok: true, status: this.communicationStatus() };
+    }
+
+    const seam = this.engineSettings;
+    if (seam === undefined || seam.selectEffort === undefined) {
+      return { ok: false, reason: "not_ready", detail: "this engine has no effort control" };
+    }
+    if (seam.selectEffortAndWait !== undefined) {
+      const applied = await seam.selectEffortAndWait(validation.effort);
+      if (!applied.ok) return { ok: false, reason: "not_ready", detail: applied.reason };
+      return { ok: true, status: this.communicationStatus() };
+    }
+    // Codex: "selected" is the honest end of the operation — the choice rides
+    // the next turn/start, so it stays pending until that turn carries it.
+    const change = seam.selectEffort(validation.effort);
+    if (!change.ok) return { ok: false, reason: "not_ready", detail: change.reason };
+    this.onEngineSettingsChange(change, { effort: validation.effort });
+    return { ok: true, status: this.communicationStatus() };
   }
 
   /**

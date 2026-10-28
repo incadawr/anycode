@@ -15,6 +15,7 @@ import type { CreateSessionOutcome, CreateSessionRequest } from "./communication
 import { normalizeHandle, type SessionAccessStore } from "./communication-sessions.js";
 import type { NewSessionPin, ResumePinResult } from "./session-pin.js";
 import type { TabHostManager } from "./tabs.js";
+import { SET_SESSION_EFFORT_OPERATION, type SetSessionEffortOutcome } from "../shared/communication.js";
 import { resolveCoreConnectionForModel } from "../shared/core-model-connection.js";
 import type { AnycodeSettings } from "../shared/settings.js";
 
@@ -58,6 +59,33 @@ export interface CreateSessionByAgentDeps {
   pushAgentTitle?(sessionId: string): void;
   /** Live tab list, for handle-uniqueness checks against live sessions. */
   listTabs(): ReadonlyArray<{ sessionId: string }>;
+  /**
+   * Deletes the database row of a session this attempt just allocated, when
+   * preparation fails after the host forked (an abandoned prepared session
+   * must not leave a picker entry behind). Called only AFTER the host is really
+   * gone — `abortPreparedTab` does not resolve until the process exit has
+   * landed, force-kill included — so a late host write cannot recreate the row;
+   * only the fresh id this attempt minted is ever passed. Absent in legacy rigs
+   * -> nothing is deleted (the pre-effort behavior).
+   */
+  deleteSessionRow?(sessionId: string): Promise<void>;
+  /** Overall deadline for preparing a created session's effort (tests shorten it). */
+  preparationDeadlineMs?: number;
+  /** Poll step for the readiness probe inside that deadline (tests shorten it). */
+  preparationPollMs?: number;
+}
+
+/** Default budget for forking a host, waiting for readiness and configuring its effort. */
+const DEFAULT_PREPARATION_DEADLINE_MS = 20_000;
+const DEFAULT_PREPARATION_POLL_MS = 150;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Remaining budget, floored so a single request can never outlive the deadline it belongs to. */
+function remaining(deadline: number): number {
+  return Math.max(1, deadline - Date.now());
 }
 
 /**
@@ -147,6 +175,7 @@ export async function createSessionForAgent(
       console.warn("[main] failed to push agent session title", error);
     }
   };
+  const wantsEffort = request.effort !== undefined;
   let created: Awaited<ReturnType<TabHostManager["createTabAwaitingInitialSpawn"]>>;
   try {
     // GitHub #6: the first fork can be parked in a provider refresh. Await its
@@ -165,6 +194,7 @@ export async function createSessionForAgent(
       // i.e. before this await resolves — the attribution must already be
       // registered for that first envelope to carry the agent badge + title.
       beforeDeferredPortDelivery: () => registerAttribution(),
+      ...(wantsEffort ? { deferPublication: true } : {}),
     });
   } finally {
     releasePin();
@@ -180,12 +210,85 @@ export async function createSessionForAgent(
     if (created.reason === "folder_not_found") return { ok: false, reason: "folder_not_found" };
     return { ok: false, reason: created.reason === "max_tabs" ? ("too_many" as const) : ("not_ready" as const) };
   }
-  // A deferred first fork already registered its attribution and delivered its
-  // own port from its completion (GitHub #6); a synchronous one has done
-  // neither yet. Both must precede the delivery.
-  if (created.deferred !== true) {
-    registerAttribution();
-    tabs.deliverTabPort(created.tab);
+  const tab = created.tab;
+
+  /**
+   * Discards a prepared session whose effort could not be configured. Order is
+   * load-bearing: the host is reaped FIRST, so a late host write cannot
+   * recreate the row we then delete. Only the id minted by this attempt is
+   * ever deleted.
+   */
+  const abortPrepared = async (
+    reason: "invalid_effort" | "not_ready",
+    detail?: string,
+  ): Promise<CreateSessionOutcome> => {
+    await tabs.abortPreparedTab(tab.tabId);
+    if (deps.deleteSessionRow !== undefined) {
+      try {
+        await deps.deleteSessionRow(sessionId);
+      } catch {
+        // A leftover picker row must never turn the refusal into an error.
+      }
+    }
+    return { ok: false, reason, ...(detail !== undefined ? { detail } : {}) };
+  };
+
+  if (wantsEffort) {
+    const deadline = Date.now() + (deps.preparationDeadlineMs ?? DEFAULT_PREPARATION_DEADLINE_MS);
+    const pollMs = deps.preparationPollMs ?? DEFAULT_PREPARATION_POLL_MS;
+    // 1. Readiness only. The host is reachable over the internal control plane
+    // before it is published, so this probe observes the REAL new host (and
+    // thereby its real model vocabulary) instead of main guessing a default.
+    let ready = false;
+    for (;;) {
+      try {
+        await tabs.communicationRequest(sessionId, "get_session_status", undefined, tab.workspace, {
+          timeoutMs: remaining(deadline),
+        });
+        ready = true;
+        break;
+      } catch {
+        // Host still booting, or it never will: bounded by the deadline below.
+      }
+      if (Date.now() >= deadline) break;
+      await delay(Math.min(pollMs, remaining(deadline)));
+    }
+    if (!ready) return abortPrepared("not_ready", "the new session host did not become ready in time");
+
+    // 2. Exactly one mutation. An unknown transport outcome is never retried:
+    // a second attempt could apply a different effort than the one reported.
+    let outcome: unknown;
+    try {
+      outcome = await tabs.communicationRequest(
+        sessionId,
+        SET_SESSION_EFFORT_OPERATION,
+        { effort: request.effort },
+        tab.workspace,
+        { timeoutMs: remaining(deadline) },
+      );
+    } catch {
+      return abortPrepared("not_ready", "the new session could not confirm its reasoning effort");
+    }
+    const result = outcome as SetSessionEffortOutcome | null;
+    if (result === null || typeof result !== "object" || typeof result.ok !== "boolean") {
+      return abortPrepared("not_ready", "the new session could not confirm its reasoning effort");
+    }
+    if (!result.ok) {
+      // `invalid_effort` keeps the host's classification and complete detail
+      // (model, requested value, allowed list) verbatim.
+      return result.reason === "invalid_effort"
+        ? abortPrepared("invalid_effort", result.detail)
+        : abortPrepared("not_ready", result.detail);
+    }
+    // 3. Only now does this session exist for anyone else.
+    if (!tabs.publishPreparedTab(tab.tabId)) {
+      return abortPrepared("not_ready", "the prepared session host exited before it could be published");
+    }
   }
-  return { ok: true, sessionId, tabId: created.tab.tabId, ...(handle !== undefined ? { handle } : {}) };
+
+  if (created.deferred !== true || wantsEffort) {
+    registerAttribution();
+    tabs.deliverTabPort(tab);
+  }
+  return { ok: true, sessionId, tabId: tab.tabId, ...(handle !== undefined ? { handle } : {}) };
 }
