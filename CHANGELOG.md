@@ -7,53 +7,26 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.50] — 2026-10-29
+
 ### Added
 
-- Choose reasoning effort for native Codex models, including models outside the built-in catalog, and set validated effort when creating sessions through the Sessions API. Session status reports the selected effort and supported levels.
+- Codex sessions can set their reasoning effort from the model menu, including levels the app-server advertises for models outside the built-in catalog; Sessions API `create_session` accepts `effort` and refuses an unsupported value with `invalid_effort`.
 
 ### Fixed
 
-- The context popover's session spend line wraps instead of clipping the subagent share and the price qualifiers.
-- A step row in the context popover keeps "cost ≈ $0.0021" on one line instead of splitting the money value.
-- Cost copy is sentence case inside a sentence ("by subscription", "price unknown") instead of mixing "By subscription" and "Price unknown".
-- The context popover fits above its trigger instead of growing past the window top, and its body scrolls when an expanded turn is long.
-- The context popover's usage bar turns the warning / danger colour near the limit instead of staying accent blue.
-- The Review panel and the Settings panes keep their layout and spacing: the stylesheets no longer lose the rules that followed two malformed comments.
-- The transcript tick rail stays clear of message text in narrow panes, including when a side panel is open (#16).
-- The test suite no longer adds phantom projects to the developer's own AnyCode sidebar.
-- A host test that times out no longer hands a late boot the developer's real profile: the test stops the host before restoring the environment.
-- Test cleanup removes the session variables a host boot creates, so later tests no longer inherit a deleted session.
-- Host tests ignore the shell's proxy settings, so a credentialed proxy cannot shape a test run.
-- MCP servers use the login shell PATH and show startup and configuration failures in Settings (#3).
-- MCP failure diagnostics redact credential values a server inherits from the environment, so its stderr can no longer expose them (#3).
-- A Claude session's failed MCP server row says Claude does not report the reason and points at `claude mcp list` (#3).
-- The MCP pane follows every Claude turn, so a server that stops working after the first turn no longer shows as connected (#3).
-- A malformed MCP config file is reported without quoting its contents (#3).
-- A plugin you turned off is treated as a state, not a problem: no duplicate "Problems" line and no warning in Settings → MCP, Skills or Subagents, even when its manifest asks for a newer AnyCode or declares an escaping skills, agents or workflows directory.
-- The Sessions API starts even when a folder in its allowed list was deleted; the other folders keep working and the folder is allowed again once it is back.
-- Settings → Sessions API → Advanced shows an allowed project as "On" with a "Turn off" action, spaces its rows, and labels the port field.
-- Settings → Roles and the first-run role dialog name every connection by its label or provider name instead of showing a raw connection id.
-- Skipping the first-run role dialog now starts the orchestration task on the built-in defaults instead of doing nothing.
-- Creating a role profile without typing a name gives it a unique name (no more duplicate “New profile”), and Rename works for the selected custom profile.
-- The Roles save result appears next to “Save roles”, and the pane description matches the single global parallel-children limit.
-- The Roles project picker shows the folder name, with the full path as its tooltip.
-- Show an actionable error when a tab’s workspace folder is missing. (#6)
-- Starting a task in a deleted folder now refuses and keeps the typed message and attachments instead of losing them in a tab that never connects — including when a provider refresh delays the start. (#6)
-- The Sessions API reports a missing folder instead of a started session when the folder disappears while the session is being prepared or while a provider refresh delays its start. (#6)
-- Restoring a missing folder after a failed resume still opens on the imported task’s chosen model. (#6)
-- A failed turn or compaction no longer hides that the host is reconnecting. (#6)
-- Sessions API tabs keep their agent handle as the title after closing the tab, restarting AnyCode and resuming the session; a title from an older version is repaired on resume only while it is still the raw delivery header, and a title you chose — including after changing the handle later — is left alone.
-- An agent message reads the same in the live transcript as it does after a reload: the delivery wrapper, its JSON header and the delivery line no longer appear, and the message body is not shown twice.
-- A background child's report is labelled "Background subagent completed" instead of repeating the word "subagent".
-- An agent handle is only acknowledged as stored once the session store actually holds it: a failed write — including a session row that could not be created at all — is retried instead of silently forfeited, so the title survives the next restart.
-- Deliver the first message to newly created sessions reliably and report delivery failures. (#21)
-- A message still being handed to a new session is no longer shown to it as an earlier delivery, so the first turn always starts. (#21)
-- A message that cannot be dispatched is reported as failed at its own 20-second deadline, not up to a second later. (#21)
-- A failed session preparation no longer deletes the session row while its host may still be running.
-- Deferred session creation keeps agent attribution private until the requested reasoning effort is accepted.
-- Picking a reasoning effort right after switching to another native model is no longer ignored.
-- An effort chosen for a newly selected native model is kept and shown as the selected value instead of reverting to Default when it matches the previous model's effort.
-- The native model menu shows its effort row even when the session has not reported an applied effort yet.
+- A missing workspace folder shows an actionable error instead of "Connecting to host…"; starting a task in a deleted folder refuses and keeps the typed message, and the Sessions API answers `folder_not_found` (GitHub #6).
+- The first message of a session created through the Sessions API is delivered reliably, and a delivery that fails is reported at its own deadline (GitHub #21).
+- MCP servers use the login shell PATH, show startup and configuration failures in Settings, follow every Claude turn and redact inherited credentials from their diagnostics (GitHub #3).
+- The transcript tick rail stays clear of message text in narrow panes, including with a side panel open (GitHub #16).
+- The Sessions API starts even when a folder in its allowed list was deleted; the other folders keep working, and the folder is allowed again once it is back.
+- Sessions API tabs keep their agent handle as the title across restarts and resumes, and agent messages read the same live as after a reload, without the delivery wrapper or a duplicated body.
+- The context popover wraps its spend line instead of clipping it, keeps money values on one line, fits short windows and scrolls long turns, tints its usage bar near the limit, and writes cost copy in sentence case.
+- The Review panel and the Settings panes keep their layout: two malformed stylesheet comments no longer drop the rules after them.
+- Settings → Roles names connections by label, Skip in the first-run role dialog starts the task, new profiles get unique names, Rename works, the save result appears next to "Save roles" and the project picker shows folder names.
+- A plugin you turned off is a state, not a problem: no "Problems" line or warning in Settings → MCP, Skills or Subagents. Settings → Sessions API → Advanced shows an allowed project as "On" with a "Turn off" action.
+- A failed turn or compaction no longer hides that the host is reconnecting, and a background child's report no longer repeats the word "subagent".
+- Test runs no longer touch the developer's own AnyCode profile, sidebar or proxy settings.
 
 ## [0.0.49] — 2026-10-28
 
