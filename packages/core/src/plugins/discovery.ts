@@ -24,12 +24,14 @@
  * deterministic downstream precedence.
  *
  * v1 gating (design §2/§4), applied per plugin AFTER manifest load:
+ *  - name in state.json `disabled` (user-global by name) → skip with a
+ *    `skipped[]` entry but NO problem: it is the user's own OFF switch, not a
+ *    load failure, so panes must not warn about it. This is checked FIRST —
+ *    a disabled plugin's newer manifest or engine mismatch is not a problem
+ *    either, it simply does not load;
  *  - `manifestVersion > MANIFEST_VERSION` → skip, problem "requires newer
  *    AnyCode" (the schema accepts the int; a future manifest never crashes
  *    an older app);
- *  - name in state.json `disabled` (user-global by name) → skip with a
- *    `skipped[]` entry but NO problem: it is the user's own OFF switch, not a
- *    load failure, so panes must not warn about it;
  *  - `engines.anycode` unsatisfied by `appVersion` (when provided) → plugin
  *    stays installed but INACTIVE: skip, problem "incompatible with AnyCode
  *    X (needs R)";
@@ -492,18 +494,20 @@ export async function discoverPlugins(
       return;
     }
 
+    // The user's OFF switch is decided FIRST, once the name is known: a plugin
+    // the user turned off is a STATE, not a load failure, so nothing about it
+    // (newer manifest, incompatible engine) may surface as a problem in the
+    // Plugins pane or leak into MCP/Skills/Subagents. Only an ENABLED plugin
+    // reaches the gates below.
+    if (disabled.has(manifest.name)) {
+      skipped.push({ name: manifest.name, dir: pluginDir, tier, reason: "disabled" });
+      return;
+    }
+
     if (manifest.manifestVersion !== undefined && manifest.manifestVersion > MANIFEST_VERSION) {
       const problem = `Plugin "${manifest.name}" at ${pluginDir} skipped: manifest version ${manifest.manifestVersion} requires a newer AnyCode (this app understands ${MANIFEST_VERSION})`;
       problems.push(problem);
       skipped.push({ name: manifest.name, dir: pluginDir, tier, reason: "newer-manifest", problem });
-      return;
-    }
-
-    if (disabled.has(manifest.name)) {
-      // A user-disabled plugin is a STATE, not a load failure: record the skip
-      // (the Plugins pane still rows it as OFF) but never a problem, so the
-      // MCP/Skills/Subagents panes do not warn about it.
-      skipped.push({ name: manifest.name, dir: pluginDir, tier, reason: "disabled" });
       return;
     }
 

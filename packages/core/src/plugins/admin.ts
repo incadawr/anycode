@@ -285,13 +285,17 @@ export async function scanPluginsAdmin(
             row.description = parsed.data.description;
           }
           // Containment sanity problems for declared dirs (informational).
+          // A user-disabled plugin is a STATE, not a failure: its row carries
+          // no diagnostics at all (re-enabling it restores any real badge on
+          // the next scan).
+          const diagnosticsWanted = !row.disabled;
           for (const [dirs, label] of [
             [parsed.data.skills, "skills"],
             [parsed.data.agents, "agents"],
             [pluginWorkflowsDirs(parsed.data), "workflows"],
           ] as const) {
             for (const dir of dirs) {
-              if (!containedRoot(info.root, dir)) {
+              if (diagnosticsWanted && !containedRoot(info.root, dir)) {
                 row.problems.push(`${label} entry ${JSON.stringify(dir)} escapes the plugin root`);
               }
             }
@@ -299,18 +303,21 @@ export async function scanPluginsAdmin(
         }
       }
     } catch (error) {
-      row.problems.push(`Could not read manifest: ${describeError(error)}`);
+      if (!row.disabled) {
+        row.problems.push(`Could not read manifest: ${describeError(error)}`);
+      }
     }
   }
 
   // ── Attribution: discovery problems that name a plugin land on its row
-  // (once — a skipped row may already carry the same line from its candidate). ──
+  // (once — a skipped row may already carry the same line from its candidate).
+  // A disabled row stays clean: it is OFF by the user's choice, not failing. ──
   for (const problem of discovery.problems) {
     for (const name of rows.keys()) {
       if (problem.includes(`"${name}"`)) {
-        const rowProblems = rows.get(name)!.problems;
-        if (!rowProblems.includes(problem)) {
-          rowProblems.push(problem);
+        const row = rows.get(name)!;
+        if (!row.disabled && !row.problems.includes(problem)) {
+          row.problems.push(problem);
         }
         break;
       }

@@ -237,6 +237,41 @@ describe("discoverPlugins — disabled set (user-global by name)", () => {
     expect(result.problems[0]).toMatch(/Plugin "future" .*is installed but inactive: incompatible/);
     expect(result.problems.some((p) => p.includes("turned-off"))).toBe(false);
   });
+
+  it("a disabled plugin with a NEWER manifest is a state, not a problem — an enabled one still reports", async () => {
+    const fs = makeFs({
+      dirs: { [USER_PLUGINS]: ["future", "turned-off"] },
+      files: {
+        ...stateWith({}, { disabled: ["turned-off"] }),
+        ...manifestAt(`${USER_PLUGINS}/future`, {
+          name: "future",
+          manifestVersion: 2,
+          skills: ["s"],
+          agents: [],
+        }),
+        ...manifestAt(`${USER_PLUGINS}/turned-off`, {
+          name: "turned-off",
+          manifestVersion: 2,
+          skills: ["s2"],
+          agents: [],
+        }),
+      },
+    });
+    const result = await discoverPlugins(fs, { ...base(), pluginStatePath: STATE_PATH });
+
+    // The user's own OFF switch is decided first: the newer manifest on a
+    // disabled plugin stays a state, never a load failure.
+    const off = result.skipped.find((s) => s.name === "turned-off")!;
+    expect(off.reason).toBe("disabled");
+    expect(off.problem).toBeUndefined();
+    expect(result.problems.some((p) => p.includes("turned-off"))).toBe(false);
+
+    // The SAME newer manifest on an ENABLED plugin is a real failure.
+    expect(result.problems).toHaveLength(1);
+    expect(result.problems[0]).toMatch(/Plugin "future" .*requires a newer AnyCode/);
+    expect(result.skipped.find((s) => s.name === "future")!.reason).toBe("newer-manifest");
+    expect(result.skillRoots).toEqual([]);
+  });
 });
 
 describe("discoverPlugins — engines.anycode compat gating", () => {

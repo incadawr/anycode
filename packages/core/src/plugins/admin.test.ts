@@ -287,6 +287,44 @@ describe("scanPluginsAdmin", () => {
     expect(future.problems[0]).toMatch(/incompatible with AnyCode 0\.1\.7/);
   });
 
+  it("an escaping skills dir badges an ENABLED plugin but never a DISABLED one", async () => {
+    const fs = makeFs({
+      dirs: { [USER_PLUGINS]: ["enabled-escape", "turned-off"] },
+      files: {
+        [STATE_PATH]: JSON.stringify({
+          version: 1,
+          plugins: {},
+          removedDefaults: [],
+          disabled: ["turned-off"],
+        }),
+        ...manifestAt(`${USER_PLUGINS}/enabled-escape`, {
+          name: "enabled-escape",
+          skills: ["../outside"],
+          agents: [],
+          workflows: [],
+        }),
+        ...manifestAt(`${USER_PLUGINS}/turned-off`, {
+          name: "turned-off",
+          skills: ["../outside"],
+          agents: [],
+          workflows: [],
+        }),
+      },
+    });
+    const result = await scanPluginsAdmin(fs, { workspace: WORKSPACE, home: HOME });
+
+    // OFF is a state: the detail pass must not badge it with containment lines.
+    const off = result.rows.find((r) => r.name === "turned-off")!;
+    expect(off.status).toBe("disabled");
+    expect(off.problems).toEqual([]);
+    expect(result.problems.some((p) => p.includes("turned-off"))).toBe(false);
+
+    // The same declaration on an ENABLED plugin is a real problem, kept.
+    const enabled = result.rows.find((r) => r.name === "enabled-escape")!;
+    expect(enabled.status).toBe("active");
+    expect(enabled.problems.some((p) => p.includes('skills entry "../outside" escapes the plugin root'))).toBe(true);
+  });
+
   it("empty world: zero rows, zero problems", async () => {
     const result = await scanPluginsAdmin(makeFs({}), { workspace: WORKSPACE, home: HOME });
     expect(result.rows).toEqual([]);
