@@ -110,6 +110,7 @@ import { activeConnection, activeProviderView, connectionById, resolveProviderCo
 // CONNECTION (the core engine has no engine-model argv), never a silent fallback.
 import { primeNewSessionPin } from "./session-pin.js";
 import { createSessionForAgent as createSessionForAgentImpl, type CreateSessionByAgentDeps } from "./create-session-by-agent.js";
+import { createAgentTitlePushes, recoverAgentSessionTitle, type AgentTitlePushes } from "./agent-session-title.js";
 import { rebuildHostEnvCache } from "./host-env-cache.js";
 import { recordHostFailure } from "../host/error-diagnostics.js";
 import {
@@ -548,7 +549,21 @@ let communicationApprovals: SessionAccessStore | null = null;
 /** Taskana 4768: per-project "Allow agents to open tasks here" switch (default OFF everywhere) and the sessions an agent opened (drives the "agent" marker). */
 let communicationAgentProjects: AgentProjectsStore | null = null;
 const agentOpenedSessions = new Set<string>();
+/**
+ * The handle a session's tab is titled with. Kept for the tab's lifetime (the
+ * sidebar reads it), and mirrored into the session row by `agentTitlePushes`
+ * so the title survives a restart — a session created before that existed is
+ * repaired from the handles file when it is resumed (`recoverAgentSessionTitle`).
+ */
 const agentSessionTitles = new Map<string, string>();
+const agentTitlePushes: AgentTitlePushes = createAgentTitlePushes({
+  titleOf: (sessionId) => agentSessionTitles.get(sessionId),
+  request: (sessionId, title) => {
+    if (manager === null) return Promise.reject(new Error("No tab manager"));
+    return manager.communicationRequest(sessionId, "set_agent_title", title);
+  },
+  warn: (message, error) => console.warn(message, error),
+});
 // Taskana 4759: the per-session "Full browser access" switch and the notifier that pushes
 // each tab's EFFECTIVE value (renderer + host flag) exactly once per change.
 let browserAccessStore: BrowserAccessStore | null = null;
@@ -2423,6 +2438,7 @@ void app.whenReady().then(async () => {
     agentOpenedSessions,
     closeSessionByAgent: (sessionId) => closeSessionForAgent(manager, agentOpenedSessions, sessionId, (tabId) => {
       agentSessionTitles.delete(sessionId);
+      agentTitlePushes.forget(sessionId);
       sendToMainWindow(win, TAB_CLOSED_ENVELOPE_TYPE, { tabId });
     }),
   });
@@ -2446,6 +2462,7 @@ void app.whenReady().then(async () => {
     randomUUID,
     agentOpenedSessions,
     agentSessionTitles,
+    pushAgentTitle: (sessionId) => agentTitlePushes.retain(sessionId),
     listTabs: () => manager?.listTabs() ?? [],
   };
   const createSessionForAgent = (request: { workspace: string; engine?: "core" | "codex" | "claude"; model?: string; handle?: string }) =>
@@ -2453,11 +2470,25 @@ void app.whenReady().then(async () => {
 
   manager = new TabHostManager({
     agentTitleOf: (sessionId) => agentSessionTitles.get(sessionId),
+    // Every spawn, respawn and resume delivers a fresh port: that is the moment a
+    // title push that lost its host gets another chance.
+    onTabPortDelivered: (tab) => agentTitlePushes.retry(tab.sessionId),
     isAgentOpenedSession: (sessionId) => agentOpenedSessions.has(sessionId),
     onSessionRegistered: (info) => {
       const sessionsAdded = communicationSessions?.register(info);
       const approvalsAdded = communicationApprovals?.register(info);
       const browserAdded = browserAccessStore?.register(info);
+      // A session created before handles were persisted keeps the payload-derived
+      // title in SQLite; the saved handle repairs it as soon as its tab is back.
+      void recoverAgentSessionTitle({
+        sessionId: info.sessionId,
+        savedHandle: () => communicationSessions?.getHandle(info.sessionId),
+        readPersistedTitle: async () => (await persistence?.getSessionById(info.sessionId))?.title,
+        adopt: (title) => {
+          agentSessionTitles.set(info.sessionId, title);
+          agentTitlePushes.retain(info.sessionId);
+        },
+      }).catch((error: unknown) => console.warn("[main] agent title recovery failed", error));
       return () => {
         if (sessionsAdded) communicationSessions?.remove(info.sessionId);
         if (approvalsAdded) communicationApprovals?.remove(info.sessionId);

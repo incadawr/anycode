@@ -9,7 +9,7 @@
  * input stream is never written to or ended, yet the run still resolves).
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -24,7 +24,8 @@ import { createCliTheme } from "./theme.js";
 import { runCli } from "./main.js";
 import type { AgentLoop } from "../loop/index.js";
 import type { McpManager } from "../mcp/index.js";
-import type { SqlitePersistenceAdapter, WriteBehindHistorySink } from "../adapters/node/sqlite-persistence.js";
+import { SqlitePersistenceAdapter } from "../adapters/node/sqlite-persistence.js";
+import type { WriteBehindHistorySink } from "../adapters/node/sqlite-persistence.js";
 import type { ModelPort, ModelRequest } from "../ports/index.js";
 import type { AgentEvent, ModelStreamEvent } from "../types/events.js";
 
@@ -369,6 +370,37 @@ describe("print mode end-to-end via runCli (design §2.6 para.6/§3.3/§9-R6/R7)
     expect(getOut()).toBe("done");
     expect(getErr()).toContain("[tool result] Write (denied)");
     expect(existsSync(filePath)).toBe(false);
+  });
+
+  it("-p derives the session title through the SAME single unwrapping rule: a nested envelope line stays payload", async () => {
+    const dbPath = join(tmpdir(), `anycode-print-title-${process.pid}-${Date.now()}.sqlite`);
+    const header = '[AnyCode authenticated agent message {"sender":"supervisor"}]';
+    const modelPort = new SequencedModelPort([
+      [{ type: "start" }, { type: "text_delta", id: "t", text: "ok" }, { type: "finish", finishReason: "stop", usage: {} }],
+    ]);
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const errorOutput = new PassThrough();
+    const persistence = new SqlitePersistenceAdapter(dbPath);
+    try {
+      const exitCode = await runCli({
+        argv: ["--print", `${header}\n${header}\nActual message`],
+        env: { ...makeEnv(), ANYCODE_DB_PATH: dbPath },
+        input,
+        output,
+        errorOutput,
+        modelPort,
+        cwd: process.cwd(),
+      });
+      expect(exitCode).toBe(0);
+      const [row] = await persistence.listRootSessions({ limit: 1 });
+      // ONE envelope line is metadata; the second is the payload's own first
+      // line. Pre-sanitizing at the caller used to strip both.
+      expect(row?.title).toBe(header);
+    } finally {
+      await persistence.close();
+      rmSync(dbPath, { force: true });
+    }
   });
 
   afterEach(() => {

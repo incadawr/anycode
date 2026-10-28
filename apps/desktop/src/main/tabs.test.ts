@@ -1502,6 +1502,23 @@ describe("TabHostManager — connection pinning (TASK.45 W10)", () => {
     expect("openedByAgent" in payloads[1]!).toBe(false);
   });
 
+  it("reports every fresh host generation once, so a retained agent title can be retried (onTabPortDelivered)", () => {
+    const { window, posted } = windowRig();
+    const delivered: string[] = [];
+    const manager = new TabHostManager({
+      fork: liveForkRig().fork, hostEntry: "/fake/host.js", createChannel: fakeChannel, getWindow: () => window, env: () => ({}), logger: silentLogger,
+      onTabPortDelivered: (tab) => delivered.push(tab.sessionId),
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "s-agent", resume: false });
+    const tab = manager.getTab(created.ok ? created.tab.tabId : "")!;
+    // A spawn delivery and a respawn delivery are two generations; a renderer
+    // reload re-delivering the port is a third call.
+    manager.deliverTabPort(tab);
+    manager.deliverTabPort(tab);
+    expect(delivered).toEqual(["s-agent", "s-agent"]);
+    expect(posted.filter((p) => p.channel === PORT_ENVELOPE_TYPE)).toHaveLength(2);
+  });
+
   it("resolveCredential receives the tab's pinned connectionId (per-tab oauth routing)", async () => {
     const seen: (string | undefined)[] = [];
     const { fork, hosts } = liveForkRig();

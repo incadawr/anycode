@@ -49,6 +49,13 @@ export interface CreateSessionByAgentDeps {
   randomUUID(): string;
   agentOpenedSessions: Set<string>;
   agentSessionTitles: Map<string, string>;
+  /**
+   * Retains the accepted handle as the tab's durable title: pushes it to the
+   * host now and keeps it for a retry when that push cannot land (a booting,
+   * exiting or respawning host). Optional so a bare test bench stays valid;
+   * `agentSessionTitles` is still the in-memory source the sidebar reads.
+   */
+  pushAgentTitle?(sessionId: string): void;
   /** Live tab list, for handle-uniqueness checks against live sessions. */
   listTabs(): ReadonlyArray<{ sessionId: string }>;
 }
@@ -133,6 +140,12 @@ export async function createSessionForAgent(
     if (!sessions.setHandle(sessionId, normalized.handle, isLive).ok) return;
     handle = normalized.handle;
     deps.agentSessionTitles.set(sessionId, handle);
+    // Never awaited or fatal; main retains the title for a later host generation.
+    try {
+      deps.pushAgentTitle?.(sessionId);
+    } catch (error) {
+      console.warn("[main] failed to push agent session title", error);
+    }
   };
   let created: Awaited<ReturnType<TabHostManager["createTabAwaitingInitialSpawn"]>>;
   try {

@@ -30,7 +30,7 @@ import * as fsp from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
-import { deriveSessionTitle, sanitizeTitleSource, type HistoryItem, type PermissionMode, type PersistencePort } from "@anycode/core";
+import { deriveSessionTitle, type HistoryItem, type PermissionMode, type PersistencePort } from "@anycode/core";
 import { importCodexRollout, type ImportCodexRolloutOptions, type RolloutImportReport } from "./codex-rollout.js";
 
 export const CODEX_ROLLOUT_LIST_CHANNEL = "anycode:codex-rollout-list";
@@ -311,12 +311,13 @@ export async function handleCodexRolloutImport(deps: CodexRolloutIpcDeps, raw: u
   const connectionId = deps.activeConnectionId?.();
   // TASK.57: an imported session otherwise lands with no title at all (this
   // handler never passed one) — derived the same way a live session's first
-  // turn titles itself (`deriveSessionTitle(sanitizeTitleSource(...))`), off
-  // the imported conversation's own first user message. No user message (or
-  // one that derives to an empty heuristic title) ⇒ leave `title` unset,
-  // byte-as-today.
+  // turn titles itself, off the imported conversation's own first user
+  // message. `deriveSessionTitle` is the ONE unwrapping rule (agent envelope,
+  // then reminders); sanitizing before it would strip a second envelope-shaped
+  // line that is genuine payload. No user message (or one that derives to an
+  // empty heuristic title) ⇒ leave `title` unset, byte-as-today.
   const firstUserText = firstImportedUserMessageText(imported.report.items);
-  const title = firstUserText !== undefined ? deriveSessionTitle(sanitizeTitleSource(firstUserText)) : "";
+  const title = firstUserText !== undefined ? deriveSessionTitle(firstUserText) : "";
   const session = await deps.persistence.createSession({
     id: randomUUID(),
     workspace,

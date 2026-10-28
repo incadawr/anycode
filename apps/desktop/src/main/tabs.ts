@@ -656,6 +656,14 @@ export interface TabHostManagerDeps {
    * parent's). Absent in legacy tests.
    */
   onSessionRegistered?: (info: { sessionId: string; parentSessionId?: string }) => void | (() => void);
+  /**
+   * Called with the tab every time a fresh MessageChannel is delivered to its
+   * host (initial spawn, respawn, resume, renderer reload) — one delivery per
+   * host GENERATION. Main retries a retained agent title here: a push that
+   * lost its host (exit, timeout, boot race) gets another chance on the next
+   * generation instead of being forgotten. Absent in legacy tests.
+   */
+  onTabPortDelivered?: (tab: { tabId: string; sessionId: string; workspace: string }) => void;
   /** utilityProcess.fork (or a fake). */
   fork: HostForkFn;
   /**
@@ -3487,6 +3495,11 @@ export class TabHostManager {
       [channel.port2],
     );
     this.logger.log(`[main] delivered fresh MessageChannel to tab ${tab.tabId}`);
+    try {
+      this.deps.onTabPortDelivered?.({ tabId: tab.tabId, sessionId: tab.sessionId, workspace: tab.workspace });
+    } catch (error) {
+      this.logger.warn(`[main] onTabPortDelivered callback failed for tab ${tab.tabId}`, error);
+    }
 
     // Everything below binds the term channel to `tab.proc`; an error tab got
     // its whole delivery (the UI envelope above) and has no PTY to attach.

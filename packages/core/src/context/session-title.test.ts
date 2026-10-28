@@ -247,8 +247,23 @@ describe("generateSessionTitle mid-stream replay (Taskana 4705 review)", () => {
 
 
 describe("agent envelope titles (Taskana 4880)", () => {
-  it.each(["\\n", "\n"])("uses the payload after separator %j", (separator) => {
+  it.each(["\\n", "\n"])("uses the payload after separator %j", async (separator) => {
     const source = `[AnyCode authenticated agent message {"sender":"supervisor"}]${separator}Fix the sidebar\nDetails`;
-    expect(deriveSessionTitle(sanitizeTitleSource(source))).toBe("Fix the sidebar");
+    expect(deriveSessionTitle(source)).toBe("Fix the sidebar");
+    const port = new ScriptedModelPort(textScript("Sidebar"));
+    await generateSessionTitle({ modelPort: port, text: source });
+    expect(port.requests[0]!.messages).toEqual([{ role: "user", content: "Fix the sidebar\nDetails" }]);
+  });
+
+  it("handles escaped separator-like metadata and leaves malformed headers intact", () => {
+    const source = `[AnyCode authenticated agent message ${JSON.stringify({ sender: "name}]\nother" })}]\nActual payload`;
+    expect(deriveSessionTitle(source)).toBe("Actual payload");
+    const malformed = '[AnyCode authenticated agent message {not json}]\nKeep this';
+    expect(sanitizeTitleSource(malformed)).toBe(malformed);
+  });
+
+  it("preserves an envelope-like line in the payload", () => {
+    const header = '[AnyCode authenticated agent message {"sender":"supervisor"}]';
+    expect(deriveSessionTitle(`${header}\n${header}\nActual message`)).toBe(header);
   });
 });

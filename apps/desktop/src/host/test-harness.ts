@@ -301,6 +301,8 @@ export interface HarnessOptions {
   hasTitle?: boolean;
   /** GitHub #19: persisted boot title, re-asserted on every ui_ready. */
   initialTitle?: string;
+  /** Observes every persistence patch the session writes (title recovery tests). */
+  onTouch?: SessionPersistence["touch"];
   /**
    * Tier-2 title refinement callback (Phase 4 slice 4.4-T, design §3,
 
@@ -727,6 +729,9 @@ export function createHarness(options: HarnessOptions): Harness {
   const persistence: SessionPersistence = {
     touch(patch) {
       touches.push(patch);
+      // The result is FORWARDED: a test can make the write pending and prove
+      // the caller only acknowledges after it committed.
+      return options.onTouch?.(patch);
     },
   };
   // R1 (Taskana 4704 re-review #3): the harness builds the SAME spawn-mode cell

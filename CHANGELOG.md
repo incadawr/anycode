@@ -31,6 +31,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - The Sessions API reports a missing folder instead of a started session when the folder disappears while the session is being prepared or while a provider refresh delays its start. (#6)
 - Restoring a missing folder after a failed resume still opens on the imported task’s chosen model. (#6)
 - A failed turn or compaction no longer hides that the host is reconnecting. (#6)
+- Sessions API tabs keep their agent handle as the title after closing the tab, restarting AnyCode and resuming the session. A session that was restored with its message text as the title is repaired from the saved handle on resume.
 
 ## [0.0.49] — 2026-10-28
 

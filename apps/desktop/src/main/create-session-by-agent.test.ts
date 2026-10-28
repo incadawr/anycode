@@ -179,6 +179,30 @@ describe("create_session — the production creation path primes a non-active co
     expect(r.manager.listTabs()).toHaveLength(0);
   });
 
+  it("retains the accepted handle as the tab title and never fails the session on a broken push", async () => {
+    const r = rig();
+    const titles = new Map<string, string>();
+    const pushed: string[] = [];
+    const deps = r.deps({
+      agentSessionTitles: titles,
+      // The host is not ready to take the title (or the retainer itself is
+      // wired to something broken): create_session must still succeed.
+      pushAgentTitle: (sessionId) => { pushed.push(sessionId); throw new Error("host unavailable"); },
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const outcome = await createSessionForAgent({ workspace: "/ws", handle: "worker-1" }, deps);
+      expect(outcome).toMatchObject({ ok: true, handle: "worker-1" });
+      if (!outcome.ok) throw new Error("create refused");
+      // The sidebar title is set for the tab's lifetime…
+      expect(titles.get(outcome.sessionId)).toBe("worker-1");
+      // …and the push was attempted (main retains it for the next host generation).
+      expect(pushed).toEqual([outcome.sessionId]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("the no-model path keeps using the ACTIVE connection (no priming, no pin)", async () => {
     const r = rig();
     const outcome = await createSessionForAgent({ workspace: "/ws", engine: "core" }, r.deps());

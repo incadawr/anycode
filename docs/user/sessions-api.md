@@ -79,12 +79,17 @@ Settings → Sessions API → Advanced lists the projects that allow it and has 
 
 Input: `workspace` (absolute path, required); optional `engine` (`core`,
 `codex`, `claude`), `model`, `handle` and `firstMessage`. The new session is
-shared immediately. An accepted `handle` is the tab title for the tab's lifetime
-and stays fixed through automatic titling. This pin is in memory: saved session
-history retains the automatically generated payload title, which is shown when
-the session is resumed after closing the tab or restarting AnyCode. Without a
-handle the title comes from the message payload. `firstMessage` is delivered
-like `send_message` with
+shared immediately. An accepted `handle` becomes the tab title: it replaces the
+title the first message would have produced and stays fixed through automatic
+titling, closing the tab, restarting AnyCode and resuming the session. The title
+is written to the session store before the call is confirmed, so a restart reads
+it back; if that write cannot happen yet (the tab's process is still starting or
+was replaced), AnyCode keeps the handle and writes it again when the tab's next
+process is ready. A session opened by an agent before this could be restored with
+its message-derived title instead of its handle; resuming such a session repairs
+the title from the saved handle, and a title you renamed is left as you set it.
+Without a handle the title comes from the message payload, whose delivery wrapper
+AnyCode strips first. `firstMessage` is delivered like `send_message` with
 `mode: next_turn` and the reply carries its `messageId`, so `wait_for_result`
 works on it. If the new tab's host is not ready within 10 seconds, the reply
 omits `messageId`; the tab exists, so send the message yourself with

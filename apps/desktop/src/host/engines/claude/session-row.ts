@@ -67,6 +67,12 @@ export class ClaudeSessionRowWriter {
   private chain: Promise<void> | null;
   private readonly buffered: ClaudeSessionRowPatch[] = [];
   /**
+   * Resolvers of `touch()` calls that arrived while the row did not exist yet.
+   * Resolved after the CREATE + buffered-flush tail settles, so a caller that
+   * promises persistence waits for the real write instead of the buffer.
+   */
+  private readonly bufferedWaiters: Array<() => void> = [];
+  /**
    * Taskana 4123 follow-up: the pending-child-reports snapshot saved before
    * the row exists. At most one entry is ever live (each save overwrites the
    * whole snapshot — `null` once the queue drains), so the buffer keeps only
@@ -93,16 +99,23 @@ export class ClaudeSessionRowWriter {
     return this.chain !== null;
   }
 
-  /** Fire-and-forget patch. Buffered while no row exists yet, never dropped. */
-  touch(patch: ClaudeSessionRowPatch): void {
+  /**
+   * Patch, never dropped: buffered while no row exists yet. The returned
+   * promise settles once THIS patch has been written (never rejects — a
+   * failure is reported through `onError`), so the Sessions API title ack can
+   * wait for the commit instead of the enqueue.
+   */
+  touch(patch: ClaudeSessionRowPatch): Promise<void> {
     if (this.chain === null) {
       this.buffered.push(patch);
-      return;
+      return new Promise<void>((resolve) => { this.bufferedWaiters.push(resolve); });
     }
-    this.chain = this.chain
+    const write = this.chain
       .then(() => this.options.port.touch(this.options.rowId, patch))
       .then(() => undefined)
       .catch((error: unknown) => this.options.onError(error, "touch"));
+    this.chain = write;
+    return write;
   }
 
   /**
@@ -169,7 +182,7 @@ export class ClaudeSessionRowWriter {
    */
   materialize(posture: { model: string; mode: string }): void {
     if (this.chain !== null) {
-      this.touch(posture);
+      void this.touch(posture);
       return;
     }
     const created = this.options.port
@@ -179,7 +192,7 @@ export class ClaudeSessionRowWriter {
     // so the boot survives it) — which is exactly why the flush below gates
     // on `created`'s OWN outcome, not on the chain settling.
     this.chain = created.catch((error: unknown) => this.options.onError(error, "create"));
-    for (const patch of this.buffered.splice(0, this.buffered.length)) this.touch(patch);
+    for (const patch of this.buffered.splice(0, this.buffered.length)) void this.touch(patch);
     // Taskana 4123 follow-up: flush the newest report snapshot (if any was
     // buffered) after the CREATE, through the same serialized chain.
     // Taskana 4123 cross-review F1: strictly after the create settles, and
@@ -198,12 +211,18 @@ export class ClaudeSessionRowWriter {
     // buffer if a live save registered anyway (defense against any future
     // reordering), and the create-success gate is evaluated when the link
     // RUNS, so `settled()` still covers the whole tail including the flush.
+    // The buffered patches' waiters resolve LAST: every `touch` above re-chained
+    // behind `created`, so by the time this tail link runs their writes settled.
+    const waiters = this.bufferedWaiters.splice(0, this.bufferedWaiters.length);
     this.chain = this.chain
       .then(() => created)
       .then(
         () => this.flushBufferedReportJson(),
         () => undefined,
-      );
+      )
+      .then(() => {
+        for (const resolve of waiters) resolve();
+      });
     void this.chain;
   }
 
