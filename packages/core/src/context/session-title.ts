@@ -26,9 +26,8 @@ export const SESSION_TITLE_TIMEOUT_MS = 10_000;
  * Paired reminder/context tags that hosts inject around raw user input
  * (agent-loop.ts's `<hook-context>`, prompts/plan-reminder.ts's
  * `<plan-mode-reminder>`, and
- * the assistant-side `<system-reminder>` convention). Both title tiers key off
-
- * second layer against a future caller that forwards already-wrapped text.
+ * the assistant-side `<system-reminder>` convention). Both title tiers strip
+ * these as a second layer against callers forwarding already-wrapped text.
  */
 const PAIRED_REMINDER_TAGS = ["hook-context", "plan-mode-reminder", "orchestrate-reminder", "system-reminder"] as const;
 
@@ -39,8 +38,39 @@ const PAIRED_REMINDER_TAGS = ["hook-context", "plan-mode-reminder", "orchestrate
  * text without any of these tags passes through byte-for-byte.
  */
 export function sanitizeTitleSource(text: string): string {
-  // Agent delivery uses a literal \n separator; accept real newlines as well.
-  let result = text.replace(/^\[AnyCode authenticated agent message \{[^\r\n]*?\}\](?:\\n|\r?\n)/, "");
+  // Parse the JSON object so a separator-looking sequence inside an escaped
+  // metadata string cannot be mistaken for the end of the envelope.
+  const prefix = "[AnyCode authenticated agent message ";
+  let result = text;
+  if (text.startsWith(prefix + "{")) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = prefix.length; i < text.length; i++) {
+      const char = text[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+      } else if (char === '"') {
+        inString = true;
+      } else if (char === "{") {
+        depth++;
+      } else if (char === "}" && --depth === 0) {
+        const suffix = text.slice(i + 1);
+        const separator = suffix.startsWith("]\r\n") || suffix.startsWith("]\\n")
+          ? 3
+          : suffix.startsWith("]\n") ? 2 : 0;
+        if (separator > 0) {
+          try {
+            JSON.parse(text.slice(prefix.length, i + 1));
+            result = suffix.slice(separator);
+          } catch { /* Leave malformed envelope-like user text intact. */ }
+        }
+        break;
+      }
+    }
+  }
   for (const tag of PAIRED_REMINDER_TAGS) {
     const pairedBlock = new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, "g");
     result = result.replace(pairedBlock, "");
@@ -51,11 +81,10 @@ export function sanitizeTitleSource(text: string): string {
 /**
  * Heuristic title (tier 1, design §2): the first non-empty line of the raw
  * message, trimmed and capped. Byte-for-byte the original
- * `host/session.ts` implementation — sanitization is the caller's job
- * (`deriveSessionTitle(sanitizeTitleSource(text))`), not this function's.
+ * `host/session.ts` implementation, with injected wrappers removed first.
  */
 export function deriveSessionTitle(text: string): string {
-  const firstLine = text.split("\n", 1)[0] ?? "";
+  const firstLine = sanitizeTitleSource(text).split("\n", 1)[0] ?? "";
   const trimmed = firstLine.trim();
   return trimmed.length > SESSION_TITLE_MAX_LENGTH
     ? trimmed.slice(0, SESSION_TITLE_MAX_LENGTH)

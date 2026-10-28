@@ -240,6 +240,24 @@ describe("handleCodexRolloutImport", () => {
     expect(session?.title).toBe("hello there");
   });
 
+  it("unwraps an agent envelope exactly once, so a nested envelope line stays payload (one unwrapping rule, shared with the host)", async () => {
+    const sessionsDir = await tmp();
+    const header = '[AnyCode authenticated agent message {"sender":"supervisor"}]';
+    await seedRollout(sessionsDir, "2026/07/01/rollout-nested-envelope.jsonl", [
+      { timestamp: "2026-07-01T00:00:00.000Z", type: "session_meta", payload: { cwd: "/tmp/project-a" } },
+      { timestamp: "2026-07-01T00:00:01.000Z", type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: `${header}\n${header}\nActual message` }] } },
+    ]);
+    const persistence = new FakePersistence();
+    const deps = makeDeps(persistence, { p1: sessionsDir });
+
+    const result = await handleCodexRolloutImport(deps, { profileId: "p1", fileName: "2026/07/01/rollout-nested-envelope.jsonl", model: "claude-sonnet-5" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // ONE envelope is metadata; the second line is the payload's own first line,
+    // exactly what the desktop host derives from the same message.
+    expect(persistence.sessions.get(result.sessionId)?.title).toBe(header);
+  });
+
   it("leaves the title unset when the rollout carries no user message at all", async () => {
     const sessionsDir = await tmp();
     await seedRollout(sessionsDir, "2026/07/01/rollout-no-user.jsonl", [

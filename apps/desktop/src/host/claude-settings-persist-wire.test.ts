@@ -152,7 +152,7 @@ function fixture(): Fixture {
     model: "haiku",
     sessionId: "claude-session",
     rules: new SessionPermissionRules(),
-    persistence: { touch: (patch) => touches.push(patch) },
+    persistence: { touch: (patch) => { touches.push(patch); } },
   });
   session.bindPort(nodeWirePort(channel.port2 as NodeMessagePort));
 

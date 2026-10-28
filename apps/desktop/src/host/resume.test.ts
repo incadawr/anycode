@@ -14,6 +14,9 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   ConversationHistory,
   SqlitePersistenceAdapter,
@@ -342,6 +345,83 @@ describe("Session — title derivation", () => {
     } finally {
       h.close();
     }
+  });
+
+  it("persists an agent handle in SQLite and retains it after reopening and resume", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "anycode-title-test-"));
+    const path = join(dir, "sessions.db");
+    let persistence = new SqlitePersistenceAdapter(path);
+    let first: ReturnType<typeof createHarness> | undefined;
+    let resumed: ReturnType<typeof createHarness> | undefined;
+    try {
+      await resolveBootSession(persistence, {
+        args: { sessionId: "test-session", resume: false }, workspace: "/workspace", model: "scripted-model",
+      });
+      first = createHarness({ steps: [textStep("a")], onTouch: (patch) => { void persistence.touchSession("test-session", patch); } });
+      first.session.setAgentTitle("worker-1");
+      first.send({ type: "ui_ready" });
+      await first.waitFor(isHostReady);
+      await first.session.receiveAgentMessage({ messageId: "m1", sender: "supervisor", recipientSessionId: "test-session", kind: "agent_message", payload: "Fix the sidebar", mode: "next_turn", createdAt: new Date().toISOString() });
+      await first.waitFor(agentEventOf("loop_end"));
+      expect((await persistence.getSessionById("test-session"))?.title).toBe("worker-1");
+      first.close();
+      first = undefined;
+      await persistence.close();
+      persistence = new SqlitePersistenceAdapter(path);
+      const boot = await resolveBootSession(persistence, {
+        args: { sessionId: "test-session", resume: true }, workspace: "/workspace", model: "scripted-model",
+      });
+      expect(boot.sessionMeta.title).toBe("worker-1");
+      resumed = createHarness({ steps: [textStep("b")], hasTitle: !!boot.sessionMeta.title, onTouch: (patch) => { void persistence.touchSession("test-session", patch); } });
+      resumed.send({ type: "ui_ready" });
+      await resumed.waitFor(isHostReady);
+      resumed.send({ type: "user_message", requestId: "r2", text: "another payload" });
+      await resumed.waitFor(agentEventOf("loop_end"));
+      expect(resumed.touches).toEqual([]);
+      expect((await persistence.getSessionById("test-session"))?.title).toBe("worker-1");
+    } finally {
+      first?.close();
+      resumed?.close();
+      await persistence.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("acknowledges an agent title only after the persistence write commits", async () => {
+    let commitTitle!: () => void;
+    const h = createHarness({
+      steps: [textStep("a")],
+      onTouch: (patch) => (patch.title === "worker-1" ? new Promise<void>((resolve) => { commitTitle = resolve; }) : undefined),
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      let acked = false;
+      const ack = h.session.setAgentTitle("worker-1").then(() => { acked = true; });
+      await h.flush();
+      // The write is STARTED but not committed: no acknowledgement yet.
+      expect(h.touches).toContainEqual({ title: "worker-1" });
+      expect(acked).toBe(false);
+      commitTitle();
+      await ack;
+      expect(acked).toBe(true);
+    } finally { h.close(); }
+  });
+
+  it("does not let an in-flight refinement overwrite a pinned handle", async () => {
+    let resolveTitle!: (title: string) => void;
+    const h = createHarness({ steps: [textStep("a")], refineTitle: () => new Promise((resolve) => { resolveTitle = resolve; }) });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "r1", text: "payload" });
+      await h.waitFor(agentEventOf("loop_end"));
+      await h.waitUntil(() => resolveTitle !== undefined);
+      h.session.setAgentTitle("worker-1");
+      resolveTitle("Old refinement");
+      await h.flush();
+      expect(h.touches).toEqual([{ title: "payload" }, { title: "worker-1" }]);
+    } finally { h.close(); }
   });
 
   it("skips title derivation AND refinement when the boot session already has a title", async () => {

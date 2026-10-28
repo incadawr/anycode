@@ -49,7 +49,7 @@ import { NodeArtifactStore } from "../adapters/node/node-artifacts.js";
 // proxy; the exec adapter below re-reads its URL per spawn.
 import { closeProxyRelay, credentialedProxyValuesForRelay, resolveProxyRelay } from "../adapters/node/proxy-relay.js";
 import { ConversationHistory } from "../context/history.js";
-import { deriveSessionTitle, generateSessionTitle, sanitizeTitleSource } from "../context/session-title.js";
+import { deriveSessionTitle, generateSessionTitle } from "../context/session-title.js";
 import { createDefaultTokenizer } from "../context/tokenizer.js";
 import {
   InMemoryHookRunner,
@@ -1621,7 +1621,11 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
     // titled session is never re-derived (sessionTitleSet gate). Awaited BEFORE
     // runPrintMode, which closes persistence inside its own exit path.
     if (!sessionTitleSet) {
-      const title = deriveSessionTitle(sanitizeTitleSource(printPrompt!));
+      // `deriveSessionTitle` unwraps the authenticated-agent envelope itself —
+      // pre-sanitizing here stripped a second envelope-shaped line that is
+      // actually payload (a nested delivery), giving the CLI a different title
+      // than the desktop host derives from the very same message.
+      const title = deriveSessionTitle(printPrompt!);
       if (title.length > 0) {
         await persistence.touchSession(session.id, { title }).catch(() => {});
       }
@@ -2095,7 +2099,9 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
         // per session (sessionTitleSet flip, mirroring host/session.ts's titleSet).
         if (!sessionTitleSet) {
           sessionTitleSet = true;
-          const title = deriveSessionTitle(sanitizeTitleSource(trimmed));
+          // Single sanitization, inside `deriveSessionTitle`: see the print-mode
+          // note above (a pre-sanitized source lost a nested envelope line).
+          const title = deriveSessionTitle(trimmed);
           if (title.length > 0) {
             void persistence.touchSession(session.id, { title }).catch(() => {});
             // Arms the tier-2 refinement below, over the SAME raw text.

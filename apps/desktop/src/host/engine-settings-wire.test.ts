@@ -184,7 +184,7 @@ function fixtureWith(opts: { child?: boolean }): Fixture {
     model: engine.model,
     sessionId: "codex-session",
     rules: new SessionPermissionRules(),
-    persistence: { touch: (patch) => touches.push(patch) },
+    persistence: { touch: (patch) => { touches.push(patch); } },
     ...(opts.child
       ? {
           child: {

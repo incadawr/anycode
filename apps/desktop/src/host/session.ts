@@ -75,7 +75,6 @@ import {
   finalizeFinalText,
   fixateFinalText,
   resetFinalText,
-  sanitizeTitleSource,
   summarizeChildToolCall,
   withBackgroundTaskNotices,
   withPlanModeReminder,
@@ -598,7 +597,10 @@ export function tapChildPermissions(
  * Narrow persistence callback injected into Session (design §4.2): Session
  * persists session-meta patches (title on the first user message, mode on a
  * between-turns set_mode) WITHOUT ever receiving the whole PersistencePort.
- * Fire-and-forget — it must never throw into or block a turn.
+ * Fire-and-forget for the turn paths — it must never throw into or block a
+ * turn. A caller that needs the write to have LANDED (the Sessions API
+ * `set_agent_title`, whose ack promises persistence) awaits the returned
+ * promise instead; implementations therefore return the real write.
  */
 export interface SessionPersistence {
   /**
@@ -609,7 +611,7 @@ export interface SessionPersistence {
    * is a plain TEXT column — no migration, cut §2(k).4). The host maps it to
    * that column at the persistence boundary, where the cast is visible.
    */
-  touch(patch: { title?: string; mode?: PermissionMode; model?: string; enginePreset?: string }): void;
+  touch(patch: { title?: string; mode?: PermissionMode; model?: string; enginePreset?: string }): void | Promise<void>;
 }
 
 /**
@@ -1284,6 +1286,7 @@ export class Session {
    * refinement attempt consumes it — so a later turn can never re-trigger it.
    */
   private pendingTitleRefineText: string | null = null;
+  private agentTitlePinned = false;
 
   /** Target file paths captured on tool_execution_start, consumed by the "after" snapshot. */
   private readonly snapshotPaths = new Map<string, string>();
@@ -5222,6 +5225,21 @@ export class Session {
   }
 
   /**
+   * Persist the accepted create_session handle as the session title before
+   * admitting its first message. Resolves only once the title write has
+   * COMMITTED, so the caller's acknowledgement (the Sessions API
+   * `set_agent_title`) never claims a title the next boot cannot read back.
+   */
+  async setAgentTitle(title: string): Promise<void> {
+    this.titleSet = true;
+    this.agentTitlePinned = true;
+    this.pendingTitleRefineText = null;
+    await this.persistence?.touch({ title });
+    this.currentTitle = title;
+    this.outbound.emit({ type: "title_changed", title });
+  }
+
+  /**
    * Derives the session title from the first user message's first line
    * (design §4.2; Phase 4 slice 4.4-T additionally sanitizes reminder tags
    * and emits `title_changed` + arms the tier-2 refinement). `sanitizeTitleSource`
@@ -5236,7 +5254,7 @@ export class Session {
     }
     // One attempt, regardless of outcome — never re-derive on later turns.
     this.titleSet = true;
-    const title = deriveSessionTitle(sanitizeTitleSource(text));
+    const title = deriveSessionTitle(text);
     if (title.length > 0) {
       this.currentTitle = title;
       this.persistence?.touch({ title });
@@ -5265,7 +5283,7 @@ export class Session {
     }
     void this.refineTitle(text)
       .then((title) => {
-        if (title) {
+        if (title && !this.agentTitlePinned) {
           this.currentTitle = title;
           this.persistence?.touch({ title });
           this.outbound.emit({ type: "title_changed", title });

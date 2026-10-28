@@ -1985,7 +1985,9 @@ async function bootCodexSession(
         // its own types; the column is shared, and the cast lives here, once.
         const { enginePreset, ...rest } = patch;
         const row = { ...rest, ...(enginePreset !== undefined ? { mode: enginePreset as PermissionMode } : {}) };
-        void persistence?.touchSession(connected.sessionMeta.id, row).catch((error) => {
+        // Returned (not just fired) so a caller that promises persistence — the
+        // Sessions API title ack — waits for the real write to land.
+        return persistence?.touchSession(connected.sessionMeta.id, row).catch((error) => {
           console.error(`[host] touchSession failed: ${describeError(error)}`);
         });
       },
@@ -2730,8 +2732,9 @@ async function bootClaudeSession(
         const { enginePreset, ...rest } = patch;
         const row = { ...rest, ...(enginePreset !== undefined ? { mode: enginePreset } : {}) };
         // Buffered until the row exists (native-first); serialized behind the
-        // CREATE once it does.
-        rowWriter.touch(row);
+        // CREATE once it does. The returned promise settles once the buffered
+        // write has actually run (see ClaudeSessionRowWriter.touch).
+        return rowWriter.touch(row);
       },
     },
     postPreviewArtifacts: sendPreviewArtifacts,
@@ -4993,7 +4996,7 @@ async function boot(): Promise<void> {
           if (!persistence) {
             return;
           }
-          void persistence.touchSession(sessionId, patch).catch((error) => {
+          return persistence.touchSession(sessionId, patch).catch((error) => {
             console.error(`[host] touchSession failed: ${describeError(error)}`);
           });
         },
@@ -5251,6 +5254,11 @@ process.parentPort.on("message", (event) => {
         if (!session) throw new Error("Session not ready");
         let result: unknown;
         switch (communication.operation) {
+          case "set_agent_title":
+            if (typeof communication.payload !== "string" || !communication.payload) throw new Error("Invalid agent title");
+            // Awaits the persistence write: main's acknowledgement must mean the
+            // title is durable, or a failed push would leave a storable handle lost.
+            await session.setAgentTitle(communication.payload); result = {}; break;
           case "get_session_result": result = session.communicationResult(); break;
           case "get_session_status": result = session.communicationStatus(); break;
           case "send_message": result = await session.receiveAgentMessage(communication.payload as import("../shared/communication.js").AgentEnvelope); break;
