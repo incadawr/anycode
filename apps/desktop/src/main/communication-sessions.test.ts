@@ -286,38 +286,6 @@ describe("session handles (Taskana 4750b)", () => {
     await writeFile(markers, "{not json");
     expect(store().getConfirmedTitle("a")).toBeUndefined();
   });
-
-  // The durable half of "an agent opened this tab": a resume-time title repair
-  // needs it, because a saved handle also matches one the user assigned by hand.
-  it("remembers which sessions an agent opened across a restart, and forgets a closed one", async () => {
-    const openedFile = join(dir, "communication-agent-opened.json");
-    const withOpened = () => createSessionAccessStore({ file, defaultOn: () => false, handlesFile: handlesFile(), agentOpenedFile: openedFile });
-    const s = withOpened();
-    s.register({ sessionId: "a" });
-    s.setHandle("a", "build-bot", alwaysLive);
-    // A handle alone NEVER marks a session as agent-opened.
-    expect(s.isAgentOpened("a")).toBe(false);
-
-    s.markAgentOpened("a");
-    expect(s.isAgentOpened("a")).toBe(true);
-    expect(withOpened().isAgentOpened("a")).toBe(true);
-    expect((await stat(openedFile)).mode & 0o777).toBe(0o600);
-    expect(JSON.parse(await readFile(openedFile, "utf8"))).toEqual({ a: true });
-
-    s.remove("a");
-    expect(withOpened().isAgentOpened("a")).toBe(false);
-  });
-
-  it("drops non-true agent-opened entries from a hand-edited file (fail closed)", async () => {
-    const openedFile = join(dir, "communication-agent-opened.json");
-    await writeFile(openedFile, JSON.stringify({ a: true, b: "yes", c: 1 }));
-    const read = createSessionAccessStore({ file, defaultOn: () => false, agentOpenedFile: openedFile });
-    expect(read.isAgentOpened("a")).toBe(true);
-    expect(read.isAgentOpened("b")).toBe(false);
-    expect(read.isAgentOpened("c")).toBe(false);
-    await writeFile(openedFile, "{not json");
-    expect(createSessionAccessStore({ file, defaultOn: () => false, agentOpenedFile: openedFile }).isAgentOpened("a")).toBe(false);
-  });
 });
 
 describe("External approvals store (Taskana 4763)", () => {

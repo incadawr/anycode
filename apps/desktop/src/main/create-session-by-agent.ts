@@ -133,8 +133,6 @@ export async function createSessionForAgent(
     deps.agentOpenedSessions.add(sessionId);
     // Registered synchronously by createTab (onSessionRegistered); "shared immediately".
     sessions.set(sessionId, true);
-    // Persist agent ownership for resume-time title repair.
-    sessions.markAgentOpened(sessionId);
     if (request.handle === undefined) return;
     const normalized = normalizeHandle(request.handle);
     if (!normalized.ok || normalized.handle === null) return;

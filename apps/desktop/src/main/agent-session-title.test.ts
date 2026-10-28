@@ -201,11 +201,8 @@ describe("resume-time agent title recovery", () => {
       run: () => recoverAgentSessionTitle({
         sessionId: "s1",
         savedHandle: () => "worker-1",
-        // Not an agent-opened tab: a saved handle alone proves nothing, since the
-        // user can assign one to an ordinary shared session.
-        openedByAgent: () => false,
-        // No marker on record: the pre-fix shape (nothing recorded which title
-        // the agent wrote, so none was ever confirmed).
+        // No marker on record: nothing recorded which title the agent wrote, so
+        // the repair has to judge by the stored title alone.
         confirmedTitle: () => undefined,
         readPersistedTitle: async () => FALLBACK_TITLE,
         adopt: (title) => adopted.push(title),
@@ -222,9 +219,8 @@ describe("resume-time agent title recovery", () => {
 
   // The lead constraint on the repair: a saved handle is NOT evidence that an
   // agent opened the tab (the Sessions API row lets the user give an ordinary
-  // session a handle too), so a row written before the durable agent-opened
-  // marker can only be repaired when its title is the raw envelope header —
-  // the one title text that is never user-chosen.
+  // session a handle too), so only the raw envelope header — the one title text
+  // that is never user-chosen — is repaired.
   it("leaves a pre-fix session's plain-text title alone (a saved handle is not proof of an agent-opened tab)", async () => {
     const { adopted, run } = recover({ readPersistedTitle: async () => "Sidebar layout and focus" });
     expect(await run()).toBe(false);
@@ -237,22 +233,17 @@ describe("resume-time agent title recovery", () => {
     expect(adopted).toEqual([]);
   });
 
-  // Rows written from this version on: `create_session` records a durable
-  // agent-opened marker, which is enough to know the stored title (when it is
-  // not the handle) was produced by the app's automatic titling.
-  it("repairs a session created by this version whose automatic title is not the handle", async () => {
+  // An agent-opened session is repaired from its saved handle only while the
+  // stored title is the auto-generated envelope. Once the user assigns a NEW
+  // handle, the stored title (the previous handle) is a title the app wrote but
+  // nobody asked to change — a resume must leave it exactly as it is.
+  it("keeps the title of an agent-opened session whose handle the user changed later", async () => {
     const { adopted, run } = recover({
-      openedByAgent: () => true,
-      readPersistedTitle: async () => "Fix the sidebar",
+      savedHandle: () => "worker-2",
+      readPersistedTitle: async () => "worker-1",
     });
-    expect(await run()).toBe(true);
-    expect(adopted).toEqual(["worker-1"]);
-  });
-
-  it("repairs an agent-opened session whose stored title is still the envelope header", async () => {
-    const { adopted, run } = recover({ openedByAgent: () => true });
-    expect(await run()).toBe(true);
-    expect(adopted).toEqual(["worker-1"]);
+    expect(await run()).toBe(false);
+    expect(adopted).toEqual([]);
   });
 
   it("does not rewrite a title that already is the handle", async () => {

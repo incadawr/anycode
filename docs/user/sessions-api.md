@@ -97,15 +97,14 @@ store holds.
 Sessions an agent opened before this version kept the automatically generated
 title in the session store while the handle was saved separately, so resuming one
 replaced nothing and the tab came back titled from the first message. Resuming
-such a session now rewrites the stored title from its saved handle, but only when
-that stored title is the raw delivery header (`[AnyCode authenticated agent
-message …`) — the one title text nobody chooses. Any other title an older version
-stored is left exactly as it is, because a handle can also be assigned to an
-ordinary session from the environment menu and that session's title is not the
-agent's to replace. From this version on, `create_session` also records that it
-opened the session, so a resume repairs that session's title whenever it is not
-the handle; and every title a host confirms is recorded with the handle, so a
-title written after it is recognised as someone else's and left alone.
+such a session now rewrites the stored title from its saved handle, but the rule
+is exactly this and nothing more: **only a stored title that begins with the raw
+delivery header** (`[AnyCode authenticated agent message …`) is replaced, because
+that is the one title text nobody chooses. Every other stored title is left
+exactly as it is — a handle can also be assigned to an ordinary session from the
+environment menu, and the title of a session whose handle you change later is not
+the agent's to replace. (Every title a host confirms is also recorded, so a title
+written after that confirmation is recognised as someone else's and left alone.)
 
 Without a handle the title comes from the message payload, whose delivery wrapper
 AnyCode strips first. `firstMessage` is delivered like `send_message` with
