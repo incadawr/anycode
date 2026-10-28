@@ -54,7 +54,7 @@ function settings(): AnycodeSettings {
   };
 }
 
-function rig(options: { failPrimingFor?: string; blocked?: () => boolean; pending?: Promise<void>; failFork?: boolean; sessions?: SessionAccessStore } = {}) {
+function rig(options: { failPrimingFor?: string; blocked?: () => boolean; pending?: Promise<void>; failFork?: boolean; sessions?: SessionAccessStore; workspaceMissing?: (workspace: string) => boolean } = {}) {
   // Mirrors main/index.ts: `hostEnvByConnection`, filled ONLY by ensurePinnedEnv
   // (through resolveResumePin) and read fail-closed by the fork's `env`.
   const cache = new Map<string, NodeJS.ProcessEnv>();
@@ -91,6 +91,7 @@ function rig(options: { failPrimingFor?: string; blocked?: () => boolean; pendin
       options.blocked?.() ? undefined : connectionId === undefined || connectionId === "conn-active" ? { PATH: "/active" } : cache.get(connectionId),
     engineEnv: (engine) => ({ ANYCODE_ENGINE: engine }),
     engineReady: () => true,
+    ...(options.workspaceMissing !== undefined ? { workspaceMissing: options.workspaceMissing } : {}),
     logger: silentLogger,
     limits: {},
   });
@@ -162,6 +163,24 @@ describe("create_session — the production creation path primes a non-active co
     expect(outcome.ok).toBe(true);
     expect(r.forkEnvs[0]?.ANYCODE_API_KEY).toBeUndefined();
     expect(r.forkEnvs[0]?.PATH).toBe("/active");
+  });
+
+  it("a folder that disappears during the async preparation refuses folder_not_found, not a session (GitHub #6)", async () => {
+    // The server realpath'd the workspace, then the folder vanished while the
+    // trust/secrets/pin preparation was still awaiting — the exact window the
+    // API used to answer with a dead but "successful" session.
+    let gone = false;
+    const r = rig({ workspaceMissing: () => gone });
+    const outcome = await createSessionForAgent({ workspace: "/ws", engine: "core" }, r.deps({
+      mcpSecretPrime: async () => {
+        gone = true;
+      },
+    }));
+    expect(outcome).toEqual({ ok: false, reason: "folder_not_found" });
+    // No fork, no tab, no session registration/handle — nothing to roll forward.
+    expect(r.forkEnvs).toHaveLength(0);
+    expect(r.manager.listTabs()).toHaveLength(0);
+    expect(r.exposed.size).toBe(0);
   });
 });
 

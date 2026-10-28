@@ -806,6 +806,22 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     expect(f.tabs).toHaveLength(0);
   });
 
+  it("create_session: a folder that vanished DURING creation is folder_not_found and spends no creation budget (GitHub #6)", async () => {
+    let refusedLeft = 5;
+    let successes = 0;
+    const f = await createFixture({ creator: async () => {
+      if (refusedLeft-- > 0) return { ok: false, reason: "folder_not_found" };
+      successes++;
+      return { ok: true, sessionId: `agent-${successes}`, tabId: `tab-${successes}` };
+    } });
+    for (let i = 0; i < 5; i++) {
+      expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatch(/^create_session folder_not_found:/);
+    }
+    // No tab survived from any attempt, and the 5/min window is still empty.
+    expect(f.tabs).toHaveLength(0);
+    expect(value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatchObject({ sessionId: "agent-1" });
+  });
+
   it("create_session: not_trusted when the creator reports an untrusted folder", async () => {
     const f = await createFixture({ creator: async () => ({ ok: false, reason: "not_trusted" }) });
     expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatch(/^create_session not_trusted/);
