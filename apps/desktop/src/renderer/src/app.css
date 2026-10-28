@@ -4457,6 +4457,22 @@ body {
   box-shadow: var(--shadow-menu);
   transform-origin: 100% 100%;
   animation: scale-in var(--dur-2) var(--ease-spring);
+  /* Height ceiling comes from the anchor: the room between the trigger's top
+     edge and the window top (inline `max-height`). The box is bottom-anchored,
+     so an unbounded height grew upward off-screen at the 480px minimum window
+     height. */
+  overflow: hidden;
+}
+
+/* Only the body scrolls — the header (title + `<used>/<budget>` headline)
+   stays pinned while a long expanded turn is scrolled. */
+.ctx-popover-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .ctx-popover-header {
