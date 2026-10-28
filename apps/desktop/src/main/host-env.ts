@@ -260,7 +260,7 @@ export function secretEnvFor(key: SecretKey): SecretEnvKey {
   }
   if (isProxyProfileSecretKey(key)) {
     throw new Error(
-      `secretEnvFor refuses a proxy-profile key (${key}) — a proxy password has no host-env materialisation ( §5)`,
+      `secretEnvFor refuses a proxy-profile key (${key}) — a proxy password has no host-env materialisation`,
     );
   }
   return "ANYCODE_API_KEY";
