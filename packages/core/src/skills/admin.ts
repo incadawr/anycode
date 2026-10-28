@@ -29,6 +29,7 @@ export type {
 export { loadDisabledSkills, setSkillEnabled } from "./settings.js";
 export { scanHarnessSkills, applySkillImport } from "./harness-skill-import.js";
 export type {
+  HarnessPluginWorld,
   HarnessSkillCandidate,
   SkillHarnessKind,
   ApplySkillImportResult,

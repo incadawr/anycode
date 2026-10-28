@@ -46,6 +46,7 @@ export {
 export type { SkillAdminRow, SkillAdminScanResult, DeleteSkillResult } from "./admin-scan.js";
 export { scanHarnessSkills, applySkillImport } from "./harness-skill-import.js";
 export type {
+  HarnessPluginWorld,
   HarnessSkillCandidate,
   SkillHarnessKind,
   ApplySkillImportResult,

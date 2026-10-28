@@ -29,6 +29,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import { parseFrontmatter } from "./frontmatter.js";
 import { SKILL_NAME_RE } from "./discovery.js";
 import { buildSkillRoots, isUnderOwnRootsResolved } from "./admin-scan.js";
+import type { ScanSkillsAdminOptions } from "./admin-scan.js";
 import { discoverSkills } from "./discovery.js";
 import { discoverPlugins } from "../plugins/discovery.js";
 import { isDangerousKey } from "../util/config-file.js";
@@ -586,20 +587,32 @@ async function scanClaudePlugins(ctx: ScanContext, home: string): Promise<void> 
 }
 
 /**
+ * The plugin-world discovery options that shape `alreadyPresent` — exactly the
+ * ones `scanSkillsAdmin` accepts, minus the two the scan derives itself from its
+ * arguments. One type for both surfaces is what keeps the import catalog and the
+ * Skills pane from disagreeing about which plugins exist.
+ */
+export type HarnessPluginWorld = Omit<ScanSkillsAdminOptions, "workspace" | "home">;
+
+/**
  * Scans the FIXED §3 allowlist of foreign skill catalogs and returns classified
  * candidates. `alreadyPresent` is computed against OUR current post-dedup
  * catalog (project+user+plugin). Never throws; a missing catalog is a no-op.
  *
- * `pluginWorld` carries the same discovery options the host runtime uses. The
- * disabled set is load-bearing here: a plugin the user turned OFF contributes
- * no skills to the live catalog, so its skills must not mark a foreign skill as
- * `alreadyPresent` (which would make the import list it as unavailable).
+ * `pluginWorld` carries the SAME discovery options the Skills pane and the host
+ * runtime use (`pluginStatePath`, `appVersion`, the reserved-name sets, consent).
+ * Every one of them is load-bearing for `alreadyPresent`, which must be computed
+ * against exactly the catalog the pane shows — a candidate the pane cannot see
+ * (a plugin the user disabled, an enabled plugin this app version excludes, a
+ * plugin skill shadowing a reserved builtin name) must not mark a foreign skill
+ * as `alreadyPresent`, or the import silently lands under a suffixed name.
+ * `workspace`/`home` are NOT taken from there: they are arguments.
  */
 export async function scanHarnessSkills(
   fs: FileSystemPort,
   home: string,
   workspace: string,
-  pluginWorld?: { pluginStatePath?: string },
+  pluginWorld?: HarnessPluginWorld,
 ): Promise<HarnessSkillCandidate[]> {
   const h = stripTrailingSep(home);
   const ws = stripTrailingSep(workspace);
@@ -608,10 +621,12 @@ export async function scanHarnessSkills(
   const ourNames = new Set<string>();
   try {
     const plugins = await discoverPlugins(fs, {
+      // Spread FIRST: `workspace`/`home`/`claimedMcpNames` below always win, so
+      // the caller's bag can only ever supply plugin-world options.
+      ...(pluginWorld ?? {}),
       workspace: ws,
       home: h,
       claimedMcpNames: new Set(),
-      ...(pluginWorld?.pluginStatePath !== undefined ? { pluginStatePath: pluginWorld.pluginStatePath } : {}),
     });
     const roots = buildSkillRoots(ws, h, plugins.skillRoots);
     const discovery = await discoverSkills(fs, roots);
