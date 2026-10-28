@@ -399,6 +399,7 @@ import type { CodexAgentCardLogPort } from "./agent-card-log.js";
 
 export interface CodexEngineCreateOptions extends Omit<AppServerClientOptions, "bootstrap" | "onServerRequest"> {
   agentBridge?: import("./dynamic-tool-bridge.js").CodexDynamicToolBridge;
+  onMcpNotification?: (notification: JsonRpcNotification) => void;
   agentCardLog?: CodexAgentCardLogPort;
   bootstrap: EngineBootstrap;
   workspace: string;
@@ -742,6 +743,7 @@ export async function startCodexEngine(options: CodexEngineCreateOptions): Promi
       ? options.agentBridge.handle(request, respond, owner, (event) => engine?.pushBridgeEvent(event, owner))
       : approvals.handle(request, respond);
   } });
+  client.observeNotifications((notification) => options.onMcpNotification?.(notification));
   try {
     await client.start();
     const connected = await createNativeCodexSession(client, options.workspace, approvals, options.timeouts, options.selection, options.shadowLog, options.agentBridge, options.agentCardLog, withVersionWarning(options.bootNotices, client.versionWarning), options.mcpForward);
@@ -773,6 +775,7 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
       ? options.agentBridge.handle(request, respond, owner, (event) => engine?.pushBridgeEvent(event, owner))
       : approvals.handle(request, respond);
   } });
+  client.observeNotifications((notification) => options.onMcpNotification?.(notification));
   try {
     await client.start();
     const connected = await resumeNativeCodexSession(

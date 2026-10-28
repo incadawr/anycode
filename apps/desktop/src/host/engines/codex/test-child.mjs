@@ -81,8 +81,10 @@ if (args.includes("--version")) {
     } else if (request.method === "account/rateLimits/read") {
       process.stdout.write(`${JSON.stringify({ id: request.id, result: {} })}\n`);
     } else if (request.method === "thread/start") {
+      if (request.params?.config?.mcp_servers?.broken) process.stdout.write(`${JSON.stringify({ method: "mcpServer/startupStatus/updated", params: { name: "broken", status: "failed", error: "spawn failed" } })}\n`);
       process.stdout.write(`${JSON.stringify({ id: request.id, result: { thread: { id: "thread-180", turns: [] }, model: "gpt-test" } })}\n`);
     } else if (request.method === "thread/resume") {
+      if (request.params?.config?.mcp_servers?.broken) process.stdout.write(`${JSON.stringify({ method: "mcpServer/startupStatus/updated", params: { name: "broken", status: "failed", error: "spawn failed" } })}\n`);
       process.stdout.write(`${JSON.stringify({ id: request.id, result: { thread: { id: "thread-180", turns: [] }, model: "gpt-test" } })}\n`);
     } else if (request.method === "thread/read") {
       process.stdout.write(`${JSON.stringify({ id: request.id, result: { thread: { id: "thread-180", turns: [] } } })}\n`);

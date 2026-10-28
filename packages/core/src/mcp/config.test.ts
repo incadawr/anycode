@@ -576,3 +576,10 @@ it("uses the discovered login PATH without inheriting unrelated environment", as
   rmSync(dir, { recursive: true, force: true });
   expect(asStdio(specs[0]).env.MCP_PRIVATE_TEST).toBeUndefined();
 });
+
+it("does not expose malformed JSON content in diagnostics", async () => {
+  const { fs } = makeFs({ [PROJECT_CONFIG]: '{"mcpServers": "TOKEN_JSON_SHOULD_STAY_PRIVATE" x}' });
+  const { problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME);
+  expect(problems[0]).toContain("Invalid JSON");
+  expect(JSON.stringify(problems)).not.toContain("TOKEN_JSON_SHOULD_STAY_PRIVATE");
+});
