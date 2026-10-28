@@ -15,6 +15,7 @@
 
 import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -29,6 +30,25 @@ import { deriveSessionTitle } from "./session.js";
 import { createHarness, textStep } from "./test-harness.js";
 
 type Of<T extends HostToUiMessage["type"]> = Extract<HostToUiMessage, { type: T }>;
+
+
+/**
+ * Makes every `sessions.title` UPDATE fail at the SQLite level — a real write
+ * failure (the shape a full disk or a corrupted file produces), not a stub of
+ * the adapter. Dropped again so the retry can land.
+ */
+function blockTitleWrites(path: string, blocked: boolean): void {
+  const db = new DatabaseSync(path);
+  try {
+    db.exec(
+      blocked
+        ? "CREATE TRIGGER title_write_fails BEFORE UPDATE OF title ON sessions BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END"
+        : "DROP TRIGGER IF EXISTS title_write_fails",
+    );
+  } finally {
+    db.close();
+  }
+}
 
 const isHostReady = (m: HostToUiMessage): m is Of<"host_ready"> => m.type === "host_ready";
 const isSessionHistory = (m: HostToUiMessage): m is Of<"session_history"> =>
@@ -408,8 +428,62 @@ describe("Session — title derivation", () => {
     } finally { h.close(); }
   });
 
-  it("does not let an in-flight refinement overwrite a pinned handle", async () => {
-    let resolveTitle!: (title: string) => void;
+  // The defect: the title RPC acknowledged a write whose SQLite commit failed,
+  // so main dropped the handle it would have retried — and the title a restart
+  // read back was whatever the row already held. Driven through the REAL
+  // adapter, with a real failing UPDATE (a trigger aborting it), then retried
+  // after the failure clears and read back through a fresh connection.
+  it("refuses to acknowledge a handle whose SQLite write failed, and stores it on the retry", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "anycode-title-fail-"));
+    const path = join(dir, "sessions.db");
+    const persistence = new SqlitePersistenceAdapter(path);
+    const h = createHarness({
+      steps: [textStep("a")],
+      // The production wiring: the strict title seam writes through the adapter
+      // and does not swallow its failure.
+      onCommitTitle: (title) => persistence.touchSession("test-session", { title }),
+    });
+    try {
+      await resolveBootSession(persistence, {
+        args: { sessionId: "test-session", resume: false }, workspace: "/workspace", model: "scripted-model",
+      });
+      blockTitleWrites(path, true);
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      await expect(h.session.setAgentTitle("worker-1")).rejects.toThrow(/disk I\/O error/);
+      // Not acknowledged: the UI was never told and the row still has no title,
+      // so main keeps the handle in its retry queue.
+      expect(h.commits).toEqual(["worker-1"]);
+      expect(h.received.filter(isTitleChanged)).toHaveLength(0);
+      expect((await persistence.getSessionById("test-session"))?.title).toBeUndefined();
+
+      // The next host generation: the write works, the retried handle lands…
+      blockTitleWrites(path, false);
+      await h.session.setAgentTitle("worker-1");
+      await h.flush();
+      expect(h.received.filter(isTitleChanged).map((m) => m.title)).toEqual(["worker-1"]);
+      expect((await persistence.getSessionById("test-session"))?.title).toBe("worker-1");
+
+      // …and a resume reads it back from a fresh connection.
+      h.close();
+      const reopened = new SqlitePersistenceAdapter(path);
+      try {
+        const boot = await resolveBootSession(reopened, {
+          args: { sessionId: "test-session", resume: true }, workspace: "/workspace", model: "scripted-model",
+        });
+        expect(boot.sessionMeta.title).toBe("worker-1");
+      } finally {
+        await reopened.close();
+      }
+    } finally {
+      h.close();
+      await persistence.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let an in-flight refinement overwrite a pinned handle", async () => {    let resolveTitle!: (title: string) => void;
     const h = createHarness({ steps: [textStep("a")], refineTitle: () => new Promise((resolve) => { resolveTitle = resolve; }) });
     try {
       h.send({ type: "ui_ready" });

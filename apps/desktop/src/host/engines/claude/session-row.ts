@@ -62,16 +62,25 @@ export interface ClaudeSessionRowWriterOptions {
   onError(error: unknown, stage: "create" | "touch" | "pending_reports"): void;
 }
 
+/**
+ * A patch parked until the row exists. `settle` reports the real outcome: a
+ * plain `touch` resolves whenever its write was attempted (its promise is only
+ * "the enqueue landed", matching the fire-and-forget turn paths), while a
+ * `commitTitle` write — `strict` — REJECTS when the row was never created or
+ * the UPDATE failed.
+ */
+interface BufferedWrite {
+  patch: ClaudeSessionRowPatch;
+  /** True when the caller must learn the failure (a title the RPC acknowledges). */
+  strict: boolean;
+  /** Settles this write; `error` is the failure, absent on success. */
+  settle(error?: unknown): void;
+}
+
 export class ClaudeSessionRowWriter {
   /** Serializes writes behind the CREATE; null exactly while no row exists. */
   private chain: Promise<void> | null;
-  private readonly buffered: ClaudeSessionRowPatch[] = [];
-  /**
-   * Resolvers of `touch()` calls that arrived while the row did not exist yet.
-   * Resolved after the CREATE + buffered-flush tail settles, so a caller that
-   * promises persistence waits for the real write instead of the buffer.
-   */
-  private readonly bufferedWaiters: Array<() => void> = [];
+  private readonly buffered: BufferedWrite[] = [];
   /**
    * Taskana 4123 follow-up: the pending-child-reports snapshot saved before
    * the row exists. At most one entry is ever live (each save overwrites the
@@ -102,20 +111,43 @@ export class ClaudeSessionRowWriter {
   /**
    * Patch, never dropped: buffered while no row exists yet. The returned
    * promise settles once THIS patch has been written (never rejects — a
-   * failure is reported through `onError`), so the Sessions API title ack can
-   * wait for the commit instead of the enqueue.
+   * failure is reported through `onError`), so a caller that only waits for
+   * the attempt can follow it.
    */
   touch(patch: ClaudeSessionRowPatch): Promise<void> {
+    return this.write(patch, false);
+  }
+
+  /**
+   * Write a title whose caller must be able to CONFIRM it (the Sessions API
+   * `set_agent_title` ack). Unlike `touch`, the returned promise REJECTS when
+   * the row could not be created or the UPDATE failed: a swallowed failure
+   * would tell main the title is durable and drop the only copy of the handle.
+   * The writer's own serialized chain stays fail-soft either way — an ordinary
+   * turn patch queued behind a rejected title write still runs.
+   */
+  commitTitle(title: string): Promise<void> {
+    return this.write({ title }, true);
+  }
+
+  private write(patch: ClaudeSessionRowPatch, strict: boolean): Promise<void> {
     if (this.chain === null) {
-      this.buffered.push(patch);
-      return new Promise<void>((resolve) => { this.bufferedWaiters.push(resolve); });
+      return new Promise<void>((resolve, reject) => {
+        this.buffered.push({
+          patch,
+          strict,
+          settle: (error) => {
+            if (!strict || error === undefined) resolve();
+            else reject(error);
+          },
+        });
+      });
     }
-    const write = this.chain
-      .then(() => this.options.port.touch(this.options.rowId, patch))
-      .then(() => undefined)
-      .catch((error: unknown) => this.options.onError(error, "touch"));
-    this.chain = write;
-    return write;
+    const write = this.chain.then(() => this.options.port.touch(this.options.rowId, patch));
+    // The chain keeps the fail-soft posture (a rejected write is reported, and
+    // the next queued write still runs); only a strict caller is told.
+    this.chain = write.then(() => undefined, (error: unknown) => this.options.onError(error, "touch"));
+    return strict ? write.then(() => undefined) : write.then(() => undefined, () => undefined);
   }
 
   /**
@@ -192,7 +224,12 @@ export class ClaudeSessionRowWriter {
     // so the boot survives it) — which is exactly why the flush below gates
     // on `created`'s OWN outcome, not on the chain settling.
     this.chain = created.catch((error: unknown) => this.options.onError(error, "create"));
-    for (const patch of this.buffered.splice(0, this.buffered.length)) void this.touch(patch);
+    // The buffered writes' own view of that outcome: a strict (title) write
+    // cannot have landed if the INSERT never did, and must say so.
+    const createFailure = created.then(() => null, (error: unknown) => error);
+    for (const item of this.buffered.splice(0, this.buffered.length)) {
+      this.chain = this.chain.then(() => this.flushBufferedWrite(item, createFailure));
+    }
     // Taskana 4123 follow-up: flush the newest report snapshot (if any was
     // buffered) after the CREATE, through the same serialized chain.
     // Taskana 4123 cross-review F1: strictly after the create settles, and
@@ -211,19 +248,43 @@ export class ClaudeSessionRowWriter {
     // buffer if a live save registered anyway (defense against any future
     // reordering), and the create-success gate is evaluated when the link
     // RUNS, so `settled()` still covers the whole tail including the flush.
-    // The buffered patches' waiters resolve LAST: every `touch` above re-chained
-    // behind `created`, so by the time this tail link runs their writes settled.
-    const waiters = this.bufferedWaiters.splice(0, this.bufferedWaiters.length);
+    // The buffered writes above reported their own outcomes as they settled,
+    // so this tail only closes the chain (`settled()` covers it).
     this.chain = this.chain
       .then(() => created)
       .then(
         () => this.flushBufferedReportJson(),
         () => undefined,
-      )
-      .then(() => {
-        for (const resolve of waiters) resolve();
-      });
+      );
     void this.chain;
+  }
+
+  /**
+   * Writes one buffered patch after the CREATE and reports its real outcome to
+   * that write's own caller. Never rejects, so the serialized chain — and every
+   * write queued behind this one — survives a failure.
+   *
+   * A plain `touch` keeps the pre-existing posture: it fires even after a
+   * failed CREATE (a no-op UPDATE), so the writer is never stranded and its
+   * promise still settles. A strict (`commitTitle`) write is a title a host is
+   * about to acknowledge: a missing row or a failed UPDATE rejects it, because
+   * a no-op UPDATE would otherwise pass for a durable title.
+   */
+  private async flushBufferedWrite(item: BufferedWrite, createFailure: Promise<unknown>): Promise<void> {
+    const failure = await createFailure;
+    if (failure !== null && item.strict) {
+      // The INSERT failed; onError("create") already reported it.
+      item.settle(failure);
+      return;
+    }
+    try {
+      await this.options.port.touch(this.options.rowId, item.patch);
+    } catch (error) {
+      this.options.onError(error, "touch");
+      item.settle(error);
+      return;
+    }
+    item.settle();
   }
 
   /** Resolves once every write issued so far has settled (tests; never awaited on the boot path). */

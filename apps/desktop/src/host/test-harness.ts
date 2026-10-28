@@ -304,6 +304,12 @@ export interface HarnessOptions {
   /** Observes every persistence patch the session writes (title recovery tests). */
   onTouch?: SessionPersistence["touch"];
   /**
+   * The STRICT twin of `onTouch`: the Sessions API title path. Wiring it here
+   * proves the caller learns a failed write instead of the fail-soft `touch`
+   * reporting it as done (a real persistence adapter rejects on failure).
+   */
+  onCommitTitle?: SessionPersistence["commitTitle"];
+  /**
    * Tier-2 title refinement callback (Phase 4 slice 4.4-T, design §3,
 
    * pre-existing test (no DI callback) has no refinement behavior at all.
@@ -528,6 +534,8 @@ export interface Harness {
   received: HostToUiMessage[];
   /** Every persistence `touch` patch the Session emitted, in order (title/mode). */
   touches: { title?: string; mode?: PermissionMode }[];
+  /** Titles written through the STRICT ack path (`commitTitle`). */
+  commits: string[];
   /**
    * TASK.117 acceptance defect 1 fixture: the GatedModelPort constructed for
    * this harness (undefined unless `options.gated` was set). `release()`
@@ -726,6 +734,7 @@ export function createHarness(options: HarnessOptions): Harness {
   });
 
   const touches: { title?: string; mode?: PermissionMode }[] = [];
+  const commits: string[] = [];
   const persistence: SessionPersistence = {
     touch(patch) {
       touches.push(patch);
@@ -733,6 +742,14 @@ export function createHarness(options: HarnessOptions): Harness {
       // the caller only acknowledges after it committed.
       return options.onTouch?.(patch);
     },
+    ...(options.onCommitTitle !== undefined
+      ? {
+          commitTitle(title: string) {
+            commits.push(title);
+            return options.onCommitTitle!(title);
+          },
+        }
+      : {}),
   };
   // R1 (Taskana 4704 re-review #3): the harness builds the SAME spawn-mode cell
   // host/index.ts builds (spawn-mode-cell.ts) — no copy — so a test asserting
@@ -859,6 +876,7 @@ export function createHarness(options: HarnessOptions): Harness {
     rules,
     received,
     touches,
+    commits,
     gated: gatedPort,
     seedPendingPrompt(requestId: string, text: string): void {
       // Test-only nonpublic access (narrow cast): the harness drives the REAL

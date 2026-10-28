@@ -612,6 +612,17 @@ export interface SessionPersistence {
    * that column at the persistence boundary, where the cast is visible.
    */
   touch(patch: { title?: string; mode?: PermissionMode; model?: string; enginePreset?: string }): void | Promise<void>;
+  /**
+   * Writes a title whose caller must be able to CONFIRM it — the Sessions API
+   * `set_agent_title` acknowledgement promises the next boot reads this title
+   * back, so a failure has to reach that caller instead of dying in a log
+   * line. Implementations REJECT when the write did not commit (a missing row,
+   * a failed INSERT, a failed UPDATE). `touch` keeps its fail-soft posture: a
+   * turn is never failed by its own title write. Absent = the seam is not
+   * wired (tests, engines without a session row), and the write falls back to
+   * `touch`.
+   */
+  commitTitle?(title: string): Promise<void>;
 }
 
 /**
@@ -5229,12 +5240,21 @@ export class Session {
    * admitting its first message. Resolves only once the title write has
    * COMMITTED, so the caller's acknowledgement (the Sessions API
    * `set_agent_title`) never claims a title the next boot cannot read back.
+   * REJECTS when that write did not commit — a swallowed failure would tell
+   * main the title is durable and drop the only copy of the handle.
    */
   async setAgentTitle(title: string): Promise<void> {
     this.titleSet = true;
     this.agentTitlePinned = true;
     this.pendingTitleRefineText = null;
-    await this.persistence?.touch({ title });
+    const commit = this.persistence?.commitTitle;
+    if (commit !== undefined) {
+      // A REJECTED commit is exactly the case the caller must see: main then
+      // keeps the handle retained and retries on the tab's next host.
+      await commit.call(this.persistence, title);
+    } else {
+      await this.persistence?.touch({ title });
+    }
     this.currentTitle = title;
     this.outbound.emit({ type: "title_changed", title });
   }

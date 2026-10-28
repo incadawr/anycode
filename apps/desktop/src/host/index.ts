@@ -1991,6 +1991,17 @@ async function bootCodexSession(
           console.error(`[host] touchSession failed: ${describeError(error)}`);
         });
       },
+      /**
+       * The Sessions API title ack for a Codex tab: NEVER swallowed, so a failed
+       * write rejects the `set_agent_title` RPC and main retries the handle. The
+       * turn paths above stay fail-soft.
+       */
+      commitTitle(title) {
+        if (!persistence) {
+          return Promise.reject(new Error("No persistence port"));
+        }
+        return persistence.touchSession(connected.sessionMeta.id, { title });
+      },
     },
     postPreviewArtifacts: sendPreviewArtifacts,
     // TASK.159 INVARIANT: this is a foreign-engine boot — CodexEngine never
@@ -2736,6 +2747,13 @@ async function bootClaudeSession(
         // write has actually run (see ClaudeSessionRowWriter.touch).
         return rowWriter.touch(row);
       },
+      /**
+       * The Sessions API title ack for a Claude tab. `commitTitle` — unlike
+       * `touch` — REJECTS when the row could not be created or the patch could
+       * not be written, so a title main believes is stored is one a resume can
+       * read back.
+       */
+      commitTitle: (title) => rowWriter.commitTitle(title),
     },
     postPreviewArtifacts: sendPreviewArtifacts,
     // TASK.159 INVARIANT: same as the codex branch above — a foreign-engine
@@ -4990,7 +5008,8 @@ async function boot(): Promise<void> {
       imageFallbackAvailable: media.recognizerConfigured,
       applyRecognizerConfig: applyRecognizerEndpoint,
       // Narrow persistence callback (§4.2): Session persists title/mode patches
-      // without ever holding the whole port. Fire-and-forget, never blocks a turn.
+      // without ever holding the whole port. Fire-and-forget for the turn
+      // paths, never blocks a turn.
       persistence: {
         touch(patch) {
           if (!persistence) {
@@ -4999,6 +5018,19 @@ async function boot(): Promise<void> {
           return persistence.touchSession(sessionId, patch).catch((error) => {
             console.error(`[host] touchSession failed: ${describeError(error)}`);
           });
+        },
+        /**
+         * The Sessions API title ack: DELIBERATELY not caught. A rejected write
+         * (a closed database, SQLITE_BUSY past busy_timeout) must reach main as
+         * a failed RPC so the handle stays retained and is retried, instead of
+         * being dropped against a title no boot can read back. Ordinary turn
+         * writes above keep their fail-soft posture.
+         */
+        commitTitle(title) {
+          if (!persistence) {
+            return Promise.reject(new Error("No persistence port"));
+          }
+          return persistence.touchSession(sessionId, { title });
         },
       },
       // Taskana 4083 / TASK.34: the persistent per-step provider-usage audit,

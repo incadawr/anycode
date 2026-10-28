@@ -426,8 +426,7 @@ describe("ClaudeSessionRowWriter — child stamp (CUT-S4 §4.3, mirrors bootClau
   });
 });
 
-describe("ClaudeSessionRowWriter — a resume writes straight through", () => {
-  function resumed(rec: Recorder): ClaudeSessionRowWriter {
+describe("ClaudeSessionRowWriter — a resume writes straight through", () => {  function resumed(rec: Recorder): ClaudeSessionRowWriter {
     return new ClaudeSessionRowWriter({
       rowId: "row-1",
       identity: IDENTITY,
@@ -458,5 +457,101 @@ describe("ClaudeSessionRowWriter — a resume writes straight through", () => {
     await writer.settled();
 
     expect(rec.touches).toEqual([{ id: "row-1", patch: { model: "opus[1m]", mode: "workspace" } }]);
+  });
+});
+
+/**
+ * The Sessions API acknowledges a title only after it is stored, so that path
+ * needs a write whose failure REACHES it. A plain `touch` is deliberately
+ * fail-soft (a turn is never failed by its own title write); `commitTitle` is
+ * the strict twin — a row that was never created, or an UPDATE that failed,
+ * rejects instead of passing for a stored title.
+ */
+describe("ClaudeSessionRowWriter — a title write its caller must confirm", () => {
+  function failingTitleWriter(options: { failCreate?: boolean } = {}) {
+    const writes: string[] = [];
+    const errors: string[] = [];
+    const writer = new ClaudeSessionRowWriter({
+      rowId: "row-1",
+      identity: IDENTITY,
+      rowExists: false,
+      port: {
+        create: async () => {
+          if (options.failCreate === true) throw new Error("db is gone");
+          return undefined;
+        },
+        touch: async (_id, patch) => {
+          writes.push(Object.keys(patch).join(","));
+          if (patch.title !== undefined) throw new Error("SQLITE_BUSY");
+          return undefined;
+        },
+      },
+      onError: (_error, stage) => errors.push(stage),
+    });
+    return { writer, writes, errors };
+  }
+
+  it("rejects a buffered title when the row could not be created (no no-op UPDATE passes for a stored title)", async () => {
+    const { writer, writes, errors } = failingTitleWriter({ failCreate: true });
+
+    const committed = writer.commitTitle("worker-1");
+    writer.materialize({ model: "haiku", mode: "ask" });
+
+    await expect(committed).rejects.toThrow("db is gone");
+    // The create failure is reported once, as a create failure.
+    expect(errors).toEqual(["create"]);
+    expect(writes).toEqual([]);
+  });
+
+  it("rejects a buffered title whose UPDATE failed, while the ordinary patch beside it stays fail-soft", async () => {
+    const { writer, writes, errors } = failingTitleWriter();
+
+    const sibling = writer.touch({ model: "sonnet" });
+    const committed = writer.commitTitle("worker-1");
+    writer.materialize({ model: "haiku", mode: "ask" });
+
+    await expect(committed).rejects.toThrow("SQLITE_BUSY");
+    await expect(sibling).resolves.toBeUndefined();
+    await writer.settled();
+    expect(writes).toEqual(["model", "title"]);
+    expect(errors).toEqual(["touch"]);
+  });
+
+  it("rejects on the live path (a resumed row) without breaking the writes queued behind it", async () => {
+    const writes: string[] = [];
+    const writer = new ClaudeSessionRowWriter({
+      rowId: "row-1",
+      identity: IDENTITY,
+      rowExists: true,
+      port: {
+        create: async () => undefined,
+        touch: async (_id, patch) => {
+          writes.push(Object.keys(patch).join(","));
+          if (patch.title !== undefined) throw new Error("SQLITE_BUSY");
+          return undefined;
+        },
+      },
+      onError: () => {},
+    });
+
+    const committed = writer.commitTitle("worker-1");
+    const sibling = writer.touch({ model: "sonnet" });
+
+    await expect(committed).rejects.toThrow("SQLITE_BUSY");
+    await expect(sibling).resolves.toBeUndefined();
+    // The failing title write did not strand the next one.
+    expect(writes).toEqual(["title", "model"]);
+  });
+
+  it("resolves once the buffered title is on disk (a later resume reads it back)", async () => {
+    const rec = recorder();
+    const writer = fresh(rec);
+
+    const committed = writer.commitTitle("worker-1");
+    writer.materialize({ model: "haiku", mode: "ask" });
+    await committed;
+
+    expect(rec.order).toEqual(["create", "touch:title"]);
+    expect(rec.touches).toEqual([{ id: "row-1", patch: { title: "worker-1" } }]);
   });
 });
