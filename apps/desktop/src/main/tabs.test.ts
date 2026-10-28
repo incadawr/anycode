@@ -486,6 +486,49 @@ describe("TabHostManager — host spawn", () => {
     expect(posted.filter((entry) => entry.channel === PORT_ENVELOPE_TYPE)).toHaveLength(1);
   });
 
+  it("a RESUMED tab whose folder vanishes during the deferred first fork keeps its error tab (GitHub #6)", async () => {
+    // A resume's first fork is parked in the same provider refresh and carries
+    // `firstSpawn: true` too — but the session already exists, so the error tab
+    // IS the surface: rolling it back (the new-session behaviour) would close the
+    // restored tab and leave the user with nothing but a vanished sidebar entry.
+    const rig = shutdownableForkRig();
+    let blocked = true;
+    let missing = false;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const { window, posted, hostExited } = windowRig();
+    const registered = vi.fn(() => () => {});
+    const closed = vi.fn();
+    const manager = new TabHostManager({
+      fork: rig.fork, hostEntry: "/fake/host.js", createChannel: fakeChannel,
+      getWindow: () => window, env: () => blocked ? undefined : {},
+      waitForHostEnv: () => blocked ? pending : undefined,
+      workspaceMissing: () => missing,
+      onSessionRegistered: registered, onTabClosed: closed, logger: silentLogger,
+    });
+    const created = manager.createTab({ workspace: "/ws/gone", sessionId: "resumed-gone", connectionId: "old", resume: true });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    // The folder disappears while the provider refresh is still pending.
+    missing = true;
+    blocked = false;
+    release();
+    await vi.waitFor(() => expect(posted.filter((entry) => entry.channel === PORT_ENVELOPE_TYPE)).toHaveLength(1));
+    // The tab is still here, bound, and reported as a missing-workspace error —
+    // that envelope is what the renderer shows instead of "Connecting to host…".
+    expect(manager.listTabs()).toHaveLength(1);
+    expect(manager.sessionOpenInTab("resumed-gone")).toBe(created.tab.tabId);
+    expect(manager.getTab(created.tab.tabId)?.missingWorkspace).toBe(true);
+    expect(manager.getTab(created.tab.tabId)?.state).toBe("crash_looped");
+    const envelope = posted.find((entry) => entry.channel === PORT_ENVELOPE_TYPE);
+    expect(envelope?.payload).toMatchObject({ tabId: created.tab.tabId, workspace: "/ws/gone", missingWorkspace: true });
+    // A resume is never rolled back: no close event, no registration undo, no
+    // host-exit banner over the missing-folder error.
+    expect(closed).not.toHaveBeenCalled();
+    expect(hostExited).toHaveLength(0);
+    expect(rig.hosts).toHaveLength(0);
+  });
+
   it("refuses IPC rebind when the replacement fork throws without persisting the pin", async () => {
     const rig = shutdownableForkRig();
     const error = new Error("replacement fork failed");
