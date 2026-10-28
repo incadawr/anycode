@@ -41,6 +41,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - An agent message reads the same in the live transcript as it does after a reload: the delivery wrapper, its JSON header and the delivery line no longer appear, and the message body is not shown twice.
 - A background child's report is labelled "Background subagent completed" instead of repeating the word "subagent".
 - An agent handle is only acknowledged as stored once the session store actually holds it: a failed write — including a session row that could not be created at all — is retried instead of silently forfeited, so the title survives the next restart.
+- Deliver the first message to newly created sessions reliably and report delivery failures. (#21)
 
 ## [0.0.49] — 2026-10-28
 

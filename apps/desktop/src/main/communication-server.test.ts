@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile, readFile, stat, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, stat, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, StreamableHTTPClientTransport, StdioClientTransport } from "@anycode/core/communication-mcp";
 import { startCommunicationServer, type CloseSessionOutcome, type CreateSessionOutcome, type CreateSessionRequest } from "./communication-server.js";
 import type { AgentEnvelope } from "../shared/communication.js";
+import { createHarness, finishStep, ScriptedModelPort } from "../host/test-harness.js";
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
 async function fixture() {
@@ -139,6 +140,21 @@ describe("production communication MCP over real SDK HTTP", () => {
     expect(retried.envelope.messageId).toBe(acked.envelope.messageId);
     expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(3);
   });
+  it("resolves an interrupted dispatch on server restart without replay", async () => {
+    const f = await fixture();
+    const record = value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed", payload: "hello", mode: "next_turn" } }));
+    await f.client.close(); await f.service.close();
+    await writeFile(`${f.discoveryFile}.messages`, JSON.stringify([{ ...record, state: "unknown", detail: "Dispatch pending" }]));
+    const restart = await startCommunicationServer({ manager: f.manager, configFile: f.configFile, userData: f.dir });
+    cleanups.push(() => restart.close());
+    const ledger = JSON.parse(await readFile(`${f.discoveryFile}.messages`, "utf8"));
+    expect(ledger[0]).toMatchObject({ state: "unknown", detail: "Host response unavailable; do not blindly resend" });
+    f.request.mockImplementation(async (_session, op) => op === "get_message_status" ? { ...record, state: "unknown", detail: "Dispatch pending" } : undefined);
+    const client = await reconnect(f.discoveryFile);
+    expect(value(await client.callTool({ name: "get_message_status", arguments: { messageId: record.envelope.messageId } })).detail).toBe("Host response unavailable; do not blindly resend");
+    expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
+  });
+
   it("a queued record survives a restart against the same live host and reconciles its status", async () => {
     const f = await fixture();
     const record = value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed", payload: "still queued", mode: "next_turn" } }));
@@ -980,11 +996,104 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     expect(value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(["agent-1"]);
   });
 
+  it("delivers the first turn when startup and ledger restoration overlap", async () => {
+    const h = createHarness({ steps: [finishStep()] });
+    try {
+      const f = await createFixture({ creator: async (input, tabs) => {
+        tabs.push({ sessionId: "test-session", workspace: input.workspace, state: "running", pid: 101 });
+        return { ok: true, sessionId: "test-session", tabId: "tab-1" };
+      } });
+      let probes = 0;
+      f.request.mockImplementation(async (_session, op, payload: any) => {
+        if (op === "get_session_status") { if (++probes < 2) throw new Error("starting"); return { engine: "core", state: "idle" }; }
+        if (op === "restore_agent_messages") { h.session.restoreAgentMessages(payload); return undefined; }
+        if (op === "send_message") {
+          await new Promise((resolve) => setTimeout(resolve, 1100));
+          return await h.session.receiveAgentMessage(payload);
+        }
+        return undefined;
+      });
+      const result = value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, firstMessage: "first turn" } }));
+      expect(result.messageId).toBeTruthy();
+      await vi.waitFor(() => expect((h.config.modelPort as ScriptedModelPort).requests).toHaveLength(1));
+      expect(JSON.stringify((h.config.modelPort as ScriptedModelPort).requests[0])).toContain("first turn");
+      expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
+      const ledger = JSON.parse(await readFile(join(f.dir, "communication.json.messages"), "utf8"));
+      expect(ledger[0]).toMatchObject({ state: "acknowledged" });
+    } finally { h.close(); }
+  });
+
+  it("expires a dispatch that never settles without replay", async () => {
+    const f = await createFixture();
+    let finish!: (value: any) => void;
+    f.request.mockImplementation(async (_session, op, payload: any) => {
+      if (op === "get_session_status") return { engine: "core", state: "idle" };
+      if (op === "send_message") {
+        payload.createdAt = new Date(Date.now() - 21_000).toISOString();
+        return await new Promise((resolve) => { finish = resolve; });
+      }
+      return undefined;
+    });
+    const pending = f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, firstMessage: "hello" } });
+    await vi.waitFor(async () => {
+      const ledger = JSON.parse(await readFile(join(f.dir, "communication.json.messages"), "utf8"));
+      expect(ledger[0]?.detail).toBe("Host response unavailable; do not blindly resend");
+    }, { timeout: 4000, interval: 50 });
+    expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
+    finish({ state: "unknown", detail: "Host response unavailable; do not blindly resend" });
+    expect((await pending).isError).toBe(true);
+  });
+
+  it("reports a host generation lost during dispatch", async () => {
+    const f = await createFixture();
+    f.request.mockImplementation(async (_session, op, payload) => {
+      if (op === "get_session_status") return { engine: "core", state: "idle" };
+      if (op === "send_message") { f.tabs[0]!.pid++; return { envelope: payload, state: "queued" }; }
+      return undefined;
+    });
+    const result = await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, firstMessage: "hello" } });
+    expect(errorText(result)).toContain("Host restarted");
+    const ledger = JSON.parse(await readFile(join(f.dir, "communication.json.messages"), "utf8"));
+    expect(ledger[0].state).toBe("unknown");
+  });
+
+  it("does not retry after a post-dispatch ledger write fails", async () => {
+    const f = await createFixture();
+    f.request.mockImplementation(async (_session, op, payload) => {
+      if (op === "get_session_status") return { engine: "core", state: "idle" };
+      if (op === "send_message") {
+        await rm(join(f.dir, "communication.json.messages"));
+        await mkdir(join(f.dir, "communication.json.messages"));
+        return { envelope: payload, state: "acknowledged" };
+      }
+      return undefined;
+    });
+    const result = await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, firstMessage: "hello" } });
+    expect(result.isError).toBe(true);
+    expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
+    await rm(join(f.dir, "communication.json.messages"), { recursive: true });
+    f.request.mockImplementation(async (_session, op, payload) => op === "send_message" ? { envelope: payload, state: "acknowledged" } : undefined);
+    await f.client.callTool({ name: "send_message", arguments: { sessionId: "agent-1", payload: "later", mode: "next_turn" } });
+  });
+
+  it.each(["throw", "timeout", "disconnect"])("settles %s with an explicit delivery error", async (failure) => {
+    const f = await createFixture();
+    f.request.mockImplementation(async (_session, op, payload) => {
+      if (op === "get_session_status") return { engine: "core", state: "idle" };
+      if (op === "send_message") throw new Error(failure);
+      return undefined;
+    });
+    const result = await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, firstMessage: "hello" } });
+    expect(errorText(result)).toContain("Host response unavailable");
+    expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
+    const ledger = JSON.parse(await readFile(join(f.dir, "communication.json.messages"), "utf8"));
+    expect(ledger[0]).toMatchObject({ state: "unknown", detail: "Host response unavailable; do not blindly resend" });
+  });
+
   it("create_session: returns without messageId when the host never becomes ready", async () => {
     const f = await createFixture({ ready: false });
-    const created = value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, firstMessage: "hello" } }));
-    expect(created.sessionId).toBe("agent-1");
-    expect(created).not.toHaveProperty("messageId");
+    const created = await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, firstMessage: "hello" } });
+    expect(errorText(created)).toMatch(/^create_session not_ready/);
     expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(0);
   });
 
