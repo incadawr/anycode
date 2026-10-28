@@ -110,7 +110,8 @@ const tools = [
   { name: "close_session", description: "Close a shared tab opened by create_session, through the same path as closing it in the UI. A running turn must be stopped with cancel_turn first. Errors start with a code: not_allowed (including env-file mode), not_found (unknown, closing or not shared), not_agent_opened (user tab), busy (running turn or host not ready), last_tab (open another tab first).", inputSchema: { type: "object", properties: { sessionId: { type: "string", minLength: 1 } }, required: ["sessionId"], additionalProperties: false } },
 ];
 
-async function writePrivateFile(path: string, text: string): Promise<void> {
+/** Atomic private write (mode 0600, temp file + rename); the default ledger and discovery writer. */
+export async function writePrivateFile(path: string, text: string): Promise<void> {
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, text, { mode: 0o600, flag: "wx" });
@@ -147,6 +148,10 @@ export interface CommunicationServerOptions {
   /** How long `create_session` waits for the new host before it returns without messageId, and the poll step (tests shorten both). */
   readyTimeoutMs?: number;
   readyPollMs?: number;
+  /** Dispatch deadline for one ledger record, from its own `createdAt` (tests shorten it). */
+  dispatchTimeoutMs?: number;
+  /** Seam for the durable ledger write; tests hold it open to reproduce a slow disk between the record and the envelope post. */
+  writeLedger?: (path: string, text: string) => Promise<void>;
 }
 
 /** Exactly one source: an env config FILE (legacy) or a live config OBJECT (Settings). */
@@ -185,15 +190,53 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   await mkdir(dirname(discoveryFile), { recursive: true, mode: 0o700 });
+  const writeLedger = options.writeLedger ?? writePrivateFile;
   let writes = Promise.resolve();
   const persist = () => {
     const snapshot = JSON.stringify([...messages.values()]);
     writes = writes.catch(() => {}).then(async () => {
-      await writePrivateFile(ledgerFile, snapshot);
+      await writeLedger(ledgerFile, snapshot);
     });
     return writes;
   };
   await persist();
+  /**
+   * GitHub #21: ids whose dispatch is not settled yet — the record exists (its
+   * write may even be still open), but the envelope has not reached the host or
+   * its outcome is unknown. Such a record must NEVER be eligible for
+   * `restore_agent_messages`: the host keeps the messageId as a known delivery
+   * and answers the real envelope with that stale record instead of starting the
+   * turn (the record then reads "unknown / Dispatch pending" forever). This is
+   * tracked by id, NOT by the displayed detail, because the dispatch deadline
+   * rewrites that detail while the dispatch is still in flight.
+   */
+  const inFlight = new Set<string>();
+  const dispatchTimeoutMs = options.dispatchTimeoutMs ?? 20_000;
+  const expiryTimers = new Map<string, NodeJS.Timeout>();
+  const clearExpiry = (messageId: string) => {
+    const timer = expiryTimers.get(messageId);
+    if (timer !== undefined) { clearTimeout(timer); expiryTimers.delete(messageId); }
+  };
+  /**
+   * One timer per record at its own deadline (no 1 s scan): a record that still
+   * reads "Dispatch pending" at `createdAt + dispatchTimeoutMs` cannot stay
+   * pending for a caller. `createdAt` is the envelope's, so the deadline does not
+   * drift with how long the ledger write or the post takes.
+   */
+  const scheduleExpiry = (record: Record) => {
+    const messageId = record.envelope.messageId;
+    clearExpiry(messageId);
+    const due = Date.parse(record.envelope.createdAt) + dispatchTimeoutMs - Date.now();
+    const timer = setTimeout(() => {
+      expiryTimers.delete(messageId);
+      if (record.detail !== "Dispatch pending") return;
+      record.state = "unknown";
+      record.detail = "Host response unavailable; do not blindly resend";
+      void persist().catch(() => {});
+    }, Math.max(0, due));
+    timer.unref();
+    expiryTimers.set(messageId, timer);
+  };
   const markLostGeneration = async (record: Record) => {
     if (record.state !== "queued") return false;
     const tab = options.manager.listTabs().find((t) => t.sessionId === record.envelope.recipientSessionId);
@@ -285,11 +328,20 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     const envelope: AgentEnvelope = { messageId: randomUUID(), sender, recipientSessionId: input.sessionId, payload: input.payload, mode: input.mode, kind: input.kind, correlationId: input.correlationId, replyTo: input.replyTo, createdAt: new Date().toISOString() };
     const record: Record = { envelope, state: "unknown", detail: "Dispatch pending", idempotencyKey: input.idempotencyKey, workspace, hostPid: recipient.pid };
     messages.set(envelope.messageId, record);
-    await persist(); // Durable acceptance BEFORE any delivery side effect.
+    // In flight from the moment the record exists until the post settles: the
+    // window the ledger write and the host request open is exactly when
+    // reconciliation must keep its hands off this record.
+    inFlight.add(envelope.messageId);
+    scheduleExpiry(record);
     try {
-      const response = await options.manager.communicationRequest(input.sessionId, "send_message", envelope, recipient.workspace) as AgentDelivery;
-      record.state = response.state; record.detail = response.detail === "Dispatch pending" ? "Host response unavailable; do not blindly resend" : response.detail;
-    } catch { record.state = "unknown"; record.detail = "Host response unavailable; do not blindly resend"; }
+      await persist(); // Durable acceptance BEFORE any delivery side effect.
+      try {
+        const response = await options.manager.communicationRequest(input.sessionId, "send_message", envelope, recipient.workspace) as AgentDelivery;
+        record.state = response.state; record.detail = response.detail === "Dispatch pending" ? "Host response unavailable; do not blindly resend" : response.detail;
+      } catch { record.state = "unknown"; record.detail = "Host response unavailable; do not blindly resend"; }
+    } finally {
+      inFlight.delete(envelope.messageId);
+    }
     await markLostGeneration(record);
     await persist(); return record;
   };
@@ -538,7 +590,11 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     try {
       for (const record of messages.values()) await markLostGeneration(record);
       for (const tab of await tabs()) {
-        const records = [...messages.values()].filter((r) => r.envelope.recipientSessionId === tab.sessionId && r.detail !== "Dispatch pending");
+        // GitHub #21: a record still in flight (and any record still reading
+        // "Dispatch pending", e.g. one whose pre-dispatch write failed) carries no
+        // settled host outcome to display; restoring it would make the host treat
+        // the real envelope as a duplicate and never start the turn.
+        const records = [...messages.values()].filter((r) => r.envelope.recipientSessionId === tab.sessionId && r.detail !== "Dispatch pending" && !inFlight.has(r.envelope.messageId));
         if (!records.length) continue;
         const key = `${tab.sessionId}:${tab.pid}`;
         if (!restoredHosts.has(key)) {
@@ -585,19 +641,10 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   const url = `http://127.0.0.1:${address.port}/mcp`;
   try { await writePrivateFile(discoveryFile, JSON.stringify({ url, token, workspaces: [...allowed] })); }
   catch (error) { http.closeAllConnections(); http.close(); throw error; }
-  // Expiry must not wait for reconciliation's host requests to finish.
-  const expiryTimer = setInterval(() => {
-    let changed = false;
-    for (const record of messages.values()) {
-      if (record.detail === "Dispatch pending" && Date.now() - Date.parse(record.envelope.createdAt) >= 20_000) {
-        record.state = "unknown"; record.detail = "Host response unavailable; do not blindly resend"; changed = true;
-      }
-    }
-    if (changed) void persist().catch(() => {});
-  }, 1000);
-  expiryTimer.unref();
+  // Each record carries its own dispatch deadline (see `scheduleExpiry`), so
+  // expiry never waits for reconciliation's host requests to finish.
   const reconcileTimer = setInterval(() => { void reconcile(); }, 1000);
   reconcileTimer.unref();
   let closed = false;
-  return { url, discoveryFile, async close() { if (closed) return; closed = true; closing = true; for (const waiter of waiters) waiter.abort(); unsubscribe?.(); clearInterval(reconcileTimer); clearInterval(expiryTimer); http.closeAllConnections(); await new Promise<void>((resolve) => http.close(() => resolve())); await writes; try { const current = JSON.parse(await readFile(discoveryFile, "utf8")); if (current.token === token) await rm(discoveryFile, { force: true }); } catch { /* already removed or replaced */ } } };
+  return { url, discoveryFile, async close() { if (closed) return; closed = true; closing = true; for (const waiter of waiters) waiter.abort(); unsubscribe?.(); clearInterval(reconcileTimer); for (const messageId of [...expiryTimers.keys()]) clearExpiry(messageId); http.closeAllConnections(); await new Promise<void>((resolve) => http.close(() => resolve())); await writes; try { const current = JSON.parse(await readFile(discoveryFile, "utf8")); if (current.token === token) await rm(discoveryFile, { force: true }); } catch { /* already removed or replaced */ } } };
 }

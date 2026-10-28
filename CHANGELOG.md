@@ -42,6 +42,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - A background child's report is labelled "Background subagent completed" instead of repeating the word "subagent".
 - An agent handle is only acknowledged as stored once the session store actually holds it: a failed write — including a session row that could not be created at all — is retried instead of silently forfeited, so the title survives the next restart.
 - Deliver the first message to newly created sessions reliably and report delivery failures. (#21)
+- A message still being handed to a new session is no longer shown to it as an earlier delivery, so the first turn always starts. (#21)
+- A message that cannot be dispatched is reported as failed at its own 20-second deadline, not up to a second later. (#21)
 
 ## [0.0.49] — 2026-10-28
 
