@@ -107,13 +107,23 @@ export function engineEffortOptions(
 }
 
 /**
- * The effort row's value text. `current` is the APPLIED effort (absent when the
- * session has not reported one — shown as `Default`, never as an invented
- * level); `pending` is the chosen-but-not-yet-applied level and is marked as
- * applying on the next turn, so it can never read as already active.
- * Exported for unit testing.
+ * Applied / next-turn effort state of the SELECTED native model. Every field is
+ * optional on purpose: an unknown value is honest, never defaulted.
  */
-export function engineEffortSummary(effort?: { current?: string; pending?: string }): string {
+export interface EngineEffortState {
+  current?: string;
+  selected?: string;
+  pending?: string;
+}
+
+/**
+ * The effort row's value text. `current` is the APPLIED effort of the selected
+ * model (absent when the session has not reported one — shown as `Default`,
+ * never as an invented level); `pending` is the chosen-but-not-yet-applied
+ * level and is marked as applying on the next turn, so it can never read as
+ * already active. Exported for unit testing.
+ */
+export function engineEffortSummary(effort?: EngineEffortState): string {
   if (effort === undefined) {
     return "Default";
   }
@@ -132,21 +142,53 @@ export function engineSelectedModel(model: EngineModelMenuProps["model"], pendin
 }
 
 /**
- * The effort a native pick must be compared against — the same next-turn rule
- * as {@link engineSelectedModel}. Comparing against the applied effort instead
- * swallowed a pick that cancels a pending choice (applied `medium`, pending
- * `xhigh`, user picks `medium`: the menu closed and the next turn still ran at
- * `xhigh`). Exported for unit testing.
+ * The effort a native pick must be compared against: the effort OF THE SELECTED
+ * MODEL for the next turn, and NOTHING when it is unknown. Comparing against
+ * the applied model's effort instead swallowed a pick right after a model
+ * switch (A applied `medium`, B queued with no known effort: picking `medium`
+ * for B matched A's applied value, the menu closed, and the next turn ran with
+ * whatever B defaulted to). An unknown value is unequal to every level, so
+ * every pick is sent. Exported for unit testing.
  */
-export function engineSelectedEffort(effort?: { current?: string; pending?: string }): string | undefined {
-  return effort?.pending ?? effort?.current;
+export function engineSelectedEffort(effort?: EngineEffortState): string | undefined {
+  return effort?.selected;
+}
+
+/**
+ * The effort control's state for the model that is actually SELECTED:
+ *
+ * - `current`  the applied effort — only when the applied model IS the selected
+ *              one; a queued switch says nothing about the new model's effort,
+ *              so it is absent there rather than borrowing the old model's.
+ * - `selected` the next-turn effort for the selected model: its queued choice,
+ *              else the applied value, else absent (unknown).
+ * - `pending`  the queued choice, marked as applying on the next turn.
+ *
+ * `undefined` when the selected model advertises no levels — capability is the
+ * vocabulary, never the presence of a value. Exported for unit testing (and
+ * shared with the automation facade so its label matches the rendered chip).
+ */
+export function engineEffortControlState(
+  model: EngineModelMenuProps["model"] & { readonly effort?: string },
+  pendingModel: string | undefined,
+  pendingEffort: string | undefined,
+): EngineEffortState | undefined {
+  if (engineEffortOptions(model, pendingModel).length === 0) {
+    return undefined;
+  }
+  const current = pendingModel === undefined || pendingModel === model.current ? model.effort : undefined;
+  const selected = pendingEffort ?? current;
+  return {
+    ...(current !== undefined ? { current } : {}),
+    ...(selected !== undefined ? { selected } : {}),
+    ...(pendingEffort !== undefined && pendingEffort !== current ? { pending: pendingEffort } : {}),
+  };
 }
 
 /**
  * The effort control Composer hands to `EngineModelMenu` — present whenever the
- * SELECTED model advertises levels, and absent otherwise. Capability is the
- * vocabulary (`engineEffortOptions`), never the presence of a current effort
- * value: a session that has not reported one yet still gets the row.
+ * SELECTED model advertises levels, and absent otherwise (see
+ * {@link engineEffortControlState} for the applied/selected split).
  * Exported for unit testing (the mounted DOM test builds its props with it).
  */
 export function nativeEffortControl(
@@ -155,10 +197,8 @@ export function nativeEffortControl(
   pendingEffort: string | undefined,
   onPick: (effort: string) => void,
 ): EngineModelMenuProps["effort"] {
-  if (engineEffortOptions(model, pendingModel).length === 0) {
-    return undefined;
-  }
-  return { current: model.effort, pending: pendingEffort, onPick };
+  const state = engineEffortControlState(model, pendingModel, pendingEffort);
+  return state === undefined ? undefined : { ...state, onPick };
 }
 
 /**
@@ -172,7 +212,7 @@ export function nativeEffortControl(
 export function engineMenuChipLabel(
   model: EngineModelMenuProps["model"],
   pendingModel: string | undefined,
-  effort?: { current?: string; pending?: string },
+  effort?: EngineEffortState,
 ): string {
   const base = engineChipLabel(
     engineModelDisplayName(model.current, model.available),
@@ -369,12 +409,11 @@ export interface EngineModelMenuProps {
    * unknown current effort means "this session has not reported one yet", not
    * "this model has no effort capability" — capability is `model.available`
    * alone, so the row must appear as soon as the vocabulary is nonempty.
+   * `selected` is the NEXT-TURN effort of the selected model and may also be
+   * unknown; a pick is compared against IT, never against the applied model's
+   * effort (see `engineSelectedEffort`).
    */
-  effort?: {
-    current?: string;
-    pending?: string;
-    onPick(effort: string): void;
-  };
+  effort?: EngineEffortState & { onPick(effort: string): void };
 }
 
 /**

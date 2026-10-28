@@ -106,6 +106,44 @@ describe("EngineModelMenu — rendered effort row", () => {
     }
   });
 
+  it("sends an effort pick for a queued model switch whose own effort is unknown", async () => {
+    // Model A is applied at `medium`; a switch to B (which advertises `medium`
+    // but has no catalog default) is queued. B's effort is therefore UNKNOWN,
+    // and picking `medium` for it is a real change — comparing against A's
+    // applied `medium` closed the menu and left the next turn at B's default.
+    const models = [
+      { id: "model-a", label: "Model A", efforts: ["low", "medium", "high"] },
+      { id: "model-b", label: "Model B", efforts: ["low", "medium", "high"] },
+    ];
+    const onEffortPick = vi.fn();
+    const control = nativeEffortControl({ current: "model-a", available: models, effort: "medium" }, "model-b", undefined, onEffortPick);
+    const { container, root } = await mount({
+      model: { current: "model-a", available: models },
+      pendingModel: "model-b",
+      disabled: false,
+      onPick: vi.fn(),
+      ...(control !== undefined ? { effort: control } : {}),
+    });
+    try {
+      await openPage(container, "Effort");
+
+      const page = container.querySelector('[data-model-pill-page="effort"]')!;
+      const medium = [...page.querySelectorAll<HTMLButtonElement>("button.model-pill-item")]
+        .find((item) => item.getAttribute("data-effort") === "medium")!;
+
+      await act(async () => medium.click());
+      // B's effort is unknown, so picking `medium` for it IS a change.
+      expect(onEffortPick).toHaveBeenCalledWith("medium");
+
+      // ...and nothing of A's reads as B's: the applied effort belongs to the
+      // OLD model, so no level is checked and the chip reads Default.
+      expect(medium.getAttribute("aria-checked")).toBe("false");
+      expect(container.querySelector('button[aria-label="Engine model and effort"]')?.textContent).toContain("Default");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it("sends a model pick that returns to the applied model while another switch is queued", async () => {
     const onPick = vi.fn();
     const { container, root } = await mount({ model: { current: "gpt-6.1-terra", available: terraModels }, pendingModel: "plain", disabled: false, onPick });
