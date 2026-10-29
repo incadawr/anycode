@@ -1777,6 +1777,11 @@ export class ClaudeEngine implements SessionEngine {
    * window — the one thing a host-side sum of `result.usage` can never get
    * right (the window size is not on the result frame at all).
    */
+  async initialContextUsage(): Promise<{ estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" } | undefined> {
+    const event = await this.readContextUsage();
+    return event?.type === "context_usage" ? { estimatedTokens: event.estimatedTokens, budgetTokens: event.budgetTokens, source: event.source } : undefined;
+  }
+
   private async readContextUsage(): Promise<AgentEvent | null> {
     try {
       const usage = await this.client.getContextUsage();
