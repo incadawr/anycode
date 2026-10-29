@@ -3,7 +3,10 @@
  * the exponential cooldown ladder, the health cache, and infrastructure
  * failure classification. Everything here is clock-injected — no timers.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createChildSessionPort, CHILD_SYNC_JOIN_BUDGET_MS } from "./child-session-port.js";
+import { createRoutedChildComposition } from "./routed-child-composition.js";
+import { CHILD_RUN_EVENT_TYPE, CHILD_SPAWN_REQUEST_TYPE, type ChildRunEvent, type ChildSpawnRequest } from "../shared/child-sessions.js";
 import {
   ROLE_COOLDOWN_BASE_MS,
   ROLE_COOLDOWN_MAX_MS,
@@ -358,54 +361,72 @@ describe("respawnReportId (R3)", () => {
   });
 });
 
-/**
- * GitHub #17 slice D: a synchronous join can be handed off to
- * the background after its tool call already returned, so its route facts MUST
- * be captured at dispatch. This pins the preservation rule: the fallback chain
- * that decides the later background terminal is the one captured then, not a
- * fresh read of the (now changed) settings.
- */
-describe("routed facts captured at dispatch survive a handoff (GitHub #17 slice D)", () => {
-  it("a settings change after dispatch cannot change the captured fallback chain", () => {
-    const health = new RoleHealthCache();
-    const dispatchSettings = {
-      primary: { connection: "conn-a", model: "model-a" },
-      fallbacks: [{ connection: "conn-b", model: "model-b" }],
-    };
-    const resolution = resolveRoleRouteChain({
-      role: "executor",
-      config: dispatchSettings,
-      claimedByMdProfile: false,
-      health: health.snapshot(),
-      now: T0,
-    })!;
-    // The facts index.ts's noteRoutedSpawn records at dispatch time.
-    const captured: RoutedSpawnFacts = {
-      role: "executor",
-      entry: resolution.entries[0]!,
-      rest: resolution.entries.slice(1),
-      usedFallback: resolution.skipped.length > 0,
-    };
-
-    // The owner edits settings while the child keeps running in the background.
-    const laterSettings = {
-      primary: { connection: "conn-c", model: "model-c" },
-      fallbacks: [{ connection: "conn-d", model: "model-d" }],
-    };
-    const laterResolution = resolveRoleRouteChain({
-      role: "executor",
-      config: laterSettings,
-      claimedByMdProfile: false,
-      health: health.snapshot(),
-      now: T0 + 1,
-    })!;
-    expect(laterResolution.entries[0]).not.toEqual(captured.entry);
-
-    const decision = decideRoutedTerminal(captured, "error", "rate limited (HTTP 429)", health, T0 + 2);
-    expect(decision.action).toBe("respawn");
-    if (decision.action !== "respawn") return;
-    // Captured chain: the ORIGINAL fallback, never the edited one.
-    expect(decision.entry).toEqual({ connection: "conn-b", model: "model-b" });
-    expect(decision.next.rest).toEqual([]);
+describe("routed child composition", () => {
+  it("keeps the dispatch route through handoff and respawns on the captured fallback", async () => {
+    vi.useFakeTimers();
+    try {
+      let listener: (event: ChildRunEvent) => void = () => {};
+      const sent: ChildSpawnRequest[] = [];
+      let entries = [{ model: "A" }, { model: "B" }];
+      const composition = createRoutedChildComposition({
+        health: new RoleHealthCache(), describeError: String,
+        resolve: () => ({ entries, skipped: [] }),
+        prepare: (req) => req,
+        record: () => {},
+        report: () => {},
+        deliver: () => {},
+      });
+      const port = createChildSessionPort({
+        parentSessionId: "parent", getPermissionMode: () => "build",
+        send: (message) => { if (message.type === CHILD_SPAWN_REQUEST_TYPE) sent.push(message); },
+        subscribe: (cb) => { listener = cb; return () => {}; },
+        onDetachedTerminal: composition.onTerminal,
+      });
+      composition.attach(port);
+      const pending = port.run({ agentType: "executor", description: "Review", prompt: "the task", spawnToolCallId: "original", model: "A", routeStamped: true, allowBackgroundHandoff: true }, {});
+      const id = sent[0]!.requestId;
+      listener({ type: CHILD_RUN_EVENT_TYPE, kind: "accepted", requestId: id, childSessionId: "child", childTabId: "tab", model: "A" });
+      entries = [{ model: "C" }, { model: "D" }];
+      await vi.advanceTimersByTimeAsync(CHILD_SYNC_JOIN_BUDGET_MS);
+      await pending;
+      listener({ type: CHILD_RUN_EVENT_TYPE, kind: "terminal", requestId: id, status: "error", finalText: "rate limited (HTTP 429)", truncated: false, turns: 1, toolCalls: 0, durationMs: 120000, childSessionId: "child" });
+      expect(sent).toHaveLength(2);
+      expect(sent[1]).toMatchObject({ model: "B", prompt: "the task" });
+      expect(sent[1]!.spawnToolCallId).not.toBe("original");
+      listener({ type: CHILD_RUN_EVENT_TYPE, kind: "terminal", requestId: id, status: "error", finalText: "rate limited (HTTP 429)", truncated: false, turns: 1, toolCalls: 0, durationMs: 120000, childSessionId: "child" });
+      expect(sent).toHaveLength(2);
+    } finally { vi.useRealTimers(); }
   });
+});
+
+it.each([
+  { name: "a synchronous completion", request: { allowBackgroundHandoff: true as const, routeStamped: true }, status: "completed" as const, text: "done", handoff: false, fallback: false },
+  { name: "an explicitly detached routed child", request: { detach: true, routeStamped: true }, status: "error" as const, text: "rate limited (HTTP 429)", handoff: false, fallback: true },
+  { name: "caller-selected routing", request: { detach: true }, status: "error" as const, text: "rate limited (HTTP 429)", handoff: false, fallback: false },
+  { name: "a continuation", request: { detach: true, routeStamped: true, resumeChildSessionId: "previous" }, status: "error" as const, text: "rate limited (HTTP 429)", handoff: false, fallback: false },
+  { name: "a task failure", request: { detach: true, routeStamped: true }, status: "error" as const, text: "task failed: assertion mismatch", handoff: false, fallback: false },
+  { name: "a cancellation", request: { detach: true, routeStamped: true }, status: "cancelled" as const, text: "cancelled", handoff: false, fallback: false },
+])("handles $name through the child port", async ({ request, status, text, fallback }) => {
+  const sent: ChildSpawnRequest[] = [];
+  const delivered: string[] = [];
+  let listener: (event: ChildRunEvent) => void = () => {};
+  const composition = createRoutedChildComposition({
+    health: new RoleHealthCache(), describeError: String, resolve: () => ({ entries: [{ model: "A" }, { model: "B" }], skipped: [] }),
+    prepare: (req) => req, record: () => {}, report: () => {}, deliver: (outcome) => delivered.push(outcome.finalText),
+  });
+  const port = createChildSessionPort({
+    parentSessionId: "parent", getPermissionMode: () => "build",
+    send: (message) => { if (message.type === CHILD_SPAWN_REQUEST_TYPE) sent.push(message); },
+    subscribe: (cb) => { listener = cb; return () => {}; }, onDetachedTerminal: composition.onTerminal,
+  });
+  composition.attach(port);
+  const pending = port.run({ agentType: "executor", description: "Review", prompt: "task", spawnToolCallId: "original", ...request }, {});
+  const id = sent[0]!.requestId;
+  listener({ type: CHILD_RUN_EVENT_TYPE, kind: "accepted", requestId: id, childSessionId: "child", childTabId: "tab", model: "A" });
+  if (request.detach) await pending;
+  listener({ type: CHILD_RUN_EVENT_TYPE, kind: "terminal", requestId: id, status, finalText: text, truncated: false, turns: 1, toolCalls: 0, durationMs: 1, childSessionId: "child" });
+  await pending;
+  expect(sent).toHaveLength(fallback ? 2 : 1);
+  if (fallback) expect(sent[1]).toMatchObject({ model: "B", prompt: "task" });
+  if (request.detach && !fallback) expect(delivered).toEqual([text]);
 });

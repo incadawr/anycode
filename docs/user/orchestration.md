@@ -72,8 +72,14 @@ for that project's parent session and never raise it — the lower of the two
 applies. Leave the field blank to use the session limit.
 
 A background (detached) spawn above the limit is refused immediately with the
-limit message, so a burst of delegations never stalls the parent turn. A spawn
+“child session limit reached” message, counting running children and pending admissions, so a burst of delegations never stalls the parent turn. A spawn
 asked to wait synchronously stays queued and starts when a slot frees.
+
+The application-wide limit across all parents is the session setting
+`sessionLimits.childSessionsGlobalMax` (1–24, default 8). A background spawn
+over this limit is refused with the
+“application-wide child session limit reached” message; a synchronous spawn
+waits for a slot.
 
 For a longer worked example, the source repository has `docs/orchestration.md`.
 It is not shipped inside the app.
