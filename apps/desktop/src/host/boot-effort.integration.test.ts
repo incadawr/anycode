@@ -166,7 +166,7 @@ for (const [resumed, initialModel] of [[false, "both"], [false, "onlyMax"], [tru
         const beforeSecond = requests.length;
         port.send({ type: "user_message", requestId: "two", text: "hello again" });
         await vi.waitFor(() => expect(requests.length).toBeGreaterThan(beforeSecond), { timeout: 15000 });
-        expect(requests.at(-1).reasoning_effort).toBe("high"); // chat-completions transport's max encoding
+        expect(requests.at(-1).reasoning_effort).toBe("max");
         settings.provider.connections[0]!.modelCapabilities.onlyMax.effortLevels = ["xhigh", "max"];
         writeFileSync(profile.settingsPath, JSON.stringify(settings));
         await vi.waitFor(() => expect(port.messages.filter((m) => m.type === "agent_event" && m.event?.type === "loop_end").length).toBeGreaterThanOrEqual(2), { timeout: 15000 });

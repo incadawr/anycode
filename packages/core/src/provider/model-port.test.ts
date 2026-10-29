@@ -185,7 +185,7 @@ describe("reasoningRequestOptions — prompt cache options (GitHub #15)", () => 
     expect(
       reasoningRequestOptions({ ...baseRequest, reasoningEffort: "max" }, "custom", "openai-chat-completions", cache),
     ).toEqual({
-      providerOptions: { openaiCompatible: { reasoningEffort: "high", prompt_cache_options: cache } },
+      providerOptions: { openaiCompatible: { reasoningEffort: "max", prompt_cache_options: cache } },
     });
     expect(
       reasoningRequestOptions({ ...baseRequest, reasoningEffort: "max", maxOutputTokens: 2048 }, "OpenAI", "openai-responses", cache),
@@ -978,7 +978,7 @@ describe("reasoningRequestOptions — transport branching (TASK.43 §0.7)", () =
   });
 
   it.each(["low", "medium", "high", "max"] as const)(
-    "passes openai-responses effort %s through VERBATIM (no chat-completions-style max->high collapse), alongside store:false",
+    "passes openai-responses effort %s through verbatim, alongside store:false",
     (effort) => {
       // forceReasoning rides along because @ai-sdk/openai decides whether to
       // emit reasoning.effort from an id-prefix heuristic (o1/o3/o4-mini/gpt-5*)
@@ -1018,11 +1018,11 @@ describe("reasoningRequestOptions — transport branching (TASK.43 §0.7)", () =
     },
   );
 
-  it("collapses openai-chat-completions effort max to high (no max/xhigh tier on chat-completions)", () => {
+  it("passes openai-chat-completions effort max through unchanged", () => {
     expect(
       reasoningRequestOptions({ ...baseRequest, reasoningEffort: "max" }, "custom", "openai-chat-completions"),
     ).toEqual({
-      providerOptions: { openaiCompatible: { reasoningEffort: "high" } },
+      providerOptions: { openaiCompatible: { reasoningEffort: "max" } },
     });
   });
 
