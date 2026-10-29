@@ -105,14 +105,14 @@ describe("Responses reasoning text over SSE (#27)",()=>{
    expect(events).toContainEqual(expect.objectContaining({type:"text_delta",text:"ok"}));
    expect(events.filter(e=>e.type==="error")).toEqual([]);
  });
- it("flushes buffered reasoning as soon as its missing part arrives", async () => {
-   set(created(), {...delta("B"),content_index:1}, delta("A"), {...delta("C"),content_index:1});
+ it("flushes buffered reasoning in order when the preceding part finishes", async () => {
+   set(created(), {...delta("B"),content_index:1}, delta("A"), delta("a"), {type:"response.reasoning_text.done",item_id:"rs_1",content_index:0,text:"Aa"}, {...delta("C"),content_index:1});
    holdOpen=true;
    const abort=new AbortController();
    const iterator=portFor().streamText({...req,abortSignal:abort.signal})[Symbol.asyncIterator]();
    try {
      const result=await Promise.race([(async()=>{let result=""; for (;;) {const next=await iterator.next(); if(next.done) return result; if(next.value.type==="reasoning_delta") result+=next.value.text; if(result.includes("C")) return result;}})(),new Promise<never>((_,reject)=>setTimeout(()=>reject(new Error("reasoning remained buffered")),1500))]);
-     expect(result).toBe("A\n\nBC");
+     expect(result).toBe("Aa\n\nBC");
    } finally { abort.abort(); await iterator.return?.(); }
  });
  it("still stalls when the response goes silent (#27)",async()=>{set(created()); holdOpen=true; await expect(collect(portFor({stallTimeoutMs:200}).streamText(req))).rejects.toThrow(/stream stalled: no events for 200ms/);});
