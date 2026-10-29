@@ -1430,3 +1430,12 @@ describe("agentTool — background handoff presentation (GitHub #17 slice D)", (
     expect("allowBackgroundHandoff" in (seen[1] ?? {})).toBe(false);
   });
 });
+
+
+it("describes Git access and the command boundary in both Agent declarations", () => {
+  for (const tool of [createAgentTool(), createAgentTool({ sessionTier: true })]) {
+    expect(tool.metadata.description).toContain("Git history");
+    expect(tool.metadata.description).toContain("cannot run commands");
+    expect(tool.metadata.description).toContain("general-purpose");
+  }
+});

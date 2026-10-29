@@ -52,7 +52,7 @@ interface RecordedCall {
   args: string[];
   cwd?: string;
   timeoutMs?: number;
-  env?: Record<string, string>;
+  env?: Record<string, string | undefined>;
 }
 
 class FakeExec implements ExecutionPort {

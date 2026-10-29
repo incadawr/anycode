@@ -542,3 +542,50 @@ export interface WebSearchOutput {
   /** True when the backend yielded more parseable results than were returned. */
   truncated: boolean;
 }
+
+// Read-only Git requests are structured; no caller-controlled argv or configuration.
+export const gitInputSchema = z.object({
+  operation: z.enum(["show", "log", "diff", "blame", "ls-tree", "rev-parse", "branch", "status"]).describe("Read-only Git operation"),
+  revision: z.string().min(1).optional().describe("Local revision; log also accepts a revision range such as develop..HEAD"),
+  endRevision: z.string().min(1).optional().describe("Second diff endpoint"),
+  path: z.string().min(1).optional().describe("One literal workspace path, separate from the revision"),
+  paths: z.array(z.string().min(1)).min(1).optional().describe("Literal paths inside the session workspace"),
+  maxCount: z.number().int().positive().max(1000).optional().describe("Maximum log commits, default 20"),
+  format: z.enum(["normal", "oneline", "stat", "name-only"]).optional(),
+  startLine: z.number().int().positive().optional(),
+  endLine: z.number().int().positive().optional(),
+}).strict().superRefine((input, ctx) => {
+  const allowed: Record<typeof input.operation, readonly string[]> = {
+    show: ["revision", "path", "format"],
+    log: ["revision", "paths", "maxCount", "format"],
+    diff: ["revision", "endRevision", "paths", "format"],
+    blame: ["revision", "path", "startLine", "endLine"],
+    "ls-tree": ["revision", "path"],
+    "rev-parse": ["revision"],
+    branch: [], status: [],
+  };
+  for (const [key, value] of Object.entries(input)) {
+    if (key !== "operation" && value !== undefined && !allowed[input.operation].includes(key)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: `Not valid for ${input.operation}` });
+    }
+  }
+  if (["show", "diff", "ls-tree", "rev-parse"].includes(input.operation) && !input.revision) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["revision"], message: "Revision is required" });
+  }
+  if (input.operation === "blame" && !input.path) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["path"], message: "Path is required" });
+  }
+  if ((input.startLine === undefined) !== (input.endLine === undefined) ||
+      (input.startLine !== undefined && input.endLine !== undefined && input.startLine > input.endLine)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Provide an ordered inclusive line range" });
+  }
+  const formats: Record<string, readonly string[]> = { show: ["normal", "stat"], log: ["normal", "oneline", "stat"], diff: ["normal", "stat", "name-only"] };
+  if (input.format && !formats[input.operation]?.includes(input.format)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["format"], message: "Unsupported format" });
+  }
+  if (input.operation === "show" && input.path && input.format && input.format !== "normal") {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["format"], message: "Historical file reads do not support this format" });
+  }
+});
+export type GitInput = z.output<typeof gitInputSchema>;
+export type GitOutput = import("../ports/git-read.js").GitReadOutput;
