@@ -1982,6 +1982,7 @@ describe("custom endpoint cache creation", () => {
     const calls: unknown[] = [];
     const bindings: Record<string, unknown> = {
       preflightModelId, model: "fixture-model", buildCustomProviderCreateRequest: () => ({}),
+      pricingPayload: () => ({ mode: "subscription" }), modelPricingPayload: () => ({ "fixture-model": { input: 1, cachedInput: 0, output: 2 } }),
       contextWindowTokensField, contextWindow: { raw: "" }, reasoningSupported: false, modelEffort: "",
       customName: "fixture", customBaseUrl: "http://127.0.0.1", customKind: "openai-compatible",
       secretValue: "", noAuth: true, setCreating: () => {}, setError: () => {}, catalog: [],
@@ -1996,7 +1997,7 @@ describe("custom endpoint cache creation", () => {
     };
     const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
     await run();
-    expect(calls).toEqual([{ providerId: "custom:fixture", model: "fixture-model", transport: "openai-responses", promptCache: IMPLICIT_PROMPT_CACHE }]);
+    expect(calls).toEqual([{ providerId: "custom:fixture", pricing: { mode: "subscription" }, modelPricing: { "fixture-model": { input: 1, cachedInput: 0, output: 2 } }, model: "fixture-model", transport: "openai-responses", promptCache: IMPLICIT_PROMPT_CACHE }]);
   });
 });
 
@@ -2030,4 +2031,9 @@ it("prefills each model's own context window when navigating A → B → A", () 
   field = contextWindowAfterRawInput(field, "", "a");
   expect(contextWindowAfterModelInput(field, " a ", saved).raw).toBe("");
   expect(saved.modelOverrides.b.contextWindowTokens).toBe(64000);
+});
+
+it("disables per-model rate inputs while a save is pending", () => {
+  const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
+  expect(source).toContain('fieldset key={id} disabled={readOnly || saving || pricingMode === "subscription"}');
 });

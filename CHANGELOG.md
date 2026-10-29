@@ -10,6 +10,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Claude and Codex sessions can change reasoning effort while a turn is running; the choice applies from the next turn (GitHub #25).
+- Custom provider connections take token prices per model; each step is priced by its own model's rates (subagents included), and an unpriced custom connection points to its pricing settings (GitHub #20).
 
 ### Fixed
 

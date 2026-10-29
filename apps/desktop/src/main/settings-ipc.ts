@@ -22,6 +22,7 @@ import { randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
 import { ipcMain } from "electron";
 import { z } from "zod";
+import { normalizeModelId } from "../shared/settings.js";
 import { patchModelOverride } from "../shared/model-overrides.js";
 import { SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
 import type { FileIoLogger } from "../settings/files.js";
@@ -373,6 +374,25 @@ const CONTEXT_WINDOW_TOKENS_MIN = 1_024;
 const CONTEXT_WINDOW_TOKENS_MAX = 1_000_000;
 const contextWindowTokensSchema = z.number().int().min(CONTEXT_WINDOW_TOKENS_MIN).max(CONTEXT_WINDOW_TOKENS_MAX);
 
+const tokenRatesSchema = z.object({ input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict();
+const modelIdKey = z.string().refine((id) => normalizeModelId(id) === id);
+const modelPricingSchema = <T extends z.ZodType>(valueSchema: T) =>
+  z.unknown().transform((raw, ctx) => {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Expected a model price map" });
+      return z.NEVER;
+    }
+    const entries: [string, z.output<T>][] = [];
+    for (const [id, value] of Object.entries(raw)) {
+      const parsed = valueSchema.safeParse(value);
+      if (!modelIdKey.safeParse(id).success || !parsed.success) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid model price", path: [id] });
+        return z.NEVER;
+      }
+      entries.push([id, parsed.data]);
+    }
+    return Object.fromEntries(entries);
+  });
 const connectionPricingSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("subscription") }).strict(),
   z.object({ mode: z.literal("rates"), input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict(),
@@ -394,6 +414,7 @@ const promptCacheSchema = z
 const connectionCreateSchema = z
   .object({
     providerId: z.string().min(1),
+    modelPricing: modelPricingSchema(tokenRatesSchema).optional(),
     pricing: connectionPricingSchema.optional(),
     label: z.string().optional(),
     model: z.string().optional(),
@@ -432,6 +453,7 @@ const connectionCreateSchema = z
   .strict();
 const connectionUpdateSchema = z
   .object({
+    modelPricing: modelPricingSchema(z.union([tokenRatesSchema, z.literal("")])).optional(),
     pricing: z.union([connectionPricingSchema, z.literal("")]).optional(),
     id: z.string().min(1),
     label: z.string().optional(),
@@ -1790,6 +1812,7 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
         ...(req.reasoningSupported !== undefined ? { reasoningSupported: req.reasoningSupported } : {}),
       });
     }
+    for (const [model, pricing] of Object.entries(req.modelPricing ?? {})) patchModelOverride(connection, model, { pricing });
     const shouldActivate = req.setActive === true || loaded.settings.provider.activeConnectionId === undefined;
     const activeConnectionId = shouldActivate ? id : loaded.settings.provider.activeConnectionId;
     // Spread the loaded provider block (FX3-L1 G-C): rebuilding it from named
@@ -1904,6 +1927,7 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
         ? { lastHealth: { status: "unchecked" as const, at: (deps.now ?? defaultNowIso)() } }
         : {}),
     };
+    for (const [model, pricing] of Object.entries(req.modelPricing ?? {})) patchModelOverride(updatedConnection, model, { pricing: pricing === "" ? undefined : pricing });
     if (req.pricing !== undefined) {
       if (req.pricing === "") delete updatedConnection.pricing;
       else updatedConnection.pricing = req.pricing;

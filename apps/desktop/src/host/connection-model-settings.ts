@@ -8,7 +8,7 @@ import {
 import type { ProviderConnection } from "../shared/settings.js";
 import { applyModelReasoningOverride, modelOverrideFor } from "../shared/model-overrides.js";
 
-type ConnectionSettings = Pick<ProviderConnection, "modelOverrides" | "reasoningEffort" | "modelCapabilities">;
+type ConnectionSettings = Pick<ProviderConnection, "modelOverrides" | "reasoningEffort" | "modelCapabilities" | "pricing">;
 
 /** Refresh only at model switches and turn starts, never during a running model call. */
 export function createConnectionModelSettings(deps: {
@@ -71,6 +71,8 @@ export function createConnectionModelSettings(deps: {
 
   return {
     refresh,
+    pricingSnapshot() { return hasReadConnection ? { fallback: connection?.pricing, models: Object.fromEntries(Object.entries(connection?.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => [id, value.pricing])) } : undefined; },
+    hasReadConnection() { return hasReadConnection; },
     capabilitiesFor,
     effortFor,
     contextFor(model: string) {

@@ -19,6 +19,8 @@ import { describe, expect, it } from "vitest";
 import type { WireUsageAuditStep, WireUsageAuditTotals } from "../../../shared/protocol.js";
 import {
   UsageCostBlock,
+  contextWindowSettingsTarget,
+  showCustomPricingHint,
   formatTurnStepSummary,
   formatUsageAuditStepRow,
   formatUsageCostLedger,
@@ -158,4 +160,16 @@ describe("popover code has no other clipping cost rows", () => {
     });
     expect(clipped).toEqual([]);
   });
+});
+
+
+it("shows the sum of model prices and points an unpriced pinned custom connection to settings", () => {
+  const markup = renderToStaticMarkup(createElement(UsageCostBlock, { ledger: formatUsageCostLedger({ ...base, costUsd: .003 + .007 }, null), turnSummary: null, turnSteps: [], expanded: false, onToggle: () => {} }));
+  expect(textOf(markup)).toContain("Spent in this session: ≈ $0.0100");
+  const connections = [{ id: "custom", providerId: "custom:fixture" }, { id: "active", providerId: "z-ai" }];
+  const target = contextWindowSettingsTarget(connections, "a", "custom", "active");
+  expect(showCustomPricingHint(target, { ...base, unpricedSteps: 1, costUsd: .003 })).toBe(true);
+  expect(showCustomPricingHint(target, { ...base, subagentUnpriced: 1 })).toBe(true);
+  expect(showCustomPricingHint(target, { ...base, costUsd: .01 })).toBe(false);
+  expect(showCustomPricingHint(contextWindowSettingsTarget(connections, "a", "active", "custom"), { ...base, unpricedSteps: 1 })).toBe(false);
 });
