@@ -95,6 +95,7 @@ export interface HostPortMeta {
   tabId: string;
   workspace: string;
   missingWorkspace?: boolean;
+  hostFailure?: PortEnvelope["hostFailure"];
   /**
    * TASK.45 W10-FIX F2: the tab's pinned provider connection (additive control
    * plane). Absent for an unpinned/legacy tab — the ModelPill then falls back to
@@ -175,6 +176,7 @@ export function onHostPort(cb: (port: MessagePort, meta: HostPortMeta) => void):
         tabId?: unknown;
         workspace?: unknown;
         missingWorkspace?: unknown;
+        hostFailure?: PortEnvelope["hostFailure"];
         connectionId?: unknown;
         providerId?: unknown;
         child?: unknown;
@@ -197,6 +199,7 @@ export function onHostPort(cb: (port: MessagePort, meta: HostPortMeta) => void):
         tabId,
         workspace: wsFromEnvelope,
         ...(envelope.missingWorkspace === true ? { missingWorkspace: true } : {}),
+        ...(envelope.hostFailure ? { hostFailure: envelope.hostFailure } : {}),
         ...(pinnedConnection !== undefined ? { pinnedConnection } : {}),
         ...(child !== undefined ? { child } : {}),
         ...(typeof envelope.agentTitle === "string" ? { agentTitle: envelope.agentTitle } : {}),
@@ -242,14 +245,16 @@ export function onTerminalPort(cb: (port: MessagePort, tabId: string) => void): 
  * tabId identifies which tab's host exited; per-tab routing is
  * `ConnectionManager`'s job below.
  */
-export function onHostExited(cb: (tabId: string) => void): () => void {
+export function onHostExited(cb: (tabId: string, failure?: PortEnvelope["hostFailure"]) => void): () => void {
   function handleMessage(event: MessageEvent): void {
     const data: unknown = event.data;
     const isExitEnvelope =
       typeof data === "object" && data !== null && (data as { type?: unknown }).type === HOST_EXITED_ENVELOPE_TYPE;
     if (isExitEnvelope) {
       const tabId = typeof (data as { tabId?: unknown }).tabId === "string" ? (data as { tabId: string }).tabId : "";
-      cb(tabId);
+      const failure = (data as { hostFailure?: PortEnvelope["hostFailure"] }).hostFailure;
+      if (failure) cb(tabId, failure);
+      else cb(tabId);
     }
   }
   window.addEventListener("message", handleMessage);
@@ -292,7 +297,7 @@ export interface ConnectionRegistry {
    * found gone, so the surface can show that error instead of a connecting
    * state (GitHub #6).
    */
-  markHostExited(tabId: string, missingWorkspacePath?: string): void;
+  markHostExited(tabId: string, missingWorkspacePath?: string, failure?: PortEnvelope["hostFailure"]): void;
   disposeTab?(tabId: string): void;
   /**
    * Attaches a fresh term-port for `tabId` (design slice-2.4-cut.md §4).
@@ -327,8 +332,9 @@ export function startConnectionManager(registry: ConnectionRegistry): () => void
     // its workspace folder is gone. Mark the tab exited with that path so the
     // surface shows an error naming the folder instead of sitting in
     // "Connecting to host…" forever.
-    if (attached && meta.missingWorkspace) {
-      registry.markHostExited(meta.tabId, meta.workspace);
+    if (attached && (meta.missingWorkspace || meta.hostFailure)) {
+      if (meta.hostFailure) registry.markHostExited(meta.tabId, meta.missingWorkspace ? meta.workspace : undefined, meta.hostFailure);
+      else registry.markHostExited(meta.tabId, meta.workspace);
     }
     if (!attached) {
       console.warn("[port] dropping port for a closed/unknown tab", meta.tabId);
@@ -346,11 +352,12 @@ export function startConnectionManager(registry: ConnectionRegistry): () => void
     }
   });
 
-  const stopExitListener = onHostExited((tabId) => {
+  const stopExitListener = onHostExited((tabId, failure) => {
     if (!tabId) {
       return;
     }
-    registry.markHostExited(tabId);
+    if (failure) registry.markHostExited(tabId, undefined, failure);
+    else registry.markHostExited(tabId);
   });
 
   const onClosed = (event: MessageEvent): void => {
