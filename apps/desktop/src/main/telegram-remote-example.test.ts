@@ -172,7 +172,7 @@ async function harness(opts: { env?: Record<string, string | undefined>; bridge?
         const scripted = results.get(payload as string);
         return scripted ? scripted() : { state: "running" };
       }
-      if (op === "get_session_status") return { engine: "codex", running: false };
+      if (op === "get_session_status") return { engine: "codex", state: "idle" };
       if (op === "list_pending_approvals") return approvals.items.map((item) => ({ ...item }));
       if (op === "answer_approval") return approvals.answer(payload);
       if (op === "cancel_turn") return approvals.cancel();
