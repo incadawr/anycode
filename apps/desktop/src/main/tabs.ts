@@ -68,7 +68,7 @@ import {
 } from "../shared/preview.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
 import { PROVIDER_QUOTA_EVENT_TYPE } from "../shared/provider-quota.js";
-import { clampSessionLimit, SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
+import { childSessionLimitMessage, clampSessionLimit, SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
 import type { RecognizerConfigChanged } from "../shared/recognizer.js";
 import { ENV_CONNECTION_ID, ENV_MAX_TURNS, ENV_MODEL, ENV_REASONING_EFFORT, ENV_REASONING_EFFORT_MODEL } from "./host-env.js";
 import type { CloseTabResult } from "../shared/tabs.js";
@@ -117,8 +117,6 @@ const HOST_SHUTDOWN_MESSAGE_TYPE = "shutdown";
  * п.3/п.4's ratifications of the S2b wording AS-IS. None of these four is a
  * main-side style choice.
  */
-const CHILD_LIMIT_PARENT_MESSAGE =
-  'Agent: session-subagent limit reached — this session already has 3 running child sessions. Wait for one to finish, or use tier "inline".';
 const CHILD_LIMIT_GLOBAL_MESSAGE =
   'Agent: application-wide session-subagent limit reached (8 running child sessions). No child was started. Wait for one to finish, or use tier "inline".';
 const CHILD_RECURSION_MESSAGE = 'Agent: a child session cannot spawn its own child sessions. Use tier "inline".';
@@ -2131,7 +2129,7 @@ export class TabHostManager {
       clampSessionLimit("childSessionsPerParentMax", this.childPerParentReader?.(parentTab.projectRoot)) ??
       CHILD_RUNS_PER_PARENT_MAX;
     if (perParent >= perParentMax) {
-      return { reason: "limit_parent", message: CHILD_LIMIT_PARENT_MESSAGE };
+      return { reason: "limit_parent", message: childSessionLimitMessage(perParent) };
     }
     const globalMax = clampSessionLimit("childSessionsGlobalMax", this.childGlobalReader?.()) ?? CHILD_RUNS_GLOBAL_MAX;
     if (this.childRuns.size >= globalMax) {

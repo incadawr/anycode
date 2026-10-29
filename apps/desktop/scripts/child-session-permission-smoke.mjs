@@ -228,7 +228,7 @@ async function cdpConnect(port, timeoutMs = 60_000) {
  * present on the outer `.tool-call-card` in EVERY render, collapsed or not —
  * design/slice-P7.18-cut.md §4 W4) and reads the session-child badge's real
  * Blink geometry, plus whether ANY permission modal exists anywhere in the
- * document (the master-modal-absent half of п.6).
+ * document, including the forwarded permission dialog.
  */
 function masterBadgeGeometryJs(toolCallId) {
   return `(() => {
@@ -487,11 +487,9 @@ async function step6PermissionAsk(ctx) {
       `under mode="build" (either the model skipped Write, or the ask was bypassed). Final block: ${JSON.stringify(waitingSeen.block ?? waitingSeen)}`,
   );
 
-  // Master modal must NOT be up (structural: the master pane's own
-  // ConnectedPermissionModal reads the ROOT tab's own store, untouched by a
-  // child's own connection).
+  // The root has no own ask; its modal forwards the child request.
   const rootPermission = await rootPermissionState(ctx);
-  assert(step, rootPermission === null, `master's OWN /state permission field is non-null while the child is asking — the MASTER modal would be up: ${JSON.stringify(rootPermission)}`);
+  assert(step, rootPermission === null, `master's own permission state is non-null while the child is asking: ${JSON.stringify(rootPermission)}`);
 
   const badgeGeo = await ctx.cdp.eval(masterBadgeGeometryJs(ctx.step6ToolCallId));
   assert(step, badgeGeo.ok === true && badgeGeo.hasBadge === true, `master card badge not found in the DOM: ${JSON.stringify(badgeGeo)}`);
@@ -499,11 +497,23 @@ async function step6PermissionAsk(ctx) {
   assert(step, badgeGeo.rect.width > 0 && badgeGeo.rect.height > 0, `badge has zero getBoundingClientRect: ${JSON.stringify(badgeGeo.rect)}`);
   assert(step, badgeGeo.offsetHeight > 0, "badge offsetHeight is 0");
   assert(step, badgeGeo.display !== "none" && badgeGeo.visibility !== "hidden" && Number(badgeGeo.opacity) > 0, `badge not visually visible: display=${badgeGeo.display} visibility=${badgeGeo.visibility} opacity=${badgeGeo.opacity}`);
-  assert(step, badgeGeo.hitInsideBadge === true, `elementFromPoint at the badge's own center (hit tag=${badgeGeo.hitTag}) did NOT land inside the badge`);
-  assert(step, badgeGeo.globalModalPresent === false, `a permission modal exists in the DOM while viewing master — expected NONE: globalModalPresent=${badgeGeo.globalModalPresent} open=${badgeGeo.globalModalOpen}`);
+  const forwarded = await pollUntil(10_000, 200, async () => {
+    const geo = await ctx.cdp.eval(CHILD_PERMISSION_MODAL_JS);
+    return geo.ok && geo.open ? geo : undefined;
+  });
+  assert(step, forwarded !== null, "forwarded child permission did not appear in the parent");
+  const description = waitingSeen.subagent?.description;
+  assert(step, typeof description === "string" && description.trim().length > 0, "child description is missing");
+  const owner = await ctx.cdp.eval(`document.querySelector('dialog.permission-modal')?.textContent ?? ''`);
+  assert(step, owner.includes(`Subagent: ${description}`), `forwarded modal did not show the child description: ${owner}`);
+  const strip = await pollUntil(130_000, 250, async () => {
+    const elapsed = await ctx.cdp.eval(`document.querySelector('.background-agents-elapsed')?.textContent ?? null`);
+    return elapsed === null ? undefined : elapsed;
+  });
+  assert(step, strip !== null && /^2m |^[3-9]m |h /.test(strip), `handoff elapsed time is incorrect on first observation: ${strip}`);
   ctx.step6BadgeGeo = badgeGeo;
 
-  await saveScreenshot(ctx, "permission-step6-badge-master-no-modal");
+  await saveScreenshot(ctx, "permission-step6-forwarded-modal");
 
   // Open on the running child — the modal must now be visible in the CHILD surface.
   await apiAction(ctx, step, `/tabs/${ctx.tabId}/child/open`, { spawnToolCallId: ctx.step6ToolCallId });
@@ -567,7 +577,7 @@ async function step6PermissionAsk(ctx) {
 
   pass(
     step,
-    `real permission-ask on a running child: badge visible on master (rect=${JSON.stringify(badgeGeo.rect)}), no master modal, ` +
+    `real permission-ask on a running child: badge visible and forwarded modal names the child (rect=${JSON.stringify(badgeGeo.rect)}), ` +
       `child-surface modal visible+real content after Open (rect=${JSON.stringify(modalGeo.rect)}, title="${modalGeo.titleText}"), ` +
       `allow via child tabId continued the child turn to success, badge cleared, ${permProofPath} written with PERMISSION-OK, ` +
       `child's durable row.mode="${childRow.mode}" (inherited from the root's own mode set before spawn)`,

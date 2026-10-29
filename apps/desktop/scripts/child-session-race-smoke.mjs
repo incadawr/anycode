@@ -135,7 +135,7 @@ const FLAGS = { keep: process.argv.slice(2).includes("--keep") };
 // imported (main is not an importable module from a script; these are the
 // exact frozen strings review checks byte-for-byte). ──
 const CHILD_LIMIT_PARENT_MESSAGE =
-  'Agent: session-subagent limit reached — this session already has 3 running child sessions. Wait for one to finish, or use tier "inline".';
+  'Agent: child session limit reached (3 running or pending). Wait for a report or stop a child before delegating more.';
 const CHILD_HOST_EXITED_MESSAGE = "Agent: the child session host exited before completing.";
 /**
  * `shared/child-sessions.ts:171` — the deadline main gives an admitted child

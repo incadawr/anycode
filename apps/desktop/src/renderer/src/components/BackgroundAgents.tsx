@@ -51,11 +51,12 @@ export function BackgroundAgents() {
   const send = useTabSend();
   const parentSessionId = useTabsStore((state) => state.tabs.find((tab) => tab.tabId === tabId)?.sessionId ?? null);
   const relations = childRelationStore((state) => state.relations);
-  const [now, setNow] = useState(() => Date.now());
+  const [, setTick] = useState(0);
+  const now = Date.now();
 
   useEffect(() => {
     if (children.length === 0) return undefined;
-    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    const timer = setInterval(() => setTick((tick) => tick + 1), 1_000);
     return () => clearInterval(timer);
   }, [children.length]);
 
