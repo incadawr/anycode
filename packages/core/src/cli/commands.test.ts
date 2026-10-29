@@ -206,11 +206,11 @@ describe("handleSlashCommand — /help, /quit, /exit, unknown (design §2.4/§2.
     expect(getText()).toBe("");
   });
 
-  it("an unknown command lists the CURRENT 23-command set", async () => {
+  it("an unknown command lists the CURRENT 24-command set", async () => {
     const { deps, getText } = makeDeps();
     await handleSlashCommand("/bogus", deps);
     expect(getText()).toBe(
-      "[unknown command: /bogus] known commands: /compact, /allow, /mcp, /skills, /workflows, /sessions, /rewind, /reasoning, /mode, /model, /status, /diff, /commit, /hooks, /tasks, /lsp, /image, /context, /telemetry, /repo-map, /help, /quit, /exit\n",
+      "[unknown command: /bogus] known commands: /compact, /allow, /mcp, /skills, /workflows, /sessions, /rewind, /reasoning, /effort, /mode, /model, /status, /diff, /commit, /hooks, /tasks, /lsp, /image, /context, /telemetry, /repo-map, /help, /quit, /exit\n",
     );
   });
 
@@ -250,6 +250,7 @@ describe("KNOWN_SLASH_COMMANDS (design §2.4, extended slice 4.2 §2.6, slice 4.
       "/sessions",
       "/rewind",
       "/reasoning",
+      "/effort",
       "/mode",
       "/model",
       "/status",
