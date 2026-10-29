@@ -176,6 +176,18 @@ export type WireAgentEvent =
       notice?: UsageLimitNotice;
     };
 
+/** Host-owned presentation retained for the lifetime of a session. */
+export interface PresentationTurn {
+  turnId: string;
+  requestId: string;
+  startedAt: number;
+  text?: string;
+  images?: ImageAttachment[];
+  origin?: "system";
+  events: { event: WireAgentEvent; step?: number; attempt?: number; at?: number }[];
+  fileSnapshots?: Extract<HostToUiMessage, { type: "file_snapshot" }>[];
+}
+
 /** UI-safe subset of ToolMetadata (flat data only, no schemas/handlers). */
 export interface WireToolMeta {
   name: string;
@@ -632,6 +644,20 @@ export type HostToUiMessage =
    */
   | { type: "steer_requeued"; requestId: string; reason: string; text?: string }
   | { type: "session_history"; sessionId: string; items: WireHistoryItem[]; truncated: boolean }
+  /** Presentation and history observed at the same reconnect boundary. */
+  | {
+      type: "presentation_snapshot";
+      turns: PresentationTurn[];
+      /** Includes discarded turns whose old replay events must remain suppressed. */
+      coveredTurnIds: string[];
+      items: WireHistoryItem[];
+      truncated: boolean;
+      liveTurnId?: string;
+      historyTracksTurns: boolean;
+    }
+  /** The enclosed ring events predate the presentation snapshot. */
+  | { type: "presentation_replay_start" }
+  | { type: "presentation_replay_end" }
   | { type: "worktree_notice"; message: string }
   /** `startedAt` (epoch ms, host clock): when the turn really began — a re-asserted or replayed copy carries the original, so a footer's duration survives a reconnect. Absent from older hosts. */
   | { type: "turn_started"; requestId: string; turnId: string; startedAt?: number }
@@ -647,7 +673,7 @@ export type HostToUiMessage =
    * items share one key space: `${turnId}:${step}`. Core also stamps the
    * attempt within each step, starting at zero and advancing on retry.
    */
-  | { type: "agent_event"; turnId: string; step?: number; attempt?: number; event: WireAgentEvent }
+  | { type: "agent_event"; turnId: string; step?: number; attempt?: number; event: WireAgentEvent; /** Host completion time for a loop_end. */ at?: number }
   /**
    * TASK.117: the host's authoritative pending-prompt push (sendDirect,
    * regenerated on every ui_ready — never ring-buffered). Present iff an

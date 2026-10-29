@@ -487,6 +487,9 @@ export function createTabRegistry(
       // renderer-only posture as the quota notices restored on host_ready.
       if (message.type === "session_history") {
         entry.store.getState().insertConnectionChangedAt(loadConnectionSwitches(message.sessionId));
+      } else if (message.type === "presentation_snapshot") {
+        const sessionId = entry.store.getState().sessionId;
+        if (sessionId !== null) entry.store.getState().insertConnectionChangedAt(loadConnectionSwitches(sessionId));
       }
       if (message.type === "child_report") {
         // TASK.145 срез 2: acks UNCONDITIONALLY — whether store.ts's

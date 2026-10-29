@@ -508,8 +508,8 @@ export type TranscriptBlock =
    * must say so, never silently).
    */
   | { kind: "degeneration"; id: string; channel: "text" | "reasoning"; period: number; repeats: number }
-  /** `durationMs`: wall time from this renderer's `turn_started` to the loop_end; absent when the start was not seen live (a replayed/reconnected turn). */
-  | { kind: "loop_end"; id: string; reason: string; turns: number; durationMs?: number; /** Epoch ms when the turn ended (renderer clock). */ at?: number }
+  /** Wall time from turn start to completion, using host timestamps when available. */
+  | { kind: "loop_end"; id: string; reason: string; turns: number; durationMs?: number; /** Epoch ms when the turn ended. */ at?: number }
   /**
    * One persisted line per `stream_retry` AgentEvent (TASK.33 W8), ADDITIVE to
    * the existing one-slot `notice` toast (which still shows the LATEST retry
@@ -1835,7 +1835,11 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
  * construct an isolated store with an injected `FrameScheduler` test double
  * instead of sharing a single store's buffered-delta state across test cases.
  */
-export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler) {
+export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler, projectionMaps?: {
+  streams: Map<string, string>;
+  reasoning: Map<string, { key: string; attempt?: number }>;
+  attempts: Map<string, number>;
+}) {
   // Buffered delta text, keyed by the minted transcript block id (see
   // `blockSeq`/`openStreamBlocks` below) that owns the block — NOT the raw
   // stream id, which repeats across steps. Mutated in place (never
@@ -1872,7 +1876,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
   // TASK.117: keyed by the STREAM SCOPE `${turnId}:${step}:${streamId}` —
   // SDK stream ids are REUSED across steps of one outer turn, so a bare-id
   // key would route a later step's deltas into the earlier step's block.
-  const openStreamBlocks = new Map<string, string>();
+  const openStreamBlocks = projectionMaps?.streams ?? new Map<string, string>();
+  let presentationReplayTurns: Set<string> | null = null;
+  let presentationReplayActive = false;
 
   function streamScope(turnId: string, step: number | undefined, streamId: string): string {
     return `${turnId}:${step ?? "_"}:${streamId}`;
@@ -1887,8 +1893,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
   // stream is past the checkpoint tail and deltas append unconditionally.
   // Entries live only while the block is open.
   const checkpointStreams = new Map<string, number>();
-  const reasoningOwners = new Map<string, { key: string; attempt?: number }>();
-  const currentAttempts = new Map<string, number>();
+  const reasoningOwners = projectionMaps?.reasoning ?? new Map<string, { key: string; attempt?: number }>();
+  const currentAttempts = projectionMaps?.attempts ?? new Map<string, number>();
   const checkpointAttempts = new Map<string, number>();
 
   // ── TASK.117 core-only typed wire-state checkpoint (fold) ───────────────
@@ -2197,6 +2203,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       pendingText.clear();
       pendingReasoning.clear();
       openStreamBlocks.clear();
+      presentationReplayTurns = null;
+      presentationReplayActive = false;
       // TASK.117 acceptance defect 1: the checkpoint-stream registry dies with
       // the open blocks it tracked (blockSeq is never rewound, so the minted
       // ids can never be reused by a later text_start).
@@ -2226,6 +2234,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       // anchor/projection info indexing it dies with it (public reset also
       // clears the public staging fields itself).
       hydrationItemIds = null;
+      presentationAnchors.clear();
       set({ ...initialSessionSlice(), lastFatal: null });
     }
 
@@ -2235,13 +2244,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
     // non-rendering anchor (e.g. a tool item, which projects no blocks) to the
     // preceding visible boundary. Cleared on every transcript-discard path.
     let hydrationItemIds: string[] | null = null;
+    const presentationAnchors = new Map<string, string>();
 
     /** The newest transcript index owned by `itemId`'s projected blocks, or -1. */
     function lastBlockIndexOfItem(transcript: readonly TranscriptBlock[], itemId: string): number {
       const prefix = `${itemId}:`;
+      const anchor = presentationAnchors.get(itemId);
       let last = -1;
       for (let index = 0; index < transcript.length; index += 1) {
-        if (transcript[index]!.id.startsWith(prefix)) {
+        if (transcript[index]!.id.startsWith(prefix) || transcript[index]!.id === anchor) {
           last = index;
         }
       }
@@ -3191,7 +3202,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
      * a reconnect never loses accounting. Foreign-engine/legacy envelopes
      * carry no `step` and never engage the fold.
      */
-    function onAgentEvent(turnId: string, event: WireAgentEvent, step: number | undefined, attempt?: number): void {
+    function onAgentEvent(turnId: string, event: WireAgentEvent, step: number | undefined, attempt?: number, eventAt?: number): void {
       const attemptKey = `${turnId}:${step ?? "_"}`;
       if (attempt !== undefined) {
         const current = currentAttempts.get(attemptKey);
@@ -3613,7 +3624,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           const loopEndId = `loop_end:${turnId}`;
           const startedAt = turnStartedAt.get(turnId);
           turnStartedAt.delete(turnId);
-          const durationMs = startedAt === undefined ? undefined : Math.max(0, Date.now() - startedAt);
+          const endedAt = eventAt ?? Date.now();
+          const durationMs = startedAt === undefined ? undefined : Math.max(0, endedAt - startedAt);
           set((state) => {
             const lastSent = state.lastSentMessage;
             const retryMeta = state.lastErrorRetry;
@@ -3641,7 +3653,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                   reason: event.reason,
                   turns: event.turns,
                   ...(durationMs !== undefined ? { durationMs } : {}),
-                  at: Date.now(),
+                  at: endedAt,
                 },
               ],
               ...(armRetry && lastSent !== null
@@ -4534,6 +4546,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             set({ notice: { kind: "worktree_notice", text: message.message } });
             return;
           case "turn_started": {
+            if (presentationReplayActive && presentationReplayTurns?.has(message.turnId)) return;
             // Taskana 4234 fallback: a turn starting means post-switch content
             // is about to land — if the hydration boundary never arrived (no
             // session_history at all), flush staged markers NOW so they
@@ -4679,7 +4692,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             return;
           }
           case "agent_event":
-            onAgentEvent(message.turnId, message.event, message.step, message.attempt);
+            if (presentationReplayActive && presentationReplayTurns?.has(message.turnId) && !["context_usage", "engine_quota", "provider_quota", "engine_session_tokens", "todo_reminder_state"].includes(message.event.type)) return;
+            onAgentEvent(message.turnId, message.event, message.step, message.attempt, message.at);
             return;
           case "pending_prompt": {
             // TASK.117: the host's authoritative in-flight prompt push. A
@@ -4733,7 +4747,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // requestId — never stack a second bubble on top of it. A
             // reconnected store has no such echo, so there the bubble is the
             // prompt's only rendered form.
-            const echoed = message.requestId !== undefined && get().transcript.some((block) => block.id === message.requestId);
+            const echoed = get().transcript.some((block) => block.id === `pending:${message.turnId}` || (message.requestId !== undefined && block.id === message.requestId));
             if (!echoed) {
               appendBlock({
                 kind: "user_text",
@@ -4948,6 +4962,74 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             return;
           case "session_history":
             hydrateSessionHistory(message.items, message.truncated);
+            return;
+          case "presentation_snapshot": {
+            // Reconstruct in an isolated store: historical terminal events must
+            // never drain queues or change the active turn in this store.
+            const maps = { streams: new Map<string, string>(), reasoning: new Map<string, { key: string; attempt?: number }>(), attempts: new Map<string, number>() };
+            const projection = createDesktopStore({ schedule: (fn) => fn() }, maps);
+            const known = new Set(message.coveredTurnIds);
+            const isCore = get().engine === null;
+            const tracksTurns = message.historyTracksTurns;
+            const retained = new Map<string, number>();
+            for (const item of message.items) {
+              if (item.turnId !== undefined && item.step !== undefined) {
+                retained.set(item.turnId, Math.min(retained.get(item.turnId) ?? Infinity, item.step));
+              }
+            }
+            const prefix = message.items.filter((item) => item.turnId === undefined || !known.has(item.turnId));
+            const savedNotices = get().transcript.filter((block) => block.kind === "usage_limit");
+            projection.setState({ transcript: [...savedNotices, ...projectHistoryToBlocks(prefix)] });
+            presentationAnchors.clear();
+            for (const turn of message.turns) {
+              const boundary = retained.get(turn.turnId);
+              if (tracksTurns && message.truncated && boundary === undefined && turn.turnId !== message.liveTurnId) continue;
+              const userItems = message.items.filter((item) => item.turnId === turn.turnId && item.step === 0 && item.message.role === "user");
+              if (userItems.length) {
+                projection.setState((state) => ({ transcript: [...state.transcript, ...projectHistoryToBlocks(userItems)] }));
+              } else if (turn.text !== undefined && (!tracksTurns || turn.turnId === message.liveTurnId) && (!message.truncated || boundary === undefined || boundary === 0)) {
+                projection.getState().appendUserText(tracksTurns ? `pending:${turn.turnId}` : turn.requestId, turn.text, turn.images, turn.origin);
+              }
+              projection.getState().applyHostMessage({ type: "turn_started", turnId: turn.turnId, requestId: turn.requestId, startedAt: turn.startedAt });
+              for (const entry of turn.events) {
+                if (tracksTurns && boundary !== undefined && entry.step !== undefined && entry.step < boundary) continue;
+                projection.getState().applyHostMessage({ type: "agent_event", turnId: turn.turnId, ...entry });
+              }
+              for (const snapshot of turn.fileSnapshots ?? []) projection.getState().applyHostMessage(snapshot);
+              const tail = projection.getState().transcript.at(-1);
+              if (tail) {
+                for (const item of message.items) {
+                  if (item.turnId === turn.turnId && item.message.role !== "user") presentationAnchors.set(item.id, tail.id);
+                }
+              }
+            }
+            flushDeltas();
+            openStreamBlocks.clear();
+            for (const [scope, id] of maps.streams) openStreamBlocks.set(scope, id);
+            reasoningOwners.clear();
+            for (const [id, owner] of maps.reasoning) reasoningOwners.set(id, owner);
+            currentAttempts.clear();
+            for (const [key, attempt] of maps.attempts) currentAttempts.set(key, attempt);
+            const seenNotices = new Set(savedNotices.map((block) => block.kind === "usage_limit" ? JSON.stringify(block.notice) : ""));
+            const transcript = projection.getState().transcript.filter((block) => {
+              if (block.kind !== "usage_limit" || savedNotices.includes(block)) return true;
+              return !seenNotices.has(JSON.stringify(block.notice));
+            });
+            for (const block of transcript) {
+              const match = /^(?:text|reason):(\d+):/.exec(block.id);
+              if (match) blockSeq = Math.max(blockSeq, Number(match[1]) + 1);
+              if (block.kind === "loop_end") loopEndEmitted.add(block.id);
+            }
+            set({ transcript, modelTurns: projection.getState().modelTurns, ...(!isCore ? { sessionTokens: projection.getState().sessionTokens } : {}) });
+            presentationReplayTurns = known;
+            return;
+          }
+          case "presentation_replay_start":
+            presentationReplayActive = true;
+            return;
+          case "presentation_replay_end":
+            presentationReplayActive = false;
+            presentationReplayTurns = null;
             return;
           case "title_changed":
             // Phase 4 slice 4.4-T (design feature-session-titles.md §4): title
