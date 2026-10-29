@@ -1573,7 +1573,14 @@ describe("Sessions API create_session (Taskana 4768)", () => {
   });
 
   it.each(["timeout", "disconnect"] as const)("settles %s through the host request boundary", async (failure) => {
-    const f = await createFixture();
+    const snapshots: string[] = [];
+    let expired!: () => void;
+    const expiryWritten = new Promise<void>((resolve) => { expired = resolve; });
+    const f = await createFixture({ dispatchTimeoutMs: 1_000, writeLedger: async (path, text) => {
+      snapshots.push(text);
+      await writePrivateFile(path, text);
+      if (text.includes("Host response unavailable; do not blindly resend")) expired();
+    } });
     const host = new EventEmitter() as EventEmitter & { postMessage: (message: any) => void };
     let posted!: () => void;
     const postedMessage = new Promise<void>((resolve) => { posted = resolve; });
@@ -1588,13 +1595,27 @@ describe("Sessions API create_session (Taskana 4768)", () => {
       }
     };
     const manager = { tabs: new Map([["tab-1", { sessionId: "agent-1", workspace: f.dir, state: "running", proc: host }]]) } as unknown as TabHostManager;
-    f.request.mockImplementation((session, op, payload) => TabHostManager.prototype.communicationRequest.call(manager, session, op, payload, f.dir) as never);
+    let hostOutcome: Promise<unknown> | undefined;
+    f.request.mockImplementation((session, op, payload) => {
+      const request = TabHostManager.prototype.communicationRequest.call(manager, session, op, payload, f.dir);
+      if (op === "send_message") hostOutcome = request.then(() => "resolved", (error: Error) => error.message);
+      return request as never;
+    });
     if (failure === "timeout") vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      const pending = f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, firstMessage: "hello" } });
+      let settled = false;
+      const pending = f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, firstMessage: "hello" } }).then((result) => { settled = true; return result; });
       if (failure === "timeout") {
         await postedMessage;
-        await vi.advanceTimersByTimeAsync(20_000);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(snapshots.some((text) => text.includes("Host response unavailable; do not blindly resend"))).toBe(true);
+        await expiryWritten;
+        expect(settled).toBe(false);
+        expect(host.listenerCount("message")).toBe(1);
+        const expiredLedger = JSON.parse(await readFile(join(f.dir, "communication.json.messages"), "utf8"));
+        expect(expiredLedger[0]).toMatchObject({ state: "unknown", detail: "Host response unavailable; do not blindly resend" });
+        await vi.advanceTimersByTimeAsync(19_000);
+        expect(await hostOutcome).toBe("Host response timed out; delivery unknown");
       }
       const result = await pending;
       expect(errorText(result)).toContain("Host response unavailable");
