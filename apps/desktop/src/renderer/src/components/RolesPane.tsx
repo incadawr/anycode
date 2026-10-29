@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SubagentsSnapshot } from "../../../shared/subagents-config.js";
 import { useSettingsStore } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
@@ -68,7 +68,17 @@ export function buildRoleProfileRoles<R extends object>(
   };
 }
 
-let registryWriteQueue: Promise<void> = Promise.resolve();
+let registryWriteState = { pending: false, revision: 0 };
+const registryWriteListeners = new Set<() => void>();
+function subscribeRegistryWrites(listener: () => void): () => void {
+  registryWriteListeners.add(listener);
+  return () => { registryWriteListeners.delete(listener); };
+}
+function registryWriteSnapshot() { return registryWriteState; }
+function updateRegistryWrite(pending: boolean, saved = false): void {
+  registryWriteState = { pending, revision: registryWriteState.revision + (saved ? 1 : 0) };
+  registryWriteListeners.forEach((listener) => listener());
+}
 
 export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps = {}): React.JSX.Element {
   const snapshot = useSettingsStore((s) => s.snapshot);
@@ -95,8 +105,9 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
   const [nameAction, setNameAction] = useState<"new" | "duplicate" | "rename" | null>(null);
   const [name, setName] = useState("");
   const [pending, setPending] = useState<{ title: string; body: string; confirmLabel: string; action: () => void; onCancel?: () => void } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const busyRef = useRef(false);
+  const writeState = useSyncExternalStore(subscribeRegistryWrites, registryWriteSnapshot, registryWriteSnapshot);
+  const busy = writeState.pending;
+  const seenRevision = useRef(writeState.revision);
   const [sessionProjects, setSessionProjects] = useState<string[]>([]);
   const [addProject, setAddProject] = useState("");
   const [addProfile, setAddProfile] = useState("");
@@ -105,6 +116,11 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
   const modelSources = useMemo(() => ({ connections, activeConnectionId, engineModels, catalog: snapshot?.catalog, custom: snapshot?.settings.provider.custom }), [connections, activeConnectionId, engineModels, snapshot]);
   const dirty = JSON.stringify(draft) !== JSON.stringify(baseline) || cap !== baselineCap;
   useEffect(() => {
+    if (!busy || !pending) return;
+    setPending(null);
+    pending.onCancel?.();
+  }, [busy, pending]);
+  useEffect(() => {
     const next = toDraft(initialRoles);
     setDraft(next); setBaseline(next);
     const nextCap = selected?.roles.maxParallelChildren?.toString() ?? "";
@@ -112,7 +128,7 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
     // The actual target, not readiness or catalog changes, owns the draft.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetKey]);
-  const rolesKey = JSON.stringify(initialRoles);
+  const rolesKey = selected ? JSON.stringify(selected.roles) : "implicit";
   useEffect(() => {
     if (dirty) return;
     const next = toDraft(initialRoles);
@@ -121,6 +137,16 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
     // Refresh a clean draft when a write from another mount lands.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rolesKey, dirty]);
+  useEffect(() => {
+    if (seenRevision.current === writeState.revision) return;
+    seenRevision.current = writeState.revision;
+    const next = toDraft(initialRoles);
+    const nextCap = selected?.roles.maxParallelChildren?.toString() ?? "";
+    setDraft(next); setBaseline(next); setCap(nextCap); setBaselineCap(nextCap);
+    setExpanded({}); setRecovery({});
+    // A successful write invalidates drafts held by other mounts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [writeState.revision]);
   useEffect(() => {
     let live = true;
     void window.anycode.listSessions().then((sessions) => {
@@ -148,20 +174,18 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
     return () => registerGuard?.(null);
   });
   async function write(transform: (current: typeof registry) => typeof registry, message = "Profiles saved."): Promise<boolean> {
-    if (busyRef.current) return false;
-    busyRef.current = true; setBusy(true);
+    if (registryWriteState.pending) return false;
+    updateRegistryWrite(true);
+    let saved = false;
     try {
-      const operation = registryWriteQueue.then(() => {
-        const current = roleProfiles(useSettingsStore.getState().snapshot?.settings ?? {});
-        return setPatch({ roleProfiles: transform(current) });
-      });
-      registryWriteQueue = operation.then(() => {}, () => {});
-      const result = await operation;
+      const current = roleProfiles(useSettingsStore.getState().snapshot?.settings ?? {});
+      const result = await setPatch({ roleProfiles: transform(current) });
+      saved = result.ok;
       setNotice({ ok: result.ok, message: result.ok ? message : "Saving profiles failed." });
       return result.ok;
     } catch {
       setNotice({ ok: false, message: "Saving profiles failed." }); return false;
-    } finally { busyRef.current = false; setBusy(false); }
+    } finally { updateRegistryWrite(false, saved); }
   }
   function selectProfile(id: string): void {
     guard(() => { void (async () => { const ok = await write((current) => projectRoot
@@ -190,37 +214,14 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
   async function save(): Promise<void> {
     if (!parseRoleChildLimitInput(cap).valid) { setNotice({ ok: false, message: ROLE_CHILD_LIMIT_INVALID_MESSAGE }); return; }
     const converted = fromDraft(draft).roles;
-    const baseRoles = fromDraft(baseline).roles;
     const id = selected?.id ?? (projectRoot || registry.profiles.some((p) => p.id === "default") ? crypto.randomUUID() : "default");
     const ok = await write((current) => {
       const existing = current.profiles.find((p) => p.id === id);
       const roles = existing ? { ...existing.roles } : {};
       for (const role of ROLE_PRESET_ROLES) {
-        if (!existing) { roles[role] = converted[role]; continue; }
-        if (JSON.stringify(draft[role]) === JSON.stringify(baseline[role])) continue;
-        const next = converted[role]!;
-        const base = baseRoles[role]!;
-        const merged = { ...roles[role], primary: { ...roles[role]?.primary } };
-        // Route selectors are mutually exclusive and form one logical field.
-        if (["engine", "connection", "provider"].some((key) => base.primary[key as keyof typeof base.primary] !== next.primary[key as keyof typeof next.primary])) {
-          delete merged.primary.engine; delete merged.primary.connection; delete merged.primary.provider;
-          if (next.primary.engine !== undefined) merged.primary.engine = next.primary.engine;
-          if (next.primary.connection !== undefined) merged.primary.connection = next.primary.connection;
-          if (next.primary.provider !== undefined) merged.primary.provider = next.primary.provider;
-        }
-        for (const key of ["model", "effort"] as const) {
-          if (base.primary[key] !== next.primary[key]) {
-            if (next.primary[key] === undefined) delete merged.primary[key];
-            else Object.assign(merged.primary, { [key]: next.primary[key] });
-          }
-        }
-        // Fallbacks are an ordered list; additions, removals, and moves replace it.
-        if (JSON.stringify(draft[role].fallbacks) !== JSON.stringify(baseline[role].fallbacks)) {
-          if (next.fallbacks) merged.fallbacks = next.fallbacks; else delete merged.fallbacks;
-        }
-        roles[role] = merged;
+        if (!existing || JSON.stringify(draft[role]) !== JSON.stringify(baseline[role])) roles[role] = converted[role];
       }
-      const built = buildRoleProfileRoles(roles, !existing || cap !== baselineCap ? cap : existing.roles.maxParallelChildren?.toString() ?? "");
+      const built = buildRoleProfileRoles(roles, cap);
       if (!built.valid) return current;
       const profile = { id, name: existing?.name ?? "Default", roles: built.roles };
       return { ...current, profiles: existing ? current.profiles.map((p) => p.id === id ? profile : p) : [...current.profiles, profile], activeId: projectRoot ? current.activeId : id, ...(!selected && projectRoot ? { projects: [...current.projects.filter((p) => p.projectRoot !== projectRoot), { projectRoot, profileId: id }] } : {}) };
@@ -229,6 +230,7 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
   }
   const title = projectRoot ? mapped ? `project override for ${projectFolderName(projectRoot)}` : `inherited global profile for ${projectFolderName(projectRoot)}` : "";
   return <div className="settings-pane roles-pane" data-testid="settings-roles-pane">
+    {busy && <p className="settings-field-hint" role="status">Saving…</p>}
     <div className="roles-header"><span>Profile:</span>
       {registry.profiles.length ? <select className="settings-field-select" aria-label="Role profile" title={selected?.name ?? "Default"} value={projectRoot ? mapped?.id ?? "" : selected?.id ?? ""} disabled={busy} onChange={(e) => selectProfile(e.target.value)}>
         {projectRoot ? <option value="">{`Use global (${registry.profiles.find((p) => p.id === registry.activeId)?.name ?? "Default"})`}</option> : !selected && <option value="">Default</option>}{registry.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -241,7 +243,7 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
       <select className="settings-field-select roles-preset" aria-label="Apply preset" value="" disabled={busy} onChange={(e) => { const preset = deriveRolePresets(engines, activeConnectionId ?? "").find((p) => p.id === e.target.value); if (preset) guard(() => { setDraft(toDraft(preset.roles)); setCap(baselineCap); }); }}><option value="">Apply preset…</option>{deriveRolePresets(engines, activeConnectionId ?? "").map((p) => <option key={p.id} value={p.id} disabled={!presetApplicable(p, engines)}>{p.label}</option>)}</select>
     </div>
     {mapping && !mapped && <p className="settings-field-hint">Missing project profile; using the global fallback.</p>}
-    {nameAction && <form className="roles-name-form" onSubmit={(e) => { e.preventDefault(); void submitName(); }}><label className="settings-field-label" htmlFor="role-profile-name">{nameAction === "rename" ? "Rename profile" : nameAction === "duplicate" ? "Duplicate profile name" : "New profile name"}</label><input id="role-profile-name" className="settings-field-input" disabled={busy} value={name} onChange={(e) => setName(e.target.value)} /><button className="settings-button settings-button-primary" type="submit" disabled={busy || (nameAction === "rename" && !canRenameProfile(selected?.name, name))}>Save</button><button className="settings-button" type="button" onClick={() => setNameAction(null)}>Cancel</button></form>}
+    {nameAction && <form className="roles-name-form" onSubmit={(e) => { e.preventDefault(); void submitName(); }}><label className="settings-field-label" htmlFor="role-profile-name">{nameAction === "rename" ? "Rename profile" : nameAction === "duplicate" ? "Duplicate profile name" : "New profile name"}</label><input id="role-profile-name" className="settings-field-input" disabled={busy} value={name} onChange={(e) => setName(e.target.value)} /><button className="settings-button settings-button-primary" type="submit" disabled={busy || (nameAction === "rename" && !canRenameProfile(selected?.name, name))}>Save</button><button className="settings-button" type="button" disabled={busy} onClick={() => setNameAction(null)}>Cancel</button></form>}
     <fieldset className="roles-editor" disabled={busy}><div className="roles-table" aria-label="Role routes">{ROLE_PRESET_ROLES.map((role) => {
       const entry = draft[role].primary;
       const unavailable = entry.engine === "claude" ? !engines.claudeReady : entry.engine === "codex" ? !engines.codexReady : false;
@@ -257,8 +259,8 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
     <div className="roles-actions"><button type="button" className="settings-button settings-button-primary" data-testid="role-picker-save" disabled={busy || !draftValid(draft)} onClick={() => void save()}>Save roles</button>{notice && <RolesSaveNotice ok={notice.ok} message={notice.message} />}</div>
     <details onToggle={(e) => setAdvanced(e.currentTarget.open)}><summary className="settings-button">Advanced {(selected?.roles.maxParallelChildren !== undefined || ROLE_PRESET_ROLES.some((role) => (selected?.roles[role]?.fallbacks?.length ?? 0) > 1)) && <span className="roles-badge">Configured</span>}</summary><label className="settings-field"><span className="settings-field-label">Max parallel children</span><input className="settings-field-input" type="text" inputMode="numeric" aria-label="Max parallel children" disabled={busy} value={cap} onChange={(e) => setCap(e.target.value)} /><span className="settings-field-hint">Optional limit (1–16); blank uses the session limit, default 3.</span></label></details>
     <details><summary className="settings-button">Per-project profiles ({registry.projects.length})</summary><div className="roles-projects">{registry.projects.map((p) => <div className="roles-project" key={p.projectRoot}><span title={p.projectRoot}>{projectLabel(p.projectRoot)}</span><span>{registry.profiles.find((profile) => profile.id === p.profileId)?.name ?? "Missing profile (using global fallback)"}</span><button type="button" className="settings-button" disabled={busy} aria-label={`Remove profile for ${p.projectRoot}`} onClick={() => { const run = () => { void write((current) => ({ ...current, projects: current.projects.filter((entry) => entry.projectRoot !== p.projectRoot) })); }; if (projectRoot === p.projectRoot) guard(run); else run(); }}>Remove</button></div>)}
-      <div className="roles-project"><select className="settings-field-select" aria-label="Project to add" value={addProject} onChange={(e) => setAddProject(e.target.value)}><option value="">Select project</option>{projects.map((p) => <option key={p} value={p}>{projectLabel(p)}</option>)}</select><select className="settings-field-select" aria-label="Profile to add" value={addProfile} onChange={(e) => setAddProfile(e.target.value)}><option value="">Select profile</option>{registry.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select><button className="settings-button" type="button" disabled={busy || !addProject || !addProfile} onClick={() => { const run = () => { void write((current) => ({ ...current, projects: [...current.projects.filter((p) => p.projectRoot !== addProject), { projectRoot: addProject, profileId: addProfile }] })); }; if (projectRoot === addProject) guard(run); else run(); }}>Add</button></div></div></details>
-    <ConfirmDialog request={pending} onCancel={() => { const cancel = pending?.onCancel; setPending(null); cancel?.(); }} onConfirm={() => { const action = pending?.action; setPending(null); action?.(); }} />
+      <div className="roles-project"><select className="settings-field-select" aria-label="Project to add" disabled={busy} value={addProject} onChange={(e) => setAddProject(e.target.value)}><option value="">Select project</option>{projects.map((p) => <option key={p} value={p}>{projectLabel(p)}</option>)}</select><select className="settings-field-select" aria-label="Profile to add" disabled={busy} value={addProfile} onChange={(e) => setAddProfile(e.target.value)}><option value="">Select profile</option>{registry.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select><button className="settings-button" type="button" disabled={busy || !addProject || !addProfile} onClick={() => { const run = () => { void write((current) => ({ ...current, projects: [...current.projects.filter((p) => p.projectRoot !== addProject), { projectRoot: addProject, profileId: addProfile }] })); }; if (projectRoot === addProject) guard(run); else run(); }}>Add</button></div></div></details>
+    <ConfirmDialog request={busy ? null : pending} onCancel={() => { const cancel = pending?.onCancel; setPending(null); cancel?.(); }} onConfirm={() => { const action = pending?.action; setPending(null); action?.(); }} />
   </div>;
 }
 
