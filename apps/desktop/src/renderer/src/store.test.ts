@@ -548,7 +548,7 @@ describe("desktop store — waiting for network (Taskana 4772)", () => {
     expect(store.getState().waitingForNetwork).toBe(false);
     const line = store.getState().transcript.find((b) => b.kind === "stream_retry");
     expect(line).toMatchObject({ attempt: 3, delayMs: 0, waitedMs: 812_400, reason: "connect timeout" });
-    expect(store.getState().notice?.text).toContain("attempt 3/8");
+    expect(store.getState().notice?.text).toContain("Retry 3");
   });
 
   // Review F2: parent and inline-subagent children share one network, so both
@@ -1090,7 +1090,7 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
     });
 
     expect(store.getState().notice?.kind).toBe("stream_retry");
-    expect(store.getState().notice?.text.toLowerCase()).toContain("retrying");
+    expect(store.getState().notice?.text.toLowerCase()).toContain("retry");
   });
 
   it("stream_retry past maxAttempts (network budget) shows the attempt without an impossible total (Taskana 4705 review)", () => {
@@ -1105,7 +1105,7 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
       event: { type: "stream_retry", attempt: 9, maxAttempts: 8, delayMs: 500, reason: "network error" },
     });
 
-    expect(store.getState().notice?.text).toBe("Retrying… (attempt 9: network error)");
+    expect(store.getState().notice?.text).toBe("Retry 9 in 0.5 s: network error");
   });
 
   it("compaction_start and compaction_end (ok) raise notices; compaction_end (fail) surfaces the error", () => {
@@ -1638,7 +1638,7 @@ describe("desktop store — TASK.33 W8 retry visibility + Try-again", () => {
     expect(new Set(retryBlocks.map((b) => b.id)).size).toBe(2);
     // The one-slot notice channel is untouched — still shows only the latest attempt.
     expect(store.getState().notice?.kind).toBe("stream_retry");
-    expect(store.getState().notice?.text).toContain("attempt 2/3");
+    expect(store.getState().notice?.text).toContain("Retry 2");
   });
 
   it("repeated stream_retry + the AI SDK's synthetic start between attempts never plants an empty content block (re-cut W8 note)", () => {
@@ -8919,4 +8919,33 @@ it("keeps the host connection identity when the active connection changes", () =
   expect(modelSettingsWrites(pending, { model: "b", effort: "max" })).toEqual([{ id: "original", model: "b", modelOverrideModel: "b", reasoningEffort: "max" }]);
   store.getState().applyHostMessage({ type: "model_changed", model: "b", reasoningEffort: "off" });
   expect(store.getState().modelSettingsConnectionId).toBe("original");
+});
+
+
+describe("reasoning replay ownership", () => {
+  it("removes flushed and pending abandoned blocks, preserves prior steps, and reopens reused ids", () => {
+    const clock = createManualScheduler();
+    const store = createDesktopStore(clock.scheduler);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r", turnId: "t" });
+    const send = (step: number, attempt: number, event: WireAgentEvent) => store.getState().applyHostMessage({ type: "agent_event", turnId: "t", step, attempt, event });
+    send(1, 0, { type: "reasoning_start", id: "r" });
+    send(1, 0, { type: "reasoning_delta", id: "r", text: "previous" });
+    clock.runPending();
+    send(2, 0, { type: "reasoning_start", id: "a" });
+    send(2, 0, { type: "reasoning_delta", id: "a", text: "flushed" });
+    send(2, 0, { type: "reasoning_end", id: "a" });
+    clock.runPending();
+    send(2, 0, { type: "reasoning_start", id: "r" });
+    send(2, 0, { type: "reasoning_delta", id: "r", text: "pending" });
+    send(2, 0, { type: "reasoning_end", id: "r" });
+    send(2, 1, { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 1, reason: "network" });
+    send(2, 1, { type: "reasoning_start", id: "r" });
+    send(2, 1, { type: "reasoning_delta", id: "r", text: "winner" });
+    clock.runPending();
+    send(3, 1, { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 1, reason: "network" });
+    const reasons = store.getState().transcript.filter(b => b.kind === "reasoning");
+    expect(reasons.map(b => b.text)).toEqual(["previous", "winner"]);
+    expect(store.getState().transcript.filter(b => b.kind === "stream_retry").map(b => b.id)).toHaveLength(2);
+    expect(new Set(store.getState().transcript.filter(b => b.kind === "stream_retry").map(b => b.id)).size).toBe(2);
+  });
 });

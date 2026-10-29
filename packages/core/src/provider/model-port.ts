@@ -12,41 +12,13 @@ import { contextualizeNetworkFailure } from "./network-failure.js";
  *  - consumes result.fullStream and yields translateStreamPart(part) events,
  *    dropping nulls.
  *
-
- * while no MODEL OUTPUT has yet reached the consumer from this attempt's stream
- * (see `isModelOutputEvent` in ./failure.ts): a before-content failure —
- * connect/reset/HTTP-error-before-content — is safe to replay the whole step.
- * The SDK's `fullStream` unconditionally yields a synthetic `{type:"start"}`
- * before any network I/O, and a same-attempt `{type:"error"}` is the failure
- * descriptor itself, so NEITHER closes the gate (TASK.33 W7a; without this the
- * connect-timeout retry never fired in production). Retries apply uniformly
- * whether the failure surfaces as a thrown exception from `fullStream`
- * iteration or as a translated `error` event. Before each retry the adapter
- * yields `stream_retry`, then waits the backoff delay — the wait is abortable
- * and the request's abortSignal wins instantly; an already-aborted request
- * never retries (an external abort always wins).
- *
- * Taskana 4705: a MID-STREAM failure — one that arrives after real model
- * output (content/reasoning/tool-input/`tool_call`/`finish`) was already
- * delivered — now replays the WHOLE step a bounded number of times
- * (`policy.midStreamRetries`, default 2), discarding the partial output. This
- * is safe: the consumer (agent loop) resets its accumulators on `stream_retry`,
- * and the tools of the discarded attempt were never dispatched — dispatch runs
- * only after the step's stream ends — so a replay cannot double-execute a tool
- * call. Mid-stream replays increment the SAME attempt counter as pre-content
- * retries and are additionally bounded per streamText call by
- * `midStreamRetries`; 0 restores the pre-4705 behavior (fail after any output).
- *
-
- * abortable `policy.stallTimeoutMs` timer (0 disables it). A stall aborts the
- * per-attempt controller (so the underlying SDK call is actually cancelled,
- * not merely abandoned) and is classified as a retryable stall REGARDLESS of
- * `hadModelOutput`. Pre-content stalls ride the shared
- * `attempt < policy.maxRetries` budget; a stall after real output counts as a
- * mid-stream replay (Taskana 4705) and is bounded by `midStreamRetries` once
- * the attempt budget is exhausted. A genuine external abort
- * (request.abortSignal) always wins over a stall and rejects immediately with
- * the abort reason, never retried.
+ * Retryable failures before text or tool output may replay the step. Reasoning
+ * is provisional and shares the count budget with pre-content retries. Once
+ * text or tool output begins, or a successful finish arrives, replay stops.
+ * Pre-content network failures retain their time-budget and waiting behavior;
+ * reasoning-only attempts use the count budget. Every abandoned attempt is
+ * aborted before the retry event and the backoff remains externally abortable.
+ * The legacy midStreamRetries setting no longer changes replay eligibility.
  *
  * TASK.168 adds a SEPARATE, budget-exempt one-shot retry on the
  * openai-chat-completions transport: a pre-content HTTP 400 while
@@ -68,7 +40,7 @@ import { linkAbortSignal } from "../util/abort.js";
 import type { ProviderTransport } from "./catalog.js";
 import type { EndpointConfig } from "./endpoint.js";
 import type { ImplicitPromptCache } from "../types/config.js";
-import { classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
+import { blocksAutomaticReplay, classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
 import { ResponsesReasoningTextRecovery } from "./responses-reasoning-text.js";
 import { createLanguageModel } from "./language-model.js";
 import type { ProviderQuotaUpdate } from "./quota.js";
@@ -813,8 +785,6 @@ export class AiSdkModelPort implements ModelPort {
   async *streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
     const policy = resolveRetryPolicy(this.config.retry);
     let attempt = 0;
-    // Taskana 4705: mid-stream replays spent this turn; bounded by policy.midStreamRetries.
-    let midStreamRetries = 0;
     // Time of this step's first retryable failure; anchors networkRetryBudgetMs.
     let firstFailureAt: number | undefined;
     // Taskana 4772: monotonic time this step has already spent waiting for the network (all episodes).
@@ -838,13 +808,20 @@ export class AiSdkModelPort implements ModelPort {
         policy.maxRetries > 0 &&
         policy.networkWaitMaxMs > 0 &&
         isTransientNetworkError(error));
+    const mayRetryProvisional = (error: unknown, hadOutput: boolean): boolean => {
+      if (!hadOutput) return mayRetryOrWait(error, false);
+      firstFailureAt ??= Date.now();
+      return attempt < policy.maxRetries;
+    };
     // TASK.168: the failure that STARTED the include_usage probe, carried
     // from that attempt to the very next one (the probe retry) — see
     // `ProbeFailure`'s docstring.
     let includeUsageProbe: ProbeFailure | undefined;
 
     for (;;) {
+      if (request.abortSignal?.aborted) throw abortReason(request.abortSignal);
       let hadModelOutput = false;
+      let replayBlocked = false;
       // finish totals discard raw usage; keep the latest step's wire usage
       // inside this attempt so abandoned attempts cannot affect a retry.
       let stepRawUsage: unknown;
@@ -921,14 +898,10 @@ export class AiSdkModelPort implements ModelPort {
             // A stall after a completed step has nothing left to deliver: end
             // the step as finished instead of replaying it (Taskana 4705 review).
             if (completedFinish) break;
-            // Stall is retryable regardless of hadModelOutput. Replays — pre-
-            // content or mid-stream — count inside maxRetries through mayRetry,
-            // the same gate the error and thrown paths use (Taskana 4705 review);
-            // after real output a replay is also bounded by midStreamRetries.
+            // A stall may replay only before committed output.
             const stallRetryAllowed =
-              mayRetry(stallError) && (!hadModelOutput || midStreamRetries < policy.midStreamRetries);
+              !replayBlocked && (hadModelOutput ? mayRetryProvisional(stallError, true) : mayRetry(stallError)) && !request.abortSignal?.aborted;
             if (stallRetryAllowed) {
-              if (hadModelOutput) midStreamRetries += 1;
               pendingRetryError = stallError;
               break;
             }
@@ -1012,30 +985,20 @@ export class AiSdkModelPort implements ModelPort {
             probeRetryNeeded = true;
             break;
           }
-          // Retry a before-content failure that surfaced as an `error` STREAM
-          // PART (the connect/reset/HTTP-error-before-content class — see the
-          // gate note in ./failure.ts). Taskana 4705: after real model output
-          // the step is replayed whole (partial output discarded; its tools
-          // were never dispatched) up to policy.midStreamRetries times — these
-          // replays share the attempt counter and add their own bound. The
-          // synthetic `start` above does NOT close the gate. An already-
-          // aborted request always wins over retry (the abort reason may itself
-          // look retryable); aborting the attempt controller before breaking
-          // tears down the abandoned attempt's socket now instead of at GC,
-          // mirroring the stall path.
+          // A retryable failure can replay while output remains provisional.
           if (
             event.type === "error" &&
             !completedFinish &&
-            (hadModelOutput ? midStreamRetries < policy.midStreamRetries : true) &&
+            !replayBlocked &&
             isRetryableStreamError(event.error) &&
-            mayRetryOrWait(event.error, hadModelOutput) &&
+            mayRetryProvisional(event.error, hadModelOutput) &&
             !request.abortSignal?.aborted
           ) {
-            if (hadModelOutput) midStreamRetries += 1;
             pendingRetryError = event.error;
             attemptController.abort(pendingRetryError);
             break;
           }
+          if (blocksAutomaticReplay(event)) replayBlocked = true;
           if (isModelOutputEvent(event)) {
             hadModelOutput = true;
           }
@@ -1075,20 +1038,15 @@ export class AiSdkModelPort implements ModelPort {
           this.#includeUsageDisabledForEndpoint = true;
           probeRetryNeeded = true;
         } else if (
-          // Same gate as the error-part branch, for a failure that surfaced as
-          // a THROWN exception from `fullStream` iteration. Taskana 4705: after
-          // real model output the step replays whole up to
-          // policy.midStreamRetries times (shared attempt counter). The
-          // `!request.abortSignal?.aborted` guard makes an external abort always
-          // win over retry, even when the thrown abort reason looks retryable.
+          // Match the yielded-error gate and let external cancellation win.
           !completedFinish &&
-          (hadModelOutput ? midStreamRetries < policy.midStreamRetries : true) &&
+          !replayBlocked &&
           isRetryableStreamError(error) &&
-          mayRetryOrWait(error, hadModelOutput) &&
+          mayRetryProvisional(error, hadModelOutput) &&
           !request.abortSignal?.aborted
         ) {
-          if (hadModelOutput) midStreamRetries += 1;
           pendingRetryError = error;
+          attemptController.abort(error);
         } else {
           throw error;
         }
@@ -1127,9 +1085,9 @@ export class AiSdkModelPort implements ModelPort {
         this.#confirmIncludeUsageProbe();
         includeUsageProbe = undefined;
         if (
-          !hadModelOutput &&
+          !completedFinish && !replayBlocked &&
           isRetryableStreamError(failure.error) &&
-          mayRetryOrWait(failure.error, hadModelOutput) &&
+          mayRetryProvisional(failure.error, hadModelOutput) &&
           !request.abortSignal?.aborted
         ) {
           pendingRetryError = failure.error;

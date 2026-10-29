@@ -239,73 +239,54 @@ describe("AgentLoop terminal retry metadata over a real AiSdkModelPort (TASK.33 
     return chunks.map((chunk) => `event: ${chunk.type}\ndata: ${JSON.stringify(chunk)}\n\n`).join("");
   }
 
-  it("mid-stream replay recovers a socket cut after a text delta (Taskana 4705)", async () => {
+  it.each(["reasoning", "text"] as const)("handles a confirmed %s connection drop", async (kind) => {
     let hits = 0;
+    let cut: (() => void) | undefined;
     server = createServer((req, res) => {
-      hits += 1;
+      hits++;
       req.resume();
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
       if (hits === 1) {
-        // Hit 1: a real partial stream, then the socket is destroyed mid-text.
-        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
-        res.write(
-          serializeSse([
-            {
-              type: "message_start",
-              message: { id: "msg_1", model: "glm-5.2", role: "assistant", usage: { input_tokens: 12 } },
-            },
-            { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-            { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial prefix" } },
-          ]),
-        );
-        res.destroy();
+        cut = () => res.destroy();
+        const block = kind === "reasoning" ? { type: "thinking", thinking: "" } : { type: "text", text: "" };
+        const delta = kind === "reasoning" ? { type: "thinking_delta", thinking: "discarded" } : { type: "text_delta", text: "delivered" };
+        res.write(serializeSse([
+          { type: "message_start", message: { id: "msg_1", model: "deepseek", role: "assistant", usage: { input_tokens: 12 } } },
+          { type: "content_block_start", index: 0, content_block: block },
+          { type: "content_block_delta", index: 0, delta },
+        ]));
         return;
       }
-      // Hit 2: a full valid stream.
-      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
-      res.end(
-        serializeSse([
-          {
-            type: "message_start",
-            message: { id: "msg_2", model: "glm-5.2", role: "assistant", usage: { input_tokens: 12 } },
-          },
-          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-          { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "recovered whole step" } },
-          { type: "content_block_stop", index: 0 },
-          { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 9 } },
-          { type: "message_stop" },
-        ]),
-      );
+      res.end(serializeSse([
+        { type: "message_start", message: { id: "msg_2", model: "deepseek", role: "assistant", usage: { input_tokens: 12 } } },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "recovered" } },
+        { type: "content_block_stop", index: 0 },
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 9 } },
+        { type: "message_stop" },
+      ]));
     });
     const baseUrl = `${await listen(server)}/v1`;
-
-    const config: AnthropicEndpointConfig = {
-      transport: "anthropic-messages",
-      baseUrl,
-      apiKey: "test-key",
-      model: "glm-5.2",
-      retry: { maxRetries: 2, midStreamRetries: 2, baseDelayMs: 1, maxDelayMs: 1, stallTimeoutMs: 0 },
-    };
-    const loop = makeLoop(new AiSdkModelPort(config));
-
-    const events = await collect(loop.runTurn("hi"));
-
-    // The cut after the delta fired exactly one mid-stream replay...
-    expect(events.filter((e) => e.type === "stream_retry")).toHaveLength(1);
-    // ...the replay recovered, the turn completed...
-    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
-    // ...and the assistant history carries ONLY the second attempt's text —
-    // the loop resets its accumulators on stream_retry, so the discarded
-    // attempt's partial prefix never doubles into the written history.
-    const messages = loop.history.toMessages();
-    const assistant = messages.find((m) => m.role === "assistant");
-    expect(assistant).toBeDefined();
-    const parts = assistant?.content as unknown as Array<{ type: string; text?: string }>;
-    const text = parts
-      .filter((p) => p.type === "text")
-      .map((p) => p.text)
-      .join("");
-    expect(text).toBe("recovered whole step");
-    expect(text).not.toContain("partial prefix");
+    const loop = makeLoop(new AiSdkModelPort({ transport: "anthropic-messages", baseUrl, apiKey: "test-key", model: "deepseek", retry: { maxRetries: 2, midStreamRetries: 0, baseDelayMs: 1, maxDelayMs: 1, stallTimeoutMs: 0 } }));
+    const events: AgentEvent[] = [];
+    for await (const event of loop.runTurn("hi")) {
+      events.push(event);
+      if ((kind === "reasoning" && event.type === "reasoning_delta") || (kind === "text" && event.type === "text_delta")) {
+        if (cut) { const destroy = cut; cut = undefined; destroy(); }
+      }
+    }
+    if (kind === "reasoning") {
+      expect(events.filter(e => e.type === "stream_retry")).toHaveLength(1);
+      expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+      expect(JSON.stringify(loop.history.toMessages())).toContain("recovered");
+      expect(JSON.stringify(loop.history.toMessages())).not.toContain("discarded");
+      expect(hits).toBe(2);
+    } else {
+      expect(events.filter(e => e.type === "stream_retry")).toHaveLength(0);
+      expect(findErrorEvent(events)?.retry).toMatchObject({ replayStopped: "output_started", hadModelOutput: true });
+      expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
+      expect(hits).toBe(1);
+    }
   });
 
   it("quota 429 (z.ai code 1308) exhausts immediately: no retries, terminal quota error (Taskana 4705)", async () => {

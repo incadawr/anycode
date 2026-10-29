@@ -584,28 +584,32 @@ describe("formatErrorRetrySuffix (TASK.33 W8 — mirrors cli/render.ts wording)"
   });
 
   it("uses the singular 'attempt' for exactly one retry", () => {
-    expect(formatErrorRetrySuffix(retryMeta({ attemptsMade: 1 }))).toBe(" (failed after 1 attempt)");
+    expect(formatErrorRetrySuffix(retryMeta({ attemptsMade: 1 }))).toBe(" (after 1 automatic retry)");
   });
 
   it("uses the plural 'attempts' for more than one retry", () => {
-    expect(formatErrorRetrySuffix(retryMeta({ attemptsMade: 3 }))).toBe(" (failed after 3 attempts)");
+    expect(formatErrorRetrySuffix(retryMeta({ attemptsMade: 3 }))).toBe(" (after 3 automatic retries)");
   });
+  it("explains the output boundary after earlier automatic retries", () => {
+    expect(formatErrorRetrySuffix({ ...retryMeta({ attemptsMade: 2 }), replayStopped: "output_started" })).toBe(" (after 2 automatic retries) Stream interrupted after output began; automatic retry stopped.");
+  });
+
 });
 
 describe("formatStreamRetryLine (TASK.33 W8 — mirrors cli/render.ts's '[retry N/M in X s: reason]')", () => {
   it("formats attempt/limit/delay/reason, with the delay in seconds (Taskana 4772)", () => {
-    expect(formatStreamRetryLine(1, 3, 500, "connect refused")).toBe("Retry 1/3 in 0.5 s: connect refused");
-    expect(formatStreamRetryLine(2, 3, 1000, "ECONNRESET")).toBe("Retry 2/3 in 1.0 s: ECONNRESET");
+    expect(formatStreamRetryLine(1, 3, 500, "connect refused")).toBe("Retry 1 in 0.5 s: connect refused");
+    expect(formatStreamRetryLine(2, 3, 1000, "ECONNRESET")).toBe("Retry 2 in 1.0 s: ECONNRESET");
   });
 
   it("shows a raw float delay as one decimal of seconds, never ms noise (Taskana 4772)", () => {
     expect(formatStreamRetryLine(1, 8, 791.1655902966864, "connect timeout")).toBe(
-      "Retry 1/8 in 0.8 s: connect timeout",
+      "Retry 1 in 0.8 s: connect timeout",
     );
   });
 
   it("drops the total once the network budget runs past maxRetries (Taskana 4705 review: no 9/8)", () => {
-    expect(formatStreamRetryLine(8, 8, 500, "network")).toBe("Retry 8/8 in 0.5 s: network");
+    expect(formatStreamRetryLine(8, 8, 500, "network")).toBe("Retry 8 in 0.5 s: network");
     expect(formatStreamRetryLine(9, 8, 500, "network")).toBe("Retry 9 in 0.5 s: network");
   });
 
@@ -614,7 +618,7 @@ describe("formatStreamRetryLine (TASK.33 W8 — mirrors cli/render.ts's '[retry 
   // delay ("Retry 3 in 812.4 s" was the reported defect).
   it("renders a recovered wait as retry-now with the wait duration (4772 review F5)", () => {
     expect(formatStreamRetryLine(3, 8, 0, "connect timeout", 812_400)).toBe(
-      "Retry 3/8 now (network back after 812.4 s): connect timeout",
+      "Retry 3 now (network back after 812.4 s): connect timeout",
     );
   });
 });

@@ -426,6 +426,7 @@ export const WORKFLOW_ACTIVITY_RING = 200;
 /** TASK.33 W7b terminal-error retry metadata — mirrors the core AgentEvent's `error.retry` field (types/events.ts) 1:1. */
 export interface ErrorRetryMeta {
   attemptsMade: number;
+  replayStopped?: "output_started";
   maxAttempts?: number;
   retryable: boolean;
   hadModelOutput: boolean;
@@ -1879,6 +1880,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
   // stream is past the checkpoint tail and deltas append unconditionally.
   // Entries live only while the block is open.
   const checkpointStreams = new Map<string, number>();
+  const reasoningOwners = new Map<string, { key: string; attempt?: number }>();
+  const currentAttempts = new Map<string, number>();
+  const checkpointAttempts = new Map<string, number>();
 
   // ── TASK.117 core-only typed wire-state checkpoint (fold) ───────────────
   // A RECONNECT is: host_ready(reset) -> session_history(fresh durable) ->
@@ -2190,6 +2194,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       // the open blocks it tracked (blockSeq is never rewound, so the minted
       // ids can never be reused by a later text_start).
       checkpointStreams.clear();
+      reasoningOwners.clear();
+      currentAttempts.clear();
+      checkpointAttempts.clear();
       // TASK.117: the fold checkpoint mirrors durable coverage of the
       // transcript — every path that discards the transcript must discard it
       // too, or a stale suppression entry would shadow post-reset turns. The
@@ -3176,7 +3183,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
      * a reconnect never loses accounting. Foreign-engine/legacy envelopes
      * carry no `step` and never engage the fold.
      */
-    function onAgentEvent(turnId: string, event: WireAgentEvent, step: number | undefined): void {
+    function onAgentEvent(turnId: string, event: WireAgentEvent, step: number | undefined, attempt?: number): void {
+      const attemptKey = `${turnId}:${step ?? "_"}`;
+      if (attempt !== undefined) {
+        const current = currentAttempts.get(attemptKey);
+        if (current !== undefined && attempt < current) return;
+        currentAttempts.set(attemptKey, attempt);
+      }
       // `context_usage` is exempt from the turn-scoped guard: it is a
       // SESSION-scoped status-bar reading, not turn content. The Claude engine
       // reads it from `get_context_usage` AFTER the terminal result (the CLI's
@@ -3453,6 +3466,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           }
           const blockId = `reason:${blockSeq++}:${event.id}`;
           openStreamBlocks.set(scope, blockId);
+          reasoningOwners.set(blockId, { key: attemptKey, attempt });
           appendBlock({ kind: "reasoning", id: blockId, text: "", collapsed: false });
           return;
         }
@@ -3754,21 +3768,18 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // later notice simply replaces an earlier one still showing);
         // context_usage is a pure status-bar reading, no notice ──
         //
-        // TASK.33 W8: ADDITIVELY to that one-slot notice (which only ever
-        // shows the latest retry), a `stream_retry` also leaves a persisted
-        // transcript line per attempt — a full history of every attempt this
-        // turn made, not just the last one. A retry fires either before any
-        // model output or as a mid-stream replay (Taskana 4705: the port
-        // replays the whole step after partial output, provider/failure.ts).
-        // In the mid-stream case the discarded attempt's text block is already
-        // on screen above this line; the replayed attempt opens a fresh block.
-        // The AI SDK's synthetic `{type:"start"}` between attempts is a no-op
-        // below (the "start"/"turn_start"/tool_input_* case), so repeated
-        // attempts never plant an empty content block (re-cut W8 note).
-        case "stream_retry":
+        // Retain a notice for each retry and discard provisional reasoning
+        // belonging to the abandoned attempt.
+        case "stream_retry": {
+          if (!stepCovered(turnId, step) && (attempt === undefined || (checkpointAttempts.get(attemptKey) ?? -1) < attempt)) {
+            const removed = new Set([...reasoningOwners].filter(([, owner]) => owner.key === attemptKey && (attempt === undefined || owner.attempt === undefined || owner.attempt < attempt)).map(([id]) => id));
+            for (const id of removed) { reasoningOwners.delete(id); pendingReasoning.delete(id); checkpointStreams.delete(id); }
+            for (const [scope, id] of openStreamBlocks) if (removed.has(id)) openStreamBlocks.delete(scope);
+            set((state) => ({ transcript: state.transcript.filter((block) => !removed.has(block.id)) }));
+          }
           appendBlock({
             kind: "stream_retry",
-            id: `stream_retry:${turnId}:${event.attempt}`,
+            id: `stream_retry:${turnId}:${step ?? "_"}:${event.attempt}`,
             attempt: event.attempt,
             maxAttempts: event.maxAttempts,
             delayMs: event.delayMs,
@@ -3803,10 +3814,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           set({
             notice: {
               kind: "stream_retry",
-              text: `Retrying… (attempt ${event.attempt > event.maxAttempts ? event.attempt : `${event.attempt}/${event.maxAttempts}`}: ${event.reason})`,
+              text: event.waitedMs !== undefined
+                ? `Retry ${event.attempt} now (network back after ${(event.waitedMs / 1000).toFixed(1)} s): ${event.reason}`
+                : `Retry ${event.attempt} in ${(event.delayMs / 1000).toFixed(1)} s: ${event.reason}`,
             },
           });
           return;
+        }
         // Taskana 4772: the adapter parked a transient network failure and is
         // probing. No transcript block and no notice: the status line says it.
         case "waiting_for_network": {
@@ -4654,7 +4668,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             return;
           }
           case "agent_event":
-            onAgentEvent(message.turnId, message.event, message.step);
+            onAgentEvent(message.turnId, message.event, message.step, message.attempt);
             return;
           case "pending_prompt": {
             // TASK.117: the host's authoritative in-flight prompt push. A
@@ -4774,6 +4788,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // guarded below by the replay-prefix rule). A ring delta can
             // never PRECEDE its own start (host emits through one for-await,
             // the ring is FIFO), so no open stream can be missed here.
+            if (message.currentAttempt && message.liveTurnId) {
+              const key = `${message.liveTurnId}:${message.currentAttempt.step}`;
+              currentAttempts.set(key, message.currentAttempt.attempt);
+              checkpointAttempts.set(key, message.currentAttempt.attempt);
+            }
             for (const stream of message.streams ?? []) {
               const scope = streamScope(
                 get().turn.turnId ?? "",
@@ -4793,6 +4812,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               // holds) so the replayed suffix is consumed, not re-appended
               // (see applyStreamDelta).
               checkpointStreams.set(blockId, stream.replayChars);
+              if (stream.kind === "reasoning") reasoningOwners.set(blockId, { key: `${get().turn.turnId ?? ""}:${stream.step}`, attempt: stream.attempt });
               appendBlock(
                 stream.kind === "text"
                   ? { kind: "assistant_text", id: blockId, text: stream.text }

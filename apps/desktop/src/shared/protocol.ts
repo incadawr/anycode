@@ -171,7 +171,7 @@ export type WireAgentEvent =
   | {
       type: "error";
       error: SerializedError;
-      retry?: { attemptsMade: number; maxAttempts?: number; retryable: boolean; hadModelOutput: boolean; code: string };
+      retry?: { attemptsMade: number; replayStopped?: "output_started"; maxAttempts?: number; retryable: boolean; hadModelOutput: boolean; code: string };
       notice?: UsageLimitNotice;
     };
 
@@ -641,9 +641,10 @@ export type HostToUiMessage =
    * message — the renderer treats absent as unknown and never matches
    * against it. Rides EVERY agent_event of that step (turn_start, streams,
    * tool lifecycle, turn_end alike) so replayed events and durable history
-   * items share one key space: `${turnId}:${step}`.
+   * items share one key space: `${turnId}:${step}`. Core also stamps the
+   * attempt within each step, starting at zero and advancing on retry.
    */
-  | { type: "agent_event"; turnId: string; step?: number; event: WireAgentEvent }
+  | { type: "agent_event"; turnId: string; step?: number; attempt?: number; event: WireAgentEvent }
   /**
    * TASK.117: the host's authoritative pending-prompt push (sendDirect,
    * regenerated on every ui_ready — never ring-buffered). Present iff an
@@ -720,7 +721,9 @@ export type HostToUiMessage =
        * own text_start (same for-await, FIFO ring), so the replayed suffix
        * is contiguous with the live tail and the char count is exact.
        */
-      streams?: { step: number; streamId: string; kind: "text" | "reasoning"; text: string; replayChars: number }[];
+      streams?: { step: number; attempt?: number; streamId: string; kind: "text" | "reasoning"; text: string; replayChars: number }[];
+      /** Current core attempt, retained even while no stream is open. */
+      currentAttempt?: { step: number; attempt: number };
       /**
        * TASK.117 acceptance defect 2: the LIVE outer turn's id at push time
        * (`Session.turnId`), absent when no turn is running. The renderer's

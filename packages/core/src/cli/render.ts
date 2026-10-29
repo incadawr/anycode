@@ -374,6 +374,8 @@ export function formatResultForDisplay(outcome: ToolCallOutcome): string {
  * so `transcript === undefined` takes the exact same path as the pre-4.2.2
  * no-op stub did.
  */
+const reasoningState = new WeakMap<TranscriptOptions, { staged: string; committed: boolean }>();
+
 export function renderEvent(
   event: AgentEvent,
   write: (text: string) => void,
@@ -384,6 +386,30 @@ export function renderEvent(
   // theming, and every existing main.test.ts snapshot) — matches theme.color
   // ===false's own identity paint, so the two "no color" paths agree.
   const paint = (role: CliStyleRole, text: string): string => theme?.paint(role, text) ?? text;
+  let reasoning = transcript?.reasoning ? reasoningState.get(transcript) : undefined;
+  if (transcript?.reasoning && !reasoning) {
+    reasoning = { staged: "", committed: false };
+    reasoningState.set(transcript, reasoning);
+  }
+  if (reasoning) {
+    if (event.type === "turn_start" || event.type === "stream_retry" || event.type === "loop_end") {
+      reasoning.staged = "";
+      reasoning.committed = false;
+    } else if (event.type === "error") {
+      reasoning.staged = "";
+    } else if (event.type === "text_start" || event.type === "text_delta" || event.type === "text_end" ||
+      event.type === "tool_input_start" || event.type === "tool_input_delta" || event.type === "tool_input_end" ||
+      event.type === "tool_call" || (event.type === "finish" && event.finishReason !== "error")) {
+      if (reasoning.staged) write(reasoning.staged);
+      reasoning.staged = "";
+      reasoning.committed = true;
+    }
+  }
+  const writeReasoning = (text: string): void => {
+    if (!reasoning) return;
+    if (reasoning.committed) write(text);
+    else reasoning.staged += text;
+  };
   switch (event.type) {
     case "text_delta":
       write(event.text);
@@ -467,7 +493,7 @@ export function renderEvent(
       // never-retried failure needs no "after N attempts" annotation.
       const retrySuffix =
         event.retry && event.retry.attemptsMade > 0
-          ? ` (failed after ${event.retry.attemptsMade} attempt${event.retry.attemptsMade === 1 ? "" : "s"})`
+          ? ` (after ${event.retry.attemptsMade} automatic retr${event.retry.attemptsMade === 1 ? "y" : "ies"})`
           : "";
       // Render EXCLUSIVELY from the whitelist-derived `safe` descriptor (TASK.33
       // W7b-FIX #2) — never String(event.error), which can embed a raw response
@@ -476,7 +502,7 @@ export function renderEvent(
       const body = safe
         ? `${safe.message}${safe.statusCode !== undefined ? ` (HTTP ${safe.statusCode})` : ""} [${safe.code}]`
         : "request failed";
-      write(paint("error", `\n[error] ${body}${retrySuffix}\n`));
+      write(paint("error", `\n[error] ${body}${retrySuffix}${event.retry?.replayStopped ? " Stream interrupted after output began; automatic retry stopped." : ""}\n`));
       // Opt-in raw diagnostics to STDERR only (never stdout/transcript): the CLI
       // otherwise keeps no raw record of a provider failure (unlike the desktop
       // host process log), so ANYCODE_DEBUG_ERRORS=1 restores DoD-c
@@ -536,12 +562,12 @@ export function renderEvent(
       // wait duration rides waitedMs, never as a pending "in N s" delay.
       if (event.waitedMs !== undefined) {
         write(
-          `\n[retry ${event.attempt > event.maxAttempts ? event.attempt : `${event.attempt}/${event.maxAttempts}`} now (network back after ${(event.waitedMs / 1000).toFixed(1)} s): ${event.reason}]\n`,
+          `\n[retry ${event.attempt} now (network back after ${(event.waitedMs / 1000).toFixed(1)} s): ${event.reason}]\n`,
         );
         break;
       }
       write(
-        `\n[retry ${event.attempt > event.maxAttempts ? event.attempt : `${event.attempt}/${event.maxAttempts}`} in ${(event.delayMs / 1000).toFixed(1)} s: ${event.reason}]\n`,
+        `\n[retry ${event.attempt} in ${(event.delayMs / 1000).toFixed(1)} s: ${event.reason}]\n`,
       );
       break;
     }
@@ -670,17 +696,17 @@ export function renderEvent(
 
     case "reasoning_start":
       if (transcript?.reasoning) {
-        write(paint("reasoning", "\n[reasoning]\n"));
+        writeReasoning(paint("reasoning", "\n[reasoning]\n"));
       }
       break;
     case "reasoning_delta":
       if (transcript?.reasoning) {
-        write(paint("reasoning", event.text));
+        writeReasoning(paint("reasoning", event.text));
       }
       break;
     case "reasoning_end":
       if (transcript?.reasoning) {
-        write("\n");
+        writeReasoning("\n");
       }
       break;
     case "turn_end":

@@ -42,16 +42,7 @@ export interface RetryPolicy {
    * never waited out. 0 = off. Default 1 800 000 (30 min).
    */
   networkWaitMaxMs: number;
-  /**
-   * Whole-step replays allowed after a MID-STREAM failure (real model output
-   * was already delivered). The replay discards the partial output — tools of
-   * the discarded attempt were never dispatched (dispatch runs after the
-   * step's stream ends), so a replay cannot double-execute a tool call. Replays
-   * count INSIDE maxRetries (same attempt counter, same announced total) and
-   * this number caps how many of them one streamText call may spend. 0 disables
-   * (pre-4705 behavior). Default DEFAULT_MIDSTREAM_RETRIES. A completed step
-   * (a non-error finish was seen) is never replayed.
-   */
+  /** @deprecated Retained for compatibility; reasoning retries use maxRetries. */
   midStreamRetries: number;
 }
 
