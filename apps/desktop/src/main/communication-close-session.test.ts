@@ -26,6 +26,11 @@ describe("main close_session gate", () => {
     expect(f.manager.closeTab).not.toHaveBeenCalled();
     expect(f.opened.size).toBe(1);
   });
+  it("refuses an approval-waiting session as busy", async () => {
+    const f = fixture("waiting_approval");
+    expect(await f.close("agent")).toEqual({ ok: false, reason: "busy" });
+    expect(f.manager.closeTab).not.toHaveBeenCalled();
+  });
   it("rechecks turn state immediately before closing: idle then running refuses busy", async () => {
     const f = fixture();
     f.manager.communicationRequest.mockResolvedValueOnce({ state: "idle" }).mockResolvedValueOnce({ state: "running" });
