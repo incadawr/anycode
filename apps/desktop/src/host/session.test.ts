@@ -3844,7 +3844,7 @@ describe("Session — model switch (slice P7.15 · F14)", () => {
 
   it("replaces the original provider reading when a fallback turn fails before usage", async () => {
     let loopModel = "scripted-model";
-    const save = vi.fn(async () => {});
+    const save = vi.fn(async (_snapshot: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate"; engine: string; model: string } | null) => {});
     const h = createHarness({
       steps: [[{ type: "start" }, { type: "finish", finishReason: "stop", usage: { inputTokens: 1234, outputTokens: 10, totalTokens: 1244 } }]],
       saveContextUsage: save,
@@ -3861,6 +3861,7 @@ describe("Session — model switch (slice P7.15 · F14)", () => {
       h.send({ type: "user_message", requestId: "original", text: "hello" });
       await h.waitUntil(() => h.received.some((m) => m.type === "agent_event" && m.event.type === "loop_end"));
       expect(h.received.some((m) => m.type === "agent_event" && m.event.type === "context_usage" && m.event.source === "provider")).toBe(true);
+      await h.waitUntil(() => save.mock.calls.some(([snapshot]) => snapshot?.model === "scripted-model" && snapshot.source === "provider"));
       vi.spyOn(h.engine, "runTurn").mockImplementation(async function* () { yield { type: "loop_end", reason: "cancelled", turns: 0 }; });
       h.send({ type: "set_orchestrate", enabled: true });
       await h.waitUntil(() => h.received.some((m) => m.type === "orchestrate_changed" && m.enabled));
@@ -3868,6 +3869,15 @@ describe("Session — model switch (slice P7.15 · F14)", () => {
       h.send({ type: "user_message", requestId: "failed-fallback", text: "hello" });
       await h.waitUntil(() => h.received.slice(turnOffset).some((m) => m.type === "agent_event" && m.event.type === "loop_end"));
       expect(h.received.slice(turnOffset).some((m) => m.type === "agent_event" && m.event.type === "context_usage")).toBe(false);
+      expect(loopModel).toBe("fallback");
+      const checkpointOffset = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(checkpointOffset).some((m) => m.type === "context_usage_checkpoint"));
+      expect(h.received.slice(checkpointOffset).find(isHostReady)?.model).toBe("fallback");
+      const fallbackReading = { estimatedTokens: 50, budgetTokens: 8000, source: "estimate" };
+      expect(h.received.slice(checkpointOffset).find((m) => m.type === "context_usage_checkpoint")).toMatchObject({ contextUsage: fallbackReading });
+      await h.waitUntil(() => save.mock.calls.some(([snapshot]) => snapshot?.model === "fallback" && snapshot.source === "estimate"));
+      expect(save).toHaveBeenLastCalledWith({ ...fallbackReading, engine: "core", model: "fallback" });
       for (const [model, budgetTokens] of [["fallback", 8000], ["scripted-model", 5000]] as const) {
         const offset = h.received.length;
         const savedCount = save.mock.calls.length;
