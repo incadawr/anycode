@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { NodeExecutionAdapter } from "../adapters/node/node-execution.js";
 import { LspManager } from "./manager.js";
-import { LSP_DISPOSE_DEADLINE_MS, LSP_MAX_SERVERS } from "../types/config.js";
+import { LSP_DIAGNOSTICS_TIMEOUT_MS, LSP_DISPOSE_DEADLINE_MS, LSP_MAX_SERVERS } from "../types/config.js";
 import type { ExecutionPort, PersistentChildHandle, PersistentChildRequest } from "../ports/execution.js";
 import type { LspServerSpec } from "../ports/lsp.js";
 
@@ -59,6 +59,51 @@ function spyExec(): { exec: ExecutionPort; spawnCount: () => number } {
     },
   };
   return { exec, spawnCount: () => count };
+}
+
+
+/** Observe the real child stream after delivering each chunk to the manager. */
+function observedFixture(marker: string, stream: "stdout" | "stderr"): { exec: ExecutionPort; seen: Promise<void> } {
+  const adapter = new NodeExecutionAdapter();
+  let resolveSeen!: () => void;
+  const seen = new Promise<void>((resolve) => { resolveSeen = resolve; });
+  let text = "";
+  const observe = (chunk: string) => {
+    text += chunk;
+    if (text.includes(marker)) resolveSeen();
+  };
+  const exec: ExecutionPort = {
+    run: adapter.run.bind(adapter),
+    runBinary: adapter.runBinary!.bind(adapter),
+    spawnPersistent: (request) => adapter.spawnPersistent!({
+      ...request,
+      onStdout: (chunk) => { request.onStdout(chunk); if (stream === "stdout") observe(chunk.toString()); },
+      onStderr: (chunk) => { request.onStderr?.(chunk); if (stream === "stderr") observe(chunk); },
+    }),
+  };
+  return { exec, seen };
+}
+
+async function fixtureDeadline<T>(run: () => Promise<T>, seen: Promise<void>): Promise<T> {
+  const realSetTimeout = setTimeout;
+  const realClearTimeout = clearTimeout;
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  try {
+    let settled = false;
+    const pending = run().then((value) => { settled = true; return value; });
+    await Promise.race([seen, new Promise<never>((_, reject) => {
+      watchdog = realSetTimeout(() => reject(new Error("fixture did not send the expected message")), 5_000);
+    })]);
+    await vi.advanceTimersByTimeAsync(LSP_DIAGNOSTICS_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    return await pending;
+  } finally {
+    if (watchdog !== undefined) realClearTimeout(watchdog);
+    vi.useRealTimers();
+  }
 }
 
 function tsSpec(name: string, flags: string[] = []): LspServerSpec {
@@ -137,8 +182,9 @@ describe("LspManager (fixture integration)", () => {
   it(
     "returns reason:initializing (no crash) when the server does not finish init within the edit budget (§6#4a)",
     async () => {
-      const manager = makeManager([tsSpec("slow", ["--no-init-reply"])]);
-      const outcome = await manager.diagnosticsAfterWrite("/proj/slow.ts", "x\n");
+      const { exec, seen } = observedFixture("initialize received", "stderr");
+      const manager = makeManager([tsSpec("slow", ["--no-init-reply", "--report-init"])], exec);
+      const outcome = await fixtureDeadline(() => manager.diagnosticsAfterWrite("/proj/slow.ts", "x\n"), seen);
       expect(outcome).toEqual({ available: false, reason: "initializing" });
       expect(manager.status()[0]!.state).toBe("initializing");
     },
@@ -148,8 +194,9 @@ describe("LspManager (fixture integration)", () => {
   it(
     "returns reason:timeout when the server publishes for a foreign URI (§6#4d)",
     async () => {
-      const manager = makeManager([tsSpec("wrong", ["--wrong-uri"])]);
-      const outcome = await manager.diagnosticsAfterWrite("/proj/mine.ts", "DIAG:not attributed\n");
+      const { exec, seen } = observedFixture("file:///fixture/wrong/other-file.ts", "stdout");
+      const manager = makeManager([tsSpec("wrong", ["--wrong-uri"])], exec);
+      const outcome = await fixtureDeadline(() => manager.diagnosticsAfterWrite("/proj/mine.ts", "DIAG:not attributed\n"), seen);
       expect(outcome).toEqual({ available: false, reason: "timeout" });
     },
     15_000,
