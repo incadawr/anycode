@@ -93,6 +93,7 @@ export interface EngineCapabilitiesProjection {
   costAccounting: boolean;
   supportsModelSelection: boolean;
   supportsReasoningEffort: boolean;
+  supportsDeferredEffortChange?: boolean;
   supportsImages: boolean;
   supportsTasks: boolean;
   supportsFileSnapshots: boolean;
@@ -905,6 +906,7 @@ export type HostToUiMessage =
       model?: string;
       activePresetId?: string;
       effort?: string;
+      deferredEffort?: boolean;
       state?: "pending" | "applied";
       appliesFrom: "next_turn";
     }

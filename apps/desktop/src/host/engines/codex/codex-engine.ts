@@ -104,6 +104,7 @@ export const CODEX_ENGINE_CAPABILITIES: EngineCapabilities = {
   // effort selector is exposed. The engine still re-asserts the thread's own
   // effective effort on every turn (see turnSettingsOverride).
   supportsReasoningEffort: true,
+  supportsDeferredEffortChange: true,
   // The app-server accepts native image items. Per-model admission is still
   // fail-closed through `imageInputEnabled()` below, based on `model/list`.
   supportsImages: true,
