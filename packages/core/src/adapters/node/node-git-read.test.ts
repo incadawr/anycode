@@ -5,7 +5,7 @@ import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeExecutionAdapter } from "./node-execution.js";
 import { NodeGitReadAdapter } from "./node-git-read.js";
-import type { GitInput } from "../../tools/schemas.js";
+import { gitInputSchema, type GitInput } from "../../tools/schemas.js";
 
 let dir: string;
 let reader: NodeGitReadAdapter;
@@ -166,6 +166,20 @@ describe("NodeGitReadAdapter", () => {
       expect(output).not.toContain("secret.txt");
     }
     expect(log.stdout).toContain("empty commit");
+  });
+
+  it("rejects an operation naming a configured executable Git alias", async () => {
+    const sentinel = join(dir, "alias-sentinel");
+    git("config", "alias.aliastrip", "!touch alias-sentinel");
+    // Confirm the alias is executable in this repository before testing the tool boundary.
+    git("aliastrip");
+    expect(existsSync(sentinel)).toBe(true);
+    rmSync(sentinel);
+
+    const parsed = gitInputSchema.safeParse({ operation: "aliastrip" });
+    if (parsed.success) await read(parsed.data);
+    expect(existsSync(sentinel)).toBe(false);
+    expect(parsed.success).toBe(false);
   });
 
   it("passes pager safeguards and only built-in commands to Git", async () => {
