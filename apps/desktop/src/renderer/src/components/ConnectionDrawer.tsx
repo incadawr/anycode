@@ -2078,6 +2078,8 @@ export function ConnectionDrawerFields({
         {(["off", "low", "medium", "high", "xhigh", "max"] as ReasoningEffort[]).map((level) => <label key={level}>
           <input type="checkbox" disabled={readOnly} checked={effortLevels.includes(level)} onChange={(e) => {
             setEffortLevelsDirty(true);
+            setReasoningSupported(true);
+            setReasoningSupportedDirty(true);
             setEffortLevels((levels) => e.target.checked ? [...levels, level] : levels.filter((item) => item !== level));
           }} /> {level}
         </label>)}
