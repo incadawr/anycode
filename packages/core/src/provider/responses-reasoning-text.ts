@@ -16,6 +16,7 @@ export class ResponsesReasoningTextRecovery {
   readonly #summarized = new Set<string>();    // item ids with an SDK summary delta
   readonly #hasText = new Set<string>();       // item ids that already got text from us
   readonly #streamedParts = new Set<string>(); // `${itemId}#${contentIndex}` parts that streamed
+  readonly #emittedParts = new Set<string>();
   readonly #pendingParts = new Map<string, Map<number, string>>(); // parts waiting for missing earlier indices
   readonly #done = new Set<string>();          // item ids past their output_item.done
 
@@ -55,7 +56,8 @@ export class ResponsesReasoningTextRecovery {
         const key = partKey(itemId, index);
         const firstOfPart = !this.#streamedParts.has(key);
         this.#streamedParts.add(key);
-        if (this.#bufferPart(itemId, index, value.delta)) return [];
+        if (this.#bufferPart(itemId, index, value.delta)) return this.#flushReadyParts(itemId);
+        this.#emittedParts.add(key);
         const text = firstOfPart && this.#hasText.has(itemId) ? PART_SEPARATOR + value.delta : value.delta;
         return this.#emit(itemId, text);
       }
@@ -67,7 +69,8 @@ export class ResponsesReasoningTextRecovery {
         const key = partKey(itemId, index);
         if (this.#streamedParts.has(key)) return [];
         this.#streamedParts.add(key);
-        if (this.#bufferPart(itemId, index, value.text)) return [];
+        if (this.#bufferPart(itemId, index, value.text)) return this.#flushReadyParts(itemId);
+        this.#emittedParts.add(key);
         return this.#emit(itemId, this.#hasText.has(itemId) ? PART_SEPARATOR + value.text : value.text);
       }
       case "response.output_item.done": {
@@ -107,6 +110,7 @@ export class ResponsesReasoningTextRecovery {
 
   #bufferPart(itemId: string, index: number, text: string): boolean {
     let pending = this.#pendingParts.get(itemId);
+    if (this.#emittedParts.has(partKey(itemId, index))) return false;
     let missingEarlier = false;
     for (let i = 0; !pending && i < index; i++) {
       if (!this.#streamedParts.has(partKey(itemId, i))) { missingEarlier = true; break; }
@@ -118,6 +122,23 @@ export class ResponsesReasoningTextRecovery {
     if (!pending) return false;
     pending.set(index, (pending.get(index) ?? "") + text);
     return true;
+  }
+
+  #flushReadyParts(itemId: string): ReasoningEvent[] {
+    const pending = this.#pendingParts.get(itemId);
+    if (!pending) return [];
+    const events: ReasoningEvent[] = [];
+    for (let index = 0; ; index++) {
+      const key = partKey(itemId, index);
+      if (this.#emittedParts.has(key)) continue;
+      const text = pending.get(index);
+      if (text === undefined) break;
+      pending.delete(index);
+      this.#emittedParts.add(key);
+      events.push(...this.#emit(itemId, (this.#hasText.has(itemId) ? PART_SEPARATOR : "") + text));
+    }
+    if (pending.size === 0) this.#pendingParts.delete(itemId);
+    return events;
   }
 
   #flushPending(itemId: string): ReasoningEvent[] {
