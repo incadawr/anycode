@@ -486,6 +486,22 @@ async function flush(): Promise<void> {
   await Promise.resolve();
 }
 
+async function afterDeadline<T>(run: () => Promise<T>, deadlineMs: number): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    let settled = false;
+    const pending = run().then((result) => { settled = true; return result; });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(deadlineMs - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    return await pending;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 describe("PreviewHost — window security invariants (cut §2.5, non-negotiable)", () => {
   it("wires setWindowOpenHandler to always deny", async () => {
     const rig = makeRig();
@@ -1256,11 +1272,11 @@ describe("PreviewHost — read op", () => {
       }
       return "done";
     };
-    const result = await rig.host.handleRequest(TAB, {
+    const result = await afterDeadline(() => rig.host.handleRequest(TAB, {
       type: "anycode:preview-request" as const,
       requestId: "r4",
       op: { kind: "read", previewId, waitForSelector: "#ready", waitMs: 1000 },
-    });
+    }), 250);
     void result;
     const posted = rig.posted.at(-1)!;
     expect(posted.message.type === PREVIEW_RESPONSE_TYPE && posted.message.result.ok).toBe(true);
@@ -1273,11 +1289,11 @@ describe("PreviewHost — read op", () => {
       if (script.includes("querySelector(")) return false;
       return "";
     };
-    await rig.host.handleRequest(TAB, {
+    await afterDeadline(() => rig.host.handleRequest(TAB, {
       type: "anycode:preview-request" as const,
       requestId: "r5",
       op: { kind: "read", previewId, waitForSelector: "#never", waitMs: 300 },
-    });
+    }), 250);
     const posted = rig.posted.at(-1)!;
     if (posted.message.type === PREVIEW_RESPONSE_TYPE) {
       expect(posted.message.result).toMatchObject({ ok: false, errorKind: "timeout" });
@@ -3817,7 +3833,7 @@ describe("PreviewHost — browser control (Taskana 4759, Phase A)", () => {
     await controlRequest(rig, { action: "snapshot", previewId });
 
     cdp.fire("Page.frameNavigated", { frame: { id: "child", parentId: "main" } });
-    const sub = await controlRequest(rig, { action: "click", previewId, target: { ref: "e1" }, doubleClick: false, button: "left" });
+    const sub = await afterDeadline(() => controlRequest(rig, { action: "click", previewId, target: { ref: "e1" }, doubleClick: false, button: "left" }), 1_500);
     expect(sub.ok).toBe(true);
 
     cdp.fire("Page.frameNavigated", { frame: { id: "main" } });
@@ -3897,7 +3913,7 @@ describe("PreviewHost — browser control (Taskana 4759, Phase A)", () => {
       error: "this preview shows a remote origin (https://example.org); the call needs the user's approval. Retry with remote:true so the user is asked.",
       errorKind: "not_allowed",
     });
-    const approved = await controlRequest(rig, { action: "click", previewId, target: { ref: "e1" }, doubleClick: false, button: "left" }, { allowRemote: true });
+    const approved = await afterDeadline(() => controlRequest(rig, { action: "click", previewId, target: { ref: "e1" }, doubleClick: false, button: "left" }, { allowRemote: true }), 1_500);
     expect(approved.ok).toBe(true);
   });
 });
@@ -3949,7 +3965,7 @@ describe("PreviewHost — Full browser access (Taskana 4759 amendment, live read
 
     const snap = await controlRequest(rig, { action: "snapshot", previewId });
     expect(snap.ok).toBe(true);
-    const click = await controlRequest(rig, { action: "click", previewId, target: { ref: "e1" }, doubleClick: false, button: "left" });
+    const click = await afterDeadline(() => controlRequest(rig, { action: "click", previewId, target: { ref: "e1" }, doubleClick: false, button: "left" }), 1_500);
     expect(click.ok).toBe(true);
   });
 
