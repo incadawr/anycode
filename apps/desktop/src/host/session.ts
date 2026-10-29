@@ -3016,7 +3016,7 @@ export class Session {
     if (result.selectedReasoningEffort !== undefined) this.selectedEffort = result.selectedReasoningEffort;
     const oldModel = this.model;
     this.model = result.model;
-    const contextUsage = this.engine.id === "core" && oldModel === this.model && result.contextUsage?.source === "estimate" && this.checkpointContextUsage?.source === "provider"
+    const contextUsage = this.engine.id === "core" && (result.previousModel ?? oldModel) === this.model && result.contextUsage?.source === "estimate" && this.checkpointContextUsage?.source === "provider"
       ? { ...this.checkpointContextUsage, budgetTokens: result.contextUsage.budgetTokens }
       : result.contextUsage;
     if (contextUsage !== undefined) this.updateContextUsage(contextUsage);
