@@ -7625,7 +7625,11 @@ describe("TabHostManager — detached spawns are refused at the cap, never parke
 
     hostD.emit("message", spawnRequest({ requestId: "d-global", detach: true, spawnToolCallId: "d-global-call" }));
     const refused = childRunEvents(hostD).find((e) => e.requestId === "d-global");
-    expect(refused).toMatchObject({ kind: "rejected", reason: "limit_global" });
+    expect(refused).toMatchObject({
+      kind: "rejected",
+      reason: "limit_global",
+      message: 'Agent: application-wide child session limit reached (8 running child sessions). No child was started. Wait for one to finish, or use tier "inline".',
+    });
     const raw = manager as unknown as { childSpawnQueue: string[]; childSpawnKeys: Map<string, string> };
     expect(raw.childSpawnQueue).toEqual([]);
     expect(raw.childSpawnKeys.has(["root-gD", "d-global-call"].join(String.fromCharCode(0)))).toBe(false);

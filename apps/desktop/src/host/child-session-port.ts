@@ -736,6 +736,9 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     // handoff must seed the background waiting state and raise the parent's
     // notice once, so its later settlement retracts that same notice.
     let joiningAsk: { toolName: string; subject: string } | undefined;
+    // Coarse progress can report the last completed tool after an approval ask.
+    // Keep the pending tool authoritative until that ask settles.
+    let approvalTool: string | undefined;
     const syncJoinBudgetMs = options.syncJoinBudgetMs ?? CHILD_SYNC_JOIN_BUDGET_MS;
     // The request the background callbacks receive: an explicitly detached run
     // keeps its own object identity; an automatically handed-off one gets a
@@ -975,12 +978,13 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               // returned at admit, so no live card exists for opts.onProgress
               // to update.
               stallClock.noteProgress(event.lastTool);
-              retainProgress({ turns: event.turns, toolCalls: event.toolCalls, lastTool: event.lastTool });
+              const lastTool = approvalTool ?? event.lastTool;
+              retainProgress({ turns: event.turns, toolCalls: event.toolCalls, lastTool });
               if (mode === "background") {
                 updateBackgroundSnapshot(acceptedEvent?.childSessionId ?? "", {
                   turns: event.turns,
                   toolCalls: event.toolCalls,
-                  ...(event.lastTool !== undefined ? { lastTool: event.lastTool } : {}),
+                  ...(lastTool !== undefined ? { lastTool } : {}),
                 });
                 // Taskana 4820: a detached run's progress is the only place
                 // the parent can learn its child is about to hit its turn
@@ -1035,9 +1039,10 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
             }
             case "activity": {
               stallClock.noteProgress(event.toolName);
-              retainProgress({ lastTool: event.toolName });
+              const lastTool = approvalTool ?? event.toolName;
+              retainProgress({ lastTool });
               if (mode === "background") {
-                updateBackgroundSnapshot(acceptedEvent?.childSessionId ?? "", { lastTool: event.toolName });
+                updateBackgroundSnapshot(acceptedEvent?.childSessionId ?? "", { lastTool });
                 return;
               }
               const progress: SubagentProgress = { kind: "tool", toolName: event.toolName, summary: event.summary };
@@ -1057,6 +1062,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               } else {
                 stallClock.resume();
               }
+              approvalTool = event.waiting ? event.toolName : undefined;
               retainProgress({ waitingForApproval: event.waiting, ...(event.waiting ? { lastTool: event.toolName } : {}) });
               if (mode === "joining") {
                 // A joining run has no parent-side notice yet, but a handoff

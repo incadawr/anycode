@@ -107,7 +107,7 @@ const HOST_SHUTDOWN_MESSAGE_TYPE = "shutdown";
  * Model-visible rejection/terminal texts for the child-session admission path
  * (TASK.102 CUT-S2 §2.6.4/§2.7/§10.8.2). Every text below is now VERBATIM-
  * frozen by a cut authority — review checks byte-for-byte equality, not
- * paraphrase: limit_parent/limit_global/recursion/the provider-not-ready
+ * paraphrase: recursion/the provider-not-ready
  * template/closing/spawn_failed/the crash text are §2.7's own wording (the
  * model reads them through `tools/agent.ts`'s outcome mapping);
  * CHILD_ENGINE_NOT_READY_MESSAGE and CHILD_START_TIMEOUT_MESSAGE are
@@ -115,10 +115,11 @@ const HOST_SHUTDOWN_MESSAGE_TYPE = "shutdown";
  * wording (that wording stated a fact with no actionable next step); and
  * CHILD_CANCELLED_MESSAGE and CHILD_DUPLICATE_SPAWN_MESSAGE are §10.8.2
  * п.3/п.4's ratifications of the S2b wording AS-IS. None of these four is a
- * main-side style choice.
+ * main-side style choice. The child-limit messages use the current wording
+ * documented for users.
  */
 const CHILD_LIMIT_GLOBAL_MESSAGE =
-  'Agent: application-wide session-subagent limit reached (8 running child sessions). No child was started. Wait for one to finish, or use tier "inline".';
+  'Agent: application-wide child session limit reached (8 running child sessions). No child was started. Wait for one to finish, or use tier "inline".';
 const CHILD_RECURSION_MESSAGE = 'Agent: a child session cannot spawn its own child sessions. Use tier "inline".';
 const CHILD_CLOSING_MESSAGE = "Agent: the child session could not be started (host is closing).";
 const CHILD_SPAWN_FAILED_MESSAGE = "Agent: the child session failed to start.";
