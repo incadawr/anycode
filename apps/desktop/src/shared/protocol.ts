@@ -572,6 +572,7 @@ export type HostToUiMessage =
       model: string;
       sessionId: string;
       reasoningEffort?: ReasoningEffort;
+      effortAdjustment?: { from: ReasoningEffort; to: ReasoningEffort };
       availableEffortLevels?: ReasoningEffort[];
       /**
        * TASK.56 W2: live image-input verdict for the CURRENT model (Session's

@@ -8983,3 +8983,20 @@ it("does not consume a pending effort on an unrelated model acknowledgement", ()
   expect(modelSettingsWrites(pending, {kind:"model", model:"b", effort:"low"})).toEqual([]);
   expect(pending.effort).toBeDefined();
 });
+
+
+it("shows the adjustment notice received on a destination host handshake", () => {
+  const store = createDesktopStore(createManualScheduler().scheduler);
+  store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "glm-5.3", sessionId: "s", reasoningEffort: "low", effortAdjustment: { from: "off", to: "low" } });
+  expect(store.getState().notice).toEqual({ kind: "engine_notice", text: "glm-5.3 reasoning effort adjusted to low." });
+});
+
+it.each(["effort-first", "model-first"])("retains both acknowledgement kinds until the picker observes them (%s)", (order) => {
+  const store = createDesktopStore(createManualScheduler().scheduler);
+  store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "a", sessionId: "s" });
+  const effort = () => store.getState().applyHostMessage({ type: "reasoning_effort_changed", effort: "high" });
+  const model = () => store.getState().applyHostMessage({ type: "model_changed", model: "b", reasoningEffort: "low" });
+  if (order === "effort-first") { effort(); model(); } else { model(); effort(); }
+  expect(store.getState().effortSelectionAck).toMatchObject({ kind: "effort", effort: "high", model: order === "effort-first" ? "a" : "b" });
+  expect(store.getState().modelSelectionAck).toMatchObject({ kind: "model", model: "b", effort: "low" });
+});

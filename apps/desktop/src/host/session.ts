@@ -1068,6 +1068,7 @@ export interface SessionOptions {
   reasoningSupported?: boolean;
   /** Effort levels the boot model supports (for the UI selector + set_reasoning_effort validation). */
   availableEffortLevels?: ReasoningEffort[];
+  bootEffortAdjustment?: { from: ReasoningEffort; to: ReasoningEffort };
   /**
    * Core's own effort resolution, for the models `sessionEffortState()` has to
    * describe (host/index.ts threads `resolveEffortLevels` +
@@ -1281,6 +1282,7 @@ export class Session {
   // Slice P7.15 (F14): mutable — re-resolved per new model on a set_model switch.
   private reasoningSupported: boolean;
   private availableEffortLevels: ReasoningEffort[] | undefined;
+  private bootEffortAdjustment: { from: ReasoningEffort; to: ReasoningEffort } | undefined;
   private readonly effortResolution: SessionOptions["effortResolution"];
   /** Slice P7.15 (F14): the user-selected effort tier, persisted across a model switch. */
   private selectedEffort: ReasoningEffort;
@@ -1708,6 +1710,7 @@ export class Session {
     this.refineTitle = options.refineTitle;
     this.reasoningSupported = options.reasoningSupported ?? true;
     this.availableEffortLevels = options.availableEffortLevels;
+    this.bootEffortAdjustment = options.bootEffortAdjustment;
     this.effortResolution = options.effortResolution;
     this.selectedEffort = options.selectedEffort ?? this.engine.reasoningEffort() ?? "off";
     this.sendPreviewArtifacts = options.postPreviewArtifacts;
@@ -2447,6 +2450,8 @@ export class Session {
           this.child.onReady();
         }
         const presentation = enginePresentation(this.engine, this.engineSettings);
+        const bootEffortAdjustment = this.bootEffortAdjustment;
+        this.bootEffortAdjustment = undefined;
         this.outbound.sendDirect({
           type: "host_ready",
           workspace: this.workspace,
@@ -2456,6 +2461,7 @@ export class Session {
           model: this.model,
           sessionId: this.sessionId,
           reasoningEffort: this.engine.reasoningEffort() ?? "off",
+          ...(bootEffortAdjustment !== undefined ? { effortAdjustment: bootEffortAdjustment } : {}),
           ...(this.availableEffortLevels !== undefined ? { availableEffortLevels: this.availableEffortLevels } : {}),
           // TASK.56 W2: live image-input verdict for the CURRENT model (the
           // seam is a closure over the active model, host/index.ts). Rides

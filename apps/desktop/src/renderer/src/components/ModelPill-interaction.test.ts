@@ -50,7 +50,7 @@ describe("model menu interaction", () => {
     expect(harness.send).toHaveBeenCalledWith({ type: "set_reasoning_effort", effort: "off" });
     expect(harness.update).not.toHaveBeenCalled();
     harness.state.reasoningEffort = "off";
-    harness.state.modelSelectionAck = {kind:"effort", model:"glm-5.2", effort:"off"};
+    harness.state.effortSelectionAck = {kind:"effort", model:"glm-5.2", effort:"off"};
     render();
     await vi.waitFor(() => expect(harness.update).toHaveBeenCalledWith({ id: "c", modelOverrideModel: "glm-5.2", reasoningEffort: "off" }));
   });
@@ -75,6 +75,24 @@ describe("model menu interaction", () => {
     harness.state.modelSelectionAck = {kind:"model", model:"glm-4.6", effort, requestedEffort:effort};
     render();
     await vi.waitFor(() => expect(harness.update).toHaveBeenCalledExactlyOnceWith({id:"c", model:"glm-4.6", modelOverrideModel:"glm-4.6", reasoningEffort:effort}));
+  });
+
+  it.each(["effort-first", "model-first"])("persists both acknowledgements arriving before render (%s)", async (order) => {
+    harness.settings.snapshot.catalog[0].models.push({id:"glm-4.6", reasoning:true, effortLevels:["off","high","max"]});
+    let tree = render(); tree.props.children[0].props.onClick(); tree = render();
+    menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "effort-open")); tree = render();
+    menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "effort" && r.value === "max"));
+    tree = render(); tree.props.children[0].props.onClick(); tree = render();
+    menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "group")); tree = render();
+    menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "model" && r.modelId === "glm-4.6"));
+    const effortAck = {kind:"effort", model: order === "effort-first" ? "glm-5.2" : "glm-4.6", effort:"max"};
+    const modelAck = {kind:"model", model:"glm-4.6", effort:"high"};
+    if (order === "effort-first") { harness.state.effortSelectionAck = effortAck; harness.state.modelSelectionAck = modelAck; }
+    else { harness.state.modelSelectionAck = modelAck; harness.state.effortSelectionAck = effortAck; }
+    render();
+    await vi.waitFor(() => expect(harness.update).toHaveBeenCalledTimes(2));
+    expect(harness.update).toHaveBeenCalledWith({id:"c", model:"glm-4.6"});
+    expect(harness.update).toHaveBeenCalledWith({id:"c", modelOverrideModel:effortAck.model, reasoningEffort:"max"});
   });
 
   it("shows no effort row for a model without reasoning metadata", () => {

@@ -3547,10 +3547,13 @@ async function boot(): Promise<void> {
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
     ));
     const bootSelectedEffort = connectionModelSettings.effortFor(envConfig.model);
-    const normalizedBootEffort = bootSelectedEffort === undefined ? undefined : connectionModelSettings.normalize(envConfig.model, bootSelectedEffort);
+    const bootCandidate = bootSelectedEffort ?? resolveReasoningEffort(envConfig.model, catalogEntry, undefined, liveCapsFor(envConfig.model)) ?? "off";
+    const normalizedBootEffort = connectionModelSettings.normalize(envConfig.model, bootCandidate);
+    const bootAdjustment = bootSelectedEffort !== undefined && normalizedBootEffort !== bootCandidate
+      ? { from: bootCandidate, to: normalizedBootEffort } : undefined;
     const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, normalizedBootEffort, liveCapsFor(envConfig.model));
     // Preserve explicit selections even when the current model suppresses them.
-    selectedEffort = normalizedBootEffort ?? bootReasoningEffort ?? "off";
+    selectedEffort = normalizedBootEffort;
     connectionModelSettings.remember(envConfig.model, selectedEffort);
     const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry, liveCapsFor(envConfig.model));
     // TASK.162 (F6): the same catalog + env overrides the three boot
@@ -4876,6 +4879,7 @@ async function boot(): Promise<void> {
       },
       model: currentModel,
       reasoningSupported: bootEffortLevels !== undefined,
+      ...(bootAdjustment !== undefined ? { bootEffortAdjustment: bootAdjustment } : {}),
       ...(bootEffortLevels !== undefined ? { availableEffortLevels: bootEffortLevels } : {}),
       // The SAME two resolvers this composition root already uses for the boot
       // vocabulary and for every model switch, so the status projection and
