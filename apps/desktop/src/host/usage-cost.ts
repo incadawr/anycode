@@ -27,3 +27,28 @@ export function connectionPricing(raw: string | undefined): { subscription: true
     return { subscription: false, price: { basisId: `connection:${raw}`, input: value.input as number, cachedInput: value.cachedInput as number, output: value.output as number, ...(value.cacheWrite !== undefined ? { cacheWrite: value.cacheWrite as number } : {}) } };
   } catch { return undefined; }
 }
+
+/** Resolve one complete price for the model, keeping explicit scopes stable. */
+export function resolveUsagePrice(raw: string | undefined, model: string, catalog: ModelPricing | undefined): { subscription: true } | { subscription: false; price: ModelPricing } | undefined {
+  let value: unknown;
+  try { value = raw ? JSON.parse(raw) : undefined; } catch { value = undefined; }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return catalog ? { subscription: false, price: catalog } : undefined;
+  const object = value as Record<string, unknown>;
+  const envelope = Object.hasOwn(object, "fallback") || Object.hasOwn(object, "models");
+  const fallback = envelope ? object.fallback : object;
+  const fallbackPrice = connectionPricing(fallback === undefined ? undefined : JSON.stringify(fallback));
+  if (fallbackPrice?.subscription) return fallbackPrice;
+  const models = object.models;
+  if (envelope && models !== null && typeof models === "object" && !Array.isArray(models) && Object.hasOwn(models, model)) {
+    const candidate = (models as Record<string, unknown>)[model];
+    if (candidate !== null && typeof candidate === "object" && !Array.isArray(candidate)) {
+      const rates = candidate as Record<string, unknown>;
+      if ([rates.input, rates.cachedInput, rates.output].every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0) &&
+          (rates.cacheWrite === undefined || (typeof rates.cacheWrite === "number" && Number.isFinite(rates.cacheWrite) && rates.cacheWrite >= 0))) {
+        const tuple = { input: rates.input as number, cachedInput: rates.cachedInput as number, output: rates.output as number, ...(rates.cacheWrite === undefined ? {} : { cacheWrite: rates.cacheWrite as number }) };
+        return { subscription: false, price: { ...tuple, basisId: `model:${JSON.stringify([model, tuple])}` } };
+      }
+    }
+  }
+  return fallbackPrice ?? (catalog ? { subscription: false, price: catalog } : undefined);
+}

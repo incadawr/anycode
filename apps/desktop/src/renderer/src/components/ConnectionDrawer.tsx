@@ -41,6 +41,7 @@ import type {
   SecretStatus,
   SecretKey,
   SettingsMutationResult,
+  TokenRates,
 } from "../../../shared/settings.js";
 import { applyModelReasoningOverride, contextWindowTokensField, modelOverrideFor } from "../../../shared/model-overrides.js";
 import { mergeModelIds, normalizeModelId } from "../../../shared/settings.js";
@@ -1186,6 +1187,26 @@ export function ConnectionDrawerFields({
     if (raw.some((v) => !v.trim()) || values.some((v) => !Number.isFinite(v) || v < 0) || (priceWrite.trim() !== "" && (!Number.isFinite(write) || write < 0))) return null;
     return { mode: "rates" as const, input: values[0]!, cachedInput: values[1]!, output: values[2]!, ...(priceWrite.trim() ? { cacheWrite: write } : {}) };
   };
+  type RateDraft = { input: string; cachedInput: string; output: string; cacheWrite: string };
+  const [modelRates, setModelRates] = useState<Record<string, RateDraft>>(() => Object.fromEntries(
+    Object.entries(editConnection?.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => {
+      const rate = value.pricing!;
+      return [id, { input: String(rate.input), cachedInput: String(rate.cachedInput), output: String(rate.output), cacheWrite: rate.cacheWrite === undefined ? "" : String(rate.cacheWrite) }];
+    }),
+  ));
+  const [dirtyRates, setDirtyRates] = useState<Set<string>>(() => new Set());
+  const modelPricingPayload = (): Record<string, TokenRates | ""> | null => {
+    const entries: [string, TokenRates | ""][] = [];
+    for (const id of dirtyRates) {
+      const draft = modelRates[id]!;
+      const raw = [draft.input, draft.cachedInput, draft.output];
+      if ([...raw, draft.cacheWrite].every((v) => !v.trim())) { entries.push([id, ""]); continue; }
+      const values = raw.map(Number), write = Number(draft.cacheWrite);
+      if (normalizeModelId(id) !== id || raw.some((v) => !v.trim()) || values.some((v) => !Number.isFinite(v) || v < 0) || (draft.cacheWrite.trim() !== "" && (!Number.isFinite(write) || write < 0))) return null;
+      entries.push([id, { input: values[0]!, cachedInput: values[1]!, output: values[2]!, ...(draft.cacheWrite.trim() ? { cacheWrite: write } : {}) }]);
+    }
+    return Object.fromEntries(entries);
+  };
   // TASK.150: stored as a string (it backs a plain `<input type="number">`) so
   // an in-progress edit (e.g. a momentarily-empty field) never gets coerced
   // through `Number()` before the user is done typing; `maxOutputTokensField`
@@ -1415,6 +1436,9 @@ export function ConnectionDrawerFields({
       setError(MODEL_ID_ERROR);
       return;
     }
+    const pricing = pricingPayload();
+    const modelPricing = modelPricingPayload();
+    if (pricing === null || modelPricing === null) { setError("Enter non-negative prices per million tokens."); return; }
     const createModel = preflight.kind === "id" ? preflight.id : undefined;
     const window = contextWindowTokensField(contextWindow.raw);
     if (!window.ok || (window.value !== "" && createModel === undefined)) {
@@ -1458,6 +1482,8 @@ export function ConnectionDrawerFields({
         reloadSnapshot,
         {
           providerId: newId,
+          ...(pricing !== "" ? { pricing } : {}),
+          modelPricing: Object.fromEntries(Object.entries(modelPricing).filter(([, value]) => value !== "")) as Record<string, TokenRates>,
           ...(createModel !== undefined ? { model: createModel } : {}),
           ...(label.trim() ? { label: label.trim() } : {}),
           ...(transport ? { transport } : {}),
@@ -1509,7 +1535,8 @@ export function ConnectionDrawerFields({
     // what can be typed, so silently discarding e.g. `500` would create a
     // connection whose ceiling the user believes they set.
     const pricing = pricingPayload();
-    if (pricing === null) { setError("Enter non-negative prices per million tokens."); return; }
+    const modelPricing = modelPricingPayload();
+    if (pricing === null || modelPricing === null) { setError("Enter non-negative prices per million tokens."); return; }
     const mot = maxOutputTokensField(maxOutputTokens);
     if (!mot.ok) {
       // A refused Advanced field must not stay hidden behind a closed disclosure.
@@ -1561,6 +1588,7 @@ export function ConnectionDrawerFields({
         reloadSnapshot,
         {
           providerId,
+          modelPricing: Object.fromEntries(Object.entries(modelPricing).filter(([, value]) => value !== "")) as Record<string, TokenRates>,
           ...(pricing !== "" ? { pricing } : {}),
           ...(createModel !== "" ? { model: createModel } : {}),
           ...(label.trim() ? { label: label.trim() } : {}),
@@ -1650,7 +1678,8 @@ export function ConnectionDrawerFields({
     // gives the specific, actionable message instead (same pattern as the
     // `modelSaveBlocked` guard just above).
     const pricing = pricingPayload();
-    if (pricing === null) { setError("Enter non-negative prices per million tokens."); return; }
+    const modelPricing = modelPricingPayload();
+    if (pricing === null || modelPricing === null) { setError("Enter non-negative prices per million tokens."); return; }
     const mot = maxOutputTokensField(maxOutputTokens);
     if (!mot.ok) {
       // A refused Advanced field must not stay hidden behind a closed disclosure.
@@ -1702,9 +1731,10 @@ export function ConnectionDrawerFields({
           maxOutputTokens: mot.value,
           imageInput,
           promptCacheEnabled,
-        }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty }), pricing },
+        }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty }), pricing, modelPricing },
         selectedModelId,
       );
+      if (outcome.metaOk) setDirtyRates(new Set());
       let keyRefused = false;
       let keyRefusalDetail: string | null = null;
       if (secretValue && credentialKey !== undefined) {
@@ -1884,6 +1914,16 @@ export function ConnectionDrawerFields({
       {pricingMode === "rates" && <div>
         {([["Input", priceInput, setPriceInput], ["Cached input", priceCached, setPriceCached], ["Output", priceOutput, setPriceOutput], ["Cache write (optional)", priceWrite, setPriceWrite]] as const).map(([label, value, set]) => <label className="settings-field" key={label}><span className="settings-field-label">{label} · USD / 1M tokens</span><input type="number" min="0" step="any" value={value} disabled={readOnly} onChange={(e) => set(e.target.value)} /></label>)}
       </div>}
+
+      <p>Prices apply to future usage. Model rates override the connection fallback.</p>
+      <div aria-label="Per-model prices">
+        {mergeModelIds(modelSuggestions.map((item) => item.id), mergeModelIds(Object.keys(modelRates), normalizeModelId(model) ? [normalizeModelId(model)!] : [])).map((id) => {
+          const draft = (Object.hasOwn(modelRates, id) ? modelRates[id] : undefined) ?? { input: "", cachedInput: "", output: "", cacheWrite: "" };
+          return <fieldset key={id} disabled={readOnly || saving || pricingMode === "subscription"}><legend>{id}</legend>
+            {([ ["input", "Input"], ["cachedInput", "Cached input"], ["output", "Output"], ["cacheWrite", "Cache write (optional)"] ] as const).map(([key, label]) => <label className="settings-field" key={key}><span className="settings-field-label">{label} · USD / 1M tokens</span><input type="number" min="0" step="any" aria-label={`${id} ${label} · USD / 1M tokens`} value={draft[key]} onChange={(e) => { const value = e.target.value; setModelRates((previous) => ({ ...previous, [id]: { ...draft, [key]: value } })); setDirtyRates((previous) => new Set(previous).add(id)); }} /></label>)}
+          </fieldset>;
+        })}
+      </div>
 
       <label className="settings-field">
         <span className="settings-field-label">Transport</span>

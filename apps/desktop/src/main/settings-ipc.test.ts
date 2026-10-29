@@ -332,6 +332,34 @@ it("persists, changes, validates, and clears per-connection pricing", async () =
   expect(snapshot.settings.provider.connections[0]?.pricing).toBeUndefined();
 });
 
+it("round trips independent model prices and preserves unrelated overrides", async () => {
+  const deps = makeDeps({ catalogIds: CATALOG_IDS });
+  const a = { input: 1, cachedInput: 0, output: 2 };
+  const b = { input: 3, cachedInput: 1, output: 4 };
+  expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", contextWindowTokens: 8192, modelPricing: { a, b } })).ok).toBe(true);
+  expect((await handleGet(deps)).settings.provider.connections[0]?.modelOverrides).toMatchObject({ a: { pricing: a, contextWindowTokens: 8192 }, b: { pricing: b } });
+  expect(await handleConnectionUpdate(deps, { id: "conn-1", modelPricing: { a: { ...a, input: -1 } } })).toEqual({ ok: false, reason: "invalid" });
+  expect((await handleConnectionUpdate(deps, { id: "conn-1", modelPricing: { a: "" } })).ok).toBe(true);
+  expect((await handleGet(deps)).settings.provider.connections[0]?.modelOverrides).toEqual({ a: { contextWindowTokens: 8192 }, b: { pricing: b } });
+});
+
+it("round trips special model ids through create, update, and clear", async () => {
+  const deps = makeDeps({ catalogIds: CATALOG_IDS });
+  const rates = { input: 1, cachedInput: 0, output: 2 };
+  const modelPricing = Object.fromEntries([["__proto__", rates]]);
+  expect((await handleConnectionCreate(deps, { providerId: "z-ai", modelPricing })).ok).toBe(true);
+  let overrides = (await handleGet(deps)).settings.provider.connections[0]?.modelOverrides;
+  expect(Object.hasOwn(overrides!, "__proto__")).toBe(true);
+  expect(overrides!["__proto__"]?.pricing).toEqual(rates);
+  const updated = { ...rates, output: 4 };
+  expect((await handleConnectionUpdate(deps, { id: "conn-1", modelPricing: Object.fromEntries([["__proto__", updated]]) })).ok).toBe(true);
+  overrides = (await handleGet(deps)).settings.provider.connections[0]?.modelOverrides;
+  expect(Object.hasOwn(overrides!, "__proto__")).toBe(true);
+  expect(overrides!["__proto__"]?.pricing).toEqual(updated);
+  expect((await handleConnectionUpdate(deps, { id: "conn-1", modelPricing: Object.fromEntries([["__proto__", ""]]) })).ok).toBe(true);
+  expect(Object.hasOwn((await handleGet(deps)).settings.provider.connections[0]?.modelOverrides ?? {}, "__proto__")).toBe(false);
+});
+
 // GitHub #15: the opt-in prompt-cache policy is per-connection state with the
 // same lifecycle as `pricing`/`maxOutputTokens` — set on create, kept when the
 // update omits it, deleted by the `""` sentinel, and refused at the IPC
