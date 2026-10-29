@@ -469,3 +469,10 @@ describe("connectionOfferedModels / buildStartModelGroups (TASK.183 — manual i
     expect(connectionOfferedModels(conn, CATALOG, undefined)?.map((m) => m.id)).toEqual(["kimi-for-coding", "k3"]);
   });
 });
+
+it("does not invent an effort for an untouched manual vocabulary", async () => {
+  const { displayedStartEffort } = await import("./start-model-picker.js");
+  expect(displayedStartEffort(undefined, undefined, ["low", "high"], undefined)).toBeUndefined();
+  expect(displayedStartEffort(undefined, "high", ["low", "high"], undefined)).toBe("high");
+  expect(displayedStartEffort("off", "high", ["low", "high"], undefined)).toBeUndefined();
+});

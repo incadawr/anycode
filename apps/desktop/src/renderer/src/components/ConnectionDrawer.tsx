@@ -356,13 +356,14 @@ export function promptCacheVisible(
 
 export function buildDrawerSavePayload(
   params: Parameters<typeof buildConnectionUpdatePayload>[0],
-  fields: { contextWindowDirty: boolean; contextWindowTokens: number | ""; reasoningSupportedDirty: boolean; reasoningSupported: boolean; modelEffortDirty: boolean; modelEffort: ReasoningEffort | ""; imageInputDirty: boolean },
+  fields: { contextWindowDirty: boolean; contextWindowTokens: number | ""; reasoningSupportedDirty: boolean; reasoningSupported: boolean; modelEffortDirty: boolean; modelEffort: ReasoningEffort | ""; imageInputDirty: boolean; effortLevelsDirty?: boolean; effortLevels?: ReasoningEffort[] },
 ): ConnectionUpdateRequest {
   return buildConnectionUpdatePayload({
     ...params,
     ...(fields.contextWindowDirty ? { contextWindowTokens: fields.contextWindowTokens } : {}),
     ...(fields.reasoningSupportedDirty ? { reasoningSupported: fields.reasoningSupported ? true : "" } : {}),
     ...(fields.modelEffortDirty ? { reasoningEffort: fields.modelEffort } : {}),
+    ...(fields.effortLevelsDirty ? { effortLevels: fields.effortLevels?.length ? fields.effortLevels : "" } : {}),
     imageInputChanged: fields.imageInputDirty,
   });
 }
@@ -399,6 +400,7 @@ export function buildConnectionUpdatePayload(params: {
   promptCacheEnabled: boolean;
   reasoningEffort?: ReasoningEffort | "";
   reasoningSupported?: true | "";
+  effortLevels?: ReasoningEffort[] | "";
 }): ConnectionUpdateRequest {
   return {
     id: params.connectionId,
@@ -424,6 +426,7 @@ export function buildConnectionUpdatePayload(params: {
     ...(params.contextWindowTokens !== undefined ? { contextWindowTokens: params.contextWindowTokens } : {}),
     ...(params.reasoningEffort !== undefined ? { reasoningEffort: params.reasoningEffort } : {}),
     ...(params.reasoningSupported !== undefined ? { reasoningSupported: params.reasoningSupported } : {}),
+    ...(params.effortLevels !== undefined ? { effortLevels: params.effortLevels } : {}),
     // Sent unconditionally (Taskana 4088), same rationale: "auto" must CLEAR
     // the saved override pair (`""` is main's clear sentinel), while "on"/"off"
     // persist it. The model binding is derived SERVER-SIDE, exactly like the
@@ -1227,6 +1230,8 @@ export function ConnectionDrawerFields({
   const [reasoningSupported, setReasoningSupported] = useState(() =>
     modelOverrideFor(editConnection, editConnection?.model ?? "")?.reasoningSupported === true,
   );
+  const [effortLevels, setEffortLevels] = useState<ReasoningEffort[]>(() => modelOverrideFor(editConnection, editConnection?.model ?? "")?.effortLevels ?? []);
+  const [effortLevelsDirty, setEffortLevelsDirty] = useState(false);
   const [modelEffort, setModelEffort] = useState<ReasoningEffort | "">(() =>
     modelOverrideFor(editConnection, editConnection?.model ?? "")?.reasoningEffort ?? "",
   );
@@ -1247,7 +1252,7 @@ export function ConnectionDrawerFields({
   // The Advanced disclosure is controlled: open from the start only when a
   // tuning value is already set (evaluated once, from the initial state), and
   // forced open by a rejected Advanced field on save/create.
-  const [advancedOpen, setAdvancedOpen] = useState(() => initialFocus === "context" || reasoningSupported || modelEffort !== "" || advancedHasValues({
+  const [advancedOpen, setAdvancedOpen] = useState(() => initialFocus === "context" || reasoningSupported || effortLevels.length > 0 || modelEffort !== "" || advancedHasValues({
     transport,
     maxOutputTokens,
     contextWindowRaw: contextWindow.raw,
@@ -1391,6 +1396,7 @@ export function ConnectionDrawerFields({
     effectiveProviderId, effectiveFormModel.trim(), catalog.filter((entry) => !entry.id.startsWith("custom:")),
     applyModelReasoningOverride(targetConnection?.modelCapabilities?.[effectiveFormModel.trim()], reasoningSupported),
   );
+  const effectiveReasoningLevels = effortLevels.length ? effortLevels : reasoningLevels;
   const imageInputFeedHint = proxySnapshot === null ? null : imageInputEnvHint(proxySnapshot.envOverrides);
 
   /**
@@ -1414,6 +1420,8 @@ export function ConnectionDrawerFields({
       const target = force ? undefined : modelOverrideFor(saved, effective.trim());
       setReasoningSupported(target?.reasoningSupported === true);
       setModelEffort(target?.reasoningEffort ?? "");
+      setEffortLevels(target?.effortLevels ?? []);
+      setEffortLevelsDirty(false);
       setImageInput(force || targetConnection === undefined ? "auto" : imageInputInitialValue({...targetConnection, model: effective.trim()}));
       setImageInputDirty(false);
       setContextWindowDirty(false);
@@ -1444,6 +1452,11 @@ export function ConnectionDrawerFields({
     if (!window.ok || (window.value !== "" && createModel === undefined)) {
       setAdvancedOpen(true);
       setError(window.ok ? CONTEXT_WINDOW_ERROR_MODEL : CONTEXT_WINDOW_ERROR);
+      return;
+    }
+    const imageInputError = imageInputModelPreflightError(imageInput, createModel ?? "");
+    if (imageInputError !== null) {
+      setError(imageInputError);
       return;
     }
     const req = buildCustomProviderCreateRequest({
@@ -1495,7 +1508,9 @@ export function ConnectionDrawerFields({
           ...(promptCacheEnabled ? { promptCache: IMPLICIT_PROMPT_CACHE } : {}),
           ...(contextWindow.raw.trim() ? { contextWindowTokens: Number(contextWindow.raw) } : {}),
           ...(reasoningSupported ? { reasoningSupported: true as const } : {}),
+          ...(effortLevels.length ? { effortLevels } : {}),
           ...(modelEffort !== "" ? { reasoningEffort: modelEffort } : {}),
+          ...(imageInput !== "auto" ? { imageInputOverride: imageInput } : {}),
         },
         createModel ?? null,
       );
@@ -1599,6 +1614,7 @@ export function ConnectionDrawerFields({
           ...(mot.value !== "" ? { maxOutputTokens: mot.value } : {}),
           ...(cw.value !== "" ? { contextWindowTokens: cw.value } : {}),
           ...(reasoningSupported ? { reasoningSupported: true as const } : {}),
+          ...(effortLevels.length ? { effortLevels } : {}),
           ...(modelEffort !== "" ? { reasoningEffort: modelEffort } : {}),
           // Taskana 4088: create keeps the conditional-spread form (create's
           // schema has no "" sentinel — omission already means "auto"); only an
@@ -1731,7 +1747,7 @@ export function ConnectionDrawerFields({
           maxOutputTokens: mot.value,
           imageInput,
           promptCacheEnabled,
-        }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty }), pricing, modelPricing },
+        }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty, effortLevelsDirty, effortLevels }), pricing, modelPricing },
         selectedModelId,
       );
       if (outcome.metaOk) setDirtyRates(new Set());
@@ -2052,18 +2068,29 @@ export function ConnectionDrawerFields({
       {!knownCatalogModel && <label className="settings-field">
         <span className="settings-field-label">Reasoning support (this model)</span>
         <select className="settings-field-input" aria-label="Reasoning support" disabled={readOnly}
-          value={reasoningSupported ? "on" : "auto"} onChange={(e) => { setReasoningSupportedDirty(true); setReasoningSupported(e.target.value === "on"); }}>
+          value={reasoningSupported || effortLevels.length > 0 ? "on" : "auto"} onChange={(e) => { setReasoningSupportedDirty(true); setReasoningSupported(e.target.value === "on"); if (e.target.value === "auto") { setEffortLevels([]); setEffortLevelsDirty(true); } }}>
           <option value="auto">Auto — catalog or provider metadata</option>
           <option value="on">Supported</option>
         </select>
       </label>}
+      {!knownCatalogModel && (reasoningSupported || effortLevels.length > 0) && <fieldset className="settings-field">
+        <legend className="settings-field-label">Supported effort levels (empty uses automatic levels)</legend>
+        {(["off", "low", "medium", "high", "xhigh", "max"] as ReasoningEffort[]).map((level) => <label key={level}>
+          <input type="checkbox" disabled={readOnly} checked={effortLevels.includes(level)} onChange={(e) => {
+            setEffortLevelsDirty(true);
+            setReasoningSupported(true);
+            setReasoningSupportedDirty(true);
+            setEffortLevels((levels) => e.target.checked ? [...levels, level] : levels.filter((item) => item !== level));
+          }} /> {level}
+        </label>)}
+      </fieldset>}
       <label className="settings-field">
         <span className="settings-field-label">Reasoning effort (this model)</span>
         <select className="settings-field-input" aria-label="Reasoning effort" disabled={readOnly}
           value={modelEffort} onChange={(e) => { setModelEffortDirty(true); setModelEffort(e.target.value as ReasoningEffort | ""); }}>
           <option value="">{editConnection?.reasoningEffort === undefined ? "Default" : `Default (connection: ${editConnection.reasoningEffort})`}</option>
-          {(reasoningLevels ?? []).map((level) => <option key={level} value={level}>{level}</option>)}
-          {modelEffort !== "" && !reasoningLevels?.includes(modelEffort) && <option value={modelEffort} disabled>{modelEffort} (unavailable)</option>}
+          {(effectiveReasoningLevels ?? []).map((level) => <option key={level} value={level}>{level}</option>)}
+          {modelEffort !== "" && !effectiveReasoningLevels?.includes(modelEffort) && <option value={modelEffort} disabled>{modelEffort} (unavailable)</option>}
         </select>
       </label>
 

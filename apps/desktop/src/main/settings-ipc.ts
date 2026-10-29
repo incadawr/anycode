@@ -435,6 +435,7 @@ const connectionCreateSchema = z
     proxyRef: z.string().min(1).optional(),
     reasoningEffort: reasoningEffortEnum.optional(),
     reasoningSupported: z.literal(true).optional(),
+    effortLevels: z.array(reasoningEffortEnum).min(1).transform((levels) => [...new Set(levels)]).optional(),
     promptCache: promptCacheSchema.optional(),
     maxOutputTokens: maxOutputTokensSchema.optional(),
     // Per-model context window (TASK.142). Only the numeric value is accepted
@@ -476,6 +477,7 @@ const connectionUpdateSchema = z
     reasoningEffort: z.union([reasoningEffortEnum, z.literal("")]).optional(),
     modelOverrideModel: z.string().trim().min(1).optional(),
     reasoningSupported: z.union([z.literal(true), z.literal("")]).optional(),
+    effortLevels: z.union([z.array(reasoningEffortEnum).min(1).transform((levels) => [...new Set(levels)]), z.literal("")]).optional(),
     // Opt-in prompt cache (GitHub #15) with the same `""` clear sentinel as
     // `maxOutputTokens` below: absent = keep, enabled object = set, `""` = clear.
     promptCache: z.union([promptCacheSchema, z.literal("")]).optional(),
@@ -1804,12 +1806,13 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
         : {}),
       ...(req.authOptional === true ? { authOptional: true } : {}),
     };
-    if (req.contextWindowTokens !== undefined || req.reasoningEffort !== undefined || req.reasoningSupported !== undefined) {
+    if (req.contextWindowTokens !== undefined || req.reasoningEffort !== undefined || req.reasoningSupported !== undefined || req.effortLevels !== undefined) {
       if (!createContextWindowModel) return { ok: false, reason: "invalid" };
       patchModelOverride(connection, createContextWindowModel, {
         ...(req.contextWindowTokens !== undefined ? { contextWindowTokens: req.contextWindowTokens } : {}),
         ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort } : {}),
         ...(req.reasoningSupported !== undefined ? { reasoningSupported: req.reasoningSupported } : {}),
+        ...(req.effortLevels !== undefined ? { effortLevels: req.effortLevels } : {}),
       });
     }
     for (const [model, pricing] of Object.entries(req.modelPricing ?? {})) patchModelOverride(connection, model, { pricing });
@@ -1989,15 +1992,16 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
       }
     }
     // GitHub #26: patch only the requested model, preserving every sibling.
-    if (req.contextWindowTokens !== undefined || req.reasoningEffort !== undefined || req.reasoningSupported !== undefined) {
+    if (req.contextWindowTokens !== undefined || req.reasoningEffort !== undefined || req.reasoningSupported !== undefined || req.effortLevels !== undefined) {
       const effectiveModel = (req.modelOverrideModel ?? (req.model !== undefined ? req.model : existing.model))?.trim();
-      if (!effectiveModel && [req.contextWindowTokens, req.reasoningEffort, req.reasoningSupported].some((value) => value !== undefined && value !== "")) {
+      if (!effectiveModel && [req.contextWindowTokens, req.reasoningEffort, req.reasoningSupported, req.effortLevels].some((value) => value !== undefined && value !== "")) {
         return { ok: false, reason: "invalid" };
       }
       if (effectiveModel) patchModelOverride(updatedConnection, effectiveModel, {
         ...(req.contextWindowTokens !== undefined ? { contextWindowTokens: req.contextWindowTokens === "" ? undefined : req.contextWindowTokens } : {}),
         ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort === "" ? undefined : req.reasoningEffort } : {}),
         ...(req.reasoningSupported !== undefined ? { reasoningSupported: req.reasoningSupported === "" ? undefined : req.reasoningSupported } : {}),
+        ...(req.effortLevels !== undefined || req.reasoningSupported === "" ? { effortLevels: req.effortLevels === "" || req.reasoningSupported === "" ? undefined : req.effortLevels } : {}),
       });
     }
     // Per-model image-input override (Taskana 4088) — the context-window pair

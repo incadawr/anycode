@@ -589,6 +589,7 @@ export function ModelPill() {
     recentModelIds: deriveRecentModelIds(sessions),
     page: drillPage,
     currentEffort: reasoningEffort,
+    availableEffortLevels,
   });
   const openGroup =
     drillPage.kind === "group"
