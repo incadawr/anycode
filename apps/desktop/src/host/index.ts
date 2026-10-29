@@ -1,3 +1,4 @@
+import { contextSnapshotOptions } from "./context-snapshot.js";
 import { discoverLoginPath, mcpProblemStatuses, codexMcpStatus, claudeMcpStatuses, forwardProblemStatuses } from "./mcp-login-path.js";
 import { readRoleSettings } from "./role-settings.js";
 import { SqliteCodexAgentCardLog } from "./engines/codex/agent-card-log.js";
@@ -1934,6 +1935,7 @@ async function bootCodexSession(
     workspace,
     model: connected.model,
     sessionId: connected.sessionMeta.id,
+    ...await contextSnapshotOptions(persistence!, connected.sessionMeta.id, "codex", connected.model, undefined, connected.initialContextUsage),
     usageAudit: codexUsageAudit,
     // Codex owns native thread history; never an AgentLoop history — this is
     // the resume projection built ONCE at boot (TASK.42, cut §2(e)):
@@ -2696,6 +2698,7 @@ async function bootClaudeSession(
     workspace,
     model: connected.model,
     sessionId: rowId,
+    ...await contextSnapshotOptions(persistence!, rowId, "claude", connected.model, undefined, args.resume ? () => claudeEngine.initialContextUsage() : undefined),
     // The resume projection built above — `[]` for a fresh session, the
     // shadow-mirror transcript (incl. tool_call cards) for a resumed one.
     bootHistory,
@@ -3394,6 +3397,7 @@ async function boot(): Promise<void> {
     const currentPricingRaw = () => connectionModelSettings.hasReadConnection() ? JSON.stringify(connectionModelSettings.pricingSnapshot()) : process.env.ANYCODE_CONNECTION_PRICING;
     let turnPricingRaw = currentPricingRaw();
     const liveCapsFor = (id: string): LiveModelCapabilities | undefined => connectionModelSettings.capabilitiesFor(id);
+    const effortLevelsFor = (id: string) => envConfig.effortLevels ?? connectionModelSettings.effortLevelsFor(id);
     const gitForWorkspace = (cwd: string, operationSignal?: AbortSignal) =>
       new NodeGitAdapter({
         exec: execAdapter,
@@ -3549,15 +3553,15 @@ async function boot(): Promise<void> {
     const bootSelectedEffort = connectionModelSettings.effortFor(envConfig.model);
     const priorEffort = process.env.ANYCODE_SWITCH_PRIOR_EFFORT;
     const switchFallback = (["off", "low", "medium", "high", "xhigh", "max"] as const).find((tier) => tier === priorEffort);
-    const bootCandidate = bootSelectedEffort ?? resolveReasoningEffort(envConfig.model, catalogEntry, undefined, liveCapsFor(envConfig.model)) ?? switchFallback ?? "off";
+    const bootCandidate = bootSelectedEffort ?? resolveReasoningEffort(envConfig.model, catalogEntry, undefined, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model)) ?? switchFallback ?? "off";
     const normalizedBootEffort = connectionModelSettings.normalize(envConfig.model, bootCandidate);
     const bootAdjustment = (bootSelectedEffort !== undefined || switchFallback !== undefined) && normalizedBootEffort !== bootCandidate
       ? { from: bootCandidate, to: normalizedBootEffort } : undefined;
-    const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, normalizedBootEffort, liveCapsFor(envConfig.model));
+    const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, normalizedBootEffort, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model));
     // Preserve explicit selections even when the current model suppresses them.
     selectedEffort = normalizedBootEffort;
     connectionModelSettings.remember(envConfig.model, selectedEffort);
-    const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry, liveCapsFor(envConfig.model));
+    const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model));
     // TASK.162 (F6): the same catalog + env overrides the three boot
     // resolutions above read, packaged once so an Agent-tool `model` override
     // re-resolves the child's ceiling/effort/window for ITS model instead of
@@ -3574,6 +3578,7 @@ async function boot(): Promise<void> {
       onStubFallback: (modelId, applied) =>
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
       liveCapabilitiesFor: liveCapsFor,
+      effortLevelsFor,
       contextWindowFor: (id) => connectionModelSettings.contextFor(id).tokens,
     });
     const history = new ConversationHistory({ initial: initialHistory, sink: historySink, tokenizer });
@@ -4658,7 +4663,7 @@ async function boot(): Promise<void> {
           (modelId, applied) =>
             console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
         ));
-        const resolvedEffort = resolveReasoningEffort(id, catalogEntry, selectedTier, liveCapsFor(id));
+        const resolvedEffort = resolveReasoningEffort(id, catalogEntry, selectedTier, liveCapsFor(id), effortLevelsFor(id));
         config.reasoningEffort = resolvedEffort;
         liveContextWindow = contextWindow;
         // TASK.198 срез C (plan §9): a model switch can flip sighted<->blind,
@@ -4676,7 +4681,7 @@ async function boot(): Promise<void> {
         loop.setContextWindow(contextWindow);
         loop.setTodoReminderEvery(envConfig.todoReminderEvery ?? catalogEntry?.models.find((m) => m.id === id)?.todoReminderEvery);
         config.context = { ...config.context, contextWindowTokens: contextWindow };
-        const availableEffortLevels = resolveEffortLevels(id, catalogEntry, liveCapsFor(id));
+        const availableEffortLevels = resolveEffortLevels(id, catalogEntry, liveCapsFor(id), effortLevelsFor(id));
         if (persistence) {
           void persistence.touchSession(sessionId, { model: id }).catch((error) => {
             console.error(`[host] touchSession(model) failed: ${describeError(error)}`);
@@ -4697,7 +4702,7 @@ async function boot(): Promise<void> {
       loop,
       config,
       switchModelImpl,
-      resolveSelectedEffort: (effort) => resolveReasoningEffort(currentModel, catalogEntry, effort, liveCapsFor(currentModel)),
+      resolveSelectedEffort: (effort) => resolveReasoningEffort(currentModel, catalogEntry, effort, liveCapsFor(currentModel), effortLevelsFor(currentModel)),
       onBeforeTurn: async () => {
         if (connectionModelSettings.refresh()) session?.refreshModelSettings();
         turnPricingRaw = currentPricingRaw();
@@ -4711,7 +4716,13 @@ async function boot(): Promise<void> {
     });
     const cleanupHandoff = sessionMeta.worktreeCleanup ?? parseCleanupIntent(process.env[WORKTREE_CLEANUP_ENV]);
     const coreHistoryMaxItems = resolveSessionHistoryMaxItems(process.env);
+    const restoredLoopContext = loop.contextInfo();
+    const fallbackContext = initialHistory.length > 0
+      ? { estimatedTokens: restoredLoopContext.estimatedTokens, budgetTokens: restoredLoopContext.effectiveWindowTokens, source: "estimate" as const }
+      : undefined;
+    const restoredContext = await contextSnapshotOptions(persistence, sessionId, "core", currentModel, restoredLoopContext.effectiveWindowTokens, fallbackContext);
     session = new Session({
+      ...restoredContext,
       workspaceTrustRequired: workspaceTrustRequiredMessage,
       outbound,
       engine,
@@ -4888,8 +4899,8 @@ async function boot(): Promise<void> {
       // `set_session_effort` validation can describe the SELECTED model (a
       // queued change included) exactly as core will resolve it.
       effortResolution: {
-        levels: (id) => resolveEffortLevels(id, catalogEntry, liveCapsFor(id)),
-        effective: (id, tier) => resolveReasoningEffort(id, catalogEntry, tier, liveCapsFor(id)),
+        levels: (id) => resolveEffortLevels(id, catalogEntry, liveCapsFor(id), effortLevelsFor(id)),
+        effective: (id, tier) => resolveReasoningEffort(id, catalogEntry, tier, liveCapsFor(id), effortLevelsFor(id)),
       },
       // Slice P7.15 (F14): the user-selected effort tier, threaded so Session can
       // re-resolve effort against the NEW model on a switch (mirror of the CLI's

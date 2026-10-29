@@ -1,5 +1,6 @@
 /** GitHub #26: isolated model-settings GUI/host smoke; loopback provider fixture, no external credentials. */
 import assert from "node:assert/strict";
+import { buildSmokeEnv } from "./model-overrides-smoke-env.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,7 +22,7 @@ const fixture = createHttpServer((request, response) => {
     const input = JSON.parse(body);
     const userContent = input.messages.findLast((message) => message.role === "user")?.content;
     const prompt = typeof userContent === "string" ? userContent : JSON.stringify(userContent);
-    fixtureRequests.push({model:input.model, prompt, effort:input.reasoning_effort});
+    fixtureRequests.push({model:input.model, prompt, effort:input.reasoning_effort, content:userContent});
     const reply = `fixture answer: ${prompt}`;
     response.writeHead(200, {"Content-Type":"text/event-stream"});
     const base = {id:"fixture-chat", object:"chat.completion.chunk", created:0, model:input.model};
@@ -34,18 +35,10 @@ await new Promise((resolve) => fixture.listen(0, "127.0.0.1", resolve));
 const fixtureUrl = `http://127.0.0.1:${fixture.address().port}/v1`;
 const binary = join(profile, "unavailable-engine");
 writeFileSync(binary, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
-const env = { ...process.env,
-  ANYCODE_AUTOMATION: "1", ANYCODE_SUBAGENTS_HOME: profile, REMOTE_DEBUGGING_PORT: String(port),
-  ANYCODE_USER_DATA_DIR: join(profile, "user-data"), ANYCODE_DB_PATH: join(profile, "db.sqlite"),
-  ANYCODE_AUTOMATION_INFO: join(profile, "automation.json"),
-  ANYCODE_SETTINGS_PATH: join(profile, "settings.json"), ANYCODE_SECRETS_PATH: join(profile, "secrets.json"),
-  ANYCODE_CODEX_BIN: binary, ANYCODE_CLAUDE_BIN: binary,
-  CODEX_HOME: join(profile, "codex-home"), CLAUDE_CONFIG_DIR: join(profile, "claude-home"),
-};
-for (const key of ["ANYCODE_API_KEY", "ANYCODE_MODEL", "ANYCODE_BASE_URL", "ANYCODE_PROVIDER", "ANYCODE_TRANSPORT", "ANYCODE_REASONING_EFFORT", "ANYCODE_CONTEXT_WINDOW", "ANYCODE_CONTEXT_WINDOW_MODEL"]) delete env[key];
+const env = buildSmokeEnv(process.env, profile, port, binary);
 writeFileSync(join(profile, "settings.json"), JSON.stringify({
-  version:2, provider:{activeConnectionId:"conn-smoke", connections:[{
-    id:"conn-smoke", providerId:"vllm", label:"Model overrides smoke", model:"a", models:["a","b","unknown","glm-like-52","glm-like-53"],
+  version:2, provider:{activeConnectionId:"conn-smoke", custom:[{id:"custom:smoke", name:"Smoke", baseUrl:fixtureUrl, kind:"openai-compatible", models:["unknown"]}], connections:[{
+    id:"conn-smoke", providerId:"custom:smoke", label:"Model overrides smoke", model:"a", models:["a","b","unknown","glm-like-52","glm-like-53"],
     modelCapabilities:{"glm-like-52":{reasoning:true, effortLevels:["off","high","max"]}, "glm-like-53":{reasoning:true, effortLevels:["low","medium","high","max"]}},
     transport:"openai-chat-completions", baseUrl:fixtureUrl, authOptional:true, imageInputOverride:"on", imageInputModel:"a",
   }]}, tools:{}, permissions:{alwaysAllow:[]}, ui:{theme:"dark"}, security:{allowWeakSecretStorage:false},
@@ -116,7 +109,9 @@ try {
   await evaluate("document.querySelector('.connection-drawer-advanced').open = true");
   await input(field("Context window"), "128000");
   await select("Reasoning support", "on");
-  await select("Reasoning effort", "max");
+  await evaluate(`document.querySelectorAll('fieldset input[type="checkbox"]')[1].click()`);
+  await evaluate(`document.querySelectorAll('fieldset input[type="checkbox"]')[3].click()`);
+  await select("Reasoning effort", "high");
   await click("Save");
   await poll(() => JSON.parse(readFileSync(join(profile, "settings.json"), "utf8")).provider.connections[0].modelOverrides?.a?.contextWindowTokens === 128000);
   await input("document.querySelector('input[list=connection-drawer-model-suggestions]')", "b");
@@ -128,7 +123,7 @@ try {
   await poll(() => JSON.parse(readFileSync(join(profile, "settings.json"), "utf8")).provider.connections[0].modelOverrides?.b?.contextWindowTokens === 64000);
   await input("document.querySelector('input[list=connection-drawer-model-suggestions]')", "a");
   assert.equal(await evaluate(`${field("Context window")}.value`), "128000");
-  assert.equal(await evaluate("document.querySelector('select[aria-label=\"Reasoning effort\"]').value"), "max");
+  assert.equal(await evaluate("document.querySelector('select[aria-label=\"Reasoning effort\"]').value"), "high");
   await evaluate(`${field("Context window")}.scrollIntoView({block:"center"})`);
   await sleep(400);
   const png = await call("Page.captureScreenshot", {format:"png"});
@@ -139,7 +134,7 @@ try {
   await call("Page.reload", {});
   await poll(() => evaluate("!!document.querySelector('.sidebar-settings')"));
   const saved = JSON.parse(readFileSync(join(profile, "settings.json"), "utf8")).provider.connections[0];
-  assert.deepEqual(saved.modelOverrides, { a: {contextWindowTokens:128000, reasoningSupported:true, reasoningEffort:"max"}, b:{contextWindowTokens:64000, reasoningSupported:true, reasoningEffort:"low"} });
+  assert.deepEqual(saved.modelOverrides, { a: {contextWindowTokens:128000, reasoningSupported:true, reasoningEffort:"high", effortLevels:["low","high"]}, b:{contextWindowTokens:64000, reasoningSupported:true, reasoningEffort:"low"} });
   assert(!Object.hasOwn(saved, "contextWindowTokens"));
   assert(!Object.hasOwn(saved, "contextWindowModel"));
   const info = await poll(() => existsSync(join(profile, "automation.json")) && JSON.parse(readFileSync(join(profile, "automation.json"), "utf8")));
@@ -155,8 +150,8 @@ try {
     try { return await api(`/tabs/${tab.tabId}/model-pill`); }
     catch { return {ok:false}; }
   };
-  await poll(async () => { const p = await pill(); return p.ok && p.currentModel === "a" && p.currentEffort === "max"; }, 30000);
-  await api(`/tabs/${tab.tabId}/model-pill/pick`, "POST", {kind:"effort", value:"max"});
+  await poll(async () => { const p = await pill(); return p.ok && p.currentModel === "a" && p.currentEffort === "high"; }, 30000);
+  await api(`/tabs/${tab.tabId}/model-pill/pick`, "POST", {kind:"effort", value:"high"});
   let turnSequence = 0;
   async function turn(model, budget, expectedEffort = model === "a" ? "high" : model === "b" ? "low" : undefined) {
     const text = `smoke-${model}-${++turnSequence}`;
@@ -176,11 +171,26 @@ try {
     assert.equal(request.effort, expectedEffort, `Wrong wire reasoning effort for ${text}`);
   }
   await turn("a", 104000);
+  const imagePath = join(profile, "pixel.png");
+  writeFileSync(imagePath, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"));
+  await call("DOM.getDocument", {});
+  const remote = await call("Runtime.evaluate", {expression:"document.querySelector('.composer-file-input')"});
+  const imageNode = await call("DOM.requestNode", {objectId:remote.result.objectId});
+  await call("DOM.setFileInputFiles", {files:[imagePath], nodeId:imageNode.nodeId});
+  await evaluate("document.querySelector('.composer-file-input').dispatchEvent(new Event('change', {bubbles:true}))");
+  await poll(() => evaluate("!!document.querySelector('.composer-image-pill-name')"));
+  await evaluate(`(() => { const input = document.querySelector('.composer-textarea'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'image smoke'); input.dispatchEvent(new Event('input', {bubbles:true})); })()`);
+  await poll(() => evaluate("!document.querySelector('.composer-send').disabled"));
+  await evaluate("document.querySelector('.composer-send').click()");
+  const imageRequest = await poll(() => fixtureRequests.find((request) => Array.isArray(request.content) && request.content.some((part) => part.type === "image_url")), 15000);
+  assert.equal(imageRequest.model, "a");
+  assert.equal(imageRequest.effort, "high");
+  await poll(async () => (await api(`/state/${tab.tabId}`)).snapshot.states[tab.tabId].turn.status === "idle");
   await api(`/tabs/${tab.tabId}/model-pill/pick`, "POST", {kind:"model", value:"b"});
   await poll(async () => { const p = await pill(); return p.currentModel === "b" && p.currentEffort === "low"; });
   await turn("b", 40000);
   await api(`/tabs/${tab.tabId}/model-pill/pick`, "POST", {kind:"model", value:"a"});
-  await poll(async () => { const p = await pill(); return p.currentModel === "a" && p.currentEffort === "max"; });
+  await poll(async () => { const p = await pill(); return p.currentModel === "a" && p.currentEffort === "high"; });
   await turn("a", 104000);
   await api(`/tabs/${tab.tabId}/model-pill/pick`, "POST", {kind:"model", value:"unknown"});
   await poll(async () => (await pill()).currentModel === "unknown");
@@ -221,9 +231,9 @@ try {
   // Editing the boot model also replaces its settings-derived env value on the next turn.
   await api(`/tabs/${tab.tabId}/model-pill/pick`, "POST", {kind:"model", value:"a"});
   await poll(async () => (await pill()).currentModel === "a");
-  assert((await evaluate("window.anycode.settings.connectionUpdate({id:'conn-smoke', modelOverrideModel:'a', contextWindowTokens:112000, reasoningEffort:'medium'})")).ok);
-  await turn("a", 88000, "medium");
-  assert.equal((await pill()).currentEffort, "medium");
+  assert((await evaluate("window.anycode.settings.connectionUpdate({id:'conn-smoke', modelOverrideModel:'a', contextWindowTokens:112000, reasoningEffort:'low'})")).ok);
+  await turn("a", 88000, "low");
+  assert.equal((await pill()).currentEffort, "low");
   // Exercise an initially displayed, unsaved off value through the real picker.
   assert((await evaluate("window.anycode.settings.connectionUpdate({id:'conn-smoke', model:'glm-like-52'})")).ok);
   assert((await evaluate("window.anycode.settings.connectionUpdate({id:'conn-smoke', modelOverrideModel:'glm-like-53', reasoningEffort:'off'})")).ok);

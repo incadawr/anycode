@@ -997,7 +997,7 @@ function CtxPopover({
   };
   turnStatus: TurnState["status"];
   quota: CodexRateLimitsWire | null;
-  percent: number;
+  percent: number | null;
   tint: string;
   /** codex-profiles cut §5.2: Codex has no per-category breakdown — the popover shows an honest message instead of a skeleton (see `ctxPopoverBodyState`'s "unsupported" branch). */
   supportsContextBreakdown: boolean;
@@ -1145,7 +1145,7 @@ function CtxPopover({
     }
   }
 
-  const roundedPercent = Math.round(percent);
+  const roundedPercent = percent === null ? null : Math.round(percent);
   const headline = ctxPopoverHeadline(contextUsage, roundedPercent);
   const rows = ctxPopoverRows(contextBreakdown);
   const loading = ctxPopoverLoading(open, contextBreakdown);
@@ -1159,7 +1159,7 @@ function CtxPopover({
   const turnSteps = currentTurnSteps(usageAudit.list);
   const turnStepSummary = formatTurnStepSummary(turnSteps);
   const quotaView = buildQuotaPopoverView(quota, Date.now());
-  const fillPercent = Math.min(100, Math.max(0, percent));
+  const fillPercent = percent === null ? 0 : Math.min(100, Math.max(0, percent));
 
   return (
     <div
@@ -1181,8 +1181,7 @@ function CtxPopover({
         onClick={handleClick}
         onFocus={handleFocus}
       >
-        <CtxRing percent={percent} />
-        {ctxMeterLabel(roundedPercent, contextWindowAssumed)}
+        {percent !== null && roundedPercent !== null ? <><CtxRing percent={percent} />{ctxMeterLabel(roundedPercent, contextWindowAssumed)}</> : "Usage"}
       </button>
 
       {open && (
@@ -1208,9 +1207,9 @@ function CtxPopover({
               {shortcutTarget !== null && <button type="button" className="settings-button"
                 onClick={() => { close(); setSettingsTarget(shortcutTarget); }}>Set context window</button>}
             </div>}
-            <div className="ctx-popover-bar">
+            {percent !== null && <div className="ctx-popover-bar">
               <div className="ctx-popover-bar-fill" style={{ width: `${fillPercent}%` }} />
-            </div>
+            </div>}
             {bodyState === "skeleton" && (
               <div className="ctx-popover-skeleton" aria-label="Loading context breakdown">
                 <div className="ctx-popover-skeleton-row" />
@@ -2162,7 +2161,7 @@ export function Composer() {
           {hintText}
         </span>
         <div className="composer-footer-right">
-          {supportsContextUsage && ctxPercent !== null && (
+          {supportsContextUsage && (ctxPercent !== null || usageAudit.totals !== null || sessionTokens !== null) && (
             <CtxPopover
               contextUsage={contextUsage}
               contextBreakdown={contextBreakdown}

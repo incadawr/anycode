@@ -68,6 +68,7 @@ export interface CoreEnvConfig {
   maxOutputTokens?: number;
   /** Opt-in reasoning budget (ANYCODE_REASONING_EFFORT). */
   reasoningEffort?: ReasoningEffort;
+  effortLevels?: ReasoningEffort[];
   /**
    * Opt-in implicit prompt caching (ANYCODE_PROMPT_CACHE_OPTIONS, GitHub #15).
    * Absent = no cache options are emitted (byte-identical to today). Only the

@@ -3160,7 +3160,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
 
       if (message.conversationRestored) {
         drainPendingDeltas();
-        set({ transcript: [], waitingSubagents: new Set() });
+        set({ transcript: [], waitingSubagents: new Set(), contextUsage: null });
       }
       const shortId = message.safetyCheckpointId?.slice(0, 8);
       set({
@@ -3905,6 +3905,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             };
             const openAt = findOpenCompaction(state.transcript);
             return {
+              ...(event.ok ? { contextUsage: null } : {}),
               transcript:
                 openAt === -1
                   ? [
@@ -4435,6 +4436,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             });
             set({
               connection: "ready",
+              contextUsage: message.contextUsage ?? null,
               // Taskana 4234: the tab's session id, lifted for marker persistence.
               sessionId: message.sessionId,
               workspace: message.workspace,
@@ -5062,6 +5064,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           // the active value before the queued change applies). No-op while
           // there is no `engine` projection at all (shouldn't happen —
           // host_ready always precedes this on the same port — defensive).
+          case "context_usage_checkpoint":
+            set({ contextUsage: message.contextUsage });
+            return;
           case "engine_settings_changed": {
             set((state) => {
               if (state.engine === null) {
@@ -5134,6 +5139,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                 }
               }
               return {
+                ...(message.clearContextUsage ? { contextUsage: null } : {}),
                 engine: {
                   ...state.engine,
                   ...(nextEngineModel !== undefined ? { model: nextEngineModel } : {}),
@@ -5309,6 +5315,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             set((state) => ({
               ...(state.engine !== null ? { engine: { ...state.engine, id: message.engine } } : {}),
               pendingEngineChange: null,
+              contextUsage: null,
             }));
             return;
           case "engine_switch_failed":

@@ -270,6 +270,7 @@ const connectionSchema = z.object({
     contextWindowTokens: z.number().int().min(1_024).max(1_000_000).optional().catch(undefined),
     reasoningEffort: reasoningEffortSchema.optional().catch(undefined),
     reasoningSupported: z.literal(true).optional().catch(undefined),
+    effortLevels: z.array(reasoningEffortSchema).min(1).transform((levels) => [...new Set(levels)]).optional().catch(undefined),
   }).catch({});
     return Object.fromEntries(Object.entries(raw).map(([id, value]) => [id, entrySchema.parse(value)]));
   }).optional(),

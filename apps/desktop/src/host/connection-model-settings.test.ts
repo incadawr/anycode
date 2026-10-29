@@ -223,3 +223,24 @@ describe("catalog model switch effort", () => {
     expect(settings.switchEffort("glm-5.2", "glm-5.3-flash", "off")).toBe("low");
   });
 });
+
+it("declared levels override fetched levels when normalizing a model switch", () => {
+  const settings = createConnectionModelSettings({
+    connection: { modelOverrides: { b: { effortLevels: ["low", "high"] } } },
+    liveCapabilitiesFor: () => ({ reasoning: true, effortLevels: ["off", "max"] }),
+  });
+  expect(settings.switchEffort("a", "b", "off", true)).toBe("low");
+  expect(settings.takeAdjustment()).toEqual({ from: "off", to: "low" });
+  expect(settings.normalize("b", "max")).toBe("high");
+});
+
+it("refreshes manual vocabularies without borrowing a sibling's levels", () => {
+  let saved = { modelOverrides: { a: { effortLevels: ["low", "high"] as ReasoningEffort[] } } };
+  const settings = createConnectionModelSettings({ readConnection: () => saved, liveCapabilitiesFor: () => undefined });
+  settings.refresh();
+  expect(settings.effortLevelsFor("a")).toEqual(["low", "high"]);
+  expect(settings.effortLevelsFor("constructor")).toBeUndefined();
+  saved = { modelOverrides: { a: { effortLevels: ["xhigh"] } } };
+  settings.refresh();
+  expect(settings.effortLevelsFor("a")).toEqual(["xhigh"]);
+});

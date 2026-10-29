@@ -18,6 +18,8 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StartScreen } from "./StartScreen.js";
 import { useTabsStore } from "../tabs-store.js";
+import { useSettingsStore } from "../settings-store.js";
+import { cloneDefaults } from "../../../settings/schema.js";
 import { tabRegistry } from "../tab-registry.js";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -214,4 +216,25 @@ describe("StartScreen — Claude draft effort menu", () => {
       await act(async () => root.unmount());
     }
   });
+});
+
+
+it("shows no selected effort for an untouched core draft with a custom vocabulary", async () => {
+  const settings = cloneDefaults();
+  settings.provider.activeConnectionId = "c";
+  settings.provider.connections = [{ id:"c", providerId:"custom:test", model:"unknown", modelOverrides:{unknown:{effortLevels:["low", "high"]}} }];
+  useSettingsStore.setState({ snapshot: {settings, readOnly:false, secrets:[], envOverrides:[], providerReady:true, catalog:[]} });
+  useTabsStore.setState({ draft: {workspace:"/ws", prompt:"", engine:"core", model:null, mode:"build"} });
+  const { container, root } = await mountStartScreen();
+  try {
+    const chip = container.querySelector<HTMLButtonElement>("button.model-pill-chip")!;
+    expect(chip.textContent).not.toMatch(/low|high/i);
+    await act(async () => chip.click());
+    const effort = [...container.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.includes("Effort"))!;
+    await act(async () => effort.click());
+    const page = container.querySelector<HTMLElement>('[data-level="effort"]')!;
+    expect(page.textContent).toContain("Low");
+    expect(page.textContent).toContain("High");
+    expect(page.querySelector('[aria-checked="true"]')).toBeNull();
+  } finally { await act(async () => root.unmount()); useSettingsStore.setState({snapshot:null}); }
 });
