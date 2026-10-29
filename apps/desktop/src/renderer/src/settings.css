@@ -3216,3 +3216,31 @@
   border: 1px solid var(--border);
   border-radius: 8px;
 }
+
+/* Compact role configuration */
+.roles-pane { gap: 0.65rem; min-width: 0; container-type: inline-size; }
+.roles-header, .roles-actions, .roles-name-form, .roles-project { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; min-width: 0; }
+.roles-header > .settings-field-select { flex: 0 1 12rem; min-width: 0; }
+.roles-header .roles-preset { margin-left: auto; flex-basis: 13rem; }
+.roles-menu { position: relative; }
+.roles-menu > summary { list-style: none; }
+.roles-menu > summary::-webkit-details-marker { display: none; }
+.roles-menu-items { position: absolute; z-index: 2; right: 0; display: grid; gap: 0.25rem; padding: 0.4rem; background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--r-sm); }
+.roles-editor { border: 0; padding: 0; margin: 0; min-width: 0; }
+.roles-table { display: grid; gap: 0.3rem; min-width: 0; }
+.roles-row { min-width: 0; padding: 0.4rem; border: 1px solid var(--border); border-radius: var(--r-sm); }
+.roles-primary { display: grid; grid-template-columns: minmax(5.8rem, 6.5rem) minmax(0, 1fr) auto; align-items: center; gap: 0.5rem; }
+.roles-role-name { text-transform: capitalize; }
+.roles-primary .role-picker-entry { display: flex; gap: 0.35rem; min-width: 0; }
+.roles-primary .role-picker-entry-label { display: none; }
+.roles-primary .role-picker-entry select, .roles-primary .role-picker-entry input, .roles-fallbacks select, .roles-fallbacks input { min-width: 0; max-width: 100%; }
+.roles-primary .role-picker-entry-route { flex: 1.4; }
+.roles-primary .role-picker-entry-model { flex: 1; }
+.roles-primary .role-picker-entry-effort { flex: 0 0 7.5rem; }
+.roles-unavailable { color: var(--text-dim); display: flex; align-items: center; gap: 0.5rem; }
+.roles-fallbacks, .roles-projects { display: grid; gap: 0.4rem; margin: 0.5rem 0 0; min-width: 0; }
+.roles-fallbacks .role-picker-entry { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.roles-project > span { min-width: 0; overflow-wrap: anywhere; flex: 1; }
+.roles-pane > details > summary { display: inline-block; }
+.roles-badge { color: var(--accent); font-size: var(--fs-xs); }
+@container (max-width: 640px) { .roles-primary { grid-template-columns: 1fr; } .roles-primary .role-picker-entry { flex-wrap: wrap; } .roles-primary .role-picker-entry > * { flex: 1 1 9rem; } }

@@ -55,7 +55,7 @@ import {
   type CommunicationMutationResult,
   type CommunicationRegenerateResult,
 } from "../shared/communication-config.js";
-import { SCOPE_WORKSPACES_LIST_CHANNEL, type ScopeWorkspacesListResult } from "../shared/scope-workspaces.js";
+import { SCOPE_WORKSPACES_LIST_CHANNEL, SCOPE_WORKSPACES_RESOLVE_CHANNEL, type ScopeWorkspacesListResult } from "../shared/scope-workspaces.js";
 import {
   BROWSER_ACCESS_CHANGED_CHANNEL,
   BROWSER_ACCESS_GET_CHANNEL,
@@ -1165,6 +1165,7 @@ contextBridge.exposeInMainWorld("anycode", {
   scopeWorkspaces: {
     list: (): Promise<ScopeWorkspacesListResult> =>
       ipcRenderer.invoke(SCOPE_WORKSPACES_LIST_CHANNEL, {}) as Promise<ScopeWorkspacesListResult>,
+    resolve: (ref: string): Promise<string | null> => ipcRenderer.invoke(SCOPE_WORKSPACES_RESOLVE_CHANNEL, { ref }) as Promise<string | null>,
   },
   // Taskana 4759: `browserAccess.*` — the per-session "Full browser access" switch.
   // The renderer names a tabId and a boolean only; main resolves the session, checks

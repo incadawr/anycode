@@ -1040,7 +1040,7 @@ export function resolvePendingAddConnection(
  * folder). Exported for SettingsScreen.test.ts.
  */
 export function paneHasScope(pane: SettingsPaneId | undefined): boolean {
-  return pane === "mcp" || pane === "language-servers" || pane === "skills" || pane === "subagents";
+  return pane === "mcp" || pane === "language-servers" || pane === "skills" || pane === "subagents" || pane === "roles";
 }
 
 /**
@@ -1337,6 +1337,8 @@ export interface SettingsScreenProps {
   onAddConnectionConsumed?: () => void;
   /** Taskana 4758: the folder list for the scope dropdown; defaults to the preload bridge (absent outside Electron). */
   scopeBridge?: ScopeWorkspacesBridge;
+  onPaneRequestCancelled?: () => void;
+  registerLeaveGuard?: (guard: ((action: () => void, onCancel?: () => void) => void) | null) => void;
 }
 
 /** Taskana 4758: the one bridge call the scope dropdown needs (opaque ids only). */
@@ -1356,6 +1358,8 @@ export function SettingsScreen({
   addConnectionRequest = 0,
   onAddConnectionConsumed,
   scopeBridge,
+  onPaneRequestCancelled,
+  registerLeaveGuard,
 }: SettingsScreenProps) {
   const snapshot = useStore(store, (s) => s.snapshot);
   const notice = useStore(store, (s) => s.notice);
@@ -1431,6 +1435,11 @@ export function SettingsScreen({
   // kept across pane switches and active-tab changes. The selection is an opaque
   // id; the folder list comes from main (`scopeBridge.list`), so the renderer
   // never holds a path it could send back.
+  const roleGuardRef = useRef<((action: () => void, onCancel?: () => void) => void) | null>(null);
+  const registerRoleGuard = useCallback((guard: ((action: () => void, onCancel?: () => void) => void) | null) => { roleGuardRef.current = guard; registerLeaveGuard?.(guard); }, [registerLeaveGuard]);
+  function guardRoleLeave(action: () => void, onCancel?: () => void): void {
+    if (roleGuardRef.current) roleGuardRef.current(action, onCancel); else action();
+  }
   const [scopeSelection, setScopeSelection] = useState<ScopeSelection>(USER_SCOPE);
   const scopeSelectionRef = useRef<ScopeSelection>(USER_SCOPE);
   const [scopeEntries, setScopeEntries] = useState<ScopeWorkspaceEntry[]>([]);
@@ -1475,8 +1484,8 @@ export function SettingsScreen({
   // (the initializer already used the same value) bails out for free —
   // React skips the re-render when the new state equals the old.
   useEffect(() => {
-    if (initialPane !== undefined) {
-      setRequestedPane(initialPane);
+    if (initialPane !== undefined && addConnectionRequest === 0) {
+      if (initialPane !== requestedPane) guardRoleLeave(() => setRequestedPane(initialPane), onPaneRequestCancelled);
     }
   }, [initialPane]);
 
@@ -1498,8 +1507,7 @@ export function SettingsScreen({
   // effect as a no-op and does not re-navigate.
   useEffect(() => {
     if (addConnectionRequest > 0) {
-      setRequestedPane("provider");
-      setSearchQuery("");
+      guardRoleLeave(() => { setRequestedPane("provider"); setSearchQuery(""); }, () => { onAddConnectionConsumed?.(); onPaneRequestCancelled?.(); });
     }
   }, [addConnectionRequest]);
 
@@ -1528,6 +1536,15 @@ export function SettingsScreen({
   const scopeResolution = resolveScopeSelection(scopeSelection, scopeEntries);
   const scopeRef = scopeResolution.ref;
   const scopeEntry = scopeResolution.entry;
+  const [rolesScope, setRolesScope] = useState<{ ref: string; root: string | null } | null>(null);
+  const rolesScopeRoot = scopeRef && rolesScope?.ref === scopeRef ? rolesScope.root ?? undefined : undefined;
+  useEffect(() => {
+    let live = true;
+    if (scopeRef && window.anycode?.scopeWorkspaces?.resolve) {
+      void window.anycode.scopeWorkspaces.resolve(scopeEntry?.tabIds[0] ?? scopeRef).then((root) => { if (live) setRolesScope({ ref: scopeRef, root }); }).catch(() => { if (live) setRolesScope({ ref: scopeRef, root: null }); });
+    }
+    return () => { live = false; };
+  }, [scopeRef, scopeEntry?.tabIds.join("|")]);
   // MCP runtime status dots only for the folder whose tab is the active tab.
   const mcpLive = mcpStatusActive(scopeEntry, activeTabId);
   // Language servers' live section needs a real tab (never a workspace id): the
@@ -1551,8 +1568,9 @@ export function SettingsScreen({
       default: return;
     }
     event.preventDefault();
-    setRequestedPane(visiblePanes[next]!.id);
-    navRefs.current[next]?.focus();
+    const target = visiblePanes[next]!.id;
+    const navigate = () => { setRequestedPane(target); navRefs.current[next]?.focus(); };
+    if (target !== activePane) guardRoleLeave(navigate); else navigate();
   }
 
   // Seeds the local form fields from the first snapshot that arrives (once —
@@ -1587,7 +1605,7 @@ export function SettingsScreen({
           <div className="settings-rail">
             <div className="settings-rail-header">
               {onClose && (
-                <button type="button" className="settings-back" onClick={onClose}>
+                <button type="button" className="settings-back" onClick={() => guardRoleLeave(onClose)}>
                   <Chevron className="settings-back-chevron" />
                   Back to app
                 </button>
@@ -1690,7 +1708,7 @@ export function SettingsScreen({
         <div className="settings-rail">
           <div className="settings-rail-header">
             {onClose && (
-              <button type="button" className="settings-back" onClick={onClose}>
+              <button type="button" className="settings-back" onClick={() => guardRoleLeave(onClose)}>
                 <Chevron className="settings-back-chevron" />
                 Back to app
               </button>
@@ -1705,7 +1723,7 @@ export function SettingsScreen({
               placeholder="Search settings"
               aria-label="Search settings"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => { const value = e.target.value; const change = () => setSearchQuery(value); const nextPanes = filterSettingsPanes(value); const nextActive = nextPanes.includes(requestedPane) ? requestedPane : nextPanes[0]; if (activePane === "roles" && nextActive !== "roles") guardRoleLeave(change); else change(); }}
             />
           </label>
 
@@ -1741,7 +1759,7 @@ export function SettingsScreen({
                       aria-controls={active ? `settings-pane-${pane.id}` : undefined}
                       tabIndex={active ? 0 : -1}
                       className="settings-nav-item"
-                      onClick={() => setRequestedPane(pane.id)}
+                      onClick={() => { const navigate = () => setRequestedPane(pane.id); if (pane.id !== activePane) guardRoleLeave(navigate); else navigate(); }}
                     >
                       <PaneIcon />
                       <span>{pane.label}</span>
@@ -1795,8 +1813,8 @@ export function SettingsScreen({
                     void refreshScopeEntries();
                   }}
                   onSelect={(next) => {
-                    setScopeFellBackNote(null);
-                    applyScope(next);
+                    const change = () => { setScopeFellBackNote(null); applyScope(next); };
+                    if (activePane === "roles" && roleGuardRef.current) roleGuardRef.current(change); else change();
                   }}
                   countLabel={countLabel(activePane ?? "", paneCount)}
                   hint={scopeHintFor(scopeSelection, scopeEntry)}
@@ -1987,7 +2005,7 @@ export function SettingsScreen({
               md profile's override of a role is visible here, not silent. In
               Global mode the active tab still answers "will my route apply in
               the project I have open". */}
-          {activePane === "roles" && <RolesPane tabId={scopeRef ?? activeTabId ?? undefined} />}
+          {activePane === "roles" && (scopeRef && !rolesScopeRoot ? <p className="settings-field-hint">{rolesScope?.ref === scopeRef ? "Project unavailable." : "Loading project…"}</p> : <RolesPane tabId={scopeRef ?? activeTabId ?? undefined} projectRoot={rolesScopeRoot} registerGuard={registerRoleGuard} />)}
           {/* Taskana 4732 S1-C: the Plugins pane — NOT scope-bar-dependent (it
               shows every tier at once: managed installs + project plugins of
               the active workspace + legacy dirs); main resolves the workspace
@@ -2381,6 +2399,8 @@ function UpdateNoticeBanner({ status, store }: { status: UpdateStatus; store: Se
  */
 export function SettingsDialog({ open, onClose, store = useSettingsStore }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const leaveGuardRef = useRef<((action: () => void, onCancel?: () => void) => void) | null>(null);
+  const registerLeaveGuard = useCallback((guard: ((action: () => void, onCancel?: () => void) => void) | null) => { leaveGuardRef.current = guard; }, []);
   const updateStatus = useStore(store, (s) => s.updateStatus);
   // P7.23/F24 W2 pane-select seam (cut §4.6): held HERE, not in
   // `SettingsScreen`, because this component is unconditionally mounted for
@@ -2403,6 +2423,7 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
   // dropped it, e.g. readOnly).
   const [addConnectionRequest, setAddConnectionRequest] = useState(0);
   const consumeAddConnection = useCallback(() => setAddConnectionRequest(0), []);
+  const cancelPaneRequest = useCallback(() => setSelectedPane(null), []);
 
   useEffect(() => {
     function onSelectPane(event: Event): void {
@@ -2503,13 +2524,15 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
             return;
           }
           event.preventDefault();
-          onClose();
+          if (leaveGuardRef.current) leaveGuardRef.current(onClose); else onClose();
         }}
       >
         <SettingsScreen
           store={store}
           onClose={onClose}
+          registerLeaveGuard={registerLeaveGuard}
           initialPane={selectedPane ?? undefined}
+          onPaneRequestCancelled={cancelPaneRequest}
           addConnectionRequest={addConnectionRequest}
           onAddConnectionConsumed={consumeAddConnection}
         />

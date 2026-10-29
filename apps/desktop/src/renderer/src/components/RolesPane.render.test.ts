@@ -36,7 +36,7 @@ const base = {
 describe("Roles editor modality", () => {
   it("the Settings Roles pane renders the editor in the page flow, never as a <dialog>", () => {
     const html = renderToStaticMarkup(createElement(RolesPane));
-    expect(html).toContain("role-picker-inline");
+    expect(html).toContain("roles-table");
     expect(html).not.toContain("<dialog");
   });
 
@@ -77,9 +77,9 @@ describe("Role model fields in both editor entry points", () => {
     expect(html).toContain('<option value="default" selected="">Default</option>');
     expect(html).toContain('>Catalog model</option>');
     expect(html).toContain('<option value="custom" selected="">Custom…</option>');
-    expect(html).toContain('aria-label="Primary custom model"');
+    expect(html).toContain(surface === "settings" ? 'aria-label="executor primary custom model"' : 'aria-label="Primary custom model"');
     expect(html).toContain('value="saved-unknown"');
-    expect(html).toContain('<option value="model:1" selected="">live-model</option>');
+    if (surface === "dialog") expect(html).toContain('<option value="model:1" selected="">live-model</option>');
     expect(html).not.toContain('model (optional)');
   });
 });
@@ -138,14 +138,13 @@ it("renders provider names in every route and preserves route values", () => {
 
 it("renders profile and project selection controls", () => {
   const html = renderToStaticMarkup(createElement(RolesPane));
-  expect(html).toContain('aria-label="Global role profile"');
-  expect(html).toContain('aria-label="Project"');
-  expect(html).not.toContain('aria-label="Project folder path"');
-  expect(html).toContain('aria-label="Project role profile"');
-  expect(html).toContain('Create profile');
-  expect(html).toContain('Duplicate profile');
-  expect(html).toContain('Rename profile');
-  expect(html).toContain('Delete profile');
+  expect(html).toContain('aria-label="Profile actions"');
+  expect(html).toContain('aria-label="Project to add"');
+  expect(html).toContain('aria-label="Profile to add"');
+  expect(html).toContain('>New</button>');
+  expect(html).toContain('>Duplicate</button>');
+  expect(html).toContain('>Rename</button>');
+  expect(html).toContain('>Delete</button>');
 });
 
 it("an empty saved profile displays the active connection instead of an unsaved preset", () => {
