@@ -753,14 +753,15 @@ async function step8(ctx) {
   await pollState(step, s => s.ready && !s.running && s.assistantCount > 0, "idle unsupported Codex", 60_000);
   const unsupportedTurns = count("turn/start");
   const reason = "Manual compaction is unavailable for this Codex app-server. Update Codex and start a new session.";
-  for (const action of ["Enter", "Send"]) {
-    await evaluate(typeDraftJs("/compact"));
-    assertStep(step, !(await evaluate(`(() => [...document.querySelectorAll('[role="option"]')].some(x => x.textContent.includes('Compact')))()`)), "unsupported Compact menu row is visible");
-    if (action === "Enter") await evaluate(PRESS_ENTER_JS); else await evaluate(clickSendJs("Send"));
-    const refused = await readState();
-    assertStep(step, refused.notices.includes(reason) && refused.draft === "/compact", "unsupported compact refusal or retained draft missing");
-    assertStep(step, count("thread/compact/start") === compactCount && count("turn/start") === unsupportedTurns, "unsupported command reached native work");
-  }
+  await evaluate(typeDraftJs("/compact"));
+  await evaluate(PRESS_ENTER_JS);
+  await pollState(step, s => !s.running && s.notices.includes(reason), "unsupported compact response", 30_000);
+  assertStep(step, count("thread/compact/start") === compactCount + 1, "unsupported compact was not attempted once");
+  await evaluate(typeDraftJs("/compact"));
+  await evaluate(clickSendJs("Send"));
+  const refused = await readState();
+  assertStep(step, refused.notices.includes(reason) && refused.draft === "/compact", "unsupported compact refusal or retained draft missing");
+  assertStep(step, count("thread/compact/start") === compactCount + 1 && count("turn/start") === unsupportedTurns, "unsupported command was retried");
   await screenshot("08-codex-unsupported.png");
   await sendTurn(ctx, step, "unsupported ordinary chat still works");
   const requests = fixtureFrames(file);

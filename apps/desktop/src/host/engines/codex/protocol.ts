@@ -163,4 +163,3 @@ export const UNHANDLED_SERVER_REQUEST_ERROR: JsonRpcError = {
 export const CODEX_THREAD_COMPACT_START_METHOD = "thread/compact/start";
 export interface ThreadCompactStartParams { threadId: string }
 export type ThreadCompactStartResponse = Record<string, never>;
-export interface CodexProtocolFeatures { manualCompact: boolean }

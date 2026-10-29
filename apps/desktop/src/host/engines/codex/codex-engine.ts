@@ -50,7 +50,7 @@ import { CollabAgentCardIndex } from "./collab-agent-index.js";
 import { CodexQuotaTracker } from "./quota.js";
 import type { CodexShadowLogPort } from "./shadow-log.js";
 import { TurnItemIndex } from "./turn-item-index.js";
-import { CODEX_THREAD_COMPACT_START_METHOD, type CodexProtocolFeatures } from "./protocol.js";
+import { CODEX_THREAD_COMPACT_START_METHOD } from "./protocol.js";
 import { manualCompactionUnavailableReason } from "../../../shared/manual-compaction.js";
 import type { JsonRpcNotification } from "./protocol.js";
 import {
@@ -111,7 +111,6 @@ export const CODEX_ENGINE_CAPABILITIES: EngineCapabilities = {
   supportsImages: true,
   supportsTasks: false,
   supportsFileSnapshots: false,
-  // Runtime instances override this after executable schema discovery.
   supportsManualCompact: true,
 };
 
@@ -382,7 +381,6 @@ function buildSettings(
 
 /** Narrow transport seam keeps lifecycle tests independent from a real child. */
 export interface CodexClient {
-  getProtocolFeatures?(): Promise<CodexProtocolFeatures>;
   request<T>(method: string, params?: unknown, opts?: { timeoutMs?: number }): Promise<T>;
   notify(method: string, params?: unknown): void;
   notifications(): AsyncIterable<JsonRpcNotification>;
@@ -623,7 +621,7 @@ export async function createNativeCodexSession(
   return {
     // A fresh thread has zero prior turns: no history to hydrate, and the
     // FIRST turn this launch runs is native turn ordinal 0 (cut §2(e)).
-    engine: new CodexEngine(client, native.threadId, approvals, overrides, settings, shadowLog, 0, [], quota, agentBridge, agentCardLog, await client.getProtocolFeatures?.() ?? { manualCompact: false }),
+    engine: new CodexEngine(client, native.threadId, approvals, overrides, settings, shadowLog, 0, [], quota, agentBridge, agentCardLog),
     ...native,
     presetId: preset.id,
   };
@@ -715,7 +713,7 @@ export async function resumeNativeCodexSession(
   const model = stored ?? native.model;
   const settings = buildSettings(workspace, catalog, preset, resumed, model, notices, selection?.effort, selection?.excludeTmpRoots, selection?.childTempDir);
   return {
-    engine: new CodexEngine(client, native.threadId, approvals, overrides, settings, shadowLog, baseTurnOrdinal, historyItems, quota, agentBridge, agentCardLog, await client.getProtocolFeatures?.() ?? { manualCompact: false }),
+    engine: new CodexEngine(client, native.threadId, approvals, overrides, settings, shadowLog, baseTurnOrdinal, historyItems, quota, agentBridge, agentCardLog),
     threadId: native.threadId,
     model,
     presetId: preset.id,
@@ -816,7 +814,7 @@ export class CodexEngine implements SessionEngine {
     this.bridgeWake = undefined;
   }
   readonly id = "codex" as const;
-  readonly capabilities: EngineCapabilities;
+  capabilities: EngineCapabilities;
   private readonly bounds: CodexEngineTimeouts;
   private readonly unobserve: () => void;
   private turnNumber = 0;
@@ -888,13 +886,12 @@ export class CodexEngine implements SessionEngine {
     private readonly quota?: CodexQuotaTracker,
     private readonly agentBridge?: import("./dynamic-tool-bridge.js").CodexDynamicToolBridge,
     private readonly agentCardLog?: CodexAgentCardLogPort,
-    features: CodexProtocolFeatures = { manualCompact: false },
   ) {
     // Interactive approval is advertised only after the exact W0 bridge is
     // installed; direct/test-only engines retain the fail-closed capability.
-    this.capabilities = { ...(approvals === undefined ? CODEX_ENGINE_CAPABILITIES : CODEX_BRIDGED_CAPABILITIES), supportsManualCompact: features.manualCompact };
+    this.capabilities = { ...(approvals === undefined ? CODEX_ENGINE_CAPABILITIES : CODEX_BRIDGED_CAPABILITIES) };
     this.nextNativeTurnOrdinal = baseTurnOrdinal;
-    if (features.manualCompact) this.compactNow = this.compactNowInner.bind(this);
+    this.compactNow = this.compactNowInner.bind(this);
     this.bounds = timeouts(overrides);
     this.settings = settings;
     this.applied = this.chosen();
@@ -1597,6 +1594,10 @@ export class CodexEngine implements SessionEngine {
         if (raced.kind === "rejection") {
           if (!nativeId && typeof raced.error?.code === "number") {
             submitted = false;
+            if (raced.error.code === -32601) {
+              this.capabilities = { ...this.capabilities, supportsManualCompact: false };
+              this.compactNow = undefined;
+            }
             yield end(false, raced.error.code === -32601 ? manualCompactionUnavailableReason("codex", false) : `Codex thread/compact/start failed: ${String(raced.error.message)}`);
             return;
           }
