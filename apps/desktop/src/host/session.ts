@@ -774,6 +774,8 @@ export interface SessionOptions {
   model: string;
   /** Persistence session id, known at boot; echoed in host_ready (design §3.3). */
   sessionId: string;
+  initialContextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
+  saveContextUsage?: (snapshot: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate"; engine: string; model: string } | null) => Promise<void>;
   /**
    * Boot snapshot of the persisted history (post-repair) for transcript
    * hydration of a resumed session; emitted as `session_history` on every
@@ -1455,6 +1457,8 @@ export class Session {
    * reading (latest-wins scalar), captured at emission for the same reason
    * as checkpointSessionTokens above. Null until the first reading.
    */
+  private readonly saveContextUsage: SessionOptions["saveContextUsage"];
+  private contextWriteTail: Promise<void> = Promise.resolve();
   private checkpointContextUsage: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" } | null = null;
   /**
    * TASK.117 acceptance defect 1: the LIVE turn's currently-open partial
@@ -1685,6 +1689,8 @@ export class Session {
     this.reportProviderQuota = options.reportProviderQuota;
     this.model = options.model;
     this.sessionId = options.sessionId;
+    this.saveContextUsage = options.saveContextUsage;
+    this.checkpointContextUsage = options.initialContextUsage ?? null;
     this.persistence = options.persistence;
     this.usageAudit = options.usageAudit;
     this.rules = options.rules;
@@ -1758,6 +1764,7 @@ export class Session {
     // always after ui_ready; it is `emit` (buffered), not sendDirect, so the ack
     // survives a renderer reload via replay rather than racing it.
     this.engineSettingsUnsubscribe = this.engineSettings?.onSettingsApplied((applied) => {
+      if (this.model !== applied.model) this.updateContextUsage(null);
       this.model = applied.model;
       // SLICE-CC §1.5: for an immediate-apply seam THIS is the only honest
       // moment to persist — the engine has now acknowledged the change, so the
@@ -2360,6 +2367,7 @@ export class Session {
       await Promise.allSettled([seen]);
     }
     await Promise.allSettled([disposal]);
+    await this.contextWriteTail;
     // Taskana 4083 cross-review finding 4: the LAST finish a settling turn
     // emitted may still be STAGED for the usage audit (cross-review finding
     // 1 made the write provisional until the step is certain) — hand it to
@@ -2455,6 +2463,7 @@ export class Session {
           mode: this.engine.mode(),
           model: this.model,
           sessionId: this.sessionId,
+          ...(this.checkpointContextUsage !== null ? { contextUsage: this.checkpointContextUsage } : {}),
           reasoningEffort: this.engine.reasoningEffort() ?? "off",
           ...(this.availableEffortLevels !== undefined ? { availableEffortLevels: this.availableEffortLevels } : {}),
           // TASK.56 W2: live image-input verdict for the CURRENT model (the
@@ -2985,8 +2994,10 @@ export class Session {
       ? this.engine.switchModel(id, this.selectedEffort, true)
       : this.engine.switchModel(id, this.selectedEffort);
     if (result.selectedReasoningEffort !== undefined) this.selectedEffort = result.selectedReasoningEffort;
-    if (result.contextUsage !== undefined) this.checkpointContextUsage = result.contextUsage;
+    const oldModel = this.model;
     this.model = result.model;
+    if (result.contextUsage !== undefined) this.updateContextUsage(result.contextUsage);
+    else if (oldModel !== this.model) this.updateContextUsage(null);
     this.availableEffortLevels = result.availableEffortLevels;
     this.reasoningSupported = result.availableEffortLevels !== undefined;
     this.outbound.emit({
@@ -3174,8 +3185,23 @@ export class Session {
    * store's handler is idempotent (set-permission-slot), so a renderer that
    * DID see the original (ring intact) just re-sets the same value.
    */
+  private updateContextUsage(usage: SessionOptions["initialContextUsage"] | null): void {
+    if (usage !== null && usage !== undefined && (!Number.isFinite(usage.estimatedTokens) || usage.estimatedTokens < 0 || !Number.isFinite(usage.budgetTokens) || usage.budgetTokens <= 0 || (usage.source !== "provider" && usage.source !== "estimate"))) return;
+    this.checkpointContextUsage = usage ?? null;
+    const snapshot = usage ? { ...usage, engine: this.engine.id, model: this.model } : null;
+    if (this.saveContextUsage) {
+      this.contextWriteTail = this.contextWriteTail.then(() => this.saveContextUsage!(snapshot)).catch((error) => {
+        console.error(`[host] context usage write failed: ${describeError(error)}`);
+      });
+    }
+  }
+
   private pushSessionCheckpoint(): void {
     if (this.engine.id !== "core") {
+      if (this.lastUsageSummary !== null) this.outbound.sendDirect({
+        type: "session_checkpoint",
+        usageAudit: { lastStep: this.lastUsageSummary.steps.at(-1) ?? null, totals: this.lastUsageSummary.totals, totalSteps: this.lastUsageSummary.steps.length },
+      });
       return;
     }
     const shown = this.broker.pendingShownRequest();
@@ -3548,6 +3574,7 @@ export class Session {
         // Atomic swap feeding the write-behind sink (truncates persistence too),
         // exactly the CLI's /rewind conversation restore.
         this.engine.replaceHistory(res.historyItems!);
+        this.updateContextUsage(null);
         // drift-flag-1: rebuild the re-handshake snapshot from the TRUNCATED
         // history and drop the pre-rewind replay ring BEFORE re-sending, so a
         // renderer reload never resurrects the rewound-away conversation.
@@ -3665,12 +3692,9 @@ export class Session {
         // (sentinel-turnId event, plain emit) still restores the POST-swap
         // meter instead of a stale pre-compaction one. Latest-wins scalar,
         // same shape as checkpointContextUsage's other writers.
-        if (this.engine.id === "core" && event.type === "context_usage") {
-          this.checkpointContextUsage = {
-            estimatedTokens: event.estimatedTokens,
-            budgetTokens: event.budgetTokens,
-            source: event.source,
-          };
+        if (event.type === "compaction_end" && event.ok) this.updateContextUsage(null);
+        if (event.type === "context_usage") {
+          this.updateContextUsage({ estimatedTokens: event.estimatedTokens, budgetTokens: event.budgetTokens, source: event.source });
         }
       }
     } catch (error) {
@@ -3782,6 +3806,7 @@ export class Session {
       this.settingsGeneration++;
       this.settingsBarrier = Promise.resolve();
       this.settingsBarrierActive = false;
+      this.updateContextUsage(null);
       this.engine = next;
       this.engineSwitched = true;
       this.switchCarriedHistory = canonical;
@@ -5028,12 +5053,9 @@ export class Session {
             }
           }
         }
-        if (this.engine.id === "core" && event.type === "context_usage") {
-          this.checkpointContextUsage = {
-            estimatedTokens: event.estimatedTokens,
-            budgetTokens: event.budgetTokens,
-            source: event.source,
-          };
+        if (event.type === "compaction_end" && event.ok) this.updateContextUsage(null);
+        if (event.type === "context_usage") {
+          this.updateContextUsage({ estimatedTokens: event.estimatedTokens, budgetTokens: event.budgetTokens, source: event.source });
         }
         // Taskana 4083 cross-review finding 1: the step's turn_end proves the
         // attempt was NOT stall-discarded (a retry never yields turn_end for

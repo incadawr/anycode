@@ -571,6 +571,7 @@ export type HostToUiMessage =
       mode: PermissionMode;
       model: string;
       sessionId: string;
+      contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
       reasoningEffort?: ReasoningEffort;
       availableEffortLevels?: ReasoningEffort[];
       /**
