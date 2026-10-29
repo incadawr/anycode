@@ -16,6 +16,7 @@ export class ResponsesReasoningTextRecovery {
   readonly #summarized = new Set<string>();    // item ids with an SDK summary delta
   readonly #hasText = new Set<string>();       // item ids that already got text from us
   readonly #streamedParts = new Set<string>(); // `${itemId}#${contentIndex}` parts that streamed
+  readonly #pendingParts = new Map<string, Map<number, string>>(); // parts waiting for missing earlier indices
   readonly #done = new Set<string>();          // item ids past their output_item.done
 
   observe(part: unknown): ReasoningEvent[] {
@@ -50,9 +51,11 @@ export class ResponsesReasoningTextRecovery {
         if (typeof value.delta !== "string" || value.delta === "") return [];
         const itemId = itemIdFrom(value.item_id);
         if (this.#summarized.has(itemId) || this.#done.has(itemId)) return [];
-        const key = partKey(itemId, value.content_index);
+        const index = contentIndexOf(value.content_index);
+        const key = partKey(itemId, index);
         const firstOfPart = !this.#streamedParts.has(key);
         this.#streamedParts.add(key);
+        if (this.#bufferPart(itemId, index, value.delta)) return [];
         const text = firstOfPart && this.#hasText.has(itemId) ? PART_SEPARATOR + value.delta : value.delta;
         return this.#emit(itemId, text);
       }
@@ -60,9 +63,11 @@ export class ResponsesReasoningTextRecovery {
         if (typeof value.text !== "string" || value.text === "") return [];
         const itemId = itemIdFrom(value.item_id);
         if (this.#summarized.has(itemId) || this.#done.has(itemId)) return [];
-        const key = partKey(itemId, value.content_index);
+        const index = contentIndexOf(value.content_index);
+        const key = partKey(itemId, index);
         if (this.#streamedParts.has(key)) return [];
         this.#streamedParts.add(key);
+        if (this.#bufferPart(itemId, index, value.text)) return [];
         return this.#emit(itemId, this.#hasText.has(itemId) ? PART_SEPARATOR + value.text : value.text);
       }
       case "response.output_item.done": {
@@ -72,14 +77,20 @@ export class ResponsesReasoningTextRecovery {
         const events: ReasoningEvent[] = [];
         if (!this.#summarized.has(itemId) && !this.#done.has(itemId) && Array.isArray(item.content)) {
           const missing: string[] = [];
+          const pending = this.#pendingParts.get(itemId);
           item.content.forEach((entry, index) => {
-            if (isRecord(entry) && entry.type === "reasoning_text" && typeof entry.text === "string" && entry.text !== "" && !this.#streamedParts.has(partKey(itemId, index))) {
+            const buffered = pending?.get(index);
+            if (buffered) { missing.push(buffered); pending?.delete(index); }
+            else if (isRecord(entry) && entry.type === "reasoning_text" && typeof entry.text === "string" && entry.text !== "" && !this.#streamedParts.has(partKey(itemId, index))) {
               this.#streamedParts.add(partKey(itemId, index));
               missing.push(entry.text);
             }
           });
+          if (pending) { for (const [, text] of [...pending].sort(([a], [b]) => a - b)) missing.push(text); this.#pendingParts.delete(itemId); }
           if (missing.length > 0) events.push(...this.#emit(itemId, (this.#hasText.has(itemId) ? PART_SEPARATOR : "") + missing.join(PART_SEPARATOR)));
         }
+        if (!this.#summarized.has(itemId)) events.push(...this.#flushPending(itemId));
+        else this.#pendingParts.delete(itemId);
         this.#done.add(itemId);
         const id = blockId(itemId);
         if (this.#synthesized.has(id)) {
@@ -92,6 +103,29 @@ export class ResponsesReasoningTextRecovery {
       default:
         return [];
     }
+  }
+
+  #bufferPart(itemId: string, index: number, text: string): boolean {
+    let pending = this.#pendingParts.get(itemId);
+    let missingEarlier = false;
+    for (let i = 0; !pending && i < index; i++) {
+      if (!this.#streamedParts.has(partKey(itemId, i))) { missingEarlier = true; break; }
+    }
+    if (!pending && missingEarlier) {
+      pending = new Map();
+      this.#pendingParts.set(itemId, pending);
+    }
+    if (!pending) return false;
+    pending.set(index, (pending.get(index) ?? "") + text);
+    return true;
+  }
+
+  #flushPending(itemId: string): ReasoningEvent[] {
+    const pending = this.#pendingParts.get(itemId);
+    if (!pending) return [];
+    this.#pendingParts.delete(itemId);
+    const text = [...pending].sort(([a], [b]) => a - b).map(([, part]) => part).join(PART_SEPARATOR);
+    return text ? this.#emit(itemId, (this.#hasText.has(itemId) ? PART_SEPARATOR : "") + text) : [];
   }
 
   #emit(itemId: string, text: string): ReasoningEvent[] {
@@ -109,6 +143,10 @@ export class ResponsesReasoningTextRecovery {
 
   #closeSynthesized(): ReasoningEvent[] {
     const events: ReasoningEvent[] = [];
+    for (const itemId of this.#pendingParts.keys()) {
+      if (!this.#summarized.has(itemId)) events.push(...this.#flushPending(itemId));
+      else this.#pendingParts.delete(itemId);
+    }
     for (const id of this.#synthesized) {
       this.#open.delete(id);
       events.push({ type: "reasoning_end", id });
@@ -132,8 +170,11 @@ function itemIdOfBlock(partId: string): string {
   const at = partId.lastIndexOf(":");
   return at > 0 ? partId.slice(0, at) : partId;
 }
+function contentIndexOf(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
 function partKey(itemId: string, contentIndex: unknown): string {
-  return `${itemId}#${typeof contentIndex === "number" ? contentIndex : 0}`;
+  return `${itemId}#${contentIndexOf(contentIndex)}`;
 }
 export function reasoningContentText(content: unknown): string {
   if (!Array.isArray(content)) return "";
