@@ -14,6 +14,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RolesPane, type RolesPaneProps } from "./RolesPane.js";
+import { SettingsDialog } from "./SettingsScreen.js";
 import { useSettingsStore } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
 import { cloneDefaults, mergeSettings, roleProfilesWriteSchema, settingsSchema } from "../../../settings/schema.js";
@@ -489,5 +490,79 @@ describe("Project list availability", () => {
     expect(container.textContent).toContain("mapping");
     expect(container.querySelector('[aria-label="Remove profile for /only/mapping"]')).not.toBeNull();
     expect(bridge.set).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("Discard and navigation regressions", () => {
+  it("resets the draft when removing an override that points to the global profile", async () => {
+    const initial = settingsWithProfile("Team");
+    initial.roleProfiles!.projects = [{ projectRoot: "/project", profileId: "p" }];
+    const bridge = installBridge(initial);
+    root = createRoot(container);
+    await act(async () => root?.render(createElement<RolesPaneProps>(RolesPane, { projectRoot: "/project" })));
+    const cap = container.querySelector<HTMLInputElement>('[aria-label="Max parallel children"]')!;
+    await act(async () => type(cap, "5"));
+    await click(container.querySelector<HTMLButtonElement>('[aria-label="Remove profile for /project"]')!);
+    await click(buttonByText("Discard changes"));
+    expect(cap.value).toBe("");
+    expect(bridge.current().roleProfiles?.projects).toEqual([]);
+    await click(buttonByText("Save roles"));
+    expect(bridge.current().roleProfiles?.profiles[0]?.roles.maxParallelChildren).toBeUndefined();
+  });
+
+  it("guards pane navigation and closing settings", async () => {
+    installBridge(settingsWithProfile("Team"));
+    const onClose = vi.fn();
+    const original = useSettingsStore.getState();
+    useSettingsStore.setState({ subscribeUpdates: () => () => {}, subscribeProviderHealth: () => () => {}, subscribeProviderQuota: () => () => {} });
+    try {
+      root = createRoot(container);
+      await act(async () => root?.render(createElement(SettingsDialog, { open: true, onClose })));
+      await click(container.querySelector<HTMLButtonElement>('#settings-tab-roles')!);
+      const cap = container.querySelector<HTMLInputElement>('[aria-label="Max parallel children"]')!;
+      await act(async () => type(cap, "5"));
+      await click(container.querySelector<HTMLButtonElement>('#settings-tab-tools')!);
+      expect(container.querySelector('[aria-label="Discard unsaved roles?"]')).not.toBeNull();
+      await click(buttonByText("Cancel"));
+      expect(cap.value).toBe("5");
+      await click(container.querySelector<HTMLButtonElement>('#settings-tab-tools')!);
+      await click(buttonByText("Discard changes"));
+      expect(container.querySelector('[data-testid="settings-roles-pane"]')).toBeNull();
+      await click(container.querySelector<HTMLButtonElement>('#settings-tab-roles')!);
+      const newCap = container.querySelector<HTMLInputElement>('[aria-label="Max parallel children"]')!;
+      expect(newCap.value).toBe("");
+      await act(async () => type(newCap, "5"));
+      await click(buttonByText("Back to app"));
+      expect(onClose).not.toHaveBeenCalled();
+      await click(buttonByText("Cancel"));
+      await act(async () => container.querySelector<HTMLDialogElement>('[aria-label="Settings"]')!.dispatchEvent(new Event("cancel", { bubbles: false, cancelable: true })));
+      expect(onClose).not.toHaveBeenCalled();
+      await click(buttonByText("Discard changes"));
+      expect(onClose).toHaveBeenCalledTimes(1);
+    } finally {
+      useSettingsStore.setState({ subscribeUpdates: original.subscribeUpdates, subscribeProviderHealth: original.subscribeProviderHealth, subscribeProviderQuota: original.subscribeProviderQuota });
+    }
+  });
+});
+
+describe("Writes across mounts", () => {
+  it("serializes writes and applies each to the latest registry", async () => {
+    const initial = settingsWithProfile("Team");
+    initial.roleProfiles!.projects = [{ projectRoot: "/one", profileId: "p" }, { projectRoot: "/two", profileId: "p" }];
+    const bridge = installBridge(initial);
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const original = bridge.set.getMockImplementation()!;
+    bridge.set.mockImplementationOnce(async (patch) => { await waiting; return original(patch); });
+    await mount();
+    await click(container.querySelector<HTMLButtonElement>('[aria-label="Remove profile for /one"]')!);
+    await act(async () => root?.render(createElement("div")));
+    await act(async () => root?.render(createElement(RolesPane)));
+    await click(container.querySelector<HTMLButtonElement>('[aria-label="Remove profile for /two"]')!);
+    expect(bridge.set).toHaveBeenCalledTimes(1);
+    await act(async () => { release(); await waiting; });
+    expect(bridge.set).toHaveBeenCalledTimes(2);
+    expect(bridge.current().roleProfiles?.projects).toEqual([]);
   });
 });

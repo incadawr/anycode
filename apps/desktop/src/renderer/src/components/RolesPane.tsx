@@ -68,6 +68,8 @@ export function buildRoleProfileRoles<R extends object>(
   };
 }
 
+let registryWriteQueue: Promise<void> = Promise.resolve();
+
 export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps = {}): React.JSX.Element {
   const snapshot = useSettingsStore((s) => s.snapshot);
   const setPatch = useSettingsStore((s) => s.setPatch);
@@ -130,7 +132,7 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
   const projectLabel = (path: string) => projects.filter((p) => projectFolderName(p) === projectFolderName(path)).length > 1 ? `${projectFolderName(path)} — ${path}` : projectFolderName(path);
   function guard(action: () => void): void {
     if (!dirty) { action(); return; }
-    setPending({ title: "Discard unsaved roles?", body: "Your unsaved role changes will be lost.", confirmLabel: "Discard changes", action });
+    setPending({ title: "Discard unsaved roles?", body: "Your unsaved role changes will be lost.", confirmLabel: "Discard changes", action: () => { setDraft(baseline); setCap(baselineCap); action(); } });
   }
   useEffect(() => {
     registerGuard?.(guard);
@@ -140,8 +142,12 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
     if (busyRef.current) return false;
     busyRef.current = true; setBusy(true);
     try {
-      const current = roleProfiles(useSettingsStore.getState().snapshot?.settings ?? {});
-      const result = await setPatch({ roleProfiles: transform(current) });
+      const operation = registryWriteQueue.then(() => {
+        const current = roleProfiles(useSettingsStore.getState().snapshot?.settings ?? {});
+        return setPatch({ roleProfiles: transform(current) });
+      });
+      registryWriteQueue = operation.then(() => {}, () => {});
+      const result = await operation;
       setNotice({ ok: result.ok, message: result.ok ? message : "Saving profiles failed." });
       return result.ok;
     } catch {
