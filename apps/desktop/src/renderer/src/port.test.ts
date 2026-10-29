@@ -106,6 +106,22 @@ describe("port — GitHub #6 missing workspace envelope", () => {
     }
   });
 
+  it("routes terminal reasons on exit and reload delivery", () => {
+    const listeners = new Set<(event: unknown) => void>();
+    vi.stubGlobal("window", { addEventListener: (_: string, cb: (event: unknown) => void) => listeners.add(cb), removeEventListener: (_: string, cb: (event: unknown) => void) => listeners.delete(cb) });
+    const registry = { registerPort: vi.fn(() => true), registerTerminalPort: vi.fn(() => true), markHostExited: vi.fn() };
+    const failure = { code: "per_tab_crash_loop", message: "Stopped." };
+    try {
+      const stop = startConnectionManager(registry);
+      for (const cb of listeners) cb({ data: { type: "anycode:host-exited", tabId: "tab", hostFailure: failure }, ports: [] });
+      expect(registry.markHostExited).toHaveBeenCalledWith("tab", undefined, failure);
+      registry.markHostExited.mockClear();
+      for (const cb of listeners) cb({ data: { type: "anycode:port", tabId: "tab", workspace: "/ws", hostFailure: failure }, ports: [{}] });
+      expect(registry.markHostExited).toHaveBeenCalledWith("tab", undefined, failure);
+      stop();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it("does not fold an ordinary port delivery into the stopped state", () => {
     const listeners = new Set<(event: unknown) => void>();
     vi.stubGlobal("window", {

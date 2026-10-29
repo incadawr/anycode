@@ -1158,6 +1158,7 @@ export interface DesktopState {
   contextUsage: ContextUsage | null;
   /** Last fatal message from the host (e.g. sanitizer failure); null once nothing has fired yet. */
   lastFatal: string | null;
+  hostFailure: import("../../shared/host-failure.js").HostFailure | null;
   /**
    * GitHub #6: the tab is stopped for good because its workspace folder is gone
    * (main checked before forking and delivered an error instead of a host). Part
@@ -1352,7 +1353,7 @@ export interface DesktopState {
    * error instead of a reconnecting state that can never resolve. Defaults to
    * false: every ordinary exit keeps the connection lines.
    */
-  setHostExited(missingWorkspace?: boolean): void;
+  setHostExited(missingWorkspace?: boolean, failure?: import("../../shared/host-failure.js").HostFailure): void;
   /** Records the tab's pinned connection from the tab-port envelope (TASK.45 W10-FIX F2). */
   setPinnedConnection(pinnedConnection: { connectionId: string; providerId: string }): void;
   /** Marks this tab's store as a child surface (TASK.102 CUT-S2 §10.15.1); set once, never cleared. */
@@ -4358,6 +4359,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       steering: null,
       ...initialSessionSlice(),
       lastFatal: null,
+      hostFailure: null,
       // Prompt-queue slots (slice P7.14): outside initialSessionSlice so a
       // host respawn preserves user-typed prompts (see QueuedPrompt comment).
       promptQueue: [],
@@ -5337,7 +5339,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       },
 
       setAwaitingHostReady(): void {
-        set({ connection: "awaiting_host_ready" });
+        set({ connection: "awaiting_host_ready", hostFailure: null });
       },
 
       setPinnedConnection(pinnedConnection: { connectionId: string; providerId: string }): void {
@@ -5348,7 +5350,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         set({ childSurface: true });
       },
 
-      setHostExited(missingWorkspace = false): void {
+      setHostExited(missingWorkspace = false, failure): void {
         // Slice P7.14: the host dying is an anomalous end — hold a non-empty
         // queue paused so nothing drains silently once a new host connects.
         // The connection flip AWAY from "ready" already disables the drainer,
@@ -5368,6 +5370,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // GitHub #6: only the missing-folder refusal is terminal; every other
             // exit keeps the reconnecting path open, so the flag follows the call.
             workspaceMissing: missingWorkspace,
+            hostFailure: failure ?? null,
             queueInFlight: null,
             promptQueue,
             // Taskana 4772 review F3: the host is gone, so the turn is

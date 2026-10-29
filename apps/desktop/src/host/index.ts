@@ -259,6 +259,7 @@ import {
   resolveMaxOutputTokens,
   clampSubagentMaxOutputTokens,
   resolveReasoningEffort,
+  resolveChildReasoningEffort,
   runWrapUp,
   SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS,
   // taskana 4181: supervisor idle-watchdog defaults (see
@@ -3550,15 +3551,17 @@ async function boot(): Promise<void> {
       (modelId, applied) =>
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
     ));
+    const isChildSession = isChildSessionBoot(args, sessionMeta);
+    const resolveSessionEffort = isChildSession ? resolveChildReasoningEffort : resolveReasoningEffort;
     const bootSelectedEffort = connectionModelSettings.effortFor(envConfig.model);
     const priorEffort = process.env.ANYCODE_SWITCH_PRIOR_EFFORT;
     const switchFallback = (["off", "low", "medium", "high", "xhigh", "max"] as const).find((tier) => tier === priorEffort);
-    const bootCandidate = bootSelectedEffort ?? resolveReasoningEffort(envConfig.model, catalogEntry, undefined, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model)) ?? switchFallback ?? "off";
-    const normalizedBootEffort = connectionModelSettings.normalize(envConfig.model, bootCandidate);
-    const bootAdjustment = (bootSelectedEffort !== undefined || switchFallback !== undefined) && normalizedBootEffort !== bootCandidate
+    const bootCandidate = bootSelectedEffort ?? resolveSessionEffort(envConfig.model, catalogEntry, undefined, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model)) ?? switchFallback ?? "off";
+    const normalizedBootEffort = isChildSession ? bootCandidate : connectionModelSettings.normalize(envConfig.model, bootCandidate);
+    const bootAdjustment = !isChildSession && (bootSelectedEffort !== undefined || switchFallback !== undefined) && normalizedBootEffort !== bootCandidate
       ? { from: bootCandidate, to: normalizedBootEffort } : undefined;
-    const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, normalizedBootEffort, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model));
-    // Preserve explicit selections even when the current model suppresses them.
+    const bootReasoningEffort = resolveSessionEffort(envConfig.model, catalogEntry, normalizedBootEffort, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model));
+    // Preserve child selections even when the current model maps or suppresses them.
     selectedEffort = normalizedBootEffort;
     connectionModelSettings.remember(envConfig.model, selectedEffort);
     const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model));
@@ -4625,8 +4628,8 @@ async function boot(): Promise<void> {
     // callback (mirror of the CLI's deps.model.set). It stays host-owned while
     // CoreEngine exposes it through the neutral SessionEngine seam.
     const switchModelImpl = (id: string, selectedTier: ReasoningEffort, effortExplicit = false) => {
-        selectedTier = connectionModelSettings.switchEffort(currentModel, id, selectedTier, effortExplicit);
-        const effortAdjustment = connectionModelSettings.takeAdjustment();
+        if (!isChildSession) selectedTier = connectionModelSettings.switchEffort(currentModel, id, selectedTier, effortExplicit);
+        const effortAdjustment = isChildSession ? undefined : connectionModelSettings.takeAdjustment();
         // TASK.162 (§0b): Session hands its OWN preserved user-selected tier
         // here, so this is the second (and only other) writer that keeps the
         // host cell faithful — without it a tier selected before a switch
@@ -4663,7 +4666,7 @@ async function boot(): Promise<void> {
           (modelId, applied) =>
             console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
         ));
-        const resolvedEffort = resolveReasoningEffort(id, catalogEntry, selectedTier, liveCapsFor(id), effortLevelsFor(id));
+        const resolvedEffort = resolveSessionEffort(id, catalogEntry, selectedTier, liveCapsFor(id), effortLevelsFor(id));
         config.reasoningEffort = resolvedEffort;
         liveContextWindow = contextWindow;
         // TASK.198 срез C (plan §9): a model switch can flip sighted<->blind,
@@ -4702,7 +4705,7 @@ async function boot(): Promise<void> {
       loop,
       config,
       switchModelImpl,
-      resolveSelectedEffort: (effort) => resolveReasoningEffort(currentModel, catalogEntry, effort, liveCapsFor(currentModel), effortLevelsFor(currentModel)),
+      resolveSelectedEffort: (effort) => resolveSessionEffort(currentModel, catalogEntry, effort, liveCapsFor(currentModel), effortLevelsFor(currentModel)),
       onBeforeTurn: async () => {
         if (connectionModelSettings.refresh()) session?.refreshModelSettings();
         turnPricingRaw = currentPricingRaw();
@@ -4900,7 +4903,7 @@ async function boot(): Promise<void> {
       // queued change included) exactly as core will resolve it.
       effortResolution: {
         levels: (id) => resolveEffortLevels(id, catalogEntry, liveCapsFor(id), effortLevelsFor(id)),
-        effective: (id, tier) => resolveReasoningEffort(id, catalogEntry, tier, liveCapsFor(id), effortLevelsFor(id)),
+        effective: (id, tier) => resolveSessionEffort(id, catalogEntry, tier, liveCapsFor(id), effortLevelsFor(id)),
       },
       // Slice P7.15 (F14): the user-selected effort tier, threaded so Session can
       // re-resolve effort against the NEW model on a switch (mirror of the CLI's

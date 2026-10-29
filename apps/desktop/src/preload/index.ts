@@ -672,6 +672,7 @@ ipcRenderer.on(
       openedByAgent?: PortEnvelope["openedByAgent"];
       agentTitle?: string;
       missingWorkspace?: boolean;
+      hostFailure?: PortEnvelope["hostFailure"];
     },
   ) => {
     // TASK.45 W10-FIX F2: forward the additive pin metadata (connectionId/providerId)
@@ -683,6 +684,7 @@ ipcRenderer.on(
         tabId: payload.tabId,
         workspace: payload.workspace,
         ...(payload.missingWorkspace === true ? { missingWorkspace: true } : {}),
+        ...(payload.hostFailure ? { hostFailure: payload.hostFailure } : {}),
         ...(payload.connectionId !== undefined && payload.providerId !== undefined
           ? { connectionId: payload.connectionId, providerId: payload.providerId }
           : {}),
@@ -705,8 +707,8 @@ ipcRenderer.on(TAB_CLOSED_ENVELOPE_TYPE, (_event, payload: { tabId: string }) =>
   window.postMessage({ type: TAB_CLOSED_ENVELOPE_TYPE, tabId: payload.tabId }, "*");
 });
 
-ipcRenderer.on(HOST_EXITED_ENVELOPE_TYPE, (_event, payload: { tabId: string }) => {
-  window.postMessage({ type: HOST_EXITED_ENVELOPE_TYPE, tabId: payload.tabId }, "*");
+ipcRenderer.on(HOST_EXITED_ENVELOPE_TYPE, (_event, payload: { tabId: string; hostFailure?: PortEnvelope["hostFailure"] }) => {
+  window.postMessage({ type: HOST_EXITED_ENVELOPE_TYPE, tabId: payload.tabId, ...(payload.hostFailure ? { hostFailure: payload.hostFailure } : {}) }, "*");
 });
 
 // Slice 2.4.2 (design §3.4): the term-port envelope, exact copy of the

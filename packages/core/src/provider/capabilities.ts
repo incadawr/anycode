@@ -253,6 +253,20 @@ export function resolveEffortLevels(
   return matched.effortLevels ?? ["off", "low", "medium", "high"];
 }
 
+/** Resolve a child selection against its target model's effort vocabulary. */
+export function resolveChildReasoningEffort(
+  modelId: string,
+  entry: CatalogProviderEntry | undefined,
+  override: ReasoningEffort | undefined,
+  live?: LiveModelCapabilities,
+  explicitLevels?: readonly ReasoningEffort[],
+): ReasoningEffort | undefined {
+  const levels = resolveEffortLevels(modelId, entry, live, explicitLevels);
+  const selected = override === "xhigh" && levels !== undefined && !levels.includes("xhigh") && levels.includes("max")
+    ? "max" : override;
+  return resolveReasoningEffort(modelId, entry, selected, live, explicitLevels);
+}
+
 /** Live per-model capability facts a models-list endpoint declared (Taskana 4118). */
 export interface LiveModelCapabilities {
   reasoning?: boolean;

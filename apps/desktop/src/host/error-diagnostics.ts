@@ -1,6 +1,6 @@
 import { constants, closeSync, fstatSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import { classifyEngineFailure, safeFailureCode, safeFailureMessage } from "./safe-failure.js";
+import { classifyEngineFailure, classifyHostStderr, safeFailureCode, safeFailureMessage } from "./safe-failure.js";
 
 function safeSystemCode(text: string): string | undefined {
   return text.match(/\b(EACCES|ENOENT|EPERM|EISDIR|ENOTDIR|EMFILE|ENFILE|ENOSPC|EROFS|ELOOP)\b/)?.[1];
@@ -56,9 +56,7 @@ export type HostFailureReason = "connection_env_unavailable" | "host_crash_loop"
 
 export function recordHostFailure(directory: string | undefined, sessionId: string, reason: HostFailureReason, exitCode?: number, stderr = "", signal?: string): void {
   // Keep only the standard error class; arbitrary error text can contain secrets.
-  const line = stderr.split(/\r?\n/).find((part) => /(?:^|\s)(?:[A-Za-z]*Error|Error):/.test(part));
-  const kind = line?.match(/\b(Error|SyntaxError|TypeError|ReferenceError|RangeError|URIError|EvalError):/)?.[1];
-  const systemCode = line ? safeSystemCode(line) : undefined;
+  const { kind, systemCode } = classifyHostStderr(stderr);
   const errorLine = kind ? `${kind}:${systemCode ? ` ${systemCode}:` : ""} [details redacted]` : stderr.trim() ? "[first error line redacted]" : undefined;
   recordErrorDiagnostic(directory, sessionId, reason, undefined, exitCode, errorLine, signal);
 }
