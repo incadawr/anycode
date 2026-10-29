@@ -388,9 +388,13 @@ describe("Secondary controls", () => {
   it("reveals fallbacks without writing and shows ordering only with Advanced open", async () => {
     const initial = settingsWithProfile("Team");
     initial.roleProfiles!.profiles[0]!.roles.executor = { primary: {}, fallbacks: [{ connection: "one" }, { connection: "two" }] };
+    initial.roleProfiles!.profiles[0]!.roles.planner = { primary: {}, fallbacks: [{ connection: "one" }] };
     const bridge = installBridge(initial);
     await mount();
     const row = container.querySelector('[data-testid="role-picker-role-executor"]')!;
+    expect(row.querySelector(".roles-fallback-toggle")?.textContent).toBe("+2 fallbacks");
+    expect(container.querySelector('[data-testid="role-picker-role-planner"] .roles-fallback-toggle')?.textContent).toBe("+1 fallback");
+    expect(container.querySelector('[data-testid="role-picker-role-explore"] .roles-fallback-toggle')?.textContent).toBe("Add fallback");
     await click(row.querySelector<HTMLButtonElement>('.roles-fallback-toggle')!);
     expect(row.querySelector('[aria-label="executor fallback 1 route"]')).not.toBeNull();
     expect(row.querySelector('[aria-label="Move executor fallback 1 up"]')).toBeNull();
