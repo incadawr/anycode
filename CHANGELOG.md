@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Claude and Codex sessions can change reasoning effort during a turn; the choice applies to the next turn. (GitHub #25)
+
 ## [0.0.50] — 2026-10-29
 
 ### Added

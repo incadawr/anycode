@@ -6462,6 +6462,23 @@ describe("desktop store — engine_settings_changed / pendingEngineChange (Codex
     };
   }
 
+  it("reasserts newer effort after an older acknowledgement and rolls it back without losing other choices", () => {
+    const store = createDesktopStore();
+    const ready = codexHostReady();
+    if (ready.type !== "host_ready" || !ready.engine?.model) throw new Error("missing engine model");
+    ready.engine.model.effort = "medium";
+    store.getState().applyHostMessage(ready);
+    store.getState().applyHostMessage({ type: "engine_settings_changed", activePresetId: "workspace", state: "pending", appliesFrom: "next_turn" });
+    store.getState().applyHostMessage({ type: "engine_settings_changed", model: "gpt-5.6-terra", effort: "medium", deferredEffort: true, state: "pending", appliesFrom: "next_turn" });
+    expect(store.getState().pendingEngineChange).toEqual({ activePresetId: "workspace", effort: "medium" });
+    store.getState().applyHostMessage({ type: "engine_settings_changed", model: "gpt-5.6-terra", effort: "high", state: "applied", appliesFrom: "next_turn" });
+    store.getState().applyHostMessage({ type: "engine_settings_changed", model: "gpt-5.6-terra", activePresetId: "workspace", effort: "medium", deferredEffort: true, state: "pending", appliesFrom: "next_turn" });
+    expect(store.getState().engine?.model?.effort).toBe("high");
+    expect(store.getState().pendingEngineChange).toEqual({ activePresetId: "workspace", effort: "medium" });
+    store.getState().applyHostMessage({ type: "engine_settings_changed", model: "gpt-5.6-terra", activePresetId: "workspace", effort: "high", state: "pending", appliesFrom: "next_turn" });
+    expect(store.getState().pendingEngineChange).toEqual({ activePresetId: "workspace" });
+  });
+
   it("marks a preset change pending on engine_settings_changed{state:\"pending\"} and does NOT touch the displayed activePresetId yet", () => {
     const store = createDesktopStore();
     store.getState().applyHostMessage(codexHostReady());
