@@ -104,7 +104,9 @@ describe("per-model price resolution", () => {
     expect(resolveUsagePrice(undefined, "C", price)).toEqual({ subscription: false, price });
     expect(resolveUsagePrice(undefined, "C", undefined)).toBeUndefined();
     const zero = resolveUsagePrice(JSON.stringify({ models: { A: { input: 0, cachedInput: 0, output: 0 } } }), "A", price);
-    if (zero && !zero.subscription) expect(calculateUsageCost(usage, zero.price)?.costUsd).toBe(0);
+    expect(zero?.subscription).toBe(false);
+    if (!zero || zero.subscription) throw new Error("Expected a zero-rate price");
+    expect(calculateUsageCost(usage, zero.price)?.costUsd).toBe(0);
     expect(resolveUsagePrice(raw, "A", price)).toEqual(resolveUsagePrice(JSON.stringify({ fallback: { mode: "rates", ...b }, models: { A: a, B: a } }), "A", price));
   });
 });

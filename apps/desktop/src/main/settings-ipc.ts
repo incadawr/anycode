@@ -376,6 +376,23 @@ const contextWindowTokensSchema = z.number().int().min(CONTEXT_WINDOW_TOKENS_MIN
 
 const tokenRatesSchema = z.object({ input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict();
 const modelIdKey = z.string().refine((id) => normalizeModelId(id) === id);
+const modelPricingSchema = <T extends z.ZodType>(valueSchema: T) =>
+  z.unknown().transform((raw, ctx) => {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Expected a model price map" });
+      return z.NEVER;
+    }
+    const entries: [string, z.output<T>][] = [];
+    for (const [id, value] of Object.entries(raw)) {
+      const parsed = valueSchema.safeParse(value);
+      if (!modelIdKey.safeParse(id).success || !parsed.success) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid model price", path: [id] });
+        return z.NEVER;
+      }
+      entries.push([id, parsed.data]);
+    }
+    return Object.fromEntries(entries);
+  });
 const connectionPricingSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("subscription") }).strict(),
   z.object({ mode: z.literal("rates"), input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict(),
@@ -397,7 +414,7 @@ const promptCacheSchema = z
 const connectionCreateSchema = z
   .object({
     providerId: z.string().min(1),
-    modelPricing: z.record(modelIdKey, tokenRatesSchema).optional(),
+    modelPricing: modelPricingSchema(tokenRatesSchema).optional(),
     pricing: connectionPricingSchema.optional(),
     label: z.string().optional(),
     model: z.string().optional(),
@@ -436,7 +453,7 @@ const connectionCreateSchema = z
   .strict();
 const connectionUpdateSchema = z
   .object({
-    modelPricing: z.record(modelIdKey, z.union([tokenRatesSchema, z.literal("")])).optional(),
+    modelPricing: modelPricingSchema(z.union([tokenRatesSchema, z.literal("")])).optional(),
     pricing: z.union([connectionPricingSchema, z.literal("")]).optional(),
     id: z.string().min(1),
     label: z.string().optional(),

@@ -1919,7 +1919,7 @@ export function ConnectionDrawerFields({
       <div aria-label="Per-model prices">
         {mergeModelIds(modelSuggestions.map((item) => item.id), mergeModelIds(Object.keys(modelRates), normalizeModelId(model) ? [normalizeModelId(model)!] : [])).map((id) => {
           const draft = (Object.hasOwn(modelRates, id) ? modelRates[id] : undefined) ?? { input: "", cachedInput: "", output: "", cacheWrite: "" };
-          return <fieldset key={id} disabled={readOnly || pricingMode === "subscription"}><legend>{id}</legend>
+          return <fieldset key={id} disabled={readOnly || saving || pricingMode === "subscription"}><legend>{id}</legend>
             {([ ["input", "Input"], ["cachedInput", "Cached input"], ["output", "Output"], ["cacheWrite", "Cache write (optional)"] ] as const).map(([key, label]) => <label className="settings-field" key={key}><span className="settings-field-label">{label} · USD / 1M tokens</span><input type="number" min="0" step="any" aria-label={`${id} ${label} · USD / 1M tokens`} value={draft[key]} onChange={(e) => { const value = e.target.value; setModelRates((previous) => ({ ...previous, [id]: { ...draft, [key]: value } })); setDirtyRates((previous) => new Set(previous).add(id)); }} /></label>)}
           </fieldset>;
         })}
