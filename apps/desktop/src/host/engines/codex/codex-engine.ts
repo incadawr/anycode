@@ -821,6 +821,9 @@ export class CodexEngine implements SessionEngine {
   private operation: "turn" | "compact" | null = null;
   private notificationIterator?: AsyncIterator<JsonRpcNotification>;
   private pendingNotification?: Promise<IteratorResult<JsonRpcNotification>>;
+  private maintenanceObserver?: (event: AgentEvent) => void;
+  onMaintenanceEvent(observer: (event: AgentEvent) => void): void { this.maintenanceObserver = observer; }
+  private lateCompaction: { turnId: string; translator: TurnTranslator } | null = null;
   private latestContextUsage: Extract<AgentEvent, { type: "context_usage" }> | null = null;
   private nextNativeTurnOrdinal: number;
   private nativeTurnOrdinalDirty = false;
@@ -1417,7 +1420,7 @@ export class CodexEngine implements SessionEngine {
           return;
         }
         for (const event of translated) {
-          if (event.type === "context_usage") engine.latestContextUsage = event;
+          if (event.type === "context_usage") { engine.latestContextUsage = event; engine.lateCompaction = null; }
           yield event;
         }
       };
@@ -1533,9 +1536,9 @@ export class CodexEngine implements SessionEngine {
 
   private async *compactNowInner(options: { signal: AbortSignal }): AsyncIterable<AgentEvent> {
     const started = Date.now();
-    const preTokens = this.latestContextUsage?.estimatedTokens ?? 0;
+    const preTokens = this.latestContextUsage?.estimatedTokens;
     const end = (ok: boolean, error?: string, post?: number): AgentEvent => ({
-      type: "compaction_end", ok, preTokens, durationMs: Date.now() - started,
+      type: "compaction_end", ok, ...(preTokens !== undefined ? { preTokens } : {}), durationMs: Date.now() - started,
       ...(error ? { error } : {}), ...(post !== undefined ? { postTokens: post } : {}),
     });
     if (this.operation !== null || this.disposed || this.terminalError) {
@@ -1543,6 +1546,7 @@ export class CodexEngine implements SessionEngine {
       return;
     }
     this.operation = "compact";
+    this.lateCompaction = null;
     const abort = watchAbort(options.signal);
     let startup: SettleDeadline | null = null;
     const settlement: { current: SettleDeadline | null } = { current: null };
@@ -1626,7 +1630,7 @@ export class CodexEngine implements SessionEngine {
           const items = new TurnItemIndex();
           this.activeItems = items;
           this.activeTurn = { threadId: this.threadId, turnId: nativeId, items };
-          translator = new TurnTranslator({ threadId: this.threadId, turnId: nativeId, turn: 0, items });
+          translator = new TurnTranslator({ threadId: this.threadId, turnId: nativeId, turn: 0, items, onUsage: usage => this.usageObserver?.(usage) });
           if (aborted || options.signal.aborted) cancel();
         }
         if (!nativeId) continue;
@@ -1635,8 +1639,10 @@ export class CodexEngine implements SessionEngine {
         if (!matches) continue;
         if (n.method === "item/completed" && item?.type === "contextCompaction" && typeof item.id === "string" && item.id.length) confirmed = true;
         if (n.method === "thread/tokenUsage/updated") {
-          usage = decodeCodexContextUsage(params) ?? usage;
-          for (const event of translator?.onNotification(n) ?? []) if (event.type === "engine_session_tokens") yield event;
+          if (confirmed) {
+            usage = decodeCodexContextUsage(params) ?? usage;
+            for (const event of translator?.onNotification(n) ?? []) if (event.type === "engine_session_tokens") yield event;
+          }
         }
         if (n.method === "turn/completed" && !terminal) {
           terminal = true;
@@ -1648,8 +1654,10 @@ export class CodexEngine implements SessionEngine {
         }
       }
       const ok = status === "completed" && confirmed;
+      if (ok && usage) this.latestContextUsage = usage;
+      if (ok && nativeId && translator) this.lateCompaction = { turnId: nativeId, translator };
       yield end(ok, ok ? undefined : status === "interrupted" ? "cancelled" : nativeError ?? "Codex did not confirm compaction", ok ? usage?.estimatedTokens : undefined);
-      if (ok && usage) { this.latestContextUsage = usage; yield usage; }
+      if (ok && usage && this.latestContextUsage === usage) yield usage;
       if (ok && !usage) yield { type: "engine_notice", level: "warning", message: "Codex completed compaction without updated context usage; the previous reading is retained." };
     } catch (error) {
       if (submitted) {
@@ -1748,6 +1756,14 @@ export class CodexEngine implements SessionEngine {
    */
   private observeNotification(notification: JsonRpcNotification): void {
     this.indexItem(notification);
+    const late = this.lateCompaction;
+    const params = record(notification.params);
+    if (late && notification.method === "thread/tokenUsage/updated" && params?.threadId === this.threadId && params.turnId === late.turnId) {
+      for (const event of late.translator.onNotification(notification)) {
+        if (event.type === "context_usage") this.latestContextUsage = event;
+        if (event.type === "context_usage" || event.type === "engine_session_tokens") this.maintenanceObserver?.(event);
+      }
+    }
     // `account/rateLimits/updated` (codex-profiles cut §6.1) is ACCOUNT-scoped:
     // it carries no threadId, so the per-turn queue's this-thread filter drops
     // it — and between turns there is no turn iterator draining the queue at

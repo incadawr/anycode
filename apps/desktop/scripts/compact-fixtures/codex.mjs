@@ -20,10 +20,10 @@ const complete = (status = "completed") => {
   const turn = active;
   active = null;
   if (status === "completed") {
-    usage(turn.id, turn.compact ? 8000 : 47000);
     const item = turn.compact ? { type: "contextCompaction", id: `${turn.id}-item` } : { type: "agentMessage", id: `${turn.id}-message`, text: "Fixture ready." };
     turn.items.push(item);
     notify("item/completed", { turnId: turn.id, item });
+    usage(turn.id, turn.compact ? 8000 : 47000);
   }
   turn.status = status;
   notify("turn/completed", { turn: { id: turn.id, status, items: turn.items } });

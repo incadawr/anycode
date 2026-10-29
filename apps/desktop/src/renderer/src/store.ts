@@ -155,6 +155,7 @@ export interface WorkspaceTrustRequest {
 
 /** Host's engine-switch announcement sentinel (mirrors host/engine-switch.ts ENGINE_SWITCH_TURN_ID). */
 const ENGINE_SWITCH_NOTICE_TURN_ID = "engine-switch";
+const MANUAL_COMPACTION_TURN_ID = "manual-compaction";
 
 /** Lifecycle of the renderer<->host port itself, independent of the agent turn lifecycle. */
 export type ConnectionPhase = "awaiting_port" | "awaiting_host_ready" | "ready" | "host_exited";
@@ -3200,13 +3201,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       // event type: other engines' drift `engine_notice`s are real turn-scoped
       // events and must keep being dropped when foreign.
       const isEngineSwitchNotice = event.type === "engine_notice" && turnId === ENGINE_SWITCH_NOTICE_TURN_ID;
+      const isMaintenanceEvent = turnId === MANUAL_COMPACTION_TURN_ID && (event.type === "engine_session_tokens" || event.type === "engine_notice" || event.type === "engine_quota");
       if (
         get().turn.turnId !== turnId &&
         event.type !== "context_usage" &&
         event.type !== "preview_console" &&
         event.type !== "compaction_start" &&
         event.type !== "compaction_end" &&
-        !isEngineSwitchNotice
+        !isEngineSwitchNotice &&
+        !isMaintenanceEvent
       ) {
         return;
       }
@@ -3888,7 +3891,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               notice: {
                 kind: "compaction_end" as const,
                 text: event.ok
-                  ? `Conversation compacted (${event.preTokens} → ${event.postTokens ?? "?"} tokens).`
+                  ? `Conversation compacted (${event.preTokens ?? "?"} → ${event.postTokens ?? "?"} tokens).`
                   // Same verdict the transcript row gives (MessageList's
                   // `compactionRowText`): `compaction_end` carries one `error`
                   // channel for a refusal and a real failure alike, and the

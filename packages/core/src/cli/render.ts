@@ -559,7 +559,7 @@ export function renderEvent(
     case "compaction_end":
       write(
         event.ok
-          ? `\n[compaction: ${event.preTokens} → ${event.postTokens ?? "?"} tokens in ${event.durationMs}ms]\n`
+          ? `\n[compaction: ${event.preTokens ?? "?"} → ${event.postTokens ?? "?"} tokens in ${event.durationMs}ms]\n`
           : `\n[compaction skipped/failed (${event.error ?? "unknown"})]\n`,
       );
       break;

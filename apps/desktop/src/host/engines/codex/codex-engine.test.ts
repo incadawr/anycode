@@ -3898,7 +3898,7 @@ describe("Codex manual compaction", () => {
   });
   it("runs manual compact without creating an ordinary turn", async () => {
     const { server, engine } = setup(); await normal(server, engine);
-    const run = driveCompact(engine); await tick(40); server.startCompact(); usage(server); finish(server); await run.done;
+    const run = driveCompact(engine); await tick(40); server.startCompact(); item(server); usage(server); finish(server); await run.done;
     expect(server.calls.filter(c => c.method === "thread/compact/start")).toEqual([{ method: "thread/compact/start", params: { threadId: THREAD } }]);
     expect(types(run.events)).toEqual(["compaction_start", "engine_session_tokens", "compaction_end", "context_usage"]);
     expect(run.events.find(e => e.type === "compaction_end")).toMatchObject({ ok: true, preTokens: 47000, postTokens: 8000 });
@@ -3911,7 +3911,7 @@ describe("Codex manual compaction", () => {
   });
   it("handles lifecycle notifications before the compact acknowledgement", async () => {
     const { server, engine } = setup(); let ack!: (v: unknown) => void; server.compactResponse = new Promise(resolve => { ack = resolve; });
-    const run = driveCompact(engine); await tick(40); server.startCompact(); usage(server); finish(server); await tick(40);
+    const run = driveCompact(engine); await tick(40); server.startCompact(); item(server); usage(server); finish(server); await tick(40);
     expect(run.events.some(e => e.type === "compaction_end")).toBe(false); ack({}); await run.done;
     expect(run.events.at(-1)).toMatchObject({ type: "context_usage", estimatedTokens: 8000 });
   });
@@ -3978,16 +3978,38 @@ describe("Codex manual compaction", () => {
     server.stream.push({ method: "turn/completed", params: { threadId: THREAD, turn: { id: "compact-native", status: status === "unconfirmed" ? "completed" : status, error: { message: "native failure" } } } });
     if (status === "completed") controller.abort(); await run.done; expect(run.events.find(e => e.type === "compaction_end")).toMatchObject({ ok: status === "completed" });
   });
-  it.each(["before-item", "before-terminal", "after-terminal"])("uses matching provider usage before or shortly after compact completion: %s", async when => {
+  it("ignores pre-compaction usage and records the post-compaction update", async () => {
     const { server, engine } = setup({ compactUsageWaitMs: 100 }); const observer = vi.fn(); engine.onUsage(observer);
-    const run = driveCompact(engine); await tick(40); server.startCompact(); if (when === "before-item") usage(server); item(server); if (when === "before-terminal") usage(server); server.completeTurn("completed"); if (when === "after-terminal") { await tick(40); usage(server); } await run.done;
-    expect(run.events.at(-1)).toMatchObject({ type: "context_usage", estimatedTokens: 8000 }); expect(observer).not.toHaveBeenCalled();
+    const run = driveCompact(engine); await tick(40); server.startCompact(); usage(server, 47000); item(server); server.completeTurn("completed"); await tick(20); usage(server, 8000); await run.done;
+    expect(run.events.find(e => e.type === "compaction_end")).toMatchObject({ ok: true, postTokens: 8000 });
+    expect(run.events.at(-1)).toMatchObject({ type: "context_usage", estimatedTokens: 8000 });
+    expect(observer).toHaveBeenCalled();
+  });
+  it("delivers usage arriving after the wait and retains it for the next compaction", async () => {
+    const { server, engine } = setup(); const late: AgentEvent[] = []; const observer = vi.fn(); engine.onUsage(observer); engine.onMaintenanceEvent(event => late.push(event));
+    const run = driveCompact(engine); await tick(40); server.startCompact(); usage(server, 47000); finish(server); await run.done;
+    expect(run.events.find(e => e.type === "compaction_end")).not.toHaveProperty("postTokens");
+    await tick(1100); usage(server, 8000); expect(late).toContainEqual(expect.objectContaining({ type: "context_usage", estimatedTokens: 8000 }));
+    expect(late).toContainEqual(expect.objectContaining({ type: "engine_session_tokens" }));
+    const next = driveCompact(engine); await tick(40); server.startCompact("next"); finish(server, "next"); await next.done;
+    expect(next.events.find(e => e.type === "compaction_end")).toMatchObject({ preTokens: 8000 });
+    expect(observer).toHaveBeenCalled();
+  });
+  it("reports an unknown starting value immediately after resume", async () => {
+    const server = new FakeAppServer(); server.threadReadResult = { thread: { id: "persisted-thread", turns: [] } };
+    const { engine } = await resumeNativeCodexSession(server, "/work", "persisted-thread");
+    const run = driveCompact(engine); await tick(40);
+    server.stream.push({ method: "item/completed", params: { threadId: "persisted-thread", turnId: "compact-native", item: { type: "contextCompaction", id: "item" } } });
+    server.stream.push({ method: "thread/tokenUsage/updated", params: { threadId: "persisted-thread", turnId: "compact-native", tokenUsage: { last: { totalTokens: 8000 }, modelContextWindow: 100000 } } });
+    server.stream.push({ method: "turn/completed", params: { threadId: "persisted-thread", turn: { id: "compact-native", status: "completed" } } });
+    await run.done; expect(run.events.find(e => e.type === "compaction_end")).toMatchObject({ ok: true, postTokens: 8000 });
+    expect(run.events.find(e => e.type === "compaction_end")).not.toHaveProperty("preTokens");
   });
   it.each(["missing", "negative", "nan", "window", "zero"])("preserves honest usage when compaction telemetry is unavailable: %s", async mode => {
     const { server, engine } = setup(); const run = driveCompact(engine); await tick(40); server.startCompact();
-    if (mode !== "missing") usage(server, mode === "zero" ? 0 : mode === "negative" ? -1 : mode === "nan" ? NaN : 10, "compact-native", mode === "window" ? 0 : 100000);
+    item(server); if (mode !== "missing") usage(server, mode === "zero" ? 0 : mode === "negative" ? -1 : mode === "nan" ? NaN : 10, "compact-native", mode === "window" ? 0 : 100000);
     finish(server); await run.done;
-    const end = run.events.find(e => e.type === "compaction_end"); expect(end).toMatchObject({ ok: true, preTokens: 0 });
+    const end = run.events.find(e => e.type === "compaction_end"); expect(end).toMatchObject({ ok: true }); expect(end).not.toHaveProperty("preTokens");
     if (mode === "zero") expect(end).toMatchObject({ postTokens: 0 });
     else { expect(end).not.toHaveProperty("postTokens"); expect(types(run.events)).not.toContain("context_usage"); expect(types(run.events)).toContain("engine_notice"); }
   });
@@ -3999,7 +4021,7 @@ describe("Codex manual compaction", () => {
   it("preserves notifications across normal turns and repeated compactions", async () => {
     const { server, engine } = setup(); await normal(server, engine);
     for (const id of ["compact-one", "compact-two"]) {
-      const run = driveCompact(engine); await tick(40); server.startCompact(id); usage(server, 8000, id); finish(server, id); await run.done;
+      const run = driveCompact(engine); await tick(40); server.startCompact(id); item(server, id); usage(server, 8000, id); finish(server, id); await run.done;
       const chat = await normal(server, engine); expect(types(chat.events)).toContain("context_usage"); expect(types(chat.events)).toContain("loop_end"); expect(chat.events).toContainEqual(expect.objectContaining({ type: "text_delta", text: "Next chat message" }));
     }
   });

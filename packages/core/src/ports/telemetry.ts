@@ -55,7 +55,7 @@ export type TelemetryEventRecord =
   | { t: "tool"; tool: string; status: ToolCallStatus; durationMs: number }
   | { t: "loop_end"; reason: LoopEndReason; turns: number }
   | { t: "compaction_start"; trigger: "auto" | "manual" }
-  | { t: "compaction_end"; ok: boolean; preTokens: number; postTokens?: number; durationMs: number }
+  | { t: "compaction_end"; ok: boolean; preTokens?: number; postTokens?: number; durationMs: number }
   | { t: "microcompact"; clearedToolResults: number; savedTokens: number }
   | { t: "context_usage"; estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" }
   | { t: "subagent_start"; agentType: string; model?: string; engine?: string; route?: string; fallbackReason?: string }
