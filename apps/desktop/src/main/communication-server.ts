@@ -363,6 +363,8 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     if (!tab) throw new Error("Session unavailable or outside authorized workspace");
     return tab;
   };
+  const terminalState = (tab: { missingWorkspace?: boolean; hostFailure?: unknown }) =>
+    tab.missingWorkspace ? "missing_workspace" : tab.hostFailure ? "crash_looped" : undefined;
   const approvalOn = (sessionId: string): boolean => options.isExternalApprovalEnabled?.(sessionId) === true;
   /** Access first (an unshared session never reveals anything), then the approval switch. */
   const requireApprovalSession = async (sessionId: string) => {
@@ -496,7 +498,10 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     switch (name) {
       case "list_sessions": {
         z.object({}).strict().parse(raw);
-        const sessions = await tabs(true);
+        const sessions = (await tabs(true)).map((tab) => {
+          const state = terminalState(tab);
+          return state ? { ...tab, state } : tab;
+        });
         // externalApproval is reported only when the switch is wired at all (Taskana 4763).
         const withApproval = (tab: (typeof sessions)[number]) => options.isExternalApprovalEnabled ? { ...tab, externalApproval: approvalOn(tab.sessionId) } : tab;
         if (!options.handleOf) return { sessions: sessions.map(withApproval) };
@@ -574,8 +579,8 @@ export async function startCommunicationServer(options: CommunicationServerOptio
       case "get_session_result":
       case "get_session_status": {
         const input = sessionSchema.parse(raw); const tab = await requireSession(input.sessionId);
-        if (name === "get_session_status" && tab.missingWorkspace) return { ...tab, state: "missing_workspace" };
-        if (name === "get_session_status" && tab.hostFailure) return { ...tab, state: "crash_looped" };
+        const state = terminalState(tab);
+        if (name === "get_session_status" && state) return { ...tab, state };
         const status = await options.manager.communicationRequest(input.sessionId, name, undefined, tab.workspace);
         return { ...tab, ...(status as object) };
       }
