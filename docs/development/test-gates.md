@@ -10,8 +10,9 @@ use the relevant UI smoke when appropriate.
 `node scripts/test-scope.mjs <base-ref>` runs a conservative development scope
 for renderer component and CSS changes: the renderer tests, cross-boundary
 checks, and tests found through imports. It falls back to the full suite for
-other paths, named fixtures or contracts, deleted files, or an empty diff. It includes staged, unstaged, and
-untracked files. The scope is a starting point; add tests for affected behavior
+other paths, configuration or manifest inputs, named fixtures or contracts,
+deletions, renames, or an empty diff. It considers committed, staged, unstaged,
+and untracked changes independently, even when their contents cancel out. The scope is a starting point; add tests for affected behavior
 when a dependency is not represented by an import.
 
 Before landing on `next`, run `pnpm run typecheck`, the full `pnpm vitest run`

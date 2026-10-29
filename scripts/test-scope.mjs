@@ -6,6 +6,7 @@ import { join, delimiter } from "node:path";
 
 const renderer = "apps/desktop/src/renderer/src/";
 const always = [
+  "apps/desktop/src/renderer/renderer-core-import-guard.test.ts",
   "apps/desktop/src/main/subagents-ipc.test.ts",
   "apps/desktop/src/main/repo-hygiene.test.ts",
   "apps/desktop/src/main/workflow-map-smoke-assertions.test.ts",
@@ -19,6 +20,7 @@ export function planScope(files, exists = () => true) {
   const eligible = files.length > 0 && files.every((file) =>
     file.startsWith(renderer) && /\.(?:ts|tsx|css)$/.test(file) &&
     (file.startsWith(`${renderer}components/`) || /\.css$/.test(file)) &&
+    !/(?:^|\/)(?:[^/]*config[^/]*|[^/]*manifest[^/]*|package\.json|tsconfig[^/]*|vite[^/]*|vitest[^/]*|electron-builder[^/]*|[^/]*\.(?:json|jsonl|ya?ml))$/i.test(file) &&
     !/(?:^|[\/._-])(?:__)?(?:fixtures?|snapshots?|contracts?|protocols?)(?:__)?(?:[\/._-]|$)/i.test(file) && exists(file));
   return eligible ? { mode: "renderer", always: [...always] } : { mode: "full", always: [] };
 }
@@ -32,9 +34,19 @@ function main() {
   let root, files;
   try {
     root = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
-    const changed = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", base, "--"], { cwd: root, encoding: "utf8" });
+    const changes = [];
+    for (const args of [[base, "HEAD"], ["--cached"], []]) {
+      const fields = execFileSync("git", ["diff", "--name-status", "-z", ...args, "--"], { cwd: root, encoding: "utf8" }).split("\0");
+      while (fields[0]) {
+        const status = fields.shift();
+        const path = fields.shift();
+        changes.push({ status, path });
+        if (/^[RC]/.test(status)) changes.push({ status, path: fields.shift() });
+      }
+    }
     const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard", "-z"], { cwd: root, encoding: "utf8" });
-    files = [...new Set((changed + untracked).split("\0").filter(Boolean))];
+    files = [...new Set([...changes.map((change) => change.path), ...untracked.split("\0").filter(Boolean)])];
+    if (changes.some(({ status }) => /^[DRC]/.test(status))) files.push("");
   } catch (error) {
     console.error("Cannot determine changed files:", error.message);
     return 2;
