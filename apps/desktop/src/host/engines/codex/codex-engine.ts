@@ -37,7 +37,7 @@ import { CodexApprovalBridge, type ActiveCodexTurn } from "./approval-bridge.js"
 import type { CodexPatchAutoApprovalPolicy } from "./patch-auto-approval.js";
 import { AppServerClient, type AppServerClientOptions } from "./app-server-client.js";
 import { CodexModelCatalog } from "./catalog.js";
-import { TurnTranslator } from "./event-translator.js";
+import { decodeCodexContextUsage, TurnTranslator } from "./event-translator.js";
 import { NATIVE_PERSISTED, projectCodexHistory, type CodexThreadRead } from "./history-projection.js";
 import {
   DEFAULT_CODEX_PRESET,
@@ -480,6 +480,16 @@ function watchAbort(signal: AbortSignal): { promise: Promise<void>; dispose(): v
   return { promise, dispose: () => signal.removeEventListener("abort", listener) };
 }
 
+// Codex reports its replacement-history estimate with zero request counters.
+// Ordinary compaction request usage must not be mistaken for the new context.
+function compactedContextUsage(params: unknown): Extract<AgentEvent, { type: "context_usage" }> | null {
+  const last = record(record(record(params)?.tokenUsage)?.last);
+  if (!last || last.inputTokens !== 0 || last.cachedInputTokens !== 0 ||
+      last.outputTokens !== 0 || last.reasoningOutputTokens !== 0 ||
+      typeof last.totalTokens !== "number" || last.totalTokens <= 0) return null;
+  return decodeCodexContextUsage(params);
+}
+
 interface SettleDeadline {
   promise: Promise<{ kind: "settle-timeout" }>;
   cancel(): void;
@@ -823,7 +833,7 @@ export class CodexEngine implements SessionEngine {
   private pendingNotification?: Promise<IteratorResult<JsonRpcNotification>>;
   private maintenanceObserver?: (event: AgentEvent) => void;
   onMaintenanceEvent(observer: (event: AgentEvent) => void): void { this.maintenanceObserver = observer; }
-  private lateCompaction: { turnId: string; translator: TurnTranslator } | null = null;
+  private lateCompaction: { turnId: string; translator: TurnTranslator; succeeded: boolean } | null = null;
   private compactUsageNotifications: JsonRpcNotification[] | null = null;
   private latestContextUsage: Extract<AgentEvent, { type: "context_usage" }> | null = null;
   private nextNativeTurnOrdinal: number;
@@ -1660,17 +1670,19 @@ export class CodexEngine implements SessionEngine {
       this.compactUsageNotifications = null;
       const accounting: AgentEvent[] = [];
       if (nativeId && translator) {
-        this.lateCompaction = { turnId: nativeId, translator };
+        this.lateCompaction = { turnId: nativeId, translator, succeeded: ok };
         for (const reading of readings) {
           if (record(reading.params)?.turnId !== nativeId) continue;
           for (const event of translator.onNotification(reading)) if (event.type === "engine_session_tokens") accounting.push(event);
         }
       }
-      // The compact turn usage describes its summarization request, not the
-      // replacement context. The protocol supplies no post-compaction size.
-      if (ok) this.latestContextUsage = null;
+      // Only the zero-counter replacement estimate describes the new context.
+      const context = ok ? readings.filter(reading => record(reading.params)?.turnId === nativeId)
+        .map(reading => compactedContextUsage(reading.params)).filter(event => event !== null).at(-1) : undefined;
+      if (ok) this.latestContextUsage = context ?? null;
       for (const event of accounting) yield event;
       yield end(ok, ok ? undefined : status === "interrupted" ? "cancelled" : nativeError ?? "Codex did not confirm compaction");
+      if (context) yield context;
     } catch (error) {
       if (submitted) {
         this.terminalError = error instanceof Error ? error : new Error(String(error));
@@ -1777,6 +1789,11 @@ export class CodexEngine implements SessionEngine {
     if (late && notification.method === "thread/tokenUsage/updated" && params?.threadId === this.threadId && params.turnId === late.turnId) {
       for (const event of late.translator.onNotification(notification)) {
         if (event.type === "engine_session_tokens") this.maintenanceObserver?.(event);
+      }
+      const context = late.succeeded ? compactedContextUsage(notification.params) : null;
+      if (context) {
+        this.latestContextUsage = context;
+        this.maintenanceObserver?.(context);
       }
     }
     // `account/rateLimits/updated` (codex-profiles cut §6.1) is ACCOUNT-scoped:
