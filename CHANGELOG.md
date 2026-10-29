@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- On the OpenAI Responses transport, reasoning that a provider streams as `reasoning_text` (for example through a LiteLLM gateway) now appears in the Reasoning block, and a long thinking phase no longer fails with `stream_stalled` while the provider is still sending data (#27).
+- On the OpenAI Responses transport, reasoning that a provider streams as `reasoning_text` (for example through a LiteLLM gateway) now appears in the Reasoning block, and a long thinking phase no longer fails with `stream_stalled` while the provider is still sending data (GitHub #27).
 
 ## [0.0.50] — 2026-10-29
 

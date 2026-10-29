@@ -1,4 +1,6 @@
 import { createServer, type Server } from "node:http";
+import { generateText } from "ai";
+import { createOpenAIResponsesLanguageModel } from "./openai-responses.js";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ModelStreamEvent } from "../types/events.js";
@@ -21,6 +23,36 @@ describe("Responses reasoning text over SSE (#27)",()=>{
  function portFor(retry:NonNullable<EndpointConfig["retry"]>={}) {return new AiSdkModelPort({transport:"openai-responses",baseUrl,apiKey:"test-key",model:"gpt-oss",retry:{maxRetries:0,stallTimeoutMs:5000,...retry}});}
  function set(...chunks:Record<string,unknown>[]) {frames=chunks.map(chunk=>({chunk}));}
  it("streams reasoning_text deltas into the block the SDK opened, without duplicating done or content",async()=>{set(created(),added,delta("First, "),delta("check the file."),{type:"response.reasoning_text.done",item_id:"rs_1",content_index:0,text:"First, check the file."},done(["First, check the file."]),...message,completed()); const e=await collect(portFor().streamText(req)); expect(reasoning(e)).toEqual([{type:"reasoning_start",id:"rs_1:0"},{type:"reasoning_delta",id:"rs_1:0",text:"First, "},{type:"reasoning_delta",id:"rs_1:0",text:"check the file."},{type:"reasoning_end",id:"rs_1:0"}]); expect(e.findIndex(x=>x.type==="reasoning_end")).toBeLessThan(e.findIndex(x=>x.type==="text_delta")); expect(e).toContainEqual(expect.objectContaining({type:"text_delta",text:"ok"})); expect(e.filter(x=>x.type==="error")).toEqual([]);});
+ it("delivers reasoning while the server is still holding the stream open", async () => {
+   set(created(), delta("Live thinking"));
+   holdOpen = true;
+   const abort = new AbortController();
+   const iterator = portFor().streamText({...req, abortSignal: abort.signal})[Symbol.asyncIterator]();
+   try {
+     const received = await Promise.race([
+       (async () => { for (;;) { const next = await iterator.next(); if (next.done || next.value.type === "reasoning_delta") return next; } })(),
+       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("reasoning was buffered")), 1500)),
+     ]);
+     expect(received.value).toEqual({type:"reasoning_delta", id:"rs_1:0", text:"Live thinking"});
+   } finally { abort.abort(); await iterator.return?.(); }
+ });
+ it("recovers final content parts after streamed reasoning", async () => {
+   set(created(), added, delta("A"), done(["A", "B"]), ...message, completed());
+   expect(text(await collect(portFor().streamText(req)))).toBe("A\n\nB");
+ });
+ it("recovers reasoning content from a non-streaming response", async () => {
+   server.removeAllListeners("request");
+   server.on("request", (request, response) => {
+     request.resume();
+     request.on("end", () => {
+       response.writeHead(200, {"content-type":"application/json"});
+       response.end(JSON.stringify({id:"resp_1", object:"response", created_at:1700000000, model:"gpt-oss", output:[{type:"reasoning", id:"rs_1", summary:[], content:[{type:"reasoning_text",text:"Think."}]}], usage:{input_tokens:5, output_tokens:4}}));
+     });
+   });
+   const model = createOpenAIResponsesLanguageModel({transport:"openai-responses",baseUrl,apiKey:"test-key",model:"gpt-oss"});
+   const result = await generateText({model, prompt:"hi"});
+   expect(result.reasoningText).toBe("Think.");
+ });
  it("shows reasoning item content when no reasoning_text deltas were streamed",async()=>{set(created(),added,done(["Plan A.","Plan B."]),...message,completed()); expect(reasoning(await collect(portFor().streamText(req)))).toEqual([{type:"reasoning_start",id:"rs_1:0"},{type:"reasoning_delta",id:"rs_1:0",text:"Plan A.\n\nPlan B."},{type:"reasoning_end",id:"rs_1:0"}]);});
  it("keeps reasoning summaries as the only reasoning when an item also streams reasoning_text",async()=>{set(created(),added,{type:"response.reasoning_summary_part.added",item_id:"rs_1",summary_index:0},{type:"response.reasoning_summary_text.delta",item_id:"rs_1",summary_index:0,delta:"Summary."},delta("raw thoughts"),{type:"response.reasoning_summary_part.done",item_id:"rs_1",summary_index:0},done(["raw thoughts"]),...message,completed()); expect(text(await collect(portFor().streamText(req)))).toBe("Summary.");});
  it("survives a reasoning phase longer than the stall timeout while reasoning_text keeps arriving (#27)",async()=>{frames=[{chunk:created()},...Array.from({length:20},(_,i)=>({chunk:delta(`s${i} `),delayMs:50})),...message.map(chunk=>({chunk})),{chunk:completed()}]; const e=await collect(portFor({stallTimeoutMs:400}).streamText(req)); expect(e.filter(x=>x.type==="stream_retry"||x.type==="error")).toEqual([]); expect(text(e)).toBe(Array.from({length:20},(_,i)=>`s${i} `).join("")); expect(e.findIndex(x=>x.type==="reasoning_start")).toBeLessThan(e.findIndex(x=>x.type==="reasoning_delta")); expect(e.findIndex(x=>x.type==="reasoning_end")).toBeLessThan(e.findIndex(x=>x.type==="finish")); expect(e).toContainEqual(expect.objectContaining({type:"text_delta",text:"ok"}));});

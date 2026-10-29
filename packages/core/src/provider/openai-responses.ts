@@ -6,9 +6,11 @@
  * transport, `openai-compatible.ts`).
  */
 
+import { wrapResponsesReasoningFetch } from "./responses-reasoning-fetch.js";
 import { wrapFetchWithActivity } from "./activity-fetch.js";
 import { createOpenAI } from "@ai-sdk/openai";
-import type { LanguageModel } from "ai";
+import { wrapLanguageModel, type LanguageModel } from "ai";
+import { ResponsesReasoningTextRecovery, reasoningContentText } from "./responses-reasoning-text.js";
 import type { EndpointConfig } from "./endpoint.js";
 import { normalizeExplicitBaseUrl } from "./endpoint.js";
 import { wrapFetchWithQuota } from "./quota-fetch.js";
@@ -93,9 +95,10 @@ export function createOpenAIResponsesLanguageModel(config: EndpointConfig, onRes
       : shouldStripAmbientAuthorization
         ? stripAuthorizationFetch
         : undefined;
-  const transportFetch = onResponseActivity !== undefined
-    ? wrapFetchWithActivity(fetchChain ?? ((input, init) => globalThis.fetch(input, init)), onResponseActivity)
-    : fetchChain;
+  const baseFetch = fetchChain ?? ((input, init) => globalThis.fetch(input, init));
+  const transportFetch = wrapResponsesReasoningFetch(onResponseActivity !== undefined
+    ? wrapFetchWithActivity(baseFetch, onResponseActivity)
+    : baseFetch);
   const provider = createOpenAI({
     name: OPENAI_RESPONSES_PROVIDER_NAME,
     baseURL: normalizeExplicitBaseUrl(config.baseUrl),
@@ -103,5 +106,56 @@ export function createOpenAIResponsesLanguageModel(config: EndpointConfig, onRes
     ...(config.headers !== undefined ? { headers: config.headers } : {}),
     ...(transportFetch !== undefined ? { fetch: transportFetch } : {}),
   });
-  return provider.responses(config.model);
+  return wrapLanguageModel({
+    model: provider.responses(config.model),
+    middleware: {
+      specificationVersion: "v4",
+      transformParams: async ({ type, params }) => type === "stream" ? { ...params, includeRawChunks: true } : params,
+      wrapStream: async ({ doStream }) => {
+        const result = await doStream();
+        const recovery = new ResponsesReasoningTextRecovery();
+        return {
+          ...result,
+          stream: result.stream.pipeThrough(new TransformStream({
+            transform(part, controller) {
+              for (const event of recovery.observe(part)) {
+                if (event.type === "reasoning_start") controller.enqueue({ type: "reasoning-start", id: event.id });
+                else if (event.type === "reasoning_delta") controller.enqueue({ type: "reasoning-delta", id: event.id, delta: event.text });
+                else controller.enqueue({ type: "reasoning-end", id: event.id });
+              }
+              // These raw frames were handled here; do not recover them again downstream.
+              if (part.type === "raw" && isRecoveryFrame(part.rawValue)) return;
+              controller.enqueue(part);
+            },
+          })),
+        };
+      },
+      wrapGenerate: async ({ doGenerate }) => {
+        const result = await doGenerate();
+        const body = result.response?.body;
+        if (!isRecord(body) || !Array.isArray(body.output)) return result;
+        const textById = new Map<string, string>();
+        for (const item of body.output) {
+          if (!isRecord(item) || item.type !== "reasoning" || typeof item.id !== "string") continue;
+          if (Array.isArray(item.summary) && item.summary.some((entry: unknown) => isRecord(entry) && typeof entry.text === "string" && entry.text !== "")) continue;
+          const text = reasoningContentText(item.content);
+          if (text) textById.set(item.id, text);
+        }
+        return { ...result, content: result.content.map(part => {
+          if (part.type !== "reasoning" || part.text !== "") return part;
+          const id = part.providerMetadata?.openai?.itemId;
+          const text = typeof id === "string" ? textById.get(id) : undefined;
+          return text === undefined ? part : { ...part, text };
+        }) };
+      },
+    },
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isRecoveryFrame(value: unknown): boolean {
+  return isRecord(value) && (value.type === "response.reasoning_text.delta" || value.type === "response.reasoning_text.done" || value.type === "response.output_item.done");
 }

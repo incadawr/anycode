@@ -58,10 +58,10 @@ function config(overrides: Partial<EndpointConfig> = {}): EndpointConfig {
 }
 
 describe("createOpenAIResponsesLanguageModel quota fetch wiring (Taskana 4090)", () => {
-  it("passes NO fetch key when neither onQuotaHeaders nor stripping applies (dormancy pin)", () => {
+  it("installs the Responses stream adapter without a quota observer", () => {
     createModel(config());
     const options = mockCreateOpenAI.mock.calls.at(-1)![0];
-    expect("fetch" in options).toBe(false);
+    expect(typeof options.fetch).toBe("function");
   });
 
   it("wraps fetch when onQuotaHeaders is set", () => {
