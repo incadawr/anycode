@@ -14,6 +14,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A connection drop while the model is still only reasoning no longer ends the turn: the step is retried within the retry budget and the abandoned reasoning is not shown twice; after visible text or a tool call the turn stops with an honest message instead of a retry counter.
 - Provider connections remember separate context windows and reasoning effort for each model; switching models restores their choices, and the unknown-window hint explains the available input budget and opens the matching settings field (GitHub #26).
 - On the OpenAI Responses transport, reasoning that a provider streams as `reasoning_text` (for example through a LiteLLM gateway) now appears in the Reasoning block, and a long thinking phase no longer fails with `stream_stalled` while the provider is still sending data (GitHub #27).
 
