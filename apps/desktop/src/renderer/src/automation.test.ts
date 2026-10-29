@@ -6665,6 +6665,21 @@ async function withElapsedClock<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+async function atDeadline<T>(run: () => Promise<T>, deadlineMs: number): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    let settled = false;
+    const pending = run().then((result) => { settled = true; return result; });
+    await vi.advanceTimersByTimeAsync(deadlineMs - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    return await pending;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 describe("automation facade — Vision pane probe/driver (TASK.198 срез E2c)", () => {
   /** Builds a facade wired ONLY for the Vision pane methods — every other DI slot keeps its own lazy real default, same posture as the Profile block's `buildFacade`. */
   function buildFacade(dom: VisionPaneDom) {
@@ -8786,9 +8801,7 @@ describe("automation facade — provider connections grid/drawer probe/driver (T
     it("refuses with did_not_open when the drawer never mounts, bounded by the commit-poll deadline rather than hanging", async () => {
       const dom = fakeProviderPaneDom({ drawer: null });
       const facade = buildFacade(settingsStoreWith(null), dom);
-      const start = Date.now();
-      await expect(facade.settingsProviderAddOpen()).resolves.toEqual({ ok: false, reason: "did_not_open" });
-      expect(Date.now() - start).toBeLessThan(4000);
+      await expect(atDeadline(() => facade.settingsProviderAddOpen(), 2_000)).resolves.toEqual({ ok: false, reason: "did_not_open" });
     });
   });
 
@@ -9007,9 +9020,7 @@ describe("automation facade — provider connections grid/drawer probe/driver (T
     it("refuses with did_not_settle when the snapshot never changes, bounded by the commit-poll deadline rather than hanging", async () => {
       const dom = fakeProviderPaneDom({ drawer: drawerState({ primaryButtonEnabled: true }) });
       const facade = buildFacade(settingsStoreWith(null), dom);
-      const start = Date.now();
-      await expect(facade.settingsProviderDrawerSubmit()).resolves.toEqual({ ok: false, reason: "did_not_settle" });
-      expect(Date.now() - start).toBeLessThan(4000);
+      await expect(atDeadline(() => facade.settingsProviderDrawerSubmit(), 2_000)).resolves.toEqual({ ok: false, reason: "did_not_settle" });
     });
   });
 
