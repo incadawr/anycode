@@ -47,3 +47,9 @@ describe("HostBanner — GitHub #6 missing workspace", () => {
     expect(html).not.toContain("Connecting to host");
   });
 });
+
+it("shows a terminal host reason without promising reconnection", () => {
+  const html = renderToStaticMarkup(createElement(HostBanner, { connection: "host_exited", lastFatal: null, workspaceMissing: false, hostFailure: { code: "per_tab_crash_loop", message: "Session host stopped after repeated crashes." } }));
+  expect(html).toContain("Session host stopped after repeated crashes.");
+  expect(html).not.toContain("reconnecting");
+});

@@ -15,6 +15,7 @@ import {
   resolveImageInput,
   resolveMaxOutputTokens,
   resolveReasoningEffort,
+  resolveChildReasoningEffort,
   UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS,
 } from "./capabilities.js";
 import { DEFAULT_MAX_OUTPUT_TOKENS } from "../types/config.js";
@@ -526,6 +527,33 @@ describe("saved retired models", () => {
   });
 });
 
+
+describe("child reasoning effort compatibility", () => {
+  it("uses the target catalog vocabulary and leaves root validation strict", () => {
+    const anthropic = findCatalogEntry("anthropic");
+    const zai = findCatalogEntry("z-ai");
+    expect(resolveChildReasoningEffort("claude-opus-5-5", anthropic, "xhigh", { reasoning: true, effortLevels: ["max"] })).toBe("xhigh");
+    expect(resolveChildReasoningEffort("glm-5.3", zai, "xhigh", { reasoning: true, effortLevels: ["xhigh"] })).toBe("max");
+    expect(resolveReasoningEffort("glm-5.3", zai, "xhigh")).toBeUndefined();
+    expect(resolveChildReasoningEffort("claude-opus-4-20250514", anthropic, "xhigh")).toBeUndefined();
+    expect(resolveChildReasoningEffort("gpt-6.1-terra", findCatalogEntry("openai"), "xhigh")).toBe("xhigh");
+    expect(resolveChildReasoningEffort("glm-5.3", zai, undefined)).toBe("max");
+    expect(resolveChildReasoningEffort("glm-5.3", zai, "off")).toBeUndefined();
+  });
+  it("honors retired catalog rows ahead of conflicting live metadata", () => {
+    const entry: CatalogProviderEntry = { ...VISION_ENTRY, retiredModels: [
+      { id: "retired", name: "Retired", contextWindow: 8192, reasoning: true, effortLevels: ["max"] },
+    ] };
+    expect(resolveChildReasoningEffort("retired", entry, "xhigh", { reasoning: true, effortLevels: ["xhigh", "max"] })).toBe("max");
+  });
+  it("uses live vocabularies only on a catalog miss", () => {
+    expect(resolveChildReasoningEffort("live", undefined, "xhigh", { reasoning: true, effortLevels: ["xhigh", "max"] })).toBe("xhigh");
+    expect(resolveChildReasoningEffort("live", undefined, "xhigh", { reasoning: true, effortLevels: ["max"] })).toBe("max");
+    expect(resolveChildReasoningEffort("live", undefined, "xhigh", { reasoning: true, effortLevels: ["high"] })).toBeUndefined();
+    expect(resolveChildReasoningEffort("live", undefined, "xhigh", { reasoning: false, effortLevels: ["max"] })).toBeUndefined();
+    expect(resolveChildReasoningEffort("unknown", undefined, "xhigh")).toBeUndefined();
+  });
+});
 
 describe("explicit effort vocabulary", () => {
   const entry: CatalogProviderEntry = { id: "test", name: "test", baseUrl: "", defaultTransport: "openai-chat-completions", supportedTransports: ["openai-chat-completions"], auth: { kind: "api_key" }, models: [{ id: "glm-5.2", contextWindow: 8192, reasoning: true, effortLevels: ["max"] }] };

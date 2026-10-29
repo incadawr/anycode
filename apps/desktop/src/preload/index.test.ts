@@ -38,7 +38,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { PORT_ENVELOPE_TYPE } from "../shared/envelopes.js";
+import { PORT_ENVELOPE_TYPE, HOST_EXITED_ENVELOPE_TYPE } from "../shared/envelopes.js";
 
 /** The exact shape `deliverTabPort` (main/tabs.ts) stamps for a child-session tab's port delivery. */
 const CHILD_FIELD = {
@@ -62,6 +62,16 @@ describe("preload PORT_ENVELOPE_TYPE forwarding", () => {
     const [posted] = win.postMessage.mock.calls[0] as [Record<string, unknown>, string, unknown[]];
     return posted;
   }
+
+  it("forwards terminal reasons on both delivery paths", () => {
+    const failure = { code: "per_tab_crash_loop", message: "Stopped." };
+    mockListeners.get(PORT_ENVELOPE_TYPE)?.({ ports: [] }, { tabId: "tab", workspace: "/ws", hostFailure: failure });
+    expect(postedEnvelope().hostFailure).toEqual(failure);
+    const win = globalThis.window as unknown as { postMessage: ReturnType<typeof vi.fn> };
+    win.postMessage.mockClear();
+    mockListeners.get(HOST_EXITED_ENVELOPE_TYPE)?.({}, { tabId: "tab", hostFailure: failure });
+    expect(postedEnvelope().hostFailure).toEqual(failure);
+  });
 
   it("forwards the `child` field untouched for a child-session tab's port envelope", () => {
     const listener = mockListeners.get(PORT_ENVELOPE_TYPE);
