@@ -643,6 +643,7 @@ declare global {
       // Taskana 4758: the Settings scope dropdown's folder list (opaque ids only).
       scopeWorkspaces: {
         list(): Promise<ScopeWorkspacesListResult>;
+        resolve(ref: string): Promise<string | null>;
       };
       // Taskana 4759: "Full browser access" per session. Only the user can set it (the
       // main window's sender is checked); set/get resolve the EFFECTIVE value.

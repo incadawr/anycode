@@ -84,6 +84,12 @@ describe("RolePickerDialog draft model", () => {
     expect(draftValid(withFallback)).toBe(false);
   });
 
+  it("preserves provider routes and rejects conflicting route kinds", () => {
+    const entry = { provider: "example", model: "custom" };
+    expect(fromDraftEntry(toDraftEntry(entry))).toEqual(entry);
+    expect(draftValid(patchEntry(toDraft({}), "planner", null, { provider: "example", engine: "codex" }))).toBe(false);
+  });
+
   it("fromDraftEntry drops empty strings and trims", () => {
     expect(fromDraftEntry({ engine: "", connection: "  ", model: "  m  ", effort: "" })).toEqual({ model: "m" });
     expect(fromDraftEntry(toDraftEntry(undefined))).toEqual({});

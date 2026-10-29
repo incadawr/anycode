@@ -3,7 +3,7 @@
  * payload and returns an allow-listed projection (no raw path field).
  */
 import { describe, expect, it } from "vitest";
-import { handleScopeWorkspacesList } from "./scope-workspaces-ipc.js";
+import { handleScopeWorkspacesList, handleScopeWorkspaceResolve } from "./scope-workspaces-ipc.js";
 
 const entry = {
   id: "ws_0123456789abcdef",
@@ -47,5 +47,16 @@ describe("handleScopeWorkspacesList (Taskana 4758)", () => {
       },
     };
     expect(await handleScopeWorkspacesList(failing, {})).toEqual({ ok: false, reason: "failed" });
+  });
+});
+
+
+describe("project scope resolution", () => {
+  it("accepts only a reference and returns only a registry-resolved path", () => {
+    const scoped = { ...deps, resolve: (ref: string) => ref === "ws_known" ? "/project" : undefined };
+    expect(handleScopeWorkspaceResolve(scoped, { ref: "ws_known" })).toBe("/project");
+    expect(handleScopeWorkspaceResolve(scoped, { ref: "ws_unknown" })).toBeNull();
+    expect(handleScopeWorkspaceResolve(scoped, { ref: "ws_known", path: "/other" })).toBeNull();
+    expect(handleScopeWorkspaceResolve(scoped, { ref: "" })).toBeNull();
   });
 });

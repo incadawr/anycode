@@ -225,7 +225,7 @@ export function RolePickerDialog({
 
         {!valid && (
           <div className="role-picker-error" role="alert">
-            An entry cannot select both an engine and a connection — pick one.
+            An entry cannot select more than one engine, connection, or provider.
           </div>
         )}
 
@@ -260,7 +260,7 @@ export function RolePickerDialog({
   );
 }
 
-interface EntryRowProps {
+export interface EntryRowProps {
   label: string;
   entry: RolesDraft[PresetRole]["primary"];
   connections: readonly ProviderConnection[];
@@ -268,14 +268,15 @@ interface EntryRowProps {
   onChange(patch: Partial<RolesDraft[PresetRole]["primary"]>): void;
   onRemove?(): void;
   onMove?(delta: -1 | 1): void;
+  compact?: boolean;
 }
 
 /**
  * Route labels for the connection options: a display name, never the raw
  * `conn-<uuid>` storage id (role-routes.ts owns the rule).
  */
-function EntryRow({ label, entry, connections, modelSources, onChange, onRemove, onMove }: EntryRowProps) {
-  const route = entry.engine !== "" ? `engine:${entry.engine}` : entry.connection.trim() !== "" ? `connection:${entry.connection}` : "connection:active";
+export function EntryRow({ label, entry, connections, modelSources, onChange, onRemove, onMove, compact = false }: EntryRowProps) {
+  const route = entry.engine !== "" ? `engine:${entry.engine}` : entry.connection.trim() !== "" ? `connection:${entry.connection}` : entry.provider ? `provider:${entry.provider}` : "connection:active";
   const models = resolveRoleModels(entry, modelSources);
   const selection = nextCustomMode(entry.customModel === true, entry.model, models) ? "custom" : roleModelSelection(entry.model, models, entry.engine);
   const routeLabels = useMemo(
@@ -286,14 +287,17 @@ function EntryRow({ label, entry, connections, modelSources, onChange, onRemove,
     <div className="role-picker-entry" data-route={route}>
       <span className="role-picker-entry-label">{label}</span>
       <select
-        className="role-picker-entry-route"
+        className={compact ? "settings-field-select role-picker-entry-route" : "role-picker-entry-route"}
         aria-label={`${label} route`}
+        title={entry.engine ? `${entry.engine} engine` : entry.provider ? `Provider: ${entry.provider}` : entry.connection ? routeLabels.get(entry.connection) ?? `Unavailable connection: ${entry.connection}` : "Session’s connection"}
         value={route}
         onChange={(event) => onChange(routePatch(event.target.value))}
       >
         <option value="engine:claude">Claude engine</option>
         <option value="engine:codex">Codex engine</option>
         <option value="connection:active">Session's connection</option>
+        {entry.provider && <option value={`provider:${entry.provider}`}>Provider: {entry.provider}</option>}
+        {entry.connection.trim() && !connections.some((connection) => connection.id === entry.connection) && <option value={`connection:${entry.connection}`}>Unavailable connection: {entry.connection}</option>}
         {connections.map((connection) => (
           <option key={connection.id} value={`connection:${connection.id}`}>
             {routeLabels.get(connection.id) ?? "Connection"}
@@ -301,7 +305,7 @@ function EntryRow({ label, entry, connections, modelSources, onChange, onRemove,
         ))}
       </select>
       <select
-        className="role-picker-entry-model"
+        className={compact ? "settings-field-select role-picker-entry-model" : "role-picker-entry-model"}
         aria-label={`${label} model`}
         value={selection}
         onChange={(event) => {
@@ -319,10 +323,11 @@ function EntryRow({ label, entry, connections, modelSources, onChange, onRemove,
       </select>
       {selection === "custom" && (
         <input
-          className="role-picker-entry-model"
+          className={compact ? "settings-field-input role-picker-entry-model" : "role-picker-entry-model"}
           aria-label={`${label} custom model`}
           type="text"
           placeholder="Model ID"
+          title={entry.model}
           value={entry.model}
           onChange={(event) => {
             onChange({ model: event.target.value, customModel: nextCustomMode(true, event.target.value, models) });
@@ -330,7 +335,7 @@ function EntryRow({ label, entry, connections, modelSources, onChange, onRemove,
         />
       )}
       <select
-        className="role-picker-entry-effort"
+        className={compact ? "settings-field-select role-picker-entry-effort" : "role-picker-entry-effort"}
         aria-label={`${label} effort`}
         value={entry.effort}
         onChange={(event) => onChange({ effort: event.target.value as (typeof ROLE_EFFORT_LEVELS)[number] })}
@@ -343,16 +348,16 @@ function EntryRow({ label, entry, connections, modelSources, onChange, onRemove,
       </select>
       {onMove && (
         <span className="role-picker-entry-order">
-          <button type="button" aria-label={`Move ${label} up`} disabled={false} onClick={() => onMove?.(-1)}>
+          <button type="button" className={compact ? "settings-button" : undefined} aria-label={`Move ${label} up`} disabled={false} onClick={() => onMove?.(-1)}>
             <Chevron />
           </button>
-          <button type="button" aria-label={`Move ${label} down`} onClick={() => onMove?.(1)}>
+          <button type="button" className={compact ? "settings-button" : undefined} aria-label={`Move ${label} down`} onClick={() => onMove?.(1)}>
             <Chevron />
           </button>
         </span>
       )}
       {onRemove && (
-        <button type="button" className="role-picker-entry-remove" aria-label={`Remove ${label}`} onClick={onRemove}>
+        <button type="button" className={compact ? "settings-button role-picker-entry-remove" : "role-picker-entry-remove"} aria-label={`Remove ${label}`} onClick={onRemove}>
           <X />
         </button>
       )}

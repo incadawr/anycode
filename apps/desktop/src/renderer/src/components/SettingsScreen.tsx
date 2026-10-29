@@ -1040,7 +1040,7 @@ export function resolvePendingAddConnection(
  * folder). Exported for SettingsScreen.test.ts.
  */
 export function paneHasScope(pane: SettingsPaneId | undefined): boolean {
-  return pane === "mcp" || pane === "language-servers" || pane === "skills" || pane === "subagents";
+  return pane === "mcp" || pane === "language-servers" || pane === "skills" || pane === "subagents" || pane === "roles";
 }
 
 /**
@@ -1431,6 +1431,8 @@ export function SettingsScreen({
   // kept across pane switches and active-tab changes. The selection is an opaque
   // id; the folder list comes from main (`scopeBridge.list`), so the renderer
   // never holds a path it could send back.
+  const roleGuardRef = useRef<((action: () => void) => void) | null>(null);
+  const registerRoleGuard = useCallback((guard: ((action: () => void) => void) | null) => { roleGuardRef.current = guard; }, []);
   const [scopeSelection, setScopeSelection] = useState<ScopeSelection>(USER_SCOPE);
   const scopeSelectionRef = useRef<ScopeSelection>(USER_SCOPE);
   const [scopeEntries, setScopeEntries] = useState<ScopeWorkspaceEntry[]>([]);
@@ -1528,6 +1530,15 @@ export function SettingsScreen({
   const scopeResolution = resolveScopeSelection(scopeSelection, scopeEntries);
   const scopeRef = scopeResolution.ref;
   const scopeEntry = scopeResolution.entry;
+  const [rolesScope, setRolesScope] = useState<{ ref: string; root: string | null } | null>(null);
+  const rolesScopeRoot = scopeRef && rolesScope?.ref === scopeRef ? rolesScope.root ?? undefined : undefined;
+  useEffect(() => {
+    let live = true;
+    if (scopeRef && window.anycode?.scopeWorkspaces?.resolve) {
+      void window.anycode.scopeWorkspaces.resolve(scopeEntry?.tabIds[0] ?? scopeRef).then((root) => { if (live) setRolesScope({ ref: scopeRef, root }); }).catch(() => { if (live) setRolesScope({ ref: scopeRef, root: null }); });
+    }
+    return () => { live = false; };
+  }, [scopeRef, scopeEntry?.tabIds.join("|")]);
   // MCP runtime status dots only for the folder whose tab is the active tab.
   const mcpLive = mcpStatusActive(scopeEntry, activeTabId);
   // Language servers' live section needs a real tab (never a workspace id): the
@@ -1795,8 +1806,8 @@ export function SettingsScreen({
                     void refreshScopeEntries();
                   }}
                   onSelect={(next) => {
-                    setScopeFellBackNote(null);
-                    applyScope(next);
+                    const change = () => { setScopeFellBackNote(null); applyScope(next); };
+                    if (activePane === "roles" && roleGuardRef.current) roleGuardRef.current(change); else change();
                   }}
                   countLabel={countLabel(activePane ?? "", paneCount)}
                   hint={scopeHintFor(scopeSelection, scopeEntry)}
@@ -1987,7 +1998,7 @@ export function SettingsScreen({
               md profile's override of a role is visible here, not silent. In
               Global mode the active tab still answers "will my route apply in
               the project I have open". */}
-          {activePane === "roles" && <RolesPane tabId={scopeRef ?? activeTabId ?? undefined} />}
+          {activePane === "roles" && (scopeRef && !rolesScopeRoot ? <p className="settings-field-hint">{rolesScope?.ref === scopeRef ? "Project unavailable." : "Loading project…"}</p> : <RolesPane tabId={scopeRef ?? activeTabId ?? undefined} projectRoot={rolesScopeRoot} registerGuard={registerRoleGuard} />)}
           {/* Taskana 4732 S1-C: the Plugins pane — NOT scope-bar-dependent (it
               shows every tier at once: managed installs + project plugins of
               the active workspace + legacy dirs); main resolves the workspace

@@ -45,11 +45,11 @@ describe("Global role profile select", () => {
     useSettingsStore.setState({ snapshot: withProfile });
     const html = renderToStaticMarkup(createElement(RolesPane));
     // With a profile active the built-in defaults are not a selectable target.
-    expect(html).not.toContain('<option value="">Built-in defaults</option>');
+    expect(html).not.toContain('<option value="">Default</option>');
     expect(html).toContain('<option value="p" selected="">Profile 1</option>');
     // The name field follows the selection, so Rename starts from the current
     // name instead of an empty box (canRenameProfile covers the enable rule).
-    expect(html).toContain('aria-label="Profile name" value="Profile 1"');
+    expect(html).toContain('aria-label="Profile actions"');
   });
 
   it("still offers the built-in defaults while no saved profile is active", () => {
@@ -62,7 +62,7 @@ describe("Global role profile select", () => {
       },
     });
     const html = renderToStaticMarkup(createElement(RolesPane));
-    expect(html).toContain('<option value="" selected="">Built-in defaults</option>');
+    expect(html).toContain('<option value="" selected="">Default</option>');
     expect(html).toContain('<option value="p">Profile 1</option>');
   });
 });
@@ -85,7 +85,7 @@ describe("Project options show the folder name", () => {
   it("labels the option with the folder name and keeps the path as its tooltip", () => {
     useSettingsStore.setState({ snapshot });
     const html = renderToStaticMarkup(createElement(RolesPane));
-    expect(html).toContain('<option value="/private/tmp/anycode-live/uiux-b/ws" title="/private/tmp/anycode-live/uiux-b/ws">ws</option>');
+    expect(html).toContain('<span title="/private/tmp/anycode-live/uiux-b/ws">ws</span>');
     expect(html).not.toContain('>/private/tmp/anycode-live/uiux-b/ws</option>');
   });
 });

@@ -4,6 +4,7 @@
  * Value-only and import-free so the sandboxed preload can value-import it.
  */
 export const SCOPE_WORKSPACES_LIST_CHANNEL = "anycode:scope-workspaces-list";
+export const SCOPE_WORKSPACES_RESOLVE_CHANNEL = "anycode:scope-workspaces-resolve";
 
 /** Prefix of a workspace scope reference (`ws_` + 16 hex). Tab ids never start with it. */
 export const SCOPE_WORKSPACE_ID_PREFIX = "ws_";
