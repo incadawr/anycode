@@ -2981,6 +2981,7 @@ export class Session {
     // switchModel runs the full re-budget recipe host-side and returns the
     // effort state re-resolved for the NEW model. Core also returns that
     // model's restored selected tier, independently of its effective effort.
+    const requestedEffort = effortExplicit ? this.selectedEffort : undefined;
     const result = effortExplicit
       ? this.engine.switchModel(id, this.selectedEffort, true)
       : this.engine.switchModel(id, this.selectedEffort);
@@ -2993,6 +2994,8 @@ export class Session {
       type: "model_changed",
       ...(result.contextUsage !== undefined ? {contextUsage: result.contextUsage} : {}),
       ...(result.selectedReasoningEffort !== undefined ? {selectedReasoningEffort: result.selectedReasoningEffort} : {}),
+      ...(requestedEffort !== undefined ? { requestedReasoningEffort: requestedEffort } : {}),
+      ...(result.effortAdjustment !== undefined ? { effortAdjustment: result.effortAdjustment } : {}),
       model: result.model,
       reasoningEffort: result.reasoningEffort,
       ...(result.availableEffortLevels !== undefined ? { availableEffortLevels: result.availableEffortLevels } : {}),

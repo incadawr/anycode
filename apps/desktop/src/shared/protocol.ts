@@ -869,6 +869,8 @@ export type HostToUiMessage =
       /** Budget and selected tier belong to this same model acknowledgement. */
       contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
       selectedReasoningEffort?: ReasoningEffort;
+      requestedReasoningEffort?: ReasoningEffort;
+      effortAdjustment?: { from: ReasoningEffort; to: ReasoningEffort };
       model: string;
       reasoningEffort: ReasoningEffort;
       availableEffortLevels?: ReasoningEffort[];

@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Save every effort selection and adjust unsupported levels when switching models.
+
 ### Added
 
 - Explore agents can read Git history and status using a read-only Git tool (GitHub #22).

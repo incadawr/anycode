@@ -45,11 +45,12 @@ const env = { ...process.env,
 for (const key of ["ANYCODE_API_KEY", "ANYCODE_MODEL", "ANYCODE_BASE_URL", "ANYCODE_PROVIDER", "ANYCODE_TRANSPORT", "ANYCODE_REASONING_EFFORT", "ANYCODE_CONTEXT_WINDOW", "ANYCODE_CONTEXT_WINDOW_MODEL"]) delete env[key];
 writeFileSync(join(profile, "settings.json"), JSON.stringify({
   version:2, provider:{activeConnectionId:"conn-smoke", connections:[{
-    id:"conn-smoke", providerId:"vllm", label:"Model overrides smoke", model:"a", models:["a","b","unknown"],
+    id:"conn-smoke", providerId:"vllm", label:"Model overrides smoke", model:"a", models:["a","b","unknown","glm-like-52","glm-like-53"],
+    modelCapabilities:{"glm-like-52":{reasoning:true, effortLevels:["off","high","max"]}, "glm-like-53":{reasoning:true, effortLevels:["low","medium","high","max"]}},
     transport:"openai-chat-completions", baseUrl:fixtureUrl, authOptional:true, imageInputOverride:"on", imageInputModel:"a",
   }]}, tools:{}, permissions:{alwaysAllow:[]}, ui:{theme:"dark"}, security:{allowWeakSecretStorage:false},
 }));
-const app = spawn("pnpm", ["--filter", "@anycode/desktop", "dev"], {
+const app = spawn("pnpm", ["--filter", "@anycode/desktop", "dev", ...(process.env.ANYCODE_SMOKE_NO_SANDBOX === "1" ? ["--noSandbox"] : [])], {
   env, stdio: ["ignore", "inherit", "inherit"], detached: true,
 });
 let ws;
@@ -223,6 +224,44 @@ try {
   assert((await evaluate("window.anycode.settings.connectionUpdate({id:'conn-smoke', modelOverrideModel:'a', contextWindowTokens:112000, reasoningEffort:'medium'})")).ok);
   await turn("a", 88000, "medium");
   assert.equal((await pill()).currentEffort, "medium");
+  // Exercise an initially displayed, unsaved off value through the real picker.
+  assert((await evaluate("window.anycode.settings.connectionUpdate({id:'conn-smoke', model:'glm-like-52'})")).ok);
+  assert((await evaluate("window.anycode.settings.connectionUpdate({id:'conn-smoke', modelOverrideModel:'glm-like-53', reasoningEffort:'off'})")).ok);
+  const effortTab = await evaluate(`window.anycode.createTab({kind:'new', workspace:${JSON.stringify(profile)}})`);
+  assert(effortTab.ok);
+  await api(`/tabs/${effortTab.tabId}/select`, "POST", {});
+  const effortPath = `/tabs/${effortTab.tabId}/model-pill`;
+  await poll(async () => { const p = await api(effortPath); return p.currentModel === "glm-like-52" && p.currentEffort === "off"; });
+  assert.equal(JSON.parse(readFileSync(join(profile, "settings.json"), "utf8")).provider.connections[0].modelOverrides?.["glm-like-52"]?.reasoningEffort, undefined);
+  await api(`${effortPath}/pick`, "POST", {kind:"effort", value:"off"});
+  await poll(() => JSON.parse(readFileSync(join(profile, "settings.json"), "utf8")).provider.connections[0].modelOverrides?.["glm-like-52"]?.reasoningEffort === "off");
+  await call("Page.reload", {});
+  await poll(() => evaluate("!!document.querySelector('.sidebar-settings')"));
+  const reloaded = await evaluate(`window.anycode.createTab({kind:'new', workspace:${JSON.stringify(profile)}})`);
+  assert(reloaded.ok);
+  await poll(async () => { try { return (await api(`/tabs/${reloaded.tabId}/select`, "POST", {})).ok; } catch { return false; } });
+  const reloadedPath = `/tabs/${reloaded.tabId}/model-pill`;
+  await poll(async () => { try { const p = await api(reloadedPath); return p.currentModel === "glm-like-52" && p.currentEffort === "off"; } catch { return false; } });
+  await api(`${reloadedPath}/pick`, "POST", {kind:"model", value:"glm-like-53"});
+  await poll(async () => (await api(reloadedPath)).currentEffort === "low");
+  await poll(() => evaluate("document.querySelector('.notice-toast-text')?.textContent.includes('glm-like-53 reasoning effort adjusted to low')"));
+  const adjustment = await call("Page.captureScreenshot", {format:"png"});
+  writeFileSync(join(profile, "effort-adjustment.png"), Buffer.from(adjustment.data, "base64"));
+  await api(`${reloadedPath}/pick`, "POST", {kind:"open"});
+  await evaluate("document.querySelector('.start-model-effort-row').click()");
+  await poll(() => evaluate("document.querySelector('[role=menuitemradio][data-effort=low]')?.getAttribute('aria-checked') === 'true'"));
+  const checked = await call("Page.captureScreenshot", {format:"png"});
+  writeFileSync(join(profile, "effort-checkmark.png"), Buffer.from(checked.data, "base64"));
+  await evaluate("document.querySelector('[role=menuitemradio][data-effort=low]').closest('[role=menu]').dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}))");
+  const prompt = "effort-fallback-smoke";
+  await api(`/tabs/${reloaded.tabId}/prompt`, "POST", {text:prompt});
+  const waitedEffort = await api("/wait", "POST", {tabId:reloaded.tabId, until:{transcriptIncludes:`fixture answer: ${prompt}`, turnStatus:"idle"}, timeoutMs:15000});
+  assert(waitedEffort.matched);
+  writeFileSync(join(profile, "fixture-requests.json"), JSON.stringify(fixtureRequests, null, 2));
+  assert(fixtureRequests.some((entry) => entry.prompt === prompt && entry.model === "glm-like-53" && entry.effort === "low"));
+  await api(`${reloadedPath}/pick`, "POST", {kind:"model", value:"glm-like-52"});
+  await poll(async () => (await api(reloadedPath)).currentEffort === "off");
+  writeFileSync(join(profile, "fixture-requests.json"), JSON.stringify(fixtureRequests, null, 2));
   console.log(`PASS: live window/effort edits without restart, cached-model switches, settings-derived env refresh, and a context shortcut that preserves the connection default and image override. Evidence: ${profile}`);
 
 } finally {
