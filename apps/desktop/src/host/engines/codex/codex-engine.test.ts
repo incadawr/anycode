@@ -492,6 +492,12 @@ describe("CodexEngine — native session boot", () => {
     await expect(createNativeCodexSession(server, "/work")).resolves.toMatchObject({ threadId: "fresh-thread" });
   });
 
+  it("accepts a ChatGPT account with a workspace name", async () => {
+    const server = new FakeAppServer();
+    server.account = { type: "chatgpt", workspaceName: "Workspace" };
+    await expect(createNativeCodexSession(server, "/work")).resolves.toMatchObject({ threadId: "fresh-thread" });
+  });
+
   it("refuses a signed-out account before native thread creation", async () => {
     const server = new FakeAppServer();
     server.account = null;
