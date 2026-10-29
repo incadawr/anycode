@@ -464,6 +464,7 @@ export function ModelPill() {
   const model = useTabStore((state) => state.model);
   const reasoningEffort = useTabStore((state) => state.reasoningEffort);
   const modelSelectionAck = useTabStore((state) => state.modelSelectionAck);
+  const effortSelectionAck = useTabStore((state) => state.effortSelectionAck);
   const availableEffortLevels = useTabStore((state) => state.availableEffortLevels);
   const turnStatus = useTabStore((state) => state.turn.status);
   const queueInFlight = useTabStore((state) => state.queueInFlight);
@@ -923,12 +924,14 @@ export function ModelPill() {
 
   // One model acknowledgement can include both queued choices. Persist only
   // axes the user actually picked, even if the acknowledged value is unchanged.
-  useEffect(() => {
-    if (modelSelectionAck === undefined || modelSelectionAck === null || modelSelectionAck.model === null) return;
-    for (const request of modelSettingsWrites(pendingPickRef.current, { model: modelSelectionAck.model, effort: modelSelectionAck.effort, requestedEffort: modelSelectionAck.requestedEffort, kind: modelSelectionAck.kind })) {
+  function persistAck(ack: typeof modelSelectionAck): void {
+    if (ack == null || ack.model === null) return;
+    for (const request of modelSettingsWrites(pendingPickRef.current, { model: ack.model, effort: ack.effort, requestedEffort: ack.requestedEffort, kind: ack.kind })) {
       writeChainRef.current = chainWrite(writeChainRef.current, () => connectionUpdate(request));
     }
-  }, [modelSelectionAck]);
+  }
+  useEffect(() => { persistAck(effortSelectionAck); }, [effortSelectionAck]);
+  useEffect(() => { persistAck(modelSelectionAck); }, [modelSelectionAck]);
 
   function onChipKeyDown(event: KeyboardEvent<HTMLButtonElement>): void {
     if (pickDisabled) {
