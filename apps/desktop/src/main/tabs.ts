@@ -118,8 +118,9 @@ const HOST_SHUTDOWN_MESSAGE_TYPE = "shutdown";
  * main-side style choice. The child-limit messages use the current wording
  * documented for users.
  */
-const CHILD_LIMIT_GLOBAL_MESSAGE =
-  'Agent: application-wide child session limit reached (8 running child sessions). No child was started. Wait for one to finish, or use tier "inline".';
+function childLimitGlobalMessage(limit: number): string {
+  return `Agent: application-wide child session limit reached (${limit} running child ${limit === 1 ? "session" : "sessions"}). No child was started. Wait for one to finish, or use tier "inline".`;
+}
 const CHILD_RECURSION_MESSAGE = 'Agent: a child session cannot spawn its own child sessions. Use tier "inline".';
 const CHILD_CLOSING_MESSAGE = "Agent: the child session could not be started (host is closing).";
 const CHILD_SPAWN_FAILED_MESSAGE = "Agent: the child session failed to start.";
@@ -2134,7 +2135,7 @@ export class TabHostManager {
     }
     const globalMax = clampSessionLimit("childSessionsGlobalMax", this.childGlobalReader?.()) ?? CHILD_RUNS_GLOBAL_MAX;
     if (this.childRuns.size >= globalMax) {
-      return { reason: "limit_global", message: CHILD_LIMIT_GLOBAL_MESSAGE };
+      return { reason: "limit_global", message: childLimitGlobalMessage(globalMax) };
     }
     return undefined;
   }
