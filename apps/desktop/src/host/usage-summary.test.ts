@@ -3,6 +3,17 @@ import { SqlitePersistenceAdapter } from "@anycode/core";
 import { summarizeWithChildren } from "./usage-summary.js";
 
 describe("session and child cost rollup", () => {
+  it("adds an inline model's recorded price once", async () => {
+    const db = new SqlitePersistenceAdapter(":memory:");
+    try {
+      await db.createSession({ id: "root", workspace: "/w", model: "a", mode: "build" });
+      await db.recordProviderUsage({ sessionId: "root", turnId: "own", step: 1, createdAt: 1, model: "a", costUsd: .003, priceBasisId: "model:a", finishReason: "stop", transportRetries: 0 });
+      await db.recordProviderUsage({ sessionId: "root", turnId: "child", step: 1, createdAt: 2, model: "b", subagentId: "child", costUsd: .007, priceBasisId: "model:b", finishReason: "stop", transportRetries: 0 });
+      const summary = await summarizeWithChildren(db, "root");
+      expect(summary.totals).toMatchObject({ costUsd: .003, subagentCostUsd: .007, subagentCount: 1 });
+      expect((summary.totals?.costUsd ?? 0) + (summary.totals?.subagentCostUsd ?? 0)).toBeCloseTo(.01);
+    } finally { await db.close(); }
+  });
   it("preserves unknown Claude native-child cost without adding it twice", async () => {
     const db = new SqlitePersistenceAdapter(":memory:");
     await db.createSession({ id: "root", workspace: "/w", model: "m", mode: "build" });

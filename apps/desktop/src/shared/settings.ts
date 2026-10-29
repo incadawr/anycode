@@ -229,11 +229,14 @@ export type ProviderHealthStatus =
  * "legacy" bucket (no catalog pick) so `activeProviderView` reads back an
  * absent `provider.id`, exactly like a v1 singleton with no id.
  */
+export interface TokenRates { input: number; cachedInput: number; output: number; cacheWrite?: number }
+
 export type ConnectionPricing =
   | { mode: "subscription" }
-  | { mode: "rates"; input: number; cachedInput: number; output: number; cacheWrite?: number };
+  | ({ mode: "rates" } & TokenRates);
 
 export interface ModelOverrides {
+  pricing?: TokenRates;
   contextWindowTokens?: number;
   reasoningEffort?: ReasoningEffort;
   /** User declaration for a model missing from the catalog and live metadata. */
@@ -1198,6 +1201,7 @@ export type SettingsPatch = Omit<DeepPartial<AnycodeSettings>, "provider">;
 // ── connection CRUD request payloads (companions to the connection-* channels) ──
 
 export interface ConnectionCreateRequest {
+  modelPricing?: Record<string, TokenRates>;
   reasoningSupported?: true;
   pricing?: ConnectionPricing;
   providerId: string;
@@ -1244,6 +1248,7 @@ export interface ConnectionCreateRequest {
 }
 
 export interface ConnectionUpdateRequest {
+  modelPricing?: Record<string, TokenRates | "">;
   pricing?: ConnectionPricing | "";
   id: string;
   label?: string;

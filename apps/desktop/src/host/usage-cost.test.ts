@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { findCatalogEntry } from "@anycode/core/catalog";
 import { SqlitePersistenceAdapter } from "@anycode/core";
 import { summarizeProviderUsage } from "./session.js";
-import { calculateUsageCost, connectionPricing } from "./usage-cost.js";
+import { calculateUsageCost, connectionPricing, resolveUsagePrice } from "./usage-cost.js";
 
 const price = { basisId: "test", input: 0.3, cachedInput: 0.006, output: 1.2 };
 describe("usage cost snapshots", () => {
@@ -85,5 +85,26 @@ describe("catalog prices through the calculator", () => {
     expect(catalogPrice("kimi", "k3")).toBeUndefined();
     expect(catalogPrice("moonshot", "kimi-k2.6")).toBeUndefined();
     expect(calculateUsageCost({ inputTokens: 1_000, cachedInputTokens: 0, outputTokens: 1_000 }, catalogPrice("kimi", "k3"))).toBeUndefined();
+  });
+});
+
+
+describe("per-model price resolution", () => {
+  const a = { input: 1, cachedInput: 0, output: 2 };
+  const b = { input: 3, cachedInput: 0, output: 4 };
+  const usage = { inputTokens: 1000, cachedInputTokens: 0, outputTokens: 1000 };
+  it("uses exact model prices, fallback, catalog and subscription in order", () => {
+    const raw = JSON.stringify({ fallback: { mode: "rates", ...b }, models: { A: a, B: b, constructor: a, bad: { input: -1 } } });
+    for (const [id, expected] of [["A", .003], ["B", .007], ["constructor", .003], ["bad", .007], ["a", .007]] as const) {
+      const selected = resolveUsagePrice(raw, id, price);
+      expect(selected?.subscription).toBe(false);
+      if (selected && !selected.subscription) expect(calculateUsageCost(usage, selected.price)?.costUsd).toBeCloseTo(expected);
+    }
+    expect(resolveUsagePrice(JSON.stringify({ models: { A: a }, fallback: { mode: "subscription" } }), "A", price)).toEqual({ subscription: true });
+    expect(resolveUsagePrice(undefined, "C", price)).toEqual({ subscription: false, price });
+    expect(resolveUsagePrice(undefined, "C", undefined)).toBeUndefined();
+    const zero = resolveUsagePrice(JSON.stringify({ models: { A: { input: 0, cachedInput: 0, output: 0 } } }), "A", price);
+    if (zero && !zero.subscription) expect(calculateUsageCost(usage, zero.price)?.costUsd).toBe(0);
+    expect(resolveUsagePrice(raw, "A", price)).toEqual(resolveUsagePrice(JSON.stringify({ fallback: { mode: "rates", ...b }, models: { A: a, B: a } }), "A", price));
   });
 });
