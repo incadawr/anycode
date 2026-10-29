@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, constants, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { McpServerSpec, McpStdioServerSpec } from "@anycode/core";
@@ -19,8 +19,18 @@ function freshHome(): string {
   return mkdtempSync(join(tmpdir(), "mcp-path-home-"));
 }
 
+function isExecutable(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 describe("discoverLoginPath — GitHub #3 (a launcher outside the minimal GUI PATH)", () => {
-  it.skipIf(process.platform === "win32")("reads a directory added by shell startup, not just the inherited PATH", async () => {
+  // A startup file can only be read when its shell exists and is executable.
+  it.skipIf(process.platform === "win32" || !isExecutable("/bin/zsh"))("reads a directory added by zsh startup, not just the inherited PATH", async () => {
     const dir = mkdtempSync(join(tmpdir(), "mcp-shell-"));
     try {
       writeFileSync(join(dir, ".zshrc"), 'export PATH="/startup-only/bin:$PATH"\n');
@@ -33,6 +43,22 @@ describe("discoverLoginPath — GitHub #3 (a launcher outside the minimal GUI PA
       expect(path?.split(":")).toContain("/startup-only/bin");
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32" || !isExecutable("/bin/bash"))("reads a directory added by bash startup, not just the inherited PATH", async () => {
+    const home = freshHome();
+    try {
+      writeFileSync(join(home, ".bash_profile"), 'export PATH="/bash-startup-only/bin:$PATH"\n');
+      const path = await discoverLoginPath({
+        ...process.env,
+        SHELL: "/bin/bash",
+        HOME: home,
+        PATH: "/usr/bin:/bin",
+      });
+      expect(path?.split(":")).toContain("/bash-startup-only/bin");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
     }
   });
 
