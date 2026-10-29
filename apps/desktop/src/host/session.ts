@@ -1184,7 +1184,7 @@ const answerApprovalSchema = z.object({
 }).strict();
 
 export class Session {
-  private readonly presentationJournal = new PresentationJournal();
+  private readonly presentationJournal: PresentationJournal;
   private readonly outbound: Outbound;
   /**
    * Taskana 4068: NOT readonly — the engine_swap_request handler re-assigns
@@ -1753,6 +1753,7 @@ export class Session {
     this.currentTitle = initialTitle.length > 0 ? options.initialTitle : undefined;
     this.titleSet = this.currentTitle !== undefined || (options.hasTitle ?? false);
     this.historyMaxItems = options.historyMaxItems ?? SESSION_HISTORY_MAX_ITEMS;
+    this.presentationJournal = new PresentationJournal(this.historyMaxItems, REPLAY_BUFFER_CAP);
     this.sessionHistory = buildSessionHistory(options.bootHistory ?? [], this.historyMaxItems);
     const publicHistory = options.bootHistory ?? this.engine.historyItems();
     for (const item of [...publicHistory].reverse()) {
@@ -3750,7 +3751,7 @@ export class Session {
     this.abort = controller;
     try {
       for await (const event of engine.compactNow!({ signal: controller.signal })) {
-        if (event.type === "compaction_start" && engine.id === "core") this.presentationJournal.observeHistory(engine.historyItems());
+        if (event.type === "compaction_start" && engine.id === "core") this.presentationJournal.observeHistory(engine.historyItems(), this.turnId ?? undefined);
         // `emit` (not `sendDirect`): a reconnect mid-compaction must replay
         // the start/end pair from the ring buffer exactly like a real turn's
         // events do — a fresh renderer attach should never see a half-open
@@ -5062,7 +5063,7 @@ export class Session {
           this.pendingUsageAuditRow = null;
         }
         if (this.engine.id === "core" && (event.type === "turn_end" || event.type === "loop_end" || event.type === "compaction_start")) {
-          this.presentationJournal.observeHistory(this.engine.historyItems());
+          this.presentationJournal.observeHistory(this.engine.historyItems(), this.turnId ?? undefined);
         }
         const eventStep = this.engine.id === "core" ? this.currentStep : undefined;
         const eventAttempt = eventStep !== undefined ? this.currentAttempt : undefined;

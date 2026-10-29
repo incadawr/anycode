@@ -4983,16 +4983,17 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             presentationAnchors.clear();
             for (const turn of message.turns) {
               const boundary = retained.get(turn.turnId);
-              if (tracksTurns && message.truncated && boundary === undefined && turn.turnId !== message.liveTurnId) continue;
               const userItems = message.items.filter((item) => item.turnId === turn.turnId && item.step === 0 && item.message.role === "user");
               if (userItems.length) {
                 projection.setState((state) => ({ transcript: [...state.transcript, ...projectHistoryToBlocks(userItems)] }));
-              } else if (turn.text !== undefined && (!tracksTurns || turn.turnId === message.liveTurnId) && (!message.truncated || boundary === undefined || boundary === 0)) {
+              } else if (turn.text !== undefined && (!message.truncated || boundary === undefined || boundary === 0)) {
                 projection.getState().appendUserText(tracksTurns ? `pending:${turn.turnId}` : turn.requestId, turn.text, turn.images, turn.origin);
               }
               projection.getState().applyHostMessage({ type: "turn_started", turnId: turn.turnId, requestId: turn.requestId, startedAt: turn.startedAt });
               for (const entry of turn.events) {
                 if (tracksTurns && boundary !== undefined && entry.step !== undefined && entry.step < boundary) continue;
+                const event = entry.event;
+                if (event.type === "user_injected" && userItems.some((item) => item.message.role === "user" && item.message.content === event.text)) continue;
                 projection.getState().applyHostMessage({ type: "agent_event", turnId: turn.turnId, ...entry });
               }
               for (const snapshot of turn.fileSnapshots ?? []) projection.getState().applyHostMessage(snapshot);
@@ -5020,7 +5021,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               if (match) blockSeq = Math.max(blockSeq, Number(match[1]) + 1);
               if (block.kind === "loop_end") loopEndEmitted.add(block.id);
             }
-            set({ transcript, modelTurns: projection.getState().modelTurns, ...(!isCore ? { sessionTokens: projection.getState().sessionTokens } : {}) });
+            set({ transcript, modelTurns: projection.getState().modelTurns, continueOffer: projection.getState().continueOffer, ...(!isCore ? { sessionTokens: projection.getState().sessionTokens } : {}) });
             presentationReplayTurns = known;
             return;
           }

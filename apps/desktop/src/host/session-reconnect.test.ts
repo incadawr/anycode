@@ -456,7 +456,7 @@ describe("TASK.117 — rendered reconnect (Session -> fresh desktopStore)", () =
     }
   });
 
-  it("cancel: pending prompt is cleaned up, unpersisted text does not resurrect on reconnect", async () => {
+  it("cancel: pending prompt is cleaned up and its completed turn survives reconnect", async () => {
     const h = createHarness({ steps: [renderedTextStep("never happens")] });
     let release: (() => void) | undefined = (() => {}) as (() => void) | undefined;
     const gate = new Promise<void>((r) => {
@@ -492,7 +492,8 @@ describe("TASK.117 — rendered reconnect (Session -> fresh desktopStore)", () =
       await settle();
       const fresh = attachStore(h).store;
       expect(fresh.getState().pendingPrompt).toBeNull();
-      expect(texts(fresh)).not.toContain("cancelled prompt");
+      expect(texts(fresh)).toContain("cancelled prompt");
+      expect(fresh.getState().transcript.some((b) => b.kind === "loop_end" && b.reason === "cancelled")).toBe(true);
       expect(fresh.getState().turn.status).toBe("idle");
     } finally {
       release?.();
@@ -650,11 +651,11 @@ describe("TASK.117 — rendered reconnect (Session -> fresh desktopStore)", () =
       for (let i = 0; i < cascadeEnd; i += 1) {
         fresh.getState().applyHostMessage(h.received[i] as HostToUiMessage);
       }
-      // No durable user item for the cancelled prompt, no stale pendingPrompt
-      // field, turn idle, NO rendered cancelled text.
+      // The journal restores the completed turn despite the absent durable item.
       expect(h.engine.historyItems().filter((item) => (item.message.content ?? "") === "terminal prompt")).toHaveLength(0);
       expect(fresh.getState().pendingPrompt).toBeNull();
-      expect(texts(fresh).filter((t) => t === "terminal prompt")).toHaveLength(0);
+      expect(texts(fresh).filter((t) => t === "terminal prompt")).toHaveLength(1);
+      expect(fresh.getState().transcript.some((b) => b.kind === "loop_end" && b.reason === "cancelled")).toBe(true);
       expect(fresh.getState().turn.status).toBe("idle");
 
       // The NEXT accepted prompt is unaffected: renders, clears at terminal.
