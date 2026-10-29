@@ -5,7 +5,7 @@
  * a live InProcessTaskManager with a controllable ExecutionPort — no timers.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { bashOutputTool } from "./bash-output.js";
 import { InProcessTaskManager } from "../tasks/manager.js";
 import type { ToolContext } from "../types/tools.js";
@@ -133,6 +133,17 @@ describe("bashOutputTool — real cursor increment through InProcessTaskManager 
     const r3 = await bashOutputTool.handler({ task_id: "task-1" }, ctx);
     expect(r3.output?.newOutput).toBe("");
 
-    await manager.disposeAll();
+    vi.useFakeTimers();
+    try {
+      let disposed = false;
+      const disposal = manager.disposeAll().then(() => { disposed = true; });
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(disposed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await disposal;
+      expect(disposed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

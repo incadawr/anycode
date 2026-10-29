@@ -184,6 +184,30 @@ describe("checkReloadProtection (GitHub #19 packaged reload-shortcut check)", ()
 
   const safeMenu = { items: [{ label: "File", submenu: { items: [{ role: "close" }] } }] };
 
+  async function checkWithClock(win: ReturnType<typeof fakeWin>, menu: Parameters<typeof checkReloadProtection>[1], platform: NodeJS.Platform, waits: number): Promise<void> {
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      const result = checkReloadProtection(win.win as never, menu, platform).then(
+        () => { settled = true; return undefined; },
+        (error: unknown) => { settled = true; return error; },
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      for (let i = 0; i < waits; i++) {
+        expect(win.state.sentEvents).toHaveLength((i + 1) * 2);
+        await vi.advanceTimersByTimeAsync(499);
+        expect(settled).toBe(false);
+        expect(win.state.sentEvents).toHaveLength((i + 1) * 2);
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      expect(settled).toBe(true);
+      const error = await result;
+      if (error !== undefined) throw error;
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
   it("accepts the production menu with Electron-style null defaults", async () => {
     // Electron 43 supplies role-specific accelerators and submenus before
     // replacing absent values with null. Only fields traversed by the check
@@ -216,7 +240,7 @@ describe("checkReloadProtection (GitHub #19 packaged reload-shortcut check)", ()
       const menu = convert(buildApplicationMenuTemplate({
         platform, development: false, onReload: () => {}, onForceReload: () => {}, onToggleDevTools: () => {},
       }), platform);
-      await checkReloadProtection(fakeWin().win as never, menu, platform);
+      await checkWithClock(fakeWin(), menu, platform, 2);
     }
   });
 
@@ -247,8 +271,9 @@ describe("checkReloadProtection (GitHub #19 packaged reload-shortcut check)", ()
   });
 
   it("sends both R and Shift+R keyDown/keyUp with the platform primary modifier and keeps the sentinel", async () => {
-    const { win, state } = fakeWin();
-    await checkReloadProtection(win as never, safeMenu, "darwin");
+    const rig = fakeWin();
+    const { state } = rig;
+    await checkWithClock(rig, safeMenu, "darwin", 2);
     expect(state.loadStarts).toBe(0);
     expect(state.sentEvents.map((e) => `${e.type}:${e.keyCode}:${e.modifiers.join(",")}`)).toEqual([
       "keyDown:R:command",
@@ -260,28 +285,32 @@ describe("checkReloadProtection (GitHub #19 packaged reload-shortcut check)", ()
   });
 
   it("uses control as the primary modifier on win32/linux", async () => {
-    const { win, state } = fakeWin();
-    await checkReloadProtection(win as never, safeMenu, "win32");
+    const rig = fakeWin();
+    const { state } = rig;
+    await checkWithClock(rig, safeMenu, "win32", 2);
     expect(state.sentEvents[0]).toMatchObject({ type: "keyDown", keyCode: "R", modifiers: ["control"] });
     expect(state.sentEvents[2]).toMatchObject({ modifiers: ["control", "shift"] });
   });
 
   it.each([{ undelivered: true }, { dropShift: true }])("fails when shortcut key events are not delivered: %o", async (overrides) => {
-    const { win, state } = fakeWin(overrides);
-    await expect(checkReloadProtection(win as never, safeMenu, "darwin")).rejects.toThrow("reload shortcut events were not delivered");
+    const rig = fakeWin(overrides);
+    const { state } = rig;
+    await expect(checkWithClock(rig, safeMenu, "darwin", overrides.dropShift ? 2 : 1)).rejects.toThrow("reload shortcut events were not delivered");
     expect(state.listener).toBeUndefined();
     expect(state.inputListener).toBeUndefined();
   });
 
   it("fails when a synthetic reload clears the sentinel, and detaches the listener", async () => {
-    const { win, state } = fakeWin({ clearOnKey: true });
-    await expect(checkReloadProtection(win as never, safeMenu, "darwin")).rejects.toThrow("reloaded the window");
+    const rig = fakeWin({ clearOnKey: true });
+    const { state } = rig;
+    await expect(checkWithClock(rig, safeMenu, "darwin", 1)).rejects.toThrow("reloaded the window");
     expect(state.listener).toBeUndefined();
   });
 
   it("fails on a load-start during a key press and still detaches the listener", async () => {
-    const { win, state } = fakeWin({ loadOnKey: true });
-    await expect(checkReloadProtection(win as never, safeMenu, "darwin")).rejects.toThrow("started 1 load");
+    const rig = fakeWin({ loadOnKey: true });
+    const { state } = rig;
+    await expect(checkWithClock(rig, safeMenu, "darwin", 1)).rejects.toThrow("started 1 load");
     expect(state.listener).toBeUndefined();
   });
 });
