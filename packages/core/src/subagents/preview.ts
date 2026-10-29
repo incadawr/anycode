@@ -79,7 +79,7 @@ export function effectiveProfileTools(tools: readonly string[]): string[] {
 export interface SubagentProfileDraft {
   name: string;
   description: string;
-  /** Absent ⇒ inherit the general-purpose baseline (nine non-spawn tools). */
+  /** Absent ⇒ inherit the general-purpose baseline (ten non-spawn tools). */
   tools?: readonly string[];
   /** Raw child systemPrompt body (the loader caps it + placeholders an empty one). */
   body: string;

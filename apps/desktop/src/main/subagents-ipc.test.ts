@@ -92,6 +92,7 @@ describe("handleSubagentsList", () => {
     const home = await tmp();
     await seed(join(ws, ".anycode/agents/reviewer.md"), md({ name: "reviewer", description: "Reviews code", tools: "Read, Grep" }, "body"));
     await seed(join(home, ".anycode/agents/personal.md"), md({ name: "personal", description: "Personal helper" }, "body"));
+    await seed(join(home, ".anycode/agents/partial.md"), md({ name: "partial", description: "Missing Git", tools: "Read, Write, Edit, Bash, Grep, Glob, TodoRead, TodoWrite, WebFetch, Skill" }, "body"));
     await seed(join(ws, ".anycode/agents/broken.md"), "no frontmatter");
     await seedPluginAgent(ws, "myplug", "plugagent", "a plugin agent");
 
@@ -105,9 +106,10 @@ describe("handleSubagentsList", () => {
       toolsBadge: "All tools",
       source: "builtin",
     });
-    expect(byName.explore).toMatchObject({ sourceKind: "builtin", editable: false, toolsBadge: "6 tools", toolCount: 6 });
+    expect(byName.explore).toMatchObject({ sourceKind: "builtin", editable: false, toolsBadge: "7 tools", toolCount: 7 });
     expect(byName.reviewer).toMatchObject({ sourceKind: "project", editable: true, toolsBadge: "2 tools", toolCount: 2 });
-    expect(byName.personal).toMatchObject({ sourceKind: "user", editable: true });
+    expect(byName.personal).toMatchObject({ sourceKind: "user", editable: true, toolsBadge: "All tools" });
+    expect(byName.partial).toMatchObject({ sourceKind: "user", toolsBadge: "10 tools", toolCount: 10 });
     expect(byName.plugagent).toMatchObject({ sourceKind: "plugin", pluginName: "myplug", editable: false });
     expect(byName.broken).toBeUndefined();
     expect(snapshot.problems.length).toBeGreaterThanOrEqual(1);
@@ -123,10 +125,10 @@ describe("handleSubagentsList", () => {
     expect(row?.sourceKind).toBe("user");
   });
 
-  it("badges general-purpose as All tools (its list IS the full non-spawn default)", () => {
-    const fullCount = effectiveProfileTools(PERSONAS["general-purpose"].tools).length;
-    expect(effectiveProfileTools(PERSONAS["general-purpose"].tools).length).toBe(fullCount);
-    expect(effectiveProfileTools(PERSONAS.explore.tools).length).toBe(6);
+  it("includes Git in the general-purpose and explore tool sets", () => {
+    expect(effectiveProfileTools(PERSONAS["general-purpose"].tools)).toContain("Git");
+    expect(effectiveProfileTools(PERSONAS.explore.tools)).toContain("Git");
+    expect(effectiveProfileTools(PERSONAS.explore.tools)).toHaveLength(7);
   });
 });
 
