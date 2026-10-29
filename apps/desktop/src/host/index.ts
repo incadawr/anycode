@@ -259,6 +259,7 @@ import {
   resolveMaxOutputTokens,
   clampSubagentMaxOutputTokens,
   resolveReasoningEffort,
+  resolveChildReasoningEffort,
   runWrapUp,
   SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS,
   // taskana 4181: supervisor idle-watchdog defaults (see
@@ -3550,8 +3551,9 @@ async function boot(): Promise<void> {
       (modelId, applied) =>
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
     ));
+    const resolveSessionEffort = isChildSessionBoot(args, sessionMeta) ? resolveChildReasoningEffort : resolveReasoningEffort;
     const bootSelectedEffort = connectionModelSettings.effortFor(envConfig.model);
-    const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, bootSelectedEffort, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model));
+    const bootReasoningEffort = resolveSessionEffort(envConfig.model, catalogEntry, bootSelectedEffort, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model));
     // Preserve explicit selections even when the current model suppresses them.
     selectedEffort = bootSelectedEffort ?? bootReasoningEffort ?? "off";
     connectionModelSettings.remember(envConfig.model, selectedEffort);
@@ -4656,7 +4658,7 @@ async function boot(): Promise<void> {
           (modelId, applied) =>
             console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
         ));
-        const resolvedEffort = resolveReasoningEffort(id, catalogEntry, selectedTier, liveCapsFor(id), effortLevelsFor(id));
+        const resolvedEffort = resolveSessionEffort(id, catalogEntry, selectedTier, liveCapsFor(id), effortLevelsFor(id));
         config.reasoningEffort = resolvedEffort;
         liveContextWindow = contextWindow;
         // TASK.198 срез C (plan §9): a model switch can flip sighted<->blind,
@@ -4694,7 +4696,7 @@ async function boot(): Promise<void> {
       loop,
       config,
       switchModelImpl,
-      resolveSelectedEffort: (effort) => resolveReasoningEffort(currentModel, catalogEntry, effort, liveCapsFor(currentModel), effortLevelsFor(currentModel)),
+      resolveSelectedEffort: (effort) => resolveSessionEffort(currentModel, catalogEntry, effort, liveCapsFor(currentModel), effortLevelsFor(currentModel)),
       onBeforeTurn: async () => {
         if (connectionModelSettings.refresh()) session?.refreshModelSettings();
         turnPricingRaw = currentPricingRaw();
@@ -4891,7 +4893,7 @@ async function boot(): Promise<void> {
       // queued change included) exactly as core will resolve it.
       effortResolution: {
         levels: (id) => resolveEffortLevels(id, catalogEntry, liveCapsFor(id), effortLevelsFor(id)),
-        effective: (id, tier) => resolveReasoningEffort(id, catalogEntry, tier, liveCapsFor(id), effortLevelsFor(id)),
+        effective: (id, tier) => resolveSessionEffort(id, catalogEntry, tier, liveCapsFor(id), effortLevelsFor(id)),
       },
       // Slice P7.15 (F14): the user-selected effort tier, threaded so Session can
       // re-resolve effort against the NEW model on a switch (mirror of the CLI's

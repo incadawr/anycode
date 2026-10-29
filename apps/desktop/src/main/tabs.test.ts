@@ -2902,10 +2902,10 @@ describe("TabHostManager — a profile's effort reaches a core child's host (TAS
     expect(forkSpy.mock.calls[1]?.[2]?.env ?? {}).not.toHaveProperty("ANYCODE_REASONING_EFFORT");
   });
 
-  it("a core child's xhigh effort maps to max in the stamped env", () => {
+  it("a core child's xhigh effort is preserved in the stamped env", () => {
     const { hosts, forkSpy } = rig();
     hosts[0]!.emit("message", spawnRequest({ requestId: "effort-xhigh-core", effort: "xhigh" }));
-    expect(forkSpy.mock.calls[1]?.[2]?.env).toMatchObject({ ANYCODE_REASONING_EFFORT: "max" });
+    expect(forkSpy.mock.calls[1]?.[2]?.env).toMatchObject({ ANYCODE_REASONING_EFFORT: "xhigh" });
   });
 });
 

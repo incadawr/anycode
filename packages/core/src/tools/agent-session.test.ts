@@ -1736,7 +1736,7 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
         throw new Error("inline run not expected");
       },
       listAgentTypes: () => ["general-purpose", "explore", "planner", "executor", "reviewer"],
-      coreProfile: () => ({ systemPrompt: "role body", model: "stale-primary" }),
+      coreProfile: () => ({ systemPrompt: "role body", model: "stale-primary", effort: "xhigh" }),
       resolveRoleRoute: (agentType: string) =>
         route === null
           ? null
@@ -1777,6 +1777,7 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
       const { ctx, seen } = roleCtx({ entries, skipped });
       await full.handler({ description: "d", prompt: "task", tier: "session", agent_type: "executor" }, ctx);
       expect(seen()?.prompt).toBe("role body\n\n---\n\ntask");
+      expect(seen()).not.toHaveProperty("effort");
       if (model) expect(seen()?.model).toBe(model);
       else expect(seen()).not.toHaveProperty("model");
     }

@@ -132,22 +132,17 @@ type ReasoningOptions = AnthropicReasoningOptions | OpenAICompatibleReasoningOpt
  * It defaults to `anthropic-messages` so pre-transport call sites keep their
  * pinned bytes.
  *
- * openai-chat-completions maps to `providerOptions.openaiCompatible.reasoningEffort`
- * (TASK.43 §4.2/§4.3): `@ai-sdk/openai-compatible` reads that exact key
- * unconditionally and serializes it as top-level `reasoning_effort` in the
- * request body. `"max"` collapses to `"high"` — chat-completions has no `xhigh`/
- * `max` tier of its own, unlike GLM's Anthropic-proxied enum above.
+ * openai-chat-completions maps to `providerOptions.openaiCompatible.reasoningEffort`.
+ * `@ai-sdk/openai-compatible` reads that key and serializes it as top-level
+ * `reasoning_effort`. Compatible providers may support different tiers, so the
+ * model capability layer determines which value to send.
  *
  * openai-responses maps to `providerOptions.openai.{reasoningEffort, store}`
  * (TASK.43 §0.2/§0.7). `store: false` is UNCONDITIONAL — it rides on every
  * request on this transport, reasoning or not (see `OpenAIResponsesReasoningOptions`
- * above). `reasoningEffort`, when present, is passed through VERBATIM
- * (including `"max"`) rather than collapsed the way chat-completions collapses
- * it: unlike chat-completions' fixed enum, real OpenAI reasoning models keep
- * gaining tiers (`minimal`, and whatever ships after this was written), and
- * which values a given model actually accepts is a capability-layer/catalog
- * question (`effortLevels`), not something this wire-mapping function should
- * guess or narrow ahead of time.
+ * above). `reasoningEffort`, when present, is passed through verbatim. Which
+ * values a model accepts is a capability-layer/catalog question (`effortLevels`),
+ * not something this wire-mapping function should guess or narrow ahead of time.
  *
  * Overloaded so a caller that passes a literal `"anthropic-messages"` transport
  * (or omits it) keeps `providerOptions.anthropic` as a NON-optional key on the
@@ -242,13 +237,11 @@ export function reasoningRequestOptions(
       };
     }
     // reasoning_effort is an enum, not a token budget: no maxOutputTokens arithmetic.
-    // "max" has no chat-completions equivalent; collapse to "high" (§4.3).
-    const mapped = effort === "max" ? "high" : effort;
     return {
       ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
       providerOptions: {
         openaiCompatible: {
-          reasoningEffort: mapped,
+          reasoningEffort: effort,
           ...(promptCache !== undefined ? { prompt_cache_options: promptCache } : {}),
         },
       },

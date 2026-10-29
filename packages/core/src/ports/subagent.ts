@@ -282,7 +282,7 @@ export interface SubagentPort {
    */
   engineProfile?(agentType: string): EngineProfileInfo | null;
   /** Current winning core profile metadata, excluding reserved personas. */
-  coreProfile?(agentType: string): { systemPrompt: string; model?: string } | null;
+  coreProfile?(agentType: string): { systemPrompt: string; model?: string; effort?: ReasoningEffort } | null;
   /** Resolves an md-profile's `connection:`/`provider:` frontmatter; null for built-ins, engine profiles, and unrouted profiles. */
   profileRouting?(agentType: string): { provider?: string; connection?: string } | null;
   /**

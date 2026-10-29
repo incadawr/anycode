@@ -269,7 +269,7 @@ describe("parseAgentProfileMd — effort frontmatter and unknown keys (TASK.127/
     expect(res).toEqual({ error: { kind: "bad_effort", name: "planner", effort: "turbo" } });
   });
 
-  it("xhigh parses (carried verbatim for engine children, mapped to core max)", () => {
+  it("xhigh parses and is carried verbatim", () => {
     const res = parseAgentProfileMd(md({ name: "planner", description: "d", effort: "xhigh" }, "b"), "f");
     expect("ok" in res && res.ok.effort).toBe("xhigh");
   });
