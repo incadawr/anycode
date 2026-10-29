@@ -2275,7 +2275,7 @@ describe("automation facade — startScreenToggleProjectMenu (design/slice-F5-1b
     const startScreenDom = fakeStartScreenDom({ projectMenuOpen: () => false, clickProjectChip: () => {} });
     const facade = createAutomationFacade(registry, tabsStore, stubBridge(), undefined, undefined, startScreenDom);
 
-    await expect(facade.startScreenToggleProjectMenu(true)).resolves.toEqual({ ok: false, reason: "did_not_open" });
+    await expect(atDeadline(() => facade.startScreenToggleProjectMenu(true), 500)).resolves.toEqual({ ok: false, reason: "did_not_open" });
   });
 });
 
@@ -2345,7 +2345,7 @@ describe("automation facade — startScreenModelMenuState / startScreenToggleMod
     const startScreenDom = fakeStartScreenDom({ modelMenuOpen: () => false, clickModelChip: () => {} });
     const facade = createAutomationFacade(registry, tabsStore, stubBridge(), undefined, undefined, startScreenDom);
 
-    await expect(facade.startScreenToggleModelMenu(true)).resolves.toEqual({ ok: false, reason: "did_not_open" });
+    await expect(atDeadline(() => facade.startScreenToggleModelMenu(true), 500)).resolves.toEqual({ ok: false, reason: "did_not_open" });
   });
 
   it("startScreenSelectModelRow refuses with no_draft when no draft is open, and never clicks anything", async () => {
@@ -2420,7 +2420,7 @@ describe("automation facade — startScreenModelMenuState / startScreenToggleMod
     const startScreenDom = fakeStartScreenDom({ modelMenuOpen: () => true, clickModelItem: () => true });
     const facade = createAutomationFacade(registry, tabsStore, stubBridge(), undefined, undefined, startScreenDom);
 
-    await expect(facade.startScreenSelectModelRow("conn-second", "m2")).resolves.toEqual({ ok: false, reason: "did_not_close" });
+    await expect(atDeadline(() => facade.startScreenSelectModelRow("conn-second", "m2"), 500)).resolves.toEqual({ ok: false, reason: "did_not_close" });
   });
 });
 
@@ -3167,13 +3167,7 @@ describe("automation facade — modelPillState / modelPillPick (design/slice-P7.
         pillDom({ popoverOpen: false }),
         settingsStoreWith(null),
       );
-      const start = Date.now();
-      await expect(facade.modelPillPick(tabId, { kind: "open" })).resolves.toEqual({ ok: false, reason: "did_not_open" });
-      const elapsed = Date.now() - start;
-      // Bounded by the commit-poll deadline (~500ms), not open-ended: proves
-      // this is a poll-with-deadline, not a fixed sleep or an infinite wait.
-      expect(elapsed).toBeGreaterThanOrEqual(450);
-      expect(elapsed).toBeLessThan(2000);
+      await expect(atDeadline(() => facade.modelPillPick(tabId, { kind: "open" }), 500)).resolves.toEqual({ ok: false, reason: "did_not_open" });
     });
 
     it('kind:"model" opens the popover, navigates to the Model page, and clicks the item at the SAME index modelMenuItems/the component\'s own .map() renders — both the chip-click and the row-click commit on a LATER tick, exercising the fix twice in one call', async () => {
@@ -3305,11 +3299,7 @@ describe("automation facade — modelPillState / modelPillPick (design/slice-P7.
         dom,
         settingsStoreWith(null),
       );
-      const start = Date.now();
-      await expect(facade.modelPillPick(tabId, { kind: "effort", value: "high" })).resolves.toEqual({ ok: false, reason: "effort_row_hidden" });
-      const elapsed = Date.now() - start;
-      expect(elapsed).toBeGreaterThanOrEqual(450);
-      expect(elapsed).toBeLessThan(2000);
+      await expect(atDeadline(() => facade.modelPillPick(tabId, { kind: "effort", value: "high" }), 500)).resolves.toEqual({ ok: false, reason: "effort_row_hidden" });
       expect(dom.clickItemAt).not.toHaveBeenCalled();
     });
 
@@ -3599,11 +3589,7 @@ describe("automation facade — ctxPopoverState / ctxPopoverOpen (design/slice-P
       tabsStore.getState().setActiveTab(tabId);
       const dom = fakeCtxPopoverDom({ mounted: true, open: false });
       const facade = buildFacade(registry, tabsStore, dom);
-      const start = Date.now();
-      await expect(facade.ctxPopoverOpen(tabId, true)).resolves.toEqual({ ok: false, reason: "did_not_open" });
-      const elapsed = Date.now() - start;
-      expect(elapsed).toBeGreaterThanOrEqual(450);
-      expect(elapsed).toBeLessThan(2000);
+      await expect(atDeadline(() => facade.ctxPopoverOpen(tabId, true), 500)).resolves.toEqual({ ok: false, reason: "did_not_open" });
       expect(dom.clickTrigger).toHaveBeenCalledTimes(1);
     });
 
@@ -3612,7 +3598,7 @@ describe("automation facade — ctxPopoverState / ctxPopoverOpen (design/slice-P
       tabsStore.getState().setActiveTab(tabId);
       const dom = fakeCtxPopoverDom({ mounted: true, open: true });
       const facade = buildFacade(registry, tabsStore, dom);
-      await expect(facade.ctxPopoverOpen(tabId, false)).resolves.toEqual({ ok: false, reason: "did_not_close" });
+      await expect(atDeadline(() => facade.ctxPopoverOpen(tabId, false), 500)).resolves.toEqual({ ok: false, reason: "did_not_close" });
       expect(dom.clickTrigger).toHaveBeenCalledTimes(1);
     });
   });
@@ -3791,11 +3777,7 @@ describe("automation facade — settings probe/driver (design/slice-P7.16-cut.md
     it("refuses with did_not_open when the dialog never mounts, bounded by the commit-poll deadline rather than hanging", async () => {
       const dom = fakeSettingsDom({ mounted: false });
       const facade = buildFacade(settingsStoreWithRules([]), dom);
-      const start = Date.now();
-      await expect(facade.settingsOpen()).resolves.toEqual({ ok: false, reason: "did_not_open" });
-      const elapsed = Date.now() - start;
-      expect(elapsed).toBeGreaterThanOrEqual(450);
-      expect(elapsed).toBeLessThan(2000);
+      await expect(atDeadline(() => facade.settingsOpen(), 500)).resolves.toEqual({ ok: false, reason: "did_not_open" });
     });
   });
 
@@ -3827,11 +3809,7 @@ describe("automation facade — settings probe/driver (design/slice-P7.16-cut.md
     it("refuses with did_not_close when the dialog never unmounts, bounded by the commit-poll deadline", async () => {
       const dom = fakeSettingsDom({ mounted: true });
       const facade = buildFacade(settingsStoreWithRules([]), dom);
-      const start = Date.now();
-      await expect(facade.settingsClose()).resolves.toEqual({ ok: false, reason: "did_not_close" });
-      const elapsed = Date.now() - start;
-      expect(elapsed).toBeGreaterThanOrEqual(450);
-      expect(elapsed).toBeLessThan(2000);
+      await expect(atDeadline(() => facade.settingsClose(), 500)).resolves.toEqual({ ok: false, reason: "did_not_close" });
     });
   });
 
@@ -3870,11 +3848,7 @@ describe("automation facade — settings probe/driver (design/slice-P7.16-cut.md
     it("refuses with pane_switch_failed when activePane never matches, bounded by the commit-poll deadline", async () => {
       const dom = fakeSettingsDom({ mounted: true, activePane: "provider", clickPaneTabResult: true });
       const facade = buildFacade(settingsStoreWithRules([]), dom);
-      const start = Date.now();
-      await expect(facade.settingsSelectPane("permissions")).resolves.toEqual({ ok: false, reason: "pane_switch_failed" });
-      const elapsed = Date.now() - start;
-      expect(elapsed).toBeGreaterThanOrEqual(450);
-      expect(elapsed).toBeLessThan(2000);
+      await expect(atDeadline(() => facade.settingsSelectPane("permissions"), 500)).resolves.toEqual({ ok: false, reason: "pane_switch_failed" });
     });
   });
 
@@ -3923,11 +3897,7 @@ describe("automation facade — settings probe/driver (design/slice-P7.16-cut.md
     it("refuses with add_failed when the tool input never clears (the mutation was refused store-side), bounded by the commit-poll deadline", async () => {
       const dom = fakeSettingsDom({ mounted: true, canSubmit: true, toolInputValue: "Bash" });
       const facade = buildFacade(settingsStoreWithRules([]), dom);
-      const start = Date.now();
-      await expect(facade.settingsPermissionAdd({ toolName: "Bash" })).resolves.toEqual({ ok: false, reason: "add_failed" });
-      const elapsed = Date.now() - start;
-      expect(elapsed).toBeGreaterThanOrEqual(450);
-      expect(elapsed).toBeLessThan(2000);
+      await expect(atDeadline(() => facade.settingsPermissionAdd({ toolName: "Bash" }), 500)).resolves.toEqual({ ok: false, reason: "add_failed" });
     });
   });
 
@@ -3974,11 +3944,7 @@ describe("automation facade — settings probe/driver (design/slice-P7.16-cut.md
     it("refuses with remove_failed when the row never disappears, bounded by the commit-poll deadline", async () => {
       const dom = fakeSettingsDom({ mounted: true, clickRemoveResult: true, removeRowExists: true });
       const facade = buildFacade(settingsStoreWithRules([]), dom);
-      const start = Date.now();
-      await expect(facade.settingsPermissionRemove({ toolName: "Bash", pattern: "git *" })).resolves.toEqual({ ok: false, reason: "remove_failed" });
-      const elapsed = Date.now() - start;
-      expect(elapsed).toBeGreaterThanOrEqual(450);
-      expect(elapsed).toBeLessThan(2000);
+      await expect(atDeadline(() => facade.settingsPermissionRemove({ toolName: "Bash", pattern: "git *" }), 500)).resolves.toEqual({ ok: false, reason: "remove_failed" });
     });
   });
 });
@@ -4276,11 +4242,7 @@ describe("automation facade — agentCardExpand (design/slice-P7.18-cut.md §4 W
       clickToggle,
     };
     const facade = buildFacade(registry, tabsStore, agentCardDom);
-    const start = Date.now();
-    await expect(facade.agentCardExpand(tabId, "call-1")).resolves.toEqual({ ok: false, reason: "did_not_expand" });
-    const elapsed = Date.now() - start;
-    expect(elapsed).toBeGreaterThanOrEqual(450);
-    expect(elapsed).toBeLessThan(2000);
+    await expect(atDeadline(() => facade.agentCardExpand(tabId, "call-1"), 500)).resolves.toEqual({ ok: false, reason: "did_not_expand" });
     expect(clickToggle).toHaveBeenCalledTimes(1);
   });
 });
@@ -4548,9 +4510,7 @@ describe("automation facade — Skills pane probe/driver (design/slice-P7.20-cut
         confirmDeleteVisible: false,
       });
       const facade = buildFacade(dom);
-      const start = Date.now();
-      await expect(facade.skillsDelete("alpha")).resolves.toEqual({ ok: false, reason: "confirm_not_shown" });
-      expect(Date.now() - start).toBeGreaterThanOrEqual(450);
+      await expect(atDeadline(() => facade.skillsDelete("alpha"), 500)).resolves.toEqual({ ok: false, reason: "confirm_not_shown" });
       expect(dom.clickRowConfirmDelete).not.toHaveBeenCalled();
     });
 
@@ -4615,9 +4575,7 @@ describe("automation facade — Skills pane probe/driver (design/slice-P7.20-cut
     it("refuses with did_not_open when the click never opens the dialog, bounded by the commit-poll deadline", async () => {
       const dom = fakeSkillsPaneDom({ mounted: true, importOpen: false });
       const facade = buildFacade(dom);
-      const start = Date.now();
-      await expect(facade.skillsImportOpen()).resolves.toEqual({ ok: false, reason: "did_not_open" });
-      expect(Date.now() - start).toBeGreaterThanOrEqual(450);
+      await expect(atDeadline(() => facade.skillsImportOpen(), 500)).resolves.toEqual({ ok: false, reason: "did_not_open" });
       expect(dom.clickImportButton).toHaveBeenCalledTimes(1);
     });
   });
@@ -4895,7 +4853,7 @@ describe("automation facade — MCP pane add-server driver (TASK.186/4061 item 4
   it("reports did_not_open when the click never opens the form", async () => {
     const dom = fakeMcpPaneDom({ clickDoesNotOpen: true });
     const facade = buildMcpAddFacade(dom);
-    await expect(facade.mcpAddServer({ name: "srv" })).resolves.toEqual({ ok: false, reason: "did_not_open" });
+    await expect(atDeadline(() => facade.mcpAddServer({ name: "srv" }), 500)).resolves.toEqual({ ok: false, reason: "did_not_open" });
     expect(dom.clickAddServerButton).toHaveBeenCalledTimes(1);
   });
 
@@ -4963,7 +4921,7 @@ describe("automation facade — MCP pane add-server driver (TASK.186/4061 item 4
   it("refuses set_failed when a radio click never commits its checked readback — never submits", async () => {
     const dom = fakeMcpPaneDom({ radioNeverCommits: true });
     const facade = buildMcpAddFacade(dom);
-    await expect(facade.mcpAddServer({ name: "srv", transport: "http", url: "https://x" })).resolves.toEqual({
+    await expect(atDeadline(() => facade.mcpAddServer({ name: "srv", transport: "http", url: "https://x" }), 500)).resolves.toEqual({
       ok: false,
       reason: "set_failed",
     });
@@ -4973,7 +4931,7 @@ describe("automation facade — MCP pane add-server driver (TASK.186/4061 item 4
   it("refuses set_failed when a field write never commits its value readback — never submits", async () => {
     const dom = fakeMcpPaneDom({ fieldNeverCommits: true });
     const facade = buildMcpAddFacade(dom);
-    await expect(facade.mcpAddServer({ name: "srv", command: "node" })).resolves.toEqual({ ok: false, reason: "set_failed" });
+    await expect(atDeadline(() => facade.mcpAddServer({ name: "srv", command: "node" }), 500)).resolves.toEqual({ ok: false, reason: "set_failed" });
     expect(dom.clickFormSubmit).not.toHaveBeenCalled();
   });
 
@@ -5620,7 +5578,7 @@ describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-
     it("refuses with set_failed when the field never visibly updates within the deadline", async () => {
       const dom = fakeSubagentsPaneDom({ editorOpen: true, fieldValues: { name: "stale", description: "", tools: [], body: "", model: "" } });
       const facade = buildFacade(dom);
-      await expect(facade.subagentsEditorSet({ name: "summarizer" })).resolves.toEqual({ ok: false, reason: "set_failed" });
+      await expect(atDeadline(() => facade.subagentsEditorSet({ name: "summarizer" }), 500)).resolves.toEqual({ ok: false, reason: "set_failed" });
     });
   });
 
@@ -6281,7 +6239,7 @@ describe("automation facade — Profile pane probe/driver (design/slice-P7.22-cu
     it("reports did_not_switch when the click never commits (a genuine no-op click)", async () => {
       const dom = fakeProfilePaneDom({ mounted: true, activePeriodIndex: 3, clickPeriodButtonAtCommits: false });
       const facade = buildFacade(dom);
-      await expect(facade.profileSelectPeriod("today")).resolves.toEqual({ ok: false, reason: "did_not_switch" });
+      await expect(atDeadline(() => facade.profileSelectPeriod("today"), 500)).resolves.toEqual({ ok: false, reason: "did_not_switch" });
     });
   });
 
@@ -6315,7 +6273,7 @@ describe("automation facade — Profile pane probe/driver (design/slice-P7.22-cu
     it("reports did_not_toggle when the click never commits", async () => {
       const dom = fakeProfilePaneDom({ mounted: true, modelsTotal: 12, clickModelsExpandCommits: false });
       const facade = buildFacade(dom);
-      await expect(facade.profileToggleModelsExpanded()).resolves.toEqual({ ok: false, reason: "did_not_toggle" });
+      await expect(atDeadline(() => facade.profileToggleModelsExpanded(), 500)).resolves.toEqual({ ok: false, reason: "did_not_toggle" });
     });
   });
 
@@ -6980,7 +6938,7 @@ describe("automation facade — Vision pane probe/driver (TASK.198 срез E2c)
     it("reports did_not_select when the pick is delivered but never commits", async () => {
       const dom = fakeVisionPaneDom({ selectConnectionCommits: false });
       const facade = buildFacade(dom);
-      await expect(facade.visionSelectConnection("conn-1")).resolves.toEqual({
+      await expect(atDeadline(() => facade.visionSelectConnection("conn-1"), 500)).resolves.toEqual({
         ok: false,
         reason: "did_not_select",
       });
@@ -7016,7 +6974,7 @@ describe("automation facade — Vision pane probe/driver (TASK.198 срез E2c)
     it("reports did_not_commit when the keystroke is delivered but never commits", async () => {
       const dom = fakeVisionPaneDom({ setModelCommits: false });
       const facade = buildFacade(dom);
-      await expect(facade.visionSetModel("glm-5.3-flash")).resolves.toEqual({
+      await expect(atDeadline(() => facade.visionSetModel("glm-5.3-flash"), 500)).resolves.toEqual({
         ok: false,
         reason: "did_not_commit",
       });
@@ -8191,14 +8149,10 @@ describe("automation facade — workflowStepsState/workflowStepClick (TASK.191 s
         click,
       };
       const facade = buildFacade(registry, tabsStore, workflowStepsDom);
-      const start = Date.now();
-      await expect(facade.workflowStepClick(tabId, "call-1", "step-1")).resolves.toEqual({
+      await expect(atDeadline(() => facade.workflowStepClick(tabId, "call-1", "step-1"), 500)).resolves.toEqual({
         ok: false,
         reason: "did_not_settle",
       });
-      const elapsed = Date.now() - start;
-      expect(elapsed).toBeGreaterThanOrEqual(450);
-      expect(elapsed).toBeLessThan(2000);
       expect(click).toHaveBeenCalledTimes(1);
     });
   });
@@ -8447,14 +8401,10 @@ describe("automation facade — workflowMapState/workflowMapToggle/workflowTicks
         clickToggle,
       };
       const facade = buildFacade(registry, tabsStore, workflowMapDom);
-      const start = Date.now();
-      await expect(facade.workflowMapToggle(tabId, "call-1", false)).resolves.toEqual({
+      await expect(atDeadline(() => facade.workflowMapToggle(tabId, "call-1", false), 500)).resolves.toEqual({
         ok: false,
         reason: "did_not_settle",
       });
-      const elapsed = Date.now() - start;
-      expect(elapsed).toBeGreaterThanOrEqual(450);
-      expect(elapsed).toBeLessThan(2000);
       expect(clickToggle).toHaveBeenCalledTimes(1);
     });
 
@@ -8589,14 +8539,10 @@ describe("automation facade — workflowMapState/workflowMapToggle/workflowTicks
         clickToggle,
       };
       const facade = buildFacade(registry, tabsStore, undefined, undefined, agentCardDom);
-      const start = Date.now();
-      await expect(facade.agentCardCollapse(tabId, "call-1")).resolves.toEqual({
+      await expect(atDeadline(() => facade.agentCardCollapse(tabId, "call-1"), 500)).resolves.toEqual({
         ok: false,
         reason: "did_not_collapse",
       });
-      const elapsed = Date.now() - start;
-      expect(elapsed).toBeGreaterThanOrEqual(450);
-      expect(elapsed).toBeLessThan(2000);
       expect(clickToggle).toHaveBeenCalledTimes(1);
     });
   });
@@ -10393,7 +10339,7 @@ describe("automation facade — sidebar row-cut probe/driver (TASK.125)", () => 
 
   it("reports did_not_commit when the click leaves the drawn list unchanged — a click is not an outcome", async () => {
     const dom = fakeSidebarDom([group()]);
-    await expect(buildFacade(dom).sidebarShowMore("/ws/alpha")).resolves.toEqual({
+    await expect(atDeadline(() => buildFacade(dom).sidebarShowMore("/ws/alpha"), 500)).resolves.toEqual({
       ok: false,
       reason: "did_not_commit",
     });
@@ -12693,11 +12639,7 @@ describe("automation facade — modelPillPick drill-down menu (TASK.106 shared p
     // navigation (row gone / handler drift).
     (dom.clickDrillBack as ReturnType<typeof vi.fn>).mockImplementation(() => true);
     const { facade, tabId } = readyFacade(dom);
-    const start = Date.now();
-    await expect(facade.modelPillPick(tabId, { kind: "effort", value: "high" })).resolves.toEqual({ ok: false, reason: "navigation_failed" });
-    const elapsed = Date.now() - start;
-    expect(elapsed).toBeGreaterThanOrEqual(450);
-    expect(elapsed).toBeLessThan(2000);
+    await expect(atDeadline(() => facade.modelPillPick(tabId, { kind: "effort", value: "high" }), 500)).resolves.toEqual({ ok: false, reason: "navigation_failed" });
   });
 
   it("deferred chip commit still holds on the drill path: a closed popover is opened first and the walk starts only after the open commits", async () => {
