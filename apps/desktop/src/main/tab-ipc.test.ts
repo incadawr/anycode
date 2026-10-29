@@ -8,6 +8,9 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+const ipcHandlers = vi.hoisted(() => new Map<string, (...args: any[]) => any>());
+vi.mock("electron", () => ({ ipcMain: { handle: (channel: string, handler: (...args: any[]) => any) => ipcHandlers.set(channel, handler) } }));
+import { TAB_REBIND_CHANNEL } from "../shared/tabs.js";
 import { EventEmitter } from "node:events";
 import { homedir, tmpdir } from "node:os";
 import { mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
@@ -22,6 +25,7 @@ import {
   handleSessionsDeleteOlder,
   handleSessionsList,
   handleTabRebind,
+  registerTabIpc,
   handleWorkspacePick,
   sessionsListRequestSchema,
   tabRebindRequestSchema,
@@ -2104,6 +2108,16 @@ function makeRebindDeps(
 }
 
 describe("handleTabRebind — TASK.106 cut-2 (§D6 fail-closed order)", () => {
+  it("forwards the prior effort through the registered IPC parser and switch handler", async () => {
+    const { deps, rebindTab } = makeRebindDeps(runningCoreTab(), { connectionExists: () => true });
+    registerTabIpc(deps);
+    const handler = ipcHandlers.get(TAB_REBIND_CHANNEL)!;
+    expect(await handler({}, { tabId: "tab-1", connectionId: "conn-new", priorEffort: "high" })).toEqual({ ok: true, connectionId: "conn-new" });
+    expect(rebindTab).toHaveBeenCalledWith(expect.objectContaining({ tabId: "tab-1" }), "conn-new", "high");
+    expect(await handler({}, { tabId: "tab-1", connectionId: "conn-new", priorEffort: "invalid" })).toEqual({ ok: false, reason: "unknown_tab" });
+    expect(rebindTab).toHaveBeenCalledTimes(1);
+  });
+
   it("happy path: primes the env, re-pins the session row with the target's model, then rebinds the tab", async () => {
     const order: string[] = [];
     const { deps, touchSession, rebindTab } = makeRebindDeps(runningCoreTab(), {

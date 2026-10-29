@@ -26,6 +26,7 @@ function render(): any {
   for (const effect of harness.effects) effect();
   return tree;
 }
+function requestId(type: string): string { return harness.send.mock.calls.filter(([m]: any[]) => m.type === type).at(-1)![0].requestId; }
 function menu(tree: any): any { return tree.props.children[1].props.children; }
 
 describe("model menu interaction", () => {
@@ -47,10 +48,10 @@ describe("model menu interaction", () => {
     const off = menu(tree).props.rows.find((row: any) => row.kind === "effort" && row.value === "off");
     expect(off).toBeDefined();
     menu(tree).props.onActivateRow(off);
-    expect(harness.send).toHaveBeenCalledWith({ type: "set_reasoning_effort", effort: "off" });
+    expect(harness.send).toHaveBeenCalledWith({ type: "set_reasoning_effort", effort: "off", requestId: expect.any(String) });
     expect(harness.update).not.toHaveBeenCalled();
     harness.state.reasoningEffort = "off";
-    harness.state.effortSelectionAck = {kind:"effort", model:"glm-5.2", effort:"off"};
+    harness.state.effortSelectionAck = {kind:"effort", model:"glm-5.2", effort:"off", requestId:requestId("set_reasoning_effort")};
     render();
     await vi.waitFor(() => expect(harness.update).toHaveBeenCalledWith({ id: "c", modelOverrideModel: "glm-5.2", reasoningEffort: "off" }));
   });
@@ -72,7 +73,7 @@ describe("model menu interaction", () => {
     else { chooseEffort(effort); chooseModel(); }
     expect(harness.update).not.toHaveBeenCalled();
     harness.state.model = "glm-4.6";
-    harness.state.modelSelectionAck = {kind:"model", model:"glm-4.6", effort, requestedEffort:effort};
+    harness.state.modelSelectionAck = {kind:"model", model:"glm-4.6", effort, requestId:requestId("set_model"), effortRequestId:requestId("set_reasoning_effort")};
     render();
     await vi.waitFor(() => expect(harness.update).toHaveBeenCalledExactlyOnceWith({id:"c", model:"glm-4.6", modelOverrideModel:"glm-4.6", reasoningEffort:effort}));
   });
@@ -85,8 +86,8 @@ describe("model menu interaction", () => {
     tree = render(); tree.props.children[0].props.onClick(); tree = render();
     menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "group")); tree = render();
     menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "model" && r.modelId === "glm-4.6"));
-    const effortAck = {kind:"effort", model: "glm-5.2", effort:"max"};
-    const modelAck = {kind:"model", model:"glm-4.6", effort:"high"};
+    const effortAck = {kind:"effort", model: "glm-5.2", effort:"max", requestId:requestId("set_reasoning_effort")};
+    const modelAck = {kind:"model", model:"glm-4.6", effort:"high", requestId:requestId("set_model")};
     if (order === "effort-first") { harness.state.effortSelectionAck = effortAck; harness.state.modelSelectionAck = modelAck; }
     else { harness.state.modelSelectionAck = modelAck; harness.state.effortSelectionAck = effortAck; }
     render();
@@ -105,8 +106,26 @@ describe("model menu interaction", () => {
     tree = render(); tree.props.children[0].props.onClick(); tree = render();
     menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "effort-open")); tree = render();
     menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "effort" && r.value === "off"));
-    harness.state.effortSelectionAck = {kind:"effort", model:"glm-5.2", effort:"off"};
-    harness.state.modelSelectionAck = {kind:"model", model:"glm-4.6", effort:"low", requestedEffort:"off"};
+    harness.state.effortSelectionAck = {kind:"effort", model:"glm-5.2", effort:"off", requestId:"stale"};
+    harness.state.modelSelectionAck = {kind:"model", model:"glm-4.6", effort:"low", requestId:requestId("set_model"), effortRequestId:requestId("set_reasoning_effort")};
+    render();
+    await vi.waitFor(() => expect(harness.update).toHaveBeenCalledExactlyOnceWith({id:"c", model:"glm-4.6", modelOverrideModel:"glm-4.6", reasoningEffort:"low"}));
+  });
+
+  it("ignores a stale same-value acknowledgement before a later model pick", async () => {
+    harness.state.turn.status = "running";
+    harness.state.reasoningEffort = "off";
+    harness.settings.snapshot.catalog[0].models.push({id:"glm-4.6", reasoning:true, effortLevels:["off","high","max"]});
+    let tree = render(); tree.props.children[0].props.onClick(); tree = render();
+    menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "effort-open")); tree = render();
+    menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "effort" && r.value === "off"));
+    harness.state.effortSelectionAck = {kind:"effort", model:"glm-5.2", effort:"off", requestId:"stale"};
+    render();
+    expect(harness.update).not.toHaveBeenCalled();
+    tree = render(); tree.props.children[0].props.onClick(); tree = render();
+    menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "group")); tree = render();
+    menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "model" && r.modelId === "glm-4.6"));
+    harness.state.modelSelectionAck = {kind:"model", model:"glm-4.6", effort:"low", requestId:requestId("set_model"), effortRequestId:requestId("set_reasoning_effort")};
     render();
     await vi.waitFor(() => expect(harness.update).toHaveBeenCalledExactlyOnceWith({id:"c", model:"glm-4.6", modelOverrideModel:"glm-4.6", reasoningEffort:"low"}));
   });

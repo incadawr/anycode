@@ -188,7 +188,7 @@ export function isPinSwitchInTab(
 interface PendingPick {
   kind: "model" | "effort";
   value: string;
-  model?: string;
+  requestId: string;
   // The connection id this pick was made against, captured at PICK time (codex
   // P2 defect: recomputing it from the settings snapshot again at ACK time is
   // wrong — the active connection can change in Settings between the send and
@@ -433,17 +433,18 @@ export const MID_TURN_CHANGE_NOTE = "Model and effort changes apply from the nex
 
 export function modelSettingsPick(
   kind: "model" | "effort", value: string,
-  hostId: string | null | undefined, pinnedId: string | undefined, activeId: string | undefined, model?: string,
+  hostId: string | null | undefined, pinnedId: string | undefined, activeId: string | undefined, requestId: string,
 ): PendingPick {
-  return { kind, value, model, connectionId: modelSettingsTarget(hostId, pinnedId, activeId) };
+  return { kind, value, requestId, connectionId: modelSettingsTarget(hostId, pinnedId, activeId) };
 }
 
 export function modelSettingsWrites(
   pending: { model?: PendingPick; effort?: PendingPick },
-  ack: { model: string; effort: ReasoningEffort; requestedEffort?: ReasoningEffort; kind?: "model" | "effort" },
+  ack: { model: string; effort: ReasoningEffort; requestId?: string; effortRequestId?: string; kind: "model" | "effort" },
 ): ConnectionUpdateRequest[] {
-  const modelPick = ack.kind !== "effort" && pending.model?.value === ack.model ? pending.model : undefined;
-  const effortPick = (ack.kind !== "model" || ack.requestedEffort !== undefined) && pending.effort?.value === (ack.requestedEffort ?? ack.effort) && (pending.effort.model === undefined || pending.effort.model === ack.model) ? pending.effort : undefined;
+  const modelPick = ack.kind === "model" && ack.requestId !== undefined && pending.model?.requestId === ack.requestId ? pending.model : undefined;
+  const effortId = ack.kind === "effort" ? ack.requestId : ack.effortRequestId;
+  const effortPick = effortId !== undefined && pending.effort?.requestId === effortId ? pending.effort : undefined;
   if (modelPick !== undefined) delete pending.model;
   if (effortPick !== undefined) delete pending.effort;
   const writes = new Map<string, ConnectionUpdateRequest>();
@@ -787,9 +788,9 @@ export function ModelPill() {
     // queued pick instead of being mistaken for a no-op. `pendingPickRef` is
     // the only record of a pick the host has not acked yet.
     if (id !== model || (pendingPickRef.current.model !== undefined || pendingPickRef.current.effort !== undefined)) {
-      pendingPickRef.current.model = modelSettingsPick("model", id, modelSettingsConnectionId, pinnedConnection?.connectionId, snapshot?.settings.provider.activeConnectionId);
-      if (!idle && pendingPickRef.current.effort !== undefined) pendingPickRef.current.effort.model = id;
-      sendToHost({ type: "set_model", model: id });
+      const requestId = crypto.randomUUID();
+      pendingPickRef.current.model = modelSettingsPick("model", id, modelSettingsConnectionId, pinnedConnection?.connectionId, snapshot?.settings.provider.activeConnectionId, requestId);
+      sendToHost({ type: "set_model", model: id, requestId });
     }
     close(true);
   }
@@ -798,8 +799,9 @@ export function ModelPill() {
     if (pickDisabled) {
       return;
     }
-    pendingPickRef.current.effort = modelSettingsPick("effort", effort, modelSettingsConnectionId, pinnedConnection?.connectionId, snapshot?.settings.provider.activeConnectionId, pendingPickRef.current.model?.value ?? model ?? undefined);
-    sendToHost({ type: "set_reasoning_effort", effort });
+    const requestId = crypto.randomUUID();
+    pendingPickRef.current.effort = modelSettingsPick("effort", effort, modelSettingsConnectionId, pinnedConnection?.connectionId, snapshot?.settings.provider.activeConnectionId, requestId);
+    sendToHost({ type: "set_reasoning_effort", effort, requestId });
     close(true);
   }
 
@@ -928,7 +930,7 @@ export function ModelPill() {
   // axes the user actually picked, even if the acknowledged value is unchanged.
   function persistAck(ack: typeof modelSelectionAck): void {
     if (ack == null || ack.model === null) return;
-    for (const request of modelSettingsWrites(pendingPickRef.current, { model: ack.model, effort: ack.effort, requestedEffort: ack.requestedEffort, kind: ack.kind })) {
+    for (const request of modelSettingsWrites(pendingPickRef.current, { model: ack.model, effort: ack.effort, requestId: ack.requestId, effortRequestId: ack.effortRequestId, kind: ack.kind })) {
       writeChainRef.current = chainWrite(writeChainRef.current, () => connectionUpdate(request));
     }
   }

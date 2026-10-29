@@ -1009,7 +1009,8 @@ export interface ModelSelectionAck {
   kind: "model" | "effort";
   model: string | null;
   effort: ReasoningEffort;
-  requestedEffort?: ReasoningEffort;
+  requestId?: string;
+  effortRequestId?: string;
 }
 
 export interface DesktopState {
@@ -4472,7 +4473,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             return;
           case "reasoning_effort_changed":
             set({
-              effortSelectionAck: {kind: "effort", model: get().model, effort: message.effort},
+              effortSelectionAck: {kind: "effort", model: get().model, effort: message.effort, requestId: message.requestId},
               reasoningEffort: message.effort,
               ...(message.availableEffortLevels !== undefined ? { availableEffortLevels: message.availableEffortLevels } : {}),
             });
@@ -4495,7 +4496,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // needed here.
             set({
               contextUsage: message.contextUsage ?? null,
-              modelSelectionAck: {kind: "model", model: message.model, effort: message.selectedReasoningEffort ?? message.reasoningEffort, ...(message.requestedReasoningEffort !== undefined ? { requestedEffort: message.requestedReasoningEffort } : {})},
+              modelSelectionAck: {kind: "model", model: message.model, effort: message.selectedReasoningEffort ?? message.reasoningEffort, requestId: message.requestId, effortRequestId: message.effortRequestId},
               model: message.model,
               reasoningEffort: message.reasoningEffort,
               availableEffortLevels: message.availableEffortLevels,

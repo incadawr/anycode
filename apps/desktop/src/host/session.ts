@@ -1296,6 +1296,8 @@ export class Session {
    */
   private pendingModel: string | undefined;
   private pendingEffort: ReasoningEffort | undefined;
+  private pendingModelRequestId: string | undefined;
+  private pendingEffortRequestId: string | undefined;
   private pendingEngineEffort: { effort: string; model: string; seam: EngineSettingsSeam; engine: SessionEngine } | undefined;
   private inFlightEngineEffort: typeof this.pendingEngineEffort;
   private settingsBarrier: Promise<void> = Promise.resolve();
@@ -2722,7 +2724,7 @@ export class Session {
           (this.availableEffortLevels === undefined || this.availableEffortLevels.includes(message.effort))
         ) {
           if (!this.busy) {
-            this.applyReasoningEffort(message.effort);
+            this.applyReasoningEffort(message.effort, message.requestId);
             break;
           }
           // Taskana 4895: the CORE engine queues a mid-turn pick instead of
@@ -2732,6 +2734,7 @@ export class Session {
           // is `set_engine_effort`, not this message).
           if (this.engine.id === "core") {
             this.pendingEffort = message.effort;
+            this.pendingEffortRequestId = message.requestId;
           }
         }
         break;
@@ -2773,10 +2776,11 @@ export class Session {
         if (this.busy) {
           if (this.engine.id === "core") {
             this.pendingModel = id;
+            this.pendingModelRequestId = message.requestId;
           }
           break;
         }
-        this.applyModelSwitch(id);
+        this.applyModelSwitch(id, false, message.requestId);
         break;
       }
       case "set_engine_preset":
@@ -2946,11 +2950,15 @@ export class Session {
     this.applyPendingEngineEffort();
     const model = this.pendingModel;
     const effort = this.pendingEffort;
+    const modelRequestId = this.pendingModelRequestId;
+    const effortRequestId = this.pendingEffortRequestId;
+    this.pendingModelRequestId = undefined;
+    this.pendingEffortRequestId = undefined;
     this.pendingModel = undefined;
     this.pendingEffort = undefined;
     if (model === undefined) {
       if (effort !== undefined) {
-        this.applyReasoningEffort(effort);
+        this.applyReasoningEffort(effort, effortRequestId);
       }
       return;
     }
@@ -2959,13 +2967,15 @@ export class Session {
       // switch below re-resolves it against the new model's capabilities.
       this.selectedEffort = effort;
     }
-    if (!this.applyModelSwitch(model, effort !== undefined) && effort !== undefined) {
-      this.applyReasoningEffort(effort);
+    if (!this.applyModelSwitch(model, effort !== undefined, modelRequestId, effortRequestId) && effort !== undefined) {
+      this.applyReasoningEffort(effort, effortRequestId);
     }
   }
 
   /** Taskana 4895: drops a queued mid-turn pick — used when the engine itself is about to be replaced (the pick was made against the old one). */
   private clearPendingModelSelection(): void {
+    this.pendingModelRequestId = undefined;
+    this.pendingEffortRequestId = undefined;
     this.pendingModel = undefined;
     this.pendingEffort = undefined;
   }
@@ -2980,7 +2990,7 @@ export class Session {
     if (this.engine.id === "core") this.applyModelSwitch(this.model);
   }
 
-  private applyModelSwitch(id: string, effortExplicit = false): boolean {
+  private applyModelSwitch(id: string, effortExplicit = false, requestId?: string, effortRequestId?: string): boolean {
     if (this.engine.switchModel === undefined) {
       return false;
     }
@@ -2998,6 +3008,8 @@ export class Session {
     this.reasoningSupported = result.availableEffortLevels !== undefined;
     this.outbound.emit({
       type: "model_changed",
+      ...(requestId !== undefined ? { requestId } : {}),
+      ...(effortRequestId !== undefined ? { effortRequestId } : {}),
       ...(result.contextUsage !== undefined ? {contextUsage: result.contextUsage} : {}),
       ...(result.selectedReasoningEffort !== undefined ? {selectedReasoningEffort: result.selectedReasoningEffort} : {}),
       ...(requestedEffort !== undefined ? { requestedReasoningEffort: requestedEffort } : {}),
@@ -3025,7 +3037,7 @@ export class Session {
   }
 
   /** Taskana 4895: the effort half of the same recipe — remembered as the user's SELECTED tier, applied to the engine, acked to the renderer. */
-  private applyReasoningEffort(effort: ReasoningEffort): void {
+  private applyReasoningEffort(effort: ReasoningEffort, requestId?: string): void {
     // Slice P7.15 (F14): remember the user-selected tier so a later model
     // switch re-resolves effort against it (a non-reasoning model drops it,
     // but switching back restores it).
@@ -3034,6 +3046,7 @@ export class Session {
     else this.engine.setReasoningEffort(effort === "off" ? undefined : effort);
     this.outbound.emit({
       type: "reasoning_effort_changed",
+      ...(requestId !== undefined ? { requestId } : {}),
       effort,
       ...(this.availableEffortLevels !== undefined ? { availableEffortLevels: this.availableEffortLevels } : {}),
     });

@@ -3961,13 +3961,15 @@ describe("Session — model switch (slice P7.15 · F14)", () => {
       await h.waitFor(isHostReady);
       h.send({type:"user_message", requestId:"r1", text:"write it"});
       const req = await h.waitFor(isPermissionRequest);
-      h.send({type:"set_model", model:"glm-5.3"});
-      h.send({type:"set_reasoning_effort", effort:"off"});
+      h.send({type:"set_model", model:"glm-5.3", requestId:"old-model"});
+      h.send({type:"set_model", model:"glm-5.3", requestId:"new-model"});
+      h.send({type:"set_reasoning_effort", effort:"off", requestId:"old-effort"});
+      h.send({type:"set_reasoning_effort", effort:"off", requestId:"new-effort"});
       await h.flush();
       expect(h.received.some(isModelChanged)).toBe(false);
       h.send({type:"permission_response", requestId:req.requestId, behavior:"deny"});
       const changed = await h.waitFor(isModelChanged);
-      expect(changed).toMatchObject({model:"glm-5.3", reasoningEffort:"low", selectedReasoningEffort:"low", requestedReasoningEffort:"off", effortAdjustment:{from:"off", to:"low"}});
+      expect(changed).toMatchObject({requestId:"new-model", effortRequestId:"new-effort", model:"glm-5.3", reasoningEffort:"low", selectedReasoningEffort:"low", requestedReasoningEffort:"off", effortAdjustment:{from:"off", to:"low"}});
     } finally { h.close(); }
   });
 

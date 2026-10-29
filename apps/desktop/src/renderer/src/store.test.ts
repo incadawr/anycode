@@ -8932,8 +8932,8 @@ it("keeps the host connection identity when the active connection changes", () =
   expect(store.getState().pinnedConnection).toBeNull();
   const connections = [{ id: "original", providerId: "custom" }, { id: "new-active", providerId: "custom" }];
   expect(contextWindowSettingsTarget(connections, "a", store.getState().modelSettingsConnectionId, undefined)).toEqual({ connection: connections[0], model: "a" });
-  const pending = { model: modelSettingsPick("model", "b", store.getState().modelSettingsConnectionId, undefined, "new-active"), effort: modelSettingsPick("effort", "max", store.getState().modelSettingsConnectionId, undefined, "new-active") };
-  expect(modelSettingsWrites(pending, { model: "b", effort: "max" })).toEqual([{ id: "original", model: "b", modelOverrideModel: "b", reasoningEffort: "max" }]);
+  const pending = { model: modelSettingsPick("model", "b", store.getState().modelSettingsConnectionId, undefined, "new-active", "m"), effort: modelSettingsPick("effort", "max", store.getState().modelSettingsConnectionId, undefined, "new-active", "e") };
+  expect(modelSettingsWrites(pending, { kind: "model", model: "b", effort: "max", requestId: "m", effortRequestId: "e" })).toEqual([{ id: "original", model: "b", modelOverrideModel: "b", reasoningEffort: "max" }]);
   store.getState().applyHostMessage({ type: "model_changed", model: "b", reasoningEffort: "off" });
   expect(store.getState().modelSettingsConnectionId).toBe("original");
 });
@@ -8970,16 +8970,23 @@ describe("reasoning replay ownership", () => {
 
 it("acknowledges an adjusted queued choice and persists its resolved destination level", () => {
   const store = createDesktopStore(createManualScheduler().scheduler);
-  const pending = { effort: modelSettingsPick("effort", "off", "original", undefined, "other") };
-  store.getState().applyHostMessage({ type: "model_changed", model: "glm-5.3", reasoningEffort: "low", selectedReasoningEffort: "low", requestedReasoningEffort: "off", availableEffortLevels: ["low", "high"], effortAdjustment: {from: "off", to: "low"} });
+  const pending = { effort: modelSettingsPick("effort", "off", "original", undefined, "other", "e") };
+  store.getState().applyHostMessage({ type: "model_changed", model: "glm-5.3", reasoningEffort: "low", selectedReasoningEffort: "low", requestedReasoningEffort: "off", effortRequestId: "e", availableEffortLevels: ["low", "high"], effortAdjustment: {from: "off", to: "low"} });
   const state = store.getState();
   expect(state).toMatchObject({model:"glm-5.3", reasoningEffort:"low", availableEffortLevels:["low", "high"], notice:{text:"glm-5.3 reasoning effort adjusted to low."}});
   expect(modelSettingsWrites(pending, {...state.modelSelectionAck!, model: "glm-5.3"})).toEqual([{id:"original", modelOverrideModel:"glm-5.3", reasoningEffort:"low"}]);
   expect(pending.effort).toBeUndefined();
 });
 
+it("does not consume a newer model choice on an older acknowledgement of the same value", () => {
+  const pending = { model: modelSettingsPick("model", "b", "c", undefined, undefined, "new") };
+  expect(modelSettingsWrites(pending, {kind:"model", model:"b", effort:"low", requestId:"old"})).toEqual([]);
+  expect(pending.model).toBeDefined();
+  expect(modelSettingsWrites(pending, {kind:"model", model:"b", effort:"low", requestId:"new"})).toEqual([{id:"c", model:"b"}]);
+});
+
 it("does not consume a pending effort on an unrelated model acknowledgement", () => {
-  const pending = { effort: modelSettingsPick("effort", "low", "c", undefined, undefined) };
+  const pending = { effort: modelSettingsPick("effort", "low", "c", undefined, undefined, "e") };
   expect(modelSettingsWrites(pending, {kind:"model", model:"b", effort:"low"})).toEqual([]);
   expect(pending.effort).toBeDefined();
 });

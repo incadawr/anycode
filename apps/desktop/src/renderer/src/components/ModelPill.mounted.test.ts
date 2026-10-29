@@ -31,16 +31,16 @@ it("saves the checked effort only after an unchanged acknowledgement, to the ori
     const off = container.querySelector<HTMLButtonElement>('[role="menuitemradio"][data-effort="off"]')!;
     expect(off.getAttribute("aria-checked")).toBe("true");
     await act(async () => { off.click(); });
-    expect(send).toHaveBeenCalledWith("tab", {type:"set_reasoning_effort", effort:"off"});
+    expect(send).toHaveBeenCalledWith("tab", {type:"set_reasoning_effort", effort:"off", requestId:expect.any(String)});
     expect(update).not.toHaveBeenCalled();
     useSettingsStore.setState({snapshot: {...useSettingsStore.getState().snapshot!, settings:{...useSettingsStore.getState().snapshot!.settings, provider:{...useSettingsStore.getState().snapshot!.settings.provider, activeConnectionId:"other"}}}});
-    await act(async () => { store.getState().applyHostMessage({type:"reasoning_effort_changed", effort:"off"}); });
+    await act(async () => { store.getState().applyHostMessage({type:"reasoning_effort_changed", effort:"off", requestId: (send.mock.lastCall![1] as {requestId: string}).requestId}); });
     expect(update).toHaveBeenCalledWith({id:"c", modelOverrideModel:"glm-5.2", reasoningEffort:"off"});
     for (let i = 0; i < 2; i++) {
       await act(async () => { container.querySelector<HTMLButtonElement>(".model-pill-chip")!.click(); });
       await act(async () => { container.querySelector<HTMLButtonElement>(".start-model-effort-row")!.click(); });
       await act(async () => { container.querySelector<HTMLButtonElement>('[role="menuitemradio"][data-effort="high"]')!.click(); });
-      await act(async () => { store.getState().applyHostMessage({type:"reasoning_effort_changed", effort:"high"}); });
+      await act(async () => { store.getState().applyHostMessage({type:"reasoning_effort_changed", effort:"high", requestId: (send.mock.lastCall![1] as {requestId: string}).requestId}); });
     }
     expect(update).toHaveBeenCalledTimes(3);
     expect(update).toHaveBeenLastCalledWith({id:"c", modelOverrideModel:"glm-5.2", reasoningEffort:"high"});
