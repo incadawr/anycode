@@ -366,6 +366,32 @@ describe("Sessions API approvals (Taskana 4763)", () => {
     metadata: { name: toolName, description: "", readOnly: false, destructive: false, riskLevel: "high", sideEffectScope: "workspace" } as unknown as PermissionRequest["metadata"],
   });
 
+  it("keeps status and result aligned through turns, queued asks, cancellation and shutdown", async () => {
+    const { h, finishes, make } = fixture();
+    const state = (expected: string) => {
+      expect(h.session.communicationStatus().state).toBe(expected);
+      expect(h.session.communicationResult().state).toBe(expected);
+    };
+    try {
+      state("idle");
+      await h.session.receiveAgentMessage(make("activity"));
+      await h.waitUntil(() => finishes.length > 0); state("running");
+      const first = h.broker.requestPermission(askOf("Bash", { command: "ls" }));
+      const second = h.broker.requestPermission(askOf("AskUserQuestion", { questions: [] }));
+      state("waiting_approval");
+      const id = h.session.communicationPendingApprovals()[0]!.approvalId;
+      h.session.communicationAnswerApproval({ approvalId: id, decision: "allow" }); await first;
+      state("waiting_approval");
+      h.broker.denyAll("settled", "turn_cancelled"); await second; state("running");
+      const third = h.broker.requestPermission(askOf("Bash", { command: "pwd" }));
+      state("waiting_approval"); h.session.communicationCancelTurn(); await third; state("running");
+      finishes.shift()!(); await h.waitUntil(() => h.session.communicationStatus().state === "idle"); state("idle");
+      const pending = h.broker.requestPermission(askOf("AskUserQuestion", { questions: [] }));
+      state("waiting_approval");
+      const shutdown = h.session.shutdown(); state("closing"); await pending; await shutdown; state("closing");
+    } finally { h.close(); }
+  });
+
   it("T12 communicationPendingApprovals shows a description and never the input; ExitPlanMode and AskUserQuestion are not answerable; an inline child's ask is listed under the parent", () => {
     const { h } = fixture();
     void h.broker.requestPermission(askOf("Write", { file_path: "/workspace/big.txt", content: "X".repeat(100_000) }));

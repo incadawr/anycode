@@ -365,6 +365,15 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   };
   const terminalState = (tab: { missingWorkspace?: boolean; hostFailure?: unknown }) =>
     tab.missingWorkspace ? "missing_workspace" : tab.hostFailure ? "crash_looped" : undefined;
+  const resolveStatus = async (tab: Awaited<ReturnType<typeof requireSession>>) => {
+    const state = terminalState(tab);
+    if (state) return { ...tab, state };
+    const status = await options.manager.communicationRequest(tab.sessionId, "get_session_status", undefined, tab.workspace);
+    if (!status || typeof status !== "object" || !["idle", "running", "waiting_approval", "closing"].includes((status as { state?: string }).state ?? "")) {
+      throw new Error("Invalid session status");
+    }
+    return { ...tab, ...status as object };
+  };
   const approvalOn = (sessionId: string): boolean => options.isExternalApprovalEnabled?.(sessionId) === true;
   /** Access first (an unshared session never reveals anything), then the approval switch. */
   const requireApprovalSession = async (sessionId: string) => {
@@ -498,10 +507,25 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     switch (name) {
       case "list_sessions": {
         z.object({}).strict().parse(raw);
-        const sessions = (await tabs(true)).map((tab) => {
-          const state = terminalState(tab);
-          return state ? { ...tab, state } : tab;
-        });
+        const rows = await Promise.all((await tabs(true)).map(async (tab) => {
+          try {
+            const status = await resolveStatus(tab);
+            const current = (await tabs(false)).find((t) => t.sessionId === tab.sessionId);
+            if (!current) return undefined;
+            const terminal = terminalState(current);
+            if (terminal) return { ...current, state: terminal };
+            if (terminalState(tab) || current.workspace !== tab.workspace || current.pid !== tab.pid) return undefined;
+            return { ...current, state: status.state };
+          } catch {
+            try {
+              const current = (await tabs(false)).find((t) => t.sessionId === tab.sessionId);
+              if (!current) return undefined;
+              const state = terminalState(current);
+              return state ? { ...current, state } : undefined;
+            } catch { return undefined; }
+          }
+        }));
+        const sessions = rows.filter((row): row is NonNullable<typeof row> => row !== undefined);
         // externalApproval is reported only when the switch is wired at all (Taskana 4763).
         const withApproval = (tab: (typeof sessions)[number]) => options.isExternalApprovalEnabled ? { ...tab, externalApproval: approvalOn(tab.sessionId) } : tab;
         if (!options.handleOf) return { sessions: sessions.map(withApproval) };
@@ -576,13 +600,14 @@ export async function startCommunicationServer(options: CommunicationServerOptio
           ...(typeof result?.turnId === "string" ? { turnId: result.turnId } : {}),
         };
       }
-      case "get_session_result":
       case "get_session_status": {
         const input = sessionSchema.parse(raw); const tab = await requireSession(input.sessionId);
-        const state = terminalState(tab);
-        if (name === "get_session_status" && state) return { ...tab, state };
-        const status = await options.manager.communicationRequest(input.sessionId, name, undefined, tab.workspace);
-        return { ...tab, ...(status as object) };
+        return resolveStatus(tab);
+      }
+      case "get_session_result": {
+        const input = sessionSchema.parse(raw); const tab = await requireSession(input.sessionId);
+        const result = await options.manager.communicationRequest(input.sessionId, name, undefined, tab.workspace);
+        return { ...tab, ...(result as object) };
       }
       case "send_message": {
         return sendMessage(parseOr(messageSchema, raw, 'send_message expects sessionId, payload (1..32000 chars) and mode ("next_turn" or "steer"); optional: kind, correlationId, replyTo, idempotencyKey'));

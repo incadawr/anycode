@@ -1,4 +1,4 @@
-import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult, type SessionStatus, type SetSessionEffortOutcome } from "../shared/communication.js";
+import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult, type SessionStatus, type SessionActivityState, type SetSessionEffortOutcome } from "../shared/communication.js";
 import { normalizeEffortLevels, validateSessionEffort } from "../shared/session-effort.js";
 import { safeFailureMessage } from "./safe-failure.js";
 import { claudeNativeChildRecord } from "./claude-usage.js";
@@ -1892,9 +1892,9 @@ export class Session {
     ).map(([id]) => id);
   }
 
-  /** One busy-derived state for both Sessions API reads, so status and result can never disagree (Taskana 4768). */
-  private communicationState(): "idle" | "running" | "closing" {
-    return this.shuttingDown ? "closing" : this.busy ? "running" : "idle";
+  /** Shared activity state for status and result projections. */
+  private communicationState(): SessionActivityState {
+    return this.shuttingDown ? "closing" : this.broker.isAwaitingApproval ? "waiting_approval" : this.busy ? "running" : "idle";
   }
 
   communicationResult() {

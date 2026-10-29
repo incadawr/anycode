@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Sessions API lists the same activity state as session status, including approval waits.
+
 ## [0.0.52] — 2026-10-30
 
 ### Added
