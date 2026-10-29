@@ -269,7 +269,7 @@ export const WEBFETCH_CACHE_TTL_MS = 900_000;
 // ---------------------------------------------------------------------------
 
 
-/** Per-attempt stream stall watchdog: no fullStream part for this long => retryable stall. 0 disables it. */
+/** Per-attempt stream stall watchdog: no fullStream part for this long => retryable stall (on openai-responses, response bytes also count as activity, GitHub #27). 0 disables it. */
 export const DEFAULT_STREAM_STALL_TIMEOUT_MS = 90_000;
 
 /** Cap applied to a provider-supplied retry-after delay before it is honored. */

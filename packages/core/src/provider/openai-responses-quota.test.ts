@@ -118,3 +118,18 @@ describe("createOpenAIResponsesLanguageModel quota fetch wiring (Taskana 4090)",
     });
   });
 });
+
+describe("createOpenAIResponsesLanguageModel response-activity tap (#27)", () => {
+  it("installs a fetch wrapper when onResponseActivity is given and nothing else wraps", () => {
+    createModel(config(), vi.fn()); const options=mockCreateOpenAI.mock.calls.at(-1)![0]; expect(typeof options.fetch).toBe("function");
+  });
+  it("taps outside quota and Authorization stripping: bytes observed, quota fires, header stripped", async () => {
+    let sawAuthorization: string | undefined;
+    const origin=await listen((req,res)=>{ sawAuthorization=req.headers.authorization; res.writeHead(200,{"x-ratelimit-requests-limit":"50","x-ratelimit-requests-remaining":"10"}); res.write("data: a\n\n"); setTimeout(()=>res.end("data: b\n\n"),10); });
+    const seen: Array<ProviderQuotaUpdate | null>=[]; const activity=vi.fn();
+    createModel(config({apiKey:undefined,baseUrl:`${origin}/v1`,onQuotaHeaders: update=>seen.push(update)}),activity);
+    const options=mockCreateOpenAI.mock.calls.at(-1)![0] as {fetch:typeof fetch};
+    const res=await options.fetch(`${origin}/v1/responses`,{method:"POST",headers:{authorization:"Bearer "}});
+    expect(await res.text()).toBe("data: a\n\ndata: b\n\n"); expect(activity.mock.calls.length).toBeGreaterThanOrEqual(2); expect(seen).toHaveLength(1); expect(sawAuthorization).toBeUndefined();
+  });
+});

@@ -1,6 +1,8 @@
 import { contextualizeNetworkFailure } from "./network-failure.js";
 /**
  * ModelPort adapter over the AI SDK. Per call:
+ * On openai-responses, response bytes also count as watchdog activity and raw
+ * chunks recover reasoning_text events hidden by the SDK (GitHub #27).
  *  - builds the LanguageModel via createLanguageModel(config), which picks the
  *    client factory by the config's transport
  *  - invokes streamText with stopWhen: stepCountIs(1) (explicit; one model
@@ -67,6 +69,7 @@ import type { ProviderTransport } from "./catalog.js";
 import type { EndpointConfig } from "./endpoint.js";
 import type { ImplicitPromptCache } from "../types/config.js";
 import { classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
+import { ResponsesReasoningTextRecovery } from "./responses-reasoning-text.js";
 import { createLanguageModel } from "./language-model.js";
 import type { ProviderQuotaUpdate } from "./quota.js";
 import type { NetworkWaiter } from "./network-waiter.js";
@@ -487,6 +490,7 @@ function waitTickOrHint(ms: number, box: HintBox, signal: AbortSignal | undefine
 }
 
 /**
+ * Optional lastActivityAt extends the watchdog when response bytes arrive.
  * Waits for the iterator's next result, racing it against an abortable
  * `stallTimeoutMs` watchdog (unarmed when <= 0) and `signal`. A genuine abort
  * that fires WHILE this call is pending rejects (propagating the signal's
@@ -503,6 +507,7 @@ function nextWithStallTimeout<T>(
   iterator: AsyncIterator<T>,
   stallTimeoutMs: number,
   signal: AbortSignal,
+  lastActivityAt?: () => number,
 ): Promise<IteratorResult<T> | StalledOutcome> {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -523,12 +528,22 @@ function nextWithStallTimeout<T>(
     signal.addEventListener("abort", onAbort, { once: true });
 
     if (stallTimeoutMs > 0) {
-      timer = setTimeout(() => {
+      const armedAt = Date.now();
+      const onTimer = (): void => {
         if (settled) return;
+        if (lastActivityAt !== undefined) {
+          const quietSince = Math.max(armedAt, lastActivityAt());
+          const remaining = Math.min(stallTimeoutMs, stallTimeoutMs - (Date.now() - quietSince));
+          if (remaining > 0) {
+            timer = setTimeout(onTimer, remaining);
+            return;
+          }
+        }
         settled = true;
         cleanup();
         resolve({ stalled: true });
-      }, stallTimeoutMs);
+      };
+      timer = setTimeout(onTimer, stallTimeoutMs);
     }
 
     iterator.next().then(
@@ -697,11 +712,13 @@ export class AiSdkModelPort implements ModelPort {
    * the object identity the no-resolver path guarantees and add an
    * `includeUsage: undefined` key the pre-TASK.168 shape never carried.
    */
-  private async buildAttemptModel(includeUsage: boolean | undefined): Promise<LanguageModel> {
+  // The factory receives exactly one argument when the activity hook is absent.
+  private async buildAttemptModel(includeUsage: boolean | undefined, onResponseActivity?: () => void): Promise<LanguageModel> {
+    const create = (cfg: EndpointConfig): LanguageModel => onResponseActivity === undefined ? createLanguageModel(cfg) : createLanguageModel(cfg, onResponseActivity);
     const { resolveApiKey } = this.config;
     const usageOverridden = includeUsage !== this.config.includeUsage;
     if (resolveApiKey === undefined) {
-      return createLanguageModel(usageOverridden ? { ...this.config, includeUsage } : this.config);
+      return create(usageOverridden ? { ...this.config, includeUsage } : this.config);
     }
     let apiKey = this.config.apiKey;
     try {
@@ -712,7 +729,7 @@ export class AiSdkModelPort implements ModelPort {
     } catch {
       // Fall back to the static key: a refresh hiccup must not kill the attempt.
     }
-    return createLanguageModel(
+    return create(
       usageOverridden ? { ...this.config, apiKey, includeUsage } : { ...this.config, apiKey },
     );
   }
@@ -849,6 +866,12 @@ export class AiSdkModelPort implements ModelPort {
       // Per-attempt dedup of dropped-artifact warnings (reset with the attempt
       // on retry, alongside hadModelOutput) — slice 3.7 R1, §2.2.
       const warnedArtifacts = new Set<string>();
+      // Per-attempt recovery and byte liveness prevent cross-talk on retries (GitHub #27).
+      const reasoningTextRecovery = this.config.transport === "openai-responses" ? new ResponsesReasoningTextRecovery() : undefined;
+      let lastWireActivityAt = Number.NEGATIVE_INFINITY;
+      const onResponseActivity = this.config.transport === "openai-responses" && policy.stallTimeoutMs > 0
+        ? (): void => { lastWireActivityAt = Date.now(); } : undefined;
+      const lastActivityAt = onResponseActivity !== undefined ? (): number => lastWireActivityAt : undefined;
       // TASK.168: the effective include_usage verdict for THIS attempt —
       // forced off once the endpoint-level probe has committed, or while this
       // attempt IS itself the probe retry (both fold into the same field:
@@ -864,7 +887,7 @@ export class AiSdkModelPort implements ModelPort {
         : () => {};
 
       try {
-        const model = await this.buildAttemptModel(attemptIncludeUsage);
+        const model = await this.buildAttemptModel(attemptIncludeUsage, onResponseActivity);
         const result = streamText({
           model,
           // System prompt goes out-of-band: ai@7 rejects system-role messages
@@ -880,18 +903,16 @@ export class AiSdkModelPort implements ModelPort {
           // fullStream error already reaches our safe classifier and journal.
           onError: () => {},
           abortSignal: attemptController.signal,
-          // Raw provider chunks are the only trustworthy source of the
-          // response-side model claim, and only the anthropic-messages
-          // transport carries one (`message_start.message.model`); the flag
-          // stays off elsewhere so no other transport pays for duplicate parts.
-          ...(this.config.transport === "anthropic-messages" ? { includeRawChunks: true } : {}),
+          // Raw chunks carry provenance for Anthropic and reasoning text for Responses.
+          ...(this.config.transport === "anthropic-messages" || this.config.transport === "openai-responses"
+            ? { includeRawChunks: true } : {}),
           ...reasoningRequestOptions(request, this.config.providerName, this.config.transport, this.config.promptCache, this.config.model),
           temperature: request.temperature,
         });
 
         const iterator = result.fullStream[Symbol.asyncIterator]();
         for (;;) {
-          const outcome = await nextWithStallTimeout(iterator, policy.stallTimeoutMs, attemptController.signal);
+          const outcome = await nextWithStallTimeout(iterator, policy.stallTimeoutMs, attemptController.signal, lastActivityAt);
 
           if (isStalledOutcome(outcome)) {
             const stallError = new StreamStallError(policy.stallTimeoutMs);
@@ -929,6 +950,12 @@ export class AiSdkModelPort implements ModelPort {
             this.#lastResponseModel = rawResponseModel;
           }
 
+          if (reasoningTextRecovery !== undefined) {
+            for (const recovered of reasoningTextRecovery.observe(outcome.value)) {
+              if (isModelOutputEvent(recovered)) hadModelOutput = true;
+              yield recovered;
+            }
+          }
           if (outcome.value.type === "finish-step") {
             stepRawUsage = outcome.value.usage.raw;
           }

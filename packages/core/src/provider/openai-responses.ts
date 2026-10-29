@@ -6,6 +6,7 @@
  * transport, `openai-compatible.ts`).
  */
 
+import { wrapFetchWithActivity } from "./activity-fetch.js";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import type { EndpointConfig } from "./endpoint.js";
@@ -74,7 +75,8 @@ function hasExplicitAuthorizationHeader(headers: Record<string, string> | undefi
   return Object.keys(headers).some((key) => key.toLowerCase() === "authorization");
 }
 
-export function createOpenAIResponsesLanguageModel(config: EndpointConfig): LanguageModel {
+/** The optional hook observes response-byte activity for the stall watchdog. */
+export function createOpenAIResponsesLanguageModel(config: EndpointConfig, onResponseActivity?: () => void): LanguageModel {
   const shouldStripAmbientAuthorization =
     config.apiKey === undefined && !hasExplicitAuthorizationHeader(config.headers);
   // Taskana 4090: when BOTH wrappers apply, the quota wrapper is the OUTER —
@@ -91,12 +93,15 @@ export function createOpenAIResponsesLanguageModel(config: EndpointConfig): Lang
       : shouldStripAmbientAuthorization
         ? stripAuthorizationFetch
         : undefined;
+  const transportFetch = onResponseActivity !== undefined
+    ? wrapFetchWithActivity(fetchChain ?? ((input, init) => globalThis.fetch(input, init)), onResponseActivity)
+    : fetchChain;
   const provider = createOpenAI({
     name: OPENAI_RESPONSES_PROVIDER_NAME,
     baseURL: normalizeExplicitBaseUrl(config.baseUrl),
     apiKey: config.apiKey ?? "",
     ...(config.headers !== undefined ? { headers: config.headers } : {}),
-    ...(fetchChain !== undefined ? { fetch: fetchChain } : {}),
+    ...(transportFetch !== undefined ? { fetch: transportFetch } : {}),
   });
   return provider.responses(config.model);
 }
