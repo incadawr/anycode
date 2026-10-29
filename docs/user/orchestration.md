@@ -75,8 +75,9 @@ A background (detached) spawn above the limit is refused immediately with the
 “child session limit reached” message, counting running children and pending admissions, so a burst of delegations never stalls the parent turn. A spawn
 asked to wait synchronously stays queued and starts when a slot frees.
 
-The application also allows up to eight running child sessions across all
-parents. A background spawn over this limit is refused with the
+The application-wide limit across all parents is the session setting
+`sessionLimits.childSessionsGlobalMax` (1–24, default 8). A background spawn
+over this limit is refused with the
 “application-wide child session limit reached” message; a synchronous spawn
 waits for a slot.
 

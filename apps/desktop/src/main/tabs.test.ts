@@ -7636,6 +7636,24 @@ describe("TabHostManager — detached spawns are refused at the cap, never parke
     expect(hosts).toHaveLength(4 + 8);
   });
 
+  it("reports the configured global limit when it changes below the running count", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    let globalMax = 2;
+    const manager = childManager(fork, window, { childRunsGlobalMax: () => globalMax });
+    manager.createTab({ workspace: "/ws", sessionId: "root-global-configured", resume: false });
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "first" }));
+    rootHost.emit("message", spawnRequest({ requestId: "second" }));
+    globalMax = 1;
+    rootHost.emit("message", spawnRequest({ requestId: "refused", detach: true, spawnToolCallId: "refused" }));
+    expect(childRunEvents(rootHost).find((event) => event.requestId === "refused")).toMatchObject({
+      kind: "rejected",
+      reason: "limit_global",
+      message: 'Agent: application-wide child session limit reached (1 running child session). No child was started. Wait for one to finish, or use tier "inline".',
+    });
+  });
+
   it("the live per-parent resolver uses the OWNING workspace", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
