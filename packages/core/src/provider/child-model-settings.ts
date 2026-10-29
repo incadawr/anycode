@@ -21,7 +21,7 @@
 
 import type { CatalogProviderEntry } from "./catalog.js";
 import type { ReasoningEffort } from "../types/config.js";
-import { resolveContextWindow, resolveMaxOutputTokens, resolveReasoningEffort } from "./capabilities.js";
+import { resolveContextWindow, resolveMaxOutputTokens, resolveChildReasoningEffort } from "./capabilities.js";
 import type { LiveModelCapabilities } from "./capabilities.js";
 
 export interface ChildModelSettings {
@@ -57,7 +57,7 @@ export function buildChildModelSettingsResolver(deps: {
     try {
       return {
         maxOutputTokens: resolveMaxOutputTokens(modelId, catalogEntry, envMaxOutputTokens, onClamp, onStubFallback),
-        reasoningEffort: resolveReasoningEffort(modelId, catalogEntry, selectedTier, liveCapabilitiesFor?.(modelId), deps.effortLevelsFor?.(modelId)),
+        reasoningEffort: resolveChildReasoningEffort(modelId, catalogEntry, selectedTier, liveCapabilitiesFor?.(modelId), deps.effortLevelsFor?.(modelId)),
         contextWindowTokens: deps.contextWindowFor?.(modelId) ?? resolveContextWindow(modelId, catalogEntry, envContextWindow, envContextWindowModel),
       };
     } catch {

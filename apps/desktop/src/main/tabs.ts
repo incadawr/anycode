@@ -1761,10 +1761,10 @@ export class TabHostManager {
           // like ANYCODE_CONNECTION_ID above and rides every respawn (lives on the
           // tab). Absent for every non-import spawn ⇒ nothing stamped.
           ...(tab.modelOverride !== undefined ? { [ENV_MODEL]: tab.modelOverride } : {}),
-          // Core children: xhigh maps to the existing core "max"; absent keeps
+          // Core children retain the selected tier; absent keeps
           // the absent-field behavior (nothing stamped).
           ...(tab.effortOverride !== undefined
-            ? { [ENV_REASONING_EFFORT]: tab.effortOverride === "xhigh" ? "max" : tab.effortOverride, [ENV_REASONING_EFFORT_MODEL]: "" }
+            ? { [ENV_REASONING_EFFORT]: tab.effortOverride, [ENV_REASONING_EFFORT_MODEL]: "" }
             : {}),
           ...engineEnvOverlay,
           // The session's tools identify their session. Stamped
