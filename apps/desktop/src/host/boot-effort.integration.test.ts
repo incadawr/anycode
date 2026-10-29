@@ -11,7 +11,7 @@ class FakePort extends EventEmitter {
 }
 
 describe("host boot effort selection", () => {
-  it("retains a saved off selection when switching from GLM-5.2 to GLM-5.3", async () => {
+  it("adjusts an unbound off override when switching from GLM-5.2 to GLM-5.3", async () => {
     // The profile inputs the fork must NOT see, captured for the cleanup checks.
     const ambient = {
       home: process.env.HOME,
@@ -31,7 +31,7 @@ describe("host boot effort selection", () => {
         expect(port.messages.find((m) => m.type === "host_ready")).not.toHaveProperty("reasoningEffortDefault");
         port.send({ type: "set_model", model: "glm-5.3" });
         await vi.waitFor(() => expect(port.messages.some((m) => m.type === "model_changed")).toBe(true));
-        expect(port.messages.find((m) => m.type === "model_changed").reasoningEffort).toBe("off");
+        expect(port.messages.find((m) => m.type === "model_changed")).toMatchObject({ reasoningEffort: "low", effortAdjustment: { from: "off", to: "low" } });
         expect(port.messages.find((m) => m.type === "model_changed")).not.toHaveProperty("reasoningEffortDefault");
         // What the fork stamped into its own environment on this bare boot.
         stampedSessionId = process.env.ANYCODE_SESSION_ID;

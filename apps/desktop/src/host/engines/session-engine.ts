@@ -47,6 +47,7 @@ export interface EngineCapabilities {
 export interface ModelSwitchResult {
   contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
   selectedReasoningEffort?: ReasoningEffort;
+  effortAdjustment?: { from: ReasoningEffort; to: ReasoningEffort };
   model: string;
   reasoningEffort: ReasoningEffort;
   availableEffortLevels?: ReasoningEffort[];

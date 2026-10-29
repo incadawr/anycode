@@ -1009,6 +1009,7 @@ export interface ModelSelectionAck {
   kind: "model" | "effort";
   model: string | null;
   effort: ReasoningEffort;
+  requestedEffort?: ReasoningEffort;
 }
 
 export interface DesktopState {
@@ -4490,10 +4491,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // needed here.
             set({
               contextUsage: message.contextUsage ?? null,
-              modelSelectionAck: {kind: "model", model: message.model, effort: message.selectedReasoningEffort ?? message.reasoningEffort},
+              modelSelectionAck: {kind: "model", model: message.model, effort: message.selectedReasoningEffort ?? message.reasoningEffort, ...(message.requestedReasoningEffort !== undefined ? { requestedEffort: message.requestedReasoningEffort } : {})},
               model: message.model,
               reasoningEffort: message.reasoningEffort,
               availableEffortLevels: message.availableEffortLevels,
+              ...(message.effortAdjustment !== undefined ? { notice: { kind: "engine_notice" as const, text: `${message.model} reasoning effort adjusted to ${message.effortAdjustment.to}.` } } : {}),
               // TASK.56 W3: re-gate upfront on a mid-session model switch —
               // vision -> non-vision flips this to false in the SAME push
               // that already updates `model` (W2 re-reads the verdict after

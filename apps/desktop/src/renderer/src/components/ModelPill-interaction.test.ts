@@ -37,6 +37,7 @@ describe("model menu interaction", () => {
     vi.stubGlobal("document", { addEventListener() {}, removeEventListener() {} });
   });
   it("persists off after the host acknowledges an effort picked in the menu", async () => {
+    harness.state.reasoningEffort = "off";
     let tree = render();
     tree.props.children[0].props.onClick();
     tree = render();
@@ -71,7 +72,7 @@ describe("model menu interaction", () => {
     else { chooseEffort(effort); chooseModel(); }
     expect(harness.update).not.toHaveBeenCalled();
     harness.state.model = "glm-4.6";
-    harness.state.modelSelectionAck = {kind:"model", model:"glm-4.6", effort};
+    harness.state.modelSelectionAck = {kind:"model", model:"glm-4.6", effort, requestedEffort:effort};
     render();
     await vi.waitFor(() => expect(harness.update).toHaveBeenCalledExactlyOnceWith({id:"c", model:"glm-4.6", modelOverrideModel:"glm-4.6", reasoningEffort:effort}));
   });

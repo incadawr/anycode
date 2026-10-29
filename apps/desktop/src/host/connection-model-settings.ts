@@ -1,5 +1,6 @@
 import {
   resolveContextWindowInfo,
+  resolveEffortLevels,
   resolveReasoningEffort,
   type CatalogProviderEntry,
   type LiveModelCapabilities,
@@ -7,6 +8,15 @@ import {
 } from "@anycode/core";
 import type { ProviderConnection } from "../shared/settings.js";
 import { applyModelReasoningOverride, modelOverrideFor } from "../shared/model-overrides.js";
+
+const EFFORT_ORDER: ReasoningEffort[] = ["off", "low", "medium", "high", "xhigh", "max"];
+
+/** Pick the closest supported tier; ties favor the lower tier. */
+export function nearestSupportedEffort(tier: ReasoningEffort, levels: ReasoningEffort[] | undefined): ReasoningEffort {
+  if (!levels?.length || levels.includes(tier)) return tier;
+  const rank = EFFORT_ORDER.indexOf(tier);
+  return [...levels].sort((a, b) => Math.abs(EFFORT_ORDER.indexOf(a) - rank) - Math.abs(EFFORT_ORDER.indexOf(b) - rank) || EFFORT_ORDER.indexOf(a) - EFFORT_ORDER.indexOf(b))[0]!;
+}
 
 type ConnectionSettings = Pick<ProviderConnection, "modelOverrides" | "reasoningEffort" | "modelCapabilities" | "pricing">;
 
@@ -29,6 +39,7 @@ export function createConnectionModelSettings(deps: {
   let fingerprint = JSON.stringify(connection);
   const selected = new Map<string, ReasoningEffort>();
   const invalidated = new Set<string>();
+  let adjustment: { from: ReasoningEffort; to: ReasoningEffort } | undefined;
 
   function capabilitiesFor(model: string): LiveModelCapabilities | undefined {
     const map = connection?.modelCapabilities;
@@ -85,12 +96,19 @@ export function createConnectionModelSettings(deps: {
       selected.set(model, effort);
       invalidated.delete(model);
     },
+    normalize(model: string, tier: ReasoningEffort): ReasoningEffort {
+      return nearestSupportedEffort(tier, resolveEffortLevels(model, deps.catalogEntry, capabilitiesFor(model)));
+    },
+    takeAdjustment() { const value = adjustment; adjustment = undefined; return value; },
     switchEffort(from: string, to: string, tier: ReasoningEffort, explicit = false): ReasoningEffort {
       refresh();
       // A new persisted choice must not be replaced by Session's previous tier.
       if (!explicit && !invalidated.has(from)) selected.set(from, tier);
-      const next = explicit ? tier : effortFor(to) ??
-        resolveReasoningEffort(to, deps.catalogEntry, undefined, capabilitiesFor(to)) ?? "off";
+      const levels = resolveEffortLevels(to, deps.catalogEntry, capabilitiesFor(to));
+      const candidate = explicit ? tier : effortFor(to) ??
+        resolveReasoningEffort(to, deps.catalogEntry, undefined, capabilitiesFor(to)) ?? (levels?.length ? tier : "off");
+      const next = nearestSupportedEffort(candidate, levels);
+      adjustment = next !== candidate ? { from: candidate, to: next } : undefined;
       selected.set(to, next);
       invalidated.delete(to);
       return next;

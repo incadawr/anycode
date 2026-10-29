@@ -3547,9 +3547,10 @@ async function boot(): Promise<void> {
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
     ));
     const bootSelectedEffort = connectionModelSettings.effortFor(envConfig.model);
-    const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, bootSelectedEffort, liveCapsFor(envConfig.model));
+    const normalizedBootEffort = bootSelectedEffort === undefined ? undefined : connectionModelSettings.normalize(envConfig.model, bootSelectedEffort);
+    const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, normalizedBootEffort, liveCapsFor(envConfig.model));
     // Preserve explicit selections even when the current model suppresses them.
-    selectedEffort = bootSelectedEffort ?? bootReasoningEffort ?? "off";
+    selectedEffort = normalizedBootEffort ?? bootReasoningEffort ?? "off";
     connectionModelSettings.remember(envConfig.model, selectedEffort);
     const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry, liveCapsFor(envConfig.model));
     // TASK.162 (F6): the same catalog + env overrides the three boot
@@ -4615,6 +4616,7 @@ async function boot(): Promise<void> {
     // CoreEngine exposes it through the neutral SessionEngine seam.
     const switchModelImpl = (id: string, selectedTier: ReasoningEffort, effortExplicit = false) => {
         selectedTier = connectionModelSettings.switchEffort(currentModel, id, selectedTier, effortExplicit);
+        const effortAdjustment = connectionModelSettings.takeAdjustment();
         // TASK.162 (§0b): Session hands its OWN preserved user-selected tier
         // here, so this is the second (and only other) writer that keeps the
         // host cell faithful — without it a tier selected before a switch
@@ -4681,6 +4683,7 @@ async function boot(): Promise<void> {
           model: id,
           contextUsage: {estimatedTokens: usage.estimatedTokens, budgetTokens: usage.effectiveWindowTokens, source: usage.source},
           selectedReasoningEffort: selectedTier,
+          ...(effortAdjustment !== undefined ? { effortAdjustment } : {}),
           reasoningEffort: resolvedEffort ?? "off",
           ...(availableEffortLevels !== undefined ? { availableEffortLevels } : {}),
         };
