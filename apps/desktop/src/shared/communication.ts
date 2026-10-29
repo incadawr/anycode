@@ -55,6 +55,13 @@ export interface TerminalSessionStatus {
   hostFailure: import("./host-failure.js").HostFailure;
 }
 
+export interface MissingWorkspaceSessionStatus {
+  sessionId: string;
+  engine: string;
+  state: "missing_workspace";
+  missingWorkspace: true;
+}
+
 /** Internal main→host operation name (never a public MCP tool). */
 export const SET_SESSION_EFFORT_OPERATION = "set_session_effort";
 
