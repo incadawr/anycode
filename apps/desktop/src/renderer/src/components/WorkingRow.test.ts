@@ -6,10 +6,9 @@
  * rendering. Covers WorkingRow's clock/verb/format helpers, MessageList's
  * `isTailLive` predicate, and ReasoningBlock's `reasoningTailPreview`.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   formatElapsed,
-  getTurnStartedAt,
   VERB_ROTATE_SECONDS,
   WORKING_VERBS,
   workingVerb,
@@ -61,46 +60,6 @@ describe("workingVerb", () => {
   it("keeps the rotation constant and the band width consistent", () => {
     expect(WORKING_VERBS).toEqual(["Working", "Thinking", "Reviewing", "Checking"]);
     expect(VERB_ROTATE_SECONDS).toBe(12);
-  });
-});
-
-describe("getTurnStartedAt", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("is idempotent for a given turnId (later reads never re-stamp)", () => {
-    let clock = 1000;
-    vi.spyOn(Date, "now").mockImplementation(() => (clock += 1000));
-    const first = getTurnStartedAt("turn-idempotent");
-    const second = getTurnStartedAt("turn-idempotent");
-    expect(second).toBe(first);
-  });
-
-  it("stamps distinct turnIds with their own first-observation time", () => {
-    let clock = 100_000;
-    vi.spyOn(Date, "now").mockImplementation(() => (clock += 1000));
-    const a = getTurnStartedAt("turn-distinct-a");
-    const b = getTurnStartedAt("turn-distinct-b");
-    expect(b).not.toBe(a);
-  });
-
-  it("evicts the oldest entry once the 32-entry cap is exceeded", () => {
-    let clock = 500_000;
-    vi.spyOn(Date, "now").mockImplementation(() => (clock += 1000));
-    const firstStamp = getTurnStartedAt("evict-0");
-    // Insert 32 more distinct ids: the map exceeds 32 entries on the 33rd
-    // insertion and drops the oldest (evict-0) in insertion order.
-    for (let i = 1; i <= 32; i += 1) {
-      getTurnStartedAt(`evict-${i}`);
-    }
-    // evict-0 is gone → a fresh query re-stamps it with a NEW (later) time.
-    const reStamp = getTurnStartedAt("evict-0");
-    expect(reStamp).not.toBe(firstStamp);
-    // A survivor (inserted after evict-0) keeps its original stamp.
-    const survivor = getTurnStartedAt("evict-32");
-    const survivorAgain = getTurnStartedAt("evict-32");
-    expect(survivorAgain).toBe(survivor);
   });
 });
 

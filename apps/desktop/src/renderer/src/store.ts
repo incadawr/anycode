@@ -175,6 +175,7 @@ export interface TurnState {
   status: "idle" | "running" | "compacting";
   turnId: string | null;
   requestId: string | null;
+  startedAt?: number;
 }
 
 /**
@@ -2220,6 +2221,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
      */
     function performReset(): void {
       drainPendingDeltas();
+      turnStartedAt.clear();
       // Taskana 4234: the transcript is being discarded — the hydration
       // anchor/projection info indexing it dies with it (public reset also
       // clears the public staging fields itself).
@@ -4554,13 +4556,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             const inFlight = get().queueInFlight;
             // The host's own clock when it sends one: a turn_started re-asserted
             // on reconnect would otherwise restart the footer's duration at ~0.
-            if (message.startedAt !== undefined) {
-              turnStartedAt.set(message.turnId, message.startedAt);
-            } else if (!turnStartedAt.has(message.turnId)) {
-              turnStartedAt.set(message.turnId, Date.now());
+            if (!turnStartedAt.has(message.turnId)) {
+              turnStartedAt.set(message.turnId, message.startedAt ?? Date.now());
             }
             set({
-              turn: { status: "running", turnId: message.turnId, requestId: message.requestId },
+              turn: { status: "running", turnId: message.turnId, requestId: message.requestId, startedAt: turnStartedAt.get(message.turnId) },
               // TASK.33 W8: a new turn starting — whether via the Try-again
               // click (already one-shot consumed by then) or any other
               // send — retires the previous turn's retry bookkeeping so a

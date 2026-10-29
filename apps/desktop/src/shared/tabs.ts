@@ -24,6 +24,13 @@ import type { ReasoningEffort } from "@anycode/core";
  * nothing above is changed.
  */
 
+export const TAB_BOOTSTRAP_CHANNEL = "anycode:tab-bootstrap";
+export const TAB_SELECT_CHANNEL = "anycode:tab-select";
+export interface TabBootstrap {
+  tabs: Array<{ tabId: string; workspace: string }>;
+  activeTabId: string | null;
+}
+
 /** invoke channel: create a tab (new session or resume). */
 export const TAB_CREATE_CHANNEL = "anycode:tab-create";
 

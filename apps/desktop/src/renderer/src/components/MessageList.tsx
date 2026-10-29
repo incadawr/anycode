@@ -47,7 +47,7 @@ import {
 import { PreviewConsoleRow } from "./PreviewConsoleRow.js";
 import { ToolCallCard } from "./ToolCallCard.js";
 import { ToolCallStack } from "./ToolCallStack.js";
-import { WorkingRow, formatElapsed, getTurnStartedAt } from "./WorkingRow.js";
+import { WorkingRow, formatElapsed } from "./WorkingRow.js";
 import { formatBlockTime } from "../block-time.js";
 import { formatUsageLimitReset } from "../provider-notices.js";
 
@@ -936,9 +936,7 @@ export function MessageList({
   }
   const last = blocks.length > 0 ? blocks[blocks.length - 1] : undefined;
   const showWorkingRow = running && !isTailLive(last);
-  // Query the clock on EVERY running render (not just when the row shows) so
-  // the turn-start stamp anchors before the first suppression gap ends.
-  const startedAt = running && turn.turnId !== null ? getTurnStartedAt(turn.turnId) : null;
+  const startedAt = running ? turn.startedAt ?? null : null;
 
   return (
     <div

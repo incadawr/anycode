@@ -25,6 +25,8 @@ import {
   SESSION_DELETE_CHANNEL,
   TAB_CLOSE_CHANNEL,
   TAB_CREATE_CHANNEL,
+  TAB_BOOTSTRAP_CHANNEL,
+  TAB_SELECT_CHANNEL,
   TAB_REBIND_CHANNEL,
   WORKSPACE_PICK_CHANNEL,
 } from "../shared/tabs.js";
@@ -972,6 +974,16 @@ export async function handleTabRebind(deps: TabIpcDeps, req: TabRebindRequest): 
  * negative result of that channel rather than throwing across the bridge.
  */
 export function registerTabIpc(deps: TabIpcDeps): void {
+  let selectedTabId: string | null = null;
+  ipcMain.on(TAB_SELECT_CHANNEL, (_event, raw: unknown) => {
+    if (typeof raw === "string" && deps.manager.listTabs().some((tab) => tab.tabId === raw && !tab.childOf)) {
+      selectedTabId = raw;
+    }
+  });
+  ipcMain.handle(TAB_BOOTSTRAP_CHANNEL, () => {
+    const tabs = deps.manager.listTabs().filter((tab) => !tab.childOf).map(({ tabId, workspace }) => ({ tabId, workspace }));
+    return { tabs, activeTabId: tabs.some((tab) => tab.tabId === selectedTabId) ? selectedTabId : null };
+  });
   ipcMain.handle(TAB_CREATE_CHANNEL, async (_event, raw: unknown): Promise<CreateTabResult> => {
     const parsed = createTabRequestSchema.safeParse(raw);
     if (!parsed.success) {
