@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1021,71 +1021,4 @@ describe("checkCodexBinaryTrustOnDisk — consent threading (TASK.103)", () => {
       expect(afterTouch).toMatch(/world-writable/);
     },
   );
-});
-
-
-describe("optional Codex protocol discovery", () => {
-  it("discovers compact support once from the configured executable", async () => {
-    const spawns: string[][] = [];
-    const client = makeClient([], { tempDir: fixtureDir, spawnImpl: (command, args, options) => {
-      spawns.push([...args]);
-      return spawn(command, args, options);
-    } });
-    try {
-      await client.start(); await client.request("initialize", {});
-      const a = client.getProtocolFeatures();
-      expect(client.getProtocolFeatures()).toBe(a);
-      expect(await a).toEqual({ manualCompact: true });
-      expect(client.getProtocolFeatures()).toBe(a);
-      const schemaSpawns = spawns.filter(args => args.includes("generate-json-schema"));
-      expect(schemaSpawns).toHaveLength(1);
-      expect(schemaSpawns[0]?.slice(0, 4)).toEqual([childPath, "app-server", "generate-json-schema", "--out"]);
-      expect(readdirSync(fixtureDir).filter(name => name.startsWith("codex-schema-"))).toEqual([]);
-      expect(await client.request("echo", { alive: true })).toEqual({ alive: true });
-    } finally { await client.close(); }
-  });
-  it.each(["unsupported", "malformed", "missing", "oversized", "fail", "hang"])("keeps the transport usable when optional schema discovery fails: %s", async mode => {
-    const client = makeClient([`--schema-${mode}`], { schemaTimeoutMs: mode === "hang" ? 100 : 3000, tempDir: fixtureDir });
-    try {
-      await client.start(); await client.request("initialize", {});
-      expect(await client.getProtocolFeatures()).toEqual({ manualCompact: false });
-      expect(readdirSync(fixtureDir).filter(name => name.startsWith("codex-schema-"))).toEqual([]);
-      expect(await client.request("echo", { alive: true })).toEqual({ alive: true });
-    } finally { await client.close(); }
-  });
-  it("applies binary trust and the filtered environment to schema discovery", async () => {
-    let denied = false;
-    const launches: Array<{ args: readonly string[]; options: import("node:child_process").SpawnOptions }> = [];
-    const client = makeClient([], { tempDir: fixtureDir, sourceEnv: { HOME: fixtureDir, PATH: process.env.PATH, ANYCODE_API_KEY: "synthetic-secret" }, binaryTrust: () => denied ? "Changed trust" : null,
-      spawnImpl: (command, args, options) => { launches.push({ args, options }); return spawn(command, args, options); },
-    });
-    try {
-      await client.start(); await client.request("initialize", {});
-      expect(await client.getProtocolFeatures()).toEqual({ manualCompact: true });
-      const schema = launches.find(l => l.args.includes("generate-json-schema"))!;
-      expect(schema.options.env?.ANYCODE_API_KEY).toBeUndefined();
-      expect(schema.options.env?.TMPDIR).toBe(fixtureDir);
-      expect(schema.options.shell).toBe(false);
-      expect(schema.options.detached).toBe(process.platform !== "win32");
-    } finally { await client.close(); }
-    const deniedClient = makeClient([], { binaryTrust: () => denied ? "Changed trust" : null });
-    try {
-      await deniedClient.start(); await deniedClient.request("initialize", {}); denied = true;
-      await expect(deniedClient.getProtocolFeatures()).rejects.toThrow("Changed trust");
-    } finally { await deniedClient.close(); }
-  });
-
-  it.each(["timeout", "close"])("reaps schema discovery descendants on timeout and close: %s", async mode => {
-    const pidFile = join(fixtureDir, `schema-descendant-${mode}`);
-    const client = makeClient(["--schema-grandchild", `--pid-file=${pidFile}`], { schemaTimeoutMs: mode === "timeout" ? 500 : 5000 });
-    try {
-      await client.start(); await client.request("initialize", {});
-      const discovery = client.getProtocolFeatures();
-      await waitForFile(pidFile);
-      if (mode === "close") await client.close();
-      expect(await discovery).toEqual({ manualCompact: false });
-      const pid = Number(readFileSync(pidFile, "utf8"));
-      await vi.waitFor(() => expect(alive(pid)).toBe(false));
-    } finally { await client.close(); }
-  });
 });

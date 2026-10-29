@@ -6,10 +6,6 @@
 
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
-import { mkdtemp, readFile, stat, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { decodeCodexProtocolFeatures } from "./protocol-features.js";
-import type { CodexProtocolFeatures } from "./protocol.js";
 import { dirname, isAbsolute, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { proxyRelayLookup } from "@anycode/core/proxy-relay";
@@ -89,7 +85,6 @@ export interface AppServerClientOptions {
   spawnImpl?: (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
   /** DI seam for the spawn-time trust gate; production re-reads the real filesystem (`checkCodexBinaryTrustOnDisk`). */
   binaryTrust?: (binaryPath: string) => string | null;
-  schemaTimeoutMs?: number;
   versionTimeoutMs?: number;
   maxLineBytes?: number;
   maxPendingRequests?: number;
@@ -377,8 +372,6 @@ export class AppServerClient {
   private readonly queue: NotificationQueue;
   private readonly observers = new Set<(notification: JsonRpcNotification) => void>();
   private child: ChildProcess | null = null;
-  private schemaChild: ChildProcess | null = null;
-  private featuresPromise?: Promise<CodexProtocolFeatures>;
   private nextRequestId = 1;
   private lineBuffer = "";
   private stderr = "";
@@ -518,54 +511,9 @@ export class AppServerClient {
    * the real teardown, never a no-op — and the child still never sees a second
    * signal storm.
    */
-  getProtocolFeatures(): Promise<CodexProtocolFeatures> {
-    return this.featuresPromise ??= this.discoverProtocolFeatures();
-  }
-
-  private async discoverProtocolFeatures(): Promise<CodexProtocolFeatures> {
-    const scratch = await mkdtemp(join(this.options.tempDir ?? tmpdir(), "codex-schema-"));
-    let child: ChildProcess | null = null;
-    try {
-      // Trust failures are boot failures, not optional-feature failures.
-      this.assertTrusted();
-      if (this.closing) return { manualCompact: false };
-      try {
-        child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), "app-server", "generate-json-schema", "--out", scratch], this.spawnOptions(true));
-        this.schemaChild = child;
-        this.reportOwnedProcess(child);
-        const ok = await new Promise<boolean>((resolve) => {
-          const timer = setTimeout(() => { if (child) this.signalOwnedProcess(child, "SIGKILL"); resolve(false); }, this.options.schemaTimeoutMs ?? 5_000);
-          child!.once("error", () => { clearTimeout(timer); resolve(false); });
-          child!.once("close", (code) => { clearTimeout(timer); resolve(code === 0); });
-          child!.stdin?.on("error", () => {});
-          child!.stdout?.on("error", () => {});
-          child!.stderr?.on("error", () => {});
-          child!.stdout?.resume();
-          child!.stderr?.resume();
-          child!.stdin?.end();
-        });
-        if (!ok || this.closing) return { manualCompact: false };
-        const path = join(scratch, "codex_app_server_protocol.schemas.json");
-        if ((await stat(path)).size > 16 * 1024 * 1024) return { manualCompact: false };
-        return decodeCodexProtocolFeatures(JSON.parse(await readFile(path, "utf8")));
-      } catch { return { manualCompact: false }; }
-    } finally {
-      if (child) {
-        this.signalOwnedProcess(child, "SIGKILL");
-        this.sweepOwnedGroup(child);
-        if (child.exitCode === null && child.signalCode === null) {
-          await this.exitedWithin(new Promise<void>((resolve) => child!.once("close", () => resolve())), CODEX_TEARDOWN_SIGKILL_WAIT_MS);
-        }
-      }
-      this.schemaChild = null;
-      await rm(scratch, { recursive: true, force: true });
-    }
-  }
-
   close(): Promise<void> {
     this.closing = true;
-    if (this.schemaChild) this.signalOwnedProcess(this.schemaChild, "SIGKILL");
-    this.closePromise ??= Promise.all([this.child === null ? Promise.resolve() : this.teardown(this.child), this.featuresPromise?.catch(() => {})]).then(() => {});
+    this.closePromise ??= this.child === null ? Promise.resolve() : this.teardown(this.child);
     return this.closePromise;
   }
 

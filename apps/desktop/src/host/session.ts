@@ -380,6 +380,14 @@ export class Outbound {
     this.buffer.length = 0;
   }
 
+  /** Drop readings from the previous engine while retaining transcript events. */
+  clearContextUsage(): void {
+    for (let i = this.buffer.length - 1; i >= 0; i--) {
+      const message = this.buffer[i];
+      if (message?.type === "agent_event" && message.event.type === "context_usage") this.buffer.splice(i, 1);
+    }
+  }
+
   private write(message: HostToUiMessage): void {
     if (!this.port) {
       return;
@@ -3722,6 +3730,8 @@ export class Session {
         next.setMode(previousEngine.mode());
       }
       this.engine = next;
+      this.checkpointContextUsage = null;
+      this.outbound.clearContextUsage();
       this.engineSwitched = true;
       this.switchCarriedHistory = canonical;
       this.engineSettings = undefined; // foreign seam re-wired by the composition root later (§7 Q2)

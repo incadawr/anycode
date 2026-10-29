@@ -14,20 +14,7 @@ const forkStubbornGrandchild = () => {
   if (pidFilePath && grandchild.pid !== undefined) writeFileSync(pidFilePath, String(grandchild.pid));
 };
 
-if (args.includes("generate-json-schema")) {
-  if (args.includes("--schema-grandchild")) forkStubbornGrandchild();
-  if (args.includes("--schema-hang") || args.includes("--schema-grandchild")) { setInterval(() => {}, 1000); }
-  else {
-    const out = new URL(`file://${args[args.indexOf("--out") + 1]}/codex_app_server_protocol.schemas.json`);
-    if (args.includes("--schema-fail")) process.exit(1);
-    if (!args.includes("--schema-missing")) {
-      const schema = JSON.parse(readFileSync(new URL("./contract/fixtures/schema-0.144.3/codex_app_server_protocol.schemas.json", import.meta.url), "utf8"));
-      if (args.includes("--schema-unsupported")) schema.definitions.ClientRequest.oneOf = schema.definitions.ClientRequest.oneOf.filter(v => !v.properties.method.enum.includes("thread/compact/start"));
-      writeFileSync(out, args.includes("--schema-malformed") ? "{" : args.includes("--schema-oversized") ? " ".repeat(16 * 1024 * 1024 + 1) : JSON.stringify(schema));
-    }
-    process.exit(0);
-  }
-} else if (args.includes("--version")) {
+if (args.includes("--version")) {
   if (args.includes("--version-grandchild")) {
     // A version wrapper that forks a grandchild and hangs. The preflight runs
     // BEFORE the long-lived client exists, so killing only the direct wrapper

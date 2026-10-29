@@ -285,7 +285,6 @@ class FakeAppServer implements CodexClient {
   threadReadResult: unknown = { thread: { id: "persisted-thread", turns: [] } };
   compactResponse: Promise<unknown> = Promise.resolve({});
   compactCalls = 0;
-  getProtocolFeatures = async () => ({ manualCompact: true });
   startCompact(id = "compact-native"): void {
     this.currentTurnId = id;
     this.stream.push({ method: "turn/started", params: { threadId: THREAD, turn: { id, status: "inProgress" } } });
@@ -3875,7 +3874,7 @@ describe("Codex manual compaction", () => {
   function setup(overrides: Partial<import("./codex-engine.js").CodexEngineTimeouts> = {}, log?: RecordingShadowLog) {
     const server = new FakeAppServer();
     server.threadReadResult = { thread: { id: THREAD, turns: [] } };
-    const engine = new CodexEngine(server, THREAD, undefined, { compactUsageWaitMs: 10, turnStartMs: 100, postInterruptSettleMs: 100, interruptRetryDelaysMs: [1, 1], ...overrides }, undefined, log, 0, [], undefined, undefined, undefined, { manualCompact: true });
+    const engine = new CodexEngine(server, THREAD, undefined, { compactUsageWaitMs: 10, turnStartMs: 100, postInterruptSettleMs: 100, interruptRetryDelaysMs: [1, 1], ...overrides }, undefined, log, 0, [], undefined, undefined, undefined);
     return { server, engine };
   }
   const item = (server: FakeAppServer, id = "compact-native", threadId = THREAD) => server.stream.push({ method: "item/completed", params: { threadId, turnId: id, item: { type: "contextCompaction", id: `${id}-item` } } });
@@ -3888,16 +3887,14 @@ describe("Codex manual compaction", () => {
     usage(server, count, server.turnId); server.completeTurn("completed"); await run.done;
     return run;
   }
-  it.each([false, true])("advertises manual compact only for verified fresh and resumed sessions: %s", async supported => {
+  it("advertises manual compact for fresh and resumed sessions", async () => {
     for (const resume of [false, true]) for (const bridged of [false, true]) {
-      const server = new FakeAppServer(); server.getProtocolFeatures = async () => ({ manualCompact: supported });
+      const server = new FakeAppServer();
       const bridge = bridged ? new CodexApprovalBridge({} as never) : undefined;
       const result = resume ? await resumeNativeCodexSession(server, "/work", "persisted-thread", bridge) : await createNativeCodexSession(server, "/work", bridge);
-      expect(result.engine.capabilities.supportsManualCompact).toBe(supported);
-      expect(typeof result.engine.compactNow === "function").toBe(supported);
+      expect(result.engine.capabilities.supportsManualCompact).toBe(true);
+      expect(typeof result.engine.compactNow).toBe("function");
     }
-    const server = new FakeAppServer(); (server as Partial<CodexClient>).getProtocolFeatures = undefined;
-    expect((await createNativeCodexSession(server, "/work")).engine.compactNow).toBeUndefined();
   });
   it("runs manual compact without creating an ordinary turn", async () => {
     const { server, engine } = setup(); await normal(server, engine);
@@ -3963,6 +3960,12 @@ describe("Codex manual compaction", () => {
   it.each([-32601, -32000])("reports explicit compact rejection without killing ordinary turns: %s", async code => {
     const { server, engine } = setup(); server.compactResponse = Promise.reject(Object.assign(new Error("denied"), { code }));
     const run = driveCompact(engine); await run.done; expect(run.events.at(-1)).toMatchObject({ ok: false }); expect(server.closeCount).toBe(0);
+    if (code === -32601) {
+      expect(run.events.at(-1)).toMatchObject({ error: "Manual compaction is unavailable for this Codex app-server. Update Codex and start a new session." });
+      expect(engine.capabilities.supportsManualCompact).toBe(false);
+      expect(engine.compactNow).toBeUndefined();
+      expect(server.compactCalls).toBe(1);
+    } else expect(engine.capabilities.supportsManualCompact).toBe(true);
     expect(types((await normal(server, engine)).events)).toContain("loop_end");
   });
   it.each(["before", "during", "ack"])("pairs compact start on transport and decoding failures: %s", async mode => {

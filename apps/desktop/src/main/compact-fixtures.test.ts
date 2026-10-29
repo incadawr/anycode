@@ -1,4 +1,4 @@
-import { spawnSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -60,18 +60,6 @@ describe("native engine smoke fixtures", () => {
 
 
 describe("Codex compact fixture lifecycle", () => {
-  it("Codex fixture exposes supported and unsupported compact schemas", async () => {
-    const home = mkdtempSync(join(tmpdir(), "compact-schema-fixture-"));
-    const binary = fileURLToPath(new URL("../../scripts/compact-fixtures/codex.mjs", import.meta.url));
-    try {
-      for (const unsupported of [false, true]) {
-        if (unsupported) writeFileSync(join(home, "codex-compact-mode"), "unsupported");
-        expect(spawnSync(binary, ["app-server", "generate-json-schema", "--out", home], { env: { HOME: home, PATH: process.env.PATH } }).status).toBe(0);
-        const schema = JSON.parse(readFileSync(join(home, "codex_app_server_protocol.schemas.json"), "utf8"));
-        expect(schema.definitions.ClientRequest.oneOf.some((v: Frame) => v.properties.method.enum.includes("thread/compact/start"))).toBe(!unsupported);
-      }
-    } finally { rmSync(home, { recursive: true, force: true }); }
-  });
   it("Codex fixture completes and interrupts native compact without creating chat turns", async () => {
     const home = mkdtempSync(join(tmpdir(), "compact-lifecycle-fixture-")); const f = startFixture("codex", home);
     try {

@@ -1,17 +1,11 @@
 #!/usr/bin/env node
 // Deterministic synthetic native server for GitHub #24; no provider access.
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 const home = process.env.HOME;
 const unsupported = () => existsSync(join(home, "codex-compact-mode")) && readFileSync(join(home, "codex-compact-mode"), "utf8").trim() === "unsupported";
 if (process.argv.includes("--version")) { console.log("codex-cli 0.144.3"); process.exit(0); }
-if (process.argv.includes("generate-json-schema")) {
-  const schema = JSON.parse(readFileSync(new URL("../../src/host/engines/codex/contract/fixtures/schema-0.144.3/codex_app_server_protocol.schemas.json", import.meta.url), "utf8"));
-  if (unsupported()) schema.definitions.ClientRequest.oneOf = schema.definitions.ClientRequest.oneOf.filter(v => !v.properties?.method?.enum?.includes("thread/compact/start"));
-  writeFileSync(join(process.argv[process.argv.indexOf("--out") + 1], "codex_app_server_protocol.schemas.json"), JSON.stringify(schema));
-  process.exit(0);
-}
 const send = (frame) => process.stdout.write(`${JSON.stringify(frame)}\n`);
 const notify = (method, params) => send({ method, params: { threadId: "fixture-thread", ...params } });
 const turns = [];

@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { createDesktopStore } from "../renderer/src/store.js";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -57,7 +58,16 @@ describe("Codex compact protocol fixture", () => {
     const home = mkdtempSync(join(tmpdir(), "compact-codex-wire-"));
     if (unsupported) writeFileSync(join(home, "codex-compact-mode"), "unsupported");
     const fixture = fileURLToPath(new URL("../../scripts/compact-fixtures/codex.mjs", import.meta.url));
-    const client = new AppServerClient({ binaryPath: fixture, cwd: home, sourceEnv: { HOME: home, PATH: process.env.PATH, CODEX_HOME: home } });
+    const launches: Array<{ args: readonly string[]; pid: number | undefined }> = [];
+    const registrations: Array<{ enginePid: number; pgid: number }> = [];
+    const client = new AppServerClient({ binaryPath: fixture, cwd: home, sourceEnv: { HOME: home, PATH: process.env.PATH, CODEX_HOME: home },
+      spawnImpl: (command, args, options) => {
+        const child = spawn(command, args, options);
+        launches.push({ args, pid: child.pid });
+        return child;
+      },
+      processOwnership: { hostPid: process.pid, generation: 1, report: message => registrations.push(message) },
+    });
     await client.start(); const { engine } = await createNativeCodexSession(client, home);
     const h = createHarness({ steps: [], engine });
     h.send({ type: "ui_ready" }); await h.waitFor((m): m is Extract<HostToUiMessage, { type: "host_ready" }> => m.type === "host_ready");
@@ -66,11 +76,13 @@ describe("Codex compact protocol fixture", () => {
     const idle = () => vi.waitFor(() => expect((h.session as unknown as { busy: boolean }).busy).toBe(false));
     const chat = async (text = "fixture ready") => { const before = h.received.length; h.send({ type: "user_message", requestId: `chat-${before}`, text }); await vi.waitFor(() => expect(h.received.slice(before).some(m => m.type === "agent_event" && m.event.type === "loop_end")).toBe(true)); await idle(); };
     const close = async () => { await client.close(); h.close(); rmSync(home, { recursive: true, force: true }); };
-    return { home, client, engine, h, rpcs, end, idle, chat, close };
+    return { home, client, engine, h, rpcs, end, idle, chat, close, launches, registrations };
   }
   it("routes idle Codex compact through native RPC and the manual UI rail", async () => {
     const f = await setup();
     try {
+      expect(f.launches.map(launch => launch.args)).toEqual([["--version"], ["app-server", "--stdio"]]);
+      if (process.platform !== "win32") expect(f.registrations).toEqual([expect.objectContaining({ enginePid: f.launches[1]?.pid, pgid: f.launches[1]?.pid })]);
       await f.chat(); const initialTurns = f.rpcs().filter(r => r.method === "turn/start").length;
       f.h.send({ type: "compact_request" });
       await f.h.waitFor((m): m is Extract<HostToUiMessage, { type: "agent_event" }> => m.type === "agent_event" && m.event.type === "compaction_start");
@@ -101,10 +113,14 @@ describe("Codex compact protocol fixture", () => {
   it("refuses unsupported Codex compact while idle with engine-specific copy", async () => {
     const f = await setup(true);
     try {
-      await f.chat(); expect(f.engine.capabilities.supportsManualCompact).toBe(false); f.h.send({ type: "compact_request" });
+      await f.chat(); expect(f.engine.capabilities.supportsManualCompact).toBe(true); f.h.send({ type: "compact_request" });
+      const end = await f.end(); await f.idle();
+      expect(end.event).toMatchObject({ ok: false, error: "Manual compaction is unavailable for this Codex app-server. Update Codex and start a new session." });
+      expect(f.engine.capabilities.supportsManualCompact).toBe(false);
+      f.h.send({ type: "compact_request" });
       const refusal = await f.h.waitFor((m): m is Extract<HostToUiMessage, { type: "compact_rejected" }> => m.type === "compact_rejected");
       expect(refusal.reason).toBe("Manual compaction is unavailable for this Codex app-server. Update Codex and start a new session.");
-      expect(f.rpcs().some(r => r.method === "thread/compact/start")).toBe(false); await f.chat("following chat");
+      expect(f.rpcs().filter(r => r.method === "thread/compact/start")).toHaveLength(1); await f.chat("following chat");
     } finally { await f.close(); }
   });
   it("refuses busy Codex compact without another native request", async () => {
