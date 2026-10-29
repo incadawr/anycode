@@ -31,7 +31,7 @@ async function fixture() {
     if (op === "cancel_turn") return { cancelled: false, reason: "idle" };
     return undefined;
   });
-  const manager: { listTabs: () => Array<{ sessionId: string; workspace: string; state: string; pid: number | null; engine?: string; hostFailure?: import("../shared/host-failure.js").HostFailure; missingWorkspace?: boolean }>; communicationRequest: typeof request } = { listTabs: () => [{ sessionId: "allowed", workspace: dir, state: "running", pid: 10 }, { sessionId: "forbidden", workspace: tmpdir(), state: "running", pid: 11 }], communicationRequest: request };
+  const manager: { listTabs: () => Array<{ sessionId: string; workspace: string; state: string; activityState?: import("../shared/communication.js").SessionActivityState; pid: number | null; engine?: string; hostFailure?: import("../shared/host-failure.js").HostFailure; missingWorkspace?: boolean }>; communicationRequest: typeof request } = { listTabs: () => [{ sessionId: "allowed", workspace: dir, state: "running", pid: 10 }, { sessionId: "forbidden", workspace: tmpdir(), state: "running", pid: 11 }], communicationRequest: request };
   const service = await startCommunicationServer({ manager, configFile, userData: dir }); cleanups.push(() => service.close());
   const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string };
   const client = new Client({ name: "supervisor-test", version: "1" });
@@ -57,62 +57,32 @@ describe("production communication MCP over real SDK HTTP", () => {
     expect((await client.listTools()).tools).toHaveLength(11);
     expect(value(await client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } })).engine).toBe("codex");
   });
-  it("reports the same live activity through both endpoints", async () => {
+  it("reports the main-owned activity through both endpoints", async () => {
     const f = await fixture();
-    for (const state of ["idle", "running", "waiting_approval", "closing"]) {
-      f.request.mockImplementation(async (_id, op) => op === "get_session_status" ? { engine: "core", state, model: "private" } : undefined);
+    for (const activityState of ["idle", "running", "waiting_approval", "closing"] as const) {
+      f.manager.listTabs = () => [{ sessionId: "allowed", workspace: f.dir, state: "running", activityState, pid: 10 }];
+      f.request.mockResolvedValue({ engine: "core", state: "wrong" });
       const row = value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions[0];
       const status = value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } }));
-      expect(row.state).toBe(state); expect(status.state).toBe(row.state);
+      expect(row.state).toBe(activityState); expect(status.state).toBe(row.state);
       expect(row).not.toHaveProperty("model");
     }
   });
-  it("omits failed or malformed probes while retaining healthy and terminal peers in order", async () => {
+  it("lists a restarting session without waiting for a stalled host", async () => {
     const f = await fixture();
-    f.manager.listTabs = () => ["bad", "healthy", "malformed", "terminal"].map((sessionId, i) => ({ sessionId, workspace: f.dir, state: "running", pid: i, ...(sessionId === "terminal" ? { hostFailure: { code: "per_tab_crash_loop" as const, message: "Stopped" } } : {}) }));
-    f.request.mockImplementation(async (id) => { if (id === "bad") throw new Error("closed"); return id === "malformed" ? { state: "wrong", engine: "core" } : { state: "idle", engine: "core" }; });
+    f.manager.listTabs = () => [{ sessionId: "allowed", workspace: f.dir, state: "running", activityState: "idle", pid: null }];
+    f.request.mockImplementation(() => new Promise(() => {}));
+    const row = value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions[0];
+    expect(row).toMatchObject({ sessionId: "allowed", state: "idle", pid: null });
+    expect(f.request).not.toHaveBeenCalled();
+  });
+  it("filters sessions when sharing changes", async () => {
+    const exposed = new Set(["on", "off-approvals"]);
+    const f = await approvalFixture({ approvals: new Set(), exposed });
+    exposed.delete("on");
     const rows = value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions;
-    expect(rows.map((row: { sessionId: string; state: string }) => [row.sessionId, row.state])).toEqual([["healthy", "idle"], ["terminal", "crash_looped"]]);
-    expect((await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "malformed" } })).isError).toBe(true);
-    expect(f.request.mock.calls.some(([id]) => id === "terminal")).toBe(false);
-  });
-  it("rechecks terminal, closure, replacement and workspace changes after in-flight probes", async () => {
-    const f = await fixture();
-    for (const transition of ["terminal", "closed", "restart", "moved"]) {
-      let changed = false; let release!: () => void; let entered!: () => void;
-      const seen = new Promise<void>((r) => { entered = r; });
-      const gate = new Promise<void>((r) => { release = r; });
-      f.manager.listTabs = () => changed && transition === "closed" ? [] : [{ sessionId: "allowed", workspace: changed && transition === "moved" ? tmpdir() : f.dir, state: "running", pid: changed && transition === "restart" ? 99 : 10, ...(changed && transition === "terminal" ? { hostFailure: { code: "per_tab_crash_loop" as const, message: "Stopped" } } : {}) }];
-      f.request.mockImplementation(async () => { entered(); await gate; if (transition === "terminal") throw new Error("closed"); return { state: "idle", engine: "core" }; });
-      const pending = f.client.callTool({ name: "list_sessions", arguments: {} });
-      await seen; changed = true; release();
-      const rows = value(await pending).sessions;
-      expect(rows.map((r: { state: string }) => r.state)).toEqual(transition === "terminal" ? ["crash_looped"] : []);
-    }
-  });
-  it("probes authorized sessions concurrently and drops a session unshared during its probe", async () => {
-    const exposed = new Set(["on", "off-approvals"]); const releases: Array<() => void> = [];
-    const f = await approvalFixture({ approvals: new Set(), exposed, request: async (_id, op) => {
-      if (op !== "get_session_status") return undefined;
-      await new Promise<void>((resolve) => releases.push(resolve)); return { state: "idle" };
-    } });
-    const pending = f.client.callTool({ name: "list_sessions", arguments: {} });
-    await vi.waitFor(() => expect(releases).toHaveLength(2));
-    exposed.delete("on"); releases.forEach((release) => release());
-    const rows = value(await pending).sessions;
     expect(rows.map((r: { sessionId: string }) => r.sessionId)).toEqual(["off-approvals"]);
-    expect(f.request.mock.calls.some(([id]) => id === "unshared-approving")).toBe(false);
-  });
-  it("reports a real broker approval through both endpoints with external answers disabled", async () => {
-    const f = await fixture(); const h = createHarness({ steps: [] });
-    try {
-      f.request.mockImplementation(async (_id, op) => op === "get_session_status" ? h.session.communicationStatus() : undefined);
-      const ask = h.broker.requestPermission({ toolName: "AskUserQuestion", input: { questions: [] }, mode: "build", metadata: { name: "AskUserQuestion", description: "", readOnly: false, destructive: false, riskLevel: "high", sideEffectScope: "workspace" } } as never);
-      const row = value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions[0];
-      const status = value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } }));
-      expect(row.state).toBe("waiting_approval"); expect(status.state).toBe(row.state);
-      h.broker.denyAll("cleanup", "shutdown"); await ask;
-    } finally { h.close(); }
+    expect(f.request).not.toHaveBeenCalled();
   });
   it("returns an authorized terminal status without contacting the host", async () => {
     const f = await fixture();

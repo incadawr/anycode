@@ -183,10 +183,9 @@ time is refused with `not_ready` instead, and no tab is left behind.
 `list_sessions` and `get_session_status` report the same activity state: `idle`,
 `running`, `waiting_approval` (including queued human interaction), or `closing`.
 A pending approval is reported even when External approvals is off. Terminal
-sessions report `crash_looped` or `missing_workspace`. Listing queries live
-hosts concurrently and omits sessions that are temporarily unqueryable; retry
-later to see them. This can add host response latency to listing. Clients should
-accept the full state vocabulary.
+sessions report `crash_looped` or `missing_workspace`. Listing reads the latest
+activity known to the application without waiting for hosts, including while a
+host restarts. Clients should accept the full state vocabulary.
 
 `get_session_status` also answers the engine and these effort fields:
 
