@@ -38,7 +38,7 @@ const CODEX_CAPABILITIES: EngineCapabilities = {
 
 /** The engine seam, with the SAME contract CodexEngine implements: validate host-side, send nothing, ack on apply. */
 class FakeEngine implements SessionEngine, EngineSettingsSeam {
-  readonly id = "codex" as const;
+  readonly id: "codex" | "claude" = "codex";
   readonly capabilities = CODEX_CAPABILITIES;
   readonly catalog = ["gpt-5.6-sol", "gpt-5.4-mini"];
   readonly presetTable = ["read-only", "ask", "workspace"];
@@ -145,6 +145,8 @@ class FakeEngine implements SessionEngine, EngineSettingsSeam {
 
 interface Fixture {
   engine: FakeEngine;
+  session: Session;
+  outbound: Outbound;
   received: HostToUiMessage[];
   touches: Parameters<SessionPersistence["touch"]>[0][];
   send(message: UiToHostMessage): void;
@@ -165,14 +167,14 @@ function fixture(): Fixture {
  * tab's picker turns a `child-ask` boot into `full-access`), so the route is
  * gated on `child === undefined` the same way `compact_request` already is.
  */
-function fixtureWith(opts: { child?: boolean }): Fixture {
+function fixtureWith(opts: { child?: boolean; engine?: FakeEngine; nextEngine?: SessionEngine; replayCapacity?: number }): Fixture {
   const channel = new MessageChannel();
   const received: HostToUiMessage[] = [];
   channel.port1.on("message", (value: unknown) => received.push(value as HostToUiMessage));
   channel.port1.start();
 
-  const outbound = new Outbound();
-  const engine = new FakeEngine();
+  const outbound = new Outbound(opts.replayCapacity);
+  const engine = opts.engine ?? new FakeEngine();
   const touches: Parameters<SessionPersistence["touch"]>[0][] = [];
   const session = new Session({
     outbound,
@@ -184,6 +186,7 @@ function fixtureWith(opts: { child?: boolean }): Fixture {
     model: engine.model,
     sessionId: "codex-session",
     rules: new SessionPermissionRules(),
+    ...(opts.nextEngine ? { switchEngineFactory: async () => opts.nextEngine! } : {}),
     persistence: { touch: (patch) => { touches.push(patch); } },
     ...(opts.child
       ? {
@@ -200,6 +203,8 @@ function fixtureWith(opts: { child?: boolean }): Fixture {
 
   const value: Fixture = {
     engine,
+    session,
+    outbound,
     received,
     touches,
     send: (message) => channel.port1.postMessage(message),
@@ -429,5 +434,282 @@ describe("TASK.39 — set_engine_preset / set_model routing", () => {
     expect(settings(ui.received)).toEqual([]);
     expect(ui.touches).toEqual([]);
     expect(ui.engine.snapshot()).toEqual({ model: "gpt-5.6-sol", activePresetId: "ask" });
+  });
+});
+
+class EffortEngine extends FakeEngine {
+  override readonly capabilities = { ...CODEX_CAPABILITIES, supportsDeferredEffortChange: true };
+  selected = "medium";
+  picks: string[] = [];
+  override models(): { id: string; label: string; efforts: string[] }[] {
+    return this.catalog.map((id) => ({ id, label: id, efforts: id === this.catalog[0] ? ["medium", "high", "xhigh"] : [] }));
+  }
+  override snapshot(): { model: string; activePresetId: string; effort: string } {
+    return { ...super.snapshot(), effort: "medium" };
+  }
+  selectEffort(effort: string): EngineSettingsChange {
+    this.picks.push(effort);
+    this.selected = effort;
+    return { ok: true, ...super.snapshot(), effort };
+  }
+}
+
+describe("deferred native effort", () => {
+  it("validates and restores pending intent, applying only the final choice at the boundary", async () => {
+    const engine = new EffortEngine();
+    const ui = fixtureWith({ engine });
+    ui.send({ type: "ui_ready" });
+    ui.send({ type: "user_message", requestId: "a", text: "go" });
+    await ui.settle();
+    ui.send({ type: "set_engine_effort", effort: "high" });
+    ui.send({ type: "set_engine_effort", effort: "xhigh" });
+    ui.send({ type: "set_engine_effort", effort: "unsupported" });
+    ui.send({ type: "ui_ready" });
+    await ui.settle();
+    expect(engine.picks).toEqual([]);
+    expect(ui.received.some((message) => message.type === "mode_change_rejected")).toBe(true);
+    expect(settings(ui.received).at(-1)).toMatchObject({ state: "pending", effort: "xhigh" });
+    engine.finishTurn();
+    await ui.settle();
+    expect(engine.picks).toEqual(["xhigh"]);
+  });
+
+  it("cancels a deferred pick when the baseline is selected again", async () => {
+    const engine = new EffortEngine();
+    const ui = fixtureWith({ engine });
+    ui.send({ type: "ui_ready" });
+    ui.send({ type: "user_message", requestId: "a", text: "go" });
+    await ui.settle();
+    ui.send({ type: "set_engine_effort", effort: "high" });
+    ui.send({ type: "set_engine_effort", effort: "medium" });
+    await ui.settle();
+    expect(settings(ui.received).at(-1)).toMatchObject({ state: "pending", effort: "medium" });
+    engine.finishTurn();
+    await ui.settle();
+    expect(engine.picks).toEqual([]);
+  });
+});
+
+class AcknowledgedEffortEngine extends EffortEngine {
+  override readonly id = "claude" as const;
+  private activeEffort = "medium";
+  private waiting: ((result: EngineSettingsChange) => void) | undefined;
+  private appliedListeners = new Set<(snapshot: { model: string; activePresetId: string; effort?: string }) => void>();
+  override snapshot(): { model: string; activePresetId: string; effort: string } {
+    return { model: this.model, activePresetId: this.presetId, effort: this.activeEffort };
+  }
+  override onSettingsApplied(listener: (snapshot: { model: string; activePresetId: string; effort?: string }) => void): () => void {
+    this.appliedListeners.add(listener);
+    return () => this.appliedListeners.delete(listener);
+  }
+  selectEffortAndWait(effort: string): Promise<EngineSettingsChange> {
+    this.picks.push(effort);
+    return new Promise((resolve) => { this.waiting = resolve; });
+  }
+  settleEffort(ok: boolean): void {
+    const waiting = this.waiting;
+    if (!waiting) throw new Error("no effort request");
+    this.waiting = undefined;
+    if (!ok) { waiting({ ok: false, reason: "control refused" }); return; }
+    this.activeEffort = this.picks.at(-1)!;
+    const snapshot = this.snapshot();
+    for (const listener of this.appliedListeners) listener(snapshot);
+    waiting({ ok: true, ...snapshot });
+  }
+}
+
+describe("acknowledged deferred effort", () => {
+  it("holds the next native turn until acknowledgement and retains a newer pick", async () => {
+    const engine = new AcknowledgedEffortEngine();
+    const ui = fixtureWith({ engine });
+    ui.send({ type: "ui_ready" });
+    ui.send({ type: "user_message", requestId: "a", text: "first" });
+    await ui.settle();
+    ui.send({ type: "set_engine_effort", effort: "high" });
+    await ui.settle();
+    expect(engine.picks).toEqual([]);
+    engine.finishTurn();
+    await ui.settle();
+    expect(engine.picks).toEqual(["high"]);
+    ui.send({ type: "ui_ready" });
+    ui.send({ type: "user_message", requestId: "b", text: "second" });
+    ui.send({ type: "set_engine_effort", effort: "xhigh" });
+    await ui.settle();
+    expect(engine.turns).toBe(1);
+    expect(settings(ui.received).at(-1)).toMatchObject({ state: "pending", effort: "xhigh" });
+    engine.settleEffort(true);
+    await ui.settle();
+    expect(engine.turns).toBe(2);
+    expect(settings(ui.received).at(-1)).toMatchObject({ state: "pending", effort: "xhigh" });
+    engine.finishTurn();
+    await ui.settle();
+    expect(engine.picks).toEqual(["high", "xhigh"]);
+    engine.settleEffort(true);
+    await ui.settle();
+    expect(engine.snapshot().effort).toBe("xhigh");
+  });
+
+  it("honors Stop while the next turn waits for the settings acknowledgment", async () => {
+    const engine = new AcknowledgedEffortEngine();
+    const ui = fixtureWith({ engine });
+    ui.send({ type: "ui_ready" });
+    ui.send({ type: "user_message", requestId: "a", text: "first" });
+    await ui.settle();
+    ui.send({ type: "set_engine_effort", effort: "high" });
+    await ui.settle();
+    engine.finishTurn();
+    await ui.settle();
+    ui.send({ type: "user_message", requestId: "b", text: "second" });
+    await ui.settle();
+    ui.send({ type: "cancel_turn" });
+    await ui.settle();
+    expect(engine.turns).toBe(1);
+    expect(ui.received).toContainEqual(expect.objectContaining({ type: "agent_event", event: expect.objectContaining({ type: "loop_end", reason: "cancelled" }) }));
+    engine.settleEffort(true);
+    await ui.settle();
+    expect(ui.received.filter((message) => message.type === "fatal")).toEqual([]);
+  });
+
+  it("keeps the newer effort pending after Stop while acknowledgements are queued", async () => {
+    const engine = new AcknowledgedEffortEngine();
+    const ui = fixtureWith({ engine });
+    ui.send({ type: "ui_ready" });
+    ui.send({ type: "user_message", requestId: "a", text: "first" });
+    await ui.settle();
+    ui.send({ type: "set_engine_effort", effort: "high" });
+    await ui.settle();
+    engine.finishTurn();
+    await ui.settle();
+    ui.send({ type: "user_message", requestId: "b", text: "second" });
+    ui.send({ type: "set_engine_effort", effort: "xhigh" });
+    await ui.settle();
+    ui.send({ type: "cancel_turn" });
+    await ui.settle();
+    expect(engine.turns).toBe(1);
+    engine.settleEffort(true);
+    await ui.settle();
+    expect(engine.picks).toEqual(["high", "xhigh"]);
+    expect(settings(ui.received).at(-1)).toMatchObject({ state: "pending", effort: "xhigh", deferredEffort: true });
+    ui.send({ type: "ui_ready" });
+    await ui.settle();
+    expect(settings(ui.received).at(-1)).toMatchObject({ state: "pending", effort: "xhigh", deferredEffort: true });
+    engine.settleEffort(true);
+    await ui.settle();
+    expect(engine.snapshot().effort).toBe("xhigh");
+  });
+
+  it("reports rejection immediately and allows the next turn with the prior effort", async () => {
+    const engine = new AcknowledgedEffortEngine();
+    const ui = fixtureWith({ engine });
+    ui.send({ type: "ui_ready" });
+    ui.send({ type: "user_message", requestId: "a", text: "first" });
+    await ui.settle();
+    ui.send({ type: "set_engine_effort", effort: "high" });
+    await ui.settle();
+    engine.finishTurn();
+    await ui.settle();
+    ui.send({ type: "user_message", requestId: "b", text: "second" });
+    await ui.settle();
+    expect(engine.turns).toBe(1);
+    engine.settleEffort(false);
+    await ui.settle();
+    expect(engine.turns).toBe(2);
+    expect(engine.snapshot().effort).toBe("medium");
+    expect(ui.received).toContainEqual({ type: "mode_change_rejected", reason: "control refused" });
+    expect(settings(ui.received).at(-1)).toMatchObject({ state: "pending", effort: "medium" });
+    engine.finishTurn();
+    await ui.settle();
+  });
+});
+
+
+describe("deferred effort lifecycle", () => {
+  it("restores pending intent after replay eviction and retains it across Stop", async () => {
+    const engine = new EffortEngine();
+    const ui = fixtureWith({ engine, replayCapacity: 3 });
+    ui.send({ type: "ui_ready" });
+    ui.send({ type: "user_message", requestId: "a", text: "first" });
+    await ui.settle();
+    ui.send({ type: "set_engine_effort", effort: "high" });
+    await ui.settle();
+    for (let i = 0; i < 4; i++) ui.outbound.emit({ type: "mode_change_rejected", reason: "filler" });
+    expect(ui.outbound.ringView().some((message) => message.type === "engine_settings_changed")).toBe(false);
+    ui.send({ type: "ui_ready" });
+    await ui.settle();
+    expect(settings(ui.received).at(-1)).toMatchObject({ state: "pending", effort: "high" });
+    ui.send({ type: "cancel_turn" });
+    engine.finishTurn();
+    await ui.settle();
+    expect(engine.picks).toEqual(["high"]);
+    ui.send({ type: "user_message", requestId: "b", text: "second" });
+    await ui.settle();
+    expect(engine.turns).toBe(2);
+    engine.finishTurn();
+    await ui.settle();
+  });
+
+  it("serializes an idle model change behind the in-flight effort acknowledgment", async () => {
+    const engine = new AcknowledgedEffortEngine();
+    const ui = fixtureWith({ engine });
+    ui.send({ type: "ui_ready" });
+    ui.send({ type: "user_message", requestId: "a", text: "first" });
+    await ui.settle();
+    ui.send({ type: "set_engine_effort", effort: "high" });
+    await ui.settle();
+    engine.finishTurn();
+    await ui.settle();
+    ui.send({ type: "set_model", model: "gpt-5.4-mini" });
+    await ui.settle();
+    expect(engine.model).toBe("gpt-5.6-sol");
+    engine.settleEffort(true);
+    await ui.settle();
+    expect(engine.model).toBe("gpt-5.4-mini");
+    expect(engine.picks).toEqual(["high"]);
+  });
+
+  it("does not publish an old acknowledgement after shutdown", async () => {
+    const engine = new AcknowledgedEffortEngine();
+    const ui = fixtureWith({ engine });
+    ui.send({ type: "ui_ready" });
+    ui.send({ type: "user_message", requestId: "a", text: "first" });
+    await ui.settle();
+    ui.send({ type: "set_engine_effort", effort: "high" });
+    await ui.settle();
+    engine.finishTurn();
+    await ui.settle();
+    await ui.session.shutdown();
+    const count = ui.outbound.ringView().length;
+    engine.settleEffort(true);
+    await ui.settle();
+    expect(ui.outbound.ringView()).toHaveLength(count);
+    const fresh = fixtureWith({ engine: new AcknowledgedEffortEngine() });
+    fresh.send({ type: "ui_ready" });
+    await fresh.settle();
+    expect(settings(fresh.received)).toEqual([]);
+  });
+
+  it("does not publish an old acknowledgement after engine replacement", async () => {
+    const engine = new AcknowledgedEffortEngine();
+    const next = new FakeEngine();
+    const ui = fixtureWith({ engine, nextEngine: next });
+    ui.send({ type: "ui_ready" });
+    ui.send({ type: "user_message", requestId: "a", text: "first" });
+    await ui.settle();
+    ui.send({ type: "set_engine_effort", effort: "high" });
+    await ui.settle();
+    engine.finishTurn();
+    await ui.settle();
+    ui.send({ type: "engine_switch_request", requestId: "switch", engine: "codex" });
+    await ui.settle();
+    expect(ui.received).toContainEqual(expect.objectContaining({ type: "engine_switched", requestId: "switch" }));
+    ui.send({ type: "user_message", requestId: "next", text: "replacement" });
+    await ui.settle();
+    expect(next.turns).toBe(1);
+    next.finishTurn();
+    await ui.settle();
+    const count = settings(ui.received).length;
+    engine.settleEffort(true);
+    await ui.settle();
+    expect(settings(ui.received)).toHaveLength(count);
   });
 });

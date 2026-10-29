@@ -11795,6 +11795,20 @@ describe("automation facade — native engine effort", () => {
     expect(state.clicks).toEqual(["back", "root:model", "model:plain"]);
   });
 
+  it("allows opening and effort selection while running, but blocks native model selection", async () => {
+    const { dom, state } = nativeMenuDom();
+    const { facade, port, tabId } = nativeFacade(dom, TERRA);
+    const ready = nativeReady(TERRA);
+    if (ready.type !== "host_ready" || !ready.engine) throw new Error("missing engine");
+    ready.engine.capabilities.supportsDeferredEffortChange = true;
+    port.emit(ready);
+    port.emit({ type: "turn_started", requestId: "r", turnId: "t" });
+    await expect(facade.modelPillPick(tabId, { kind: "open" })).resolves.toEqual({ ok: true });
+    await expect(facade.modelPillPick(tabId, { kind: "model", value: "plain" })).resolves.toEqual({ ok: false, reason: "pick_disabled" });
+    await expect(facade.modelPillPick(tabId, { kind: "effort", value: "xhigh" })).resolves.toEqual({ ok: true });
+    expect(state.clicks).toEqual(["root:effort", "effort:xhigh"]);
+  });
+
   it("reports effort_row_hidden only when the model advertises no levels", async () => {
     const { dom, state } = nativeMenuDom();
     const { facade, tabId } = nativeFacade(dom, { current: "plain", available: [{ id: "plain", label: "Plain" }] });

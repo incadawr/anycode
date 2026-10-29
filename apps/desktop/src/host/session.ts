@@ -227,6 +227,8 @@ export interface EngineSettingsSeam {
    * applied effort, and resolves `{ ok: false }` — never a thrown error.
    */
   selectEffortAndWait?(effort: string): Promise<EngineSettingsChange>;
+  waitForModelChanges?(): Promise<void>;
+  waitForSettingsChanges?(): Promise<void>;
   onSettingsApplied(listener: (snapshot: { model: string; activePresetId: string; effort?: string }) => void): () => void;
   /**
    * The chosen-but-not-yet-applied delta, or null. Re-asserted on every
@@ -291,6 +293,7 @@ function enginePresentation(engine: SessionEngine, settings?: EngineSettingsSeam
       costAccounting: capabilities.costAccounting,
       supportsModelSelection: capabilities.supportsModelSelection,
       supportsReasoningEffort: capabilities.supportsReasoningEffort,
+      ...(capabilities.supportsDeferredEffortChange !== undefined ? { supportsDeferredEffortChange: capabilities.supportsDeferredEffortChange } : {}),
       supportsImages: capabilities.supportsImages,
       supportsTasks: capabilities.supportsTasks,
       supportsFileSnapshots: capabilities.supportsFileSnapshots,
@@ -1291,6 +1294,11 @@ export class Session {
    */
   private pendingModel: string | undefined;
   private pendingEffort: ReasoningEffort | undefined;
+  private pendingEngineEffort: { effort: string; model: string; seam: EngineSettingsSeam; engine: SessionEngine } | undefined;
+  private inFlightEngineEffort: typeof this.pendingEngineEffort;
+  private settingsBarrier: Promise<void> = Promise.resolve();
+  private settingsBarrierActive = false;
+  private settingsGeneration = 0;
 
   /**
    * Prebuilt `session_history` payload (mapping + 500-cap applied once at
@@ -1766,6 +1774,7 @@ export class Session {
         state: "applied",
         appliesFrom: "next_turn",
       });
+      if (this.mergedEngineSettings() !== null) this.publishPendingEngineSettings();
     });
   }
 
@@ -1955,7 +1964,7 @@ export class Session {
     if (this.engineSettings !== undefined) {
       const applied = this.engineSettings.snapshot();
       const pending = this.engineSettings.pendingSnapshot?.() ?? null;
-      const chosen = pending ?? applied;
+      const chosen = this.mergedEngineSettings() ?? pending ?? applied;
       const supportedEfforts = normalizeEffortLevels(
         this.engineSettings.models().find((model) => model.id === chosen.model)?.efforts ?? [],
       );
@@ -2254,6 +2263,9 @@ export class Session {
 
   closeAdmissions(): void {
     this.shuttingDown = true;
+    this.pendingEngineEffort = undefined;
+    this.inFlightEngineEffort = undefined;
+    this.settingsGeneration++;
     // TASK.117: same disarm as shutdown() — once admissions close, the
     // session is on its terminal path and the disconnect grace timer must
     // never fire past the real settlement.
@@ -2733,7 +2745,14 @@ export class Session {
         // discipline is unchanged (busy => silent drop).
         if (this.engineSettings !== undefined) {
           if (this.busy) break;
-          this.onEngineSettingsChange(this.engineSettings.selectModel(id), { model: id });
+          this.queueIdleEngineSetting((seam) => {
+            const before = seam.pendingSnapshot?.() ?? seam.snapshot();
+            const result = seam.selectModel(id);
+            const hadPending = result.ok && result.model !== before.model && this.pendingEngineEffort !== undefined;
+            if (hadPending) this.pendingEngineEffort = undefined;
+            this.onEngineSettingsChange(result, { model: id });
+            if (hadPending) this.publishPendingEngineSettings();
+          });
           break;
         }
         if (this.engine.switchModel === undefined) {
@@ -2788,12 +2807,33 @@ export class Session {
           });
           break;
         }
-        this.onEngineSettingsChange(this.engineSettings.selectPreset(message.presetId), { presetId: message.presetId });
+        this.queueIdleEngineSetting((seam) => this.onEngineSettingsChange(seam.selectPreset(message.presetId), { presetId: message.presetId }));
         break;
-      case "set_engine_effort":
-        if (this.engineSettings === undefined || this.busy || this.engineSettings.selectEffort === undefined) break;
-        this.onEngineSettingsChange(this.engineSettings.selectEffort(message.effort), { effort: message.effort });
+      case "set_engine_effort": {
+        const seam = this.engineSettings;
+        if (seam === undefined || seam.selectEffort === undefined) break;
+        if (this.busy) {
+          if (!this.engine.capabilities.supportsDeferredEffortChange) break;
+          const selectedBase = seam.pendingSnapshot?.() ?? seam.snapshot();
+          const selected = this.inFlightEngineEffort?.seam === seam && this.inFlightEngineEffort.model === selectedBase.model
+            ? { ...selectedBase, effort: this.inFlightEngineEffort.effort }
+            : selectedBase;
+          const levels = seam.models().find((model) => model.id === selected.model)?.efforts ?? [];
+          if (!levels.includes(message.effort)) {
+            this.outbound.emit({ type: "mode_change_rejected", reason: `Effort ${message.effort} is not supported by ${selected.model}` });
+            this.publishPendingEngineSettings();
+            break;
+          }
+          const baseline = selected.effort;
+          this.pendingEngineEffort = message.effort === baseline ? undefined : { effort: message.effort, model: selected.model, seam, engine: this.engine };
+          this.publishPendingEngineSettings();
+          break;
+        }
+        this.queueIdleEngineSetting((current) => {
+          if (current.selectEffort !== undefined) this.onEngineSettingsChange(current.selectEffort(message.effort), { effort: message.effort });
+        });
         break;
+      }
       case "git_command":
         // Slice 5.7 / TASK.40 (design §2(f)): user-initiated git command. The
         // bridge validates nothing (the zod schema already ran in `route`
@@ -2896,6 +2936,7 @@ export class Session {
    * ack-gated persist reads.
    */
   private applyPendingModelSelection(): void {
+    this.applyPendingEngineEffort();
     const model = this.pendingModel;
     const effort = this.pendingEffort;
     this.pendingModel = undefined;
@@ -3733,6 +3774,11 @@ export class Session {
       ) {
         next.setMode(previousEngine.mode());
       }
+      this.pendingEngineEffort = undefined;
+      this.inFlightEngineEffort = undefined;
+      this.settingsGeneration++;
+      this.settingsBarrier = Promise.resolve();
+      this.settingsBarrierActive = false;
       this.engine = next;
       this.engineSwitched = true;
       this.switchCarriedHistory = canonical;
@@ -4758,6 +4804,18 @@ export class Session {
     };
 
     try {
+      if (this.settingsBarrierActive && !controller.signal.aborted) {
+        await new Promise<void>((resolve) => {
+          const abort = () => resolve();
+          controller.signal.addEventListener("abort", abort, { once: true });
+          void this.settingsBarrier.finally(() => { controller.signal.removeEventListener("abort", abort); resolve(); });
+        });
+      }
+      if (controller.signal.aborted || this.shuttingDown) {
+        recordResult("cancelled");
+        if (!this.shuttingDown) this.outbound.emit({ type: "agent_event", turnId, event: { type: "loop_end", reason: "cancelled", turns: 0 } });
+        return;
+      }
       // Taskana 4068: consume the one-shot engine-switch import prompt BEFORE
       // the engine call — the import is PREPENDED to the user's own turn
       // input (typed text + any plan/notice augmentation) for exactly this one
@@ -5212,17 +5270,90 @@ export class Session {
    * carries only the applied snapshot. ZERO wire delta: this is the same
    * `engine_settings_changed{state:"pending"}` the change itself emits.
    */
+  private mergedEngineSettings(): { model: string; activePresetId: string; effort?: string } | null {
+    const seam = this.engineSettings;
+    if (seam === undefined) return null;
+    const pending = seam.pendingSnapshot?.() ?? null;
+    const deferred = this.pendingEngineEffort ?? this.inFlightEngineEffort;
+    if (deferred === undefined || deferred.seam !== seam || deferred.engine !== this.engine) return pending;
+    const base = pending ?? seam.snapshot();
+    return base.model === deferred.model ? { ...base, effort: deferred.effort } : pending;
+  }
+
+  private publishPendingEngineSettings(direct = false): void {
+    const pending = this.mergedEngineSettings() ?? this.engineSettings?.snapshot();
+    if (pending === undefined || this.shuttingDown) return;
+    const message = { type: "engine_settings_changed" as const, ...pending, ...((this.pendingEngineEffort ?? this.inFlightEngineEffort) !== undefined ? { deferredEffort: true } : {}), state: "pending" as const, appliesFrom: "next_turn" as const };
+    if (direct) this.outbound.sendDirect(message);
+    else this.outbound.emit(message);
+  }
+
   private pushPendingEngineSettings(): void {
-    const pending = this.engineSettings?.pendingSnapshot?.();
-    if (pending == null) return;
-    this.outbound.sendDirect({
-      type: "engine_settings_changed",
-      model: pending.model,
-      activePresetId: pending.activePresetId,
-      ...(pending.effort !== undefined ? { effort: pending.effort } : {}),
-      state: "pending",
-      appliesFrom: "next_turn",
+    if (this.mergedEngineSettings() !== null) this.publishPendingEngineSettings(true);
+  }
+
+  private queueIdleEngineSetting(operation: (seam: EngineSettingsSeam) => void | Promise<void>): void {
+    const seam = this.engineSettings;
+    const engine = this.engine;
+    const generation = this.settingsGeneration;
+    if (seam === undefined) return;
+    if (!this.settingsBarrierActive) { operation(seam); return; }
+    const barrier = this.settingsBarrier.then(async () => {
+      if (!this.shuttingDown && generation === this.settingsGeneration && this.engine === engine && this.engineSettings === seam) {
+        await operation(seam);
+        await seam.waitForSettingsChanges?.();
+      }
+    }).finally(() => {
+      if (generation === this.settingsGeneration && this.settingsBarrier === barrier) this.settingsBarrierActive = false;
     });
+    this.settingsBarrier = barrier;
+  }
+
+  private applyPendingEngineEffort(): void {
+    const pending = this.pendingEngineEffort;
+    this.pendingEngineEffort = undefined;
+    if (pending === undefined || this.shuttingDown || pending.seam !== this.engineSettings || pending.engine !== this.engine) return;
+    const selected = pending.seam.pendingSnapshot?.() ?? pending.seam.snapshot();
+    if (selected.model !== pending.model || !pending.seam.models().find((model) => model.id === pending.model)?.efforts?.includes(pending.effort)) {
+      this.outbound.emit({ type: "mode_change_rejected", reason: "The selected model no longer supports this effort" });
+      this.publishPendingEngineSettings();
+      return;
+    }
+    const generation = this.settingsGeneration;
+    if (pending.seam.selectEffortAndWait === undefined) {
+      const result = pending.seam.selectEffort?.(pending.effort);
+      if (result !== undefined) this.onEngineSettingsChange(result, { effort: pending.effort });
+      return;
+    }
+    this.inFlightEngineEffort = pending;
+    this.settingsBarrierActive = true;
+    const barrier = this.settingsBarrier.then(async () => {
+      if (this.shuttingDown || generation !== this.settingsGeneration || this.engineSettings !== pending.seam || this.engine !== pending.engine) return;
+      await pending.seam.waitForModelChanges?.();
+      if (this.shuttingDown || generation !== this.settingsGeneration || this.engineSettings !== pending.seam || this.engine !== pending.engine) return;
+      if (pending.seam.snapshot().model !== pending.model || !pending.seam.models().find((model) => model.id === pending.model)?.efforts?.includes(pending.effort)) {
+        if (this.inFlightEngineEffort === pending) this.inFlightEngineEffort = undefined;
+        this.outbound.emit({ type: "mode_change_rejected", reason: "The selected model no longer supports this effort" });
+        this.publishPendingEngineSettings();
+        return;
+      }
+      const operation = pending.seam.selectEffortAndWait;
+      if (operation === undefined) return;
+      const result = await operation.call(pending.seam, pending.effort);
+      if (this.shuttingDown || generation !== this.settingsGeneration || this.engineSettings !== pending.seam || this.engine !== pending.engine) return;
+      if (this.inFlightEngineEffort === pending) this.inFlightEngineEffort = undefined;
+      if (!result.ok) this.outbound.emit({ type: "mode_change_rejected", reason: result.reason });
+      this.publishPendingEngineSettings();
+    }).catch((error: unknown) => {
+      if (!this.shuttingDown && generation === this.settingsGeneration) {
+        if (this.inFlightEngineEffort === pending) this.inFlightEngineEffort = undefined;
+        this.outbound.emit({ type: "mode_change_rejected", reason: String(error) });
+        this.publishPendingEngineSettings();
+      }
+    }).finally(() => {
+      if (generation === this.settingsGeneration && this.settingsBarrier === barrier) this.settingsBarrierActive = false;
+    });
+    this.settingsBarrier = barrier;
   }
 
   private onEngineSettingsChange(result: EngineSettingsChange, intent: { model?: string; presetId?: string; effort?: string }): void {

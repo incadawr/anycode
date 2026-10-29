@@ -89,6 +89,7 @@ export const CLAUDE_ENGINE_CAPABILITIES: EngineCapabilities = {
   costAccounting: true,
   supportsModelSelection: true,
   supportsReasoningEffort: true,
+  supportsDeferredEffortChange: true,
   // R-W0-9 was DISPROVEN live on 2026-07-25 (CLI 2.1.220): a user frame built
   // as a content-block array delivers the image, and the model describes it.
   // The original finding (the model answered "no attached image data") dates to

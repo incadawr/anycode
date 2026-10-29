@@ -164,3 +164,57 @@ describe("EngineModelMenu — rendered effort row", () => {
     }
   });
 });
+
+describe("busy native effort menu", () => {
+  it("offers effort by mouse and keyboard while model navigation is unavailable", async () => {
+    const onModel = vi.fn();
+    const onEffort = vi.fn();
+    const model = { current: "gpt-6.1-terra", available: terraModels, effort: "medium" };
+    const effort = nativeEffortControl(model, undefined, undefined, onEffort)!;
+    const { container, root } = await mount({ model, pendingModel: undefined, disabled: false, modelDisabled: true, onPick: onModel, effort });
+    try {
+      await openMenu(container);
+      const rootPage = container.querySelector<HTMLElement>('[data-model-pill-page="root"]')!;
+      expect(rootPage.textContent).not.toContain("Model");
+      const row = rootPage.querySelector<HTMLButtonElement>('button[role="menuitem"]')!;
+      expect(row.textContent).toContain("Effort");
+      await act(async () => row.click());
+      await act(async () => container.querySelector<HTMLButtonElement>('[data-effort="high"]')!.click());
+      expect(onEffort).toHaveBeenCalledWith("high");
+      await openMenu(container);
+      const page = container.querySelector<HTMLElement>('[data-model-pill-page="root"]')!;
+      await act(async () => page.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+      expect(container.querySelector('[data-model-pill-page="effort"]')).not.toBeNull();
+      const effortPage = container.querySelector<HTMLElement>('[data-model-pill-page="effort"]')!;
+      await act(async () => effortPage.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
+      await act(async () => effortPage.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+      expect(onEffort).toHaveBeenLastCalledWith("xhigh");
+      expect(onModel).not.toHaveBeenCalled();
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it("shows a pending badge when the newer choice equals the older displayed baseline", async () => {
+    const model = { current: "gpt-6.1-terra", available: terraModels, effort: "medium" };
+    const effort = nativeEffortControl(model, undefined, "medium", vi.fn())!;
+    const { container, root } = await mount({ model, pendingModel: undefined, disabled: false, modelDisabled: true, onPick: vi.fn(), effort });
+    try {
+      expect(container.textContent).toContain("next turn");
+      await openPage(container, "Effort");
+      expect(container.querySelector('[data-effort="medium"]')?.textContent).toContain("next turn");
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it("leaves an open model page when the turn begins", async () => {
+    const model = { current: "gpt-6.1-terra", available: terraModels, effort: "medium" };
+    const onPick = vi.fn();
+    const props = { model, pendingModel: undefined, disabled: false, onPick, effort: nativeEffortControl(model, undefined, undefined, vi.fn())! };
+    const { container, root } = await mount(props);
+    try {
+      await openPage(container, "Model");
+      await act(async () => root.render(createElement(EngineModelMenu, { ...props, modelDisabled: true })));
+      expect(container.querySelector('[data-model-pill-page="model"]')).toBeNull();
+      expect(container.querySelector('[data-model-pill-page="root"]')?.textContent).toContain("Effort");
+      expect(onPick).not.toHaveBeenCalled();
+    } finally { await act(async () => root.unmount()); }
+  });
+});
