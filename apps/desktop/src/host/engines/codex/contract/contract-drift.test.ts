@@ -141,6 +141,7 @@ describe("contract-drift layer 1 (always-on)", () => {
       "thread/start",
       "thread/resume",
       "thread/read",
+      "thread/compact/start",
       "turn/start",
       "turn/interrupt",
       "account/login/start",
@@ -151,6 +152,7 @@ describe("contract-drift layer 1 (always-on)", () => {
       expect(client).toContain(method);
     }
     expect(Object.keys(pinned.methods.serverNotifications)).toContain("windowsSandbox/setupCompleted");
+    expect(Object.keys(pinned.methods.serverNotifications)).toContain("turn/started");
   });
 
   it("the pinned windowsSandbox family matches protocol.ts constants (Taskana 4139)", () => {
@@ -546,5 +548,25 @@ describe.skipIf(!process.env.ANYCODE_CODEX_DRIFT_BIN)("contract-drift layer 2 (e
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+
+describe("manual compact contract", () => {
+  it("pins manual compact request acknowledgement and native turn start", () => {
+    const pin = loadPinned();
+    expect(pin.methods.clientRequests["thread/compact/start"]).toEqual({ params: "v2/ThreadCompactStartParams", result: "v2/ThreadCompactStartResponse" });
+    expect(pin.methods.serverNotifications["turn/started"]).toEqual({ params: "v2/TurnStartedNotification" });
+    expect((pin.definitions.v2 as Record<string, unknown>).ThreadCompactStartParams).toMatchObject({ type: "object", required: ["threadId"], properties: { threadId: { type: "string" } } });
+    expect((pin.definitions.v2 as Record<string, unknown>).ThreadCompactStartResponse).toMatchObject({ type: "object" });
+    const definitions = pin.definitions.v2 as Record<string, any>;
+    expect(definitions.TurnStartedNotification).toMatchObject({ required: ["threadId", "turn"], properties: { threadId: { type: "string" }, turn: { $ref: "#/definitions/v2/Turn" } } });
+    expect(definitions.ThreadItem.oneOf.find((v: any) => v.properties.type.enum.includes("contextCompaction"))).toMatchObject({ type: "object", required: ["id", "type"], properties: { id: { type: "string" } } });
+  });
+  it("detects removal of the manual compact request from the registry", () => {
+    const pin = loadPinned();
+    const schema = buildSyntheticSchema(pin);
+    renameMethodInRegistry(schema, "ClientRequest", "thread/compact/start", "thread/compact/removed");
+    expect("error" in runExtractor(schema, pin.generatedFrom)).toBe(true);
   });
 });

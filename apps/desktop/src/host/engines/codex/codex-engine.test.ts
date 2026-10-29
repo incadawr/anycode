@@ -12,7 +12,7 @@ import { CodexApprovalBridge } from "./approval-bridge.js";
 import type { CodexPatchAutoApprovalPolicy } from "./patch-auto-approval.js";
 import type { JsonRpcNotification, JsonRpcServerRequest } from "./protocol.js";
 import { decodeWindowsSandboxReadiness } from "./protocol.js";
-import { NATIVE_PERSISTED, type ShadowCommandItem } from "./history-projection.js";
+import { projectCodexHistory, NATIVE_PERSISTED, type ShadowCommandItem } from "./history-projection.js";
 import type { CodexShadowLogPort } from "./shadow-log.js";
 import {
   CODEX_NOT_SIGNED_IN,
@@ -283,6 +283,13 @@ class FakeAppServer implements CodexClient {
   threadStartParams: unknown = undefined;
   /** `thread/read`'s response (TASK.42 resume-history hydration); default has zero turns — an empty resumed thread. */
   threadReadResult: unknown = { thread: { id: "persisted-thread", turns: [] } };
+  compactResponse: Promise<unknown> = Promise.resolve({});
+  compactCalls = 0;
+  getProtocolFeatures = async () => ({ manualCompact: true });
+  startCompact(id = "compact-native"): void {
+    this.currentTurnId = id;
+    this.stream.push({ method: "turn/started", params: { threadId: THREAD, turn: { id, status: "inProgress" } } });
+  }
   private pendingTurnStart: { resolve: (value: unknown) => void } | null = null;
   private turnCount = 0;
   private currentTurnId = "";
@@ -367,6 +374,7 @@ class FakeAppServer implements CodexClient {
     if (method === "thread/read") {
       return Promise.resolve(this.threadReadResult as T);
     }
+    if (method === "thread/compact/start") { this.compactCalls++; return this.compactResponse as Promise<T>; }
     if (method === "turn/start") {
       if (this.turnStartMode === "never") return new Promise<T>(() => {});
       if (this.turnStartMode === "deferred") {
@@ -3853,5 +3861,185 @@ describe("CodexEngine — Taskana 4764 browser dynamicTools", () => {
     server.completeTurn("completed");
     await turn.done;
     expect(turn.events.filter((e) => e.type === "tool_call" || e.type === "tool_execution_start" || e.type === "tool_result")).toHaveLength(0);
+  });
+});
+
+
+function driveCompact(engine: CodexEngine, signal = new AbortController().signal) {
+  const events: AgentEvent[] = [];
+  const done = (async () => { for await (const event of engine.compactNow!({ signal })) events.push(event); })();
+  return { events, done };
+}
+
+describe("Codex manual compaction", () => {
+  function setup(overrides: Partial<import("./codex-engine.js").CodexEngineTimeouts> = {}, log?: RecordingShadowLog) {
+    const server = new FakeAppServer();
+    server.threadReadResult = { thread: { id: THREAD, turns: [] } };
+    const engine = new CodexEngine(server, THREAD, undefined, { compactUsageWaitMs: 10, turnStartMs: 100, postInterruptSettleMs: 100, interruptRetryDelaysMs: [1, 1], ...overrides }, undefined, log, 0, [], undefined, undefined, undefined, { manualCompact: true });
+    return { server, engine };
+  }
+  const item = (server: FakeAppServer, id = "compact-native", threadId = THREAD) => server.stream.push({ method: "item/completed", params: { threadId, turnId: id, item: { type: "contextCompaction", id: `${id}-item` } } });
+  const usage = (server: FakeAppServer, count: unknown = 8000, id = "compact-native", window: unknown = 100000) => server.stream.push({ method: "thread/tokenUsage/updated", params: { threadId: THREAD, turnId: id, tokenUsage: { last: { totalTokens: count }, total: { inputTokens: 50000, outputTokens: 1000, totalTokens: 51000 }, modelContextWindow: window } } });
+  const finish = (server: FakeAppServer, id = "compact-native", status: "completed" | "interrupted" = "completed") => { item(server, id); server.completeTurn(status, id); };
+  async function normal(server: FakeAppServer, engine: CodexEngine, count = 47000) {
+    const run = drive(engine, "hello", new AbortController().signal);
+    await tick(40);
+    server.stream.push({ method: "item/agentMessage/delta", params: { threadId: THREAD, turnId: server.turnId, itemId: "following-message", delta: "Next chat message" } });
+    usage(server, count, server.turnId); server.completeTurn("completed"); await run.done;
+    return run;
+  }
+  it.each([false, true])("advertises manual compact only for verified fresh and resumed sessions: %s", async supported => {
+    for (const resume of [false, true]) for (const bridged of [false, true]) {
+      const server = new FakeAppServer(); server.getProtocolFeatures = async () => ({ manualCompact: supported });
+      const bridge = bridged ? new CodexApprovalBridge({} as never) : undefined;
+      const result = resume ? await resumeNativeCodexSession(server, "/work", "persisted-thread", bridge) : await createNativeCodexSession(server, "/work", bridge);
+      expect(result.engine.capabilities.supportsManualCompact).toBe(supported);
+      expect(typeof result.engine.compactNow === "function").toBe(supported);
+    }
+    const server = new FakeAppServer(); (server as Partial<CodexClient>).getProtocolFeatures = undefined;
+    expect((await createNativeCodexSession(server, "/work")).engine.compactNow).toBeUndefined();
+  });
+  it("runs manual compact without creating an ordinary turn", async () => {
+    const { server, engine } = setup(); await normal(server, engine);
+    const run = driveCompact(engine); await tick(40); server.startCompact(); usage(server); finish(server); await run.done;
+    expect(server.calls.filter(c => c.method === "thread/compact/start")).toEqual([{ method: "thread/compact/start", params: { threadId: THREAD } }]);
+    expect(types(run.events)).toEqual(["compaction_start", "engine_session_tokens", "compaction_end", "context_usage"]);
+    expect(run.events.find(e => e.type === "compaction_end")).toMatchObject({ ok: true, preTokens: 47000, postTokens: 8000 });
+  });
+  it("waits for native completion after the empty compact acknowledgement", async () => {
+    const { server, engine } = setup(); const run = driveCompact(engine); await tick(40);
+    expect(types(run.events)).toEqual(["compaction_start"]); server.startCompact(); await tick();
+    expect(run.events.some(e => e.type === "compaction_end")).toBe(false); finish(server); await run.done;
+    expect(run.events.find(e => e.type === "compaction_end")).toMatchObject({ ok: true });
+  });
+  it("handles lifecycle notifications before the compact acknowledgement", async () => {
+    const { server, engine } = setup(); let ack!: (v: unknown) => void; server.compactResponse = new Promise(resolve => { ack = resolve; });
+    const run = driveCompact(engine); await tick(40); server.startCompact(); usage(server); finish(server); await tick(40);
+    expect(run.events.some(e => e.type === "compaction_end")).toBe(false); ack({}); await run.done;
+    expect(run.events.at(-1)).toMatchObject({ type: "context_usage", estimatedTokens: 8000 });
+  });
+  it("correlates completed-only compact items and ignores stale or foreign notifications", async () => {
+    const { server, engine } = setup(); server.threadReadResult = { thread: { id: THREAD, turns: [{ id: "old" }] } };
+    const run = driveCompact(engine); await tick(40);
+    server.startCompact("old"); item(server, "old"); server.completeTurn("completed", "old"); item(server, "foreign", "foreign-thread"); usage(server, 999, "old");
+    item(server); usage(server); server.completeTurn("completed", "compact-native"); await run.done;
+    expect(run.events.at(-1)).toMatchObject({ estimatedTokens: 8000 });
+  });
+  it("deduplicates compact lifecycle notifications", async () => {
+    const { server, engine } = setup(); const run = driveCompact(engine); await tick(40);
+    server.startCompact(); server.startCompact(); item(server); item(server); usage(server); server.completeTurn("completed"); server.completeTurn("completed"); await run.done;
+    expect(types(run.events).filter(t => t === "compaction_start")).toHaveLength(1); expect(types(run.events).filter(t => t === "compaction_end")).toHaveLength(1); expect(types(run.events).filter(t => t === "context_usage")).toHaveLength(1);
+  });
+  it.each(["pre", "yield", "read"])("cancels before sending compact without native work: %s", async mode => {
+    const { server, engine } = setup(); const controller = new AbortController();
+    if (mode === "pre") controller.abort();
+    if (mode === "read") { const original = server.request.bind(server); server.request = (m, p, o) => m === "thread/read" ? new Promise(() => {}) : original(m, p, o); }
+    const iterator = engine.compactNow!({ signal: controller.signal })[Symbol.asyncIterator](); const events = [(await iterator.next()).value];
+    const done = (async () => { for (;;) { const n = await iterator.next(); if (n.done) break; events.push(n.value); } })();
+    controller.abort(); await done;
+    expect(events.at(-1)).toMatchObject({ type: "compaction_end", ok: false, error: "cancelled" }); expect(server.compactCalls).toBe(0); expect(server.interrupts).toBe(0);
+  });
+  it("latches Stop until the native compact turn id arrives", async () => {
+    const { server, engine } = setup(); const controller = new AbortController(); const run = driveCompact(engine, controller.signal); await tick(40); controller.abort(); await tick(); expect(server.interrupts).toBe(0);
+    server.startCompact(); await run.done; expect(server.interrupts).toBe(1); expect(server.calls.find(c => c.method === "turn/interrupt")?.params).toEqual({ threadId: THREAD, turnId: "compact-native" }); expect(run.events.at(-1)).toMatchObject({ ok: false, error: "cancelled" });
+  });
+  it("interrupts compact while the notification reader is parked", async () => {
+    const { server, engine } = setup(); const controller = new AbortController(); const run = driveCompact(engine, controller.signal); await tick(40); server.startCompact(); await tick(40); expect(server.stream.parked).toBe(true); controller.abort(); await run.done;
+    expect(run.events.at(-1)).toMatchObject({ ok: false, error: "cancelled" }); expect((await normal(server, engine)).events.at(-1)).toMatchObject({ type: "loop_end" });
+  });
+  it.each([-32600, -32000])("retries only rejected early compact interrupts and never repeats an accepted interrupt: %s", async code => {
+    const { server, engine } = setup(); server.interruptRejections = 1; server.interruptRejectionCode = code;
+    const controller = new AbortController(); const run = driveCompact(engine, controller.signal); await tick(40); server.startCompact(); await tick(); controller.abort(); controller.abort(); await run.done;
+    expect(server.interrupts).toBe(code === -32600 ? 2 : 1); if (code === -32000) expect(server.closeCount).toBe(1);
+  });
+  it.each(["ack", "identity", "settlement"])("bounds compact startup and interrupted settlement failures: %s", async mode => {
+    const { server, engine } = setup({ turnStartMs: 25, postInterruptSettleMs: 25 }); const controller = new AbortController();
+    if (mode === "ack") server.compactResponse = new Promise(() => {});
+    const run = driveCompact(engine, controller.signal); await tick(40);
+    if (mode === "settlement") { server.interruptSettles = "silent"; server.startCompact(); await tick(); controller.abort(); }
+    await run.done; expect(run.events.at(-1)).toMatchObject({ ok: false }); expect(server.closeCount).toBe(1);
+    const before = server.calls.length; await driveCompact(engine).done; expect(server.calls).toHaveLength(before);
+  });
+  it.each([-32601, -32000])("reports explicit compact rejection without killing ordinary turns: %s", async code => {
+    const { server, engine } = setup(); server.compactResponse = Promise.reject(Object.assign(new Error("denied"), { code }));
+    const run = driveCompact(engine); await run.done; expect(run.events.at(-1)).toMatchObject({ ok: false }); expect(server.closeCount).toBe(0);
+    expect(types((await normal(server, engine)).events)).toContain("loop_end");
+  });
+  it.each(["before", "during", "ack"])("pairs compact start on transport and decoding failures: %s", async mode => {
+    const { server, engine } = setup(); if (mode === "ack") server.compactResponse = Promise.resolve(null);
+    const run = driveCompact(engine); await tick(40); if (mode === "during") server.startCompact(); if (mode !== "ack") server.stream.close(); await run.done;
+    expect(types(run.events)).toEqual(["compaction_start", "compaction_end"]); expect(run.events.at(-1)).toMatchObject({ ok: false });
+  });
+  it.each(["unconfirmed", "failed", "interrupted", "completed"])("requires compaction confirmation and respects the native terminal verdict: %s", async status => {
+    const { server, engine } = setup(); const controller = new AbortController(); const run = driveCompact(engine, controller.signal); await tick(40); server.startCompact(); if (status !== "unconfirmed") item(server);
+    server.stream.push({ method: "turn/completed", params: { threadId: THREAD, turn: { id: "compact-native", status: status === "unconfirmed" ? "completed" : status, error: { message: "native failure" } } } });
+    if (status === "completed") controller.abort(); await run.done; expect(run.events.find(e => e.type === "compaction_end")).toMatchObject({ ok: status === "completed" });
+  });
+  it.each(["before-item", "before-terminal", "after-terminal"])("uses matching provider usage before or shortly after compact completion: %s", async when => {
+    const { server, engine } = setup({ compactUsageWaitMs: 100 }); const observer = vi.fn(); engine.onUsage(observer);
+    const run = driveCompact(engine); await tick(40); server.startCompact(); if (when === "before-item") usage(server); item(server); if (when === "before-terminal") usage(server); server.completeTurn("completed"); if (when === "after-terminal") { await tick(40); usage(server); } await run.done;
+    expect(run.events.at(-1)).toMatchObject({ type: "context_usage", estimatedTokens: 8000 }); expect(observer).not.toHaveBeenCalled();
+  });
+  it.each(["missing", "negative", "nan", "window", "zero"])("preserves honest usage when compaction telemetry is unavailable: %s", async mode => {
+    const { server, engine } = setup(); const run = driveCompact(engine); await tick(40); server.startCompact();
+    if (mode !== "missing") usage(server, mode === "zero" ? 0 : mode === "negative" ? -1 : mode === "nan" ? NaN : 10, "compact-native", mode === "window" ? 0 : 100000);
+    finish(server); await run.done;
+    const end = run.events.find(e => e.type === "compaction_end"); expect(end).toMatchObject({ ok: true, preTokens: 0 });
+    if (mode === "zero") expect(end).toMatchObject({ postTokens: 0 });
+    else { expect(end).not.toHaveProperty("postTokens"); expect(types(run.events)).not.toContain("context_usage"); expect(types(run.events)).toContain("engine_notice"); }
+  });
+  it("does not steer or approve a manual compact turn", async () => {
+    const { server, engine } = setup(); const run = driveCompact(engine); await tick(40); server.startCompact(); await tick(40);
+    expect(engine.activeTurnDetails).toBeNull(); expect(engine.steeringStatus().ready).toBe(false); await expect(engine.steer("bad")).rejects.toThrow(); expect(server.calls.some(c => c.method === "turn/steer")).toBe(false);
+    finish(server); await run.done;
+  });
+  it("preserves notifications across normal turns and repeated compactions", async () => {
+    const { server, engine } = setup(); await normal(server, engine);
+    for (const id of ["compact-one", "compact-two"]) {
+      const run = driveCompact(engine); await tick(40); server.startCompact(id); usage(server, 8000, id); finish(server, id); await run.done;
+      const chat = await normal(server, engine); expect(types(chat.events)).toContain("context_usage"); expect(types(chat.events)).toContain("loop_end"); expect(chat.events).toContainEqual(expect.objectContaining({ type: "text_delta", text: "Next chat message" }));
+    }
+  });
+  it.each([false, true])("refreshes native shadow ordinals after manual compaction: %s", async persisted => {
+    const log = new RecordingShadowLog(); const { server, engine } = setup({}, log); await normal(server, engine);
+    const compact = driveCompact(engine); await tick(40); server.startCompact(); finish(server); await compact.done;
+    const turns = [{ id: "native-turn-1" }, ...(persisted ? [{ id: "compact-native" }] : [])]; server.threadReadResult = { thread: { id: THREAD, turns } };
+    const chat = drive(engine, "command", new AbortController().signal); await tick(40);
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "commandExecution", id: "command-after-compact", command: "echo ok", aggregatedOutput: "ok", status: "completed", exitCode: 0 } } });
+    server.completeTurn("completed"); await chat.done; expect(log.writes.at(-1)?.item.turnOrdinal).toBe(turns.length);
+    const projected = projectCodexHistory({ thread: { id: THREAD, turns: [...turns, { id: server.turnId, items: [{ id: "after-command", type: "agentMessage", text: "after command" }] }] } }, log.writes.map(row => row.item), { maxItems: 100 });
+    const toolAt = projected.findIndex(row => row.message.role === "assistant" && Array.isArray(row.message.content) && row.message.content.some(part => part.type === "tool_call"));
+    expect(toolAt).toBeGreaterThanOrEqual(0);
+    expect(projected.at(-1)?.message).toMatchObject({ role: "assistant", content: [{ type: "text", text: "after command" }] });
+  });
+  it("reserves compact ownership before the first yield and releases it when the consumer returns", async () => {
+    const { server, engine } = setup();
+    const first = engine.compactNow!({ signal: new AbortController().signal })[Symbol.asyncIterator]();
+    expect((await first.next()).value).toMatchObject({ type: "compaction_start" });
+    const second = driveCompact(engine); await second.done;
+    expect(second.events).toEqual([expect.objectContaining({ type: "compaction_end", ok: false, error: "Codex engine is busy" })]);
+    expect(server.compactCalls).toBe(0); await first.return?.();
+    const retry = driveCompact(engine); await tick(40); server.startCompact(); finish(server); await retry.done;
+    expect(retry.events.find(e => e.type === "compaction_end")).toMatchObject({ ok: true });
+  });
+  it.each(["identity", "parked"])("shares the interrupt latch when compact Stop races disposal: %s", async mode => {
+    const { server, engine } = setup(); const controller = new AbortController(); const run = driveCompact(engine, controller.signal); await tick(40);
+    if (mode === "parked") { server.startCompact(); await tick(40); }
+    controller.abort(); await tick(); await engine.dispose("session-close"); await run.done;
+    expect(server.interrupts).toBe(mode === "parked" ? 1 : 0);
+    expect(run.events.filter(e => e.type === "compaction_end")).toHaveLength(1);
+    expect(engine.activeTurnDetails).toBeNull();
+  });
+  it("keeps warnings on the maintenance rail and ignores foreign warning identities", async () => {
+    const { server, engine } = setup(); const run = driveCompact(engine); await tick(40);
+    server.stream.push({ method: "warning", params: { threadId: THREAD, message: "Native maintenance notice" } });
+    server.stream.push({ method: "warning", params: { threadId: "foreign", message: "foreign warning" } });
+    server.startCompact(); finish(server); await run.done;
+    expect(run.events).toContainEqual({ type: "engine_notice", level: "warning", message: "Native maintenance notice" });
+    expect(JSON.stringify(run.events)).not.toContain("foreign warning");
+  });
+  it("sends no new native work when the compaction correlation baseline cannot be read", async () => {
+    const { server, engine } = setup(); server.threadReadResult = {}; const bad = driveCompact(engine); await bad.done; expect(server.compactCalls).toBe(0); expect(bad.events.at(-1)).toMatchObject({ ok: false });
+    server.threadReadResult = { thread: { id: THREAD, turns: [] } }; const retry = driveCompact(engine); await tick(40); server.startCompact(); finish(server); await retry.done; expect(retry.events.find(e => e.type === "compaction_end")).toMatchObject({ ok: true });
   });
 });

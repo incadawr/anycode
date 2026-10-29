@@ -321,6 +321,15 @@ function projectPlanTodos(plan: unknown): { todos: { content: string; status: st
 }
 
 /** A one-turn translator; callers must construct a fresh one for every native turn. */
+export function decodeCodexContextUsage(params: unknown): Extract<AgentEvent, { type: "context_usage" }> | null {
+  const usage = record(record(params)?.tokenUsage);
+  const tokens = record(usage?.last)?.totalTokens;
+  const window = usage?.modelContextWindow;
+  return typeof tokens === "number" && Number.isFinite(tokens) && tokens >= 0 &&
+    typeof window === "number" && Number.isFinite(window) && window > 0
+    ? { type: "context_usage", estimatedTokens: tokens, budgetTokens: window, source: "provider" } : null;
+}
+
 export class TurnTranslator {
   private readonly openText = new Set<string>();
   /**
@@ -947,15 +956,9 @@ export class TurnTranslator {
     // `last` is the current model request's usage and matches AgentEvent's
     // per-step context accounting semantics.
     const last = record(usage?.last);
-    const totalTokens = last?.totalTokens;
-    const contextWindow = usage?.modelContextWindow;
     const events: AgentEvent[] = [];
-    if (
-      typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens >= 0 &&
-      typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0
-    ) {
-      events.push({ type: "context_usage", estimatedTokens: totalTokens, budgetTokens: contextWindow, source: "provider" });
-    }
+    const context = decodeCodexContextUsage(params);
+    if (context) events.push(context);
     // The native last value describes one request; total identifies redeliveries.
     const cumulative = record(usage?.total);
     if (last !== null && cumulative !== null) {

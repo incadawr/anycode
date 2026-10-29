@@ -7336,7 +7336,7 @@ describe("Session — manual compaction wire (TASK.146)", () => {
     }
   });
 
-  it("refused (compact_rejected) by construction on an engine without compactNow (movement-profile gate, no `if (engine === \"claude\")` needed)", async () => {
+  it("refuses unsupported Codex compact with engine-specific copy", async () => {
     const engine: SessionEngine = {
       id: "codex",
       capabilities: {
@@ -7371,7 +7371,7 @@ describe("Session — manual compaction wire (TASK.146)", () => {
 
       h.send({ type: "compact_request" });
       const rejected = await h.waitFor(isCompactRejected);
-      expect(rejected.reason).toBe("Manual compaction is not available in this session.");
+      expect(rejected.reason).toBe("Manual compaction is unavailable for this Codex app-server. Update Codex and start a new session.");
 
       expect(h.received.some(agentEventOf("compaction_start"))).toBe(false);
       expect(h.received.some((m) => m.type === "fatal")).toBe(false);
@@ -7440,7 +7440,67 @@ describe("Session — manual compaction wire (TASK.146)", () => {
   });
 
 
-  it("visibly refused (compact_rejected) for a CHILD session even though its engine does implement compactNow", async () => {
+  it("forwards Codex compact events on the manual sentinel and releases busy after cancellation", async () => {
+    const compactCalls: number[] = [];
+    const engine: SessionEngine = {
+      id: "codex",
+      capabilities: {
+        supportsCorePermissions: false,
+        supportsRewind: false,
+        supportsWorkflow: false,
+        supportsGitMutations: false,
+        supportsContextUsage: true,
+        supportsContextBreakdown: false,
+        supportsInteractiveApprovals: false,
+        costAccounting: true,
+        supportsModelSelection: true,
+        supportsReasoningEffort: true,
+        supportsImages: true,
+        supportsTasks: false,
+        supportsFileSnapshots: false,
+        supportsManualCompact: true,
+      },
+      mode: () => "build",
+      setMode: () => {},
+      reasoningEffort: () => undefined,
+      setReasoningEffort: () => {},
+      async *runTurn(): AsyncIterable<AgentEvent> {},
+      historyItems: () => [],
+      dispose: async () => {},
+      async *compactNow(options: { signal: AbortSignal }): AsyncIterable<AgentEvent> {
+        compactCalls.push(1);
+        expect(options.signal.aborted).toBe(false);
+        yield { type: "compaction_start", trigger: "manual" };
+        await new Promise<void>(resolve => options.signal.addEventListener("abort", () => resolve(), { once: true }));
+        yield { type: "compaction_end", ok: false, error: "cancelled", preTokens: 1000, durationMs: 5 };
+      },
+    };
+    const h = createHarness({ steps: [], engine });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "compact_request" });
+      await h.waitFor(agentEventOf("compaction_start"));
+      h.send({ type: "cancel_turn" });
+      const end = await h.waitFor(agentEventOf("compaction_end"));
+      await h.waitUntil(() => !(h.session as unknown as { busy: boolean }).busy);
+
+      expect(compactCalls).toEqual([1]);
+      expect(end.turnId).toBe(MANUAL_COMPACTION_TURN_ID);
+      expect(end.event).toMatchObject({ type: "compaction_end", ok: false });
+      const start = h.received.find(agentEventOf("compaction_start"));
+      expect(start).toBeDefined();
+      expect(start!.event).toMatchObject({ type: "compaction_start", trigger: "manual" });
+      expect(h.received.indexOf(start!)).toBeLessThan(h.received.indexOf(end));
+      expect(h.received.some((m) => m.type === "fatal")).toBe(false);
+    } finally {
+      h.close();
+    }
+  });
+
+
+  it("refuses child compact with child-specific copy", async () => {
     // The child branch runs a REAL CoreEngine (compactNow present) over a real
     // AgentLoop, and the history below is the same compactable seed the
     // accepted-between-turns case uses — so route()'s `child !== undefined`
@@ -7463,7 +7523,7 @@ describe("Session — manual compaction wire (TASK.146)", () => {
 
       h.send({ type: "compact_request" });
       const rejected = await h.waitFor(isCompactRejected);
-      expect(rejected.reason).toBe("Manual compaction is not available in this session.");
+      expect(rejected.reason).toBe("Manual compaction is not available in child sessions.");
 
       expect(h.received.some(agentEventOf("compaction_start"))).toBe(false);
       expect(h.received.some((m) => m.type === "fatal")).toBe(false);

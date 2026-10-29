@@ -1,3 +1,9 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { AppServerClient } from "./engines/codex/app-server-client.js";
+import { createNativeCodexSession } from "./engines/codex/codex-engine.js";
 /**
  * TASK.117 supervisor correction (2026-10-04) — the two acceptance defects a
  * reconnect after replay-ring overflow (>REPLAY_BUFFER_CAP) still had:
@@ -285,4 +291,26 @@ describe("TASK.117 supervisor correction — reconnect defects after ring overfl
       }
     },
   );
+});
+
+
+it("restores Codex post-compaction context usage after replay eviction", async () => {
+  const home = mkdtempSync(join(tmpdir(), "compact-native-reconnect-"));
+  const fixture = fileURLToPath(new URL("../../scripts/compact-fixtures/codex.mjs", import.meta.url));
+  const client = new AppServerClient({ binaryPath: fixture, cwd: home, sourceEnv: { HOME: home, PATH: process.env.PATH, CODEX_HOME: home } });
+  let h: Harness | undefined;
+  try {
+    await client.start(); const { engine } = await createNativeCodexSession(client, home); h = createHarness({ steps: [], engine });
+    h.send({ type: "ui_ready" }); await h.waitFor(m => m.type === "host_ready");
+    h.send({ type: "user_message", requestId: "before", text: "fixture ready" }); await h.waitUntil(() => countLoopEnds(h!) === 1); await settle();
+    const pre = h.received.find(m => m.type === "agent_event" && m.event.type === "context_usage"); expect(pre).toMatchObject({ event: { estimatedTokens: 47000 } });
+    h.send({ type: "compact_request" }); await h.waitFor((m): m is Extract<HostToUiMessage, { type: "agent_event" }> => m.type === "agent_event" && m.event.type === "compaction_start");
+    writeFileSync(join(home, "release-codex-compact-1"), "release"); await h.waitFor((m): m is Extract<HostToUiMessage, { type: "agent_event" }> => m.type === "agent_event" && m.event.type === "context_usage" && m.event.estimatedTokens === 8000); await settle();
+    const { REPLAY_BUFFER_CAP } = await import("./session.js");
+    for (let i = 0; i < REPLAY_BUFFER_CAP + 1000; i++) h.outbound.emit({ type: "title_changed", title: `flood-${i}` });
+    await settle(); const before = h.received.length; h.send({ type: "ui_ready" });
+    await h.waitUntil(() => h!.received.slice(before).some(m => m.type === "session_checkpoint")); await settle();
+    const fresh = createDesktopStore({ schedule: fn => fn() }); for (const m of h.received.slice(before)) fresh.getState().applyHostMessage(m);
+    expect(fresh.getState().contextUsage).toEqual({ estimatedTokens: 8000, budgetTokens: 100000, source: "provider" });
+  } finally { await client.close(); h?.close(); rmSync(home, { recursive: true, force: true }); }
 });

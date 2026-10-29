@@ -561,11 +561,11 @@ describe("SLASH_COMMANDS capability gating — no dead actions (design TASK.40 �
     expect(names).toEqual(["New task", "Tasks", "MCP", "Skills", "Roles", "Plugins", "Settings"]);
   });
 
-  it("TASK.146/TASK.92: hides Compact on a codex-shaped profile (no compactNow) — the list a codex boot sees stays byte-identical", () => {
+  it("hides Compact on an unsupported Codex profile", () => {
     const names = filterSlashItems(SLASH_COMMANDS, [], "", codexShapedCtx).map((item) => item.name);
     expect(names).not.toContain("Compact");
     expect(names).toEqual(["New task", "Tasks", "MCP", "Skills", "Roles", "Plugins", "Settings"]);
-    // Not even by query: a codex boot cannot reach the row at all.
+    // An unsupported executable cannot offer this row even by query.
     expect(filterSlashItems(SLASH_COMMANDS, [], "co", codexShapedCtx)).toEqual([]);
   });
 
@@ -720,14 +720,14 @@ describe("resolveBareSlashSubmit (GitHub #14)", () => {
       kind: "refuse",
       reason: "This command is not available in this session.",
     });
-    // Codex has no manual compaction; a child surface's transcript belongs to the parent.
+    // Unverified support stays unavailable; child transcripts belong to the parent.
     expect(resolveBareSlashSubmit("/compact", ctx({ supportsManualCompact: false }), 0, false)).toEqual({
       kind: "refuse",
       reason: "Manual compaction is not available in this session.",
     });
     expect(resolveBareSlashSubmit("/compact", ctx(), 0, true)).toEqual({
       kind: "refuse",
-      reason: "Manual compaction is not available in this session.",
+      reason: "Manual compaction is not available in child sessions.",
     });
   });
 
@@ -750,5 +750,26 @@ describe("resolveBareSlashSubmit (GitHub #14)", () => {
     expect(resolveBareSlashSubmit("/compact.txt", ctx(), 0, false)).toEqual({ kind: "text" });
     expect(resolveBareSlashSubmit("/unknown", ctx(), 0, false)).toEqual({ kind: "text" });
     expect(resolveBareSlashSubmit("please /compact", ctx(), 0, false)).toEqual({ kind: "text" });
+  });
+});
+
+
+describe("Codex slash compaction", () => {
+  it("shows Compact for supported Codex and hides it for unsupported Codex", () => {
+    const command = SLASH_COMMANDS.find(c => c.id === "compact")!;
+    expect(command.visible(ctx({ engineId: "codex", supportsManualCompact: true }))).toBe(true);
+    expect(command.visible(ctx({ engineId: "codex", supportsManualCompact: false }))).toBe(false);
+  });
+  it("refuses unsupported Codex compact with engine-specific copy", () => {
+    expect(resolveBareSlashSubmit("/compact", ctx({ engineId: "codex", supportsManualCompact: false }), 0, false)).toEqual({ kind: "refuse", reason: "Manual compaction is unavailable for this Codex app-server. Update Codex and start a new session." });
+  });
+  it("refuses child compact with child-specific copy", () => {
+    expect(resolveBareSlashSubmit("/compact", ctx({ engineId: "codex" }), 0, true)).toEqual({ kind: "refuse", reason: "Manual compaction is not available in child sessions." });
+  });
+  it("keeps readiness attachment and busy precedence for Codex compact", () => {
+    const codex = { engineId: "codex" as const, supportsManualCompact: true };
+    expect(resolveBareSlashSubmit("/compact", ctx({ ...codex, ready: false }), 1, false)).toMatchObject({ reason: "Wait for this session to connect before running a command." });
+    expect(resolveBareSlashSubmit("/compact", ctx(codex), 1, false)).toMatchObject({ reason: "Remove attachments before running a slash command." });
+    expect(resolveBareSlashSubmit("/compact", ctx({ ...codex, idle: false }), 0, false)).toMatchObject({ reason: "Cannot compact while this session is busy. Try again after this turn." });
   });
 });

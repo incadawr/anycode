@@ -1155,6 +1155,21 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
     return store;
   }
 
+  it.each([
+    { name: "renders Codex manual compact success and provider context usage on the sentinel", success: true },
+    { name: "releases Codex manual compact state after cancellation without ending a chat turn", success: false },
+  ])("$name", ({ success }) => {
+    const store = readyStore();
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "fixture", sessionId: "codex", engine: { id: "codex", capabilities: { supportsCorePermissions: false, supportsRewind: false, supportsWorkflow: false, supportsGitMutations: false, supportsContextUsage: true, supportsContextBreakdown: false, supportsInteractiveApprovals: false, costAccounting: false, supportsModelSelection: true, supportsReasoningEffort: true, supportsImages: true, supportsTasks: false, supportsFileSnapshots: false, supportsManualCompact: true } } });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: { type: "compaction_start", trigger: "manual" } });
+    expect(store.getState().turn.status).toBe("compacting");
+    store.getState().applyHostMessage({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: { type: "compaction_end", ok: success, preTokens: 47000, ...(success ? { postTokens: 8000 } : { error: "cancelled" }), durationMs: 5 } });
+    if (success) store.getState().applyHostMessage({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: { type: "context_usage", estimatedTokens: 8000, budgetTokens: 100000, source: "provider" } });
+    expect(store.getState().turn.status).toBe("idle"); expect(store.getState().turn.turnId).toBeNull();
+    if (success) expect(store.getState().contextUsage).toEqual({ estimatedTokens: 8000, budgetTokens: 100000, source: "provider" });
+    else expect(store.getState().notice?.text).toContain("cancelled");
+  });
+
   it("TASK.146: a manual compaction between turns survives the turn-scoped drop guard and claims the session", () => {
     const store = readyStore();
     // Between turns there IS no active turn — the guard's `turnId` is null,

@@ -1,3 +1,4 @@
+import { manualCompactionUnavailableReason } from "../shared/manual-compaction.js";
 import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult, type SessionStatus, type SetSessionEffortOutcome } from "../shared/communication.js";
 import { normalizeEffortLevels, validateSessionEffort } from "../shared/session-effort.js";
 import { safeFailureMessage } from "./safe-failure.js";
@@ -3107,10 +3108,8 @@ export class Session {
    * on EVERY ui_ready (never ring-buffered), carrying exactly the wire state
    * the replay ring may have evicted: cumulative finish totals, the latest
    * context_usage reading, and the broker's CURRENTLY-SHOWN parked ask.
-   * CORE-ONLY by the capture gates (both checkpoint fields are written only
-   * for core-engine events; a foreign host's engine_session_tokens REPLACE
-   * semantics ride the ring untouched), so the whole push is core-gated
-   * here too — a native host never receives core checkpoint semantics.
+   * Native engines receive only the latest context reading. Core accounting
+   * and transcript checkpoint fields retain their existing capture gates.
    * Additive-optional fields: whatever has not been captured yet is simply
    * absent from the message (an older renderer / nothing-in-flight changes
    * nothing). The permission re-assert re-sends the SAME
@@ -3120,6 +3119,10 @@ export class Session {
    */
   private pushSessionCheckpoint(): void {
     if (this.engine.id !== "core") {
+      // Native context telemetry needs reconnect custody without core accounting.
+      if (this.checkpointContextUsage !== null) {
+        this.outbound.sendDirect({ type: "session_checkpoint", contextUsage: this.checkpointContextUsage });
+      }
       return;
     }
     const shown = this.broker.pendingShownRequest();
@@ -3572,9 +3575,8 @@ export class Session {
     if (this.shuttingDown) {
       return refuse("This session is closing.");
     }
-    if (this.child !== undefined || this.engine.compactNow === undefined) {
-      return refuse("Manual compaction is not available in this session.");
-    }
+    if (this.child !== undefined) return refuse(manualCompactionUnavailableReason(this.engine.id, true));
+    if (this.engine.compactNow === undefined) return refuse(manualCompactionUnavailableReason(this.engine.id, false));
     if (this.relocating) {
       return refuse("Wait for the workspace move to finish before compacting.");
     }
@@ -3607,7 +3609,7 @@ export class Session {
         // (sentinel-turnId event, plain emit) still restores the POST-swap
         // meter instead of a stale pre-compaction one. Latest-wins scalar,
         // same shape as checkpointContextUsage's other writers.
-        if (this.engine.id === "core" && event.type === "context_usage") {
+        if (event.type === "context_usage") {
           this.checkpointContextUsage = {
             estimatedTokens: event.estimatedTokens,
             budgetTokens: event.budgetTokens,
@@ -4948,7 +4950,7 @@ export class Session {
             }
           }
         }
-        if (this.engine.id === "core" && event.type === "context_usage") {
+        if (event.type === "context_usage") {
           this.checkpointContextUsage = {
             estimatedTokens: event.estimatedTokens,
             budgetTokens: event.budgetTokens,

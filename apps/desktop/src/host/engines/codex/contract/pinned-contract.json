@@ -3012,6 +3012,24 @@
         ],
         "type": "string"
       },
+      "ThreadCompactStartParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadCompactStartParams",
+        "type": "object"
+      },
+      "ThreadCompactStartResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadCompactStartResponse",
+        "type": "object"
+      },
       "ThreadId": {
         "type": "string"
       },
@@ -4751,6 +4769,23 @@
         "title": "TurnStartResponse",
         "type": "object"
       },
+      "TurnStartedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "turn": {
+            "$ref": "#/definitions/v2/Turn"
+          }
+        },
+        "required": [
+          "threadId",
+          "turn"
+        ],
+        "title": "TurnStartedNotification",
+        "type": "object"
+      },
       "TurnStatus": {
         "enum": [
           "completed",
@@ -5091,6 +5126,10 @@
         "params": "v2/ModelListParams",
         "result": "v2/ModelListResponse"
       },
+      "thread/compact/start": {
+        "params": "v2/ThreadCompactStartParams",
+        "result": "v2/ThreadCompactStartResponse"
+      },
       "thread/read": {
         "params": "v2/ThreadReadParams",
         "result": "v2/ThreadReadResponse"
@@ -5152,6 +5191,9 @@
       },
       "turn/plan/updated": {
         "params": "v2/TurnPlanUpdatedNotification"
+      },
+      "turn/started": {
+        "params": "v2/TurnStartedNotification"
       },
       "windowsSandbox/setupCompleted": {
         "params": "v2/WindowsSandboxSetupCompletedNotification"

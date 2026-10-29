@@ -509,10 +509,8 @@ export type UiToHostMessage =
   // only — a foreign engine's host never answers (the renderer's list stays
   // null, same posture as an unsupported context_breakdown).
   | { type: "usage_audit_request" }
-  // TASK.146: manual conversation compaction. Payload-less, mirror of
-  // context_breakdown_request. Served ONLY between turns — Session drops it
-  // when busy or on an engine without `compactNow` (a chat/codex engine gates
-  // this by construction: SessionEngine.compactNow? is undefined there).
+  // Payloadless manual conversation compaction, served between turns.
+  // Session visibly refuses busy, child, and unsupported engine requests.
   | { type: "compact_request" }
   // Renderer Panels sub-slice D: background-task list/output/kill controls.
   | { type: "task_list_request" }

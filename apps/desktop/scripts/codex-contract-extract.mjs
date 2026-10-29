@@ -57,6 +57,7 @@ const CLIENT_REQUEST_METHODS = [
   { method: "model/list", resultRef: "v2/ModelListResponse" },
   { method: "thread/start", resultRef: "v2/ThreadStartResponse" },
   { method: "thread/resume", resultRef: "v2/ThreadResumeResponse" },
+  { method: "thread/compact/start", resultRef: "v2/ThreadCompactStartResponse" },
   { method: "thread/read", resultRef: "v2/ThreadReadResponse" },
   { method: "turn/start", resultRef: "v2/TurnStartResponse" },
   { method: "turn/interrupt", resultRef: "v2/TurnInterruptResponse" },
@@ -94,6 +95,7 @@ const SERVER_NOTIFICATION_METHODS = [
   { method: "item/completed" },
   { method: "item/agentMessage/delta" },
   { method: "thread/tokenUsage/updated" },
+  { method: "turn/started" },
   { method: "turn/completed" },
   // Codex's own todo list (the `update_plan` tool's effect). Turn-scoped, not
   // a thread item — the translator projects each revision into a synthetic

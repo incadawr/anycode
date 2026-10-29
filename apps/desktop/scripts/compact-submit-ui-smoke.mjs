@@ -72,7 +72,8 @@ const ATTACHMENT_REFUSAL_TEXT = "Remove attachments before running a slash comma
 const TURN_TIMEOUT_MS = 240_000;
 const COMPACTION_TIMEOUT_MS = 300_000;
 const LAUNCH_TIMEOUT_MS = 120_000;
-const TOTAL_STEPS = 9;
+const CODEX_ONLY = process.argv.includes("--codex-only");
+const TOTAL_STEPS = CODEX_ONLY ? 2 : 9;
 
 const EVIDENCE_DIR = mkdtempSync(join(tmpdir(), "anycode-compact-submit-smoke-"));
 mkdirSync(EVIDENCE_DIR, { recursive: true });
@@ -169,6 +170,7 @@ const COMPOSER_STATE_JS = `(() => {
       text: el.textContent ?? '',
     })),
     notices: [...document.querySelectorAll('.notice-toast-text')].map((el) => el.textContent ?? ''),
+    contextReading: document.querySelector('.composer-ctx-meter')?.textContent ?? null,
     imagePills: [...document.querySelectorAll('.composer-image-pill-name')].map((el) => el.textContent ?? ''),
     permissionOpen: modal !== null && modal.open === true,
     permissionTool: modal?.querySelector(".permission-modal-tool")?.textContent ?? "",
@@ -309,7 +311,7 @@ function smokeLaunchEnv(ctx) {
 }
 
 async function launch(ctx) {
-  const provider = resolveProvider();
+  const provider = CODEX_ONLY ? { apiKey: "fixture-shell-only", baseUrl: "http://127.0.0.1:1", model: "fixture", providerId: "z-ai" } : resolveProvider();
   if (provider.apiKey === null || provider.baseUrl === null) {
     console.log(
       "SKIP: no live provider credential in the environment. Set ANYCODE_SMOKE_API_KEY and " +
@@ -697,27 +699,80 @@ async function step7(ctx) {
 }
 
 async function step8(ctx) {
-  await startFixtureTab(8, "Codex");
-  const busy = await pollState(8, (s) => s.running, "Codex fixture's held initial turn", 60_000);
-  const file = join(ctx.importHome, "codex-turns.jsonl");
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline && fixtureFrames(file).length === 0) await sleep(100);
-  const count = fixtureFrames(file).length;
-  assertStep(8, count === 1, "Codex initial turn did not reach fixture");
-  await evaluate(typeDraftJs("/compact "));
-  await evaluate(PRESS_ENTER_JS);
-  const refused = await readState();
-  assertStep(8, refused.notices.includes("Manual compaction is not available in this session.") && refused.draft === "/compact ", "Codex unsupported compact was not visibly refused with draft retained");
-  assertStep(8, fixtureFrames(file).length === count && refused.userMessages.length === busy.userMessages.length && refused.queueItems.length === 0, "Codex compact leaked into a turn or queue");
+  const step = 8;
+  await startFixtureTab(step, "Codex");
+  const initial = await pollState(step, s => s.ready && !s.running && s.assistantCount > 0, "idle supported Codex", 60_000);
+  const file = join(ctx.importHome, "codex-rpcs.jsonl");
+  const count = method => fixtureFrames(file).filter(r => r.method === method).length;
+  const nativeStartCount = count("turn/start");
+  const success = [];
+  for (const [index, action] of ["Enter", "Send", "menu"].entries()) {
+    if (index > 0) await sendTurn(ctx, step, `fixture context ${index}`);
+    const before = await readState();
+    const beforeCount = count("thread/compact/start");
+    await evaluate(typeDraftJs(action === "menu" ? "/compact" : "/compact "));
+    if (action === "Enter") await evaluate(PRESS_ENTER_JS);
+    else if (action === "Send") await evaluate(clickSendJs("Send"));
+    else assertStep(step, await evaluate(`(() => {
+      const row = [...document.querySelectorAll('[role="option"]')].find(x => x.textContent.includes('Compact'));
+      if (!row) return false; row.click(); return true;
+    })()`), "Compact menu row missing");
+    const running = await pollState(step, s => s.running && s.notices.includes("Compacting conversation…"), "manual compact progress", 30_000);
+    assertStep(step, count("thread/compact/start") === beforeCount + 1, `${action} must send exactly one compact RPC`);
+    assertStep(step, running.userMessages.length === before.userMessages.length && running.queueItems.length === 0, "compact created a user turn or queue entry");
+    await screenshot(`08-codex-${action}-running.png`);
+    writeFileSync(join(ctx.importHome, `release-codex-compact-${index + 1}`), "release");
+    const done = await pollState(step, s => !s.running && s.compactions.filter(c => c.status === "done").length > before.compactions.filter(c => c.status === "done").length, "confirmed compact completion", 30_000);
+    const tokens = parseCompactionTokens(done.compactions.at(-1)?.text ?? done.notices.join(" "));
+    assertStep(step, before.contextReading?.includes("47%"), `expected 47% context before compaction: ${before.contextReading}`);
+    assertStep(step, tokens?.pre === 47000 && tokens?.post === 8000, `unexpected native compact readings: ${JSON.stringify(done)}`);
+    assertStep(step, done.contextReading?.includes("8%"), `expected 8% context meter: ${done.contextReading}`);
+    assertStep(step, count("thread/compact/start") === beforeCount + 1, "compact submitted twice");
+    await screenshot(`08-codex-${action}-done.png`);
+    success.push({ action, tokens, contextBefore: before.contextReading, contextAfter: done.contextReading });
+  }
+  await evaluate(typeDraftJs("/compact ")); await evaluate(PRESS_ENTER_JS);
+  await pollState(step, s => s.running, "cancellable compact", 30_000);
+  assertStep(step, await evaluate(`(() => { const b = document.querySelector('.composer-stop'); if (!b) return false; b.click(); return true; })()`), "Stop missing");
+  const cancelled = await pollState(step, s => !s.running && s.compactions.some(c => c.status === "failed"), "cancelled compact", 30_000);
+  assertStep(step, count("turn/interrupt") === 1, "Stop must interrupt native compact exactly once");
+  await screenshot("08-codex-cancelled.png");
+  await sendTurn(ctx, step, "fixture after cancellation");
+  await evaluate(typeDraftJs("fixture: hold")); await evaluate(PRESS_ENTER_JS);
+  const busy = await pollState(step, s => s.running, "held ordinary turn", 30_000);
+  const compactCount = count("thread/compact/start");
+  await evaluate(typeDraftJs("/compact")); await evaluate(PRESS_ENTER_JS);
+  const refusedBusy = await readState();
+  assertStep(step, refusedBusy.notices.includes(BUSY_COMPACT_TEXT) && refusedBusy.draft === "/compact" && refusedBusy.userMessages.length === busy.userMessages.length, "busy refusal missing or draft lost");
+  writeFileSync(join(ctx.importHome, "release-codex"), "release");
+  await pollState(step, s => !s.running, "held turn completion", 30_000);
+  assertStep(step, count("thread/compact/start") === compactCount, "busy compact was deferred");
+  await screenshot("08-codex-busy-refusal.png");
+  writeFileSync(join(ctx.importHome, "codex-compact-mode"), "unsupported");
+  await startFixtureTab(step, "Codex");
+  await pollState(step, s => s.ready && !s.running && s.assistantCount > 0, "idle unsupported Codex", 60_000);
+  const unsupportedTurns = count("turn/start");
+  const reason = "Manual compaction is unavailable for this Codex app-server. Update Codex and start a new session.";
+  for (const action of ["Enter", "Send"]) {
+    await evaluate(typeDraftJs("/compact"));
+    assertStep(step, !(await evaluate(`(() => [...document.querySelectorAll('[role="option"]')].some(x => x.textContent.includes('Compact')))()`)), "unsupported Compact menu row is visible");
+    if (action === "Enter") await evaluate(PRESS_ENTER_JS); else await evaluate(clickSendJs("Send"));
+    const refused = await readState();
+    assertStep(step, refused.notices.includes(reason) && refused.draft === "/compact", "unsupported compact refusal or retained draft missing");
+    assertStep(step, count("thread/compact/start") === compactCount && count("turn/start") === unsupportedTurns, "unsupported command reached native work");
+  }
   await screenshot("08-codex-unsupported.png");
-  facts.steps.step8 = { initialTurns: count, extraTurns: fixtureFrames(file).length - count };
-  pass(8, "Codex fixture: unsupported compact refused without a new turn or queue item");
+  await sendTurn(ctx, step, "unsupported ordinary chat still works");
+  const requests = fixtureFrames(file);
+  assertStep(step, requests.filter(r => r.method === "thread/compact/start").every(r => r.params.threadId === "fixture-thread"), "compact used the wrong native thread ID");
+  facts.steps.step8 = { success, cancelled: cancelled.compactions, supportedInitialContext: initial.contextReading, nativeStartCount, compactRequests: compactCount, requests };
+  pass(step, "Codex fixtures: Enter/Send/menu success, honest meter, Stop, busy and unsupported refusals");
 }
 
 // ── step 9: the evidence dir is complete ──
 
 function step9() {
-  const expected = [
+  const expected = CODEX_ONLY ? ["08-codex-Enter-done.png", "08-codex-Send-done.png", "08-codex-menu-done.png", "08-codex-cancelled.png", "08-codex-busy-refusal.png", "08-codex-unsupported.png"] : [
     "01-seven-turns-idle.png",
     "02-trailing-space-compacted.png",
     "04-refused-while-compacting.png",
@@ -769,13 +824,18 @@ async function run() {
   let failedStep = null;
   console.log(`Evidence: ${EVIDENCE_DIR}`);
   try {
-    await step1(ctx);
-    await step2(ctx);
-    const runningState = await step3(ctx);
-    await step4(ctx, runningState);
-    await step5(ctx);
-    await step6(ctx);
-    await step7(ctx);
+    if (CODEX_ONLY) {
+      await launch(ctx);
+      await waitComposerReady(8);
+    } else {
+      await step1(ctx);
+      await step2(ctx);
+      const runningState = await step3(ctx);
+      await step4(ctx, runningState);
+      await step5(ctx);
+      await step6(ctx);
+      await step7(ctx);
+    }
     await step8(ctx);
     step9();
   } catch (err) {
