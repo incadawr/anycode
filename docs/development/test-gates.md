@@ -22,5 +22,9 @@ suite, and the desktop production build. A targeted run helps the development
 loop but does not replace this gate. Coordinate full-suite runs with other local
 sessions to avoid contention and misleading timeout failures.
 
+Typecheck stores incremental state in this worktree's
+`node_modules/.cache/tsc/`. To force a cold check, remove that directory and
+rerun `pnpm run typecheck`.
+
 Release CI continues to run the full suite and typecheck before packaging; see
 [release policy](release.md) for the remaining release checks.

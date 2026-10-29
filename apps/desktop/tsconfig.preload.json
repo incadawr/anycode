@@ -3,6 +3,8 @@
   "compilerOptions": {
     "types": ["node"],
     "lib": ["ES2023", "DOM"],
+    "incremental": true,
+    "tsBuildInfoFile": "../../node_modules/.cache/tsc/desktop-preload.tsbuildinfo",
     "noEmit": true
   },
   "include": ["src/preload/**/*.ts", "src/shared/**/*.ts"]
