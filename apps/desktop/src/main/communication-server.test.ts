@@ -31,7 +31,7 @@ async function fixture() {
     if (op === "cancel_turn") return { cancelled: false, reason: "idle" };
     return undefined;
   });
-  const manager = { listTabs: () => [{ sessionId: "allowed", workspace: dir, state: "running", pid: 10 }, { sessionId: "forbidden", workspace: tmpdir(), state: "running", pid: 11 }], communicationRequest: request };
+  const manager: { listTabs: () => Array<{ sessionId: string; workspace: string; state: string; pid: number | null; engine?: string; hostFailure?: import("../shared/host-failure.js").HostFailure; missingWorkspace?: boolean }>; communicationRequest: typeof request } = { listTabs: () => [{ sessionId: "allowed", workspace: dir, state: "running", pid: 10 }, { sessionId: "forbidden", workspace: tmpdir(), state: "running", pid: 11 }], communicationRequest: request };
   const service = await startCommunicationServer({ manager, configFile, userData: dir }); cleanups.push(() => service.close());
   const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string };
   const client = new Client({ name: "supervisor-test", version: "1" });
@@ -69,6 +69,26 @@ describe("production communication MCP over real SDK HTTP", () => {
     expect(sessions[0].hostFailure).toEqual(status.hostFailure);
     expect((await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "forbidden" } })).isError).toBe(true);
     expect((await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "unknown" } })).isError).toBe(true);
+    expect(f.request).not.toHaveBeenCalled();
+  });
+  it("keeps a retained terminal status during a deferred replacement, then queries the new host", async () => {
+    const f = await fixture();
+    const failure = { code: "per_tab_crash_loop" as const, message: "Stopped." };
+    let pending = true;
+    f.manager.listTabs = () => [{ sessionId: "allowed", workspace: f.dir, state: "running", pid: pending ? null : 12, engine: "core", ...(pending ? { hostFailure: failure } : {}) }];
+    const status = value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } }));
+    expect(status).toMatchObject({ state: "crash_looped", hostFailure: failure });
+    expect(f.request).not.toHaveBeenCalled();
+    pending = false;
+    expect(value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } })).state).toBe("idle");
+    expect(f.request).toHaveBeenCalledOnce();
+  });
+  it("reports a missing workspace as the current terminal status", async () => {
+    const f = await fixture();
+    f.manager.listTabs = () => [{ sessionId: "allowed", workspace: f.dir, state: "crash_looped", pid: null, engine: "core", missingWorkspace: true }];
+    const status = value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } }));
+    expect(status).toMatchObject({ state: "crash_looped", missingWorkspace: true });
+    expect(status).not.toHaveProperty("hostFailure");
     expect(f.request).not.toHaveBeenCalled();
   });
   it("initializes, lists/calls tools and enforces auth, origin and workspace scope", async () => {

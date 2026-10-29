@@ -7753,6 +7753,30 @@ describe("GitHub #6 — a missing workspace folder fails fast instead of connect
     }
   });
 
+  it("replaces a retained crash cause when a rebind finds the workspace missing", async () => {
+    const rig = dyingForkRig();
+    const win = windowRig();
+    let missing = false;
+    const manager = new TabHostManager({
+      fork: rig.fork, hostEntry: "/fake", createChannel: fakeChannel,
+      getWindow: () => win.window, env: () => ({}), logger: silentLogger,
+      workspaceMissing: () => missing,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "vanished-rebind", resume: false });
+    if (!created.ok) throw new Error("create failed");
+    await flush();
+    expect(created.tab.hostFailure?.code).toBe("per_tab_crash_loop");
+    missing = true;
+    await manager.rebindTab(created.tab, "new");
+    expect(created.tab.missingWorkspace).toBe(true);
+    expect(created.tab.hostFailure).toBeUndefined();
+    expect(manager.listTabs()[0]).toMatchObject({ missingWorkspace: true });
+    expect(manager.listTabs()[0]).not.toHaveProperty("hostFailure");
+    const envelope = win.posted.filter((entry) => entry.channel === PORT_ENVELOPE_TYPE).at(-1)?.payload;
+    expect(envelope).toMatchObject({ missingWorkspace: true });
+    expect(envelope).not.toHaveProperty("hostFailure");
+  });
+
   it("a folder deleted under a live tab makes the respawn refuse to fork and deliver the error", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "anycode-ws-"));
     const rig = liveForkRig();

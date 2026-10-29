@@ -10,6 +10,7 @@ describe("host failure summaries", () => {
       expect(JSON.stringify(failure)).not.toContain(secret);
       expect(failure).toMatchObject({ exitCode: 7, signal: "SIGSEGV" });
     }
+    expect(hostFailure("per_tab_crash_loop", `\u001b[31mTypeError: EACCES ${secret}\u001b[0m`).message).toContain("TypeError, EACCES");
     expect(hostFailure("global_storm", "TypeError: EACCES secret").message).toContain("TypeError, EACCES");
     expect(hostFailure("spawn_refused", "", -1, "SIGSECRET")).toEqual({ code: "spawn_refused", message: "Session host could not start." });
   });
