@@ -84,6 +84,31 @@ describe("Responses reasoning text over SSE (#27)",()=>{
    await expect(collect(portFor({stallTimeoutMs:250}).streamText(req))).rejects.toThrow(/stream stalled: no events for 250ms/);
    expect(Date.now()-started).toBeGreaterThan(1200);
  });
+ it("retries after recovered reasoning has reached the consumer", async () => {
+   let attempts = 0;
+   let cut: (() => void) | undefined;
+   server.removeAllListeners("request");
+   server.on("request", (request, response) => {
+     request.resume();
+     request.on("end", () => {
+       attempts++;
+       response.writeHead(200, {"content-type":"text/event-stream"});
+       const chunks = attempts === 1 ? [created(), added, delta("discarded")] : [created(), added, delta("winning"), done(["winning"]), ...message, completed()];
+       for (const chunk of chunks) response.write(`data: ${JSON.stringify(chunk)}\n\n`);
+       if (attempts === 1) cut = () => response.destroy(); else response.end();
+     });
+   });
+   const events: ModelStreamEvent[] = [];
+   for await (const event of portFor({maxRetries: 1, midStreamRetries: 0, baseDelayMs: 1, maxDelayMs: 1}).streamText(req)) {
+     events.push(event);
+     if (event.type === "reasoning_delta" && event.text === "discarded") { const destroy = cut; cut = undefined; destroy?.(); }
+   }
+   expect(attempts).toBe(2);
+   expect(events.filter(e => e.type === "stream_retry")).toHaveLength(1);
+   expect(events.at(-1)?.type).toBe("finish");
+   const retry = events.findIndex(e => e.type === "stream_retry");
+   expect(text(events.slice(retry + 1))).toBe("winning");
+ });
  it("retries a transient failure after an unknown event before output", async () => {
    let attempts=0;
    server.removeAllListeners("request");

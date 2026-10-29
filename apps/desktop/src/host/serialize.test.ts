@@ -74,6 +74,13 @@ describe("sanitizeAgentEvent", () => {
     });
   });
 
+  it("carries the output boundary without exposing the provider error", () => {
+    const event: AgentEvent = { type: "error", error: poisonedError(), safe: { code: "network", message: "network error" }, retry: { attemptsMade: 2, maxAttempts: 8, retryable: true, hadModelOutput: true, code: "network", replayStopped: "output_started" } };
+    const wire = sanitizeAgentEvent(event);
+    expect(wire).toMatchObject({ retry: { replayStopped: "output_started", attemptsMade: 2 } });
+    expect(JSON.stringify(wire)).not.toContain("sk-test");
+  });
+
   it("omits retry entirely when the core event carries none (byte parity for non-retried failures)", () => {
     const event: AgentEvent = { type: "error", error: new Error("plain"), safe: { code: "unknown", message: "request failed" } };
     const wire = sanitizeAgentEvent(event);
