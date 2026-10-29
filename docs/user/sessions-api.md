@@ -345,4 +345,4 @@ See also [configuration.md](configuration.md) and
 
 When a session host stops after repeated failures, `get_session_status` returns `state: "crash_looped"`, its engine, and a safe `hostFailure` summary without model or effort details. `list_sessions` includes the same summary.
 
-When the workspace folder is missing, `get_session_status` returns `state: "missing_workspace"`, its engine, and `missingWorkspace: true`, without a `hostFailure` summary or model or effort details.
+When the workspace folder is missing and the session passes the authorized-workspace check, `get_session_status` returns `state: "missing_workspace"`, its engine, and `missingWorkspace: true`, without a `hostFailure` summary or model or effort details. With a restricted workspace list, a missing folder is refused as unavailable or outside the authorized workspace.
