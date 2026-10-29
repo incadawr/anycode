@@ -1904,7 +1904,7 @@ describe("ConnectionDrawer layout wiring (Taskana 4749)", () => {
     expect(source).toMatch(/<details\s+className="connection-drawer-advanced"/);
     expect(source).toMatch(/open=\{advancedOpen\}/);
     expect(source).toMatch(/onToggle=\{\(e\) => setAdvancedOpen\(e\.currentTarget\.open\)\}/);
-    expect(source).toMatch(/useState\(\(\) => initialFocus === "context" \|\| reasoningSupported \|\| modelEffort !== "" \|\| advancedHasValues\(/);
+    expect(source).toMatch(/useState\(\(\) => initialFocus === "context" \|\| reasoningSupported \|\| effortLevels.length > 0 \|\| modelEffort !== "" \|\| advancedHasValues\(/);
     expect(source).not.toMatch(/AdvancedFields/);
   });
 

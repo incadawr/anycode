@@ -1252,7 +1252,7 @@ export function ConnectionDrawerFields({
   // The Advanced disclosure is controlled: open from the start only when a
   // tuning value is already set (evaluated once, from the initial state), and
   // forced open by a rejected Advanced field on save/create.
-  const [advancedOpen, setAdvancedOpen] = useState(() => initialFocus === "context" || reasoningSupported || modelEffort !== "" || advancedHasValues({
+  const [advancedOpen, setAdvancedOpen] = useState(() => initialFocus === "context" || reasoningSupported || effortLevels.length > 0 || modelEffort !== "" || advancedHasValues({
     transport,
     maxOutputTokens,
     contextWindowRaw: contextWindow.raw,
@@ -2068,12 +2068,12 @@ export function ConnectionDrawerFields({
       {!knownCatalogModel && <label className="settings-field">
         <span className="settings-field-label">Reasoning support (this model)</span>
         <select className="settings-field-input" aria-label="Reasoning support" disabled={readOnly}
-          value={reasoningSupported ? "on" : "auto"} onChange={(e) => { setReasoningSupportedDirty(true); setReasoningSupported(e.target.value === "on"); if (e.target.value === "auto") { setEffortLevels([]); setEffortLevelsDirty(true); } }}>
+          value={reasoningSupported || effortLevels.length > 0 ? "on" : "auto"} onChange={(e) => { setReasoningSupportedDirty(true); setReasoningSupported(e.target.value === "on"); if (e.target.value === "auto") { setEffortLevels([]); setEffortLevelsDirty(true); } }}>
           <option value="auto">Auto — catalog or provider metadata</option>
           <option value="on">Supported</option>
         </select>
       </label>}
-      {!knownCatalogModel && reasoningSupported && <fieldset className="settings-field">
+      {!knownCatalogModel && (reasoningSupported || effortLevels.length > 0) && <fieldset className="settings-field">
         <legend className="settings-field-label">Supported effort levels (empty uses automatic levels)</legend>
         {(["off", "low", "medium", "high", "xhigh", "max"] as ReasoningEffort[]).map((level) => <label key={level}>
           <input type="checkbox" disabled={readOnly} checked={effortLevels.includes(level)} onChange={(e) => {

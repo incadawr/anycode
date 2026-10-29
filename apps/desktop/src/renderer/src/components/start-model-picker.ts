@@ -454,6 +454,17 @@ export function resolveStartModelEffort(
   return efforts[0];
 }
 
+/** Resolve the level displayed for a new session without inventing a selection. */
+export function displayedStartEffort(
+  draft: string | undefined,
+  saved: string | undefined,
+  levels: readonly string[] | undefined,
+  providerDefault: string | undefined,
+): string | undefined {
+  const candidate = draft ?? saved ?? providerDefault;
+  return candidate !== undefined && levels?.includes(candidate) ? candidate : undefined;
+}
+
 // ── popover geometry: the popover moves, it does not grow a scrollbar ──
 
 /** One row's height budget — `.start-model-item`/`.start-model-row`'s pinned `min-height` in app.css. */

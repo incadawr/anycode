@@ -117,10 +117,10 @@ describe("buildSessionDrillRows (TASK.106 cut-2 §D4 — every connection, the T
       currentModelId: "or/foreign-model",
       recentModelIds: [],
     });
-    // The row uses the first supported level when no explicit tier is selected.
+    // No level is selected when no tier is selected.
     expect(efforts).toEqual(["xhigh", "high", "max"]);
-    expect(effort).toBe("xhigh");
-    expect(rows.at(-1)).toEqual({ kind: "effort-open", value: "xhigh" });
+    expect(effort).toBeUndefined();
+    expect(rows.at(-1)).toEqual({ kind: "effort-open", value: "Default" });
   });
 
   it("lists the OPEN group's models on the group level", () => {
@@ -383,4 +383,12 @@ it("offers manually enabled reasoning on an uncataloged model and restores that 
   });
   expect(result.efforts).toContain("max");
   expect(result.rows).toContainEqual({kind:"effort", value:"max", current:true});
+});
+
+it("keeps the menu available without marking a level when the host reports off outside the vocabulary", () => {
+  const result = buildSessionDrillRows({
+    connections: [{id:"connection", providerId:"custom:test", model:"a", modelOverrides:{a:{effortLevels:["low", "high"]}}}],
+    currentConnectionId: "connection", currentModelId: "a", currentEffort: "off", catalog: [], custom: [], recentModelIds: [], page: {kind:"effort"},
+  });
+  expect(result.rows).toEqual([{kind:"effort", value:"low", current:false}, {kind:"effort", value:"high", current:false}]);
 });

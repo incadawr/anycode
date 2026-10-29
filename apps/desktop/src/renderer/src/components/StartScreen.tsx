@@ -74,9 +74,9 @@ import {
   buildStartModelGroups,
   buildStartModelPopularRows,
   deriveRecentModelIds,
-  resolveStartModelEffort,
   startModelDefaultEffort,
   startModelEffortLevels,
+  displayedStartEffort,
   startModelLevelHeightPx,
   startModelMenuFlipsUp,
   startModelMenuMaxHeightPx,
@@ -746,11 +746,8 @@ export function StartScreen({ onToast }: StartScreenProps) {
     snapshot?.catalog,
     modelCapabilitiesFor(chipConnection, modelChip.modelId),
   );
-  // What that level DISPLAYS and pre-selects: the draft's own pick, else the
-  // effort the target connection already persists (what the session would
-  // boot with if the user never opened the level), else the model's provider
-  // default (Taskana 4894), else the vocabulary's first entry.
-  const modelEffort = resolveStartModelEffort(
+  // Show only a draft, saved, or documented default that will actually apply.
+  const selectedModelEffort = displayedStartEffort(
     draft?.engineEffort,
     modelOverrideFor(chipConnection, modelChip.modelId)?.reasoningEffort ?? chipConnection?.reasoningEffort,
     modelEfforts,
@@ -760,11 +757,11 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // the active-session ModelPill does — a picked effort that is only visible
   // inside the popover reads as no effort at all. Falls back to the provider
   // default for an untouched draft whose model the catalog knows nothing
-  // about (no vocabulary => no level, so `modelEffort` is undefined there).
+  // about (no vocabulary => no selected model effort).
   const defaultEffort = view?.reasoningEffort;
   const modelChipLabel =
-    modelEffort !== undefined
-      ? `${modelChip.label} · ${effortLabel(modelEffort)}`
+    selectedModelEffort !== undefined
+      ? `${modelChip.label} · ${effortLabel(selectedModelEffort)}`
       : draft?.model === null && defaultEffort !== undefined
         ? pillLabel(modelChip.label, defaultEffort, ["off"])
         : modelChip.label;
@@ -786,7 +783,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
           current: item.current,
         }))
       : modelMenuPage.kind === "effort"
-        ? (modelEfforts ?? []).map((level) => ({ kind: "effort" as const, value: level, current: level === modelEffort }))
+        ? (modelEfforts ?? []).map((level) => ({ kind: "effort" as const, value: level, current: level === selectedModelEffort }))
         : [
             ...modelPopularRows.map((row) => ({
               kind: "popular" as const,
@@ -803,7 +800,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
               subtitle: group.subtitle,
               count: group.items.length,
             })),
-            ...(modelEffort !== undefined ? [{ kind: "effort-open" as const, value: modelEffort }] : []),
+            ...(modelEfforts !== undefined ? [{ kind: "effort-open" as const, value: selectedModelEffort ?? "Default" }] : []),
           ];
   const projectRowCount = recents.length + 1; // +1 for the trailing "Browse…" row
   // TASK.39: hook-safe boolean (computed ahead of the `draft === null` early
