@@ -67,12 +67,53 @@ describe("Responses reasoning text over SSE (#27)",()=>{
      expect(count).toBe(200);
    } finally { abort.abort(); }
  });
- it("keeps consuming unknown events beyond the timeout, then stalls on silence", async () => {
-   frames=[{chunk:created()},...Array.from({length:30},(_,i)=>({chunk:{type:"vendor.unknown",sequence:i},delayMs:40}))];
-   holdOpen=true;
+ it("keeps the watchdog alive on SSE comments, then stalls on silence", async () => {
+   server.removeAllListeners("request");
+   server.on("request", (request, response) => {
+     request.resume();
+     request.on("end", async () => {
+       response.writeHead(200, {"content-type":"text/event-stream"});
+       response.write(`data: ${JSON.stringify(created())}\n\n`);
+       for (let i=0; i<30; i++) {
+         await new Promise(r=>setTimeout(r,40));
+         if (!response.destroyed) response.write(": heartbeat\n\n");
+       }
+     });
+   });
    const started=Date.now();
    await expect(collect(portFor({stallTimeoutMs:250}).streamText(req))).rejects.toThrow(/stream stalled: no events for 250ms/);
    expect(Date.now()-started).toBeGreaterThan(1200);
+ });
+ it("retries a transient failure after an unknown event before output", async () => {
+   let attempts=0;
+   server.removeAllListeners("request");
+   server.on("request", (request, response) => {
+     request.resume();
+     request.on("end", () => {
+       attempts++;
+       response.writeHead(200, {"content-type":"text/event-stream"});
+       const chunks = attempts === 1
+         ? [created(), {type:"vendor.progress"}, {type:"response.failed",sequence_number:2,response:{error:{code:"server_error",message:"temporary failure"}}}]
+         : [created(), ...message, completed()];
+       for (const chunk of chunks) response.write(`data: ${JSON.stringify(chunk)}\n\n`);
+       response.end();
+     });
+   });
+   const events=await collect(portFor({maxRetries:1}).streamText(req));
+   expect(attempts).toBe(2);
+   expect(events).toContainEqual(expect.objectContaining({type:"stream_retry"}));
+   expect(events).toContainEqual(expect.objectContaining({type:"text_delta",text:"ok"}));
+   expect(events.filter(e=>e.type==="error")).toEqual([]);
+ });
+ it("flushes buffered reasoning as soon as its missing part arrives", async () => {
+   set(created(), {...delta("B"),content_index:1}, delta("A"), {...delta("C"),content_index:1});
+   holdOpen=true;
+   const abort=new AbortController();
+   const iterator=portFor().streamText({...req,abortSignal:abort.signal})[Symbol.asyncIterator]();
+   try {
+     const result=await Promise.race([(async()=>{let result=""; for (;;) {const next=await iterator.next(); if(next.done) return result; if(next.value.type==="reasoning_delta") result+=next.value.text; if(result.includes("C")) return result;}})(),new Promise<never>((_,reject)=>setTimeout(()=>reject(new Error("reasoning remained buffered")),1500))]);
+     expect(result).toBe("A\n\nBC");
+   } finally { abort.abort(); await iterator.return?.(); }
  });
  it("still stalls when the response goes silent (#27)",async()=>{set(created()); holdOpen=true; await expect(collect(portFor({stallTimeoutMs:200}).streamText(req))).rejects.toThrow(/stream stalled: no events for 200ms/);});
  it("streams text and a function call unchanged through the activity tap",async()=>{set(created(),{type:"response.output_item.added",output_index:0,item:{type:"function_call",id:"item_1",call_id:"call_1",name:"Read",arguments:""}},{type:"response.function_call_arguments.delta",item_id:"item_1",output_index:0,delta:'{"file_path"'},{type:"response.function_call_arguments.delta",item_id:"item_1",output_index:0,delta:':"/a.txt"}'},{type:"response.output_item.done",output_index:0,item:{type:"function_call",id:"item_1",call_id:"call_1",name:"Read",arguments:'{"file_path":"/a.txt"}',status:"completed"}},completed()); const e=await collect(portFor().streamText({...req,tools:[{name:"Read",description:"Reads a file",inputJsonSchema:{type:"object",properties:{file_path:{type:"string"}},required:["file_path"]}}]})); expect(e).toContainEqual(expect.objectContaining({type:"tool_call",toolCall:expect.objectContaining({id:"call_1",name:"Read",input:{file_path:"/a.txt"}})})); expect(e).toContainEqual(expect.objectContaining({type:"finish",finishReason:"tool_calls"})); expect(e.filter(x=>x.type==="error")).toEqual([]);});
