@@ -374,7 +374,7 @@ export function formatResultForDisplay(outcome: ToolCallOutcome): string {
  * so `transcript === undefined` takes the exact same path as the pre-4.2.2
  * no-op stub did.
  */
-const reasoningState = new WeakMap<TranscriptOptions, { staged: string; committed: boolean }>();
+const reasoningState = new WeakMap<TranscriptOptions, { shown: boolean }>();
 
 export function renderEvent(
   event: AgentEvent,
@@ -388,28 +388,19 @@ export function renderEvent(
   const paint = (role: CliStyleRole, text: string): string => theme?.paint(role, text) ?? text;
   let reasoning = transcript?.reasoning ? reasoningState.get(transcript) : undefined;
   if (transcript?.reasoning && !reasoning) {
-    reasoning = { staged: "", committed: false };
+    reasoning = { shown: false };
     reasoningState.set(transcript, reasoning);
   }
   if (reasoning) {
-    if (event.type === "turn_start" || event.type === "stream_retry" || event.type === "loop_end") {
-      reasoning.staged = "";
-      reasoning.committed = false;
-    } else if (event.type === "error") {
-      reasoning.staged = "";
-    } else if (event.type === "text_start" || event.type === "text_delta" || event.type === "text_end" ||
-      event.type === "tool_input_start" || event.type === "tool_input_delta" || event.type === "tool_input_end" ||
-      event.type === "tool_call" || (event.type === "finish" && event.finishReason !== "error")) {
-      if (reasoning.staged) write(reasoning.staged);
-      reasoning.staged = "";
-      reasoning.committed = true;
+    if (event.type === "stream_retry") {
+      if (reasoning.shown) write("\n[reasoning discarded; retrying]\n");
+      reasoning.shown = false;
+    } else if (event.type === "turn_start" || event.type === "finish" || event.type === "loop_end") {
+      reasoning.shown = false;
+    } else if (event.type === "reasoning_start" || event.type === "reasoning_delta") {
+      reasoning.shown = true;
     }
   }
-  const writeReasoning = (text: string): void => {
-    if (!reasoning) return;
-    if (reasoning.committed) write(text);
-    else reasoning.staged += text;
-  };
   switch (event.type) {
     case "text_delta":
       write(event.text);
@@ -696,17 +687,17 @@ export function renderEvent(
 
     case "reasoning_start":
       if (transcript?.reasoning) {
-        writeReasoning(paint("reasoning", "\n[reasoning]\n"));
+        write(paint("reasoning", "\n[reasoning]\n"));
       }
       break;
     case "reasoning_delta":
       if (transcript?.reasoning) {
-        writeReasoning(paint("reasoning", event.text));
+        write(paint("reasoning", event.text));
       }
       break;
     case "reasoning_end":
       if (transcript?.reasoning) {
-        writeReasoning("\n");
+        write("\n");
       }
       break;
     case "turn_end":

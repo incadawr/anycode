@@ -46,7 +46,7 @@ export function isModelOutputEvent(e: ModelStreamEvent): boolean {
 /** Output whose delivery makes an automatic replay unsafe. */
 export function blocksAutomaticReplay(e: ModelStreamEvent): boolean {
   switch (e.type) {
-    case "text_start": case "text_delta": case "text_end":
+    case "text_delta":
     case "tool_input_start": case "tool_input_delta": case "tool_input_end": case "tool_call":
       return true;
     default:
