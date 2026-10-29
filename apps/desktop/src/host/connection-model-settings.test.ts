@@ -95,3 +95,71 @@ describe("connection model settings (GitHub #26)", () => {
     }
   });
 });
+
+
+it("reloads saved windows and invalidates cached effort on a running session's model switches", () => {
+  let persisted: NonNullable<Parameters<typeof createConnectionModelSettings>[0]["connection"]> = structuredClone(connection);
+  const settings = createConnectionModelSettings({
+    connection: persisted, readConnection: () => persisted, liveCapabilitiesFor: () => undefined,
+    envContextWindow: 128000, envContextWindowModel: "a", envContextWindowFromSettings: true,
+    envReasoningEffort: "max", envReasoningEffortModel: "a", envReasoningEffortFromSettings: true,
+  });
+  settings.remember("a", "max");
+  expect(settings.switchEffort("a", "b", "max")).toBe("low");
+  persisted = {
+    modelOverrides: {
+      a: { ...persisted.modelOverrides?.a, contextWindowTokens: 96000, reasoningEffort: "medium" },
+      b: { ...persisted.modelOverrides?.b, contextWindowTokens: 80000, reasoningEffort: "high" },
+    },
+  };
+  expect(settings.switchEffort("b", "a", "low")).toBe("medium");
+  expect(settings.contextFor("a").tokens).toBe(96000);
+  expect(settings.switchEffort("a", "b", "medium")).toBe("high");
+  expect(settings.contextFor("b").tokens).toBe(80000);
+});
+
+it("applies a cleared override at the next safe refresh instead of restoring its boot environment value", () => {
+  let persisted: Parameters<typeof createConnectionModelSettings>[0]["connection"] = structuredClone(connection);
+  const settings = createConnectionModelSettings({
+    connection: persisted, readConnection: () => persisted, liveCapabilitiesFor: () => undefined,
+    envContextWindow: 128000, envContextWindowModel: "a", envContextWindowFromSettings: true,
+    envReasoningEffort: "max", envReasoningEffortModel: "a", envReasoningEffortFromSettings: true,
+  });
+  settings.remember("a", "max");
+  persisted = { modelOverrides: {} };
+  expect(settings.refresh()).toBe(true);
+  expect(settings.switchEffort("a", "a", "max")).toBe("off");
+  expect(settings.contextFor("a")).toEqual({ tokens: 8192, source: "assumed" });
+});
+
+it("keeps real shell overrides authoritative when connection settings are refreshed", () => {
+  let persisted: Parameters<typeof createConnectionModelSettings>[0]["connection"] = structuredClone(connection);
+  const settings = createConnectionModelSettings({
+    connection: persisted, readConnection: () => persisted, liveCapabilitiesFor: () => undefined,
+    envContextWindow: 32000, envReasoningEffort: "off",
+  });
+  persisted = { modelOverrides: { b: {contextWindowTokens: 96000, reasoningEffort: "high"} } };
+  expect(settings.switchEffort("a", "b", "off")).toBe("off");
+  expect(settings.contextFor("b").tokens).toBe(32000);
+});
+
+
+
+it("uses boot settings until a read succeeds, then honours a clear instead of a stale env backup", () => {
+  let readable = false;
+  const settings = createConnectionModelSettings({
+    readConnection: () => readable ? {} : null,
+    envContextWindow:128000, envContextWindowFromSettings:true,
+    envReasoningEffort:"high", envReasoningEffortFromSettings:true,
+    liveCapabilitiesFor:() => undefined,
+  });
+  settings.remember("a", "high");
+  expect(settings.contextFor("a").tokens).toBe(128000);
+  expect(settings.effortFor("a")).toBe("high");
+  expect(settings.refresh()).toBe(false);
+  readable = true;
+  expect(settings.refresh()).toBe(true);
+  expect(settings.contextFor("a").tokens).toBe(8192);
+  expect(settings.effortFor("a")).toBeUndefined();
+  expect(settings.switchEffort("a", "a", "high")).toBe("off");
+});

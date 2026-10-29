@@ -438,6 +438,7 @@ export function ModelPill() {
   const tabId = useContext(TabContext)?.tabId;
   const model = useTabStore((state) => state.model);
   const reasoningEffort = useTabStore((state) => state.reasoningEffort);
+  const modelSelectionAck = useTabStore((state) => state.modelSelectionAck);
   const availableEffortLevels = useTabStore((state) => state.availableEffortLevels);
   const turnStatus = useTabStore((state) => state.turn.status);
   const queueInFlight = useTabStore((state) => state.queueInFlight);
@@ -518,11 +519,8 @@ export function ModelPill() {
   const rootRef = useRef<HTMLDivElement>(null);
   const chipRef = useRef<HTMLButtonElement>(null);
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  // The one pending-pick slot (design §2.4) — never holds more than one pick
-  // at a time (a second pick before the first acks would overwrite it, but
-  // the chip is closed/disabled between send and ack in practice since a
-  // pick immediately closes the popover).
-  const pendingPickRef = useRef<PendingPick | null>(null);
+  // Model and effort picks are independent until their acknowledgements arrive.
+  const pendingPickRef = useRef<{model?: PendingPick; effort?: PendingPick}>({});
   // Serializes the ack-triggered persist writes below (codex P2 defect fix):
   // guarantees writes run in ack order even though `setPatch` itself is an
   // unawaited, unlocked load/merge/save.
@@ -541,7 +539,7 @@ export function ModelPill() {
   const slotsTabRef = useRef<string | undefined>(tabId);
   if (slotsTabRef.current !== tabId) {
     slotsTabRef.current = tabId;
-    pendingPickRef.current = null;
+    pendingPickRef.current = {};
   }
   // Carries the effort reset a rebind decided (§D3) from the pick to the ledger
   // line the pin-watching effect writes once the new host is up; cleared as
@@ -758,8 +756,8 @@ export function ModelPill() {
     // re-picking the model still on screen must travel too: it replaces the
     // queued pick instead of being mistaken for a no-op. `pendingPickRef` is
     // the only record of a pick the host has not acked yet.
-    if (id !== model || pendingPickRef.current !== null) {
-      pendingPickRef.current = { kind: "model", value: id, connectionId: writeTargetConnectionId };
+    if (id !== model || (pendingPickRef.current.model !== undefined || pendingPickRef.current.effort !== undefined)) {
+      pendingPickRef.current.model = { kind: "model", value: id, connectionId: writeTargetConnectionId };
       sendToHost({ type: "set_model", model: id });
     }
     close(true);
@@ -770,8 +768,8 @@ export function ModelPill() {
       return;
     }
     // Same queued-pick rule as pickModel above.
-    if (effort !== reasoningEffort || pendingPickRef.current !== null) {
-      pendingPickRef.current = { kind: "effort", value: effort, connectionId: writeTargetConnectionId };
+    if (effort !== reasoningEffort || (pendingPickRef.current.model !== undefined || pendingPickRef.current.effort !== undefined)) {
+      pendingPickRef.current.effort = { kind: "effort", value: effort, connectionId: writeTargetConnectionId };
       sendToHost({ type: "set_reasoning_effort", effort });
     }
     close(true);
@@ -898,46 +896,27 @@ export function ModelPill() {
     }
   }
 
-  // Ack-gated persist half 1/2: fires only when `model` just landed the
-  // value THIS component asked for via a model pick.
+  // One model acknowledgement can include both queued choices. Persist only
+  // axes the user actually picked, even if the acknowledged value is unchanged.
   useEffect(() => {
-    if (model === null) {
-      return;
-    }
+    if (modelSelectionAck === undefined || modelSelectionAck === null || modelSelectionAck.model === null) return;
+    const ack = modelSelectionAck;
+    const ackModel = modelSelectionAck.model;
     const pending = pendingPickRef.current;
-    if (pending && shouldPersistOnAck(pending, "model", model)) {
-      pendingPickRef.current = null;
-      const connectionId = pending.connectionId;
-      if (connectionId !== undefined) {
-        writeChainRef.current = chainWrite(writeChainRef.current, () =>
-          connectionUpdate(buildConnectionUpdate(connectionId, true, model, reasoningEffort)),
-        );
-      }
+    const modelPick = pending.model?.value === ack.model ? pending.model : undefined;
+    const effortPick = pending.effort?.value === ack.effort ? pending.effort : undefined;
+    if (modelPick !== undefined) delete pending.model;
+    if (effortPick !== undefined) delete pending.effort;
+    const writes = new Map<string, ConnectionUpdateRequest>();
+    if (modelPick?.connectionId !== undefined) writes.set(modelPick.connectionId, {id: modelPick.connectionId, model: ackModel});
+    if (effortPick?.connectionId !== undefined) writes.set(effortPick.connectionId, {
+      ...writes.get(effortPick.connectionId), id: effortPick.connectionId,
+      modelOverrideModel: ackModel, reasoningEffort: ack.effort,
+    });
+    for (const request of writes.values()) {
+      writeChainRef.current = chainWrite(writeChainRef.current, () => connectionUpdate(request));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately
-    // keyed on `model` alone: this effect's job is "did `model` just become
-    // the pending pick's value", not a generic recompute-on-anything-changed.
-  }, [model]);
-
-  // Ack-gated persist half 2/2: fires only when `reasoningEffort` just
-  // landed the value THIS component asked for via an effort pick.
-  useEffect(() => {
-    if (model === null) {
-      return;
-    }
-    const pending = pendingPickRef.current;
-    if (pending && shouldPersistOnAck(pending, "effort", reasoningEffort)) {
-      pendingPickRef.current = null;
-      const connectionId = pending.connectionId;
-      if (connectionId !== undefined) {
-        writeChainRef.current = chainWrite(writeChainRef.current, () =>
-          connectionUpdate(buildConnectionUpdate(connectionId, false, model, reasoningEffort)),
-        );
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- same discipline
-    // as the model-watching effect above, keyed on `reasoningEffort` alone.
-  }, [reasoningEffort]);
+  }, [modelSelectionAck]);
 
   function onChipKeyDown(event: KeyboardEvent<HTMLButtonElement>): void {
     if (pickDisabled) {

@@ -19,10 +19,13 @@ const fixture = createHttpServer((request, response) => {
   request.on("data", (chunk) => { body += chunk; });
   request.on("end", () => {
     const input = JSON.parse(body);
-    fixtureRequests.push(input.model);
+    const userContent = input.messages.findLast((message) => message.role === "user")?.content;
+    const prompt = typeof userContent === "string" ? userContent : JSON.stringify(userContent);
+    fixtureRequests.push({model:input.model, prompt, effort:input.reasoning_effort});
+    const reply = `fixture answer: ${prompt}`;
     response.writeHead(200, {"Content-Type":"text/event-stream"});
     const base = {id:"fixture-chat", object:"chat.completion.chunk", created:0, model:input.model};
-    response.write(`data: ${JSON.stringify({...base, choices:[{index:0, delta:{role:"assistant", content:"fixture answer"}, finish_reason:null}]})}\n\n`);
+    response.write(`data: ${JSON.stringify({...base, choices:[{index:0, delta:{role:"assistant", content:reply}, finish_reason:null}]})}\n\n`);
     response.write(`data: ${JSON.stringify({...base, choices:[{index:0, delta:{}, finish_reason:"stop"}], usage:{prompt_tokens:100, completion_tokens:2, total_tokens:102}})}\n\n`);
     response.end("data: [DONE]\n\n");
   });
@@ -43,7 +46,7 @@ for (const key of ["ANYCODE_API_KEY", "ANYCODE_MODEL", "ANYCODE_BASE_URL", "ANYC
 writeFileSync(join(profile, "settings.json"), JSON.stringify({
   version:2, provider:{activeConnectionId:"conn-smoke", connections:[{
     id:"conn-smoke", providerId:"vllm", label:"Model overrides smoke", model:"a", models:["a","b","unknown"],
-    transport:"openai-chat-completions", baseUrl:fixtureUrl, authOptional:true,
+    transport:"openai-chat-completions", baseUrl:fixtureUrl, authOptional:true, imageInputOverride:"on", imageInputModel:"a",
   }]}, tools:{}, permissions:{alwaysAllow:[]}, ui:{theme:"dark"}, security:{allowWeakSecretStorage:false},
 }));
 const app = spawn("pnpm", ["--filter", "@anycode/desktop", "dev"], {
@@ -153,14 +156,23 @@ try {
   };
   await poll(async () => { const p = await pill(); return p.ok && p.currentModel === "a" && p.currentEffort === "max"; }, 30000);
   await api(`/tabs/${tab.tabId}/model-pill/pick`, "POST", {kind:"effort", value:"max"});
-  async function turn(model, budget) {
-    const text = `smoke-${model}-${fixtureRequests.length}`;
+  let turnSequence = 0;
+  async function turn(model, budget, expectedEffort = model === "a" ? "high" : model === "b" ? "low" : undefined) {
+    const text = `smoke-${model}-${++turnSequence}`;
+    const reply = `fixture answer: ${text}`;
+    const requestCount = fixtureRequests.length;
     await api(`/tabs/${tab.tabId}/prompt`, "POST", {text});
-    const waited = await api("/wait", "POST", {tabId:tab.tabId, until:{transcriptIncludes:text, turnStatus:"idle"}, timeoutMs:15000});
+    const waited = await api("/wait", "POST", {tabId:tab.tabId, until:{transcriptIncludes:reply, turnStatus:"idle"}, timeoutMs:15000});
     assert(waited.matched, `Turn did not finish: ${model}`);
-    const state = (await api(`/state/${tab.tabId}`)).snapshot.states[tab.tabId];
-    assert.equal(state.contextUsage?.budgetTokens, budget, `Wrong context budget for ${model}`);
-    assert(fixtureRequests.includes(model), `Fixture received no request for ${model}`);
+    const state = await poll(async () => {
+      const next = (await api(`/state/${tab.tabId}`)).snapshot.states[tab.tabId];
+      return next.model === model && next.contextUsage?.budgetTokens === budget && next.turn.status === "idle" ? next : null;
+    });
+    assert.equal(state.contextUsage.budgetTokens, budget, `Wrong context budget for ${model}`);
+    const request = fixtureRequests.slice(requestCount).find((entry) => entry.prompt === text);
+    assert(request, `Fixture received no new request for ${text}`);
+    assert.equal(request.model, model);
+    assert.equal(request.effort, expectedEffort, `Wrong wire reasoning effort for ${text}`);
   }
   await turn("a", 104000);
   await api(`/tabs/${tab.tabId}/model-pill/pick`, "POST", {kind:"model", value:"b"});
@@ -172,16 +184,46 @@ try {
   await api(`/tabs/${tab.tabId}/model-pill/pick`, "POST", {kind:"model", value:"unknown"});
   await poll(async () => (await pill()).currentModel === "unknown");
   await turn("unknown", 2048);
+  // Simulate another tab choosing A as the connection default while this host runs unknown.
+  assert((await evaluate("window.anycode.settings.connectionUpdate({id:'conn-smoke', model:'a'})")).ok);
+  const beforeShortcut = JSON.parse(readFileSync(join(profile, "settings.json"), "utf8")).provider.connections[0];
+  assert.equal(beforeShortcut.model, "a");
+  assert.equal(beforeShortcut.imageInputModel, "a");
+  assert.equal(beforeShortcut.imageInputOverride, "on");
   await api(`/tabs/${tab.tabId}/ctx-popover/open`, "POST", {open:true});
   await poll(() => evaluate("!!document.querySelector('.ctx-popover-assumed')"));
   assert(await evaluate("document.querySelector('.ctx-popover-assumed').textContent.includes('output reserve: 2K')"));
   await click("Set context window");
   await poll(() => evaluate("document.querySelector('.connection-drawer')?.open && document.activeElement?.type === 'number'"));
-  assert.equal(await evaluate("document.querySelector('input[list=connection-drawer-model-suggestions]').value"), "unknown");
+  assert(await evaluate("document.querySelector('.connection-drawer').textContent.includes('Model: unknown')"));
+  assert(await evaluate("document.querySelector('input[list=connection-drawer-model-suggestions]') === null"));
   assert.equal(await evaluate(`${field("Context window")}.value`), "");
   const shortcut = await call("Page.captureScreenshot", {format:"png"});
   writeFileSync(join(profile, "context-window-shortcut.png"), Buffer.from(shortcut.data, "base64"));
-  console.log(`PASS: two model windows and efforts, A → B → A, persisted reload, live context budgets, assumed-window hint and focused settings shortcut. Evidence: ${profile}`);
+  await input(field("Context window"), "96000");
+  await click("Save");
+  await poll(() => evaluate("!document.querySelector('.connection-drawer')"));
+  const afterShortcut = JSON.parse(readFileSync(join(profile, "settings.json"), "utf8")).provider.connections[0];
+  assert.deepEqual(afterShortcut, {...beforeShortcut, modelOverrides:{...beforeShortcut.modelOverrides, unknown:{contextWindowTokens:96000}}});
+  // Same host, same current model: next turn uses the saved window without a restart.
+  await turn("unknown", 72000);
+  // B was already visited and cached; a later saved effort/window must replace that cache.
+  assert((await evaluate("window.anycode.settings.connectionUpdate({id:'conn-smoke', modelOverrideModel:'b', contextWindowTokens:88000, reasoningEffort:'high'})")).ok);
+  await api(`/tabs/${tab.tabId}/model-pill/pick`, "POST", {kind:"model", value:"b"});
+  await poll(async () => (await pill()).currentModel === "b" && (await pill()).currentEffort === "high");
+  await turn("b", 64000, "high");
+  await api(`/tabs/${tab.tabId}/model-pill/pick`, "POST", {kind:"model", value:"a"});
+  await poll(async () => (await pill()).currentModel === "a");
+  await turn("a", 104000);
+  await api(`/tabs/${tab.tabId}/model-pill/pick`, "POST", {kind:"model", value:"b"});
+  await poll(async () => (await pill()).currentModel === "b" && (await pill()).currentEffort === "high");
+  // Editing the boot model also replaces its settings-derived env value on the next turn.
+  await api(`/tabs/${tab.tabId}/model-pill/pick`, "POST", {kind:"model", value:"a"});
+  await poll(async () => (await pill()).currentModel === "a");
+  assert((await evaluate("window.anycode.settings.connectionUpdate({id:'conn-smoke', modelOverrideModel:'a', contextWindowTokens:112000, reasoningEffort:'medium'})")).ok);
+  await turn("a", 88000, "medium");
+  assert.equal((await pill()).currentEffort, "medium");
+  console.log(`PASS: live window/effort edits without restart, cached-model switches, settings-derived env refresh, and a context shortcut that preserves the connection default and image override. Evidence: ${profile}`);
 
 } finally {
   if (ws?.readyState === WebSocket.OPEN) await call("Browser.close", {}).catch(() => {});

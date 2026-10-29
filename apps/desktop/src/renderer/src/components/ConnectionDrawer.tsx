@@ -42,7 +42,7 @@ import type {
   SecretKey,
   SettingsMutationResult,
 } from "../../../shared/settings.js";
-import { applyModelReasoningOverride, modelOverrideFor } from "../../../shared/model-overrides.js";
+import { applyModelReasoningOverride, contextWindowTokensField, modelOverrideFor } from "../../../shared/model-overrides.js";
 import { mergeModelIds, normalizeModelId } from "../../../shared/settings.js";
 import type { CustomProviderMutationResult, CustomProviderUpdateRequest, FetchModelsOutcome } from "../anycode-window.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
@@ -381,6 +381,7 @@ export function buildConnectionUpdatePayload(params: {
   maxOutputTokens: number | "";
   contextWindowTokens: number | "";
   imageInput: ImageInputSelection;
+  imageInputChanged?: boolean;
   promptCacheEnabled: boolean;
   reasoningEffort?: ReasoningEffort | "";
   reasoningSupported?: true | "";
@@ -417,7 +418,7 @@ export function buildConnectionUpdatePayload(params: {
     // the saved override pair (`""` is main's clear sentinel), while "on"/"off"
     // persist it. The model binding is derived SERVER-SIDE, exactly like the
     // context-window pair.
-    imageInputOverride: imageInputToPayload(params.imageInput),
+    ...(params.imageInputChanged === false ? {} : {imageInputOverride: imageInputToPayload(params.imageInput)}),
     // Sent unconditionally (GitHub #15), same rationale as `transport`: the
     // enabled object SETS the policy and `""` CLEARS it (main deletes the key,
     // because Off is absence on the wire). Also sent while the field is hidden
@@ -651,20 +652,7 @@ export function maxOutputTokensEffectiveHint(
  * invalid). Exported for direct testing (no jsdom in this package's vitest
  * config, see file docstring).
  */
-export function contextWindowTokensField(raw: string): { ok: true; value: number | "" } | { ok: false } {
-  const trimmed = raw.trim();
-  if (trimmed === "") {
-    return { ok: true, value: "" };
-  }
-  if (!/^-?\d+$/.test(trimmed)) {
-    return { ok: false };
-  }
-  const n = Number(trimmed);
-  if (!Number.isInteger(n) || n < 1024 || n > 1000000) {
-    return { ok: false };
-  }
-  return { ok: true, value: n };
-}
+export { contextWindowTokensField } from "../../../shared/model-overrides.js";
 
 /** Shared by both write paths so create and save refuse a bad window identically. */
 const CONTEXT_WINDOW_ERROR =
@@ -1215,6 +1203,7 @@ export function ConnectionDrawerFields({
   const [imageInput, setImageInput] = useState<ImageInputSelection>(() =>
     editConnection === undefined ? "auto" : imageInputInitialValue(editConnection),
   );
+  const [imageInputDirty, setImageInputDirty] = useState(false);
   // UI-only (never saved): the user picked the Custom segment of Max output tokens.
   const [maxOutputCustom, setMaxOutputCustom] = useState(false);
   // GitHub #15: opt-in prompt caching, prefilled from the connection's saved
@@ -1392,6 +1381,8 @@ export function ConnectionDrawerFields({
       const target = force ? undefined : modelOverrideFor(saved, effective.trim());
       setReasoningSupported(target?.reasoningSupported === true);
       setModelEffort(target?.reasoningEffort ?? "");
+      setImageInput(force || targetConnection === undefined ? "auto" : imageInputInitialValue({...targetConnection, model: effective.trim()}));
+      setImageInputDirty(false);
     }
     setModel(next);
   }
@@ -1697,6 +1688,7 @@ export function ConnectionDrawerFields({
           contextWindowTokens: cw.value,
           reasoningSupported: reasoningSupported ? true : "",
           reasoningEffort: modelEffort,
+          imageInputChanged: imageInputDirty,
           imageInput,
           promptCacheEnabled,
         }), pricing },
@@ -2020,7 +2012,7 @@ export function ConnectionDrawerFields({
         <span className="settings-field-label">Reasoning effort (this model)</span>
         <select className="settings-field-input" aria-label="Reasoning effort" disabled={readOnly}
           value={modelEffort} onChange={(e) => setModelEffort(e.target.value as ReasoningEffort | "")}>
-          <option value="">Default</option>
+          <option value="">{editConnection?.reasoningEffort === undefined ? "Default" : `Default (connection: ${editConnection.reasoningEffort})`}</option>
           {(reasoningLevels ?? []).map((level) => <option key={level} value={level}>{level}</option>)}
           {modelEffort !== "" && !reasoningLevels?.includes(modelEffort) && <option value={modelEffort} disabled>{modelEffort} (unavailable)</option>}
         </select>
@@ -2043,7 +2035,7 @@ export function ConnectionDrawerFields({
           className="settings-field-input"
           value={imageInput}
           disabled={readOnly}
-          onChange={(e) => setImageInput(e.target.value as ImageInputSelection)}
+          onChange={(e) => { setImageInput(e.target.value as ImageInputSelection); setImageInputDirty(true); }}
         >
           <option value="auto">{imageInputAutoLabel(imageInputHint)}</option>
           <option value="on">On</option>

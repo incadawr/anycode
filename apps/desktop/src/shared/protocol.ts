@@ -861,6 +861,9 @@ export type HostToUiMessage =
   // vision -> non-vision switch. Absent (older host) = no model-level gating.
   | {
       type: "model_changed";
+      /** Budget and selected tier belong to this same model acknowledgement. */
+      contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
+      selectedReasoningEffort?: ReasoningEffort;
       model: string;
       reasoningEffort: ReasoningEffort;
       availableEffortLevels?: ReasoningEffort[];

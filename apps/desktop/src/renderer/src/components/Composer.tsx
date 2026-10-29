@@ -24,6 +24,7 @@ import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-cont
 import { isSessionBusy, type ContextUsage, type DesktopState, type SessionTokens, type TurnState } from "../store.js";
 import { useSettingsStore } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
+import type { ProviderConnection } from "../../../shared/settings.js";
 import type { WireContextBreakdown, WireUsageAuditStep, WireUsageAuditTotals } from "../../../shared/protocol.js";
 import {
   makePasteMarker,
@@ -993,8 +994,8 @@ function CtxPopover({
   const model = useTabStore((state) => state.model);
   const pinnedConnection = useTabStore((state) => state.pinnedConnection);
   const snapshot = useSettingsStore((state) => state.snapshot);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  useOverlayFlag(settingsOpen);
+  const [settingsTarget, setSettingsTarget] = useState<{ connection: ProviderConnection; model: string } | null>(null);
+  useOverlayFlag(settingsTarget !== null);
   const connectionId = pinnedConnection?.connectionId ?? snapshot?.settings.provider.activeConnectionId;
   const savedConnection = snapshot?.settings.provider.connections.find((connection) => connection.id === connectionId);
   const assumedHint = ctxWindowAssumedHint(contextUsage);
@@ -1191,7 +1192,7 @@ function CtxPopover({
             {contextWindowAssumed && <div className="ctx-popover-assumed">
               {assumedHint}
               {savedConnection !== undefined && model !== null && <button type="button" className="settings-button"
-                onClick={() => { close(); setSettingsOpen(true); }}>Set context window</button>}
+                onClick={() => { close(); setSettingsTarget({ connection: savedConnection, model }); }}>Set context window</button>}
             </div>}
             <div className="ctx-popover-bar">
               <div className="ctx-popover-bar-fill" style={{ width: `${fillPercent}%` }} />
@@ -1234,10 +1235,10 @@ function CtxPopover({
           </div>
         </div>
       )}
-      {settingsOpen && snapshot !== null && savedConnection !== undefined && model !== null && (
+      {settingsTarget !== null && snapshot !== null && (
         <Suspense fallback={null}>
-          <ContextWindowSettings snapshot={snapshot} connection={savedConnection} model={model}
-            onClose={() => setSettingsOpen(false)} />
+          <ContextWindowSettings snapshot={snapshot} connection={settingsTarget.connection} model={settingsTarget.model}
+            onClose={() => setSettingsTarget(null)} />
         </Suspense>
       )}
     </div>
