@@ -188,6 +188,21 @@ async function flush(): Promise<void> {
 let requestSeq = 0;
 
 /** A valid ChildSpawnRequest (shared/child-sessions.ts's own shape); each call mints a fresh requestId unless overridden. */
+async function atHostExitDeadline<T>(run: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    let settled = false;
+    const pending = run().then((value) => { settled = true; return value; });
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    return await pending;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 function spawnRequest(overrides: Partial<ChildSpawnRequest> = {}): ChildSpawnRequest {
   requestSeq += 1;
   return {
@@ -1691,7 +1706,7 @@ describe("TabHostManager — close guards", () => {
     const b = manager.createTab({ workspace: "/b", sessionId: "sb", resume: false });
     expect(a.ok && b.ok).toBe(true);
 
-    const result = await manager.closeTab(a.ok ? a.tab.tabId : "");
+    const result = await atHostExitDeadline(() => manager.closeTab(a.ok ? a.tab.tabId : ""));
     expect(result).toEqual({ ok: true });
     expect(manager.count()).toBe(1);
     expect(manager.sessionOpenInTab("sa")).toBeUndefined();
@@ -1786,7 +1801,7 @@ describe("TabHostManager — preview control plane (night-track wave-1 cut §2.3
     await flush();
 
     const tabId = a.ok ? a.tab.tabId : "";
-    await manager.closeTab(tabId);
+    await atHostExitDeadline(() => manager.closeTab(tabId));
 
     expect(onTabClosed).toHaveBeenCalledExactlyOnceWith(tabId);
   });
@@ -5223,7 +5238,7 @@ describe("TabHostManager — rebindTab (TASK.106 cut-2)", () => {
     const oldProc = tab!.proc;
     expect(hosts).toHaveLength(1);
 
-    const res = await manager.rebindTab(tab!, "conn-new");
+    const res = await atHostExitDeadline(() => manager.rebindTab(tab!, "conn-new"));
 
     expect(res).toEqual({ ok: true });
     // A second host was forked and took over the tab.
@@ -5274,7 +5289,7 @@ describe("TabHostManager — rebindTab (TASK.106 cut-2)", () => {
     });
     expect(created.ok).toBe(true);
 
-    const res = await manager.rebindTab(created.ok ? created.tab : undefined!, "conn-new");
+    const res = await atHostExitDeadline(() => manager.rebindTab(created.ok ? created.tab : undefined!, "conn-new"));
 
     expect(res).toEqual({ ok: true });
     expect(seenArgs).toHaveLength(2);
