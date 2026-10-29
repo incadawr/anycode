@@ -294,7 +294,7 @@ describe("TASK.117 supervisor correction — reconnect defects after ring overfl
 });
 
 
-it("restores Codex post-compaction context usage after replay eviction", async () => {
+it("retains the last real Codex context reading after compaction and replay eviction", async () => {
   const home = mkdtempSync(join(tmpdir(), "compact-native-reconnect-"));
   const fixture = fileURLToPath(new URL("../../scripts/compact-fixtures/codex.mjs", import.meta.url));
   const client = new AppServerClient({ binaryPath: fixture, cwd: home, sourceEnv: { HOME: home, PATH: process.env.PATH, CODEX_HOME: home } });
@@ -305,12 +305,13 @@ it("restores Codex post-compaction context usage after replay eviction", async (
     h.send({ type: "user_message", requestId: "before", text: "fixture ready" }); await h.waitUntil(() => countLoopEnds(h!) === 1); await settle();
     const pre = h.received.find(m => m.type === "agent_event" && m.event.type === "context_usage"); expect(pre).toMatchObject({ event: { estimatedTokens: 47000 } });
     h.send({ type: "compact_request" }); await h.waitFor((m): m is Extract<HostToUiMessage, { type: "agent_event" }> => m.type === "agent_event" && m.event.type === "compaction_start");
-    writeFileSync(join(home, "release-codex-compact-1"), "release"); await h.waitFor((m): m is Extract<HostToUiMessage, { type: "agent_event" }> => m.type === "agent_event" && m.event.type === "context_usage" && m.event.estimatedTokens === 8000); await settle();
+    writeFileSync(join(home, "release-codex-compact-1"), "release"); await h.waitFor((m): m is Extract<HostToUiMessage, { type: "agent_event" }> => m.type === "agent_event" && m.event.type === "compaction_end"); await settle();
+    expect(h.received.filter(m => m.type === "agent_event" && m.event.type === "context_usage")).toHaveLength(1);
     const { REPLAY_BUFFER_CAP } = await import("./session.js");
     for (let i = 0; i < REPLAY_BUFFER_CAP + 1000; i++) h.outbound.emit({ type: "title_changed", title: `flood-${i}` });
     await settle(); const before = h.received.length; h.send({ type: "ui_ready" });
     await h.waitUntil(() => h!.received.slice(before).some(m => m.type === "session_checkpoint")); await settle();
     const fresh = createDesktopStore({ schedule: fn => fn() }); for (const m of h.received.slice(before)) fresh.getState().applyHostMessage(m);
-    expect(fresh.getState().contextUsage).toEqual({ estimatedTokens: 8000, budgetTokens: 100000, source: "provider" });
+    expect(fresh.getState().contextUsage).toEqual({ estimatedTokens: 47000, budgetTokens: 100000, source: "provider" });
   } finally { await client.close(); h?.close(); rmSync(home, { recursive: true, force: true }); }
 });

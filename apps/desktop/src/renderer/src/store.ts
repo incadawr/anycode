@@ -3891,7 +3891,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               notice: {
                 kind: "compaction_end" as const,
                 text: event.ok
-                  ? `Conversation compacted (${event.preTokens ?? "?"} → ${event.postTokens ?? "?"} tokens).`
+                  ? event.postTokens !== undefined
+                    ? `Conversation compacted (${event.preTokens ?? "?"} → ${event.postTokens} tokens).`
+                    : event.preTokens !== undefined
+                      ? `Conversation compacted (before: ${event.preTokens} tokens).`
+                      : "Conversation compacted."
                   // Same verdict the transcript row gives (MessageList's
                   // `compactionRowText`): `compaction_end` carries one `error`
                   // channel for a refusal and a real failure alike, and the
