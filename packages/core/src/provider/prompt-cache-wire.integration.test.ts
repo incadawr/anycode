@@ -178,8 +178,7 @@ describe("AiSdkModelPort prompt-cache wire options (GitHub #15)", () => {
         if (effort === undefined || effort === "off") {
           expect(body["reasoning_effort"]).toBeUndefined();
         } else {
-          // "max" collapses to "high" on chat-completions (§4.3).
-          expect(body["reasoning_effort"]).toBe(effort === "max" ? "high" : effort);
+          expect(body["reasoning_effort"]).toBe(effort);
         }
         expect(cacheOccurrences(capturedRaw)).toBe(1);
       },
