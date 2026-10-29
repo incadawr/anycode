@@ -1764,7 +1764,8 @@ export class Session {
     // always after ui_ready; it is `emit` (buffered), not sendDirect, so the ack
     // survives a renderer reload via replay rather than racing it.
     this.engineSettingsUnsubscribe = this.engineSettings?.onSettingsApplied((applied) => {
-      if (this.model !== applied.model) this.updateContextUsage(null);
+      const clearContextUsage = this.model !== applied.model;
+      if (clearContextUsage) this.updateContextUsage(null);
       this.model = applied.model;
       // SLICE-CC §1.5: for an immediate-apply seam THIS is the only honest
       // moment to persist — the engine has now acknowledged the change, so the
@@ -1776,6 +1777,7 @@ export class Session {
       }
       this.outbound.emit({
         type: "engine_settings_changed",
+        ...(clearContextUsage ? { clearContextUsage: true } : {}),
         model: applied.model,
         activePresetId: applied.activePresetId,
         ...(applied.effort !== undefined ? { effort: applied.effort } : {}),
@@ -2565,6 +2567,7 @@ export class Session {
           .catch(() => {});
         this.pushSessionCheckpoint();
         this.outbound.replay();
+        this.outbound.sendDirect({ type: "context_usage_checkpoint", contextUsage: this.checkpointContextUsage });
         // GitHub #19: re-assert the authoritative title on every ui_ready, as
         // an un-buffered sendDirect AFTER replay(). This covers a resumed host
         // whose persisted title never produced an event in this process AND a

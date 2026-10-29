@@ -1935,7 +1935,7 @@ async function bootCodexSession(
     workspace,
     model: connected.model,
     sessionId: connected.sessionMeta.id,
-    ...await contextSnapshotOptions(persistence!, connected.sessionMeta.id, "codex", connected.model),
+    ...await contextSnapshotOptions(persistence!, connected.sessionMeta.id, "codex", connected.model, undefined, connected.initialContextUsage),
     usageAudit: codexUsageAudit,
     // Codex owns native thread history; never an AgentLoop history — this is
     // the resume projection built ONCE at boot (TASK.42, cut §2(e)):
@@ -2698,7 +2698,7 @@ async function bootClaudeSession(
     workspace,
     model: connected.model,
     sessionId: rowId,
-    ...await contextSnapshotOptions(persistence!, rowId, "claude", connected.model),
+    ...await contextSnapshotOptions(persistence!, rowId, "claude", connected.model, undefined, args.resume ? () => claudeEngine.initialContextUsage() : undefined),
     // The resume projection built above — `[]` for a fresh session, the
     // shadow-mirror transcript (incl. tool_call cards) for a resumed one.
     bootHistory,

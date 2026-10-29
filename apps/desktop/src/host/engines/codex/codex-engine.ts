@@ -208,6 +208,7 @@ export interface ConnectedCodexEngine {
   engine: CodexEngine;
   threadId: string;
   model: string;
+  initialContextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" };
   /** The preset the session is running under; the host persists it verbatim in the session `mode` column (cut §2(k).4). */
   presetId: string;
 }
@@ -501,8 +502,7 @@ function deadline(ms: number): SettleDeadline {
  * — unlike `account/read`, whose `params: {}` is schema-mandated. Never
  * boot-fatal: quota is additive presentation data, and a session must boot
  * (and run) without it. On resume this is also the §5.4 rule: quotas are
- * available immediately, while the ctx meter honestly waits for the first
- * turn's `thread/tokenUsage/updated` (no false 0% is ever emitted here).
+ * available immediately; context comes from a native usage notification when available.
  */
 async function pullQuotaSnapshot(client: CodexClient, timeoutMs: number): Promise<CodexQuotaTracker> {
   const tracker = new CodexQuotaTracker();
@@ -660,6 +660,19 @@ export async function resumeNativeCodexSession(
   // whether any server survived serialization.
   if (mcpForward?.notices !== undefined) notices.push(...mcpForward.notices);
   const preset = resolvePreset(selection, notices);
+  let initialContextUsage: ConnectedCodexEngine["initialContextUsage"];
+  const unobserve = client.observeNotifications?.((notification) => {
+    if (notification.method !== "thread/tokenUsage/updated") return;
+    const params = record(notification.params);
+    if (params?.threadId !== externalSessionRef) return;
+    const usage = record(params.tokenUsage);
+    const tokens = record(usage?.last)?.totalTokens;
+    const budget = usage?.modelContextWindow;
+    if (typeof tokens === "number" && Number.isFinite(tokens) && tokens >= 0 && typeof budget === "number" && Number.isFinite(budget) && budget > 0) {
+      initialContextUsage = { estimatedTokens: tokens, budgetTokens: budget, source: "provider" };
+    }
+  });
+  try {
   const resumed = await client.request<ThreadResult>("thread/resume", {
     threadId: externalSessionRef,
     cwd: workspace,
@@ -717,7 +730,9 @@ export async function resumeNativeCodexSession(
     threadId: native.threadId,
     model,
     presetId: preset.id,
+    ...(model === native.model && initialContextUsage !== undefined ? { initialContextUsage } : {}),
   };
+  } finally { unobserve?.(); }
 }
 
 /** Starts a new native thread before anything is persisted. */
