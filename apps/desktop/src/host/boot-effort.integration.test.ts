@@ -86,6 +86,9 @@ it("pins an unpinned legacy host's live model settings to the connection that su
     await vi.waitFor(() => expect(port.listenerCount("message")).toBeGreaterThan(0), {timeout:15000});
     port.send({type:"ui_ready"});
     await vi.waitFor(() => expect(port.messages.some((m) => m.type === "host_ready")).toBe(true));
+    expect(port.messages.find((m) => m.type === "host_ready").modelSettingsConnectionId).toBe("conn-source");
+    settings.provider.activeConnectionId = "other-connection";
+    writeFileSync(profile.settingsPath, JSON.stringify(settings));
     port.send({type:"set_model", model:"glm-5.3"});
     await vi.waitFor(() => expect(port.messages.some((m) => m.type === "model_changed")).toBe(true));
     expect(port.messages.find((m) => m.type === "model_changed")).toMatchObject({reasoningEffort:"low", contextUsage:{budgetTokens:40000}});

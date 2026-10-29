@@ -1,3 +1,4 @@
+import { modelSettingsTarget } from "./model-settings-target.js";
 import { agentMessageText, type AgentEnvelope } from "../../shared/communication.js";
 import { TurnTranslator } from "../../host/engines/codex/event-translator.js";
 import { CollabAgentCardIndex } from "../../host/engines/codex/collab-agent-index.js";
@@ -8904,4 +8905,14 @@ it("switches the model, assumption and budget atomically before another response
   store.getState().applyHostMessage({type:"model_changed", model:"unknown", reasoningEffort:"off"});
   expect(store.getState().contextUsage).toBeNull();
   expect(store.getState().modelSelectionAck).not.toBe(first);
+});
+
+
+it("keeps the host connection identity when the active connection changes", () => {
+  const store = createDesktopStore(createManualScheduler().scheduler);
+  store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "a", sessionId: "s", modelSettingsConnectionId: "original" });
+  expect(store.getState().pinnedConnection).toBeNull();
+  expect(modelSettingsTarget(store.getState().modelSettingsConnectionId, undefined, "new-active")).toBe("original");
+  store.getState().applyHostMessage({ type: "model_changed", model: "b", reasoningEffort: "off" });
+  expect(store.getState().modelSettingsConnectionId).toBe("original");
 });

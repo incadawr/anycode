@@ -1,3 +1,4 @@
+import { modelSettingsTarget } from "../model-settings-target.js";
 import { resolveProfileRoles, rolesPatch } from "../../../shared/role-profiles.js";
 /**
  * Message input + turn controls (design §5, restructured in UI-5). Sends
@@ -993,10 +994,11 @@ function CtxPopover({
   const sendToHost = useTabSend();
   const model = useTabStore((state) => state.model);
   const pinnedConnection = useTabStore((state) => state.pinnedConnection);
+  const modelSettingsConnectionId = useTabStore((state) => state.modelSettingsConnectionId);
   const snapshot = useSettingsStore((state) => state.snapshot);
   const [settingsTarget, setSettingsTarget] = useState<{ connection: ProviderConnection; model: string } | null>(null);
   useOverlayFlag(settingsTarget !== null);
-  const connectionId = pinnedConnection?.connectionId ?? snapshot?.settings.provider.activeConnectionId;
+  const connectionId = modelSettingsTarget(modelSettingsConnectionId, pinnedConnection?.connectionId);
   const savedConnection = snapshot?.settings.provider.connections.find((connection) => connection.id === connectionId);
   const assumedHint = ctxWindowAssumedHint(contextUsage);
   const [open, setOpen] = useState(false);
