@@ -1584,8 +1584,9 @@ export class CodexEngine implements SessionEngine {
       this.compactUsageNotifications = [];
       const request = this.client.request(CODEX_THREAD_COMPACT_START_METHOD, { threadId: this.threadId }, { timeoutMs: this.bounds.turnStartMs })
         .then(value => ({ kind: "ack" as const, value }), error => ({ kind: "rejection" as const, error }));
-      while (!(terminal && acknowledged && (status !== "completed" || !confirmed || usage !== null))) {
-        if (terminal && acknowledged && status === "completed" && confirmed && !usage) grace ??= deadline(this.bounds.compactUsageWaitMs);
+      const hasPostUsage = (): boolean => usage !== null && (preTokens === undefined || usage.estimatedTokens !== preTokens);
+      while (!(terminal && acknowledged && (status !== "completed" || !confirmed || hasPostUsage()))) {
+        if (terminal && acknowledged && status === "completed" && confirmed && !hasPostUsage()) grace ??= deadline(this.bounds.compactUsageWaitMs);
         const raced = await Promise.race([
           this.peekNotification().then(value => ({ kind: "notification" as const, value })),
           ...(!acknowledged ? [request] : []),
@@ -1659,8 +1660,8 @@ export class CodexEngine implements SessionEngine {
       const readings = this.compactUsageNotifications ?? [];
       this.compactUsageNotifications = null;
       const accounting: AgentEvent[] = [];
-      if (ok && nativeId && translator) {
-        this.lateCompaction = { turnId: nativeId, translator };
+      if (nativeId && translator) {
+        if (ok) this.lateCompaction = { turnId: nativeId, translator };
         for (const reading of readings) {
           if (record(reading.params)?.turnId !== nativeId) continue;
           usage = decodeCodexContextUsage(record(reading.params)) ?? usage;

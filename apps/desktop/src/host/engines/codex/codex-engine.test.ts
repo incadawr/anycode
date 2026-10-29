@@ -3978,6 +3978,28 @@ describe("Codex manual compaction", () => {
     server.stream.push({ method: "turn/completed", params: { threadId: THREAD, turn: { id: "compact-native", status: status === "unconfirmed" ? "completed" : status, error: { message: "native failure" } } } });
     if (status === "completed") controller.abort(); await run.done; expect(run.events.find(e => e.type === "compaction_end")).toMatchObject({ ok: status === "completed" });
   });
+  it.each(["failed", "interrupted"])("retains accounting for an unsuccessful compact turn: %s", async status => {
+    const { server, engine } = setup(); await normal(server, engine);
+    const observer = vi.fn(); engine.onUsage(observer);
+    const run = driveCompact(engine); await tick(40); server.startCompact(); item(server); usage(server, 8000);
+    server.stream.push({ method: "turn/completed", params: { threadId: THREAD, turn: { id: "compact-native", status } } });
+    await run.done;
+    expect(run.events).toContainEqual(expect.objectContaining({ type: "engine_session_tokens" }));
+    expect(observer).toHaveBeenCalledOnce();
+    expect(run.events.find(e => e.type === "compaction_end")).toMatchObject({ ok: false, preTokens: 47000 });
+    expect(run.events.find(e => e.type === "compaction_end")).not.toHaveProperty("postTokens");
+    expect(types(run.events)).not.toContain("context_usage");
+    const next = driveCompact(engine); await tick(40); server.startCompact("next"); finish(server, "next"); await next.done;
+    expect(next.events.find(e => e.type === "compaction_end")).toMatchObject({ preTokens: 47000 });
+  });
+  it("waits for a reduced reading after a baseline reading and terminal event", async () => {
+    const { server, engine } = setup({ compactUsageWaitMs: 100 }); await normal(server, engine);
+    const run = driveCompact(engine); await tick(40); server.startCompact(); usage(server, 47000); finish(server);
+    await tick(20); expect(run.events.some(e => e.type === "compaction_end")).toBe(false);
+    usage(server, 8000); await run.done;
+    expect(run.events.find(e => e.type === "compaction_end")).toMatchObject({ ok: true, preTokens: 47000, postTokens: 8000 });
+    expect(run.events).toContainEqual(expect.objectContaining({ type: "context_usage", estimatedTokens: 8000 }));
+  });
   it("reconciles the sole reduced usage reading before compaction confirmation", async () => {
     const { server, engine } = setup(); await normal(server, engine);
     const observer = vi.fn(); engine.onUsage(observer);
