@@ -373,7 +373,7 @@ import {
   isChildSessionBoot,
   parseHostArgs,
   readConnectionModelCapabilities,
-  readConnectionModelSettings,
+  readConnectionModelSettingsSync,
   resolveChildMaxTurns,
   resolveEngineDraftPresetId,
   repairDanglingToolCalls,
@@ -3369,22 +3369,25 @@ async function boot(): Promise<void> {
     // names the old connection at boot. Main stamps the env from
     // `tab.connectionId` on every spawn, so it is the connection whose
     // credentials this host actually talks to; the row pin is the fallback.
-    const liveCapsConnectionId =
-      forkConnectionId !== undefined && forkConnectionId.trim() !== "" ? forkConnectionId : sessionMeta.connectionId;
+    const liveCapsConnectionId = forkConnectionId?.trim() ||
+      process.env.ANYCODE_MODEL_SETTINGS_CONNECTION_ID?.trim() || sessionMeta.connectionId;
     const liveCapsMap = await readConnectionModelCapabilities(
       liveCapsConnectionId,
       settingsPathOverride !== undefined && settingsPathOverride.trim() !== "" ? settingsPathOverride : undefined,
     );
+    const readModelSettings = () => readConnectionModelSettingsSync(liveCapsConnectionId, settingsPathOverride?.trim() || undefined);
+    const initialModelSettings = readModelSettings();
     const connectionModelSettings = createConnectionModelSettings({
-      connection: await readConnectionModelSettings(
-        liveCapsConnectionId,
-        settingsPathOverride?.trim() || undefined,
-      ),
+      connection: initialModelSettings ?? undefined,
+      ...(liveCapsConnectionId ? { readConnection: readModelSettings } : {}),
+      initialReadSucceeded: Boolean(liveCapsConnectionId) && initialModelSettings !== null,
       catalogEntry,
       envContextWindow: envConfig.contextWindowTokens,
+      envContextWindowFromSettings: process.env.ANYCODE_CONTEXT_WINDOW_FROM_SETTINGS === "1",
       envContextWindowModel: envConfig.contextWindowModel,
       envReasoningEffort: envConfig.reasoningEffort,
       envReasoningEffortModel: process.env.ANYCODE_REASONING_EFFORT_MODEL?.trim() || undefined,
+      envReasoningEffortFromSettings: Boolean(process.env.ANYCODE_REASONING_EFFORT_MODEL?.trim()),
       liveCapabilitiesFor: (id) => liveCapsMap !== undefined && Object.hasOwn(liveCapsMap, id) ? liveCapsMap[id] : undefined,
     });
     const liveCapsFor = (id: string): LiveModelCapabilities | undefined => connectionModelSettings.capabilitiesFor(id);
@@ -3540,9 +3543,10 @@ async function boot(): Promise<void> {
       (modelId, applied) =>
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
     ));
-    const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, envConfig.reasoningEffort, liveCapsFor(envConfig.model));
+    const bootSelectedEffort = connectionModelSettings.effortFor(envConfig.model);
+    const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, bootSelectedEffort, liveCapsFor(envConfig.model));
     // Preserve explicit selections even when the current model suppresses them.
-    selectedEffort = envConfig.reasoningEffort ?? bootReasoningEffort ?? "off";
+    selectedEffort = bootSelectedEffort ?? bootReasoningEffort ?? "off";
     connectionModelSettings.remember(envConfig.model, selectedEffort);
     const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry, liveCapsFor(envConfig.model));
     // TASK.162 (F6): the same catalog + env overrides the three boot
@@ -4667,8 +4671,10 @@ async function boot(): Promise<void> {
           });
         }
         console.log(`[host] model switched: ${previous} -> ${id}`);
+        const usage = loop.contextInfo();
         return {
           model: id,
+          contextUsage: {estimatedTokens: usage.estimatedTokens, budgetTokens: usage.effectiveWindowTokens, source: usage.source},
           selectedReasoningEffort: selectedTier,
           reasoningEffort: resolvedEffort ?? "off",
           ...(availableEffortLevels !== undefined ? { availableEffortLevels } : {}),
@@ -4679,7 +4685,10 @@ async function boot(): Promise<void> {
       config,
       switchModelImpl,
       resolveSelectedEffort: (effort) => resolveReasoningEffort(currentModel, catalogEntry, effort, liveCapsFor(currentModel)),
-      onBeforeTurn: refreshExtensionProfiles,
+      onBeforeTurn: async () => {
+        if (connectionModelSettings.refresh()) session?.refreshModelSettings();
+        await refreshExtensionProfiles();
+      },
       // Preserve the selected tier independently of the model-effective tier.
       onReasoningEffortSet: (effort) => {
         selectedEffort = effort ?? "off";
@@ -4997,7 +5006,7 @@ async function boot(): Promise<void> {
         const effort = picked.entry.effort === undefined || picked.entry.effort === "xhigh"
           ? undefined
           : picked.entry.effort;
-        switchModelImpl(switchModel, effort ?? selectedEffort ?? "medium");
+        switchModelImpl(switchModel, effort ?? selectedEffort ?? "medium", effort !== undefined);
         return `Orchestrator: primary route unhealthy (${reason}), running on ${switchModel}.`;
       },
       // Slice P7.8 (design slice-P7.8-cut.md §3.2, mirror of the `lsp` seam

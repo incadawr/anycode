@@ -49,6 +49,9 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { parseSettings } from "../settings/schema.js";
+import { migrateModelOverrides } from "../shared/model-overrides.js";
 import {
   CHILD_NETWORK_RETRY_BUDGET_MS,
   ConversationHistory,
@@ -516,16 +519,36 @@ export async function seedAlwaysAllowRules(
 
 // ── Taskana 4118: boot-time read of live per-model capabilities from settings.json ──
 
+export type ConnectionModelSettings = Pick<ProviderConnection, "modelOverrides" | "reasoningEffort" | "modelCapabilities">;
+
+/** null means unreadable: keep the previous snapshot until the next safe boundary. */
+export function readConnectionModelSettingsSync(
+  connectionId: string | undefined,
+  settingsPath: string = defaultSettingsPath(),
+): ConnectionModelSettings | undefined | null {
+  if (!connectionId) return undefined;
+  try {
+    const parsed = parseSettings(JSON.parse(readFileSync(settingsPath, "utf8")));
+    if (parsed.status === "corrupt") return null;
+    const found = connectionById(parsed.settings, connectionId);
+    if (found === undefined) return undefined;
+    const connection = migrateModelOverrides(found);
+    return { modelOverrides: connection.modelOverrides, reasoningEffort: connection.reasoningEffort, modelCapabilities: connection.modelCapabilities };
+  } catch {
+    return null;
+  }
+}
+
 /** Read the pinned connection's user overrides without ever writing settings. */
 export async function readConnectionModelSettings(
   connectionId: string | undefined,
   settingsPath: string = defaultSettingsPath(),
-): Promise<Pick<ProviderConnection, "modelOverrides" | "reasoningEffort"> | undefined> {
+): Promise<ConnectionModelSettings | undefined> {
   if (!connectionId) return undefined;
   try {
     const { settings } = await loadSettings(settingsPath);
     const connection = connectionById(settings, connectionId);
-    return connection === undefined ? undefined : { modelOverrides: connection.modelOverrides, reasoningEffort: connection.reasoningEffort };
+    return connection === undefined ? undefined : { modelOverrides: connection.modelOverrides, reasoningEffort: connection.reasoningEffort, modelCapabilities: connection.modelCapabilities };
   } catch {
     return undefined;
   }

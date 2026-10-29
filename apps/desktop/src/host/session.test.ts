@@ -9246,3 +9246,20 @@ describe("durable cost summary", () => {
     expect(summary.totals).toMatchObject({ costUsd: 0.5, cacheSavingsUsd: expect.closeTo(0.3), unpricedSteps: 1 });
   });
 });
+
+
+it("keeps the switched context budget in the reconnect checkpoint before another turn", async () => {
+  const h = createHarness({steps:[], switchModel:(model) => ({model, reasoningEffort:"off", contextUsage:{estimatedTokens:15500, budgetTokens:2048, source:"estimate"}})});
+  try {
+    h.send({type:"ui_ready"});
+    await h.waitFor((m) => m.type === "host_ready");
+    h.send({type:"set_model", model:"unknown"});
+    const changed = await h.waitFor((m) => m.type === "model_changed");
+    expect(changed).toMatchObject({contextUsage:{budgetTokens:2048}});
+    const before = h.received.length;
+    h.send({type:"ui_ready"});
+    await h.waitUntil(() => h.received.slice(before).some((m) => m.type === "session_checkpoint"));
+    const checkpoint = h.received.slice(before).find((m) => m.type === "session_checkpoint");
+    expect(checkpoint).toMatchObject({contextUsage:{budgetTokens:2048}});
+  } finally { h.close(); }
+});

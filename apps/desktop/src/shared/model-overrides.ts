@@ -52,3 +52,19 @@ export function modelCapabilitiesFor(
     ? connection.modelCapabilities[model] : undefined;
   return applyModelReasoningOverride(live, modelOverrideFor(connection, model)?.reasoningSupported === true);
 }
+
+
+export function contextWindowTokensField(raw: string): { ok: true; value: number | "" } | { ok: false } {
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return { ok: true, value: "" };
+  }
+  if (!/^-?\d+$/.test(trimmed)) {
+    return { ok: false };
+  }
+  const n = Number(trimmed);
+  if (!Number.isInteger(n) || n < 1024 || n > 1000000) {
+    return { ok: false };
+  }
+  return { ok: true, value: n };
+}

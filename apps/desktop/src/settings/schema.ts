@@ -262,11 +262,15 @@ const connectionSchema = z.object({
   contextWindowTokens: z.number().int().min(1_024).max(1_000_000).optional().catch(undefined),
   contextWindowModel: z.string().optional(),
   // A bad entry drops locally; valid siblings and the rest of the document survive.
-  modelOverrides: z.record(z.string(), z.object({
+  modelOverrides: z.unknown().transform((raw) => {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+    const entrySchema = z.object({
     contextWindowTokens: z.number().int().min(1_024).max(1_000_000).optional().catch(undefined),
     reasoningEffort: reasoningEffortSchema.optional().catch(undefined),
     reasoningSupported: z.literal(true).optional().catch(undefined),
-  }).catch({})).optional().catch(undefined),
+  }).catch({});
+    return Object.fromEntries(Object.entries(raw).map(([id, value]) => [id, entrySchema.parse(value)]));
+  }).optional(),
   // Taskana 4088 (TASK.69): per-model image-input override bound to ONE model id
   // (the TASK.142 contextWindowTokens/contextWindowModel pair discipline). The
   // binding is derived SERVER-SIDE from the effective model; the renderer never

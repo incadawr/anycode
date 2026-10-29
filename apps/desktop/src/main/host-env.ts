@@ -117,6 +117,10 @@ export const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
  */
 export const ENV_CONTEXT_WINDOW = "ANYCODE_CONTEXT_WINDOW";
 export const ENV_CONTEXT_WINDOW_MODEL = "ANYCODE_CONTEXT_WINDOW_MODEL";
+/** Internal provenance: a settings value must not mask later settings edits. */
+export const ENV_CONTEXT_WINDOW_FROM_SETTINGS = "ANYCODE_CONTEXT_WINDOW_FROM_SETTINGS";
+/** Captures the connection that supplied this fork's settings, including unpinned legacy tabs. */
+export const ENV_MODEL_SETTINGS_CONNECTION_ID = "ANYCODE_MODEL_SETTINGS_CONNECTION_ID";
 /**
  * 4088-on-4118 integration: the former ENV_IMAGE_INPUT_MODELS declaration is
  * GONE — the live image-modality facts ride 4118's `modelCapabilities` map
@@ -1111,6 +1115,9 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // migration the active connection ≡ the former singleton, so the ladder OUTPUT
   // stays byte-equivalent (DoD #5).
   const view = activeProviderView(settings);
+  const settingsConnectionId = activeConnection(settings)?.id;
+  if (settingsConnectionId !== undefined) env[ENV_MODEL_SETTINGS_CONNECTION_ID] = settingsConnectionId;
+  else delete env[ENV_MODEL_SETTINGS_CONNECTION_ID];
   if (view.pricing !== undefined) env.ANYCODE_CONNECTION_PRICING = JSON.stringify(view.pricing);
   else delete env.ANYCODE_CONNECTION_PRICING;
   // Custom-provider route (F-G-B): a `custom:<slug>` providerId resolves from
@@ -1275,6 +1282,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // from the fully merged env, because shell ANYCODE_MODEL may override
   // `view.model` — is it emitted. Anything missing/invalid/mismatched emits
   // NEITHER half.
+  delete env[ENV_CONTEXT_WINDOW_FROM_SETTINGS];
   if (envPresent(env, ENV_CONTEXT_WINDOW)) {
     // Shell wins verbatim; binding (if any) is the shell's alone.
   } else {
@@ -1296,6 +1304,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
     ) {
       env[ENV_CONTEXT_WINDOW] = numToStr(windowTokens);
       env[ENV_CONTEXT_WINDOW_MODEL] = windowBinding;
+      env[ENV_CONTEXT_WINDOW_FROM_SETTINGS] = "1";
     }
   }
   // 4088-on-4118 integration: the former ANYCODE_IMAGE_INPUT_MODELS emission is

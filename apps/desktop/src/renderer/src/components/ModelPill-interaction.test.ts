@@ -49,9 +49,33 @@ describe("model menu interaction", () => {
     expect(harness.send).toHaveBeenCalledWith({ type: "set_reasoning_effort", effort: "off" });
     expect(harness.update).not.toHaveBeenCalled();
     harness.state.reasoningEffort = "off";
+    harness.state.modelSelectionAck = {kind:"effort", model:"glm-5.2", effort:"off"};
     render();
     await vi.waitFor(() => expect(harness.update).toHaveBeenCalledWith({ id: "c", modelOverrideModel: "glm-5.2", reasoningEffort: "off" }));
   });
+  it.each(["model-first", "effort-first"])("persists both explicit queued axes (%s), including an unchanged effective tier", async (order) => {
+    harness.state.turn.status = "running";
+    harness.settings.snapshot.catalog[0].models.push({id:"glm-4.6", reasoning:true, effortLevels:["off","high","max"]});
+    const chooseEffort = (value: string) => {
+      let tree = render(); tree.props.children[0].props.onClick(); tree = render();
+      menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "effort-open")); tree = render();
+      menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "effort" && r.value === value));
+    };
+    const chooseModel = () => {
+      let tree = render(); tree.props.children[0].props.onClick(); tree = render();
+      menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "group")); tree = render();
+      menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "model" && r.modelId === "glm-4.6"));
+    };
+    const effort = order === "model-first" ? "high" : "max";
+    if (order === "model-first") { chooseModel(); chooseEffort(effort); }
+    else { chooseEffort(effort); chooseModel(); }
+    expect(harness.update).not.toHaveBeenCalled();
+    harness.state.model = "glm-4.6";
+    harness.state.modelSelectionAck = {kind:"model", model:"glm-4.6", effort};
+    render();
+    await vi.waitFor(() => expect(harness.update).toHaveBeenCalledExactlyOnceWith({id:"c", model:"glm-4.6", modelOverrideModel:"glm-4.6", reasoningEffort:effort}));
+  });
+
   it("shows no effort row for a model without reasoning metadata", () => {
     harness.state.model = "gpt-6-astra"; harness.state.availableEffortLevels = undefined;
     harness.settings.snapshot.catalog[0].models = [findCatalogEntry("openai")!.models.find((model) => model.id === "gpt-6-astra")!];

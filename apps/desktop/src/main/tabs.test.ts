@@ -2884,6 +2884,18 @@ describe("TabHostManager — a profile's effort reaches a core child's host (TAS
     expect(forkSpy.mock.calls[1]?.[2]?.env).toMatchObject({ ANYCODE_REASONING_EFFORT: "low" });
   });
 
+  it("an explicit child effort clears the parent's settings provenance marker", () => {
+    const hosts: FakeHost[] = [];
+    const fork = vi.fn<HostForkFn>(() => {
+      const host = new FakeHost(); hosts.push(host); queueMicrotask(() => host.emit("spawn"));
+      return host as unknown as UtilityProcess;
+    });
+    const manager = childManager(fork, windowRig().window, {env:() => ({ANYCODE_REASONING_EFFORT:"low", ANYCODE_REASONING_EFFORT_MODEL:"a"})});
+    expect(manager.createTab({workspace:"/ws", sessionId:"effort-provenance", resume:false, connectionId:"conn-parent"}).ok).toBe(true);
+    hosts[0]!.emit("message", spawnRequest({requestId:"explicit-child-effort", effort:"max"}));
+    expect(fork.mock.calls[1]?.[2]?.env).toMatchObject({ANYCODE_REASONING_EFFORT:"max", ANYCODE_REASONING_EFFORT_MODEL:""});
+  });
+
   it("no effort on the request leaves the connection's own tier untouched", () => {
     const { hosts, forkSpy } = rig();
     hosts[0]!.emit("message", spawnRequest({ requestId: "effort-2" }));

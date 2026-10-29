@@ -2307,7 +2307,7 @@ describe("TASK.141 byte-identity — a registry-free document changes not one by
     });
     expect(withEmptyRegistry).toEqual(plain);
     // And the whole object, not a filtered view: no proxy var exists at all.
-    expect(plain).toEqual({ PATH: "/usr/bin", HOME: "/home/me", ANYCODE_MODEL: "m" });
+    expect(plain).toEqual({ PATH: "/usr/bin", HOME: "/home/me", ANYCODE_MODEL: "m", ANYCODE_MODEL_SETTINGS_CONNECTION_ID: "conn-z-ai" });
   });
 
   // The DoD's second half: a document carrying ONLY legacy strings produces the
@@ -2322,6 +2322,7 @@ describe("TASK.141 byte-identity — a registry-free document changes not one by
       PATH: "/usr/bin",
       HOME: "/home/me",
       ANYCODE_MODEL: "m",
+      ANYCODE_MODEL_SETTINGS_CONNECTION_ID: "conn-z-ai",
       HTTPS_PROXY: "http://user:pass@legacy:8080",
       HTTP_PROXY: "http://user:pass@legacy:8080",
       https_proxy: "http://user:pass@legacy:8080",

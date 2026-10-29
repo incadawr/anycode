@@ -353,7 +353,7 @@ export function createTabRegistry(
     // (`resolveReasoningEffort`, fail-closed), so a pick resolved against a
     // stale catalog can only be ignored, never misapplied.
     const level = reasoningEffort === undefined ? undefined : asReasoningEffort(reasoningEffort);
-    if (level !== undefined && level !== current.reasoningEffort) {
+    if (level !== undefined && (level !== current.reasoningEffort || (model !== undefined && model !== current.model))) {
       entry.connection?.send({ type: "set_reasoning_effort", effort: level });
     }
     // Start-screen Orchestrate (core only): LAST of the picks, so the host's

@@ -2923,6 +2923,11 @@ export class Session {
    * the idle route and Taskana 4895's turn-boundary apply. Returns false when
    * no switch factory is wired (a legacy engine/test double: a silent no-op).
    */
+  /** Host-only refresh at the start of a new core turn, before its first model call. */
+  refreshModelSettings(): void {
+    if (this.engine.id === "core") this.applyModelSwitch(this.model);
+  }
+
   private applyModelSwitch(id: string, effortExplicit = false): boolean {
     if (this.engine.switchModel === undefined) {
       return false;
@@ -2934,11 +2939,14 @@ export class Session {
       ? this.engine.switchModel(id, this.selectedEffort, true)
       : this.engine.switchModel(id, this.selectedEffort);
     if (result.selectedReasoningEffort !== undefined) this.selectedEffort = result.selectedReasoningEffort;
+    if (result.contextUsage !== undefined) this.checkpointContextUsage = result.contextUsage;
     this.model = result.model;
     this.availableEffortLevels = result.availableEffortLevels;
     this.reasoningSupported = result.availableEffortLevels !== undefined;
     this.outbound.emit({
       type: "model_changed",
+      ...(result.contextUsage !== undefined ? {contextUsage: result.contextUsage} : {}),
+      ...(result.selectedReasoningEffort !== undefined ? {selectedReasoningEffort: result.selectedReasoningEffort} : {}),
       model: result.model,
       reasoningEffort: result.reasoningEffort,
       ...(result.availableEffortLevels !== undefined ? { availableEffortLevels: result.availableEffortLevels } : {}),

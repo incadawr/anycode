@@ -2735,7 +2735,7 @@ describe("connection maxOutputTokens CRUD (TASK.150) — bounded at the IPC boun
   });
 });
 
-describe("connection contextWindowTokens CRUD (TASK.142) — bounded model override at the IPC boundary", () => {
+describe("connection contextWindowTokens CRUD — bounded model override at the IPC boundary", () => {
   it("create persists the numeric window under the effective model", async () => {
     const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
       providerId: "z-ai",
@@ -4863,7 +4863,7 @@ describe("settings-set — browser.fullAccessDefault (Taskana 4759)", () => {
 });
 
 
-describe("per-model overrides (GitHub #26 / 5024)", () => {
+describe("per-model overrides (GitHub #26)", () => {
   it("keeps two windows and effort choices across switches, restarts, and a targeted clear", async () => {
     const deps = makeDeps({ catalogIds: CATALOG_IDS });
     expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", contextWindowTokens: 128000, reasoningEffort: "max" })).ok).toBe(true);
@@ -4928,4 +4928,31 @@ describe("per-model overrides (GitHub #26 / 5024)", () => {
     expect(await buildHostEnv({ bootEnv, settings, getSecret: async () => undefined })).toMatchObject({ ANYCODE_CONTEXT_WINDOW: "64000", ANYCODE_REASONING_EFFORT: "low" });
     expect(await buildHostEnv({ bootEnv: { ...bootEnv, ANYCODE_REASONING_EFFORT: "high" }, settings, getSecret: async () => undefined })).toMatchObject({ ANYCODE_REASONING_EFFORT: "high" });
   });
+});
+
+
+it("a session context-window patch preserves the default model, image override, and other connection metadata", async () => {
+  const deps = makeDeps({ catalogIds: CATALOG_IDS });
+  await handleConnectionCreate(deps, {
+    providerId: "z-ai", model: "a", label: "Keep this label", imageInputOverride: "on",
+    reasoningEffort: "max", maxOutputTokens: 32768, contextWindowTokens: 128000,
+  });
+  const before = (await loadSettings(settingsPath)).settings.provider.connections[0]!;
+  const updated = await handleConnectionUpdate(deps, { id: "conn-1", modelOverrideModel: "b", contextWindowTokens: 96000 });
+  expect(updated.ok).toBe(true);
+  const after = (await loadSettings(settingsPath)).settings.provider.connections[0]!;
+  expect(after).toEqual({ ...before, modelOverrides: { ...before.modelOverrides, b: {contextWindowTokens: 96000} } });
+  expect(after.model).toBe("a");
+  expect(after.imageInputOverride).toBe("on");
+  expect(after.imageInputModel).toBe("a");
+});
+
+
+it("persists and reloads an override for every accepted exact model id", async () => {
+  const deps = makeDeps({catalogIds:CATALOG_IDS});
+  await handleConnectionCreate(deps, {providerId:"z-ai", model:"a"});
+  expect((await handleConnectionUpdate(deps, {id:"conn-1", modelOverrideModel:"__proto__", contextWindowTokens:128000})).ok).toBe(true);
+  const map = (await loadSettings(settingsPath)).settings.provider.connections[0]!.modelOverrides!;
+  expect(Object.hasOwn(map, "__proto__")).toBe(true);
+  expect(map["__proto__"]?.contextWindowTokens).toBe(128000);
 });
