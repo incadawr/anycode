@@ -1,3 +1,4 @@
+import type { ReasoningEffort } from "@anycode/core";
 /**
  * Control-plane contract for the tab invoke-API between main and renderer
  * (design/phase-2.md §3.2, refrozen by task 2.1.1). The renderer drives tab
@@ -47,6 +48,7 @@ export const TAB_REBIND_CHANNEL = "anycode:tab-rebind";
 export interface TabRebindRequest {
   tabId: string;
   connectionId: string;
+  priorEffort?: ReasoningEffort;
 }
 
 /**
