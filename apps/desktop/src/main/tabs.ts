@@ -938,6 +938,7 @@ export interface TabSummary {
   sessionId: string;
   state: TabHost["state"];
   hostFailure?: HostFailure;
+  missingWorkspace?: boolean;
   engine?: EngineId;
   pid: number | null;
   /**
@@ -1211,6 +1212,7 @@ export class TabHostManager {
       state: tab.state,
       pid: tab.proc?.pid ?? null,
       ...(tab.hostFailure ? { hostFailure: tab.hostFailure, engine: tab.engine } : {}),
+      ...(tab.missingWorkspace ? { missingWorkspace: true, engine: tab.engine } : {}),
       ...(tab.childOf !== undefined
         ? { childOf: { parentTabId: tab.childOf.parentTabId, requestId: tab.childOf.requestId } }
         : {}),
@@ -1584,6 +1586,7 @@ export class TabHostManager {
     if (this.deps.workspaceMissing?.(tab.workspace)) {
       this.logger.error(`[main] tab ${tab.tabId} workspace folder is missing (${tab.workspace}); refusing to spawn`);
       tab.missingWorkspace = true;
+      delete tab.hostFailure;
       tab.state = "crash_looped";
       tab.proc = null;
       return;

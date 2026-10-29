@@ -8,7 +8,7 @@ import { z } from "zod";
 import type { AgentDelivery, AgentEnvelope } from "../shared/communication.js";
 
 export interface CommunicationManager {
-  listTabs(): ReadonlyArray<{ sessionId: string; workspace: string; state: string; engine?: string; hostFailure?: import("../shared/host-failure.js").HostFailure; pid?: number | null; childOf?: { parentTabId: string; requestId?: string } }>;
+  listTabs(): ReadonlyArray<{ sessionId: string; workspace: string; state: string; engine?: string; missingWorkspace?: boolean; hostFailure?: import("../shared/host-failure.js").HostFailure; pid?: number | null; childOf?: { parentTabId: string; requestId?: string } }>;
   onCommunicationDelivery?(listener: (sessionId: string, delivery: AgentDelivery) => void): () => void;
   communicationRequest(sessionId: string, operation: string, payload?: unknown, expectedWorkspace?: string): Promise<unknown>;
 }
@@ -574,7 +574,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
       case "get_session_result":
       case "get_session_status": {
         const input = sessionSchema.parse(raw); const tab = await requireSession(input.sessionId);
-        if (name === "get_session_status" && tab.state === "crash_looped" && tab.hostFailure) return { ...tab, engine: tab.engine, state: "crash_looped", hostFailure: tab.hostFailure };
+        if (name === "get_session_status" && (tab.hostFailure || tab.missingWorkspace)) return { ...tab, state: "crash_looped" };
         const status = await options.manager.communicationRequest(input.sessionId, name, undefined, tab.workspace);
         return { ...tab, ...(status as object) };
       }
