@@ -342,3 +342,5 @@ Services that bridge an outside channel use the same tools. See the
 
 See also [configuration.md](configuration.md) and
 [troubleshooting.md](troubleshooting.md).
+
+When a session host stops after repeated failures, `get_session_status` returns `state: "crash_looped"`, its engine, and a safe `hostFailure` summary without model or effort details. `list_sessions` includes the same summary.

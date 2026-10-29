@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Show a safe reason when a session host repeatedly crashes, including in Sessions API status.
+
 ### Added
 
 - Explore agents can read Git history and status using a read-only Git tool (GitHub #22).
