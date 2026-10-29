@@ -1337,6 +1337,7 @@ export interface SettingsScreenProps {
   onAddConnectionConsumed?: () => void;
   /** Taskana 4758: the folder list for the scope dropdown; defaults to the preload bridge (absent outside Electron). */
   scopeBridge?: ScopeWorkspacesBridge;
+  registerLeaveGuard?: (guard: ((action: () => void) => void) | null) => void;
 }
 
 /** Taskana 4758: the one bridge call the scope dropdown needs (opaque ids only). */
@@ -1356,6 +1357,7 @@ export function SettingsScreen({
   addConnectionRequest = 0,
   onAddConnectionConsumed,
   scopeBridge,
+  registerLeaveGuard,
 }: SettingsScreenProps) {
   const snapshot = useStore(store, (s) => s.snapshot);
   const notice = useStore(store, (s) => s.notice);
@@ -1432,7 +1434,10 @@ export function SettingsScreen({
   // id; the folder list comes from main (`scopeBridge.list`), so the renderer
   // never holds a path it could send back.
   const roleGuardRef = useRef<((action: () => void) => void) | null>(null);
-  const registerRoleGuard = useCallback((guard: ((action: () => void) => void) | null) => { roleGuardRef.current = guard; }, []);
+  const registerRoleGuard = useCallback((guard: ((action: () => void) => void) | null) => { roleGuardRef.current = guard; registerLeaveGuard?.(guard); }, [registerLeaveGuard]);
+  function guardRoleLeave(action: () => void): void {
+    if (roleGuardRef.current) roleGuardRef.current(action); else action();
+  }
   const [scopeSelection, setScopeSelection] = useState<ScopeSelection>(USER_SCOPE);
   const scopeSelectionRef = useRef<ScopeSelection>(USER_SCOPE);
   const [scopeEntries, setScopeEntries] = useState<ScopeWorkspaceEntry[]>([]);
@@ -1478,7 +1483,7 @@ export function SettingsScreen({
   // React skips the re-render when the new state equals the old.
   useEffect(() => {
     if (initialPane !== undefined) {
-      setRequestedPane(initialPane);
+      if (initialPane !== requestedPane) guardRoleLeave(() => setRequestedPane(initialPane));
     }
   }, [initialPane]);
 
@@ -1500,8 +1505,7 @@ export function SettingsScreen({
   // effect as a no-op and does not re-navigate.
   useEffect(() => {
     if (addConnectionRequest > 0) {
-      setRequestedPane("provider");
-      setSearchQuery("");
+      guardRoleLeave(() => { setRequestedPane("provider"); setSearchQuery(""); });
     }
   }, [addConnectionRequest]);
 
@@ -1562,8 +1566,9 @@ export function SettingsScreen({
       default: return;
     }
     event.preventDefault();
-    setRequestedPane(visiblePanes[next]!.id);
-    navRefs.current[next]?.focus();
+    const target = visiblePanes[next]!.id;
+    const navigate = () => { setRequestedPane(target); navRefs.current[next]?.focus(); };
+    if (target !== activePane) guardRoleLeave(navigate); else navigate();
   }
 
   // Seeds the local form fields from the first snapshot that arrives (once —
@@ -1598,7 +1603,7 @@ export function SettingsScreen({
           <div className="settings-rail">
             <div className="settings-rail-header">
               {onClose && (
-                <button type="button" className="settings-back" onClick={onClose}>
+                <button type="button" className="settings-back" onClick={() => guardRoleLeave(onClose)}>
                   <Chevron className="settings-back-chevron" />
                   Back to app
                 </button>
@@ -1701,7 +1706,7 @@ export function SettingsScreen({
         <div className="settings-rail">
           <div className="settings-rail-header">
             {onClose && (
-              <button type="button" className="settings-back" onClick={onClose}>
+              <button type="button" className="settings-back" onClick={() => guardRoleLeave(onClose)}>
                 <Chevron className="settings-back-chevron" />
                 Back to app
               </button>
@@ -1716,7 +1721,7 @@ export function SettingsScreen({
               placeholder="Search settings"
               aria-label="Search settings"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => { const value = e.target.value; const change = () => setSearchQuery(value); const nextPanes = filterSettingsPanes(value); const nextActive = nextPanes.includes(requestedPane) ? requestedPane : nextPanes[0]; if (activePane === "roles" && nextActive !== "roles") guardRoleLeave(change); else change(); }}
             />
           </label>
 
@@ -1752,7 +1757,7 @@ export function SettingsScreen({
                       aria-controls={active ? `settings-pane-${pane.id}` : undefined}
                       tabIndex={active ? 0 : -1}
                       className="settings-nav-item"
-                      onClick={() => setRequestedPane(pane.id)}
+                      onClick={() => { const navigate = () => setRequestedPane(pane.id); if (pane.id !== activePane) guardRoleLeave(navigate); else navigate(); }}
                     >
                       <PaneIcon />
                       <span>{pane.label}</span>
@@ -2392,6 +2397,8 @@ function UpdateNoticeBanner({ status, store }: { status: UpdateStatus; store: Se
  */
 export function SettingsDialog({ open, onClose, store = useSettingsStore }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const leaveGuardRef = useRef<((action: () => void) => void) | null>(null);
+  const registerLeaveGuard = useCallback((guard: ((action: () => void) => void) | null) => { leaveGuardRef.current = guard; }, []);
   const updateStatus = useStore(store, (s) => s.updateStatus);
   // P7.23/F24 W2 pane-select seam (cut §4.6): held HERE, not in
   // `SettingsScreen`, because this component is unconditionally mounted for
@@ -2514,12 +2521,13 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
             return;
           }
           event.preventDefault();
-          onClose();
+          if (leaveGuardRef.current) leaveGuardRef.current(onClose); else onClose();
         }}
       >
         <SettingsScreen
           store={store}
           onClose={onClose}
+          registerLeaveGuard={registerLeaveGuard}
           initialPane={selectedPane ?? undefined}
           addConnectionRequest={addConnectionRequest}
           onAddConnectionConsumed={consumeAddConnection}
