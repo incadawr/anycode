@@ -50,7 +50,7 @@ describe("model menu interaction", () => {
     expect(harness.update).not.toHaveBeenCalled();
     harness.state.reasoningEffort = "off";
     render();
-    await vi.waitFor(() => expect(harness.update).toHaveBeenCalledWith({ id: "c", reasoningEffort: "off" }));
+    await vi.waitFor(() => expect(harness.update).toHaveBeenCalledWith({ id: "c", modelOverrideModel: "glm-5.2", reasoningEffort: "off" }));
   });
   it("shows no effort row for a model without reasoning metadata", () => {
     harness.state.model = "gpt-6-astra"; harness.state.availableEffortLevels = undefined;
