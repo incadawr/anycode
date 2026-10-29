@@ -14,6 +14,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - Sessions API lists the same activity state as session status, including approval waits, without waiting for session hosts.
+- After switching models, the context indicator counts the system prompt and tools instead of dropping to near zero.
 
 ## [0.0.52] — 2026-10-30
 
