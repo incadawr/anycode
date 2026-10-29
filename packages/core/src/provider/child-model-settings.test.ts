@@ -268,3 +268,11 @@ it("uses a connection model-window resolver independently for each child", () =>
   expect(resolve("a", undefined).contextWindowTokens).toBe(128000);
   expect(resolve("b", undefined).contextWindowTokens).toBe(64000);
 });
+
+
+it("uses the child's explicit vocabulary without inheriting another model's levels", () => {
+  const resolve = buildChildModelSettingsResolver({ catalogEntry: undefined, envMaxOutputTokens: undefined, envContextWindow: undefined, effortLevelsFor: (id) => id === "child" ? ["low", "high"] : undefined });
+  expect(resolve("child", "high").reasoningEffort).toBe("high");
+  expect(resolve("child", "xhigh").reasoningEffort).toBeUndefined();
+  expect(resolve("sibling", "high").reasoningEffort).toBeUndefined();
+});

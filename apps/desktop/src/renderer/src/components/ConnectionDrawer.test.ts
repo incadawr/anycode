@@ -1974,7 +1974,19 @@ describe("ConnectionDrawer layout wiring (Taskana 4749)", () => {
 });
 
 describe("custom endpoint cache creation", () => {
-  it("sends the selected cache policy through the custom endpoint create path", async () => {
+  it("rejects image overrides before creating a provider when there is no model", async () => {
+    const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
+    const body = source.slice(source.indexOf("  async function createNewCustomEndpoint()"), source.indexOf("  /** ADD: single primary action"));
+    const ts = await import("typescript");
+    const js = ts.transpile(body + "\nreturn createNewCustomEndpoint;", { target: ts.ScriptTarget.ES2022 });
+    let error: unknown;
+    const bindings = { preflightModelId, model: "", pricingPayload: () => "", modelPricingPayload: () => ({}), contextWindowTokensField, contextWindow: { raw: "" }, imageInputModelPreflightError, imageInput: "on", setError: (value: unknown) => { error = value; } };
+    const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
+    await run();
+    expect(error).toEqual(expect.any(String));
+  });
+
+  it.each(["auto", "on", "off"] as const)("sends image input %s through the custom endpoint create path", async (imageInput) => {
     const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
     const body = source.slice(source.indexOf("  async function createNewCustomEndpoint()"), source.indexOf("  /** ADD: single primary action"));
     const ts = await import("typescript");
@@ -1983,7 +1995,7 @@ describe("custom endpoint cache creation", () => {
     const bindings: Record<string, unknown> = {
       preflightModelId, model: "fixture-model", buildCustomProviderCreateRequest: () => ({}),
       pricingPayload: () => ({ mode: "subscription" }), modelPricingPayload: () => ({ "fixture-model": { input: 1, cachedInput: 0, output: 2 } }),
-      contextWindowTokensField, contextWindow: { raw: "" }, reasoningSupported: false, modelEffort: "",
+      contextWindowTokensField, contextWindow: { raw: "" }, reasoningSupported: false, modelEffort: "", effortLevels: [], imageInput, imageInputModelPreflightError,
       customName: "fixture", customBaseUrl: "http://127.0.0.1", customKind: "openai-compatible",
       secretValue: "", noAuth: true, setCreating: () => {}, setError: () => {}, catalog: [],
       isCustomRecordProviderId: () => false, resolvedCustomProvider: () => ({ create: async () => ({ ok: true, providers: [] }) }),
@@ -1997,7 +2009,7 @@ describe("custom endpoint cache creation", () => {
     };
     const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
     await run();
-    expect(calls).toEqual([{ providerId: "custom:fixture", pricing: { mode: "subscription" }, modelPricing: { "fixture-model": { input: 1, cachedInput: 0, output: 2 } }, model: "fixture-model", transport: "openai-responses", promptCache: IMPLICIT_PROMPT_CACHE }]);
+    expect(calls).toEqual([{ providerId: "custom:fixture", pricing: { mode: "subscription" }, modelPricing: { "fixture-model": { input: 1, cachedInput: 0, output: 2 } }, model: "fixture-model", transport: "openai-responses", promptCache: IMPLICIT_PROMPT_CACHE, ...(imageInput === "auto" ? {} : { imageInputOverride: imageInput }) }]);
   });
 });
 

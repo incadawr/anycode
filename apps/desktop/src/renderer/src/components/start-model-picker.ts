@@ -340,7 +340,9 @@ export function startModelEffortLevels(
   modelId: string,
   catalog: CatalogSummary | undefined,
   liveCaps?: ModelCapabilitiesDto,
+  manualLevels?: readonly string[],
 ): readonly string[] | undefined {
+  if (manualLevels !== undefined) return manualLevels;
   const matched = catalog
     ?.find((entry) => entry.id === providerId)
     ?.models.find((model) => model.id === modelId);

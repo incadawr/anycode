@@ -176,3 +176,15 @@ it("retains the last pricing snapshot on an unreadable read and refreshes on rec
   expect(settings.refresh()).toBe(true);
   expect(settings.pricingSnapshot()).toEqual({ fallback: undefined, models: { a: { input: 3, cachedInput: 0, output: 4 } } });
 });
+
+
+it("refreshes manual vocabularies without borrowing a sibling's levels", () => {
+  let saved = { modelOverrides: { a: { effortLevels: ["low", "high"] as ReasoningEffort[] } } };
+  const settings = createConnectionModelSettings({ readConnection: () => saved, liveCapabilitiesFor: () => undefined });
+  settings.refresh();
+  expect(settings.effortLevelsFor("a")).toEqual(["low", "high"]);
+  expect(settings.effortLevelsFor("constructor")).toBeUndefined();
+  saved = { modelOverrides: { a: { effortLevels: ["xhigh"] } } };
+  settings.refresh();
+  expect(settings.effortLevelsFor("a")).toEqual(["xhigh"]);
+});

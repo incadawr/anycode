@@ -75,6 +75,7 @@ export interface SessionDrillArgs {
   page?: ModelDrillPage;
   /** The tab's live reasoning effort (`state.reasoningEffort`), if any. */
   currentEffort?: string;
+  availableEffortLevels?: readonly string[];
 }
 
 /** What `buildSessionDrillRows` hands the component (rows) and its caller (the pieces the rows were built from). */
@@ -112,11 +113,12 @@ export function buildSessionDrillRows(args: SessionDrillArgs): SessionDrillRows 
   const currentConnection = args.connections.find((connection) => connection.id === args.currentConnectionId);
   // Taskana 4118: a model the catalog does not know falls back to the
   // connection's live-declared capabilities, when the fetch persisted any.
-  const efforts = startModelEffortLevels(
+  const efforts = Object.hasOwn(args, "availableEffortLevels") ? args.availableEffortLevels : startModelEffortLevels(
     currentConnection?.providerId,
     args.currentModelId,
     args.catalog,
     modelCapabilitiesFor(currentConnection, args.currentModelId),
+    modelOverrideFor(currentConnection, args.currentModelId)?.effortLevels,
   );
   const effort = resolveStartModelEffort(
     args.currentEffort,

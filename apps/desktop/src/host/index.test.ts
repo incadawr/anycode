@@ -3038,9 +3038,10 @@ describe("per-model context window production wiring (TASK.142: pin the REAL cal
       "catalogEntry",
       "console",
       "liveCapsFor",
+      "effortLevelsFor",
       "connectionModelSettings",
       `return ({${production[0]!}});`,
-    )(envConfig, zAiEntry, console, liveCapsFor,
+    )(envConfig, zAiEntry, console, liveCapsFor, () => undefined,
       (await import("./connection-model-settings.js")).createConnectionModelSettings({
         catalogEntry: zAiEntry, envContextWindow: envConfig.contextWindowTokens,
         envContextWindowModel: envConfig.contextWindowModel, liveCapabilitiesFor: liveCapsFor,

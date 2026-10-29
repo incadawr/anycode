@@ -246,7 +246,7 @@ describe("CLI slash dispatcher (design slice-2.3-cut.md, tail 3) — fake ModelP
 });
 
 describe("KNOWN_SLASH_COMMANDS (slice 4.1 §2.4, extended slice 4.2 §2.6, slice 4.3 §2.6, slice 4.4 §2.3, slice 4.6 §2.3, slice 4.7 §2.8, slice 5.4 §2.5, slice 5.6 wave C, slice 5.5 wave C, slice 6.1 wave D, slice 6.2 wave D, slice 6.4 wave C, slice 6.6 wave C)", () => {
-  it("is the frozen 23-command set, now including /repo-map", () => {
+  it("includes the effort command", () => {
     expect(KNOWN_SLASH_COMMANDS).toEqual([
       "/compact",
       "/allow",
@@ -256,6 +256,7 @@ describe("KNOWN_SLASH_COMMANDS (slice 4.1 §2.4, extended slice 4.2 §2.6, slice
       "/sessions",
       "/rewind",
       "/reasoning",
+      "/effort",
       "/mode",
       "/model",
       "/status",
@@ -5389,3 +5390,74 @@ describe("--tui flag (Taskana 4082)", () => {
     expect(withTui.text).toBe(plain.text);
   });
 });
+
+
+it("applies shell effort levels at boot, after effort changes, and after a model switch", async () => {
+  const { workspace, dbPath } = setupTitleTestDirs();
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const initial = new RecordingTextModelPort("boot answer");
+  const next = new RecordingTextModelPort("next answer");
+  const run = runCli({ argv: [], env: { ...makeTitleTestEnv(dbPath), ANYCODE_BASE_URL: "http://127.0.0.1:9999/v1", ANYCODE_MODEL: "custom-a", ANYCODE_EFFORT_LEVELS: '["low","high"]', ANYCODE_REASONING_EFFORT: "low" }, input, output, modelPort: initial, modelPortFactory: () => next, cwd: workspace });
+  input.write("first\n/effort high\nsecond\n/model custom-b\nthird\n/quit\n");
+  expect(await run).toBe(0);
+  expect(initial.requests.map((request) => request.reasoningEffort)).toEqual(["low", "high"]);
+  expect(next.requests.map((request) => request.reasoningEffort)).toEqual(["high"]);
+});
+
+it("sends shell-declared effort levels to a loopback endpoint across CLI model changes", async () => {
+  const { workspace, dbPath } = setupTitleTestDirs();
+  const requests: Array<{ model: string; reasoning_effort?: string }> = [];
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      const frame = { id: "cli-test", object: "chat.completion.chunk", created: 1, model: requests.at(-1)!.model, choices: [{ index: 0, delta: { content: "ok" }, finish_reason: null }] };
+      const end = { ...frame, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] };
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(`data: ${JSON.stringify(frame)}\n\ndata: ${JSON.stringify(end)}\n\ndata: [DONE]\n\n`);
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const input = new PassThrough();
+  try {
+    const run = runCli({ argv: [], env: { ...makeTitleTestEnv(dbPath), ANYCODE_BASE_URL: `http://127.0.0.1:${port}/v1`, ANYCODE_PROVIDER_TRANSPORT: "openai-chat-completions", ANYCODE_MODEL: "custom-a", ANYCODE_EFFORT_LEVELS: '["low","high"]', ANYCODE_REASONING_EFFORT: "low" }, input, output: new PassThrough(), cwd: workspace });
+    input.write("first\n/effort high\nsecond\n/model custom-b\nthird\n/quit\n");
+    expect(await run).toBe(0);
+    expect(requests.filter((request) => request.reasoning_effort !== undefined).map(({ model, reasoning_effort }) => [model, reasoning_effort])).toEqual([["custom-a", "low"], ["custom-a", "high"], ["custom-b", "high"]]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+it("applies shell-declared effort to a child model on a loopback endpoint", async () => {
+  const { workspace, dbPath } = setupTitleTestDirs();
+  const requests: Array<{ model: string; reasoning_effort?: string; messages: Array<{ role: string }> }> = [];
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      requests.push(body);
+      const toolCall = body.model === "parent" && !body.messages.some((message: { role: string }) => message.role === "tool");
+      const delta = toolCall ? { tool_calls: [{ index: 0, id: "call-1", type: "function", function: { name: "Agent", arguments: JSON.stringify({ agent_type: "general-purpose", description: "delegate", prompt: "do it", model: "child" }) } }] } : { content: "done" };
+      const frame = { id: "cli-child", object: "chat.completion.chunk", created: 1, model: body.model, choices: [{ index: 0, delta, finish_reason: null }] };
+      const end = { ...frame, choices: [{ index: 0, delta: {}, finish_reason: toolCall ? "tool_calls" : "stop" }] };
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(`data: ${JSON.stringify(frame)}\n\ndata: ${JSON.stringify(end)}\n\ndata: [DONE]\n\n`);
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const input = new PassThrough();
+  try {
+    const run = runCli({ argv: [], env: { ...makeTitleTestEnv(dbPath), ANYCODE_BASE_URL: `http://127.0.0.1:${port}/v1`, ANYCODE_PROVIDER_TRANSPORT: "openai-chat-completions", ANYCODE_MODEL: "parent", ANYCODE_EFFORT_LEVELS: '["low","high"]', ANYCODE_REASONING_EFFORT: "high" }, input, output: new PassThrough(), cwd: workspace });
+    input.write("delegate a task\n/quit\n");
+    expect(await run).toBe(0);
+    expect(requests.find((request) => request.model === "child")?.reasoning_effort).toBe("high");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}, 15000);

@@ -37,6 +37,7 @@ export const ENV_TODO_REMINDER_EVERY = "ANYCODE_TODO_REMINDER_EVERY";
 export const ENV_SUPERVISOR_IDLE_MS = "ANYCODE_SUPERVISOR_IDLE_MS";
 export const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 export const ENV_REASONING_EFFORT = "ANYCODE_REASONING_EFFORT";
+export const ENV_EFFORT_LEVELS = "ANYCODE_EFFORT_LEVELS";
 export const ENV_CONTEXT_WINDOW = "ANYCODE_CONTEXT_WINDOW";
 /** Model binding for ANYCODE_CONTEXT_WINDOW (TASK.142): the pair is model-specific. */
 export const ENV_CONTEXT_WINDOW_MODEL = "ANYCODE_CONTEXT_WINDOW_MODEL";
@@ -205,6 +206,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
     supervisorIdleMs,
     maxOutputTokens,
     reasoningEffort,
+    effortLevels: readEffortLevels(env),
     promptCache,
     contextWindowTokens,
     contextWindowModel,
@@ -288,6 +290,20 @@ function readProviderTransport(env: NodeJS.ProcessEnv): ProviderTransport | unde
   throw new Error(
     `Invalid ${ENV_PROVIDER_TRANSPORT}: "${raw}" is not one of ${PROVIDER_TRANSPORT_VALUES.join(", ")}`,
   );
+}
+
+function readEffortLevels(env: NodeJS.ProcessEnv): ReasoningEffort[] | undefined {
+  const raw = env[ENV_EFFORT_LEVELS];
+  if (raw === undefined || raw.trim() === "") return undefined;
+  try {
+    const value: unknown = JSON.parse(raw);
+    const allowed = ["off", "low", "medium", "high", "xhigh", "max"];
+    if (Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === "string" && allowed.includes(v))) {
+      return [...new Set(value)] as ReasoningEffort[];
+    }
+  } catch { /* warn below */ }
+  console.warn(`Invalid ${ENV_EFFORT_LEVELS}: expected a nonempty JSON array of effort levels — ignoring`);
+  return undefined;
 }
 
 function readReasoningEffort(env: NodeJS.ProcessEnv): ReasoningEffort | undefined {

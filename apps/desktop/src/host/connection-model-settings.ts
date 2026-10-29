@@ -74,6 +74,7 @@ export function createConnectionModelSettings(deps: {
     pricingSnapshot() { return hasReadConnection ? { fallback: connection?.pricing, models: Object.fromEntries(Object.entries(connection?.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => [id, value.pricing])) } : undefined; },
     hasReadConnection() { return hasReadConnection; },
     capabilitiesFor,
+    effortLevelsFor(model: string) { return modelOverrideFor(connection, model)?.effortLevels; },
     effortFor,
     contextFor(model: string) {
       const envApplies = (!deps.envContextWindowFromSettings || !hasReadConnection) && deps.envContextWindow !== undefined &&
@@ -90,7 +91,7 @@ export function createConnectionModelSettings(deps: {
       // A new persisted choice must not be replaced by Session's previous tier.
       if (!explicit && !invalidated.has(from)) selected.set(from, tier);
       const next = explicit ? tier : effortFor(to) ??
-        resolveReasoningEffort(to, deps.catalogEntry, undefined, capabilitiesFor(to)) ?? "off";
+        resolveReasoningEffort(to, deps.catalogEntry, undefined, capabilitiesFor(to), modelOverrideFor(connection, to)?.effortLevels) ?? "off";
       selected.set(to, next);
       invalidated.delete(to);
       return next;

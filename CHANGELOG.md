@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Custom endpoints can declare supported reasoning levels and save image input for a new connection (GitHub #2).
+
 ## [0.0.51] — 2026-10-29
 
 ### Changed

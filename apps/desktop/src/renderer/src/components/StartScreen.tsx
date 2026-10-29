@@ -736,6 +736,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
     modelChip.modelId,
     snapshot?.catalog,
     modelCapabilitiesFor(chipConnection, modelChip.modelId),
+    modelOverrideFor(chipConnection, modelChip.modelId)?.effortLevels,
   );
   // Taskana 4894: the provider's documented default tier for that model —
   // the level to show when neither the draft nor the connection has a pick.
