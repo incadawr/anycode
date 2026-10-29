@@ -570,6 +570,34 @@ describe("acknowledged deferred effort", () => {
     expect(ui.received.filter((message) => message.type === "fatal")).toEqual([]);
   });
 
+  it("keeps the newer effort pending after Stop while acknowledgements are queued", async () => {
+    const engine = new AcknowledgedEffortEngine();
+    const ui = fixtureWith({ engine });
+    ui.send({ type: "ui_ready" });
+    ui.send({ type: "user_message", requestId: "a", text: "first" });
+    await ui.settle();
+    ui.send({ type: "set_engine_effort", effort: "high" });
+    await ui.settle();
+    engine.finishTurn();
+    await ui.settle();
+    ui.send({ type: "user_message", requestId: "b", text: "second" });
+    ui.send({ type: "set_engine_effort", effort: "xhigh" });
+    await ui.settle();
+    ui.send({ type: "cancel_turn" });
+    await ui.settle();
+    expect(engine.turns).toBe(1);
+    engine.settleEffort(true);
+    await ui.settle();
+    expect(engine.picks).toEqual(["high", "xhigh"]);
+    expect(settings(ui.received).at(-1)).toMatchObject({ state: "pending", effort: "xhigh", deferredEffort: true });
+    ui.send({ type: "ui_ready" });
+    await ui.settle();
+    expect(settings(ui.received).at(-1)).toMatchObject({ state: "pending", effort: "xhigh", deferredEffort: true });
+    engine.settleEffort(true);
+    await ui.settle();
+    expect(engine.snapshot().effort).toBe("xhigh");
+  });
+
   it("reports rejection immediately and allows the next turn with the prior effort", async () => {
     const engine = new AcknowledgedEffortEngine();
     const ui = fixtureWith({ engine });
