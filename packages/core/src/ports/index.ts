@@ -1,3 +1,6 @@
+import type { GitReadPort } from "./git-read.js";
+export type { GitReadPort, GitReadOutput } from "./git-read.js";
+
 import type { ExecutionPort } from "./execution.js";
 import type { FileSystemPort } from "./file-system.js";
 import type { HttpPort } from "./http.js";
@@ -108,11 +111,12 @@ export type {
 
 /**
  * Host-provided side-effect ports handed to tool handlers via ToolContext.
- * All fields are required by design (§2.4): a tool must never be able to
- * "not receive" a port. PersistencePort is intentionally NOT here — history
+ * Base ports are required; optional capabilities fail closed when absent.
+ * PersistencePort is intentionally NOT here — history
  * persistence attaches through HistorySink, tools do not see it.
  */
 export interface CorePorts {
+  gitRead?: GitReadPort;
   fs: FileSystemPort;
   exec: ExecutionPort;
   /** NodeHttpAdapter (global fetch) in adapters/node. */

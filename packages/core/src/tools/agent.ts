@@ -89,7 +89,7 @@ const DEFAULT_AGENT_TYPE = "general-purpose";
 
 /** Base description shared by both declarations (CUT-S2 §2.1); sessionTier:true appends one sentence. */
 const BASE_DESCRIPTION =
-  'Delegate a task to a subagent. agent_type "explore" = read-only recon for sweeping several files when you only need the conclusion; "general-purpose" = the subtask needs write/exec tools. Independent Agent calls issued together in one response run concurrently — fan out disjoint searches. For a single known-file fact, Read/Grep it yourself; once delegated, do not redo the search.';
+  'Delegate a task to a subagent. agent_type "explore" = read-only recon that can read files and Git history with Git, but cannot run commands; use general-purpose for work needing Bash; "general-purpose" = the subtask needs write/exec tools. Independent Agent calls issued together in one response run concurrently — fan out disjoint searches. For a single known-file fact, Read/Grep it yourself; once delegated, do not redo the search.';
 
 const SESSION_TIER_DESCRIPTION_SUFFIX =
   ' Tier "session" spawns a full child session the user can open and steer. send_to delivers a follow-up to your own still-running child (tier session).';

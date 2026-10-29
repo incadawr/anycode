@@ -9,6 +9,7 @@ const ALL_TOOLS = [
   "ArchMap",
   "Bash",
   "Edit",
+  "Git",
   "Glob",
   "Grep",
   "Read",

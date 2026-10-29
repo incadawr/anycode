@@ -191,6 +191,7 @@ import {
   NodeExecutionAdapter,
   NodeFileSystemAdapter,
   NodeGitAdapter,
+  NodeGitReadAdapter,
   NodeHttpAdapter,
   NodeMcpTransportFactory,
   createModelAskClassifier,
@@ -4157,6 +4158,7 @@ async function boot(): Promise<void> {
       ports: {
         fs: fsAdapter,
         exec: execAdapter,
+        gitRead: new NodeGitReadAdapter(execAdapter),
         http: new NodeHttpAdapter(),
         todos: new InMemoryTodoStore(),
       },

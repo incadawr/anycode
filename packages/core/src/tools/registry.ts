@@ -2,6 +2,7 @@
 
 import type { AnyToolDefinition, ToolDefinition, ToolMetadata } from "../types/tools.js";
 import type { WebSearchInput, WebSearchOutput } from "./schemas.js";
+import { gitTool } from "./git.js";
 import { readTool } from "./read.js";
 import { writeTool } from "./write.js";
 import { editTool } from "./edit.js";
@@ -79,15 +80,16 @@ export interface CreateDefaultToolRegistryOptions {
 }
 
 /**
- * Builds a registry with the twelve built-ins: Read, Write, Edit, Bash, Grep
+ * Builds a registry with the thirteen built-ins: Git, Read, Write, Edit, Bash, Grep
  * (Phase 0) + Glob, TodoRead, TodoWrite, WebFetch (Phase 1, design §2.14) +
  * Agent (Phase 3 slice 3.1, design §3.4) + Skill (Phase 3 slice 3.3, design
  * §2.7) + Workflow (Phase 3 slice 3.4, design §2.7). With opts.archMap the
- * thirteenth built-in joins (TASK.233 slice S1, opt-in per Taskana 4162).
+ * fourteenth built-in joins when ArchMap is enabled.
  */
 export function createDefaultToolRegistry(opts?: CreateDefaultToolRegistryOptions): ToolRegistry {
   const registry = new ToolRegistry();
   registry.register(readTool);
+  registry.register(gitTool);
   registry.register(writeTool);
   registry.register(editTool);
   registry.register(bashTool);
