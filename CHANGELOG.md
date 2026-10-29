@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.52] — 2026-10-30
+
 ### Added
 
 - Explore agents can read Git history and status using a read-only Git tool (GitHub #22).
