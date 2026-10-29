@@ -311,7 +311,6 @@ import type {
   RepoMapConfig,
   SessionSubagentOutcome,
   SessionSubagentRequest,
-  SubagentRunOptions,
   SubagentStallReport,
   SystemPromptEnv,
   TelemetryPort,
@@ -339,7 +338,8 @@ import {
 } from "./supervisor-idle-watchdog.js";
 import { attachChildReportDurability, attachEngineChildReportDurability } from "./child-report-durability.js";
 import { createSpawnModeCell } from "./spawn-mode-cell.js";
-import { RoleHealthCache, decideRoutedTerminal, entryLabel, pickEntry, resolveRoleRouteChain, respawnReportId, toCoreEntry } from "./role-route.js";
+import { createRoutedChildComposition } from "./routed-child-composition.js";
+import { RoleHealthCache, pickEntry, resolveRoleRouteChain, toCoreEntry } from "./role-route.js";
 import { parseSettings } from "../settings/schema.js";
 import { ENV_APP_VERSION, parseAppVersionEnv } from "../main/host-env.js";
 import { readFileSync, realpathSync } from "node:fs";
@@ -680,161 +680,7 @@ function sendChildSessionMessage(message: ChildSpawnRequest | ChildRunCancel | C
   process.parentPort.postMessage(message);
 }
 
-/**
- * Taskana 4704 §3.6: per-spawn record of the role entry a DETACHED spawn
- * actually ran on (the host stamped it at spawn time via the Agent tool's
- * roleRoute). Keyed by `spawnToolCallId` — the stable id a terminal outcome
- * carries back. Removed at every terminal (the port's onDetachedTerminal
- * fires exactly once per detached child).
- */
-interface RoutedSpawnRecord {
-  role: string;
-  /** The entry this child is running on (already core-shaped). */
-  entry: import("@anycode/core").RoleRouteEntry;
-  /** The REMAINING chain after `entry` (health re-checked at respawn). */
-  rest: import("@anycode/core").RoleRouteEntry[];
-  /** True once this spawn already ran on a non-primary entry (visibility §3.6). */
-  usedFallback: boolean;
-  /** The reason the primary was skipped (for the visibility line); undefined when the primary was used. */
-  skipReason?: string;
-}
-const routedSpawns = new Map<string, RoutedSpawnRecord>();
-
-/**
- * Taskana 4704 §3.6 (cross-review F2): registers a detached spawn's route
- * facts at ADMIT time. Called by the host wrapper around the child port with
- * the entry the child ACTUALLY runs on (as stamped on the request) plus the
- * remaining chain — pure bookkeeping, no I/O.
- */
-function noteRoutedSpawn(
-  req: SessionSubagentRequest,
-  actualEntry: import("@anycode/core").RoleRouteEntry,
-  rest: import("@anycode/core").RoleRouteEntry[],
-  skipped: readonly { entry: import("@anycode/core").RoleRouteEntry; reason: string }[],
-): void {
-  if (!isRoleRouteName(req.agentType)) return;
-  routedSpawns.set(req.spawnToolCallId, {
-    role: req.agentType,
-    entry: actualEntry,
-    rest: [...rest],
-    usedFallback: skipped.length > 0,
-    ...(skipped.length > 0 ? { skipReason: skipped[0]!.reason } : {}),
-  });
-}
-
-/**
- * Taskana 4704 §3.6 — the visibility line for a terminal report: names the
- * role, the NON-PRIMARY entry it ran on, and why (spawn-time skip reason or
- * respawn cause). Undefined for primary-entry runs (the common case — no
- * noise). MUST run before respawnRoutedRoleChild (which consumes the record).
- */
-function detachedRouteNotice(req: SessionSubagentRequest): string | undefined {
-  const record = routedSpawns.get(req.spawnToolCallId);
-  if (record === undefined || !record.usedFallback || record.skipReason === undefined) {
-    return undefined;
-  }
-  return `Role ${record.role} ran on ${entryLabel(record.entry)} because ${record.skipReason}.`;
-}
-
-/**
- * Taskana 4704 §3.6 — the detached-terminal respawn decision (pure logic in
- * role-route.ts's decideRoutedTerminal; this wrapper performs the I/O: the
- * re-spawn through the port and the short report). Returns true when the
- * terminal was CONSUMED by a respawn (the caller must NOT deliver the child's
- * error report). False => deliver the outcome unchanged (possibly with the
- * appended exhausted-chain line).
- */
-function respawnRoutedRoleChild(outcome: SessionSubagentOutcome, req: SessionSubagentRequest): boolean {
-  const record = routedSpawns.get(req.spawnToolCallId);
-  routedSpawns.delete(req.spawnToolCallId);
-  // R2: classify the SAFE error descriptor only — never the child's free
-  // model text (see role-route.ts decideRoutedTerminal).
-  const decision = decideRoutedTerminal(record, outcome.status, outcome.finalText, roleHealth, Date.now(), outcome.errorDescriptor);
-  if (decision.action === "deliver") {
-    return false;
-  }
-  if (decision.action === "deliver_exhausted") {
-    outcome.finalText = `${outcome.finalText}\n[role ${record!.role}: all route entries failed]`;
-    return false;
-  }
-  // Respawn the same prompt/description on the next healthy entry (F5):
-  // stamp the entry's OWN routing fields and clear whatever the failed
-  // child carried (`...req` alone would keep a stale engine/connection of a
-  // DIFFERENT hop; the entry's engine XOR connection/provider XOR bare-model
-  // shape is authoritative). The respawn notice rides the FAILED child's
-  // spawnToolCallId — the real respawned report arrives under its own fresh
-  // id, so the renderer's originId dedupe (store.ts child_report) can never
-  // swallow it.
-  const respawnId = randomUUID();
-  const respawnReq: SessionSubagentRequest = {
-    agentType: req.agentType,
-    description: `[fallback] ${req.description}`,
-    prompt: req.prompt,
-    spawnToolCallId: respawnId,
-    ...(decision.entry.engine !== undefined ? { engine: decision.entry.engine } : {}),
-    ...(decision.entry.connection !== undefined ? { connectionId: decision.entry.connection } : {}),
-    ...(decision.entry.provider !== undefined ? { provider: decision.entry.provider } : {}),
-    ...(decision.entry.model !== undefined ? { model: decision.entry.model } : {}),
-    ...(decision.entry.effort !== undefined ? { effort: decision.entry.effort } : {}),
-    detach: true,
-  };
-  routedSpawns.set(respawnId, { ...decision.next, rest: [...decision.next.rest] });
-  // F5(c): the run() promise is fully handled here — a detached run settles
-  // at admit; a pre-flight/cap REFUSAL must still reach the orchestrator as
-  // an honest failure report under the FAILED child's id, never as a silent
-  // "retrying" that no report ever follows.
-  // R3 (Taskana 4704 cross-review): the honest refusal/failure report after
-  // a failed respawn rides a DISTINCT queue id — never the failed child's
-  // spawnToolCallId, which the "retrying" notice just took: the renderer
-  // dedupes child_report by originId (store.ts), so a second report under
-  // the same id is silently dropped. The distinct id is namespaced off the
-  // failed child's id (stable, one per respawn attempt, never collides with
-  // a real spawnToolCallId uuid shape) so the retrying notice AND the honest
-  // failure both reach the orchestrator.
-  void childSessionPortForRespawn
-    ?.run(respawnReq, {})
-    .then((admit) => {
-      if (admit.status === "error") {
-        routedSpawns.delete(respawnId);
-        childReportQueue.add(
-          respawnReportId(req.spawnToolCallId, "refused"),
-          formatChildTaskNotification({
-            taskId: req.spawnToolCallId,
-            toolUseId: req.spawnToolCallId,
-            agentId: "",
-            subagentType: req.agentType,
-            status: "failed",
-            summary: `Role ${record!.role} failed (${decision.reason}) and the fallback respawn on ${entryLabel(decision.entry)} was refused: ${admit.finalText}`,
-          }),
-          { status: "error", durationMs: outcome.durationMs },
-        );
-      }
-    })
-    .catch((runError: unknown) => {
-      routedSpawns.delete(respawnId);
-      console.error(`[host] routed role respawn failed: ${describeError(runError)}`);
-      childReportQueue.add(
-        respawnReportId(req.spawnToolCallId, "failed"),
-        formatChildTaskNotification({
-          taskId: req.spawnToolCallId,
-          toolUseId: req.spawnToolCallId,
-          agentId: "",
-          subagentType: req.agentType,
-          status: "failed",
-          summary: `Role ${record!.role} failed (${decision.reason}) and the fallback respawn on ${entryLabel(decision.entry)} could not start.`,
-        }),
-        { status: "error", durationMs: outcome.durationMs },
-      );
-    });
-  // The failed child's terminal is REPLACED by the short retrying notice —
-  // under the failed child's id (a completed marker for a spawn that did
-  // happen), consumed once the renderer acks it.
-  childReportQueue.add(req.spawnToolCallId, decision.notice, { status: "completed", durationMs: 0 });
-  return true;
-}
-
-/** The core boot's child port — set once constructed, used ONLY by the respawn path above. */
-let childSessionPortForRespawn: ChildSessionPort | undefined;
+let routedChildComposition: ReturnType<typeof createRoutedChildComposition> | undefined;
 
 /**
  * TASK.145 срез 1/2: builds and delivers a detached child's terminal report
@@ -853,27 +699,6 @@ let childSessionPortForRespawn: ChildSessionPort | undefined;
  * renderer's (store.ts's `child_report` case).
  */
 function deliverDetachedChildReport(outcome: SessionSubagentOutcome, req: SessionSubagentRequest): void {
-  // Taskana 4704 §3.6 — visibility: whenever a spawn actually ran on a
-  // NON-PRIMARY entry (spawn-time health skip recorded at admit, or a
-  // respawn), the delivered report text gains a first line naming the role,
-  // the entry it ran on, and why. Reports are the orchestrator's input; the
-  // child card already shows the model id (subagent_start.model). PEEKED
-  // here, BEFORE the respawn decision below (which consumes the record).
-  const routeNotice = detachedRouteNotice(req);
-  // Taskana 4704 §3.6 — detached respawn (fallback point 2). An
-  // infrastructure-class failure of a ROUTED role child marks its entry dead
-  // and re-spawns the SAME prompt on the next healthy entry (a fresh child
-  // session; the original error report is REPLACED by a short retrying
-  // notice — the eventual real terminal delivers normally). An exhausted
-  // chain delivers the original error with an appended failure line. A
-  // completed routed child marks its entry healthy. Ordinary task failures
-  // (classify => "none") NEVER fall back — they deliver unchanged.
-  if (respawnRoutedRoleChild(outcome, req)) {
-    return;
-  }
-  if (routeNotice !== undefined) {
-    outcome.finalText = `${routeNotice}\n${outcome.finalText}`;
-  }
   const fullReportPath = childNotificationSummaryOverflows(outcome.finalText)
     ? saveFullChildReport(defaultChildReportDir(), outcome.childSessionId, outcome.finalText)
     : undefined;
@@ -4317,6 +4142,15 @@ async function boot(): Promise<void> {
     // further down. `undefined` for a child-session boot or a claude/codex
     // master, exactly mirroring `config.sessionSubagents`'s own absence.
     let childSessionPortHandle: ChildSessionPort | undefined;
+    routedChildComposition = createRoutedChildComposition({
+      health: roleHealth,
+      describeError,
+      resolve: resolveRoleRouteImpl,
+      prepare: (req) => stampLearnedMaxTurns(req, { adaptive: adaptiveTurnBudget, settingsBudgetSet: envConfig.subagentMaxTurns !== undefined, port: subagentBudget }),
+      record: (outcome, req) => recordAcceptedChildBudget(subagentBudget, outcome, req),
+      report: (id, text, meta) => childReportQueue.add(id, text, meta),
+      deliver: deliverDetachedChildReport,
+    });
     // A1/R1 (Taskana 4704 review): the child port (below) exists BEFORE the
     // Session, so the child spawn mode is read through the shared cell
     // (spawn-mode-cell.ts): config-derived until the Session exists, then the
@@ -4343,8 +4177,7 @@ async function boot(): Promise<void> {
         // turn count exists (the admit outcome is not evidence), so the
         // adaptive history is written here, before the report is delivered.
         onDetachedTerminal: (outcome, req) => {
-          recordAcceptedChildBudget(subagentBudget, outcome, req);
-          deliverDetachedChildReport(outcome, req);
+          routedChildComposition!.onTerminal(outcome, req);
         },
         // TASK.148 slice 2: the detached-stall delivery seam — fires
         // mid-run, zero or more times, independently of onDetachedTerminal
@@ -4371,63 +4204,7 @@ async function boot(): Promise<void> {
           readChildSessionsPerParentMax(hostSettingsPathOverride() ?? defaultSettingsPath(), rolesProjectRoot),
       });
       config.sessionSubagents = childSessionPortHandle;
-      // Taskana 4704 §3.6: the respawn path re-spawns through THIS port, and
-      // every detached spawn's route facts are recorded at admit so a
-      // terminal can classify + respawn. The wrapper records ONLY routed
-      // role spawns (noteRoutedSpawn no-ops otherwise) and never alters the
-      // outcome — the port itself stays byte-identical.
-      childSessionPortForRespawn = childSessionPortHandle;
-      const innerRun = childSessionPortHandle.run.bind(childSessionPortHandle);
-      childSessionPortHandle.run = (req: SessionSubagentRequest, opts: SubagentRunOptions) => {
-        // Cross-review F2: record ONLY spawns whose route the HOST actually
-        // stamped — a caller-passed explicit model/provider/connection is the
-        // caller's own choice, never a role-chain hop, so a later infra
-        // failure must NOT respawn it onto the chain (that would override the
-        // explicit request). R7 (re-review #3): core's routeStamped flag is
-        // the ONLY discriminator — it is set exactly when the route (not the
-        // caller) stamped the request (tools/agent.ts), so a caller's explicit
-        // model that merely equals the bare head model is never mistaken for a
-        // chain hop. Field equality is no longer consulted.
-        // GitHub #17 slice D: a SYNCHRONOUS join that can be
-        // handed off to the background needs the same route facts recorded —
-        // its real terminal arrives after the tool call returned. The snapshot
-        // (head/rest/skipped) is captured HERE, at dispatch, so a later
-        // background terminal never reads freshly changed settings.
-        if (
-          (req.detach === true || req.allowBackgroundHandoff === true) &&
-          isRoleRouteName(req.agentType) &&
-          req.resumeChildSessionId === undefined
-        ) {
-          const resolution = resolveRoleRouteImpl(req.agentType);
-          const head = resolution?.entries[0];
-          if (head !== undefined) {
-            if (req.routeStamped === true) {
-              noteRoutedSpawn(req, head, resolution!.entries.slice(1), resolution!.skipped);
-            }
-          }
-        }
-        // TASK.4721: adaptive only — a learned base budget stands in for the
-        // host default (never over an explicit request, the settings budget, or
-        // an engine child). The same object is returned when nothing applies.
-        const budgeted = stampLearnedMaxTurns(req, {
-          adaptive: adaptiveTurnBudget,
-          settingsBudgetSet: envConfig.subagentMaxTurns !== undefined,
-          port: subagentBudget,
-        });
-        // GitHub #17 slice D: ONE outcome-based continuation for
-        // every request. An admission/handoff outcome (explicit detach OR a
-        // join-budget handoff) is not a finished run — it must neither train
-        // the budget nor release the routed-spawn facts (the child's real
-        // terminal, delivered through onDetachedTerminal, still needs them).
-        // A real synchronous terminal/rejection records its budget and drops
-        // the route facts, exactly like before this slice.
-        return innerRun(budgeted, opts).then((outcome) => {
-          if (outcome.background !== undefined) return outcome;
-          routedSpawns.delete(req.spawnToolCallId);
-          recordAcceptedChildBudget(subagentBudget, outcome, budgeted);
-          return outcome;
-        });
-      };
+      routedChildComposition.attach(childSessionPortHandle);
     }
     // taskana 4181: the supervisor idle watchdog for a CORE root boot — the
     // engine-agnostic twin of the codex boot's construction above (same

@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Keep background child progress visible at handoff and identify children in permission dialogs.
+
 ### Added
 
 - Explore agents can read Git history and status using a read-only Git tool (GitHub #22).

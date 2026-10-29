@@ -2606,7 +2606,7 @@ describe("TabHostManager — session-spawn queue (TASK.147 срез 1)", () => {
       kind: "rejected",
       reason: "limit_parent",
       message:
-        'Agent: session-subagent limit reached — this session already has 3 running child sessions. Wait for one to finish, or use tier "inline".',
+        'Agent: child session limit reached (3 running or pending). Wait for a report or stop a child before delegating more.',
     });
     expect(raw.childSpawnQueue).toHaveLength(CHILD_SPAWN_QUEUE_MAX); // never enqueued
   });
@@ -7530,6 +7530,23 @@ describe("TabHostManager — GitHub #17 slice A accepted acknowledgement", () =>
  * flag exists to avoid. Explicitly synchronous callers keep the FIFO queue.
  */
 describe("TabHostManager — detached spawns are refused at the cap, never parked (GitHub #17 slice B)", () => {
+  it("uses the configured per-parent count for detached refusals and keeps joins queued", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, { childRunsPerParentMax: () => 1 });
+    manager.createTab({ workspace: "/ws", sessionId: "root-small-cap", resume: false });
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "first", detach: true }));
+    rootHost.emit("message", spawnRequest({ requestId: "refused", detach: true, spawnToolCallId: "refused" }));
+    rootHost.emit("message", spawnRequest({ requestId: "queued", spawnToolCallId: "queued" }));
+    expect(childRunEvents(rootHost).find((event) => event.requestId === "refused")).toMatchObject({
+      kind: "rejected", reason: "limit_parent",
+      message: "Agent: child session limit reached (1 running or pending). Wait for a report or stop a child before delegating more.",
+    });
+    expect(childRunEvents(rootHost).some((event) => event.requestId === "queued")).toBe(false);
+    expect(hosts).toHaveLength(2);
+  });
+
   it("four detached same-step requests accept three and reject the fourth without queueing", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
@@ -7551,7 +7568,7 @@ describe("TabHostManager — detached spawns are refused at the cap, never parke
       kind: "rejected",
       reason: "limit_parent",
       message:
-        'Agent: session-subagent limit reached — this session already has 3 running child sessions. Wait for one to finish, or use tier "inline".',
+        'Agent: child session limit reached (3 running or pending). Wait for a report or stop a child before delegating more.',
     });
     // Nothing was queued, nothing was reserved, nothing forked.
     const raw = manager as unknown as { childSpawnQueue: string[]; childSpawnKeys: Map<string, string> };

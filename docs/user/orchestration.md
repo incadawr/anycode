@@ -72,7 +72,7 @@ for that project's parent session and never raise it — the lower of the two
 applies. Leave the field blank to use the session limit.
 
 A background (detached) spawn above the limit is refused immediately with the
-limit message, so a burst of delegations never stalls the parent turn. A spawn
+“child session limit reached” message, counting running children and pending admissions, so a burst of delegations never stalls the parent turn. A spawn
 asked to wait synchronously stays queued and starts when a slot frees.
 
 For a longer worked example, the source repository has `docs/orchestration.md`.

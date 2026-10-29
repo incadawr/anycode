@@ -1,3 +1,4 @@
+import { childSessionLimitMessage } from "../shared/session-limits.js";
 /**
  * Host-side RPC client for `SessionSubagentPort` (TASK.102 CUT-S2 §2.6.1):
  * the parent root host's half of the `Agent tier:"session"` wire. Turns one
@@ -644,7 +645,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
       if (cap !== undefined && liveDetachedCount() >= cap) {
         return Promise.resolve({
           status: "error",
-          finalText: `Agent: child limit reached (${liveDetachedCount()} running). Wait for a report or stop a child before delegating more.`,
+          finalText: childSessionLimitMessage(liveDetachedCount()),
           truncated: false,
           turns: 0,
           toolCalls: 0,
@@ -724,7 +725,11 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     // an explicit detach is in background mode before it is ever handed off).
     let handedOff = false;
     let acceptedEvent: Extract<ChildRunEvent, { kind: "accepted" }> | undefined;
-    let acceptedAt = 0;
+    let acceptedAt: number | undefined;
+    let latestProgress: Partial<BackgroundChildSnapshot> = {};
+    const retainProgress = (patch: Partial<BackgroundChildSnapshot>): void => {
+      latestProgress = { ...latestProgress, ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) };
+    };
     let terminalSeen = false;
     let joinTimer: ReturnType<typeof setTimeout> | undefined;
     // A permission ask that arrived while this run was still JOINING: a
@@ -845,8 +850,8 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
             description: req.description,
             // Elapsed time continues from the ACTUAL admission, not the
             // handoff — a 2-minute wait is not reset to zero by the handoff.
-            startedAt: acceptedAt !== 0 ? acceptedAt : Date.now(),
-            ...(joiningAsk !== undefined ? { waitingForApproval: true } : {}),
+            startedAt: acceptedAt ?? Date.now(),
+            ...latestProgress,
           },
           cancelRequested: false,
         });
@@ -907,6 +912,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               // detached OR already handed off), a handoff-eligible joining run
               // that starts its budget clock here, or a plain synchronous join.
               // A duplicate accepted is a no-op: settlement happens once.
+              if (acceptedEvent !== undefined) return;
               acceptedEvent = event;
               acceptedAt = Date.now();
               if (mode === "background" || req.detach === true) {
@@ -969,6 +975,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               // returned at admit, so no live card exists for opts.onProgress
               // to update.
               stallClock.noteProgress(event.lastTool);
+              retainProgress({ turns: event.turns, toolCalls: event.toolCalls, lastTool: event.lastTool });
               if (mode === "background") {
                 updateBackgroundSnapshot(acceptedEvent?.childSessionId ?? "", {
                   turns: event.turns,
@@ -1028,6 +1035,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
             }
             case "activity": {
               stallClock.noteProgress(event.toolName);
+              retainProgress({ lastTool: event.toolName });
               if (mode === "background") {
                 updateBackgroundSnapshot(acceptedEvent?.childSessionId ?? "", { lastTool: event.toolName });
                 return;
@@ -1049,6 +1057,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               } else {
                 stallClock.resume();
               }
+              retainProgress({ waitingForApproval: event.waiting, ...(event.waiting ? { lastTool: event.toolName } : {}) });
               if (mode === "joining") {
                 // A joining run has no parent-side notice yet, but a handoff
                 // must know whether an ask was already pending when the wait
