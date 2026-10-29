@@ -145,7 +145,10 @@ function handle(message) {
   const method = message.method;
 
   if (method === "initialize") {
-    if (has("--no-init-reply")) return;
+    if (has("--no-init-reply")) {
+      if (has("--report-init")) process.stderr.write("initialize received\n");
+      return;
+    }
     send({
       jsonrpc: "2.0",
       id: message.id,
