@@ -1070,6 +1070,7 @@ export interface SessionOptions {
   reasoningSupported?: boolean;
   /** Effort levels the boot model supports (for the UI selector + set_reasoning_effort validation). */
   availableEffortLevels?: ReasoningEffort[];
+  bootEffortAdjustment?: { from: ReasoningEffort; to: ReasoningEffort };
   /**
    * Core's own effort resolution, for the models `sessionEffortState()` has to
    * describe (host/index.ts threads `resolveEffortLevels` +
@@ -1283,6 +1284,7 @@ export class Session {
   // Slice P7.15 (F14): mutable — re-resolved per new model on a set_model switch.
   private reasoningSupported: boolean;
   private availableEffortLevels: ReasoningEffort[] | undefined;
+  private bootEffortAdjustment: { from: ReasoningEffort; to: ReasoningEffort } | undefined;
   private readonly effortResolution: SessionOptions["effortResolution"];
   /** Slice P7.15 (F14): the user-selected effort tier, persisted across a model switch. */
   private selectedEffort: ReasoningEffort;
@@ -1296,6 +1298,8 @@ export class Session {
    */
   private pendingModel: string | undefined;
   private pendingEffort: ReasoningEffort | undefined;
+  private pendingModelRequestId: string | undefined;
+  private pendingEffortRequestId: string | undefined;
   private pendingEngineEffort: { effort: string; model: string; seam: EngineSettingsSeam; engine: SessionEngine } | undefined;
   private inFlightEngineEffort: typeof this.pendingEngineEffort;
   private settingsBarrier: Promise<void> = Promise.resolve();
@@ -1714,6 +1718,7 @@ export class Session {
     this.refineTitle = options.refineTitle;
     this.reasoningSupported = options.reasoningSupported ?? true;
     this.availableEffortLevels = options.availableEffortLevels;
+    this.bootEffortAdjustment = options.bootEffortAdjustment;
     this.effortResolution = options.effortResolution;
     this.selectedEffort = options.selectedEffort ?? this.engine.reasoningEffort() ?? "off";
     this.sendPreviewArtifacts = options.postPreviewArtifacts;
@@ -2457,6 +2462,8 @@ export class Session {
           this.child.onReady();
         }
         const presentation = enginePresentation(this.engine, this.engineSettings);
+        const bootEffortAdjustment = this.bootEffortAdjustment;
+        this.bootEffortAdjustment = undefined;
         this.outbound.sendDirect({
           type: "host_ready",
           workspace: this.workspace,
@@ -2467,6 +2474,7 @@ export class Session {
           sessionId: this.sessionId,
           ...(this.checkpointContextUsage !== null ? { contextUsage: this.checkpointContextUsage } : {}),
           reasoningEffort: this.engine.reasoningEffort() ?? "off",
+          ...(bootEffortAdjustment !== undefined ? { effortAdjustment: bootEffortAdjustment } : {}),
           ...(this.availableEffortLevels !== undefined ? { availableEffortLevels: this.availableEffortLevels } : {}),
           // TASK.56 W2: live image-input verdict for the CURRENT model (the
           // seam is a closure over the active model, host/index.ts). Rides
@@ -2728,7 +2736,7 @@ export class Session {
           (this.availableEffortLevels === undefined || this.availableEffortLevels.includes(message.effort))
         ) {
           if (!this.busy) {
-            this.applyReasoningEffort(message.effort);
+            this.applyReasoningEffort(message.effort, message.requestId);
             break;
           }
           // Taskana 4895: the CORE engine queues a mid-turn pick instead of
@@ -2738,6 +2746,7 @@ export class Session {
           // is `set_engine_effort`, not this message).
           if (this.engine.id === "core") {
             this.pendingEffort = message.effort;
+            this.pendingEffortRequestId = message.requestId;
           }
         }
         break;
@@ -2779,10 +2788,11 @@ export class Session {
         if (this.busy) {
           if (this.engine.id === "core") {
             this.pendingModel = id;
+            this.pendingModelRequestId = message.requestId;
           }
           break;
         }
-        this.applyModelSwitch(id);
+        this.applyModelSwitch(id, false, message.requestId);
         break;
       }
       case "set_engine_preset":
@@ -2952,11 +2962,15 @@ export class Session {
     this.applyPendingEngineEffort();
     const model = this.pendingModel;
     const effort = this.pendingEffort;
+    const modelRequestId = this.pendingModelRequestId;
+    const effortRequestId = this.pendingEffortRequestId;
+    this.pendingModelRequestId = undefined;
+    this.pendingEffortRequestId = undefined;
     this.pendingModel = undefined;
     this.pendingEffort = undefined;
     if (model === undefined) {
       if (effort !== undefined) {
-        this.applyReasoningEffort(effort);
+        this.applyReasoningEffort(effort, effortRequestId);
       }
       return;
     }
@@ -2965,13 +2979,15 @@ export class Session {
       // switch below re-resolves it against the new model's capabilities.
       this.selectedEffort = effort;
     }
-    if (!this.applyModelSwitch(model, effort !== undefined) && effort !== undefined) {
-      this.applyReasoningEffort(effort);
+    if (!this.applyModelSwitch(model, effort !== undefined, modelRequestId, effortRequestId) && effort !== undefined) {
+      this.applyReasoningEffort(effort, effortRequestId);
     }
   }
 
   /** Taskana 4895: drops a queued mid-turn pick — used when the engine itself is about to be replaced (the pick was made against the old one). */
   private clearPendingModelSelection(): void {
+    this.pendingModelRequestId = undefined;
+    this.pendingEffortRequestId = undefined;
     this.pendingModel = undefined;
     this.pendingEffort = undefined;
   }
@@ -2986,13 +3002,14 @@ export class Session {
     if (this.engine.id === "core") this.applyModelSwitch(this.model);
   }
 
-  private applyModelSwitch(id: string, effortExplicit = false): boolean {
+  private applyModelSwitch(id: string, effortExplicit = false, requestId?: string, effortRequestId?: string): boolean {
     if (this.engine.switchModel === undefined) {
       return false;
     }
     // switchModel runs the full re-budget recipe host-side and returns the
     // effort state re-resolved for the NEW model. Core also returns that
     // model's restored selected tier, independently of its effective effort.
+    const requestedEffort = effortExplicit ? this.selectedEffort : undefined;
     const result = effortExplicit
       ? this.engine.switchModel(id, this.selectedEffort, true)
       : this.engine.switchModel(id, this.selectedEffort);
@@ -3005,8 +3022,12 @@ export class Session {
     this.reasoningSupported = result.availableEffortLevels !== undefined;
     this.outbound.emit({
       type: "model_changed",
+      ...(requestId !== undefined ? { requestId } : {}),
+      ...(effortRequestId !== undefined ? { effortRequestId } : {}),
       ...(result.contextUsage !== undefined ? {contextUsage: result.contextUsage} : {}),
       ...(result.selectedReasoningEffort !== undefined ? {selectedReasoningEffort: result.selectedReasoningEffort} : {}),
+      ...(requestedEffort !== undefined ? { requestedReasoningEffort: requestedEffort } : {}),
+      ...(result.effortAdjustment !== undefined ? { effortAdjustment: result.effortAdjustment } : {}),
       model: result.model,
       reasoningEffort: result.reasoningEffort,
       ...(result.availableEffortLevels !== undefined ? { availableEffortLevels: result.availableEffortLevels } : {}),
@@ -3030,7 +3051,7 @@ export class Session {
   }
 
   /** Taskana 4895: the effort half of the same recipe — remembered as the user's SELECTED tier, applied to the engine, acked to the renderer. */
-  private applyReasoningEffort(effort: ReasoningEffort): void {
+  private applyReasoningEffort(effort: ReasoningEffort, requestId?: string): void {
     // Slice P7.15 (F14): remember the user-selected tier so a later model
     // switch re-resolves effort against it (a non-reasoning model drops it,
     // but switching back restores it).
@@ -3039,6 +3060,7 @@ export class Session {
     else this.engine.setReasoningEffort(effort === "off" ? undefined : effort);
     this.outbound.emit({
       type: "reasoning_effort_changed",
+      ...(requestId !== undefined ? { requestId } : {}),
       effort,
       ...(this.availableEffortLevels !== undefined ? { availableEffortLevels: this.availableEffortLevels } : {}),
     });

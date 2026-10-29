@@ -1009,6 +1009,8 @@ export interface ModelSelectionAck {
   kind: "model" | "effort";
   model: string | null;
   effort: ReasoningEffort;
+  requestId?: string;
+  effortRequestId?: string;
 }
 
 export interface DesktopState {
@@ -1152,6 +1154,7 @@ export interface DesktopState {
   networkWaitEpisodes: { parent: number; subagent: number };
   /** Last `context_usage` reading (design §2.12); null before the first one arrives in a session. */
   modelSelectionAck?: ModelSelectionAck | null;
+  effortSelectionAck?: ModelSelectionAck | null;
   contextUsage: ContextUsage | null;
   /** Last fatal message from the host (e.g. sanitizer failure); null once nothing has fired yet. */
   lastFatal: string | null;
@@ -1548,6 +1551,7 @@ interface SessionSlice {
   /** Taskana 4772 review F2: see DesktopState.networkWaitEpisodes. */
   networkWaitEpisodes: { parent: number; subagent: number };
   modelSelectionAck?: ModelSelectionAck | null;
+  effortSelectionAck?: ModelSelectionAck | null;
   contextUsage: ContextUsage | null;
   mcpServers: McpServerStatus[];
   lspServers: LspServerStatus[];
@@ -1622,6 +1626,7 @@ function initialSessionSlice(): SessionSlice {
     // at once). waitingForNetwork is its `sum > 0` projection.
     networkWaitEpisodes: { parent: 0, subagent: 0 },
     modelSelectionAck: null,
+    effortSelectionAck: null,
     contextUsage: null,
     mcpServers: [],
     lspServers: [],
@@ -4443,6 +4448,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               shell: message.shell ?? null,
               model: message.model,
               reasoningEffort: message.reasoningEffort ?? "off",
+              ...(message.effortAdjustment !== undefined ? { notice: { kind: "engine_notice" as const, text: `${message.model} reasoning effort adjusted to ${message.effortAdjustment.to}.` } } : {}),
               availableEffortLevels: message.availableEffortLevels,
               // TASK.56 W3: live per-model verdict off the same hello (W2
               // wire). Absent on the message -> undefined here -> no
@@ -4471,7 +4477,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             return;
           case "reasoning_effort_changed":
             set({
-              modelSelectionAck: {kind: "effort", model: get().model, effort: message.effort},
+              effortSelectionAck: {kind: "effort", model: get().model, effort: message.effort, requestId: message.requestId},
               reasoningEffort: message.effort,
               ...(message.availableEffortLevels !== undefined ? { availableEffortLevels: message.availableEffortLevels } : {}),
             });
@@ -4494,10 +4500,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // needed here.
             set({
               contextUsage: message.contextUsage ?? null,
-              modelSelectionAck: {kind: "model", model: message.model, effort: message.selectedReasoningEffort ?? message.reasoningEffort},
+              modelSelectionAck: {kind: "model", model: message.model, effort: message.selectedReasoningEffort ?? message.reasoningEffort, requestId: message.requestId, effortRequestId: message.effortRequestId},
               model: message.model,
               reasoningEffort: message.reasoningEffort,
               availableEffortLevels: message.availableEffortLevels,
+              ...(message.effortAdjustment !== undefined ? { notice: { kind: "engine_notice" as const, text: `${message.model} reasoning effort adjusted to ${message.effortAdjustment.to}.` } } : {}),
               // TASK.56 W3: re-gate upfront on a mid-session model switch —
               // vision -> non-vision flips this to false in the SAME push
               // that already updates `model` (W2 re-reads the verdict after

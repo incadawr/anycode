@@ -1574,6 +1574,7 @@ export class TabHostManager {
     tab: TabHost,
     opts: {
       firstSpawn: boolean;
+      priorEffort?: ReasoningEffort;
       onDeferredInitialSpawn?: () => void;
       onDeferredFinished?: () => void;
       beforeDeferredPortDelivery?: (tab: TabHost) => void;
@@ -1767,6 +1768,8 @@ export class TabHostManager {
           // is stamped per-fork from `tab.connectionId` (never baked into the shared
           // base env — a legacy/unpinned tab must not inherit another tab's pin).
           ...baseEnv,
+          ...(opts.priorEffort !== undefined || baseEnv.ANYCODE_SWITCH_PRIOR_EFFORT !== undefined
+            ? { ANYCODE_SWITCH_PRIOR_EFFORT: opts.priorEffort ?? "" } : {}),
           ...(tab.connectionId !== undefined ? { [ENV_CONNECTION_ID]: tab.connectionId } : {}),
           // S4-1 arm 2 (W4-F1): an imported session's picked model, stamped over
           // the base env's ANYCODE_MODEL (the active connection's model). Per-fork
@@ -3329,7 +3332,7 @@ export class TabHostManager {
     this.rebindings.delete(tabId);
   }
 
-  async rebindTab(tab: TabHost, connectionId: string): Promise<{ ok: true } | { ok: false; reason: "not_ready" | "spawn_failed" }> {
+  async rebindTab(tab: TabHost, connectionId: string, priorEffort?: ReasoningEffort): Promise<{ ok: true } | { ok: false; reason: "not_ready" | "spawn_failed" }> {
     if (this.env(connectionId) === undefined) {
       this.logger.error(
         `[main] tab ${tab.tabId} rebind to ${connectionId} refused: no primed fork env for that connection`,
@@ -3353,7 +3356,7 @@ export class TabHostManager {
     tab.initialResume = true;
     tab.rapidRespawns = 0;
     tab.state = "running";
-    const spawn = this.spawnTabHost(tab, { firstSpawn: false });
+    const spawn = this.spawnTabHost(tab, { firstSpawn: false, priorEffort });
     if (spawn === false) {
       tab.connectionId = previousConnectionId;
       tab.modelOverride = previousModelOverride;

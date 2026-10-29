@@ -188,6 +188,7 @@ export function isPinSwitchInTab(
 interface PendingPick {
   kind: "model" | "effort";
   value: string;
+  requestId: string;
   // The connection id this pick was made against, captured at PICK time (codex
   // P2 defect: recomputing it from the settings snapshot again at ACK time is
   // wrong — the active connection can change in Settings between the send and
@@ -432,17 +433,18 @@ export const MID_TURN_CHANGE_NOTE = "Model and effort changes apply from the nex
 
 export function modelSettingsPick(
   kind: "model" | "effort", value: string,
-  hostId: string | null | undefined, pinnedId: string | undefined, activeId: string | undefined,
+  hostId: string | null | undefined, pinnedId: string | undefined, activeId: string | undefined, requestId: string,
 ): PendingPick {
-  return { kind, value, connectionId: modelSettingsTarget(hostId, pinnedId, activeId) };
+  return { kind, value, requestId, connectionId: modelSettingsTarget(hostId, pinnedId, activeId) };
 }
 
 export function modelSettingsWrites(
   pending: { model?: PendingPick; effort?: PendingPick },
-  ack: { model: string; effort: ReasoningEffort },
+  ack: { model: string; effort: ReasoningEffort; requestId?: string; effortRequestId?: string; kind: "model" | "effort" },
 ): ConnectionUpdateRequest[] {
-  const modelPick = pending.model?.value === ack.model ? pending.model : undefined;
-  const effortPick = pending.effort?.value === ack.effort ? pending.effort : undefined;
+  const modelPick = ack.kind === "model" && ack.requestId !== undefined && pending.model?.requestId === ack.requestId ? pending.model : undefined;
+  const effortId = ack.kind === "effort" ? ack.requestId : ack.effortRequestId;
+  const effortPick = effortId !== undefined && pending.effort?.requestId === effortId ? pending.effort : undefined;
   if (modelPick !== undefined) delete pending.model;
   if (effortPick !== undefined) delete pending.effort;
   const writes = new Map<string, ConnectionUpdateRequest>();
@@ -464,6 +466,7 @@ export function ModelPill() {
   const model = useTabStore((state) => state.model);
   const reasoningEffort = useTabStore((state) => state.reasoningEffort);
   const modelSelectionAck = useTabStore((state) => state.modelSelectionAck);
+  const effortSelectionAck = useTabStore((state) => state.effortSelectionAck);
   const availableEffortLevels = useTabStore((state) => state.availableEffortLevels);
   const turnStatus = useTabStore((state) => state.turn.status);
   const queueInFlight = useTabStore((state) => state.queueInFlight);
@@ -786,8 +789,9 @@ export function ModelPill() {
     // queued pick instead of being mistaken for a no-op. `pendingPickRef` is
     // the only record of a pick the host has not acked yet.
     if (id !== model || (pendingPickRef.current.model !== undefined || pendingPickRef.current.effort !== undefined)) {
-      pendingPickRef.current.model = modelSettingsPick("model", id, modelSettingsConnectionId, pinnedConnection?.connectionId, snapshot?.settings.provider.activeConnectionId);
-      sendToHost({ type: "set_model", model: id });
+      const requestId = crypto.randomUUID();
+      pendingPickRef.current.model = modelSettingsPick("model", id, modelSettingsConnectionId, pinnedConnection?.connectionId, snapshot?.settings.provider.activeConnectionId, requestId);
+      sendToHost({ type: "set_model", model: id, requestId });
     }
     close(true);
   }
@@ -796,11 +800,9 @@ export function ModelPill() {
     if (pickDisabled) {
       return;
     }
-    // Same queued-pick rule as pickModel above.
-    if (effort !== reasoningEffort || (pendingPickRef.current.model !== undefined || pendingPickRef.current.effort !== undefined)) {
-      pendingPickRef.current.effort = modelSettingsPick("effort", effort, modelSettingsConnectionId, pinnedConnection?.connectionId, snapshot?.settings.provider.activeConnectionId);
-      sendToHost({ type: "set_reasoning_effort", effort });
-    }
+    const requestId = crypto.randomUUID();
+    pendingPickRef.current.effort = modelSettingsPick("effort", effort, modelSettingsConnectionId, pinnedConnection?.connectionId, snapshot?.settings.provider.activeConnectionId, requestId);
+    sendToHost({ type: "set_reasoning_effort", effort, requestId });
     close(true);
   }
 
@@ -861,7 +863,7 @@ export function ModelPill() {
       return;
     }
     effortResetRef.current = undefined;
-    const result = await window.anycode.tabRebind({ tabId, connectionId });
+    const result = await window.anycode.tabRebind({ tabId, connectionId, priorEffort: reasoningEffort });
     if (!result.ok) {
       effortResetRef.current = undefined;
       failRebind(result.reason === "spawn_failed" ? "host failed to start" : result.reason);
@@ -927,12 +929,14 @@ export function ModelPill() {
 
   // One model acknowledgement can include both queued choices. Persist only
   // axes the user actually picked, even if the acknowledged value is unchanged.
-  useEffect(() => {
-    if (modelSelectionAck === undefined || modelSelectionAck === null || modelSelectionAck.model === null) return;
-    for (const request of modelSettingsWrites(pendingPickRef.current, { model: modelSelectionAck.model, effort: modelSelectionAck.effort })) {
+  function persistAck(ack: typeof modelSelectionAck): void {
+    if (ack == null || ack.model === null) return;
+    for (const request of modelSettingsWrites(pendingPickRef.current, { model: ack.model, effort: ack.effort, requestId: ack.requestId, effortRequestId: ack.effortRequestId, kind: ack.kind })) {
       writeChainRef.current = chainWrite(writeChainRef.current, () => connectionUpdate(request));
     }
-  }, [modelSelectionAck]);
+  }
+  useEffect(() => { persistAck(effortSelectionAck); }, [effortSelectionAck]);
+  useEffect(() => { persistAck(modelSelectionAck); }, [modelSelectionAck]);
 
   function onChipKeyDown(event: KeyboardEvent<HTMLButtonElement>): void {
     if (pickDisabled) {

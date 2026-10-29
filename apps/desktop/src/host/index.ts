@@ -3551,11 +3551,18 @@ async function boot(): Promise<void> {
       (modelId, applied) =>
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
     ));
-    const resolveSessionEffort = isChildSessionBoot(args, sessionMeta) ? resolveChildReasoningEffort : resolveReasoningEffort;
+    const isChildSession = isChildSessionBoot(args, sessionMeta);
+    const resolveSessionEffort = isChildSession ? resolveChildReasoningEffort : resolveReasoningEffort;
     const bootSelectedEffort = connectionModelSettings.effortFor(envConfig.model);
-    const bootReasoningEffort = resolveSessionEffort(envConfig.model, catalogEntry, bootSelectedEffort, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model));
-    // Preserve explicit selections even when the current model suppresses them.
-    selectedEffort = bootSelectedEffort ?? bootReasoningEffort ?? "off";
+    const priorEffort = process.env.ANYCODE_SWITCH_PRIOR_EFFORT;
+    const switchFallback = (["off", "low", "medium", "high", "xhigh", "max"] as const).find((tier) => tier === priorEffort);
+    const bootCandidate = bootSelectedEffort ?? resolveSessionEffort(envConfig.model, catalogEntry, undefined, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model)) ?? switchFallback ?? "off";
+    const normalizedBootEffort = isChildSession ? bootCandidate : connectionModelSettings.normalize(envConfig.model, bootCandidate);
+    const bootAdjustment = !isChildSession && (bootSelectedEffort !== undefined || switchFallback !== undefined) && normalizedBootEffort !== bootCandidate
+      ? { from: bootCandidate, to: normalizedBootEffort } : undefined;
+    const bootReasoningEffort = resolveSessionEffort(envConfig.model, catalogEntry, normalizedBootEffort, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model));
+    // Preserve child selections even when the current model maps or suppresses them.
+    selectedEffort = normalizedBootEffort;
     connectionModelSettings.remember(envConfig.model, selectedEffort);
     const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model));
     // TASK.162 (F6): the same catalog + env overrides the three boot
@@ -4621,7 +4628,9 @@ async function boot(): Promise<void> {
     // callback (mirror of the CLI's deps.model.set). It stays host-owned while
     // CoreEngine exposes it through the neutral SessionEngine seam.
     const switchModelImpl = (id: string, selectedTier: ReasoningEffort, effortExplicit = false) => {
-        selectedTier = connectionModelSettings.switchEffort(currentModel, id, selectedTier, effortExplicit);
+        if (isChildSession) connectionModelSettings.refresh();
+        else selectedTier = connectionModelSettings.switchEffort(currentModel, id, selectedTier, effortExplicit);
+        const effortAdjustment = isChildSession ? undefined : connectionModelSettings.takeAdjustment();
         // TASK.162 (§0b): Session hands its OWN preserved user-selected tier
         // here, so this is the second (and only other) writer that keeps the
         // host cell faithful — without it a tier selected before a switch
@@ -4688,6 +4697,7 @@ async function boot(): Promise<void> {
           model: id,
           contextUsage: {estimatedTokens: usage.estimatedTokens, budgetTokens: usage.effectiveWindowTokens, source: usage.source},
           selectedReasoningEffort: selectedTier,
+          ...(effortAdjustment !== undefined ? { effortAdjustment } : {}),
           reasoningEffort: resolvedEffort ?? "off",
           ...(availableEffortLevels !== undefined ? { availableEffortLevels } : {}),
         };
@@ -4886,6 +4896,7 @@ async function boot(): Promise<void> {
       },
       model: currentModel,
       reasoningSupported: bootEffortLevels !== undefined,
+      ...(bootAdjustment !== undefined ? { bootEffortAdjustment: bootAdjustment } : {}),
       ...(bootEffortLevels !== undefined ? { availableEffortLevels: bootEffortLevels } : {}),
       // The SAME two resolvers this composition root already uses for the boot
       // vocabulary and for every model switch, so the status projection and

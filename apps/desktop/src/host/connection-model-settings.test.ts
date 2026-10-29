@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolveEffortLevels, resolveReasoningEffort, type ReasoningEffort } from "@anycode/core";
-import { createConnectionModelSettings } from "./connection-model-settings.js";
+import { createConnectionModelSettings, nearestSupportedEffort } from "./connection-model-settings.js";
+import { findCatalogEntry } from "@anycode/core/catalog";
 import { createHarness } from "./test-harness.js";
 
 const connection = {
@@ -177,6 +178,61 @@ it("retains the last pricing snapshot on an unreadable read and refreshes on rec
   expect(settings.pricingSnapshot()).toEqual({ fallback: undefined, models: { a: { input: 3, cachedInput: 0, output: 4 } } });
 });
 
+
+describe("nearest supported effort", () => {
+  it.each([
+    ["off", ["low", "max"], "low"],
+    ["medium", ["high", "low"], "low"],
+    ["max", ["low", "high"], "high"],
+    ["high", ["max", "off"], "max"],
+    ["low", [], "low"],
+  ] as const)("maps %s against %s to %s", (tier, levels, expected) => {
+    expect(nearestSupportedEffort(tier, [...levels])).toBe(expected);
+  });
+});
+
+
+describe("catalog model switch effort", () => {
+  const catalogEntry = findCatalogEntry("z-ai")!;
+  const makeSettings = (connection: Parameters<typeof createConnectionModelSettings>[0]["connection"] = {}) =>
+    createConnectionModelSettings({ connection, catalogEntry, liveCapabilitiesFor: () => undefined });
+
+  it("restores the documented default and the source preference", () => {
+    const settings = makeSettings({modelOverrides:{"glm-5.2":{reasoningEffort:"off"}}});
+    expect(settings.switchEffort("glm-5.2", "glm-5.3", "off")).toBe("max");
+    expect(settings.switchEffort("glm-5.3", "glm-5.2", "max")).toBe("off");
+  });
+  it.each([
+    {reasoningEffort:"off" as const},
+    {modelOverrides:{"glm-5.3":{reasoningEffort:"off" as const}}},
+  ])("normalizes an unsupported saved candidate", (connection) => {
+    const settings = makeSettings(connection);
+    expect(settings.switchEffort("glm-5.2", "glm-5.3", "off")).toBe("low");
+    expect(settings.takeAdjustment()).toEqual({from:"off", to:"low"});
+    expect(settings.switchEffort("glm-5.3", "glm-5.3", "low")).toBe("low");
+    expect(settings.takeAdjustment()).toBeUndefined();
+  });
+  it("normalizes an explicit switch while retaining the source", () => {
+    const settings = makeSettings({modelOverrides:{"glm-5.2":{reasoningEffort:"off"}}});
+    expect(settings.switchEffort("glm-5.2", "glm-5.3", "off", true)).toBe("low");
+    expect(settings.switchEffort("glm-5.3", "glm-5.2", "low")).toBe("off");
+    expect(settings.normalize("glm-5.3", "off")).toBe("low");
+  });
+  it("uses the previous level when a model has no recorded default", () => {
+    const settings = makeSettings();
+    expect(settings.switchEffort("glm-5.2", "glm-5.3-flash", "off")).toBe("low");
+  });
+});
+
+it("declared levels override fetched levels when normalizing a model switch", () => {
+  const settings = createConnectionModelSettings({
+    connection: { modelOverrides: { b: { effortLevels: ["low", "high"] } } },
+    liveCapabilitiesFor: () => ({ reasoning: true, effortLevels: ["off", "max"] }),
+  });
+  expect(settings.switchEffort("a", "b", "off", true)).toBe("low");
+  expect(settings.takeAdjustment()).toEqual({ from: "off", to: "low" });
+  expect(settings.normalize("b", "max")).toBe("high");
+});
 
 it("refreshes manual vocabularies without borrowing a sibling's levels", () => {
   let saved = { modelOverrides: { a: { effortLevels: ["low", "high"] as ReasoningEffort[] } } };

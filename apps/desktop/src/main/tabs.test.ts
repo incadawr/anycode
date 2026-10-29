@@ -5278,6 +5278,24 @@ describe("TabHostManager — rebindTab (TASK.106 cut-2)", () => {
     expect(tab!.state).toBe("running");
   });
 
+  it("carries the prior effort only on the destination rebind spawn", async () => {
+    const envs: NodeJS.ProcessEnv[] = [];
+    const fork: HostForkFn = (_entry, _args, options) => {
+      envs.push(options?.env ?? {});
+      const host = new FakeHost();
+      queueMicrotask(() => host.emit("spawn"));
+      return host as unknown as UtilityProcess;
+    };
+    const { window } = windowRig();
+    const manager = rebindManager(fork, window, new Map([["old", {}], ["new", {ANYCODE_MODEL: "glm-5.3-flash"}]]));
+    const created = manager.createTab({workspace:"/ws", sessionId:"rebind-effort", resume:false, connectionId:"old"});
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    expect(await atHostExitDeadline(() => manager.rebindTab(created.tab, "new", "high"))).toEqual({ok:true});
+    expect(envs[0]?.ANYCODE_SWITCH_PRIOR_EFFORT).toBeUndefined();
+    expect(envs[1]).toMatchObject({ANYCODE_MODEL:"glm-5.3-flash", ANYCODE_SWITCH_PRIOR_EFFORT:"high"});
+  });
+
   it("the re-spawn's argv runs --resume with the SAME session id (history survives by construction)", async () => {
     const seenArgs: string[][] = [];
     const hosts: FakeHost[] = [];

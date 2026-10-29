@@ -470,12 +470,12 @@ export type UiToHostMessage =
   // drop, the set_mode discipline); acked by `orchestrate_changed`. Untrusted
   // -> validated by `setOrchestrateSchema` below (fail-closed).
   | { type: "set_orchestrate"; enabled: boolean }
-  | { type: "set_reasoning_effort"; effort: ReasoningEffort }
+  | { type: "set_reasoning_effort"; effort: ReasoningEffort; requestId?: string }
   // Slice P7.15 (F14): mid-session model switch (mirror of the CLI `/model`
   // re-budget, host-side switch not a respawn). Untrusted -> validated by
   // `setModelSchema` below (fail-closed). Honored only between turns (Session
   // silently drops it while busy, mirroring set_reasoning_effort).
-  | { type: "set_model"; model: string }
+  | { type: "set_model"; model: string; requestId?: string }
   // Codex-fixes TASK.39 (cut §3.3): switch a non-core engine's permission
   // posture. Mirrors set_model's between-turns discipline (a pending-override
   // the engine applies to the NEXT turn/start, cut §2(d)) — untrusted ->
@@ -573,6 +573,7 @@ export type HostToUiMessage =
       sessionId: string;
       contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
       reasoningEffort?: ReasoningEffort;
+      effortAdjustment?: { from: ReasoningEffort; to: ReasoningEffort };
       availableEffortLevels?: ReasoningEffort[];
       /**
        * TASK.56 W2: live image-input verdict for the CURRENT model (Session's
@@ -853,7 +854,7 @@ export type HostToUiMessage =
   // precedent mode_changed). Carries the resulting state so the renderer's
   // tab-scoped orchestrateActive stays in sync even across a reconnect.
   | { type: "orchestrate_changed"; enabled: boolean }
-  | { type: "reasoning_effort_changed"; effort: ReasoningEffort; availableEffortLevels?: ReasoningEffort[] }
+  | { type: "reasoning_effort_changed"; effort: ReasoningEffort; requestId?: string; availableEffortLevels?: ReasoningEffort[] }
   // Slice P7.15 (F14): host acknowledges a `set_model` switch (trusted, no zod,
   // precedent mode_changed/reasoning_effort_changed). `reasoningEffort` is the
   // effort re-resolved for the NEW model (collapses to "off" on a non-reasoning
@@ -867,9 +868,13 @@ export type HostToUiMessage =
   // vision -> non-vision switch. Absent (older host) = no model-level gating.
   | {
       type: "model_changed";
+      requestId?: string;
+      effortRequestId?: string;
       /** Budget and selected tier belong to this same model acknowledgement. */
       contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
       selectedReasoningEffort?: ReasoningEffort;
+      requestedReasoningEffort?: ReasoningEffort;
+      effortAdjustment?: { from: ReasoningEffort; to: ReasoningEffort };
       model: string;
       reasoningEffort: ReasoningEffort;
       availableEffortLevels?: ReasoningEffort[];
@@ -1142,6 +1147,7 @@ export const setModeSchema = z
 export const setReasoningEffortSchema = z.object({
   type: z.literal("set_reasoning_effort"),
   effort: z.enum(["off", "low", "medium", "high", "xhigh", "max"]),
+  requestId: z.string().min(1).max(128).optional(),
 }).strict();
 
 // Taskana 4704 §3.7: untrusted set_orchestrate. Mirror of setModeSchema —
@@ -1162,6 +1168,7 @@ export const setModelSchema = z
   .object({
     type: z.literal("set_model"),
     model: z.string().min(1).max(256),
+    requestId: z.string().min(1).max(128).optional(),
   })
   .strict();
 

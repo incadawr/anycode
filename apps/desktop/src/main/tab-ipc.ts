@@ -353,6 +353,7 @@ const closeTabRequestSchema = z.object({ tabId: z.string().min(1) });
 const tabRebindRequestSchema: z.ZodType<TabRebindRequest> = z.object({
   tabId: z.string().min(1).max(128),
   connectionId: z.string().min(1).max(128),
+  priorEffort: z.enum(["off", "low", "medium", "high", "xhigh", "max"]).optional(),
 });
 
 /** TASK.106 cut-2: exported for tests (tab-ipc.test.ts) — the fail-closed re-bind request schema. */
@@ -941,7 +942,9 @@ export async function handleTabRebind(deps: TabIpcDeps, req: TabRebindRequest): 
         return { ok: false, reason: "not_ready" };
       }
     }
-    const rebound = await deps.manager.rebindTab(tab, req.connectionId);
+    const rebound = req.priorEffort === undefined
+      ? await deps.manager.rebindTab(tab, req.connectionId)
+      : await deps.manager.rebindTab(tab, req.connectionId, req.priorEffort);
     if (!rebound.ok) {
       // Nothing durable was written, so the refusal leaves the session row
       // pinned where the tab still runs.
