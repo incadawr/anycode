@@ -64,8 +64,7 @@ function spyExec(): { exec: ExecutionPort; spawnCount: () => number } {
 
 
 /** Observe the real child stream after delivering each chunk to the manager. */
-function observedFixture(marker: string, stream: "stdout" | "stderr"): { exec: ExecutionPort; seen: Promise<void>; observeStdout: (chunk: Buffer) => void } {
-  const adapter = new NodeExecutionAdapter();
+function observedFixture(marker: string, stream: "stdout" | "stderr", adapter: ExecutionPort = new NodeExecutionAdapter()): { exec: ExecutionPort; seen: Promise<void> } {
   let resolveSeen!: () => void;
   let rejectSeen!: (error: Error) => void;
   const seen = new Promise<void>((resolve, reject) => { resolveSeen = resolve; rejectSeen = reject; });
@@ -79,17 +78,16 @@ function observedFixture(marker: string, stream: "stdout" | "stderr"): { exec: E
     text += chunk;
     if (text.includes(marker)) resolveSeen();
   };
-  const observeStdout = (chunk: Buffer) => decoder.feed(chunk);
   const exec: ExecutionPort = {
     run: adapter.run.bind(adapter),
     runBinary: adapter.runBinary!.bind(adapter),
     spawnPersistent: (request) => adapter.spawnPersistent!({
       ...request,
-      onStdout: (chunk) => { request.onStdout(chunk); if (stream === "stdout") observeStdout(chunk); },
+      onStdout: (chunk) => { request.onStdout(chunk); if (stream === "stdout") decoder.feed(chunk); },
       onStderr: (chunk) => { request.onStderr?.(chunk); if (stream === "stderr") observe(chunk); },
     }),
   };
-  return { exec, seen, observeStdout };
+  return { exec, seen };
 }
 
 async function fixtureDeadline<T>(run: () => Promise<T>, seen: Promise<void>): Promise<T> {
@@ -121,20 +119,33 @@ function tsSpec(name: string, flags: string[] = []): LspServerSpec {
 describe("fixture stream observer", () => {
   it("waits for the complete diagnostics frame after the URI prefix", async () => {
     const uri = "file:///fixture/wrong/other-file.ts";
-    const { seen, observeStdout } = observedFixture(uri, "stdout");
+    const adapter = new NodeExecutionAdapter();
+    let spawnedRequest!: PersistentChildRequest;
+    const spawnAdapter: ExecutionPort = {
+      run: adapter.run.bind(adapter),
+      runBinary: adapter.runBinary.bind(adapter),
+      spawnPersistent: (request) => {
+        spawnedRequest = request;
+        return { pid: undefined, exited: false, write: () => {}, kill: async () => {} };
+      },
+    };
+    const { exec, seen } = observedFixture(uri, "stdout", spawnAdapter);
+    const onStdout = vi.fn();
+    exec.spawnPersistent!({ file: "fixture", args: [], onStdout, onExit: () => {} });
     const body = JSON.stringify({ jsonrpc: "2.0", method: "textDocument/publishDiagnostics", params: { uri, diagnostics: [] } });
     const frame = `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`;
     const split = frame.indexOf(uri) + uri.length;
     let settled = false;
     void seen.then(() => { settled = true; });
 
-    observeStdout(Buffer.from(frame.slice(0, split)));
+    spawnedRequest.onStdout(Buffer.from(frame.slice(0, split)));
     await Promise.resolve();
     expect(settled).toBe(false);
 
-    observeStdout(Buffer.from(frame.slice(split)));
+    spawnedRequest.onStdout(Buffer.from(frame.slice(split)));
     await seen;
     expect(settled).toBe(true);
+    expect(onStdout).toHaveBeenCalledTimes(2);
   });
 });
 
