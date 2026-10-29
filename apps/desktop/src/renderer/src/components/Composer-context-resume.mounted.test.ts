@@ -40,3 +40,20 @@ it("replaces the restored reading with newer live usage", () => {
   store.getState().applyHostMessage({ type: "agent_event", turnId: "new", event: { type: "context_usage", estimatedTokens: 50, budgetTokens: 100, source: "estimate" } });
   expect(store.getState().contextUsage).toEqual({ estimatedTokens: 50, budgetTokens: 100, source: "estimate" });
 });
+
+it("keeps saved cost accessible without inventing a context percentage", async () => {
+  Object.defineProperty(window, "anycode", { configurable: true, value: { listSessions: async () => [] } });
+  const store = createDesktopStore();
+  store.getState().applyHostMessage({ type: "host_ready", workspace: "/w", mode: "build", model: "m", sessionId: "s" });
+  store.getState().applyHostMessage({ type: "session_checkpoint", usageAudit: { lastStep: null, totalSteps: 1, totals: { input: 0, output: 0, total: 0, stepsReported: 1, stepsWithCache: 0, costUsd: 0.0271 } } });
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(Composer))));
+    const trigger = container.querySelector<HTMLButtonElement>('[aria-label="Context window usage"]');
+    expect(trigger?.textContent).toBe("Usage");
+    await act(async () => trigger!.click());
+    expect(container.textContent).toContain("$0.0271");
+    expect(container.querySelector(".ctx-popover-bar")).toBeNull();
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});

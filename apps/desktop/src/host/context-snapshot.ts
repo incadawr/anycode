@@ -15,10 +15,11 @@ export function parseContextSnapshot(json: string | null, engine: string, model:
   } catch { return undefined; }
 }
 
-export async function contextSnapshotOptions(db: SqlitePersistenceAdapter, id: string, engine: string, model: string, budget?: number, fallback?: ContextReading) {
+export async function contextSnapshotOptions(db: SqlitePersistenceAdapter, id: string, engine: string, model: string, budget?: number, fallback?: ContextReading | (() => Promise<ContextReading | undefined>)) {
   let initialContextUsage: ContextReading | undefined;
-  try { initialContextUsage = parseContextSnapshot(await db.loadContextUsage(id), engine, model, budget) ?? fallback; }
-  catch (error) { console.error("[host] context usage read failed:", error); initialContextUsage = fallback; }
+  try { initialContextUsage = parseContextSnapshot(await db.loadContextUsage(id), engine, model, budget); }
+  catch (error) { console.error("[host] context usage read failed:", error); }
+  if (!initialContextUsage) initialContextUsage = typeof fallback === "function" ? await fallback() : fallback;
   return {
     ...(initialContextUsage ? { initialContextUsage } : {}),
     saveContextUsage: (snapshot: Snapshot | null) => db.saveContextUsage(id, snapshot === null ? null : JSON.stringify(snapshot)),
