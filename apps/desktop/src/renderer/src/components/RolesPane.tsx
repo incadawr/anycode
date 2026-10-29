@@ -25,7 +25,7 @@ export interface RolesPaneProps {
    */
   tabId?: string;
   projectRoot?: string;
-  registerGuard?: (guard: ((action: () => void) => void) | null) => void;
+  registerGuard?: (guard: ((action: () => void, onCancel?: () => void) => void) | null) => void;
 }
 
 /** Shown in the existing save-notice slot when the cap input is unusable. */
@@ -94,7 +94,7 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
   const [recovery, setRecovery] = useState<Partial<Record<PresetRole, boolean>>>({});
   const [nameAction, setNameAction] = useState<"new" | "duplicate" | "rename" | null>(null);
   const [name, setName] = useState("");
-  const [pending, setPending] = useState<{ title: string; body: string; confirmLabel: string; action: () => void } | null>(null);
+  const [pending, setPending] = useState<{ title: string; body: string; confirmLabel: string; action: () => void; onCancel?: () => void } | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [sessionProjects, setSessionProjects] = useState<string[]>([]);
@@ -112,6 +112,15 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
     // The actual target, not readiness or catalog changes, owns the draft.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetKey]);
+  const rolesKey = JSON.stringify(initialRoles);
+  useEffect(() => {
+    if (dirty) return;
+    const next = toDraft(initialRoles);
+    const nextCap = selected?.roles.maxParallelChildren?.toString() ?? "";
+    setDraft(next); setBaseline(next); setCap(nextCap); setBaselineCap(nextCap);
+    // Refresh a clean draft when a write from another mount lands.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rolesKey, dirty]);
   useEffect(() => {
     let live = true;
     void window.anycode.listSessions().then((sessions) => {
@@ -130,9 +139,9 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
   }, [tabId, snapshot]);
   const projects = [...new Set([...tabs.map((t) => t.projectRoot ?? t.workspace).filter(isAbsoluteProject), ...sessionProjects, ...registry.projects.map((p) => p.projectRoot)])];
   const projectLabel = (path: string) => projects.filter((p) => projectFolderName(p) === projectFolderName(path)).length > 1 ? `${projectFolderName(path)} — ${path}` : projectFolderName(path);
-  function guard(action: () => void): void {
+  function guard(action: () => void, onCancel?: () => void): void {
     if (!dirty) { action(); return; }
-    setPending({ title: "Discard unsaved roles?", body: "Your unsaved role changes will be lost.", confirmLabel: "Discard changes", action: () => { setDraft(baseline); setCap(baselineCap); action(); } });
+    setPending({ title: "Discard unsaved roles?", body: "Your unsaved role changes will be lost.", confirmLabel: "Discard changes", onCancel, action: () => { setDraft(baseline); setCap(baselineCap); action(); } });
   }
   useEffect(() => {
     registerGuard?.(guard);
@@ -181,14 +190,37 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
   async function save(): Promise<void> {
     if (!parseRoleChildLimitInput(cap).valid) { setNotice({ ok: false, message: ROLE_CHILD_LIMIT_INVALID_MESSAGE }); return; }
     const converted = fromDraft(draft).roles;
+    const baseRoles = fromDraft(baseline).roles;
     const id = selected?.id ?? (projectRoot || registry.profiles.some((p) => p.id === "default") ? crypto.randomUUID() : "default");
     const ok = await write((current) => {
       const existing = current.profiles.find((p) => p.id === id);
       const roles = existing ? { ...existing.roles } : {};
       for (const role of ROLE_PRESET_ROLES) {
-        if (!selected || JSON.stringify(draft[role]) !== JSON.stringify(baseline[role])) roles[role] = converted[role];
+        if (!existing) { roles[role] = converted[role]; continue; }
+        if (JSON.stringify(draft[role]) === JSON.stringify(baseline[role])) continue;
+        const next = converted[role]!;
+        const base = baseRoles[role]!;
+        const merged = { ...roles[role], primary: { ...roles[role]?.primary } };
+        // Route selectors are mutually exclusive and form one logical field.
+        if (["engine", "connection", "provider"].some((key) => base.primary[key as keyof typeof base.primary] !== next.primary[key as keyof typeof next.primary])) {
+          delete merged.primary.engine; delete merged.primary.connection; delete merged.primary.provider;
+          if (next.primary.engine !== undefined) merged.primary.engine = next.primary.engine;
+          if (next.primary.connection !== undefined) merged.primary.connection = next.primary.connection;
+          if (next.primary.provider !== undefined) merged.primary.provider = next.primary.provider;
+        }
+        for (const key of ["model", "effort"] as const) {
+          if (base.primary[key] !== next.primary[key]) {
+            if (next.primary[key] === undefined) delete merged.primary[key];
+            else Object.assign(merged.primary, { [key]: next.primary[key] });
+          }
+        }
+        // Fallbacks are an ordered list; additions, removals, and moves replace it.
+        if (JSON.stringify(draft[role].fallbacks) !== JSON.stringify(baseline[role].fallbacks)) {
+          if (next.fallbacks) merged.fallbacks = next.fallbacks; else delete merged.fallbacks;
+        }
+        roles[role] = merged;
       }
-      const built = buildRoleProfileRoles(roles, cap);
+      const built = buildRoleProfileRoles(roles, !existing || cap !== baselineCap ? cap : existing.roles.maxParallelChildren?.toString() ?? "");
       if (!built.valid) return current;
       const profile = { id, name: existing?.name ?? "Default", roles: built.roles };
       return { ...current, profiles: existing ? current.profiles.map((p) => p.id === id ? profile : p) : [...current.profiles, profile], activeId: projectRoot ? current.activeId : id, ...(!selected && projectRoot ? { projects: [...current.projects.filter((p) => p.projectRoot !== projectRoot), { projectRoot, profileId: id }] } : {}) };
@@ -226,7 +258,7 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
     <details onToggle={(e) => setAdvanced(e.currentTarget.open)}><summary className="settings-button">Advanced {(selected?.roles.maxParallelChildren !== undefined || ROLE_PRESET_ROLES.some((role) => (selected?.roles[role]?.fallbacks?.length ?? 0) > 1)) && <span className="roles-badge">Configured</span>}</summary><label className="settings-field"><span className="settings-field-label">Max parallel children</span><input className="settings-field-input" type="text" inputMode="numeric" aria-label="Max parallel children" disabled={busy} value={cap} onChange={(e) => setCap(e.target.value)} /><span className="settings-field-hint">Optional limit (1–16); blank uses the session limit, default 3.</span></label></details>
     <details><summary className="settings-button">Per-project profiles ({registry.projects.length})</summary><div className="roles-projects">{registry.projects.map((p) => <div className="roles-project" key={p.projectRoot}><span title={p.projectRoot}>{projectLabel(p.projectRoot)}</span><span>{registry.profiles.find((profile) => profile.id === p.profileId)?.name ?? "Missing profile (using global fallback)"}</span><button type="button" className="settings-button" disabled={busy} aria-label={`Remove profile for ${p.projectRoot}`} onClick={() => { const run = () => { void write((current) => ({ ...current, projects: current.projects.filter((entry) => entry.projectRoot !== p.projectRoot) })); }; if (projectRoot === p.projectRoot) guard(run); else run(); }}>Remove</button></div>)}
       <div className="roles-project"><select className="settings-field-select" aria-label="Project to add" value={addProject} onChange={(e) => setAddProject(e.target.value)}><option value="">Select project</option>{projects.map((p) => <option key={p} value={p}>{projectLabel(p)}</option>)}</select><select className="settings-field-select" aria-label="Profile to add" value={addProfile} onChange={(e) => setAddProfile(e.target.value)}><option value="">Select profile</option>{registry.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select><button className="settings-button" type="button" disabled={busy || !addProject || !addProfile} onClick={() => { const run = () => { void write((current) => ({ ...current, projects: [...current.projects.filter((p) => p.projectRoot !== addProject), { projectRoot: addProject, profileId: addProfile }] })); }; if (projectRoot === addProject) guard(run); else run(); }}>Add</button></div></div></details>
-    <ConfirmDialog request={pending} onCancel={() => setPending(null)} onConfirm={() => { const action = pending?.action; setPending(null); action?.(); }} />
+    <ConfirmDialog request={pending} onCancel={() => { const cancel = pending?.onCancel; setPending(null); cancel?.(); }} onConfirm={() => { const action = pending?.action; setPending(null); action?.(); }} />
   </div>;
 }
 
