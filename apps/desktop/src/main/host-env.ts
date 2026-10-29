@@ -1118,7 +1118,8 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   const settingsConnectionId = activeConnection(settings)?.id;
   if (settingsConnectionId !== undefined) env[ENV_MODEL_SETTINGS_CONNECTION_ID] = settingsConnectionId;
   else delete env[ENV_MODEL_SETTINGS_CONNECTION_ID];
-  if (view.pricing !== undefined) env.ANYCODE_CONNECTION_PRICING = JSON.stringify(view.pricing);
+  const pricedModels = Object.fromEntries(Object.entries(activeConnection(settings)?.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => [id, value.pricing]));
+  if (view.pricing !== undefined || Object.keys(pricedModels).length) env.ANYCODE_CONNECTION_PRICING = JSON.stringify({ fallback: view.pricing, models: pricedModels });
   else delete env.ANYCODE_CONNECTION_PRICING;
   // Custom-provider route (F-G-B): a `custom:<slug>` providerId resolves from
   // `settings.provider.custom[]` — the record's baseUrl verbatim plus the

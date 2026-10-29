@@ -163,3 +163,16 @@ it("uses boot settings until a read succeeds, then honours a clear instead of a 
   expect(settings.effortFor("a")).toBeUndefined();
   expect(settings.switchEffort("a", "a", "high")).toBe("off");
 });
+
+
+it("retains the last pricing snapshot on an unreadable read and refreshes on recovery", () => {
+  let saved: any = { pricing: { mode: "subscription" }, modelOverrides: { a: { pricing: { input: 1, cachedInput: 0, output: 2 } } } };
+  const settings = createConnectionModelSettings({ connection: saved, readConnection: () => saved, liveCapabilitiesFor: () => undefined });
+  const before = settings.pricingSnapshot();
+  saved = null;
+  expect(settings.refresh()).toBe(false);
+  expect(settings.pricingSnapshot()).toEqual(before);
+  saved = { modelOverrides: { a: { pricing: { input: 3, cachedInput: 0, output: 4 } } } };
+  expect(settings.refresh()).toBe(true);
+  expect(settings.pricingSnapshot()).toEqual({ fallback: undefined, models: { a: { input: 3, cachedInput: 0, output: 4 } } });
+});

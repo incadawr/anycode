@@ -960,6 +960,10 @@ export function contextWindowSettingsTarget(
   return connection !== undefined && model !== null ? { connection, model } : null;
 }
 
+export function showCustomPricingHint(target: { connection: ProviderConnection } | null, totals: WireUsageAuditTotals | null): boolean {
+  return Boolean(target?.connection.providerId.startsWith("custom:") && ((totals?.unpricedSteps ?? 0) > 0 || (totals?.subagentUnpriced ?? 0) > 0));
+}
+
 /**
  * Hover/focus/click-triggered popover anchored to the ctx meter. Positioning
  * mirrors ModelPill.tsx's popover (position:fixed, anchor computed from
@@ -1232,6 +1236,7 @@ function CtxPopover({
             )}
             <div className="ctx-popover-divider" />
             <UsageCostBlock ledger={ledger} turnSummary={turnStepSummary} turnSteps={turnSteps} expanded={stepsExpanded} onToggle={() => setStepsExpanded((value) => !value)} />
+            {showCustomPricingHint(shortcutTarget, usageAudit.totals) && <div className="ctx-popover-footnote">Set prices in the connection settings</div>}
             {usageAudit.list === null && usageAudit.totalSteps > 0 && (
               <div className="ctx-popover-session">Step history: {usageAudit.totalSteps} records — reopen to load</div>
             )}

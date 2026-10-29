@@ -281,7 +281,7 @@ import {
   type RoleRouteResolution,
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
-import { calculateUsageCost, connectionPricing } from "./usage-cost.js";
+import { calculateUsageCost, resolveUsagePrice } from "./usage-cost.js";
 import { summarizeWithChildren } from "./usage-summary.js";
 import { claudeNativeChildrenFromHistory, claudeUsageRecord } from "./claude-usage.js";
 import { closeProxyRelay, credentialedProxyValuesForRelay, resolveProxyRelay } from "@anycode/core/proxy-relay";
@@ -3390,6 +3390,8 @@ async function boot(): Promise<void> {
       envReasoningEffortFromSettings: Boolean(process.env.ANYCODE_REASONING_EFFORT_MODEL?.trim()),
       liveCapabilitiesFor: (id) => liveCapsMap !== undefined && Object.hasOwn(liveCapsMap, id) ? liveCapsMap[id] : undefined,
     });
+    const currentPricingRaw = () => connectionModelSettings.hasReadConnection() ? JSON.stringify(connectionModelSettings.pricingSnapshot()) : process.env.ANYCODE_CONNECTION_PRICING;
+    let turnPricingRaw = currentPricingRaw();
     const liveCapsFor = (id: string): LiveModelCapabilities | undefined => connectionModelSettings.capabilitiesFor(id);
     const gitForWorkspace = (cwd: string, operationSignal?: AbortSignal) =>
       new NodeGitAdapter({
@@ -4489,11 +4491,12 @@ async function boot(): Promise<void> {
           createUsageRecorder: (model) => {
             const subagentId = randomUUID();
             let step = 0;
+            const pricingRaw = currentPricingRaw();
             return (usage) => {
               const price = envConfig.baseUrl.replace(/\/$/, "") === catalogEntry?.baseUrl.replace(/\/$/, "")
                 ? catalogEntry.models.find((item) => item.id === model)?.pricing : undefined;
-              const override = connectionPricing(process.env.ANYCODE_CONNECTION_PRICING);
-              const cost = override?.subscription ? { priceBasisId: "subscription" } : calculateUsageCost(usage, override?.price ?? price);
+              const override = resolveUsagePrice(pricingRaw, model ?? "", price);
+              const cost = override?.subscription ? { priceBasisId: "subscription" } : calculateUsageCost(usage, override?.price);
               const row = { ...usage, ...cost, subagentId, sessionId, turnId: subagentId, step: ++step, createdAt: Date.now(), model, finishReason: "unknown", transportRetries: 0 };
               usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve()).then(() => persistence!.recordProviderUsage(row)).catch((e) => console.error("[host] usage audit write failed", e));
             };
@@ -4687,6 +4690,7 @@ async function boot(): Promise<void> {
       resolveSelectedEffort: (effort) => resolveReasoningEffort(currentModel, catalogEntry, effort, liveCapsFor(currentModel)),
       onBeforeTurn: async () => {
         if (connectionModelSettings.refresh()) session?.refreshModelSettings();
+        turnPricingRaw = currentPricingRaw();
         await refreshExtensionProfiles();
       },
       // Preserve the selected tier independently of the model-effective tier.
@@ -5045,9 +5049,9 @@ async function boot(): Promise<void> {
             // may charge a different price even when it exposes the same model.
             const price = envConfig.baseUrl.replace(/\/$/, "") === catalogEntry?.baseUrl.replace(/\/$/, "")
               ? catalogEntry.models.find((model) => model.id === r.model)?.pricing : undefined;
-            const override = connectionPricing(process.env.ANYCODE_CONNECTION_PRICING);
+            const override = resolveUsagePrice(turnPricingRaw, r.model ?? "", price);
             const cost = override?.subscription ? { priceBasisId: "subscription" }
-              : calculateUsageCost(r, override?.price ?? price);
+              : calculateUsageCost(r, override?.price);
             // Serialized (chained off the tail, never parallel) so flush()
             // below is an honest drain of every queued write IN ORDER.
             usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve())
