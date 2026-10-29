@@ -37,6 +37,8 @@ import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRoutedChildComposition } from "./routed-child-composition.js";
+import { RoleHealthCache } from "./role-route.js";
 import {
   bashTool,
   backgroundCapableBashTool,
@@ -657,31 +659,65 @@ describe("host subagent model-override wiring", () => {
   });
 
   it("Taskana 4704 F5: the respawn notice rides the FAILED child's id; a refused respawn reports honestly", async () => {
+    const reports: Array<{ id: string; text: string; meta: { status: string; durationMs: number } }> = [];
+    const run = vi.fn()
+      .mockResolvedValueOnce({ background: { childSessionId: "child" } })
+      .mockResolvedValueOnce({ status: "error", finalText: "capacity reached" });
+    const port = { run };
+    const composition = createRoutedChildComposition({
+      health: new RoleHealthCache(),
+      describeError: String,
+      resolve: () => ({ entries: [{ engine: "claude", connection: "old", model: "A" }, { model: "B" }], skipped: [] }),
+      prepare: (req) => req,
+      record: () => {},
+      deliver: () => {},
+      report: (id, text, meta) => reports.push({ id, text, meta }),
+    });
+    composition.attach(port as never);
+    const req = { agentType: "executor", description: "Review", prompt: "task", spawnToolCallId: "original", engine: "claude" as const, connectionId: "old", model: "A", detach: true, routeStamped: true };
+    await port.run(req, {});
+    composition.onTerminal({ status: "error", finalText: "rate limited (HTTP 429)", durationMs: 42 } as never, req);
+    await vi.waitFor(() => expect(reports).toHaveLength(2));
+
+    const retry = run.mock.calls[1]![0];
+    expect(retry).toMatchObject({ model: "B", prompt: "task", detach: true });
+    expect(retry.spawnToolCallId).not.toBe("original");
+    expect(retry).not.toHaveProperty("engine");
+    expect(retry).not.toHaveProperty("connectionId");
+    expect(reports[0]).toMatchObject({ id: "original", meta: { status: "completed", durationMs: 0 } });
+    expect(reports[0]!.text).toContain("retry");
+    expect(reports[1]).toMatchObject({ id: "original:respawn-refused", meta: { status: "error", durationMs: 42 } });
+    expect(reports[1]!.text).toContain("was refused: capacity reached");
+
+    // The host connects the composition's reports to the durable queue.
     const source = await readHostSource();
-    // F5(b): the retrying notice is queued under the FAILED child's
-    // spawnToolCallId (a completed marker for a spawn that DID happen,
-    // consumed once the renderer acks it) — NOT under the respawn's fresh id
-    // (the renderer's originId dedupe would swallow the real report of the
-    // respawned child when it eventually arrives under that same id).
-    expect(source).toContain("childReportQueue.add(req.spawnToolCallId, decision.notice");
-    // F5(c): the respawn run()'s admit outcome is HANDLED — a refused
-    // respawn (cap/shape) delivers an honest error report under the failed
-    // child's id instead of a silent "retrying" with no follow-up.
-    expect(source).toContain("admit.status === \"error\"");
-    expect(source).toContain("was refused");
-    // R3 (cross-review): that honest refusal/failure report rides a DISTINCT
-    // queue id — never the failed child's spawnToolCallId, which the
-    // "retrying" notice already claimed (renderer dedupes child_report by
-    // originId; a same-id follow-up would be silently dropped).
-    // R3 (re-review #3): the id itself is pinned behaviourally in
-    // role-route.test.ts (respawnReportId + ChildReportQueue); here only the
-    // wiring must go through the helper.
-    expect(source).toContain('respawnReportId(req.spawnToolCallId, "refused")');
-    expect(source).toContain('respawnReportId(req.spawnToolCallId, "failed")');
-    // The respawn request stamps ONLY the next entry's fields (a stale
-    // engine/connection of the failed hop never leaks through `...req`).
-    expect(source).not.toContain("...req,\n    spawnToolCallId: respawnId");
-    expect(source).toContain("...(decision.entry.engine !== undefined ? { engine: decision.entry.engine } : {})");
+    expect(source).toContain("report: (id, text, meta) => childReportQueue.add(id, text, meta)");
+  });
+
+  it("reports a failed fallback start under a distinct id", async () => {
+    const reports: Array<{ id: string; text: string }> = [];
+    const run = vi.fn()
+      .mockResolvedValueOnce({ background: { childSessionId: "child" } })
+      .mockRejectedValueOnce(new Error("start failed"));
+    const port = { run };
+    const composition = createRoutedChildComposition({
+      health: new RoleHealthCache(), describeError: String,
+      resolve: () => ({ entries: [{ model: "A" }, { model: "B" }], skipped: [] }),
+      prepare: (req) => req, record: () => {}, deliver: () => {},
+      report: (id, text) => reports.push({ id, text }),
+    });
+    composition.attach(port as never);
+    const req = { agentType: "executor", description: "Review", prompt: "task", spawnToolCallId: "original", detach: true, routeStamped: true };
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await port.run(req, {});
+      composition.onTerminal({ status: "error", finalText: "rate limited (HTTP 429)", durationMs: 42 } as never, req);
+      await vi.waitFor(() => expect(reports).toHaveLength(2));
+      expect(reports.map((report) => report.id)).toEqual(["original", "original:respawn-failed"]);
+      expect(reports[1]!.text).toContain("could not start");
+    } finally {
+      log.mockRestore();
+    }
   });
 });
 
