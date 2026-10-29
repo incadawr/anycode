@@ -33,6 +33,8 @@ function childStore(tabId: string): ChildPermissionStore | undefined {
 export function ConnectedChildPermissionModal() {
   const rootHasOwn = useTabStore((state) => state.permission !== null);
   const parentSessionId = useTabStore((state) => state.sessionId);
+  const transcript = useTabStore((state) => state.transcript);
+  const backgroundChildren = useTabStore((state) => state.backgroundChildren);
   const relations = childRelationStore((state) => state.relations);
   const [, setRevision] = useState(0);
   // Read the current parent and relations on every render, so switching root
@@ -112,7 +114,7 @@ export function ConnectedChildPermissionModal() {
       onDeny={handleDeny}
       allowRemember={allowRemember}
       workspace={childState?.workspace ?? null}
-      ownerLabel={childPermissionOwnerLabel(forwarded.childSessionId)}
+      ownerLabel={childPermissionOwnerLabel(forwarded.childSessionId, forwarded.spawnToolCallId, transcript, backgroundChildren)}
     />
   );
 }

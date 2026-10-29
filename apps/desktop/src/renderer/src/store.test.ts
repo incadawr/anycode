@@ -7634,7 +7634,7 @@ describe("TASK.242 visible agent provenance", () => {
 });
 
 describe("desktop store — background_children (detached agents strip)", () => {
-  const CHILD = { childSessionId: "child-1", agentType: "glm-lead", description: "fix it", startedAt: 1 };
+  const CHILD = { childSessionId: "child-1", agentType: "glm-lead", description: "fix it", startedAt: 1, turns: 0, toolCalls: 2, lastTool: "Write", waitingForApproval: true };
 
   it("background_children replaces the list wholesale, and an empty push clears it", () => {
     const { scheduler } = createManualScheduler();

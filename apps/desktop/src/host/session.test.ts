@@ -2353,6 +2353,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
       agentType: "explore",
       description: "sweep the repo",
       startedAt: 1_000,
+      turns: 0, toolCalls: 2, lastTool: "Write", waitingForApproval: true,
     };
 
     it("pushes the current list (possibly empty) on ui_ready, mirroring pushTaskList/pushHooksList", () => {

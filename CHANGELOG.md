@@ -15,6 +15,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Sessions API lists the same activity state as session status, including approval waits, without waiting for session hosts.
 - After switching models, the context indicator counts the system prompt and tools instead of dropping to near zero.
+- Background subagents keep their progress, elapsed time and current tool when handed off to the background, and permission requests name the subagent instead of an id.
 
 ## [0.0.52] — 2026-10-30
 
