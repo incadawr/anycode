@@ -994,3 +994,42 @@ describe("runCompaction mid-stream replay (Taskana 4705 review)", () => {
     expect(content).not.toContain("STALE");
   });
 });
+
+
+describe("request overhead and model anchors", () => {
+  it("uses live overhead only without an anchor and keeps history deltas across budget changes", () => {
+    const history = buildHistory([]);
+    let overhead = 120;
+    const manager = new ContextManager({ history, tokenizer: new HeuristicTokenizer(), modelPort: new ScriptedModelPort([]), config: { ...DEFAULT_CONTEXT_BUDGET }, requestOverheadTokens: () => overhead });
+    expect(manager.estimate()).toEqual({ tokens: 120, source: "estimate" });
+    history.append(userMsg("hello world"));
+    const baseline = history.totalTokenEstimate();
+    expect(manager.estimate().tokens).toBe(baseline + 120);
+    manager.noteUsage({ inputTokens: 500 });
+    overhead = 200;
+    history.append(userMsg("more history"));
+    const delta = history.totalTokenEstimate() - baseline;
+    manager.setBudgetConfig({ ...DEFAULT_CONTEXT_BUDGET, contextWindowTokens: 100_000 });
+    expect(manager.estimate()).toEqual({ tokens: 500 + delta, source: "provider" });
+    manager.invalidateProviderAnchor();
+    expect(manager.estimate()).toEqual({ tokens: history.totalTokenEstimate() + 200, source: "estimate" });
+    manager.noteUsage({ inputTokens: 900 });
+    expect(manager.estimate()).toEqual({ tokens: 900, source: "provider" });
+  });
+
+  it("applies overhead to compaction pressure and the post-compaction estimate", async () => {
+    const history = buildHistory([userMsg("first"), userMsg("second"), userMsg("third")]);
+    const config = { ...DEFAULT_CONTEXT_BUDGET, contextWindowTokens: 1000, outputReserveTokens: 0, compactBufferTokens: 0, compactThresholdPercent: 50, keepRecentMessages: 1 };
+    let overhead = 0;
+    const manager = new ContextManager({ history, tokenizer: new HeuristicTokenizer(), modelPort: new ScriptedModelPort(summaryScript("summary")), config, requestOverheadTokens: () => overhead });
+    expect(manager.shouldAutoCompact()).toBe(false);
+    overhead = 600;
+    expect(manager.shouldAutoCompact()).toBe(true);
+    manager.noteUsage({ inputTokens: 900 });
+    const result = await manager.runCompaction({});
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.postTokens).toBe(history.totalTokenEstimate() + 600);
+    expect(manager.estimate()).toEqual({ tokens: history.totalTokenEstimate() + 600, source: "estimate" });
+  });
+
+});

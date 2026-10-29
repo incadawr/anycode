@@ -1952,6 +1952,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
               if (modelPortFactory === undefined) {
                 return "model switching is unavailable: this session runs on an injected model port";
               }
+              const previousModel = currentModel;
               modelPort.setPort(modelPortFactory(id));
               loop.setTodoReminderEvery(envConfig.todoReminderEvery ?? catalogEntry?.models.find((m) => m.id === id)?.todoReminderEvery);
               currentModel = id;
@@ -1991,6 +1992,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
               // subtraction from the freshly rebuilt systemPrompt.
               loopConfig.systemPromptComponents = composeSystemPromptComponents();
               loop.setContextWindow(contextWindow);
+              if (previousModel !== id) loop.invalidateProviderAnchor();
               loopConfig.context = { ...loopConfig.context, contextWindowTokens: contextWindow };
               void persistence.touchSession(session.id, { model: id }).catch(() => {});
               return null;

@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Include the system prompt and tools in context estimates after switching models.
+
 ### Changed
 
 - Settings shows compact role routes with profile and project controls (GitHub #23).

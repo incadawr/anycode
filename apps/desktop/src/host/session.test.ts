@@ -3764,6 +3764,33 @@ describe("catalog defaults in a fresh session", () => {
 });
 
 describe("Session — model switch (slice P7.15 · F14)", () => {
+  it("keeps a restored provider reading on a same-model refresh and persists the emitted reading", async () => {
+    const save = vi.fn(async () => {});
+    const h = createHarness({
+      steps: [],
+      initialContextUsage: { estimatedTokens: 1234, budgetTokens: 5000, source: "provider" },
+      saveContextUsage: save,
+      switchModel: (model) => ({ model, reasoningEffort: "off", contextUsage: { estimatedTokens: 50, budgetTokens: 8000, source: "estimate" } }),
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_model", model: "scripted-model" });
+      const changed = await h.waitFor(isModelChanged);
+      const reading = { estimatedTokens: 1234, budgetTokens: 8000, source: "provider" };
+      expect(changed.contextUsage).toEqual(reading);
+      await h.waitUntil(() => save.mock.calls.length > 0);
+      expect(save).toHaveBeenLastCalledWith({ ...reading, engine: "core", model: "scripted-model" });
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.some((m) => m.type === "context_usage_checkpoint" && m.contextUsage?.budgetTokens === 8000));
+      expect(h.received.find((m) => m.type === "context_usage_checkpoint" && m.contextUsage?.budgetTokens === 8000)).toMatchObject({ contextUsage: reading });
+      const offset = h.received.length;
+      h.send({ type: "set_model", model: "other" });
+      await h.waitUntil(() => h.received.slice(offset).some(isModelChanged));
+      expect(h.received.slice(offset).find(isModelChanged)?.contextUsage).toEqual({ estimatedTokens: 50, budgetTokens: 8000, source: "estimate" });
+    } finally { h.close(); }
+  });
+
   it("switches the model between turns, emits model_changed, and reports it on the next handshake", async () => {
     const h = createHarness({
       steps: [textStep("x"), finishStep()],

@@ -4683,6 +4683,7 @@ async function boot(): Promise<void> {
         config.systemPrompt = composeSystemPrompt(switchedSystemPromptComponents);
         config.systemPromptComponents = switchedSystemPromptComponents;
         loop.setContextWindow(contextWindow);
+        if (previous !== id) loop.invalidateProviderAnchor();
         loop.setTodoReminderEvery(envConfig.todoReminderEvery ?? catalogEntry?.models.find((m) => m.id === id)?.todoReminderEvery);
         config.context = { ...config.context, contextWindowTokens: contextWindow };
         const availableEffortLevels = resolveEffortLevels(id, catalogEntry, liveCapsFor(id), effortLevelsFor(id));

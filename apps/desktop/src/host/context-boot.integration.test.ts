@@ -106,7 +106,9 @@ describe("core context boot", () => {
     const dir = mkdtempSync(join(tmpdir(), "core-context-boot-"));
     const saved = join(dir, "saved.sqlite");
     const argv = process.argv;
+    let requests = 0;
     const server = createServer((request, response) => {
+      requests += 1;
       request.resume();
       request.on("end", () => {
         const base = { id: "fixture", object: "chat.completion.chunk", created: 0, model: "fixture-model" };
@@ -133,13 +135,43 @@ describe("core context boot", () => {
             expect(port.messages.find(m => m.type === "host_ready").contextUsage).toEqual(reading);
           } else {
             port.send({ type: "user_message", requestId: "turn", text: "hello" });
-            await vi.waitFor(() => expect(port.messages.some(m => m.type === "agent_event" && m.event.type === "context_usage" && m.event.source === "provider")).toBe(true), { timeout: 15000 });
+            await vi.waitFor(() => expect(port.messages.some(m => m.type === "agent_event" && m.event.type === "loop_end")).toBe(true), { timeout: 15000 });
+          }
+          const beforeSwitch = requests;
+          let count = port.messages.filter(m => m.type === "model_changed").length;
+          port.send({ type: "set_model", model: "fixture-model" });
+          await vi.waitFor(() => expect(port.messages.filter(m => m.type === "model_changed").length).toBeGreaterThan(count));
+          const same = port.messages.filter(m => m.type === "model_changed").at(-1).contextUsage;
+          expect(same.source).toBe("provider");
+          if (restart) expect(same).toEqual(reading);
+          count++;
+          port.send({ type: "set_model", model: "other-model" });
+          await vi.waitFor(() => expect(port.messages.filter(m => m.type === "model_changed").length).toBeGreaterThan(count));
+          const switched = port.messages.filter(m => m.type === "model_changed").at(-1).contextUsage;
+          expect(switched).toMatchObject({ source: "estimate", budgetTokens: 2048 });
+          expect(switched.estimatedTokens).toBeGreaterThan(0);
+          expect(requests).toBe(beforeSwitch);
+          const store = createDesktopStore();
+          for (const m of port.messages) store.getState().applyHostMessage(m);
+          expect(store.getState().contextUsage).toEqual(switched);
+          const offset = port.messages.length;
+          port.send({ type: "ui_ready" });
+          await vi.waitFor(() => expect(port.messages.slice(offset).some(m => m.type === "context_usage_checkpoint" && m.contextUsage?.source === "estimate")).toBe(true));
+          expect(port.messages.slice(offset).find(m => m.type === "context_usage_checkpoint").contextUsage).toEqual(switched);
+          if (!restart) {
+            const backOffset = port.messages.length;
+            port.send({ type: "set_model", model: "fixture-model" });
+            await vi.waitFor(() => expect(port.messages.slice(backOffset).some(m => m.type === "model_changed")).toBe(true));
+            expect(port.messages.slice(backOffset).find(m => m.type === "model_changed").contextUsage.source).toBe("estimate");
+            const turnOffset = port.messages.length;
+            port.send({ type: "user_message", requestId: "again", text: "again" });
+            await vi.waitFor(() => expect(port.messages.slice(turnOffset).some(m => m.type === "agent_event" && m.event.type === "loop_end")).toBe(true), { timeout: 15000 });
           }
           requestShutdown();
           expect(await waitForStopped(15000)).toBe(true);
           const db = new SqlitePersistenceAdapter(profile.dbPath);
           const snapshot = JSON.parse((await db.loadContextUsage("core-session"))!);
-          expect(snapshot).toMatchObject({ engine: "core", model: "fixture-model", source: "provider" });
+          expect(snapshot).toMatchObject(restart ? { engine: "core", model: "other-model", ...switched } : { engine: "core", model: "fixture-model", source: "provider" });
           if (!restart) {
             reading = { estimatedTokens: snapshot.estimatedTokens, budgetTokens: snapshot.budgetTokens, source: snapshot.source };
             expect(reading.estimatedTokens).toBeGreaterThan(10000);
@@ -147,7 +179,7 @@ describe("core context boot", () => {
           await db.close();
           copyFileSync(profile.dbPath, saved);
         }, {
-          extraEnv: { ANYCODE_MODEL: "fixture-model", ANYCODE_BASE_URL: `http://127.0.0.1:${address.port}/v1`, ANYCODE_API_KEY: "test", ANYCODE_PROVIDER_TRANSPORT: "openai-chat-completions", ANYCODE_CONTEXT_WINDOW: "200000" },
+          extraEnv: { ANYCODE_MODEL: "fixture-model", ANYCODE_BASE_URL: `http://127.0.0.1:${address.port}/v1`, ANYCODE_API_KEY: "test", ANYCODE_PROVIDER_TRANSPORT: "openai-chat-completions", ANYCODE_CONTEXT_WINDOW: "200000", ANYCODE_CONTEXT_WINDOW_MODEL: "fixture-model" },
           boot: async () => {
             process.argv = [argv[0]!, argv[1]!, "--resume", "core-session"];
             process.chdir(dir);

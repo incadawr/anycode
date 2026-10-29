@@ -3679,6 +3679,29 @@ describe("AgentLoop microcompact pressure gate", () => {
 // denominator and the manager's compaction threshold follow the new window.
 
 describe("AgentLoop.contextInfo / setContextWindow (slice 6.4)", () => {
+  it("reads the full prompt and declarations live and discards only the model anchor", async () => {
+    const declarations = [{ name: "tool", description: "help", inputJsonSchema: {} }];
+    const declarationTokens = JSON.stringify({ name: "tool", description: "help", inputSchema: {} }).length;
+    const modelPort = new MockModelPort([[{ type: "finish", finishReason: "stop", usage: { inputTokens: 5000 } }]]);
+    const loop = makeLoop({ tokenizer: lengthTokenizer, systemPrompt: "prompt", modelPort });
+    const config = (loop as unknown as { config: AgentLoopConfig }).config;
+    vi.mocked(toToolDeclarations).mockImplementation(() => declarations);
+    try {
+      expect(loop.contextInfo().estimatedTokens).toBe(6 + declarationTokens);
+      config.systemPrompt = "new prompt";
+      expect(loop.contextInfo().estimatedTokens).toBe(10 + declarationTokens);
+      declarations.length = 0;
+      expect(loop.contextInfo().estimatedTokens).toBe(10);
+      await collect(loop.runTurn("hello"));
+      const anchored = loop.contextInfo();
+      expect(anchored.source).toBe("provider");
+      loop.setContextWindow(100_000);
+      expect(loop.contextInfo().estimatedTokens).toBe(anchored.estimatedTokens);
+      loop.invalidateProviderAnchor();
+      expect(loop.contextInfo()).toMatchObject({ source: "estimate", estimatedTokens: loop.history.totalTokenEstimate() + 10 });
+    } finally { vi.mocked(toToolDeclarations).mockImplementation(() => []); }
+  });
+
   it("reports an estimate-source virgin snapshot with the default budget", () => {
     const loop = makeLoop({});
     const info = loop.contextInfo();
@@ -3758,19 +3781,16 @@ describe("AgentLoop.contextInfo / setContextWindow (slice 6.4)", () => {
 describe("AgentLoop.contextBreakdown (design slice-P7.17-cut.md §2.1)", () => {
   it("collapses the whole systemPrompt into systemPromptTokens when systemPromptComponents is absent (backward-compat)", () => {
     const loop = makeLoop({ tokenizer: lengthTokenizer, systemPrompt: "0123456789" });
-    // A history message gives the provider-anchored total (P7.17/F12 W1-FIX P2)
-    // something nonzero to anchor to; with no components, none of the raw
-    // systemPrompt weight (10) leaks into skills/meta, and the shared
-    // anchor-scale (anchor=40, rawTotal=50, k=0.8) lands on exact integers.
+    // The local total includes both history and the full prompt.
     loop.history.append({ role: "user", content: "h".repeat(40) });
     const breakdown = loop.contextBreakdown();
     expect(breakdown.skillsTokens).toBe(0);
     expect(breakdown.metaTokens).toBe(0);
     expect(breakdown.systemToolsTokens).toBe(0);
     expect(breakdown.mcpToolsTokens).toBe(0);
-    expect(breakdown.messagesTokens).toBe(32);
-    expect(breakdown.systemPromptTokens).toBe(8);
-    expect(breakdown.totalEstimatedTokens).toBe(40);
+    expect(breakdown.messagesTokens).toBe(40);
+    expect(breakdown.systemPromptTokens).toBe(10);
+    expect(breakdown.totalEstimatedTokens).toBe(50);
     expect(breakdown.totalEstimatedTokens).toBe(loop.contextInfo().estimatedTokens);
   });
 
@@ -3819,18 +3839,14 @@ describe("AgentLoop.contextBreakdown (design slice-P7.17-cut.md §2.1)", () => {
         { kind: "repoMap", text: repoMap },
       ],
     });
-    // Raw leaves before the anchor-scale: messages=50, skills=7, systemPrompt
-    // (base, by subtraction)=20, meta=5+4+3+6=18; anchor=50 (local, no
-    // provider usage — the same field contextInfo() reports), rawTotal=95,
-    // k=50/95. The kind-based bucket assignment and the base/skills/meta
-    // ordering (20 > 18 > 7) survive that single shared scale factor exactly.
+    // The full local total is 50 history tokens plus 45 prompt tokens.
     loop.history.append({ role: "user", content: "h".repeat(50) });
     const breakdown = loop.contextBreakdown();
-    expect(breakdown.skillsTokens).toBe(4);
-    expect(breakdown.metaTokens).toBe(9);
-    expect(breakdown.systemPromptTokens).toBe(11);
-    expect(breakdown.messagesTokens).toBe(26);
-    expect(breakdown.totalEstimatedTokens).toBe(50);
+    expect(breakdown.skillsTokens).toBe(7);
+    expect(breakdown.metaTokens).toBe(18);
+    expect(breakdown.systemPromptTokens).toBe(20);
+    expect(breakdown.messagesTokens).toBe(50);
+    expect(breakdown.totalEstimatedTokens).toBe(95);
     expect(breakdown.totalEstimatedTokens).toBe(
       breakdown.messagesTokens +
         breakdown.systemToolsTokens +
