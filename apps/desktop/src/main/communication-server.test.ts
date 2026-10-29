@@ -1575,7 +1575,10 @@ describe("Sessions API create_session (Taskana 4768)", () => {
   it.each(["timeout", "disconnect"] as const)("settles %s through the host request boundary", async (failure) => {
     const f = await createFixture();
     const host = new EventEmitter() as EventEmitter & { postMessage: (message: any) => void };
+    let posted!: () => void;
+    const postedMessage = new Promise<void>((resolve) => { posted = resolve; });
     host.postMessage = (message) => {
+      if (message.operation === "send_message") posted();
       if (message.operation === "get_session_status") {
         queueMicrotask(() => host.emit("message", { type: "communication_response", requestId: message.requestId, result: { engine: "core", state: "idle" } }));
       } else if (message.operation === "send_message" && failure === "disconnect") {
@@ -1586,12 +1589,22 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     };
     const manager = { tabs: new Map([["tab-1", { sessionId: "agent-1", workspace: f.dir, state: "running", proc: host }]]) } as unknown as TabHostManager;
     f.request.mockImplementation((session, op, payload) => TabHostManager.prototype.communicationRequest.call(manager, session, op, payload, f.dir) as never);
-    const result = await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, firstMessage: "hello" } });
-    expect(errorText(result)).toContain("Host response unavailable");
-    const ledger = JSON.parse(await readFile(join(f.dir, "communication.json.messages"), "utf8"));
-    expect(ledger[0]).toMatchObject({ state: "unknown", detail: "Host response unavailable; do not blindly resend" });
-    expect(host.listenerCount("message")).toBe(0);
-    expect(host.listenerCount("exit")).toBe(0);
+    if (failure === "timeout") vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const pending = f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, firstMessage: "hello" } });
+      if (failure === "timeout") {
+        await postedMessage;
+        await vi.advanceTimersByTimeAsync(20_000);
+      }
+      const result = await pending;
+      expect(errorText(result)).toContain("Host response unavailable");
+      const ledger = JSON.parse(await readFile(join(f.dir, "communication.json.messages"), "utf8"));
+      expect(ledger[0]).toMatchObject({ state: "unknown", detail: "Host response unavailable; do not blindly resend" });
+      expect(host.listenerCount("message")).toBe(0);
+      expect(host.listenerCount("exit")).toBe(0);
+    } finally {
+      if (failure === "timeout") vi.useRealTimers();
+    }
   }, 30000);
 
   it("create_session: returns without messageId when the host never becomes ready", async () => {
