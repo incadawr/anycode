@@ -737,6 +737,7 @@ export function createTabRegistry(
       closedTabIds.add(tabId);
       const entry = entries.get(tabId);
       if (!entry) {
+        tabsStore.getState().removeTab(tabId);
         return;
       }
       entry.unsubscribeMessages?.();

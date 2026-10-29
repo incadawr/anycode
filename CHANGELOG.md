@@ -13,6 +13,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Window reloads preserve the active tab and running timer; resumed sessions become active.
 - Sessions API lists the same activity state as session status, including approval waits, without waiting for session hosts.
 
 ## [0.0.52] — 2026-10-30

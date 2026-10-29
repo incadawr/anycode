@@ -1282,6 +1282,46 @@ describe("automation facade — tab-lifecycle passthrough (window.anycode bridge
 
     expect(bridge.createTab).toHaveBeenCalledWith({ kind: "resume", sessionId: "sess-9" });
     expect(result).toEqual({ ok: true, tabId: "t9", workspace: "/ws/resumed" });
+    expect(tabsStore.getState().activeTabId).toBe("t9");
+    expect(tabsStore.getState().draftActive).toBe(false);
+  });
+
+  it.each(["port first", "result first"])("activates a resumed tab with %s", async (order) => {
+    const tabsStore = createTabsStore();
+    const registry = createTabRegistry(tabsStore);
+    registry.registerPort("existing", "/ws", asPort(new FakeMessagePort()));
+    tabsStore.getState().openDraft();
+    let resolve!: (result: CreateTabResult) => void;
+    const resultPromise = new Promise<CreateTabResult>((done) => { resolve = done; });
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge({ createTab: () => resultPromise }));
+    const pending = facade.resumeSession("resume");
+    const port = new FakeMessagePort();
+    if (order === "port first") registry.registerPort("resumed", "/ws/resumed", asPort(port));
+    resolve({ ok: true, tabId: "resumed", workspace: "/ws/resumed" });
+    await pending;
+    if (order === "result first") registry.registerPort("resumed", "/ws/resumed", asPort(port));
+    expect(tabsStore.getState().activeTabId).toBe("resumed");
+    expect(tabsStore.getState().draftActive).toBe(false);
+    expect(tabsStore.getState().tabs.filter((tab) => tab.tabId === "resumed")).toHaveLength(1);
+    expect(registry.getStore("resumed")).toBeDefined();
+  });
+
+  it("focuses an already-open session and leaves selection alone on refusal", async () => {
+    const tabsStore = createTabsStore();
+    const registry = createTabRegistry(tabsStore);
+    registry.registerPort("first", "/first", asPort(new FakeMessagePort()));
+    registry.registerPort("second", "/second", asPort(new FakeMessagePort()));
+    tabsStore.getState().openDraft();
+    const bridge = stubBridge({ createTab: vi.fn(async (): Promise<CreateTabResult> => ({ ok: false, reason: "already_open", focusTabId: "second" })) });
+    const facade = createAutomationFacade(registry, tabsStore, bridge);
+    await facade.resumeSession("open");
+    expect(tabsStore.getState().activeTabId).toBe("second");
+    expect(tabsStore.getState().draftActive).toBe(false);
+    tabsStore.getState().openDraft();
+    vi.mocked(bridge.createTab).mockResolvedValueOnce({ ok: false, reason: "session_not_found" });
+    await facade.resumeSession("missing");
+    expect(tabsStore.getState().activeTabId).toBe("second");
+    expect(tabsStore.getState().draftActive).toBe(true);
   });
 
   it("closeTab disposes the tab locally on ok:true (mirrors App.tsx's handleCloseTab)", async () => {
