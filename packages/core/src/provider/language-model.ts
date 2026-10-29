@@ -18,7 +18,8 @@ import type { EndpointConfig } from "./endpoint.js";
 import { createOpenAICompatibleLanguageModel } from "./openai-compatible.js";
 import { createOpenAIResponsesLanguageModel } from "./openai-responses.js";
 
-export function createLanguageModel(config: EndpointConfig): LanguageModel {
+/** onResponseActivity is the per-attempt byte-liveness hook for openai-responses (GitHub #27). */
+export function createLanguageModel(config: EndpointConfig, onResponseActivity?: () => void): LanguageModel {
   switch (config.transport) {
     case "anthropic-messages":
       // `EndpointConfig.transport` is a flat union field, not a discriminated
@@ -30,7 +31,7 @@ export function createLanguageModel(config: EndpointConfig): LanguageModel {
     case "openai-chat-completions":
       return createOpenAICompatibleLanguageModel(config);
     case "openai-responses":
-      return createOpenAIResponsesLanguageModel(config);
+      return createOpenAIResponsesLanguageModel(config, onResponseActivity);
     default: {
       const unknown: never = config.transport;
       throw new Error(`Unknown provider transport: ${JSON.stringify(unknown)}`);
