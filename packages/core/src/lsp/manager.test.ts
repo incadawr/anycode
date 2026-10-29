@@ -64,7 +64,7 @@ function spyExec(): { exec: ExecutionPort; spawnCount: () => number } {
 
 
 /** Observe the real child stream after delivering each chunk to the manager. */
-function observedFixture(marker: string, stream: "stdout" | "stderr"): { exec: ExecutionPort; seen: Promise<void> } {
+function observedFixture(marker: string, stream: "stdout" | "stderr"): { exec: ExecutionPort; seen: Promise<void>; observeStdout: (chunk: Buffer) => void } {
   const adapter = new NodeExecutionAdapter();
   let resolveSeen!: () => void;
   let rejectSeen!: (error: Error) => void;
@@ -79,16 +79,17 @@ function observedFixture(marker: string, stream: "stdout" | "stderr"): { exec: E
     text += chunk;
     if (text.includes(marker)) resolveSeen();
   };
+  const observeStdout = (chunk: Buffer) => decoder.feed(chunk);
   const exec: ExecutionPort = {
     run: adapter.run.bind(adapter),
     runBinary: adapter.runBinary!.bind(adapter),
     spawnPersistent: (request) => adapter.spawnPersistent!({
       ...request,
-      onStdout: (chunk) => { request.onStdout(chunk); if (stream === "stdout") decoder.feed(chunk); },
+      onStdout: (chunk) => { request.onStdout(chunk); if (stream === "stdout") observeStdout(chunk); },
       onStderr: (chunk) => { request.onStderr?.(chunk); if (stream === "stderr") observe(chunk); },
     }),
   };
-  return { exec, seen };
+  return { exec, seen, observeStdout };
 }
 
 async function fixtureDeadline<T>(run: () => Promise<T>, seen: Promise<void>): Promise<T> {
@@ -116,6 +117,26 @@ async function fixtureDeadline<T>(run: () => Promise<T>, seen: Promise<void>): P
 function tsSpec(name: string, flags: string[] = []): LspServerSpec {
   return { name, command: process.execPath, args: [FIXTURE, ...flags], extensions: [".ts"] };
 }
+
+describe("fixture stream observer", () => {
+  it("waits for the complete diagnostics frame after the URI prefix", async () => {
+    const uri = "file:///fixture/wrong/other-file.ts";
+    const { seen, observeStdout } = observedFixture(uri, "stdout");
+    const body = JSON.stringify({ jsonrpc: "2.0", method: "textDocument/publishDiagnostics", params: { uri, diagnostics: [] } });
+    const frame = `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`;
+    const split = frame.indexOf(uri) + uri.length;
+    let settled = false;
+    void seen.then(() => { settled = true; });
+
+    observeStdout(Buffer.from(frame.slice(0, split)));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    observeStdout(Buffer.from(frame.slice(split)));
+    await seen;
+    expect(settled).toBe(true);
+  });
+});
 
 describe("LspManager (fixture integration)", () => {
   const managers: LspManager[] = [];
