@@ -5,10 +5,10 @@ import { readFile, writeFile, rename, mkdir, rm, realpath } from "node:fs/promis
 import { dirname, isAbsolute } from "node:path";
 import { Server, StreamableHTTPServerTransport, CallToolRequestSchema, ListToolsRequestSchema } from "@anycode/core/communication-mcp";
 import { z } from "zod";
-import type { AgentDelivery, AgentEnvelope } from "../shared/communication.js";
+import type { AgentDelivery, AgentEnvelope, SessionActivityState } from "../shared/communication.js";
 
 export interface CommunicationManager {
-  listTabs(): ReadonlyArray<{ sessionId: string; workspace: string; state: string; engine?: string; missingWorkspace?: boolean; hostFailure?: import("../shared/host-failure.js").HostFailure; pid?: number | null; childOf?: { parentTabId: string; requestId?: string } }>;
+  listTabs(): ReadonlyArray<{ sessionId: string; workspace: string; state: string; activityState?: SessionActivityState; engine?: string; missingWorkspace?: boolean; hostFailure?: import("../shared/host-failure.js").HostFailure; pid?: number | null; childOf?: { parentTabId: string; requestId?: string } }>;
   onCommunicationDelivery?(listener: (sessionId: string, delivery: AgentDelivery) => void): () => void;
   communicationRequest(sessionId: string, operation: string, payload?: unknown, expectedWorkspace?: string): Promise<unknown>;
 }
@@ -350,13 +350,16 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     // One re-resolution per request at most, and none while every entry is present.
     if (retryMissing && unresolved.size > 0) await resolveMissing();
     for (const tab of options.manager.listTabs()) {
-      if (options.isSessionExposed && !options.isSessionExposed(tab.sessionId)) continue;
-      if (!restricted) { result.push(tab); continue; }
+      if (!restricted) { if (!options.isSessionExposed || options.isSessionExposed(tab.sessionId)) result.push(tab); continue; }
       let path: string;
       try { path = await resolvePath(tab.workspace); } catch { continue; }
-      if (allowed.has(path)) result.push(tab);
+      if (allowed.has(path) && (!options.isSessionExposed || options.isSessionExposed(tab.sessionId))) result.push(tab);
     }
-    return result;
+    const current = new Map(options.manager.listTabs().map((tab) => [tab.sessionId, tab]));
+    return result.flatMap((tab) => {
+      const latest = current.get(tab.sessionId);
+      return latest && latest.workspace === tab.workspace && (!options.isSessionExposed || options.isSessionExposed(tab.sessionId)) ? [latest] : [];
+    });
   };
   const requireSession = async (sessionId: string) => {
     const tab = (await tabs(true)).find((t) => t.sessionId === sessionId);
@@ -365,14 +368,17 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   };
   const terminalState = (tab: { missingWorkspace?: boolean; hostFailure?: unknown }) =>
     tab.missingWorkspace ? "missing_workspace" : tab.hostFailure ? "crash_looped" : undefined;
+  const publicTab = (tab: Awaited<ReturnType<typeof requireSession>>) => {
+    const { activityState, ...rest } = tab;
+    return { ...rest, state: terminalState(tab) ?? activityState ?? "idle" };
+  };
   const resolveStatus = async (tab: Awaited<ReturnType<typeof requireSession>>) => {
-    const state = terminalState(tab);
-    if (state) return { ...tab, state };
+    if (terminalState(tab)) return publicTab(tab);
     const status = await options.manager.communicationRequest(tab.sessionId, "get_session_status", undefined, tab.workspace);
-    if (!status || typeof status !== "object" || !["idle", "running", "waiting_approval", "closing"].includes((status as { state?: string }).state ?? "")) {
-      throw new Error("Invalid session status");
-    }
-    return { ...tab, ...status as object };
+    if (!status || typeof status !== "object") throw new Error("Invalid session status");
+    const current = await requireSession(tab.sessionId);
+    if (terminalState(current)) return publicTab(current);
+    return { ...status as object, ...publicTab(current) };
   };
   const approvalOn = (sessionId: string): boolean => options.isExternalApprovalEnabled?.(sessionId) === true;
   /** Access first (an unshared session never reveals anything), then the approval switch. */
@@ -507,25 +513,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     switch (name) {
       case "list_sessions": {
         z.object({}).strict().parse(raw);
-        const rows = await Promise.all((await tabs(true)).map(async (tab) => {
-          try {
-            const status = await resolveStatus(tab);
-            const current = (await tabs(false)).find((t) => t.sessionId === tab.sessionId);
-            if (!current) return undefined;
-            const terminal = terminalState(current);
-            if (terminal) return { ...current, state: terminal };
-            if (terminalState(tab) || current.workspace !== tab.workspace || current.pid !== tab.pid) return undefined;
-            return { ...current, state: status.state };
-          } catch {
-            try {
-              const current = (await tabs(false)).find((t) => t.sessionId === tab.sessionId);
-              if (!current) return undefined;
-              const state = terminalState(current);
-              return state ? { ...current, state } : undefined;
-            } catch { return undefined; }
-          }
-        }));
-        const sessions = rows.filter((row): row is NonNullable<typeof row> => row !== undefined);
+        const sessions = (await tabs(true)).map(publicTab);
         // externalApproval is reported only when the switch is wired at all (Taskana 4763).
         const withApproval = (tab: (typeof sessions)[number]) => options.isExternalApprovalEnabled ? { ...tab, externalApproval: approvalOn(tab.sessionId) } : tab;
         if (!options.handleOf) return { sessions: sessions.map(withApproval) };

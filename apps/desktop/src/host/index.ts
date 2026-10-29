@@ -5166,6 +5166,7 @@ async function boot(): Promise<void> {
 }
 
 const ready = boot();
+void ready.then(() => session?.observeActivity((state) => { process.parentPort.postMessage({ type: "session_activity", state }); }));
 void ready.then(() => session?.observeAgentDeliveries((delivery) => { process.parentPort.postMessage({ type: "communication_delivery", delivery }); }));
 
 async function handleShutdown(): Promise<void> {

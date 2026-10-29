@@ -5449,6 +5449,23 @@ describe("TASK.194 model admission before fork", () => {
   });
 });
 
+describe("session activity messages", () => {
+  it("tracks the current host and ignores stale or invalid messages", () => {
+    const rig = liveForkRig(); const manager = makeManager(rig.fork, windowRig().window);
+    manager.createTab({ workspace: "/allowed", sessionId: "activity", resume: false });
+    const host = rig.hosts[0]!;
+    expect(manager.listTabs()[0]?.activityState).toBe("idle");
+    host.emit("message", { type: "session_activity", state: "waiting_approval" });
+    expect(manager.listTabs()[0]?.activityState).toBe("waiting_approval");
+    host.emit("message", { type: "session_activity", state: "invalid" });
+    expect(manager.listTabs()[0]?.activityState).toBe("waiting_approval");
+    host.emit("exit", 1);
+    expect(manager.listTabs()[0]?.activityState).toBe("idle");
+    host.emit("message", { type: "session_activity", state: "running" });
+    expect(manager.listTabs()[0]?.activityState).toBe("idle");
+  });
+});
+
 describe("TASK.242 owned process communication routing", () => {
   it("pins workspace/session and accepts a correlated response only from the recipient host", async () => {
     const rig = liveForkRig(); const manager = makeManager(rig.fork, windowRig().window);

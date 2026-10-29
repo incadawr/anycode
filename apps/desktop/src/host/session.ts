@@ -1352,7 +1352,20 @@ export class Session {
   /** Injected turn-end poster; undefined in legacy tests -> the collector still runs, nothing is ever sent. */
   private readonly sendPreviewArtifacts: SessionOptions["postPreviewArtifacts"];
 
-  private busy = false;
+  private busyValue = false;
+  private activityListener?: (state: SessionActivityState) => void;
+  private get busy(): boolean { return this.busyValue; }
+  private set busy(value: boolean) {
+    this.busyValue = value;
+    this.publishActivity();
+  }
+  private publishActivity(): void {
+    this.activityListener?.(this.communicationState());
+  }
+  observeActivity(listener: (state: SessionActivityState) => void): void {
+    this.activityListener = listener;
+    this.publishActivity();
+  }
   /**
    * Taskana 4704 §2.2/§3.7: per-session orchestrate flag — a TAB-level state,
    * never a PermissionMode. Enabling it (a) switches the mode to `plan` (the
@@ -1676,6 +1689,7 @@ export class Session {
     this.switchEngineFactory = options.switchEngineFactory;
     this.engineSettings = options.engineSettings;
     this.broker = options.broker;
+    this.broker.observeActivity(() => this.publishActivity());
     this.reconnectGraceMs = options.reconnectGraceMs ?? UI_RECONNECT_GRACE_MS;
     this.fs = options.fs;
     this.workspace = options.workspace;
@@ -2278,6 +2292,7 @@ export class Session {
 
   closeAdmissions(): void {
     this.shuttingDown = true;
+    this.publishActivity();
     this.pendingEngineEffort = undefined;
     this.inFlightEngineEffort = undefined;
     this.settingsGeneration++;

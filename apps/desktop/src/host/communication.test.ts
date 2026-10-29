@@ -368,7 +368,10 @@ describe("Sessions API approvals (Taskana 4763)", () => {
 
   it("keeps status and result aligned through turns, queued asks, cancellation and shutdown", async () => {
     const { h, finishes, make } = fixture();
+    let observed = "";
+    h.session.observeActivity((activity) => { observed = activity; });
     const state = (expected: string) => {
+      expect(observed).toBe(expected);
       expect(h.session.communicationStatus().state).toBe(expected);
       expect(h.session.communicationResult().state).toBe(expected);
     };

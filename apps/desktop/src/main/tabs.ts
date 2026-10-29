@@ -1,6 +1,6 @@
 import { hostFailure } from "./host-failure.js";
 import type { HostFailure } from "../shared/host-failure.js";
-import type { AgentDelivery } from "../shared/communication.js";
+import type { AgentDelivery, SessionActivityState } from "../shared/communication.js";
 /**
  * TabHostManager (design/phase-2.md §2.2): the multi-host generalization of the
  * MVP single-host lifecycle. One window / one renderer / N host utilityProcesses
@@ -393,6 +393,7 @@ export interface TabHost {
   pendingWorktreeCleanup?: WorktreeCleanupIntent;
   /* */
   sessionId: string;
+  activityState?: SessionActivityState;
   /**
    * The provider connection pinned to this session (TASK.45 W10, core engine
    * only). Fixed at createTab from the active connection (new) or the session's
@@ -937,6 +938,7 @@ export interface TabSummary {
   workspace: string;
   sessionId: string;
   state: TabHost["state"];
+  activityState?: SessionActivityState;
   hostFailure?: HostFailure;
   missingWorkspace?: boolean;
   engine?: EngineId;
@@ -1210,6 +1212,7 @@ export class TabHostManager {
       workspace: tab.workspace,
       sessionId: tab.sessionId,
       state: tab.state,
+      activityState: tab.activityState ?? "idle",
       pid: tab.proc?.pid ?? null,
       ...(tab.hostFailure ? { hostFailure: tab.hostFailure, engine: tab.engine } : {}),
       ...(tab.missingWorkspace ? { missingWorkspace: true, engine: tab.engine } : {}),
@@ -1842,6 +1845,11 @@ export class TabHostManager {
       return;
     }
     const data = message as { type?: unknown; requestId?: unknown };
+    if (data.type === "session_activity") {
+      const state = (message as { state?: unknown }).state;
+      if (tab.proc === child && (state === "idle" || state === "running" || state === "waiting_approval" || state === "closing")) tab.activityState = state;
+      return;
+    }
     if (data.type === WORKSPACE_TRUST_PENDING_MESSAGE_TYPE) {
       this.recordWorkspaceTrustPending(tab, child, message);
       return;
@@ -3461,6 +3469,7 @@ export class TabHostManager {
       return;
     }
     tab.proc = null;
+    tab.activityState = "idle";
 
     if (this.unpublishedTabs.has(tab.tabId)) {
       // A prepared host died before anyone could use it. There is nothing to
