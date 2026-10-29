@@ -374,11 +374,20 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   };
   const resolveStatus = async (tab: Awaited<ReturnType<typeof requireSession>>) => {
     if (terminalState(tab)) return publicTab(tab);
-    const status = await options.manager.communicationRequest(tab.sessionId, "get_session_status", undefined, tab.workspace);
-    if (!status || typeof status !== "object") throw new Error("Invalid session status");
+    let status: unknown;
+    if (tab.pid !== null) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        status = await Promise.race([
+          options.manager.communicationRequest(tab.sessionId, "get_session_status", undefined, tab.workspace),
+          new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), 250); }),
+        ]);
+      } catch { /* Host details are optional while the host is unavailable. */ }
+      finally { if (timer !== undefined) clearTimeout(timer); }
+    }
     const current = await requireSession(tab.sessionId);
     if (terminalState(current)) return publicTab(current);
-    return { ...status as object, ...publicTab(current) };
+    return { ...(status && typeof status === "object" ? status : {}), ...publicTab(current) };
   };
   const approvalOn = (sessionId: string): boolean => options.isExternalApprovalEnabled?.(sessionId) === true;
   /** Access first (an unshared session never reveals anything), then the approval switch. */

@@ -18,6 +18,8 @@ import type { AgentDelivery, AgentEnvelope } from "../shared/communication.js";
 import type { AnycodeSettings } from "../shared/settings.js";
 import { createHarness, finishStep, ScriptedModelPort } from "../host/test-harness.js";
 import type { Session } from "../host/session.js";
+import { forwardSessionActivity } from "../host/activity-forwarding.js";
+import { CORE_ENGINE_CAPABILITIES, type SessionEngine } from "../host/engines/session-engine.js";
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
 async function fixture() {
@@ -75,6 +77,79 @@ describe("production communication MCP over real SDK HTTP", () => {
     const row = value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions[0];
     expect(row).toMatchObject({ sessionId: "allowed", state: "idle", pid: null });
     expect(f.request).not.toHaveBeenCalled();
+  });
+  it("returns state while the host is restarting or stalled", async () => {
+    const f = await fixture();
+    for (const pid of [null, 10]) {
+      f.manager.listTabs = () => [{ sessionId: "allowed", workspace: f.dir, state: "running", activityState: "running", pid, engine: "core" }];
+      f.request.mockImplementation(() => new Promise(() => {}));
+      const row = value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions[0];
+      const status = value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } }));
+      expect(status).toMatchObject({ state: row.state, engine: "core" });
+    }
+  });
+  it("rechecks sharing after asynchronous workspace resolution", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-sharing-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const exposed = new Set(["a", "b"]);
+    let pause = false;
+    let reached!: () => void; let release!: () => void;
+    const paused = new Promise<void>((resolve) => { reached = resolve; });
+    const resume = new Promise<void>((resolve) => { release = resolve; });
+    const manager = { listTabs: () => [
+      { sessionId: "a", workspace: `${dir}/a`, state: "running" },
+      { sessionId: "b", workspace: `${dir}/b`, state: "running" },
+    ], communicationRequest: async () => ({}) };
+    const service = await startCommunicationServer({ manager, userData: dir, config: { workspaces: [dir], discoveryFile: join(dir, "endpoint.json") },
+      isSessionExposed: (id) => exposed.has(id), realpath: async (path) => {
+        if (pause && path.endsWith("/b")) { reached(); await resume; }
+        return dir;
+      } });
+    cleanups.push(() => service.close());
+    const client = await reconnect(service.discoveryFile);
+    pause = true;
+    const pending = client.callTool({ name: "list_sessions", arguments: {} });
+    await paused; exposed.delete("a"); release();
+    const rows = value(await pending).sessions;
+    expect(rows.map((row: { sessionId: string }) => row.sessionId)).toEqual(["b"]);
+  });
+  it("forwards real host activity to both public endpoints", async () => {
+    const hostEntry = await readFile(fileURLToPath(new URL("../host/index.ts", import.meta.url)), "utf8");
+    expect(hostEntry).toContain('forwardSessionActivity(session, (message) => process.parentPort.postMessage(message))');
+    const dir = await mkdtemp(join(tmpdir(), "anycode-activity-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    let finish!: () => void;
+    const engine: SessionEngine = {
+      id: "codex", capabilities: CORE_ENGINE_CAPABILITIES, mode: () => "build", reasoningEffort: () => undefined,
+      setReasoningEffort: () => {}, historyItems: () => [], dispose: async () => {},
+      async *runTurn() { yield { type: "turn_start", turn: 1 }; await new Promise<void>((resolve) => { finish = resolve; }); yield { type: "loop_end", reason: "completed", turns: 1 }; },
+    };
+    const h = createHarness({ steps: [], engine });
+    cleanups.push(async () => h.close());
+    const proc = Object.assign(new EventEmitter(), { pid: 123, kill: () => true, postMessage: (message: any) => {
+      if (message.operation === "get_session_status") queueMicrotask(() => proc.emit("message", { type: "communication_response", requestId: message.requestId, result: h.session.communicationStatus() }));
+    } });
+    const manager = new TabHostManager({ fork: (() => proc as unknown as UtilityProcess) as HostForkFn,
+      hostEntry: "/fake/host.js", createChannel: () => ({ port1: {} as MessagePortMain, port2: {} as MessagePortMain }),
+      getWindow: () => null, env: () => ({}), engineEnv: () => ({}), engineReady: () => true,
+      logger: { log: () => {}, warn: () => {}, error: () => {} } });
+    manager.createTab({ workspace: dir, sessionId: "test-session", resume: false });
+    forwardSessionActivity(h.session, (message) => proc.emit("message", message));
+    const service = await startCommunicationServer({ manager, userData: dir, config: { workspaces: [dir], discoveryFile: join(dir, "endpoint.json") } });
+    cleanups.push(() => service.close());
+    const client = await reconnect(service.discoveryFile);
+    const state = async (expected: string) => {
+      const row = value(await client.callTool({ name: "list_sessions", arguments: {} })).sessions[0];
+      const status = value(await client.callTool({ name: "get_session_status", arguments: { sessionId: "test-session" } }));
+      expect(row.state).toBe(expected); expect(status.state).toBe(expected);
+    };
+    await state("idle");
+    await h.session.receiveAgentMessage({ messageId: "activity", sender: "test", recipientSessionId: "test-session", payload: "hello", mode: "next_turn", kind: "agent_message", createdAt: new Date().toISOString() });
+    await h.waitUntil(() => typeof finish === "function"); await state("running");
+    const approval = h.broker.requestPermission({ toolName: "Bash", input: {}, mode: "build", metadata: { name: "Bash", description: "", readOnly: false, destructive: false, riskLevel: "high", sideEffectScope: "workspace" } } as unknown as Parameters<typeof h.broker.requestPermission>[0]);
+    await state("waiting_approval");
+    h.broker.denyAll("settled", "turn_cancelled"); await approval;
+    finish(); await h.waitUntil(() => h.session.communicationStatus().state === "idle"); await state("idle");
   });
   it("filters sessions when sharing changes", async () => {
     const exposed = new Set(["on", "off-approvals"]);

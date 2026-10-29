@@ -600,6 +600,8 @@ describe("TabHostManager — host spawn", () => {
     });
     const created = manager.createTab({ workspace: "/ws", sessionId: "replacement", resume: false });
     if (!created.ok) throw new Error("create failed");
+    rig.hosts[0]!.emit("message", { type: "session_activity", state: "closing" });
+    expect(manager.listTabs()[0]?.activityState).toBe("closing");
     if (kind === "restart") {
       await manager.restartTabHost(created.tab.tabId);
     } else {
@@ -607,6 +609,7 @@ describe("TabHostManager — host spawn", () => {
     }
     await vi.waitFor(() => expect(created.tab.state).toBe("crash_looped"));
     expect(created.tab.proc).toBeNull();
+    expect(manager.listTabs()[0]?.activityState).toBe("idle");
     expect(logError).toHaveBeenCalledWith(expect.stringContaining("host spawn failed"), error);
   });
 
