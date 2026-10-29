@@ -4,6 +4,8 @@
     "types": ["node"],
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
+    "incremental": true,
+    "tsBuildInfoFile": "../../node_modules/.cache/tsc/desktop-web.tsbuildinfo",
     "noEmit": true
   },
   "include": ["src/renderer/src/**/*.ts", "src/renderer/src/**/*.tsx", "src/shared/**/*.ts"]

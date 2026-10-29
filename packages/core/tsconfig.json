@@ -4,6 +4,8 @@
     "types": ["node"],
     "rootDir": "src",
     "outDir": "dist",
+    "incremental": true,
+    "tsBuildInfoFile": "../../node_modules/.cache/tsc/core.tsbuildinfo",
     "noEmit": true,
     "jsx": "react-jsx"
   },
