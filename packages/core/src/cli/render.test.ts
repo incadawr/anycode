@@ -653,15 +653,17 @@ describe("renderEvent — reasoning rendering (design §3.4, §5.2 item 4)", () 
     expect(text).toBe("\x1b[2m\n[reasoning]\n\x1b[0m\x1b[2mthinking about it\x1b[0m\n");
   });
 
-  it("discards provisional reasoning on retry and releases the winner", () => {
-    const text = collect([start, { ...delta, text: "discard me" }, end,
-      { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 1, reason: "network" },
-      start, { ...delta, text: "winner" }, end, { type: "text_start", id: "t" },
-      { type: "reasoning_delta", id: "r-1", text: "after boundary" }], NOCOLOR, { reasoning: true });
-    expect(text).not.toContain("discard me");
-    expect(text).toContain("winner");
-    expect(text).toContain("after boundary");
-    expect(text).not.toContain("/8");
+  it("streams reasoning immediately and marks a discarded attempt on retry", () => {
+    const transcript = { reasoning: true };
+    let text = "";
+    const write = (chunk: string) => { text += chunk; };
+    renderEvent(start, write, NOCOLOR, transcript);
+    renderEvent({ ...delta, text: "discard me" }, write, NOCOLOR, transcript);
+    expect(text).toBe("\n[reasoning]\ndiscard me");
+    renderEvent({ type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 1, reason: "network" }, write, NOCOLOR, transcript);
+    renderEvent(start, write, NOCOLOR, transcript);
+    renderEvent({ ...delta, text: "winner" }, write, NOCOLOR, transcript);
+    expect(text).toMatch(/discard me[\s\S]*discarded[\s\S]*retry[\s\S]*winner/);
   });
 
   it("renders nothing when transcript is absent", () => {

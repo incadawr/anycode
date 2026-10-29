@@ -2014,6 +2014,17 @@ describe("AiSdkModelPort — mid-stream replay (Taskana 4705)", () => {
     expect(mockStreamText).toHaveBeenCalledTimes(6);
   });
 
+  it("retries a reasoning drop after an empty text block", async () => {
+    mockStreamText.mockImplementationOnce(() => fakeResult([
+      part(startPart), part({ type: "text-start", id: "t" }), part({ type: "text-end", id: "t" }),
+      part({ type: "reasoning-delta", id: "r", text: "partial" }), part({ type: "error", error: retryableError() }),
+    ])).mockImplementationOnce(() => fakeResult([part(startPart), part(textDelta("recovered")), part(finishPart)]));
+    const events = await collect(new AiSdkModelPort(baseConfig({ maxRetries: 1, networkRetryBudgetMs: 0 })).streamText(baseRequest));
+    expect(events.filter(e => e.type === "stream_retry")).toHaveLength(1);
+    expect(events).toContainEqual({ type: "text_delta", id: "t1", text: "recovered" });
+    expect(events.at(-1)?.type).toBe("finish");
+  });
+
   it.each(["text", "tool input", "tool call"] as const)("does not replay after %s", async (kind) => {
     const output = kind === "text" ? textDelta("hi") : kind === "tool input" ? { type: "tool-input-start", id: "call_1", toolName: "Read" } : toolCallPart;
     mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), part(output), part({ type: "error", error: retryableError() })]));
