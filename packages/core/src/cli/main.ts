@@ -27,6 +27,7 @@ import {
   NodeExecutionAdapter,
   NodeFileSystemAdapter,
   NodeGitAdapter,
+  NodeGitReadAdapter,
   NodeHttpAdapter,
   NodeMcpTransportFactory,
 } from "../adapters/node/index.js";
@@ -1480,6 +1481,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
         ports: {
           fs,
           exec,
+          gitRead: new NodeGitReadAdapter(exec),
           http: new NodeHttpAdapter(),
           todos: new InMemoryTodoStore(),
         },
