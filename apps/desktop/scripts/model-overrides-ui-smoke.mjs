@@ -1,5 +1,6 @@
 /** GitHub #26: isolated model-settings GUI/host smoke; loopback provider fixture, no external credentials. */
 import assert from "node:assert/strict";
+import { buildSmokeEnv } from "./model-overrides-smoke-env.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,15 +35,7 @@ await new Promise((resolve) => fixture.listen(0, "127.0.0.1", resolve));
 const fixtureUrl = `http://127.0.0.1:${fixture.address().port}/v1`;
 const binary = join(profile, "unavailable-engine");
 writeFileSync(binary, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
-const env = { ...process.env,
-  ANYCODE_AUTOMATION: "1", ANYCODE_SUBAGENTS_HOME: profile, REMOTE_DEBUGGING_PORT: String(port),
-  ANYCODE_USER_DATA_DIR: join(profile, "user-data"), ANYCODE_DB_PATH: join(profile, "db.sqlite"),
-  ANYCODE_AUTOMATION_INFO: join(profile, "automation.json"),
-  ANYCODE_SETTINGS_PATH: join(profile, "settings.json"), ANYCODE_SECRETS_PATH: join(profile, "secrets.json"),
-  ANYCODE_CODEX_BIN: binary, ANYCODE_CLAUDE_BIN: binary,
-  CODEX_HOME: join(profile, "codex-home"), CLAUDE_CONFIG_DIR: join(profile, "claude-home"),
-};
-for (const key of ["ANYCODE_API_KEY", "ANYCODE_MODEL", "ANYCODE_BASE_URL", "ANYCODE_PROVIDER", "ANYCODE_TRANSPORT", "ANYCODE_REASONING_EFFORT", "ANYCODE_EFFORT_LEVELS", "ANYCODE_CONTEXT_WINDOW", "ANYCODE_CONTEXT_WINDOW_MODEL"]) delete env[key];
+const env = buildSmokeEnv(process.env, profile, port, binary);
 writeFileSync(join(profile, "settings.json"), JSON.stringify({
   version:2, provider:{activeConnectionId:"conn-smoke", custom:[{id:"custom:smoke", name:"Smoke", baseUrl:fixtureUrl, kind:"openai-compatible", models:["unknown"]}], connections:[{
     id:"conn-smoke", providerId:"custom:smoke", label:"Model overrides smoke", model:"a", models:["a","b","unknown"],
