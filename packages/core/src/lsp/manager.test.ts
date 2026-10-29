@@ -21,7 +21,8 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { NodeExecutionAdapter } from "../adapters/node/node-execution.js";
 import { LspManager } from "./manager.js";
-import { LSP_DIAGNOSTICS_TIMEOUT_MS, LSP_DISPOSE_DEADLINE_MS, LSP_MAX_SERVERS } from "../types/config.js";
+import { FrameDecoder } from "./jsonrpc.js";
+import { LSP_DISPOSE_DEADLINE_MS, LSP_MAX_SERVERS } from "../types/config.js";
 import type { ExecutionPort, PersistentChildHandle, PersistentChildRequest } from "../ports/execution.js";
 import type { LspServerSpec } from "../ports/lsp.js";
 
@@ -66,7 +67,13 @@ function spyExec(): { exec: ExecutionPort; spawnCount: () => number } {
 function observedFixture(marker: string, stream: "stdout" | "stderr"): { exec: ExecutionPort; seen: Promise<void> } {
   const adapter = new NodeExecutionAdapter();
   let resolveSeen!: () => void;
-  const seen = new Promise<void>((resolve) => { resolveSeen = resolve; });
+  let rejectSeen!: (error: Error) => void;
+  const seen = new Promise<void>((resolve, reject) => { resolveSeen = resolve; rejectSeen = reject; });
+  const decoder = new FrameDecoder((message) => {
+    if (typeof message !== "object" || message === null) return;
+    const notification = message as { method?: unknown; params?: { uri?: unknown } };
+    if (notification.method === "textDocument/publishDiagnostics" && notification.params?.uri === marker) resolveSeen();
+  }, rejectSeen);
   let text = "";
   const observe = (chunk: string) => {
     text += chunk;
@@ -77,7 +84,7 @@ function observedFixture(marker: string, stream: "stdout" | "stderr"): { exec: E
     runBinary: adapter.runBinary!.bind(adapter),
     spawnPersistent: (request) => adapter.spawnPersistent!({
       ...request,
-      onStdout: (chunk) => { request.onStdout(chunk); if (stream === "stdout") observe(chunk.toString()); },
+      onStdout: (chunk) => { request.onStdout(chunk); if (stream === "stdout") decoder.feed(chunk); },
       onStderr: (chunk) => { request.onStderr?.(chunk); if (stream === "stderr") observe(chunk); },
     }),
   };
@@ -95,7 +102,7 @@ async function fixtureDeadline<T>(run: () => Promise<T>, seen: Promise<void>): P
     await Promise.race([seen, new Promise<never>((_, reject) => {
       watchdog = realSetTimeout(() => reject(new Error("fixture did not send the expected message")), 5_000);
     })]);
-    await vi.advanceTimersByTimeAsync(LSP_DIAGNOSTICS_TIMEOUT_MS - 1);
+    await vi.advanceTimersByTimeAsync(2_999);
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     expect(settled).toBe(true);
