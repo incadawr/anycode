@@ -1,4 +1,5 @@
-import { modelSettingsTarget } from "./model-settings-target.js";
+import { contextWindowSettingsTarget } from "./components/Composer.js";
+import { modelSettingsPick, modelSettingsWrites } from "./components/ModelPill.js";
 import { agentMessageText, type AgentEnvelope } from "../../shared/communication.js";
 import { TurnTranslator } from "../../host/engines/codex/event-translator.js";
 import { CollabAgentCardIndex } from "../../host/engines/codex/collab-agent-index.js";
@@ -8912,7 +8913,10 @@ it("keeps the host connection identity when the active connection changes", () =
   const store = createDesktopStore(createManualScheduler().scheduler);
   store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "a", sessionId: "s", modelSettingsConnectionId: "original" });
   expect(store.getState().pinnedConnection).toBeNull();
-  expect(modelSettingsTarget(store.getState().modelSettingsConnectionId, undefined, "new-active")).toBe("original");
+  const connections = [{ id: "original", providerId: "custom" }, { id: "new-active", providerId: "custom" }];
+  expect(contextWindowSettingsTarget(connections, "a", store.getState().modelSettingsConnectionId, undefined)).toEqual({ connection: connections[0], model: "a" });
+  const pending = { model: modelSettingsPick("model", "b", store.getState().modelSettingsConnectionId, undefined, "new-active"), effort: modelSettingsPick("effort", "max", store.getState().modelSettingsConnectionId, undefined, "new-active") };
+  expect(modelSettingsWrites(pending, { model: "b", effort: "max" })).toEqual([{ id: "original", model: "b", modelOverrideModel: "b", reasoningEffort: "max" }]);
   store.getState().applyHostMessage({ type: "model_changed", model: "b", reasoningEffort: "off" });
   expect(store.getState().modelSettingsConnectionId).toBe("original");
 });

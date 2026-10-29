@@ -430,6 +430,30 @@ export function chainWrite(chain: Promise<unknown>, write: () => Promise<unknown
  */
 export const MID_TURN_CHANGE_NOTE = "Model and effort changes apply from the next turn";
 
+export function modelSettingsPick(
+  kind: "model" | "effort", value: string,
+  hostId: string | null | undefined, pinnedId: string | undefined, activeId: string | undefined,
+): PendingPick {
+  return { kind, value, connectionId: modelSettingsTarget(hostId, pinnedId, activeId) };
+}
+
+export function modelSettingsWrites(
+  pending: { model?: PendingPick; effort?: PendingPick },
+  ack: { model: string; effort: ReasoningEffort },
+): ConnectionUpdateRequest[] {
+  const modelPick = pending.model?.value === ack.model ? pending.model : undefined;
+  const effortPick = pending.effort?.value === ack.effort ? pending.effort : undefined;
+  if (modelPick !== undefined) delete pending.model;
+  if (effortPick !== undefined) delete pending.effort;
+  const writes = new Map<string, ConnectionUpdateRequest>();
+  if (modelPick?.connectionId !== undefined) writes.set(modelPick.connectionId, { id: modelPick.connectionId, model: ack.model });
+  if (effortPick?.connectionId !== undefined) writes.set(effortPick.connectionId, {
+    ...writes.get(effortPick.connectionId), id: effortPick.connectionId,
+    modelOverrideModel: ack.model, reasoningEffort: ack.effort,
+  });
+  return [...writes.values()];
+}
+
 export function ModelPill() {
   const sendToHost = useTabSend();
   const storeApi = useTabStoreApi();
@@ -761,7 +785,7 @@ export function ModelPill() {
     // queued pick instead of being mistaken for a no-op. `pendingPickRef` is
     // the only record of a pick the host has not acked yet.
     if (id !== model || (pendingPickRef.current.model !== undefined || pendingPickRef.current.effort !== undefined)) {
-      pendingPickRef.current.model = { kind: "model", value: id, connectionId: writeTargetConnectionId };
+      pendingPickRef.current.model = modelSettingsPick("model", id, modelSettingsConnectionId, pinnedConnection?.connectionId, snapshot?.settings.provider.activeConnectionId);
       sendToHost({ type: "set_model", model: id });
     }
     close(true);
@@ -773,7 +797,7 @@ export function ModelPill() {
     }
     // Same queued-pick rule as pickModel above.
     if (effort !== reasoningEffort || (pendingPickRef.current.model !== undefined || pendingPickRef.current.effort !== undefined)) {
-      pendingPickRef.current.effort = { kind: "effort", value: effort, connectionId: writeTargetConnectionId };
+      pendingPickRef.current.effort = modelSettingsPick("effort", effort, modelSettingsConnectionId, pinnedConnection?.connectionId, snapshot?.settings.provider.activeConnectionId);
       sendToHost({ type: "set_reasoning_effort", effort });
     }
     close(true);
@@ -904,20 +928,7 @@ export function ModelPill() {
   // axes the user actually picked, even if the acknowledged value is unchanged.
   useEffect(() => {
     if (modelSelectionAck === undefined || modelSelectionAck === null || modelSelectionAck.model === null) return;
-    const ack = modelSelectionAck;
-    const ackModel = modelSelectionAck.model;
-    const pending = pendingPickRef.current;
-    const modelPick = pending.model?.value === ack.model ? pending.model : undefined;
-    const effortPick = pending.effort?.value === ack.effort ? pending.effort : undefined;
-    if (modelPick !== undefined) delete pending.model;
-    if (effortPick !== undefined) delete pending.effort;
-    const writes = new Map<string, ConnectionUpdateRequest>();
-    if (modelPick?.connectionId !== undefined) writes.set(modelPick.connectionId, {id: modelPick.connectionId, model: ackModel});
-    if (effortPick?.connectionId !== undefined) writes.set(effortPick.connectionId, {
-      ...writes.get(effortPick.connectionId), id: effortPick.connectionId,
-      modelOverrideModel: ackModel, reasoningEffort: ack.effort,
-    });
-    for (const request of writes.values()) {
+    for (const request of modelSettingsWrites(pendingPickRef.current, { model: modelSelectionAck.model, effort: modelSelectionAck.effort })) {
       writeChainRef.current = chainWrite(writeChainRef.current, () => connectionUpdate(request));
     }
   }, [modelSelectionAck]);
