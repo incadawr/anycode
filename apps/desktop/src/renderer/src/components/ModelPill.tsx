@@ -76,7 +76,6 @@ import {
   buildSessionDrillRows,
   isForeignPick,
   pickSessionDrillRow,
-  resolveRebindEffort,
   type ModelDrillPage,
   type ModelDrillRow,
 } from "./model-drill-rows.js";
@@ -386,12 +385,10 @@ export function shouldPersistOnAck(
 }
 
 /**
- * The connection-update request persisted on an acked pick (TASK.45 W10): the
- * ACTIVE connection's `reasoningEffort` is always written (the connection is the
- * source of truth the readiness gate + host-env ladder read, so it doubles as
- * the former top-level `provider.model`); `model` is written only on a MODEL
- * pick — an effort-only pick must not retarget the model. `id` is the connection
- * captured at pick time. Exported for unit testing.
+ * Persist only the user's choice after its ack. A model pick changes the
+ * default model; its incidental effective effort is never a user selection.
+ * An effort pick names the tab's model without retargeting the default, which
+ * may already have changed in another tab.
  */
 export function buildConnectionUpdate(
   connectionId: string,
@@ -401,8 +398,7 @@ export function buildConnectionUpdate(
 ): ConnectionUpdateRequest {
   return {
     id: connectionId,
-    ...(isModelPick ? { model } : {}),
-    reasoningEffort,
+    ...(isModelPick ? { model } : { modelOverrideModel: model, reasoningEffort }),
   };
 }
 
@@ -824,28 +820,12 @@ export function ModelPill() {
       failRebind("connection_missing");
       return;
     }
-    // §D3: the running effort travels only when the TARGET model's own
-    // vocabulary accepts it; otherwise it is reset — and the reset is named in
-    // the ledger line the switch appends, never substituted silently.
-    const decision = resolveRebindEffort({
-      currentEffort: reasoningEffort,
-      targetProviderId: target.providerId,
-      targetModelId: modelId,
-      catalog: snapshot?.catalog,
-      targetConnectionEffort: target.reasoningEffort,
-      // Taskana 4118: the target connection's live-declared vocabulary for a
-      // model the catalog does not know.
-      targetModelCapabilities: target.modelCapabilities?.[modelId],
-    });
-    const resolvedEffort = decision.carried ?? decision.resetTo;
-    // A model with no vocabulary at all leaves the connection's effort alone:
-    // writing one the host would reject helps nobody.
-    const nextEffort = resolvedEffort === undefined ? undefined : asReasoningEffort(resolvedEffort);
+    // The target model keeps its own saved effort; a rebind must not replace
+    // that choice with the source model's effective tier.
     close(false);
     const written = await connectionUpdate({
       id: connectionId,
       model: modelId,
-      ...(nextEffort !== undefined ? { reasoningEffort: nextEffort } : {}),
     });
     if (!written.ok) {
       // settings-store already raised its own notice for the write itself; this
@@ -853,7 +833,7 @@ export function ModelPill() {
       failRebind(written.reason);
       return;
     }
-    effortResetRef.current = decision.dropped ? decision.resetTo : undefined;
+    effortResetRef.current = undefined;
     const result = await window.anycode.tabRebind({ tabId, connectionId });
     if (!result.ok) {
       effortResetRef.current = undefined;

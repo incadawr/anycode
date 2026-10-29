@@ -261,6 +261,12 @@ const connectionSchema = z.object({
   // host-env emission requires BOTH a valid value and a matching model).
   contextWindowTokens: z.number().int().min(1_024).max(1_000_000).optional().catch(undefined),
   contextWindowModel: z.string().optional(),
+  // A bad entry drops locally; valid siblings and the rest of the document survive.
+  modelOverrides: z.record(z.string(), z.object({
+    contextWindowTokens: z.number().int().min(1_024).max(1_000_000).optional().catch(undefined),
+    reasoningEffort: reasoningEffortSchema.optional().catch(undefined),
+    reasoningSupported: z.literal(true).optional().catch(undefined),
+  }).catch({})).optional().catch(undefined),
   // Taskana 4088 (TASK.69): per-model image-input override bound to ONE model id
   // (the TASK.142 contextWindowTokens/contextWindowModel pair discipline). The
   // binding is derived SERVER-SIDE from the effective model; the renderer never

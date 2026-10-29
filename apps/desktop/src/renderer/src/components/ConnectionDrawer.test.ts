@@ -1870,7 +1870,7 @@ describe("helper text (Taskana 4749: one visible line, the full text in a ? tool
       "Leave empty to use the provider's default. Reasoning models spend part of this budget on hidden thinking before they write anything — for a self-hosted endpoint the catalog has no model list to guess a limit from, so raise this if output keeps cutting off.",
     );
     expect(CONTEXT_WINDOW_HELP).toBe(
-      "Leave empty to use the catalog window; for a model the catalog does not know, an assumed 8192-token window is used so long sessions compact early instead of overstuffing the prompt. Saved for the model above only — switching this connection to another model ignores it.",
+      "Leave empty to use the catalog window; for a model the catalog does not know, an assumed 8192-token window is used so long sessions compact early instead of overstuffing the prompt. Saved separately for each model. Switching models restores their saved windows. Applies to new or reopened sessions.",
     );
     expect(IMAGE_INPUT_HELP).toBe(
       "Auto uses the catalog's vision mark or the image-capable list fetched from the provider's /v1/models. On / Off override it for the model above only — switching this connection to another model ignores it. A running session picks a change up when it next starts.",
@@ -1892,7 +1892,7 @@ describe("ConnectionDrawer layout wiring (Taskana 4749)", () => {
     expect(source).toMatch(/<details\s+className="connection-drawer-advanced"/);
     expect(source).toMatch(/open=\{advancedOpen\}/);
     expect(source).toMatch(/onToggle=\{\(e\) => setAdvancedOpen\(e\.currentTarget\.open\)\}/);
-    expect(source).toMatch(/useState\(\(\) => advancedHasValues\(/);
+    expect(source).toMatch(/useState\(\(\) => initialFocus === "context" \|\| reasoningSupported \|\| modelEffort !== "" \|\| advancedHasValues\(/);
     expect(source).not.toMatch(/AdvancedFields/);
   });
 
@@ -1901,7 +1901,7 @@ describe("ConnectionDrawer layout wiring (Taskana 4749)", () => {
   });
 
   it("both {ok:false} validation paths reopen Advanced in createConnection AND save", () => {
-    const createBlock = source.slice(source.indexOf("async function createConnection"), source.indexOf("async function save"));
+    const createBlock = source.slice(source.indexOf("  async function createConnection()"), source.indexOf("async function save"));
     const saveBlock = source.slice(source.indexOf("async function save"), source.indexOf("async function doFetchModels"));
     for (const block of [createBlock, saveBlock]) {
       // one for the max-output field, one for the context window
@@ -1970,6 +1970,7 @@ describe("custom endpoint cache creation", () => {
     const calls: unknown[] = [];
     const bindings: Record<string, unknown> = {
       preflightModelId, model: "fixture-model", buildCustomProviderCreateRequest: () => ({}),
+      contextWindowTokensField, contextWindow: { raw: "" }, reasoningSupported: false, modelEffort: "",
       customName: "fixture", customBaseUrl: "http://127.0.0.1", customKind: "openai-compatible",
       secretValue: "", noAuth: true, setCreating: () => {}, setError: () => {}, catalog: [],
       isCustomRecordProviderId: () => false, resolvedCustomProvider: () => ({ create: async () => ({ ok: true, providers: [] }) }),
@@ -2003,4 +2004,18 @@ it("renders cache visibility for new custom endpoint kinds and transport overrid
   expect(run("openai-compatible", "anthropic-messages")).toBe(false);
   expect(run("anthropic", "openai-responses")).toBe(true);
   expect(run("openai", "", false)).toBe(false);
+});
+
+
+it("prefills each model's own context window when navigating A → B → A", () => {
+  const saved = { model: "a", modelOverrides: { a: { contextWindowTokens: 128000 }, b: { contextWindowTokens: 64000 } } };
+  let field = contextWindowInitialField(saved);
+  expect(field).toEqual({ raw: "128000", model: "a" });
+  field = contextWindowAfterModelInput(field, "b", saved);
+  expect(field).toEqual({ raw: "64000", model: "b" });
+  field = contextWindowAfterModelInput(field, "a", saved);
+  expect(field).toEqual({ raw: "128000", model: "a" });
+  field = contextWindowAfterRawInput(field, "", "a");
+  expect(contextWindowAfterModelInput(field, " a ", saved).raw).toBe("");
+  expect(saved.modelOverrides.b.contextWindowTokens).toBe(64000);
 });

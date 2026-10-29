@@ -67,7 +67,7 @@ import type {
 } from "@anycode/core";
 import { BROWSER_ACCESS_HOST_MESSAGE_TYPE } from "../shared/browser-access.js";
 import { NETWORK_HINT_HOST_MESSAGE_TYPE } from "../shared/network-hints.js";
-import { SECRET_ENV_KEYS, connectionById, type ModelCapabilitiesDto } from "../shared/settings.js";
+import { SECRET_ENV_KEYS, connectionById, type ModelCapabilitiesDto, type ProviderConnection } from "../shared/settings.js";
 import { defaultSettingsPath, loadSettings } from "../settings/files.js";
 import { CREDENTIAL_REQUEST_TYPE, type CredentialRequest, type CredentialResponse } from "../shared/credentials.js";
 import type {
@@ -515,6 +515,21 @@ export async function seedAlwaysAllowRules(
 }
 
 // ── Taskana 4118: boot-time read of live per-model capabilities from settings.json ──
+
+/** Read the pinned connection's user overrides without ever writing settings. */
+export async function readConnectionModelSettings(
+  connectionId: string | undefined,
+  settingsPath: string = defaultSettingsPath(),
+): Promise<Pick<ProviderConnection, "modelOverrides" | "reasoningEffort"> | undefined> {
+  if (!connectionId) return undefined;
+  try {
+    const { settings } = await loadSettings(settingsPath);
+    const connection = connectionById(settings, connectionId);
+    return connection === undefined ? undefined : { modelOverrides: connection.modelOverrides, reasoningEffort: connection.reasoningEffort };
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Fail-soft reader of the `modelCapabilities` map main's connection-scoped

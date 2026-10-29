@@ -2907,7 +2907,7 @@ export class Session {
       // switch below re-resolves it against the new model's capabilities.
       this.selectedEffort = effort;
     }
-    if (!this.applyModelSwitch(model) && effort !== undefined) {
+    if (!this.applyModelSwitch(model, effort !== undefined) && effort !== undefined) {
       this.applyReasoningEffort(effort);
     }
   }
@@ -2923,15 +2923,17 @@ export class Session {
    * the idle route and Taskana 4895's turn-boundary apply. Returns false when
    * no switch factory is wired (a legacy engine/test double: a silent no-op).
    */
-  private applyModelSwitch(id: string): boolean {
+  private applyModelSwitch(id: string, effortExplicit = false): boolean {
     if (this.engine.switchModel === undefined) {
       return false;
     }
     // switchModel runs the full re-budget recipe host-side and returns the
-    // effort state re-resolved for the NEW model. selectedEffort is unchanged
-    // (the user's tier persists across the switch); only the effective effort
-    // and effort-levels follow the new model's capability.
-    const result = this.engine.switchModel(id, this.selectedEffort);
+    // effort state re-resolved for the NEW model. Core also returns that
+    // model's restored selected tier, independently of its effective effort.
+    const result = effortExplicit
+      ? this.engine.switchModel(id, this.selectedEffort, true)
+      : this.engine.switchModel(id, this.selectedEffort);
+    if (result.selectedReasoningEffort !== undefined) this.selectedEffort = result.selectedReasoningEffort;
     this.model = result.model;
     this.availableEffortLevels = result.availableEffortLevels;
     this.reasoningSupported = result.availableEffortLevels !== undefined;

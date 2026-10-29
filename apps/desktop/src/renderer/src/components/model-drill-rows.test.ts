@@ -374,3 +374,13 @@ describe("buildSessionDrillRows vs buildStartModelGroups (TASK.183 consistency)"
     expect(mine.items.at(-1)).toMatchObject({ id: "manual-composer", current: true });
   });
 });
+
+
+it("offers manually enabled reasoning on an uncataloged model and restores that model's saved effort", () => {
+  const result = buildSessionDrillRows({
+    connections: [{id:"connection", providerId:"vllm", model:"a", models:["a"], modelOverrides:{a:{reasoningSupported:true, reasoningEffort:"max"}}}],
+    catalog: [], custom: [], currentConnectionId:"connection", currentModelId:"a", recentModelIds:[], page:{kind:"effort"},
+  });
+  expect(result.efforts).toContain("max");
+  expect(result.rows).toContainEqual({kind:"effort", value:"max", current:true});
+});

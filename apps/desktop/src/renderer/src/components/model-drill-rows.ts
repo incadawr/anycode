@@ -22,6 +22,7 @@
  * sight; `model-drill-menu.tsx` renders whatever they return.
  */
 import type { CatalogSummary, CustomProviderRecord, ModelCapabilitiesDto, ProviderConnection } from "../../../shared/settings.js";
+import { modelCapabilitiesFor, modelOverrideFor } from "../../../shared/model-overrides.js";
 import { EFFORT_LABELS } from "./ModelPill.js";
 import {
   buildStartModelGroups,
@@ -115,17 +116,17 @@ export function buildSessionDrillRows(args: SessionDrillArgs): SessionDrillRows 
     currentConnection?.providerId,
     args.currentModelId,
     args.catalog,
-    currentConnection?.modelCapabilities?.[args.currentModelId],
+    modelCapabilitiesFor(currentConnection, args.currentModelId),
   );
   const effort = resolveStartModelEffort(
     args.currentEffort,
-    currentConnection?.reasoningEffort,
+    modelOverrideFor(currentConnection, args.currentModelId)?.reasoningEffort ?? currentConnection?.reasoningEffort,
     efforts,
     startModelDefaultEffort(
       currentConnection?.providerId,
       args.currentModelId,
       args.catalog,
-      currentConnection?.modelCapabilities?.[args.currentModelId],
+      modelCapabilitiesFor(currentConnection, args.currentModelId),
     ),
   );
 

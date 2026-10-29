@@ -72,6 +72,19 @@ node apps/desktop/scripts/start-screen-smoke.mjs --keep
 Do not run the dev automation smoke against a packaged app or enable
 `ANYCODE_AUTOMATION` in the release workflow.
 
+## Running model settings smoke
+
+```bash
+node apps/desktop/scripts/model-overrides-ui-smoke.mjs
+```
+
+This uses an isolated profile and a loopback chat-completions fixture, with no
+external credentials. It saves two models' context windows and reasoning
+choices on one connection, reloads the app, switches A → B → A through the
+real model picker and checks each live context budget. It also checks the
+unknown-window hint and its shortcut to the current model's context field.
+Screenshots and the disposable profile stay in the printed temp directory.
+
 ## Running workflow-map smoke
 
 For the Workflow run map + collapsed tick strip (Taskana 4161), run:

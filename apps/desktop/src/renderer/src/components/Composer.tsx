@@ -17,7 +17,7 @@ import { resolveProfileRoles, rolesPatch } from "../../../shared/role-profiles.j
  * wire traffic and the Enter-to-send behavior are unchanged from the pre-redesign
  * composer.
  */
-import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ClipboardEvent, DragEvent, FocusEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { CodexRateLimitsWire, ImageAttachment, ImageMediaType, PermissionMode } from "@anycode/core";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
@@ -34,6 +34,8 @@ import {
   type PasteBlock,
 } from "../paste.js";
 import { ModeMenu, modeChangeDisabled } from "./ModeMenu.js";
+import { useOverlayFlag } from "../preview/overlay-flag.js";
+const ContextWindowSettings = lazy(() => import("./ContextWindowSettings.js"));
 import { ModelPill, modelPickDisabled } from "./ModelPill.js";
 import { EngineModelMenu, EnginePresetMenu, engineControlDisabled, nativeEffortControl } from "./EngineControls.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
@@ -448,7 +450,12 @@ export function ctxPopoverHeadline(usage: ContextUsage | null, percent: number |
 }
 
 /** Taskana 4127: shown when the active model's context window is the assumed 8K fallback. */
-export const CTX_WINDOW_ASSUMED_HINT = "Context window unknown \u2014 assumed 8K. Set it in the connection settings.";
+export const CTX_WINDOW_ASSUMED_HINT = "Context window unknown \u2014 assumed 8K total.";
+
+/** Uses the meter's actual denominator, including any overridden output reserve. */
+export function ctxWindowAssumedHint(usage: ContextUsage | null): string {
+  return `${CTX_WINDOW_ASSUMED_HINT}${usage === null ? "" : ` Available input budget after the output reserve: ${formatCtxTokenCount(usage.budgetTokens)}.`} Set it in the connection settings.`;
+}
 
 /** Ctx meter label: a leading \u2248 marks the percent as relative to an assumed window. Exported for unit testing. */
 export function ctxMeterLabel(roundedPercent: number, assumed: boolean): string {
@@ -983,6 +990,14 @@ function CtxPopover({
   contextWindowAssumed: boolean;
 }) {
   const sendToHost = useTabSend();
+  const model = useTabStore((state) => state.model);
+  const pinnedConnection = useTabStore((state) => state.pinnedConnection);
+  const snapshot = useSettingsStore((state) => state.snapshot);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  useOverlayFlag(settingsOpen);
+  const connectionId = pinnedConnection?.connectionId ?? snapshot?.settings.provider.activeConnectionId;
+  const savedConnection = snapshot?.settings.provider.connections.find((connection) => connection.id === connectionId);
+  const assumedHint = ctxWindowAssumedHint(contextUsage);
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<{ left: number; bottom: number; maxHeight: number } | null>(null);
   const [timedOut, setTimedOut] = useState(false);
@@ -1144,7 +1159,7 @@ function CtxPopover({
         ref={triggerRef}
         type="button"
         className={`composer-ctx-meter${tint}${contextWindowAssumed ? " composer-ctx-meter-assumed" : ""}`}
-        title={contextWindowAssumed ? CTX_WINDOW_ASSUMED_HINT : undefined}
+        title={contextWindowAssumed ? assumedHint : undefined}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label="Context window usage"
@@ -1173,7 +1188,11 @@ function CtxPopover({
               scroll region keyboard access (arrow/PageDown) on top of the
               browser's scroll-into-view for the focusable rows inside. */}
           <div className="ctx-popover-body" tabIndex={0}>
-            {contextWindowAssumed && <div className="ctx-popover-assumed">{CTX_WINDOW_ASSUMED_HINT}</div>}
+            {contextWindowAssumed && <div className="ctx-popover-assumed">
+              {assumedHint}
+              {savedConnection !== undefined && model !== null && <button type="button" className="settings-button"
+                onClick={() => { close(); setSettingsOpen(true); }}>Set context window</button>}
+            </div>}
             <div className="ctx-popover-bar">
               <div className="ctx-popover-bar-fill" style={{ width: `${fillPercent}%` }} />
             </div>
@@ -1214,6 +1233,12 @@ function CtxPopover({
             )}
           </div>
         </div>
+      )}
+      {settingsOpen && snapshot !== null && savedConnection !== undefined && model !== null && (
+        <Suspense fallback={null}>
+          <ContextWindowSettings snapshot={snapshot} connection={savedConnection} model={model}
+            onClose={() => setSettingsOpen(false)} />
+        </Suspense>
       )}
     </div>
   );

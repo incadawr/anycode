@@ -37,7 +37,8 @@ import {
   resolveProxyLadder,
 } from "../shared/proxy.js";
 import type { AnycodeSettings, CustomProviderRecord, ProviderTransportId, SecretEnvKey, SecretKey } from "../shared/settings.js";
-import { activeProviderView, connectionById, isProxyUrl, SECRET_ENV_KEYS } from "../shared/settings.js";
+import { modelOverrideFor } from "../shared/model-overrides.js";
+import { activeConnection, activeProviderView, connectionById, isProxyUrl, SECRET_ENV_KEYS } from "../shared/settings.js";
 import { isMcpSecretKey } from "../shared/mcp-secrets.js";
 import type { RecognizerWireConfig } from "../shared/recognizer.js";
 
@@ -97,6 +98,8 @@ export const ENV_PERMISSION_CLASSIFIER = "ANYCODE_PERMISSION_CLASSIFIER";
  * `envConfig.reasoningEffort` on every fork boot — zero host/core delta here).
  */
 export const ENV_REASONING_EFFORT = "ANYCODE_REASONING_EFFORT";
+/** Internal binding for settings-derived effort; absent on a shell-global override. */
+export const ENV_REASONING_EFFORT_MODEL = "ANYCODE_REASONING_EFFORT_MODEL";
 /**
  * Explicit output-token ceiling (TASK.150). Literal mirror of core's
  * `provider/env.ts:12` ENV_MAX_OUTPUT_TOKENS — same local-literal convention
@@ -1237,7 +1240,15 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // Reasoning-effort inheritance rung (F14 §2.4): a new host boot inherits the
   // active connection's last chosen effort instead of hardcoded `off`. Env still
   // wins by construction (fillFromSettings).
-  fillFromSettings(env, ENV_REASONING_EFFORT, view.reasoningEffort);
+  const effectiveConnectionModel = env[ENV_MODEL]?.trim() ?? "";
+  const connectionModelOverride = modelOverrideFor(activeConnection(settings), effectiveConnectionModel);
+  if (!envPresent(env, ENV_REASONING_EFFORT)) {
+    delete env[ENV_REASONING_EFFORT_MODEL];
+    fillFromSettings(env, ENV_REASONING_EFFORT, connectionModelOverride?.reasoningEffort ?? activeConnection(settings)?.reasoningEffort);
+    if (envPresent(env, ENV_REASONING_EFFORT) && effectiveConnectionModel !== "") {
+      env[ENV_REASONING_EFFORT_MODEL] = effectiveConnectionModel;
+    }
+  }
   // Opt-in prompt cache (GitHub #15): the active connection's persisted policy
   // rides as one JSON value; absent = no env entry (Off). A launching shell's
   // ANYCODE_PROMPT_CACHE_OPTIONS always wins, including a literal `off` — core's
@@ -1271,8 +1282,8 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
     // settings so it can never attach to a settings value.
     delete env[ENV_CONTEXT_WINDOW_MODEL];
     const effectiveModel = env[ENV_MODEL]?.trim();
-    const windowTokens = view.contextWindowTokens;
-    const windowBinding = view.contextWindowModel?.trim();
+    const windowTokens = connectionModelOverride?.contextWindowTokens ?? view.contextWindowTokens;
+    const windowBinding = connectionModelOverride?.contextWindowTokens !== undefined ? effectiveConnectionModel : view.contextWindowModel?.trim();
     if (
       windowTokens !== undefined &&
       Number.isInteger(windowTokens) &&

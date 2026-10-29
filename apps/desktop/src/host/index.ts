@@ -250,7 +250,6 @@ import {
   mapChildRunStatusToNotification,
   matchCatalogEntryByBaseUrl,
   parseImageInputModelOverride,
-  resolveContextWindowInfo,
   resolveEffortLevels,
   resolveImageInput,
   type ImageModalityLookup,
@@ -374,6 +373,7 @@ import {
   isChildSessionBoot,
   parseHostArgs,
   readConnectionModelCapabilities,
+  readConnectionModelSettings,
   resolveChildMaxTurns,
   resolveEngineDraftPresetId,
   repairDanglingToolCalls,
@@ -434,6 +434,7 @@ const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE";
 import { resolveExtensionsHomeOverride, resolveSessionHistoryMaxItems } from "./dev-home.js";
 import { buildCheckpointService } from "./checkpoints.js";
 import { GitBridge } from "./git-bridge.js";
+import { createConnectionModelSettings } from "./connection-model-settings.js";
 import { CoreEngine } from "./engines/core-engine.js";
 import { beginEngineBootstrap, type EngineBootstrap } from "./engines/bootstrap.js";
 import { selectEnginePlugin, type EnginePlugin } from "./engines/registry.js";
@@ -3374,7 +3375,19 @@ async function boot(): Promise<void> {
       liveCapsConnectionId,
       settingsPathOverride !== undefined && settingsPathOverride.trim() !== "" ? settingsPathOverride : undefined,
     );
-    const liveCapsFor = (id: string): LiveModelCapabilities | undefined => liveCapsMap?.[id];
+    const connectionModelSettings = createConnectionModelSettings({
+      connection: await readConnectionModelSettings(
+        liveCapsConnectionId,
+        settingsPathOverride?.trim() || undefined,
+      ),
+      catalogEntry,
+      envContextWindow: envConfig.contextWindowTokens,
+      envContextWindowModel: envConfig.contextWindowModel,
+      envReasoningEffort: envConfig.reasoningEffort,
+      envReasoningEffortModel: process.env.ANYCODE_REASONING_EFFORT_MODEL?.trim() || undefined,
+      liveCapabilitiesFor: (id) => liveCapsMap !== undefined && Object.hasOwn(liveCapsMap, id) ? liveCapsMap[id] : undefined,
+    });
+    const liveCapsFor = (id: string): LiveModelCapabilities | undefined => connectionModelSettings.capabilitiesFor(id);
     const gitForWorkspace = (cwd: string, operationSignal?: AbortSignal) =>
       new NodeGitAdapter({
         exec: execAdapter,
@@ -3512,7 +3525,7 @@ async function boot(): Promise<void> {
 
     historySink = new WriteBehindHistorySink(persistence, sessionMeta.id);
     const tokenizer = await createDefaultTokenizer();
-    const bootContextInfo = resolveContextWindowInfo(envConfig.model, catalogEntry, envConfig.contextWindowTokens, envConfig.contextWindowModel);
+    const bootContextInfo = connectionModelSettings.contextFor(envConfig.model);
     const bootContextWindow: number | undefined = bootContextInfo.tokens;
     // Taskana 4150: a detached child is a subagent too; the 100 KB finalText cap
     // makes output beyond ~32k tokens paid-for-and-discarded, so clamp it here.
@@ -3530,6 +3543,7 @@ async function boot(): Promise<void> {
     const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, envConfig.reasoningEffort, liveCapsFor(envConfig.model));
     // Preserve explicit selections even when the current model suppresses them.
     selectedEffort = envConfig.reasoningEffort ?? bootReasoningEffort ?? "off";
+    connectionModelSettings.remember(envConfig.model, selectedEffort);
     const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry, liveCapsFor(envConfig.model));
     // TASK.162 (F6): the same catalog + env overrides the three boot
     // resolutions above read, packaged once so an Agent-tool `model` override
@@ -3547,6 +3561,7 @@ async function boot(): Promise<void> {
       onStubFallback: (modelId, applied) =>
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
       liveCapabilitiesFor: liveCapsFor,
+      contextWindowFor: (id) => connectionModelSettings.contextFor(id).tokens,
     });
     const history = new ConversationHistory({ initial: initialHistory, sink: historySink, tokenizer });
 
@@ -4589,7 +4604,8 @@ async function boot(): Promise<void> {
     // Slice P7.15 (F14, design §2.1): the narrow mid-session model-switch
     // callback (mirror of the CLI's deps.model.set). It stays host-owned while
     // CoreEngine exposes it through the neutral SessionEngine seam.
-    const switchModelImpl = (id: string, selectedTier: ReasoningEffort) => {
+    const switchModelImpl = (id: string, selectedTier: ReasoningEffort, effortExplicit = false) => {
+        selectedTier = connectionModelSettings.switchEffort(currentModel, id, selectedTier, effortExplicit);
         // TASK.162 (§0b): Session hands its OWN preserved user-selected tier
         // here, so this is the second (and only other) writer that keeps the
         // host cell faithful — without it a tier selected before a switch
@@ -4614,7 +4630,7 @@ async function boot(): Promise<void> {
         // model binding is absent or names THIS id (TASK.142) — a pair saved for
         // model A never leaks its window onto B, and an unknown id re-resolves
         // the assumed fallback rather than a stale previous model's window.
-        const contextInfo = resolveContextWindowInfo(id, catalogEntry, envConfig.contextWindowTokens, envConfig.contextWindowModel);
+        const contextInfo = connectionModelSettings.contextFor(id);
         const contextWindow = contextInfo.tokens;
         liveContextWindowAssumed = contextInfo.source === "assumed";
         config.maxOutputTokens = clampChildOutput(resolveMaxOutputTokens(
@@ -4653,6 +4669,7 @@ async function boot(): Promise<void> {
         console.log(`[host] model switched: ${previous} -> ${id}`);
         return {
           model: id,
+          selectedReasoningEffort: selectedTier,
           reasoningEffort: resolvedEffort ?? "off",
           ...(availableEffortLevels !== undefined ? { availableEffortLevels } : {}),
         };
@@ -4666,6 +4683,7 @@ async function boot(): Promise<void> {
       // Preserve the selected tier independently of the model-effective tier.
       onReasoningEffortSet: (effort) => {
         selectedEffort = effort ?? "off";
+        connectionModelSettings.remember(currentModel, selectedEffort);
       },
     });
     const cleanupHandoff = sessionMeta.worktreeCleanup ?? parseCleanupIntent(process.env[WORKTREE_CLEANUP_ENV]);

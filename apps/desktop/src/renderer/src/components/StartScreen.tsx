@@ -1,3 +1,4 @@
+import { modelCapabilitiesFor, modelOverrideFor } from "../../../shared/model-overrides.js";
 import { resolveProfileRoles, rolesPatch } from "../../../shared/role-profiles.js";
 /**
  * "New Task" start screen (slice P7.12 §4.5 / intake F5#1a, extended by F5#1b
@@ -732,7 +733,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
     chipConnection?.providerId,
     modelChip.modelId,
     snapshot?.catalog,
-    chipConnection?.modelCapabilities?.[modelChip.modelId],
+    modelCapabilitiesFor(chipConnection, modelChip.modelId),
   );
   // Taskana 4894: the provider's documented default tier for that model —
   // the level to show when neither the draft nor the connection has a pick.
@@ -740,7 +741,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
     chipConnection?.providerId,
     modelChip.modelId,
     snapshot?.catalog,
-    chipConnection?.modelCapabilities?.[modelChip.modelId],
+    modelCapabilitiesFor(chipConnection, modelChip.modelId),
   );
   // What that level DISPLAYS and pre-selects: the draft's own pick, else the
   // effort the target connection already persists (what the session would
@@ -748,7 +749,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // default (Taskana 4894), else the vocabulary's first entry.
   const modelEffort = resolveStartModelEffort(
     draft?.engineEffort,
-    chipConnection?.reasoningEffort,
+    modelOverrideFor(chipConnection, modelChip.modelId)?.reasoningEffort ?? chipConnection?.reasoningEffort,
     modelEfforts,
     modelDefaultEffort,
   );
@@ -1295,9 +1296,9 @@ export function StartScreen({ onToast }: StartScreenProps) {
     useTabsStore
       .getState()
       .setDraftEngineEffort(
-        carryDraftEffort(
+        modelOverrideFor(rowConnection, modelId)?.reasoningEffort ?? carryDraftEffort(
           draft?.engineEffort,
-          startModelEffortLevels(providerId, modelId, snapshot?.catalog, rowConnection?.modelCapabilities?.[modelId]),
+          startModelEffortLevels(providerId, modelId, snapshot?.catalog, modelCapabilitiesFor(rowConnection, modelId)),
         ),
       );
     closeModelMenu(true);

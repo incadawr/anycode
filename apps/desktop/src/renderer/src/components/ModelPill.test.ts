@@ -49,7 +49,6 @@ describe("resolvePillTarget (TASK.45 W10-FIX F2: pin-follows catalog + write-tar
     expect(buildConnectionUpdate(target.writeTargetConnectionId!, true, "a-model", "off")).toEqual({
       id: "conn-A",
       model: "a-model",
-      reasoningEffort: "off",
     });
   });
 
@@ -335,17 +334,17 @@ describe("shouldPersistOnAck (design §2.4 ack-gating)", () => {
 });
 
 describe("buildConnectionUpdate (TASK.45 W10 connection-update write)", () => {
-  it("writes id + model + effort on a model pick", () => {
+  it("a model pick never persists its incidental effective effort", () => {
     expect(buildConnectionUpdate("conn-1", true, "glm-4.6", "off")).toEqual({
       id: "conn-1",
       model: "glm-4.6",
-      reasoningEffort: "off",
     });
   });
 
-  it("writes ONLY id + effort on an effort pick (the model is left untouched)", () => {
+  it("an effort pick names its model without changing the connection default", () => {
     expect(buildConnectionUpdate("conn-1", false, "glm-5.2", "high")).toEqual({
       id: "conn-1",
+      modelOverrideModel: "glm-5.2",
       reasoningEffort: "high",
     });
   });
@@ -354,7 +353,6 @@ describe("buildConnectionUpdate (TASK.45 W10 connection-update write)", () => {
     expect(buildConnectionUpdate("conn-custom", true, "some-model", "max")).toEqual({
       id: "conn-custom",
       model: "some-model",
-      reasoningEffort: "max",
     });
   });
 });
@@ -425,7 +423,7 @@ describe("captured-connectionId persist (defect #1: id captured at pick time, no
 
     const req = simulateAckPersist(pending, "model", "glm-4.6", true, "glm-4.6", "off");
 
-    expect(req).toEqual({ id: "conn-1", model: "glm-4.6", reasoningEffort: "off" });
+    expect(req).toEqual({ id: "conn-1", model: "glm-4.6" });
     // The corrupting outcome this defect produced: writing to the NOW-active
     // connection instead of the pick's own.
     expect(req?.id).not.toBe("conn-2");
@@ -436,7 +434,7 @@ describe("captured-connectionId persist (defect #1: id captured at pick time, no
 
     const req = simulateAckPersist(pending, "effort", "high", false, "glm-4.6", "high");
 
-    expect(req).toEqual({ id: "conn-1", reasoningEffort: "high" });
+    expect(req).toEqual({ id: "conn-1", modelOverrideModel: "glm-4.6", reasoningEffort: "high" });
   });
 
   it("skips the write when no connection was active at pick time (env-override / fresh)", () => {

@@ -438,7 +438,8 @@ export interface HarnessOptions {
   switchModel?: (
     id: string,
     selectedEffort: ReasoningEffort | undefined,
-  ) => { model: string; reasoningEffort: ReasoningEffort; availableEffortLevels?: ReasoningEffort[] };
+    effortExplicit?: boolean,
+  ) => { model: string; selectedReasoningEffort?: ReasoningEffort; reasoningEffort: ReasoningEffort; availableEffortLevels?: ReasoningEffort[] };
   /**
    * TASK.117 phase-1 (test-only, causal fault injection): a FileSystemPort
    * wrapper whose Read is hooked. The hook receives the tool's REAL
