@@ -208,11 +208,8 @@ export function buildSessionSubagentRequest(params: BuildSessionSubagentRequestP
     spawnToolCallId,
     ...(resolvedModel !== undefined ? { model: resolvedModel } : {}),
     ...(profile?.engine !== undefined ? { engine: profile.engine } : {}),
-    // xhigh is preserved verbatim for engine children; a core consumer
-    // (profile?.engine undefined) receives the existing core "max" instead.
-    ...(effort !== undefined
-      ? { effort: profile?.engine === undefined && effort === "xhigh" ? ("max" as const) : effort }
-      : {}),
+    // Preserve the declared tier until the target model is known.
+    ...(effort !== undefined ? { effort } : {}),
     ...(maxTurns !== undefined ? { maxTurns } : {}),
   };
 }

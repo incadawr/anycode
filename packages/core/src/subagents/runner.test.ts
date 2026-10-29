@@ -15,6 +15,7 @@ import { NodeGitReadAdapter } from "../adapters/node/node-git-read.js";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { buildChildModelSettingsResolver } from "../provider/child-model-settings.js";
 import { AgentLoop, type AgentLoopConfig } from "../loop/agent-loop.js";
 import {
   SUBAGENT_WRAPUP_DEGRADED_PREFIX,
@@ -3624,28 +3625,30 @@ describe("run() — child capabilities resolved for the child's own model (TASK.
     expect(parentPort.requests.at(-1)!.reasoningEffort).toBe("low");
   });
 
-  it("an effort-only xhigh profile maps to core max at the resolver and the model request", async () => {
-    const parentPort = new ScriptedModelPort((req) => (isChildRequest(req) ? textStep("planned") : textStep("n/a")));
-    Object.assign(parentPort, { modelId: "glm-5.3" });
-    const seen: Array<[string, string | undefined]> = [];
-    const runner = createSubagentRunner(
-      makeParent({ modelPort: parentPort, reasoningEffort: "medium" }),
-      {
-        profiles: [{ ...(await makeProfile("planner", { body: "Plan." })), effort: "xhigh" }],
-        resolveChildModelSettings: (modelId, profileEffort) => {
-          seen.push([modelId, profileEffort]);
-          return { maxOutputTokens: 131_072, reasoningEffort: profileEffort, contextWindowTokens: 1_000_000 };
-        },
-      },
-    );
-
-    const outcome = await runner.run({ ...REQ, agentType: "planner" }, {});
-
-    expect(outcome.status).toBe("completed");
-    // xhigh is mapped to the existing core "max" at this core consumption boundary.
-    expect(seen).toEqual([["glm-5.3", "max"]]);
-    expect(parentPort.requests.at(-1)!.reasoningEffort).toBe("max");
-  });
+  for (const [model, expected] of [["both", "xhigh"], ["only-max", "max"]] as const) {
+    for (const path of ["effort-only", "profile-model", "explicit-model", "route"] as const) {
+      it(`${path} resolves xhigh for ${model}`, async () => {
+        const parentPort = new ScriptedModelPort(() => textStep("planned"));
+        Object.assign(parentPort, { modelId: model });
+        const childPort = new ScriptedModelPort(() => textStep("planned"));
+        const seen: Array<[string, string | undefined]> = [];
+        const resolve = buildChildModelSettingsResolver({ catalogEntry: undefined, envMaxOutputTokens: undefined, envContextWindow: undefined,
+          liveCapabilitiesFor: () => ({ reasoning: true, effortLevels: model === "both" ? ["xhigh", "max"] : ["max"] }) });
+        const profile = { ...(await makeProfile("planner", { body: "Plan." })), effort: "xhigh" as const,
+          ...(path === "profile-model" ? { model } : {}) };
+        const runner = createSubagentRunner(makeParent({ modelPort: parentPort, reasoningEffort: "medium" }), {
+          profiles: [profile],
+          ...(path === "route" ? { resolveRoleRoute: () => ({ entries: [{ model, effort: "xhigh" as const }], skipped: [] }) } : {}),
+          resolveChildModelPort: () => childPort,
+          resolveChildModelSettings: (id, tier) => { seen.push([id, tier]); return resolve(id, tier); },
+        });
+        const outcome = await runner.run({ ...REQ, agentType: "planner", ...(path === "explicit-model" ? { model } : {}) }, {});
+        expect(outcome.status).toBe("completed");
+        expect(seen).toEqual([[model, "xhigh"]]);
+        expect((path === "effort-only" ? parentPort : childPort).requests.at(-1)!.reasoningEffort).toBe(expected);
+      });
+    }
+  }
 
   it("the child's ModelRequest carries the CAPPED settings ceiling and effort, not the parent's", async () => {
     const parentPort = new ScriptedModelPort(() => textStep("parent never runs here"));
@@ -5289,6 +5292,26 @@ describe("role route chain walk (Taskana 4704 §3.2)", () => {
     expect(outcome.status).toBe("completed");
     expect(outcome.finalText).toBe("cheap-report");
     expect(resolved).toEqual(["cheap-1"]);
+  });
+
+  it("resolves each fallback candidate against its own effort vocabulary", async () => {
+    const seen: Array<[string, string | undefined, string | undefined]> = [];
+    const port = new ScriptedModelPort(() => textStep("done"));
+    const resolve = buildChildModelSettingsResolver({ catalogEntry: undefined, envMaxOutputTokens: undefined, envContextWindow: undefined,
+      liveCapabilitiesFor: (id) => ({ reasoning: true, effortLevels: id === "both" ? ["xhigh", "max"] : ["max"] }) });
+    const runner = createSubagentRunner(makeParent(), {
+      resolveRoleRoute: () => ({ entries: [{ model: "both", effort: "xhigh" }, { model: "only-max", effort: "xhigh" }], skipped: [] }),
+      resolveChildModelPort: () => port,
+      resolveChildModelSettings: (id, tier) => {
+        const settings = resolve(id, tier);
+        seen.push([id, tier, settings.reasoningEffort]);
+        if (id === "both") throw new Error("unavailable settings");
+        return settings;
+      },
+    });
+    expect((await runner.run({ ...REQ, agentType: "planner" }, {})).status).toBe("completed");
+    expect(seen).toEqual([["both", "xhigh", "xhigh"], ["only-max", "xhigh", "max"]]);
+    expect(port.requests.at(-1)!.reasoningEffort).toBe("max");
   });
 
   it("a chain entry's effort rides the child settings resolution (entry tier wins)", async () => {

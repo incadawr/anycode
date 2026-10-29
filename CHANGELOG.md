@@ -13,6 +13,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Core subagents honor the requested reasoning effort when their model supports it.
+
 - Native session children use their agent profile’s model and instructions by default (GitHub #5).
 
 ## [0.0.51] — 2026-10-29

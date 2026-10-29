@@ -57,6 +57,7 @@ export {
   resolveImageInput,
   resolveMaxOutputTokens,
   resolveReasoningEffort,
+  resolveChildReasoningEffort,
   UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS,
 } from "./capabilities.js";
 export type { ContextWindowInfo, ImageInputOverride, LiveModelCapabilities } from "./capabilities.js";
