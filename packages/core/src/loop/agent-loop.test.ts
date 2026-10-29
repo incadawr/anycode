@@ -2871,8 +2871,20 @@ describe("AgentLoop.runTurn — terminal retry metadata (TASK.33 W7b)", () => {
       attemptsMade: 0,
       retryable: false,
       hadModelOutput: true,
+      replayStopped: "output_started",
       code: "unknown",
     });
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
+  });
+
+  it("reports the output boundary after reasoning retries and does not dispatch failed tools", async () => {
+    const modelPort = new MockModelPort([[{ type: "reasoning_delta", id: "r", text: "discard" },
+      { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 0, reason: "network" },
+      { type: "tool_call", toolCall: { id: "call", name: "Mock", input: {} } },
+      { type: "error", error: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) }]]);
+    const events = await collect(makeLoop({ modelPort }).runTurn("hi"));
+    expect(findErrorEvent(events)?.retry).toMatchObject({ attemptsMade: 1, replayStopped: "output_started", hadModelOutput: true });
+    expect(events.some(e => e.type === "tool_execution_start")).toBe(false);
     expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
   });
 

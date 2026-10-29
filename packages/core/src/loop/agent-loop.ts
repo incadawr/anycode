@@ -96,7 +96,7 @@ import {
   estimateToolDeclarationTokens,
   splitToolDeclarationsByMcpPrefix,
 } from "../context/tokens.js";
-import { classifyProviderFailure, isModelOutputEvent } from "../provider/failure.js";
+import { blocksAutomaticReplay, classifyProviderFailure, isModelOutputEvent } from "../provider/failure.js";
 import { linkAbortSignal } from "../util/abort.js";
 import {
   ask,
@@ -143,8 +143,9 @@ function buildErrorMetadata(
   attemptsMade: number,
   maxAttempts: number | undefined,
   hadModelOutput: boolean,
+  replayBlocked: boolean,
 ): {
-  retry: { attemptsMade: number; maxAttempts?: number; retryable: boolean; hadModelOutput: boolean; code: string };
+  retry: { attemptsMade: number; maxAttempts?: number; retryable: boolean; hadModelOutput: boolean; code: string; replayStopped?: "output_started" };
   safe: { code: string; message: string; statusCode?: number };
 } {
   const classification = classifyProviderFailure(error);
@@ -154,6 +155,7 @@ function buildErrorMetadata(
       ...(maxAttempts !== undefined ? { maxAttempts } : {}),
       retryable: classification.retryable,
       hadModelOutput,
+      ...(replayBlocked ? { replayStopped: "output_started" as const } : {}),
       code: classification.code,
     },
     safe: classification.safe,
@@ -1357,6 +1359,7 @@ export class AgentLoop {
         let attemptsMade = 0;
         let maxAttempts: number | undefined;
         let hadModelOutput = false;
+        let replayBlocked = false;
 
         // Degenerate-generation guard (TASK.210): a per-turn AbortController
         // separate from the caller's own `signal` — linked FROM it, never
@@ -1386,11 +1389,12 @@ export class AgentLoop {
             });
             for await (const event of stream) {
               if (event.type === "error") {
-                const { retry, safe } = buildErrorMetadata(event.error, attemptsMade, maxAttempts, hadModelOutput);
+                const { retry, safe } = buildErrorMetadata(event.error, attemptsMade, maxAttempts, hadModelOutput, replayBlocked);
                 yield { ...event, retry, safe };
               } else {
                 yield event;
               }
+              if (blocksAutomaticReplay(event)) replayBlocked = true;
               if (isModelOutputEvent(event)) {
                 hadModelOutput = true;
               }
@@ -1436,24 +1440,11 @@ export class AgentLoop {
                   streamErrored = true;
                   break;
                 case "stream_retry":
+                  replayBlocked = false;
                   attemptsMade += 1;
                   maxAttempts = event.maxAttempts;
-                  // hadModelOutput is deliberately NOT reset here: the STALL retry path
-                  // (model-port.ts) permits a stream_retry AFTER model output has
-                  // already reached the consumer, so once output was delivered this
-                  // turn the flag must stay true across the retry. Resetting it would
-                  // make the terminal metadata claim no output was delivered, and W8
-                  // would offer Try-again on a step whose re-send risks double-dispatch/
-                  // double-bill (TASK.33 invariant #1).
-                  //
-                  // The CONTENT accumulators below still reset: the whole step is
-                  // replayed from scratch, so every accumulator built up from the
-                  // aborted attempt's partial events must be discarded — the eventual
-                  // assistant message must reflect only the winning attempt. For a
-                  // pre-first-event retry every one of these is already a no-op. Known
-                  // cosmetic gap (out of scope for 2.3): any partial text already
-                  // rendered by the UI before the stall stays on screen; only the
-                  // written history is guaranteed clean.
+                  // Observability remains cumulative; only attempt-local content
+                  // and detectors are cleared before the replay.
                   textParts.length = 0;
                   toolCalls.length = 0;
                   finishReason = "unknown";
@@ -1501,7 +1492,7 @@ export class AgentLoop {
             if (signal?.aborted) {
               yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
             } else {
-              const { retry, safe } = buildErrorMetadata(error, attemptsMade, maxAttempts, hadModelOutput);
+              const { retry, safe } = buildErrorMetadata(error, attemptsMade, maxAttempts, hadModelOutput, replayBlocked);
               yield { type: "error", error, retry, safe };
               // The consumer may abort while paused on the yielded error event
               // (before this generator resumes) — re-check so a synchronous

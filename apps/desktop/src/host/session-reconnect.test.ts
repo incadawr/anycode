@@ -17,6 +17,9 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { AiSdkModelPort } from "@anycode/core";
 import type { AgentEvent, HistoryItem } from "@anycode/core";
 import type { HostToUiMessage } from "../shared/protocol.js";
 import { createDesktopStore } from "../renderer/src/store.js";
@@ -1888,4 +1891,91 @@ describe("Taskana 4896 — reminder state on reconnect", () => {
       h.close();
     }
   });
+});
+
+
+describe("reasoning retry reconnect", () => {
+  it.each(["backoff", "winning"] as const)("keeps only the current attempt during %s after ring overflow", { timeout: 60_000 }, async (where) => {
+    const { REPLAY_BUFFER_CAP } = await import("./session.js");
+    const events: ModelStreamEvent[] = [
+      { type: "start" }, { type: "reasoning_start", id: "same" },
+      ...Array.from({ length: REPLAY_BUFFER_CAP + 20 }, () => ({ type: "reasoning_delta" as const, id: "same", text: "old " })),
+      { type: "reasoning_end", id: "same" },
+      { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 1, reason: "network" },
+    ];
+    const retryIndex = events.length - 1;
+    events.push({ type: "reasoning_start", id: "same" }, { type: "reasoning_delta", id: "same", text: "winner" },
+      { type: "reasoning_end", id: "same" }, { type: "finish", finishReason: "stop", usage: {} });
+    const h = createHarness({ steps: [events], gated: { parkAfterIndex: where === "backoff" ? retryIndex : retryIndex + 2 } });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(m => m.type === "host_ready");
+      h.send({ type: "user_message", requestId: "r", text: "hello" });
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && (where === "backoff" ? m.event.type === "stream_retry" : m.event.type === "reasoning_delta" && m.event.text === "winner")), 20_000);
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some(m => m.type === "session_checkpoint"), 10_000);
+      await settle(12);
+      const end = h.received.length;
+      const store = createDesktopStore({ schedule: fn => fn() });
+      for (const message of h.received.slice(before, end)) store.getState().applyHostMessage(message);
+      expect(store.getState().transcript.filter(b => b.kind === "reasoning").map(b => b.text)).toEqual(where === "backoff" ? [] : ["winner"]);
+      h.gated?.release();
+      await h.waitUntil(() => countLoopEnds(h) >= 1, 20_000);
+      await settle();
+      feed(store, h, end);
+      expect(store.getState().transcript.filter(b => b.kind === "reasoning").map(b => b.text)).toEqual(["winner"]);
+    } finally { h.gated?.release(); h.close(); }
+  });
+});
+
+
+it("renders a real interrupted reasoning stream and its successful replay", { timeout: 30_000 }, async () => {
+  let hits = 0;
+  let cut: (() => void) | undefined;
+  const sse = (events: Record<string, unknown>[]) => events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+  const server = createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      hits++;
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      const initial = [
+        { type: "message_start", message: { id: `m${hits}`, model: "deepseek", role: "assistant", usage: { input_tokens: 1 } } },
+        { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: hits === 1 ? "abandoned" : "winner" } },
+      ];
+      response.write(sse(initial));
+      if (hits === 1) { cut = () => response.destroy(); return; }
+      response.end(sse([
+        { type: "content_block_stop", index: 0 },
+        { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "answer" } },
+        { type: "content_block_stop", index: 1 },
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+        { type: "message_stop" },
+      ]));
+    });
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const h = createHarness({ steps: [] });
+  h.config.modelPort = new AiSdkModelPort({ transport: "anthropic-messages", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`, apiKey: "test", model: "deepseek", retry: { maxRetries: 2, midStreamRetries: 0, baseDelayMs: 1, maxDelayMs: 1, stallTimeoutMs: 0 } });
+  try {
+    h.send({ type: "ui_ready" });
+    await h.waitFor(m => m.type === "host_ready");
+    const { store, applied } = attachStore(h);
+    h.send({ type: "user_message", requestId: "r", text: "hello" });
+    await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "reasoning_delta" && m.event.text === "abandoned"));
+    cut?.();
+    await h.waitUntil(() => countLoopEnds(h) >= 1);
+    await settle();
+    feed(store, h, applied);
+    expect(hits).toBe(2);
+    expect(store.getState().transcript.filter(b => b.kind === "reasoning").map(b => b.text)).toEqual(["winner"]);
+    expect(texts(store)).toContain("answer");
+    expect(h.received.some(m => m.type === "agent_event" && m.event.type === "loop_end" && m.event.reason === "completed")).toBe(true);
+  } finally {
+    h.close();
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
 });

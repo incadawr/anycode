@@ -86,6 +86,8 @@ export type ModelStreamEvent =
       error: unknown;
       retry?: {
         attemptsMade: number;
+        /** Automatic replay stopped because text or tool output was delivered. */
+        replayStopped?: "output_started";
         maxAttempts?: number;
         /**
          * Whether a MANUAL retry (W8's Try-again button) may succeed — NOT the

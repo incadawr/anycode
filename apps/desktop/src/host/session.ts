@@ -1384,6 +1384,7 @@ export class Session {
    * runTurn's event loop; undefined outside a turn / for foreign engines.
    */
   private currentStep: number | undefined;
+  private currentAttempt = 0;
   /**
    * Taskana 4083 / TASK.34: `stream_retry` events observed for the CURRENT
    * core step — the transport-retry count the usage audit row for that step
@@ -1476,7 +1477,7 @@ export class Session {
    * only (captured under the same `engine.id === "core"` gate as the other
    * checkpoint fields — foreign engines ride the ring).
    */
-  private readonly liveStreams = new Map<string, { turnId: string; step: number; streamId: string; kind: "text" | "reasoning"; text: string; settled?: boolean }>();
+  private readonly liveStreams = new Map<string, { turnId: string; step: number; attempt: number; streamId: string; kind: "text" | "reasoning"; text: string; settled?: boolean }>();
   /**
    * TASK.117 supervisor correction defect 1: the LIVE turn's tool calls whose
    * `tool_execution_start` has been emitted but whose `tool_result` has not
@@ -3195,7 +3196,7 @@ export class Session {
         message.step !== undefined &&
         (message.event.type === "text_delta" || message.event.type === "reasoning_delta")
       ) {
-        const key = `${message.turnId}:${message.step}:${message.event.id}`;
+        const key = `${message.turnId}:${message.step}:${message.attempt ?? 0}:${message.event.id}`;
         replayCharsByKey.set(key, (replayCharsByKey.get(key) ?? 0) + message.event.text.length);
       }
     }
@@ -3252,18 +3253,20 @@ export class Session {
       // exactly this id, never a ring-replayed turn_started's).
       ...(this.turnId !== null ? { liveTurnId: this.turnId } : {}),
       ...(cutTurnIds !== undefined ? { cutTurnIds } : {}),
+      ...(this.currentStep !== undefined && this.turnId !== null ? { currentAttempt: { step: this.currentStep, attempt: this.currentAttempt } } : {}),
       // TASK.117 acceptance defect 1: the currently-open partial streams ride
       // the same per-connect checkpoint — an EMPTY liveStreams (idle turn)
       // omits the field entirely, so an older renderer / an idle host sees a
       // byte-identical message to before.
       ...(streams.length > 0
         ? {
-            streams: streams.map(({ turnId, step, streamId, kind, text }) => ({
+            streams: streams.map(({ turnId, step, attempt, streamId, kind, text }) => ({
+              attempt,
               step,
               streamId,
               kind,
               text,
-              replayChars: replayCharsByKey.get(`${turnId}:${step}:${streamId}`) ?? 0,
+              replayChars: replayCharsByKey.get(`${turnId}:${step}:${attempt}:${streamId}`) ?? 0,
             })),
           }
         : {}),
@@ -4926,6 +4929,7 @@ export class Session {
         // history items by `${turnId}:${step}`.
         if (event.type === "turn_start") {
           this.currentStep = event.turn;
+          this.currentAttempt = 0;
           // TASK.117 phase-1 defect 3: the FIRST core turn_start of the turn
           // owning the pending slot hands ownership to DURABILITY — core
           // appends the user frame strictly BEFORE the first model request,
@@ -4945,13 +4949,17 @@ export class Session {
         // eventual winner's usage is ever flushed (mirrors the loop's own
         // `usage = {}` reset on this same event).
         if (this.engine.id === "core" && event.type === "stream_retry") {
+          this.currentAttempt = event.attempt;
+          for (const [key, stream] of this.liveStreams) {
+            if (stream.turnId === turnId && stream.step === this.currentStep && stream.kind === "reasoning") this.liveStreams.delete(key);
+          }
           this.finishRetries += 1;
           this.pendingUsageAuditRow = null;
         }
         this.outbound.emit({
           type: "agent_event",
           turnId,
-          ...(this.engine.id === "core" && this.currentStep !== undefined ? { step: this.currentStep } : {}),
+          ...(this.engine.id === "core" && this.currentStep !== undefined ? { step: this.currentStep, attempt: this.currentAttempt } : {}),
           event: wireEvent,
         });
         if (this.child !== undefined) {
@@ -5045,7 +5053,7 @@ export class Session {
         // unfinished streams ride the checkpoint.
         if (this.engine.id === "core" && this.currentStep !== undefined) {
           if (event.type === "text_start") {
-            this.liveStreams.set(`${turnId}:${this.currentStep}:${event.id}`, { turnId, step: this.currentStep, streamId: event.id, kind: "text", text: "" });
+            this.liveStreams.set(`${turnId}:${this.currentStep}:${event.id}`, { turnId, step: this.currentStep, attempt: this.currentAttempt, streamId: event.id, kind: "text", text: "" });
           } else if (event.type === "text_delta") {
             const entry = this.liveStreams.get(`${turnId}:${this.currentStep}:${event.id}`);
             if (entry !== undefined) {
@@ -5064,7 +5072,7 @@ export class Session {
               endedText.settled = true;
             }
           } else if (event.type === "reasoning_start") {
-            this.liveStreams.set(`${turnId}:${this.currentStep}:${event.id}`, { turnId, step: this.currentStep, streamId: event.id, kind: "reasoning", text: "" });
+            this.liveStreams.set(`${turnId}:${this.currentStep}:${event.id}`, { turnId, step: this.currentStep, attempt: this.currentAttempt, streamId: event.id, kind: "reasoning", text: "" });
           } else if (event.type === "reasoning_delta") {
             const entry = this.liveStreams.get(`${turnId}:${this.currentStep}:${event.id}`);
             if (entry !== undefined) {

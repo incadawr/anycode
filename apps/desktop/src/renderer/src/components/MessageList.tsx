@@ -483,28 +483,15 @@ export function needsSnap(
   return !isAtBottom(scrollTop, scrollHeight, clientHeight, 0);
 }
 
-/**
- * "(failed after N attempts)" terminal error-card suffix (TASK.33 W8) —
- * mirrors `cli/render.ts`'s error-line wording verbatim (same event.retry
- * shape, same "only surfaced when at least one retry actually happened"
- * gate) so the desktop and CLI report an identical failure the same way.
- * Exported for unit testing.
- */
+/** Human-readable retry count and output-boundary explanation. */
 export function formatErrorRetrySuffix(retry: ErrorRetryMeta | undefined): string {
-  return retry && retry.attemptsMade > 0
-    ? ` (failed after ${retry.attemptsMade} attempt${retry.attemptsMade === 1 ? "" : "s"})`
+  const suffix = retry && retry.attemptsMade > 0
+    ? ` (after ${retry.attemptsMade} automatic retr${retry.attemptsMade === 1 ? "y" : "ies"})`
     : "";
+  return suffix + (retry?.replayStopped ? " Stream interrupted after output began; automatic retry stopped." : "");
 }
 
-/**
- * One `stream_retry` transcript line's text (TASK.33 W8) — mirrors
- * `cli/render.ts`'s `[retry N/M in Xms: reason]` wording. Exported for unit
- * testing.
- *
- * Taskana 4772 review F5: `waitedMs` (a retry after a recovered network
- * wait) renders as "now (network back after N s)" — the wait duration was
- * already spent, never a pending delay.
- */
+/** A retry line includes the delay or elapsed network recovery time. */
 export function formatStreamRetryLine(
   attempt: number,
   maxAttempts: number,
@@ -523,13 +510,9 @@ export function formatDelaySeconds(delayMs: number): string {
   return `${(delayMs / 1000).toFixed(1)} s`;
 }
 
-/**
- * `N/M`, or just `N` once the attempt is past the announced total: a retry
- * granted by the transient-network budget (Taskana 4705) can outlive maxRetries,
- * and "9/8" would be a lie.
- */
-export function formatRetryAttempt(attempt: number, maxAttempts: number): string {
-  return attempt > maxAttempts ? `${attempt}` : `${attempt}/${maxAttempts}`;
+/** Show the retry ordinal without implying another retry is guaranteed. */
+export function formatRetryAttempt(attempt: number, _maxAttempts: number): string {
+  return `${attempt}`;
 }
 
 /**
