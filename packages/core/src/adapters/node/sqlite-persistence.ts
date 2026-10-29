@@ -375,6 +375,7 @@ const MIGRATIONS: readonly Migration[] = [
   },
   { version: 22, statements: ["ALTER TABLE provider_usage ADD COLUMN cache_write_tokens INTEGER"] },
   { version: 23, statements: ["ALTER TABLE provider_usage ADD COLUMN subagent_id TEXT"] },
+  { version: 24, statements: ["ALTER TABLE sessions ADD COLUMN context_usage_json TEXT"] },
 ];
 
 /**
@@ -1331,6 +1332,17 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   async loadPendingChildReports(id: string): Promise<string | null> {
     const db = this.open();
     const row = db.prepare("SELECT pending_child_reports_json AS json FROM sessions WHERE id = ?")
+      .get(id) as { json: string | null } | undefined;
+    return row?.json ?? null;
+  }
+
+  /** Bookkeeping snapshot; does not change session activity. */
+  async saveContextUsage(id: string, json: string | null): Promise<void> {
+    this.open().prepare("UPDATE sessions SET context_usage_json = ? WHERE id = ?").run(json, id);
+  }
+
+  async loadContextUsage(id: string): Promise<string | null> {
+    const row = this.open().prepare("SELECT context_usage_json AS json FROM sessions WHERE id = ?")
       .get(id) as { json: string | null } | undefined;
     return row?.json ?? null;
   }

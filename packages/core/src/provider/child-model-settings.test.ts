@@ -277,3 +277,21 @@ it("resolves xhigh for each child model and live capability set", () => {
   expect(resolve("only-max", "xhigh").reasoningEffort).toBe("max");
   expect(resolve("glm-5.3", "xhigh").reasoningEffort).toBe("max");
 });
+
+it("uses the child's explicit vocabulary without inheriting another model's levels", () => {
+  const resolve = buildChildModelSettingsResolver({ catalogEntry: undefined, envMaxOutputTokens: undefined, envContextWindow: undefined, effortLevelsFor: (id) => id === "child" ? ["low", "high"] : undefined });
+  expect(resolve("child", "high").reasoningEffort).toBe("high");
+  expect(resolve("child", "xhigh").reasoningEffort).toBeUndefined();
+  expect(resolve("sibling", "high").reasoningEffort).toBeUndefined();
+});
+
+
+it("maps child effort using declared levels ahead of catalog and live capabilities", () => {
+  const resolve = buildChildModelSettingsResolver({
+    catalogEntry: Z_AI_ENTRY, envMaxOutputTokens: undefined, envContextWindow: undefined,
+    liveCapabilitiesFor: () => ({ reasoning: true, effortLevels: ["xhigh"] }),
+    effortLevelsFor: (id) => id === "glm-5.3" ? ["xhigh"] : ["max"],
+  });
+  expect(resolve("glm-5.3", "xhigh").reasoningEffort).toBe("xhigh");
+  expect(resolve("custom", "xhigh").reasoningEffort).toBe("max");
+});

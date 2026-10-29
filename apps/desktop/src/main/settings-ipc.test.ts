@@ -4892,6 +4892,30 @@ describe("settings-set — browser.fullAccessDefault (Taskana 4759)", () => {
 
 
 describe("per-model overrides (GitHub #26)", () => {
+  it("persists exact effort levels independently and clears them with reasoning support", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", effortLevels: ["low", "high", "low"], contextWindowTokens: 64000 })).ok).toBe(true);
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", modelOverrideModel: "constructor", effortLevels: ["xhigh"] })).ok).toBe(true);
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", effortLevels: [] })).ok).toBe(false);
+    let saved = (await loadSettings(settingsPath)).settings.provider.connections[0];
+    expect(saved?.modelOverrides?.a).toEqual({ effortLevels: ["low", "high"], contextWindowTokens: 64000 });
+    expect(saved?.modelOverrides?.constructor).toEqual({ effortLevels: ["xhigh"] });
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", reasoningSupported: "" })).ok).toBe(true);
+    saved = (await loadSettings(settingsPath)).settings.provider.connections[0];
+    expect(saved?.modelOverrides?.a).toEqual({ contextWindowTokens: 64000 });
+    expect(saved?.modelOverrides?.constructor).toEqual({ effortLevels: ["xhigh"] });
+  });
+
+  it("drops only a malformed saved vocabulary while preserving the model's other settings", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", contextWindowTokens: 64000 });
+    const raw = JSON.parse(await readFile(settingsPath, "utf8"));
+    raw.provider.connections[0].modelOverrides.a.effortLevels = ["high", "invalid"];
+    await writeFile(settingsPath, JSON.stringify(raw));
+    const saved = (await loadSettings(settingsPath)).settings.provider.connections[0];
+    expect(saved?.modelOverrides?.a).toEqual({ contextWindowTokens: 64000 });
+  });
+
   it("keeps two windows and effort choices across switches, restarts, and a targeted clear", async () => {
     const deps = makeDeps({ catalogIds: CATALOG_IDS });
     expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", contextWindowTokens: 128000, reasoningEffort: "max" })).ok).toBe(true);

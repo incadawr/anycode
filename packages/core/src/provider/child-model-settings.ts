@@ -46,6 +46,7 @@ export function buildChildModelSettingsResolver(deps: {
   envContextWindowModel?: string;
   /** Connection-specific model overrides shared with the desktop parent resolver. */
   contextWindowFor?: (modelId: string) => number;
+  effortLevelsFor?: (modelId: string) => readonly ReasoningEffort[] | undefined;
   onClamp?: (requested: number, clamped: number, modelId: string) => void;
   onStubFallback?: (modelId: string, applied: number) => void;
   /** Taskana 4118: live /v1/models capabilities, consulted on a catalog miss. */
@@ -56,7 +57,7 @@ export function buildChildModelSettingsResolver(deps: {
     try {
       return {
         maxOutputTokens: resolveMaxOutputTokens(modelId, catalogEntry, envMaxOutputTokens, onClamp, onStubFallback),
-        reasoningEffort: resolveChildReasoningEffort(modelId, catalogEntry, selectedTier, liveCapabilitiesFor?.(modelId)),
+        reasoningEffort: resolveChildReasoningEffort(modelId, catalogEntry, selectedTier, liveCapabilitiesFor?.(modelId), deps.effortLevelsFor?.(modelId)),
         contextWindowTokens: deps.contextWindowFor?.(modelId) ?? resolveContextWindow(modelId, catalogEntry, envContextWindow, envContextWindowModel),
       };
     } catch {

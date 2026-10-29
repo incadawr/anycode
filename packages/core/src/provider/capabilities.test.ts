@@ -554,3 +554,13 @@ describe("child reasoning effort compatibility", () => {
     expect(resolveChildReasoningEffort("unknown", undefined, "xhigh")).toBeUndefined();
   });
 });
+
+describe("explicit effort vocabulary", () => {
+  const entry: CatalogProviderEntry = { id: "test", name: "test", baseUrl: "", defaultTransport: "openai-chat-completions", supportedTransports: ["openai-chat-completions"], auth: { kind: "api_key" }, models: [{ id: "glm-5.2", contextWindow: 8192, reasoning: true, effortLevels: ["max"] }] };
+  it("overrides catalog and live metadata and rejects undeclared choices", () => {
+    expect(resolveEffortLevels("glm-5.2", entry, { reasoning: true, effortLevels: ["max"] }, ["low", "high"])).toEqual(["low", "high"]);
+    expect(resolveReasoningEffort("custom", undefined, "high", undefined, ["low", "high"])).toBe("high");
+    expect(resolveReasoningEffort("custom", undefined, "xhigh", undefined, ["low", "high"])).toBeUndefined();
+    expect(resolveEffortLevels("sibling", undefined)).toBeUndefined();
+  });
+});

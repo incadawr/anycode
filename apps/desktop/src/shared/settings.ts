@@ -236,6 +236,7 @@ export type ConnectionPricing =
   | ({ mode: "rates" } & TokenRates);
 
 export interface ModelOverrides {
+  effortLevels?: ReasoningEffort[];
   pricing?: TokenRates;
   contextWindowTokens?: number;
   reasoningEffort?: ReasoningEffort;
@@ -1201,6 +1202,7 @@ export type SettingsPatch = Omit<DeepPartial<AnycodeSettings>, "provider">;
 // ── connection CRUD request payloads (companions to the connection-* channels) ──
 
 export interface ConnectionCreateRequest {
+  effortLevels?: ReasoningEffort[];
   modelPricing?: Record<string, TokenRates>;
   reasoningSupported?: true;
   pricing?: ConnectionPricing;
@@ -1288,6 +1290,7 @@ export interface ConnectionUpdateRequest {
   reasoningEffort?: ReasoningEffort | "";
   /** Target of a model override; does not change the connection's default model. */
   modelOverrideModel?: string;
+  effortLevels?: ReasoningEffort[] | "";
   reasoningSupported?: true | "";
   /**
    * Opt-in prompt-cache policy (GitHub #15) with the same `""` clear sentinel

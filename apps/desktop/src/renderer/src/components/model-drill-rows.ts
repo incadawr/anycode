@@ -75,6 +75,7 @@ export interface SessionDrillArgs {
   page?: ModelDrillPage;
   /** The tab's live reasoning effort (`state.reasoningEffort`), if any. */
   currentEffort?: string;
+  availableEffortLevels?: readonly string[];
 }
 
 /** What `buildSessionDrillRows` hands the component (rows) and its caller (the pieces the rows were built from). */
@@ -112,23 +113,19 @@ export function buildSessionDrillRows(args: SessionDrillArgs): SessionDrillRows 
   const currentConnection = args.connections.find((connection) => connection.id === args.currentConnectionId);
   // Taskana 4118: a model the catalog does not know falls back to the
   // connection's live-declared capabilities, when the fetch persisted any.
-  const efforts = startModelEffortLevels(
+  const efforts = Object.hasOwn(args, "availableEffortLevels") ? args.availableEffortLevels : startModelEffortLevels(
     currentConnection?.providerId,
     args.currentModelId,
     args.catalog,
     modelCapabilitiesFor(currentConnection, args.currentModelId),
+    modelOverrideFor(currentConnection, args.currentModelId)?.effortLevels,
   );
-  const effort = resolveStartModelEffort(
-    args.currentEffort,
-    modelOverrideFor(currentConnection, args.currentModelId)?.reasoningEffort ?? currentConnection?.reasoningEffort,
-    efforts,
-    startModelDefaultEffort(
-      currentConnection?.providerId,
-      args.currentModelId,
-      args.catalog,
-      modelCapabilitiesFor(currentConnection, args.currentModelId),
-    ),
-  );
+  // The host's effective effort is authoritative, even when it is outside the vocabulary.
+  const candidate = args.currentEffort ??
+    modelOverrideFor(currentConnection, args.currentModelId)?.reasoningEffort ??
+    currentConnection?.reasoningEffort ??
+    startModelDefaultEffort(currentConnection?.providerId, args.currentModelId, args.catalog, modelCapabilitiesFor(currentConnection, args.currentModelId));
+  const effort = candidate !== undefined && efforts?.includes(candidate) ? candidate : undefined;
 
   let rows: ModelDrillRow[];
   if (page.kind === "group") {
@@ -159,7 +156,7 @@ export function buildSessionDrillRows(args: SessionDrillArgs): SessionDrillRows 
         subtitle: group.subtitle,
         count: group.items.length,
       })),
-      ...(effort !== undefined ? [{ kind: "effort-open" as const, value: effort }] : []),
+      ...(efforts !== undefined ? [{ kind: "effort-open" as const, value: effort ?? "Default" }] : []),
     ];
   }
   return { rows, groups, popular, efforts, effort };

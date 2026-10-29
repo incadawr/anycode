@@ -741,7 +741,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
     expect(
       migrated.prepare(
         `SELECT project_root, continuation_pending, worktree_exit_notice_pending, worktree_cleanup_branch
@@ -812,7 +812,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["connection_id"]));
@@ -865,7 +865,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["codex_profile_id"]));
@@ -943,7 +943,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
     migrated.close();
   });
 
@@ -998,7 +998,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["parent_session_id", "spawn_tool_call_id"]));
@@ -1272,7 +1272,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
     migrated.close();
   });
 
@@ -3501,5 +3501,27 @@ describe("pending child reports durability (Taskana 4123)", () => {
     expect(await adapter.loadPendingChildReports("s1")).toBeNull();
 
     await adapter.close();
+  });
+});
+
+
+describe("context snapshot bookkeeping", () => {
+  it("survives reopen without changing activity or usage rows", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "context-db-"));
+    const path = join(dir, "db.sqlite");
+    const first = new SqlitePersistenceAdapter(path);
+    try {
+      await first.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+      await first.recordProviderUsage({ sessionId: "s1", turnId: "t", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0 });
+      const updated = (await first.getRootSession("s1"))!.updatedAt;
+      const json = JSON.stringify({ engine: "core", model: "m", estimatedTokens: 0, budgetTokens: 100, source: "estimate" });
+      await first.saveContextUsage("s1", json);
+      expect((await first.getRootSession("s1"))!.updatedAt).toBe(updated);
+      await first.close();
+      const second = new SqlitePersistenceAdapter(path);
+      expect(await second.loadContextUsage("s1")).toBe(json);
+      expect(await second.listProviderUsage("s1")).toHaveLength(1);
+      await second.close();
+    } finally { await first.close(); await rm(dir, { recursive: true, force: true }); }
   });
 });

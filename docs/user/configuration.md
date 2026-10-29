@@ -172,3 +172,19 @@ current workspace.
 - [skills.md](skills.md) and [subagents.md](subagents.md): extensibility surfaces.
 - [permissions.md](permissions.md): the approval model.
 - [troubleshooting.md](troubleshooting.md): when a change does not seem to apply.
+
+
+Custom endpoints can declare supported reasoning levels in the connection's
+advanced settings for each model. Select **Supported** under Reasoning support,
+then choose the levels the model accepts. Leave the level list empty to use the
+provider metadata or automatic defaults. The selected reasoning effort is a
+separate setting. Returning Reasoning support to Auto clears the manual list.
+Image input can also be set to On or Off for the chosen model.
+
+For CLI or shell-launched desktop sessions, `ANYCODE_EFFORT_LEVELS` accepts a
+nonempty JSON array, for example `export ANYCODE_EFFORT_LEVELS='["low","high"]'`.
+Use `/effort high` to change the selected level in the CLI. Valid levels are
+`off`, `low`, `medium`, `high`, `xhigh`, and `max`. Like
+`ANYCODE_IMAGE_INPUT`, this shell setting applies to all models, including child
+models, and takes precedence over per-model settings, catalog data and fetched
+metadata. An invalid value is ignored with a warning.

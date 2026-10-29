@@ -571,6 +571,7 @@ export type HostToUiMessage =
       mode: PermissionMode;
       model: string;
       sessionId: string;
+      contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
       reasoningEffort?: ReasoningEffort;
       availableEffortLevels?: ReasoningEffort[];
       /**
@@ -906,6 +907,7 @@ export type HostToUiMessage =
   // immediately) stays valid without it.
   | {
       type: "engine_settings_changed";
+      clearContextUsage?: boolean;
       model?: string;
       activePresetId?: string;
       effort?: string;
@@ -918,6 +920,7 @@ export type HostToUiMessage =
   // validated), precedent model_changed above. Emitted only AFTER the new
   // engine is live and the old one disposed, so receiving it means every later
   // message flows through the replacement engine.
+  | { type: "context_usage_checkpoint"; contextUsage: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" } | null }
   | { type: "engine_switched"; requestId: string; engine: EngineId; previousEngine: EngineId }
   // Taskana 4068: non-silent refusal for engine_switch_request — mirror of
   // rewind_result's failure shape (the UI must be able to show WHY the switch

@@ -416,6 +416,8 @@ export interface HarnessOptions {
   checkpointsSeam?: SessionOptions["checkpoints"];
   /** Taskana 4083 / TASK.34: the Session-level usage-audit seam, threaded DIRECTLY into Session. Omitted -> seam absent (audit inert, byte-identical). */
   usageAudit?: SessionOptions["usageAudit"];
+  initialContextUsage?: SessionOptions["initialContextUsage"];
+  saveContextUsage?: SessionOptions["saveContextUsage"];
   /** Provider-aware reasoning-effort support exposed to Session. */
   reasoningSupported?: boolean;
   /** Provider-declared levels exposed to the UI and enforced by Session. */
@@ -806,6 +808,8 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(options.envStatus ? { envStatus: options.envStatus } : {}),
     ...(options.checkpointsSeam ? { checkpoints: options.checkpointsSeam } : {}),
     ...(options.usageAudit !== undefined ? { usageAudit: options.usageAudit } : {}),
+    ...(options.initialContextUsage !== undefined ? { initialContextUsage: options.initialContextUsage } : {}),
+    ...(options.saveContextUsage !== undefined ? { saveContextUsage: options.saveContextUsage } : {}),
     ...(options.reconnectGraceMs !== undefined ? { reconnectGraceMs: options.reconnectGraceMs } : {}),
     ...(options.imageInputEnabled !== null ? { imageInputEnabled: media.imageInputEnabled } : {}),
     ...(options.imageFallbackAvailable !== undefined
