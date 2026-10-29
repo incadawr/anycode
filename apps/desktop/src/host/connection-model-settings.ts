@@ -85,6 +85,7 @@ export function createConnectionModelSettings(deps: {
     pricingSnapshot() { return hasReadConnection ? { fallback: connection?.pricing, models: Object.fromEntries(Object.entries(connection?.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => [id, value.pricing])) } : undefined; },
     hasReadConnection() { return hasReadConnection; },
     capabilitiesFor,
+    effortLevelsFor(model: string) { return modelOverrideFor(connection, model)?.effortLevels; },
     effortFor,
     contextFor(model: string) {
       const envApplies = (!deps.envContextWindowFromSettings || !hasReadConnection) && deps.envContextWindow !== undefined &&
@@ -97,16 +98,17 @@ export function createConnectionModelSettings(deps: {
       invalidated.delete(model);
     },
     normalize(model: string, tier: ReasoningEffort): ReasoningEffort {
-      return nearestSupportedEffort(tier, resolveEffortLevels(model, deps.catalogEntry, capabilitiesFor(model)));
+      return nearestSupportedEffort(tier, resolveEffortLevels(model, deps.catalogEntry, capabilitiesFor(model), modelOverrideFor(connection, model)?.effortLevels));
     },
     takeAdjustment() { const value = adjustment; adjustment = undefined; return value; },
     switchEffort(from: string, to: string, tier: ReasoningEffort, explicit = false): ReasoningEffort {
       refresh();
       // A new persisted choice must not be replaced by Session's previous tier.
       if (!explicit && !invalidated.has(from)) selected.set(from, tier);
-      const levels = resolveEffortLevels(to, deps.catalogEntry, capabilitiesFor(to));
+      const declaredLevels = modelOverrideFor(connection, to)?.effortLevels;
+      const levels = resolveEffortLevels(to, deps.catalogEntry, capabilitiesFor(to), declaredLevels);
       const candidate = explicit ? tier : effortFor(to) ??
-        resolveReasoningEffort(to, deps.catalogEntry, undefined, capabilitiesFor(to)) ?? (levels?.length ? tier : "off");
+        resolveReasoningEffort(to, deps.catalogEntry, undefined, capabilitiesFor(to), declaredLevels) ?? (levels?.length ? tier : "off");
       const next = nearestSupportedEffort(candidate, levels);
       adjustment = next !== candidate ? { from: candidate, to: next } : undefined;
       selected.set(to, next);

@@ -110,6 +110,7 @@ export const KNOWN_SLASH_COMMANDS = [
   "/sessions",
   "/rewind",
   "/reasoning",
+  "/effort",
   "/mode",
   "/model",
   "/status",
@@ -140,6 +141,7 @@ export const COMMAND_HELP: ReadonlyArray<{ command: string; summary: string }> =
   { command: "/sessions", summary: "list recent sessions for this workspace, or /sessions all for every workspace" },
   { command: "/rewind", summary: "list workspace checkpoints, or restore one: /rewind <#|id> [files|conversation]" },
   { command: "/reasoning", summary: "toggle reasoning rendering, or set model effort: /reasoning <off|low|medium|high|max>" },
+  { command: "/effort", summary: "show or set model reasoning effort: /effort <off|low|medium|high|xhigh|max>" },
   { command: "/mode", summary: "show the current permission mode, or switch it: /mode <plan|build|edit|auto|yolo>" },
   { command: "/model", summary: "show the session's model and provider hints, or switch it: /model <model-id>" },
   { command: "/status", summary: "show the working tree's git status (branch, staged/unstaged/untracked files)" },
@@ -785,6 +787,7 @@ export async function handleSlashCommand(line: string, deps: SlashCommandDeps): 
     case "rewind":
       await handleRewindCommand(rest, deps);
       return;
+    case "effort":
     case "reasoning": {
       const arg = rest.trim();
       if (arg !== "") {
@@ -796,6 +799,7 @@ export async function handleSlashCommand(line: string, deps: SlashCommandDeps): 
         deps.write(error === null ? `[reasoning] model effort is now ${arg}\n` : `[reasoning] ${error}\n`);
         return;
       }
+      if (command === "effort") { deps.write(`[effort] model effort=${deps.getReasoningEffort()}\n`); return; }
       const enabled = deps.toggleReasoning();
       deps.write(`[reasoning] rendering is now ${enabled ? "on" : "off"}; model effort=${deps.getReasoningEffort()}\n`);
       return;
