@@ -14,7 +14,7 @@
 
  */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -327,26 +327,38 @@ describe("LspManager (fixture integration)", () => {
   });
 
   it("does NOT notify onStatusChange on a stderr-tail append (not a state transition)", async () => {
-    let calls = 0;
-    const { exec, capture } = stubExec();
-    const manager = new LspManager(exec, [tsSpec("ts")], CWD, () => {
-      calls += 1;
-    });
-    // Spawn happens synchronously at the head of diagnosticsAfterWrite (state ->
-    // initializing); the stub never replies so it stays initializing until the
-    // diagnostics budget expires. Do not await yet — capture the pending promise.
-    const pending = manager.diagnosticsAfterWrite("/proj/a.ts", "x\n").catch(() => undefined);
-    await flushMicrotasks();
-    expect(manager.status()[0]!.state).toBe("initializing");
-    expect(calls).toBe(1); // the initializing transition
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const { exec, capture } = stubExec();
+      const manager = new LspManager(exec, [tsSpec("ts")], CWD, () => {
+        calls += 1;
+      });
+      // Spawn happens synchronously at the head of diagnosticsAfterWrite (state ->
+      // initializing); the stub never replies so it stays initializing until the
+      // diagnostics budget expires. Do not await yet — capture the pending promise.
+      let settled = false;
+      const pending = manager.diagnosticsAfterWrite("/proj/a.ts", "x\n").then((result) => {
+        settled = true;
+        return result;
+      });
+      await flushMicrotasks();
+      expect(manager.status()[0]!.state).toBe("initializing");
+      expect(calls).toBe(1); // the initializing transition
 
-    capture.onStderr!("boot warning: something\n");
-    capture.onStderr!("more noise\n");
-    await flushMicrotasks();
-    expect(manager.status()[0]!.stderrTail).toContain("boot warning");
-    expect(calls).toBe(1); // stderr appends did NOT notify
+      capture.onStderr!("boot warning: something\n");
+      capture.onStderr!("more noise\n");
+      await flushMicrotasks();
+      expect(manager.status()[0]!.stderrTail).toContain("boot warning");
+      expect(calls).toBe(1); // stderr appends did NOT notify
 
-    await pending; // let the 3s diagnostics budget settle (no leaked timer)
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toEqual({ available: false, reason: "initializing" });
+    } finally {
+      vi.useRealTimers();
+    }
   }, 10_000);
 
   it(
