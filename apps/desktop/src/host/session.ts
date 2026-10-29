@@ -933,11 +933,10 @@ export interface SessionOptions {
    * turn accept (before busy=true) ONLY while orchestrate is on and
    * roles.orchestrator.primary targets the tab's ACTIVE connection: the host
    * checks the entry's health and, when it is unhealthy and a healthy
-   * fallback exists, performs the model switch itself and returns the
-   * engine_notice line to surface. Null/undefined return => no notice, no
-   * switch. Absent seam (legacy tests) => byte-identical turns.
+   * fallback exists, returns the model selection and engine_notice line.
+   * Null/undefined return => no notice, no switch. Absent seam (legacy tests) => byte-identical turns.
    */
-  orchestratorRouteCheck?: () => string | undefined;
+  orchestratorRouteCheck?: () => string | { notice: string; model: string; effort?: ReasoningEffort } | undefined;
   /**
    * Taskana 4704 §3.7: host callback fired on every orchestrate TRANSITION
    * (after the mode switch + ack emit). The host copies the flag onto the
@@ -4110,8 +4109,13 @@ export class Session {
     // healthy fallback when the primary is down, surfacing an engine_notice
     // line. The check runs ONLY in this idle accept path.
     if (this.orchestrate) {
-      const notice = this.orchestratorRouteCheck?.();
-      if (notice !== undefined) {
+      const route = this.orchestratorRouteCheck?.();
+      if (route !== undefined) {
+        const notice = typeof route === "string" ? route : route.notice;
+        if (typeof route !== "string") {
+          if (route.effort !== undefined) this.selectedEffort = route.effort;
+          this.applyModelSwitch(route.model, route.effort !== undefined);
+        }
         this.outbound.emit({
           type: "agent_event",
           turnId: this.turnId ?? "orchestrate-route",
