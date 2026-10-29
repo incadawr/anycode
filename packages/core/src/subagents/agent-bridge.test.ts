@@ -366,7 +366,7 @@ describe("runAgentBridgeCall (§3.4)", () => {
 
   it("core entry: profile body and model default reach the session child without an engine override", async () => {
     let seen: SessionSubagentRequest | undefined;
-    const coreWithModel: AgentBridgeCatalogEntry = { ...CORE_ENTRY, model: "core-default-model" };
+    const coreWithModel: AgentBridgeCatalogEntry = { ...CORE_ENTRY, model: "core-default-model", systemPrompt: "Привет\n\n---\n\ninside" };
     const port: SessionSubagentPort = {
       run: async (req) => {
         seen = req;
@@ -378,7 +378,7 @@ describe("runAgentBridgeCall (§3.4)", () => {
       { agent_type: "reviewer", description: "d", prompt: "review" },
       { catalog: [coreWithModel], port, spawnToolCallId: "toolu_3" },
     );
-    expect(seen?.prompt).toBe("P\n\n---\n\nreview");
+    expect(seen?.prompt).toBe("Привет\n\n---\n\ninside\n\n---\n\nreview");
     expect(seen?.engine).toBeUndefined();
     expect(seen?.model).toBe("core-default-model");
   });
