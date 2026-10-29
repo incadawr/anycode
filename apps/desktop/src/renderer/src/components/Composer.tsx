@@ -35,7 +35,7 @@ import {
 } from "../paste.js";
 import { ModeMenu, modeChangeDisabled } from "./ModeMenu.js";
 import { ModelPill, modelPickDisabled } from "./ModelPill.js";
-import { EngineModelMenu, EnginePresetMenu, engineControlDisabled, nativeEffortControl } from "./EngineControls.js";
+import { EngineModelMenu, EnginePresetMenu, engineControlDisabled, engineEffortDisabled, nativeEffortControl } from "./EngineControls.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
 import { BackgroundAgents } from "./BackgroundAgents.js";
 import { PromptQueue } from "./PromptQueue.js";
@@ -1795,7 +1795,7 @@ export function Composer() {
   }
 
   function handleEngineEffortPick(effort: string): void {
-    if (!engineControlDisabled(turn.status, queueInFlight, ready)) sendToHost({ type: "set_engine_effort", effort });
+    if (!engineEffortDisabled(turn.status, queueInFlight, ready, engine?.capabilities.supportsDeferredEffortChange === true)) sendToHost({ type: "set_engine_effort", effort });
   }
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>): void {
@@ -2105,7 +2105,7 @@ export function Composer() {
               catalog — ModelPill (settings-store-backed) is core-only. */}
           {supportsModelSelection &&
             (engine?.model ? (
-              <EngineModelMenu model={engine.model} pendingModel={pendingEngineChange?.model} disabled={engineControlDisabled(turn.status, queueInFlight, ready)} onPick={handleEngineModelPick} {...(nativeEffort !== undefined ? { effort: nativeEffort } : {})} />
+              <EngineModelMenu model={engine.model} pendingModel={pendingEngineChange?.model} disabled={engineEffortDisabled(turn.status, queueInFlight, ready, engine.capabilities.supportsDeferredEffortChange === true && nativeEffort !== undefined)} modelDisabled={engineControlDisabled(turn.status, queueInFlight, ready)} onPick={handleEngineModelPick} {...(nativeEffort !== undefined ? { effort: nativeEffort } : {})} />
             ) : (
               <ModelPill />
             ))}

@@ -64,6 +64,7 @@ import {
 import { PROFILE_PERIODS, type ProfilePeriod } from "./components/ProfilePane.js";
 import {
   engineControlDisabled,
+  engineEffortDisabled,
   engineEffortControlState,
   engineEffortOptions,
   engineMenuChipLabel,
@@ -8542,7 +8543,9 @@ export function createAutomationFacade(
       // synchronous and BEFORE any click: a real disabled button no-ops a real
       // click too, so there is no commit to await here.
       if (state.engine?.model !== undefined
-        ? engineControlDisabled(state.turn.status, state.queueInFlight, state.connection === "ready")
+        ? (pick.kind === "model"
+          ? engineControlDisabled(state.turn.status, state.queueInFlight, state.connection === "ready")
+          : engineEffortDisabled(state.turn.status, state.queueInFlight, state.connection === "ready", state.engine.capabilities.supportsDeferredEffortChange === true && engineEffortOptions(state.engine.model, state.pendingEngineChange?.model).length > 0))
         : computeModelPickDisabled(state.turn.status, state.queueInFlight, state.connection === "ready", state.engine === null)) {
         return { ok: false, reason: "pick_disabled" };
       }

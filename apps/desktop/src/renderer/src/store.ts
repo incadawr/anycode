@@ -5060,7 +5060,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                   const appliedModel = state.engine.model?.current;
                   const selectedModel = nextPending.model ?? appliedModel;
                   const appliedEffort = selectedModel === appliedModel ? state.engine.model?.effort : undefined;
-                  if (appliedEffort !== undefined && message.effort === appliedEffort) delete nextPending.effort;
+                  if (!message.deferredEffort && appliedEffort !== undefined && message.effort === appliedEffort) delete nextPending.effort;
                   else nextPending.effort = message.effort;
                 }
                 if (!touched) {

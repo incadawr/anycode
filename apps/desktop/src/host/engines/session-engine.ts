@@ -31,6 +31,7 @@ export interface EngineCapabilities {
   readonly costAccounting: boolean;
   readonly supportsModelSelection: boolean;
   readonly supportsReasoningEffort: boolean;
+  readonly supportsDeferredEffortChange?: boolean;
   readonly supportsImages: boolean;
   readonly supportsTasks: boolean;
   readonly supportsFileSnapshots: boolean;

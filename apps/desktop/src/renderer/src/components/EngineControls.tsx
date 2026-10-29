@@ -56,6 +56,12 @@ export function engineControlDisabled(
   return shouldEnqueue(turnStatus, queueInFlight) || !ready;
 }
 
+export function engineEffortDisabled(
+  turnStatus: TurnState["status"], queueInFlight: DesktopState["queueInFlight"], ready: boolean, deferred: boolean,
+): boolean {
+  return !ready || (!deferred && shouldEnqueue(turnStatus, queueInFlight));
+}
+
 /** Display label for one catalog model: its own `label`, else the raw id. Exported for unit testing. */
 export function engineModelDisplayName(modelId: string, available: readonly EngineModelChoice[]): string {
   return available.find((m) => m.id === modelId)?.label ?? modelId;
@@ -200,7 +206,7 @@ export function engineEffortControlState(
   return {
     ...(current !== undefined ? { current } : {}),
     ...(selected !== undefined ? { selected } : {}),
-    ...(pendingEffort !== undefined && pendingEffort !== current ? { pending: pendingEffort } : {}),
+    ...(pendingEffort !== undefined ? { pending: pendingEffort } : {}),
   };
 }
 
@@ -415,13 +421,14 @@ function useEngineMenuState(itemCount: number, currentIndex: number, disabled: b
     }
   }
 
-  return { open, setOpen, focusIndex, anchor, rootRef, chipRef, itemRefs, close, onChipKeyDown, onMenuKeyDown };
+  return { open, setOpen, focusIndex, setFocusIndex, anchor, rootRef, chipRef, itemRefs, close, onChipKeyDown, onMenuKeyDown };
 }
 
 export interface EngineModelMenuProps {
   model: { current: string; available: readonly EngineModelChoice[] };
   pendingModel: string | undefined;
   disabled: boolean;
+  modelDisabled?: boolean;
   onPick(modelId: string): void;
   /**
    * The effort control. `current` is OPTIONAL on purpose: an
@@ -444,7 +451,7 @@ export interface EngineModelMenuProps {
  * two-level Model/Effort popover instead of growing a second composer chip.
  * Effort remains a string because Codex models advertise their own vocabulary.
  */
-export function EngineModelMenu({ model, pendingModel, disabled, onPick, effort }: EngineModelMenuProps) {
+export function EngineModelMenu({ model, pendingModel, disabled, modelDisabled = disabled, onPick, effort }: EngineModelMenuProps) {
   const items = engineModelItems(model.current, model.available);
   const activeLabel = engineModelDisplayName(model.current, model.available);
   const pendingLabel = pendingModel !== undefined ? engineModelDisplayName(pendingModel, model.available) : undefined;
@@ -454,7 +461,7 @@ export function EngineModelMenu({ model, pendingModel, disabled, onPick, effort 
   const efforts = engineEffortOptions(model, pendingModel);
   const showEffort = efforts.length > 0;
   const [page, setPage] = useState<"root" | "model" | "effort">("root");
-  const itemCount = page === "root" ? (showEffort ? 2 : 1) : page === "model" ? items.length : efforts.length;
+  const itemCount = page === "root" ? (modelDisabled ? (showEffort ? 1 : 0) : (showEffort ? 2 : 1)) : page === "model" ? items.length : efforts.length;
   // Seeded on the same row that carries the tick: the applied model, and the
   // effort the next turn will use (see the item rendering below).
   const currentIndex = page === "model" ? Math.max(0, items.findIndex((item) => item.id === model.current)) : page === "effort" ? Math.max(0, efforts.indexOf(engineSelectedEffort(effort) ?? "")) : 0;
@@ -463,11 +470,12 @@ export function EngineModelMenu({ model, pendingModel, disabled, onPick, effort 
   const chipLabel = engineMenuChipLabel(model, pendingModel, effort);
   const effortSummary = engineEffortSummary(effort);
   useEffect(() => {
-    if (!menu.open) setPage("root");
-  }, [menu.open]);
+    if (!menu.open || (modelDisabled && page === "model")) setPage("root");
+    if (modelDisabled && page === "model") menu.setFocusIndex(0);
+  }, [menu.open, modelDisabled, page, menu.setFocusIndex]);
 
   function pick(id: string): void {
-    if (disabled) {
+    if (disabled || modelDisabled) {
       return;
     }
     // Compared against the NEXT-TURN choice: picking the applied model while
@@ -504,16 +512,16 @@ export function EngineModelMenu({ model, pendingModel, disabled, onPick, effort 
           aria-label="Engine model and effort"
           data-model-pill-page="root"
           onKeyDown={(event) => menu.onMenuKeyDown(event, (index) => {
-            if (index === 0) setPage("model");
+            if (!modelDisabled && index === 0) setPage("model");
             else if (showEffort) setPage("effort");
           })}
           style={menu.anchor ? { left: menu.anchor.left, bottom: menu.anchor.bottom } : undefined}
         >
-          <button ref={(el) => { menu.itemRefs.current[0] = el; }} type="button" role="menuitem" tabIndex={menu.focusIndex === 0 ? 0 : -1} className="model-pill-row" onClick={() => setPage("model")}><span className="model-pill-row-name">Model</span><span className="model-pill-row-value">{engineChipLabel(activeLabel, pendingLabel)}</span><Chevron className="model-pill-row-chevron" /></button>
-          {showEffort && <button ref={(el) => { menu.itemRefs.current[1] = el; }} type="button" role="menuitem" tabIndex={menu.focusIndex === 1 ? 0 : -1} className="model-pill-row" onClick={() => setPage("effort")}><span className="model-pill-row-name">Effort</span><span className="model-pill-row-value">{effortSummary}</span><Chevron className="model-pill-row-chevron" /></button>}
+          {!modelDisabled && <button ref={(el) => { menu.itemRefs.current[0] = el; }} type="button" role="menuitem" tabIndex={menu.focusIndex === 0 ? 0 : -1} className="model-pill-row" onClick={() => setPage("model")}><span className="model-pill-row-name">Model</span><span className="model-pill-row-value">{engineChipLabel(activeLabel, pendingLabel)}</span><Chevron className="model-pill-row-chevron" /></button>}
+          {showEffort && <button ref={(el) => { menu.itemRefs.current[modelDisabled ? 0 : 1] = el; }} type="button" role="menuitem" tabIndex={menu.focusIndex === (modelDisabled ? 0 : 1) ? 0 : -1} className="model-pill-row" onClick={() => setPage("effort")}><span className="model-pill-row-name">Effort</span><span className="model-pill-row-value">{effortSummary}</span><Chevron className="model-pill-row-chevron" /></button>}
         </div>
       )}
-      {menu.open && page !== "root" && <div className="model-pill-popover" role="menu" aria-label={page === "model" ? "Engine model" : "Engine reasoning effort"} data-model-pill-page={page} onKeyDown={(event) => menu.onMenuKeyDown(event, (index) => { if (page === "model") { const item = items[index]; if (item) pick(item.id); } else { const value = efforts[index]; if (value) pickEffort(value); } })} style={menu.anchor ? { left: menu.anchor.left, bottom: menu.anchor.bottom } : undefined}>
+      {menu.open && page !== "root" && !(page === "model" && modelDisabled) && <div className="model-pill-popover" role="menu" aria-label={page === "model" ? "Engine model" : "Engine reasoning effort"} data-model-pill-page={page} onKeyDown={(event) => menu.onMenuKeyDown(event, (index) => { if (page === "model") { const item = items[index]; if (item) pick(item.id); } else { const value = efforts[index]; if (value) pickEffort(value); } })} style={menu.anchor ? { left: menu.anchor.left, bottom: menu.anchor.bottom } : undefined}>
         <button type="button" className="model-pill-back" onClick={() => setPage("root")}><Chevron className="model-pill-back-chevron" />{page === "model" ? "Model" : "Effort"}</button>
         {(page === "model" ? items : efforts.map((value) => ({ id: value, label: value }))).map((item, index) => {
           // What the tick means per page: on the MODEL page it is the applied
