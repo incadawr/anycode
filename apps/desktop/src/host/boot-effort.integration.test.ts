@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, statSync, writeFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { bootHostInTempProfile, PROXY_ENV_KEYS } from "./boot-test-env.js";
 
@@ -71,3 +71,38 @@ describe("host boot effort selection", () => {
     expect(existsSync(result.profile.dir)).toBe(false);
   }, 45_000);
 });
+
+
+it("pins an unpinned legacy host's live model settings to the connection that supplied its fork env", async () => {
+  const settings = {
+    version:2, provider:{activeConnectionId:"conn-source", connections:[{id:"conn-source", providerId:"z-ai", model:"glm-5.2", modelOverrides:{
+      "glm-5.2":{contextWindowTokens:128000, reasoningEffort:"high"},
+      "glm-5.3":{contextWindowTokens:64000, reasoningEffort:"low"},
+    }}]}, tools:{}, permissions:{alwaysAllow:[]}, ui:{theme:"system"}, security:{allowWeakSecretStorage:false},
+  };
+  const result = await bootHostInTempProfile(async ({parent, profile}) => {
+    const port = new FakePort();
+    parent.emit("message", {ports:[port], data:{}});
+    await vi.waitFor(() => expect(port.listenerCount("message")).toBeGreaterThan(0), {timeout:15000});
+    port.send({type:"ui_ready"});
+    await vi.waitFor(() => expect(port.messages.some((m) => m.type === "host_ready")).toBe(true));
+    expect(port.messages.find((m) => m.type === "host_ready").modelSettingsConnectionId).toBe("conn-source");
+    settings.provider.activeConnectionId = "other-connection";
+    writeFileSync(profile.settingsPath, JSON.stringify(settings));
+    port.send({type:"set_model", model:"glm-5.3"});
+    await vi.waitFor(() => expect(port.messages.some((m) => m.type === "model_changed")).toBe(true));
+    expect(port.messages.find((m) => m.type === "model_changed")).toMatchObject({reasoningEffort:"low", contextUsage:{budgetTokens:40000}});
+    settings.provider.connections[0]!.modelOverrides["glm-5.2"] = {contextWindowTokens:96000, reasoningEffort:"max"};
+    writeFileSync(profile.settingsPath, JSON.stringify(settings));
+    port.send({type:"set_model", model:"glm-5.2"});
+    await vi.waitFor(() => expect(port.messages.filter((m) => m.type === "model_changed")).toHaveLength(2));
+    expect(port.messages.filter((m) => m.type === "model_changed").at(-1)).toMatchObject({reasoningEffort:"max", contextUsage:{budgetTokens:72000}});
+  }, {
+    extraEnv:{ANYCODE_MODEL:"glm-5.2", ANYCODE_BASE_URL:"https://api.z.ai/api/anthropic", ANYCODE_API_KEY:"test",
+      ANYCODE_MODEL_SETTINGS_CONNECTION_ID:"conn-source", ANYCODE_CONTEXT_WINDOW:"128000", ANYCODE_CONTEXT_WINDOW_MODEL:"glm-5.2", ANYCODE_CONTEXT_WINDOW_FROM_SETTINGS:"1",
+      ANYCODE_REASONING_EFFORT:"high", ANYCODE_REASONING_EFFORT_MODEL:"glm-5.2"},
+    boot:async () => { vi.resetModules(); writeFileSync(process.env.ANYCODE_SETTINGS_PATH!, JSON.stringify(settings)); await import("./index.js"); },
+  });
+  if (result.error !== null) throw result.error;
+  expect(result.stopped).toBe(true);
+}, 45000);

@@ -1,3 +1,5 @@
+import { contextWindowSettingsTarget } from "./components/Composer.js";
+import { modelSettingsPick, modelSettingsWrites } from "./components/ModelPill.js";
 import { agentMessageText, type AgentEnvelope } from "../../shared/communication.js";
 import { TurnTranslator } from "../../host/engines/codex/event-translator.js";
 import { CollabAgentCardIndex } from "../../host/engines/codex/collab-agent-index.js";
@@ -8889,4 +8891,32 @@ describe("desktop store — Agent background handoff (GitHub #17 slice D)", () =
     expect(block?.kind === "tool_call" && block.subagent).toBeNull();
     expect(block?.kind === "tool_call" && block.status).toBe("success");
   });
+});
+
+
+it("switches the model, assumption and budget atomically before another response", () => {
+  const store = createDesktopStore(createManualScheduler().scheduler);
+  store.setState({contextUsage:{estimatedTokens:15500, budgetTokens:104000, source:"provider"}});
+  const seen: Array<{assumed:boolean | undefined; budget:number | undefined}> = [];
+  const unsubscribe = store.subscribe((state) => seen.push({assumed:state.contextWindowAssumed, budget:state.contextUsage?.budgetTokens}));
+  store.getState().applyHostMessage({type:"model_changed", model:"unknown", reasoningEffort:"off", contextWindowAssumed:true, contextUsage:{estimatedTokens:15500, budgetTokens:2048, source:"estimate"}});
+  unsubscribe();
+  expect(seen).toEqual([{assumed:true, budget:2048}]);
+  const first = store.getState().modelSelectionAck;
+  store.getState().applyHostMessage({type:"model_changed", model:"unknown", reasoningEffort:"off"});
+  expect(store.getState().contextUsage).toBeNull();
+  expect(store.getState().modelSelectionAck).not.toBe(first);
+});
+
+
+it("keeps the host connection identity when the active connection changes", () => {
+  const store = createDesktopStore(createManualScheduler().scheduler);
+  store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "a", sessionId: "s", modelSettingsConnectionId: "original" });
+  expect(store.getState().pinnedConnection).toBeNull();
+  const connections = [{ id: "original", providerId: "custom" }, { id: "new-active", providerId: "custom" }];
+  expect(contextWindowSettingsTarget(connections, "a", store.getState().modelSettingsConnectionId, undefined)).toEqual({ connection: connections[0], model: "a" });
+  const pending = { model: modelSettingsPick("model", "b", store.getState().modelSettingsConnectionId, undefined, "new-active"), effort: modelSettingsPick("effort", "max", store.getState().modelSettingsConnectionId, undefined, "new-active") };
+  expect(modelSettingsWrites(pending, { model: "b", effort: "max" })).toEqual([{ id: "original", model: "b", modelOverrideModel: "b", reasoningEffort: "max" }]);
+  store.getState().applyHostMessage({ type: "model_changed", model: "b", reasoningEffort: "off" });
+  expect(store.getState().modelSettingsConnectionId).toBe("original");
 });

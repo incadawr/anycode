@@ -1,3 +1,4 @@
+import { buildHostEnv } from "../../main/host-env.js";
 /**
  * Unit tests for `submitStartDraft` (slice P7.12 §4.3): guards (no draft / no
  * workspace / empty prompt), the ok-path call ordering
@@ -722,4 +723,29 @@ describe("submitStartDraft — a deferred first fork (GitHub #6)", () => {
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toMatchObject({ type: "user_message", text: "hello deferred" });
   });
+});
+
+
+it("model selection does not turn a displayed saved effort into a draft choice", async () => {
+  const { deps, tabsStore, createTab, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+  tabsStore.getState().openDraft("/ws/a");
+  tabsStore.getState().setDraftPrompt("hello");
+  selectStartModelRow(undefined, "model-a", { tabsStore });
+  // Even a prior explicit choice belongs to the previous model.
+  tabsStore.getState().setDraftEngineEffort("max");
+  selectStartModelRow(undefined, "model-a", { tabsStore }, { connectionId: "active", modelId: "model-a", activeConnectionId: "active" });
+  expect(tabsStore.getState().draft?.engineEffort).toBe("max");
+  selectStartModelRow("other", "model-a", { tabsStore }, { connectionId: "active", modelId: "model-a", activeConnectionId: "active" });
+  expect(tabsStore.getState().draft?.engineEffort).toBeUndefined();
+  tabsStore.getState().setDraftEngineEffort("max");
+  selectStartModelRow(undefined, "model-b", { tabsStore }, { connectionId: "active", modelId: "model-a", activeConnectionId: "active" });
+  expect(tabsStore.getState().draft?.engineEffort).toBeUndefined();
+  const settings = cloneDefaults();
+  settings.provider.connections = [{ id: "active", providerId: "custom", model: "model-b", modelOverrides: { "model-a": { reasoningEffort: "max" }, "model-b": { reasoningEffort: "high" } } }];
+  settings.provider.activeConnectionId = "active";
+  const env = await buildHostEnv({ bootEnv: { ANYCODE_REASONING_EFFORT: "low" }, settings, getSecret: async () => undefined });
+  await submitStartDraft(deps);
+  expect(env.ANYCODE_REASONING_EFFORT).toBe("low");
+  expect(createTab).toHaveBeenCalled();
+  expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", "model-b", "build", undefined, undefined, undefined, false);
 });

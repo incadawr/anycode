@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Provider connections remember separate context windows and reasoning effort for each model; switching models restores their choices, and the unknown-window hint explains the available input budget and opens the matching settings field (GitHub #26)
+
 ## [0.0.50] — 2026-10-29
 
 ### Added

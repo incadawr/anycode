@@ -258,3 +258,13 @@ describe("buildChildModelSettingsResolver", () => {
     expect(resolve("openrouter/foreign-model", "high").reasoningEffort).toBeUndefined();
   });
 });
+
+
+it("uses a connection model-window resolver independently for each child", () => {
+  const resolve = buildChildModelSettingsResolver({
+    catalogEntry: undefined, envMaxOutputTokens: undefined, envContextWindow: undefined,
+    contextWindowFor: (model) => model === "a" ? 128000 : 64000,
+  });
+  expect(resolve("a", undefined).contextWindowTokens).toBe(128000);
+  expect(resolve("b", undefined).contextWindowTokens).toBe(64000);
+});

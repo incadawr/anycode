@@ -605,9 +605,9 @@ async function step3PickEffortHigh(ctx) {
   }
   assert(3, state.label === "GLM-5.2 · High", `pill did not settle on High: ${JSON.stringify(state.label)}`);
 
-  const disk = await pollSettingsDiskUntil(ctx, 3, (s) => activeSmokeConnection(s)?.reasoningEffort === "high");
+  const disk = await pollSettingsDiskUntil(ctx, 3, (s) => activeSmokeConnection(s)?.modelOverrides?.[activeSmokeConnection(s).model]?.reasoningEffort === "high");
   if (disk !== null) {
-    assert(3, activeSmokeConnection(disk).reasoningEffort === "high", "settings.json missing persisted high effort");
+    assert(3, activeSmokeConnection(disk).modelOverrides?.[activeSmokeConnection(disk).model]?.reasoningEffort === "high", "settings.json missing persisted high effort");
   }
 
   const filePath = await settledScreenshot(ctx, "step-3-pill-high");
@@ -709,7 +709,7 @@ async function step7SecondTabInherits(ctx) {
   const disk = await pollSettingsDiskUntil(
     ctx,
     7,
-    (s) => activeSmokeConnection(s)?.model === MODEL_A && activeSmokeConnection(s)?.reasoningEffort === "max",
+    (s) => activeSmokeConnection(s)?.model === MODEL_A && activeSmokeConnection(s)?.modelOverrides?.[MODEL_A]?.reasoningEffort === "max",
   );
 
 
