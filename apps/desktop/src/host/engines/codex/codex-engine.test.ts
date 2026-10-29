@@ -486,6 +486,22 @@ describe("CodexEngine — native session boot", () => {
     expect(server.calls.find((call) => call.method === "thread/resume")?.params).toEqual({ threadId: "persisted-thread", cwd: "/work" });
   });
 
+  it("captures the native context notification during resume", async () => {
+    const server = new FakeAppServer();
+    const request = server.request.bind(server);
+    server.request = <T>(method: string, params?: unknown, opts?: { timeoutMs?: number }) => {
+      if (method === "thread/read") {
+        server.stream.push({ method: "thread/tokenUsage/updated", params: { threadId: "other", tokenUsage: { last: { totalTokens: 1 }, modelContextWindow: 2 } } });
+        server.stream.push({ method: "thread/tokenUsage/updated", params: { threadId: "persisted-thread", tokenUsage: { last: { totalTokens: 13500 }, modelContextWindow: 353400 } } });
+        server.stream.push({ method: "thread/tokenUsage/updated", params: { threadId: "persisted-thread", tokenUsage: { last: { totalTokens: -1 }, modelContextWindow: 0 } } });
+      }
+      return request<T>(method, params, opts);
+    };
+    const connected = await resumeNativeCodexSession(server, "/work", "persisted-thread");
+    expect(connected.initialContextUsage).toEqual({ estimatedTokens: 13500, budgetTokens: 353400, source: "provider" });
+    await connected.engine.dispose("session-close");
+  });
+
   it("accepts a GCP account returned by Codex 0.165", async () => {
     const server = new FakeAppServer();
     server.account = { type: "gcp" };
