@@ -171,3 +171,68 @@ describe("core context boot", () => {
     }
   }, 60000);
 });
+
+
+describe("Codex context boot", () => {
+  it("restores the saved turn reading instead of the native fallback after restart", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "codex-context-boot-"));
+    const saved = join(dir, "saved.sqlite");
+    const binary = join(dir, "codex.mjs");
+    const fixture = resolve("apps/desktop/scripts/compact-fixtures/codex.mjs");
+    const source = readFileSync(fixture, "utf8")
+      .replace('case "thread/start":', `case "thread/resume": result = { thread: { id: "fixture-thread", turns: [] }, model: "gpt-fake-1" }; break;
+    case "thread/read":
+      send({ method: "thread/tokenUsage/updated", params: { threadId: "fixture-thread", tokenUsage: { last: { totalTokens: 5000 }, modelContextWindow: 200000 } } });
+      result = { thread: { id: "fixture-thread", turns: [] } }; break;
+    case "thread/start":`)
+      .replace('result = { turn: { id: "fixture-turn", status: "inProgress" } };', `result = { turn: { id: "fixture-turn", status: "inProgress" } };
+      setTimeout(() => {
+        send({ method: "thread/tokenUsage/updated", params: { threadId: "fixture-thread", turnId: "fixture-turn", tokenUsage: { last: { totalTokens: 12345 }, modelContextWindow: 200000 } } });
+        send({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "completed", items: [], error: null } } });
+      }, 50);`);
+    writeFileSync(binary, source);
+    chmodSync(binary, 0o755);
+    const argv = process.argv;
+    const fallback = { estimatedTokens: 5000, budgetTokens: 200000, source: "provider" };
+    const reading = { estimatedTokens: 12345, budgetTokens: 200000, source: "provider" };
+    try {
+      for (const restart of [false, true]) {
+        vi.resetModules();
+        const result = await bootHostInTempProfile(async ({ parent, profile, requestShutdown, waitForStopped }) => {
+          const port = new Port();
+          parent.emit("message", { ports: [port], data: {} });
+          await vi.waitFor(() => expect(port.listenerCount("message")).toBeGreaterThan(0), { timeout: 15000 });
+          port.send({ type: "ui_ready" });
+          await vi.waitFor(() => expect(port.messages.some(m => m.type === "host_ready")).toBe(true), { timeout: 15000 });
+          expect(port.messages.find(m => m.type === "host_ready").contextUsage).toEqual(restart ? reading : fallback);
+          if (!restart) {
+            port.send({ type: "user_message", requestId: "turn", text: "hello" });
+            await vi.waitFor(() => expect(port.messages.some(m => m.type === "agent_event" && m.event.type === "context_usage" && m.event.estimatedTokens === reading.estimatedTokens)).toBe(true), { timeout: 15000 });
+          }
+          requestShutdown();
+          expect(await waitForStopped(15000)).toBe(true);
+          const db = new SqlitePersistenceAdapter(profile.dbPath);
+          expect(JSON.parse((await db.loadContextUsage("codex-session"))!)).toMatchObject({ engine: "codex", model: "gpt-fake-1", ...reading });
+          await db.close();
+          copyFileSync(profile.dbPath, saved);
+        }, {
+          extraEnv: { ANYCODE_ENGINE: "codex", ANYCODE_CODEX_BIN: binary },
+          boot: async () => {
+            process.argv = [argv[0]!, argv[1]!, "--resume", "codex-session"];
+            process.chdir(dir);
+            const path = process.env.ANYCODE_DB_PATH!;
+            if (restart) copyFileSync(saved, path);
+            else {
+              const db = new SqlitePersistenceAdapter(path);
+              await db.createSession({ id: "codex-session", workspace: dir, model: "gpt-fake-1", mode: "build", engineId: "codex", externalSessionRef: "fixture-thread" });
+              await db.close();
+            }
+            await import("./index.js");
+          },
+        });
+        if (result.error) throw result.error;
+        expect(result.stopped).toBe(true);
+      }
+    } finally { process.argv = argv; rmSync(dir, { recursive: true, force: true }); }
+  }, 60000);
+});
