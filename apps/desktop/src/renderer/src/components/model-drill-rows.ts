@@ -120,17 +120,12 @@ export function buildSessionDrillRows(args: SessionDrillArgs): SessionDrillRows 
     modelCapabilitiesFor(currentConnection, args.currentModelId),
     modelOverrideFor(currentConnection, args.currentModelId)?.effortLevels,
   );
-  const effort = resolveStartModelEffort(
-    args.currentEffort,
-    modelOverrideFor(currentConnection, args.currentModelId)?.reasoningEffort ?? currentConnection?.reasoningEffort,
-    efforts,
-    startModelDefaultEffort(
-      currentConnection?.providerId,
-      args.currentModelId,
-      args.catalog,
-      modelCapabilitiesFor(currentConnection, args.currentModelId),
-    ),
-  );
+  // The host's effective effort is authoritative, even when it is outside the vocabulary.
+  const candidate = args.currentEffort ??
+    modelOverrideFor(currentConnection, args.currentModelId)?.reasoningEffort ??
+    currentConnection?.reasoningEffort ??
+    startModelDefaultEffort(currentConnection?.providerId, args.currentModelId, args.catalog, modelCapabilitiesFor(currentConnection, args.currentModelId));
+  const effort = candidate !== undefined && efforts?.includes(candidate) ? candidate : undefined;
 
   let rows: ModelDrillRow[];
   if (page.kind === "group") {
@@ -161,7 +156,7 @@ export function buildSessionDrillRows(args: SessionDrillArgs): SessionDrillRows 
         subtitle: group.subtitle,
         count: group.items.length,
       })),
-      ...(effort !== undefined ? [{ kind: "effort-open" as const, value: effort }] : []),
+      ...(efforts !== undefined ? [{ kind: "effort-open" as const, value: effort ?? "Default" }] : []),
     ];
   }
   return { rows, groups, popular, efforts, effort };
