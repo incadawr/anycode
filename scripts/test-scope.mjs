@@ -21,7 +21,8 @@ export function planScope(files, exists = () => true) {
     file.startsWith(renderer) && /\.(?:ts|tsx|css)$/.test(file) &&
     (file.startsWith(`${renderer}components/`) || /\.css$/.test(file)) &&
     !/(?:^|\/)(?:[^/]*config[^/]*|[^/]*manifest[^/]*|package\.json|tsconfig[^/]*|vite[^/]*|vitest[^/]*|electron-builder[^/]*|[^/]*\.(?:json|jsonl|ya?ml))$/i.test(file) &&
-    !/(?:^|[\/._-])(?:__)?(?:fixtures?|snapshots?|contracts?|protocols?)(?:__)?(?:[\/._-]|$)/i.test(file) && exists(file));
+    !/(?:^|[\/._-])(?:__)?(?:data|fixtures?|snapshots?|contracts?|protocols?|schemas?|locales?|i18n|generated)(?:__)?(?:[\/._-]|$)/i.test(file) &&
+    !/(?:^|\/)[^/]*(?:config|manifest)[^/]*(?:\/|$)/i.test(file) && exists(file));
   return eligible ? { mode: "renderer", always: [...always] } : { mode: "full", always: [] };
 }
 
@@ -35,18 +36,27 @@ function main() {
   try {
     root = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
     const changes = [];
+    const diffPaths = [];
     for (const args of [[base, "HEAD"], ["--cached"], []]) {
+      const paths = new Set();
       const fields = execFileSync("git", ["diff", "--name-status", "-z", ...args, "--"], { cwd: root, encoding: "utf8" }).split("\0");
       while (fields[0]) {
         const status = fields.shift();
         const path = fields.shift();
         changes.push({ status, path });
-        if (/^[RC]/.test(status)) changes.push({ status, path: fields.shift() });
+        paths.add(path);
+        if (/^[RC]/.test(status)) {
+          const destination = fields.shift();
+          changes.push({ status, path: destination });
+          paths.add(destination);
+        }
       }
+      diffPaths.push(paths);
     }
     const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard", "-z"], { cwd: root, encoding: "utf8" });
     files = [...new Set([...changes.map((change) => change.path), ...untracked.split("\0").filter(Boolean)])];
-    if (changes.some(({ status }) => /^[DRC]/.test(status))) files.push("");
+    if (changes.some(({ status }) => /^[DRC]/.test(status)) ||
+        [...diffPaths[1]].some((path) => diffPaths[2].has(path))) files.push("");
   } catch (error) {
     console.error("Cannot determine changed files:", error.message);
     return 2;
