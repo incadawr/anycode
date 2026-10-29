@@ -120,6 +120,15 @@ function countOccurrences(haystack: string, needle: string): number {
   }
 }
 
+// Poll the actual output, allowing for slow CLI startup and tool execution under load.
+async function waitForOutput(getText: () => string, needle: string, message: string, occurrences = 1): Promise<void> {
+  await vi.waitFor(() => {
+    if (countOccurrences(getText(), needle) < occurrences) {
+      throw new Error(message);
+    }
+  }, { timeout: 15_000, interval: 20 });
+}
+
 function makeEnv(dbPath: string): NodeJS.ProcessEnv {
   return {
     ANYCODE_API_KEY: "test-key",
@@ -226,11 +235,7 @@ describe("interactive runCli e2e — TerminalPermissionBroker y/n/a (design slic
 
     // Synchronize on the ACTUAL prompt text landing in output before answering
 
-    await vi.waitFor(() => {
-      if (!getText().includes("answer [y/n/a]:")) {
-        throw new Error("[permission] ask has not been shown yet");
-      }
-    });
+    await waitForOutput(getText, "answer [y/n/a]:", "[permission] ask has not been shown yet");
     expect(getText()).toContain(`[permission] Write (risk: medium, destructive) — {"file_path":"${filePath}","content":"hello y"}`);
     expect(getText()).toContain("a = always allow Write this session");
     // Not yet created: the ask is still pending an answer.
@@ -238,11 +243,7 @@ describe("interactive runCli e2e — TerminalPermissionBroker y/n/a (design slic
 
     input.write("y\n");
 
-    await vi.waitFor(() => {
-      if (!getText().includes("[loop_end: completed, turns=")) {
-        throw new Error("turn has not completed yet");
-      }
-    });
+    await waitForOutput(getText, "[loop_end: completed, turns=", "turn has not completed yet");
     input.write("/quit\n");
 
     const exitCode = await runPromise;
@@ -253,7 +254,7 @@ describe("interactive runCli e2e — TerminalPermissionBroker y/n/a (design slic
     expect(getText()).not.toContain("(denied)");
 
     await assertHistoryFullyAnswered(dbPath, workspace);
-  });
+  }, 75_000);
 
   it("n: 'n' denies — the denied outcome is rendered, the file is never created, the turn still completes", async () => {
     const { workspace, dbPath, settingsFilePath } = setupTempDirs();
@@ -290,19 +291,11 @@ describe("interactive runCli e2e — TerminalPermissionBroker y/n/a (design slic
 
     input.write("please write a file\n");
 
-    await vi.waitFor(() => {
-      if (!getText().includes("answer [y/n/a]:")) {
-        throw new Error("[permission] ask has not been shown yet");
-      }
-    });
+    await waitForOutput(getText, "answer [y/n/a]:", "[permission] ask has not been shown yet");
 
     input.write("n\n");
 
-    await vi.waitFor(() => {
-      if (!getText().includes("[loop_end: completed, turns=")) {
-        throw new Error("turn has not completed yet");
-      }
-    });
+    await waitForOutput(getText, "[loop_end: completed, turns=", "turn has not completed yet");
     input.write("/quit\n");
 
     const exitCode = await runPromise;
@@ -312,7 +305,7 @@ describe("interactive runCli e2e — TerminalPermissionBroker y/n/a (design slic
     expect(getText()).toContain("[tool result] Write (denied): denied by user");
 
     await assertHistoryFullyAnswered(dbPath, workspace);
-  });
+  }, 75_000);
 
   it("a: 'a' allows once AND adds a session rule — a second Write in a later turn runs with NO second prompt", async () => {
     const { workspace, dbPath, settingsFilePath } = setupTempDirs();
@@ -363,11 +356,7 @@ describe("interactive runCli e2e — TerminalPermissionBroker y/n/a (design slic
 
     input.write("please write file one\n");
 
-    await vi.waitFor(() => {
-      if (!getText().includes("answer [y/n/a]:")) {
-        throw new Error("[permission] ask has not been shown yet");
-      }
-    });
+    await waitForOutput(getText, "answer [y/n/a]:", "[permission] ask has not been shown yet");
     expect(countOccurrences(getText(), "answer [y/n/a]:")).toBe(1);
 
     input.write("a\n");
@@ -376,20 +365,12 @@ describe("interactive runCli e2e — TerminalPermissionBroker y/n/a (design slic
     // RuleAware engine's downgrade (design §0.1) is a property of the NEXT
     // dispatch, so the second Write must not be sent until turn 1 has fully
     // closed out (rl.prompt() -> the outer for-await requests the next line).
-    await vi.waitFor(() => {
-      if (countOccurrences(getText(), "[loop_end: completed, turns=") < 1) {
-        throw new Error("turn 1 has not completed yet");
-      }
-    });
+    await waitForOutput(getText, "[loop_end: completed, turns=", "turn 1 has not completed yet", 1);
     expect(existsSync(filePathOne)).toBe(true);
 
     input.write("please write file two\n");
 
-    await vi.waitFor(() => {
-      if (countOccurrences(getText(), "[loop_end: completed, turns=") < 2) {
-        throw new Error("turn 2 has not completed yet");
-      }
-    });
+    await waitForOutput(getText, "[loop_end: completed, turns=", "turn 2 has not completed yet", 2);
     input.write("/quit\n");
 
     const exitCode = await runPromise;
@@ -405,7 +386,7 @@ describe("interactive runCli e2e — TerminalPermissionBroker y/n/a (design slic
     expect(readFileSync(filePathTwo, "utf8")).toBe("second");
 
     await assertHistoryFullyAnswered(dbPath, workspace);
-  });
+  }, 75_000);
 });
 
 describe("transcript-v2 e2e — diffs/collapse/reasoning/status (design slice-4.2-cut.md §5.2 para.7-8)", () => {
@@ -449,18 +430,10 @@ describe("transcript-v2 e2e — diffs/collapse/reasoning/status (design slice-4.
 
     input.write("please fix the file\n");
 
-    await vi.waitFor(() => {
-      if (!getText().includes("answer [y/n/a]:")) {
-        throw new Error("[permission] ask has not been shown yet");
-      }
-    });
+    await waitForOutput(getText, "answer [y/n/a]:", "[permission] ask has not been shown yet");
     input.write("y\n");
 
-    await vi.waitFor(() => {
-      if (!getText().includes("[loop_end: completed, turns=")) {
-        throw new Error("turn has not completed yet");
-      }
-    });
+    await waitForOutput(getText, "[loop_end: completed, turns=", "turn has not completed yet");
     input.write("/quit\n");
 
     const exitCode = await runPromise;
@@ -482,7 +455,7 @@ describe("transcript-v2 e2e — diffs/collapse/reasoning/status (design slice-4.
     expect(text).not.toContain("\x1b[2K");
 
     await assertHistoryFullyAnswered(dbPath, workspace);
-  });
+  }, 75_000);
 
   it("collapses a long tool_result body into head + '(+K more lines)' + tail (design §3.2)", async () => {
     const { workspace, dbPath, settingsFilePath } = setupTempDirs();
@@ -544,11 +517,7 @@ describe("transcript-v2 e2e — diffs/collapse/reasoning/status (design slice-4.
     // Agent: readOnly:true/needsApproval:false -> allowed automatically (no ask).
     input.write("dump a long file via a subagent\n");
 
-    await vi.waitFor(() => {
-      if (!getText().includes("[loop_end: completed, turns=")) {
-        throw new Error("turn has not completed yet");
-      }
-    });
+    await waitForOutput(getText, "[loop_end: completed, turns=", "turn has not completed yet");
     input.write("/quit\n");
 
     const exitCode = await runPromise;
@@ -570,7 +539,7 @@ describe("transcript-v2 e2e — diffs/collapse/reasoning/status (design slice-4.
     expect(text).not.toContain("line 55");
 
     await assertHistoryFullyAnswered(dbPath, workspace);
-  });
+  }, 75_000);
 
   it("renders the model's reasoning stream as a dim [reasoning] block by default in interactive mode", async () => {
     const { workspace, dbPath, settingsFilePath } = setupTempDirs();
@@ -601,11 +570,7 @@ describe("transcript-v2 e2e — diffs/collapse/reasoning/status (design slice-4.
 
     input.write("hello\n");
 
-    await vi.waitFor(() => {
-      if (!getText().includes("[loop_end: completed, turns=")) {
-        throw new Error("turn has not completed yet");
-      }
-    });
+    await waitForOutput(getText, "[loop_end: completed, turns=", "turn has not completed yet");
     input.write("/quit\n");
 
     const exitCode = await runPromise;
@@ -614,7 +579,7 @@ describe("transcript-v2 e2e — diffs/collapse/reasoning/status (design slice-4.
     expect(getText()).toContain("thinking about it");
 
     await assertHistoryFullyAnswered(dbPath, workspace);
-  });
+  }, 75_000);
 
   it("--no-reasoning starts a session with the reasoning block suppressed", async () => {
     const { workspace, dbPath, settingsFilePath } = setupTempDirs();
@@ -645,11 +610,7 @@ describe("transcript-v2 e2e — diffs/collapse/reasoning/status (design slice-4.
 
     input.write("hello\n");
 
-    await vi.waitFor(() => {
-      if (!getText().includes("[loop_end: completed, turns=")) {
-        throw new Error("turn has not completed yet");
-      }
-    });
+    await waitForOutput(getText, "[loop_end: completed, turns=", "turn has not completed yet");
     input.write("/quit\n");
 
     const exitCode = await runPromise;
@@ -658,7 +619,7 @@ describe("transcript-v2 e2e — diffs/collapse/reasoning/status (design slice-4.
     expect(getText()).not.toContain("thinking about it");
 
     await assertHistoryFullyAnswered(dbPath, workspace);
-  });
+  }, 75_000);
 
   it("/reasoning toggles the reasoning block off at runtime, taking effect from the next turn onward", async () => {
     const { workspace, dbPath, settingsFilePath } = setupTempDirs();
@@ -687,30 +648,18 @@ describe("transcript-v2 e2e — diffs/collapse/reasoning/status (design slice-4.
     });
 
     input.write("hello\n");
-    await vi.waitFor(() => {
-      if (countOccurrences(getText(), "[loop_end: completed, turns=") < 1) {
-        throw new Error("turn 1 has not completed yet");
-      }
-    });
+    await waitForOutput(getText, "[loop_end: completed, turns=", "turn 1 has not completed yet", 1);
     expect(getText()).toContain("[reasoning]");
 
     input.write("/reasoning\n");
-    await vi.waitFor(() => {
-      if (!getText().includes("rendering is now off")) {
-        throw new Error("/reasoning has not been acknowledged yet");
-      }
-    });
+    await waitForOutput(getText, "rendering is now off", "/reasoning has not been acknowledged yet");
     // Everything from here on is turn 2's own output — slicing from this mark
     // avoids a false pass from turn 1's already-rendered [reasoning] header
     // still being present in a whole-string toContain check.
     const markAfterToggle = getText().length;
 
     input.write("hello again\n");
-    await vi.waitFor(() => {
-      if (countOccurrences(getText(), "[loop_end: completed, turns=") < 2) {
-        throw new Error("turn 2 has not completed yet");
-      }
-    });
+    await waitForOutput(getText, "[loop_end: completed, turns=", "turn 2 has not completed yet", 2);
     input.write("/quit\n");
 
     const exitCode = await runPromise;
@@ -718,7 +667,7 @@ describe("transcript-v2 e2e — diffs/collapse/reasoning/status (design slice-4.
     expect(getText().slice(markAfterToggle)).not.toContain("[reasoning]");
 
     await assertHistoryFullyAnswered(dbPath, workspace);
-  });
+  }, 75_000);
 
   it("statusLine:true shows an ERASE+'thinking' spinner during a stall and clears it cleanly before loop_end's own line", async () => {
     const { workspace, dbPath, settingsFilePath } = setupTempDirs();
@@ -752,22 +701,11 @@ describe("transcript-v2 e2e — diffs/collapse/reasoning/status (design slice-4.
     // on CLI_STATUS_INTERVAL_MS's real tick (design §3.3) — wait for the actual
     // ERASE+frame bytes to land, then release the stall (never a blind fixed
     // sleep; the real timer, not a fake one, is what's under test here).
-    await vi.waitFor(
-      () => {
-        if (!getText().includes("\x1b[2K")) {
-          throw new Error("status line has not painted yet");
-        }
-      },
-      { timeout: 2000 },
-    );
+    await waitForOutput(getText, "\x1b[2K", "status line has not painted yet");
     expect(getText()).toContain("thinking");
     gate.resolve();
 
-    await vi.waitFor(() => {
-      if (!getText().includes("[loop_end: completed, turns=")) {
-        throw new Error("turn has not completed yet");
-      }
-    });
+    await waitForOutput(getText, "[loop_end: completed, turns=", "turn has not completed yet");
 
 
     // BEFORE renderEvent writes the loop_end line, so nothing after that line
@@ -782,7 +720,7 @@ describe("transcript-v2 e2e — diffs/collapse/reasoning/status (design slice-4.
     expect(exitCode).toBe(0);
 
     await assertHistoryFullyAnswered(dbPath, workspace);
-  });
+  }, 75_000);
 });
 
 describe("plan-mode e2e (design slice-4.3-cut.md §5.2 para.7-9)", () => {
@@ -831,11 +769,7 @@ describe("plan-mode e2e (design slice-4.3-cut.md §5.2 para.7-9)", () => {
 
     input.write("bump the version and write the changelog\n");
 
-    await vi.waitFor(() => {
-      if (!getText().includes("answer [y/n]:")) {
-        throw new Error("[permission] ExitPlanMode ask has not been shown yet");
-      }
-    });
+    await waitForOutput(getText, "answer [y/n]:", "[permission] ExitPlanMode ask has not been shown yet");
     const afterFirstAsk = getText();
     expect(afterFirstAsk).toContain("[permission] ExitPlanMode — plan approval requested");
     expect(afterFirstAsk).toContain(planText);
@@ -853,11 +787,7 @@ describe("plan-mode e2e (design slice-4.3-cut.md §5.2 para.7-9)", () => {
 
     input.write("y\n");
 
-    await vi.waitFor(() => {
-      if (!getText().includes("[tool result] ExitPlanMode (success)")) {
-        throw new Error("ExitPlanMode's own outcome has not landed yet");
-      }
-    });
+    await waitForOutput(getText, "[tool result] ExitPlanMode (success)", "ExitPlanMode's own outcome has not landed yet");
     expect(getText()).toContain(
       'Plan approved by the user. Permission mode is now "build" — proceed with the implementation',
     );
@@ -867,11 +797,7 @@ describe("plan-mode e2e (design slice-4.3-cut.md §5.2 para.7-9)", () => {
     // ExitPlanMode tool_result — is now dispatched under build, so it gets its
     // OWN ask. A plan-deny would instead show no prompt at all and go straight
     // to a "(denied)" outcome (as proven by the reject-flow test below).
-    await vi.waitFor(() => {
-      if (!getText().includes("answer [y/n/a]:")) {
-        throw new Error("Write's own ask has not been shown yet");
-      }
-    });
+    await waitForOutput(getText, "answer [y/n/a]:", "Write's own ask has not been shown yet");
     expect(getText()).toContain(
       `[permission] Write (risk: medium, destructive) — {"file_path":"${filePath}","content":"release notes"}`,
     );
@@ -879,11 +805,7 @@ describe("plan-mode e2e (design slice-4.3-cut.md §5.2 para.7-9)", () => {
 
     input.write("y\n");
 
-    await vi.waitFor(() => {
-      if (!getText().includes("[loop_end: completed, turns=")) {
-        throw new Error("turn has not completed yet");
-      }
-    });
+    await waitForOutput(getText, "[loop_end: completed, turns=", "turn has not completed yet");
     input.write("/quit\n");
 
     const exitCode = await runPromise;
@@ -897,7 +819,7 @@ describe("plan-mode e2e (design slice-4.3-cut.md §5.2 para.7-9)", () => {
 
     // persisted session really did move to build, not just the in-memory config.
     expect(await readSessionMode(dbPath, workspace)).toBe("build");
-  });
+  }, 75_000);
 
   it("reject: 'n' denies ExitPlanMode with an instructive reason, mode stays plan, and the model's own next Write is denied by the ENGINE (no second ask) rather than reaching the broker", async () => {
     const { workspace, dbPath, settingsFilePath } = setupTempDirs();
@@ -941,19 +863,11 @@ describe("plan-mode e2e (design slice-4.3-cut.md §5.2 para.7-9)", () => {
 
     input.write("rename the export\n");
 
-    await vi.waitFor(() => {
-      if (!getText().includes("answer [y/n]:")) {
-        throw new Error("[permission] ExitPlanMode ask has not been shown yet");
-      }
-    });
+    await waitForOutput(getText, "answer [y/n]:", "[permission] ExitPlanMode ask has not been shown yet");
 
     input.write("n\n");
 
-    await vi.waitFor(() => {
-      if (!getText().includes("[loop_end: completed, turns=")) {
-        throw new Error("turn has not completed yet");
-      }
-    });
+    await waitForOutput(getText, "[loop_end: completed, turns=", "turn has not completed yet");
     input.write("/quit\n");
 
     const exitCode = await runPromise;
@@ -977,7 +891,7 @@ describe("plan-mode e2e (design slice-4.3-cut.md §5.2 para.7-9)", () => {
 
     await assertHistoryFullyAnswered(dbPath, workspace);
     expect(await readSessionMode(dbPath, workspace)).toBe("plan");
-  });
+  }, 75_000);
 
   it("non-interactive: ExitPlanMode's ask is denied instantly by the DenyPermissionBroker (fail-closed, no hang), and the model's own next Write is denied as a plan-deny too", async () => {
     const { workspace, dbPath, settingsFilePath } = setupTempDirs();
@@ -1083,26 +997,14 @@ describe("plan-mode reminder e2e (design slice-4.3-cut.md §5.2 para.10)", () =>
 
     input.write("please plan it\n");
 
-    await vi.waitFor(() => {
-      if (!getText().includes("answer [y/n]:")) {
-        throw new Error("[permission] ExitPlanMode ask has not been shown yet");
-      }
-    });
+    await waitForOutput(getText, "answer [y/n]:", "[permission] ExitPlanMode ask has not been shown yet");
     input.write("y\n");
 
-    await vi.waitFor(() => {
-      if (countOccurrences(getText(), "[loop_end: completed, turns=") < 1) {
-        throw new Error("turn 1 has not completed yet");
-      }
-    });
+    await waitForOutput(getText, "[loop_end: completed, turns=", "turn 1 has not completed yet", 1);
 
     input.write("go on\n");
 
-    await vi.waitFor(() => {
-      if (countOccurrences(getText(), "[loop_end: completed, turns=") < 2) {
-        throw new Error("turn 2 has not completed yet");
-      }
-    });
+    await waitForOutput(getText, "[loop_end: completed, turns=", "turn 2 has not completed yet", 2);
     input.write("/quit\n");
 
     const exitCode = await runPromise;
@@ -1130,7 +1032,7 @@ describe("plan-mode reminder e2e (design slice-4.3-cut.md §5.2 para.10)", () =>
     expect(turn2User?.content).not.toContain("<plan-mode-reminder>");
 
     await assertHistoryFullyAnswered(dbPath, workspace);
-  });
+  }, 75_000);
 
   it("a build-mode turn's request never carries the reminder tag (byte-cleanliness outside plan)", async () => {
     const { workspace, dbPath, settingsFilePath } = setupTempDirs();
@@ -1159,11 +1061,7 @@ describe("plan-mode reminder e2e (design slice-4.3-cut.md §5.2 para.10)", () =>
 
     input.write("hello\n");
 
-    await vi.waitFor(() => {
-      if (!getText().includes("[loop_end: completed, turns=")) {
-        throw new Error("turn has not completed yet");
-      }
-    });
+    await waitForOutput(getText, "[loop_end: completed, turns=", "turn has not completed yet");
     input.write("/quit\n");
 
     const exitCode = await runPromise;
@@ -1175,7 +1073,7 @@ describe("plan-mode reminder e2e (design slice-4.3-cut.md §5.2 para.10)", () =>
     expect(lastUser?.content).not.toContain("<plan-mode-reminder>");
 
     await assertHistoryFullyAnswered(dbPath, workspace);
-  });
+  }, 75_000);
 });
 
 describe("safe-command narrowing e2e (design slice-5.1-cut.md §6, R4)", () => {
@@ -1215,11 +1113,7 @@ describe("safe-command narrowing e2e (design slice-5.1-cut.md §6, R4)", () => {
 
     input.write("check the repo status\n");
 
-    await vi.waitFor(() => {
-      if (!getText().includes("[loop_end: completed, turns=")) {
-        throw new Error("turn has not completed yet");
-      }
-    });
+    await waitForOutput(getText, "[loop_end: completed, turns=", "turn has not completed yet");
     input.write("/quit\n");
 
     const exitCode = await runPromise;
@@ -1236,7 +1130,7 @@ describe("safe-command narrowing e2e (design slice-5.1-cut.md §6, R4)", () => {
     expect(text).not.toContain("answer [y/n");
 
     await assertHistoryFullyAnswered(dbPath, workspace);
-  });
+  }, 75_000);
 
   it("non-interactive: an unsafe Bash (rm) is NOT auto-approved — it asks and is denied by the DenyPermissionBroker (fail-closed, byte-identical to today)", async () => {
     const { workspace, dbPath, settingsFilePath } = setupTempDirs();
