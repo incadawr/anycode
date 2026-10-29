@@ -11,6 +11,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Explore agents can read Git history and status using a read-only Git tool (GitHub #22).
 
+### Changed
+
+- Settings shows compact role routes with profile and project controls (GitHub #23).
+
 ### Fixed
 
 - Native session children use their agent profile’s model and instructions by default (GitHub #5).

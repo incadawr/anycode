@@ -3418,7 +3418,7 @@ void app.whenReady().then(async () => {
     homedir,
     now: () => Date.now(),
   });
-  registerScopeWorkspacesIpc({ registry: scopeRegistry });
+  registerScopeWorkspacesIpc({ registry: scopeRegistry, resolve: (ref) => scopeRegistry.resolve(ref, (tabId) => manager?.getTab(tabId)?.projectRoot ?? manager?.getTab(tabId)?.workspace) });
 
   registerMcpConfigIpc({
     home: () => (selfCheckProfile ?? resolveMcpImportHome(process.env, app.isPackaged)) ?? homedir(),
