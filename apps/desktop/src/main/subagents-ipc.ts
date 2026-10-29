@@ -245,13 +245,13 @@ function resolveWorkspace(deps: SubagentsIpcDeps, tabId: string | undefined): st
   return deps.workspaceForTab(tabId);
 }
 
-// ── tools badge (design §1.5: general-purpose = "All tools", explore = "6 tools") ──
+// ── tools badge ──
 
-/** The full non-spawn tool count a profile can request — general-purpose's own list IS this baseline. */
-const FULL_TOOL_COUNT = effectiveProfileTools(PERSONAS["general-purpose"].tools).length;
+/** The general-purpose baseline defines the tools represented by the All tools badge. */
+const FULL_TOOLS = effectiveProfileTools(PERSONAS["general-purpose"].tools);
 
-function toolsBadgeFor(toolCount: number): string {
-  return toolCount >= FULL_TOOL_COUNT ? "All tools" : `${toolCount} tools`;
+function toolsBadgeFor(tools: readonly string[]): string {
+  return FULL_TOOLS.every((name) => tools.includes(name)) ? "All tools" : `${tools.length} tools`;
 }
 
 // ── row classification (list + every handler that needs to know a row's scope) ──
@@ -279,11 +279,12 @@ function classifySourceKind(
 }
 
 function toBuiltinRowView(persona: PersonaDefinition): SubagentRowView {
-  const toolCount = effectiveProfileTools(persona.tools).length;
+  const tools = effectiveProfileTools(persona.tools);
+  const toolCount = tools.length;
   return {
     name: persona.name,
     description: persona.description,
-    toolsBadge: toolsBadgeFor(toolCount),
+    toolsBadge: toolsBadgeFor(tools),
     toolCount,
     source: "builtin",
     sourceKind: "builtin",
@@ -293,11 +294,12 @@ function toBuiltinRowView(persona: PersonaDefinition): SubagentRowView {
 
 function toRowView(row: AgentProfileAdminRow, hasWorkspace: boolean): SubagentRowView {
   const { sourceKind, pluginName } = classifySourceKind(row, hasWorkspace);
-  const toolCount = effectiveProfileTools(row.tools).length;
+  const tools = effectiveProfileTools(row.tools);
+  const toolCount = tools.length;
   const view: SubagentRowView = {
     name: row.name,
     description: row.description,
-    toolsBadge: toolsBadgeFor(toolCount),
+    toolsBadge: toolsBadgeFor(tools),
     toolCount,
     source: row.source,
     sourceKind,
