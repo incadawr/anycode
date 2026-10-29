@@ -69,12 +69,13 @@ describe("ToolRegistry", () => {
 });
 
 describe("createDefaultToolRegistry", () => {
-  it("registers exactly the twelve built-in tools by default (ArchMap is opt-in, Taskana 4162)", () => {
+  it("registers exactly the thirteen built-in tools by default", () => {
     const registry = createDefaultToolRegistry();
     expect(registry.list().sort()).toEqual([
       "Agent",
       "Bash",
       "Edit",
+      "Git",
       "Glob",
       "Grep",
       "Read",
@@ -88,13 +89,14 @@ describe("createDefaultToolRegistry", () => {
     expect(registry.has("ArchMap")).toBe(false);
   });
 
-  it("registers ArchMap as the thirteenth built-in when opts.archMap is true", () => {
+  it("registers ArchMap as the fourteenth built-in when opts.archMap is true", () => {
     const registry = createDefaultToolRegistry({ archMap: true });
     expect(registry.list().sort()).toEqual([
       "Agent",
       "ArchMap",
       "Bash",
       "Edit",
+      "Git",
       "Glob",
       "Grep",
       "Read",
@@ -115,11 +117,12 @@ describe("createDefaultToolRegistry", () => {
   // is rendered by the real renderToolDisciplineSection over exactly that
   // snapshot, so any drift in either (a reordered registration, a renamed
   // tool, a thirteenth default) turns this red.
-  it("flag off: default tool names + system-prompt tool section are byte-identical to the e89e3d76 baseline", () => {
+  it("flag off: default tool names match the system-prompt tool section", () => {
     const registry = createDefaultToolRegistry();
     const toolNames = registry.list();
     expect(toolNames).toEqual([
       "Read",
+      "Git",
       "Write",
       "Edit",
       "Bash",
@@ -138,12 +141,12 @@ describe("createDefaultToolRegistry", () => {
         "Do not call a tool absent from it or assume a capability exists because another product offers one; your only tools are those named to you, `mcp__*` included.",
         "If none of your tools cover a need, use Bash where that fits; otherwise tell the user plainly you cannot do it — never invent a tool name to paper over the gap.",
         "These are the tools available to you as this session begins:",
-        "Agent, Bash, Edit, Glob, Grep, Read, Skill, TodoRead, TodoWrite, WebFetch, Workflow, Write",
+        "Agent, Bash, Edit, Git, Glob, Grep, Read, Skill, TodoRead, TodoWrite, WebFetch, Workflow, Write",
       ].join("\n"),
     );
     // And the flag-on registry differs from the baseline ONLY by ArchMap.
     const flagOn = createDefaultToolRegistry({ archMap: true }).list();
-    expect(flagOn).toEqual([...toolNames.slice(0, 12), "ArchMap"]);
+    expect(flagOn).toEqual([...toolNames, "ArchMap"]);
   });
 
   it("without options WebSearch is absent (byte-compat pinned: no backend, no tool)", () => {
@@ -167,6 +170,7 @@ describe("createDefaultToolRegistry", () => {
     // after WebFetch — registration order of the other names is undisturbed.
     expect(registry.list()).toEqual([
       "Read",
+      "Git",
       "Write",
       "Edit",
       "Bash",

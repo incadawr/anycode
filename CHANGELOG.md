@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Explore agents can read Git history and status using a read-only Git tool (GitHub #22)
+
 ### Added
 
 - Claude and Codex sessions can change reasoning effort while a turn is running; the choice applies from the next turn (GitHub #25).

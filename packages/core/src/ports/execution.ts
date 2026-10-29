@@ -50,8 +50,8 @@ export interface BinaryExecRequest {
   args: string[];
   /** Defaults to the adapter's own process.cwd() when omitted. */
   cwd?: string;
-  /** Extra environment variables merged over the inherited environment (mirror of ExecRequest.env). */
-  env?: Record<string, string>;
+  /** Environment overlay; undefined explicitly unsets an inherited variable. */
+  env?: Record<string, string | undefined>;
   /** Defaults to DEFAULT_TOOL_TIMEOUT_MS when omitted. */
   timeoutMs?: number;
   /** Per-stream capture cap; overflow sets the corresponding *Truncated flag. */

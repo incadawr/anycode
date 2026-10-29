@@ -69,6 +69,7 @@ describe("personas", () => {
 
   it("explore is a strict read-only subset with no Bash (design R7)", () => {
     expect([...PERSONAS.explore.tools].sort()).toEqual([
+      "Git",
       "Glob",
       "Grep",
       "Read",

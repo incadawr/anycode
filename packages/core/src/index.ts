@@ -12,6 +12,7 @@ export {
   NodeExecutionAdapter,
   NodeFileSystemAdapter,
   NodeGitAdapter,
+  NodeGitReadAdapter,
   NodeHttpAdapter,
   NodeMcpTransportFactory,
   SqlitePersistenceAdapter,

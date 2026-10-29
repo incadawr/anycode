@@ -9,8 +9,10 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { NodeGitReadAdapter } from "../adapters/node/node-git-read.js";
+import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { AgentLoop, type AgentLoopConfig } from "../loop/agent-loop.js";
@@ -488,7 +490,7 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     const child = buildChildConfig(parent, getPersona("explore"), { ...REQ, agentType: "explore" });
 
     const declared = toToolDeclarations(child.registry).map((d) => d.name).sort();
-    expect(declared).toEqual(["Glob", "Grep", "Read", "TodoRead", "TodoWrite", "WebFetch"]);
+    expect(declared).toEqual(["Git", "Glob", "Grep", "Read", "TodoRead", "TodoWrite", "WebFetch"]);
     expect(declared).not.toContain("Bash");
     expect(declared).not.toContain("Agent");
     for (const name of declared) {
@@ -5713,4 +5715,65 @@ describe("inline child ask classification (Taskana 4730)", () => {
     expect(seen[0]!.userContext).toEqual([]);
     expect(brokerSpy).toHaveBeenCalledOnce();
   });
+});
+
+
+describe("explore Git history", () => {
+  for (const mode of ["build", "plan"] as const) {
+    it(`reads a historical file and branch commits in ${mode} without asking`, async () => {
+      const dir = await mkdtemp(join(tmpdir(), "explore-git-"));
+      const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" } });
+      try {
+        git("init", "-q", "-b", "develop"); git("config", "user.name", "Test"); git("config", "user.email", "test@example.com");
+        await writeFile(join(dir, "doc.txt"), "old history\n"); git("add", "."); git("commit", "-qm", "initial");
+        git("update-ref", "refs/remotes/origin/develop", "HEAD"); git("checkout", "-qb", "feature");
+        await writeFile(join(dir, "doc.txt"), "new history\n"); git("commit", "-qam", "feature commit");
+        const before = [git("status", "--porcelain"), git("show-ref"), git("config", "--local", "--list"), git("ls-files", "--stage")];
+        const asks: string[] = [];
+        const broker: PermissionBroker = { requestPermission: async req => { asks.push(req.toolName); return { behavior: "deny", reason: "unexpected" }; } };
+        let step = 0; let observed = "";
+        const model = new ScriptedModelPort(req => {
+          if (step++ === 0) return toolStep("g1", "Git", { operation: "show", revision: "origin/develop", path: "doc.txt" });
+          if (step === 2) { observed += JSON.stringify(req.messages); return toolStep("g2", "Git", { operation: "log", revision: "develop..HEAD", format: "oneline" }); }
+          observed += JSON.stringify(req.messages); return textStep("finished");
+        });
+        const exec = new NodeExecutionAdapter();
+        const parent = makeParent({ cwd: dir, mode, modelPort: model, permissionBroker: broker, ports: { ...makePorts(exec), gitRead: new NodeGitReadAdapter(exec) } });
+        const child = buildChildConfig(parent, getPersona("explore"), { ...REQ, agentType: "explore" });
+        const declarations = toToolDeclarations(child.registry).map(d => d.name);
+        expect(declarations).toContain("Git"); expect(declarations).not.toContain("Bash");
+        const events = await collect(new AgentLoop(child).runTurn("Read history"));
+        expect(observed).toContain("old history"); expect(observed).toContain("feature commit");
+        expect(events.filter(e => e.type === "tool_result" && e.outcome.toolName === "Git")).toHaveLength(2);
+        expect(events.filter(e => (e.type as string) === "permission_request")).toHaveLength(0);
+        step = 0; observed = "";
+        const delegated = await createSubagentRunner(parent).run({ ...REQ, agentType: "explore" }, {});
+        expect(delegated.status).toBe("completed"); expect(observed).toContain("old history"); expect(observed).toContain("feature commit");
+        expect(asks).toEqual([]);
+        expect([git("status", "--porcelain"), git("show-ref"), git("config", "--local", "--list"), git("ls-files", "--stage")]).toEqual(before);
+      } finally { await rm(dir, { recursive: true, force: true }); }
+    });
+  }
+});
+
+
+it("preserves the Git truncation notice through dispatcher formatting", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "git-output-"));
+  try {
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" } });
+    git("init", "-q"); git("config", "user.name", "Test"); git("config", "user.email", "test@example.com");
+    await writeFile(join(dir, "large.txt"), "界".repeat(40000)); git("add", "."); git("commit", "-qm", "large");
+    let modelText = "";
+    const model = new ScriptedModelPort(req => lastRole(req) === "user"
+      ? toolStep("big", "Git", { operation: "show", revision: "HEAD", path: "large.txt" })
+      : (modelText = JSON.stringify(req.messages), textStep("done")));
+    const exec = new NodeExecutionAdapter();
+    const parent = makeParent({ cwd: dir, modelPort: model, ports: { ...makePorts(exec), gitRead: new NodeGitReadAdapter(exec) } });
+    const child = buildChildConfig(parent, getPersona("explore"), { ...REQ, agentType: "explore" });
+    const events = await collect(new AgentLoop(child).runTurn("Read large file"));
+    const result = events.find(e => e.type === "tool_result" && e.outcome.toolName === "Git");
+    expect(result?.type === "tool_result" && result.outcome.modelText).toContain("Output truncated");
+    expect(modelText).toContain("Output truncated");
+    expect(result?.type === "tool_result" && Buffer.byteLength(result.outcome.modelText)).toBeLessThan(100000);
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });

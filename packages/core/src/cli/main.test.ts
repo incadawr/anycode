@@ -5389,3 +5389,8 @@ describe("--tui flag (Taskana 4082)", () => {
     expect(withTui.text).toBe(plain.text);
   });
 });
+
+it("wires Git reading into the CLI core ports", () => {
+  const source = readFileSync(new URL("./main.ts", import.meta.url), "utf8");
+  expect(source).toContain("gitRead: new NodeGitReadAdapter(exec)");
+});

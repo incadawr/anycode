@@ -1,6 +1,7 @@
 export { ToolRegistry, createDefaultToolRegistry } from "./registry.js";
 export type { CreateDefaultToolRegistryOptions } from "./registry.js";
 export { toToolDeclarations } from "./to-model-tools.js";
+export { gitTool } from "./git.js";
 export { readTool } from "./read.js";
 export { writeTool } from "./write.js";
 export { editTool } from "./edit.js";
