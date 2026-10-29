@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, symlinkSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -49,7 +49,7 @@ describe("NodeGitReadAdapter", () => {
     const sentinel = join(dir, "sentinel");
     const cmd = `touch ${sentinel}`;
     git("config", "core.pager", cmd); git("config", "core.fsmonitor", cmd);
-    git("config", "diff.external", cmd); git("config", "diff.evil.textconv", cmd); git("config", "alias.show", `!${cmd}`); git("config", "format.pretty", "%G?"); git("config", "log.showSignature", "true"); git("config", "gpg.program", cmd); git("config", "filter.evil.clean", cmd);
+    git("config", "diff.external", cmd); git("config", "diff.evil.textconv", cmd); git("config", "format.pretty", "%G?"); git("config", "log.showSignature", "true"); git("config", "gpg.program", cmd); git("config", "filter.evil.clean", cmd);
     git("config", "filter.evil.process", cmd); git("config", "filter.evil.required", "true");
     writeFileSync(join(dir, ".gitattributes"), "*.txt filter=evil diff=evil\n");
     writeFileSync(join(dir, "docs", "a b.txt"), "working\n");
@@ -83,10 +83,20 @@ describe("NodeGitReadAdapter", () => {
     const sentinel = join(dir, "network-helper");
     const blob = git("rev-parse", "HEAD:docs/a b.txt").trim();
     git("config", "remote.origin.url", `ext::touch ${sentinel}`);
+    git("config", "protocol.ext.allow", "always");
     git("config", "remote.origin.promisor", "true");
     git("config", "remote.origin.partialclonefilter", "blob:none");
     rmSync(join(dir, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
-    const result = await read({ operation: "show", revision: "HEAD", path: "docs/a b.txt" });
+    // Establish that the repository really invokes its configured helper without the guard.
+    spawnSync("git", ["-c", "protocol.allow=never", "show", "HEAD:docs/a b.txt"], {
+      cwd: dir, env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_NO_LAZY_FETCH: "0", GIT_ALLOW_PROTOCOL: undefined },
+    });
+    expect(existsSync(sentinel)).toBe(true);
+    rmSync(sentinel);
+    // Simulate older Git, which ignores GIT_NO_LAZY_FETCH.
+    const execution = new NodeExecutionAdapter();
+    const oldGit = new NodeGitReadAdapter({ run: execution.run.bind(execution), runBinary: request => execution.runBinary({ ...request, env: { ...request.env, GIT_NO_LAZY_FETCH: undefined } }) });
+    const result = await oldGit.read({ operation: "show", revision: "HEAD", path: "docs/a b.txt" }, dir, signal());
     expect(result.exitCode).not.toBe(0); expect(existsSync(sentinel)).toBe(false);
   });
   it("reports binary historical blobs", async () => {
@@ -137,6 +147,44 @@ describe("NodeGitReadAdapter", () => {
     git("commit", "--allow-empty", "-qm", "empty branch commit");
     const result = await read({ operation: "log", revision: "develop..HEAD", format: "oneline" });
     expect(result.stdout).toContain("empty branch commit");
+  });
+
+  it("scopes commit patches and stats without hiding empty commits", async () => {
+    mkdirSync(join(dir, "sibling"));
+    writeFileSync(join(dir, "sibling", "secret.txt"), "sibling secret\n");
+    writeFileSync(join(dir, "docs", "a b.txt"), "workspace change\n");
+    git("add", "."); git("commit", "-qm", "both directories");
+    git("commit", "--allow-empty", "-qm", "empty commit");
+    const cwd = join(dir, "docs");
+    const show = await reader.read({ operation: "show", revision: "HEAD~1" }, cwd, signal());
+    const showStat = await reader.read({ operation: "show", revision: "HEAD~1", format: "stat" }, cwd, signal());
+    const log = await reader.read({ operation: "log", format: "stat" }, cwd, signal());
+    expect(show.stdout).toContain("workspace change");
+    for (const output of [show.stdout, showStat.stdout, log.stdout]) {
+      expect(output).toContain("a b.txt");
+      expect(output).not.toContain("sibling");
+      expect(output).not.toContain("secret.txt");
+    }
+    expect(log.stdout).toContain("empty commit");
+  });
+
+  it("passes pager safeguards and only built-in commands to Git", async () => {
+    const execution = new NodeExecutionAdapter();
+    const calls: Array<{ args: string[]; env?: Record<string, string | undefined> }> = [];
+    const observing = new NodeGitReadAdapter({ run: execution.run.bind(execution), runBinary: request => {
+      calls.push(request);
+      return execution.runBinary(request);
+    } });
+    const result = await observing.read({ operation: "show", revision: "HEAD" }, dir, signal());
+    expect(result.exitCode).toBe(0);
+    for (const call of calls) {
+      expect(call.args).toContain("--no-pager");
+      expect(call.args).toContain("core.pager=cat");
+      expect(call.env?.GIT_PAGER).toBe("cat");
+      expect(call.env?.PAGER).toBe("cat");
+    }
+    const finalArgs = calls.at(-1)!.args;
+    expect(finalArgs[finalArgs.indexOf("-C") + 2]).toBe("show");
   });
 
 });
