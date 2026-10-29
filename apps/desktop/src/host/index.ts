@@ -3547,9 +3547,11 @@ async function boot(): Promise<void> {
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
     ));
     const bootSelectedEffort = connectionModelSettings.effortFor(envConfig.model);
-    const bootCandidate = bootSelectedEffort ?? resolveReasoningEffort(envConfig.model, catalogEntry, undefined, liveCapsFor(envConfig.model)) ?? "off";
+    const priorEffort = process.env.ANYCODE_SWITCH_PRIOR_EFFORT;
+    const switchFallback = (["off", "low", "medium", "high", "xhigh", "max"] as const).find((tier) => tier === priorEffort);
+    const bootCandidate = bootSelectedEffort ?? resolveReasoningEffort(envConfig.model, catalogEntry, undefined, liveCapsFor(envConfig.model)) ?? switchFallback ?? "off";
     const normalizedBootEffort = connectionModelSettings.normalize(envConfig.model, bootCandidate);
-    const bootAdjustment = bootSelectedEffort !== undefined && normalizedBootEffort !== bootCandidate
+    const bootAdjustment = (bootSelectedEffort !== undefined || switchFallback !== undefined) && normalizedBootEffort !== bootCandidate
       ? { from: bootCandidate, to: normalizedBootEffort } : undefined;
     const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, normalizedBootEffort, liveCapsFor(envConfig.model));
     // Preserve explicit selections even when the current model suppresses them.

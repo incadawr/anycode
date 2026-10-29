@@ -109,7 +109,7 @@ it("pins an unpinned legacy host's live model settings to the connection that su
 
 
 it.each([
-  { model: "glm-5.3-flash", saved: undefined, expected: "low", adjustment: undefined },
+  { model: "glm-5.3-flash", saved: undefined, expected: "high", adjustment: undefined },
   { model: "glm-5.3", saved: "off", expected: "low", adjustment: { from: "off", to: "low" } },
 ])("resolves destination effort on connection boot: $model, saved $saved", async ({ model, saved, expected, adjustment }) => {
   const result = await bootHostInTempProfile(async ({ parent }) => {
@@ -123,7 +123,7 @@ it.each([
     expect(ready.availableEffortLevels).toContain(expected);
     expect(ready.effortAdjustment).toEqual(adjustment);
   }, {
-    extraEnv: { ANYCODE_MODEL: model, ANYCODE_BASE_URL: "https://api.z.ai/api/anthropic", ANYCODE_API_KEY: "test", ANYCODE_MODEL_SETTINGS_CONNECTION_ID: "destination" },
+    extraEnv: { ANYCODE_MODEL: model, ANYCODE_BASE_URL: "https://api.z.ai/api/anthropic", ANYCODE_API_KEY: "test", ANYCODE_MODEL_SETTINGS_CONNECTION_ID: "destination", ANYCODE_SWITCH_PRIOR_EFFORT: "high" },
     boot: async () => {
       vi.resetModules();
       writeFileSync(process.env.ANYCODE_SETTINGS_PATH!, JSON.stringify({
@@ -135,4 +135,31 @@ it.each([
   });
   if (result.error !== null) throw result.error;
   expect(result.stopped).toBe(true);
+}, 45000);
+
+it("carries a selected high tier across a connection switch to Flash", async () => {
+  let priorEffort: string | undefined;
+  const source = await bootHostInTempProfile(async ({ parent }) => {
+    const port = new FakePort();
+    parent.emit("message", { ports: [port], data: {} });
+    await vi.waitFor(() => expect(port.listenerCount("message")).toBeGreaterThan(0), { timeout: 15000 });
+    port.send({ type: "ui_ready" });
+    await vi.waitFor(() => expect(port.messages.some((m) => m.type === "host_ready")).toBe(true));
+    port.send({ type: "set_reasoning_effort", effort: "high" });
+    await vi.waitFor(() => expect(port.messages.some((m) => m.type === "reasoning_effort_changed" && m.effort === "high")).toBe(true));
+    priorEffort = port.messages.filter((m) => m.type === "reasoning_effort_changed").at(-1).effort;
+  }, { extraEnv: { ANYCODE_MODEL: "glm-5.2", ANYCODE_BASE_URL: "https://api.z.ai/api/anthropic", ANYCODE_API_KEY: "test" }, boot: async () => { vi.resetModules(); await import("./index.js"); } });
+  if (source.error !== null) throw source.error;
+  expect(priorEffort).toBe("high");
+  if (priorEffort === undefined) throw new Error("source effort was not acknowledged");
+  const destination = await bootHostInTempProfile(async ({ parent }) => {
+    const port = new FakePort();
+    parent.emit("message", { ports: [port], data: {} });
+    await vi.waitFor(() => expect(port.listenerCount("message")).toBeGreaterThan(0), { timeout: 15000 });
+    port.send({ type: "ui_ready" });
+    await vi.waitFor(() => expect(port.messages.some((m) => m.type === "host_ready")).toBe(true));
+    expect(port.messages.find((m) => m.type === "host_ready")).toMatchObject({ model: "glm-5.3-flash", reasoningEffort: "high" });
+  }, { extraEnv: { ANYCODE_MODEL: "glm-5.3-flash", ANYCODE_BASE_URL: "https://api.z.ai/api/anthropic", ANYCODE_API_KEY: "test", ANYCODE_SWITCH_PRIOR_EFFORT: priorEffort }, boot: async () => { vi.resetModules(); await import("./index.js"); } });
+  if (destination.error !== null) throw destination.error;
+  expect(destination.stopped).toBe(true);
 }, 45000);
