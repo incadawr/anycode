@@ -579,7 +579,71 @@ describe("Discard and navigation regressions", () => {
 });
 
 describe("Writes across mounts", () => {
-  it("preserves a pending cap when a remounted pane queues a role edit", async () => {
+  it("keeps the first project save effective before allowing another edit", async () => {
+    const initial = cloneDefaults();
+    initial.roleProfiles = { profiles: [], activeId: "missing", projects: [] };
+    const bridge = installBridge(initial);
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const original = bridge.set.getMockImplementation()!;
+    bridge.set.mockImplementationOnce(async (patch) => { await waiting; return original(patch); });
+    root = createRoot(container);
+    const pane = () => createElement<RolesPaneProps>(RolesPane, { projectRoot: "/project" });
+    await act(async () => root?.render(pane()));
+    await act(async () => type(container.querySelector<HTMLInputElement>('[aria-label="Max parallel children"]')!, "5"));
+    await click(buttonByText("Save roles"));
+    await act(async () => root?.render(createElement("div")));
+    await act(async () => root?.render(pane()));
+    expect(buttonByText("Save roles").disabled).toBe(true);
+    expect(container.querySelector<HTMLFieldSetElement>(".roles-editor")!.disabled).toBe(true);
+    await act(async () => { release(); await waiting; });
+    expect(container.querySelector<HTMLInputElement>('[aria-label="Max parallel children"]')!.value).toBe("5");
+    const effort = container.querySelector<HTMLSelectElement>('[aria-label="executor primary effort"]')!;
+    await act(async () => { effort.value = "high"; effort.dispatchEvent(new Event("change", { bubbles: true })); });
+    await click(buttonByText("Save roles"));
+    const registry = bridge.current().roleProfiles!;
+    expect(registry.profiles).toHaveLength(1);
+    expect(registry.projects[0]?.profileId).toBe(registry.profiles[0]?.id);
+    expect(registry.profiles[0]?.roles.maxParallelChildren).toBe(5);
+    expect(registry.profiles[0]?.roles.executor?.primary.effort).toBe("high");
+  });
+
+  it("clears a pending custom model when the route changes after remount", async () => {
+    const initial = settingsWithProfile("Team");
+    initial.roleProfiles!.profiles[0]!.roles.executor = { primary: { engine: "claude" } };
+    const bridge = installBridge(initial);
+    useTabsStore.setState({ availableEngines: ["claude", "codex"] });
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const original = bridge.set.getMockImplementation()!;
+    bridge.set.mockImplementationOnce(async (patch) => { await waiting; return original(patch); });
+    await mount();
+    const model = container.querySelector<HTMLSelectElement>('[aria-label="executor primary model"]')!;
+    await act(async () => { model.value = "custom"; model.dispatchEvent(new Event("change", { bubbles: true })); });
+    await act(async () => type(container.querySelector<HTMLInputElement>('[aria-label="executor primary custom model"]')!, "old-model"));
+    await click(buttonByText("Save roles"));
+    await act(async () => root?.render(createElement("div")));
+    await act(async () => root?.render(createElement(RolesPane)));
+    expect(buttonByText("Save roles").disabled).toBe(true);
+    await act(async () => { release(); await waiting; });
+    const route = container.querySelector<HTMLSelectElement>('[aria-label="executor primary route"]')!;
+    await act(async () => { route.value = "engine:codex"; route.dispatchEvent(new Event("change", { bubbles: true })); });
+    await click(buttonByText("Save roles"));
+    expect(bridge.current().roleProfiles?.profiles[0]?.roles.executor?.primary).toEqual({ engine: "codex" });
+  });
+
+  it("keeps a clean implicit draft when readiness changes", async () => {
+    const initial = cloneDefaults();
+    initial.roleProfiles = { profiles: [], activeId: "missing", projects: [] };
+    installBridge(initial);
+    await mount();
+    const route = () => container.querySelector<HTMLSelectElement>('[aria-label="executor primary route"]')!;
+    expect(route().value).toBe("engine:claude");
+    await act(async () => { useTabsStore.setState({ availableEngines: ["claude", "codex"] }); });
+    expect(route().value).toBe("engine:claude");
+  });
+
+  it("preserves a pending cap when a remounted pane waits before a role edit", async () => {
     const initial = settingsWithProfile("Team");
     initial.roleProfiles!.profiles[0]!.roles.executor = { primary: { provider: "vendor", model: "custom" } };
     const bridge = installBridge(initial);
@@ -593,10 +657,12 @@ describe("Writes across mounts", () => {
     await click(buttonByText("Save roles"));
     await act(async () => root?.render(createElement("div")));
     await act(async () => root?.render(createElement(RolesPane)));
+    expect(buttonByText("Save roles").disabled).toBe(true);
+    expect(container.textContent).toContain("Saving…");
+    await act(async () => { release(); await waiting; });
     const effort = container.querySelector<HTMLSelectElement>('[aria-label="executor primary effort"]')!;
     await act(async () => { effort.value = "high"; effort.dispatchEvent(new Event("change", { bubbles: true })); });
     await click(buttonByText("Save roles"));
-    await act(async () => { release(); await waiting; });
     expect(bridge.current().roleProfiles?.profiles[0]?.roles).toEqual({ executor: { primary: { provider: "vendor", model: "first-model", effort: "high" } }, maxParallelChildren: 5 });
     expect(container.querySelector<HTMLInputElement>('[aria-label="Max parallel children"]')!.value).toBe("5");
   });
@@ -617,7 +683,7 @@ describe("Writes across mounts", () => {
     expect(container.querySelector<HTMLInputElement>('[aria-label="Max parallel children"]')!.value).toBe("5");
   });
 
-  it("serializes writes and applies each to the latest registry", async () => {
+  it("blocks registry controls across mounts until the write finishes", async () => {
     const initial = settingsWithProfile("Team");
     initial.roleProfiles!.projects = [{ projectRoot: "/one", profileId: "p" }, { projectRoot: "/two", profileId: "p" }];
     const bridge = installBridge(initial);
@@ -629,9 +695,12 @@ describe("Writes across mounts", () => {
     await click(container.querySelector<HTMLButtonElement>('[aria-label="Remove profile for /one"]')!);
     await act(async () => root?.render(createElement("div")));
     await act(async () => root?.render(createElement(RolesPane)));
-    await click(container.querySelector<HTMLButtonElement>('[aria-label="Remove profile for /two"]')!);
+    const remove = container.querySelector<HTMLButtonElement>('[aria-label="Remove profile for /two"]')!;
+    expect(remove.disabled).toBe(true);
+    expect(container.querySelector<HTMLSelectElement>('[aria-label="Project to add"]')!.disabled).toBe(true);
     expect(bridge.set).toHaveBeenCalledTimes(1);
     await act(async () => { release(); await waiting; });
+    await click(remove);
     expect(bridge.set).toHaveBeenCalledTimes(2);
     expect(bridge.current().roleProfiles?.projects).toEqual([]);
   });
