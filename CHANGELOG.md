@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.51] — 2026-10-29
+
 ### Changed
 
 - Codex CLI 0.166.0 is supported.
