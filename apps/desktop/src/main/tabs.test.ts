@@ -637,7 +637,7 @@ describe("TabHostManager — host spawn", () => {
 describe("TabHostManager — per-tab circuit breaker", () => {
   it("stops respawning a single crash-looping tab after MAX_RAPID_RESPAWNS", async () => {
     const { fork, hosts } = dyingForkRig();
-    const { window, hostExited } = windowRig();
+    const { window, hostExited, posted } = windowRig();
     const manager = makeManager(fork, window);
 
     const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
@@ -649,6 +649,10 @@ describe("TabHostManager — per-tab circuit breaker", () => {
     expect(hosts).toHaveLength(DEFAULT_BREAKER_LIMITS.maxRapidRespawns + 1);
     const tab = created.ok ? manager.getTab(created.tab.tabId) : undefined;
     expect(tab?.state).toBe("crash_looped");
+    expect(tab?.hostFailure).toMatchObject({ code: "per_tab_crash_loop", exitCode: 1 });
+    expect(manager.listTabs()[0]?.hostFailure).toEqual(tab?.hostFailure);
+    manager.deliverAllTabPorts();
+    expect(posted.at(-1)?.payload).toMatchObject({ tabId: tab?.tabId, hostFailure: tab?.hostFailure });
     // A host-exited banner for every crash.
     expect(hostExited.length).toBe(DEFAULT_BREAKER_LIMITS.maxRapidRespawns + 1);
     expect(new Set(hostExited)).toEqual(new Set([created.ok ? created.tab.tabId : ""]));
@@ -7218,6 +7222,48 @@ describe("deferred host spawns during a settings refresh", () => {
     expect(recordHostFailure).not.toHaveBeenCalled();
   });
 
+  it.each(["ready", "refused"] as const)("ignores an obsolete initial refresh while its replacement is pending (%s)", async (outcome) => {
+    const rig = shutdownableForkRig();
+    const window = windowRig();
+    let releaseA!: () => void;
+    let releaseB!: () => void;
+    const a = new Promise<void>((resolve) => { releaseA = resolve; });
+    const b = new Promise<void>((resolve) => { releaseB = resolve; });
+    let phase: "initial" | "admit" | "pending" | "old" | "ready" = "initial";
+    const failures = vi.fn();
+    const closed = vi.fn();
+    const manager = childManager(rig.fork, window.window, {
+      env: () => phase === "admit" || phase === "ready" || (phase === "old" && outcome === "ready") ? {} : undefined,
+      waitForHostEnv: () => phase === "initial" ? a : phase === "pending" ? b : undefined,
+      recordHostFailure: failures,
+      onTabClosed: closed,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "race", connectionId: "old", resume: false });
+    if (!created.ok) throw new Error("create failed");
+    phase = "admit";
+    const replacement = manager.rebindTab(created.tab, "new");
+    phase = "pending";
+    expect(await replacement).toEqual({ ok: true });
+    expect(created.tab.proc).toBeNull();
+    const deliveries = window.posted.length;
+    phase = "old";
+    releaseA();
+    await flush();
+    expect(rig.hosts).toHaveLength(0);
+    expect(window.posted).toHaveLength(deliveries);
+    expect(created.tab.proc).toBeNull();
+    expect(created.tab.connectionId).toBe("new");
+    expect(manager.getTab(created.tab.tabId)).toBe(created.tab);
+    expect(manager.listTabs()).toEqual([expect.objectContaining({ sessionId: "race", tabId: created.tab.tabId })]);
+    expect(closed).not.toHaveBeenCalled();
+    expect(failures).not.toHaveBeenCalled();
+    phase = "ready";
+    releaseB();
+    await vi.waitFor(() => expect(rig.hosts).toHaveLength(1));
+    expect(created.tab.proc).toBe(rig.hosts[0]);
+    expect(created.tab.connectionId).toBe("new");
+  });
+
   it("does not resume a deferred spawn after close", async () => {
     const rig = shutdownableForkRig();
     let blocked = false;
@@ -7705,6 +7751,30 @@ describe("GitHub #6 — a missing workspace folder fails fast instead of connect
       expect(posted.channel).toBe(PORT_ENVELOPE_TYPE);
       expect(posted.payload).toMatchObject({ tabId: result.tab.tabId, workspace, missingWorkspace: true });
     }
+  });
+
+  it("replaces a retained crash cause when a rebind finds the workspace missing", async () => {
+    const rig = dyingForkRig();
+    const win = windowRig();
+    let missing = false;
+    const manager = new TabHostManager({
+      fork: rig.fork, hostEntry: "/fake", createChannel: fakeChannel,
+      getWindow: () => win.window, env: () => ({}), logger: silentLogger,
+      workspaceMissing: () => missing,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "vanished-rebind", resume: false });
+    if (!created.ok) throw new Error("create failed");
+    await flush();
+    expect(created.tab.hostFailure?.code).toBe("per_tab_crash_loop");
+    missing = true;
+    await manager.rebindTab(created.tab, "new");
+    expect(created.tab.missingWorkspace).toBe(true);
+    expect(created.tab.hostFailure).toBeUndefined();
+    expect(manager.listTabs()[0]).toMatchObject({ missingWorkspace: true });
+    expect(manager.listTabs()[0]).not.toHaveProperty("hostFailure");
+    const envelope = win.posted.filter((entry) => entry.channel === PORT_ENVELOPE_TYPE).at(-1)?.payload;
+    expect(envelope).toMatchObject({ missingWorkspace: true });
+    expect(envelope).not.toHaveProperty("hostFailure");
   });
 
   it("a folder deleted under a live tab makes the respawn refuse to fork and deliver the error", async () => {

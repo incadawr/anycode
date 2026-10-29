@@ -13,6 +13,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A tab whose session host keeps crashing shows why it stopped, and the Sessions API reports the same reason; a missing workspace folder is reported as such.
 - Core subagents honor the requested reasoning effort when their model supports it.
 - Native session children use their agent profile’s model and instructions by default (GitHub #5).
 - A reopened session shows its context indicator and saved spend right away instead of after the next turn.
