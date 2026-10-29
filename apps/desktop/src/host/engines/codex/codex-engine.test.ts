@@ -4008,6 +4008,28 @@ describe("Codex manual compaction", () => {
     const next = driveCompact(engine); await tick(40); server.startCompact("next"); finish(server, "next"); await next.done;
     expect(next.events.find(e => e.type === "compaction_end")).toMatchObject({ preTokens: 9000 });
   });
+  it("publishes the replacement estimate from the observed compact sequence and then the next request", async () => {
+    const { server, engine } = setup(); await normal(server, engine, 40536);
+    const run = driveCompact(engine); await tick(40); server.startCompact();
+    server.stream.push({ method: "thread/tokenUsage/updated", params: { threadId: THREAD, turnId: "compact-native", tokenUsage: {
+      last: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 46509 },
+      total: { inputTokens: 118381, cachedInputTokens: 77312, outputTokens: 20, reasoningOutputTokens: 0, totalTokens: 118401 }, modelContextWindow: 475000,
+    } } });
+    item(server); server.completeTurn("completed", "compact-native"); await run.done;
+    expect(run.events).toContainEqual({ type: "context_usage", estimatedTokens: 46509, budgetTokens: 475000, source: "provider" });
+    expect(run.events.find(e => e.type === "compaction_end")).toMatchObject({ ok: true, preTokens: 40536 });
+    const chat = await normal(server, engine, 42710);
+    expect(chat.events).toContainEqual(expect.objectContaining({ type: "context_usage", estimatedTokens: 42710 }));
+  });
+  it.each(["completed", "interrupted"] as const)("handles a late replacement estimate after %s compaction", async status => {
+    const { server, engine } = setup(); const late: AgentEvent[] = []; engine.onMaintenanceEvent(event => late.push(event));
+    const run = driveCompact(engine); await tick(40); server.startCompact(); finish(server, "compact-native", status); await run.done;
+    server.stream.push({ method: "thread/tokenUsage/updated", params: { threadId: THREAD, turnId: "compact-native", tokenUsage: {
+      last: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 46509 },
+      total: { inputTokens: 118381, cachedInputTokens: 77312, outputTokens: 20, reasoningOutputTokens: 0, totalTokens: 118401 }, modelContextWindow: 475000,
+    } } });
+    expect(late.some(event => event.type === "context_usage")).toBe(status === "completed");
+  });
   it("accounts for late compact usage without changing context", async () => {
     const { server, engine } = setup(); const late: AgentEvent[] = []; const observer = vi.fn();
     engine.onUsage(observer); engine.onMaintenanceEvent(event => late.push(event));
