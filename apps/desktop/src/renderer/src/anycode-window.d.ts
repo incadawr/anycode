@@ -643,6 +643,7 @@ declare global {
       // : the Settings scope dropdown's folder list (opaque ids only).
       scopeWorkspaces: {
         list(): Promise<ScopeWorkspacesListResult>;
+        resolve(ref: string): Promise<string | null>;
       };
       // : "Full browser access" per session. Only the user can set it (the
       // main window's sender is checked); set/get resolve the EFFECTIVE value.

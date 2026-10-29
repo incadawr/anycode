@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Settings shows compact role routes with profile and project controls (GitHub #23).
+
 ## [0.0.52] — 2026-10-30
 
 ### Added
