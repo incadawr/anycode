@@ -50,6 +50,8 @@ function warningNotice(message: string): { type: "engine_notice"; level: "warnin
 
 export class ClaudeSettingsSeam implements EngineSettingsSeam {
   private pending: SettingsSnapshot | null = null;
+  private readonly modelChanges = new Set<Promise<EngineSettingsChange>>();
+  private readonly settingsChanges = new Set<Promise<EngineSettingsChange>>();
   /**
    * Monotonic id of the LATEST accepted change. A control-ack that is not the
    * newest generation may no longer clear `pending` or publish — see
@@ -102,8 +104,18 @@ export class ClaudeSettingsSeam implements EngineSettingsSeam {
     }
     const current = this.engine.snapshot();
     const next: SettingsSnapshot = { model: id, activePresetId: current.activePresetId, ...(current.effort !== undefined ? { effort: current.effort } : {}) };
-    void this.beginPending(next, () => this.engine.selectModel(id));
+    const change = this.beginPending(next, () => this.engine.selectModel(id));
+    this.modelChanges.add(change);
+    void change.finally(() => this.modelChanges.delete(change));
     return { ok: true, ...next };
+  }
+
+  async waitForModelChanges(): Promise<void> {
+    while (this.modelChanges.size > 0) await Promise.all(this.modelChanges);
+  }
+
+  async waitForSettingsChanges(): Promise<void> {
+    while (this.settingsChanges.size > 0) await Promise.all(this.settingsChanges);
   }
 
   selectPreset(id: string): EngineSettingsChange {
@@ -189,7 +201,7 @@ export class ClaudeSettingsSeam implements EngineSettingsSeam {
     const settle = (): void => {
       if (generation === this.generation) this.pending = null;
     };
-    return fire()
+    const change = fire()
       .then((result): EngineSettingsChange => {
         settle();
         if (result.ok) {
@@ -206,6 +218,9 @@ export class ClaudeSettingsSeam implements EngineSettingsSeam {
         this.engine.queueNotice(warningNotice(`Claude settings change failed: ${message}`));
         return { ok: false, reason: message };
       });
+    this.settingsChanges.add(change);
+    void change.finally(() => this.settingsChanges.delete(change));
+    return change;
   }
 
   private notify(snapshot: SettingsSnapshot): void {

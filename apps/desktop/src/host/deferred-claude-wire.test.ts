@@ -15,20 +15,24 @@ class Transport implements ClaudeTransport {
   readonly inputs: Array<{ input: string | unknown[]; effort: string | undefined }> = [];
   readonly controls: Array<{ subtype: string; request?: Record<string, unknown> }> = [];
   effort: string | undefined;
-  private resolveControl: ((value: unknown) => void) | undefined;
+  private pendingControls: Array<{ request?: Record<string, unknown>; resolve: (value: unknown) => void; reject: (error: Error) => void }> = [];
   private queue: ClaudeStreamMessage[] = [];
   private waiter: ((result: IteratorResult<ClaudeStreamMessage>) => void) | undefined;
   async initialize() { return { commands: [], models: [], account: { tokenSource: "oauth" } }; }
   controlRequest<T>(subtype: string, request?: Record<string, unknown>): Promise<T> {
     this.controls.push({ subtype, request });
-    return new Promise((resolve) => { this.resolveControl = (value) => resolve(value as T); });
+    return new Promise((resolve, reject) => { this.pendingControls.push({ request, resolve: (value) => resolve(value as T), reject }); });
   }
   acceptControl(): void {
-    const resolve = this.resolveControl;
-    if (!resolve) throw new Error("no control request");
-    this.resolveControl = undefined;
-    this.effort = this.controls.at(-1)?.request?.effortLevel as string;
-    resolve({});
+    const control = this.pendingControls.shift();
+    if (!control) throw new Error("no control request");
+    if (control.request?.effortLevel !== undefined) this.effort = control.request.effortLevel as string;
+    control.resolve({});
+  }
+  rejectControl(): void {
+    const control = this.pendingControls.shift();
+    if (!control) throw new Error("no control request");
+    control.reject(new Error("rejected"));
   }
   async getContextUsage(): Promise<Record<string, unknown>> { return {}; }
   async interrupt() { return { stillQueued: [] }; }
@@ -105,4 +109,82 @@ it("waits for Claude's acknowledged effort control before sending the next input
     transport.finish();
     await settle();
   } finally { channel.port1.close(); channel.port2.close(); await session.shutdown(); }
+});
+
+async function wireFixture() {
+  const transport = new Transport();
+  const catalog = ClaudeModelCatalog.fromInitialize([
+    { value: "model-a", supportsEffort: true, supportedEffortLevels: ["medium", "high", "xhigh"] },
+    { value: "model-b", supportsEffort: true, supportedEffortLevels: ["medium", "high", "xhigh"] },
+  ]);
+  const engine = new ClaudeEngine(transport, "session", undefined, { catalog, model: "model-a", preset: findClaudePreset("ask")!, effortsByModel: new Map(), notices: [] });
+  const channel = new MessageChannel();
+  const received: HostToUiMessage[] = [];
+  channel.port1.on("message", (message: HostToUiMessage) => received.push(message));
+  channel.port1.start();
+  const outbound = new Outbound();
+  const session = new Session({ outbound, engine, engineSettings: new ClaudeSettingsSeam(engine), broker: new IpcPermissionBroker((message) => outbound.emit(message)), fs: new MemFs(), workspace: "/work", model: "model-a", sessionId: "session", rules: new SessionPermissionRules() });
+  session.bindPort(nodeWirePort(channel.port2 as NodeMessagePort));
+  const send = (message: UiToHostMessage) => channel.port1.postMessage(message);
+  const settle = async () => { for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0)); };
+  const close = async () => { channel.port1.close(); channel.port2.close(); await session.shutdown(); };
+  send({ type: "ui_ready" });
+  return { transport, received, send, settle, close };
+}
+
+it("waits for both deferred and subsequent idle effort acknowledgements", async () => {
+  const { transport, send, settle, close } = await wireFixture();
+  try {
+    send({ type: "user_message", requestId: "a", text: "first" });
+    await settle();
+    send({ type: "set_engine_effort", effort: "high" });
+    await settle();
+    transport.finish();
+    await settle();
+    send({ type: "set_engine_effort", effort: "xhigh" });
+    send({ type: "user_message", requestId: "b", text: "second" });
+    await settle();
+    expect(transport.controls).toHaveLength(1);
+    transport.acceptControl();
+    await settle();
+    expect(transport.controls).toHaveLength(2);
+    expect(transport.inputs).toHaveLength(1);
+    transport.acceptControl();
+    await settle();
+    expect(transport.inputs[1]?.effort).toBe("xhigh");
+    transport.finish();
+    await settle();
+  } finally { await close(); }
+});
+
+it.each([true, false])("waits for a pending model change before applying deferred effort (accepted: %s)", async (accepted) => {
+  const { transport, received, send, settle, close } = await wireFixture();
+  try {
+    send({ type: "set_model", model: "model-b" });
+    send({ type: "user_message", requestId: "a", text: "first" });
+    await settle();
+    send({ type: "set_engine_effort", effort: "high" });
+    await settle();
+    transport.finish();
+    await settle();
+    expect(transport.controls).toHaveLength(1);
+    send({ type: "user_message", requestId: "b", text: "second" });
+    await settle();
+    expect(transport.inputs).toHaveLength(1);
+    if (accepted) transport.acceptControl(); else transport.rejectControl();
+    await settle();
+    if (accepted) {
+      expect(transport.controls.at(-1)).toEqual({ subtype: "apply_flag_settings", request: { effortLevel: "high" } });
+      expect(transport.inputs).toHaveLength(1);
+      transport.acceptControl();
+      await settle();
+      expect(transport.inputs[1]?.effort).toBe("high");
+    } else {
+      expect(transport.controls).toHaveLength(1);
+      expect(received).toContainEqual(expect.objectContaining({ type: "mode_change_rejected" }));
+      expect(transport.inputs).toHaveLength(2);
+    }
+    transport.finish();
+    await settle();
+  } finally { await close(); }
 });
