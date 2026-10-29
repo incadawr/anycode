@@ -5318,7 +5318,7 @@ export class Session {
       await pending.seam.waitForModelChanges?.();
       if (this.shuttingDown || generation !== this.settingsGeneration || this.engineSettings !== pending.seam || this.engine !== pending.engine) return;
       if (pending.seam.snapshot().model !== pending.model || !pending.seam.models().find((model) => model.id === pending.model)?.efforts?.includes(pending.effort)) {
-        this.inFlightEngineEffort = undefined;
+        if (this.inFlightEngineEffort === pending) this.inFlightEngineEffort = undefined;
         this.outbound.emit({ type: "mode_change_rejected", reason: "The selected model no longer supports this effort" });
         this.publishPendingEngineSettings();
         return;
@@ -5327,12 +5327,12 @@ export class Session {
       if (operation === undefined) return;
       const result = await operation.call(pending.seam, pending.effort);
       if (this.shuttingDown || generation !== this.settingsGeneration || this.engineSettings !== pending.seam || this.engine !== pending.engine) return;
-      this.inFlightEngineEffort = undefined;
+      if (this.inFlightEngineEffort === pending) this.inFlightEngineEffort = undefined;
       if (!result.ok) this.outbound.emit({ type: "mode_change_rejected", reason: result.reason });
       this.publishPendingEngineSettings();
     }).catch((error: unknown) => {
       if (!this.shuttingDown && generation === this.settingsGeneration) {
-        this.inFlightEngineEffort = undefined;
+        if (this.inFlightEngineEffort === pending) this.inFlightEngineEffort = undefined;
         this.outbound.emit({ type: "mode_change_rejected", reason: String(error) });
         this.publishPendingEngineSettings();
       }
