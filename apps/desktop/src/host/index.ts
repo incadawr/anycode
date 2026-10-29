@@ -4628,7 +4628,8 @@ async function boot(): Promise<void> {
     // callback (mirror of the CLI's deps.model.set). It stays host-owned while
     // CoreEngine exposes it through the neutral SessionEngine seam.
     const switchModelImpl = (id: string, selectedTier: ReasoningEffort, effortExplicit = false) => {
-        if (!isChildSession) selectedTier = connectionModelSettings.switchEffort(currentModel, id, selectedTier, effortExplicit);
+        if (isChildSession) connectionModelSettings.refresh();
+        else selectedTier = connectionModelSettings.switchEffort(currentModel, id, selectedTier, effortExplicit);
         const effortAdjustment = isChildSession ? undefined : connectionModelSettings.takeAdjustment();
         // TASK.162 (§0b): Session hands its OWN preserved user-selected tier
         // here, so this is the second (and only other) writer that keeps the

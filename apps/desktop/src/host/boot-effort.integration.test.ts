@@ -335,3 +335,45 @@ it("uses declared child effort levels over live capabilities at boot, switch, an
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }, 60000);
+
+it("refreshes declared effort levels before a child switches models", async () => {
+  const settings = {
+    version: 2, provider: { activeConnectionId: "conn", connections: [{
+      id: "conn", providerId: "custom:fixture", model: "source",
+      modelOverrides: {
+        source: { effortLevels: ["xhigh", "max"] },
+        destination: { effortLevels: ["max"] },
+      },
+    }] }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false },
+  };
+  const oldArgv = process.argv;
+  try {
+    process.argv = [process.execPath, "host", "--session", "switch-child", "--child-parent", "parent", "--child-spawn-call", "call", "--child-mode", "build"];
+    const result = await bootHostInTempProfile(async ({ parent, profile }) => {
+      const port = new FakePort();
+      parent.emit("message", { ports: [port], data: {} });
+      await vi.waitFor(() => expect(port.listenerCount("message")).toBeGreaterThan(0), { timeout: 15000 });
+      port.send({ type: "ui_ready" });
+      await vi.waitFor(() => expect(port.messages.some((m) => m.type === "host_ready")).toBe(true));
+      expect(port.messages.find((m) => m.type === "host_ready").reasoningEffort).toBe("xhigh");
+      settings.provider.connections[0]!.modelOverrides.destination.effortLevels = ["xhigh", "max"];
+      writeFileSync(profile.settingsPath, JSON.stringify(settings));
+      port.send({ type: "set_model", model: "destination" });
+      await vi.waitFor(() => expect(port.messages.some((m) => m.type === "model_changed" && m.model === "destination")).toBe(true));
+      expect(port.messages.filter((m) => m.type === "model_changed").at(-1)).toMatchObject({
+        selectedReasoningEffort: "xhigh", reasoningEffort: "xhigh", availableEffortLevels: ["xhigh", "max"],
+      });
+    }, {
+      extraEnv: { ANYCODE_MODEL: "source", ANYCODE_BASE_URL: "http://127.0.0.1:12345/v1", ANYCODE_API_KEY: "test", ANYCODE_PROVIDER_TRANSPORT: "openai-chat-completions", ANYCODE_MODEL_SETTINGS_CONNECTION_ID: "conn", ANYCODE_REASONING_EFFORT: "xhigh" },
+      boot: async () => {
+        vi.resetModules();
+        writeFileSync(process.env.ANYCODE_SETTINGS_PATH!, JSON.stringify(settings));
+        await import("./index.js");
+      },
+    });
+    if (result.error !== null) throw result.error;
+    expect(result.stopped).toBe(true);
+  } finally {
+    process.argv = oldArgv;
+  }
+}, 45000);
