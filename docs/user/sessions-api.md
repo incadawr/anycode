@@ -180,8 +180,14 @@ time is refused with `not_ready` instead, and no tab is left behind.
 
 ### Session status
 
-`get_session_status` answers the engine, the running/idle state and these
-effort fields:
+`list_sessions` and `get_session_status` report the same activity state: `idle`,
+`running`, `waiting_approval` (including queued human interaction), or `closing`.
+A pending approval is reported even when External approvals is off. Terminal
+sessions report `crash_looped` or `missing_workspace`. Listing reads the latest
+activity known to the application without waiting for hosts, including while a
+host restarts. Clients should accept the full state vocabulary.
+
+`get_session_status` also answers the engine and these effort fields:
 
 | Field | Meaning |
 |---|---|
@@ -345,4 +351,4 @@ See also [configuration.md](configuration.md) and
 
 When a session host stops after repeated failures, `get_session_status` returns `state: "crash_looped"`, its engine, and a safe `hostFailure` summary without model or effort details. `list_sessions` reports the same state and includes the same summary.
 
-When the workspace folder is missing and the session passes the authorized-workspace check, `get_session_status` returns `state: "missing_workspace"`, its engine, and `missingWorkspace: true`, without a `hostFailure` summary or model or effort details. `list_sessions` reports the same state and retains `missingWorkspace: true`. With a restricted workspace list, a missing folder is refused as unavailable or outside the authorized workspace.
+When the workspace folder is missing and the session passes the authorized-workspace check, `get_session_status` returns `state: "missing_workspace"`, its engine, and `missingWorkspace: true`, without model or effort details; a retained `hostFailure` summary may also be present. `list_sessions` reports the same state and retains `missingWorkspace: true`. With a restricted workspace list, a missing folder is refused as unavailable or outside the authorized workspace.

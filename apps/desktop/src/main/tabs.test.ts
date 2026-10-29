@@ -600,6 +600,8 @@ describe("TabHostManager — host spawn", () => {
     });
     const created = manager.createTab({ workspace: "/ws", sessionId: "replacement", resume: false });
     if (!created.ok) throw new Error("create failed");
+    rig.hosts[0]!.emit("message", { type: "session_activity", state: "closing" });
+    expect(manager.listTabs()[0]?.activityState).toBe("closing");
     if (kind === "restart") {
       await manager.restartTabHost(created.tab.tabId);
     } else {
@@ -607,6 +609,7 @@ describe("TabHostManager — host spawn", () => {
     }
     await vi.waitFor(() => expect(created.tab.state).toBe("crash_looped"));
     expect(created.tab.proc).toBeNull();
+    expect(manager.listTabs()[0]?.activityState).toBe("idle");
     expect(logError).toHaveBeenCalledWith(expect.stringContaining("host spawn failed"), error);
   });
 
@@ -5446,6 +5449,23 @@ describe("TASK.194 model admission before fork", () => {
     await flush();
     expect(validateChildModel).toHaveBeenCalledWith("claude-opus-5-5", "anthropic-connection");
     expect(hosts).toHaveLength(2);
+  });
+});
+
+describe("session activity messages", () => {
+  it("tracks the current host and ignores stale or invalid messages", () => {
+    const rig = liveForkRig(); const manager = makeManager(rig.fork, windowRig().window);
+    manager.createTab({ workspace: "/allowed", sessionId: "activity", resume: false });
+    const host = rig.hosts[0]!;
+    expect(manager.listTabs()[0]?.activityState).toBe("idle");
+    host.emit("message", { type: "session_activity", state: "waiting_approval" });
+    expect(manager.listTabs()[0]?.activityState).toBe("waiting_approval");
+    host.emit("message", { type: "session_activity", state: "invalid" });
+    expect(manager.listTabs()[0]?.activityState).toBe("waiting_approval");
+    host.emit("exit", 1);
+    expect(manager.listTabs()[0]?.activityState).toBe("idle");
+    host.emit("message", { type: "session_activity", state: "running" });
+    expect(manager.listTabs()[0]?.activityState).toBe("idle");
   });
 });
 

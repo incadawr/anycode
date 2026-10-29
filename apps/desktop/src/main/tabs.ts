@@ -1,6 +1,6 @@
 import { hostFailure } from "./host-failure.js";
 import type { HostFailure } from "../shared/host-failure.js";
-import type { AgentDelivery } from "../shared/communication.js";
+import type { AgentDelivery, SessionActivityState } from "../shared/communication.js";
 /**
  * TabHostManager (design/phase-2.md §2.2): the multi-host generalization of the
  * MVP single-host lifecycle. One window / one renderer / N host utilityProcesses
@@ -393,6 +393,8 @@ export interface TabHost {
   pendingWorktreeCleanup?: WorktreeCleanupIntent;
   /* */
   sessionId: string;
+  activityState?: SessionActivityState;
+  lastCommunicationStatus?: Record<string, unknown>;
   /**
    * The provider connection pinned to this session (TASK.45 W10, core engine
    * only). Fixed at createTab from the active connection (new) or the session's
@@ -937,6 +939,7 @@ export interface TabSummary {
   workspace: string;
   sessionId: string;
   state: TabHost["state"];
+  activityState?: SessionActivityState;
   hostFailure?: HostFailure;
   missingWorkspace?: boolean;
   engine?: EngineId;
@@ -1183,6 +1186,13 @@ export class TabHostManager {
       const onMessage = (raw: unknown) => {
         const message = raw as { type?: string; requestId?: string; result?: unknown; error?: string };
         if (message?.type !== "communication_response" || message.requestId !== requestId) return;
+        if (!message.error && tab.proc === proc && operation === "get_session_status" && message.result && typeof message.result === "object") {
+          const status = message.result as Record<string, unknown>;
+          tab.lastCommunicationStatus = { ...tab.lastCommunicationStatus, ...Object.fromEntries(
+            ["model", "effort", "steering", "supportedEfforts", "appliedEffort", "effortPending"]
+              .filter((key) => status[key] !== undefined).map((key) => [key, status[key]]),
+          ) };
+        }
         finish(message.error ? new Error(message.error) : undefined, message.result);
       };
       const onExit = () => finish(new Error("Host disconnected; delivery unknown"));
@@ -1199,6 +1209,16 @@ export class TabHostManager {
     });
   }
 
+  /** Main-owned metadata and the last host status survive host restarts. */
+  communicationStatusDetails(sessionId: string): Record<string, unknown> {
+    const tab = [...this.tabs.values()].find((t) => t.sessionId === sessionId);
+    if (!tab) return {};
+    const model = tab.modelOverride ?? (!tab.initialResume ? tab.engineModel : null);
+    const effort = tab.effortOverride ?? (!tab.initialResume ? tab.engineEffort : null);
+    return { engine: tab.engine, ...(model != null ? { model } : {}),
+      ...(effort != null ? { effort } : {}), ...tab.lastCommunicationStatus };
+  }
+
   listTabs(): ReadonlyArray<TabSummary> {
     return [...this.tabs.values()]
       // A prepared (unpublished) tab is not a session anyone may see yet: the
@@ -1210,6 +1230,7 @@ export class TabHostManager {
       workspace: tab.workspace,
       sessionId: tab.sessionId,
       state: tab.state,
+      activityState: tab.activityState ?? "idle",
       pid: tab.proc?.pid ?? null,
       ...(tab.hostFailure ? { hostFailure: tab.hostFailure, engine: tab.engine } : {}),
       ...(tab.missingWorkspace ? { missingWorkspace: true, engine: tab.engine } : {}),
@@ -1842,6 +1863,11 @@ export class TabHostManager {
       return;
     }
     const data = message as { type?: unknown; requestId?: unknown };
+    if (data.type === "session_activity") {
+      const state = (message as { state?: unknown }).state;
+      if (tab.proc === child && (state === "idle" || state === "running" || state === "waiting_approval" || state === "closing")) tab.activityState = state;
+      return;
+    }
     if (data.type === WORKSPACE_TRUST_PENDING_MESSAGE_TYPE) {
       this.recordWorkspaceTrustPending(tab, child, message);
       return;
@@ -3461,6 +3487,7 @@ export class TabHostManager {
       return;
     }
     tab.proc = null;
+    tab.activityState = "idle";
 
     if (this.unpublishedTabs.has(tab.tabId)) {
       // A prepared host died before anyone could use it. There is nothing to
@@ -3818,6 +3845,7 @@ export class TabHostManager {
         tab.proc = null;
       }
     }
+    if (tab.proc === null) tab.activityState = "idle";
   }
 
   /**

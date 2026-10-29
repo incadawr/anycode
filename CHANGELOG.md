@@ -11,6 +11,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Settings shows compact role routes with profile and project controls (GitHub #23).
 
+### Fixed
+
+- Sessions API lists the same activity state as session status, including approval waits, without waiting for session hosts.
+
 ## [0.0.52] — 2026-10-30
 
 ### Added

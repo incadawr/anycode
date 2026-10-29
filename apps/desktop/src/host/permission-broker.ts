@@ -229,6 +229,16 @@ export type EngineBridgeBroker = Pick<
 export class IpcPermissionBroker implements PermissionBroker {
   /** Every parked ask, queued or shown — the single source of truth for denyAll/handleResponse addressing. */
   private readonly pending = new Map<string, PendingAsk>();
+  private readonly activityListeners = new Set<() => void>();
+
+  observeActivity(listener: () => void): () => void {
+    this.activityListeners.add(listener);
+    return () => this.activityListeners.delete(listener);
+  }
+
+  private activityChanged(): void {
+    for (const listener of this.activityListeners) listener();
+  }
   /** requestIds waiting their turn, in arrival order; the head is presented once the shown request settles. */
   private readonly queue: string[] = [];
   /** requestId of the single `permission_request` currently in front of the UI, or null when the slot is free. */
@@ -292,6 +302,7 @@ export class IpcPermissionBroker implements PermissionBroker {
     return new Promise<PermissionDecision>((resolve) => {
       const entry: PendingAsk = { resolve, request, timer: null, createdAt: Date.now(), presentedAt: null, presentedTimeoutMs: null };
       this.pending.set(requestId, entry);
+      this.activityChanged();
       if (this.current === null) {
         this.present(requestId, entry);
       } else {
@@ -580,6 +591,7 @@ export class IpcPermissionBroker implements PermissionBroker {
       clearTimeout(entry.timer);
     }
     this.pending.delete(requestId);
+    this.activityChanged();
     this.settled.set(requestId, origin);
     if (this.settled.size > SETTLED_RECORD_CAP) {
       const oldest = this.settled.keys().next().value;

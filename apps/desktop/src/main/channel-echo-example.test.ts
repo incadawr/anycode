@@ -45,6 +45,7 @@ describe("channel-echo example plugin (Taskana 4750b)", () => {
     await mkdir(inbox, { recursive: true });
     const discoveryFile = join(dir, "endpoint.json");
     const request = vi.fn(async (_session: string, op: string, payload?: unknown) => {
+      if (op === "get_session_status") return { state: "idle" };
       if (op === "send_message") return { envelope: payload, state: "acknowledged", detail: "transport accepted" };
       if (op === "get_message_result") return { state: "done", latestResult: { publicAnswer: "ECHO:hello", turnId: "t1" }, limitation: "L" };
       return undefined;
