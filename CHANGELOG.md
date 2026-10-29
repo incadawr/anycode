@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
 - Set per-model token prices for custom connections; future usage reflects each model’s rates. (GitHub #20)
 
 ### Fixed
