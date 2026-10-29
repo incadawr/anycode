@@ -3791,6 +3791,39 @@ describe("Session — model switch (slice P7.15 · F14)", () => {
     } finally { h.close(); }
   });
 
+  it("drops a fallback model provider reading when selecting the original model", async () => {
+    let loopModel = "scripted-model";
+    const save = vi.fn(async () => {});
+    const h = createHarness({
+      steps: [[{ type: "start" }, { type: "finish", finishReason: "stop", usage: { inputTokens: 1234, outputTokens: 10, totalTokens: 1244 } }]],
+      saveContextUsage: save,
+      orchestratorRouteCheck: () => { loopModel = "fallback"; return "Fallback selected"; },
+      switchModel: (model) => {
+        const previousModel = loopModel;
+        loopModel = model;
+        return { model, previousModel, reasoningEffort: "off", contextUsage: { estimatedTokens: 50, budgetTokens: 8000, source: "estimate" } };
+      },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_orchestrate", enabled: true });
+      await h.waitUntil(() => h.received.some((m) => m.type === "orchestrate_changed" && m.enabled));
+      h.send({ type: "user_message", requestId: "fallback", text: "hello" });
+      await h.waitUntil(() => h.received.some((m) => m.type === "agent_event" && m.event.type === "loop_end"));
+      expect(loopModel).toBe("fallback");
+      expect(h.received.some((m) => m.type === "agent_event" && m.event.type === "context_usage" && m.event.source === "provider")).toBe(true);
+      const offset = h.received.length;
+      const savedCount = save.mock.calls.length;
+      h.send({ type: "set_model", model: "scripted-model" });
+      await h.waitUntil(() => h.received.slice(offset).some(isModelChanged));
+      const reading = { estimatedTokens: 50, budgetTokens: 8000, source: "estimate" };
+      expect(h.received.slice(offset).find(isModelChanged)?.contextUsage).toEqual(reading);
+      await h.waitUntil(() => save.mock.calls.length > savedCount);
+      expect(save).toHaveBeenLastCalledWith({ ...reading, engine: "core", model: "scripted-model" });
+    } finally { h.close(); }
+  });
+
   it("switches the model between turns, emits model_changed, and reports it on the next handshake", async () => {
     const h = createHarness({
       steps: [textStep("x"), finishStep()],

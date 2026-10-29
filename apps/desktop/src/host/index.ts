@@ -4696,6 +4696,7 @@ async function boot(): Promise<void> {
         const usage = loop.contextInfo();
         return {
           model: id,
+          previousModel: previous,
           contextUsage: {estimatedTokens: usage.estimatedTokens, budgetTokens: usage.effectiveWindowTokens, source: usage.source},
           selectedReasoningEffort: selectedTier,
           ...(effortAdjustment !== undefined ? { effortAdjustment } : {}),
