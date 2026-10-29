@@ -31,6 +31,9 @@ export class NodeGitReadAdapter implements GitReadPort {
     Object.assign(env, {
       GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull,
       GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_NO_LAZY_FETCH: "1",
+      // This allowlist takes precedence over every protocol.<name>.allow setting,
+      // including on Git versions that do not support GIT_NO_LAZY_FETCH.
+      GIT_ALLOW_PROTOCOL: "",
       GIT_PAGER: "cat", PAGER: "cat", GIT_LITERAL_PATHSPECS: "1", LC_ALL: "C",
     });
     const fixed = ["--no-pager", "-c", "core.pager=cat", "-c", "core.fsmonitor=false",
@@ -96,8 +99,8 @@ export class NodeGitReadAdapter implements GitReadPort {
     let args: string[];
     const scoped = literal.length ? literal : [relative(root, workspace).split(sep).join("/") || "."];
     switch (input.operation) {
-      case "show": args = input.path ? ["show", `${first}:${literal[0]}`] : ["show", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", ...(input.format === "stat" ? ["--stat"] : []), first!]; break;
-      case "log": args = ["log", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", `--max-count=${input.maxCount ?? 20}`, ...(input.format === "oneline" ? ["--oneline"] : input.format === "stat" ? ["--stat"] : []), ...(spec ? [spec] : []), ...(literal.length ? ["--", ...literal] : [])]; break;
+      case "show": args = input.path ? ["show", `${first}:${literal[0]}`] : ["show", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", ...(input.format === "stat" ? ["--stat"] : []), first!, "--", ...scoped]; break;
+      case "log": args = ["log", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", `--max-count=${input.maxCount ?? 20}`, ...(input.format === "oneline" ? ["--oneline"] : input.format === "stat" ? ["--stat"] : []), ...(spec ? [spec] : []), ...(literal.length ? ["--", ...literal] : input.format === "stat" ? ["--full-history", "--sparse", "--", ...scoped] : [])]; break;
       case "diff": args = ["diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", ...(input.format === "stat" ? ["--stat"] : input.format === "name-only" ? ["--name-only"] : []), first!, ...(second ? [second] : []), "--", ...scoped]; break;
       case "blame": args = ["blame", "--no-textconv", ...(input.startLine ? ["-L", `${input.startLine},${input.endLine}`] : []), ...(first ? [first] : []), "--", literal[0]!]; break;
       case "ls-tree": {
