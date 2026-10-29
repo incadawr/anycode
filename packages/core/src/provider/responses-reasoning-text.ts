@@ -1,15 +1,4 @@
-/**
- * Recovers reasoning that an OpenAI Responses endpoint streams as
- * `reasoning_text` (GitHub #27). `@ai-sdk/openai@4.0.14` parses
- * `response.reasoning_text.delta`/`.done` as unknown chunks and never reads a
- * reasoning item's `content`, so that text never becomes a reasoning part.
- * model-port enables `includeRawChunks` on this transport and passes every
- * fullStream part of ONE attempt through `observe`; the returned core events
- * are yielded before that part's own translation. Block ids reuse the SDK's
- * `${itemId}:0`, so the text fills the block the SDK opens on
- * `output_item.added`; when an item also has a summary, the summary wins if
- * it arrives first. Text arriving before a summary can concatenate with it.
- */
+/** Recover Responses reasoning_text events before the SDK buffers its stream. */
 import type { ModelStreamEvent } from "../types/events.js";
 
 export type ReasoningEvent = Extract<
@@ -81,9 +70,15 @@ export class ResponsesReasoningTextRecovery {
         if (!isRecord(item) || item.type !== "reasoning") return [];
         const itemId = itemIdFrom(item.id);
         const events: ReasoningEvent[] = [];
-        if (!this.#summarized.has(itemId) && !this.#hasText.has(itemId) && !this.#done.has(itemId)) {
-          const text = reasoningContentText(item.content);
-          if (text !== "") events.push(...this.#emit(itemId, text));
+        if (!this.#summarized.has(itemId) && !this.#done.has(itemId) && Array.isArray(item.content)) {
+          const missing: string[] = [];
+          item.content.forEach((entry, index) => {
+            if (isRecord(entry) && entry.type === "reasoning_text" && typeof entry.text === "string" && entry.text !== "" && !this.#streamedParts.has(partKey(itemId, index))) {
+              this.#streamedParts.add(partKey(itemId, index));
+              missing.push(entry.text);
+            }
+          });
+          if (missing.length > 0) events.push(...this.#emit(itemId, (this.#hasText.has(itemId) ? PART_SEPARATOR : "") + missing.join(PART_SEPARATOR)));
         }
         this.#done.add(itemId);
         const id = blockId(itemId);
@@ -140,7 +135,7 @@ function itemIdOfBlock(partId: string): string {
 function partKey(itemId: string, contentIndex: unknown): string {
   return `${itemId}#${typeof contentIndex === "number" ? contentIndex : 0}`;
 }
-function reasoningContentText(content: unknown): string {
+export function reasoningContentText(content: unknown): string {
   if (!Array.isArray(content)) return "";
   const texts: string[] = [];
   for (const entry of content) {
