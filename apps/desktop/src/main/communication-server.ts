@@ -574,7 +574,8 @@ export async function startCommunicationServer(options: CommunicationServerOptio
       case "get_session_result":
       case "get_session_status": {
         const input = sessionSchema.parse(raw); const tab = await requireSession(input.sessionId);
-        if (name === "get_session_status" && (tab.hostFailure || tab.missingWorkspace)) return { ...tab, state: "crash_looped" };
+        if (name === "get_session_status" && tab.missingWorkspace) return { ...tab, state: "missing_workspace" };
+        if (name === "get_session_status" && tab.hostFailure) return { ...tab, state: "crash_looped" };
         const status = await options.manager.communicationRequest(input.sessionId, name, undefined, tab.workspace);
         return { ...tab, ...(status as object) };
       }

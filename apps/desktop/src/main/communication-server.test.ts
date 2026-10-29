@@ -87,8 +87,9 @@ describe("production communication MCP over real SDK HTTP", () => {
     const f = await fixture();
     f.manager.listTabs = () => [{ sessionId: "allowed", workspace: f.dir, state: "crash_looped", pid: null, engine: "core", missingWorkspace: true }];
     const status = value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } }));
-    expect(status).toMatchObject({ state: "crash_looped", missingWorkspace: true });
+    expect(status).toMatchObject({ sessionId: "allowed", engine: "core", state: "missing_workspace", missingWorkspace: true });
     expect(status).not.toHaveProperty("hostFailure");
+    expect(status).not.toHaveProperty("model");
     expect(f.request).not.toHaveBeenCalled();
   });
   it("initializes, lists/calls tools and enforces auth, origin and workspace scope", async () => {
