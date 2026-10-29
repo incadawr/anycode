@@ -1,3 +1,4 @@
+import { forwardSessionActivity } from "./activity-forwarding.js";
 import { contextSnapshotOptions } from "./context-snapshot.js";
 import { discoverLoginPath, mcpProblemStatuses, codexMcpStatus, claudeMcpStatuses, forwardProblemStatuses } from "./mcp-login-path.js";
 import { readRoleSettings } from "./role-settings.js";
@@ -5166,7 +5167,7 @@ async function boot(): Promise<void> {
 }
 
 const ready = boot();
-void ready.then(() => session?.observeActivity((state) => { process.parentPort.postMessage({ type: "session_activity", state }); }));
+void ready.then(() => { if (session) forwardSessionActivity(session, (message) => process.parentPort.postMessage(message)); });
 void ready.then(() => session?.observeAgentDeliveries((delivery) => { process.parentPort.postMessage({ type: "communication_delivery", delivery }); }));
 
 async function handleShutdown(): Promise<void> {

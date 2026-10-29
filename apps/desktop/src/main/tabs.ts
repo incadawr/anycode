@@ -3827,6 +3827,7 @@ export class TabHostManager {
         tab.proc = null;
       }
     }
+    if (tab.proc === null) tab.activityState = "idle";
   }
 
   /**
