@@ -1721,7 +1721,7 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
   const full = createAgentTool({ sessionTier: true });
 
   function roleCtx(
-    route: { entries: Array<Record<string, string | number>>; turnBudget?: number } | null,
+    route: { entries: Array<Record<string, string | number>>; skipped?: Array<{ entry: Record<string, string | number>; reason: string }>; turnBudget?: number } | null,
   ): { ctx: ToolContext; port: SessionSubagentPort; seen: () => SessionSubagentRequest | undefined } {
     let seen: SessionSubagentRequest | undefined;
     const port: SessionSubagentPort = {
@@ -1742,7 +1742,7 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
           ? null
           : ({
               entries: route.entries as never,
-              skipped: [],
+              skipped: route.skipped ?? [],
               ...(route.turnBudget !== undefined ? { turnBudget: route.turnBudget } : {}),
             } as never),
     };
@@ -1767,8 +1767,14 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
   });
 
   it("uses the role body while routing healthy, fallback, and exhausted models", async () => {
-    for (const model of ["primary", "fallback", undefined]) {
-      const { ctx, seen } = roleCtx({ entries: model ? [{ model }] : [] });
+    const primary = { entry: { model: "stale-primary" }, reason: "cooling down" };
+    const cases = [
+      { entries: [{ model: "stale-primary" }], skipped: [], model: "stale-primary" },
+      { entries: [{ model: "fallback" }], skipped: [primary], model: "fallback" },
+      { entries: [], skipped: [primary, { entry: { model: "fallback" }, reason: "unavailable" }], model: undefined },
+    ];
+    for (const { entries, skipped, model } of cases) {
+      const { ctx, seen } = roleCtx({ entries, skipped });
       await full.handler({ description: "d", prompt: "task", tier: "session", agent_type: "executor" }, ctx);
       expect(seen()?.prompt).toBe("role body\n\n---\n\ntask");
       if (model) expect(seen()?.model).toBe(model);
