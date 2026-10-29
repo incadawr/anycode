@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 import { SqlitePersistenceAdapter } from "@anycode/core";
 import { describe, expect, it, vi } from "vitest";
@@ -31,6 +32,7 @@ describe("native context boot", () => {
     const argv = process.argv;
     try {
       for (const restart of [false, true]) {
+        if (restart) writeFileSync(binary, source.replace("totalTokens: 1000, maxTokens: 200000", "totalTokens: 5000, maxTokens: 200000"));
         vi.resetModules();
         const result = await bootHostInTempProfile(async ({ parent, profile, requestShutdown, waitForStopped }) => {
           const port = new Port();
@@ -95,5 +97,77 @@ describe("native context boot", () => {
         expect(result.stopped).toBe(true);
       }
     } finally { process.argv = argv; rmSync(dir, { recursive: true, force: true }); }
+  }, 60000);
+});
+
+
+describe("core context boot", () => {
+  it("restores the persisted turn reading through the host restart", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "core-context-boot-"));
+    const saved = join(dir, "saved.sqlite");
+    const argv = process.argv;
+    const server = createServer((request, response) => {
+      request.resume();
+      request.on("end", () => {
+        const base = { id: "fixture", object: "chat.completion.chunk", created: 0, model: "fixture-model" };
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "done" }, finish_reason: null }] })}\n\n`);
+        response.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 12345, completion_tokens: 12, total_tokens: 12357 } })}\n\n`);
+        response.end("data: [DONE]\n\n");
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (address === null || typeof address === "string") throw new Error("No fixture address");
+    let reading: { estimatedTokens: number; budgetTokens: number; source: string };
+    try {
+      for (const restart of [false, true]) {
+        vi.resetModules();
+        const result = await bootHostInTempProfile(async ({ parent, profile, requestShutdown, waitForStopped }) => {
+          const port = new Port();
+          parent.emit("message", { ports: [port], data: {} });
+          await vi.waitFor(() => expect(port.listenerCount("message")).toBeGreaterThan(0), { timeout: 15000 });
+          port.send({ type: "ui_ready" });
+          await vi.waitFor(() => expect(port.messages.some(m => m.type === "host_ready")).toBe(true), { timeout: 15000 });
+          if (restart) {
+            expect(port.messages.find(m => m.type === "host_ready").contextUsage).toEqual(reading);
+          } else {
+            port.send({ type: "user_message", requestId: "turn", text: "hello" });
+            await vi.waitFor(() => expect(port.messages.some(m => m.type === "agent_event" && m.event.type === "context_usage" && m.event.source === "provider")).toBe(true), { timeout: 15000 });
+          }
+          requestShutdown();
+          expect(await waitForStopped(15000)).toBe(true);
+          const db = new SqlitePersistenceAdapter(profile.dbPath);
+          const snapshot = JSON.parse((await db.loadContextUsage("core-session"))!);
+          expect(snapshot).toMatchObject({ engine: "core", model: "fixture-model", source: "provider" });
+          if (!restart) {
+            reading = { estimatedTokens: snapshot.estimatedTokens, budgetTokens: snapshot.budgetTokens, source: snapshot.source };
+            expect(reading.estimatedTokens).toBeGreaterThan(10000);
+          }
+          await db.close();
+          copyFileSync(profile.dbPath, saved);
+        }, {
+          extraEnv: { ANYCODE_MODEL: "fixture-model", ANYCODE_BASE_URL: `http://127.0.0.1:${address.port}/v1`, ANYCODE_API_KEY: "test", ANYCODE_PROVIDER_TRANSPORT: "openai-chat-completions", ANYCODE_CONTEXT_WINDOW: "200000" },
+          boot: async () => {
+            process.argv = [argv[0]!, argv[1]!, "--resume", "core-session"];
+            process.chdir(dir);
+            const path = process.env.ANYCODE_DB_PATH!;
+            if (restart) copyFileSync(saved, path);
+            else {
+              const db = new SqlitePersistenceAdapter(path);
+              await db.createSession({ id: "core-session", workspace: process.cwd(), model: "fixture-model", mode: "build", engineId: "core" });
+              await db.close();
+            }
+            await import("./index.js");
+          },
+        });
+        if (result.error) throw result.error;
+        expect(result.stopped).toBe(true);
+      }
+    } finally {
+      process.argv = argv;
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      rmSync(dir, { recursive: true, force: true });
+    }
   }, 60000);
 });

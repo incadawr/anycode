@@ -499,7 +499,7 @@ describe("CodexEngine — native session boot", () => {
     };
     const connected = await resumeNativeCodexSession(server, "/work", "persisted-thread");
     expect(connected.initialContextUsage).toEqual({ estimatedTokens: 13500, budgetTokens: 353400, source: "provider" });
-    await connected.engine.dispose();
+    await connected.engine.dispose("session-close");
   });
 
   it("accepts a GCP account returned by Codex 0.165", async () => {
