@@ -13,7 +13,7 @@ import type { ReasoningEffort } from "@anycode/core";
 export interface CoreEngineOptions {
   loop: AgentLoop;
   config: AgentLoopConfig;
-  switchModelImpl?: (id: string, effort: ReasoningEffort) => ModelSwitchResult;
+  switchModelImpl?: (id: string, effort: ReasoningEffort, effortExplicit?: boolean) => ModelSwitchResult;
   resolveSelectedEffort?: (effort: ReasoningEffort) => ReasoningEffort | undefined;
   capabilities?: EngineCapabilities;
   /**

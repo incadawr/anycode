@@ -94,7 +94,7 @@ function asTerminalPort(fake: FakeTerminalPort): MessagePort {
   return fake as unknown as MessagePort;
 }
 
-const HOST_READY = (workspace: string, sessionId: string): HostToUiMessage => ({
+const HOST_READY = (workspace: string, sessionId: string): Extract<HostToUiMessage, {type:"host_ready"}> => ({
   type: "host_ready",
   workspace,
   mode: "build",
@@ -1093,6 +1093,16 @@ describe("tab-registry — queueInitialPrompt core reasoning-effort seam (TASK.1
     port.emit(HOST_READY("/ws/a", "sess-a"));
 
     expect(sentTypes(port)).toEqual(["ui_ready", "set_mode", "set_model", "set_reasoning_effort", "user_message"]);
+  });
+
+  it("sends explicit effort after a model change even when it equals the old model's boot effort", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    registry.queueInitialPrompt("tab-a", "hello", "model-b", undefined, undefined, undefined, "high");
+    port.emit({...HOST_READY("/ws/a", "sess-a"), reasoningEffort:"high"});
+    expect(sentTypes(port)).toEqual(["ui_ready", "set_model", "set_reasoning_effort", "user_message"]);
   });
 
   it("sends nothing when the pick already equals the host's boot effort", () => {

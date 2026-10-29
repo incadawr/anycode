@@ -1004,6 +1004,12 @@ export interface PendingEngineChange {
   effort?: string;
 }
 
+export interface ModelSelectionAck {
+  kind: "model" | "effort";
+  model: string | null;
+  effort: ReasoningEffort;
+}
+
 export interface DesktopState {
   connection: ConnectionPhase;
   /**
@@ -1100,6 +1106,7 @@ export interface DesktopState {
   imageFallback: boolean | undefined;
   /** Taskana 4127: host says the context window is the assumed 8K fallback (set by host_ready/model_changed). */
   contextWindowAssumed: boolean | undefined;
+  modelSettingsConnectionId: string | null | undefined;
   /**
    * Taskana 4110 (TASK.123): the host's steering verdict from `host_ready`
    * (engine-level: core's deferred-injection slot / Codex app-server steer).
@@ -1143,6 +1150,7 @@ export interface DesktopState {
    */
   networkWaitEpisodes: { parent: number; subagent: number };
   /** Last `context_usage` reading (design §2.12); null before the first one arrives in a session. */
+  modelSelectionAck?: ModelSelectionAck | null;
   contextUsage: ContextUsage | null;
   /** Last fatal message from the host (e.g. sanitizer failure); null once nothing has fired yet. */
   lastFatal: string | null;
@@ -1537,6 +1545,7 @@ interface SessionSlice {
   workspaceMissing: boolean;
   /** Taskana 4772 review F2: see DesktopState.networkWaitEpisodes. */
   networkWaitEpisodes: { parent: number; subagent: number };
+  modelSelectionAck?: ModelSelectionAck | null;
   contextUsage: ContextUsage | null;
   mcpServers: McpServerStatus[];
   lspServers: LspServerStatus[];
@@ -1610,6 +1619,7 @@ function initialSessionSlice(): SessionSlice {
     // (parent + inline-subagent children share one network, so both can park
     // at once). waitingForNetwork is its `sum > 0` projection.
     networkWaitEpisodes: { parent: 0, subagent: 0 },
+    modelSelectionAck: null,
     contextUsage: null,
     mcpServers: [],
     lspServers: [],
@@ -4324,6 +4334,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       imageInput: undefined,
       imageFallback: undefined,
       contextWindowAssumed: undefined,
+      modelSettingsConnectionId: undefined,
       steering: null,
       ...initialSessionSlice(),
       lastFatal: null,
@@ -4424,6 +4435,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               // `imageInput` alone.
               imageFallback: message.imageFallback,
               contextWindowAssumed: message.contextWindowAssumed,
+              modelSettingsConnectionId: message.modelSettingsConnectionId,
               // Taskana 4110 (TASK.123): the engine's live steering verdict.
               // Absent (legacy host / engine without the seam) -> null -> the
               // composer's steer branch never engages, the queue stays.
@@ -4441,6 +4453,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             return;
           case "reasoning_effort_changed":
             set({
+              modelSelectionAck: {kind: "effort", model: get().model, effort: message.effort},
               reasoningEffort: message.effort,
               ...(message.availableEffortLevels !== undefined ? { availableEffortLevels: message.availableEffortLevels } : {}),
             });
@@ -4462,6 +4475,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // message is core-only in practice. No engine-projection handling
             // needed here.
             set({
+              contextUsage: message.contextUsage ?? null,
+              modelSelectionAck: {kind: "model", model: message.model, effort: message.selectedReasoningEffort ?? message.reasoningEffort},
               model: message.model,
               reasoningEffort: message.reasoningEffort,
               availableEffortLevels: message.availableEffortLevels,

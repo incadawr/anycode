@@ -250,7 +250,6 @@ import {
   mapChildRunStatusToNotification,
   matchCatalogEntryByBaseUrl,
   parseImageInputModelOverride,
-  resolveContextWindowInfo,
   resolveEffortLevels,
   resolveImageInput,
   type ImageModalityLookup,
@@ -374,6 +373,7 @@ import {
   isChildSessionBoot,
   parseHostArgs,
   readConnectionModelCapabilities,
+  readConnectionModelSettingsSync,
   resolveChildMaxTurns,
   resolveEngineDraftPresetId,
   repairDanglingToolCalls,
@@ -434,6 +434,7 @@ const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE";
 import { resolveExtensionsHomeOverride, resolveSessionHistoryMaxItems } from "./dev-home.js";
 import { buildCheckpointService } from "./checkpoints.js";
 import { GitBridge } from "./git-bridge.js";
+import { createConnectionModelSettings } from "./connection-model-settings.js";
 import { CoreEngine } from "./engines/core-engine.js";
 import { beginEngineBootstrap, type EngineBootstrap } from "./engines/bootstrap.js";
 import { selectEnginePlugin, type EnginePlugin } from "./engines/registry.js";
@@ -3368,13 +3369,28 @@ async function boot(): Promise<void> {
     // names the old connection at boot. Main stamps the env from
     // `tab.connectionId` on every spawn, so it is the connection whose
     // credentials this host actually talks to; the row pin is the fallback.
-    const liveCapsConnectionId =
-      forkConnectionId !== undefined && forkConnectionId.trim() !== "" ? forkConnectionId : sessionMeta.connectionId;
+    const liveCapsConnectionId = forkConnectionId?.trim() ||
+      process.env.ANYCODE_MODEL_SETTINGS_CONNECTION_ID?.trim() || sessionMeta.connectionId;
     const liveCapsMap = await readConnectionModelCapabilities(
       liveCapsConnectionId,
       settingsPathOverride !== undefined && settingsPathOverride.trim() !== "" ? settingsPathOverride : undefined,
     );
-    const liveCapsFor = (id: string): LiveModelCapabilities | undefined => liveCapsMap?.[id];
+    const readModelSettings = () => readConnectionModelSettingsSync(liveCapsConnectionId, settingsPathOverride?.trim() || undefined);
+    const initialModelSettings = readModelSettings();
+    const connectionModelSettings = createConnectionModelSettings({
+      connection: initialModelSettings ?? undefined,
+      ...(liveCapsConnectionId ? { readConnection: readModelSettings } : {}),
+      initialReadSucceeded: Boolean(liveCapsConnectionId) && initialModelSettings !== null,
+      catalogEntry,
+      envContextWindow: envConfig.contextWindowTokens,
+      envContextWindowFromSettings: process.env.ANYCODE_CONTEXT_WINDOW_FROM_SETTINGS === "1",
+      envContextWindowModel: envConfig.contextWindowModel,
+      envReasoningEffort: envConfig.reasoningEffort,
+      envReasoningEffortModel: process.env.ANYCODE_REASONING_EFFORT_MODEL?.trim() || undefined,
+      envReasoningEffortFromSettings: Boolean(process.env.ANYCODE_REASONING_EFFORT_MODEL?.trim()),
+      liveCapabilitiesFor: (id) => liveCapsMap !== undefined && Object.hasOwn(liveCapsMap, id) ? liveCapsMap[id] : undefined,
+    });
+    const liveCapsFor = (id: string): LiveModelCapabilities | undefined => connectionModelSettings.capabilitiesFor(id);
     const gitForWorkspace = (cwd: string, operationSignal?: AbortSignal) =>
       new NodeGitAdapter({
         exec: execAdapter,
@@ -3512,7 +3528,7 @@ async function boot(): Promise<void> {
 
     historySink = new WriteBehindHistorySink(persistence, sessionMeta.id);
     const tokenizer = await createDefaultTokenizer();
-    const bootContextInfo = resolveContextWindowInfo(envConfig.model, catalogEntry, envConfig.contextWindowTokens, envConfig.contextWindowModel);
+    const bootContextInfo = connectionModelSettings.contextFor(envConfig.model);
     const bootContextWindow: number | undefined = bootContextInfo.tokens;
     // Taskana 4150: a detached child is a subagent too; the 100 KB finalText cap
     // makes output beyond ~32k tokens paid-for-and-discarded, so clamp it here.
@@ -3527,9 +3543,11 @@ async function boot(): Promise<void> {
       (modelId, applied) =>
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
     ));
-    const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, envConfig.reasoningEffort, liveCapsFor(envConfig.model));
+    const bootSelectedEffort = connectionModelSettings.effortFor(envConfig.model);
+    const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, bootSelectedEffort, liveCapsFor(envConfig.model));
     // Preserve explicit selections even when the current model suppresses them.
-    selectedEffort = envConfig.reasoningEffort ?? bootReasoningEffort ?? "off";
+    selectedEffort = bootSelectedEffort ?? bootReasoningEffort ?? "off";
+    connectionModelSettings.remember(envConfig.model, selectedEffort);
     const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry, liveCapsFor(envConfig.model));
     // TASK.162 (F6): the same catalog + env overrides the three boot
     // resolutions above read, packaged once so an Agent-tool `model` override
@@ -3547,6 +3565,7 @@ async function boot(): Promise<void> {
       onStubFallback: (modelId, applied) =>
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
       liveCapabilitiesFor: liveCapsFor,
+      contextWindowFor: (id) => connectionModelSettings.contextFor(id).tokens,
     });
     const history = new ConversationHistory({ initial: initialHistory, sink: historySink, tokenizer });
 
@@ -4589,7 +4608,8 @@ async function boot(): Promise<void> {
     // Slice P7.15 (F14, design §2.1): the narrow mid-session model-switch
     // callback (mirror of the CLI's deps.model.set). It stays host-owned while
     // CoreEngine exposes it through the neutral SessionEngine seam.
-    const switchModelImpl = (id: string, selectedTier: ReasoningEffort) => {
+    const switchModelImpl = (id: string, selectedTier: ReasoningEffort, effortExplicit = false) => {
+        selectedTier = connectionModelSettings.switchEffort(currentModel, id, selectedTier, effortExplicit);
         // TASK.162 (§0b): Session hands its OWN preserved user-selected tier
         // here, so this is the second (and only other) writer that keeps the
         // host cell faithful — without it a tier selected before a switch
@@ -4614,7 +4634,7 @@ async function boot(): Promise<void> {
         // model binding is absent or names THIS id (TASK.142) — a pair saved for
         // model A never leaks its window onto B, and an unknown id re-resolves
         // the assumed fallback rather than a stale previous model's window.
-        const contextInfo = resolveContextWindowInfo(id, catalogEntry, envConfig.contextWindowTokens, envConfig.contextWindowModel);
+        const contextInfo = connectionModelSettings.contextFor(id);
         const contextWindow = contextInfo.tokens;
         liveContextWindowAssumed = contextInfo.source === "assumed";
         config.maxOutputTokens = clampChildOutput(resolveMaxOutputTokens(
@@ -4651,8 +4671,11 @@ async function boot(): Promise<void> {
           });
         }
         console.log(`[host] model switched: ${previous} -> ${id}`);
+        const usage = loop.contextInfo();
         return {
           model: id,
+          contextUsage: {estimatedTokens: usage.estimatedTokens, budgetTokens: usage.effectiveWindowTokens, source: usage.source},
+          selectedReasoningEffort: selectedTier,
           reasoningEffort: resolvedEffort ?? "off",
           ...(availableEffortLevels !== undefined ? { availableEffortLevels } : {}),
         };
@@ -4662,10 +4685,14 @@ async function boot(): Promise<void> {
       config,
       switchModelImpl,
       resolveSelectedEffort: (effort) => resolveReasoningEffort(currentModel, catalogEntry, effort, liveCapsFor(currentModel)),
-      onBeforeTurn: refreshExtensionProfiles,
+      onBeforeTurn: async () => {
+        if (connectionModelSettings.refresh()) session?.refreshModelSettings();
+        await refreshExtensionProfiles();
+      },
       // Preserve the selected tier independently of the model-effective tier.
       onReasoningEffortSet: (effort) => {
         selectedEffort = effort ?? "off";
+        connectionModelSettings.remember(currentModel, selectedEffort);
       },
     });
     const cleanupHandoff = sessionMeta.worktreeCleanup ?? parseCleanupIntent(process.env[WORKTREE_CLEANUP_ENV]);
@@ -4979,7 +5006,7 @@ async function boot(): Promise<void> {
         const effort = picked.entry.effort === undefined || picked.entry.effort === "xhigh"
           ? undefined
           : picked.entry.effort;
-        switchModelImpl(switchModel, effort ?? selectedEffort ?? "medium");
+        switchModelImpl(switchModel, effort ?? selectedEffort ?? "medium", effort !== undefined);
         return `Orchestrator: primary route unhealthy (${reason}), running on ${switchModel}.`;
       },
       // Slice P7.8 (design slice-P7.8-cut.md §3.2, mirror of the `lsp` seam
@@ -4992,6 +5019,7 @@ async function boot(): Promise<void> {
       },
       imageInputEnabled: media.imageInputEnabled,
       contextWindowAssumed: () => liveContextWindowAssumed,
+      modelSettingsConnectionId: liveCapsConnectionId ?? null,
       // TASK.198 срез C: core-only wiring (codex/claude Sessions never pass
       // these two — "codex/claude НЕ задеты (замыкание не установлено)").
       imageFallbackAvailable: media.recognizerConfigured,

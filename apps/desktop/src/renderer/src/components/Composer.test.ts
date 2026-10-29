@@ -16,6 +16,7 @@ import {
   ctxPopoverHeadline,
   ctxMeterLabel,
   CTX_WINDOW_ASSUMED_HINT,
+  ctxWindowAssumedHint,
   ctxPopoverLoading,
   ctxPopoverRows,
   ctxRingDashOffset,
@@ -452,7 +453,12 @@ describe("composer image helpers", () => {
 
 describe("assumed context window hint (Taskana 4127)", () => {
   it("states the assumption and where to fix it", () => {
-    expect(CTX_WINDOW_ASSUMED_HINT).toBe("Context window unknown \u2014 assumed 8K. Set it in the connection settings.");
+    expect(CTX_WINDOW_ASSUMED_HINT).toContain("assumed 8K total");
+    const usage = { estimatedTokens: 15500, budgetTokens: 2048 } as Parameters<typeof ctxWindowAssumedHint>[0];
+    expect(ctxWindowAssumedHint(usage)).toContain("output reserve: 2K");
+    expect(ctxWindowAssumedHint(usage)).toContain("connection settings");
+    expect(ctxPopoverHeadline(usage, 757)).toContain("/2K");
+    expect(ctxWindowAssumedHint({ ...usage!, budgetTokens: 4096 })).toContain("output reserve: 4.1K");
   });
 
   it("marks the ctx meter label only when the window is assumed", () => {

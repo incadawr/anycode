@@ -68,7 +68,7 @@ import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/
 import { PROVIDER_QUOTA_EVENT_TYPE } from "../shared/provider-quota.js";
 import { clampSessionLimit, SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
 import type { RecognizerConfigChanged } from "../shared/recognizer.js";
-import { ENV_CONNECTION_ID, ENV_MAX_TURNS, ENV_MODEL, ENV_REASONING_EFFORT } from "./host-env.js";
+import { ENV_CONNECTION_ID, ENV_MAX_TURNS, ENV_MODEL, ENV_REASONING_EFFORT, ENV_REASONING_EFFORT_MODEL } from "./host-env.js";
 import type { CloseTabResult } from "../shared/tabs.js";
 import { sessionToolEnv } from "../shared/session-env.js";
 import { ENV_MCP_SECRETS } from "../shared/mcp-secrets.js";
@@ -1764,7 +1764,7 @@ export class TabHostManager {
           // Core children: xhigh maps to the existing core "max"; absent keeps
           // the absent-field behavior (nothing stamped).
           ...(tab.effortOverride !== undefined
-            ? { [ENV_REASONING_EFFORT]: tab.effortOverride === "xhigh" ? "max" : tab.effortOverride }
+            ? { [ENV_REASONING_EFFORT]: tab.effortOverride === "xhigh" ? "max" : tab.effortOverride, [ENV_REASONING_EFFORT_MODEL]: "" }
             : {}),
           ...engineEnvOverlay,
           // The session's tools identify their session. Stamped

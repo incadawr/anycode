@@ -1016,6 +1016,7 @@ export interface SessionOptions {
    * the wire field is omitted and the UI shows no hint.
    */
   contextWindowAssumed?: () => boolean;
+  modelSettingsConnectionId?: string | null;
   /**
    * TASK.198 срез C (plan §1.3): host-owned commit for a live recognizer-
    * config push (main's RecognizerConfigChanged, TASK.198 E1). Session's own
@@ -1262,6 +1263,7 @@ export class Session {
   /** TASK.198 срез C: see SessionOptions.imageFallbackAvailable's own doc. */
   private readonly imageFallbackAvailable: (() => boolean) | undefined;
   private readonly contextWindowAssumed: (() => boolean) | undefined;
+  private readonly modelSettingsConnectionId: string | null | undefined;
   /** TASK.198 срез C: see SessionOptions.applyRecognizerConfig's own doc. */
   private readonly applyRecognizerConfigImpl: ((endpoint: RecognizerEndpoint | null) => void) | undefined;
   /**
@@ -1692,6 +1694,7 @@ export class Session {
     this.imageInputEnabled = options.imageInputEnabled;
     this.imageFallbackAvailable = options.imageFallbackAvailable;
     this.contextWindowAssumed = options.contextWindowAssumed;
+    this.modelSettingsConnectionId = options.modelSettingsConnectionId;
     this.applyRecognizerConfigImpl = options.applyRecognizerConfig;
     this.refineTitle = options.refineTitle;
     this.reasoningSupported = options.reasoningSupported ?? true;
@@ -2452,6 +2455,7 @@ export class Session {
           // claude, legacy tests) -> field absent, no fallback-aware gating.
           ...(this.imageFallbackAvailable !== undefined ? { imageFallback: this.imageFallbackAvailable() } : {}),
           ...(this.contextWindowAssumed !== undefined ? { contextWindowAssumed: this.contextWindowAssumed() } : {}),
+          ...(this.modelSettingsConnectionId !== undefined ? { modelSettingsConnectionId: this.modelSettingsConnectionId } : {}),
           // Taskana 4110 (TASK.123): the engine's live steering verdict —
           // additive-optional, absent on legacy hosts/engines without the seam
           // (mirrors imageInput/imageFallback's discipline above). 4110
@@ -2907,7 +2911,7 @@ export class Session {
       // switch below re-resolves it against the new model's capabilities.
       this.selectedEffort = effort;
     }
-    if (!this.applyModelSwitch(model) && effort !== undefined) {
+    if (!this.applyModelSwitch(model, effort !== undefined) && effort !== undefined) {
       this.applyReasoningEffort(effort);
     }
   }
@@ -2923,20 +2927,30 @@ export class Session {
    * the idle route and Taskana 4895's turn-boundary apply. Returns false when
    * no switch factory is wired (a legacy engine/test double: a silent no-op).
    */
-  private applyModelSwitch(id: string): boolean {
+  /** Host-only refresh at the start of a new core turn, before its first model call. */
+  refreshModelSettings(): void {
+    if (this.engine.id === "core") this.applyModelSwitch(this.model);
+  }
+
+  private applyModelSwitch(id: string, effortExplicit = false): boolean {
     if (this.engine.switchModel === undefined) {
       return false;
     }
     // switchModel runs the full re-budget recipe host-side and returns the
-    // effort state re-resolved for the NEW model. selectedEffort is unchanged
-    // (the user's tier persists across the switch); only the effective effort
-    // and effort-levels follow the new model's capability.
-    const result = this.engine.switchModel(id, this.selectedEffort);
+    // effort state re-resolved for the NEW model. Core also returns that
+    // model's restored selected tier, independently of its effective effort.
+    const result = effortExplicit
+      ? this.engine.switchModel(id, this.selectedEffort, true)
+      : this.engine.switchModel(id, this.selectedEffort);
+    if (result.selectedReasoningEffort !== undefined) this.selectedEffort = result.selectedReasoningEffort;
+    if (result.contextUsage !== undefined) this.checkpointContextUsage = result.contextUsage;
     this.model = result.model;
     this.availableEffortLevels = result.availableEffortLevels;
     this.reasoningSupported = result.availableEffortLevels !== undefined;
     this.outbound.emit({
       type: "model_changed",
+      ...(result.contextUsage !== undefined ? {contextUsage: result.contextUsage} : {}),
+      ...(result.selectedReasoningEffort !== undefined ? {selectedReasoningEffort: result.selectedReasoningEffort} : {}),
       model: result.model,
       reasoningEffort: result.reasoningEffort,
       ...(result.availableEffortLevels !== undefined ? { availableEffortLevels: result.availableEffortLevels } : {}),

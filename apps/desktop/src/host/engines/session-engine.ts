@@ -44,6 +44,8 @@ export interface EngineCapabilities {
 }
 
 export interface ModelSwitchResult {
+  contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
+  selectedReasoningEffort?: ReasoningEffort;
   model: string;
   reasoningEffort: ReasoningEffort;
   availableEffortLevels?: ReasoningEffort[];
@@ -87,7 +89,7 @@ export interface SessionEngine {
   reasoningEffort(): ReasoningEffort | undefined;
   setReasoningEffort(effort: ReasoningEffort | undefined): void;
   setSelectedReasoningEffort?(effort: ReasoningEffort): void;
-  switchModel?(id: string, effort: ReasoningEffort): ModelSwitchResult;
+  switchModel?(id: string, effort: ReasoningEffort, effortExplicit?: boolean): ModelSwitchResult;
   todoReminderSnapshot?(): { count: number; threshold: number } | null;
   runTurn(input: string, options: RunTurnOptions): AsyncIterable<AgentEvent>;
   /** Continue a terminal-control turn after rehost without a synthetic user frame. */

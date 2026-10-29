@@ -44,6 +44,8 @@ export function buildChildModelSettingsResolver(deps: {
   envMaxOutputTokens: number | undefined;
   envContextWindow: number | undefined;
   envContextWindowModel?: string;
+  /** Connection-specific model overrides shared with the desktop parent resolver. */
+  contextWindowFor?: (modelId: string) => number;
   onClamp?: (requested: number, clamped: number, modelId: string) => void;
   onStubFallback?: (modelId: string, applied: number) => void;
   /** Taskana 4118: live /v1/models capabilities, consulted on a catalog miss. */
@@ -55,7 +57,7 @@ export function buildChildModelSettingsResolver(deps: {
       return {
         maxOutputTokens: resolveMaxOutputTokens(modelId, catalogEntry, envMaxOutputTokens, onClamp, onStubFallback),
         reasoningEffort: resolveReasoningEffort(modelId, catalogEntry, selectedTier, liveCapabilitiesFor?.(modelId)),
-        contextWindowTokens: resolveContextWindow(modelId, catalogEntry, envContextWindow, envContextWindowModel),
+        contextWindowTokens: deps.contextWindowFor?.(modelId) ?? resolveContextWindow(modelId, catalogEntry, envContextWindow, envContextWindowModel),
       };
     } catch {
       // Degrades to the same conservative unknown-model shape a catalog-miss

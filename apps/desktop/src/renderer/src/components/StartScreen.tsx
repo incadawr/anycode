@@ -1,3 +1,4 @@
+import { modelCapabilitiesFor, modelOverrideFor } from "../../../shared/model-overrides.js";
 import { resolveProfileRoles, rolesPatch } from "../../../shared/role-profiles.js";
 /**
  * "New Task" start screen (slice P7.12 §4.5 / intake F5#1a, extended by F5#1b
@@ -72,7 +73,6 @@ import { EFFORT_LABELS, modelDisplayName, pillLabel, providerModelsFor, resolveP
 import {
   buildStartModelGroups,
   buildStartModelPopularRows,
-  carryDraftEffort,
   deriveRecentModelIds,
   resolveStartModelEffort,
   startModelDefaultEffort,
@@ -372,9 +372,12 @@ export function selectStartModelRow(
   connectionId: string | undefined,
   modelId: string,
   deps: ModelPickDeps = defaultModelPickDeps(),
+  current?: { connectionId: string | undefined; modelId: string; activeConnectionId: string | undefined },
 ): void {
+  const same = current !== undefined && (connectionId ?? current.activeConnectionId) === current.connectionId && modelId === current.modelId;
   pickModelForDraft(modelId, deps);
   deps.tabsStore.getState().setDraftConnectionId(connectionId);
+  if (!same) deps.tabsStore.getState().setDraftEngineEffort(undefined);
 }
 
 /**
@@ -732,7 +735,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
     chipConnection?.providerId,
     modelChip.modelId,
     snapshot?.catalog,
-    chipConnection?.modelCapabilities?.[modelChip.modelId],
+    modelCapabilitiesFor(chipConnection, modelChip.modelId),
   );
   // Taskana 4894: the provider's documented default tier for that model —
   // the level to show when neither the draft nor the connection has a pick.
@@ -740,7 +743,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
     chipConnection?.providerId,
     modelChip.modelId,
     snapshot?.catalog,
-    chipConnection?.modelCapabilities?.[modelChip.modelId],
+    modelCapabilitiesFor(chipConnection, modelChip.modelId),
   );
   // What that level DISPLAYS and pre-selects: the draft's own pick, else the
   // effort the target connection already persists (what the session would
@@ -748,7 +751,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // default (Taskana 4894), else the vocabulary's first entry.
   const modelEffort = resolveStartModelEffort(
     draft?.engineEffort,
-    chipConnection?.reasoningEffort,
+    modelOverrideFor(chipConnection, modelChip.modelId)?.reasoningEffort ?? chipConnection?.reasoningEffort,
     modelEfforts,
     modelDefaultEffort,
   );
@@ -1280,26 +1283,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   }
 
   function selectModel(rowConnectionId: string, modelId: string): void {
-    selectStartModelRow(startModelRowConnectionId(rowConnectionId, activeConnectionId), modelId);
-    // TASK.131: the effort vocabulary belongs to the model, so an effort pick
-    // survives a model switch only when the NEW model also declares it —
-    // otherwise it is dropped and the connection's own persisted effort
-    // stands. Never coerced to a neighbouring level.
-    const providerId = modelGroups.find((group) => group.connectionId === rowConnectionId)?.providerId;
-    // Taskana 4118: look up the row's connection for its live-declared
-    // capabilities — the vocabulary the host will consult when the catalog
-    // does not know the model.
-    const rowConnection = snapshot?.settings.provider.connections.find(
-      (connection) => connection.id === rowConnectionId,
-    );
-    useTabsStore
-      .getState()
-      .setDraftEngineEffort(
-        carryDraftEffort(
-          draft?.engineEffort,
-          startModelEffortLevels(providerId, modelId, snapshot?.catalog, rowConnection?.modelCapabilities?.[modelId]),
-        ),
-      );
+    selectStartModelRow(startModelRowConnectionId(rowConnectionId, activeConnectionId), modelId, defaultModelPickDeps(), { connectionId: chipConnectionId, modelId: modelChip.modelId, activeConnectionId });
     closeModelMenu(true);
   }
 

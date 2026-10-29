@@ -593,6 +593,7 @@ export type HostToUiMessage =
       imageFallback?: boolean;
       /** Taskana 4127: the active model's context window is the assumed unknown-model fallback (8K). Additive + optional: absent = no hint. */
       contextWindowAssumed?: boolean;
+      modelSettingsConnectionId?: string | null;
       /**
        * Taskana 4110 (TASK.123): the engine's live steering verdict over the
        * deferred-injection slot (core) / app-server steer (codex). Absent on
@@ -861,6 +862,9 @@ export type HostToUiMessage =
   // vision -> non-vision switch. Absent (older host) = no model-level gating.
   | {
       type: "model_changed";
+      /** Budget and selected tier belong to this same model acknowledgement. */
+      contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
+      selectedReasoningEffort?: ReasoningEffort;
       model: string;
       reasoningEffort: ReasoningEffort;
       availableEffortLevels?: ReasoningEffort[];

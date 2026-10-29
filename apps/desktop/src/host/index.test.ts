@@ -3001,37 +3001,17 @@ describe("per-model context window production wiring (TASK.142: pin the REAL cal
       .filter((args) => args.includes("envConfig."));
   }
 
-  it("boot and /model switch both pass the model binding as the 4th argument, and evaluated they resolve B through the catalog", async () => {
+  it("boot and /model switch share a model-aware resolver that preserves the environment binding", async () => {
     const source = await readIndexSource();
-    const calls = callArguments(source, "resolveContextWindowInfo");
-
-    // Exactly the two production call sites (boot + mid-session switch).
-    expect(calls).toHaveLength(2);
-    for (const args of calls) {
-      expect(args).toContain("envConfig.contextWindowModel");
-    }
-
-    // Evaluate the PRODUCTION argument text against a mismatched pair: booting on
-    // B while the saved pair binds A. With the 4th argument this resolves B's
-    // catalog window; dropping it would let A's 50000 override govern B.
-    const envConfig = { model: "glm-4.6", contextWindowTokens: 50_000, contextWindowModel: "glm-5.2" };
-    for (const args of calls) {
-      // The switch call passes the live `id`; the boot call passes envConfig.model.
-      const [modelId, entry, tokens, bound] = new Function(
-        "envConfig",
-        "catalogEntry",
-        "id",
-        `return [${args}];`,
-      )(envConfig, zAiEntry, envConfig.model) as [string, typeof zAiEntry, number, string | undefined];
-      expect(resolveContextWindow(modelId, entry, tokens, bound)).toBe(200_000);
-      // ...and a matching pair DOES apply, so the assertion above is not vacuous.
-      const matched = new Function("envConfig", "catalogEntry", "id", `return [${args}];`)(
-        { ...envConfig, model: "glm-5.2" },
-        zAiEntry,
-        "glm-5.2",
-      ) as [string, typeof zAiEntry, number, string | undefined];
-      expect(resolveContextWindow(matched[0], matched[1], matched[2], matched[3])).toBe(50_000);
-    }
+    expect(source).toContain("const bootContextInfo = connectionModelSettings.contextFor(envConfig.model)");
+    expect(source).toContain("const contextInfo = connectionModelSettings.contextFor(id)");
+    const { createConnectionModelSettings } = await import("./connection-model-settings.js");
+    const settings = createConnectionModelSettings({
+      catalogEntry: zAiEntry, envContextWindow: 50000, envContextWindowModel: "glm-5.2",
+      liveCapabilitiesFor: () => undefined,
+    });
+    expect(settings.contextFor("glm-4.6").tokens).toBe(200000);
+    expect(settings.contextFor("glm-5.2").tokens).toBe(50000);
   });
 
   it("the child resolver is built from the SAME env pair, and the real resolver applies it per child model", async () => {
@@ -3058,8 +3038,13 @@ describe("per-model context window production wiring (TASK.142: pin the REAL cal
       "catalogEntry",
       "console",
       "liveCapsFor",
+      "connectionModelSettings",
       `return ({${production[0]!}});`,
-    )(envConfig, zAiEntry, console, liveCapsFor) as Parameters<typeof buildChildModelSettingsResolver>[0];
+    )(envConfig, zAiEntry, console, liveCapsFor,
+      (await import("./connection-model-settings.js")).createConnectionModelSettings({
+        catalogEntry: zAiEntry, envContextWindow: envConfig.contextWindowTokens,
+        envContextWindowModel: envConfig.contextWindowModel, liveCapabilitiesFor: liveCapsFor,
+      })) as Parameters<typeof buildChildModelSettingsResolver>[0];
     expect(deps.envContextWindowModel).toBe("glm-5.2");
 
     const resolve = buildChildModelSettingsResolver(deps);
@@ -3266,4 +3251,17 @@ describe("host Claude MCP status wiring — one snapshot per system/init (GitHub
     expect(body).not.toContain("publishEngineMcpStatuses()");
     expect(body).not.toContain("engineMcpStatuses =");
   });
+});
+
+
+it("passes a declared fallback-route effort as an explicit model choice", async () => {
+  const source = await (await import("node:fs/promises")).readFile(new URL("./index.ts", import.meta.url), "utf8");
+  const call = source.match(/switchModelImpl\(switchModel, ([^;]+)\);/)?.[1];
+  expect(call).toBeDefined();
+  const [tier, explicit] = new Function("effort", "selectedEffort", `return [${call}];`)("high", "medium");
+  const {createConnectionModelSettings} = await import("./connection-model-settings.js");
+  const settings = createConnectionModelSettings({connection:{modelOverrides:{b:{reasoningEffort:"low"}}}, liveCapabilitiesFor:() => undefined});
+  settings.remember("a", "medium");
+  expect(settings.switchEffort("a", "b", tier, explicit)).toBe("high");
+  expect(settings.switchEffort("b", "a", "high")).toBe("medium");
 });

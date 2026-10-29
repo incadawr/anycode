@@ -1,3 +1,4 @@
+import { modelSettingsTarget } from "../model-settings-target.js";
 /**
  * ModelPill (design slice-P7.15-cut.md §2.2, F14) — the single footer pill
  * that replaces the old effort-`<select>` chip + display-only model `<span>`
@@ -76,7 +77,6 @@ import {
   buildSessionDrillRows,
   isForeignPick,
   pickSessionDrillRow,
-  resolveRebindEffort,
   type ModelDrillPage,
   type ModelDrillRow,
 } from "./model-drill-rows.js";
@@ -386,12 +386,10 @@ export function shouldPersistOnAck(
 }
 
 /**
- * The connection-update request persisted on an acked pick (TASK.45 W10): the
- * ACTIVE connection's `reasoningEffort` is always written (the connection is the
- * source of truth the readiness gate + host-env ladder read, so it doubles as
- * the former top-level `provider.model`); `model` is written only on a MODEL
- * pick — an effort-only pick must not retarget the model. `id` is the connection
- * captured at pick time. Exported for unit testing.
+ * Persist only the user's choice after its ack. A model pick changes the
+ * default model; its incidental effective effort is never a user selection.
+ * An effort pick names the tab's model without retargeting the default, which
+ * may already have changed in another tab.
  */
 export function buildConnectionUpdate(
   connectionId: string,
@@ -401,8 +399,7 @@ export function buildConnectionUpdate(
 ): ConnectionUpdateRequest {
   return {
     id: connectionId,
-    ...(isModelPick ? { model } : {}),
-    reasoningEffort,
+    ...(isModelPick ? { model } : { modelOverrideModel: model, reasoningEffort }),
   };
 }
 
@@ -433,6 +430,30 @@ export function chainWrite(chain: Promise<unknown>, write: () => Promise<unknown
  */
 export const MID_TURN_CHANGE_NOTE = "Model and effort changes apply from the next turn";
 
+export function modelSettingsPick(
+  kind: "model" | "effort", value: string,
+  hostId: string | null | undefined, pinnedId: string | undefined, activeId: string | undefined,
+): PendingPick {
+  return { kind, value, connectionId: modelSettingsTarget(hostId, pinnedId, activeId) };
+}
+
+export function modelSettingsWrites(
+  pending: { model?: PendingPick; effort?: PendingPick },
+  ack: { model: string; effort: ReasoningEffort },
+): ConnectionUpdateRequest[] {
+  const modelPick = pending.model?.value === ack.model ? pending.model : undefined;
+  const effortPick = pending.effort?.value === ack.effort ? pending.effort : undefined;
+  if (modelPick !== undefined) delete pending.model;
+  if (effortPick !== undefined) delete pending.effort;
+  const writes = new Map<string, ConnectionUpdateRequest>();
+  if (modelPick?.connectionId !== undefined) writes.set(modelPick.connectionId, { id: modelPick.connectionId, model: ack.model });
+  if (effortPick?.connectionId !== undefined) writes.set(effortPick.connectionId, {
+    ...writes.get(effortPick.connectionId), id: effortPick.connectionId,
+    modelOverrideModel: ack.model, reasoningEffort: ack.effort,
+  });
+  return [...writes.values()];
+}
+
 export function ModelPill() {
   const sendToHost = useTabSend();
   const storeApi = useTabStoreApi();
@@ -442,11 +463,13 @@ export function ModelPill() {
   const tabId = useContext(TabContext)?.tabId;
   const model = useTabStore((state) => state.model);
   const reasoningEffort = useTabStore((state) => state.reasoningEffort);
+  const modelSelectionAck = useTabStore((state) => state.modelSelectionAck);
   const availableEffortLevels = useTabStore((state) => state.availableEffortLevels);
   const turnStatus = useTabStore((state) => state.turn.status);
   const queueInFlight = useTabStore((state) => state.queueInFlight);
   const connection = useTabStore((state) => state.connection);
   const pinnedConnection = useTabStore((state) => state.pinnedConnection);
+  const modelSettingsConnectionId = useTabStore((state) => state.modelSettingsConnectionId);
   const ready = connection === "ready";
   // Taskana 4895: the tab store's engine projection is `null` ONLY for the core
   // engine (`host_ready` carries no `engine` block for core). Core accepts a
@@ -473,11 +496,13 @@ export function ModelPill() {
   // default-switch. Undefined write-target = no connection configured (env-override
   // / fresh) — the pick still reaches the host, but the ack skips the persist.
   const activeProviderId = snapshot ? activeProviderView(snapshot.settings).id : undefined;
-  const { providerId, writeTargetConnectionId } = resolvePillTarget(
-    pinnedConnection,
-    activeProviderId,
-    snapshot?.settings.provider.activeConnectionId,
+  const writeTargetConnectionId = modelSettingsTarget(
+    modelSettingsConnectionId, pinnedConnection?.connectionId,
+    modelSettingsConnectionId === undefined ? snapshot?.settings.provider.activeConnectionId : undefined,
   );
+  const providerId = snapshot?.settings.provider.connections.find(
+    (connection) => connection.id === writeTargetConnectionId,
+  )?.providerId ?? (modelSettingsConnectionId === undefined ? pinnedConnection?.providerId ?? activeProviderId : undefined);
   // Live-fetched ids on the TARGET connection (same pinned-else-active target
   // as the write path above) take precedence over static catalog hints.
   const targetConnection =
@@ -522,11 +547,8 @@ export function ModelPill() {
   const rootRef = useRef<HTMLDivElement>(null);
   const chipRef = useRef<HTMLButtonElement>(null);
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  // The one pending-pick slot (design §2.4) — never holds more than one pick
-  // at a time (a second pick before the first acks would overwrite it, but
-  // the chip is closed/disabled between send and ack in practice since a
-  // pick immediately closes the popover).
-  const pendingPickRef = useRef<PendingPick | null>(null);
+  // Model and effort picks are independent until their acknowledgements arrive.
+  const pendingPickRef = useRef<{model?: PendingPick; effort?: PendingPick}>({});
   // Serializes the ack-triggered persist writes below (codex P2 defect fix):
   // guarantees writes run in ack order even though `setPatch` itself is an
   // unawaited, unlocked load/merge/save.
@@ -545,7 +567,7 @@ export function ModelPill() {
   const slotsTabRef = useRef<string | undefined>(tabId);
   if (slotsTabRef.current !== tabId) {
     slotsTabRef.current = tabId;
-    pendingPickRef.current = null;
+    pendingPickRef.current = {};
   }
   // Carries the effort reset a rebind decided (§D3) from the pick to the ledger
   // line the pin-watching effect writes once the new host is up; cleared as
@@ -762,8 +784,8 @@ export function ModelPill() {
     // re-picking the model still on screen must travel too: it replaces the
     // queued pick instead of being mistaken for a no-op. `pendingPickRef` is
     // the only record of a pick the host has not acked yet.
-    if (id !== model || pendingPickRef.current !== null) {
-      pendingPickRef.current = { kind: "model", value: id, connectionId: writeTargetConnectionId };
+    if (id !== model || (pendingPickRef.current.model !== undefined || pendingPickRef.current.effort !== undefined)) {
+      pendingPickRef.current.model = modelSettingsPick("model", id, modelSettingsConnectionId, pinnedConnection?.connectionId, snapshot?.settings.provider.activeConnectionId);
       sendToHost({ type: "set_model", model: id });
     }
     close(true);
@@ -774,8 +796,8 @@ export function ModelPill() {
       return;
     }
     // Same queued-pick rule as pickModel above.
-    if (effort !== reasoningEffort || pendingPickRef.current !== null) {
-      pendingPickRef.current = { kind: "effort", value: effort, connectionId: writeTargetConnectionId };
+    if (effort !== reasoningEffort || (pendingPickRef.current.model !== undefined || pendingPickRef.current.effort !== undefined)) {
+      pendingPickRef.current.effort = modelSettingsPick("effort", effort, modelSettingsConnectionId, pinnedConnection?.connectionId, snapshot?.settings.provider.activeConnectionId);
       sendToHost({ type: "set_reasoning_effort", effort });
     }
     close(true);
@@ -824,28 +846,12 @@ export function ModelPill() {
       failRebind("connection_missing");
       return;
     }
-    // §D3: the running effort travels only when the TARGET model's own
-    // vocabulary accepts it; otherwise it is reset — and the reset is named in
-    // the ledger line the switch appends, never substituted silently.
-    const decision = resolveRebindEffort({
-      currentEffort: reasoningEffort,
-      targetProviderId: target.providerId,
-      targetModelId: modelId,
-      catalog: snapshot?.catalog,
-      targetConnectionEffort: target.reasoningEffort,
-      // Taskana 4118: the target connection's live-declared vocabulary for a
-      // model the catalog does not know.
-      targetModelCapabilities: target.modelCapabilities?.[modelId],
-    });
-    const resolvedEffort = decision.carried ?? decision.resetTo;
-    // A model with no vocabulary at all leaves the connection's effort alone:
-    // writing one the host would reject helps nobody.
-    const nextEffort = resolvedEffort === undefined ? undefined : asReasoningEffort(resolvedEffort);
+    // The target model keeps its own saved effort; a rebind must not replace
+    // that choice with the source model's effective tier.
     close(false);
     const written = await connectionUpdate({
       id: connectionId,
       model: modelId,
-      ...(nextEffort !== undefined ? { reasoningEffort: nextEffort } : {}),
     });
     if (!written.ok) {
       // settings-store already raised its own notice for the write itself; this
@@ -853,7 +859,7 @@ export function ModelPill() {
       failRebind(written.reason);
       return;
     }
-    effortResetRef.current = decision.dropped ? decision.resetTo : undefined;
+    effortResetRef.current = undefined;
     const result = await window.anycode.tabRebind({ tabId, connectionId });
     if (!result.ok) {
       effortResetRef.current = undefined;
@@ -918,46 +924,14 @@ export function ModelPill() {
     }
   }
 
-  // Ack-gated persist half 1/2: fires only when `model` just landed the
-  // value THIS component asked for via a model pick.
+  // One model acknowledgement can include both queued choices. Persist only
+  // axes the user actually picked, even if the acknowledged value is unchanged.
   useEffect(() => {
-    if (model === null) {
-      return;
+    if (modelSelectionAck === undefined || modelSelectionAck === null || modelSelectionAck.model === null) return;
+    for (const request of modelSettingsWrites(pendingPickRef.current, { model: modelSelectionAck.model, effort: modelSelectionAck.effort })) {
+      writeChainRef.current = chainWrite(writeChainRef.current, () => connectionUpdate(request));
     }
-    const pending = pendingPickRef.current;
-    if (pending && shouldPersistOnAck(pending, "model", model)) {
-      pendingPickRef.current = null;
-      const connectionId = pending.connectionId;
-      if (connectionId !== undefined) {
-        writeChainRef.current = chainWrite(writeChainRef.current, () =>
-          connectionUpdate(buildConnectionUpdate(connectionId, true, model, reasoningEffort)),
-        );
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately
-    // keyed on `model` alone: this effect's job is "did `model` just become
-    // the pending pick's value", not a generic recompute-on-anything-changed.
-  }, [model]);
-
-  // Ack-gated persist half 2/2: fires only when `reasoningEffort` just
-  // landed the value THIS component asked for via an effort pick.
-  useEffect(() => {
-    if (model === null) {
-      return;
-    }
-    const pending = pendingPickRef.current;
-    if (pending && shouldPersistOnAck(pending, "effort", reasoningEffort)) {
-      pendingPickRef.current = null;
-      const connectionId = pending.connectionId;
-      if (connectionId !== undefined) {
-        writeChainRef.current = chainWrite(writeChainRef.current, () =>
-          connectionUpdate(buildConnectionUpdate(connectionId, false, model, reasoningEffort)),
-        );
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- same discipline
-    // as the model-watching effect above, keyed on `reasoningEffort` alone.
-  }, [reasoningEffort]);
+  }, [modelSelectionAck]);
 
   function onChipKeyDown(event: KeyboardEvent<HTMLButtonElement>): void {
     if (pickDisabled) {
