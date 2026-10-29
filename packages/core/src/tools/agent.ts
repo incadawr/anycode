@@ -519,6 +519,9 @@ async function runSessionTier(
   // composition — `provider`/`detach` stay this tool's own fields (agent-
   // bridge.ts never sets either), spread on afterward.
   const resumeChildSessionId = input.continue_session;
+  const coreProfile = engineProfile === undefined && degrade === undefined
+    ? ctx.subagents?.coreProfile?.(agentType) ?? undefined
+    : undefined;
   const request: SessionSubagentRequest = {
     // TASK.218: a continuation branches the request build rather than
     // post-patching the spread — a resumed child keeps its own profile body
@@ -544,7 +547,9 @@ async function runSessionTier(
           prompt: degrade !== undefined ? `${degrade.systemPrompt}\n\n---\n\n${input.prompt}` : input.prompt,
           model: input.model,
           spawnToolCallId: ctx.toolCallId,
-          profile: engineProfile,
+          profile: engineProfile ?? (coreProfile !== undefined && roleRoute !== undefined
+            ? { systemPrompt: coreProfile.systemPrompt }
+            : coreProfile),
           // TASK.180: the profile's own turn budget rides the creating spawn only.
           ...(engineProfile?.turnBudget !== undefined ? { maxTurns: engineProfile.turnBudget } : {}),
           // The profile's declared effort rides the creating spawn too; "xhigh" is preserved for engine children.

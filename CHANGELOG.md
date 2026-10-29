@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Native session children use their agent profile’s model and instructions by default (GitHub #5).
+
 ## [0.0.51] — 2026-10-29
 
 ### Changed
