@@ -268,3 +268,12 @@ it("uses a connection model-window resolver independently for each child", () =>
   expect(resolve("a", undefined).contextWindowTokens).toBe(128000);
   expect(resolve("b", undefined).contextWindowTokens).toBe(64000);
 });
+
+
+it("resolves xhigh for each child model and live capability set", () => {
+  const resolve = buildChildModelSettingsResolver({ catalogEntry: Z_AI_ENTRY, envMaxOutputTokens: undefined, envContextWindow: undefined,
+    liveCapabilitiesFor: (id) => ({ reasoning: true, effortLevels: id === "both" ? ["xhigh", "max"] : ["max"] }) });
+  expect(resolve("both", "xhigh").reasoningEffort).toBe("xhigh");
+  expect(resolve("only-max", "xhigh").reasoningEffort).toBe("max");
+  expect(resolve("glm-5.3", "xhigh").reasoningEffort).toBe("max");
+});

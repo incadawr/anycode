@@ -724,8 +724,7 @@ export function createSubagentRunner(
         // omitted entirely when absent, never a present-but-undefined key.
         ...(persona.turnBudget !== undefined ? { turnBudget: persona.turnBudget } : {}),
         // persona.effort rides through the same as model — omitted entirely
-        // when absent. "xhigh" is carried VERBATIM for engine children; core
-        // consumption boundaries map it to the existing "max".
+        // when absent. The target model resolves compatibility for core children.
         ...(persona.effort !== undefined ? { effort: persona.effort } : {}),
       };
     },
@@ -1106,11 +1105,7 @@ export function createSubagentRunner(
               try {
                 childSettings = opts?.resolveChildModelSettings?.(
                   candidate,
-                  entry.effort === undefined
-                    ? undefined
-                    : entry.effort === "xhigh"
-                      ? "max"
-                      : entry.effort,
+                  entry.effort,
                 );
               } catch (error) {
                 // Settings resolution failure is a skip for this entry, same
@@ -1191,7 +1186,7 @@ export function createSubagentRunner(
           try {
             childSettings = opts?.resolveChildModelSettings?.(
               requestedModel,
-              persona.effort === undefined ? undefined : persona.effort === "xhigh" ? "max" : persona.effort,
+              persona.effort,
             );
           } catch (error) {
             if (exploreDefault !== undefined && requestedModel === exploreDefault) {
@@ -1217,7 +1212,7 @@ export function createSubagentRunner(
         try {
           childSettings = opts?.resolveChildModelSettings?.(
             parent.modelPort.modelId,
-            persona.effort === "xhigh" ? "max" : persona.effort,
+            persona.effort,
           );
         } catch (error) {
           return {
