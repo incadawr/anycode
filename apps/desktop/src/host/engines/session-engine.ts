@@ -107,6 +107,7 @@ export interface SessionEngine {
    * Unsupported engines omit this method; Session visibly refuses the request.
    */
   compactNow?(options: { signal: AbortSignal }): AsyncIterable<AgentEvent>;
+  onMaintenanceEvent?(observer: (event: AgentEvent) => void): void;
   dispose(reason: "session-close" | "host-shutdown"): Promise<void>;
 }
 

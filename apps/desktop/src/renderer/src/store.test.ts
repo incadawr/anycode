@@ -1170,6 +1170,19 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
     else expect(store.getState().notice?.text).toContain("cancelled");
   });
 
+  it("accepts maintenance accounting and notices without accepting foreign turn events", () => {
+    const store = readyStore();
+    store.getState().applyHostMessage({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: { type: "engine_session_tokens", input: 100, output: 20, total: 120 } });
+    expect(store.getState().sessionTokens).toMatchObject({ input: 100, output: 20, total: 120 });
+    const quota = { primary: { usedPercent: 10, windowDurationMins: 60 }, observedAt: "2026-10-29T00:00:00.000Z" };
+    store.getState().applyHostMessage({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: { type: "engine_quota", quota } });
+    expect(store.getState().quota).toEqual(quota);
+    store.getState().applyHostMessage({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: { type: "engine_notice", level: "warning", message: "Maintenance warning" } });
+    expect(store.getState().notice?.text).toContain("Maintenance warning");
+    store.getState().applyHostMessage({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: { type: "compaction_end", ok: true, postTokens: 8000, durationMs: 5 } });
+    expect(store.getState().notice?.text).toContain("? → 8000");
+  });
+
   it("TASK.146: a manual compaction between turns survives the turn-scoped drop guard and claims the session", () => {
     const store = readyStore();
     // Between turns there IS no active turn — the guard's `turnId` is null,

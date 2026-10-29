@@ -7282,7 +7282,7 @@ describe("Session — manual compaction wire (TASK.146)", () => {
       // the event has to survive `sanitizeAgentEvent` and the `agent_event`
       // envelope to reach the renderer at all.
       expect(usageEvent.estimatedTokens).toBe(endEvent.postTokens);
-      expect(usageEvent.estimatedTokens).toBeLessThan(endEvent.preTokens);
+      expect(usageEvent.estimatedTokens).toBeLessThan(endEvent.preTokens!);
       // "estimate", not "provider": runCompaction dropped the stale provider
       // baseline before returning (context/manager.ts), so the post-swap
       // reading is an honest recount rather than a pre-swap provider number

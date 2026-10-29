@@ -3595,6 +3595,11 @@ export class Session {
     // compactNow reads `this.options.loop` internally — detaching the method
     // from its receiver would call it with `this` undefined.
     const engine = this.engine;
+    engine.onMaintenanceEvent?.((event) => {
+      if (this.engine !== engine || this.shuttingDown) return;
+      this.outbound.emit({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: sanitizeAgentEvent(event) });
+      if (event.type === "context_usage") this.checkpointContextUsage = { estimatedTokens: event.estimatedTokens, budgetTokens: event.budgetTokens, source: event.source };
+    });
     this.busy = true;
     let release!: () => void;
     const op = new Promise<void>((resolve) => {
