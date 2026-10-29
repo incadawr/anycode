@@ -824,6 +824,7 @@ export class CodexEngine implements SessionEngine {
   private maintenanceObserver?: (event: AgentEvent) => void;
   onMaintenanceEvent(observer: (event: AgentEvent) => void): void { this.maintenanceObserver = observer; }
   private lateCompaction: { turnId: string; translator: TurnTranslator } | null = null;
+  private compactUsageNotifications: JsonRpcNotification[] | null = null;
   private latestContextUsage: Extract<AgentEvent, { type: "context_usage" }> | null = null;
   private nextNativeTurnOrdinal: number;
   private nativeTurnOrdinalDirty = false;
@@ -1580,6 +1581,7 @@ export class CodexEngine implements SessionEngine {
       this.interruptSent = false;
       startup = deadline(this.bounds.turnStartMs);
       submitted = true;
+      this.compactUsageNotifications = [];
       const request = this.client.request(CODEX_THREAD_COMPACT_START_METHOD, { threadId: this.threadId }, { timeoutMs: this.bounds.turnStartMs })
         .then(value => ({ kind: "ack" as const, value }), error => ({ kind: "rejection" as const, error }));
       while (!(terminal && acknowledged && (status !== "completed" || !confirmed || usage !== null))) {
@@ -1639,10 +1641,8 @@ export class CodexEngine implements SessionEngine {
         if (!matches) continue;
         if (n.method === "item/completed" && item?.type === "contextCompaction" && typeof item.id === "string" && item.id.length) confirmed = true;
         if (n.method === "thread/tokenUsage/updated") {
-          if (confirmed) {
-            usage = decodeCodexContextUsage(params) ?? usage;
-            for (const event of translator?.onNotification(n) ?? []) if (event.type === "engine_session_tokens") yield event;
-          }
+          usage = decodeCodexContextUsage(params) ?? usage;
+          if (!this.client.observeNotifications) this.compactUsageNotifications?.push(n);
         }
         if (n.method === "turn/completed" && !terminal) {
           terminal = true;
@@ -1654,8 +1654,21 @@ export class CodexEngine implements SessionEngine {
         }
       }
       const ok = status === "completed" && confirmed;
+      // The transport tap runs before the pull reader, so reconcile every matching
+      // reading dispatched so far, including those still queued after the terminal.
+      const readings = this.compactUsageNotifications ?? [];
+      this.compactUsageNotifications = null;
+      const accounting: AgentEvent[] = [];
+      if (ok && nativeId && translator) {
+        this.lateCompaction = { turnId: nativeId, translator };
+        for (const reading of readings) {
+          if (record(reading.params)?.turnId !== nativeId) continue;
+          usage = decodeCodexContextUsage(record(reading.params)) ?? usage;
+          for (const event of translator.onNotification(reading)) if (event.type === "engine_session_tokens") accounting.push(event);
+        }
+      }
       if (ok && usage) this.latestContextUsage = usage;
-      if (ok && nativeId && translator) this.lateCompaction = { turnId: nativeId, translator };
+      for (const event of accounting) yield event;
       yield end(ok, ok ? undefined : status === "interrupted" ? "cancelled" : nativeError ?? "Codex did not confirm compaction", ok ? usage?.estimatedTokens : undefined);
       if (ok && usage && this.latestContextUsage === usage) yield usage;
       if (ok && !usage) yield { type: "engine_notice", level: "warning", message: "Codex completed compaction without updated context usage; the previous reading is retained." };
@@ -1668,6 +1681,7 @@ export class CodexEngine implements SessionEngine {
     } finally {
       this.activeTurn = null;
       this.activeItems = null;
+      this.compactUsageNotifications = null;
       this.operation = null;
       abort.dispose();
       startup?.cancel();
@@ -1758,6 +1772,9 @@ export class CodexEngine implements SessionEngine {
     this.indexItem(notification);
     const late = this.lateCompaction;
     const params = record(notification.params);
+    if (this.compactUsageNotifications && notification.method === "thread/tokenUsage/updated" && params?.threadId === this.threadId) {
+      this.compactUsageNotifications.push(notification);
+    }
     if (late && notification.method === "thread/tokenUsage/updated" && params?.threadId === this.threadId && params.turnId === late.turnId) {
       for (const event of late.translator.onNotification(notification)) {
         if (event.type === "context_usage") this.latestContextUsage = event;
