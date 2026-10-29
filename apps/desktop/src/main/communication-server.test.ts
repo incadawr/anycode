@@ -66,6 +66,7 @@ describe("production communication MCP over real SDK HTTP", () => {
     expect(status).not.toHaveProperty("model");
     const sessions = value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions;
     expect(sessions).toHaveLength(1);
+    expect(sessions[0].state).toBe(status.state);
     expect(sessions[0].hostFailure).toEqual(status.hostFailure);
     expect((await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "forbidden" } })).isError).toBe(true);
     expect((await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "unknown" } })).isError).toBe(true);
@@ -78,6 +79,8 @@ describe("production communication MCP over real SDK HTTP", () => {
     f.manager.listTabs = () => [{ sessionId: "allowed", workspace: f.dir, state: "running", pid: pending ? null : 12, engine: "core", ...(pending ? { hostFailure: failure } : {}) }];
     const status = value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } }));
     expect(status).toMatchObject({ state: "crash_looped", hostFailure: failure });
+    const sessions = value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions;
+    expect(sessions[0].state).toBe(status.state);
     expect(f.request).not.toHaveBeenCalled();
     pending = false;
     expect(value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } })).state).toBe("idle");
@@ -90,6 +93,9 @@ describe("production communication MCP over real SDK HTTP", () => {
     expect(status).toMatchObject({ sessionId: "allowed", engine: "core", state: "missing_workspace", missingWorkspace: true });
     expect(status).not.toHaveProperty("hostFailure");
     expect(status).not.toHaveProperty("model");
+    const sessions = value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions;
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({ state: status.state, missingWorkspace: true });
     expect(f.request).not.toHaveBeenCalled();
   });
   it("initializes, lists/calls tools and enforces auth, origin and workspace scope", async () => {
