@@ -50,7 +50,9 @@ export function modelCapabilitiesFor(
 ): ModelCapabilitiesDto | undefined {
   const live = connection?.modelCapabilities !== undefined && Object.hasOwn(connection.modelCapabilities, model)
     ? connection.modelCapabilities[model] : undefined;
-  return applyModelReasoningOverride(live, modelOverrideFor(connection, model)?.reasoningSupported === true);
+  const override = modelOverrideFor(connection, model);
+  if (override?.effortLevels !== undefined) return { ...live, reasoning: true, effortLevels: override.effortLevels };
+  return applyModelReasoningOverride(live, override?.reasoningSupported === true);
 }
 
 
