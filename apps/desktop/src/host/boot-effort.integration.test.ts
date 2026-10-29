@@ -196,3 +196,87 @@ for (const [resumed, initialModel] of [[false, "both"], [false, "onlyMax"], [tru
     }
   }, 60000);
 }
+
+it("uses declared child effort levels over live capabilities at boot, switch, and refresh", async () => {
+  const requests: any[] = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      const input = JSON.parse(body);
+      if (input.max_tokens !== 32) requests.push(input);
+      const base = { id: "fixture", object: "chat.completion.chunk", created: 0, model: input.model };
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "done" }, finish_reason: null }] })}\n\n`);
+      res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
+      res.end("data: [DONE]\n\n");
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("No fixture address");
+  const settings = {
+    version: 2, provider: { activeConnectionId: "conn", connections: [{
+      id: "conn", providerId: "custom:fixture", model: "both",
+      modelCapabilities: {
+        both: { reasoning: true, effortLevels: ["max"] },
+        onlyMax: { reasoning: true, effortLevels: ["xhigh", "max"] },
+      },
+      modelOverrides: {
+        both: { effortLevels: ["xhigh", "max"] },
+        onlyMax: { effortLevels: ["max"] },
+      },
+    }] }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false },
+  };
+  const oldArgv = process.argv;
+  try {
+    process.argv = [process.execPath, "host", "--resume", "declared-child"];
+    const result = await bootHostInTempProfile(async ({ parent, profile }) => {
+      const port = new FakePort();
+      parent.emit("message", { ports: [port], data: {} });
+      await vi.waitFor(() => expect(port.listenerCount("message")).toBeGreaterThan(0), { timeout: 15000 });
+      port.send({ type: "ui_ready" });
+      await vi.waitFor(() => expect(port.messages.some((m) => m.type === "host_ready")).toBe(true));
+      expect(port.messages.find((m) => m.type === "host_ready").reasoningEffort).toBe("xhigh");
+
+      const beforeBoot = requests.length;
+      port.send({ type: "user_message", requestId: "boot", text: "hello" });
+      await vi.waitFor(() => expect(requests.length).toBeGreaterThan(beforeBoot), { timeout: 15000 });
+      expect(requests.at(-1)).toMatchObject({ model: "both", reasoning_effort: "xhigh" });
+      await vi.waitFor(() => expect(port.messages.filter((m) => m.type === "agent_event" && m.event?.type === "loop_end").length).toBeGreaterThanOrEqual(1), { timeout: 15000 });
+
+      port.send({ type: "set_model", model: "onlyMax" });
+      await vi.waitFor(() => expect(port.messages.some((m) => m.type === "model_changed" && m.model === "onlyMax")).toBe(true));
+      expect(port.messages.filter((m) => m.type === "model_changed").at(-1)).toMatchObject({ selectedReasoningEffort: "xhigh", reasoningEffort: "max" });
+      const beforeSwitch = requests.length;
+      port.send({ type: "user_message", requestId: "switch", text: "hello again" });
+      await vi.waitFor(() => expect(requests.length).toBeGreaterThan(beforeSwitch), { timeout: 15000 });
+      expect(requests.at(-1)).toMatchObject({ model: "onlyMax", reasoning_effort: "max" });
+      await vi.waitFor(() => expect(port.messages.filter((m) => m.type === "agent_event" && m.event?.type === "loop_end").length).toBeGreaterThanOrEqual(2), { timeout: 15000 });
+
+      settings.provider.connections[0]!.modelOverrides.onlyMax.effortLevels = ["xhigh", "max"];
+      settings.provider.connections[0]!.modelCapabilities.onlyMax.effortLevels = ["max"];
+      writeFileSync(profile.settingsPath, JSON.stringify(settings));
+      const beforeRefresh = requests.length;
+      port.send({ type: "user_message", requestId: "refresh", text: "refresh" });
+      await vi.waitFor(() => expect(requests.length).toBeGreaterThan(beforeRefresh), { timeout: 15000 });
+      expect(requests.at(-1)).toMatchObject({ model: "onlyMax", reasoning_effort: "xhigh" });
+      expect(port.messages.filter((m) => m.type === "model_changed").at(-1)).toMatchObject({ selectedReasoningEffort: "xhigh", reasoningEffort: "xhigh" });
+    }, {
+      extraEnv: { ANYCODE_MODEL: "both", ANYCODE_BASE_URL: `http://127.0.0.1:${address.port}/v1`, ANYCODE_API_KEY: "test", ANYCODE_PROVIDER_TRANSPORT: "openai-chat-completions", ANYCODE_MODEL_SETTINGS_CONNECTION_ID: "conn", ANYCODE_REASONING_EFFORT: "xhigh" },
+      boot: async () => {
+        vi.resetModules();
+        writeFileSync(process.env.ANYCODE_SETTINGS_PATH!, JSON.stringify(settings));
+        const db = new SqlitePersistenceAdapter(process.env.ANYCODE_DB_PATH!);
+        await db.createSession({ id: "declared-child", workspace: process.cwd(), model: "both", mode: "build", parentSessionId: "parent", spawnToolCallId: "call" });
+        await db.close();
+        await import("./index.js");
+      },
+    });
+    if (result.error !== null) throw result.error;
+    expect(result.stopped).toBe(true);
+  } finally {
+    process.argv = oldArgv;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}, 60000);
