@@ -4684,6 +4684,7 @@ async function boot(): Promise<void> {
         config.systemPrompt = composeSystemPrompt(switchedSystemPromptComponents);
         config.systemPromptComponents = switchedSystemPromptComponents;
         loop.setContextWindow(contextWindow);
+        if (previous !== id) loop.invalidateProviderAnchor();
         loop.setTodoReminderEvery(envConfig.todoReminderEvery ?? catalogEntry?.models.find((m) => m.id === id)?.todoReminderEvery);
         config.context = { ...config.context, contextWindowTokens: contextWindow };
         const availableEffortLevels = resolveEffortLevels(id, catalogEntry, liveCapsFor(id), effortLevelsFor(id));
@@ -4696,6 +4697,7 @@ async function boot(): Promise<void> {
         const usage = loop.contextInfo();
         return {
           model: id,
+          previousModel: previous,
           contextUsage: {estimatedTokens: usage.estimatedTokens, budgetTokens: usage.effectiveWindowTokens, source: usage.source},
           selectedReasoningEffort: selectedTier,
           ...(effortAdjustment !== undefined ? { effortAdjustment } : {}),
@@ -5002,10 +5004,9 @@ async function boot(): Promise<void> {
         spawnModeCell.onOrchestrateChanged(enabled);
       },
       // Taskana 4704 §3.6: turn-start orchestrator-route check — the host
-      // owns the health cache AND switchModelImpl. Applies model+effort ONLY
-      // on the tab's active connection (§9-Q2: connection switching stays
-      // manual). Returns the engine_notice line when a switch happened.
-      orchestratorRouteCheck: (): string | undefined => {
+      // owns the health cache. Returns a model and effort selection only
+      // for the tab's active connection, along with the notice to surface.
+      orchestratorRouteCheck: () => {
         refreshRolesSettings();
         const orchestrator = rolesSettings?.orchestrator;
         if (orchestrator === undefined) return undefined;
@@ -5037,8 +5038,7 @@ async function boot(): Promise<void> {
         const effort = picked.entry.effort === undefined || picked.entry.effort === "xhigh"
           ? undefined
           : picked.entry.effort;
-        switchModelImpl(switchModel, effort ?? selectedEffort ?? "medium", effort !== undefined);
-        return `Orchestrator: primary route unhealthy (${reason}), running on ${switchModel}.`;
+        return { notice: `Orchestrator: primary route unhealthy (${reason}), running on ${switchModel}.`, model: switchModel, ...(effort !== undefined ? { effort } : {}) };
       },
       // Slice P7.8 (design slice-P7.8-cut.md §3.2, mirror of the `lsp` seam
       // above): telemetry reads live counters on every push; repo-map is

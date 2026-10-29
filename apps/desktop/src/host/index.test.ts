@@ -3255,14 +3255,7 @@ describe("host Claude MCP status wiring — one snapshot per system/init (GitHub
 });
 
 
-it("passes a declared fallback-route effort as an explicit model choice", async () => {
+it("passes a declared fallback-route effort to the session", async () => {
   const source = await (await import("node:fs/promises")).readFile(new URL("./index.ts", import.meta.url), "utf8");
-  const call = source.match(/switchModelImpl\(switchModel, ([^;]+)\);/)?.[1];
-  expect(call).toBeDefined();
-  const [tier, explicit] = new Function("effort", "selectedEffort", `return [${call}];`)("high", "medium");
-  const {createConnectionModelSettings} = await import("./connection-model-settings.js");
-  const settings = createConnectionModelSettings({connection:{modelOverrides:{b:{reasoningEffort:"low"}}}, liveCapabilitiesFor:() => undefined});
-  settings.remember("a", "medium");
-  expect(settings.switchEffort("a", "b", tier, explicit)).toBe("high");
-  expect(settings.switchEffort("b", "a", "high")).toBe("medium");
+  expect(source).toContain('model: switchModel, ...(effort !== undefined ? { effort } : {})');
 });

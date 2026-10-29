@@ -710,6 +710,8 @@ export class AgentLoop {
       tokenizer,
       modelPort: config.modelPort,
       config: budget,
+      requestOverheadTokens: () => tokenizer.count(config.systemPrompt ?? "") +
+        estimateToolDeclarationTokens(toToolDeclarations(config.registry), tokenizer),
     });
     // TASK.229: rolling admission width for a run of parallel-safe calls. The
     // scheduler normalizes non-finite values to DEFAULT_TOOL_CONCURRENCY and
@@ -1987,6 +1989,11 @@ export class AgentLoop {
       metaTokens,
       totalEstimatedTokens: anchor,
     };
+  }
+
+  /** Discard a provider reading when the model identity changes. */
+  invalidateProviderAnchor(): void {
+    this.context.invalidateProviderAnchor();
   }
 
   /**

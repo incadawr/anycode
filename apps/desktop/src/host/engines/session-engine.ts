@@ -45,6 +45,8 @@ export interface EngineCapabilities {
 }
 
 export interface ModelSwitchResult {
+  /** Actual model held by the engine before this switch. */
+  previousModel?: string;
   contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
   selectedReasoningEffort?: ReasoningEffort;
   effortAdjustment?: { from: ReasoningEffort; to: ReasoningEffort };

@@ -30,6 +30,7 @@ export interface ContextManagerDeps {
   tokenizer: Tokenizer;
   modelPort: ModelPort;
   config: ContextBudgetConfig;
+  requestOverheadTokens?: () => number;
 }
 
 export type RunCompactionResult =
@@ -71,7 +72,13 @@ export class ContextManager {
       const delta = raw - this.baselineEstimate;
       return { tokens: Math.max(0, this.providerTokens + delta), source: "provider" };
     }
-    return { tokens: raw, source: "estimate" };
+    return { tokens: raw + (this.deps.requestOverheadTokens?.() ?? 0), source: "estimate" };
+  }
+
+  /** Discard usage from a previous model while retaining history and breaker state. */
+  invalidateProviderAnchor(): void {
+    this.providerTokens = null;
+    this.baselineEstimate = 0;
   }
 
   /** Current budget config (slice 6.4: /context introspection + the re-budget base). */
@@ -270,7 +277,7 @@ export class ContextManager {
     this.deps.history.replaceAll([summaryItem, ...tail]);
     this.consecutiveFailures = 0;
     // The provider baseline counted the pre-compaction context; it is now stale.
-    this.providerTokens = null;
+    this.invalidateProviderAnchor();
     const postTokens = this.estimate().tokens;
     return { ok: true, preTokens, postTokens };
   }

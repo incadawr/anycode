@@ -2440,6 +2440,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
     // /context AFTER the switch: the 200k window, re-budgeted between turns.
     const afterIdx = text.indexOf("[context] window 200000 — output reserve 24000 — auto-compact at 161920");
     expect(afterIdx).toBeGreaterThan(switchIdx);
+    expect(text.slice(switchIdx, afterIdx)).toMatch(/\[context\] ~[1-9]\d*\/176000 tokens \([^\n]*source: estimate\)/);
 
     // The turn after the switch ran through the factory-built glm-4.7 port AND
     // carries the new (176000) denominator — the re-budget took effect.
@@ -4486,7 +4487,7 @@ describe("CLI telemetry e2e (design slice-6.6-cut.md §2-C4/DoD): enabled sink w
     const middleTypes = new Set(records.slice(1, -1).map((r) => r.t));
     expect(middleTypes.size).toBeGreaterThan(0);
     for (const t of middleTypes) {
-      expect(["usage", "tool", "turn_end", "context_usage", "loop_end"]).toContain(t);
+      expect(["usage", "tool", "turn_end", "context_usage", "loop_end", "compaction_start", "compaction_end"]).toContain(t);
     }
   }, 15000);
 
