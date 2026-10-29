@@ -37,7 +37,7 @@ import { CodexApprovalBridge, type ActiveCodexTurn } from "./approval-bridge.js"
 import type { CodexPatchAutoApprovalPolicy } from "./patch-auto-approval.js";
 import { AppServerClient, type AppServerClientOptions } from "./app-server-client.js";
 import { CodexModelCatalog } from "./catalog.js";
-import { decodeCodexContextUsage, TurnTranslator } from "./event-translator.js";
+import { TurnTranslator } from "./event-translator.js";
 import { NATIVE_PERSISTED, projectCodexHistory, type CodexThreadRead } from "./history-projection.js";
 import {
   DEFAULT_CODEX_PRESET,
@@ -1538,9 +1538,9 @@ export class CodexEngine implements SessionEngine {
   private async *compactNowInner(options: { signal: AbortSignal }): AsyncIterable<AgentEvent> {
     const started = Date.now();
     const preTokens = this.latestContextUsage?.estimatedTokens;
-    const end = (ok: boolean, error?: string, post?: number): AgentEvent => ({
+    const end = (ok: boolean, error?: string): AgentEvent => ({
       type: "compaction_end", ok, ...(preTokens !== undefined ? { preTokens } : {}), durationMs: Date.now() - started,
-      ...(error ? { error } : {}), ...(post !== undefined ? { postTokens: post } : {}),
+      ...(error ? { error } : {}),
     });
     if (this.operation !== null || this.disposed || this.terminalError) {
       yield end(false, this.operation ? "Codex engine is busy" : "Codex engine is closed");
@@ -1558,7 +1558,7 @@ export class CodexEngine implements SessionEngine {
     let aborted = false;
     let acknowledged = false;
     let confirmed = false;
-    let usage: Extract<AgentEvent, { type: "context_usage" }> | null = null;
+    let sawUsage = false;
     let translator: TurnTranslator | null = null;
     const presentation = new TurnTranslator({ threadId: this.threadId, turnId: "", turn: 0, items: new TurnItemIndex(), ...(this.quota ? { quota: this.quota } : {}) });
     let status: unknown;
@@ -1584,9 +1584,8 @@ export class CodexEngine implements SessionEngine {
       this.compactUsageNotifications = [];
       const request = this.client.request(CODEX_THREAD_COMPACT_START_METHOD, { threadId: this.threadId }, { timeoutMs: this.bounds.turnStartMs })
         .then(value => ({ kind: "ack" as const, value }), error => ({ kind: "rejection" as const, error }));
-      const hasPostUsage = (): boolean => usage !== null && (preTokens === undefined || usage.estimatedTokens !== preTokens);
-      while (!(terminal && acknowledged && (status !== "completed" || !confirmed || hasPostUsage()))) {
-        if (terminal && acknowledged && status === "completed" && confirmed && !hasPostUsage()) grace ??= deadline(this.bounds.compactUsageWaitMs);
+      while (!(terminal && acknowledged && (status !== "completed" || !confirmed || sawUsage))) {
+        if (terminal && acknowledged && status === "completed" && confirmed && !sawUsage) grace ??= deadline(this.bounds.compactUsageWaitMs);
         const raced = await Promise.race([
           this.peekNotification().then(value => ({ kind: "notification" as const, value })),
           ...(!acknowledged ? [request] : []),
@@ -1642,7 +1641,7 @@ export class CodexEngine implements SessionEngine {
         if (!matches) continue;
         if (n.method === "item/completed" && item?.type === "contextCompaction" && typeof item.id === "string" && item.id.length) confirmed = true;
         if (n.method === "thread/tokenUsage/updated") {
-          usage = decodeCodexContextUsage(params) ?? usage;
+          sawUsage = true;
           if (!this.client.observeNotifications) this.compactUsageNotifications?.push(n);
         }
         if (n.method === "turn/completed" && !terminal) {
@@ -1661,18 +1660,17 @@ export class CodexEngine implements SessionEngine {
       this.compactUsageNotifications = null;
       const accounting: AgentEvent[] = [];
       if (nativeId && translator) {
-        if (ok) this.lateCompaction = { turnId: nativeId, translator };
+        this.lateCompaction = { turnId: nativeId, translator };
         for (const reading of readings) {
           if (record(reading.params)?.turnId !== nativeId) continue;
-          usage = decodeCodexContextUsage(record(reading.params)) ?? usage;
           for (const event of translator.onNotification(reading)) if (event.type === "engine_session_tokens") accounting.push(event);
         }
       }
-      if (ok && usage) this.latestContextUsage = usage;
+      // The compact turn usage describes its summarization request, not the
+      // replacement context. The protocol supplies no post-compaction size.
+      if (ok) this.latestContextUsage = null;
       for (const event of accounting) yield event;
-      yield end(ok, ok ? undefined : status === "interrupted" ? "cancelled" : nativeError ?? "Codex did not confirm compaction", ok ? usage?.estimatedTokens : undefined);
-      if (ok && usage && this.latestContextUsage === usage) yield usage;
-      if (ok && !usage) yield { type: "engine_notice", level: "warning", message: "Codex completed compaction without updated context usage; the previous reading is retained." };
+      yield end(ok, ok ? undefined : status === "interrupted" ? "cancelled" : nativeError ?? "Codex did not confirm compaction");
     } catch (error) {
       if (submitted) {
         this.terminalError = error instanceof Error ? error : new Error(String(error));
@@ -1778,8 +1776,7 @@ export class CodexEngine implements SessionEngine {
     }
     if (late && notification.method === "thread/tokenUsage/updated" && params?.threadId === this.threadId && params.turnId === late.turnId) {
       for (const event of late.translator.onNotification(notification)) {
-        if (event.type === "context_usage") this.latestContextUsage = event;
-        if (event.type === "context_usage" || event.type === "engine_session_tokens") this.maintenanceObserver?.(event);
+        if (event.type === "engine_session_tokens") this.maintenanceObserver?.(event);
       }
     }
     // `account/rateLimits/updated` (codex-profiles cut §6.1) is ACCOUNT-scoped:

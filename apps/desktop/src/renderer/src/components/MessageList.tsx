@@ -386,10 +386,7 @@ export const STARTER_CHIPS: readonly { label: string; insert: string }[] = [
  *
  * Running says which compaction it is, because the two have different causes a
  * user needs to tell apart: one they asked for, one the context window forced.
- * Done reports both readings — the point of the row is that the meter fell for
- * a REASON, so the reason carries the numbers. A missing `postTokens` prints
- * "?" rather than a zero: the host declined to say, and inventing a number here
- * would be a worse answer than admitting it.
+ * Done reports the available readings without inventing a post-compaction size.
  *
  * The not-ok branch never says "failed": `compaction_end` carries one `error`
  * string for both outcomes, and the commonest one is a deliberate no-op
@@ -409,6 +406,9 @@ export function compactionRowText(block: Extract<TranscriptBlock, { kind: "compa
   if (block.status === "failed") {
     return `Compaction not applied: ${block.error ?? "unknown error"}`;
   }
+  if (block.postTokens === undefined) return block.preTokens === undefined
+    ? "Conversation compacted"
+    : `Conversation compacted (before: ${block.preTokens} tokens)`;
   const pre = block.preTokens ?? "?";
   const post = block.postTokens ?? "?";
   return `Conversation compacted: ${pre} → ${post} tokens`;

@@ -92,11 +92,11 @@ describe("Codex compact protocol fixture", () => {
       await vi.waitFor(() => expect(f.rpcs().filter(r => r.method === "thread/compact/start")).toHaveLength(1));
       writeFileSync(join(f.home, "release-codex-compact-1"), "release");
       const end = await f.end(); await f.idle();
-      expect(end.turnId).toBe("manual-compaction"); expect(end.event).toMatchObject({ ok: true, preTokens: 47000, postTokens: 8000 });
-      await vi.waitFor(() => expect(f.h.received.some(m => m.type === "agent_event" && m.event.type === "context_usage" && m.event.estimatedTokens === 8000)).toBe(true));
+      expect(end.turnId).toBe("manual-compaction"); expect(end.event).toMatchObject({ ok: true, preTokens: 47000 });
+      expect(end.event).not.toHaveProperty("postTokens");
       for (; cursor < f.h.received.length; cursor++) store.getState().applyHostMessage(f.h.received[cursor]!);
-      expect(store.getState().turn.status).toBe("idle"); expect(store.getState().contextUsage).toEqual({ estimatedTokens: 8000, budgetTokens: 100000, source: "provider" });
-      expect(store.getState().notice?.text).toContain("8000"); expect(f.rpcs().filter(r => r.method === "turn/start")).toHaveLength(initialTurns);
+      expect(store.getState().turn.status).toBe("idle"); expect(store.getState().contextUsage).toEqual({ estimatedTokens: 47000, budgetTokens: 100000, source: "provider" });
+      expect(store.getState().notice?.text).toContain("before: 47000"); expect(f.rpcs().filter(r => r.method === "turn/start")).toHaveLength(initialTurns);
     } finally { await f.close(); }
   });
   it("routes cancel_turn to the active native Codex compaction", async () => {
