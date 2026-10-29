@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `/compact` now compacts idle Codex sessions, supports cancellation, updates reported context usage, and explains when the app-server does not support it. (#24)
+
 ## [0.0.50] — 2026-10-29
 
 ### Added

@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawnSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,10 +50,44 @@ describe("native engine smoke fixtures", () => {
     const f = startFixture("codex", home);
     try {
       f.send({ id: 1, method: "thread/start", params: {} });
-      f.send({ id: 2, method: "turn/start", params: { threadId: "fixture-thread", input: [{ type: "text", text: "fixture ready" }] } });
+      f.send({ id: 2, method: "turn/start", params: { threadId: "fixture-thread", input: [{ type: "text", text: "fixture: hold" }] } });
       await vi.waitFor(() => expect(f.frames.find(frame => frame.id === 2)?.result?.turn?.status).toBe("inProgress"));
       expect(f.frames.find(frame => frame.id === 1)?.result?.thread?.id).toBe("fixture-thread");
       expect(readFileSync(join(home, "codex-turns.jsonl"), "utf8").trim().split("\n")).toHaveLength(1);
+    } finally { f.child.kill(); rmSync(home, { recursive: true, force: true }); }
+  });
+});
+
+
+describe("Codex compact fixture lifecycle", () => {
+  it("Codex fixture exposes supported and unsupported compact schemas", async () => {
+    const home = mkdtempSync(join(tmpdir(), "compact-schema-fixture-"));
+    const binary = fileURLToPath(new URL("../../scripts/compact-fixtures/codex.mjs", import.meta.url));
+    try {
+      for (const unsupported of [false, true]) {
+        if (unsupported) writeFileSync(join(home, "codex-compact-mode"), "unsupported");
+        expect(spawnSync(binary, ["app-server", "generate-json-schema", "--out", home], { env: { HOME: home, PATH: process.env.PATH } }).status).toBe(0);
+        const schema = JSON.parse(readFileSync(join(home, "codex_app_server_protocol.schemas.json"), "utf8"));
+        expect(schema.definitions.ClientRequest.oneOf.some((v: Frame) => v.properties.method.enum.includes("thread/compact/start"))).toBe(!unsupported);
+      }
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+  it("Codex fixture completes and interrupts native compact without creating chat turns", async () => {
+    const home = mkdtempSync(join(tmpdir(), "compact-lifecycle-fixture-")); const f = startFixture("codex", home);
+    try {
+      f.send({ id: 1, method: "thread/compact/start", params: { threadId: "fixture-thread" } });
+      await vi.waitFor(() => expect(f.frames.find(frame => frame.id === 1)?.result).toEqual({}));
+      expect(f.frames.find(frame => frame.method === "turn/started")?.params.turn.id).toBe("fixture-compact-1");
+      writeFileSync(join(home, "release-codex-compact-1"), "release");
+      await vi.waitFor(() => expect(f.frames.find(frame => frame.method === "turn/completed")?.params.turn.status).toBe("completed"));
+      expect(f.frames.find(frame => frame.method === "thread/tokenUsage/updated")?.params.tokenUsage.last.totalTokens).toBe(8000);
+      expect(f.frames.find(frame => frame.method === "item/completed")?.params.item.type).toBe("contextCompaction");
+      f.send({ id: 2, method: "thread/compact/start", params: { threadId: "fixture-thread" } });
+      await vi.waitFor(() => expect(f.frames.find(frame => frame.id === 2)?.result).toEqual({}));
+      f.send({ id: 3, method: "turn/interrupt", params: { threadId: "fixture-thread", turnId: "fixture-compact-2" } });
+      await vi.waitFor(() => expect(f.frames.filter(frame => frame.method === "turn/completed").at(-1)?.params.turn.status).toBe("interrupted"));
+      expect(f.frames.find(frame => frame.id === 3)?.result).toEqual({});
+      expect(readFileSync(join(home, "codex-rpcs.jsonl"), "utf8")).not.toContain('"method":"turn/start"');
     } finally { f.child.kill(); rmSync(home, { recursive: true, force: true }); }
   });
 });

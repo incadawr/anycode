@@ -264,3 +264,17 @@ Machine-checked coverage that does NOT need the live run: the child env
 family (app-server-client.test.ts), the writableRoots composition
 (presets.test.ts, codex-engine.test.ts), the owner-tab byte-identity
 (index.test.ts's 4682 shape block), and the dir lifecycle (codex-home.test.ts).
+
+
+Manual compaction (GitHub #24) consumes `thread/compact/start` with the required
+string `threadId` and the object acknowledgement `ThreadCompactStartResponse`.
+That acknowledgement carries no native turn ID and does not indicate completion.
+`turn/started` establishes identity; a completed `contextCompaction` item and
+`turn/completed` confirm the outcome. Provider usage arrives separately.
+
+At native session boot, the configured executable generates a temporary JSON
+schema once per client. The adapter verifies the request registry, parameter and
+response shapes, and consumed lifecycle notifications before exposing compaction.
+Unavailable or incompatible schema generation disables this optional feature.
+Executable compact fixtures are synthetic protocol evidence, not captures of
+live backend compaction.
