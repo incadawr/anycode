@@ -227,6 +227,8 @@ export interface EngineSettingsSeam {
    * applied effort, and resolves `{ ok: false }` — never a thrown error.
    */
   selectEffortAndWait?(effort: string): Promise<EngineSettingsChange>;
+  waitForModelChanges?(): Promise<void>;
+  waitForSettingsChanges?(): Promise<void>;
   onSettingsApplied(listener: (snapshot: { model: string; activePresetId: string; effort?: string }) => void): () => void;
   /**
    * The chosen-but-not-yet-applied delta, or null. Re-asserted on every
@@ -4788,7 +4790,13 @@ export class Session {
     };
 
     try {
-      if (this.settingsBarrierActive) await this.settingsBarrier;
+      if (this.settingsBarrierActive && !controller.signal.aborted) {
+        await new Promise<void>((resolve) => {
+          const abort = () => resolve();
+          controller.signal.addEventListener("abort", abort, { once: true });
+          void this.settingsBarrier.finally(() => { controller.signal.removeEventListener("abort", abort); resolve(); });
+        });
+      }
       if (controller.signal.aborted || this.shuttingDown) {
         recordResult("cancelled");
         if (!this.shuttingDown) this.outbound.emit({ type: "agent_event", turnId, event: { type: "loop_end", reason: "cancelled", turns: 0 } });
@@ -5270,15 +5278,21 @@ export class Session {
     if (this.mergedEngineSettings() !== null) this.publishPendingEngineSettings(true);
   }
 
-  private queueIdleEngineSetting(operation: (seam: EngineSettingsSeam) => void): void {
+  private queueIdleEngineSetting(operation: (seam: EngineSettingsSeam) => void | Promise<void>): void {
     const seam = this.engineSettings;
     const engine = this.engine;
     const generation = this.settingsGeneration;
     if (seam === undefined) return;
     if (!this.settingsBarrierActive) { operation(seam); return; }
-    this.settingsBarrier = this.settingsBarrier.then(() => {
-      if (!this.shuttingDown && generation === this.settingsGeneration && this.engine === engine && this.engineSettings === seam) operation(seam);
+    const barrier = this.settingsBarrier.then(async () => {
+      if (!this.shuttingDown && generation === this.settingsGeneration && this.engine === engine && this.engineSettings === seam) {
+        await operation(seam);
+        await seam.waitForSettingsChanges?.();
+      }
+    }).finally(() => {
+      if (generation === this.settingsGeneration && this.settingsBarrier === barrier) this.settingsBarrierActive = false;
     });
+    this.settingsBarrier = barrier;
   }
 
   private applyPendingEngineEffort(): void {
@@ -5299,8 +5313,16 @@ export class Session {
     }
     this.inFlightEngineEffort = pending;
     this.settingsBarrierActive = true;
-    this.settingsBarrier = this.settingsBarrier.then(async () => {
+    const barrier = this.settingsBarrier.then(async () => {
       if (this.shuttingDown || generation !== this.settingsGeneration || this.engineSettings !== pending.seam || this.engine !== pending.engine) return;
+      await pending.seam.waitForModelChanges?.();
+      if (this.shuttingDown || generation !== this.settingsGeneration || this.engineSettings !== pending.seam || this.engine !== pending.engine) return;
+      if (pending.seam.snapshot().model !== pending.model || !pending.seam.models().find((model) => model.id === pending.model)?.efforts?.includes(pending.effort)) {
+        this.inFlightEngineEffort = undefined;
+        this.outbound.emit({ type: "mode_change_rejected", reason: "The selected model no longer supports this effort" });
+        this.publishPendingEngineSettings();
+        return;
+      }
       const operation = pending.seam.selectEffortAndWait;
       if (operation === undefined) return;
       const result = await operation.call(pending.seam, pending.effort);
@@ -5315,8 +5337,9 @@ export class Session {
         this.publishPendingEngineSettings();
       }
     }).finally(() => {
-      if (generation === this.settingsGeneration) this.settingsBarrierActive = false;
+      if (generation === this.settingsGeneration && this.settingsBarrier === barrier) this.settingsBarrierActive = false;
     });
+    this.settingsBarrier = barrier;
   }
 
   private onEngineSettingsChange(result: EngineSettingsChange, intent: { model?: string; presetId?: string; effort?: string }): void {

@@ -563,10 +563,10 @@ describe("acknowledged deferred effort", () => {
     await ui.settle();
     ui.send({ type: "cancel_turn" });
     await ui.settle();
-    engine.settleEffort(true);
-    await ui.settle();
     expect(engine.turns).toBe(1);
     expect(ui.received).toContainEqual(expect.objectContaining({ type: "agent_event", event: expect.objectContaining({ type: "loop_end", reason: "cancelled" }) }));
+    engine.settleEffort(true);
+    await ui.settle();
     expect(ui.received.filter((message) => message.type === "fatal")).toEqual([]);
   });
 
