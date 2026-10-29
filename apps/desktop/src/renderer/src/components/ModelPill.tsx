@@ -1,3 +1,4 @@
+import { modelSettingsTarget } from "../model-settings-target.js";
 /**
  * ModelPill (design slice-P7.15-cut.md §2.2, F14) — the single footer pill
  * that replaces the old effort-`<select>` chip + display-only model `<span>`
@@ -444,6 +445,7 @@ export function ModelPill() {
   const queueInFlight = useTabStore((state) => state.queueInFlight);
   const connection = useTabStore((state) => state.connection);
   const pinnedConnection = useTabStore((state) => state.pinnedConnection);
+  const modelSettingsConnectionId = useTabStore((state) => state.modelSettingsConnectionId);
   const ready = connection === "ready";
   // Taskana 4895: the tab store's engine projection is `null` ONLY for the core
   // engine (`host_ready` carries no `engine` block for core). Core accepts a
@@ -470,11 +472,13 @@ export function ModelPill() {
   // default-switch. Undefined write-target = no connection configured (env-override
   // / fresh) — the pick still reaches the host, but the ack skips the persist.
   const activeProviderId = snapshot ? activeProviderView(snapshot.settings).id : undefined;
-  const { providerId, writeTargetConnectionId } = resolvePillTarget(
-    pinnedConnection,
-    activeProviderId,
-    snapshot?.settings.provider.activeConnectionId,
+  const writeTargetConnectionId = modelSettingsTarget(
+    modelSettingsConnectionId, pinnedConnection?.connectionId,
+    modelSettingsConnectionId === undefined ? snapshot?.settings.provider.activeConnectionId : undefined,
   );
+  const providerId = snapshot?.settings.provider.connections.find(
+    (connection) => connection.id === writeTargetConnectionId,
+  )?.providerId ?? (modelSettingsConnectionId === undefined ? pinnedConnection?.providerId ?? activeProviderId : undefined);
   // Live-fetched ids on the TARGET connection (same pinned-else-active target
   // as the write path above) take precedence over static catalog hints.
   const targetConnection =

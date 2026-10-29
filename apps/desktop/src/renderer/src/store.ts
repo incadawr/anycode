@@ -1106,6 +1106,7 @@ export interface DesktopState {
   imageFallback: boolean | undefined;
   /** Taskana 4127: host says the context window is the assumed 8K fallback (set by host_ready/model_changed). */
   contextWindowAssumed: boolean | undefined;
+  modelSettingsConnectionId: string | null | undefined;
   /**
    * Taskana 4110 (TASK.123): the host's steering verdict from `host_ready`
    * (engine-level: core's deferred-injection slot / Codex app-server steer).
@@ -4333,6 +4334,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       imageInput: undefined,
       imageFallback: undefined,
       contextWindowAssumed: undefined,
+      modelSettingsConnectionId: undefined,
       steering: null,
       ...initialSessionSlice(),
       lastFatal: null,
@@ -4433,6 +4435,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               // `imageInput` alone.
               imageFallback: message.imageFallback,
               contextWindowAssumed: message.contextWindowAssumed,
+              modelSettingsConnectionId: message.modelSettingsConnectionId,
               // Taskana 4110 (TASK.123): the engine's live steering verdict.
               // Absent (legacy host / engine without the seam) -> null -> the
               // composer's steer branch never engages, the queue stays.

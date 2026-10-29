@@ -73,7 +73,6 @@ import { EFFORT_LABELS, modelDisplayName, pillLabel, providerModelsFor, resolveP
 import {
   buildStartModelGroups,
   buildStartModelPopularRows,
-  carryDraftEffort,
   deriveRecentModelIds,
   resolveStartModelEffort,
   startModelDefaultEffort,
@@ -376,6 +375,7 @@ export function selectStartModelRow(
 ): void {
   pickModelForDraft(modelId, deps);
   deps.tabsStore.getState().setDraftConnectionId(connectionId);
+  deps.tabsStore.getState().setDraftEngineEffort(undefined);
 }
 
 /**
@@ -1282,25 +1282,6 @@ export function StartScreen({ onToast }: StartScreenProps) {
 
   function selectModel(rowConnectionId: string, modelId: string): void {
     selectStartModelRow(startModelRowConnectionId(rowConnectionId, activeConnectionId), modelId);
-    // TASK.131: the effort vocabulary belongs to the model, so an effort pick
-    // survives a model switch only when the NEW model also declares it —
-    // otherwise it is dropped and the connection's own persisted effort
-    // stands. Never coerced to a neighbouring level.
-    const providerId = modelGroups.find((group) => group.connectionId === rowConnectionId)?.providerId;
-    // Taskana 4118: look up the row's connection for its live-declared
-    // capabilities — the vocabulary the host will consult when the catalog
-    // does not know the model.
-    const rowConnection = snapshot?.settings.provider.connections.find(
-      (connection) => connection.id === rowConnectionId,
-    );
-    useTabsStore
-      .getState()
-      .setDraftEngineEffort(
-        modelOverrideFor(rowConnection, modelId)?.reasoningEffort ?? carryDraftEffort(
-          draft?.engineEffort,
-          startModelEffortLevels(providerId, modelId, snapshot?.catalog, modelCapabilitiesFor(rowConnection, modelId)),
-        ),
-      );
     closeModelMenu(true);
   }
 

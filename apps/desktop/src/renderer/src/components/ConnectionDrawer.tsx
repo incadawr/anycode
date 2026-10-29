@@ -379,7 +379,7 @@ export function buildConnectionUpdatePayload(params: {
   proxyRef: string;
   authOptional: boolean;
   maxOutputTokens: number | "";
-  contextWindowTokens: number | "";
+  contextWindowTokens?: number | "";
   imageInput: ImageInputSelection;
   imageInputChanged?: boolean;
   promptCacheEnabled: boolean;
@@ -407,11 +407,7 @@ export function buildConnectionUpdatePayload(params: {
     // clearing the field back to blank must CLEAR the persisted cap, not leave
     // an old explicit value in force.
     maxOutputTokens: params.maxOutputTokens,
-    // Sent unconditionally (TASK.142), same rationale: an emptied field must
-    // CLEAR the saved pair. Only the numeric value (or `""`) travels — the
-    // model binding is derived SERVER-SIDE from the effective model, so the
-    // renderer can never attach a window to the wrong model.
-    contextWindowTokens: params.contextWindowTokens,
+    ...(params.contextWindowTokens !== undefined ? { contextWindowTokens: params.contextWindowTokens } : {}),
     ...(params.reasoningEffort !== undefined ? { reasoningEffort: params.reasoningEffort } : {}),
     ...(params.reasoningSupported !== undefined ? { reasoningSupported: params.reasoningSupported } : {}),
     // Sent unconditionally (Taskana 4088), same rationale: "auto" must CLEAR
@@ -1204,6 +1200,9 @@ export function ConnectionDrawerFields({
     editConnection === undefined ? "auto" : imageInputInitialValue(editConnection),
   );
   const [imageInputDirty, setImageInputDirty] = useState(false);
+  const [contextWindowDirty, setContextWindowDirty] = useState(false);
+  const [reasoningSupportedDirty, setReasoningSupportedDirty] = useState(false);
+  const [modelEffortDirty, setModelEffortDirty] = useState(false);
   // UI-only (never saved): the user picked the Custom segment of Max output tokens.
   const [maxOutputCustom, setMaxOutputCustom] = useState(false);
   // GitHub #15: opt-in prompt caching, prefilled from the connection's saved
@@ -1383,6 +1382,9 @@ export function ConnectionDrawerFields({
       setModelEffort(target?.reasoningEffort ?? "");
       setImageInput(force || targetConnection === undefined ? "auto" : imageInputInitialValue({...targetConnection, model: effective.trim()}));
       setImageInputDirty(false);
+      setContextWindowDirty(false);
+      setReasoningSupportedDirty(false);
+      setModelEffortDirty(false);
     }
     setModel(next);
   }
@@ -1685,9 +1687,9 @@ export function ConnectionDrawerFields({
           proxyRef,
           authOptional: noAuth,
           maxOutputTokens: mot.value,
-          contextWindowTokens: cw.value,
-          reasoningSupported: reasoningSupported ? true : "",
-          reasoningEffort: modelEffort,
+          ...(contextWindowDirty ? { contextWindowTokens: cw.value } : {}),
+          ...(reasoningSupportedDirty ? { reasoningSupported: reasoningSupported ? true : "" } : {}),
+          ...(modelEffortDirty ? { reasoningEffort: modelEffort } : {}),
           imageInputChanged: imageInputDirty,
           imageInput,
           promptCacheEnabled,
@@ -1984,12 +1986,10 @@ export function ConnectionDrawerFields({
           value={contextWindow.raw}
           disabled={readOnly}
           placeholder={contextWindowPlaceholder(cwDefaultHint)}
-          onChange={(e) =>
-            // TASK.142: editing the WINDOW binds the value to whichever model
-            // is effective right now — this is the route that must never reset
-            // on its own keystrokes.
-            setContextWindow((field) => contextWindowAfterRawInput(field, e.target.value, effectiveFormModel))
-          }
+          onChange={(e) => {
+            setContextWindowDirty(true);
+            setContextWindow((field) => contextWindowAfterRawInput(field, e.target.value, effectiveFormModel));
+          }}
         />
       </label>
       <div className="settings-field-hint">{CONTEXT_WINDOW_ONELINER}</div>
@@ -2003,7 +2003,7 @@ export function ConnectionDrawerFields({
       {!knownCatalogModel && <label className="settings-field">
         <span className="settings-field-label">Reasoning support (this model)</span>
         <select className="settings-field-input" aria-label="Reasoning support" disabled={readOnly}
-          value={reasoningSupported ? "on" : "auto"} onChange={(e) => setReasoningSupported(e.target.value === "on")}>
+          value={reasoningSupported ? "on" : "auto"} onChange={(e) => { setReasoningSupportedDirty(true); setReasoningSupported(e.target.value === "on"); }}>
           <option value="auto">Auto — catalog or provider metadata</option>
           <option value="on">Supported</option>
         </select>
@@ -2011,7 +2011,7 @@ export function ConnectionDrawerFields({
       <label className="settings-field">
         <span className="settings-field-label">Reasoning effort (this model)</span>
         <select className="settings-field-input" aria-label="Reasoning effort" disabled={readOnly}
-          value={modelEffort} onChange={(e) => setModelEffort(e.target.value as ReasoningEffort | "")}>
+          value={modelEffort} onChange={(e) => { setModelEffortDirty(true); setModelEffort(e.target.value as ReasoningEffort | ""); }}>
           <option value="">{editConnection?.reasoningEffort === undefined ? "Default" : `Default (connection: ${editConnection.reasoningEffort})`}</option>
           {(reasoningLevels ?? []).map((level) => <option key={level} value={level}>{level}</option>)}
           {modelEffort !== "" && !reasoningLevels?.includes(modelEffort) && <option value={modelEffort} disabled>{modelEffort} (unavailable)</option>}

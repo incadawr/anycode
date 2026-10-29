@@ -1016,6 +1016,7 @@ export interface SessionOptions {
    * the wire field is omitted and the UI shows no hint.
    */
   contextWindowAssumed?: () => boolean;
+  modelSettingsConnectionId?: string | null;
   /**
    * TASK.198 срез C (plan §1.3): host-owned commit for a live recognizer-
    * config push (main's RecognizerConfigChanged, TASK.198 E1). Session's own
@@ -1262,6 +1263,7 @@ export class Session {
   /** TASK.198 срез C: see SessionOptions.imageFallbackAvailable's own doc. */
   private readonly imageFallbackAvailable: (() => boolean) | undefined;
   private readonly contextWindowAssumed: (() => boolean) | undefined;
+  private readonly modelSettingsConnectionId: string | null | undefined;
   /** TASK.198 срез C: see SessionOptions.applyRecognizerConfig's own doc. */
   private readonly applyRecognizerConfigImpl: ((endpoint: RecognizerEndpoint | null) => void) | undefined;
   /**
@@ -1692,6 +1694,7 @@ export class Session {
     this.imageInputEnabled = options.imageInputEnabled;
     this.imageFallbackAvailable = options.imageFallbackAvailable;
     this.contextWindowAssumed = options.contextWindowAssumed;
+    this.modelSettingsConnectionId = options.modelSettingsConnectionId;
     this.applyRecognizerConfigImpl = options.applyRecognizerConfig;
     this.refineTitle = options.refineTitle;
     this.reasoningSupported = options.reasoningSupported ?? true;
@@ -2452,6 +2455,7 @@ export class Session {
           // claude, legacy tests) -> field absent, no fallback-aware gating.
           ...(this.imageFallbackAvailable !== undefined ? { imageFallback: this.imageFallbackAvailable() } : {}),
           ...(this.contextWindowAssumed !== undefined ? { contextWindowAssumed: this.contextWindowAssumed() } : {}),
+          ...(this.modelSettingsConnectionId !== undefined ? { modelSettingsConnectionId: this.modelSettingsConnectionId } : {}),
           // Taskana 4110 (TASK.123): the engine's live steering verdict —
           // additive-optional, absent on legacy hosts/engines without the seam
           // (mirrors imageInput/imageFallback's discipline above). 4110

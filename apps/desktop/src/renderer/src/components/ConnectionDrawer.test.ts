@@ -727,6 +727,15 @@ describe("buildConnectionUpdatePayload — contextWindowTokens (TASK.142, same u
     promptCacheEnabled: false,
   };
 
+  it("omits untouched model settings so a concurrent update survives a label save", () => {
+    const payload = buildConnectionUpdatePayload({ ...base, label: "renamed" });
+    const concurrent = { contextWindowTokens: 96000, reasoningSupported: true, reasoningEffort: "max" };
+    expect({ ...concurrent, ...payload }).toMatchObject(concurrent);
+    expect(payload).not.toHaveProperty("contextWindowTokens");
+    expect(payload).not.toHaveProperty("reasoningSupported");
+    expect(payload).not.toHaveProperty("reasoningEffort");
+  });
+
   it("a chosen number lands in the payload", () => {
     expect(buildConnectionUpdatePayload({ ...base, contextWindowTokens: 8192 }).contextWindowTokens).toBe(8192);
   });

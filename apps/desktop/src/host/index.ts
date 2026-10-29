@@ -5019,6 +5019,7 @@ async function boot(): Promise<void> {
       },
       imageInputEnabled: media.imageInputEnabled,
       contextWindowAssumed: () => liveContextWindowAssumed,
+      modelSettingsConnectionId: liveCapsConnectionId ?? null,
       // TASK.198 срез C: core-only wiring (codex/claude Sessions never pass
       // these two — "codex/claude НЕ задеты (замыкание не установлено)").
       imageFallbackAvailable: media.recognizerConfigured,
