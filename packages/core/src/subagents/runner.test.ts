@@ -27,7 +27,8 @@ import { createDefaultToolRegistry } from "../tools/registry.js";
 import { toToolDeclarations } from "../tools/to-model-tools.js";
 import { ModePermissionEngine, DenyPermissionBroker } from "../permissions/index.js";
 import { NodeExecutionAdapter } from "../adapters/node/node-execution.js";
-import { agentTool } from "../tools/agent.js";
+import { agentTool, createAgentTool } from "../tools/agent.js";
+import type { SessionSubagentRequest, SessionSubagentPort } from "../ports/session-subagent.js";
 import type { AgentEvent, ModelStreamEvent, TokenUsage } from "../types/events.js";
 import type { ModelPort, ModelRequest } from "../ports/model.js";
 import type { AskClassifier, AskClassifierInput } from "../permissions/ask-classifier.js";
@@ -5712,5 +5713,55 @@ describe("inline child ask classification (Taskana 4730)", () => {
     // the ROOT thunk reads the ROOT loop's (empty here) history.
     expect(seen[0]!.userContext).toEqual([]);
     expect(brokerSpy).toHaveBeenCalledOnce();
+  });
+});
+
+
+describe("core profile session requests", () => {
+  it("uses discovered current profile metadata and preserves follow-ups", async () => {
+    const body = "Привет\n\n---\n\ninside";
+    let profiles = [await makeProfile("worker", { body, model: "model-b" })];
+    const runner = createSubagentRunner(makeParent(), { profiles: () => profiles });
+    const requests: SessionSubagentRequest[] = [];
+    const messages: string[] = [];
+    const sessionPort: SessionSubagentPort = {
+      run: async (request) => {
+        requests.push(request);
+        return { status: "completed", finalText: "done", truncated: false, turns: 1, toolCalls: 0, durationMs: 1, childSessionId: "child", parentSessionId: "parent", spawnToolCallId: "call" };
+      },
+      send: async (request) => { messages.push(request.text); return { ok: true }; },
+    };
+    const tool = createAgentTool({ sessionTier: true });
+    const ctx = { toolCallId: "call", abortSignal: new AbortController().signal, cwd: "/work", ports: makePorts(), subagents: runner, sessionSubagents: sessionPort };
+    for (const [model, detach] of [[undefined, true], ["model-c", false], ["model-b", false]] as const) {
+      await tool.handler({ description: "d", prompt: "task", agent_type: "worker", tier: "session", ...(model ? { model } : {}), detach }, ctx);
+      const request = requests.at(-1)!;
+      expect(request.prompt).toBe(`${body}\n\n---\n\ntask`);
+      expect(request.model).toBe(model ?? "model-b");
+      expect(request).not.toHaveProperty("engine");
+    }
+    await tool.handler({ description: "d", prompt: "follow", agent_type: "worker", tier: "session", continue_session: "child", model: "model-c" }, ctx);
+    expect(requests.at(-1)).toMatchObject({ prompt: "follow", resumeChildSessionId: "child" });
+    expect(requests.at(-1)).not.toHaveProperty("model");
+    await tool.handler({ description: "d", prompt: "message", agent_type: "worker", tier: "session", send_to: "child" }, ctx);
+    expect(messages).toEqual(["message"]);
+    profiles = [await makeProfile("worker", { body: "updated" })];
+    await tool.handler({ description: "d", prompt: "task", agent_type: "worker", tier: "session" }, ctx);
+    expect(requests.at(-1)?.prompt).toBe("updated\n\n---\n\ntask");
+    expect(requests.at(-1)).not.toHaveProperty("model");
+    profiles = [];
+    expect(runner.coreProfile?.("worker")).toBeNull();
+  });
+
+  it("respects reserved names, overridable roles, and engine profiles", async () => {
+    const role = await makeProfile("planner", { body: "role", model: "role-model" });
+    const reserved = { ...role, name: "explore" };
+    const engine = { ...role, name: "foreign", engine: "claude" as const };
+    const runner = createSubagentRunner(makeParent(), { profiles: [role, reserved, engine] });
+    expect(runner.coreProfile?.("planner")).toEqual({ systemPrompt: "role", model: "role-model" });
+    expect(runner.coreProfile?.("explore")).toBeNull();
+    expect(runner.coreProfile?.("general-purpose")).toBeNull();
+    expect(runner.coreProfile?.("foreign")).toBeNull();
+    expect(runner.coreProfile?.("unknown")).toBeNull();
   });
 });

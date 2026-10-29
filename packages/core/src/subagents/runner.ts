@@ -734,6 +734,15 @@ export function createSubagentRunner(
     // as engineProfile above — a mid-session rescan is visible here too. Built-ins
     // and engine profiles never route (engine children run on their own CLI account;
     // engine+routing is parse-fatal anyway).
+    coreProfile(agentType: string): { systemPrompt: string; model?: string } | null {
+      if (isKnownPersona(agentType) && isReservedPersonaName(agentType)) return null;
+      const persona = currentProfiles().get(agentType);
+      if (!persona || persona.engine !== undefined) return null;
+      return {
+        systemPrompt: persona.systemPrompt,
+        ...(persona.model !== undefined ? { model: persona.model } : {}),
+      };
+    },
     profileRouting(agentType: string): { provider?: string; connection?: string } | null {
       // Taskana 4704: same flip as engineProfile — overridable role personas
       // consult the profile map first; hard-reserved built-ins never route.

@@ -1736,6 +1736,7 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
         throw new Error("inline run not expected");
       },
       listAgentTypes: () => ["general-purpose", "explore", "planner", "executor", "reviewer"],
+      coreProfile: () => ({ systemPrompt: "role body", model: "stale-primary" }),
       resolveRoleRoute: (agentType: string) =>
         route === null
           ? null
@@ -1763,6 +1764,16 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
       maxTurns: 80,
       provider: "conn-glm",
     });
+  });
+
+  it("uses the role body while routing healthy, fallback, and exhausted models", async () => {
+    for (const model of ["primary", "fallback", undefined]) {
+      const { ctx, seen } = roleCtx({ entries: model ? [{ model }] : [] });
+      await full.handler({ description: "d", prompt: "task", tier: "session", agent_type: "executor" }, ctx);
+      expect(seen()?.prompt).toBe("role body\n\n---\n\ntask");
+      if (model) expect(seen()?.model).toBe(model);
+      else expect(seen()).not.toHaveProperty("model");
+    }
   });
 
   it("NOT stamped on resumes (a resumed child keeps its own pin)", async () => {
