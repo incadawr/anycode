@@ -1,3 +1,5 @@
+import { hostFailure } from "./host-failure.js";
+import type { HostFailure } from "../shared/host-failure.js";
 import type { AgentDelivery } from "../shared/communication.js";
 /**
  * TabHostManager (design/phase-2.md §2.2): the multi-host generalization of the
@@ -466,6 +468,7 @@ export interface TabHost {
    */
   workspaceTrustPending?: { hash: string };
   state: "running" | "crash_looped" | "closing";
+  hostFailure?: HostFailure;
   /**
    * Whether this tab was opened as a resume (first spawn uses --resume) vs a new
 
@@ -934,6 +937,8 @@ export interface TabSummary {
   workspace: string;
   sessionId: string;
   state: TabHost["state"];
+  hostFailure?: HostFailure;
+  engine?: EngineId;
   pid: number | null;
   /**
    * Present only for a child-session tab (TASK.102 CUT-S2 §2.6.4's "listTabs()
@@ -1205,6 +1210,7 @@ export class TabHostManager {
       sessionId: tab.sessionId,
       state: tab.state,
       pid: tab.proc?.pid ?? null,
+      ...(tab.hostFailure ? { hostFailure: tab.hostFailure, engine: tab.engine } : {}),
       ...(tab.childOf !== undefined
         ? { childOf: { parentTabId: tab.childOf.parentTabId, requestId: tab.childOf.requestId } }
         : {}),
@@ -1700,6 +1706,7 @@ export class TabHostManager {
           }
           this.logger.error(`[main] tab ${tab.tabId} host environment refresh failed`, error);
           tab.state = "crash_looped";
+          tab.hostFailure = hostFailure("spawn_refused");
           this.deps.recordHostFailure?.(tab.sessionId, "connection_env_unavailable");
           this.notifyHostExited(tab.tabId);
           if (opts.firstSpawn) this.rollbackDeferredCreation(tab);
@@ -1716,6 +1723,7 @@ export class TabHostManager {
       this.deps.recordHostFailure?.(tab.sessionId, "connection_env_unavailable");
       tab.proc = null;
       tab.state = "crash_looped";
+      tab.hostFailure = hostFailure("spawn_refused");
       this.notifyHostExited(tab.tabId);
       return false;
     }
@@ -1738,6 +1746,7 @@ export class TabHostManager {
       );
       tab.proc = null;
       tab.state = "crash_looped";
+      tab.hostFailure = hostFailure("spawn_refused");
       this.notifyHostExited(tab.tabId);
       return false;
     }
@@ -1784,6 +1793,7 @@ export class TabHostManager {
     } catch (error) {
       tab.proc = null;
       tab.state = "crash_looped";
+      tab.hostFailure = hostFailure("spawn_refused");
       this.logger.error(`[main] tab ${tab.tabId} host spawn failed`, error);
       this.deps.recordHostFailure?.(tab.sessionId, "host_crash_loop");
       this.notifyHostExited(tab.tabId);
@@ -1795,6 +1805,7 @@ export class TabHostManager {
       startupStderr = (startupStderr + chunk.toString()).slice(-16384);
     });
     tab.proc = child;
+    delete tab.hostFailure;
     tab.spawnedAt = this.now();
     tab.state = "running";
     delete tab.pendingWorktreeCleanup;
@@ -3499,10 +3510,10 @@ export class TabHostManager {
 
 
     // its host-exited banner and awaits the replacement port below.
-    this.notifyHostExited(tab.tabId);
-
     if (decision.action === "give_up") {
       tab.state = "crash_looped";
+      tab.hostFailure = hostFailure(decision.reason, startupStderr, code, signal);
+      this.notifyHostExited(tab.tabId);
       this.logger.error(
         `[main] tab ${tab.tabId} host giving up respawn (${decision.reason}, code ${code})`,
       );
@@ -3511,6 +3522,7 @@ export class TabHostManager {
       return;
     }
 
+    this.notifyHostExited(tab.tabId);
     this.logger.error(`[main] tab ${tab.tabId} host exited unexpectedly (code ${code}); respawning`);
     if (this.spawnTabHost(tab, { firstSpawn: false }) === false) return;
     this.deliverTabPort(tab);
@@ -3615,7 +3627,8 @@ export class TabHostManager {
     if (win === null || win.isDestroyed()) {
       return;
     }
-    win.webContents.send(HOST_EXITED_ENVELOPE_TYPE, { tabId });
+    const failure = this.tabs.get(tabId)?.hostFailure;
+    win.webContents.send(HOST_EXITED_ENVELOPE_TYPE, { tabId, ...(failure ? { hostFailure: failure } : {}) });
   }
 
   /**
@@ -3641,7 +3654,7 @@ export class TabHostManager {
       this.logger.log(`[main] deliverTabPort deferred: tab ${tab.tabId} is not published yet`);
       return;
     }
-    if (tab.proc === null && !tab.missingWorkspace) {
+    if (tab.proc === null && !tab.missingWorkspace && !tab.hostFailure) {
       this.logger.warn(`[main] deliverTabPort skipped: tab ${tab.tabId} has no host`);
       return;
     }
@@ -3666,6 +3679,7 @@ export class TabHostManager {
         tabId: tab.tabId,
         workspace: tab.workspace,
         ...(tab.missingWorkspace ? { missingWorkspace: true } : {}),
+        ...(tab.hostFailure ? { hostFailure: tab.hostFailure } : {}),
         ...(tab.connectionId !== undefined && pin !== undefined
           ? { connectionId: tab.connectionId, providerId: pin.providerId }
           : {}),
@@ -3722,7 +3736,7 @@ export class TabHostManager {
    */
   deliverAllTabPorts(): void {
     for (const tab of this.tabs.values()) {
-      if (tab.proc !== null || tab.missingWorkspace) {
+      if (tab.proc !== null || tab.missingWorkspace || tab.hostFailure) {
         this.deliverTabPort(tab);
       }
     }

@@ -16,15 +16,18 @@ export function HostBanner({
   connection,
   lastFatal,
   workspaceMissing,
+  hostFailure = null,
 }: {
   connection: ConnectionPhase;
   lastFatal: string | null;
   /** The tab is stopped for good: its workspace folder is gone (GitHub #6). */
   workspaceMissing: boolean;
+  hostFailure?: import("../../../shared/host-failure.js").HostFailure | null;
 }) {
   return (
     <>
-      {!workspaceMissing && (
+      {hostFailure && <div className="banner banner-host-exited" role="alert">{hostFailure.message}</div>}
+      {!workspaceMissing && !hostFailure && (
         <>
           {connection === "host_exited" && (
             <div className="banner banner-host-exited" role="alert">

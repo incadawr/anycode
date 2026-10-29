@@ -654,6 +654,18 @@ describe("tab-registry — child-session registration (TASK.102 CUT-S2 §2.5, sl
     });
   });
 
+  it("isolates terminal reasons and clears them on a replacement port", () => {
+    const { registry } = createTestRegistry(createTabsStore());
+    registry.registerPort("one", "/ws", asPort(new FakeMessagePort()));
+    registry.registerPort("two", "/ws", asPort(new FakeMessagePort()));
+    const failure = { code: "per_tab_crash_loop" as const, message: "Stopped." };
+    registry.markHostExited("one", undefined, failure);
+    expect(registry.getStore("one")?.getState().hostFailure).toEqual(failure);
+    expect(registry.getStore("two")?.getState().hostFailure).toBeNull();
+    registry.registerPort("one", "/ws", asPort(new FakeMessagePort()));
+    expect(registry.getStore("one")?.getState().hostFailure).toBeNull();
+  });
+
   it("markHostExited on a ROOT tab still paints its banner as before (child branch doesn't leak into root)", () => {
     const tabsStore = createTabsStore();
     const { registry, childRelationStore } = createTestRegistry(tabsStore);

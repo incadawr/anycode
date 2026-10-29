@@ -361,6 +361,7 @@ export function SessionSurface({ tabId, onToast, suppressPermissionModal = false
   const todoReminderState = useTabStore((state) => state.todoReminderState);
   const turn = useTabStore((state) => state.turn);
   const lastFatal = useTabStore((state) => state.lastFatal);
+  const hostFailure = useTabStore((state) => state.hostFailure);
   // GitHub #6: the terminal missing-folder condition — the only case where the
   // banner drops the connection lines instead of reporting a reconnect.
   const workspaceMissing = useTabStore((state) => state.workspaceMissing);
@@ -439,7 +440,7 @@ export function SessionSurface({ tabId, onToast, suppressPermissionModal = false
   return (
     <>
       <div className="session-conversation">
-        <HostBanner connection={connection} lastFatal={lastFatal} workspaceMissing={workspaceMissing} />
+        <HostBanner connection={connection} lastFatal={lastFatal} workspaceMissing={workspaceMissing} hostFailure={hostFailure} />
 
         <MessageList
           key={tabId}

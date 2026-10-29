@@ -57,6 +57,20 @@ describe("production communication MCP over real SDK HTTP", () => {
     expect((await client.listTools()).tools).toHaveLength(11);
     expect(value(await client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } })).engine).toBe("codex");
   });
+  it("returns an authorized terminal status without contacting the host", async () => {
+    const f = await fixture();
+    const failure = { code: "per_tab_crash_loop" as const, message: "Session host stopped after repeated crashes.", exitCode: 1 };
+    f.manager.listTabs = () => [{ sessionId: "allowed", workspace: f.dir, state: "crash_looped", pid: 10, engine: "core", hostFailure: failure }, { sessionId: "forbidden", workspace: tmpdir(), state: "crash_looped", pid: 10, engine: "core", hostFailure: failure }];
+    const status = value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } }));
+    expect(status).toMatchObject({ state: "crash_looped", engine: "core", hostFailure: failure });
+    expect(status).not.toHaveProperty("model");
+    const sessions = value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions;
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].hostFailure).toEqual(status.hostFailure);
+    expect((await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "forbidden" } })).isError).toBe(true);
+    expect((await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "unknown" } })).isError).toBe(true);
+    expect(f.request).not.toHaveBeenCalled();
+  });
   it("initializes, lists/calls tools and enforces auth, origin and workspace scope", async () => {
     const f = await fixture();
     expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "list_pending_approvals", "answer_approval", "cancel_turn", "create_session", "close_session"]);

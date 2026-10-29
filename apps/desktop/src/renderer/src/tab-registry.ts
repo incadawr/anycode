@@ -157,7 +157,7 @@ export interface TabRegistry {
    * then names the folder and the way out, so the surface shows an error
    * instead of a connecting state that never resolves.
    */
-  markHostExited(tabId: string, missingWorkspacePath?: string): void;
+  markHostExited(tabId: string, missingWorkspacePath?: string, failure?: import("../../shared/host-failure.js").HostFailure): void;
   /**
    * Tears the tab down completely: unsubscribes its message listener, drops
    * the entry from the map, and removes it from the tabs-store. Marks the
@@ -677,7 +677,7 @@ export function createTabRegistry(
       return true;
     },
 
-    markHostExited(tabId, missingWorkspacePath): void {
+    markHostExited(tabId, missingWorkspacePath, failure): void {
       const entry = entries.get(tabId);
       if (!entry) {
         return;
@@ -687,7 +687,7 @@ export function createTabRegistry(
       entry.connection = null;
       // GitHub #6: the path argument is the terminal missing-folder condition, and
       // only that one may hide the surface's connection lines (HostBanner).
-      entry.store.getState().setHostExited(missingWorkspacePath !== undefined);
+      entry.store.getState().setHostExited(missingWorkspacePath !== undefined, failure);
       if (missingWorkspacePath !== undefined) {
         entry.store.getState().applyHostMessage({
           type: "fatal",
