@@ -522,6 +522,7 @@ async function runSessionTier(
   const coreProfile = engineProfile === undefined && degrade === undefined
     ? ctx.subagents?.coreProfile?.(agentType) ?? undefined
     : undefined;
+  const profileEffort = engineProfile?.effort ?? (roleRoute === undefined ? coreProfile?.effort : undefined);
   const request: SessionSubagentRequest = {
     // TASK.218: a continuation branches the request build rather than
     // post-patching the spread — a resumed child keeps its own profile body
@@ -552,8 +553,9 @@ async function runSessionTier(
             : coreProfile),
           // TASK.180: the profile's own turn budget rides the creating spawn only.
           ...(engineProfile?.turnBudget !== undefined ? { maxTurns: engineProfile.turnBudget } : {}),
-          // The profile's declared effort rides the creating spawn too; "xhigh" is preserved for engine children.
-          ...(engineProfile?.effort !== undefined ? { effort: engineProfile.effort } : {}),
+          // A role route supplies its own effort; otherwise preserve the profile's
+          // selection for the destination model to resolve at child boot.
+          ...(profileEffort !== undefined ? { effort: profileEffort } : {}),
         })),
     ...(resumeChildSessionId !== undefined ? { resumeChildSessionId } : {}),
     ...(input.provider !== undefined ? { provider: input.provider } : {}),

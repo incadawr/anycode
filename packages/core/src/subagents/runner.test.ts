@@ -16,6 +16,7 @@ import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { buildChildModelSettingsResolver } from "../provider/child-model-settings.js";
+import { resolveChildReasoningEffort } from "../provider/capabilities.js";
 import { AgentLoop, type AgentLoopConfig } from "../loop/agent-loop.js";
 import {
   SUBAGENT_WRAPUP_DEGRADED_PREFIX,
@@ -1282,11 +1283,12 @@ function fsWith(files: Record<string, string>): FileSystemPort {
 /** Discovers a single md-profile and returns its PersonaDefinition. */
 async function makeProfile(
   name: string,
-  opts: { body: string; tools?: readonly string[]; model?: string },
+  opts: { body: string; tools?: readonly string[]; model?: string; effort?: string },
 ): Promise<PersonaDefinition> {
   const lines = [`name: ${name}`, "description: test profile"];
   if (opts.tools) lines.push(`tools: ${opts.tools.join(", ")}`);
   if (opts.model) lines.push(`model: ${opts.model}`);
+  if (opts.effort) lines.push(`effort: ${opts.effort}`);
   const content = `---\n${lines.join("\n")}\n---\n${opts.body}`;
   const { profiles } = await discoverAgentProfiles(fsWith({ [`${name}.md`]: content }), PROFILE_ROOTS);
   const persona = profiles[0];
@@ -5743,6 +5745,31 @@ describe("inline child ask classification (Taskana 4730)", () => {
 
 
 describe("core profile session requests", () => {
+  it.each([
+    ["both", ["xhigh", "max"], "xhigh"],
+    ["max-only", ["high", "max"], "max"],
+  ] as const)("resolves a core profile's effort for the %s destination", async (model, levels, expected) => {
+    const profile = await makeProfile("worker", { body: "role", model, effort: "xhigh" });
+    const runner = createSubagentRunner(makeParent(), { profiles: [profile] });
+    const requests: SessionSubagentRequest[] = [];
+    const port: SessionSubagentPort = {
+      run: async (request) => {
+        requests.push(request);
+        return { status: "completed", finalText: "done", truncated: false, turns: 1, toolCalls: 0, durationMs: 1, childSessionId: "child", parentSessionId: "parent", spawnToolCallId: "call" };
+      },
+      send: async () => ({ ok: true }),
+    };
+    const tool = createAgentTool({ sessionTier: true });
+    const ctx = { toolCallId: "call", abortSignal: new AbortController().signal, cwd: "/work", ports: makePorts(), subagents: runner, sessionSubagents: port };
+    await tool.handler({ description: "d", prompt: "task", agent_type: "worker", tier: "session" }, ctx);
+    const request = requests[0]!;
+    expect(request.model).toBe(model);
+    expect(request.effort).toBe("xhigh");
+    expect(resolveChildReasoningEffort(request.model!, undefined, request.effort, { reasoning: true, effortLevels: [...levels] })).toBe(expected);
+    await tool.handler({ description: "d", prompt: "follow", agent_type: "worker", tier: "session", continue_session: "child" }, ctx);
+    expect(requests[1]).not.toHaveProperty("effort");
+  });
+
   it("uses discovered current profile metadata and preserves follow-ups", async () => {
     const body = "Привет\n\n---\n\ninside";
     let profiles = [await makeProfile("worker", { body, model: "model-b" })];

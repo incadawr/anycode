@@ -733,13 +733,14 @@ export function createSubagentRunner(
     // as engineProfile above — a mid-session rescan is visible here too. Built-ins
     // and engine profiles never route (engine children run on their own CLI account;
     // engine+routing is parse-fatal anyway).
-    coreProfile(agentType: string): { systemPrompt: string; model?: string } | null {
+    coreProfile(agentType: string): { systemPrompt: string; model?: string; effort?: ReasoningEffort } | null {
       if (isKnownPersona(agentType) && isReservedPersonaName(agentType)) return null;
       const persona = currentProfiles().get(agentType);
       if (!persona || persona.engine !== undefined) return null;
       return {
         systemPrompt: persona.systemPrompt,
         ...(persona.model !== undefined ? { model: persona.model } : {}),
+        ...(persona.effort !== undefined ? { effort: persona.effort } : {}),
       };
     },
     profileRouting(agentType: string): { provider?: string; connection?: string } | null {
