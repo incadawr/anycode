@@ -13,7 +13,7 @@ class FakePort extends EventEmitter {
 }
 
 describe("host boot effort selection", () => {
-  it("retains a saved off selection when switching from GLM-5.2 to GLM-5.3", async () => {
+  it("adjusts an unbound off override when switching from GLM-5.2 to GLM-5.3", async () => {
     // The profile inputs the fork must NOT see, captured for the cleanup checks.
     const ambient = {
       home: process.env.HOME,
@@ -33,7 +33,7 @@ describe("host boot effort selection", () => {
         expect(port.messages.find((m) => m.type === "host_ready")).not.toHaveProperty("reasoningEffortDefault");
         port.send({ type: "set_model", model: "glm-5.3" });
         await vi.waitFor(() => expect(port.messages.some((m) => m.type === "model_changed")).toBe(true));
-        expect(port.messages.find((m) => m.type === "model_changed").reasoningEffort).toBe("off");
+        expect(port.messages.find((m) => m.type === "model_changed")).toMatchObject({ reasoningEffort: "low", effortAdjustment: { from: "off", to: "low" } });
         expect(port.messages.find((m) => m.type === "model_changed")).not.toHaveProperty("reasoningEffortDefault");
         // What the fork stamped into its own environment on this bare boot.
         stampedSessionId = process.env.ANYCODE_SESSION_ID;
@@ -110,6 +110,61 @@ it("pins an unpinned legacy host's live model settings to the connection that su
 }, 45000);
 
 
+it.each([
+  { model: "glm-5.3-flash", saved: undefined, expected: "high", adjustment: undefined },
+  { model: "glm-5.3", saved: "off", expected: "low", adjustment: { from: "off", to: "low" } },
+])("resolves destination effort on connection boot: $model, saved $saved", async ({ model, saved, expected, adjustment }) => {
+  const result = await bootHostInTempProfile(async ({ parent }) => {
+    const port = new FakePort();
+    parent.emit("message", { ports: [port], data: {} });
+    await vi.waitFor(() => expect(port.listenerCount("message")).toBeGreaterThan(0), { timeout: 15000 });
+    port.send({ type: "ui_ready" });
+    await vi.waitFor(() => expect(port.messages.some((m) => m.type === "host_ready")).toBe(true));
+    const ready = port.messages.find((m) => m.type === "host_ready");
+    expect(ready.reasoningEffort).toBe(expected);
+    expect(ready.availableEffortLevels).toContain(expected);
+    expect(ready.effortAdjustment).toEqual(adjustment);
+  }, {
+    extraEnv: { ANYCODE_MODEL: model, ANYCODE_BASE_URL: "https://api.z.ai/api/anthropic", ANYCODE_API_KEY: "test", ANYCODE_MODEL_SETTINGS_CONNECTION_ID: "destination", ANYCODE_SWITCH_PRIOR_EFFORT: "high" },
+    boot: async () => {
+      vi.resetModules();
+      writeFileSync(process.env.ANYCODE_SETTINGS_PATH!, JSON.stringify({
+        version: 2, provider: { activeConnectionId: "destination", connections: [{ id: "destination", providerId: "z-ai", model, ...(saved ? { modelOverrides: { [model]: { reasoningEffort: saved } } } : {}) }] },
+        tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false },
+      }));
+      await import("./index.js");
+    },
+  });
+  if (result.error !== null) throw result.error;
+  expect(result.stopped).toBe(true);
+}, 45000);
+
+it("carries a selected high tier across a connection switch to Flash", async () => {
+  let priorEffort: string | undefined;
+  const source = await bootHostInTempProfile(async ({ parent }) => {
+    const port = new FakePort();
+    parent.emit("message", { ports: [port], data: {} });
+    await vi.waitFor(() => expect(port.listenerCount("message")).toBeGreaterThan(0), { timeout: 15000 });
+    port.send({ type: "ui_ready" });
+    await vi.waitFor(() => expect(port.messages.some((m) => m.type === "host_ready")).toBe(true));
+    port.send({ type: "set_reasoning_effort", effort: "high" });
+    await vi.waitFor(() => expect(port.messages.some((m) => m.type === "reasoning_effort_changed" && m.effort === "high")).toBe(true));
+    priorEffort = port.messages.filter((m) => m.type === "reasoning_effort_changed").at(-1).effort;
+  }, { extraEnv: { ANYCODE_MODEL: "glm-5.2", ANYCODE_BASE_URL: "https://api.z.ai/api/anthropic", ANYCODE_API_KEY: "test" }, boot: async () => { vi.resetModules(); await import("./index.js"); } });
+  if (source.error !== null) throw source.error;
+  expect(priorEffort).toBe("high");
+  if (priorEffort === undefined) throw new Error("source effort was not acknowledged");
+  const destination = await bootHostInTempProfile(async ({ parent }) => {
+    const port = new FakePort();
+    parent.emit("message", { ports: [port], data: {} });
+    await vi.waitFor(() => expect(port.listenerCount("message")).toBeGreaterThan(0), { timeout: 15000 });
+    port.send({ type: "ui_ready" });
+    await vi.waitFor(() => expect(port.messages.some((m) => m.type === "host_ready")).toBe(true));
+    expect(port.messages.find((m) => m.type === "host_ready")).toMatchObject({ model: "glm-5.3-flash", reasoningEffort: "high" });
+  }, { extraEnv: { ANYCODE_MODEL: "glm-5.3-flash", ANYCODE_BASE_URL: "https://api.z.ai/api/anthropic", ANYCODE_API_KEY: "test", ANYCODE_SWITCH_PRIOR_EFFORT: priorEffort }, boot: async () => { vi.resetModules(); await import("./index.js"); } });
+  if (destination.error !== null) throw destination.error;
+  expect(destination.stopped).toBe(true);
+}, 45000);
 for (const [resumed, initialModel] of [[false, "both"], [false, "onlyMax"], [true, "both"]] as const) {
   it(`resolves child effort across ${resumed ? "durable resume" : "fresh boot"} on ${initialModel}, switches and settings refresh`, async () => {
     const requests: any[] = [];
@@ -280,3 +335,45 @@ it("uses declared child effort levels over live capabilities at boot, switch, an
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }, 60000);
+
+it("refreshes declared effort levels before a child switches models", async () => {
+  const settings = {
+    version: 2, provider: { activeConnectionId: "conn", connections: [{
+      id: "conn", providerId: "custom:fixture", model: "source",
+      modelOverrides: {
+        source: { effortLevels: ["xhigh", "max"] },
+        destination: { effortLevels: ["max"] },
+      },
+    }] }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false },
+  };
+  const oldArgv = process.argv;
+  try {
+    process.argv = [process.execPath, "host", "--session", "switch-child", "--child-parent", "parent", "--child-spawn-call", "call", "--child-mode", "build"];
+    const result = await bootHostInTempProfile(async ({ parent, profile }) => {
+      const port = new FakePort();
+      parent.emit("message", { ports: [port], data: {} });
+      await vi.waitFor(() => expect(port.listenerCount("message")).toBeGreaterThan(0), { timeout: 15000 });
+      port.send({ type: "ui_ready" });
+      await vi.waitFor(() => expect(port.messages.some((m) => m.type === "host_ready")).toBe(true));
+      expect(port.messages.find((m) => m.type === "host_ready").reasoningEffort).toBe("xhigh");
+      settings.provider.connections[0]!.modelOverrides.destination.effortLevels = ["xhigh", "max"];
+      writeFileSync(profile.settingsPath, JSON.stringify(settings));
+      port.send({ type: "set_model", model: "destination" });
+      await vi.waitFor(() => expect(port.messages.some((m) => m.type === "model_changed" && m.model === "destination")).toBe(true));
+      expect(port.messages.filter((m) => m.type === "model_changed").at(-1)).toMatchObject({
+        selectedReasoningEffort: "xhigh", reasoningEffort: "xhigh", availableEffortLevels: ["xhigh", "max"],
+      });
+    }, {
+      extraEnv: { ANYCODE_MODEL: "source", ANYCODE_BASE_URL: "http://127.0.0.1:12345/v1", ANYCODE_API_KEY: "test", ANYCODE_PROVIDER_TRANSPORT: "openai-chat-completions", ANYCODE_MODEL_SETTINGS_CONNECTION_ID: "conn", ANYCODE_REASONING_EFFORT: "xhigh" },
+      boot: async () => {
+        vi.resetModules();
+        writeFileSync(process.env.ANYCODE_SETTINGS_PATH!, JSON.stringify(settings));
+        await import("./index.js");
+      },
+    });
+    if (result.error !== null) throw result.error;
+    expect(result.stopped).toBe(true);
+  } finally {
+    process.argv = oldArgv;
+  }
+}, 45000);

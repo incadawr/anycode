@@ -1,3 +1,5 @@
+import { findCatalogEntry } from "@anycode/core/catalog";
+import { createConnectionModelSettings } from "./connection-model-settings.js";
 /**
  * Session integration tests over a real worker_threads MessageChannel driving
  * the real AgentLoop + dispatcher against a scripted ModelPort (design §10,
@@ -3938,6 +3940,37 @@ describe("Session — model switch (slice P7.15 · F14)", () => {
     } finally {
       h.close();
     }
+  });
+
+  it("acknowledges a normalized explicit queued effort at the turn boundary", async () => {
+    const entry = findCatalogEntry("z-ai")!;
+    const settings = createConnectionModelSettings({catalogEntry:entry, liveCapabilitiesFor:() => undefined});
+    let current = "glm-5.2";
+    const h = createHarness({
+      steps:[toolStep("c1", "Write", WRITE_INPUT), finishStep()],
+      selectedEffort:"off", reasoningSupported:true, availableEffortLevels:["off", "high", "max"],
+      switchModel:(id, tier, explicit) => {
+        const selectedReasoningEffort = settings.switchEffort(current, id, tier ?? "off", explicit);
+        const effortAdjustment = settings.takeAdjustment();
+        current = id;
+        return {model:id, selectedReasoningEffort, reasoningEffort:resolveReasoningEffort(id, entry, selectedReasoningEffort) ?? "off", availableEffortLevels:resolveEffortLevels(id, entry), effortAdjustment};
+      },
+    });
+    try {
+      h.send({type:"ui_ready"});
+      await h.waitFor(isHostReady);
+      h.send({type:"user_message", requestId:"r1", text:"write it"});
+      const req = await h.waitFor(isPermissionRequest);
+      h.send({type:"set_model", model:"glm-5.3", requestId:"old-model"});
+      h.send({type:"set_model", model:"glm-5.3", requestId:"new-model"});
+      h.send({type:"set_reasoning_effort", effort:"off", requestId:"old-effort"});
+      h.send({type:"set_reasoning_effort", effort:"off", requestId:"new-effort"});
+      await h.flush();
+      expect(h.received.some(isModelChanged)).toBe(false);
+      h.send({type:"permission_response", requestId:req.requestId, behavior:"deny"});
+      const changed = await h.waitFor(isModelChanged);
+      expect(changed).toMatchObject({requestId:"new-model", effortRequestId:"new-effort", model:"glm-5.3", reasoningEffort:"low", selectedReasoningEffort:"low", requestedReasoningEffort:"off", effortAdjustment:{from:"off", to:"low"}});
+    } finally { h.close(); }
   });
 
   it("silently drops a malformed id (empty / internal whitespace) and a switch with no factory wired", async () => {

@@ -13,6 +13,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The effort picker saves the level you pick even when it is already shown, and a level the new model does not support is replaced with the nearest one, with a notice.
 - A tab whose session host keeps crashing shows why it stopped, and the Sessions API reports the same reason; a missing workspace folder is reported as such.
 - Core subagents honor the requested reasoning effort when their model supports it.
 - Native session children use their agent profile’s model and instructions by default (GitHub #5).
