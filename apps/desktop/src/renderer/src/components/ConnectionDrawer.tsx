@@ -353,6 +353,19 @@ export function promptCacheVisible(
   return resolved === "openai-chat-completions" || resolved === "openai-responses";
 }
 
+export function buildDrawerSavePayload(
+  params: Parameters<typeof buildConnectionUpdatePayload>[0],
+  fields: { contextWindowDirty: boolean; contextWindowTokens: number | ""; reasoningSupportedDirty: boolean; reasoningSupported: boolean; modelEffortDirty: boolean; modelEffort: ReasoningEffort | ""; imageInputDirty: boolean },
+): ConnectionUpdateRequest {
+  return buildConnectionUpdatePayload({
+    ...params,
+    ...(fields.contextWindowDirty ? { contextWindowTokens: fields.contextWindowTokens } : {}),
+    ...(fields.reasoningSupportedDirty ? { reasoningSupported: fields.reasoningSupported ? true : "" } : {}),
+    ...(fields.modelEffortDirty ? { reasoningEffort: fields.modelEffort } : {}),
+    imageInputChanged: fields.imageInputDirty,
+  });
+}
+
 /**
  * The connection-update payload the unified `save` sends (TASK.45 W12-FIX §3;
  * TASK.58 folded the former separate `saveMetadata` into `save`):
@@ -1677,7 +1690,7 @@ export function ConnectionDrawerFields({
         modelPersistenceBridge(),
         reloadSnapshot,
         createdConnectionId,
-        { ...buildConnectionUpdatePayload({
+        { ...buildDrawerSavePayload({
           connectionId: createdConnectionId,
           label,
           model: selectedModelId ?? model,
@@ -1687,13 +1700,9 @@ export function ConnectionDrawerFields({
           proxyRef,
           authOptional: noAuth,
           maxOutputTokens: mot.value,
-          ...(contextWindowDirty ? { contextWindowTokens: cw.value } : {}),
-          ...(reasoningSupportedDirty ? { reasoningSupported: reasoningSupported ? true : "" } : {}),
-          ...(modelEffortDirty ? { reasoningEffort: modelEffort } : {}),
-          imageInputChanged: imageInputDirty,
           imageInput,
           promptCacheEnabled,
-        }), pricing },
+        }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty }), pricing },
         selectedModelId,
       );
       let keyRefused = false;

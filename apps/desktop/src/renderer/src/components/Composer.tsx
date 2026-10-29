@@ -951,6 +951,15 @@ export function UsageCostBlock({ ledger, turnSummary, turnSteps, expanded, onTog
   </div>;
 }
 
+export function contextWindowSettingsTarget(
+  connections: readonly ProviderConnection[], model: string | null,
+  hostId: string | null | undefined, pinnedId: string | undefined,
+): { connection: ProviderConnection; model: string } | null {
+  const id = modelSettingsTarget(hostId, pinnedId);
+  const connection = connections.find((item) => item.id === id);
+  return connection !== undefined && model !== null ? { connection, model } : null;
+}
+
 /**
  * Hover/focus/click-triggered popover anchored to the ctx meter. Positioning
  * mirrors ModelPill.tsx's popover (position:fixed, anchor computed from
@@ -998,8 +1007,7 @@ function CtxPopover({
   const snapshot = useSettingsStore((state) => state.snapshot);
   const [settingsTarget, setSettingsTarget] = useState<{ connection: ProviderConnection; model: string } | null>(null);
   useOverlayFlag(settingsTarget !== null);
-  const connectionId = modelSettingsTarget(modelSettingsConnectionId, pinnedConnection?.connectionId);
-  const savedConnection = snapshot?.settings.provider.connections.find((connection) => connection.id === connectionId);
+  const shortcutTarget = contextWindowSettingsTarget(snapshot?.settings.provider.connections ?? [], model, modelSettingsConnectionId, pinnedConnection?.connectionId);
   const assumedHint = ctxWindowAssumedHint(contextUsage);
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<{ left: number; bottom: number; maxHeight: number } | null>(null);
@@ -1193,8 +1201,8 @@ function CtxPopover({
           <div className="ctx-popover-body" tabIndex={0}>
             {contextWindowAssumed && <div className="ctx-popover-assumed">
               {assumedHint}
-              {savedConnection !== undefined && model !== null && <button type="button" className="settings-button"
-                onClick={() => { close(); setSettingsTarget({ connection: savedConnection, model }); }}>Set context window</button>}
+              {shortcutTarget !== null && <button type="button" className="settings-button"
+                onClick={() => { close(); setSettingsTarget(shortcutTarget); }}>Set context window</button>}
             </div>}
             <div className="ctx-popover-bar">
               <div className="ctx-popover-bar-fill" style={{ width: `${fillPercent}%` }} />

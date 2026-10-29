@@ -372,10 +372,12 @@ export function selectStartModelRow(
   connectionId: string | undefined,
   modelId: string,
   deps: ModelPickDeps = defaultModelPickDeps(),
+  current?: { connectionId: string | undefined; modelId: string; activeConnectionId: string | undefined },
 ): void {
+  const same = current !== undefined && (connectionId ?? current.activeConnectionId) === current.connectionId && modelId === current.modelId;
   pickModelForDraft(modelId, deps);
   deps.tabsStore.getState().setDraftConnectionId(connectionId);
-  deps.tabsStore.getState().setDraftEngineEffort(undefined);
+  if (!same) deps.tabsStore.getState().setDraftEngineEffort(undefined);
 }
 
 /**
@@ -1281,7 +1283,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   }
 
   function selectModel(rowConnectionId: string, modelId: string): void {
-    selectStartModelRow(startModelRowConnectionId(rowConnectionId, activeConnectionId), modelId);
+    selectStartModelRow(startModelRowConnectionId(rowConnectionId, activeConnectionId), modelId, defaultModelPickDeps(), { connectionId: chipConnectionId, modelId: modelChip.modelId, activeConnectionId });
     closeModelMenu(true);
   }
 

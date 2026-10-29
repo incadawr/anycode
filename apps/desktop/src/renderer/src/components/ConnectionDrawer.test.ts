@@ -14,6 +14,7 @@ import {
   appendModelToConnection,
   appendModelsToConnection,
   buildConnectionUpdatePayload,
+  buildDrawerSavePayload,
   createConnectionAndPersistModel,
   liveModelSuggestions,
   maxOutputPresetSelection,
@@ -728,12 +729,14 @@ describe("buildConnectionUpdatePayload — contextWindowTokens (TASK.142, same u
   };
 
   it("omits untouched model settings so a concurrent update survives a label save", () => {
-    const payload = buildConnectionUpdatePayload({ ...base, label: "renamed" });
+    const payload = buildDrawerSavePayload({ ...base, label: "renamed" }, { contextWindowDirty: false, contextWindowTokens: 8192, reasoningSupportedDirty: false, reasoningSupported: false, modelEffortDirty: false, modelEffort: "off", imageInputDirty: false });
     const concurrent = { contextWindowTokens: 96000, reasoningSupported: true, reasoningEffort: "max" };
     expect({ ...concurrent, ...payload }).toMatchObject(concurrent);
     expect(payload).not.toHaveProperty("contextWindowTokens");
     expect(payload).not.toHaveProperty("reasoningSupported");
     expect(payload).not.toHaveProperty("reasoningEffort");
+    expect(payload).not.toHaveProperty("imageInputOverride");
+    expect(buildDrawerSavePayload(base, { contextWindowDirty: true, contextWindowTokens: "", reasoningSupportedDirty: true, reasoningSupported: true, modelEffortDirty: true, modelEffort: "max", imageInputDirty: true })).toMatchObject({ contextWindowTokens: "", reasoningSupported: true, reasoningEffort: "max", imageInputOverride: "" });
   });
 
   it("a chosen number lands in the payload", () => {
