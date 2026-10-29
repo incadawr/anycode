@@ -1,3 +1,4 @@
+import { contextSnapshotOptions } from "./context-snapshot.js";
 import { discoverLoginPath, mcpProblemStatuses, codexMcpStatus, claudeMcpStatuses, forwardProblemStatuses } from "./mcp-login-path.js";
 import { readRoleSettings } from "./role-settings.js";
 import { SqliteCodexAgentCardLog } from "./engines/codex/agent-card-log.js";
@@ -1934,6 +1935,7 @@ async function bootCodexSession(
     workspace,
     model: connected.model,
     sessionId: connected.sessionMeta.id,
+    ...await contextSnapshotOptions(persistence!, connected.sessionMeta.id, "codex", connected.model, undefined, connected.initialContextUsage),
     usageAudit: codexUsageAudit,
     // Codex owns native thread history; never an AgentLoop history — this is
     // the resume projection built ONCE at boot (TASK.42, cut §2(e)):
@@ -2696,6 +2698,7 @@ async function bootClaudeSession(
     workspace,
     model: connected.model,
     sessionId: rowId,
+    ...await contextSnapshotOptions(persistence!, rowId, "claude", connected.model, undefined, args.resume ? () => claudeEngine.initialContextUsage() : undefined),
     // The resume projection built above — `[]` for a fresh session, the
     // shadow-mirror transcript (incl. tool_call cards) for a resumed one.
     bootHistory,
@@ -4703,7 +4706,13 @@ async function boot(): Promise<void> {
     });
     const cleanupHandoff = sessionMeta.worktreeCleanup ?? parseCleanupIntent(process.env[WORKTREE_CLEANUP_ENV]);
     const coreHistoryMaxItems = resolveSessionHistoryMaxItems(process.env);
+    const restoredLoopContext = loop.contextInfo();
+    const fallbackContext = initialHistory.length > 0
+      ? { estimatedTokens: restoredLoopContext.estimatedTokens, budgetTokens: restoredLoopContext.effectiveWindowTokens, source: "estimate" as const }
+      : undefined;
+    const restoredContext = await contextSnapshotOptions(persistence, sessionId, "core", currentModel, restoredLoopContext.effectiveWindowTokens, fallbackContext);
     session = new Session({
+      ...restoredContext,
       workspaceTrustRequired: workspaceTrustRequiredMessage,
       outbound,
       engine,
