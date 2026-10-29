@@ -394,6 +394,7 @@ export interface TabHost {
   /* */
   sessionId: string;
   activityState?: SessionActivityState;
+  lastCommunicationStatus?: Record<string, unknown>;
   /**
    * The provider connection pinned to this session (TASK.45 W10, core engine
    * only). Fixed at createTab from the active connection (new) or the session's
@@ -1185,6 +1186,13 @@ export class TabHostManager {
       const onMessage = (raw: unknown) => {
         const message = raw as { type?: string; requestId?: string; result?: unknown; error?: string };
         if (message?.type !== "communication_response" || message.requestId !== requestId) return;
+        if (!message.error && tab.proc === proc && operation === "get_session_status" && message.result && typeof message.result === "object") {
+          const status = message.result as Record<string, unknown>;
+          tab.lastCommunicationStatus = { ...tab.lastCommunicationStatus, ...Object.fromEntries(
+            ["model", "effort", "steering", "supportedEfforts", "appliedEffort", "effortPending"]
+              .filter((key) => status[key] !== undefined).map((key) => [key, status[key]]),
+          ) };
+        }
         finish(message.error ? new Error(message.error) : undefined, message.result);
       };
       const onExit = () => finish(new Error("Host disconnected; delivery unknown"));
@@ -1199,6 +1207,16 @@ export class TabHostManager {
       try { proc.postMessage({ type: "communication_request", requestId, operation, payload }); }
       catch (error) { finish(error instanceof Error ? error : new Error("Host unavailable")); }
     });
+  }
+
+  /** Main-owned metadata and the last host status survive host restarts. */
+  communicationStatusDetails(sessionId: string): Record<string, unknown> {
+    const tab = [...this.tabs.values()].find((t) => t.sessionId === sessionId);
+    if (!tab) return {};
+    const model = tab.modelOverride ?? (!tab.initialResume ? tab.engineModel : null);
+    const effort = tab.effortOverride ?? (!tab.initialResume ? tab.engineEffort : null);
+    return { engine: tab.engine, ...(model != null ? { model } : {}),
+      ...(effort != null ? { effort } : {}), ...tab.lastCommunicationStatus };
   }
 
   listTabs(): ReadonlyArray<TabSummary> {

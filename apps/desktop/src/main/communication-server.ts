@@ -10,7 +10,8 @@ import type { AgentDelivery, AgentEnvelope, SessionActivityState } from "../shar
 export interface CommunicationManager {
   listTabs(): ReadonlyArray<{ sessionId: string; workspace: string; state: string; activityState?: SessionActivityState; engine?: string; missingWorkspace?: boolean; hostFailure?: import("../shared/host-failure.js").HostFailure; pid?: number | null; childOf?: { parentTabId: string; requestId?: string } }>;
   onCommunicationDelivery?(listener: (sessionId: string, delivery: AgentDelivery) => void): () => void;
-  communicationRequest(sessionId: string, operation: string, payload?: unknown, expectedWorkspace?: string): Promise<unknown>;
+  communicationStatusDetails?(sessionId: string): Record<string, unknown>;
+  communicationRequest(sessionId: string, operation: string, payload?: unknown, expectedWorkspace?: string, requestOptions?: { timeoutMs?: number }): Promise<unknown>;
 }
 /**
  * One schema for both config sources. The env file (`configFile`) additionally
@@ -373,21 +374,17 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     return { ...rest, state: terminalState(tab) ?? activityState ?? "idle" };
   };
   const resolveStatus = async (tab: Awaited<ReturnType<typeof requireSession>>) => {
-    if (terminalState(tab)) return publicTab(tab);
+    if (terminalState(tab)) return { ...options.manager.communicationStatusDetails?.(tab.sessionId), ...publicTab(tab) };
     let status: unknown;
     if (tab.pid !== null) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        status = await Promise.race([
-          options.manager.communicationRequest(tab.sessionId, "get_session_status", undefined, tab.workspace),
-          new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), 250); }),
-        ]);
-      } catch { /* Host details are optional while the host is unavailable. */ }
-      finally { if (timer !== undefined) clearTimeout(timer); }
+        status = await options.manager.communicationRequest(tab.sessionId, "get_session_status", undefined, tab.workspace, { timeoutMs: 1500 });
+      } catch { /* Use main's last known details while the host is unavailable. */ }
     }
     const current = await requireSession(tab.sessionId);
-    if (terminalState(current)) return publicTab(current);
-    return { ...(status && typeof status === "object" ? status : {}), ...publicTab(current) };
+    if (terminalState(current)) return { ...options.manager.communicationStatusDetails?.(current.sessionId), ...publicTab(current) };
+    return { ...(status && typeof status === "object" ? status : {}),
+      ...options.manager.communicationStatusDetails?.(current.sessionId), ...publicTab(current) };
   };
   const approvalOn = (sessionId: string): boolean => options.isExternalApprovalEnabled?.(sessionId) === true;
   /** Access first (an unshared session never reveals anything), then the approval switch. */

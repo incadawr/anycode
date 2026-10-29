@@ -18,7 +18,7 @@ import type { AgentDelivery, AgentEnvelope } from "../shared/communication.js";
 import type { AnycodeSettings } from "../shared/settings.js";
 import { createHarness, finishStep, ScriptedModelPort } from "../host/test-harness.js";
 import type { Session } from "../host/session.js";
-import { forwardSessionActivity } from "../host/activity-forwarding.js";
+import { startHostWithActivity } from "../host/activity-forwarding.js";
 import { CORE_ENGINE_CAPABILITIES, type SessionEngine } from "../host/engines/session-engine.js";
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
@@ -78,15 +78,39 @@ describe("production communication MCP over real SDK HTTP", () => {
     expect(row).toMatchObject({ sessionId: "allowed", state: "idle", pid: null });
     expect(f.request).not.toHaveBeenCalled();
   });
-  it("returns state while the host is restarting or stalled", async () => {
-    const f = await fixture();
-    for (const pid of [null, 10]) {
-      f.manager.listTabs = () => [{ sessionId: "allowed", workspace: f.dir, state: "running", activityState: "running", pid, engine: "core" }];
-      f.request.mockImplementation(() => new Promise(() => {}));
-      const row = value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions[0];
-      const status = value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } }));
-      expect(status).toMatchObject({ state: row.state, engine: "core" });
-    }
+  it("retains known details and releases stalled status probes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-status-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    let respond = true;
+    const details = { engine: "core", model: "host-model", effort: "high", steering: { supported: true, ready: true } };
+    const proc = Object.assign(new EventEmitter(), { pid: 123, kill: () => true, postMessage: (message: any) => {
+      if (respond && message.operation === "get_session_status") {
+        setTimeout(() => proc.emit("message", { type: "communication_response", requestId: message.requestId, result: details }), 350);
+      }
+    } });
+    const manager = new TabHostManager({ fork: (() => proc as unknown as UtilityProcess) as HostForkFn,
+      hostEntry: "/fake/host.js", createChannel: () => ({ port1: {} as MessagePortMain, port2: {} as MessagePortMain }),
+      getWindow: () => null, env: () => ({}), engineEnv: () => ({}), engineReady: () => true,
+      logger: { log: () => {}, warn: () => {}, error: () => {} } });
+    const tab = manager.createTab({ workspace: dir, sessionId: "test-session", resume: false, engine: "core", modelOverride: "draft" });
+    expect(manager.listTabs()[0]).not.toHaveProperty("engine");
+    const service = await startCommunicationServer({ manager, userData: dir, config: { workspaces: [dir], discoveryFile: join(dir, "endpoint.json") } });
+    cleanups.push(() => service.close());
+    const client = await reconnect(service.discoveryFile);
+    const status = async () => value(await client.callTool({ name: "get_session_status", arguments: { sessionId: "test-session" } }));
+    if (!tab.ok) throw new Error("tab creation failed");
+    tab.tab.proc = null;
+    expect(await status()).toMatchObject({ engine: "core", model: "draft", state: "idle" });
+    tab.tab.proc = proc as unknown as UtilityProcess;
+    expect(await status()).toMatchObject(details);
+    respond = false;
+    const messageListeners = proc.listenerCount("message");
+    const exitListeners = proc.listenerCount("exit");
+    expect(await status()).toMatchObject(details);
+    expect(proc.listenerCount("message")).toBe(messageListeners);
+    expect(proc.listenerCount("exit")).toBe(exitListeners);
+    tab.tab.proc = null;
+    expect(await status()).toMatchObject(details);
   });
   it("rechecks sharing after asynchronous workspace resolution", async () => {
     const dir = await mkdtemp(join(tmpdir(), "anycode-sharing-"));
@@ -114,8 +138,6 @@ describe("production communication MCP over real SDK HTTP", () => {
     expect(rows.map((row: { sessionId: string }) => row.sessionId)).toEqual(["b"]);
   });
   it("forwards real host activity to both public endpoints", async () => {
-    const hostEntry = await readFile(fileURLToPath(new URL("../host/index.ts", import.meta.url)), "utf8");
-    expect(hostEntry).toContain('forwardSessionActivity(session, (message) => process.parentPort.postMessage(message))');
     const dir = await mkdtemp(join(tmpdir(), "anycode-activity-"));
     cleanups.push(() => rm(dir, { recursive: true, force: true }));
     let finish!: () => void;
@@ -134,7 +156,7 @@ describe("production communication MCP over real SDK HTTP", () => {
       getWindow: () => null, env: () => ({}), engineEnv: () => ({}), engineReady: () => true,
       logger: { log: () => {}, warn: () => {}, error: () => {} } });
     manager.createTab({ workspace: dir, sessionId: "test-session", resume: false });
-    forwardSessionActivity(h.session, (message) => proc.emit("message", message));
+    await startHostWithActivity(async () => {}, () => h.session, (message) => proc.emit("message", message));
     const service = await startCommunicationServer({ manager, userData: dir, config: { workspaces: [dir], discoveryFile: join(dir, "endpoint.json") } });
     cleanups.push(() => service.close());
     const client = await reconnect(service.discoveryFile);
