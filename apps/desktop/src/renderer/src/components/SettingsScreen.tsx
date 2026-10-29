@@ -1337,7 +1337,8 @@ export interface SettingsScreenProps {
   onAddConnectionConsumed?: () => void;
   /** Taskana 4758: the folder list for the scope dropdown; defaults to the preload bridge (absent outside Electron). */
   scopeBridge?: ScopeWorkspacesBridge;
-  registerLeaveGuard?: (guard: ((action: () => void) => void) | null) => void;
+  onPaneRequestCancelled?: () => void;
+  registerLeaveGuard?: (guard: ((action: () => void, onCancel?: () => void) => void) | null) => void;
 }
 
 /** Taskana 4758: the one bridge call the scope dropdown needs (opaque ids only). */
@@ -1357,6 +1358,7 @@ export function SettingsScreen({
   addConnectionRequest = 0,
   onAddConnectionConsumed,
   scopeBridge,
+  onPaneRequestCancelled,
   registerLeaveGuard,
 }: SettingsScreenProps) {
   const snapshot = useStore(store, (s) => s.snapshot);
@@ -1433,10 +1435,10 @@ export function SettingsScreen({
   // kept across pane switches and active-tab changes. The selection is an opaque
   // id; the folder list comes from main (`scopeBridge.list`), so the renderer
   // never holds a path it could send back.
-  const roleGuardRef = useRef<((action: () => void) => void) | null>(null);
-  const registerRoleGuard = useCallback((guard: ((action: () => void) => void) | null) => { roleGuardRef.current = guard; registerLeaveGuard?.(guard); }, [registerLeaveGuard]);
-  function guardRoleLeave(action: () => void): void {
-    if (roleGuardRef.current) roleGuardRef.current(action); else action();
+  const roleGuardRef = useRef<((action: () => void, onCancel?: () => void) => void) | null>(null);
+  const registerRoleGuard = useCallback((guard: ((action: () => void, onCancel?: () => void) => void) | null) => { roleGuardRef.current = guard; registerLeaveGuard?.(guard); }, [registerLeaveGuard]);
+  function guardRoleLeave(action: () => void, onCancel?: () => void): void {
+    if (roleGuardRef.current) roleGuardRef.current(action, onCancel); else action();
   }
   const [scopeSelection, setScopeSelection] = useState<ScopeSelection>(USER_SCOPE);
   const scopeSelectionRef = useRef<ScopeSelection>(USER_SCOPE);
@@ -1482,8 +1484,8 @@ export function SettingsScreen({
   // (the initializer already used the same value) bails out for free —
   // React skips the re-render when the new state equals the old.
   useEffect(() => {
-    if (initialPane !== undefined) {
-      if (initialPane !== requestedPane) guardRoleLeave(() => setRequestedPane(initialPane));
+    if (initialPane !== undefined && addConnectionRequest === 0) {
+      if (initialPane !== requestedPane) guardRoleLeave(() => setRequestedPane(initialPane), onPaneRequestCancelled);
     }
   }, [initialPane]);
 
@@ -1505,7 +1507,7 @@ export function SettingsScreen({
   // effect as a no-op and does not re-navigate.
   useEffect(() => {
     if (addConnectionRequest > 0) {
-      guardRoleLeave(() => { setRequestedPane("provider"); setSearchQuery(""); });
+      guardRoleLeave(() => { setRequestedPane("provider"); setSearchQuery(""); }, () => { onAddConnectionConsumed?.(); onPaneRequestCancelled?.(); });
     }
   }, [addConnectionRequest]);
 
@@ -2397,8 +2399,8 @@ function UpdateNoticeBanner({ status, store }: { status: UpdateStatus; store: Se
  */
 export function SettingsDialog({ open, onClose, store = useSettingsStore }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const leaveGuardRef = useRef<((action: () => void) => void) | null>(null);
-  const registerLeaveGuard = useCallback((guard: ((action: () => void) => void) | null) => { leaveGuardRef.current = guard; }, []);
+  const leaveGuardRef = useRef<((action: () => void, onCancel?: () => void) => void) | null>(null);
+  const registerLeaveGuard = useCallback((guard: ((action: () => void, onCancel?: () => void) => void) | null) => { leaveGuardRef.current = guard; }, []);
   const updateStatus = useStore(store, (s) => s.updateStatus);
   // P7.23/F24 W2 pane-select seam (cut §4.6): held HERE, not in
   // `SettingsScreen`, because this component is unconditionally mounted for
@@ -2421,6 +2423,7 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
   // dropped it, e.g. readOnly).
   const [addConnectionRequest, setAddConnectionRequest] = useState(0);
   const consumeAddConnection = useCallback(() => setAddConnectionRequest(0), []);
+  const cancelPaneRequest = useCallback(() => setSelectedPane(null), []);
 
   useEffect(() => {
     function onSelectPane(event: Event): void {
@@ -2529,6 +2532,7 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
           onClose={onClose}
           registerLeaveGuard={registerLeaveGuard}
           initialPane={selectedPane ?? undefined}
+          onPaneRequestCancelled={cancelPaneRequest}
           addConnectionRequest={addConnectionRequest}
           onAddConnectionConsumed={consumeAddConnection}
         />

@@ -15,6 +15,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RolesPane, type RolesPaneProps } from "./RolesPane.js";
 import { SettingsDialog } from "./SettingsScreen.js";
+import { SETTINGS_ADD_CONNECTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
 import { useSettingsStore } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
 import { cloneDefaults, mergeSettings, roleProfilesWriteSchema, settingsSchema } from "../../../settings/schema.js";
@@ -511,6 +512,37 @@ describe("Discard and navigation regressions", () => {
     expect(bridge.current().roleProfiles?.profiles[0]?.roles.maxParallelChildren).toBeUndefined();
   });
 
+  it("clears cancelled external requests and accepts the same request again", async () => {
+    installBridge(settingsWithProfile("Team"));
+    const original = useSettingsStore.getState();
+    useSettingsStore.setState({ subscribeUpdates: () => () => {}, subscribeProviderHealth: () => () => {}, subscribeProviderQuota: () => () => {} });
+    try {
+      root = createRoot(container);
+      await act(async () => root?.render(createElement(SettingsDialog, { open: true, onClose: vi.fn() })));
+      await click(container.querySelector<HTMLButtonElement>('#settings-tab-roles')!);
+      await act(async () => type(container.querySelector<HTMLInputElement>('[aria-label="Max parallel children"]')!, "5"));
+      const requestPane = () => window.dispatchEvent(new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: "tools" }));
+      await act(async () => { requestPane(); });
+      await click(buttonByText("Cancel"));
+      await act(async () => { requestPane(); });
+      expect(container.querySelector('[aria-label="Discard unsaved roles?"]')).not.toBeNull();
+      await click(buttonByText("Cancel"));
+      await act(async () => { window.dispatchEvent(new CustomEvent(SETTINGS_ADD_CONNECTION_EVENT)); });
+      await click(buttonByText("Cancel"));
+      await click(container.querySelector<HTMLButtonElement>('#settings-tab-provider')!);
+      await click(buttonByText("Discard changes"));
+      expect(container.querySelector('[aria-label="Add connection"]')).toBeNull();
+      await click(container.querySelector<HTMLButtonElement>('#settings-tab-roles')!);
+      await act(async () => type(container.querySelector<HTMLInputElement>('[aria-label="Max parallel children"]')!, "5"));
+      await act(async () => { window.dispatchEvent(new CustomEvent(SETTINGS_ADD_CONNECTION_EVENT)); });
+      expect(container.querySelector('[aria-label="Discard unsaved roles?"]')).not.toBeNull();
+      await click(buttonByText("Discard changes"));
+      expect(container.querySelector('[aria-label="Add connection"]')).not.toBeNull();
+    } finally {
+      useSettingsStore.setState({ subscribeUpdates: original.subscribeUpdates, subscribeProviderHealth: original.subscribeProviderHealth, subscribeProviderQuota: original.subscribeProviderQuota });
+    }
+  });
+
   it("guards pane navigation and closing settings", async () => {
     installBridge(settingsWithProfile("Team"));
     const onClose = vi.fn();
@@ -547,6 +579,44 @@ describe("Discard and navigation regressions", () => {
 });
 
 describe("Writes across mounts", () => {
+  it("preserves a pending cap when a remounted pane queues a role edit", async () => {
+    const initial = settingsWithProfile("Team");
+    initial.roleProfiles!.profiles[0]!.roles.executor = { primary: { provider: "vendor", model: "custom" } };
+    const bridge = installBridge(initial);
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const original = bridge.set.getMockImplementation()!;
+    bridge.set.mockImplementationOnce(async (patch) => { await waiting; return original(patch); });
+    await mount();
+    await act(async () => type(container.querySelector<HTMLInputElement>('[aria-label="Max parallel children"]')!, "5"));
+    await act(async () => type(container.querySelector<HTMLInputElement>('[aria-label="executor primary custom model"]')!, "first-model"));
+    await click(buttonByText("Save roles"));
+    await act(async () => root?.render(createElement("div")));
+    await act(async () => root?.render(createElement(RolesPane)));
+    const effort = container.querySelector<HTMLSelectElement>('[aria-label="executor primary effort"]')!;
+    await act(async () => { effort.value = "high"; effort.dispatchEvent(new Event("change", { bubbles: true })); });
+    await click(buttonByText("Save roles"));
+    await act(async () => { release(); await waiting; });
+    expect(bridge.current().roleProfiles?.profiles[0]?.roles).toEqual({ executor: { primary: { provider: "vendor", model: "first-model", effort: "high" } }, maxParallelChildren: 5 });
+    expect(container.querySelector<HTMLInputElement>('[aria-label="Max parallel children"]')!.value).toBe("5");
+  });
+
+  it("refreshes a clean remounted pane when the pending write lands", async () => {
+    const bridge = installBridge(settingsWithProfile("Team"));
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const original = bridge.set.getMockImplementation()!;
+    bridge.set.mockImplementationOnce(async (patch) => { await waiting; return original(patch); });
+    await mount();
+    await act(async () => type(container.querySelector<HTMLInputElement>('[aria-label="Max parallel children"]')!, "5"));
+    await click(buttonByText("Save roles"));
+    await act(async () => root?.render(createElement("div")));
+    await act(async () => root?.render(createElement(RolesPane)));
+    expect(container.querySelector<HTMLInputElement>('[aria-label="Max parallel children"]')!.value).toBe("");
+    await act(async () => { release(); await waiting; });
+    expect(container.querySelector<HTMLInputElement>('[aria-label="Max parallel children"]')!.value).toBe("5");
+  });
+
   it("serializes writes and applies each to the latest registry", async () => {
     const initial = settingsWithProfile("Team");
     initial.roleProfiles!.projects = [{ projectRoot: "/one", profileId: "p" }, { projectRoot: "/two", profileId: "p" }];
