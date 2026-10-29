@@ -278,6 +278,16 @@ describe("TurnTranslator — renderer invariants", () => {
 });
 
 describe("TurnTranslator — errors and retries (cut §2(i))", () => {
+  it("surfaces the message for the policyCapacityUnavailable error code", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const events = translator.onNotification({
+      method: "error",
+      params: { threadId: THREAD_ID, turnId: TURN_ID, error: { message: "Capacity unavailable", codexErrorInfo: "policyCapacityUnavailable", additionalDetails: null }, willRetry: false },
+    });
+    expect(events).toEqual([{ type: "error", error: expect.any(Error) }]);
+    expect((events[0] as { error: Error }).error.message).toBe("Capacity unavailable");
+  });
+
   it("surfaces the message for the modelNotFound error code", () => {
     const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
     const events = translator.onNotification({
@@ -1363,7 +1373,7 @@ function collabTests(): void {
       expect(evTypes(sleep)).toEqual(["tool_call", "tool_execution_start", "tool_result"]);
       expect((evOf(sleep, "tool_call")!.toolCall as { input: unknown }).input).toEqual({ durationMs: 1500 });
 
-      const generation = translator.onNotification(completeOf({ type: "imageGeneration", id: "g1", status: "completed", result: "https://img/1.png", revisedPrompt: "a cat", savedPath: "/tmp/g.png" }));
+      const generation = translator.onNotification(completeOf({ type: "imageGeneration", id: "g1", startedAtMs: 100, completedAtMs: 200, generationId: "gen-1", status: "completed", result: "https://img/1.png", revisedPrompt: "a cat", savedPath: "/tmp/g.png" }));
       const input = (evOf(generation, "tool_call")!.toolCall as { input: Record<string, unknown> }).input;
       expect(input).toEqual({ savedPath: "/tmp/g.png", revisedPrompt: "a cat", status: "completed", result: "https://img/1.png" });
       expect((evOf(generation, "tool_result")!.outcome as { status: string }).status).toBe("success");

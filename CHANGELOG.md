@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Codex CLI 0.166.0 is supported.
+
 ### Added
 
 - Claude and Codex sessions can change reasoning effort while a turn is running; the choice applies from the next turn (GitHub #25).
