@@ -8,8 +8,20 @@ export class PresentationJournal {
   private readonly discardedTurns = new Set<string>();
   private readonly deltas = new Map<string, { event: WireAgentEvent; step?: number; attempt?: number; at?: number }>();
 
+  constructor(private readonly limit = 500, private readonly replayLimit = 5000) {}
+
+  private discard(index: number): void {
+    const [turn] = this.turns.splice(index, 1);
+    if (!turn) return;
+    this.durableTurns.delete(turn.turnId);
+    this.discardedTurns.add(turn.turnId);
+    while (this.discardedTurns.size > this.replayLimit) this.discardedTurns.delete(this.discardedTurns.values().next().value!);
+    for (const key of this.deltas.keys()) if (key.startsWith(`${turn.turnId}:`)) this.deltas.delete(key);
+  }
+
   start(turnId: string, requestId: string, startedAt: number, text?: string, images?: ImageAttachment[], origin?: "system"): void {
     this.turns.push({ turnId, requestId, startedAt, ...(text !== undefined ? { text } : {}), ...(images?.length ? { images } : {}), ...(origin ? { origin } : {}), events: [] });
+    while (this.turns.length > this.limit) this.discard(0);
   }
 
   record(turnId: string, event: WireAgentEvent, step?: number, attempt?: number, at?: number): void {
@@ -27,6 +39,7 @@ export class PresentationJournal {
       const entry = { event: { ...event }, ...(step !== undefined ? { step } : {}), ...(attempt !== undefined ? { attempt } : {}) };
       events.push(entry);
       this.deltas.set(key, entry);
+      this.trimEvents(turn);
       return;
     }
     if (event.type === "text_start" || event.type === "reasoning_start") {
@@ -34,6 +47,14 @@ export class PresentationJournal {
       this.deltas.delete(`${turnId}:${step ?? "_"}:${attempt ?? "_"}:${kind}:${event.id}`);
     }
     events.push({ event: { ...event }, ...(step !== undefined ? { step } : {}), ...(attempt !== undefined ? { attempt } : {}), ...(at !== undefined ? { at } : {}) });
+    this.trimEvents(turn);
+  }
+
+  private trimEvents(turn: PresentationTurn): void {
+    while (turn.events.length > this.replayLimit) {
+      const removed = turn.events.shift();
+      for (const [key, entry] of this.deltas) if (entry === removed) this.deltas.delete(key);
+    }
   }
 
   recordFileSnapshot(turnId: string, snapshot: Extract<HostToUiMessage, { type: "file_snapshot" }>): void {
@@ -43,25 +64,20 @@ export class PresentationJournal {
     const index = snapshots.findIndex((entry) => entry.toolCallId === snapshot.toolCallId && entry.phase === snapshot.phase);
     if (index < 0) snapshots.push(snapshot);
     else snapshots[index] = snapshot;
+    if (snapshots.length > this.limit) snapshots.shift();
   }
 
-  observeHistory(history: readonly HistoryItem[]): void {
-    for (const item of history) if (item.turnId !== undefined) this.durableTurns.add(item.turnId);
+  observeHistory(history: readonly HistoryItem[], liveTurnId?: string): void {
+    const present = new Set(history.slice(-this.limit).flatMap((item) => item.turnId === undefined ? [] : [item.turnId]));
+    for (let i = this.turns.length - 1; i >= 0; i--) {
+      const turn = this.turns[i]!;
+      if (this.durableTurns.has(turn.turnId) && !present.has(turn.turnId) && turn.turnId !== liveTurnId) this.discard(i);
+    }
+    for (const turn of this.turns) if (present.has(turn.turnId)) this.durableTurns.add(turn.turnId);
   }
 
   snapshot(history?: readonly HistoryItem[], liveTurnId?: string): { turns: PresentationTurn[]; coveredTurnIds: string[] } {
-    if (history) {
-      const present = new Set(history.flatMap((item) => item.turnId === undefined ? [] : [item.turnId]));
-      for (let i = this.turns.length - 1; i >= 0; i--) {
-        const turn = this.turns[i]!;
-        if (this.durableTurns.has(turn.turnId) && !present.has(turn.turnId) && turn.turnId !== liveTurnId) {
-          this.discardedTurns.add(turn.turnId);
-          this.turns.splice(i, 1);
-          for (const key of this.deltas.keys()) if (key.startsWith(`${turn.turnId}:`)) this.deltas.delete(key);
-        }
-      }
-      this.observeHistory(history);
-    }
+    if (history) this.observeHistory(history, liveTurnId);
     return { turns: structuredClone(this.turns), coveredTurnIds: [...this.discardedTurns, ...this.turns.map((turn) => turn.turnId)] };
   }
 
