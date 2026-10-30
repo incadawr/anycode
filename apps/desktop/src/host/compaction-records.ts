@@ -29,6 +29,15 @@ import { COMPACTION_RECORD_MAX_PER_SESSION } from "@anycode/core";
 export interface CompactionRecordSeam {
   /** Records one outcome; never throws, never blocks the caller. */
   record(record: CompactionRecord): void;
+  /**
+   * Drops every record created STRICTLY AFTER `checkpointAt` — the rewind
+   * cutoff (GitHub #36 review). A conversation rewind discards the turns behind
+   * the checkpoint, so their compaction rows must go too: otherwise the row
+   * (and the summary of the thrown-away conversation in it) comes back on the
+   * next reconnect and the next reopen. Removes from the live cache AND from
+   * storage, so it is gone for good.
+   */
+  truncate(checkpointAt: number): void;
   /** The kept records, oldest first — the live cache, safe to read synchronously. */
   list(): readonly CompactionRecord[];
   /** Resolves once every queued write has settled (shutdown ordering). */
@@ -39,6 +48,7 @@ export interface CompactionRecordSeam {
 export interface CompactionRecordStore {
   appendCompactionRecord(sessionId: string, record: CompactionRecord): Promise<void>;
   listCompactionRecords(sessionId: string): Promise<CompactionRecord[]>;
+  truncateCompactionRecords(sessionId: string, checkpointAt: number): Promise<void>;
 }
 
 export class CompactionRecordLog implements CompactionRecordSeam {
@@ -72,6 +82,21 @@ export class CompactionRecordLog implements CompactionRecordSeam {
     this.cache = [...this.cache, snapshot].slice(-COMPACTION_RECORD_MAX_PER_SESSION);
     this.writes = this.writes
       .then(() => this.store.appendCompactionRecord(this.sessionId, snapshot))
+      .catch((error: unknown) => {
+        this.onError(error);
+      });
+  }
+
+  /**
+   * Rewind cutoff. The cache is filtered SYNCHRONOUSLY so the very next
+   * handshake (the post-rewind `session_history`, sent in the same breath)
+   * already excludes the discarded rows; storage is deleted behind the same
+   * serialized queue so a later reopen agrees.
+   */
+  truncate(checkpointAt: number): void {
+    this.cache = this.cache.filter((record) => record.createdAt <= checkpointAt);
+    this.writes = this.writes
+      .then(() => this.store.truncateCompactionRecords(this.sessionId, checkpointAt))
       .catch((error: unknown) => {
         this.onError(error);
       });

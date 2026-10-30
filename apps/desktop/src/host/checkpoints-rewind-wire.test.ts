@@ -155,7 +155,7 @@ describe("checkpoints-rewind-wire (P7.26/R2) — route + guards + ordering (fake
     ];
     const seam: SessionOptions["checkpoints"] = {
       list: async () => [],
-      rewind: async () => ({ ok: true, safetyCheckpointId: "safety-1", restoredPaths: 3, historyItems: restored }),
+      rewind: async () => ({ ok: true, safetyCheckpointId: "safety-1", restoredPaths: 3, historyItems: restored, checkpointAt: 1_000 }),
     };
     const h = createHarness({ steps: [], checkpointsSeam: seam });
     try {

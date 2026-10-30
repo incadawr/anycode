@@ -43,9 +43,21 @@ export interface CompactionRecord {
 }
 
 /**
- * Hard bound on records kept per session. A compaction is rare (tens over the
- * life of a long session), so this is generous; it exists so a pathological
- * loop cannot grow the table without limit.
+ * Hard bound on records kept per session — the agreed retention rule.
+ *
+ * A compaction is rare (tens over the life of a long session), so 64 is
+ * generous; the bound exists so a pathological loop cannot grow the table
+ * without limit. Beyond it the OLDEST records roll off, and that is honest
+ * degradation rather than a bet:
+ *  - a successful compaction whose freshly-installed summary item is still in
+ *    the history keeps rendering after its record is gone (the projection
+ *    falls back to a `summaryOrigin: "history"` row carrying the same text, and
+ *    says the instruction it shows is the CURRENT one rather than the used one);
+ *  - a compaction whose summary a later one folded away — or one that never
+ *    happened — is genuinely unrecoverable once dropped, and simply stops
+ *    appearing. Nothing is invented in its place.
+ * Only ids are ever rewritten by retention, never text: a surviving row keeps
+ * its own summary, reason, prompt and model verbatim.
  */
 export const COMPACTION_RECORD_MAX_PER_SESSION = 64;
 
