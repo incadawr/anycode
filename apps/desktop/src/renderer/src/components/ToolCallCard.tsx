@@ -2252,7 +2252,7 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
                 <div className="tool-call-input">{summarizeInput(block.toolName, block.input)}</div>
               )}
               {block.workflow && <WorkflowStatus workflow={block.workflow} />}
-              {isDiffable && hasSnapshot && (
+              {isDiffable && block.status !== "denied" && hasSnapshot && (
                 <div className="tool-call-diff-slot">
                   <DiffView before={block.snapshots.before} after={block.snapshots.after} path={diffPath(block)} />
                 </div>
