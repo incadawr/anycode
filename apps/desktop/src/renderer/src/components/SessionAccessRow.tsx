@@ -1,13 +1,20 @@
 /**
- * Per-session Sessions API switch (Taskana 4747 owner amendment), shown as a row
- * in the tab's environment dropdown. The unit of exposure is the session: this
- * row toggles only THIS tab, by tabId; main resolves the session and owns the
+ * Per-session Sessions API switch (Taskana 4747 owner amendment), shown as rows
+ * in the tab's environment dropdown. The unit of exposure is the session: the
+ * switch toggles only THIS tab, by tabId; main resolves the session and owns the
  * state. Disabled under the env override or when the tab is unknown.
+ *
+ * The switch, the External approvals switch and the handle field are three
+ * separate rows in the shared environment-menu shape (icon, title, secondary
+ * line, control on the right), so nothing is clipped and the text field no
+ * longer dangles beside a checkbox.
  */
 import { useContext, useEffect, useState } from "react";
 import { TabContext } from "../tab-context.js";
-import { handleErrorText, sessionApprovalsLabel, sessionSwitchDisabledReason, sessionSwitchLabel, SESSION_APPROVALS_ARIA_LABEL, SESSION_APPROVALS_NOTE, SESSION_HANDLE_HINT, SESSION_HANDLE_LABEL, SESSION_HANDLE_PLACEHOLDER } from "./sessions-api-model.js";
+import { handleErrorText, sessionApprovalsLabel, sessionSwitchDetail, sessionSwitchDisabledReason, SESSION_APPROVALS_ARIA_LABEL, SESSION_APPROVALS_NOTE, SESSION_HANDLE_DETAIL, SESSION_HANDLE_HINT, SESSION_HANDLE_LABEL, SESSION_HANDLE_PLACEHOLDER, SESSION_SWITCH_TITLE } from "./sessions-api-model.js";
 import type { CommunicationGetResult, CommunicationHandleResult, CommunicationMutationResult } from "../../../shared/communication-config.js";
+import { EnvironmentMenuRow } from "./EnvironmentMenuRow.js";
+import { Check, Pencil, Robot } from "./icons.js";
 
 export interface SessionAccessBridge {
   get(): Promise<CommunicationGetResult>;
@@ -18,22 +25,68 @@ export interface SessionAccessBridge {
 }
 
 /**
- * Taskana 4763: the External approvals checkbox. Presentational: the row decides
- * when it is shown (only while the session is shared and the row is not disabled).
+ * Taskana 4763: the External approvals row. Presentational: the caller decides
+ * when it is shown (only while the session is shared and the row is not
+ * disabled). The long caption is the row's secondary line and wraps in full.
  */
 export function SessionApprovalsField({ approvals, onChange }: { approvals: boolean; onChange: (next: boolean) => void }) {
   return (
-    <span className="environment-menu-row-main">
-      <span>{sessionApprovalsLabel(approvals)}</span>
-      <input
-        type="checkbox"
-        aria-label={SESSION_APPROVALS_ARIA_LABEL}
-        data-environment-action="sessions-api-approvals"
-        checked={approvals}
-        onChange={(event) => onChange(event.target.checked)}
-      />
-      <span className="environment-menu-row-detail">{SESSION_APPROVALS_NOTE}</span>
-    </span>
+    <EnvironmentMenuRow
+      icon={<Check />}
+      title={sessionApprovalsLabel(approvals)}
+      detail={SESSION_APPROVALS_NOTE}
+      ariaLabel="External approvals"
+      control={
+        <input
+          type="checkbox"
+          aria-label={SESSION_APPROVALS_ARIA_LABEL}
+          data-environment-action="sessions-api-approvals"
+          checked={approvals}
+          onChange={(event) => onChange(event.target.checked)}
+        />
+      }
+    />
+  );
+}
+
+/** The handle row: labelled field on the right, its explanation on the tooltip and the secondary line. */
+export function SessionHandleField({
+  value,
+  error,
+  onChange,
+  onCommit,
+}: {
+  value: string;
+  error: string | null;
+  onChange: (next: string) => void;
+  onCommit: (next: string) => void;
+}) {
+  return (
+    <EnvironmentMenuRow
+      icon={<Pencil />}
+      title={SESSION_HANDLE_LABEL}
+      detail={SESSION_HANDLE_DETAIL}
+      detailTitle={SESSION_HANDLE_HINT}
+      ariaLabel="Session handle"
+      error={error}
+      control={
+        <input
+          type="text"
+          className="environment-menu-text-input"
+          aria-label={SESSION_HANDLE_LABEL}
+          data-environment-action="sessions-api-handle"
+          placeholder={SESSION_HANDLE_PLACEHOLDER}
+          title={SESSION_HANDLE_HINT}
+          maxLength={200}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onBlur={(event) => onCommit(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") onCommit(event.currentTarget.value);
+          }}
+        />
+      }
+    />
   );
 }
 
@@ -86,31 +139,33 @@ export function SessionAccessRow({ bridge = window.anycode.communication }: { br
   };
 
   return (
-    <div className="environment-menu-row" role="group" aria-label="Sessions API">
-      <span className="environment-menu-row-main">
-        <span>{sessionSwitchLabel(enabled)}</span>
-        {reason !== null && <span className="environment-menu-row-detail">{reason}</span>}
-      </span>
-      <span className="environment-menu-actions">
-        <input
-          type="checkbox"
-          aria-label="Share this session with the Sessions API"
-          data-environment-action="sessions-api-access"
-          checked={enabled}
-          disabled={reason !== null}
-          onChange={(event) => {
-            if (tabId === undefined) return;
-            const next = event.target.checked;
-            void bridge.setSessionAccess(tabId, next).then((result) => {
-              if (result.ok) {
-                const tab = result.view.tabs.find((candidate) => candidate.tabId === tabId);
-                setEnabled(tab?.enabled ?? next);
-                setApprovals(tab?.approvals ?? false);
-              }
-            });
-          }}
-        />
-      </span>
+    <div className="environment-menu-section">
+      <EnvironmentMenuRow
+        icon={<Robot />}
+        title={SESSION_SWITCH_TITLE}
+        detail={reason ?? sessionSwitchDetail(enabled)}
+        ariaLabel="Sessions API"
+        control={
+          <input
+            type="checkbox"
+            aria-label="Share this session with the Sessions API"
+            data-environment-action="sessions-api-access"
+            checked={enabled}
+            disabled={reason !== null}
+            onChange={(event) => {
+              if (tabId === undefined) return;
+              const next = event.target.checked;
+              void bridge.setSessionAccess(tabId, next).then((result) => {
+                if (result.ok) {
+                  const tab = result.view.tabs.find((candidate) => candidate.tabId === tabId);
+                  setEnabled(tab?.enabled ?? next);
+                  setApprovals(tab?.approvals ?? false);
+                }
+              });
+            }}
+          />
+        }
+      />
       {enabled && reason === null && (
         <SessionApprovalsField
           approvals={approvals}
@@ -123,23 +178,7 @@ export function SessionAccessRow({ bridge = window.anycode.communication }: { br
         />
       )}
       {enabled && reason === null && (
-        <span className="environment-menu-row-main">
-          <input
-            type="text"
-            aria-label={SESSION_HANDLE_LABEL}
-            data-environment-action="sessions-api-handle"
-            placeholder={SESSION_HANDLE_PLACEHOLDER}
-            title={SESSION_HANDLE_HINT}
-            maxLength={200}
-            value={handle}
-            onChange={(event) => setHandle(event.target.value)}
-            onBlur={(event) => commitHandle(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") commitHandle(event.currentTarget.value);
-            }}
-          />
-          {handleError !== null && <span className="environment-menu-row-detail" role="alert">{handleError}</span>}
-        </span>
+        <SessionHandleField value={handle} error={handleError} onChange={setHandle} onCommit={commitHandle} />
       )}
     </div>
   );

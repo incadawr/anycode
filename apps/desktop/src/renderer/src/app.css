@@ -1770,6 +1770,52 @@ body {
   margin-left: auto;
 }
 
+/* The Sessions API rows (switch, External approvals, handle) stack under one
+   another exactly like the Git rows do. */
+.environment-menu-section {
+  display: flex;
+  flex-direction: column;
+}
+
+/* A row's secondary line always carries readable prose (state, hint, caption),
+   so it wraps in full instead of taking the base detail's single-line clipping.
+   Combined selector (0,2,0) so it outranks the base `.environment-menu-row-detail` rule. */
+.environment-menu-row-detail.environment-menu-row-detail-prose {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.environment-menu-row-error {
+  color: var(--danger);
+  font-family: var(--font-ui);
+  font-size: var(--fs-2xs);
+}
+
+/* The handle row's text field: sits where the Git rows' control sits. */
+.environment-menu-text-input {
+  box-sizing: border-box;
+  flex: 0 1 9rem;
+  min-width: 0;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-1);
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+}
+
+.environment-menu-text-input::placeholder {
+  color: var(--text-3);
+}
+
+.environment-menu-text-input:focus {
+  border-color: var(--border-strong);
+  outline: none;
+}
+
 .environment-menu-chevron {
   transition: transform var(--dur-1) var(--ease-out);
 }

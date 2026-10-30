@@ -31,6 +31,15 @@ describe("BrowserAccessRow (Taskana 4759) — test 50", () => {
     expect(html).not.toMatch(/<input[^>]*checked=""/);
   });
 
+  it("uses the shared menu row shape: icon, wrapping detail, control on the right", () => {
+    const html = renderToStaticMarkup(createElement(BrowserAccessRow, { bridge: neverBridge }));
+    expect(html.indexOf("<svg")).toBeGreaterThan(-1);
+    expect(html.indexOf("<svg")).toBeLessThan(html.indexOf("environment-menu-row-main"));
+    expect(html.indexOf("environment-menu-row-main")).toBeLessThan(html.indexOf("environment-menu-actions"));
+    expect(html.indexOf("environment-menu-actions")).toBeLessThan(html.indexOf('data-environment-action="browser-full-access"'));
+    expect(html).toContain("environment-menu-row-detail-prose");
+  });
+
   it("the trust-pending folder row is disabled with the trust hint", () => {
     const model = browserAccessRowModel({ tabId: "t", fullAccess: false, reason: "trust" }, true);
     expect(model).toEqual({ checked: false, disabled: true, detail: BROWSER_ACCESS_TRUST_DETAIL });

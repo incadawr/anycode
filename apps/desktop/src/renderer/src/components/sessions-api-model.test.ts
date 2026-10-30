@@ -7,7 +7,7 @@ import {
   portFieldValue,
   regenerateEnabled,
   sessionSwitchDisabledReason,
-  sessionSwitchLabel,
+  sessionSwitchDetail,
   sessionsApiStatusLine,
   sessionsApiStatusTone,
   settingsEditable,
@@ -83,8 +83,8 @@ describe("Sessions API pane model (Taskana 4747)", () => {
   });
 
   it("per-tab switch: label wording and disabled reasons", () => {
-    expect(sessionSwitchLabel(true)).toMatch(/shared/);
-    expect(sessionSwitchLabel(false)).toMatch(/not shared/);
+    expect(sessionSwitchDetail(true)).toBe("Shared with external agents");
+    expect(sessionSwitchDetail(false)).toBe("Not shared");
     expect(sessionSwitchDisabledReason(true, true)).toMatch(/ANYCODE_COMMUNICATION_CONFIG/);
     expect(sessionSwitchDisabledReason(false, false)).toMatch(/Open a session/);
     expect(sessionSwitchDisabledReason(false, true)).toBeNull();

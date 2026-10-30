@@ -6,8 +6,17 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { SessionAccessRow, SessionApprovalsField, commitSessionHandle } from "./SessionAccessRow.js";
-import { handleErrorText, SESSION_APPROVALS_ARIA_LABEL, SESSION_APPROVALS_NOTE, sessionApprovalsLabel } from "./sessions-api-model.js";
+import { SessionAccessRow, SessionApprovalsField, SessionHandleField, commitSessionHandle } from "./SessionAccessRow.js";
+import {
+  handleErrorText,
+  SESSION_APPROVALS_ARIA_LABEL,
+  SESSION_APPROVALS_NOTE,
+  SESSION_HANDLE_DETAIL,
+  SESSION_HANDLE_HINT,
+  SESSION_HANDLE_LABEL,
+  SESSION_SWITCH_TITLE,
+  sessionApprovalsLabel,
+} from "./sessions-api-model.js";
 
 const neverBridge = {
   get: () => new Promise<never>(() => {}),
@@ -19,7 +28,7 @@ const neverBridge = {
 describe("SessionAccessRow (Taskana 4747)", () => {
   it("without a tab it is disabled and says to open a session", () => {
     const html = renderToStaticMarkup(createElement(SessionAccessRow, { bridge: neverBridge }));
-    expect(html).toContain("Sessions API: not shared");
+    expect(html).toContain(SESSION_SWITCH_TITLE);
     expect(html).toContain("Open a session to share it.");
     expect(html).toMatch(/<input[^>]*disabled=""/);
   });
@@ -27,6 +36,19 @@ describe("SessionAccessRow (Taskana 4747)", () => {
   it("the row is labelled as a Sessions API group for assistive tech", () => {
     const html = renderToStaticMarkup(createElement(SessionAccessRow, { bridge: neverBridge }));
     expect(html).toContain('aria-label="Sessions API"');
+  });
+
+  it("renders one row in the shared menu shape: icon, title + wrapping detail, control last", () => {
+    const html = renderToStaticMarkup(createElement(SessionAccessRow, { bridge: neverBridge }));
+    // The icon is the row's first child, the text block follows it, and the
+    // checkbox sits in the actions slot at the end (same shape as Workspace/Branch).
+    expect(html.indexOf("<svg")).toBeGreaterThan(-1);
+    expect(html.indexOf("<svg")).toBeLessThan(html.indexOf("environment-menu-row-main"));
+    expect(html.indexOf("environment-menu-row-main")).toBeLessThan(html.indexOf("environment-menu-actions"));
+    expect(html.indexOf("environment-menu-actions")).toBeLessThan(html.indexOf('data-environment-action="sessions-api-access"'));
+    // Titles and secondary lines are separate elements, and the secondary line wraps.
+    expect(html).toContain('class="environment-menu-row-title"');
+    expect(html).toContain("environment-menu-row-detail-prose");
   });
 });
 
@@ -69,11 +91,44 @@ describe("SessionAccessRow External approvals (Taskana 4763)", () => {
     expect(renderToStaticMarkup(createElement(SessionApprovalsField, { approvals: true, onChange: () => {} }))).toContain("External approvals on");
   });
 
+  it("T31 the approvals row puts its caption on the wrapping secondary line and the checkbox on the right", () => {
+    const html = renderToStaticMarkup(createElement(SessionApprovalsField, { approvals: true, onChange: () => {} }));
+    expect(html).toContain("External approvals on");
+    expect(html).toContain("environment-menu-row-detail-prose");
+    expect(html.indexOf("<svg")).toBeLessThan(html.indexOf("environment-menu-row-main"));
+    expect(html.indexOf("environment-menu-row-main")).toBeLessThan(html.indexOf("environment-menu-actions"));
+    expect(html.indexOf("environment-menu-actions")).toBeLessThan(html.indexOf('data-environment-action="sessions-api-approvals"'));
+  });
+
   it("T30 sessions-api-model pins the labels and the caption", () => {
     expect(SESSION_APPROVALS_ARIA_LABEL).toBe("Allow approving this session's tool requests from outside");
     expect(SESSION_APPROVALS_NOTE).toBe("Whoever holds the Sessions API token can allow or deny this session's tool requests.");
     expect(sessionApprovalsLabel(true)).toBe("External approvals on");
     expect(sessionApprovalsLabel(false)).toBe("External approvals off");
+  });
+});
+
+describe("SessionAccessRow layout", () => {
+  it("the handle row carries a visible label, its hint as a tooltip and the field on the right", () => {
+    const html = renderToStaticMarkup(
+      createElement(SessionHandleField, { value: "build-bot", error: null, onChange: () => {}, onCommit: () => {} }),
+    );
+    expect(html).toContain(SESSION_HANDLE_LABEL);
+    expect(html).toContain(SESSION_HANDLE_DETAIL);
+    expect(html).toContain(`title="${SESSION_HANDLE_HINT}"`);
+    expect(html).toContain("environment-menu-text-input");
+    expect(html.indexOf("environment-menu-row-main")).toBeLessThan(html.indexOf("environment-menu-actions"));
+    expect(html.indexOf("environment-menu-actions")).toBeLessThan(html.indexOf('data-environment-action="sessions-api-handle"'));
+    expect(html).not.toContain('role="alert"');
+  });
+
+  it("a handle error is an alert line inside the row, not a clipped detail", () => {
+    const html = renderToStaticMarkup(
+      createElement(SessionHandleField, { value: "", error: "Another live session already uses this handle.", onChange: () => {}, onCommit: () => {} }),
+    );
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("environment-menu-row-error");
+    expect(html).toContain("Another live session already uses this handle.");
   });
 });
 

@@ -13,6 +13,8 @@ import type {
   BrowserAccessTabState,
 } from "../../../shared/browser-access.js";
 import { ConfirmDialog, type ConfirmDialogRequest } from "./ConfirmDialog.js";
+import { EnvironmentMenuRow } from "./EnvironmentMenuRow.js";
+import { Globe } from "./icons.js";
 
 export interface BrowserAccessBridge {
   get(): Promise<BrowserAccessGetResult>;
@@ -106,12 +108,12 @@ export function BrowserAccessRow({ bridge = window.anycode.browserAccess }: { br
 
   return (
     <>
-      <div className="environment-menu-row" role="group" aria-label="Full browser access">
-        <span className="environment-menu-row-main">
-          <span>Full browser access</span>
-          {view.detail !== null && <span className="environment-menu-row-detail">{view.detail}</span>}
-        </span>
-        <span className="environment-menu-actions">
+      <EnvironmentMenuRow
+        icon={<Globe />}
+        title="Full browser access"
+        detail={view.detail}
+        ariaLabel="Full browser access"
+        control={
           <input
             type="checkbox"
             aria-label="Allow full browser access for this session"
@@ -127,8 +129,8 @@ export function BrowserAccessRow({ bridge = window.anycode.browserAccess }: { br
               apply(next);
             }}
           />
-        </span>
-      </div>
+        }
+      />
       <ConfirmDialog
         request={confirming ? BROWSER_ACCESS_CONFIRM : null}
         onConfirm={() => {
