@@ -204,6 +204,7 @@ import {
   replaySetParams,
   replayState,
   FacadeThrewError,
+  FacadeTimeoutError,
   FacadeUnavailableError,
   type AppLike,
   type AutomationWindow,
@@ -228,6 +229,14 @@ export interface AutomationServerDeps {
   /** Discovery file path (default ~/.anycode/automation.json). Injectable for tests. */
   infoPath?: string;
   logger?: { log(...a: unknown[]): void; warn(...a: unknown[]): void; error(...a: unknown[]): void };
+  /**
+   * Facade-call deadline passed to `makeFacadeCaller` (default
+   * `DEFAULT_FACADE_TIMEOUT_MS` from handlers.ts). Injectable so tests can
+   * exercise the hang bound without waiting the real ceiling; production
+   * keeps the default — every facade route answers within this bound, as a
+   * 504 `facade_timeout` instead of hanging when the renderer never settles.
+   */
+  facadeTimeoutMs?: number;
   /** Forwarded to `HandlerDeps.activeConnectionId` (TASK.45 W10, `createTabNew`'s pin). */
   activeConnectionId?: () => string | undefined;
   /** Forwarded to `HandlerDeps.previewHost` (night-track wave-1 cut §2.8, 96-E preview probes/driver). */
@@ -1873,6 +1882,11 @@ function statusForError(error: unknown): { status: number; body: unknown } {
   if (error instanceof FacadeUnavailableError) {
     return { status: 503, body: { error: "facade_unavailable", detail: error.detail } };
   }
+  if (error instanceof FacadeTimeoutError) {
+    // The hang bound: a facade call whose page promise never settled. 504, not
+    // 500 — the renderer may still complete it; the client can retry.
+    return { status: 504, body: { error: "facade_timeout", detail: error.detail } };
+  }
   if (error instanceof FacadeThrewError) {
     return { status: 500, body: { error: "facade_error", detail: error.detail } };
   }
@@ -1970,7 +1984,7 @@ export function startAutomationServer(deps: AutomationServerDeps): Promise<Autom
   let boundPort: number | undefined;
 
   const handlerDeps: HandlerDeps = {
-    callFacade: makeFacadeCaller(deps.getWindow),
+    callFacade: makeFacadeCaller(deps.getWindow, deps.facadeTimeoutMs),
     getWindow: deps.getWindow,
     manager: deps.manager,
     app: deps.app,

@@ -213,6 +213,28 @@ export class FacadeThrewError extends Error {
 }
 
 /**
+ * The facade call did not settle within its deadline -> HTTP 504. This is the
+ * hang bound: `webContents.executeJavaScript` resolves with whatever the page
+ * expression returned, and that promise NEVER settles if the renderer is busy
+ * or stuck — without a deadline the HTTP request parks forever (live
+ * incident on `POST /tabs/:id/model-pill/pick {kind:"open"}`, 28→29.10).
+ */
+export class FacadeTimeoutError extends Error {
+  constructor(public readonly detail: string) {
+    super(`facade_timeout: ${detail}`);
+    this.name = "FacadeTimeoutError";
+  }
+}
+
+/**
+ * Default facade-call deadline. Generous ceiling, not an expected latency: it
+ * covers the slowest real facade paths (settings/MCP/skills panes settle-poll
+ * up to 10s in the renderer) while still bounding a stuck page to a finite,
+ * diagnosable 504 instead of silence.
+ */
+export const DEFAULT_FACADE_TIMEOUT_MS = 30_000;
+
+/**
  * Serializes a value as a JS expression literal safe to embed in
  * `executeJavaScript` source. JSON is a syntactic subset of JS expressions, so
  * `JSON.stringify(args)` is a valid JS array literal; the only gap is
@@ -253,20 +275,44 @@ interface FacadeEnvelope {
   message?: string;
 }
 
-/** Default `FacadeCaller`: runs the built expression in the current window and unwraps the envelope. */
-export function makeFacadeCaller(getWindow: () => AutomationWindow | null): FacadeCaller {
+/**
+ * Default `FacadeCaller`: runs the built expression in the current window and
+ * unwraps the envelope. The whole call — `executeJavaScript` AND the page's
+ * returned promise — races a deadline (`timeoutMs`, default
+ * `DEFAULT_FACADE_TIMEOUT_MS`): the page expression resolves only when the
+ * renderer's facade promise settles, and a stuck renderer never settles it.
+ * Without the race the HTTP request hangs forever; with it the caller gets a
+ * bounded 504 `facade_timeout` and can retry or diagnose.
+ */
+export function makeFacadeCaller(getWindow: () => AutomationWindow | null, timeoutMs: number = DEFAULT_FACADE_TIMEOUT_MS): FacadeCaller {
   return async (method, args) => {
     const win = getWindow();
     if (win === null || win.isDestroyed()) {
       throw new FacadeUnavailableError("no_window");
     }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new FacadeTimeoutError(`${method} exceeded ${timeoutMs}ms`)), timeoutMs);
+      // The timer must not keep the (dev-only, short-lived) process alive.
+      (timer as unknown as { unref?: () => void }).unref?.();
+    });
     let raw: unknown;
     try {
-      raw = await win.webContents.executeJavaScript(buildFacadeExpr(method, args));
+      raw = await Promise.race([
+        win.webContents.executeJavaScript(buildFacadeExpr(method, args)),
+        deadline,
+      ]);
     } catch (error) {
+      if (error instanceof FacadeTimeoutError) {
+        throw error;
+      }
       // Dead / not-yet-loaded page: the eval rejects. Surface as unavailable so
       // the client's `POST /wait {connection:"ready"}` retry pattern applies.
       throw new FacadeUnavailableError(`execute_failed: ${String((error as Error)?.message ?? error)}`);
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
     }
     const env = (raw ?? {}) as FacadeEnvelope;
     if (env.__facade === "unavailable") {
