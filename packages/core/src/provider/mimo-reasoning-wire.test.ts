@@ -29,14 +29,21 @@ it("keeps MiMo requests within the output ceiling for every offered effort", asy
         transport: "anthropic-messages", baseUrl: "http://127.0.0.1:9", apiKey: "test-key",
         model: model.id, providerName: entry.name, retry: { maxRetries: 0, stallTimeoutMs: 0 },
       });
-      for (const reasoningEffort of efforts) {
+      for (const reasoningEffort of [...efforts, undefined]) {
         const events = [];
         for await (const event of port.streamText({
           messages: [{ role: "user", content: "hi" }], tools: [],
           maxOutputTokens: model.maxOutputTokens, reasoningEffort,
         })) events.push(event);
         expect(events.filter((event) => event.type === "error")).toEqual([]);
-        expect(bodies.at(-1)!.max_tokens).toBeLessThanOrEqual(131_072);
+        const body = bodies.at(-1)!;
+        expect(body.max_tokens).toBeLessThanOrEqual(131_072);
+        if (reasoningEffort === undefined || reasoningEffort === "off") {
+          expect(body.thinking).toEqual({ type: "disabled" });
+        } else {
+          const budgets = { low: 4_096, medium: 12_288, high: 24_576 };
+          expect(body.thinking).toEqual({ type: "enabled", budget_tokens: budgets[reasoningEffort as keyof typeof budgets] });
+        }
       }
     }
   }
