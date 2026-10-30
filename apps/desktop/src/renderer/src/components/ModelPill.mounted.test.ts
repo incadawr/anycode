@@ -51,3 +51,40 @@ it("saves the checked effort only after an unchanged acknowledgement, to the ori
     container.remove();
   }
 });
+
+// Audit C6: the chip's "next turn" tag is about a DEFERRED PICK, not about the
+// turn itself. A running turn with nothing picked must render no tag; picking
+// mid-turn shows it; the ack that applies the pick takes it away again.
+it("shows the next-turn tag only after a mid-turn pick, not for the turn alone", async () => {
+  const previous = useSettingsStore.getState();
+  const update = vi.fn().mockResolvedValue({ok: true});
+  const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+  (window as unknown as {anycode: unknown}).anycode = {listSessions: () => Promise.resolve([])};
+  useSettingsStore.setState({
+    connectionUpdate: update,
+    snapshot: {settings: {provider: {activeConnectionId:"c", connections:[{id:"c", providerId:"z-ai"}], custom:[]}}, catalog:[{id:"z-ai", name:"Z.AI", authKind:"api_key", models:[{id:"glm-5.2", reasoning:true, effortLevels:["off","high","max"]}]}]} as never,
+  });
+  const store = createDesktopStore();
+  store.setState({connection:"ready", model:"glm-5.2", reasoningEffort:"off", availableEffortLevels:["off","high","max"], pinnedConnection:{connectionId:"c", providerId:"z-ai"}, turn:{status:"running", turnId:"t1", requestId:"r1"}});
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => { root.render(createElement(TabContext.Provider, {value:{tabId:"tab", store}}, createElement(ModelPill))); });
+    expect(container.querySelector(".model-pill-midturn")).toBeNull();
+
+    await act(async () => { container.querySelector<HTMLButtonElement>(".model-pill-chip")!.click(); });
+    await act(async () => { container.querySelector<HTMLButtonElement>(".start-model-effort-row")!.click(); });
+    await act(async () => { container.querySelector<HTMLButtonElement>('[role="menuitemradio"][data-effort="high"]')!.click(); });
+    expect(send).toHaveBeenCalledWith("tab", {type:"set_reasoning_effort", effort:"high", requestId:expect.any(String)});
+    expect(container.querySelector(".model-pill-midturn")?.textContent).toBe("next turn");
+
+    await act(async () => { store.getState().applyHostMessage({type:"reasoning_effort_changed", effort:"high", requestId: (send.mock.lastCall![1] as {requestId: string}).requestId}); });
+    expect(container.querySelector(".model-pill-midturn")).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    useSettingsStore.setState(previous, true);
+    send.mockRestore();
+    container.remove();
+  }
+});

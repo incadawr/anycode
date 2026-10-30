@@ -32,7 +32,7 @@ import { useContext, useEffect, useRef, useState } from "react";
 import { TabContext, useTabSend, useTabStore } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
 import type { ConnectionPhase, TurnState } from "../store.js";
-import { Collapse, Dot, Globe, Terminal } from "./icons.js";
+import { Collapse, Dot, Globe, TaskList, Terminal } from "./icons.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
 import { browserAccessChipVisible, useBrowserAccessState } from "./BrowserAccessRow.js";
 import { usePreviewStore } from "../preview/preview-store.js";
@@ -303,7 +303,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
         data-running={tasksRunning ? "true" : undefined}
         onClick={toggleTasksPanel}
       >
-        <Terminal />
+        <TaskList />
       </button>}
 
 
