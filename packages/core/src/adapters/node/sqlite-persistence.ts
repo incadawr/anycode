@@ -34,6 +34,11 @@ import type {
   SessionWorktree,
   SessionWorktreeCleanup,
 } from "../../ports/persistence.js";
+import {
+  COMPACTION_RECORD_MAX_PER_SESSION,
+  boundCompactionRecord,
+  type CompactionRecord,
+} from "../../types/compaction.js";
 import type { HistoryItem } from "../../types/history.js";
 import type { PermissionMode } from "../../types/permissions.js";
 
@@ -376,6 +381,67 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 22, statements: ["ALTER TABLE provider_usage ADD COLUMN cache_write_tokens INTEGER"] },
   { version: 23, statements: ["ALTER TABLE provider_usage ADD COLUMN subagent_id TEXT"] },
   { version: 24, statements: ["ALTER TABLE sessions ADD COLUMN context_usage_json TEXT"] },
+  {
+    // GitHub #36: durable presentation records of compactions. Deliberately its
+    // OWN table rather than extra `history_items` rows: a compaction REPLACES
+    // the history (that is what the swap IS), so anything stored as a history
+    // item is exactly what the next compaction deletes — and a refused
+    // compaction stores no item at all. Rows are keyed by the per-session
+    // record id so a retried write (or a reconnect replay) can never double one.
+    version: 25,
+    statements: [
+      `CREATE TABLE compaction_records (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL REFERENCES sessions(id),
+        record_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        data TEXT NOT NULL,
+        UNIQUE (session_id, record_id)
+      )`,
+      `CREATE INDEX idx_compaction_records_session ON compaction_records (session_id, seq)`,
+    ],
+  },
+  {
+    // GitHub #36 (review 4): the compaction-record sequence current when this
+    // checkpoint's HISTORY SNAPSHOT was taken (the turn start, NOT the row's
+    // creation — capture is lazy). A rewind keeps records at or below it and
+    // drops the rest, which is the only boundary that answers the question
+    // exactly: neither the checkpoint's creation time nor the newest restored
+    // item's timestamp can describe "what existed when this snapshot was made"
+    // (a failed compaction changes no history; an auto compaction of the same
+    // turn predates the row but postdates the snapshot). NULL on every
+    // checkpoint written before this column existed.
+    version: 26,
+    // A SIDE table rather than a column on `checkpoints`: an ALTER would fail
+    // outright on any historical database whose fixture/claim says v2 is applied
+    // without the table actually being there, and a boundary is optional data
+    // (absent = the legacy, history-based rewind rule). Creation cannot fail.
+    statements: [
+      `CREATE TABLE checkpoint_boundaries (
+        checkpoint_id TEXT PRIMARY KEY,
+        compaction_seq INTEGER NOT NULL
+      )`,
+    ],
+  },
+  {
+    // GitHub #36 (review 5): the session's compaction-record sequence HIGH-WATER
+    // MARK, kept independently of the records themselves.
+    //
+    // A sequence is an identity, not a count of what is still stored: a rewind
+    // deletes records, and if the counter were re-derived from the survivors the
+    // next compaction would reuse a number a still-live checkpoint already covers
+    // as "before my snapshot" — so rewinding to that checkpoint would RETAIN the
+    // newer row and resurrect the summary of a conversation the user discarded.
+    // The mark only ever moves forward, survives record deletion and reopen, and
+    // cascades with the session tree.
+    version: 27,
+    statements: [
+      `CREATE TABLE compaction_sequence (
+        session_id TEXT PRIMARY KEY REFERENCES sessions(id),
+        seq INTEGER NOT NULL
+      )`,
+    ],
+  },
 ];
 
 /**
@@ -614,6 +680,8 @@ interface CheckpointRow {
   reason: string;
   label: string;
   history_json: string;
+  /** Migration v26 (GitHub #36): absent/NULL on checkpoints written before it. */
+  compaction_seq?: number | null;
 }
 
 /**
@@ -636,6 +704,9 @@ function rowToCheckpointMeta(row: CheckpointRow): CheckpointMeta {
     createdAt: row.created_at,
     reason: row.reason as CheckpointReason,
     label: row.label,
+    // GitHub #36: a legacy row has no boundary — the rewind then falls back to
+    // judging by the restored history.
+    ...(typeof row.compaction_seq === "number" ? { compactionSeq: row.compaction_seq } : {}),
   };
 }
 
@@ -1045,6 +1116,10 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     // id directly (unlike the shadow logs' native engine refs), so it cascades
     // with the same placeholders as history/checkpoints.
     counts.providerUsage = Number(db.prepare(`DELETE FROM provider_usage WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds).changes);
+    // GitHub #36: the compaction presentation records are keyed by the AnyCode
+    // session id, like history/usage above.
+    db.prepare(`DELETE FROM compaction_records WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds);
+    db.prepare(`DELETE FROM compaction_sequence WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds);
 
     // The shadow-log tables are keyed by the native engine ref (thread_id /
     // session_ref), never the AnyCode session id — see codex/shadow-log.ts
@@ -1294,6 +1369,102 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   }
 
   /**
+   * GitHub #36: appends one durable compaction presentation record, keeping at
+   * most `COMPACTION_RECORD_MAX_PER_SESSION` per session (the table is a view of
+   * recent compactions, not an audit log — the oldest rows roll off, see that
+   * constant's own doc for the agreed degradation this implies).
+   *
+   * Idempotent by `(session_id, record_id)`: a retried write replaces, and a
+   * reconnect that replays the same outcome can never double the row.
+   */
+  async appendCompactionRecord(sessionId: string, record: CompactionRecord): Promise<void> {
+    const bounded = boundCompactionRecord(record);
+    this.transaction((tx) => {
+      tx.prepare(
+        `INSERT INTO compaction_records (session_id, record_id, created_at, data)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT (session_id, record_id) DO UPDATE SET data = excluded.data`,
+      ).run(sessionId, bounded.id, bounded.createdAt, JSON.stringify(bounded));
+      tx.prepare(
+        `DELETE FROM compaction_records
+          WHERE session_id = ?
+            AND seq NOT IN (
+              SELECT seq FROM compaction_records WHERE session_id = ? ORDER BY seq DESC LIMIT ?
+            )`,
+      ).run(sessionId, sessionId, COMPACTION_RECORD_MAX_PER_SESSION);
+    });
+  }
+
+  /**
+   * GitHub #36: drops the named records of this session — the ones a
+   * conversation rewind discarded. The caller decides WHICH via
+   * `compactionRecordsDiscardedByRewind` (packages/core/src/types/compaction.ts),
+   * because that decision is about the checkpoint's conversation state, not
+   * about a clock: an automatic checkpoint is created lazily, at a turn's
+   * first write-effect tool, while the snapshot it holds is the history from
+   * BEFORE that turn — so a compaction earlier in the same turn is newer than
+   * the snapshot but older than the checkpoint row.
+   *
+   * Ids deleted here are gone for good: the row (and the summary of the
+   * discarded conversation in it) must not come back on the next reconnect or
+   * the next reopen.
+   */
+  async discardCompactionRecords(sessionId: string, ids: readonly string[]): Promise<void> {
+    if (ids.length === 0) return;
+    this.transaction((tx) => {
+      const placeholders = ids.map(() => "?").join(", ");
+      tx.prepare(
+        `DELETE FROM compaction_records WHERE session_id = ? AND record_id IN (${placeholders})`,
+      ).run(sessionId, ...ids);
+    });
+  }
+
+  /**
+   * GitHub #36: the highest sequence ever handed out for this session, kept
+   * apart from the records so a rewind (which deletes rows) can never make the
+   * counter go back. 0 when the session never recorded one.
+   */
+  async compactionSeqHighWater(sessionId: string): Promise<number> {
+    const db = this.open();
+    const row = db
+      .prepare("SELECT seq FROM compaction_sequence WHERE session_id = ?")
+      .get(sessionId) as { seq: number } | undefined;
+    return row === undefined ? 0 : Number(row.seq);
+  }
+
+  /**
+   * Raises the high-water mark. Monotonic by construction (`MAX`): a late or
+   * replayed write can never lower it, and two writers racing can only ever move
+   * it forward.
+   */
+  async raiseCompactionSeqHighWater(sessionId: string, seq: number): Promise<void> {
+    this.transaction((tx) => {
+      tx.prepare(
+        `INSERT INTO compaction_sequence (session_id, seq) VALUES (?, ?)
+         ON CONFLICT (session_id) DO UPDATE SET seq = MAX(compaction_sequence.seq, excluded.seq)`,
+      ).run(sessionId, seq);
+    });
+  }
+
+  /** Every kept record for one session, oldest first. Malformed rows are skipped, never thrown. */
+  async listCompactionRecords(sessionId: string): Promise<CompactionRecord[]> {
+    const db = this.open();
+    const rows = db
+      .prepare("SELECT data FROM compaction_records WHERE session_id = ? ORDER BY seq ASC")
+      .all(sessionId) as unknown as { data: string }[];
+    const records: CompactionRecord[] = [];
+    for (const row of rows) {
+      try {
+        const parsed = JSON.parse(row.data) as CompactionRecord;
+        if (typeof parsed?.id === "string" && typeof parsed?.createdAt === "number") records.push(parsed);
+      } catch {
+        // A corrupt blob must not make a session unreadable.
+      }
+    }
+    return records;
+  }
+
+  /**
    * Atomically reserves and returns the session's next vision-fallback image
    * ref (TASK.198 plan §2). ONE UPDATE statement does the whole job: the
    * RETURNING expression is evaluated against the row's POST-update state
@@ -1368,6 +1539,14 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
         record.label,
         record.historyJson,
       );
+      // GitHub #36: the compaction boundary this checkpoint captured at its
+      // turn start (absent when the caller keeps no records).
+      if (record.compactionSeq !== undefined) {
+        db.prepare(
+          `INSERT INTO checkpoint_boundaries (checkpoint_id, compaction_seq) VALUES (?, ?)
+           ON CONFLICT (checkpoint_id) DO UPDATE SET compaction_seq = excluded.compaction_seq`,
+        ).run(record.id, record.compactionSeq);
+      }
       // Keep only the newest `keep` rows for this session; the subquery pins the
       // survivors by (created_at DESC, rowid DESC) so ties break deterministically.
       db.prepare(
@@ -1380,6 +1559,13 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
              LIMIT ?
            )`,
       ).run(record.sessionId, record.sessionId, keep);
+      // A pruned checkpoint must not leave its boundary behind: an orphan row is
+      // unreachable (lookups are by checkpoint id) but would outlive the table's
+      // own retention forever.
+      db.prepare(
+        `DELETE FROM checkpoint_boundaries
+          WHERE checkpoint_id NOT IN (SELECT id FROM checkpoints)`,
+      ).run();
     });
   }
 
@@ -1387,7 +1573,11 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   async listCheckpoints(sessionId: string, opts?: { limit?: number }): Promise<CheckpointMeta[]> {
     const db = this.open();
     let sql =
-      "SELECT id, session_id, commit_hash, created_at, reason, label FROM checkpoints WHERE session_id = ? ORDER BY created_at DESC, rowid DESC";
+      `SELECT c.id, c.session_id, c.commit_hash, c.created_at, c.reason, c.label, c.history_json,
+              b.compaction_seq
+         FROM checkpoints c
+         LEFT JOIN checkpoint_boundaries b ON b.checkpoint_id = c.id
+        WHERE c.session_id = ? ORDER BY c.created_at DESC, c.rowid DESC`;
     const params: (string | number)[] = [sessionId];
     if (opts?.limit !== undefined) {
       sql += " LIMIT ?";
@@ -1400,7 +1590,15 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   /** Full checkpoint record (including the pre-turn history snapshot) by id, or null. */
   async getCheckpoint(id: string): Promise<CheckpointRecord | null> {
     const db = this.open();
-    const row = db.prepare("SELECT * FROM checkpoints WHERE id = ?").get(id) as CheckpointRow | undefined;
+    const row = db
+      .prepare(
+        `SELECT c.id, c.session_id, c.commit_hash, c.created_at, c.reason, c.label, c.history_json,
+                b.compaction_seq
+           FROM checkpoints c
+           LEFT JOIN checkpoint_boundaries b ON b.checkpoint_id = c.id
+          WHERE c.id = ?`,
+      )
+      .get(id) as CheckpointRow | undefined;
     if (!row) {
       return null;
     }

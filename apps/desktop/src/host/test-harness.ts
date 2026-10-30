@@ -43,6 +43,7 @@ import type {
   TelemetryStatus,
 } from "@anycode/core";
 import type { HostToUiMessage, UiToHostMessage, WireEnvStatus, WirePort } from "../shared/protocol.js";
+import type { CompactionRecordSeam } from "./compaction-records.js";
 import type { GitUiBridge } from "./git-bridge.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import { wirePlanExit } from "./plan-exit.js";
@@ -303,6 +304,13 @@ export interface HarnessOptions {
   initialTitle?: string;
   /** Observes every persistence patch the session writes (title recovery tests). */
   onTouch?: SessionPersistence["touch"];
+  /**
+   * GitHub #36: installs the durable compaction-record seam the real host
+   * wires (host/compaction-records.ts) — a fake that keeps every record in
+   * memory, so a test can prove what a compaction left behind without a DB.
+   * Omitted -> no seam, byte-identical to the pre-#36 session.
+   */
+  compactionRecords?: CompactionRecordSeam;
   /**
    * The STRICT twin of `onTouch`: the Sessions API title path. Wiring it here
    * proves the caller learns a failed write instead of the fail-soft `touch`
@@ -700,7 +708,15 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(options.tasks ? { tasks: options.tasks } : {}),
     // Mirror host boot (slice P7.26/R1): a supplied capturer is spread into
     // config.checkpoints; absent -> the arc stays dormant (byte-identical).
-    ...(options.checkpoints ? { checkpoints: options.checkpoints } : {}),
+    // GitHub #36: the boundary sampler is wired with it, exactly as host boot
+    // does — every turn's checkpoint records the compaction sequence current at
+    // its start, so a rewind can tell which rows predate the snapshot.
+    ...(options.checkpoints
+      ? {
+          checkpoints: options.checkpoints,
+          compactionBoundary: () => options.compactionRecords?.sequence() ?? 0,
+        }
+      : {}),
     // Mirror host boot (Taskana 4104): artifacts store + sessionId spread into
     // config.artifacts; absent -> spill degrades to truncation (byte-identical).
     ...(options.artifacts ? { artifacts: options.artifacts } : {}),
@@ -789,6 +805,7 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(options.initialTitle !== undefined ? { initialTitle: options.initialTitle } : {}),
     rules,
     persistence,
+    ...(options.compactionRecords !== undefined ? { compactionRecords: options.compactionRecords } : {}),
     refineTitle: options.refineTitle,
     git: options.git?.(outbound),
     ...(options.tasks ? { tasks: options.tasks } : {}),

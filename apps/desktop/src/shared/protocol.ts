@@ -37,6 +37,7 @@ import type {
   ChatMessage,
   CodexRateLimitsWire,
   CommandHookDeclaration,
+  CompactionRecord,
   ImageAttachment,
   ImageMediaType,
   McpServerStatus,
@@ -645,7 +646,20 @@ export type HostToUiMessage =
    * behavior is unchanged for a textless copy.
    */
   | { type: "steer_requeued"; requestId: string; reason: string; text?: string }
-  | { type: "session_history"; sessionId: string; items: WireHistoryItem[]; truncated: boolean }
+  | {
+      type: "session_history";
+      sessionId: string;
+      items: WireHistoryItem[];
+      truncated: boolean;
+      /**
+       * GitHub #36: the session's durable compaction presentation records
+       * (newest last, bounded by the store). Additive-optional: absent on a
+       * legacy host or a session that never compacted, which is exactly the
+       * pre-#36 message. They are how a reopened session shows every compaction
+       * it went through — including the failed ones, which leave no history item.
+       */
+      compactions?: CompactionRecord[];
+    }
   /** Presentation and history observed at the same reconnect boundary. */
   | {
       type: "presentation_snapshot";
@@ -654,6 +668,8 @@ export type HostToUiMessage =
       coveredTurnIds: string[];
       items: WireHistoryItem[];
       truncated: boolean;
+      /** GitHub #36: same durable compaction rows the `session_history` frame carries (see there). */
+      compactions?: CompactionRecord[];
       liveTurnId?: string;
       historyTracksTurns: boolean;
     }

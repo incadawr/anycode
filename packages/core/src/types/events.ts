@@ -227,6 +227,16 @@ export type AgentEvent =
    * (TASK.146, host/session.ts's `compact_request`).
    */
   | { type: "compaction_start"; trigger: "auto" | "manual" }
+  /**
+   * GitHub #36: the outcome carries what the row needs to show WHAT survived
+   * the swap, not just how the meter moved — the summary text that now stands
+   * in for the compacted prefix (`summary`), the id of the persisted history
+   * item holding it (`summaryItemId`, the durable link a resumable transcript
+   * can follow), the instruction the summarizing model was given (`prompt`) and
+   * the model itself (`model`), when the port exposes one. All four are
+   * additive-optional: a pre-#36 core event, or a foreign engine that compacts
+   * natively without exposing a summary, simply carries none of them.
+   */
   | {
       type: "compaction_end";
       ok: boolean;
@@ -234,6 +244,26 @@ export type AgentEvent =
       postTokens?: number;
       durationMs: number;
       error?: string;
+      /** Model-visible summary installed as the new history head (success only). */
+      summary?: string;
+      /** Id of the `compact_summary` history item that holds `summary`. */
+      summaryItemId?: string;
+      /** Instruction sent to the summarizing model (core-engine compaction). */
+      prompt?: string;
+      /**
+       * Constructed-port model id of the summarizing call, when known. Present
+       * on FAILED calls too — the model that was asked is known before the
+       * call fails, and a row that reports a failure must say who was asked.
+       */
+      model?: string;
+      /**
+       * Id of the durable presentation record the host wrote for this outcome
+       * (GitHub #36). HOST-stamped, absent on the engine's own event: it is the
+       * join key between the live row and the one hydration restores, so a
+       * reconnect patches the row in its original position instead of adding a
+       * second copy of the same compaction.
+       */
+      recordId?: string;
     }
   | { type: "microcompact"; clearedToolResults: number; savedTokens: number }
   /**
