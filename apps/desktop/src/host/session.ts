@@ -330,6 +330,7 @@ const SESSION_RESULT_LIMITATION = "Latest completed public text block only. Hist
 
 export class Outbound {
   private readonly buffer: HostToUiMessage[] = [];
+  private readonly settledRequests = new Set<string>();
   private port: WirePort | null = null;
   private observer: ((message: HostToUiMessage) => void) | undefined;
 
@@ -342,8 +343,16 @@ export class Outbound {
     this.port = port;
   }
 
+  /** A settled request must not resurrect an older refusal during replay. */
+  settleRequest(requestId: string): void {
+    this.settledRequests.delete(requestId);
+    this.settledRequests.add(requestId);
+    while (this.settledRequests.size > this.cap) this.settledRequests.delete(this.settledRequests.values().next().value!);
+  }
+
   /** Buffered send: recorded for replay and posted to the current port. */
   emit(message: HostToUiMessage): void {
+    if (message.type === "turn_started") this.settleRequest(message.requestId);
     this.observer?.(message);
     this.buffer.push(message);
     if (this.buffer.length > this.cap) {
@@ -360,6 +369,7 @@ export class Outbound {
   /** Re-posts the whole ring buffer to the current port (on ui_ready). */
   replay(): void {
     for (const message of this.buffer) {
+      if (message.type === "steer_requeued" && this.settledRequests.has(message.requestId)) continue;
       this.write(message);
     }
   }
@@ -385,6 +395,7 @@ export class Outbound {
    */
   clear(): void {
     this.buffer.length = 0;
+    this.settledRequests.clear();
   }
 
   private write(message: HostToUiMessage): void {
@@ -2224,6 +2235,7 @@ export class Session {
         // user_injected event owns the transcript; messageTurns keeps the
         // correlation for status consumers.
         this.pendingUiSteers = this.pendingUiSteers.filter((entry) => entry.requestId !== requestId);
+        this.outbound.settleRequest(requestId);
         this.messageTurns.set(requestId, { hostTurnId: receivingTurnId, nativeTurnId: ack.turnId });
       })
       .catch(() => {
