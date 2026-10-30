@@ -389,10 +389,14 @@ describe("providerOptionGroups (TASK.70: one brand = one card)", () => {
     const catalog = projectCatalogSummary(getBuiltinCatalog().providers);
     const group = providerOptionGroups(catalog).find((item) => item.label === "Xiaomi MiMo");
     expect(group?.options).toEqual([
+      { id: "xiaomi-mimo-api", label: "API (pay as you go)" },
       { id: "xiaomi-mimo-sgp", label: "Token Plan (SGP)" },
       { id: "xiaomi-mimo-cn", label: "Token Plan (CN)" },
       { id: "xiaomi-mimo-ams", label: "Token Plan (AMS)" },
     ]);
+    const api = catalog.find((entry) => entry.id === "xiaomi-mimo-api")!;
+    expect(api).toMatchObject({ defaultTransport: "anthropic-messages", supportedTransports: ["anthropic-messages"] });
+    expect(api.models.map((model) => model.id)).toEqual(["mimo-v2.6-pro", "mimo-v2.6-flash"]);
     const region = catalog.find((entry) => entry.id === "xiaomi-mimo-sgp")!;
     expect(region).toMatchObject({ defaultTransport: "anthropic-messages", supportedTransports: ["anthropic-messages"] });
     expect(region.models[0]).toMatchObject({ id: "mimo-v2.6-pro", contextWindow: 1_048_576, usableContextWindow: 300_000, maxOutputTokens: 131_072, imageInput: true, reasoning: true });

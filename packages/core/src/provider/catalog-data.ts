@@ -223,6 +223,23 @@ const ENTRIES: CatalogProviderEntry[] = [
     ],
   },
   {
+    id: "xiaomi-mimo-api",
+    name: "Xiaomi MiMo API",
+    brand: "Xiaomi MiMo",
+    modeLabel: "API (pay as you go)",
+    baseUrl: "https://api.xiaomimimo.com/anthropic",
+    defaultTransport: "anthropic-messages",
+    supportedTransports: ["anthropic-messages"],
+    auth: { kind: "api_key" },
+    // Overseas real-time API prices in USD per 1M tokens, accessed 2026-10-30:
+    // https://mimo.mi.com/docs/en-US/price/pay-as-you-go. Cache write is
+    // limited-time free, so cacheWrite is 0 until Xiaomi changes it.
+    models: [
+      { ...MIMO_MODELS[0]!, pricing: { basisId: "mimo-v2.6-pro-xiaomi-mimo-api-2026-10-30", input: 0.435, cachedInput: 0.0036, cacheWrite: 0, output: 0.87 } },
+      { ...MIMO_MODELS[1]!, pricing: { basisId: "mimo-v2.6-flash-xiaomi-mimo-api-2026-10-30", input: 0.14, cachedInput: 0.0028, cacheWrite: 0, output: 0.28 } },
+    ],
+  },
+  {
     id: "xiaomi-mimo-sgp",
     name: "Xiaomi MiMo Token Plan (SGP)",
     brand: "Xiaomi MiMo",

@@ -20,8 +20,8 @@ it("keeps MiMo requests within the output ceiling for every offered effort", asy
     });
   });
 
-  for (const region of ["sgp", "cn", "ams"]) {
-    const entry = findCatalogEntry(`xiaomi-mimo-${region}`)!;
+  for (const mode of ["api", "sgp", "cn", "ams"]) {
+    const entry = findCatalogEntry(`xiaomi-mimo-${mode}`)!;
     for (const model of entry.models) {
       const efforts = resolveEffortLevels(model.id, entry)!;
       expect(efforts).toEqual(["off", "low", "medium", "high"]);
