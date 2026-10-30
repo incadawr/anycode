@@ -9359,7 +9359,7 @@ describe("tapChildPermissions ask identity (Taskana 4821)", () => {
     });
     expect(bearer.subject).not.toContain("abc123def456ghi789abc123");
     expect(bearer.subject).toContain("[redacted]");
-    expect(bearer.subject).toContain("https://example.com/health");
+    expect(bearer.subject).not.toContain("https://example.com/health");
     // --password / -p-style flag values
     const flag = describeChildApprovalAsk("Bash", { command: "deploy --password hunter2 --verbose" });
     expect(flag.subject).not.toContain("hunter2");
@@ -9432,6 +9432,9 @@ describe("child status transcript", () => {
   it.each([
     ['{"password":"hunter2"}', "hunter2"],
     ["Authorization: Bearer secondsecret", "secondsecret"],
+    ["Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"],
+    ['{"password":"first second', "second"],
+    ['--password="first second"', "second"],
   ])("emits bounded live text and scrubs %s on the child wire", (credential, secret) => {
     const h = createChildHarness({ steps: [finishStep()] });
     try {

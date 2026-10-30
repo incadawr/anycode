@@ -74,6 +74,9 @@ describe("AgentStatus", () => {
   it.each([
     ['{"password":"hunter2"}', "hunter2"],
     ["Authorization: Bearer secondsecret", "secondsecret"],
+    ["Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"],
+    ['{"password":"first second', "second"],
+    ['--password="first second"', "second"],
   ])("scrubs %s through the inline child path", async (credential, secret) => {
     const port: SubagentPort = { run: async (_req, opts) => {
       opts.onStatusItem?.({ kind: "assistant", text: `Progress ${credential}` });
