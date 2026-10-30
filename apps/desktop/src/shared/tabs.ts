@@ -56,17 +56,25 @@ export const TAB_REBIND_CHANNEL = "anycode:tab-rebind";
  * that is the mechanism's contract, but it is terminal for work the user may
  * have forgotten about, so it is never silent:
  *  - `dryRun` asks main to run the SAME fail-closed validation and report the
- *    blockers it would refuse on, WITHOUT priming an env or replacing the
- *    host. The renderer uses it to find out whether the switch would cancel
- *    running subagents before it writes anything;
+ *    blockers it would refuse on, WITHOUT writing anything, priming an env or
+ *    replacing the host. The renderer uses it to find out whether the switch
+ *    would cancel running subagents before it commits to anything;
  *  - `cancelChildren` is the user's explicit consent to that cancellation. A
  *    tab with live children refuses `children_running` without it, so no
- *    caller can cancel someone's running subagents by accident.
+ *    caller can cancel someone's running subagents by accident. Main also
+ *    refuses NEW child admission while the rebind runs, so the set the user
+ *    was asked about is the set that is drained — not one that grew during
+ *    the switch;
+ *  - `model` is the model the pick chose on the target connection. Main writes
+ *    it as part of the locked operation (after the child gate, before the fork
+ *    env is primed), so a switch that ends up not happening leaves the
+ *    connection's saved model untouched.
  */
 export interface TabRebindRequest {
   tabId: string;
   connectionId: string;
   priorEffort?: ReasoningEffort;
+  model?: string;
   dryRun?: boolean;
   cancelChildren?: boolean;
 }
@@ -86,6 +94,9 @@ export interface TabRebindRequest {
  *    session-tier subagents) and the request did not carry the user's
  *    `cancelChildren` consent — the count rides along so the renderer can
  *    name it ("3 subagents are running and will be cancelled");
+ *  - `model_write_failed`: the target connection's model could not be saved
+ *    (read-only settings, unknown connection id, or no writer wired). Nothing
+ *    was rebound and nothing else was written;
  *  - `not_ready`: the target connection's fork env could not be primed.
  *  - `spawn_failed`: the replacement host could not be started.
  *
@@ -98,7 +109,15 @@ export type TabRebindResult =
   | { ok: false; reason: "children_running"; runningChildren: number }
   | {
       ok: false;
-      reason: "unknown_tab" | "busy" | "connection_missing" | "not_ready" | "spawn_failed" | "same_connection" | "non_core";
+      reason:
+        | "unknown_tab"
+        | "busy"
+        | "connection_missing"
+        | "not_ready"
+        | "spawn_failed"
+        | "same_connection"
+        | "non_core"
+        | "model_write_failed";
     };
 
 /** Request: optional { limit?: number } — absent = full list (TASK.125). */

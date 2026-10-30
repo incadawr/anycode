@@ -185,6 +185,18 @@ export interface TabIpcDeps {
    */
   readConnectionModel?(connectionId: string): string | undefined;
   /**
+   * GitHub #33: writes the TARGET connection's model during a re-bind —
+   * `handleConnectionUpdate`'s own settings writer, invoked from here so the
+   * write is part of the same locked operation as the child gate and the
+   * drain. The renderer no longer writes it first: a switch the user then
+   * declines must leave the connection exactly as it was, and there must be
+   * no window in which a child could be admitted between the gate and the
+   * write. Absent (legacy wiring / unit fixtures) = a request carrying `model`
+   * fails closed with `model_write_failed` rather than booting the target on a
+   * model the user did not pick.
+   */
+  writeConnectionModel?(connectionId: string, model: string): Promise<boolean>;
+  /**
    * Resolves the connection a RESUMED session is pinned to (TASK.45 W10). Absent
    * = pinning disabled (legacy wiring / unit fixtures) so resume behaves as before.
    */
@@ -356,9 +368,12 @@ const tabRebindRequestSchema: z.ZodType<TabRebindRequest> = z.object({
   tabId: z.string().min(1).max(128),
   connectionId: z.string().min(1).max(128),
   priorEffort: z.enum(["off", "low", "medium", "high", "xhigh", "max"]).optional(),
-  // GitHub #33 (additive): `dryRun` = validate and answer, mutate nothing;
-  // `cancelChildren` = the user's explicit consent to the cancellation a
-  // re-bind performs. Both are booleans only — no other shape is accepted.
+  // GitHub #33 (additive): the model the pick chose on the TARGET connection —
+  // written by main inside the locked rebind, never by the renderer first.
+  model: z.string().min(1).max(256).optional(),
+  // `dryRun` = validate and answer, mutate nothing; `cancelChildren` = the
+  // user's explicit consent to the cancellation a re-bind performs. Both are
+  // booleans only — no other shape is accepted.
   dryRun: z.boolean().optional(),
   cancelChildren: z.boolean().optional(),
 });
@@ -971,10 +986,23 @@ export async function handleTabRebind(deps: TabIpcDeps, req: TabRebindRequest): 
     if (tab === undefined) {
       return { ok: false, reason: "unknown_tab" };
     }
-    // Prime the fork env BEFORE anything is mutated — the same
-    // validated-then-primed order the cut-1 `new`-tab pick established. A throw
-    // (vault read failure) is a fail-closed `not_ready`, never a spawn on an
-    // unprimed env.
+    // GitHub #33: the target connection's model is written HERE, inside the
+    // locked operation and AFTER the child gate above, never by the renderer
+    // before it. Two properties follow, and both were broken when the renderer
+    // wrote first: a switch that does not happen (the user declined, or the
+    // drain refused) has changed no persisted setting, and the write cannot be
+    // interleaved with a child admission — `acquireRebind` refuses admission
+    // for this tab for the whole operation, so the gate checked above is still
+    // true at the drain below.
+    if (req.model !== undefined) {
+      if (deps.writeConnectionModel === undefined || !(await deps.writeConnectionModel(req.connectionId, req.model))) {
+        return { ok: false, reason: "model_write_failed" };
+      }
+    }
+    // Prime the fork env AFTER the model write and BEFORE anything is mutated —
+    // the same validated-then-primed order the cut-1 `new`-tab pick
+    // established. A throw (vault read failure) is a fail-closed `not_ready`,
+    // never a spawn on an unprimed env.
     if (deps.ensureConnectionEnv !== undefined) {
       try {
         await deps.ensureConnectionEnv(req.connectionId);
@@ -982,13 +1010,15 @@ export async function handleTabRebind(deps: TabIpcDeps, req: TabRebindRequest): 
         return { ok: false, reason: "not_ready" };
       }
     }
-    const rebound = req.priorEffort === undefined
-      ? await deps.manager.rebindTab(tab, req.connectionId)
-      : await deps.manager.rebindTab(tab, req.connectionId, req.priorEffort);
+    const rebound = await deps.manager.rebindTab(tab, req.connectionId, req.priorEffort, {
+      cancelChildren: req.cancelChildren === true,
+    });
     if (!rebound.ok) {
       // Nothing durable was written, so the refusal leaves the session row
       // pinned where the tab still runs.
-      return { ok: false, reason: rebound.reason };
+      return rebound.reason === "children_running"
+        ? { ok: false, reason: "children_running", runningChildren: rebound.runningChildren ?? 0 }
+        : { ok: false, reason: rebound.reason };
     }
     deps.consumePendingImportModel?.(tab.sessionId);
     // Design doc §D3/D5: the target connection's own model is the authority for

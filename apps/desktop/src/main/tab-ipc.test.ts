@@ -2103,6 +2103,8 @@ function makeRebindDeps(
     connectionExists?: (id: string) => boolean;
     ensureConnectionEnv?: (id: string) => Promise<void>;
     readConnectionModel?: (id: string) => string | undefined;
+    /** GitHub #33: the main-side writer for the target connection's model (absent = no writer wired). */
+    writeConnectionModel?: (id: string, model: string) => Promise<boolean>;
     /** GitHub #33: how many live children the fake manager reports for the tab. */
     runningChildren?: number;
   } = {},
@@ -2116,6 +2118,7 @@ function makeRebindDeps(
     ...(over.connectionExists !== undefined ? { connectionExists: over.connectionExists } : {}),
     ...(over.ensureConnectionEnv !== undefined ? { ensureConnectionEnv: over.ensureConnectionEnv } : {}),
     ...(over.readConnectionModel !== undefined ? { readConnectionModel: over.readConnectionModel } : {}),
+    ...(over.writeConnectionModel !== undefined ? { writeConnectionModel: over.writeConnectionModel } : {}),
   };
   return { deps, touchSession, getTab, rebindTab, runningChildCount };
 }
@@ -2126,7 +2129,7 @@ describe("handleTabRebind — TASK.106 cut-2 (§D6 fail-closed order)", () => {
     registerTabIpc(deps);
     const handler = ipcHandlers.get(TAB_REBIND_CHANNEL)!;
     expect(await handler({}, { tabId: "tab-1", connectionId: "conn-new", priorEffort: "high" })).toEqual({ ok: true, connectionId: "conn-new" });
-    expect(rebindTab).toHaveBeenCalledWith(expect.objectContaining({ tabId: "tab-1" }), "conn-new", "high");
+    expect(rebindTab).toHaveBeenCalledWith(expect.objectContaining({ tabId: "tab-1" }), "conn-new", "high", { cancelChildren: false });
     expect(await handler({}, { tabId: "tab-1", connectionId: "conn-new", priorEffort: "invalid" })).toEqual({ ok: false, reason: "unknown_tab" });
     expect(rebindTab).toHaveBeenCalledTimes(1);
   });
@@ -2146,7 +2149,7 @@ describe("handleTabRebind — TASK.106 cut-2 (§D6 fail-closed order)", () => {
     expect(res).toEqual({ ok: true, connectionId: "conn-new" });
     expect(order).toEqual(["ensure:conn-new"]);
     expect(touchSession).toHaveBeenCalledWith("session-1", { connectionId: "conn-new", model: "glm-5.3" });
-    expect(rebindTab).toHaveBeenCalledWith(expect.objectContaining({ tabId: "tab-1" }), "conn-new");
+    expect(rebindTab).toHaveBeenCalledWith(expect.objectContaining({ tabId: "tab-1" }), "conn-new", undefined, { cancelChildren: false });
   });
 
   it("a tab that does not exist refuses unknown_tab and touches nothing", async () => {
@@ -2295,7 +2298,7 @@ describe("handleTabRebind — TASK.106 cut-2 (§D6 fail-closed order)", () => {
     // where the row and the env disagree about the account).
     expect(touchSession).toHaveBeenCalledTimes(1);
     expect(touchSession).toHaveBeenCalledWith("session-1", { connectionId: "conn-new", model: "m2" });
-    expect(rebindTab).toHaveBeenCalledWith(expect.objectContaining({ tabId: "tab-1" }), "conn-new");
+    expect(rebindTab).toHaveBeenCalledWith(expect.objectContaining({ tabId: "tab-1" }), "conn-new", undefined, { cancelChildren: false });
     // TASK.109 contract: TabIpcDeps has NO seam that writes settings/connections
     // — "conn-old" must appear in NO write. The old connection survives the
     // switch configured and intact; only the session row's pin moved.
@@ -2359,7 +2362,9 @@ describe("handleTabRebind — GitHub #33: running children are never cancelled s
     const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new", cancelChildren: true });
 
     expect(res).toEqual({ ok: true, connectionId: "conn-new" });
-    expect(rebindTab).toHaveBeenCalledWith(expect.objectContaining({ tabId: "tab-1" }), "conn-new");
+    // The consent travels all the way to the manager, which is the authority
+    // that drains — the handler never decides the drain itself.
+    expect(rebindTab).toHaveBeenCalledWith(expect.objectContaining({ tabId: "tab-1" }), "conn-new", undefined, { cancelChildren: true });
     expect(touchSession).toHaveBeenCalledWith("session-1", { connectionId: "conn-new" });
   });
 
@@ -2398,8 +2403,7 @@ describe("handleTabRebind — GitHub #33: running children are never cancelled s
     expect(rebindTab).not.toHaveBeenCalled();
   });
 
-  it("a dry run takes no rebind lock — a question never makes a concurrent real switch refuse", async () => {
-    const touchSession = vi.fn(async () => {});
+  it("a dry run takes no rebind lock — a question never makes a concurrent real switch refuse", async () => {    const touchSession = vi.fn(async () => {});
     const manager = {
       getTab: () => runningCoreTab(),
       rebindTab: vi.fn(async () => ({ ok: true as const })),
@@ -2428,6 +2432,139 @@ describe("handleTabRebind — GitHub #33: running children are never cancelled s
   });
 });
 
+// GitHub #33 review round 2: the target connection's model is written by MAIN,
+// inside the locked switch, AFTER the child gate. A declined switch therefore
+// leaves no saved setting changed — and, because admission is refused for the
+// whole rebind window, a child cannot appear between the gate and the drain.
+describe("handleTabRebind — GitHub #33: the model write is part of the locked switch", () => {
+  it("writes the target model after the child gate and before the fork env is primed", async () => {
+    const order: string[] = [];
+    const { deps, rebindTab } = makeRebindDeps(runningCoreTab(), {
+      connectionExists: () => true,
+      runningChildren: 1,
+      writeConnectionModel: async (id, model) => {
+        order.push(`write:${id}:${model}`);
+        return true;
+      },
+      ensureConnectionEnv: async (id) => {
+        order.push(`ensure:${id}`);
+      },
+    });
+
+    const res = await handleTabRebind(deps, {
+      tabId: "tab-1",
+      connectionId: "conn-new",
+      model: "glm-5.3-flash",
+      cancelChildren: true,
+    });
+
+    expect(res).toEqual({ ok: true, connectionId: "conn-new" });
+    // Primed AFTER the write: the env is built from the connection's saved
+    // model, so a write that happened later would boot the host on the OLD one.
+    expect(order).toEqual(["write:conn-new:glm-5.3-flash", "ensure:conn-new"]);
+    expect(rebindTab).toHaveBeenCalledTimes(1);
+  });
+
+  it("a switch the child gate refuses writes NOTHING — declining must not leave a saved model behind", async () => {
+    const write = vi.fn(async () => true);
+    const ensured: string[] = [];
+    const { deps, rebindTab } = makeRebindDeps(runningCoreTab(), {
+      connectionExists: () => true,
+      runningChildren: 3,
+      writeConnectionModel: write,
+      ensureConnectionEnv: async (id) => {
+        ensured.push(id);
+      },
+    });
+
+    const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new", model: "glm-5.3-flash" });
+
+    expect(res).toEqual({ ok: false, reason: "children_running", runningChildren: 3 });
+    expect(write).not.toHaveBeenCalled();
+    expect(ensured).toEqual([]);
+    expect(rebindTab).not.toHaveBeenCalled();
+  });
+
+  it("a refused model write stops the switch before any env work or rebind", async () => {
+    const ensured: string[] = [];
+    const { deps, touchSession, rebindTab } = makeRebindDeps(runningCoreTab(), {
+      connectionExists: () => true,
+      writeConnectionModel: async () => false,
+      ensureConnectionEnv: async (id) => {
+        ensured.push(id);
+      },
+    });
+
+    const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new", model: "glm-5.3-flash" });
+
+    expect(res).toEqual({ ok: false, reason: "model_write_failed" });
+    expect(ensured).toEqual([]);
+    expect(rebindTab).not.toHaveBeenCalled();
+    expect(touchSession).not.toHaveBeenCalled();
+  });
+
+  it("a model with no writer wired fails closed instead of booting the target on the old model", async () => {
+    const { deps, rebindTab } = makeRebindDeps(runningCoreTab(), {
+      connectionExists: () => true,
+      ensureConnectionEnv: async () => {},
+    });
+
+    const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new", model: "glm-5.3-flash" });
+
+    expect(res).toEqual({ ok: false, reason: "model_write_failed" });
+    expect(rebindTab).not.toHaveBeenCalled();
+  });
+
+  it("a dryRun never writes the model and never primes an env", async () => {
+    const write = vi.fn(async () => true);
+    const { deps, rebindTab } = makeRebindDeps(runningCoreTab(), {
+      connectionExists: () => true,
+      writeConnectionModel: write,
+      ensureConnectionEnv: async () => {
+        throw new Error("must not be primed by a question");
+      },
+    });
+
+    const res = await handleTabRebind(deps, {
+      tabId: "tab-1",
+      connectionId: "conn-new",
+      model: "glm-5.3-flash",
+      dryRun: true,
+    });
+
+    expect(res).toEqual({ ok: true, connectionId: "conn-new" });
+    expect(write).not.toHaveBeenCalled();
+    expect(rebindTab).not.toHaveBeenCalled();
+  });
+
+  it("propagates a children_running refusal raised by the manager's own final check", async () => {
+    // The manager re-checks synchronously right before the drain. A refusal
+    // there (a child that was already admitted when the handler looked, or any
+    // future caller of rebindTab) must reach the renderer with its count, and
+    // must not be reported as a generic not_ready.
+    const tab = runningCoreTab();
+    const manager = {
+      getTab: () => tab,
+      runningChildCount: () => 0,
+      rebindTab: vi.fn(async () => ({ ok: false as const, reason: "children_running" as const, runningChildren: 2 })),
+      acquireRebind: () => true,
+      releaseRebind: () => {},
+    } as unknown as TabHostManager;
+    const deps: TabIpcDeps = {
+      manager,
+      persistence: { ...persistenceStub, touchSession: vi.fn(async () => {}) },
+      dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) } as DialogLike,
+      connectionExists: () => true,
+    };
+
+    expect(await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new" })).toEqual({
+      ok: false,
+      reason: "children_running",
+      runningChildren: 2,
+    });
+  });
+});
+
 describe("tabRebindRequestSchema — bounds only (§D6)", () => {
   it("accepts a well-formed request and bounds both ids' length", () => {
     expect(tabRebindRequestSchema.safeParse({ tabId: "tab-1", connectionId: "conn-new" }).success).toBe(true);
@@ -2449,6 +2586,15 @@ describe("tabRebindRequestSchema — bounds only (§D6)", () => {
     ).toBe(false);
     expect(
       tabRebindRequestSchema.safeParse({ tabId: "tab-1", connectionId: "conn-new", cancelChildren: 1 }).success,
+    ).toBe(false);
+  });
+
+  it("GitHub #33: accepts the picked model and bounds it", () => {
+    expect(
+      tabRebindRequestSchema.safeParse({ tabId: "tab-1", connectionId: "conn-new", model: "glm-5.3-flash" }).success,
+    ).toBe(true);
+    expect(
+      tabRebindRequestSchema.safeParse({ tabId: "tab-1", connectionId: "conn-new", model: "" }).success,
     ).toBe(false);
   });
 });

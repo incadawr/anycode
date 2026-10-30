@@ -2645,7 +2645,7 @@ describe("TabHostManager — session-spawn queue (TASK.147 срез 1)", () => {
     expect(raw.childSpawnKeys.has(dedupKey)).toBe(false);
   });
 
-  it("a spawn arriving DURING its parent's drain is refused limit_parent, not parked — a waiter would otherwise be admitted by the reaps that drain is waiting for, forking a child into a parent mid-rebind", async () => {
+  it("a spawn arriving DURING its parent's drain is refused, not parked — a waiter would otherwise be admitted by the reaps that drain is waiting for, forking a child into a parent mid-rebind", async () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const manager = childManager(fork, window);
@@ -2662,19 +2662,25 @@ describe("TabHostManager — session-spawn queue (TASK.147 срез 1)", () => {
     // A rebind drains the children WITHOUT sealing the tab `closing` first
     // (only `closeTab` seals; `handleExit` instead nulls `proc`), so the
     // parent host is still live, still `running`, and can still issue a
-    // spawn while the drain awaits its reaps. Not awaited yet: an async
-    // function body runs synchronously to its first `await`, so the drain
-    // window is already open on the line below.
-    const rebinding = manager.rebindTab(tab!, "conn-new");
+    // spawn while the drain awaits its reaps. The consent is what lets the
+    // drain start at all (GitHub #33: without it the rebind refuses
+    // `children_running` before touching anything — covered by the dedicated
+    // tests below). Not awaited yet: an async function body runs
+    // synchronously to its first `await`, so the drain window is already open
+    // on the line below.
+    const rebinding = manager.rebindTab(tab!, "conn-new", undefined, { cancelChildren: true });
     rootHost.emit("message", spawnRequest({ requestId: "d4", spawnToolCallId: "drain-window-call" }));
 
     // Every child is `cancelling` and §0.7 has `cancelling` hold its slot, so
     // the cap reads FULL for the whole drain — parking here would park in
     // every rebind rather than a rare one, and the waiter would then be
-    // admitted by the very reaps the drain is waiting for.
+    // admitted by the very reaps the drain is waiting for. Since GitHub #33 the
+    // refusal is the drain's own (`closing`, the same verb a closing parent
+    // gets): a child admitted mid-drain could only be cancelled by that drain,
+    // which is exactly the cancellation the rebind asks the user about first.
     expect(childRunEvents(rootHost).find((e) => e.requestId === "d4")).toMatchObject({
       kind: "rejected",
-      reason: "limit_parent",
+      reason: "closing",
     });
     const raw = manager as unknown as { childSpawnQueue: string[]; childSpawnKeys: Map<string, string> };
     expect(raw.childSpawnQueue).toEqual([]);
@@ -5304,6 +5310,92 @@ describe("TabHostManager — rebindTab (TASK.106 cut-2)", () => {
     expect(tab!.rapidRespawns).toBe(0);
     expect(tab!.initialResume).toBe(true);
     expect(tab!.state).toBe("running");
+  });
+
+  // ── GitHub #33: running children are never cancelled without consent ──────
+  // Driven through the REAL manager + REAL handleTabRebind, because the defect
+  // lived in the window between the handler's check and the manager's drain.
+
+  /** A root tab with one admitted, live child. Returns the pieces a rebind needs. */
+  function rootWithLiveChild(sessionId: string, connectionId: string) {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, {
+      env: (id?: string) => (id === undefined ? {} : { ANYCODE_CONNECTION: id }),
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId, resume: false, connectionId });
+    if (!created.ok) throw new Error("create failed");
+    const rootTabId = created.tab.tabId;
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "c-1" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "c-1" && e.kind === "accepted");
+    if (accepted?.kind !== "accepted") throw new Error("child was not admitted");
+    return { manager, hosts, rootHost, tab: created.tab, rootTabId, childTabId: accepted.childTabId };
+  }
+
+  it("refuses children_running and leaves the child running when no consent was given", async () => {
+    const { manager, tab, rootTabId, childTabId } = rootWithLiveChild("root-consent-refused", "conn-old");
+    expect(manager.runningChildCount(rootTabId)).toBe(1);
+
+    const res = await manager.rebindTab(tab, "conn-new");
+
+    expect(res).toEqual({ ok: false, reason: "children_running", runningChildren: 1 });
+    // Nothing was touched: the parent still runs on its old connection and the
+    // child it never agreed to lose is still live.
+    expect(tab.connectionId).toBe("conn-old");
+    expect(tab.state).toBe("running");
+    expect(manager.getTab(childTabId)).toBeDefined();
+    expect(manager.runningChildCount(rootTabId)).toBe(1);
+  });
+
+  it("drains the children and switches when the caller carries the user's consent", async () => {
+    const { manager, tab, rootTabId, childTabId } = rootWithLiveChild("root-consent-given", "conn-old");
+
+    const res = await manager.rebindTab(tab, "conn-new", undefined, { cancelChildren: true });
+
+    expect(res).toEqual({ ok: true });
+    expect(tab.connectionId).toBe("conn-new");
+    expect(manager.getTab(childTabId)).toBeUndefined();
+    expect(manager.runningChildCount(rootTabId)).toBe(0);
+  });
+
+  it("a child spawn during the switch's env preparation is REFUSED, so the consent gate's answer stays final", async () => {
+    // The exact window the review named: the handler validates the child count,
+    // then awaits env preparation, then calls rebindTab. On the unfixed code a
+    // child admitted inside that await was registered and then silently drained
+    // by the rebind. The rebind lock refuses the admission instead.
+    const { manager, tab, rootTabId } = rootWithLiveChild("root-race-clear", "conn-old");
+    // Consent for the one child the user was asked about would not cover a
+    // second one, so the tab is drained to zero first — the switch starts from
+    // "nothing running", the state in which the user was never asked anything.
+    await manager.rebindTab(tab, "conn-old", undefined, { cancelChildren: true });
+    expect(manager.runningChildCount(rootTabId)).toBe(0);
+    const hostCountBefore = manager.listTabs().length;
+
+    let spawnWhilePriming: ChildRunEvent | undefined;
+    const deps = {
+      manager,
+      connectionExists: () => true,
+      persistence: { touchSession: vi.fn(async () => {}) },
+      // Runs inside the handler's locked window, i.e. after the child gate and
+      // before the drain — the parent host is still alive and can still ask.
+      ensureConnectionEnv: async () => {
+        const live = manager.getTab(tab.tabId)?.proc as unknown as FakeHost;
+        live.emit("message", spawnRequest({ requestId: "late-child", spawnToolCallId: "late-call" }));
+        await Promise.resolve();
+        spawnWhilePriming = childRunEvents(live).find((e) => e.requestId === "late-child");
+      },
+    } as unknown as TabIpcDeps;
+
+    const res = await handleTabRebind(deps, { tabId: tab.tabId, connectionId: "conn-new" });
+
+    expect(res).toEqual({ ok: true, connectionId: "conn-new" });
+    // The late spawn never became a child: it was refused up front, not
+    // admitted and then cancelled behind the user's back.
+    expect(spawnWhilePriming).toMatchObject({ kind: "rejected", reason: "closing" });
+    expect(manager.runningChildCount(tab.tabId)).toBe(0);
+    expect(manager.listChildRuns()).toEqual([]);
+    expect(manager.listTabs()).toHaveLength(hostCountBefore);
   });
 
   it("carries the prior effort only on the destination rebind spawn", async () => {

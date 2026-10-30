@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const harness = vi.hoisted(() => ({ slots: [] as any[], cursor: 0, effects: [] as Array<() => void>, state: {} as any, settings: {} as any, send: vi.fn(), update: vi.fn() }));
+const harness = vi.hoisted(() => ({ slots: [] as any[], cursor: 0, effects: [] as Array<() => void>, state: {} as any, settings: {} as any, send: vi.fn(), update: vi.fn(), tabId: "tab" }));
 vi.mock("react", async (importOriginal) => {
   const real = await importOriginal<typeof import("react")>();
   return {
     ...real,
-    useContext: () => ({ tabId: "tab" }),
+    useContext: () => ({ tabId: harness.tabId }),
     useCallback: (fn: unknown) => fn,
     useRef: (initial: unknown) => { const i = harness.cursor++; return harness.slots[i] ??= { current: initial }; },
     useState: (initial: unknown) => { const i = harness.cursor++; if (!(i in harness.slots)) harness.slots[i] = initial; return [harness.slots[i], (v: any) => { harness.slots[i] = typeof v === "function" ? v(harness.slots[i]) : v; }]; },
@@ -14,7 +14,9 @@ vi.mock("react", async (importOriginal) => {
 });
 vi.mock("../tab-context.js", () => ({ TabContext: {}, useTabSend: () => harness.send, useTabStore: (select: any) => select(harness.state), useTabStoreApi: () => ({ getState: () => harness.state }) }));
 vi.mock("../tabs-store.js", () => ({ useTabsStore: (select: any) => select({ tabs: [] }) }));
-vi.mock("../settings-store.js", () => ({ useSettingsStore: (select: any) => select(harness.settings) }));
+// `useSettingsStore` is both a selector hook and a store handle: GitHub #33's
+// successful switch re-reads the snapshot main just wrote.
+vi.mock("../settings-store.js", () => ({ useSettingsStore: Object.assign((select: any) => select(harness.settings), { getState: () => harness.settings }) }));
 vi.mock("../preview/overlay-flag.js", () => ({ useOverlayFlag: () => {} }));
 import { ModelPill } from "./ModelPill.js";
 import { findCatalogEntry } from "@anycode/core/catalog";
@@ -23,6 +25,9 @@ function render(): any {
   harness.cursor = 0;
   harness.effects = [];
   const tree = ModelPill();
+  // Effects are replayed the way React would: a changed dep list re-runs its
+  // effect, and state setters write straight into the slots, so the next
+  // `render()` sees the updated state.
   for (const effect of harness.effects) effect();
   return tree;
 }
@@ -32,8 +37,9 @@ function menu(tree: any): any { return tree.props.children[1].props.children; }
 describe("model menu interaction", () => {
   beforeEach(() => {
     harness.slots = []; harness.send.mockReset(); harness.update.mockReset().mockResolvedValue({ ok: true });
+    harness.tabId = "tab";
     harness.state = { model: "glm-5.2", reasoningEffort: "high", availableEffortLevels: ["off", "high", "max"], turn: { status: "idle" }, queueInFlight: null, connection: "ready", pinnedConnection: { connectionId: "c", providerId: "z-ai" }, engine: null };
-    harness.settings = { connectionUpdate: harness.update, snapshot: { settings: { provider: { activeConnectionId: "c", connections: [{ id: "c", providerId: "z-ai" }], custom: [] } }, catalog: [{ id: "z-ai", name: "Z.AI", authKind: "api_key", models: [{ id: "glm-5.2", reasoning: true, effortLevels: ["off", "high", "max"] }] }] } };
+    harness.settings = { connectionUpdate: harness.update, load: vi.fn(), snapshot: { settings: { provider: { activeConnectionId: "c", connections: [{ id: "c", providerId: "z-ai" }], custom: [] } }, catalog: [{ id: "z-ai", name: "Z.AI", authKind: "api_key", models: [{ id: "glm-5.2", reasoning: true, effortLevels: ["off", "high", "max"] }] }] } };
     vi.stubGlobal("window", { addEventListener() {}, removeEventListener() {}, anycode: { listSessions: () => Promise.resolve([]) } });
     vi.stubGlobal("document", { addEventListener() {}, removeEventListener() {} });
   });
@@ -130,7 +136,7 @@ describe("model menu interaction", () => {
     await vi.waitFor(() => expect(harness.update).toHaveBeenCalledExactlyOnceWith({id:"c", model:"glm-4.6", modelOverrideModel:"glm-4.6", reasoningEffort:"low"}));
   });
 
-  it("passes the current tier when switching to another connection", async () => {
+  it("passes the current tier and the picked model when switching to another connection", async () => {
     const rebind = vi.fn().mockResolvedValue({ok:true});
     (window.anycode as any).tabRebind = rebind;
     harness.settings.snapshot.settings.provider.connections.push({id:"d", providerId:"other"});
@@ -138,7 +144,10 @@ describe("model menu interaction", () => {
     let tree = render(); tree.props.children[0].props.onClick(); tree = render();
     menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "group" && r.connectionId === "d")); tree = render();
     menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "model" && r.modelId === "glm-5.3-flash"));
-    await vi.waitFor(() => expect(rebind).toHaveBeenCalledWith({tabId:"tab", connectionId:"d", priorEffort:"high"}));
+    // GitHub #33: the dry run goes first (it is the child gate's question), the
+    // switch itself carries the effort AND the model main must write.
+    await vi.waitFor(() => expect(rebind).toHaveBeenLastCalledWith({tabId:"tab", connectionId:"d", model:"glm-5.3-flash", priorEffort:"high"}));
+    expect(rebind).toHaveBeenNthCalledWith(1, {tabId:"tab", connectionId:"d", dryRun:true});
   });
 
   it("shows no effort row for a model without reasoning metadata", () => {
@@ -150,8 +159,8 @@ describe("model menu interaction", () => {
 
   // GitHub #33: a cross-connection pick re-binds the host, which CANCELS the
   // tab's running children. The pick therefore asks first (main's dry-run
-  // answer), writes nothing until the user says so, and carries the explicit
-  // `cancelChildren` consent on the retry.
+  // answer), writes nothing at all, and carries the explicit `cancelChildren`
+  // consent on the retry — bound to the tab the question was asked in.
   describe("GitHub #33: running subagents gate a cross-connection switch", () => {
     function pickForeign(): void {
       harness.settings.snapshot.settings.provider.connections.push({ id: "d", providerId: "other" });
@@ -179,13 +188,14 @@ describe("model menu interaction", () => {
         confirmLabel: "Switch anyway",
         cancelLabel: "Wait",
       });
-      // The dry run is a question: the target connection's model was NOT
-      // written and no real rebind was attempted.
-      expect(harness.update).not.toHaveBeenCalled();
+      // A question is not a switch: no real rebind was attempted and the
+      // renderer never writes settings at all in this flow (main owns that
+      // write, inside the locked switch), so there is nothing to roll back.
       expect(rebind).toHaveBeenCalledTimes(1);
+      expect(harness.update).not.toHaveBeenCalled();
     });
 
-    it("switches only after the user confirms, with the cancelChildren consent on the rebind", async () => {
+    it("switches only after the user confirms, with the cancelChildren consent and the picked model on the rebind", async () => {
       const rebind = vi.fn()
         .mockResolvedValueOnce({ ok: false, reason: "children_running", runningChildren: 2 })
         .mockResolvedValueOnce({ ok: true, connectionId: "d" })
@@ -196,11 +206,21 @@ describe("model menu interaction", () => {
       await vi.waitFor(() => expect(rebind).toHaveBeenCalledTimes(1));
       render().props.children[2].props.onConfirm();
 
-      await vi.waitFor(() => expect(harness.update).toHaveBeenCalledWith({ id: "d", model: "glm-5.3-flash" }));
-      expect(rebind).toHaveBeenNthCalledWith(2, { tabId: "tab", connectionId: "d", dryRun: true, cancelChildren: true });
       await vi.waitFor(() =>
-        expect(rebind).toHaveBeenLastCalledWith({ tabId: "tab", connectionId: "d", priorEffort: "high", cancelChildren: true }),
+        expect(rebind).toHaveBeenLastCalledWith({
+          tabId: "tab",
+          connectionId: "d",
+          model: "glm-5.3-flash",
+          priorEffort: "high",
+          cancelChildren: true,
+        }),
       );
+      expect(rebind).toHaveBeenNthCalledWith(2, { tabId: "tab", connectionId: "d", dryRun: true, cancelChildren: true });
+      // The renderer performs no settings write of its own — main wrote the
+      // target model inside the same locked switch — it only re-reads the
+      // snapshot so Settings shows the new default.
+      expect(harness.update).not.toHaveBeenCalled();
+      expect(harness.settings.load).toHaveBeenCalled();
       expect(dialog(render()).props.request).toBeNull();
     });
 
@@ -217,11 +237,13 @@ describe("model menu interaction", () => {
       expect(dialog(render()).props.request).toBeNull();
       expect(harness.update).not.toHaveBeenCalled();
       expect(rebind).toHaveBeenCalledTimes(1);
+      expect(harness.settings.load).not.toHaveBeenCalled();
     });
 
-    it("a child that starts between the dry run and the rebind is asked about, not cancelled", async () => {
-      // Dry run says clear, the settings write lands, then the real rebind
-      // finds a live child (the race the backstop exists for).
+    it("a child that starts between the dry run and the rebind is asked about, never cancelled", async () => {
+      // Dry run says clear, then the real (locked) rebind finds a live child:
+      // main refuses before writing anything, so the only thing the renderer
+      // does is ask again — with the live count.
       const rebind = vi.fn()
         .mockResolvedValueOnce({ ok: true, connectionId: "d" })
         .mockResolvedValueOnce({ ok: false, reason: "children_running", runningChildren: 1 });
@@ -232,7 +254,79 @@ describe("model menu interaction", () => {
 
       const tree = render();
       expect(dialog(tree).props.request.body).toBe("1 subagent is running in this session and will be cancelled. Switch connection anyway?");
-      expect(rebind).toHaveBeenLastCalledWith({ tabId: "tab", connectionId: "d", priorEffort: "high" });
+      // The refused attempt carried the model but no consent — main refused it
+      // before its own write, and the tab's children keep running.
+      expect(rebind).toHaveBeenLastCalledWith({
+        tabId: "tab",
+        connectionId: "d",
+        model: "glm-5.3-flash",
+        priorEffort: "high",
+      });
+      expect(harness.settings.load).not.toHaveBeenCalled();
+    });
+
+    // ── The consent belongs to the tab it was asked in ──────────────────────
+    // The active tab's component tree is reused when the selected tab changes.
+
+    it("a dry run answered AFTER the user switched tabs opens no dialog for the new tab", async () => {
+      let answer: (result: unknown) => void = () => {};
+      const rebind = vi.fn(() => new Promise((resolve) => { answer = resolve; }));
+      (window.anycode as any).tabRebind = rebind;
+
+      pickForeign();
+      await vi.waitFor(() => expect(rebind).toHaveBeenCalledTimes(1));
+
+      // The user is now looking at another tab; this is the same mounted tree.
+      harness.tabId = "tab-2";
+      render();
+      answer({ ok: false, reason: "children_running", runningChildren: 3 });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(dialog(render()).props.request).toBeNull();
+      expect(rebind).toHaveBeenCalledTimes(1);
+      expect(harness.settings.load).not.toHaveBeenCalled();
+    });
+
+    it("a question left open is dropped when the tab changes, so it can never be answered for another tab", async () => {
+      const rebind = vi.fn().mockResolvedValue({ ok: false, reason: "children_running", runningChildren: 2 });
+      (window.anycode as any).tabRebind = rebind;
+
+      pickForeign();
+      await vi.waitFor(() => expect(rebind).toHaveBeenCalledTimes(1));
+      expect(dialog(render()).props.request).not.toBeNull();
+
+      harness.tabId = "tab-2";
+      // The tab-change effect clears the parked question…
+      render();
+
+      expect(dialog(render()).props.request).toBeNull();
+      expect(rebind).toHaveBeenCalledTimes(1);
+      expect(harness.update).not.toHaveBeenCalled();
+    });
+
+    it("a confirmation for the ORIGIN tab is not spent on the tab now in front of the user", async () => {
+      const rebind = vi.fn()
+        .mockResolvedValueOnce({ ok: false, reason: "children_running", runningChildren: 2 })
+        .mockResolvedValue({ ok: true, connectionId: "d" });
+      (window.anycode as any).tabRebind = rebind;
+
+      pickForeign();
+      await vi.waitFor(() => expect(rebind).toHaveBeenCalledTimes(1));
+      // Capture the handler while the question is still on screen for tab A…
+      const confirmForTabA = render().props.children[2].props.onConfirm;
+
+      harness.tabId = "tab-2";
+      render();
+      // …then click it after the tree now represents tab B.
+      confirmForTabA();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // The consent travelled with tab A's id, and the live tab is B: nothing
+      // is rebound, and certainly not with tab B's children cancelled.
+      expect(rebind).toHaveBeenCalledTimes(1);
+      expect(harness.settings.load).not.toHaveBeenCalled();
     });
   });
 });

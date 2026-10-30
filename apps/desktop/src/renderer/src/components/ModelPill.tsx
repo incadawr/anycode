@@ -569,10 +569,12 @@ export function ModelPill() {
   const [anchor, setAnchor] = useState<{ left: number; bottom: number } | null>(null);
   // GitHub #33: a cross-connection pick whose rebind would cancel RUNNING
   // children is not committed — it parks here as an explicit choice. Nothing
-  // has been written when this is set (the dry run precedes the settings
+  // has been written when this is set (main's gate runs before its model
   // write), so declining leaves the session and the target connection exactly
-  // as they were.
+  // as they were. `tabId` is the ORIGIN: the consent answers a question about
+  // that tab's children and must never be spent on another one.
   const [childCancelPending, setChildCancelPending] = useState<{
+    tabId: string;
     connectionId: string;
     modelId: string;
     runningChildren: number;
@@ -598,6 +600,12 @@ export function ModelPill() {
   // or effort reset belongs to the tab it was made in and is dropped, not
   // replayed into the next tab, when the pill is re-rendered for another tab.
   const slotsTabRef = useRef<string | undefined>(tabId);
+  // GitHub #33: the tab this pill represents RIGHT NOW. An in-flight question
+  // resumes with the closure of the render that started it, so the live id has
+  // to come from a ref — otherwise consent given for one tab's children could
+  // be applied to another tab whose tree reused this component.
+  const liveTabRef = useRef<string | undefined>(tabId);
+  liveTabRef.current = tabId;
   if (slotsTabRef.current !== tabId) {
     slotsTabRef.current = tabId;
     pendingPickRef.current = {};
@@ -608,6 +616,15 @@ export function ModelPill() {
   const effortResetRef = useRef<string | undefined>(undefined);
 
   const pickDisabled = modelPickDisabled(turnStatus, queueInFlight, ready, midTurnChange);
+
+  // GitHub #33: a pending "these subagents will be cancelled" question belongs
+  // to the tab it was asked in. The active tab's tree is reused when the user
+  // switches tabs, so the question is dropped with the tab rather than left
+  // for another one to answer — an answer here would be consent for children
+  // the user is no longer looking at.
+  useEffect(() => {
+    setChildCancelPending(null);
+  }, [tabId]);
 
   // TASK.106 cut-2 §D4: the drill-down's rows for THIS tab — groups over every
   // connected connection, the tab's own pin first with its live model
@@ -889,7 +906,7 @@ export function ModelPill() {
     // The target model keeps its own saved effort; a rebind must not replace
     // that choice with the source model's effective tier.
     close(false);
-    await switchForeignConnection(connectionId, modelId, false);
+    await switchForeignConnection(tabId, connectionId, modelId, false);
   }
 
   /**
@@ -900,55 +917,79 @@ export function ModelPill() {
    * true, so main's own gate (`children_running`) is satisfied by exactly the
    * click the user made and never by this component's say-so.
    *
-   * Ordering matters: the dry run comes BEFORE `connectionUpdate`, so a switch
-   * the user then declines ("Wait") has written nothing — the target
-   * connection keeps the model it had, and the session keeps its provider.
+   * GitHub #33 review: the consent belongs to the TAB it was asked in. The
+   * active tab's tree is reused when the user switches tabs, so an answer that
+   * arrives (or a click on a dialog that is still open) after `tabId` moved on
+   * must not be applied to the new tab — main's gate is per-tab, and handing it
+   * another tab's id with `cancelChildren: true` would cancel children nobody
+   * was asked about. `forTabId` is the originating tab and every step re-checks
+   * it; a mismatch drops the whole attempt silently, having written nothing.
+   *
+   * Nothing here writes settings: main owns the target connection's model write
+   * now, inside the locked rebind (after the child gate). So a switch that is
+   * asked about and declined — or that a late child blocks — leaves no saved
+   * value changed.
    */
-  async function switchForeignConnection(connectionId: string, modelId: string, cancelChildren: boolean): Promise<void> {
-    if (tabId === undefined) {
-      failRebind("unknown_tab");
+  async function switchForeignConnection(
+    forTabId: string,
+    connectionId: string,
+    modelId: string,
+    cancelChildren: boolean,
+  ): Promise<void> {
+    // Read LIVE, from a ref the next render refreshes: the async continuation
+    // resumes with the closure of the render that STARTED it, so comparing
+    // against that closure's `tabId` could never notice a tab change. The ref
+    // is what this pill currently represents.
+    const stillThisTab = (): boolean => liveTabRef.current === forTabId;
+    if (!stillThisTab()) {
       return;
     }
     const consent = cancelChildren ? { cancelChildren: true } : {};
-    const checked = await window.anycode.tabRebind({ tabId, connectionId, dryRun: true, ...consent });
+    const checked = await window.anycode.tabRebind({ tabId: forTabId, connectionId, dryRun: true, ...consent });
+    if (!stillThisTab()) {
+      return;
+    }
     if (!checked.ok) {
       if (checked.reason === "children_running" && !cancelChildren) {
         // Not a failure — a question. The count is main's live one.
-        setChildCancelPending({ connectionId, modelId, runningChildren: checked.runningChildren });
+        setChildCancelPending({ tabId: forTabId, connectionId, modelId, runningChildren: checked.runningChildren });
         return;
       }
       failRebind(checked.reason);
       return;
     }
-    const written = await connectionUpdate({
-      id: connectionId,
-      model: modelId,
-    });
-    if (!written.ok) {
-      // settings-store already raised its own notice for the write itself; this
-      // one says what the write was FOR.
-      failRebind(written.reason);
-      return;
-    }
     setChildCancelPending(null);
     effortResetRef.current = undefined;
-    const result = await window.anycode.tabRebind({ tabId, connectionId, priorEffort: reasoningEffort, ...consent });
+    const result = await window.anycode.tabRebind({
+      tabId: forTabId,
+      connectionId,
+      model: modelId,
+      priorEffort: reasoningEffort,
+      ...consent,
+    });
+    if (!stillThisTab()) {
+      return;
+    }
     if (!result.ok) {
       effortResetRef.current = undefined;
       if (result.reason === "children_running" && !cancelChildren) {
-        // A child started between the dry run and the rebind: same question,
-        // now with the live count. Nothing is cancelled — the tab and its
-        // children keep running; only the target connection's model write
-        // already landed, which is the value the user picked here anyway.
-        setChildCancelPending({ connectionId, modelId, runningChildren: result.runningChildren });
+        // A child was admitted between the dry run and the rebind: same
+        // question, now with the live count. Main refused before writing
+        // anything, so the tab, its children and the target connection are all
+        // exactly as they were.
+        setChildCancelPending({ tabId: forTabId, connectionId, modelId, runningChildren: result.runningChildren });
         return;
       }
       failRebind(result.reason);
+      return;
     }
-    // Success needs nothing here: the transcript line is written by the
-    // pin-watching effect above once the respawned host's `host_ready` has
-    // landed (§D5) — writing it now would put it in a transcript
-    // `performReset` is about to wipe.
+    // Main wrote the target connection's model as part of the switch, so this
+    // store's snapshot is stale until it is re-read (Settings' connection tile
+    // shows that saved model). Fail-soft: the switch itself already happened.
+    void Promise.resolve(useSettingsStore.getState().load()).catch(() => undefined);
+    // The transcript line is written by the pin-watching effect above once the
+    // respawned host's `host_ready` has landed (§D5) — writing it now would put
+    // it in a transcript `performReset` is about to wipe.
   }
 
   /** Backs out one level, landing focus on the row the open level was entered from (StartScreen's own back grammar). */
@@ -1184,7 +1225,9 @@ export function ModelPill() {
           const pending = childCancelPending;
           setChildCancelPending(null);
           if (pending !== null) {
-            void switchForeignConnection(pending.connectionId, pending.modelId, true);
+            // Consent is spent on the tab it was asked about, never on
+            // whichever tab happens to be active at click time.
+            void switchForeignConnection(pending.tabId, pending.connectionId, pending.modelId, true);
           }
         }}
         onCancel={() => setChildCancelPending(null)}
