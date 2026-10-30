@@ -2869,6 +2869,9 @@ describe("child-session-port — synchronous join budget handoff (GitHub #17 sli
     expect(outcome.finalText).toContain("still running after 120 seconds");
     // Handed off, not restarted and not cancelled: the same child is listed.
     expect(h.port.listBackgroundChildren().map((c) => c.childSessionId)).toEqual(["child-join"]);
+    const statusRequestId = spawns(h.sent)[0]!.requestId;
+    h.emit({ type: CHILD_RUN_EVENT_TYPE, requestId: statusRequestId, kind: "status", itemKind: "tool", text: "Read: file", toolName: "Read" });
+    expect(h.port.getStatus!("spawn-join-1")).toMatchObject({ state: "running", currentTool: "Read", tail: [{ kind: "tool", text: "Read: file" }] });
     expect(h.port.listBackgroundChildren()[0]!.startedAt).toBeLessThanOrEqual(Date.now());
     expect(cancels(h.sent)).toHaveLength(0);
     // Nothing is fabricated as a child result at handoff.
@@ -3231,5 +3234,26 @@ describe("child-session-port — background progress snapshots (GitHub #17 slice
     h.emit(terminalEvent(requestIdA!, { status: "completed", childSessionId: "child-e1" }));
     expect(h.port.listBackgroundChildren().map((c) => c.childSessionId)).toEqual(["child-e2"]);
     expect(h.changes).toEqual([1, 2, 1]);
+  });
+});
+
+describe("child status", () => {
+  it.each([false, true])("tracks a %s detached child through live events and completion, scoped to its port", async (detach) => {
+    const owner = harness();
+    const other = harness();
+    const run = owner.port.run({ agentType: "explore", description: "inspect", prompt: "go", spawnToolCallId: "handle", ...(detach ? { detach: true } : {}) }, {});
+    const requestId = spawns(owner.sent)[0]!.requestId;
+    owner.emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child", childTabId: "tab", model: "m" });
+    if (detach) await run;
+    owner.emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "progress", turns: 2, toolCalls: 3 });
+    owner.emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "status", itemKind: "tool", text: "Read: file", toolName: "Read" });
+    owner.emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: true, toolName: "Read" });
+    expect(owner.port.getStatus!("handle")).toMatchObject({ id: "child", state: "waiting for approval", turns: 2, toolCalls: 3, currentTool: "Read", tail: [{ kind: "tool", text: "Read: file" }] });
+    expect(other.port.getStatus!("child")).toBeUndefined();
+    owner.emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: false });
+    owner.emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "status", itemKind: "result", text: "Read: success" });
+    owner.emit(terminalEvent(requestId, { childSessionId: "child", turns: 4, toolCalls: 3 }));
+    if (!detach) await run;
+    expect(owner.port.getStatus!("child")).toMatchObject({ state: "completed", turns: 4, toolCalls: 3, tail: [{ kind: "tool", text: "Read: file" }, { kind: "result", text: "Read: success" }] });
   });
 });

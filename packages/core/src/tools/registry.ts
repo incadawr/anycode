@@ -12,6 +12,7 @@ import { globTool } from "./glob.js";
 import { todoReadTool } from "./todo-read.js";
 import { todoWriteTool } from "./todo-write.js";
 import { webFetchTool } from "./web-fetch.js";
+import { agentStatusTool } from "./agent-status.js";
 import { createAgentTool, type CreateAgentToolOptions } from "./agent.js";
 import { skillTool } from "./skill.js";
 import { workflowTool } from "./workflow.js";
@@ -102,6 +103,7 @@ export function createDefaultToolRegistry(opts?: CreateDefaultToolRegistryOption
     registry.register(opts.webSearch);
   }
   registry.register(createAgentTool(opts?.agent));
+  registry.register(agentStatusTool);
   registry.register(skillTool);
   registry.register(workflowTool);
   if (opts?.archMap === true) {

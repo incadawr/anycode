@@ -73,6 +73,7 @@ describe("createDefaultToolRegistry", () => {
     const registry = createDefaultToolRegistry();
     expect(registry.list().sort()).toEqual([
       "Agent",
+      "AgentStatus",
       "Bash",
       "Edit",
       "Git",
@@ -93,6 +94,7 @@ describe("createDefaultToolRegistry", () => {
     const registry = createDefaultToolRegistry({ archMap: true });
     expect(registry.list().sort()).toEqual([
       "Agent",
+      "AgentStatus",
       "ArchMap",
       "Bash",
       "Edit",
@@ -132,6 +134,7 @@ describe("createDefaultToolRegistry", () => {
       "TodoWrite",
       "WebFetch",
       "Agent",
+      "AgentStatus",
       "Skill",
       "Workflow",
     ]);
@@ -141,7 +144,7 @@ describe("createDefaultToolRegistry", () => {
         "Do not call a tool absent from it or assume a capability exists because another product offers one; your only tools are those named to you, `mcp__*` included.",
         "If none of your tools cover a need, use Bash where that fits; otherwise tell the user plainly you cannot do it — never invent a tool name to paper over the gap.",
         "These are the tools available to you as this session begins:",
-        "Agent, Bash, Edit, Git, Glob, Grep, Read, Skill, TodoRead, TodoWrite, WebFetch, Workflow, Write",
+        "Agent, AgentStatus, Bash, Edit, Git, Glob, Grep, Read, Skill, TodoRead, TodoWrite, WebFetch, Workflow, Write",
       ].join("\n"),
     );
     // And the flag-on registry differs from the baseline ONLY by ArchMap.
@@ -181,6 +184,7 @@ describe("createDefaultToolRegistry", () => {
       "WebFetch",
       "WebSearch",
       "Agent",
+      "AgentStatus",
       "Skill",
       "Workflow",
     ]);

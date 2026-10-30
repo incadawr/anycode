@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- AgentStatus lets a parent inspect its own subagents’ live progress and recent activity, with credentials and secret-bearing lines redacted, across supported parent engines (GitHub #29).
+
 ### Fixed
 
 - Subagent approval notices can be dismissed, and child approval timers wait while the window is hidden or unfocused (GitHub #32).
