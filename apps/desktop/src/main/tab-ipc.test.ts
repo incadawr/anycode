@@ -2066,11 +2066,21 @@ describe("handleChildHistory — CHILD_HISTORY_CHANNEL (TASK.102 CUT-S2 §2.5/§
  * manager's own mechanics are exercised in tabs.test.ts). All fields the
  * handler reads are plain data — no Electron involved.
  */
-function makeRebindManager(tab: Record<string, unknown> | undefined) {
+function makeRebindManager(tab: Record<string, unknown> | undefined, runningChildren = 0) {
   const getTab = vi.fn(() => tab);
   const rebindTab = vi.fn(async () => ({ ok: true as const }));
-  const manager = { getTab, rebindTab, acquireRebind: () => true, releaseRebind: () => {} } as unknown as TabHostManager;
-  return { manager, getTab, rebindTab };
+  // GitHub #33: the live-children count the running-children gate reads. The
+  // real manager derives it from `childrenByParentTab` (tabs.test.ts covers
+  // that); here it is the knob the gate is tested with.
+  const runningChildCount = vi.fn(() => runningChildren);
+  const manager = {
+    getTab,
+    rebindTab,
+    runningChildCount,
+    acquireRebind: () => true,
+    releaseRebind: () => {},
+  } as unknown as TabHostManager;
+  return { manager, getTab, rebindTab, runningChildCount };
 }
 
 /** A running, root, core tab pinned to conn-old — the happy-path subject. */
@@ -2093,10 +2103,12 @@ function makeRebindDeps(
     connectionExists?: (id: string) => boolean;
     ensureConnectionEnv?: (id: string) => Promise<void>;
     readConnectionModel?: (id: string) => string | undefined;
+    /** GitHub #33: how many live children the fake manager reports for the tab. */
+    runningChildren?: number;
   } = {},
 ) {
   const touchSession = vi.fn(async () => {});
-  const { manager, getTab, rebindTab } = makeRebindManager(tab);
+  const { manager, getTab, rebindTab, runningChildCount } = makeRebindManager(tab, over.runningChildren ?? 0);
   const deps: TabIpcDeps = {
     manager,
     persistence: { ...persistenceStub, touchSession },
@@ -2105,7 +2117,7 @@ function makeRebindDeps(
     ...(over.ensureConnectionEnv !== undefined ? { ensureConnectionEnv: over.ensureConnectionEnv } : {}),
     ...(over.readConnectionModel !== undefined ? { readConnectionModel: over.readConnectionModel } : {}),
   };
-  return { deps, touchSession, getTab, rebindTab };
+  return { deps, touchSession, getTab, rebindTab, runningChildCount };
 }
 
 describe("handleTabRebind — TASK.106 cut-2 (§D6 fail-closed order)", () => {
@@ -2240,7 +2252,7 @@ describe("handleTabRebind — TASK.106 cut-2 (§D6 fail-closed order)", () => {
     const getTab = vi.fn(() => tab);
     const rebindTab = vi.fn(async () => ({ ok: false as const, reason: "not_ready" as const }));
     const deps: TabIpcDeps = {
-      manager: { getTab, rebindTab, acquireRebind: () => true, releaseRebind: () => {} } as unknown as TabHostManager,
+      manager: { getTab, rebindTab, runningChildCount: () => 0, acquireRebind: () => true, releaseRebind: () => {} } as unknown as TabHostManager,
       persistence: { ...persistenceStub, touchSession },
       dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) } as DialogLike,
       connectionExists: () => true,
@@ -2311,6 +2323,111 @@ describe("handleTabRebind — TASK.106 cut-2 (§D6 fail-closed order)", () => {
   });
 });
 
+// GitHub #33: a cross-connection switch cancels the tab's RUNNING children
+// (background executors / session-tier subagents). That is the mechanism's
+// design, but it must never happen because a model pick looked harmless while
+// the parent turn was idle — the refusal exists so the renderer can ask.
+describe("handleTabRebind — GitHub #33: running children are never cancelled silently", () => {
+  it("a tab with live children refuses children_running with the live count, writing nothing and never rebinding", async () => {
+    const ensured: string[] = [];
+    const { deps, touchSession, rebindTab, runningChildCount } = makeRebindDeps(runningCoreTab(), {
+      connectionExists: () => true,
+      ensureConnectionEnv: async (id) => {
+        ensured.push(id);
+      },
+      runningChildren: 3,
+    });
+
+    const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new" });
+
+    expect(res).toEqual({ ok: false, reason: "children_running", runningChildren: 3 });
+    expect(runningChildCount).toHaveBeenCalledWith("tab-1");
+    // Fail-closed BEFORE any mutation: no env priming, no host teardown, no
+    // durable pin. The tab keeps running on its original connection and its
+    // three children keep working.
+    expect(ensured).toEqual([]);
+    expect(touchSession).not.toHaveBeenCalled();
+    expect(rebindTab).not.toHaveBeenCalled();
+  });
+
+  it("the explicit cancelChildren consent carries the switch through — the gate is the user's click, not the caller's", async () => {
+    const { deps, touchSession, rebindTab } = makeRebindDeps(runningCoreTab(), {
+      connectionExists: () => true,
+      runningChildren: 2,
+    });
+
+    const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new", cancelChildren: true });
+
+    expect(res).toEqual({ ok: true, connectionId: "conn-new" });
+    expect(rebindTab).toHaveBeenCalledWith(expect.objectContaining({ tabId: "tab-1" }), "conn-new");
+    expect(touchSession).toHaveBeenCalledWith("session-1", { connectionId: "conn-new" });
+  });
+
+  it("a dryRun answers children_running WITHOUT priming an env, rebinding, or touching the session row", async () => {
+    const ensured: string[] = [];
+    const { deps, touchSession, rebindTab } = makeRebindDeps(runningCoreTab(), {
+      connectionExists: () => true,
+      ensureConnectionEnv: async (id) => {
+        ensured.push(id);
+      },
+      runningChildren: 3,
+    });
+
+    const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new", dryRun: true });
+
+    expect(res).toEqual({ ok: false, reason: "children_running", runningChildren: 3 });
+    expect(ensured).toEqual([]);
+    expect(touchSession).not.toHaveBeenCalled();
+    expect(rebindTab).not.toHaveBeenCalled();
+  });
+
+  it("a dryRun on a clear tab answers ok and mutates nothing", async () => {
+    const ensured: string[] = [];
+    const { deps, touchSession, rebindTab } = makeRebindDeps(runningCoreTab(), {
+      connectionExists: () => true,
+      ensureConnectionEnv: async (id) => {
+        ensured.push(id);
+      },
+    });
+
+    const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new", dryRun: true });
+
+    expect(res).toEqual({ ok: true, connectionId: "conn-new" });
+    expect(ensured).toEqual([]);
+    expect(touchSession).not.toHaveBeenCalled();
+    expect(rebindTab).not.toHaveBeenCalled();
+  });
+
+  it("a dry run takes no rebind lock — a question never makes a concurrent real switch refuse", async () => {
+    const touchSession = vi.fn(async () => {});
+    const manager = {
+      getTab: () => runningCoreTab(),
+      rebindTab: vi.fn(async () => ({ ok: true as const })),
+      runningChildCount: () => 0,
+      // A real rebind is already in flight for this tab.
+      acquireRebind: () => false,
+      releaseRebind: () => {},
+    } as unknown as TabHostManager;
+    const deps: TabIpcDeps = {
+      manager,
+      persistence: { ...persistenceStub, touchSession },
+      dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) } as DialogLike,
+      connectionExists: () => true,
+    };
+
+    expect(await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new", dryRun: true })).toEqual({
+      ok: true,
+      connectionId: "conn-new",
+    });
+    // ...while the real request still refuses, preserving the single-rebind
+    // discipline the lock exists for.
+    expect(await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new" })).toEqual({
+      ok: false,
+      reason: "not_ready",
+    });
+  });
+});
+
 describe("tabRebindRequestSchema — bounds only (§D6)", () => {
   it("accepts a well-formed request and bounds both ids' length", () => {
     expect(tabRebindRequestSchema.safeParse({ tabId: "tab-1", connectionId: "conn-new" }).success).toBe(true);
@@ -2320,6 +2437,18 @@ describe("tabRebindRequestSchema — bounds only (§D6)", () => {
     ).toBe(false);
     expect(
       tabRebindRequestSchema.safeParse({ tabId: "tab-1", connectionId: "x".repeat(129) }).success,
+    ).toBe(false);
+  });
+
+  it("GitHub #33: accepts the dryRun / cancelChildren booleans and nothing else for them", () => {
+    expect(
+      tabRebindRequestSchema.safeParse({ tabId: "tab-1", connectionId: "conn-new", dryRun: true, cancelChildren: true }).success,
+    ).toBe(true);
+    expect(
+      tabRebindRequestSchema.safeParse({ tabId: "tab-1", connectionId: "conn-new", dryRun: "yes" }).success,
+    ).toBe(false);
+    expect(
+      tabRebindRequestSchema.safeParse({ tabId: "tab-1", connectionId: "conn-new", cancelChildren: 1 }).success,
     ).toBe(false);
   });
 });

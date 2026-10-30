@@ -3855,6 +3855,31 @@ describe("TabHostManager — children are invisible outside the manager (TASK.10
     expect(manager.listChildRuns()).toEqual([]);
   });
 
+  // GitHub #33: the count a cross-connection switch is gated on — exactly the
+  // live children the rebind's own `drainChildren` would cancel.
+  it("runningChildCount() reports the tab's live children and returns to 0 once the child run finalizes", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-running-children", resume: false });
+    expect(root.ok).toBe(true);
+    const rootTabId = manager.listTabs().find((tab) => tab.childOf === undefined)?.tabId ?? "";
+
+    expect(manager.runningChildCount(rootTabId)).toBe(0);
+
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "rc-1" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "rc-1" && e.kind === "accepted");
+    expect(accepted?.kind).toBe("accepted");
+    expect(manager.runningChildCount(rootTabId)).toBe(1);
+    // A child tab's own count is its own children's, never its parent's.
+    expect(manager.runningChildCount(accepted?.kind === "accepted" ? accepted.childTabId : "")).toBe(0);
+
+    const childHost = hosts[1]!;
+    childHost.emit("message", childTerminalMsg({ status: "completed" }));
+    expect(manager.runningChildCount(rootTabId)).toBe(0);
+  });
+
   it("deliverTabPort stamps the child envelope field and SKIPS the terminal channel entirely for a child tab", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window, posted } = windowRig();

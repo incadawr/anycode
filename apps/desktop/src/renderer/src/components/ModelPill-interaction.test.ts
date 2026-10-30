@@ -147,4 +147,92 @@ describe("model menu interaction", () => {
     let tree = render(); tree.props.children[0].props.onClick(); tree = render();
     expect(menu(tree).props.rows.some((row: any) => row.kind === "effort-open")).toBe(false);
   });
+
+  // GitHub #33: a cross-connection pick re-binds the host, which CANCELS the
+  // tab's running children. The pick therefore asks first (main's dry-run
+  // answer), writes nothing until the user says so, and carries the explicit
+  // `cancelChildren` consent on the retry.
+  describe("GitHub #33: running subagents gate a cross-connection switch", () => {
+    function pickForeign(): void {
+      harness.settings.snapshot.settings.provider.connections.push({ id: "d", providerId: "other" });
+      harness.settings.snapshot.catalog.push({ id: "other", name: "Other", authKind: "api_key", models: [{ id: "glm-5.3-flash", reasoning: true, effortLevels: ["low", "high"] }] });
+      let tree = render(); tree.props.children[0].props.onClick(); tree = render();
+      menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "group" && r.connectionId === "d")); tree = render();
+      menu(tree).props.onActivateRow(menu(tree).props.rows.find((r: any) => r.kind === "model" && r.modelId === "glm-5.3-flash"));
+    }
+    /** The confirm dialog the pill renders as the third child (chip, popover, dialog). */
+    function dialog(tree: any): any {
+      return tree.props.children[2];
+    }
+
+    it("asks with the live count instead of cancelling silently, writing nothing", async () => {
+      const rebind = vi.fn().mockResolvedValue({ ok: false, reason: "children_running", runningChildren: 3 });
+      (window.anycode as any).tabRebind = rebind;
+
+      pickForeign();
+      await vi.waitFor(() => expect(rebind).toHaveBeenCalledWith({ tabId: "tab", connectionId: "d", dryRun: true }));
+
+      const tree = render();
+      expect(dialog(tree).props.request).toEqual({
+        title: "Subagents are running",
+        body: "3 subagents are running in this session and will be cancelled. Switch connection anyway?",
+        confirmLabel: "Switch anyway",
+        cancelLabel: "Wait",
+      });
+      // The dry run is a question: the target connection's model was NOT
+      // written and no real rebind was attempted.
+      expect(harness.update).not.toHaveBeenCalled();
+      expect(rebind).toHaveBeenCalledTimes(1);
+    });
+
+    it("switches only after the user confirms, with the cancelChildren consent on the rebind", async () => {
+      const rebind = vi.fn()
+        .mockResolvedValueOnce({ ok: false, reason: "children_running", runningChildren: 2 })
+        .mockResolvedValueOnce({ ok: true, connectionId: "d" })
+        .mockResolvedValueOnce({ ok: true, connectionId: "d" });
+      (window.anycode as any).tabRebind = rebind;
+
+      pickForeign();
+      await vi.waitFor(() => expect(rebind).toHaveBeenCalledTimes(1));
+      render().props.children[2].props.onConfirm();
+
+      await vi.waitFor(() => expect(harness.update).toHaveBeenCalledWith({ id: "d", model: "glm-5.3-flash" }));
+      expect(rebind).toHaveBeenNthCalledWith(2, { tabId: "tab", connectionId: "d", dryRun: true, cancelChildren: true });
+      await vi.waitFor(() =>
+        expect(rebind).toHaveBeenLastCalledWith({ tabId: "tab", connectionId: "d", priorEffort: "high", cancelChildren: true }),
+      );
+      expect(dialog(render()).props.request).toBeNull();
+    });
+
+    it("declining leaves the session and the target connection untouched", async () => {
+      const rebind = vi.fn().mockResolvedValue({ ok: false, reason: "children_running", runningChildren: 1 });
+      (window.anycode as any).tabRebind = rebind;
+
+      pickForeign();
+      await vi.waitFor(() => expect(rebind).toHaveBeenCalledTimes(1));
+      expect(dialog(render()).props.request.body).toBe("1 subagent is running in this session and will be cancelled. Switch connection anyway?");
+
+      render().props.children[2].props.onCancel();
+
+      expect(dialog(render()).props.request).toBeNull();
+      expect(harness.update).not.toHaveBeenCalled();
+      expect(rebind).toHaveBeenCalledTimes(1);
+    });
+
+    it("a child that starts between the dry run and the rebind is asked about, not cancelled", async () => {
+      // Dry run says clear, the settings write lands, then the real rebind
+      // finds a live child (the race the backstop exists for).
+      const rebind = vi.fn()
+        .mockResolvedValueOnce({ ok: true, connectionId: "d" })
+        .mockResolvedValueOnce({ ok: false, reason: "children_running", runningChildren: 1 });
+      (window.anycode as any).tabRebind = rebind;
+
+      pickForeign();
+      await vi.waitFor(() => expect(rebind).toHaveBeenCalledTimes(2));
+
+      const tree = render();
+      expect(dialog(tree).props.request.body).toBe("1 subagent is running in this session and will be cancelled. Switch connection anyway?");
+      expect(rebind).toHaveBeenLastCalledWith({ tabId: "tab", connectionId: "d", priorEffort: "high" });
+    });
+  });
 });

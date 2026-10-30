@@ -15,6 +15,12 @@ export interface ConfirmDialogRequest {
   title: string;
   body: string;
   confirmLabel: string;
+  /**
+   * The declining button's label — "Cancel" unless the question has a better
+   * name for declining (e.g. "Wait" when the action is merely postponed, not
+   * abandoned). Optional so existing callers stay byte-identical.
+   */
+  cancelLabel?: string;
 }
 
 export interface ConfirmDialogProps {
@@ -88,7 +94,7 @@ export function ConfirmDialog({ request, onConfirm, onCancel }: ConfirmDialogPro
       <div className="git-confirm-body">{request.body}</div>
       <div className="git-confirm-actions">
         <button type="button" ref={cancelRef} className="git-confirm-cancel" onClick={onCancel}>
-          Cancel
+          {request.cancelLabel ?? "Cancel"}
         </button>
         <button type="button" className="git-confirm-confirm" onClick={onConfirm}>
           {request.confirmLabel}
