@@ -107,6 +107,9 @@ class FakeMessagePort {
   onmessage: ((event: MessageEvent<HostToUiMessage>) => void) | null = null;
   sent: unknown[] = [];
 
+  addEventListener(): void {}
+  removeEventListener(): void {}
+
   postMessage(message: unknown): void {
     this.sent.push(message);
   }
