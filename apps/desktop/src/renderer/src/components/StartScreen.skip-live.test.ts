@@ -89,6 +89,48 @@ async function mount(): Promise<void> {
   });
 }
 
+describe("Start screen mode menu's Orchestrate row", () => {
+  /**
+   * The owner-reported "clicking Orchestrate closes the menu with no effect":
+   * the draft flag has to flip (so the row checks and the chip reads
+   * Orchestrate) AND the first run has to get its role picker. A row that only
+   * wrote the draft flag looked like the click did nothing at all.
+   */
+  it("turns orchestrate on, shows the state on the chip, and asks for roles", async () => {
+    await mount();
+    await act(async () => {
+      useTabsStore.getState().openDraft("/ws/a");
+    });
+
+    const chip = container.querySelector<HTMLButtonElement>(".mode-chip")!;
+    expect(chip.textContent).toContain("build");
+    await act(async () => chip.click());
+
+    const row = container.querySelector<HTMLButtonElement>('[data-testid="mode-menu-orchestrate"]')!;
+    expect(row.getAttribute("aria-checked")).toBe("false");
+    await act(async () => row.click());
+
+    // The mode is on immediately: the tab state, the row, and the chip that
+    // used to keep reading "build".
+    expect(useTabsStore.getState().draft?.orchestrate).toBe(true);
+    expect(container.querySelector(".mode-chip")!.textContent).toContain("Orchestrate");
+    // ...and the first run (no roles yet) is asked who does the work.
+    expect(container.querySelector('[data-testid="role-picker-skip"]')).not.toBeNull();
+    expect(createTab).not.toHaveBeenCalled();
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="role-picker-skip"]')!.click();
+    });
+
+    // Skip writes nothing and starts nothing: the draft stays orchestrated and
+    // is still the user's to send.
+    expect(container.querySelector('[data-testid="role-picker-skip"]')).toBeNull();
+    expect(createTab).not.toHaveBeenCalled();
+    expect(useTabsStore.getState().draft?.orchestrate).toBe(true);
+    expect(useTabsStore.getState().draft?.prompt).toBe("");
+  });
+});
+
 describe("Start screen first-run role dialog", () => {
   it("Skip starts the orchestration task instead of only closing the dialog", async () => {
     const queueInitialPrompt = vi.spyOn(tabRegistry, "queueInitialPrompt");
