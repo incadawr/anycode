@@ -401,6 +401,21 @@ describe("createElectronPreviewWindow — event adaptation", () => {
     ]);
   });
 
+  it("drops Electron's own security warning but keeps the page's warnings", () => {
+    const win = createElectronPreviewWindow({ previewId: "p6b" });
+    const fake = latestWindow();
+    const messages: Array<{ level: string; message: string }> = [];
+    win.webContents.onConsoleMessage((level, message) => messages.push({ level, message }));
+
+    fake.webContents.emit("console-message", {
+      level: "warning",
+      message: "%cElectron Security Warning (Insecure Content-Security-Policy) This renderer process has either no Content Security Policy set…",
+    });
+    fake.webContents.emit("console-message", { level: "warning", message: "deprecated API used" });
+
+    expect(messages).toEqual([{ level: "warn", message: "deprecated API used" }]);
+  });
+
   it("classifies a CDP Runtime.exceptionThrown as a distinct pageerror, not error", () => {
     const win = createElectronPreviewWindow({ previewId: "p7" });
     const fake = latestWindow();
