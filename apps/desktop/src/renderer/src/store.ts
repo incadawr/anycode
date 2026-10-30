@@ -1990,17 +1990,7 @@ export function projectHistoryWithCompactions(
     return projected;
   }
 
-  const summaryItemIds = new Set(
-    records.flatMap((record) => (record.summaryItemId === undefined ? [] : [record.summaryItemId])),
-  );
-  const blocks = projected.filter(
-    (block) =>
-      !(
-        block.kind === "compaction" &&
-        block.summaryItemId !== undefined &&
-        summaryItemIds.has(block.summaryItemId)
-      ),
-  );
+  const blocks = filterCoveredHistoryRows(projected, records);
 
   // Block offsets per history item: a block id is `${item.id}:${partIndex}` and
   // the part index is numeric, so an item can only own blocks with that shape
@@ -2037,6 +2027,107 @@ export function projectHistoryWithCompactions(
   }
   merged.push(...blocks.slice(emitted));
   return merged;
+}
+
+/**
+ * Drops the legacy `summaryOrigin: "history"` rows a durable record already
+ * describes (GitHub #36): one compaction must never render as two rows.
+ */
+export function filterCoveredHistoryRows(
+  blocks: readonly TranscriptBlock[],
+  records: readonly CompactionRecord[] | undefined,
+): TranscriptBlock[] {
+  if (records === undefined || records.length === 0) return [...blocks];
+  const summaryItemIds = new Set(
+    records.flatMap((record) => (record.summaryItemId === undefined ? [] : [record.summaryItemId])),
+  );
+  return blocks.filter(
+    (block) =>
+      !(
+        block.kind === "compaction" &&
+        block.summaryItemId !== undefined &&
+        summaryItemIds.has(block.summaryItemId)
+      ),
+  );
+}
+
+/**
+ * Places the durable compaction rows among ALREADY REBUILT blocks (GitHub #36
+ * review) — the `presentation_snapshot` path, where the transcript is not one
+ * flat history projection but prefix blocks PLUS replayed turns.
+ *
+ * The snapshot rebuild knows two things per block: history items carry
+ * `createdAt`, turns carry `startedAt`. `anchorOf` supplies that instant (or
+ * `undefined` when the block has none), and each record is inserted before the
+ * first block that comes strictly after it. That is what keeps a compaction
+ * that happened between (or after) replayed turns in its own place, instead of
+ * ahead of every turn as a prefix-only insertion would put it.
+ *
+ * A record whose row was already rebuilt from a replayed event (same
+ * `recordId`) is left alone — the replay's position is the exact one.
+ */
+export function insertCompactionRecordsByTime(
+  blocks: readonly TranscriptBlock[],
+  records: readonly CompactionRecord[] | undefined,
+  anchorOf: (block: TranscriptBlock) => number | undefined,
+): TranscriptBlock[] {
+  if (records === undefined || records.length === 0) return [...blocks];
+
+  const rendered = new Set(
+    blocks.flatMap((block) =>
+      block.kind === "compaction" && block.recordId !== undefined ? [block.recordId] : [],
+    ),
+  );
+  const pending = records
+    .filter((record) => !rendered.has(record.id))
+    .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+
+  const kept = filterCoveredHistoryRows(blocks, records);
+  if (pending.length === 0) return kept;
+
+  const times = kept.map(anchorOf);
+  const placements = pending.map((record) => {
+    const at = times.findIndex((time) => time !== undefined && time > record.createdAt);
+    return { record, at: at === -1 ? kept.length : at };
+  });
+
+  const merged: TranscriptBlock[] = [];
+  let emitted = 0;
+  for (const { record, at } of placements) {
+    const boundary = Math.min(Math.max(at, emitted), kept.length);
+    merged.push(...kept.slice(emitted, boundary));
+    merged.push(compactionBlockFromRecord(record));
+    emitted = boundary;
+  }
+  merged.push(...kept.slice(emitted));
+  return merged;
+}
+
+/**
+ * The instant a rebuilt block belongs to, for `insertCompactionRecordsByTime`
+ * (GitHub #36 review). Covers the three shapes a snapshot produces:
+ *  - a turn's own user bubble (`pending:<turnId>`, or the requestId for a native
+ *    host) -> that turn's host start time. NB: `appendUserText` stamps the
+ *    RENDERER clock, which during a rebuild is "now" — using it would push every
+ *    record in front of every historical bubble;
+ *  - a history item's blocks (`<itemId>:<partIdx>`) -> the item's createdAt;
+ *  - anything else -> the block's own `at`, when it has one.
+ */
+export function snapshotBlockAnchor(
+  block: TranscriptBlock,
+  itemTimes: ReadonlyMap<string, number>,
+  turnStarts: ReadonlyMap<string, number>,
+): number | undefined {
+  const separator = block.id.lastIndexOf(":");
+  if (separator > 0 && /^\d+$/.test(block.id.slice(separator + 1))) {
+    const time = itemTimes.get(block.id.slice(0, separator));
+    if (time !== undefined) return time;
+  }
+  const turnTime =
+    (block.id.startsWith("pending:") ? turnStarts.get(block.id.slice("pending:".length)) : undefined) ??
+    turnStarts.get(block.id);
+  if (turnTime !== undefined) return turnTime;
+  return block.kind === "user_text" ? block.at : undefined;
 }
 
 /**
@@ -4169,6 +4260,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               ...(event.summaryItemId === undefined ? {} : { summaryItemId: event.summaryItemId }),
               ...(event.prompt === undefined ? {} : { prompt: event.prompt }),
               ...(event.model === undefined ? {} : { model: event.model }),
+              // The durable id this outcome was recorded under: it is what lets
+              // a LATER snapshot/replay recognize the row as already rendered
+              // (GitHub #36) instead of adding a second one for the same
+              // compaction. Carried on the block itself, not only in `live`.
+              ...(event.recordId === undefined ? {} : { recordId: event.recordId }),
             };
             const openAtRaw = findOpenCompaction(state.transcript);
             // GitHub #36 dedupe AND positioning: a compaction that reaches this
@@ -4189,7 +4285,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                         (event.summaryItemId !== undefined && block.summaryItemId === event.summaryItemId)),
                   )
                 : -1;
-            const live = { ...outcome, ...(event.recordId === undefined ? {} : { recordId: event.recordId }) };
+            const live = outcome;
             if (restoredAt !== -1) {
               const transcript = state.transcript.map((block, index) =>
                 index === restoredAt && block.kind === "compaction" ? { ...block, ...live } : block,
@@ -5259,13 +5355,26 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                 retained.set(item.turnId, Math.min(retained.get(item.turnId) ?? Infinity, item.step));
               }
             }
+            // GitHub #36 review: the instants the rebuilt blocks are ordered by —
+            // a history item's clock, and a turn's host start time (keyed both by
+            // turnId and by requestId: a native host titles its bubble by the
+            // request id).
+            const itemTimes = new Map(message.items.map((item) => [item.id, item.createdAt] as const));
+            const turnStarts = new Map<string, number>();
+            for (const turn of message.turns) {
+              turnStarts.set(turn.turnId, turn.startedAt);
+              turnStarts.set(turn.requestId, turn.startedAt);
+            }
             const prefix = message.items.filter((item) => item.turnId === undefined || !known.has(item.turnId));
             const savedNotices = get().transcript.filter((block) => block.kind === "usage_limit");
             // GitHub #36: the snapshot rebuilds the transcript FROM ZERO, so the
             // durable compaction rows must ride it too — otherwise a reconnect
             // that has a presentation snapshot would lose every resumed row.
+            // Positioning happens AFTER the turns are rebuilt (see below): the
+            // prefix alone cannot know where a compaction that happened during
+            // or after a replayed turn belongs.
             projection.setState({
-              transcript: [...savedNotices, ...projectHistoryWithCompactions(prefix, message.compactions)],
+              transcript: [...savedNotices, ...filterCoveredHistoryRows(projectHistoryToBlocks(prefix), message.compactions)],
             });
             presentationAnchors.clear();
             for (const turn of message.turns) {
@@ -5304,8 +5413,19 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             for (const [id, owner] of maps.reasoning) reasoningOwners.set(id, owner);
             currentAttempts.clear();
             for (const [key, attempt] of maps.attempts) currentAttempts.set(key, attempt);
+            // GitHub #36 review: now that the prefix AND every replayed turn are
+            // in place, drop the session's durable compaction rows into their own
+            // positions — before the first block whose instant is later than the
+            // record's. Inserting them up front (as part of the prefix) put a
+            // compaction that happened between/after turns ahead of those turns,
+            // and a replayed event then patched the misplaced row in place.
+            const snapshotBlocks = insertCompactionRecordsByTime(
+              projection.getState().transcript,
+              message.compactions,
+              (block) => snapshotBlockAnchor(block, itemTimes, turnStarts),
+            );
             const seenNotices = new Set(savedNotices.map((block) => block.kind === "usage_limit" ? JSON.stringify(block.notice) : ""));
-            const transcript = projection.getState().transcript.filter((block) => {
+            const transcript = snapshotBlocks.filter((block) => {
               if (block.kind !== "usage_limit" || savedNotices.includes(block)) return true;
               return !seenNotices.has(JSON.stringify(block.notice));
             });

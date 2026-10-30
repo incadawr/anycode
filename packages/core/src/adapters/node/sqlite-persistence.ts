@@ -1324,7 +1324,8 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   /**
    * GitHub #36: appends one durable compaction presentation record, keeping at
    * most `COMPACTION_RECORD_MAX_PER_SESSION` per session (the table is a view of
-   * recent compactions, not an audit log — the oldest rows roll off).
+   * recent compactions, not an audit log — the oldest rows roll off, see that
+   * constant's own doc for the agreed degradation this implies).
    *
    * Idempotent by `(session_id, record_id)`: a retried write replaces, and a
    * reconnect that replays the same outcome can never double the row.
@@ -1344,6 +1345,25 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
               SELECT seq FROM compaction_records WHERE session_id = ? ORDER BY seq DESC LIMIT ?
             )`,
       ).run(sessionId, sessionId, COMPACTION_RECORD_MAX_PER_SESSION);
+    });
+  }
+
+  /**
+   * GitHub #36: drops every record of this session created STRICTLY AFTER
+   * `checkpointAt` (epoch ms) — the rewind cutoff. A conversation rewind
+   * discards the turns (and the compactions) behind the checkpoint; leaving
+   * their records behind would resurrect summaries of exactly the text the
+   * user just threw away, on the next reconnect AND the next reopen.
+   *
+   * Strictly-after, not at-or-after: the cutoff is the checkpoint's own
+   * creation stamp, and a record stamped in the same millisecond may still
+   * describe a swap the checkpoint snapshot already contained. Keeping that
+   * one is the safe direction — a spurious row is visible and harmless, a
+   * resurrected summary is not.
+   */
+  async truncateCompactionRecords(sessionId: string, checkpointAt: number): Promise<void> {
+    this.transaction((tx) => {
+      tx.prepare("DELETE FROM compaction_records WHERE session_id = ? AND created_at > ?").run(sessionId, checkpointAt);
     });
   }
 

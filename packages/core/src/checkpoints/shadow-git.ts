@@ -46,7 +46,19 @@ export interface ShadowGitCheckpointsOptions {
 
 export type RewindScope = "both" | "files" | "conversation";
 export type RewindResult =
-  | { ok: true; safetyCheckpointId: string; restoredPaths: number | null; historyItems: HistoryItem[] | null }
+  | {
+      ok: true;
+      safetyCheckpointId: string;
+      restoredPaths: number | null;
+      historyItems: HistoryItem[] | null;
+      /**
+       * The target checkpoint's own creation time (epoch ms). Callers that keep
+       * durable PER-EVENT records outside the history (compaction rows) use it
+       * as the rewind cutoff: everything recorded strictly after this instant
+       * belongs to the conversation this rewind is discarding.
+       */
+      checkpointAt: number;
+    }
   | { ok: false; reason: string };
 
 /** sha256 hex digest (node:crypto builtin, no new dep). */
@@ -305,7 +317,7 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
       historyItems = JSON.parse(record.historyJson) as HistoryItem[];
     }
 
-    return { ok: true, safetyCheckpointId: safety.id, restoredPaths, historyItems };
+    return { ok: true, safetyCheckpointId: safety.id, restoredPaths, historyItems, checkpointAt: record.createdAt };
   }
 }
 

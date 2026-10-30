@@ -14,6 +14,15 @@ function fakeStore(initial: CompactionRecord[] = [], failWrites = false) {
       if (!order.includes(record.id)) order.push(record.id);
     },
     listCompactionRecords: async () => order.map((id) => rows.get(id)!),
+    truncateCompactionRecords: async (_sessionId, checkpointAt) => {
+      if (failWrites) throw new Error("disk on fire");
+      for (const [id, entry] of [...rows]) {
+        if (entry.createdAt > checkpointAt) {
+          rows.delete(id);
+          order.splice(order.indexOf(id), 1);
+        }
+      }
+    },
   };
   return store;
 }
@@ -36,6 +45,7 @@ describe("CompactionRecordLog (GitHub #36)", () => {
       listCompactionRecords: async () => {
         throw new Error("database locked");
       },
+      truncateCompactionRecords: async () => undefined,
     };
     const errors: unknown[] = [];
     const log = new CompactionRecordLog(store, "s1", (error) => errors.push(error));
@@ -71,6 +81,45 @@ describe("CompactionRecordLog (GitHub #36)", () => {
 
     expect(log.list()).toHaveLength(COMPACTION_RECORD_MAX_PER_SESSION);
     expect(log.list()[0]?.id).toBe("r-3");
+  });
+
+  it("truncate drops everything AFTER the cutoff from the cache at once, and from storage behind the queue", async () => {
+    const store = fakeStore([record("kept", 100), record("discarded", 300)]);
+    const log = new CompactionRecordLog(store, "s1");
+    await log.load();
+
+    log.truncate(200);
+
+    // The very next (synchronous) handshake already excludes the discarded row
+    // — a reconnect must not ship a summary of the rewound-away conversation.
+    expect(log.list().map((entry) => entry.id)).toEqual(["kept"]);
+    await log.flush();
+    // ...and a later REOPEN agrees, because storage dropped it too.
+    expect([...store.rows.keys()]).toEqual(["kept"]);
+  });
+
+  it("truncate keeps a record stamped at the cutoff itself (same-millisecond is not proof it was after the snapshot)", async () => {
+    const store = fakeStore([record("boundary", 200), record("after", 201)]);
+    const log = new CompactionRecordLog(store, "s1");
+    await log.load();
+
+    log.truncate(200);
+    await log.flush();
+
+    expect(log.list().map((entry) => entry.id)).toEqual(["boundary"]);
+    expect([...store.rows.keys()]).toEqual(["boundary"]);
+  });
+
+  it("a failed truncate write is reported and swallowed like any other record write", async () => {
+    const errors: unknown[] = [];
+    const log = new CompactionRecordLog(fakeStore([record("a", 300)], true), "s1", (error) => errors.push(error));
+
+    log.truncate(200);
+
+    await expect(log.flush()).resolves.toBeUndefined();
+    expect(errors).toHaveLength(1);
+    // The cache still honours the cutoff: the current process never shows it.
+    expect(log.list()).toEqual([]);
   });
 
   it("a failed write is reported and swallowed — a compaction row must never fail the turn that made it", async () => {

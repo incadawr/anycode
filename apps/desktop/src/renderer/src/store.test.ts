@@ -1650,6 +1650,43 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
     ]);
   });
 
+  it("GitHub #36 review: when the retention bound drops an old record, a still-surviving summary keeps its row through the history fallback", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    // The store kept only the NEWEST record (the agreed bound). The older
+    // compaction's summary item is still the history head, so its row is not
+    // lost — it degrades to the history row, labelled as such (the card then
+    // shows the CURRENT instruction rather than pretending to know the used
+    // one), instead of vanishing or inventing an origin it cannot prove.
+    store.getState().applyHostMessage({
+      type: "session_history",
+      sessionId: "s1",
+      truncated: false,
+      items: [
+        {
+          id: "summary-old",
+          createdAt: 10,
+          kind: "compact_summary",
+          message: { role: "user", content: "Session continued. Summary of the earlier conversation:\n\nold but still head" },
+        },
+        { id: "u2", createdAt: 20, message: { role: "user", content: "next" } },
+      ],
+      compactions: [],
+    });
+
+    const cards = compactionCards(store);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      summaryOrigin: "history",
+      summary: expect.stringContaining("old but still head"),
+    });
+    expect(cards[0]?.recordId).toBeUndefined();
+    // No record survived ⇒ no fabricated prompt provenance either.
+    expect(cards[0]?.prompt).toBeUndefined();
+  });
+
   it("GitHub #36: re-hydrating onto a live transcript does not add a restored twin of the compaction already on screen", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);

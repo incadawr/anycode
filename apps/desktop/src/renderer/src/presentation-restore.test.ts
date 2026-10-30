@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDesktopStore } from "./store.js";
 import type { HostToUiMessage, WireHistoryItem, PresentationTurn } from "../../shared/protocol.js";
+import type { CompactionRecord } from "@anycode/core";
 
 const turn: PresentationTurn = { turnId: "t", requestId: "r", startedAt: 1, text: "prompt", events: [{ event: { type: "loop_end" as const, reason: "cancelled" as const, turns: 0 }, step: 0, at: 2 }] };
 function restore(items: WireHistoryItem[], truncated: boolean, restoredTurn = turn) {
@@ -45,5 +46,114 @@ describe("presentation reload", () => {
     store.getState().applyHostMessage({ type: "presentation_replay_end" });
     const footer = store.getState().transcript.find((b) => b.kind === "loop_end");
     expect(store.getState().continueOffer).toEqual({ loopEndBlockId: footer?.id });
+  });
+});
+
+describe("presentation reload — durable compaction rows keep their place (GitHub #36 review)", () => {
+  const record = (id: string, createdAt: number, extra: Partial<CompactionRecord> = {}): CompactionRecord => ({
+    id,
+    createdAt,
+    ok: true,
+    summary: `summary ${id}`,
+    ...extra,
+  });
+
+  /**
+   * The layout a snapshot rebuilds: one durable item that belongs to NO covered
+   * turn (`before`, createdAt 100), then a replayed turn `t` that starts at
+   * 200. A compaction at 150 happened between them; one at 300 happened after
+   * the turn.
+   */
+  const items: WireHistoryItem[] = [
+    { id: "before", createdAt: 100, turnId: "older-turn", step: 1, message: { role: "user", content: "earlier" } },
+  ];
+  const replayedTurn: PresentationTurn = {
+    turnId: "t",
+    requestId: "r",
+    startedAt: 200,
+    text: "prompt",
+    events: [{ event: { type: "loop_end" as const, reason: "cancelled" as const, turns: 0 }, step: 0, at: 250 }],
+  };
+
+  function restoreWith(records: CompactionRecord[], turns = [replayedTurn], history = items) {
+    const store = createDesktopStore({ schedule: (fn) => fn() });
+    store.getState().applyHostMessage({
+      type: "presentation_snapshot",
+      turns,
+      coveredTurnIds: turns.map((turn) => turn.turnId),
+      items: history,
+      truncated: false,
+      historyTracksTurns: true,
+      compactions: records,
+    });
+    return store;
+  }
+
+  const shape = (store: ReturnType<typeof createDesktopStore>): string[] =>
+    store
+      .getState()
+      .transcript.map((block) =>
+        block.kind === "compaction" ? `compaction:${block.recordId ?? block.summaryItemId ?? "?"}` : block.kind,
+      );
+
+  it("places each row by its own instant — between and after the replayed turns, not bunched into the prefix", () => {
+    const store = restoreWith([record("mid", 150), record("after", 300)]);
+
+    // before-item, then the 150 compaction, then the turn, then the 300 one.
+    expect(shape(store)).toEqual([
+      "user_text",
+      "compaction:mid",
+      "user_text",
+      "loop_end",
+      "compaction:after",
+    ]);
+  });
+
+  it("a row for a compaction the replayed journal already rebuilt is not inserted a second time, and keeps the replay's position", () => {
+    const turnWithCompaction: PresentationTurn = {
+      ...replayedTurn,
+      events: [
+        { event: { type: "compaction_start" as const, trigger: "manual" as const }, step: 0 },
+        {
+          event: {
+            type: "compaction_end" as const,
+            ok: true,
+            preTokens: 900,
+            postTokens: 90,
+            durationMs: 5,
+            summary: "summary during the turn",
+            recordId: "during",
+          },
+          step: 0,
+        },
+        ...replayedTurn.events,
+      ],
+    };
+
+    const store = restoreWith([record("during", 220)], [turnWithCompaction]);
+
+    // Exactly one row for it, and it sits where the replay put it (inside the
+    // turn), not at the tail where a fresh insertion would land.
+    const cards = store.getState().transcript.filter((block) => block.kind === "compaction");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ recordId: "during", preTokens: 900 });
+    // (the durable item outside the covered turns, the turn's own bubble, the
+    // compaction the replay rebuilt inside that turn, then its footer)
+    expect(shape(store)).toEqual(["user_text", "user_text", "compaction:during", "loop_end"]);
+  });
+
+  it("a compaction recorded on an EMPTY session still renders after a snapshot restore", () => {
+    const store = createDesktopStore({ schedule: (fn) => fn() });
+    store.getState().applyHostMessage({
+      type: "presentation_snapshot",
+      turns: [],
+      coveredTurnIds: [],
+      items: [],
+      truncated: false,
+      historyTracksTurns: true,
+      compactions: [record("skipped", 10, { ok: false, error: "compaction skipped: no prefix", summary: undefined })],
+    });
+
+    expect(shape(store)).toEqual(["compaction:skipped"]);
   });
 });

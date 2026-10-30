@@ -1394,6 +1394,56 @@ describe("SqlitePersistenceAdapter", () => {
     expect(records.map((record) => record.prompt)).toEqual(["prompt one", "prompt two"]);
   });
 
+  it("truncateCompactionRecords drops exactly what came after the rewind cutoff, and keeps the rest (GitHub #36 review)", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    const session = await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+
+    for (const [id, createdAt] of [["before", 100], ["boundary", 200], ["after", 300], ["later", 400]] as const) {
+      await adapter.appendCompactionRecord(session.id, { id, createdAt, ok: true, summary: `summary of ${id}` });
+    }
+
+    await adapter.truncateCompactionRecords(session.id, 200);
+
+    // Strictly-after only: a record stamped in the same millisecond as the
+    // checkpoint MAY describe a swap the snapshot already held, and keeping a
+    // harmless visible row beats resurrecting a discarded summary.
+    expect((await adapter.listCompactionRecords(session.id)).map((record) => record.id)).toEqual([
+      "before",
+      "boundary",
+    ]);
+  });
+
+  it("a truncation is DURABLE — a reopened database does not resurrect the rewound-away records", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-compaction-rewind-"));
+    const dbPath = join(tmpDir, "anycode.sqlite");
+
+    const first = new SqlitePersistenceAdapter(dbPath);
+    await first.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+    await first.appendCompactionRecord("s1", { id: "kept", createdAt: 100, ok: true, summary: "kept summary" });
+    await first.appendCompactionRecord("s1", { id: "rewound", createdAt: 300, ok: true, summary: "discarded summary" });
+    await first.truncateCompactionRecords("s1", 200);
+    await first.close();
+
+    const reopened = new SqlitePersistenceAdapter(dbPath);
+    // This is what a REOPEN reads — the row (and the summary text inside it)
+    // must not come back.
+    expect((await reopened.listCompactionRecords("s1")).map((record) => record.id)).toEqual(["kept"]);
+    await reopened.close();
+  });
+
+  it("a session's records never leak to another session's truncate", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    const one = await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+    const two = await adapter.createSession({ id: "s2", workspace: "/w", model: "m", mode: "build" });
+    await adapter.appendCompactionRecord(one.id, { id: "a", createdAt: 100, ok: true });
+    await adapter.appendCompactionRecord(two.id, { id: "b", createdAt: 300, ok: true });
+
+    await adapter.truncateCompactionRecords(one.id, 50);
+
+    expect(await adapter.listCompactionRecords(one.id)).toEqual([]);
+    expect((await adapter.listCompactionRecords(two.id)).map((record) => record.id)).toEqual(["b"]);
+  });
+
   it("compaction records are idempotent per id and bounded per session", async () => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
     const session = await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });

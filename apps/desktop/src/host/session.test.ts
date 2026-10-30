@@ -5728,7 +5728,7 @@ describe("Session — shutdown() admission funnel: exit_worktree / rewind_reques
       list: async () => [],
       rewind: async () => {
         await gate;
-        return { ok: true, safetyCheckpointId: "safety-1", restoredPaths: 0, historyItems: null };
+        return { ok: true, safetyCheckpointId: "safety-1", restoredPaths: 0, historyItems: null, checkpointAt: 1_000 };
       },
     };
     const h = createHarness({ steps: [], checkpointsSeam: seam });
@@ -7425,6 +7425,7 @@ describe("Session — manual compaction wire (TASK.146)", () => {
         record: (record) => { records.push(record); },
         list: () => records,
         flush: () => Promise.resolve(),
+        truncate: () => undefined,
       },
     });
     try {
@@ -7466,6 +7467,132 @@ describe("Session — manual compaction wire (TASK.146)", () => {
         .filter((message): message is Extract<HostToUiMessage, { type: "session_history" }> => message.type === "session_history")
         .at(-1)!;
       expect(history.compactions?.map((entry) => entry.id)).toEqual([record.id]);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("GitHub #36 review: a skipped compaction on an EMPTY conversation is still shipped after a reopen — the history is empty, the record is not", async () => {
+    // No history at all: the compaction is a structural no-op ("no prefix
+    // before the keep-recent window"), yet it HAPPENED and its row must survive.
+    const records: CompactionRecord[] = [];
+    const h = createHarness({
+      steps: [],
+      compactionRecords: {
+        record: (entry) => { records.push(entry); },
+        list: () => records,
+        flush: () => Promise.resolve(),
+        truncate: () => undefined,
+      },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      expect(h.engine.historyItems()).toEqual([]);
+
+      h.send({ type: "compact_request" });
+      const end = await h.waitFor(agentEventOf("compaction_end"));
+      const endEvent = end.event as Extract<WireAgentEvent, { type: "compaction_end" }>;
+      // Not applied, but recorded — with the reason and the prompt it would
+      // have sent.
+      expect(endEvent.ok).toBe(false);
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ ok: false, trigger: "manual" });
+      expect(records[0]!.error).toContain("no prefix");
+
+      // A reload/reconnect over an EMPTY history: the handshake carries no
+      // items, and without the record the row would vanish.
+      const mark = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(mark).some((message) => message.type === "session_history"));
+      const history = h.received
+        .slice(mark)
+        .filter((message): message is Extract<HostToUiMessage, { type: "session_history" }> => message.type === "session_history")
+        .at(-1)!;
+      expect(history.items).toEqual([]);
+      expect(history.compactions?.map((entry) => entry.id)).toEqual([records[0]!.id]);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("GitHub #36 review: a rewind to BEFORE a compaction drops its record — the row and its summary never come back on reconnect or reopen", async () => {
+    // A durable store + live seam over ONE array: "the cache" and "storage" are
+    // the same rows here, so the assertions below cover both halves of the fix.
+    const records: CompactionRecord[] = [];
+    const dropAfter = (cutoff: number): void => {
+      for (let i = records.length - 1; i >= 0; i -= 1) if (records[i]!.createdAt > cutoff) records.splice(i, 1);
+    };
+    // The pre-compaction checkpoint sits at a FIXED instant in the past; the
+    // compaction below is stamped "now", so it is strictly newer.
+    const checkpointAt = Date.now() - 60_000;
+    const seam: SessionOptions["checkpoints"] = {
+      list: async () => [],
+      rewind: async () => ({
+        ok: true,
+        safetyCheckpointId: "safety-1",
+        restoredPaths: 0,
+        historyItems: [
+          { id: "kept-1", createdAt: 1, message: { role: "user", content: "kept turn" } },
+        ],
+        checkpointAt,
+      }),
+    };
+    const h = createHarness({
+      steps: [textStep("Summary of the earlier conversation.")],
+      checkpointsSeam: seam,
+      compactionRecords: {
+        record: (entry) => { records.push(entry); },
+        list: () => records,
+        flush: () => Promise.resolve(),
+        truncate: dropAfter,
+      },
+    });
+    try {
+      h.engine.replaceHistory!(seedManualCompactionHistory());
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "compact_request" });
+      const end = await h.waitFor(agentEventOf("compaction_end"));
+      expect((end.event as Extract<WireAgentEvent, { type: "compaction_end" }>).ok).toBe(true);
+      expect(records).toHaveLength(1);
+
+      // Rewind the CONVERSATION to before that compaction.
+      h.send({ type: "rewind_request", requestId: "rw1", checkpointId: "cp-1", scope: "conversation" });
+      const res = await h.waitFor(isRewindResult);
+      expect(res.ok).toBe(true);
+      expect(res.conversationRestored).toBe(true);
+
+      // The record is gone from the cache...
+      expect(records).toEqual([]);
+      // ...and the re-handshake that follows does not ship it. (Delivery over
+      // the port is asynchronous, so wait for the frame that comes AFTER the
+      // rewind rather than reading the log at the instant rewind_result lands.)
+      const rewindAt = h.received.indexOf(res);
+      await h.waitUntil(() =>
+        h.received.slice(rewindAt).some((message) => message.type === "session_history"),
+      );
+      const historyAfter = h.received
+        .slice(rewindAt)
+        .filter((message): message is Extract<HostToUiMessage, { type: "session_history" }> => message.type === "session_history")
+        .at(-1)!;
+      expect(historyAfter.items.map((item) => item.id)).toEqual(["kept-1"]);
+      expect(historyAfter.compactions).toBeUndefined();
+      const mark = h.received.length;
+
+      // A fresh reconnect (the renderer dropping and re-attaching) agrees.
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(mark).some((message) => message.type === "session_history"));
+      const reconnected = h.received
+        .slice(mark)
+        .filter((message): message is Extract<HostToUiMessage, { type: "session_history" }> => message.type === "session_history")
+        .at(-1)!;
+      expect(reconnected.compactions).toBeUndefined();
+
+      // And so does a REOPEN: the durable rows are gone, so a fresh host reads
+      // back nothing to resurrect.
+      expect(records).toEqual([]);
     } finally {
       h.close();
     }

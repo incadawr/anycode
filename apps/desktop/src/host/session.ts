@@ -2589,15 +2589,7 @@ export class Session {
         if (this.engine.id === "core" && !this.engineSwitched) {
           this.sessionHistory = buildSessionHistory([...this.engine.historyItems()], this.historyMaxItems);
         }
-        if (this.sessionHistory) {
-          this.outbound.sendDirect({
-            type: "session_history",
-            sessionId: this.sessionId,
-            items: this.sessionHistory.items,
-            truncated: this.sessionHistory.truncated,
-            ...this.compactionRecordsField(),
-          });
-        }
+        this.sendSessionHistory();
         const historyTracksTurns = this.engine.id === "core" && !this.engineSwitched;
         const journalSnapshot = this.presentationJournal.snapshot(
           historyTracksTurns ? this.engine.historyItems() : undefined,
@@ -3694,6 +3686,14 @@ export class Session {
       }
       const conversationRestored = res.historyItems !== null;
       if (conversationRestored) {
+        // GitHub #36 review: the rewind discards everything after the
+        // checkpoint, and this session's compaction rows are records OF that
+        // timeline — the ones stamped after it describe swaps (and carry
+        // summaries) of the conversation being thrown away. Drop them from the
+        // live cache and from storage BEFORE the re-handshake below, so the
+        // truncated `session_history` cannot ship them and a later reopen
+        // cannot restore them.
+        this.compactionRecords?.truncate(res.checkpointAt);
         // Atomic swap feeding the write-behind sink (truncates persistence too),
         // exactly the CLI's /rewind conversation restore.
         this.engine.replaceHistory(res.historyItems!);
@@ -3723,15 +3723,10 @@ export class Session {
       // §1 ordering: the truncated session_history rides AFTER rewind_result on
       // the same port. Null when the rewound-to history is empty (rewind-to-empty
       // = correct empty transcript; the renderer's transcript-scoped clear already
-      // emptied it) — skip the emit then.
-      if (conversationRestored && this.sessionHistory) {
-        this.outbound.sendDirect({
-          type: "session_history",
-          sessionId: this.sessionId,
-          items: this.sessionHistory.items,
-          truncated: this.sessionHistory.truncated,
-          ...this.compactionRecordsField(),
-        });
+      // emptied it) — skip the emit then, UNLESS records survived the cutoff
+      // below it (GitHub #36): those rows still belong to the rewound-to state.
+      if (conversationRestored) {
+        this.sendSessionHistory();
       }
     } catch (error) {
       // rewind() never throws by contract (fail-soft RewindResult), but routing
@@ -5328,6 +5323,31 @@ export class Session {
       this.currentTurn = null;
       this.drainAgentInbox();
     }
+  }
+
+  /**
+   * Ships the hydrated history and the durable compaction rows (GitHub #36).
+   *
+   * Sent when there is a history snapshot OR at least one compaction record —
+   * NOT only for a non-empty history. A manual compaction on an EMPTY
+   * conversation is recorded (it did happen: `compaction_end { ok:false }`,
+   * "no prefix before the keep-recent window") and its row must survive a
+   * reopen even though nothing else about that session is durable. The two
+   * payload halves are independent: `items: []` is a perfectly good history.
+   */
+  private sendSessionHistory(): void {
+    const items = this.sessionHistory?.items ?? [];
+    const records = this.compactionRecordsField().compactions;
+    if (items.length === 0 && records === undefined) {
+      return;
+    }
+    this.outbound.sendDirect({
+      type: "session_history",
+      sessionId: this.sessionId,
+      items,
+      truncated: this.sessionHistory?.truncated ?? false,
+      ...(records !== undefined ? { compactions: records } : {}),
+    });
   }
 
   /**
