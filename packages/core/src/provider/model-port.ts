@@ -59,6 +59,18 @@ const GLM_BUDGET_TOKENS = { high: 16_000, max: 32_000 } as const;
 /** Z.AI's documented max_tokens ceiling for the GLM-5/4.6 family. */
 const GLM_MAX_TOKENS = 131_072;
 
+/**
+ * Output-token ceiling for a one-shot title request on a provider that cannot
+ * turn thinking off (DeepSeek: the anthropic transport here sends the effort
+ * enum alone, and the service still reasons first). The default title cap of
+ * 32 tokens is entirely eaten by that thinking block — stop_reason
+ * `max_tokens`, zero text, heuristic title kept. A live title request on
+ * deepseek-flash produced the expected 3-6 word title at `max_tokens: 200`;
+ * 512 keeps generous headroom for the thinking block while staying small
+ * enough that the model cannot wander into a long preamble.
+ */
+export const MANDATORY_THINKING_TITLE_MAX_OUTPUT_TOKENS = 512;
+
 /** Return shape of `reasoningRequestOptions` on the anthropic-messages transport. */
 interface AnthropicReasoningOptions {
   maxOutputTokens?: number;
@@ -660,6 +672,17 @@ export class AiSdkModelPort implements ModelPort {
 
   get titleReasoningEffort(): "low" | undefined {
     return this.config.providerName === "DeepSeek" ? "low" : undefined;
+  }
+
+  /**
+   * DeepSeek always reasons before it answers on the live service, even with
+   * the low effort enum this port's `titleReasoningEffort` sends, so the title
+   * request needs room for that thinking block (see
+   * `MANDATORY_THINKING_TITLE_MAX_OUTPUT_TOKENS`). Every other provider keeps
+   * the default title cap.
+   */
+  get titleMaxOutputTokens(): number | undefined {
+    return this.config.providerName === "DeepSeek" ? MANDATORY_THINKING_TITLE_MAX_OUTPUT_TOKENS : undefined;
   }
 
   /**
