@@ -33,7 +33,7 @@ import { SwitchableModelPort } from "../cli/model.js";
 import { createMediaProjectionPort } from "./media-projection.js";
 import type { ModelRequest } from "../ports/model.js";
 import type { ModelStreamEvent } from "../types/events.js";
-import { AiSdkModelPort } from "./model-port.js";
+import { AiSdkModelPort, MANDATORY_THINKING_TITLE_MAX_OUTPUT_TOKENS } from "./model-port.js";
 import { findCatalogEntry } from "./catalog-data.js";
 import { resolveReasoningEffort } from "./capabilities.js";
 import type { AnthropicEndpointConfig } from "./anthropic.js";
@@ -126,7 +126,13 @@ describe("DeepSeek reasoning-effort mapping over the real @ai-sdk/anthropic wire
     const switchable = new SwitchableModelPort(port);
     const desktopPort = createMediaProjectionPort(switchable, () => true);
     expect(await generateSessionTitle({ modelPort: desktopPort, text: "Fix the sidebar" })).toBe("ok");
-    expect(captured[0]!.body).toMatchObject({ output_config: { effort: "low" }, max_tokens: 32 });
+    // DeepSeek always thinks before it answers, so the tiny title cap would be
+    // eaten by that thinking block (stop_reason max_tokens, no text, heuristic
+    // title kept). The wire request must carry the raised ceiling instead.
+    expect(captured[0]!.body).toMatchObject({
+      output_config: { effort: "low" },
+      max_tokens: MANDATORY_THINKING_TITLE_MAX_OUTPUT_TOKENS,
+    });
     expect(captured[0]!.body.tools).toBeUndefined();
     expect(captured[0]!.body.thinking).toBeUndefined();
 
@@ -138,6 +144,21 @@ describe("DeepSeek reasoning-effort mapping over the real @ai-sdk/anthropic wire
     }));
     expect(await generateSessionTitle({ modelPort: desktopPort, text: "Fix the sidebar" })).toBe("ok");
     expect(captured[1]!.body.output_config).toBeUndefined();
+    // A provider without mandatory thinking keeps the small default title cap.
+    expect(captured[1]!.body.max_tokens).toBe(32);
+  });
+
+  it("exposes the raised title ceiling only for DeepSeek", () => {
+    const { port } = portFor("low");
+    expect(port.titleMaxOutputTokens).toBe(MANDATORY_THINKING_TITLE_MAX_OUTPUT_TOKENS);
+    expect(port.titleReasoningEffort).toBe("low");
+    const anthropic = new AiSdkModelPort({
+      transport: "anthropic-messages", baseUrl: "http://127.0.0.1:9",
+      apiKey: "test-key", model: "claude-opus-5-5", providerName: "Anthropic",
+      retry: { maxRetries: 0, stallTimeoutMs: 0 },
+    });
+    expect(anthropic.titleMaxOutputTokens).toBeUndefined();
+    expect(anthropic.titleReasoningEffort).toBeUndefined();
   });
 
   it("low: SDK wire carries output_config.effort='low', no thinking key, max_tokens unchanged", async () => {

@@ -84,6 +84,8 @@ class RecordingModelPort implements ModelPort {
   constructor(
     readonly modelId?: string,
     readonly lastResponseModel?: string,
+    readonly titleReasoningEffort?: ModelPort["titleReasoningEffort"],
+    readonly titleMaxOutputTokens?: ModelPort["titleMaxOutputTokens"],
   ) {}
   streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
     this.requests.push(request);
@@ -123,6 +125,13 @@ describe("createMediaProjectionPort", () => {
     const port = createMediaProjectionPort(inner, () => true);
     expect(port.modelId).toBe("m-1");
     expect(port.lastResponseModel).toBe("m-1-raw");
+  });
+
+  it("delegates the title request policy so the wrapped provider's cap reaches the title call", () => {
+    const inner = new RecordingModelPort("m-1", undefined, "low", 512);
+    const port = createMediaProjectionPort(inner, () => true);
+    expect(port.titleReasoningEffort).toBe("low");
+    expect(port.titleMaxOutputTokens).toBe(512);
   });
 
   it("passes the request through unchanged (same object) when sighted, avoiding a needless allocation", async () => {

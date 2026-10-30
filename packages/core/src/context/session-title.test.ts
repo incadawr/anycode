@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 import {
   SESSION_TITLE_MAX_LENGTH,
+  SESSION_TITLE_MAX_OUTPUT_TOKENS,
   deriveSessionTitle,
   generateSessionTitle,
   sanitizeTitleSource,
@@ -32,6 +33,20 @@ class ScriptedModelPort implements ModelPort {
         yield event;
       }
     })();
+  }
+}
+
+/**
+ * A scripted port carrying a provider title policy, like the real port does for
+ * a provider whose replies always start with a thinking block.
+ */
+class PolicyModelPort extends ScriptedModelPort {
+  constructor(
+    events: ModelStreamEvent[],
+    readonly titleReasoningEffort?: ModelPort["titleReasoningEffort"],
+    readonly titleMaxOutputTokens?: ModelPort["titleMaxOutputTokens"],
+  ) {
+    super(events);
   }
 }
 
@@ -140,11 +155,27 @@ describe("generateSessionTitle", () => {
     expect(port.requests).toHaveLength(1);
     const request = port.requests[0]!;
     expect(request.tools).toEqual([]);
-    expect(request.maxOutputTokens).toBe(32);
+    expect(request.maxOutputTokens).toBe(SESSION_TITLE_MAX_OUTPUT_TOKENS);
     expect(request.temperature).toBe(0);
     expect(typeof request.system).toBe("string");
     expect(request.system!.length).toBeGreaterThan(0);
     expect(request.messages).toEqual([{ role: "user", content: "hello there" }]);
+  });
+
+  it("raises the cap to the port's title ceiling and carries its effort for a thinking-always provider", async () => {
+    // A provider that always thinks first cannot answer a title in 32 tokens:
+    // the thinking block alone consumes the cap and no text is produced.
+    const port = new PolicyModelPort(textScript("Fix the sidebar"), "low", 512);
+    expect(await generateSessionTitle({ modelPort: port, text: "Fix the sidebar" })).toBe("Fix the sidebar");
+    expect(port.requests).toHaveLength(1);
+    expect(port.requests[0]!.maxOutputTokens).toBe(512);
+    expect(port.requests[0]!.reasoningEffort).toBe("low");
+  });
+
+  it("keeps the default cap when the port declares no title ceiling", async () => {
+    const port = new PolicyModelPort(textScript("A Title"), "low");
+    await generateSessionTitle({ modelPort: port, text: "hello there" });
+    expect(port.requests[0]!.maxOutputTokens).toBe(32);
   });
 
   it.each([

@@ -47,6 +47,11 @@ export class SwitchableModelPort implements ModelPort {
     return this.current.titleReasoningEffort;
   }
 
+  /** Likewise for the title request's output-token ceiling. */
+  get titleMaxOutputTokens(): ModelPort["titleMaxOutputTokens"] {
+    return this.current.titleMaxOutputTokens;
+  }
+
   /** Identity readback of the port currently installed (undefined when it exposes none). */
   get modelId(): string | undefined {
     return this.current.modelId;
