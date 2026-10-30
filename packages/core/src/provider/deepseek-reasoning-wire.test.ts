@@ -52,6 +52,46 @@ function serializeSse(chunks: ReadonlyArray<Record<string, unknown>>): string {
   return chunks.map((chunk) => `event: ${chunk.type}\ndata: ${JSON.stringify(chunk)}\n\n`).join("");
 }
 
+/**
+ * Output tokens the simulated mandatory-thinking reply spends before it can
+ * say anything: the live deepseek-flash title call stops at `max_tokens` with
+ * no text at all when the cap is below this (the card's measurement was 32).
+ * Sized well above the old 32-token title cap and well below the policy's
+ * ceiling, so a fixture built from it cannot pass under the broken limit.
+ */
+const THINKING_COST_TOKENS = 150;
+
+/**
+ * A reply from a model that ALWAYS thinks first: a thinking content block,
+ * then the answer — but only if the requested `max_tokens` outlasts the
+ * thinking block. A smaller cap reproduces the live failure exactly:
+ * `stop_reason: "max_tokens"`, thinking block truncated, no text block.
+ */
+function thinkingFirstChunks(maxTokens: number): Record<string, unknown>[] {
+  const head: Record<string, unknown>[] = [
+    { type: "message_start", message: { id: "msg_1", model: "deepseek-flash", role: "assistant", usage: { input_tokens: 5 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Weighing the request before answering." } },
+    { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig" } },
+    { type: "content_block_stop", index: 0 },
+  ];
+  if (maxTokens <= THINKING_COST_TOKENS) {
+    return [
+      ...head,
+      { type: "message_delta", delta: { stop_reason: "max_tokens" }, usage: { output_tokens: maxTokens } },
+      { type: "message_stop" },
+    ];
+  }
+  return [
+    ...head,
+    { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Fix the sidebar" } },
+    { type: "content_block_stop", index: 1 },
+    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: THINKING_COST_TOKENS + 3 } },
+    { type: "message_stop" },
+  ];
+}
+
 async function drain(iterable: AsyncIterable<ModelStreamEvent>): Promise<ModelStreamEvent[]> {
   const out: ModelStreamEvent[] = [];
   for await (const item of iterable) {
@@ -74,6 +114,27 @@ describe("DeepSeek reasoning-effort mapping over the real @ai-sdk/anthropic wire
       async (input: unknown, init?: RequestInit) => {
         captured.push({ url: String(input), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
         return new Response(serializeSse(RESPONSE_CHUNKS), {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+    );
+  }
+
+  /**
+   * Stubs `fetch` with a server that behaves like the live mandatory-thinking
+   * service: the reply content depends on the requested `max_tokens`, so the
+   * test judges the CAP, not a constant read out of the implementation.
+   */
+  function stubThinkingFirstFetch(): void {
+    captured.length = 0;
+    vi.stubGlobal(
+      "fetch",
+      async (input: unknown, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        captured.push({ url: String(input), body });
+        const maxTokens = typeof body.max_tokens === "number" ? body.max_tokens : 0;
+        return new Response(serializeSse(thinkingFirstChunks(maxTokens)), {
           status: 200,
           headers: { "content-type": "text/event-stream" },
         });
@@ -126,7 +187,14 @@ describe("DeepSeek reasoning-effort mapping over the real @ai-sdk/anthropic wire
     const switchable = new SwitchableModelPort(port);
     const desktopPort = createMediaProjectionPort(switchable, () => true);
     expect(await generateSessionTitle({ modelPort: desktopPort, text: "Fix the sidebar" })).toBe("ok");
-    expect(captured[0]!.body).toMatchObject({ output_config: { effort: "low" }, max_tokens: 32 });
+    // DeepSeek always thinks before it answers, so the tiny title cap would be
+    // eaten by that thinking block (stop_reason max_tokens, no text, heuristic
+    // title kept). A live title request produced its title at max_tokens: 200;
+    // this pins a literal ceiling well above that, independently of whatever
+    // the implementation declares — reverting to the old 32 fails here.
+    expect(captured[0]!.body.output_config).toMatchObject({ effort: "low" });
+    expect(captured[0]!.body.max_tokens).toBe(512);
+    expect(captured[0]!.body.max_tokens as number).toBeGreaterThanOrEqual(200);
     expect(captured[0]!.body.tools).toBeUndefined();
     expect(captured[0]!.body.thinking).toBeUndefined();
 
@@ -138,6 +206,44 @@ describe("DeepSeek reasoning-effort mapping over the real @ai-sdk/anthropic wire
     }));
     expect(await generateSessionTitle({ modelPort: desktopPort, text: "Fix the sidebar" })).toBe("ok");
     expect(captured[1]!.body.output_config).toBeUndefined();
+    // A provider without mandatory thinking keeps the small default title cap.
+    expect(captured[1]!.body.max_tokens).toBe(32);
+  });
+
+  it("a reply that spends its whole cap on thinking leaves no title, so the title cap must outlast it", async () => {
+    stubThinkingFirstFetch();
+    // Control: the default 32-token title cap (a provider without the DeepSeek
+    // policy) is fully consumed by the thinking block — the same failure the
+    // card reports live: stop_reason max_tokens, no text, no refined title.
+    const plain = new AiSdkModelPort({
+      transport: "anthropic-messages", baseUrl: "http://127.0.0.1:9",
+      apiKey: "test-key", model: "deepseek-flash", providerName: "Anthropic",
+      retry: { maxRetries: 0, stallTimeoutMs: 0 },
+    });
+    expect(await generateSessionTitle({ modelPort: plain, text: "Fix the sidebar" })).toBeNull();
+    expect(captured[0]!.body.max_tokens).toBe(32);
+
+    // DeepSeek's policy outlasts the thinking block, so the very same reply
+    // yields a title. Reverting the ceiling reintroduces the null above.
+    const { port } = portFor("low");
+    expect(await generateSessionTitle({ modelPort: port, text: "Fix the sidebar" })).toBe("Fix the sidebar");
+    expect(captured[1]!.body.max_tokens as number).toBeGreaterThan(THINKING_COST_TOKENS);
+  });
+
+  it("exposes the raised title ceiling only for DeepSeek", () => {
+    const { port } = portFor("low");
+    // Literal: the policy's ceiling must stay clear of the thinking block and
+    // of the 200-token request the live check proved sufficient.
+    expect(port.titleMaxOutputTokens).toBe(512);
+    expect(port.titleMaxOutputTokens as number).toBeGreaterThan(THINKING_COST_TOKENS);
+    expect(port.titleReasoningEffort).toBe("low");
+    const anthropic = new AiSdkModelPort({
+      transport: "anthropic-messages", baseUrl: "http://127.0.0.1:9",
+      apiKey: "test-key", model: "claude-opus-5-5", providerName: "Anthropic",
+      retry: { maxRetries: 0, stallTimeoutMs: 0 },
+    });
+    expect(anthropic.titleMaxOutputTokens).toBeUndefined();
+    expect(anthropic.titleReasoningEffort).toBeUndefined();
   });
 
   it("low: SDK wire carries output_config.effort='low', no thinking key, max_tokens unchanged", async () => {
