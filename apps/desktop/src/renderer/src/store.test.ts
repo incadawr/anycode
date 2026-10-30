@@ -1233,10 +1233,20 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
         ok: false,
         preTokens: 1_000,
         durationMs: 3,
-        error: "compaction skipped: no prefix before the keep-recent window",
+        skipped: true,
+        error: "Nothing to compact yet — the conversation is too short",
       },
     });
-    expect(store.getState().notice?.text).toContain("no prefix");
+    // UI audit v0.0.49 §C3: a structural no-op raises NO second surface — the
+    // transcript row states it, and the "Compacting…" toast is left to expire
+    // instead of being replaced by a near-identical refusal toast on top of the
+    // composer.
+    expect(store.getState().notice?.kind).toBe("compaction_start");
+    const row = store.getState().transcript.find((block) => block.kind === "compaction");
+    expect(row).toMatchObject({
+      skipped: true,
+      error: "Nothing to compact yet — the conversation is too short",
+    });
     expect(store.getState().turn.status).toBe("idle");
   });
 
