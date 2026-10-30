@@ -46,7 +46,28 @@ export interface ShadowGitCheckpointsOptions {
 
 export type RewindScope = "both" | "files" | "conversation";
 export type RewindResult =
-  | { ok: true; safetyCheckpointId: string; restoredPaths: number | null; historyItems: HistoryItem[] | null }
+  | {
+      ok: true;
+      safetyCheckpointId: string;
+      restoredPaths: number | null;
+      /**
+       * The conversation state this checkpoint restores (null for a files-only
+       * rewind). This — NOT the checkpoint row's creation time — is what a
+       * caller keeping per-event records outside the history (compaction rows)
+       * must measure against: an automatic checkpoint is created lazily, at a
+       * turn's first write-effect tool, while the snapshot it holds is the
+       * history from before that turn.
+       */
+      historyItems: HistoryItem[] | null;
+      /**
+       * GitHub #36: the compaction-record sequence this checkpoint captured at
+       * its history snapshot (`CheckpointMeta.compactionSeq`). Absent on a
+       * checkpoint written before that field existed, and for any caller that
+       * keeps no records — the rewind then falls back to judging by the
+       * restored history.
+       */
+      compactionSeq?: number;
+    }
   | { ok: false; reason: string };
 
 /** sha256 hex digest (node:crypto builtin, no new dep). */
@@ -189,6 +210,7 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
     reason: CheckpointReason,
     label: string,
     historySnapshot: readonly HistoryItem[],
+    compactionSeq?: number,
   ): Promise<{ id: string; commitHash: string }> {
     await this.ensureInit();
     await this.ensureLastCommitLoaded();
@@ -211,6 +233,7 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
         reason,
         label,
         historyJson: JSON.stringify(historySnapshot),
+        ...(compactionSeq !== undefined ? { compactionSeq } : {}),
       },
       { keepPerSession: CHECKPOINTS_KEEP_PER_SESSION },
     );
@@ -229,7 +252,11 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
     }
     try {
       const label = deriveCheckpointLabel(req.userInput);
-      const { id } = await this.performCapture("auto", label, req.historySnapshot);
+      // GitHub #36: the boundary is the sequence that was current when the
+      // SNAPSHOT was taken (turn start), carried on the request because the
+      // capture itself is lazy — by now an auto compaction of this same turn
+      // may already have recorded an outcome.
+      const { id } = await this.performCapture("auto", label, req.historySnapshot, req.compactionSeq);
       return { kind: "created", id, label };
     } catch (err) {
       this.disabled = true;
@@ -251,7 +278,19 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
    */
   async rewind(
     checkpointId: string,
-    opts: { scope: RewindScope; currentHistory: readonly HistoryItem[] },
+    opts: {
+      scope: RewindScope;
+      currentHistory: readonly HistoryItem[];
+      /**
+       * GitHub #36 (review 5): the compaction-record sequence current NOW. The
+       * mandatory pre-rewind SAFETY checkpoint is itself a checkpoint a user can
+       * later rewind to, so it needs a boundary of its own — without one, a
+       * conversation rewind back to it falls back to the history heuristic and
+       * deletes a valid between-turns compaction row. Absent = the caller keeps
+       * no records (the CLI).
+       */
+      compactionSeq?: number;
+    },
   ): Promise<RewindResult> {
     if (!this.hasRunBinary) {
       return { ok: false, reason: NO_RUNBINARY_REASON };
@@ -272,7 +311,10 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
     // Step 2: mandatory safety checkpoint; fail-closed (no safety -> no rewind).
     let safety: { id: string; commitHash: string };
     try {
-      safety = await this.performCapture("pre-rewind", "before /rewind", opts.currentHistory);
+      // The safety checkpoint captures the CURRENT conversation, so its boundary
+      // is the CURRENT sequence — everything recorded up to now is part of the
+      // state this rewind is about to preserve.
+      safety = await this.performCapture("pre-rewind", "before /rewind", opts.currentHistory, opts.compactionSeq);
     } catch (err) {
       return { ok: false, reason: `safety checkpoint failed: ${toReason(err)}` };
     }
@@ -305,7 +347,13 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
       historyItems = JSON.parse(record.historyJson) as HistoryItem[];
     }
 
-    return { ok: true, safetyCheckpointId: safety.id, restoredPaths, historyItems };
+    return {
+      ok: true,
+      safetyCheckpointId: safety.id,
+      restoredPaths,
+      historyItems,
+      ...(record.compactionSeq !== undefined ? { compactionSeq: record.compactionSeq } : {}),
+    };
   }
 }
 

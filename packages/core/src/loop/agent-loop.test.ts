@@ -21,6 +21,7 @@ vi.mock("../tools/to-model-tools.js", () => ({
 import { z } from "zod";
 import { APICallError } from "ai";
 import { AgentLoop, type AgentLoopConfig, type ContextBreakdown } from "./agent-loop.js";
+import { COMPACTION_INSTRUCTION } from "../prompts/compaction.js";
 import { toToolDeclarations } from "../tools/to-model-tools.js";
 import type { Tokenizer } from "../context/tokenizer.js";
 import type { AgentEvent, ModelStreamEvent } from "../types/events.js";
@@ -3057,6 +3058,15 @@ describe("AgentLoop.compactNow — manual compaction (design slice-2.3-cut.md, t
     expect(types(events)).toEqual(["compaction_start", "compaction_end", "context_usage"]);
     expect(events[0]).toEqual({ type: "compaction_start", trigger: "manual" });
     expect(events[1]).toMatchObject({ type: "compaction_end", ok: true });
+    // GitHub #36: the event a transcript row expands carries the evidence —
+    // the summary that replaced the prefix (the installed item's own text), the
+    // item id, and the instruction the summarizing model was given.
+    const end = events[1] as Extract<(typeof events)[number], { type: "compaction_end" }>;
+    const summaryItem = loop.history.items[0]!;
+    expect(end.summaryItemId).toBe(summaryItem.id);
+    expect(end.summary).toBe(summaryItem.message.content);
+    expect(end.summary).toContain("Summary of the earlier conversation.");
+    expect(end.prompt).toBe(COMPACTION_INSTRUCTION);
 
     const messages = loop.history.toMessages();
     expect(messages).toHaveLength(3); // [compact_summary, u2, a2]
@@ -3576,6 +3586,57 @@ describe("AgentLoop.runTurn — auto-checkpoint arc (design slice-4.7-cut.md §2
     // The snapshot is exactly the pre-append state (2 items), NOT 3.
     expect(cap.calls[0]?.historySnapshot).toHaveLength(2);
     expect(cap.calls[0]?.userInput).toBe("do the write");
+  });
+
+  it("samples the compaction boundary at TURN START, not at the lazy capture — the fix the rewind cutoff rests on (GitHub #36 review 4)", async () => {
+    const cap = makeCapturer(createdResult);
+    // The recorded sequence grows DURING the turn — exactly what an automatic
+    // compaction of this turn does: it records an outcome after the turn-start
+    // snapshot, before the first write-effect tool asks for a checkpoint. The
+    // bump therefore happens where such a compaction would, INSIDE the turn and
+    // strictly BEFORE `capture` is called; sampling at capture time would hand
+    // the checkpoint a boundary that already covers that compaction, and a
+    // rewind to it would keep a row it must discard.
+    let recorded = 3;
+    const order: string[] = [];
+    const inner = new MockModelPort([writeStep("w1"), stopStep]);
+    const bumpingPort: ModelPort = {
+      streamText(request) {
+        const stream = inner.streamText(request);
+        return (async function* () {
+          for await (const event of stream) {
+            if (event.type === "tool_call" && event.toolCall.name === "Write") {
+              recorded = 4;
+              order.push("bump");
+            }
+            yield event;
+          }
+        })();
+      },
+    };
+    const capturing: CapturerProbe["port"] = {
+      capture: async (req) => {
+        order.push("capture");
+        return cap.port.capture(req);
+      },
+    };
+    const loop = makeLoop({
+      modelPort: bumpingPort,
+      registry: makeRegistry({ Write: writeMock }),
+      checkpoints: capturing,
+      compactionBoundary: () => recorded,
+    });
+    loop.history.append({ role: "user", content: "earlier" });
+
+    await collect(loop.runTurn("do the write"));
+
+    // The bump really did happen before the capture (otherwise the assertion
+    // below would be vacuous)...
+    expect(order).toEqual(["bump", "capture"]);
+    expect(recorded).toBe(4);
+    // ...and the checkpoint still carries the value read at TURN START.
+    expect(cap.calls).toHaveLength(1);
+    expect(cap.calls[0]?.compactionSeq).toBe(3);
   });
 
   it("hands the capturer the RAW userInput, not the hook-augmented prompt", async () => {

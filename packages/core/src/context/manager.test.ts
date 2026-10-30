@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { COMPACTION_INSTRUCTION } from "../prompts/compaction.js";
 import { ContextManager, MICROCOMPACT_CLEARED_TEXT } from "./manager.js";
 import { ConversationHistory } from "./history.js";
 import { HeuristicTokenizer } from "./tokenizer.js";
@@ -567,8 +568,84 @@ describe("ContextManager.runCompaction — success", () => {
     }
   });
 
-  it("skips (ok:false) without a breaker hit when the prefix is empty", async () => {
+  it("reports what the swap left behind: the installed summary, its item id, the prompt and the model (GitHub #36)", async () => {
+    const messages: ChatMessage[] = [];
+    for (let t = 0; t < 6; t += 1) {
+      messages.push(userMsg(`turn ${t}`));
+      messages.push(assistantToolCall(`c${t}`));
+      messages.push(toolResult(`c${t}`, `result ${t}`));
+    }
+    const history = buildHistory(messages);
+    const port = Object.assign(new ScriptedModelPort(summaryScript("CONDENSED")), { modelId: "glm-5.3" });
+    const manager = makeManager(history, port, { keepRecentMessages: 4 });
+
+    const result = await manager.runCompaction({});
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The result describes the very item the swap installed — the durable link
+    // a transcript row follows, not a second copy of the text that could drift.
+    const installed = history.items[0]!;
+    expect(installed.kind).toBe("compact_summary");
+    expect(result.summaryItemId).toBe(installed.id);
+    expect(result.summary).toBe(installed.message.content);
+    expect(result.summary).toContain("CONDENSED");
+    // The prompt is the instruction core actually sent, and the model id is the
+    // constructed port's identity (not a provider claim about the response).
+    expect(result.prompt).toBe(COMPACTION_INSTRUCTION);
+    expect(port.requests[0]!.messages.at(-1)).toEqual({ role: "user", content: COMPACTION_INSTRUCTION });
+    expect(result.model).toBe("glm-5.3");
+  });
+
+  it("a port with no model id leaves the model field off instead of inventing one (GitHub #36)", async () => {
+    const messages: ChatMessage[] = [];
+    for (let t = 0; t < 6; t += 1) {
+      messages.push(userMsg(`turn ${t}`));
+      messages.push(assistantToolCall(`c${t}`));
+      messages.push(toolResult(`c${t}`, `result ${t}`));
+    }
+    const history = buildHistory(messages);
+    const manager = makeManager(history, new ScriptedModelPort(summaryScript("S")), { keepRecentMessages: 4 });
+
+    const result = await manager.runCompaction({});
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.model).toBeUndefined();
+  });
+
+  it("a FAILED summarization call still names the model that was asked (GitHub #36 review)", async () => {
+    const messages: ChatMessage[] = [];
+    for (let t = 0; t < 6; t += 1) {
+      messages.push(userMsg(`turn ${t}`));
+      messages.push(assistantToolCall(`c${t}`));
+      messages.push(toolResult(`c${t}`, `result ${t}`));
+    }
+    const history = buildHistory(messages);
+    // The port identifies itself before the call; a failed call must not lose
+    // that fact — the row would otherwise show a duration and no model.
+    const port = Object.assign(new ScriptedModelPort(errorScript()), { modelId: "glm-5.3" });
+    const manager = makeManager(history, port, { keepRecentMessages: 4 });
+
+    const result = await manager.runCompaction({});
+
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ prompt: COMPACTION_INSTRUCTION, model: "glm-5.3" });
+    expect("summary" in result).toBe(false);
+  });
+
+  it("a refused (skipped) compaction still reports the prompt it would have sent, and never a summary (GitHub #36)", async () => {
     const history = buildHistory([userMsg("only one turn")]);
+    const manager = makeManager(history, new ScriptedModelPort(summaryScript("S")), { keepRecentMessages: 10 });
+
+    const result = await manager.runCompaction({});
+
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ prompt: COMPACTION_INSTRUCTION });
+    expect("summary" in result).toBe(false);
+  });
+
+  it("skips (ok:false) without a breaker hit when the prefix is empty", async () => {    const history = buildHistory([userMsg("only one turn")]);
     const manager = makeManager(history, new ScriptedModelPort(summaryScript("S")), {
       keepRecentMessages: 10,
     });

@@ -105,6 +105,7 @@ import type {
   BackgroundTaskSnapshot,
   CodexRateLimitsWire,
   CommandHookDeclaration,
+  CompactionRecord,
   GitBranchInfo,
   GitCommitInfo,
   GitDiffTarget,
@@ -545,11 +546,31 @@ export type TranscriptBlock =
    * absent while the compaction is still running; `error` is present exactly
    * when `status` is "failed" and the host named a reason.
    *
-   * Renderer-only and NOT reconstructed by `projectHistoryToBlocks` — same
-   * posture as `usage_limit`/`connection_changed` above, and the same
-   * consequence: a reload loses the card. Carrying it across a reload needs
-   * the compaction to leave a mark in the persisted history, which is a wire
-   * change and deliberately not part of this cut.
+   * GitHub #36: `summary` is the text that now stands in for the compacted
+   * prefix (what the model actually sees), `summaryItemId` the persisted
+   * history item holding it, `prompt`/`model` the instruction and model of the
+   * summarizing call. All four are additive-optional — a foreign engine that
+   * compacts natively (claude) exposes no summary, and a pre-#36 host sends
+   * none of them. `restored` marks a row rebuilt from persisted history at
+   * hydration (it has the summary but never saw the live event); such a row
+   * starts expanded so a resumed transcript does not hide text the old
+   * projection rendered as a plain bubble.
+   *
+   * Durable (GitHub #36 follow-up): a row is NOT lost when the tab closes. The
+   * host writes one record per outcome into its own bounded table and ships
+   * them back with `session_history`/`presentation_snapshot`, so a reopened
+   * session shows EVERY compaction it went through — repeated ones each with
+   * their own summary, failed ones with their own reason — even though a later
+   * compaction replaced the history (and its summary item) that used to be the
+   * only trace. `recordId` is the join key: the live event carries the same id,
+   * so a replayed outcome patches the restored row IN PLACE instead of adding a
+   * second row at the wrong position.
+   *
+   * `restored` marks a row rebuilt at hydration rather than from a live event;
+   * `summaryOrigin` says where its summary text came from — `"record"` (a
+   * durable record: prompt/model included, collapsed by default) or
+   * `"history"` (the legacy fallback, an item still in the history: the
+   * projection expands it, because the pre-#36 transcript showed that text).
    */
   | {
       kind: "compaction";
@@ -561,6 +582,20 @@ export type TranscriptBlock =
       postTokens?: number;
       durationMs?: number;
       error?: string;
+      /** Model-visible summary that replaced the prefix (absent while running, or when the engine exposed none). */
+      summary?: string;
+      /** Id of the persisted `compact_summary` history item carrying `summary`. */
+      summaryItemId?: string;
+      /** Instruction ACTUALLY sent to the summarizing model; absent when it was not recorded. */
+      prompt?: string;
+      /** Model id of the summarizing call, when the host knew one — failures included. */
+      model?: string;
+      /** True when this row was rebuilt from persisted state at hydration, not from a live event. */
+      restored?: boolean;
+      /** Where a restored row's summary came from; absent on live rows. */
+      summaryOrigin?: "record" | "history";
+      /** The durable record this row was built from / patched by (see the block doc). */
+      recordId?: string;
     }
   /**
    * One row per `preview_console` AgentEvent (slice 96-D, night-track
@@ -1722,12 +1757,15 @@ const defaultScheduler: FrameScheduler = {
 // Projects a resumed session's persisted `WireHistoryItem[]` into
 // `TranscriptBlock[]`, pure and side-effect free so the mapping itself is
 // unit-testable without a live store. Mapping:
-//   - `user` message (role "user", including `kind:"compact_summary"` — still
-//     a user-role item, rendered the same way) -> one `user_text` block, text
-//     run through `stripReminderBlocks` (host/core reminder-injection tags
-//     stripped presentation-only, wire payload stays honest); if the message
-//     is entirely a stripped block (trim()-empty remainder), no block is
-//     emitted at all (design slice-P7.9-cut.md §3.5).
+//   - `user` message (role "user") -> one `user_text` block, text run through
+//     `stripReminderBlocks` (host/core reminder-injection tags stripped
+//     presentation-only, wire payload stays honest); if the message is
+//     entirely a stripped block (trim()-empty remainder), no block is emitted
+//     at all (design slice-P7.9-cut.md §3.5).
+//   - `user` message carrying `kind:"compact_summary"` (GitHub #36) -> one
+//     `restored` compaction row holding the summary text, NOT a user bubble:
+//     it is the model's summary of the compacted prefix, not something the
+//     human typed, and the row is where it can be read in full / copied.
 //   - `assistant` message -> one block per part, in part order: a `text` part
 //     becomes `assistant_text`; a `tool_call` part becomes a `tool_call`
 //     block, paired with the `ToolResultPart` of the matching `toolCallId`
@@ -1754,6 +1792,31 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
 
   for (const [index, item] of items.entries()) {
     const message = item.message;
+
+    // GitHub #36: core's compaction installs its summary as a user-role
+    // `compact_summary` item — the ONE durable trace a swap leaves in history.
+    // Projecting it as an ordinary `user_text` bubble (the pre-#36 behaviour)
+    // put the model's summary in the human's voice and left nothing to open;
+    // a `restored` compaction row carries the same text (it starts expanded,
+    // so nothing that used to be visible is hidden) and adds the summary's
+    // own detail view. Marker items other engines write under the same `kind`
+    // (codex truncation markers) are ASSISTANT-role and never reach this
+    // branch, so they keep rendering as ordinary assistant text.
+    if (message.role === "user" && item.kind === "compact_summary") {
+      blocks.push({
+        kind: "compaction",
+        id: `${item.id}:0`,
+        status: "done",
+        summary: message.content,
+        summaryItemId: item.id,
+        restored: true,
+        // The legacy fallback: this text was found in the history, not in a
+        // durable record, so the card must not pretend to know which prompt
+        // produced it (it labels the shown instruction as the current one).
+        summaryOrigin: "history",
+      });
+      continue;
+    }
 
     if (message.role === "user") {
       const text = stripReminderBlocks(message.content);
@@ -1831,6 +1894,250 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
   }
 
   return blocks;
+}
+
+/**
+ * GitHub #36: turns one durable compaction record into its transcript row.
+ * `restored` + `summaryOrigin: "record"` mark it as history-rebuilt evidence
+ * (collapsed by default, prompt/model included), so it reads the same on every
+ * reopen instead of depending on what this process happened to witness.
+ */
+export function compactionBlockFromRecord(
+  record: CompactionRecord,
+): Extract<TranscriptBlock, { kind: "compaction" }> {
+  return {
+    kind: "compaction",
+    id: `compaction-record:${record.id}`,
+    recordId: record.id,
+    status: record.ok ? "done" : "failed",
+    restored: true,
+    ...(record.summary !== undefined ? { summaryOrigin: "record" as const } : {}),
+    ...(record.trigger !== undefined ? { trigger: record.trigger } : {}),
+    ...(record.preTokens !== undefined ? { preTokens: record.preTokens } : {}),
+    ...(record.postTokens !== undefined ? { postTokens: record.postTokens } : {}),
+    ...(record.durationMs !== undefined ? { durationMs: record.durationMs } : {}),
+    ...(record.error !== undefined ? { error: record.error } : {}),
+    ...(record.summary !== undefined ? { summary: record.summary } : {}),
+    ...(record.summaryItemId !== undefined ? { summaryItemId: record.summaryItemId } : {}),
+    ...(record.prompt !== undefined ? { prompt: record.prompt } : {}),
+    ...(record.model !== undefined ? { model: record.model } : {}),
+  };
+}
+
+/**
+ * The one-slot notice for a finished compaction. Same verdict the transcript row
+ * gives (`compactionRowText`): `compaction_end` carries one `error` channel for
+ * a refusal and a real failure alike, and the commonest one is core's
+ * deliberate no-op. The two surfaces report the same event and must not
+ * disagree about it.
+ */
+function compactionEndNotice(
+  event: Extract<WireAgentEvent, { type: "compaction_end" }>,
+): { kind: "compaction_end"; text: string } {
+  return {
+    kind: "compaction_end",
+    text: event.ok
+      ? `Conversation compacted (${event.preTokens} → ${event.postTokens ?? "?"} tokens).`
+      : `Compaction not applied: ${event.error ?? "unknown error"}`,
+  };
+}
+
+/**
+ * Where one record's row belongs among the hydrated blocks (GitHub #36).
+ *
+ * The record has to survive reopen in its ORIGINAL position, but the history it
+ * happened against is exactly what it changed. Two anchors, in order of
+ * fidelity:
+ *  1. the summary item it installed, while that item is still in the history —
+ *     the row sits immediately before it (the swap replaced the prefix with
+ *     that item);
+ *  2. otherwise the item's own clock: the block index of the first history item
+ *     created AFTER the compaction. A failed compaction changed nothing, so its
+ *     row lands before whatever was said next; a compaction whose summary a
+ *     later one folded away lands before that later summary. When nothing is
+ *     newer, the row belongs at the end.
+ *
+ * Pure and exported for the ordering pin.
+ */
+export function compactionInsertIndex(
+  record: CompactionRecord,
+  items: readonly WireHistoryItem[],
+  offsets: readonly number[],
+): number {
+  if (record.summaryItemId !== undefined) {
+    const index = items.findIndex((item) => item.id === record.summaryItemId);
+    if (index !== -1) return offsets[index] ?? 0;
+  }
+  const next = items.findIndex((item) => item.createdAt > record.createdAt);
+  return next === -1 ? (offsets[items.length] ?? 0) : (offsets[next] ?? 0);
+}
+
+/**
+ * `projectHistoryToBlocks` + the durable compaction rows (GitHub #36): the
+ * hydration projection a resumed session actually renders.
+ *
+ * A record and a still-surviving `compact_summary` item describe the SAME
+ * compaction; the record wins (it also has the prompt, the model and — for a
+ * failed call — the reason), so the item-derived fallback row is dropped rather
+ * than shown twice.
+ */
+export function projectHistoryWithCompactions(
+  items: readonly WireHistoryItem[],
+  records: readonly CompactionRecord[] | undefined,
+): TranscriptBlock[] {
+  const projected = projectHistoryToBlocks(items);
+  if (records === undefined || records.length === 0) {
+    return projected;
+  }
+
+  const blocks = filterCoveredHistoryRows(projected, records);
+
+  // Block offsets per history item: a block id is `${item.id}:${partIndex}` and
+  // the part index is numeric, so an item can only own blocks with that shape
+  // (item ids may themselves contain colons — "codex-agent-card:<call>").
+  const offsets: number[] = new Array<number>(items.length + 1).fill(blocks.length);
+  let cursor = 0;
+  items.forEach((item, index) => {
+    offsets[index] = cursor;
+    const prefix = `${item.id}:`;
+    while (cursor < blocks.length) {
+      const id = blocks[cursor]!.id;
+      if (!id.startsWith(prefix) || !/^\d+$/.test(id.slice(prefix.length))) break;
+      cursor += 1;
+    }
+  });
+  offsets[items.length] = blocks.length;
+
+  const placements = records
+    .map((record) => ({ record, at: compactionInsertIndex(record, items, offsets) }))
+    .sort(
+      (left, right) =>
+        left.at - right.at ||
+        left.record.createdAt - right.record.createdAt ||
+        left.record.id.localeCompare(right.record.id),
+    );
+
+  const merged: TranscriptBlock[] = [];
+  let emitted = 0;
+  for (const { record, at } of placements) {
+    const boundary = Math.min(Math.max(at, emitted), blocks.length);
+    merged.push(...blocks.slice(emitted, boundary));
+    merged.push(compactionBlockFromRecord(record));
+    emitted = boundary;
+  }
+  merged.push(...blocks.slice(emitted));
+  return merged;
+}
+
+/**
+ * Drops the legacy `summaryOrigin: "history"` rows a durable record already
+ * describes (GitHub #36): one compaction must never render as two rows.
+ */
+export function filterCoveredHistoryRows(
+  blocks: readonly TranscriptBlock[],
+  records: readonly CompactionRecord[] | undefined,
+): TranscriptBlock[] {
+  if (records === undefined || records.length === 0) return [...blocks];
+  const summaryItemIds = new Set(
+    records.flatMap((record) => (record.summaryItemId === undefined ? [] : [record.summaryItemId])),
+  );
+  return blocks.filter(
+    (block) =>
+      !(
+        block.kind === "compaction" &&
+        // Only the LEGACY history-derived row is the duplicate: a row that
+        // already carries a durable `recordId` IS that record's rendering
+        // (GitHub #36 review 3). Dropping it here while also treating it as
+        // already rendered below removed a successful compaction entirely —
+        // it normally has BOTH ids.
+        block.recordId === undefined &&
+        block.summaryItemId !== undefined &&
+        summaryItemIds.has(block.summaryItemId)
+      ),
+  );
+}
+
+/**
+ * Places the durable compaction rows among ALREADY REBUILT blocks (GitHub #36
+ * review) — the `presentation_snapshot` path, where the transcript is not one
+ * flat history projection but prefix blocks PLUS replayed turns.
+ *
+ * The snapshot rebuild knows two things per block: history items carry
+ * `createdAt`, turns carry `startedAt`. `anchorOf` supplies that instant (or
+ * `undefined` when the block has none), and each record is inserted before the
+ * first block that comes strictly after it. That is what keeps a compaction
+ * that happened between (or after) replayed turns in its own place, instead of
+ * ahead of every turn as a prefix-only insertion would put it.
+ *
+ * A record whose row was already rebuilt from a replayed event (same
+ * `recordId`) is left alone — the replay's position is the exact one.
+ */
+export function insertCompactionRecordsByTime(
+  blocks: readonly TranscriptBlock[],
+  records: readonly CompactionRecord[] | undefined,
+  anchorOf: (block: TranscriptBlock) => number | undefined,
+): TranscriptBlock[] {
+  if (records === undefined || records.length === 0) return [...blocks];
+
+  // ORDER MATTERS (GitHub #36 review 3): the legacy duplicates are dropped
+  // FIRST, and only then is "already rendered" read off the survivors. The
+  // other way round, a replayed successful row (which carries both a recordId
+  // and the summaryItemId the filter matches on) was removed as a duplicate
+  // AND skipped for reinsertion — the compaction disappeared entirely.
+  const kept = filterCoveredHistoryRows(blocks, records);
+  const rendered = new Set(
+    kept.flatMap((block) =>
+      block.kind === "compaction" && block.recordId !== undefined ? [block.recordId] : [],
+    ),
+  );
+  const pending = records
+    .filter((record) => !rendered.has(record.id))
+    .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+  if (pending.length === 0) return kept;
+
+  const times = kept.map(anchorOf);
+  const placements = pending.map((record) => {
+    const at = times.findIndex((time) => time !== undefined && time > record.createdAt);
+    return { record, at: at === -1 ? kept.length : at };
+  });
+
+  const merged: TranscriptBlock[] = [];
+  let emitted = 0;
+  for (const { record, at } of placements) {
+    const boundary = Math.min(Math.max(at, emitted), kept.length);
+    merged.push(...kept.slice(emitted, boundary));
+    merged.push(compactionBlockFromRecord(record));
+    emitted = boundary;
+  }
+  merged.push(...kept.slice(emitted));
+  return merged;
+}
+
+/**
+ * The instant a rebuilt block belongs to, for `insertCompactionRecordsByTime`
+ * (GitHub #36 review). Covers the three shapes a snapshot produces:
+ *  - a turn's own user bubble (`pending:<turnId>`, or the requestId for a native
+ *    host) -> that turn's host start time. NB: `appendUserText` stamps the
+ *    RENDERER clock, which during a rebuild is "now" — using it would push every
+ *    record in front of every historical bubble;
+ *  - a history item's blocks (`<itemId>:<partIdx>`) -> the item's createdAt;
+ *  - anything else -> the block's own `at`, when it has one.
+ */
+export function snapshotBlockAnchor(
+  block: TranscriptBlock,
+  itemTimes: ReadonlyMap<string, number>,
+  turnStarts: ReadonlyMap<string, number>,
+): number | undefined {
+  const separator = block.id.lastIndexOf(":");
+  if (separator > 0 && /^\d+$/.test(block.id.slice(separator + 1))) {
+    const time = itemTimes.get(block.id.slice(0, separator));
+    if (time !== undefined) return time;
+  }
+  const turnTime =
+    (block.id.startsWith("pending:") ? turnStarts.get(block.id.slice("pending:".length)) : undefined) ??
+    turnStarts.get(block.id);
+  if (turnTime !== undefined) return turnTime;
+  return block.kind === "user_text" ? block.at : undefined;
 }
 
 /**
@@ -2982,10 +3289,45 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
      * scratch, so the first (and only) hydration lands on an empty
      * transcript.
      */
-    function hydrateSessionHistory(items: readonly WireHistoryItem[], truncated: boolean): void {
+    function hydrateSessionHistory(
+      items: readonly WireHistoryItem[],
+      truncated: boolean,
+      compactions?: readonly CompactionRecord[],
+    ): void {
       flushDeltas();
       const existingIds = new Set(get().transcript.map((block) => block.id));
-      const newBlocks = projectHistoryToBlocks(items).filter((block) => !existingIds.has(block.id));
+      // GitHub #36: a compaction already rendered from a LIVE event must not
+      // gain a second, restored row for the same durable one — identity is the
+      // durable record id (and, for the legacy summary-item fallback, the item
+      // id). (The transcript is normally emptied by `host_ready` before
+      // hydration, so this only guards a repeated hydration onto a live
+      // transcript.)
+      const knownRecordIds = new Set(
+        get().transcript.flatMap((block) =>
+          block.kind === "compaction" && block.recordId !== undefined ? [block.recordId] : [],
+        ),
+      );
+      const knownSummaryItemIds = new Set(
+        get().transcript.flatMap((block) =>
+          block.kind === "compaction" && block.summaryItemId !== undefined ? [block.summaryItemId] : [],
+        ),
+      );
+      const newBlocks = projectHistoryWithCompactions(items, compactions).filter((block) => {
+        if (existingIds.has(block.id)) {
+          return false;
+        }
+        if (block.kind !== "compaction") {
+          return true;
+        }
+        if (block.recordId !== undefined && knownRecordIds.has(block.recordId)) {
+          return false;
+        }
+        return !(
+          block.restored === true &&
+          block.summaryItemId !== undefined &&
+          knownSummaryItemIds.has(block.summaryItemId)
+        );
+      });
       if (newBlocks.length > 0) {
         set((state) => ({ transcript: [...state.transcript, ...newBlocks] }));
       }
@@ -3921,30 +4263,67 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               durationMs: event.durationMs,
               ...(event.postTokens === undefined ? {} : { postTokens: event.postTokens }),
               ...(event.error === undefined ? {} : { error: event.error }),
+              // GitHub #36: what the swap actually left behind. Additive and
+              // independent of `ok` — a failed call still carries the prompt
+              // it sent, and only a successful one carries a summary.
+              ...(event.summary === undefined ? {} : { summary: event.summary }),
+              ...(event.summaryItemId === undefined ? {} : { summaryItemId: event.summaryItemId }),
+              ...(event.prompt === undefined ? {} : { prompt: event.prompt }),
+              ...(event.model === undefined ? {} : { model: event.model }),
+              // The durable id this outcome was recorded under: it is what lets
+              // a LATER snapshot/replay recognize the row as already rendered
+              // (GitHub #36) instead of adding a second one for the same
+              // compaction. Carried on the block itself, not only in `live`.
+              ...(event.recordId === undefined ? {} : { recordId: event.recordId }),
             };
-            const openAt = findOpenCompaction(state.transcript);
+            const openAtRaw = findOpenCompaction(state.transcript);
+            // GitHub #36 dedupe AND positioning: a compaction that reaches this
+            // handler a SECOND time — a reconnect journal replay of the same
+            // start/end pair — already has its durable row in the transcript,
+            // restored at its original place by hydration (`recordId`, or the
+            // legacy `summaryItemId` fallback). That row is PATCHED IN PLACE
+            // with the live reading and the replayed "running" card the start
+            // appended at the tail is dropped: the row never moves to the end
+            // of the transcript, which is where the replay appended it.
+            const restoredAt =
+              event.recordId !== undefined || event.summaryItemId !== undefined
+                ? state.transcript.findIndex(
+                    (block) =>
+                      block.kind === "compaction" &&
+                      block.restored === true &&
+                      ((event.recordId !== undefined && block.recordId === event.recordId) ||
+                        (event.summaryItemId !== undefined && block.summaryItemId === event.summaryItemId)),
+                  )
+                : -1;
+            const live = outcome;
+            if (restoredAt !== -1) {
+              const transcript = state.transcript.map((block, index) =>
+                index === restoredAt && block.kind === "compaction" ? { ...block, ...live } : block,
+              );
+              if (openAtRaw !== -1 && openAtRaw !== restoredAt) {
+                transcript.splice(openAtRaw, 1);
+              }
+              return {
+                ...(event.ok ? { contextUsage: null } : {}),
+                transcript,
+                notice: compactionEndNotice(event),
+                ...(state.turn.status === "compacting"
+                  ? { turn: { status: "idle" as const, turnId: null, requestId: null } }
+                  : {}),
+              };
+            }
             return {
               ...(event.ok ? { contextUsage: null } : {}),
               transcript:
-                openAt === -1
+                openAtRaw === -1
                   ? [
                       ...state.transcript,
                       { kind: "compaction" as const, id: `compaction:${compactionSeq++}`, ...outcome },
                     ]
                   : state.transcript.map((block, index) =>
-                      index === openAt && block.kind === "compaction" ? { ...block, ...outcome } : block,
+                      index === openAtRaw && block.kind === "compaction" ? { ...block, ...live } : block,
                     ),
-              notice: {
-                kind: "compaction_end" as const,
-                text: event.ok
-                  ? `Conversation compacted (${event.preTokens} → ${event.postTokens ?? "?"} tokens).`
-                  // Same verdict the transcript row gives (MessageList's
-                  // `compactionRowText`): `compaction_end` carries one `error`
-                  // channel for a refusal and a real failure alike, and the
-                  // commonest one is core's deliberate no-op. The two surfaces
-                  // report the same event and must not disagree about it.
-                  : `Compaction not applied: ${event.error ?? "unknown error"}`,
-              },
+              notice: compactionEndNotice(event),
               ...(state.turn.status === "compacting"
                 ? { turn: { status: "idle" as const, turnId: null, requestId: null } }
                 : {}),
@@ -4970,7 +5349,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             }));
             return;
           case "session_history":
-            hydrateSessionHistory(message.items, message.truncated);
+            hydrateSessionHistory(message.items, message.truncated, message.compactions);
             return;
           case "presentation_snapshot": {
             // Reconstruct in an isolated store: historical terminal events must
@@ -4986,9 +5365,27 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                 retained.set(item.turnId, Math.min(retained.get(item.turnId) ?? Infinity, item.step));
               }
             }
+            // GitHub #36 review: the instants the rebuilt blocks are ordered by —
+            // a history item's clock, and a turn's host start time (keyed both by
+            // turnId and by requestId: a native host titles its bubble by the
+            // request id).
+            const itemTimes = new Map(message.items.map((item) => [item.id, item.createdAt] as const));
+            const turnStarts = new Map<string, number>();
+            for (const turn of message.turns) {
+              turnStarts.set(turn.turnId, turn.startedAt);
+              turnStarts.set(turn.requestId, turn.startedAt);
+            }
             const prefix = message.items.filter((item) => item.turnId === undefined || !known.has(item.turnId));
             const savedNotices = get().transcript.filter((block) => block.kind === "usage_limit");
-            projection.setState({ transcript: [...savedNotices, ...projectHistoryToBlocks(prefix)] });
+            // GitHub #36: the snapshot rebuilds the transcript FROM ZERO, so the
+            // durable compaction rows must ride it too — otherwise a reconnect
+            // that has a presentation snapshot would lose every resumed row.
+            // Positioning happens AFTER the turns are rebuilt (see below): the
+            // prefix alone cannot know where a compaction that happened during
+            // or after a replayed turn belongs.
+            projection.setState({
+              transcript: [...savedNotices, ...filterCoveredHistoryRows(projectHistoryToBlocks(prefix), message.compactions)],
+            });
             presentationAnchors.clear();
             for (const turn of message.turns) {
               const boundary = retained.get(turn.turnId);
@@ -5026,8 +5423,19 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             for (const [id, owner] of maps.reasoning) reasoningOwners.set(id, owner);
             currentAttempts.clear();
             for (const [key, attempt] of maps.attempts) currentAttempts.set(key, attempt);
+            // GitHub #36 review: now that the prefix AND every replayed turn are
+            // in place, drop the session's durable compaction rows into their own
+            // positions — before the first block whose instant is later than the
+            // record's. Inserting them up front (as part of the prefix) put a
+            // compaction that happened between/after turns ahead of those turns,
+            // and a replayed event then patched the misplaced row in place.
+            const snapshotBlocks = insertCompactionRecordsByTime(
+              projection.getState().transcript,
+              message.compactions,
+              (block) => snapshotBlockAnchor(block, itemTimes, turnStarts),
+            );
             const seenNotices = new Set(savedNotices.map((block) => block.kind === "usage_limit" ? JSON.stringify(block.notice) : ""));
-            const transcript = projection.getState().transcript.filter((block) => {
+            const transcript = snapshotBlocks.filter((block) => {
               if (block.kind !== "usage_limit" || savedNotices.includes(block)) return true;
               return !seenNotices.has(JSON.stringify(block.notice));
             });

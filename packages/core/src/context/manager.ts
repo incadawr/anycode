@@ -34,8 +34,40 @@ export interface ContextManagerDeps {
 }
 
 export type RunCompactionResult =
-  | { ok: true; preTokens: number; postTokens: number }
-  | { ok: false; preTokens: number; error: string };
+  | {
+      ok: true;
+      preTokens: number;
+      postTokens: number;
+      /**
+       * The summary exactly as it was installed in history (own prefix
+       * included — that wrapper is part of what the model now sees).
+       */
+      summary: string;
+      /** Id of the persisted `compact_summary` item holding `summary`. */
+      summaryItemId: string;
+      /** The instruction that was sent to the summarizing model. */
+      prompt: string;
+      /** Constructed-port model id of the summarizing call, when the port has one. */
+      model?: string;
+    }
+  | {
+      ok: false;
+      preTokens: number;
+      error: string;
+      /**
+       * The instruction that WOULD have been / was sent. Carried on every
+       * outcome (GitHub #36) so a refused or failed row can still show the
+       * prompt beside its reason; for a structural skip the model was never
+       * called, and this is the instruction the skipped call would have used.
+       */
+      prompt: string;
+      /**
+       * Constructed-port model id of the summarizing call, present when the
+       * port exposes one — on failures too: the model was chosen before the
+       * call failed, so a failed row can name who was asked.
+       */
+      model?: string;
+    };
 
 export class ContextManager {
   /** Authoritative last-context-size from the provider, or null before any usage / after compaction. */
@@ -194,6 +226,10 @@ export class ContextManager {
     const preTokens = this.estimate().tokens;
     const signal = opts.signal;
     const items = this.deps.history.items;
+    // Constructed-port identity of the summarizing call (GitHub #36 meta line).
+    // Read once here: a port's id never changes, and an unnamed port (a stub,
+    // or a transport that exposes none) simply leaves the field off.
+    const modelId = this.deps.modelPort.modelId;
 
     const boundary = this.compactionBoundary(items);
     // boundary <= 0 => empty prefix: nothing to compact. Not a failure.
@@ -202,6 +238,8 @@ export class ContextManager {
         ok: false,
         preTokens,
         error: "compaction skipped: no prefix before the keep-recent window",
+        prompt: COMPACTION_INSTRUCTION,
+        ...(modelId !== undefined ? { model: modelId } : {}),
       };
     }
     // A prefix made up entirely of existing compact_summary items (a repeated
@@ -212,6 +250,8 @@ export class ContextManager {
         ok: false,
         preTokens,
         error: "compaction skipped: prefix already fully summarized",
+        prompt: COMPACTION_INSTRUCTION,
+        ...(modelId !== undefined ? { model: modelId } : {}),
       };
     }
 
@@ -255,17 +295,18 @@ export class ContextManager {
     }
 
     if (aborted || signal?.aborted) {
-      return this.recordFailure(preTokens, "compaction aborted");
+      return this.recordFailure(preTokens, "compaction aborted", modelId);
     }
     if (streamError !== null) {
-      return this.recordFailure(preTokens, streamError);
+      return this.recordFailure(preTokens, streamError, modelId);
     }
     const trimmed = summary.trim();
     if (trimmed.length === 0) {
-      return this.recordFailure(preTokens, "compaction produced an empty summary");
+      return this.recordFailure(preTokens, "compaction produced an empty summary", modelId);
     }
 
-    const message: ChatMessage = { role: "user", content: `${COMPACT_SUMMARY_PREFIX}${trimmed}` };
+    const summaryText = `${COMPACT_SUMMARY_PREFIX}${trimmed}`;
+    const message: ChatMessage = { role: "user", content: summaryText };
     const summaryItem: HistoryItem = {
       id: globalThis.crypto.randomUUID(),
       createdAt: Date.now(),
@@ -279,7 +320,18 @@ export class ContextManager {
     // The provider baseline counted the pre-compaction context; it is now stale.
     this.invalidateProviderAnchor();
     const postTokens = this.estimate().tokens;
-    return { ok: true, preTokens, postTokens };
+    // GitHub #36: the row that reports this swap must be able to show what
+    // replaced the prefix — the text itself, the durable item that holds it,
+    // and which model/instruction produced it.
+    return {
+      ok: true,
+      preTokens,
+      postTokens,
+      summary: summaryText,
+      summaryItemId: summaryItem.id,
+      prompt: COMPACTION_INSTRUCTION,
+      ...(modelId !== undefined ? { model: modelId } : {}),
+    };
   }
 
   /**
@@ -299,9 +351,19 @@ export class ContextManager {
     return 0;
   }
 
-  private recordFailure(preTokens: number, error: string): RunCompactionResult {
+  private recordFailure(
+    preTokens: number,
+    error: string,
+    modelId: string | undefined,
+  ): RunCompactionResult {
     this.consecutiveFailures += 1;
-    return { ok: false, preTokens, error };
+    return {
+      ok: false,
+      preTokens,
+      error,
+      prompt: COMPACTION_INSTRUCTION,
+      ...(modelId !== undefined ? { model: modelId } : {}),
+    };
   }
 }
 
