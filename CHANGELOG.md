@@ -13,6 +13,15 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Settings no longer looks like several panes share a destination: each rail icon is unique (Roles, Claude, language servers, plugins and Sessions API), the Plugins header stops saying “not checked” twice, and the session header's background-tasks toggle is no longer a second terminal glyph.
+- The Roles preset chips describe the routes actually shown: a persisted Claude/Codex chain with no engine signed in no longer claims “Current connection”, engine routes read “(not connected)”, and disabled presets state what they need instead of explaining only in a hover title.
+- Starting the first-run role setup no longer keeps a default that points at an engine that is not ready when the engine list arrives later; only an untouched draft follows the new default.
+- The connection drawer's title becomes “Edit connection” once a connection is created, the first-run custom-endpoint form stops asking for both a provider name and a nearly identical label, and the model checkbox list is styled and always lists (and ticks) the connection's current model.
+- A saved API key whose storage reports “unavailable” now says the OS keychain is unavailable instead of a bare “stored · unavailable”.
+- Clicking a connection tile says it is making the tile the default for new sessions, in the tile's tooltip and as a hint under the grid.
+- The Claude engine panel names the cause of a failed version check (the CLI's own error output) and gives a next step instead of only an exit code.
+- Advanced connection fields keep a real gutter between fields and hints, and the custom-provider row uses the same text size as the rest of Settings.
+- The Tools pane's Adaptive turn budget is a labelled checkbox row instead of a lone centred checkbox, and fallback reordering shows a real up arrow before the down arrow.
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
 - Choosing No thinking for Xiaomi MiMo models now turns their reasoning off.
 - Xiaomi MiMo Token Plan sessions show a pay-as-you-go list-price cost estimate instead of “price unknown”.

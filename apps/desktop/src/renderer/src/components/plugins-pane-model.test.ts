@@ -42,6 +42,7 @@ import {
   pluginsRefusalMessage,
   pluginCapabilitiesText,
   pluginIndexCheckedText,
+  pluginIndexHeaderText,
   pluginIndexStatusText,
   pluginRowActions,
   pluginSourceText,
@@ -273,6 +274,20 @@ describe("pluginIndexCheckedText", () => {
   it("states an honest never-checked", () => {
     expect(pluginIndexCheckedText(undefined)).toBe("Not checked yet");
     expect(pluginIndexCheckedText("2026-10-24T10:00:00Z")).toContain("2026-10-24T10:00:00Z");
+  });
+});
+
+describe("pluginIndexHeaderText", () => {
+  it("does not say 'not checked' twice for an unchecked index", () => {
+    expect(pluginIndexHeaderText("unchecked", undefined)).toBe("Index not checked yet");
+  });
+
+  it("keeps both facts for a checked index and for every other status", () => {
+    expect(pluginIndexHeaderText("unchecked", "2026-10-24T10:00:00Z"))
+      .toBe("Index not checked yet · Last checked 2026-10-24T10:00:00Z");
+    expect(pluginIndexHeaderText("ok", "2026-10-24T10:00:00Z"))
+      .toBe("Index up to date · Last checked 2026-10-24T10:00:00Z");
+    expect(pluginIndexHeaderText("ok", undefined)).toBe("Index up to date · Not checked yet");
   });
 });
 

@@ -8038,6 +8038,29 @@ body {
   cursor: not-allowed;
 }
 
+/* Disabled chips explain themselves in text, not only in a hover title. */
+.role-picker-preset-note {
+  margin: 0;
+  padding: 0 var(--sp-4) var(--sp-2);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+/* A route to an engine that is not set up says so next to the row — the
+   select option also reads "(not connected)". */
+.role-picker-entry-offline {
+  flex-basis: 100%;
+  color: var(--warning);
+  font-size: var(--fs-2xs);
+  line-height: 1.4;
+}
+
+/* The order pair is up-then-down, so the up glyph is the chevron rotated. */
+.role-picker-entry-order-glyph {
+  transform: rotate(180deg);
+}
+
 .role-picker-roles {
   flex: 1;
   overflow-y: auto;

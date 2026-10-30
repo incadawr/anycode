@@ -27,6 +27,7 @@ if (args[0] === "--version") {
     process.stdout.write("not-a-version\n");
     process.exit(0);
   } else if (flag("--nonzero-exit")) {
+    process.stderr.write("Error: Cannot find module '@anthropic-ai/claude-code/cli.js'\n");
     process.exit(1);
   } else {
     process.stdout.write("2.1.212 (Claude Code)\n");
