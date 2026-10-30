@@ -189,7 +189,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         return {
           ok: false,
           errorKind: "invalid_input",
-          error: 'Agent: "continue_session" is only valid with tier "session".',
+          error: 'Agent: "continue_session" is only valid with tier "session". See the using-subagents skill.',
         };
       }
       if (input.continue_session !== undefined && input.provider !== undefined) {
@@ -211,7 +211,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         return {
           ok: false,
           errorKind: "invalid_input",
-          error: 'Agent: "send_to" is only valid with tier "session", alone (no provider/detach/continue_session).',
+          error: 'Agent: "send_to" is only valid with tier "session", alone (no provider/detach/continue_session). See the using-subagents skill.',
         };
       }
 
