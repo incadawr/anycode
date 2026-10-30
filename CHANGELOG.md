@@ -9,6 +9,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Redact credentials in child progress, including JSON fields and authorization headers.
+
 - Protect child status from tool data leaks and show the latest progress across supported parent engines.
 
 ### Added

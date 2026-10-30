@@ -223,3 +223,5 @@ export type { SubagentPromptOptions } from "./prompts/subagent.js";
 export { linkAbortSignal, raceWithTimeout } from "./util/abort.js";
 export type { TimeoutRaceResult } from "./util/abort.js";
 export { resolveWorkspaceWriteFacts } from "./util/path-containment.js";
+
+export { scrubApprovalText } from "./utils/scrub-approval-text.js";

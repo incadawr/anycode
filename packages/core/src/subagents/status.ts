@@ -1,3 +1,4 @@
+import { scrubApprovalText } from "../utils/scrub-approval-text.js";
 import { sanitizeAndCap } from "./summarize-tool.js";
 
 /** A bounded, session-owned view of child activity. */
@@ -18,13 +19,7 @@ export interface ChildStatus {
 
 // Status snapshots can contain model-authored credentials. Scrub before truncation.
 export function sanitizeStatusText(text: string, maxChars = CHILD_STATUS_TEXT_MAX, tail = false): string {
-  const secret = "(?:token|secret|password|passwd|api[-_]?key|auth)";
-  const cleaned = text
-    .replace(new RegExp(`(--[A-Za-z0-9_-]*${secret}[A-Za-z0-9_-]*)(\\s+|=)(\\S+)`, "gi"), "$1$2[redacted]")
-    .replace(new RegExp(`\\b([A-Za-z0-9_-]*${secret}[A-Za-z0-9_-]*)\\s*[:=]\\s*(\\S+)`, "gi"), "$1=[redacted]")
-    .replace(/Bearer\s+\S+/gi, "[redacted]")
-    .replace(/\b(?:sk|pk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]{16,}/g, "[redacted]")
-    .replace(/[A-Za-z0-9+/=_-]{32,}/g, "[redacted]");
+  const cleaned = scrubApprovalText(text);
   if (!tail) return sanitizeAndCap(cleaned, maxChars);
   const flat = sanitizeAndCap(cleaned, Number.MAX_SAFE_INTEGER);
   const chars = Array.from(flat);

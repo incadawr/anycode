@@ -9429,7 +9429,10 @@ it("keeps the switched context budget in the reconnect checkpoint before another
 });
 
 describe("child status transcript", () => {
-  it("emits bounded live text, calls and safe error summaries on the child wire", () => {
+  it.each([
+    ['{"password":"hunter2"}', "hunter2"],
+    ["Authorization: Bearer secondsecret", "secondsecret"],
+  ])("emits bounded live text and scrubs %s on the child wire", (credential, secret) => {
     const h = createChildHarness({ steps: [finishStep()] });
     try {
       observeChildEventDirect(h.session, { type: "turn_start", turn: 1 });
@@ -9438,10 +9441,11 @@ describe("child status transcript", () => {
       observeChildEventDirect(h.session, { type: "tool_result", outcome: { toolCallId: "c", toolName: "Read", status: "error", modelText: "private error detail", durationMs: 1 } });
       observeChildEventDirect(h.session, { type: "tool_execution_start", toolCallId: "secret", toolName: "Bash", input: { command: "echo --password=hunter2" } });
       observeChildEventDirect(h.session, { type: "tool_result", outcome: { toolCallId: "secret", toolName: "Read", status: "success", modelText: "secret file contents", durationMs: 1 } });
-      observeChildEventDirect(h.session, { type: "text_delta", id: "text", text: " latest progress" });
+      observeChildEventDirect(h.session, { type: "text_delta", id: "text", text: ` latest progress ${credential}` });
       observeChildEventDirect(h.session, { type: "turn_end", turn: 1, finishReason: "stop" });
       const items = h.onProgress.mock.calls.map(([report]) => report).filter((report) => report.kind === "status");
       expect(JSON.stringify(items)).not.toContain("hunter2");
+      expect(JSON.stringify(items)).not.toContain(secret);
       expect(JSON.stringify(items)).not.toContain("secret file contents");
       expect(JSON.stringify(items)).toContain("latest progress");
       expect(items).toEqual(expect.arrayContaining([
