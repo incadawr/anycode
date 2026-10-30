@@ -24,6 +24,19 @@ describe("presentation reload", () => {
     expect(store.getState().transcript.filter((b) => b.kind === "user_text").map((b) => b.kind === "user_text" && b.text)).toEqual(["prompt", "steer"]);
   });
 
+  it("retains a later steer that repeats the original prompt", () => {
+    const items: WireHistoryItem[] = [{ id: "prompt", createdAt: 1, turnId: "t", step: 0, message: { role: "user", content: "prompt" } }];
+    const store = restore(items, false, { ...turn, events: [{ event: { type: "user_injected", step: 1, text: "prompt" }, step: 2 }, ...turn.events] });
+    expect(store.getState().transcript.filter((b) => b.kind === "user_text").map((b) => b.kind === "user_text" && b.text)).toEqual(["prompt", "prompt"]);
+  });
+
+  it("matches each projected step-zero steer only once, excluding the prompt", () => {
+    const items: WireHistoryItem[] = [0, 1].map((i) => ({ id: `i${i}`, createdAt: i, turnId: "t", step: 0, message: { role: "user", content: "prompt" } }));
+    const injected = { event: { type: "user_injected" as const, step: 0, text: "prompt" }, step: 1 };
+    const store = restore(items, false, { ...turn, events: [injected, injected, ...turn.events] });
+    expect(store.getState().transcript.filter((b) => b.kind === "user_text").map((b) => b.kind === "user_text" && b.text)).toEqual(["prompt", "prompt", "prompt"]);
+  });
+
   it("restores the Continue offer on a turn-limit footer", () => {
     const store = restore([], false, { ...turn, events: [{ event: { type: "loop_end", reason: "max_turns", turns: 3 }, step: 0, at: 2 }] });
     store.getState().applyHostMessage({ type: "presentation_replay_start" });

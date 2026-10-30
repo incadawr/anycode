@@ -4984,6 +4984,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             for (const turn of message.turns) {
               const boundary = retained.get(turn.turnId);
               const userItems = message.items.filter((item) => item.turnId === turn.turnId && item.step === 0 && item.message.role === "user");
+              const injectedItems = [...userItems];
+              const promptIndex = injectedItems.findIndex((item) => item.message.role === "user" && item.message.content === turn.text);
+              if (promptIndex >= 0) injectedItems.splice(promptIndex, 1);
               if (userItems.length) {
                 projection.setState((state) => ({ transcript: [...state.transcript, ...projectHistoryToBlocks(userItems)] }));
               } else if (turn.text !== undefined && (!message.truncated || boundary === undefined || boundary === 0)) {
@@ -4993,7 +4996,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               for (const entry of turn.events) {
                 if (tracksTurns && boundary !== undefined && entry.step !== undefined && entry.step < boundary) continue;
                 const event = entry.event;
-                if (event.type === "user_injected" && userItems.some((item) => item.message.role === "user" && item.message.content === event.text)) continue;
+                if (event.type === "user_injected" && event.step === 0) {
+                  const index = injectedItems.findIndex((item) => item.message.role === "user" && item.message.content === event.text);
+                  if (index >= 0) { injectedItems.splice(index, 1); continue; }
+                }
                 projection.getState().applyHostMessage({ type: "agent_event", turnId: turn.turnId, ...entry });
               }
               for (const snapshot of turn.fileSnapshots ?? []) projection.getState().applyHostMessage(snapshot);

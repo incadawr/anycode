@@ -37,6 +37,11 @@ export class PresentationJournal {
         return;
       }
       const entry = { event: { ...event }, ...(step !== undefined ? { step } : {}), ...(attempt !== undefined ? { attempt } : {}) };
+      // A start may already have aged out before the first delta arrived.
+      const startType = event.type === "text_delta" ? "text_start" : "reasoning_start";
+      if (!events.some((item) => item.step === step && item.attempt === attempt && item.event.type === startType && item.event.id === event.id)) {
+        events.push({ event: { type: startType, id: event.id }, ...(step !== undefined ? { step } : {}), ...(attempt !== undefined ? { attempt } : {}) });
+      }
       events.push(entry);
       this.deltas.set(key, entry);
       this.trimEvents(turn);
@@ -52,8 +57,28 @@ export class PresentationJournal {
 
   private trimEvents(turn: PresentationTurn): void {
     while (turn.events.length > this.replayLimit) {
-      const removed = turn.events.shift();
-      for (const [key, entry] of this.deltas) if (entry === removed) this.deltas.delete(key);
+      // Keep a retained delta together with the start that makes it visible.
+      // Prefer trimming other events; if the limit cannot hold all streams,
+      // remove the oldest pair together.
+      const starts = new Map<string, number>();
+      const pairs = new Map<number, number>();
+      turn.events.forEach((entry, index) => {
+        const event = entry.event;
+        if (event.type !== "text_start" && event.type !== "reasoning_start" && event.type !== "text_delta" && event.type !== "reasoning_delta") return;
+        const kind = event.type.startsWith("text_") ? "text" : "reasoning";
+        const key = JSON.stringify([entry.step, entry.attempt, kind, event.id]);
+        if (event.type === "text_start" || event.type === "reasoning_start") starts.set(key, index);
+        else {
+          const start = starts.get(key);
+          if (start !== undefined) { pairs.set(start, index); pairs.set(index, start); }
+        }
+      });
+      const unpaired = turn.events.findIndex((_, index) => !pairs.has(index));
+      const indices = unpaired >= 0 ? [unpaired] : [0, pairs.get(0)!].sort((a, b) => b - a);
+      for (const index of indices) {
+        const [removed] = turn.events.splice(index, 1);
+        for (const [key, entry] of this.deltas) if (entry === removed) this.deltas.delete(key);
+      }
     }
   }
 

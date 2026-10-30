@@ -33,4 +33,34 @@ describe("presentation journal retention", () => {
     expect(snapshot.turns[1]!.events).toHaveLength(3);
     expect(snapshot.coveredTurnIds.length).toBeLessThanOrEqual(5);
   });
+
+  it("keeps retained reasoning and text renderable at the event limit", () => {
+    const journal = new PresentationJournal();
+    journal.start("t", "r", 1, "prompt");
+    journal.record("t", { type: "reasoning_start", id: "reason" }, 1, 1);
+    journal.record("t", { type: "reasoning_delta", id: "reason", text: "thinking" }, 1, 1);
+    journal.record("t", { type: "text_start", id: "text" }, 1, 1);
+    journal.record("t", { type: "text_delta", id: "text", text: "answer" }, 1, 1);
+    for (let i = 0; i < 5000; i++) journal.record("t", { type: "text_end", id: `filler${i}` }, 1, 1);
+    const snapshot = journal.snapshot();
+    expect(snapshot.turns[0]!.events).toHaveLength(5000);
+    const store = createDesktopStore({ schedule: (fn) => fn() });
+    store.getState().applyHostMessage({ type: "presentation_snapshot", ...snapshot, items: [], truncated: false, historyTracksTurns: true });
+    expect(store.getState().transcript).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "reasoning", text: "thinking" }),
+      expect.objectContaining({ kind: "assistant_text", text: "answer" }),
+    ]));
+  });
+
+  it("recreates a start trimmed before its first delta arrives", () => {
+    const journal = new PresentationJournal(1, 3);
+    journal.start("t", "r", 1);
+    journal.record("t", { type: "text_start", id: "s" });
+    for (let i = 0; i < 3; i++) journal.record("t", { type: "text_end", id: `${i}` });
+    journal.record("t", { type: "text_delta", id: "s", text: "late" });
+    const snapshot = journal.snapshot();
+    const store = createDesktopStore({ schedule: (fn) => fn() });
+    store.getState().applyHostMessage({ type: "presentation_snapshot", ...snapshot, items: [], truncated: false, historyTracksTurns: true });
+    expect(store.getState().transcript).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "assistant_text", text: "late" })]));
+  });
 });
