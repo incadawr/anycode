@@ -18,7 +18,7 @@
 
 /** Plan-discipline text wrapped by withPlanModeReminder; original prose, never copied. */
 export const PLAN_MODE_REMINDER =
-  "You are in plan mode: only read-only tools are allowed — writes and commands are denied before they execute, so do not try. Investigate first: if the scope spans several files or is uncertain, launch up to 3 explore subagents in parallel — one Agent call each in the same response, each with its own focus; use Read, Grep, and Glob directly only for quick checks of known files. Then call ExitPlanMode with a complete implementation plan; if rejected, refine the plan or ask clarifying questions, and implement nothing until it is approved.";
+  "You are in plan mode: writes are denied. Bash permits only provably read-only single commands or | pipelines; &&, ;, redirects and other shell forms are denied. Prefer Glob instead of ls, Read instead of cat or wc, and Git instead of git status, log or show. Investigate first: if the scope spans several files or is uncertain, launch up to 3 explore subagents in parallel — one Agent call each in the same response, each with its own focus; use Read, Grep, and Glob directly only for quick checks of known files. Then call ExitPlanMode with a complete implementation plan; if rejected, refine the plan or ask clarifying questions, and implement nothing until it is approved.";
 
 /**
  * Appends the plan-mode reminder to a user prompt inside a <plan-mode-reminder>
