@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:net";
+import { launchSmokeElectron } from "./smoke-electron-launch.mjs";
 
 const profile = mkdtempSync(join(tmpdir(), "anycode-first-run-"));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -36,9 +37,7 @@ const env = { ...process.env,
   CODEX_HOME: join(profile, "codex-home"), CLAUDE_CONFIG_DIR: join(profile, "claude-home"),
 };
 for (const key of ["ANYCODE_API_KEY", "ANYCODE_MODEL", "ANYCODE_BASE_URL", "ANYCODE_PROVIDER", "ANYCODE_TRANSPORT"]) delete env[key];
-const app = spawn("pnpm", ["--filter", "@anycode/desktop", "dev"], {
-  env, stdio: ["ignore", "inherit", "inherit"], detached: true,
-});
+const app = launchSmokeElectron(spawn, { env, detached: true });
 let ws;
 const pending = new Map();
 let nextId = 0;

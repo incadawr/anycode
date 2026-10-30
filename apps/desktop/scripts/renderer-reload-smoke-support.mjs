@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
+import { launchSmokeElectron } from "./smoke-electron-launch.mjs";
 
 /** Remove inherited application and platform profile overrides before assigning isolated paths. */
 export function isolatedSmokeEnv(source, profile) {
@@ -33,7 +34,7 @@ export function isolatedSmokeEnv(source, profile) {
 
 /** Launch through the exact environment used by the smoke. */
 export function launchReloadSmoke(spawn, source, profile, workspace, port, unavailableEngine) {
-  return spawn("pnpm", ["--filter", "@anycode/desktop", "dev"], {
+  return launchSmokeElectron(spawn, {
     env: {
       ...isolatedSmokeEnv(source, profile),
       ANYCODE_AUTOMATION: "1", ANYCODE_WORKSPACE: workspace,
@@ -46,7 +47,7 @@ export function launchReloadSmoke(spawn, source, profile, workspace, port, unava
       ANYCODE_CODEX_BIN: unavailableEngine, ANYCODE_CLAUDE_BIN: unavailableEngine,
       CODEX_HOME: join(profile, "codex-home"), CLAUDE_CONFIG_DIR: join(profile, "claude-home"),
     },
-    stdio: ["ignore", "inherit", "inherit"], detached: true,
+    detached: true,
   });
 }
 
