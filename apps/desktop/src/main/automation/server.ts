@@ -231,10 +231,14 @@ export interface AutomationServerDeps {
   logger?: { log(...a: unknown[]): void; warn(...a: unknown[]): void; error(...a: unknown[]): void };
   /**
    * Facade-call deadline passed to `makeFacadeCaller` (default
-   * `DEFAULT_FACADE_TIMEOUT_MS` from handlers.ts). Injectable so tests can
-   * exercise the hang bound without waiting the real ceiling; production
-   * keeps the default — every facade route answers within this bound, as a
-   * 504 `facade_timeout` instead of hanging when the renderer never settles.
+   * `DEFAULT_FACADE_TIMEOUT_MS` from `shared/automation-deadlines.ts`) — the
+   * deadline for ordinary routes. Methods whose renderer-side settle ceiling
+   * exceeds it (`profileRefresh`/`profileRebuild`/`visionProbe`) carry their
+   * own per-method deadline inside the caller and are NOT affected by this
+   * override. Injectable so tests can exercise the hang bound without waiting
+   * the real ceiling; production keeps the defaults — every facade route
+   * answers within its bound, as a 504 `facade_timeout` instead of hanging
+   * when the renderer never settles.
    */
   facadeTimeoutMs?: number;
   /** Forwarded to `HandlerDeps.activeConnectionId` (TASK.45 W10, `createTabNew`'s pin). */

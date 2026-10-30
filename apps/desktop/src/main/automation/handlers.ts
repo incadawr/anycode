@@ -34,6 +34,11 @@ import type { PreviewContainerKind, PreviewSetContainerResult } from "../../shar
 import { navigateMdDoc, type MdDocDeps } from "../preview/md-doc.js";
 import type { MdDocReadResult } from "../../shared/md-preview.js";
 import type { PersistencePort, SessionMeta } from "@anycode/core";
+import {
+  DEFAULT_FACADE_TIMEOUT_MS,
+  PROFILE_FACADE_TIMEOUT_MS,
+  VISION_PROBE_FACADE_TIMEOUT_MS,
+} from "../../shared/automation-deadlines.js";
 
 /** Structural view of `webContents` the channel needs (executeJavaScript for the facade, capturePage for evidence). */
 export interface CapturedImage {
@@ -226,13 +231,21 @@ export class FacadeTimeoutError extends Error {
   }
 }
 
+// `DEFAULT_FACADE_TIMEOUT_MS` and the per-route overrides below live in
+// `../../shared/automation-deadlines.js` (shared main ↔ renderer so the facade
+// deadline can never drift below the renderer-side settle ceiling it bounds).
+
 /**
- * Default facade-call deadline. Generous ceiling, not an expected latency: it
- * covers the slowest real facade paths (settings/MCP/skills panes settle-poll
- * up to 10s in the renderer) while still bounding a stuck page to a finite,
- * diagnosable 504 instead of silence.
+ * Facade methods whose renderer-side settle ceiling exceeds the 30 s default
+ * (`shared/automation-deadlines.ts`): the profile telemetry rescan pair and
+ * the Vision recognizer probe. Each gets a facade deadline above its own
+ * ceiling; everything else keeps the default.
  */
-export const DEFAULT_FACADE_TIMEOUT_MS = 30_000;
+const FACADE_METHOD_TIMEOUT_MS: Readonly<Record<string, number>> = {
+  profileRefresh: PROFILE_FACADE_TIMEOUT_MS,
+  profileRebuild: PROFILE_FACADE_TIMEOUT_MS,
+  visionProbe: VISION_PROBE_FACADE_TIMEOUT_MS,
+};
 
 /**
  * Serializes a value as a JS expression literal safe to embed in
@@ -278,11 +291,16 @@ interface FacadeEnvelope {
 /**
  * Default `FacadeCaller`: runs the built expression in the current window and
  * unwraps the envelope. The whole call — `executeJavaScript` AND the page's
- * returned promise — races a deadline (`timeoutMs`, default
- * `DEFAULT_FACADE_TIMEOUT_MS`): the page expression resolves only when the
- * renderer's facade promise settles, and a stuck renderer never settles it.
- * Without the race the HTTP request hangs forever; with it the caller gets a
- * bounded 504 `facade_timeout` and can retry or diagnose.
+ * returned promise — races a deadline: `timeoutMs` (an injected test override
+ * of the default) or, when the method has its own entry in
+ * `FACADE_METHOD_TIMEOUT_MS` (a renderer-side settle ceiling above the
+ * default), that per-method deadline — the per-method map always wins over
+ * any injected override, because the relation "facade deadline > renderer
+ * ceiling" is a correctness invariant, not a tuning knob. The page expression
+ * resolves only when the renderer's facade promise settles, and a stuck
+ * renderer never settles it. Without the race the HTTP request hangs forever;
+ * with it the caller gets a bounded 504 `facade_timeout` and can retry or
+ * diagnose.
  */
 export function makeFacadeCaller(getWindow: () => AutomationWindow | null, timeoutMs: number = DEFAULT_FACADE_TIMEOUT_MS): FacadeCaller {
   return async (method, args) => {
@@ -290,18 +308,24 @@ export function makeFacadeCaller(getWindow: () => AutomationWindow | null, timeo
     if (win === null || win.isDestroyed()) {
       throw new FacadeUnavailableError("no_window");
     }
+    const methodTimeoutMs = FACADE_METHOD_TIMEOUT_MS[method] ?? timeoutMs;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new FacadeTimeoutError(`${method} exceeded ${timeoutMs}ms`)), timeoutMs);
+      timer = setTimeout(() => reject(new FacadeTimeoutError(`${method} exceeded ${methodTimeoutMs}ms`)), methodTimeoutMs);
       // The timer must not keep the (dev-only, short-lived) process alive.
       (timer as unknown as { unref?: () => void }).unref?.();
     });
     let raw: unknown;
     try {
-      raw = await Promise.race([
-        win.webContents.executeJavaScript(buildFacadeExpr(method, args)),
-        deadline,
-      ]);
+      // The raced loser keeps running in the background: if the deadline wins,
+      // the eval's promise can still reject later (window destroyed, page
+      // navigated away). `Promise.race` already observes the loser, so that
+      // late rejection cannot become an unhandled one — the explicit no-op
+      // catch documents the intent and guards against a refactor that drops
+      // the race.
+      const evalPromise = win.webContents.executeJavaScript(buildFacadeExpr(method, args));
+      evalPromise.catch(() => {});
+      raw = await Promise.race([evalPromise, deadline]);
     } catch (error) {
       if (error instanceof FacadeTimeoutError) {
         throw error;
