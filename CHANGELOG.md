@@ -13,6 +13,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- When several background subagents wait for permission at once, the approval dialog names each subagent and its type, shows which request of how many is on screen, and lets you switch to the next one instead of letting it expire unseen.
+- The notice a parent agent gets about a subagent's pending approval now points at the approval dialog it is actually shown in, instead of the subagent's own tab.
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
 - Choosing No thinking for Xiaomi MiMo models now turns their reasoning off.
 - Xiaomi MiMo Token Plan sessions show a pay-as-you-go list-price cost estimate instead of “price unknown”.

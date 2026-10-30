@@ -548,7 +548,13 @@ describe("formatChildApprovalNotice (Taskana 4821)", () => {
     expect(text).toContain("<task-approval-notice>");
     expect(text).toContain("<tool>Write</tool>");
     expect(text).toContain("<subject>/tmp/report.md</subject>");
-    expect(text).toContain("open the child's tab");
+    expect(text).toContain("shown in the app's approval dialog");
+    expect(text).toContain("labelled with this child's description and subagent type");
+    expect(text).toContain("which request of how many is shown and lets the user switch to the next one");
+    expect(text).toContain("Ask the user to answer it in that dialog");
+    // The ask is presented by the PARENT window's dialog, not on the child's
+    // own tab — pointing the model at a tab would send the user nowhere.
+    expect(text).not.toContain("open the child's tab");
     expect(text).toContain("If nobody answers in time it is denied");
     expect(text).not.toContain("<task-notification>");
   });

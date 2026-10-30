@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collectChildPermissions,
+  forwardedChildPermissionQueue,
   respondChildPermission,
   selectForwardedChildPermission,
   subscribeChildPermissions,
@@ -161,6 +162,29 @@ describe("selectForwardedChildPermission (GitHub #17 slice E)", () => {
         displayedChildSpawnToolCallIds: [],
       })?.spawnToolCallId,
     ).toBe("a");
+  });
+
+  it("queues EVERY pending child ask, so the dialog can count and switch between them", () => {
+    expect(
+      forwardedChildPermissionQueue({
+        rootHasOwnPermission: false,
+        owners: [owner("a"), owner("b"), owner("c")],
+        displayedChildSpawnToolCallIds: [],
+      }).map((entry) => entry.spawnToolCallId),
+    ).toEqual(["a", "b", "c"]);
+    // The single-ask selector is the queue's head, never a re-implementation.
+    const owners = [owner("a"), owner("b")];
+    expect(selectForwardedChildPermission({ rootHasOwnPermission: false, owners, displayedChildSpawnToolCallIds: [] })).toBe(
+      forwardedChildPermissionQueue({ rootHasOwnPermission: false, owners, displayedChildSpawnToolCallIds: [] })[0],
+    );
+    // The root's own ask empties the queue; a displayed child is skipped but
+    // the rest of the queue survives.
+    expect(forwardedChildPermissionQueue({ rootHasOwnPermission: true, owners, displayedChildSpawnToolCallIds: [] })).toEqual([]);
+    expect(
+      forwardedChildPermissionQueue({ rootHasOwnPermission: false, owners, displayedChildSpawnToolCallIds: ["a"] }).map(
+        (entry) => entry.spawnToolCallId,
+      ),
+    ).toEqual(["b"]);
   });
 });
 
