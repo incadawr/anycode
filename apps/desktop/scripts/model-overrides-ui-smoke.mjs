@@ -1,6 +1,7 @@
 /** GitHub #26: isolated model-settings GUI/host smoke; loopback provider fixture, no external credentials. */
 import assert from "node:assert/strict";
 import { buildSmokeEnv } from "./model-overrides-smoke-env.mjs";
+import { launchSmokeElectron } from "./smoke-electron-launch.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -43,9 +44,7 @@ writeFileSync(join(profile, "settings.json"), JSON.stringify({
     transport:"openai-chat-completions", baseUrl:fixtureUrl, authOptional:true, imageInputOverride:"on", imageInputModel:"a",
   }]}, tools:{}, permissions:{alwaysAllow:[]}, ui:{theme:"dark"}, security:{allowWeakSecretStorage:false},
 }));
-const app = spawn("pnpm", ["--filter", "@anycode/desktop", "dev", ...(process.env.ANYCODE_SMOKE_NO_SANDBOX === "1" ? ["--noSandbox"] : [])], {
-  env, stdio: ["ignore", "inherit", "inherit"], detached: true,
-});
+const app = launchSmokeElectron(spawn, { env, detached: true });
 let ws;
 const pending = new Map();
 let nextId = 0;

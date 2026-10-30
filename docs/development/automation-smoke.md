@@ -9,6 +9,39 @@ main → preload → renderer → host path rather than replacing it with a test
 For example, start-screen smoke creates an isolated profile, exercises task
 creation, and saves screenshots as evidence.
 
+## Launching the app from automation
+
+A dev Electron started from an agent shell or CI is not the same as one started
+by a person at the desktop. macOS main blocks in `SecItemAdd` until Electron
+receives `--use-mock-keychain`, and a windowed launch can fail before creating a
+window unless `--no-sandbox` and `--disable-gpu` are passed. New and updated
+smoke scripts must therefore launch through the shared helper
+`apps/desktop/scripts/smoke-electron-launch.mjs`, never with a hand-written
+`spawn("pnpm", ["--filter", "@anycode/desktop", "dev"])`:
+
+```js
+import { launchSmokeElectron, smokeElectronArgs } from "./smoke-electron-launch.mjs";
+
+launchSmokeElectron(spawn, { env, remoteDebuggingPort: port });
+// or, when the script already owns spawn options:
+spawn("pnpm", smokeElectronArgs(), { env, detached: true });
+```
+
+`launchSmokeElectron` starts the dev app with `--use-mock-keychain`,
+`--no-sandbox` and `--disable-gpu` by default, and removes an inherited
+`ELECTRON_CLI_ARGS`/`NO_SANDBOX` so only the switches it built reach Electron.
+The three defaults only affect the disposable profile the smoke owns; no manual
+flags are needed. A run that must exercise the real OS keychain opts back in
+explicitly with `electron: { mockKeychain: false }` (the sandbox and GPU
+switches are independently opt-out in the same object; `extra` appends
+smoke-specific switches). `remoteDebuggingPort` sets electron-vite's
+`REMOTE_DEBUGGING_PORT` lever, which appends `--remote-debugging-port`.
+
+The switches reach the app through electron-vite's literal `--` forwarding
+(`ELECTRON_CLI_ARGS`); `pnpm <script> -- ...` preserves that separator. These
+switches do not enable automation — the dev-only automation server is still
+gated separately.
+
 ## Safe release boundary
 
 Automation is for development only.
