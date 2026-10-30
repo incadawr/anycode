@@ -1181,6 +1181,21 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
     else expect(store.getState().notice?.text).toContain("cancelled");
   });
 
+  it("learns a mid-session manual-compact revocation from engine_capabilities_changed", () => {
+    const store = readyStore();
+    const codexCapabilities = { supportsCorePermissions: false, supportsRewind: false, supportsWorkflow: false, supportsGitMutations: false, supportsContextUsage: true, supportsContextBreakdown: false, supportsInteractiveApprovals: false, costAccounting: false, supportsModelSelection: true, supportsReasoningEffort: true, supportsImages: true, supportsTasks: false, supportsFileSnapshots: false, supportsManualCompact: true } as const;
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "fixture", sessionId: "codex", engine: { id: "codex", capabilities: codexCapabilities } });
+    expect(store.getState().engine?.capabilities.supportsManualCompact).toBe(true);
+    // The app-server refused thread/compact/start; the host re-advertises the
+    // revoked capability so the Compact slash row disappears for this session.
+    store.getState().applyHostMessage({ type: "engine_capabilities_changed", capabilities: { ...codexCapabilities, supportsManualCompact: false } });
+    expect(store.getState().engine?.capabilities.supportsManualCompact).toBe(false);
+    // A core session (no engine projection) ignores the push.
+    const core = readyStore();
+    core.getState().applyHostMessage({ type: "engine_capabilities_changed", capabilities: { ...codexCapabilities, supportsManualCompact: false } });
+    expect(core.getState().engine).toBeNull();
+  });
+
   it("accepts maintenance accounting and notices without accepting foreign turn events", () => {
     const store = readyStore();
     store.getState().applyHostMessage({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: { type: "engine_session_tokens", input: 100, output: 20, total: 120 } });

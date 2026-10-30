@@ -116,10 +116,20 @@ describe("Codex compact protocol fixture", () => {
   it("refuses unsupported Codex compact while idle with engine-specific copy", async () => {
     const f = await setup(true);
     try {
+      // Regression (review minor): the refused attempt must re-advertise the
+      // revoked capability to the renderer, so /compact stops being offered
+      // for this session instead of toasting the refusal on every try.
+      const store = createDesktopStore({ schedule: fn => fn() });
+      for (const message of f.h.received) store.getState().applyHostMessage(message);
+      expect(store.getState().engine?.capabilities.supportsManualCompact).toBe(true);
       await f.chat(); expect(f.engine.capabilities.supportsManualCompact).toBe(true); f.h.send({ type: "compact_request" });
       const end = await f.end(); await f.idle();
       expect(end.event).toMatchObject({ ok: false, error: "Manual compaction is unavailable for this Codex app-server. Update Codex and start a new session." });
       expect(f.engine.capabilities.supportsManualCompact).toBe(false);
+      const push = await f.h.waitFor((m): m is Extract<HostToUiMessage, { type: "engine_capabilities_changed" }> => m.type === "engine_capabilities_changed");
+      expect(push.capabilities.supportsManualCompact).toBe(false);
+      for (const message of f.h.received.slice(f.h.received.indexOf(push))) store.getState().applyHostMessage(message);
+      expect(store.getState().engine?.capabilities.supportsManualCompact).toBe(false);
       f.h.send({ type: "compact_request" });
       const refusal = await f.h.waitFor((m): m is Extract<HostToUiMessage, { type: "compact_rejected" }> => m.type === "compact_rejected");
       expect(refusal.reason).toBe("Manual compaction is unavailable for this Codex app-server. Update Codex and start a new session.");
