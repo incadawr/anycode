@@ -67,6 +67,25 @@ describe("AgentStatus", () => {
     expect(child.tail[0]!.text).toContain("[redacted]");
   });
 
+  it("documents when foreground children can be polled", () => {
+    expect(agentStatusTool.metadata.description).toContain("a parent blocked on a foreground child cannot poll until it returns or hands off");
+  });
+
+  it.each([
+    ['{"password":"hunter2"}', "hunter2"],
+    ["Authorization: Bearer secondsecret", "secondsecret"],
+  ])("scrubs %s through the inline child path", async (credential, secret) => {
+    const port: SubagentPort = { run: async (_req, opts) => {
+      opts.onStatusItem?.({ kind: "assistant", text: `Progress ${credential}` });
+      return { status: "completed", finalText: "done", truncated: false, turns: 1, toolCalls: 0, durationMs: 1 };
+    } };
+    const ctx = context(port);
+    await agentTool.handler({ description: "inspect", prompt: "go" }, ctx);
+    const text = JSON.stringify((await agentStatusTool.handler({ id: "child-call" }, ctx)).output);
+    expect(text).toContain("Progress");
+    expect(text).not.toContain(secret);
+  });
+
   it("is allowed without an approval in every mode", () => {
     const engine = new ModePermissionEngine();
     for (const mode of ["plan", "build", "edit", "auto", "yolo"] as const) {
