@@ -3,7 +3,7 @@
  * own Bash denial is narrowed; other denials remain authoritative.
  */
 
-import { isTrustedPlanCommand } from "./plan-command.js";
+import { resolveTrustedPlanCommand } from "./plan-command.js";
 import type { PermissionEngine, PermissionRequest, PermissionRuling } from "../types/permissions.js";
 import { classifyBashCommandLine, type BashCommandClass } from "./safe-command.js";
 
@@ -27,11 +27,14 @@ export class SafeCommandPermissionEngine implements PermissionEngine {
     const command = (request.input as { command?: unknown } | null)?.command;
     // Plan-mode denials are relaxed only by the actual classifier, regardless of
     // any injected classifier used for build-mode approval policy.
+    const resolvedCommand = typeof command === "string" && request.mode === "plan"
+      ? resolveTrustedPlanCommand(command, request.cwd) : undefined;
     const safe = typeof command === "string" && (request.mode === "plan"
-      ? isTrustedPlanCommand(command, request.cwd)
+      ? resolvedCommand !== undefined
       : this.classify(command) === "read-only");
     if (safe) {
-      return { decision: "allow", reason: "Bash: auto-approved (provably read-only command)" };
+      return { decision: "allow", reason: "Bash: auto-approved (provably read-only command)",
+        ...(resolvedCommand !== undefined ? { resolvedCommand } : {}) };
     }
     if (planDeny) {
       return {

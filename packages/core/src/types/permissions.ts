@@ -50,6 +50,8 @@ export interface PermissionWorkspaceFacts {
 export interface PermissionRuling {
   decision: "allow" | "ask" | "deny";
   reason?: string;
+  /** Bash command bound to the executables checked by the permission engine. */
+  resolvedCommand?: string;
 }
 
 /** Broker resolution of an "ask" ruling. */

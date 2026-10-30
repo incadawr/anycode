@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Plan-mode commands execute the trusted binaries checked at approval, even if PATH changes.
+
 ### Fixed
 
 - Plan-mode read-only commands work with normal PATH entries while rejecting shadowed executables.

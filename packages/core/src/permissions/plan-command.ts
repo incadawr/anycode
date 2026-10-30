@@ -30,12 +30,12 @@ function trustedPath(path: string, directory: boolean): boolean {
   }
 }
 
-function trustedExecutable(name: string, cwd: string | undefined): boolean {
-  if (!/^[a-z0-9-]+$/.test(name)) return false;
+function trustedExecutable(name: string, cwd: string | undefined): string | undefined {
+  if (!/^[a-z0-9-]+$/.test(name)) return undefined;
   const path = process.env.PATH;
-  if (path === undefined) return false;
+  if (path === undefined) return undefined;
   for (const dir of path.split(":")) {
-    if (!isAbsolute(dir) && (!cwd || !isAbsolute(cwd))) return false;
+    if (!isAbsolute(dir) && (!cwd || !isAbsolute(cwd))) return undefined;
     // Preserve symlink/.. traversal exactly as the shell passes it to the OS.
     const candidate = `${isAbsolute(dir) ? dir : `${cwd}/${dir}`}/${name}`;
     try {
@@ -44,35 +44,42 @@ function trustedExecutable(name: string, cwd: string | undefined): boolean {
       accessSync(candidate, constants.X_OK);
     } catch (error) {
       if (["ENOENT", "ENOTDIR", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) continue;
-      return false;
+      return undefined;
     }
     try {
       const real = realpathSync(candidate);
-      if (!trustedPath(candidate, false)) return false;
+      if (!trustedPath(candidate, false)) return undefined;
       const fd = openSync(real, "r");
       try {
         const magic = Buffer.alloc(4);
-        if (readSync(fd, magic, 0, 4, 0) !== 4) return false;
+        if (readSync(fd, magic, 0, 4, 0) !== 4) return undefined;
         const value = magic.readUInt32BE();
         // ELF, Mach-O, or universal Mach-O; never a shell script.
-        return value === 0x7f454c46 || [0xfeedface, 0xcefaedfe, 0xfeedfacf, 0xcffaedfe, 0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca].includes(value);
+        return value === 0x7f454c46 || [0xfeedface, 0xcefaedfe, 0xfeedfacf, 0xcffaedfe, 0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca].includes(value) ? real : undefined;
       } finally { closeSync(fd); }
     } catch {
-      return false;
+      return undefined;
     }
   }
-  return false;
+  return undefined;
 }
 
-/** Plan mode never inherits build's basename trust or Git's lexical policy. */
-export function isTrustedPlanCommand(command: string, cwd?: string): boolean {
-  if (process.platform === "win32" || !trustedPath("/bin/sh", false)) return false;
-  if (Object.keys(process.env).some(key => /^(?:LD_|DYLD_|BASH_FUNC_|BASH_ENV$|ENV$)/.test(key) && process.env[key])) return false;
-  if (classifyBashCommandLine(command).class !== "read-only") return false;
+/** Return a shell command bound to the executables checked for plan mode. */
+export function resolveTrustedPlanCommand(command: string, cwd?: string): string | undefined {
+  if (process.platform === "win32" || !trustedPath("/bin/sh", false)) return undefined;
+  if (Object.keys(process.env).some(key => /^(?:LD_|DYLD_|BASH_FUNC_|BASH_ENV$|ENV$)/.test(key) && process.env[key])) return undefined;
+  if (classifyBashCommandLine(command).class !== "read-only") return undefined;
   const split = splitBashSegments(command);
-  if (!split) return false;
-  return split.segments.every(segment => {
-    const name = segment.trim().split(/[ \t]+/, 1)[0] ?? "";
-    return name !== "git" && trustedExecutable(name, cwd);
-  });
+  if (!split) return undefined;
+  const segments: string[] = [];
+  for (const segment of split.segments) {
+    const match = /^(\s*)([a-z0-9-]+)(?=\s|$)/.exec(segment);
+    if (!match || match[2] === "git") return undefined;
+    const executable = trustedExecutable(match[2]!, cwd);
+    if (!executable) return undefined;
+    // Quote even trusted paths: PATH entries may contain shell metacharacters.
+    const quoted = "'" + executable.replace(/'/g, "'\\''") + "'";
+    segments.push(match[1] + quoted + segment.slice(match[0].length));
+  }
+  return segments.join("|");
 }
