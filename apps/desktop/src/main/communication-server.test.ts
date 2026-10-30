@@ -22,7 +22,7 @@ import { startHostWithActivity } from "../host/activity-forwarding.js";
 import { CORE_ENGINE_CAPABILITIES, type SessionEngine } from "../host/engines/session-engine.js";
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
-async function fixture() {
+async function fixture(options: { dispatchTimeoutMs?: number; writeLedger?: (path: string, text: string) => Promise<void> } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "anycode-communication-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
   const configFile = join(dir, "config.json"); const discoveryFile = join(dir, "endpoint.json");
   await writeFile(configFile, JSON.stringify({ workspaces: [dir], discoveryFile }));
@@ -34,7 +34,11 @@ async function fixture() {
     return undefined;
   });
   const manager: { listTabs: () => Array<{ sessionId: string; workspace: string; state: string; activityState?: import("../shared/communication.js").SessionActivityState; pid: number | null; engine?: string; hostFailure?: import("../shared/host-failure.js").HostFailure; missingWorkspace?: boolean }>; communicationRequest: typeof request } = { listTabs: () => [{ sessionId: "allowed", workspace: dir, state: "running", pid: 10 }, { sessionId: "forbidden", workspace: tmpdir(), state: "running", pid: 11 }], communicationRequest: request };
-  const service = await startCommunicationServer({ manager, configFile, userData: dir }); cleanups.push(() => service.close());
+  const service = await startCommunicationServer({
+    manager, configFile, userData: dir,
+    ...(options.dispatchTimeoutMs !== undefined ? { dispatchTimeoutMs: options.dispatchTimeoutMs } : {}),
+    ...(options.writeLedger ? { writeLedger: options.writeLedger } : {}),
+  }); cleanups.push(() => service.close());
   const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string };
   const client = new Client({ name: "supervisor-test", version: "1" });
   await client.connect(new StreamableHTTPClientTransport(new URL(discovery.url), { requestInit: { headers: { Authorization: `Bearer ${discovery.token}` } } }));
@@ -441,6 +445,47 @@ describe("production communication MCP over real SDK HTTP", () => {
     }, { timeout: 2500, interval: 30 });
     expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
   });
+  it("restores a record its host generation had to leave out while its pre-dispatch write was open", async () => {
+    // GitHub #21 follow-up. The sweep restores only records with a settled host
+    // outcome, and the bookkeeping used to mark the whole host generation done:
+    // a record parked in its own pre-dispatch ledger write was excluded together
+    // with the rest and then dropped for the life of that host. Its envelope was
+    // never posted, so once the write failed and the record's own deadline
+    // settled it, the undelivered message still had to reach the host.
+    let holdWrite = true;
+    let releaseWrite!: () => void;
+    const writeReleased = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const f = await fixture({
+      dispatchTimeoutMs: 60,
+      writeLedger: async (path, text) => {
+        if (holdWrite && text.includes("stuck behind its write")) { holdWrite = false; await writeReleased; throw new Error("ledger write failed"); }
+        await writePrivateFile(path, text);
+      },
+    });
+    const restoredPayloads: string[][] = [];
+    f.request.mockImplementation(async (_session: string, op: string, payload?: unknown): Promise<any> => {
+      if (op === "get_session_status") return { engine: "codex", state: "idle" };
+      if (op === "send_message") return { envelope: payload, state: "queued" };
+      if (op === "restore_agent_messages") { restoredPayloads.push((payload as AgentDelivery[]).map((entry) => entry.envelope.payload)); return {}; }
+      return undefined;
+    });
+    const old = value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed", payload: "old record", mode: "next_turn" } }));
+    expect(old.state).toBe("queued");
+    const stuck = f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed", payload: "stuck behind its write", mode: "next_turn" } });
+    // The generation's restore runs while the second record is still in flight,
+    // so it carries the old record alone.
+    await vi.waitFor(() => expect(restoredPayloads.flat()).toContain("old record"), { timeout: 2500, interval: 20 });
+    expect(restoredPayloads.flat()).toEqual(["old record"]);
+    releaseWrite();
+    expect((await stuck as { isError?: boolean }).isError).toBe(true);
+    // The write failed, so the envelope was never posted and the record settled
+    // unknown by its own deadline — exactly the state the host may be shown.
+    expect(f.request.mock.calls.filter((c) => c[1] === "send_message" && (c[2] as AgentEnvelope).payload === "stuck behind its write")).toHaveLength(0);
+    await vi.waitFor(() => expect(restoredPayloads.flat()).toContain("stuck behind its write"), { timeout: 2500, interval: 20 });
+    // Restored once, not on every sweep of the same host generation.
+    expect(restoredPayloads.flat()).toEqual(["old record", "stuck behind its write"]);
+    expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
+  }, 10000);
 });
 
 describe("live config option and session exposure (Taskana 4747)", () => {

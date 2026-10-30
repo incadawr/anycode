@@ -710,25 +710,55 @@ export async function startCommunicationServer(options: CommunicationServerOptio
 
   // Rehydrate visible envelopes only, never replay payloads to the model.
   const restoredHosts = new Set<string>();
+  /**
+   * GitHub #21 follow-up: a generation's restore is decided once, but the
+   * records it had to leave out are retried instead of being dropped with it.
+   * An excluded record (its dispatch or its pre-dispatch ledger write still
+   * open) becomes restorable a moment later — the dispatch settles, or the
+   * write fails and its own dispatch deadline settles the detail — and it must
+   * still reach the host, otherwise an undelivered message never shows up in
+   * the feed. Keyed by host generation, holding the ids that generation's
+   * restore still owes; an id leaves the set only once it is restored.
+   */
+  const deferredRestores = new Map<string, Set<string>>();
+  /** A record with no settled host outcome yet: see the eligibility comment below. */
+  const settled = (record: Record) => record.detail !== "Dispatch pending" && !inFlight.has(record.envelope.messageId);
   let reconciling = false;
   const reconcile = async () => {
     if (reconciling) return;
     reconciling = true;
     try {
       for (const record of messages.values()) await markLostGeneration(record);
+      // Forget bookkeeping for host generations that are gone (a new pid replaces them).
+      const liveGenerations = new Set(options.manager.listTabs().map((tab) => `${tab.sessionId}:${tab.pid}`));
+      for (const key of [...restoredHosts]) if (!liveGenerations.has(key)) restoredHosts.delete(key);
+      for (const key of [...deferredRestores.keys()]) if (!liveGenerations.has(key)) deferredRestores.delete(key);
       for (const tab of await tabs(false)) {
+        const key = `${tab.sessionId}:${tab.pid}`;
+        const records = [...messages.values()].filter((r) => r.envelope.recipientSessionId === tab.sessionId);
+        if (!records.length) continue;
         // GitHub #21: a record still in flight (and any record still reading
         // "Dispatch pending", e.g. one whose pre-dispatch write failed) carries no
         // settled host outcome to display; restoring it would make the host treat
         // the real envelope as a duplicate and never start the turn.
-        const records = [...messages.values()].filter((r) => r.envelope.recipientSessionId === tab.sessionId && r.detail !== "Dispatch pending" && !inFlight.has(r.envelope.messageId));
-        if (!records.length) continue;
-        const key = `${tab.sessionId}:${tab.pid}`;
+        const waiting = deferredRestores.get(key) ?? new Set<string>();
+        for (const record of records) if (!settled(record)) waiting.add(record.envelope.messageId);
+        const eligible = records.filter(settled);
         if (!restoredHosts.has(key)) {
-          await options.manager.communicationRequest(tab.sessionId, "restore_agent_messages", records, tab.workspace);
-          restoredHosts.add(key);
+          if (eligible.length) {
+            await options.manager.communicationRequest(tab.sessionId, "restore_agent_messages", eligible, tab.workspace);
+            restoredHosts.add(key);
+            for (const record of eligible) waiting.delete(record.envelope.messageId);
+          }
+        } else {
+          const retry = eligible.filter((r) => waiting.has(r.envelope.messageId));
+          if (retry.length) {
+            await options.manager.communicationRequest(tab.sessionId, "restore_agent_messages", retry, tab.workspace);
+            for (const record of retry) waiting.delete(record.envelope.messageId);
+          }
         }
-        for (const record of records.filter((r) => r.state === "queued")) {
+        if (waiting.size) deferredRestores.set(key, waiting); else deferredRestores.delete(key);
+        for (const record of eligible.filter((r) => r.state === "queued")) {
           const current = await options.manager.communicationRequest(tab.sessionId, "get_message_status", record.envelope.messageId, tab.workspace) as AgentDelivery | undefined;
           if (record.state === "queued" && !await markLostGeneration(record) && current && (current.state !== record.state || current.detail !== record.detail)) { record.state = current.state; record.detail = current.detail; await persist(); }
         }
