@@ -32,6 +32,17 @@ describe("role profiles", () => {
     // A per-project profile still wins over it.
     expect(resolveProfileRoles({ roleProfiles: { ...saved, projects: [{ projectRoot: "/project", profileId: "builtin" }] } }, "/project")).toEqual(other);
   });
+  it("treats an absent activeId as the built-in defaults (no id to collide with)", () => {
+    const builtin = { profiles: [{ id: "a", name: "A", roles: legacy }, { id: "b", name: "B", roles: other }], activeId: undefined, projects: [] };
+    // The whole document passes both gates the app reads and writes through.
+    expect(roleProfilesWriteSchema.safeParse(builtin).success).toBe(true);
+    expect(roleProfilesSchema.safeParse(builtin).success).toBe(true);
+    expect(settingsSchema.safeParse(mergeSettings(cloneDefaults(), { roleProfiles: builtin })).success).toBe(true);
+    // With no active profile the built-ins apply (undefined roles), and a
+    // per-project mapping still wins.
+    expect(resolveProfileRoles({ roleProfiles: builtin }, "/other")).toBeUndefined();
+    expect(resolveProfileRoles({ roleProfiles: { ...builtin, projects: [{ projectRoot: "/project", profileId: "b" }] } }, "/project")).toEqual(other);
+  });
   it("first-run saves the project profile without changing the global profile", () => {
     const patch = rolesPatch({ roleProfiles: registry }, { planner: { primary: { model: "project-model" } } }, "/project");
     expect(patch.roleProfiles?.activeId).toBe("a");
