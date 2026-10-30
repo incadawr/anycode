@@ -110,6 +110,18 @@ export function worktreeExitControlState(
   };
 }
 
+/**
+ * Audit D12: a long single-token title (a path, a filename) had no word
+ * boundary for `text-overflow: ellipsis` to cut at, so it was chopped
+ * mid-word ("…outside.txt conta"). Such a title wraps to its own lines
+ * instead; multi-word titles keep the one-line ellipsis (the wrap always
+ * finds a word boundary there). Pure, exported for unit tests.
+ */
+export function sessionHeaderTitleClass(title: string): string {
+  const hasWordBoundary = /\s/.test(title.trim());
+  return hasWordBoundary ? "session-header-title" : "session-header-title session-header-title-wrap";
+}
+
 export interface SessionHeaderProps {
   sidebarCollapsed: boolean;
   onToggleSidebar(): void;
@@ -248,7 +260,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
         </button>
       )}
 
-      <span className="session-header-title" title={title}>{title}</span>
+      <span className={sessionHeaderTitleClass(title)} title={title}>{title}</span>
 
       {openedByAgent && <span className="session-header-agent" title="Opened by an agent">agent</span>}
 

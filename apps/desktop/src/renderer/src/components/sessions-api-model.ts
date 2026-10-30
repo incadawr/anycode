@@ -35,6 +35,13 @@ export const SESSIONS_API_AGENT_PROJECT_ON = "On";
 export const SESSIONS_API_AGENT_PROJECT_TURN_OFF = "Turn off";
 export const SESSIONS_API_AGENT_PROJECTS_EMPTY = "No project allows agents to open tasks yet. Use the project ⋯ menu in the sidebar.";
 export const SESSIONS_API_AGENT_PROJECTS_HINT = "Off by default. Turn one on in the sidebar project ⋯ menu; trusted folders only.";
+/**
+ * The step-1 hint (audit D9): says WHERE a session is switched on (the
+ * session's own ⋯ environment menu) before the live count, so the pane
+ * explains per-session sharing instead of only listing "Currently shared: 4".
+ */
+export const SESSIONS_API_SHARE_HINT =
+  "Open a session's ⋯ environment menu and turn on Sessions API; only sessions you switch on are shared. Currently shared: {count}.";
 
 export type SessionsApiTone = "ok" | "danger" | "muted";
 

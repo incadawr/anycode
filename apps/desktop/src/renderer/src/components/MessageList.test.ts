@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   aggregateStackStatus,
   compactionRowText,
+  formatLoopEndLine,
   FOLLOW_THRESHOLD_PX,
   formatErrorRetrySuffix,
   formatStreamRetryLine,
@@ -620,6 +621,36 @@ describe("formatStreamRetryLine (TASK.33 W8 — mirrors cli/render.ts's '[retry 
     expect(formatStreamRetryLine(3, 8, 0, "connect timeout", 812_400)).toBe(
       "Retry 3 now (network back after 812.4 s): connect timeout",
     );
+  });
+});
+
+describe("formatLoopEndLine (loop-end footer wording)", () => {
+  // Audit D15: "2 TURNS · 2M 12S · 00:02" mixed a duration with a bare
+  // clock-like field whose unit was unclear. The clock time is now named
+  // ("at 00:02") and turns are sentence case.
+  it("labels the wall-clock field with 'at' so its unit is unambiguous", () => {
+    const endedAt = new Date(2026, 9, 30, 0, 2, 11).getTime();
+    expect(
+      formatLoopEndLine({ kind: "loop_end", id: "loop_end:t1", reason: "completed", turns: 2, durationMs: 132_000, at: endedAt }, endedAt + 1000),
+    ).toMatch(/\(2 turns · 2m 12s · at .*00:02\)$/);
+  });
+
+  it("renders the same parts without the wall clock when the host sent no timestamp", () => {
+    expect(
+      formatLoopEndLine({ kind: "loop_end", id: "loop_end:t1", reason: "completed", turns: 2, durationMs: 132_000 }, 0),
+    ).toBe("Turn ended: completed (2 turns · 2m 12s)");
+  });
+
+  it("keeps singular '1 turn' and drops the duration when the start time was never seen", () => {
+    expect(
+      formatLoopEndLine({ kind: "loop_end", id: "loop_end:t1", reason: "steered", turns: 1 }, 0),
+    ).toBe("Turn ended: steered (1 turn)");
+  });
+
+  it("the max_turns stop keeps its own wording (turn-limit decision point)", () => {
+    expect(
+      formatLoopEndLine({ kind: "loop_end", id: "loop_end:t1", reason: "max_turns", turns: 3 }, 0),
+    ).toBe("Stopped: turn limit reached (3 turns).");
   });
 });
 

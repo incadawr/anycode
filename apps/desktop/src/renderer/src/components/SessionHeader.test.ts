@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { computePreviewMenuVisible, derivePreviewMenuItems, worktreeExitControlState } from "./SessionHeader.js";
+import { computePreviewMenuVisible, derivePreviewMenuItems, sessionHeaderTitleClass, worktreeExitControlState } from "./SessionHeader.js";
 import type { PreviewChangedPayload, PreviewPanelInfo } from "../../../shared/preview-panel.js";
+
+describe("sessionHeaderTitleClass (audit D12 — long titles cut mid-word)", () => {
+  it("lets a short title stay on one line (no wrap class)", () => {
+    expect(sessionHeaderTitleClass("Fix the bug")).toBe("session-header-title");
+  });
+
+  it("lets a wrapped multi-word title break at word boundaries (no wrap class either)", () => {
+    expect(sessionHeaderTitleClass("please read outside.txt and fix the header")).toBe("session-header-title");
+  });
+
+  it("force-wraps a single unbroken token (path/filename), which ellipsis would cut mid-word", () => {
+    expect(sessionHeaderTitleClass("…outside.txt")).toBe("session-header-title session-header-title-wrap");
+  });
+});
 
 describe("worktreeExitControlState", () => {
   it("disables Exit with an accessible running-turn explanation", () => {
