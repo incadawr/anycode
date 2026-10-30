@@ -170,7 +170,7 @@ describe("agentTool handler — provider validation (CUT-S2 §2.1)", () => {
     );
     expect(result.ok).toBe(false);
     expect(result.errorKind).toBe("invalid_input");
-    expect(result.error).toBe('Agent: "provider" is only valid with tier "session".');
+    expect(result.error).toBe('Agent: "provider" is only valid with tier "session". See the using-subagents skill.');
   });
 
   it("provider with tier omitted (default inline) => invalid_input, same exact message", async () => {
@@ -178,7 +178,7 @@ describe("agentTool handler — provider validation (CUT-S2 §2.1)", () => {
     const result = await full.handler({ description: "d", prompt: "p", provider: "anthropic-2" }, makeCtx());
     expect(result.ok).toBe(false);
     expect(result.errorKind).toBe("invalid_input");
-    expect(result.error).toBe('Agent: "provider" is only valid with tier "session".');
+    expect(result.error).toBe('Agent: "provider" is only valid with tier "session". See the using-subagents skill.');
   });
 
   it("provider validation fires even with NO ports at all wired (fails fast, before any availability check)", async () => {
@@ -217,7 +217,7 @@ describe("agentTool handler — session-tier fail-closed lock (CUT-S2 §2.1)", (
     );
     expect(result).toEqual({
       ok: false,
-      error: "Agent: session-tier subagents are unavailable in this host.",
+      error: "Agent: session-tier subagents are unavailable in this host. See the using-subagents skill.",
     });
   });
 
@@ -232,7 +232,7 @@ describe("agentTool handler — session-tier fail-closed lock (CUT-S2 §2.1)", (
       { description: "d", prompt: "p", tier: "session" },
       makeCtx({ subagents: inlinePort }),
     );
-    expect(result.error).toBe("Agent: session-tier subagents are unavailable in this host.");
+    expect(result.error).toBe("Agent: session-tier subagents are unavailable in this host. See the using-subagents skill.");
   });
 
   it("DISCRIMINATION PIN: default tier (absent) with ONLY sessionSubagents wired never reaches sessionSubagents.run — mirrors agent.test.ts's pre-B1 pin, now proven against the REAL tier branch", async () => {
@@ -1276,14 +1276,14 @@ describe("agentTool handler — detach validation (TASK.145 срез 1, preceden
     const result = await full.handler({ description: "d", prompt: "p", tier: "inline", detach: true }, makeCtx());
     expect(result.ok).toBe(false);
     expect(result.errorKind).toBe("invalid_input");
-    expect(result.error).toBe('Agent: "detach" is only valid with tier "session".');
+    expect(result.error).toBe('Agent: "detach" is only valid with tier "session". See the using-subagents skill.');
   });
 
   it("detach:true with tier omitted (default inline) => invalid_input, same exact message", async () => {
     const full = createAgentTool({ sessionTier: true });
     const result = await full.handler({ description: "d", prompt: "p", detach: true }, makeCtx());
     expect(result.errorKind).toBe("invalid_input");
-    expect(result.error).toBe('Agent: "detach" is only valid with tier "session".');
+    expect(result.error).toBe('Agent: "detach" is only valid with tier "session". See the using-subagents skill.');
   });
 
   it("detach:true validation fires even with NO ports at all wired (fails fast, before any availability check)", async () => {

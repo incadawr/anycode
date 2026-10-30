@@ -196,6 +196,6 @@ describe("bridgeCallableCatalog (Taskana 4101)", () => {
       { catalog: callable, port: unknownPort, spawnToolCallId: "toolu_4101_b" },
     );
     expect(rejected.isError).toBe(true);
-    expect(rejected.text).toBe('Unknown agent_type "new-profile". Available agent types: glm-lead.');
+    expect(rejected.text).toBe('Unknown agent_type "new-profile". Available agent types: glm-lead. See the using-subagents skill.');
   });
 });

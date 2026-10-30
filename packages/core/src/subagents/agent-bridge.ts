@@ -258,8 +258,8 @@ export function outcomeToResult(
     const error = partial
       ? `Agent: the subagent ran out of budget after ${outcome.turns} turns without finishing.\n` +
         `INCOMPLETE SUBAGENT RESULT — DO NOT TREAT AS A FINISHED REPORT. ` +
-        `Missing checks may invalidate the conclusions below.\n\n${partial}` + lengthNote
-      : `Agent: the subagent ran out of budget after ${outcome.turns} turns without finishing and produced no partial result. The task was not completed — split it into narrower delegations, or ask the user to raise the subagent turn budget (Settings → Tools → "Maximum turns (subagents)").` + lengthNote;
+        `Missing checks may invalidate the conclusions below. See the using-subagents skill.\n\n${partial}` + lengthNote
+      : `Agent: the subagent ran out of budget after ${outcome.turns} turns without finishing and produced no partial result. The task was not completed — split it into narrower delegations, or ask the user to raise the subagent turn budget (Settings → Tools → "Maximum turns (subagents)"). See the using-subagents skill.` + lengthNote;
     return { ok: false, errorKind: "max_turns", error, output: toAgentOutput(outcome), ...presentation };
   }
   // cancelled (TASK.44): preserve cancellation semantics — never success.
@@ -609,7 +609,7 @@ export async function runAgentBridgeCall(
   if (entry === undefined) {
     const available = deps.catalog.map((candidate) => candidate.name);
     return {
-      text: `Unknown agent_type "${input.agent_type}". Available agent types: ${available.join(", ")}.`,
+      text: `Unknown agent_type "${input.agent_type}". Available agent types: ${available.join(", ")}. See the using-subagents skill.`,
       isError: true,
     };
   }
