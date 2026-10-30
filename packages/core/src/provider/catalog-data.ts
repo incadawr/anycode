@@ -44,12 +44,15 @@ export const CUSTOM_PROVIDER_ID = "custom";
  */
 const LARGE_MODEL_USABLE_CONTEXT_TOKENS = 300_000;
 
-// Token Plan is a credit-based subscription with no published USD per-token
-// rate. Its console specifies interactive coding-tool use, not automated
-// scripts or backends. Models and regions are from the Token Plan console.
+// Token Plan is a credit subscription; displayed costs are pay-as-you-go
+// list-price estimates. Its console specifies interactive coding-tool use, not
+// automated scripts or backends. Models and regions are from the console.
+// Overseas real-time API prices in USD per 1M tokens, accessed 2026-10-30:
+// https://mimo.mi.com/docs/en-US/price/pay-as-you-go. Cache write is
+// limited-time free, so cacheWrite is 0 until Xiaomi changes it.
 const MIMO_MODELS: CatalogProviderEntry["models"] = [
-  { id: "mimo-v2.6-pro", name: "MiMo V2.6 Pro", contextWindow: 1_048_576, usableContextWindow: LARGE_MODEL_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true },
-  { id: "mimo-v2.6-flash", name: "MiMo V2.6 Flash", contextWindow: 1_048_576, usableContextWindow: LARGE_MODEL_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true },
+  { id: "mimo-v2.6-pro", pricing: { basisId: "mimo-v2.6-pro-xiaomi-mimo-api-2026-10-30", input: 0.435, cachedInput: 0.0036, cacheWrite: 0, output: 0.87 }, name: "MiMo V2.6 Pro", contextWindow: 1_048_576, usableContextWindow: LARGE_MODEL_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true },
+  { id: "mimo-v2.6-flash", pricing: { basisId: "mimo-v2.6-flash-xiaomi-mimo-api-2026-10-30", input: 0.14, cachedInput: 0.0028, cacheWrite: 0, output: 0.28 }, name: "MiMo V2.6 Flash", contextWindow: 1_048_576, usableContextWindow: LARGE_MODEL_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true },
 ];
 
 const ENTRIES: CatalogProviderEntry[] = [
@@ -231,13 +234,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
-    // Overseas real-time API prices in USD per 1M tokens, accessed 2026-10-30:
-    // https://mimo.mi.com/docs/en-US/price/pay-as-you-go. Cache write is
-    // limited-time free, so cacheWrite is 0 until Xiaomi changes it.
-    models: [
-      { ...MIMO_MODELS[0]!, pricing: { basisId: "mimo-v2.6-pro-xiaomi-mimo-api-2026-10-30", input: 0.435, cachedInput: 0.0036, cacheWrite: 0, output: 0.87 } },
-      { ...MIMO_MODELS[1]!, pricing: { basisId: "mimo-v2.6-flash-xiaomi-mimo-api-2026-10-30", input: 0.14, cachedInput: 0.0028, cacheWrite: 0, output: 0.28 } },
-    ],
+    models: MIMO_MODELS,
   },
   {
     id: "xiaomi-mimo-sgp",

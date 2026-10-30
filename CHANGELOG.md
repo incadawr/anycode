@@ -11,6 +11,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Xiaomi MiMo pay-as-you-go API is available as a provider (mimo-v2.6-pro and mimo-v2.6-flash, with per-token cost tracking).
 
+### Fixed
+
+- Choosing No thinking for Xiaomi MiMo models now turns their reasoning off.
+- Xiaomi MiMo Token Plan sessions show a pay-as-you-go list-price cost estimate instead of “price unknown”.
+
 ## [0.0.55] — 2026-10-30
 
 ### Added
