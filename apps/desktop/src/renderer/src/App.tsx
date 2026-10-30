@@ -545,6 +545,11 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
     if (childView.kind === "split") return effectiveChildId(childView.expandedId);
     return undefined;
   })();
+  useEffect(() => {
+    if (parentSessionId && focusedChildId) {
+      childRelationStore.getState().dismissApprovalExpired(parentSessionId, focusedChildId);
+    }
+  }, [parentSessionId, focusedChildId]);
   const childRelation = childRelationStore((state) =>
     focusedChildId !== undefined && parentSessionId !== null && parentSessionId !== undefined
       ? state.getRelation(parentSessionId, focusedChildId)
@@ -878,8 +883,8 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
         <>
           <ApprovalStatus />
           <ConnectedPermissionModal />
-          {permissionForwarder}
           <ChildSessionPane
+            permissionForwarder={permissionForwarder}
             parentTabId={tabId}
             spawnToolCallId={childView.spawnToolCallId}
             relation={childRelation}
@@ -894,8 +899,8 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
       <>
         <ApprovalStatus />
         <ConnectedPermissionModal />
-        {permissionForwarder}
         <ChildHistoryPane
+          permissionForwarder={permissionForwarder}
           parentTabId={tabId}
           parentSessionId={parentSessionId}
           spawnToolCallId={childView.spawnToolCallId}
@@ -908,8 +913,8 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
 
   return (
     <>
-      {permissionForwarder}
       <SessionHeader sidebarCollapsed={sidebarCollapsed} onToggleSidebar={onToggleSidebar} onToast={onToast} />
+      {permissionForwarder}
 
       <div
         ref={attachReviewRoot}
@@ -953,6 +958,7 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
 }
 
 interface ChildSessionPaneProps {
+  permissionForwarder: ReactNode;
   parentTabId: string;
   spawnToolCallId: string;
   /** Guaranteed `live: true` by the caller above — ActiveTabBody only renders this while the child is live. */
@@ -980,6 +986,7 @@ interface ChildSessionPaneProps {
  * the very next tick for that case.
  */
 function ChildSessionPane({
+  permissionForwarder,
   parentTabId,
   spawnToolCallId,
   relation,
@@ -1030,6 +1037,7 @@ function ChildSessionPane({
           Split
         </button>
       </header>
+      {permissionForwarder}
 
       <div className="session-content">
         {childStore ? (
@@ -1045,6 +1053,7 @@ function ChildSessionPane({
 }
 
 interface ChildHistoryPaneProps {
+  permissionForwarder: ReactNode;
   parentTabId: string;
   /** The master's own sessionId (ambient — NEVER a card-payload id, CUT-S2 §2.3's identity discipline mirrored renderer-side). Null/undefined only if this tab's own session row hasn't hydrated yet — treated as unavailable rather than crashing. */
   parentSessionId: string | null | undefined;
@@ -1076,7 +1085,7 @@ const CHILD_HISTORY_LOADING = { kind: "loading" as const };
  * `Composer` at all — "composer disabled" per §10.8.1 point 3's normative
  * §2.5 rule, since there is no live connection to send a composer draft on.
  */
-function ChildHistoryPane({ parentTabId, parentSessionId, spawnToolCallId, sidebarCollapsed, onToggleSidebar }: ChildHistoryPaneProps) {
+function ChildHistoryPane({ permissionForwarder, parentTabId, parentSessionId, spawnToolCallId, sidebarCollapsed, onToggleSidebar }: ChildHistoryPaneProps) {
   const masterTitle =
     useTabsStore((state) => state.tabs.find((tab) => tab.tabId === parentTabId)?.title) ?? "Untitled task";
   const card = useTabStore((state) => {
@@ -1122,6 +1131,7 @@ function ChildHistoryPane({ parentTabId, parentSessionId, spawnToolCallId, sideb
           Split
         </button>
       </header>
+      {permissionForwarder}
 
       <div className="session-content">
         <ChildHistoryContent parentSessionId={parentSessionId} spawnToolCallId={spawnToolCallId} />
