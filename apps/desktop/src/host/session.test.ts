@@ -8777,6 +8777,21 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
     return { turnId: turnStarted!.turnId };
   }
 
+  it("persists timing supplied by the model stream alongside usage", async () => {
+    const { sink, records } = recordingSink();
+    const h = createHarness({
+      steps: [[{ type: "start" }, { type: "text_delta", id: "t", text: "hi" },
+        { type: "finish", finishReason: "stop", usage: { outputTokens: 50 }, timeToFirstTokenMs: 200, generationDurationMs: 1000 }]],
+      usageAudit: { sink, summary: fakeSummary({ steps: [], totals: null }) },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      await runOneTurn(h);
+      expect(records[0]).toMatchObject({ outputTokens: 50, timeToFirstTokenMs: 200, generationDurationMs: 1000 });
+    } finally { h.close(); }
+  });
+
   it("normal finish: sink records ONE entry with the real outer turnId, step 1, model, finishReason", async () => {
     const { sink, records } = recordingSink();
     const h = createHarness({
@@ -9695,6 +9710,17 @@ describe("tapChildPermissions ask identity (Taskana 4821)", () => {
 
 
 describe("durable cost summary", () => {
+  it("computes a weighted generation rate using only timed output rows", () => {
+    const base = { sessionId: "s", turnId: "t", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0 };
+    const totals = summarizeProviderUsage([
+      { ...base, outputTokens: 100, generationDurationMs: 1000 },
+      { ...base, step: 2, outputTokens: 300, generationDurationMs: 2000 },
+      { ...base, step: 3, outputTokens: 9000 },
+      { ...base, step: 4, outputTokens: 500, generationDurationMs: 0 },
+    ]).totals;
+    expect(totals?.generationTokensPerSecond).toBeCloseTo(400 / 3);
+  });
+
   it("retains the unknown count when every parent step is unpriced", () => {
     const summary = summarizeProviderUsage([{ sessionId: "s", turnId: "t", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0 }]);
     expect(summary.totals).toMatchObject({ unpricedSteps: 1 });

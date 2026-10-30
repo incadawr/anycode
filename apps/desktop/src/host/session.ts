@@ -689,7 +689,7 @@ export interface ProviderUsageAudit {
 export interface ProviderUsageSummaryPort {
   summary(): Promise<{
     steps: ProviderUsageRecord[];
-    totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unknownSavingsSteps?: number; priceBasisIds?: string[]; unpricedSteps?: number; subscriptionSteps?: number; subagentCostUsd?: number; subagentUnpriced?: number; subagentSubscription?: number; subagentIncludedInReportedCost?: boolean; subagentCount?: number } | null;
+    totals: { generationTokensPerSecond?: number; input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unknownSavingsSteps?: number; priceBasisIds?: string[]; unpricedSteps?: number; subscriptionSteps?: number; subagentCostUsd?: number; subagentUnpriced?: number; subagentSubscription?: number; subagentIncludedInReportedCost?: boolean; subagentCount?: number } | null;
   }>;
 }
 
@@ -703,7 +703,7 @@ export interface ProviderUsageSummaryPort {
  */
 export function summarizeProviderUsage(steps: ProviderUsageRecord[]): {
   steps: ProviderUsageRecord[];
-  totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unknownSavingsSteps?: number; priceBasisIds?: string[]; unpricedSteps?: number; subscriptionSteps?: number; subagentCostUsd?: number; subagentUnpriced?: number; subagentSubscription?: number; subagentIncludedInReportedCost?: boolean; subagentCount?: number } | null;
+  totals: { generationTokensPerSecond?: number; input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unknownSavingsSteps?: number; priceBasisIds?: string[]; unpricedSteps?: number; subscriptionSteps?: number; subagentCostUsd?: number; subagentUnpriced?: number; subagentSubscription?: number; subagentIncludedInReportedCost?: boolean; subagentCount?: number } | null;
 } {
   if (steps.length === 0) {
     return { steps, totals: null };
@@ -729,6 +729,8 @@ export function summarizeProviderUsage(steps: ProviderUsageRecord[]): {
       stepsWithCache += 1;
     }
   }
+  const timed = steps.filter((step) => step.outputTokens !== undefined && Number.isFinite(step.outputTokens) && step.outputTokens >= 0 && step.generationDurationMs !== undefined && Number.isFinite(step.generationDurationMs) && step.generationDurationMs > 0);
+  const generationTokensPerSecond = timed.length ? 1000 * timed.reduce((sum, step) => sum + step.outputTokens!, 0) / timed.reduce((sum, step) => sum + step.generationDurationMs!, 0) : undefined;
   const subscriptionSteps = steps.filter((step) => step.priceBasisId === "subscription").length;
   const priced = steps.filter((step) => step.costUsd !== undefined);
   const savings = steps.filter((step) => step.cacheSavingsUsd !== undefined);
@@ -738,7 +740,7 @@ export function summarizeProviderUsage(steps: ProviderUsageRecord[]): {
     ...(savings.length ? { cacheSavingsUsd: savings.reduce((sum, step) => sum + step.cacheSavingsUsd!, 0) } : {}),
 
   };
-  return { steps, totals: { input, output, total, stepsReported, stepsWithCache, ...costs, ...(steps.length > priced.length + subscriptionSteps ? { unpricedSteps: steps.length - priced.length - subscriptionSteps } : {}), ...(priced.length || subscriptionSteps ? { unknownSavingsSteps: steps.length - savings.length - subscriptionSteps } : {}), ...(subscriptionSteps ? { subscriptionSteps } : {}) } };
+  return { steps, totals: { input, output, total, stepsReported, stepsWithCache, ...(generationTokensPerSecond !== undefined ? { generationTokensPerSecond } : {}), ...costs, ...(steps.length > priced.length + subscriptionSteps ? { unpricedSteps: steps.length - priced.length - subscriptionSteps } : {}), ...(priced.length || subscriptionSteps ? { unknownSavingsSteps: steps.length - savings.length - subscriptionSteps } : {}), ...(subscriptionSteps ? { subscriptionSteps } : {}) } };
 }
 
 export interface SessionOptions {
@@ -5220,6 +5222,8 @@ export class Session {
               outputTokens: event.usage.outputTokens,
               totalTokens: event.usage.totalTokens,
               finishReason: event.finishReason,
+              ...(event.generationDurationMs !== undefined ? { generationDurationMs: event.generationDurationMs } : {}),
+              ...(event.timeToFirstTokenMs !== undefined ? { timeToFirstTokenMs: event.timeToFirstTokenMs } : {}),
               transportRetries: this.finishRetries,
             };
           }

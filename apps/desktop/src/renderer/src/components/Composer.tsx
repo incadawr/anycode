@@ -922,7 +922,8 @@ export function ctxPopoverAnchorFromRect(
  * the total row wraps, and the qualifiers are separate lines rather than a
  * " · "-joined tail that overflowed the 280 px popover.
  */
-export function UsageCostBlock({ ledger, turnSummary, turnSteps, expanded, onToggle }: {
+export function UsageCostBlock({ ledger, turnSummary, turnSteps, generationTokensPerSecond, expanded, onToggle }: {
+  generationTokensPerSecond?: number;
   ledger: UsageCostLedger;
   turnSummary: string | null;
   turnSteps: readonly WireUsageAuditStep[];
@@ -930,6 +931,9 @@ export function UsageCostBlock({ ledger, turnSummary, turnSteps, expanded, onTog
   onToggle: () => void;
 }) {
   const total = [ledger.total, ledger.qualifier, ledger.subagentSuffix].filter((part): part is string => part !== null).join(" · ");
+  const timed = turnSteps.filter((step) => step.outputTokens !== undefined && Number.isFinite(step.outputTokens) && step.outputTokens >= 0 && step.generationDurationMs !== undefined && Number.isFinite(step.generationDurationMs) && step.generationDurationMs > 0);
+  const turnRate = timed.length ? 1000 * timed.reduce((sum, step) => sum + step.outputTokens!, 0) / timed.reduce((sum, step) => sum + step.generationDurationMs!, 0) : undefined;
+  const rate = (value: number | undefined) => value === undefined || !Number.isFinite(value) ? "—" : `${Number(value.toFixed(1))} t/s`;
   return <div className="ctx-popover-cost-block">
     <div className="ctx-popover-total ctx-popover-cost-line" tabIndex={0} title={total}>{ledger.total}</div>
     {ledger.qualifier !== null && <div className="ctx-popover-total-qualifier" title={ledger.qualifier}>{ledger.qualifier}</div>}
@@ -947,6 +951,7 @@ export function UsageCostBlock({ ledger, turnSummary, turnSteps, expanded, onTog
         })}
       </div>}
     </>}
+    {(generationTokensPerSecond !== undefined || turnRate !== undefined) && <div className="ctx-popover-session">Generation speed: session {rate(generationTokensPerSecond)} · this turn {rate(turnRate)}</div>}
     {ledger.footnote !== null && <div className="ctx-popover-session ctx-popover-footnote" tabIndex={0} title={ledger.footnote}>{ledger.footnote}</div>}
   </div>;
 }
@@ -1234,7 +1239,7 @@ function CtxPopover({
               </div>
             )}
             <div className="ctx-popover-divider" />
-            <UsageCostBlock ledger={ledger} turnSummary={turnStepSummary} turnSteps={turnSteps} expanded={stepsExpanded} onToggle={() => setStepsExpanded((value) => !value)} />
+            <UsageCostBlock ledger={ledger} turnSummary={turnStepSummary} turnSteps={turnSteps} generationTokensPerSecond={usageAudit.totals?.generationTokensPerSecond} expanded={stepsExpanded} onToggle={() => setStepsExpanded((value) => !value)} />
             {showCustomPricingHint(shortcutTarget, usageAudit.totals) && <div className="ctx-popover-footnote">Set prices in the connection settings</div>}
             {usageAudit.list === null && usageAudit.totalSteps > 0 && (
               <div className="ctx-popover-session">Step history: {usageAudit.totalSteps} records — reopen to load</div>

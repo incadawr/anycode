@@ -304,6 +304,18 @@ afterEach(() => {
 });
 
 describe("AiSdkModelPort — happy path", () => {
+  it("measures first output and generation duration on the successful stream attempt", async () => {
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    mockStreamText.mockImplementationOnce(() => ({ fullStream: (async function* () {
+      yield startPart;
+      now = 300; yield { type: "reasoning-delta", id: "r", text: "thinking" };
+      now = 1300; yield finishPart;
+    })() }));
+    const events = await collect(new AiSdkModelPort(baseConfig()).streamText(baseRequest));
+    expect(events.find((event) => event.type === "finish")).toMatchObject({ timeToFirstTokenMs: 200, generationDurationMs: 1000 });
+  });
+
   it("yields translated events for a single successful attempt with no retries", async () => {
     mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), part(finishPart)]));
 
@@ -560,7 +572,7 @@ describe("AiSdkModelPort — ignorable provider stream artifacts (slice 3.7 R1)"
       { type: "start" },
       { type: "text_delta", id: "t1", text: "a" },
       { type: "text_delta", id: "t1", text: "b" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, timeToFirstTokenMs: expect.any(Number), generationDurationMs: expect.any(Number) },
     ]);
     expect(events.some((e) => e.type === "error")).toBe(false);
     expect(warnSpy).toHaveBeenCalledTimes(1); // deduped by signature
