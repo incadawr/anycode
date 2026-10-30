@@ -104,6 +104,16 @@ describe("describeClaudeReportStatus", () => {
   it("error surfaces the diagnostic string", () => {
     expect(describeClaudeReportStatus({ status: "error", error: "boom" }).detail).toBe("boom");
   });
+
+  it("a version-check failure adds an actionable hint after the CLI's own cause", () => {
+    const detail = describeClaudeReportStatus({
+      status: "error",
+      error: "Claude version check exited with code 1: Cannot find module",
+    }).detail;
+    expect(detail).toContain("Cannot find module");
+    expect(detail).toContain("claude --version");
+    expect(detail).toContain("Binary");
+  });
 });
 
 describe("formatClaudeBinarySourceLabel", () => {

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { computePreviewMenuVisible, derivePreviewMenuItems, worktreeExitControlState } from "./SessionHeader.js";
 import type { PreviewChangedPayload, PreviewPanelInfo } from "../../../shared/preview-panel.js";
@@ -115,5 +116,18 @@ describe("derivePreviewMenuItems (D15, TASK.96 96-P3)", () => {
       visiblePanelPreviewId: "same-id",
     };
     expect(derivePreviewMenuItems(payload)[0]?.visible).toBe(false);
+  });
+});
+
+describe("header toggles", () => {
+  // The header used one Terminal glyph for BOTH the background-tasks toggle
+  // and the terminal toggle, so the two read as the same control.
+  it("background tasks and terminal do not share one glyph", () => {
+    const source = readFileSync(new URL("./SessionHeader.tsx", import.meta.url), "utf8");
+    const tasks = source.slice(source.indexOf('aria-label="Toggle background tasks"'), source.indexOf("</button>", source.indexOf('aria-label="Toggle background tasks"')));
+    const terminal = source.slice(source.indexOf('aria-label="Toggle terminal"'), source.indexOf("</button>", source.indexOf('aria-label="Toggle terminal"')));
+    expect(tasks).toContain("<Stack />");
+    expect(tasks).not.toContain("<Terminal />");
+    expect(terminal).toContain("<Terminal />");
   });
 });

@@ -59,9 +59,11 @@ import {
   describeFetchModelsError,
   describeSecretStatus,
   isOwnDialogCancel,
+  mergeCurationModelIds,
   secretFieldReducer,
   selectProviderEntry,
   shouldShowBaseUrlField,
+  showConnectionLabelField,
   toggleSelectedModel,
   transportOptions,
   type CustomProviderBridge,
@@ -1906,8 +1908,12 @@ export function ConnectionDrawerFields({
         placeholder="e.g. Work, Personal"
         onChange={(e) => setLabel(e.target.value)}
       />
+      <span className="settings-field-hint">A name for this saved connection only — the provider keeps its own name.</span>
     </label>
   );
+  // On the new-custom-endpoint form the provider Name already identifies the
+  // row; a second "Label" field next to it reads as the same question twice.
+  const labelFieldVisible = showConnectionLabelField(simplified, isNewCustomEndpoint, createdConnectionId !== null);
 
   const maxOutputInputShown = maxOutputSegmentSelection(maxOutputTokens, maxOutputCustom) === "custom";
 
@@ -1920,7 +1926,7 @@ export function ConnectionDrawerFields({
       onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
     >
       <summary>{simplified ? "Advanced settings (optional)" : "Advanced"}</summary>
-      {simplified && labelField}
+      {simplified && labelFieldVisible && labelField}
       <label className="settings-field">
         <span className="settings-field-label">Pricing</span>
         <select className="settings-field-select" value={pricingMode} disabled={readOnly} onChange={(e) => setPricingMode(e.target.value as "catalog" | "subscription" | "rates")}>
@@ -2179,7 +2185,7 @@ export function ConnectionDrawerFields({
       {isNewCustomEndpoint && createdConnectionId === null && (
         <div className="connection-drawer-custom-fields">
           <label className="settings-field">
-            <span className="settings-field-label">Name</span>
+            <span className="settings-field-label">Provider name</span>
             <input
               className="settings-field-input"
               type="text"
@@ -2188,6 +2194,7 @@ export function ConnectionDrawerFields({
               placeholder="e.g. LM Studio"
               onChange={(e) => setCustomName(e.target.value)}
             />
+            <span className="settings-field-hint">Shown in the provider list on this machine.</span>
           </label>
           <label className="settings-field">
             <span className="settings-field-label">Base URL</span>
@@ -2217,7 +2224,7 @@ export function ConnectionDrawerFields({
       )}
 
       {/* Label: top of the dialog; in the first-run flow it stays inside Advanced. */}
-      {!simplified && labelField}
+      {!simplified && labelFieldVisible && labelField}
 
       {showBaseUrl && (
         <label className="settings-field">
@@ -2409,19 +2416,25 @@ export function ConnectionDrawerFields({
                 )}
               </div>
               {isCustomRecordConnection && fetchedModels !== null && (
-                <fieldset className="settings-field">
+                <fieldset className="settings-field connection-drawer-model-curation">
                   <legend className="settings-field-label">Models to show in the selector</legend>
-                  {fetchedModels.map((m) => (
-                    <label key={m.id} className="settings-field-row">
-                      <input
-                        type="checkbox"
-                        checked={curatedModelIds.includes(m.id)}
-                        disabled={readOnly || curating}
-                        onChange={() => void toggleModel(m.id)}
-                      />
-                      {m.id}
-                    </label>
-                  ))}
+                  <span className="settings-field-hint">Tick the models this connection offers. The current model is always listed and stays ticked.</span>
+                  {mergeCurationModelIds(fetchedModels.map((m) => m.id), curatedModelIds, model).map((id) => {
+                    const isCurrent = id === model.trim();
+                    return (
+                      <label key={id} className="settings-field-checkbox connection-drawer-model-curation-row">
+                        <input
+                          type="checkbox"
+                          checked={isCurrent || curatedModelIds.includes(id)}
+                          disabled={readOnly || curating || isCurrent}
+                          title={isCurrent ? "The connection's current model is always listed" : undefined}
+                          onChange={() => void toggleModel(id)}
+                        />
+                        {id}
+                        {isCurrent && <span className="settings-field-hint">current</span>}
+                      </label>
+                    );
+                  })}
                 </fieldset>
               )}
             </div>
@@ -2534,9 +2547,27 @@ export interface ConnectionDrawerProps {
   customProvider?: CustomProviderBridge;
 }
 
+/**
+ * Header text for the drawer. A create flow that SUCCEEDS is editing from
+ * that moment on (the form switches to the created connection); leaving the
+ * title at "Add connection" reads as if nothing was saved.
+ */
+export function connectionDrawerTitle(mode: "add" | "edit", createdWhileOpen: boolean): "Add connection" | "Edit connection" {
+  return mode === "edit" || createdWhileOpen ? "Edit connection" : "Add connection";
+}
+
+/** A connection appearing under an open add drawer means the create flow succeeded. */
+export function connectionCreatedWhileOpen(baseline: number | null, current: number, mode: "add" | "edit"): boolean {
+  return mode === "add" && baseline !== null && current > baseline;
+}
+
 /** Native-`<dialog>` wrapper around `ConnectionDrawerFields` for the Settings grid's Add/Edit action. */
 export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDrawerProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  // The create path lives inside `fieldsProps`; the one fact the header needs
+  // is whether a connection appeared while this drawer was open.
+  const [createdWhileOpen, setCreatedWhileOpen] = useState(false);
+  const openCount = useRef<number | null>(null);
 
   useEffect(() => {
     if (!open) {
@@ -2549,6 +2580,20 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
       }
     };
   }, [open]);
+
+  useEffect(() => {
+    if (open) {
+      openCount.current = fieldsProps.connections.length;
+      setCreatedWhileOpen(false);
+    }
+    // The baseline is the count at OPEN time, not every count change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    setCreatedWhileOpen(connectionCreatedWhileOpen(openCount.current, fieldsProps.connections.length, fieldsProps.mode));
+  }, [open, fieldsProps.mode, fieldsProps.connections.length]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -2570,7 +2615,7 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
     <dialog
       ref={dialogRef}
       className="connection-drawer"
-      aria-label={fieldsProps.mode === "add" ? "Add connection" : "Edit connection"}
+      aria-label={connectionDrawerTitle(fieldsProps.mode, createdWhileOpen)}
       onCancel={(event) => {
         // TASK.58 item 4: act only on THIS drawer's own Escape — the shared
         // guard also stops this cancel (which React propagates up the tree)
@@ -2583,7 +2628,7 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
       }}
     >
       <div className="connection-drawer-header">
-        <span className="connection-drawer-title">{fieldsProps.mode === "add" ? "Add connection" : "Edit connection"}</span>
+        <span className="connection-drawer-title">{connectionDrawerTitle(fieldsProps.mode, createdWhileOpen)}</span>
         <button type="button" className="connection-drawer-close" aria-label="Close" onClick={onClose}>
           <X aria-hidden="true" />
         </button>

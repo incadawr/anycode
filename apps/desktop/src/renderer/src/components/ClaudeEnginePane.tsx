@@ -77,8 +77,15 @@ export function describeClaudeReportStatus(report: ClaudeDoctorReport | undefine
       };
     case "not_installed":
       return { headline: "Not installed", detail: "No Claude Code CLI was found on PATH or in common install locations.", tone: "muted" };
-    case "error":
-      return { headline: "Error", detail: report.error ?? "Claude Code could not be checked.", tone: "error" };
+    case "error": {
+      const detail = report.error ?? "Claude Code could not be checked.";
+      // A check failure names its cause when the CLI gives one; otherwise the
+      // user still gets a next step instead of a bare exit code.
+      const actionable = /version check|timed out|handshake/i.test(detail)
+        ? " Run `claude --version` in a terminal to see the full error, or choose the binary under “Binary”."
+        : "";
+      return { headline: "Error", detail: `${detail}${actionable}`, tone: "error" };
+    }
     default: {
       const exhaustive: never = report.status;
       return exhaustive;

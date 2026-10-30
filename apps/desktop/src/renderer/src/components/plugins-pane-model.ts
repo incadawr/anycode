@@ -320,6 +320,19 @@ export function pluginIndexCheckedText(checkedAt: string | undefined): string {
   return checkedAt !== undefined ? `Last checked ${checkedAt}` : "Not checked yet";
 }
 
+/**
+ * The index line in the Plugins header. Status and checked-at say the same
+ * thing for an unchecked index ("Index not checked yet" + "Not checked yet"),
+ * so that pair renders the status alone; every other status keeps both facts.
+ */
+export function pluginIndexHeaderText(status: PluginsIndexStatus, checkedAt: string | undefined): string {
+  const statusText = pluginIndexStatusText(status).text;
+  if (status === "unchecked") {
+    return checkedAt !== undefined ? `${statusText} · Last checked ${checkedAt}` : statusText;
+  }
+  return `${statusText} · ${pluginIndexCheckedText(checkedAt)}`;
+}
+
 // ── install menu ──
 
 export type InstallMenuOption = {

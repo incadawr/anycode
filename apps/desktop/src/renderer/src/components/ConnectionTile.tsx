@@ -291,6 +291,13 @@ export function connectionQuotaLine(
   return `${label} · ${percentLeft}% left${resetsPart}`;
 }
 
+/** What clicking the tile does — it silently changed the default for new sessions before. */
+export function connectionTileSelectHint(selected: boolean): string {
+  return selected
+    ? "This is the default connection for new sessions"
+    : "Make this the default connection for new sessions";
+}
+
 export function ConnectionTile({
   connection,
   catalogEntry,
@@ -418,10 +425,12 @@ export function ConnectionTile({
         className="connection-tile-select"
         tabIndex={tabIndex}
         aria-pressed={selected}
+        title={readOnly ? undefined : connectionTileSelectHint(selected)}
         disabled={readOnly}
         onClick={onSelect}
         onKeyDown={onKeyDownRoving}
       >
+        <span className="visually-hidden">{selected ? "Default for new sessions. " : "Make default for new sessions. "}</span>
         <div className="connection-tile-header">
           <span className="connection-tile-provider">{providerLabel}</span>
           {selected && (

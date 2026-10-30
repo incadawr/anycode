@@ -11,6 +11,8 @@ import { projectCatalogSummary } from "../../../main/settings-ipc.js";
 import type { CatalogSummaryEntry, ProviderConnection, SettingsMutationResult } from "../../../shared/settings.js";
 import type { FetchModelsOutcome } from "../anycode-window.js";
 import {
+  connectionCreatedWhileOpen,
+  connectionDrawerTitle,
   MAX_OUTPUT_TOKEN_PRESETS,
   MODEL_ID_ERROR,
   appendModelToConnection,
@@ -1958,10 +1960,10 @@ describe("ConnectionDrawer layout wiring (Taskana 4749)", () => {
   });
 
   it("Label is at the top in the dialog (not simplified), and inside Advanced only for the first-run flow", () => {
-    const top = source.indexOf("{!simplified && labelField}");
+    const top = source.indexOf("{!simplified && labelFieldVisible && labelField}");
     expect(top).toBeGreaterThan(source.indexOf("<span className=\"settings-field-label\">Provider</span>"));
     expect(top).toBeLessThan(source.indexOf("{showBaseUrl && ("));
-    expect(source.indexOf("{simplified && labelField}")).toBeGreaterThan(source.indexOf("const advancedBlock = ("));
+    expect(source.indexOf("{simplified && labelFieldVisible && labelField}")).toBeGreaterThan(source.indexOf("const advancedBlock = ("));
   });
 
   it("the standalone catalog hint lines are gone and the inputs carry the catalog number as placeholder", () => {
@@ -2068,4 +2070,26 @@ it("prefills each model's own context window when navigating A → B → A", () 
 it("disables per-model rate inputs while a save is pending", () => {
   const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
   expect(source).toContain('fieldset key={id} disabled={readOnly || saving || pricingMode === "subscription"}');
+});
+
+describe("connectionDrawerTitle", () => {
+  it("stays 'Add connection' only until the create flow succeeds", () => {
+    expect(connectionDrawerTitle("add", false)).toBe("Add connection");
+    // A created connection is being edited from that moment on; the old title
+    // kept claiming nothing had been saved.
+    expect(connectionDrawerTitle("add", true)).toBe("Edit connection");
+    expect(connectionDrawerTitle("edit", false)).toBe("Edit connection");
+  });
+});
+
+describe("connectionCreatedWhileOpen", () => {
+  it("sees a new connection appear under an open add drawer", () => {
+    expect(connectionCreatedWhileOpen(2, 3, "add")).toBe(true);
+  });
+
+  it("ignores the unchanged baseline, an edit drawer, and an unknown baseline", () => {
+    expect(connectionCreatedWhileOpen(2, 2, "add")).toBe(false);
+    expect(connectionCreatedWhileOpen(2, 3, "edit")).toBe(false);
+    expect(connectionCreatedWhileOpen(null, 3, "add")).toBe(false);
+  });
 });

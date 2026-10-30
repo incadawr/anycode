@@ -270,6 +270,17 @@ describe("runClaudeDoctor — status discrimination against a fake CLI", () => {
     expect(report.error).toMatch(/Unrecognized Claude version/);
   });
 
+  it("error: a non-zero --version exit carries the CLI's own cause, not just the code", async () => {
+    const report = await runClaudeDoctor("/fake/claude", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(["--nonzero-exit"]),
+      profileDir: freshProfileDir(),
+    });
+    expect(report.status).toBe("error");
+    expect(report.error).toContain("exited with code 1");
+    expect(report.error).toContain("Cannot find module '@anthropic-ai/claude-code/cli.js'");
+  });
+
   it("error: trust gate refuses the path before any spawn happens", async () => {
     const report = await runClaudeDoctor("/fake/claude", {
       trust: () => ({

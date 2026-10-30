@@ -265,6 +265,7 @@ function preflightVersion(
 ): Promise<PreflightResult> {
   return new Promise((resolve) => {
     let stdout = "";
+    let stderr = "";
     let settled = false;
     let disarm: () => void = () => {};
     const child = spawnImpl(binaryPath, ["--version"], {
@@ -294,10 +295,23 @@ function preflightVersion(
     child.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString("utf8");
     });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      // Bounded: the report crosses IPC; a chatty wrapper must not carry the
+      // whole log into the Settings pane.
+      stderr = (stderr + chunk.toString("utf8")).slice(-400);
+    });
     child.once("error", (error) => settle({ error: `Claude version check failed: ${error.message}` }));
     child.once("close", (code) => {
       if (code !== 0) {
-        settle({ error: `Claude version check exited with code ${code ?? "null"}` });
+        // The exit code alone gives the user nothing to act on (an isolated
+        // HOME, a broken wrapper script and a missing dynamic library all
+        // look the same). Carry the CLI's own last words as the cause.
+        const cause = stderr
+          .replace(/\u001b\[[0-9;]*m/g, "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(-240);
+        settle({ error: `Claude version check exited with code ${code ?? "null"}${cause ? `: ${cause}` : ""}` });
         return;
       }
       settle({ version: stdout });

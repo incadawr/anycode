@@ -101,9 +101,18 @@
 
 .connection-drawer-advanced {
   display: grid;
-  gap: var(--sp-3);
+  /* Audited at B10: with sp-3 a hint ("Blank = provider default.") sat as close
+     to the next label as to its own input, so fields read as one run-on block. */
+  gap: var(--sp-4);
   border-top: 1px solid var(--border);
   padding-top: var(--sp-3);
+}
+
+/* Hints are secondary to the field they belong to and must not compete with
+   the next field's label. */
+.connection-drawer-advanced .settings-field-hint {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
 }
 
 .connection-drawer-advanced > summary {
@@ -868,6 +877,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* The row inherited the dialog's 16px body size while every other list row
+     is fs-md — it read as a heading (audit B9). */
+  font-size: var(--fs-md);
+  font-weight: var(--w-semibold, 600);
 }
 
 .custom-provider-detail {
@@ -875,7 +888,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-2);
-  font-size: 0.9em;
+  font-size: var(--fs-xs);
 }
 
 .custom-provider-row > button {
@@ -1115,6 +1128,29 @@
 .connection-grid-empty {
   font-size: var(--fs-sm);
   color: var(--text-dim);
+}
+
+.connection-grid-hint {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+/* The model curation list was a bare fieldset with a column of native
+   checkboxes; it is a list of rows now (audit B9). */
+.connection-drawer-model-curation {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2, 8px);
+}
+
+.connection-drawer-model-curation > legend {
+  padding: 0 var(--sp-1);
+}
+
+.connection-drawer-model-curation-row {
+  justify-content: flex-start;
 }
 
 /* ── Connection add/edit drawer (TASK.45 W12, cut §"Add/Edit flow") ── */
