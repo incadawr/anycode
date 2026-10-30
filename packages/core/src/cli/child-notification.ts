@@ -374,8 +374,10 @@ export function formatChildApprovalNotice(input: ChildApprovalNoticeInput): stri
   return (
     `${NOTIFICATION_HEADER}\n\n` +
     "This child session has NOT finished — it is paused on a permission request that needs a human " +
-    "answer. To unblock it, open the child's tab and approve or deny the pending request (or ask the " +
-    `user to). ${deadlineSentence}${expiredRecovery}${noBypass}` +
+    "answer. The pending request is shown in the app's approval dialog, labelled with this child's " +
+    "description and subagent type; when several children are waiting at once the dialog says " +
+    "which request of how many is shown and lets the user switch to the next one. Ask the user to " +
+    `answer it in that dialog. ${deadlineSentence}${expiredRecovery}${noBypass}` +
     "This is a progress notice, not a completion report.\n\n" +
     body
   );

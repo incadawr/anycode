@@ -87,20 +87,34 @@ export function childPermissionSubmissionKey(childTabId: string, requestId: stri
   return `${childTabId}\u0000${requestId}`;
 }
 
-/** Header label for a forwarded child ask — the dialog names its owner. */
+/**
+ * Header label for a forwarded child ask — the dialog names its owner instead
+ * of showing a bare session uuid. The name comes from the spawn card (live
+ * subagent sub-status, then the Agent call's own input) or the background-child
+ * announcement; the subagent TYPE rides along in parentheses when the same
+ * sources know it. Only when no name is known at all does the session id
+ * remain, so an early ask is never rendered as nothing.
+ */
 export function childPermissionOwnerLabel(
   childSessionId: string,
   spawnToolCallId?: string,
   transcript: readonly TranscriptBlock[] = [],
-  backgroundChildren: readonly { childSessionId: string; description: string }[] = [],
+  backgroundChildren: readonly { childSessionId: string; description: string; agentType?: string }[] = [],
 ): string {
   const call = transcript.find((block) => block.kind === "tool_call" && block.toolCallId === spawnToolCallId);
   const input = call?.kind === "tool_call" && typeof call.input === "object" && call.input !== null
     ? (call.input as { description?: unknown }).description : undefined;
+  const background = backgroundChildren.find((child) => child.childSessionId === childSessionId);
   const candidates = [call?.kind === "tool_call" ? call.subagent?.description : undefined, input,
-    backgroundChildren.find((child) => child.childSessionId === childSessionId)?.description];
+    background?.description];
   const description = candidates.find((value): value is string => typeof value === "string" && value.trim().length > 0);
-  return `Subagent: ${description?.trim() ?? childSessionId}`;
+  const typeCandidates = [call?.kind === "tool_call" ? call.subagent?.agentType : undefined, background?.agentType];
+  const type = typeCandidates.find((value): value is string => typeof value === "string" && value.trim().length > 0);
+  const name = description?.trim();
+  if (name !== undefined && type !== undefined) return `Subagent: ${name} (${type.trim()})`;
+  if (name !== undefined) return `Subagent: ${name}`;
+  if (type !== undefined) return `Subagent (${type.trim()})`;
+  return `Subagent: ${childSessionId}`;
 }
 
 /**
@@ -163,20 +177,31 @@ export function respondChildPermission(
 }
 
 /**
- * The ask to forward right now, if any. Priority: the root's OWN ask always
- * wins (it is shown by the root's own modal); a child whose pane is currently
- * displayed is suppressed because that pane shows the very same dialog; then
- * the first pending child in registration order.
+ * Every child ask the parent's window may present right now, in registration
+ * order. The root's OWN ask wins the dialog (its own modal shows it), and a
+ * child whose pane is currently displayed by a surface that shows the same
+ * dialog is suppressed. The list — not just its head — is what lets the
+ * dialog count the waiting asks ("1 of N") and switch between them instead of
+ * hiding every ask but the first until it settles.
  */
+export function forwardedChildPermissionQueue(input: {
+  rootHasOwnPermission: boolean;
+  owners: readonly ChildPermissionOwner[];
+  /** spawnToolCallIds of children whose pane is currently displayed (split's expanded row, or the single child layout). */
+  displayedChildSpawnToolCallIds: readonly string[];
+}): ChildPermissionOwner[] {
+  if (input.rootHasOwnPermission) return [];
+  return input.owners.filter(
+    (owner) => !input.displayedChildSpawnToolCallIds.includes(owner.spawnToolCallId),
+  );
+}
+
+/** The ask to forward right now, if any — the queue's head (see `forwardedChildPermissionQueue`). */
 export function selectForwardedChildPermission(input: {
   rootHasOwnPermission: boolean;
   owners: readonly ChildPermissionOwner[];
   /** spawnToolCallIds of children whose pane is currently displayed (split's expanded row, or the single child layout). */
   displayedChildSpawnToolCallIds: readonly string[];
 }): ChildPermissionOwner | null {
-  if (input.rootHasOwnPermission) return null;
-  const pending = input.owners.find(
-    (owner) => !input.displayedChildSpawnToolCallIds.includes(owner.spawnToolCallId),
-  );
-  return pending ?? null;
+  return forwardedChildPermissionQueue(input)[0] ?? null;
 }

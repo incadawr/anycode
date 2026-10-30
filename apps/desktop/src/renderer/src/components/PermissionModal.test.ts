@@ -876,4 +876,32 @@ describe("PermissionModal owner label (GitHub #17 slice E)", () => {
     expect(html).not.toContain("permission-owner-label");
     expect(html).not.toContain("Subagent:");
   });
+
+  it("prints the queue position and a switch when several child asks are waiting", () => {
+    const html = render({
+      request: request as never,
+      onAllow: () => {},
+      onDeny: () => {},
+      workspace: "/workspace",
+      ownerLabel: "Subagent: child-17",
+      queuePosition: { index: 1, total: 3 },
+      onShowNextRequest: () => {},
+    });
+    expect(html).toContain("Request 2 of 3");
+    expect(html).toContain("permission-queue-next");
+    expect(html).toContain("Next request");
+  });
+
+  it("omits the queue chrome for a single ask", () => {
+    const html = render({
+      request: request as never,
+      onAllow: () => {},
+      onDeny: () => {},
+      workspace: "/workspace",
+      queuePosition: { index: 0, total: 1 },
+      onShowNextRequest: () => {},
+    });
+    expect(html).not.toContain("permission-queue-position");
+    expect(html).not.toContain("Next request");
+  });
 });
