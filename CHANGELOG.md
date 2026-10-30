@@ -7,6 +7,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- The conversation-compacted row opens to show the summary that replaced the earlier messages, with a copy button, the prompt that produced it and the summarizing model and duration (GitHub #36).
+- A reopened session shows the same compaction row, with its summary, instead of the summary as an ordinary message.
+
 ## [0.0.53] — 2026-10-30
 
 ### Changed

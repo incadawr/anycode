@@ -31,6 +31,7 @@ import { isReplaySurface, replayStore } from "../replay.js";
 import { matchCheckpointsToTurns } from "./checkpoint-model.js";
 import { ChildReportBlock } from "./ChildReportBlock.js";
 import { AgentMessageStack } from "./AgentMessageStack.js";
+import { CompactionCard, compactionRowText } from "./CompactionCard.js";
 import { COMPOSER_INSERT_EVENT } from "./Composer.js";
 import { ImageViewer } from "./ImageViewer.js";
 import { Markdown } from "./Markdown.js";
@@ -380,39 +381,11 @@ export const STARTER_CHIPS: readonly { label: string; insert: string }[] = [
 ];
 
 /**
- * The one line a compaction card shows (TASK.227). Kept a pure function of the
- * block so the wording is pinnable without mounting the list, and so the three
- * states read as one decision rather than three nested ternaries in JSX.
- *
- * Running says which compaction it is, because the two have different causes a
- * user needs to tell apart: one they asked for, one the context window forced.
- * Done reports both readings — the point of the row is that the meter fell for
- * a REASON, so the reason carries the numbers. A missing `postTokens` prints
- * "?" rather than a zero: the host declined to say, and inventing a number here
- * would be a worse answer than admitting it.
- *
- * The not-ok branch never says "failed": `compaction_end` carries one `error`
- * string for both outcomes, and the commonest one is a deliberate no-op
- * (context/manager.ts's empty-prefix return, whose own comment reads "nothing
- * to compact. Not a failure."). Calling that a failure would be a claim the
- * wire does not support — the CLI hedges the same ambiguity as "compaction
- * skipped/failed" (cli/render.ts). "Not applied" states the one thing that IS
- * certain of both, and leaves the verb to the host's own reason instead of
- * stuttering over it ("skipped/failed: compaction skipped: …", live 07.09).
+ * Re-exported for the renderer's tests and for the store-side wording pins: the
+ * row text now lives with the card that renders it (CompactionCard.tsx,
+ * GitHub #36), which is where the expandable detail view needs it too.
  */
-export function compactionRowText(block: Extract<TranscriptBlock, { kind: "compaction" }>): string {
-  if (block.status === "running") {
-    return block.trigger === "auto"
-      ? "Context window full — compacting conversation…"
-      : "Compacting conversation…";
-  }
-  if (block.status === "failed") {
-    return `Compaction not applied: ${block.error ?? "unknown error"}`;
-  }
-  const pre = block.preTokens ?? "?";
-  const post = block.postTokens ?? "?";
-  return `Conversation compacted: ${pre} → ${post} tokens`;
-}
+export { compactionRowText };
 
 /**
  * Empty-state gate: zero blocks, no running turn (a running zero-block turn
@@ -1192,18 +1165,11 @@ export function MessageList({
             // only a toast that the next notice overwrites. Appended running
             // and patched in place when it ends — a tool_call's pending->result
             // shape, in the register the other system rows already use.
+            // GitHub #36: the row is now a disclosure over the resulting
+            // summary and the prompt that produced it, so the card owns its
+            // own body/alert wrapper (CompactionCard.tsx).
             case "compaction":
-              return (
-                <div
-                  key={block.id}
-                  data-block-id={block.id}
-                  data-compaction-status={block.status}
-                  className={`message ${block.status === "failed" ? "message-error" : "message-loop-end"}${enterClass(block.id)}`}
-                  {...(block.status === "failed" ? { role: "alert" as const } : {})}
-                >
-                  {compactionRowText(block)}
-                </div>
-              );
+              return <CompactionCard key={block.id} block={block} enter={enterIds.has(block.id)} />;
             case "output_truncated":
               return (
                 <div key={block.id} className="message message-error" role="alert">

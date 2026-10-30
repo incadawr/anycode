@@ -21,6 +21,7 @@ vi.mock("../tools/to-model-tools.js", () => ({
 import { z } from "zod";
 import { APICallError } from "ai";
 import { AgentLoop, type AgentLoopConfig, type ContextBreakdown } from "./agent-loop.js";
+import { COMPACTION_INSTRUCTION } from "../prompts/compaction.js";
 import { toToolDeclarations } from "../tools/to-model-tools.js";
 import type { Tokenizer } from "../context/tokenizer.js";
 import type { AgentEvent, ModelStreamEvent } from "../types/events.js";
@@ -3057,6 +3058,15 @@ describe("AgentLoop.compactNow — manual compaction (design slice-2.3-cut.md, t
     expect(types(events)).toEqual(["compaction_start", "compaction_end", "context_usage"]);
     expect(events[0]).toEqual({ type: "compaction_start", trigger: "manual" });
     expect(events[1]).toMatchObject({ type: "compaction_end", ok: true });
+    // GitHub #36: the event a transcript row expands carries the evidence —
+    // the summary that replaced the prefix (the installed item's own text), the
+    // item id, and the instruction the summarizing model was given.
+    const end = events[1] as Extract<(typeof events)[number], { type: "compaction_end" }>;
+    const summaryItem = loop.history.items[0]!;
+    expect(end.summaryItemId).toBe(summaryItem.id);
+    expect(end.summary).toBe(summaryItem.message.content);
+    expect(end.summary).toContain("Summary of the earlier conversation.");
+    expect(end.prompt).toBe(COMPACTION_INSTRUCTION);
 
     const messages = loop.history.toMessages();
     expect(messages).toHaveLength(3); // [compact_summary, u2, a2]
