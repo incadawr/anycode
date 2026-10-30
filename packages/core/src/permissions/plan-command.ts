@@ -1,30 +1,36 @@
-import { accessSync, closeSync, constants, openSync, readSync, realpathSync, statSync } from "node:fs";
-import { dirname, isAbsolute } from "node:path";
+import { accessSync, closeSync, constants, openSync, readSync, readlinkSync, realpathSync, lstatSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join } from "node:path";
 import { classifyBashCommandLine } from "./safe-command.js";
 import { splitBashSegments } from "./rules.js";
 
-// Trust only root-owned, non-writable files and every directory on their paths.
+// Resolve every path component ourselves so intermediate symlinks are checked too.
 function trustedPath(path: string, directory: boolean): boolean {
   try {
-    const real = realpathSync(path);
-    for (const candidate of new Set([path, real])) {
-      let current = candidate;
-      let first = true;
-      for (;;) {
-        const stat = statSync(current);
-        // Check effective access as well as mode bits, including ACL grants.
-        try { accessSync(current, constants.W_OK); return false; } catch (error) {
-          if (!["EACCES", "EPERM", "EROFS"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
-        }
-        if (stat.uid !== 0 || (stat.mode & 0o022) !== 0 ||
-            (first && (directory ? !stat.isDirectory() : !stat.isFile()))) return false;
-        const parent = dirname(current);
-        if (parent === current) break;
-        current = parent;
-        first = false;
+    if (!isAbsolute(path)) return false;
+    let current = "/";
+    let remaining = path.split("/").filter(Boolean);
+    let hops = 0;
+    for (;;) {
+      const stat = lstatSync(current);
+      if (stat.uid !== 0) return false;
+      if (stat.isSymbolicLink()) {
+        // Symlink permissions are not meaningful; its containing directory was checked.
+        if (++hops > 40) return false;
+        const target = readlinkSync(current);
+        current = isAbsolute(target) ? "/" : dirname(current);
+        remaining = [...target.split("/").filter(Boolean), ...remaining];
+        continue;
       }
+      // Check effective access as well as mode bits, including ACL grants.
+      try { accessSync(current, constants.W_OK); return false; } catch (error) {
+        if (!["EACCES", "EPERM", "EROFS"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
+      }
+      if ((stat.mode & 0o022) !== 0) return false;
+      if (remaining.length === 0) return directory ? stat.isDirectory() : stat.isFile();
+      if (!stat.isDirectory()) return false;
+      const component = remaining.shift()!;
+      current = component === ".." ? dirname(current) : component === "." ? current : join(current, component);
     }
-    return true;
   } catch {
     return false;
   }

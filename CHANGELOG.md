@@ -11,6 +11,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Plan-mode commands reject executables reached through untrusted symlink chains.
 - Plan-mode read-only commands work with normal PATH entries while rejecting shadowed executables.
 - Protect plan-mode Bash from executable shadowing and Git configuration hooks while preserving build-mode approvals.
 
