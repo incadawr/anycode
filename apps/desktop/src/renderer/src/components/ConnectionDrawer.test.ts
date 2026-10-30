@@ -6,6 +6,8 @@
  * behavior is proven live by `provider-connections-ui-smoke.mjs` instead.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getBuiltinCatalog } from "@anycode/core/catalog";
+import { projectCatalogSummary } from "../../../main/settings-ipc.js";
 import type { CatalogSummaryEntry, ProviderConnection, SettingsMutationResult } from "../../../shared/settings.js";
 import type { FetchModelsOutcome } from "../anycode-window.js";
 import {
@@ -382,6 +384,20 @@ describe("providerOptionGroups (TASK.70: one brand = one card)", () => {
     { id: "z-ai", name: "Z.AI (GLM)", authKind: "api_key", models: [] },
     { id: "custom", name: "Custom endpoint", authKind: "api_key", models: [], needsBaseUrl: true, isCustom: true },
   ];
+
+  it("projects the MiMo regions into the provider picker with their model capabilities", () => {
+    const catalog = projectCatalogSummary(getBuiltinCatalog().providers);
+    const group = providerOptionGroups(catalog).find((item) => item.label === "Xiaomi MiMo");
+    expect(group?.options).toEqual([
+      { id: "xiaomi-mimo-sgp", label: "Token Plan (SGP)" },
+      { id: "xiaomi-mimo-cn", label: "Token Plan (CN)" },
+      { id: "xiaomi-mimo-ams", label: "Token Plan (AMS)" },
+    ]);
+    const region = catalog.find((entry) => entry.id === "xiaomi-mimo-sgp")!;
+    expect(region).toMatchObject({ defaultTransport: "anthropic-messages", supportedTransports: ["anthropic-messages"] });
+    expect(region.models[0]).toMatchObject({ id: "mimo-v2.6-pro", contextWindow: 1_048_576, usableContextWindow: 300_000, maxOutputTokens: 131_072, imageInput: true, reasoning: true });
+    expect(region.models.map((model) => model.id)).toEqual(["mimo-v2.6-pro", "mimo-v2.6-flash"]);
+  });
 
   it("brandless catalog → all groups have an empty label and options labelled entry.name (or Custom endpoint… for isCustom)", () => {
     expect(providerOptionGroups(BRANDLESS)).toEqual([
