@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.54] — 2026-10-30
+
 ### Added
 
 - AgentStatus lets a parent inspect its own subagents’ live progress and recent activity, with credentials and secret-bearing lines redacted, across supported parent engines (GitHub #29).
