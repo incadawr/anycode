@@ -1962,6 +1962,12 @@ body {
   color: var(--warning);
 }
 
+.approval-status button {
+  margin-left: 0.5rem;
+  color: inherit;
+  cursor: pointer;
+}
+
 /* No-active-tab fallback (App.tsx): a quiet, centered holding state rather
    than a warning strip pinned to an otherwise-empty pane — this is a benign
    transient (a tab exists but its store/port hasn't attached yet), not an

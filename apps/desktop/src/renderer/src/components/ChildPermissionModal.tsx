@@ -63,11 +63,29 @@ export function ConnectedChildPermissionModal() {
     displayedChildSpawnToolCallIds: [],
   });
 
+  const shownTabId = forwarded?.childTabId;
+  const shownRequestId = forwarded?.request.requestId;
+  useEffect(() => {
+    if (!shownTabId || !shownRequestId) return;
+    tabRegistry.sendToTab(shownTabId, { type: "approval_visibility", requestId: shownRequestId, visible: true });
+    return () => tabRegistry.sendToTab(shownTabId, { type: "approval_visibility", requestId: shownRequestId, visible: false });
+  }, [shownTabId, shownRequestId]);
+
   // Keep the preview WebContentsView from covering the approval while it shows.
   useOverlayFlag(forwarded !== null);
 
+  const unattendedChildren = parentSessionId === null ? [] : [...relations.entries()]
+    .filter(([key, relation]) => key.startsWith(`${parentSessionId}\u0000`) && (relation.live ? childStore(relation.childTabId)?.getState().unattended : relation.approvalExpired))
+    .map(([key, relation]) => ({ ...relation, spawnToolCallId: key.slice(parentSessionId.length + 1) }));
+  const statuses = unattendedChildren.map((child) => (
+    <div className="banner banner-info approval-status" role="status" key={child.childTabId}>
+      {childPermissionOwnerLabel(child.childSessionId, child.spawnToolCallId, transcript, backgroundChildren)}:
+      {child.live ? " an unanswered request expired. New approval requests are being denied automatically." : " an unanswered request expired before this subagent finished."}
+      {child.live && <button type="button" onClick={() => tabRegistry.sendToTab(child.childTabId, { type: "approval_recover" })}>Ask me again</button>}
+    </div>
+  ));
   if (forwarded === null) {
-    return null;
+    return <>{statuses}</>;
   }
 
   const childState = childStore(forwarded.childTabId)?.getState();
@@ -105,6 +123,8 @@ export function ConnectedChildPermissionModal() {
   }
 
   return (
+    <>
+    {statuses}
     <PermissionModal
       // A new ask for the same or another child remounts the dialog, so no
       // stale button or keyboard handler can answer it.
@@ -116,5 +136,6 @@ export function ConnectedChildPermissionModal() {
       workspace={childState?.workspace ?? null}
       ownerLabel={childPermissionOwnerLabel(forwarded.childSessionId, forwarded.spawnToolCallId, transcript, backgroundChildren)}
     />
+    </>
   );
 }

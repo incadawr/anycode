@@ -425,6 +425,8 @@ export interface WireBackgroundChild {
 
 // ── renderer -> host ──
 export type UiToHostMessage =
+  | { type: "approval_recover" }
+  | { type: "approval_visibility"; requestId: string; visible: boolean }
   | { type: "ui_ready" } // handshake; host replies host_ready + replay
   | {
       type: "user_message";
@@ -810,6 +812,7 @@ export type HostToUiMessage =
         totalSteps: number;
       };
       permission?: {
+        deadline?: number;
         requestId: string;
         toolName: string;
         input: unknown;
@@ -818,7 +821,13 @@ export type HostToUiMessage =
       };
     }
   | {
+      type: "approval_state";
+      unattended: boolean;
+      pending: { requestId: string; toolName: string; input: unknown; mode: PermissionMode; metadata: WireToolMeta; deadline?: number } | null;
+    }
+  | {
       type: "permission_request";
+      deadline?: number;
       requestId: string;
       toolName: string;
       input: unknown;
@@ -1382,6 +1391,8 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   networkRetryNowSchema,
   exitWorktreeSchema,
   permissionResponseSchema,
+  z.object({ type: z.literal("approval_recover") }).strict(),
+  z.object({ type: z.literal("approval_visibility"), requestId: z.string(), visible: z.boolean() }).strict(),
   setModeSchema,
   setReasoningEffortSchema,
   setOrchestrateSchema,
