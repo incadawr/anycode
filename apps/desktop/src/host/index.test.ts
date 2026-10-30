@@ -3285,10 +3285,11 @@ describe("host Claude MCP status wiring — one snapshot per system/init (GitHub
 
   // GitHub #3 follow-up: the CLI never names a reason, so the host probes the
   // failed server's own launch command and republishes the row with the
-  // redacted cause (spawn error / exit code / stderr tail).
-  it("probes failed stdio servers once and republishes the row with the cause", async () => {
+  // redacted cause (spawn error / exit code / stderr tail). The scheduler
+  // (once-per-boot + in-flight guard) is unit-tested in mcp-spawn-probe.test.ts.
+  it("probes failed stdio servers through the once-per-boot scheduler and republishes the row with the cause", async () => {
     const body = hookBody(await readHostSource(), "claudeEngine.onEverySystemInit(");
-    expect(body).toContain("probeMcpServerSpawn(spec, { loginPath: hostMcpLoginPath })");
+    expect(body).toContain("claudeMcpProbeScheduler.probe(spec, (outcome) => {");
     expect(body).toContain("existing.error = outcome.detail");
   });
 

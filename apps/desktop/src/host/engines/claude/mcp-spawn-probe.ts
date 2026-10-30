@@ -15,14 +15,21 @@
  * The probe never completes the MCP handshake and never forwards the child's
  * stdin — it is a diagnostic, not a second server instance. Stderr is kept to
  * a short tail (few last lines, bounded chars) and redacted against the
- * spec's resolved secret values before it can reach a status row.
+ * spec's resolved secret values PLUS the values of sensitive-named variables
+ * in the merged environment the child actually received (the probe child
+ * inherits the full host env, and a crashing wrapper can dump unrelated
+ * credentials the spec never mentioned) before it can reach a status row.
+ * A still-alive launcher is shut down with a SIGTERM and a short grace
+ * period before SIGKILL, so a launcher mid-write is not hard-killed.
  */
 import { spawn } from "node:child_process";
 import type { McpStdioServerSpec } from "@anycode/core";
-import { redactSecrets } from "@anycode/core";
+import { redactSecrets, sensitiveEnvValues } from "@anycode/core";
 
 /** A well-behaved stdio server waits on stdin indefinitely; the probe only outlives crashers. */
 export const MCP_SPAWN_PROBE_TIMEOUT_MS = 10_000;
+/** Grace period for our own SIGTERM before the probe escalates to SIGKILL. */
+export const MCP_SPAWN_PROBE_KILL_GRACE_MS = 500;
 /** Hard cap on buffered stderr, so a chatty crasher cannot grow the buffer. */
 const STDERR_BUFFER_CAP = 64 * 1024;
 /** How much of that tail may reach a status row. */
@@ -52,14 +59,17 @@ export function stderrTail(text: string): string {
 
 /**
  * Formats a probe failure for a status row. Pure — unit-tested. The tail is
- * redacted HERE, the last point where raw child output exists.
+ * redacted HERE, the last point where raw child output exists: first against
+ * the spec's resolved secrets, then against the values of sensitive-named
+ * variables in the merged env the probe child received.
  */
 export function formatMcpSpawnProbeFailure(
   failure: McpSpawnProbeFailure,
   rawStderrTail: string,
   secretValues: readonly string[],
+  mergedEnv: Record<string, string> = {},
 ): string {
-  const tail = stderrTail(redactSecrets(rawStderrTail, secretValues));
+  const tail = stderrTail(redactSecrets(rawStderrTail, [...secretValues, ...sensitiveEnvValues(mergedEnv)]));
   const suffix = tail.length > 0 ? `; stderr:\n${tail}` : "";
   if (failure.kind === "spawn-error") {
     return `probe could not run the server command: ${failure.message}${suffix}`;
@@ -82,8 +92,13 @@ export async function probeMcpServerSpawn(
 ): Promise<McpSpawnProbeOutcome> {
   try {
     return await new Promise<McpSpawnProbeOutcome>((resolve) => {
+      const mergedEnv: Record<string, string> = {
+        ...process.env,
+        ...(options.loginPath !== undefined ? { PATH: options.loginPath } : {}),
+        ...spec.env,
+      };
       const child = spawn(spec.command, spec.args, {
-        env: { ...process.env, ...(options.loginPath !== undefined ? { PATH: options.loginPath } : {}), ...spec.env },
+        env: mergedEnv,
         stdio: ["pipe", "ignore", "pipe"], // stdin pipe: we never write, a healthy server just waits
         windowsHide: true,
       });
@@ -93,8 +108,15 @@ export async function probeMcpServerSpawn(
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        // Graceful first: a launcher may be mid-write (sqlite, file sink), so
+        // give it a SIGTERM and a short grace before the unavoidable SIGKILL.
+        if (!child.killed && child.exitCode === null) {
+          child.kill("SIGTERM");
+          setTimeout(() => {
+            if (!child.killed && child.exitCode === null) child.kill("SIGKILL");
+          }, MCP_SPAWN_PROBE_KILL_GRACE_MS);
+        }
         child.removeAllListeners();
-        if (!child.killed) child.kill("SIGKILL");
         resolve(outcome);
       };
       const timer = setTimeout(() => {
@@ -105,14 +127,54 @@ export async function probeMcpServerSpawn(
         if (stderr.length < STDERR_BUFFER_CAP) stderr += chunk.toString("utf8").slice(0, STDERR_BUFFER_CAP);
       });
       child.on("error", (error: NodeJS.ErrnoException) => {
-        finish({ ok: false, detail: formatMcpSpawnProbeFailure({ kind: "spawn-error", message: error.message }, stderr, spec.secretValues ?? []) });
+        finish({ ok: false, detail: formatMcpSpawnProbeFailure({ kind: "spawn-error", message: error.message }, stderr, spec.secretValues ?? [], mergedEnv) });
       });
       child.on("exit", (code, signal) => {
-        if (signal === "SIGKILL") return; // our own finish() kill racing the event
-        finish({ ok: false, detail: formatMcpSpawnProbeFailure({ kind: "exit", code, signal }, stderr, spec.secretValues ?? []) });
+        // our own finish() SIGTERM/SIGKILL racing the event; anything else is the server's own death
+        if (settled && (signal === "SIGKILL" || signal === "SIGTERM")) return;
+        finish({ ok: false, detail: formatMcpSpawnProbeFailure({ kind: "exit", code, signal }, stderr, spec.secretValues ?? [], mergedEnv) });
       });
     });
   } catch {
     return { ok: true };
   }
+}
+
+export interface McpSpawnProbeScheduler {
+  /**
+   * Runs the probe for `spec` if this name was not probed yet this boot and
+   * no probe for it is in flight; otherwise a no-op. `onOutcome` is invoked
+   * exactly once for a probe that actually ran — with the probe's outcome, or
+   * `{ ok: true }` when the probe itself failed internally (a broken probe
+   * must not manufacture a fake cause).
+   */
+  probe(spec: McpStdioServerSpec, onOutcome: (outcome: McpSpawnProbeOutcome) => void): void;
+}
+
+/**
+ * The every-init MCP probe scheduler: init re-fires on EVERY turn, so a
+ * naive per-init "already probed" set would re-spawn a persistently failed
+ * server's launch command (with its side effects) turn after turn, and
+ * overlapping inits would race a second probe for the same name while one is
+ * still in flight. This factory owns the once-per-boot done-set and the
+ * in-flight-set at boot scope and drives the injected probe through them.
+ */
+export function createMcpSpawnProbeScheduler(
+  runProbe: (spec: McpStdioServerSpec) => Promise<McpSpawnProbeOutcome>,
+): McpSpawnProbeScheduler {
+  const probedNames = new Set<string>();
+  const inFlight = new Set<string>();
+  return {
+    probe(spec, onOutcome) {
+      if (probedNames.has(spec.name) || inFlight.has(spec.name)) return;
+      probedNames.add(spec.name);
+      inFlight.add(spec.name);
+      void runProbe(spec)
+        .catch(() => ({ ok: true }) as McpSpawnProbeOutcome)
+        .then((outcome) => {
+          inFlight.delete(spec.name);
+          onOutcome(outcome);
+        });
+    },
+  };
 }
