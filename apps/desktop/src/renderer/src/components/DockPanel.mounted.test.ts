@@ -217,7 +217,7 @@ describe("dock resize handle placement (GitHub #31)", () => {
     await mountBody();
     await openDockTab();
 
-    // Pin a second pane (the dock store's splitRight — the ⫿ button's path).
+    // Pin a second pane (the dock store's splitRight — the split button's path).
     // A 1600px window is past the 1076px canSplit gate, so the pin sticks.
     await act(async () => {
       useDockStore.getState().open({ id: "git", kind: "git", title: "Review" });
@@ -244,5 +244,30 @@ describe("dock resize handle placement (GitHub #31)", () => {
     await act(async () => window.dispatchEvent(pointerEvent("pointermove", 2400)));
     expect(useDockStore.getState().width).toBe(DOCK_WIDTH_MIN);
     await act(async () => window.dispatchEvent(pointerEvent("pointerup", 2400)));
+  });
+
+  // Audit C10: the per-tab split affordance must read as an icon, not as a
+  // stray divider glyph sitting between the title and the close button.
+  it("renders the split affordance as an icon with no text glyph (C10)", async () => {
+    await mountBody();
+    await act(async () => useDockStore.getState().open({ id: "git", kind: "git", title: "Review" }));
+
+    const split = container.querySelector(".dock-tab-split");
+    expect(split).not.toBeNull();
+    expect(split!.querySelector("svg")).not.toBeNull();
+    expect(split!.textContent).toBe("");
+  });
+
+  // Audit C11: the background-tasks and terminal header toggles must not share
+  // one glyph — they were indistinguishable without their tooltips.
+  it("gives the background-tasks and terminal toggles distinct glyphs (C11)", async () => {
+    await mountBody();
+
+    const tasks = container.querySelector('[aria-label="Toggle background tasks"]');
+    const terminal = container.querySelector('[aria-label="Toggle terminal"]');
+    expect(tasks).not.toBeNull();
+    expect(terminal).not.toBeNull();
+    expect(tasks!.querySelector("svg")).not.toBeNull();
+    expect(tasks!.innerHTML).not.toBe(terminal!.innerHTML);
   });
 });
