@@ -423,6 +423,25 @@ const MIGRATIONS: readonly Migration[] = [
       )`,
     ],
   },
+  {
+    // GitHub #36 (review 5): the session's compaction-record sequence HIGH-WATER
+    // MARK, kept independently of the records themselves.
+    //
+    // A sequence is an identity, not a count of what is still stored: a rewind
+    // deletes records, and if the counter were re-derived from the survivors the
+    // next compaction would reuse a number a still-live checkpoint already covers
+    // as "before my snapshot" — so rewinding to that checkpoint would RETAIN the
+    // newer row and resurrect the summary of a conversation the user discarded.
+    // The mark only ever moves forward, survives record deletion and reopen, and
+    // cascades with the session tree.
+    version: 27,
+    statements: [
+      `CREATE TABLE compaction_sequence (
+        session_id TEXT PRIMARY KEY REFERENCES sessions(id),
+        seq INTEGER NOT NULL
+      )`,
+    ],
+  },
 ];
 
 /**
@@ -1100,6 +1119,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     // GitHub #36: the compaction presentation records are keyed by the AnyCode
     // session id, like history/usage above.
     db.prepare(`DELETE FROM compaction_records WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds);
+    db.prepare(`DELETE FROM compaction_sequence WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds);
 
     // The shadow-log tables are keyed by the native engine ref (thread_id /
     // session_ref), never the AnyCode session id — see codex/shadow-log.ts
@@ -1396,6 +1416,33 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       tx.prepare(
         `DELETE FROM compaction_records WHERE session_id = ? AND record_id IN (${placeholders})`,
       ).run(sessionId, ...ids);
+    });
+  }
+
+  /**
+   * GitHub #36: the highest sequence ever handed out for this session, kept
+   * apart from the records so a rewind (which deletes rows) can never make the
+   * counter go back. 0 when the session never recorded one.
+   */
+  async compactionSeqHighWater(sessionId: string): Promise<number> {
+    const db = this.open();
+    const row = db
+      .prepare("SELECT seq FROM compaction_sequence WHERE session_id = ?")
+      .get(sessionId) as { seq: number } | undefined;
+    return row === undefined ? 0 : Number(row.seq);
+  }
+
+  /**
+   * Raises the high-water mark. Monotonic by construction (`MAX`): a late or
+   * replayed write can never lower it, and two writers racing can only ever move
+   * it forward.
+   */
+  async raiseCompactionSeqHighWater(sessionId: string, seq: number): Promise<void> {
+    this.transaction((tx) => {
+      tx.prepare(
+        `INSERT INTO compaction_sequence (session_id, seq) VALUES (?, ?)
+         ON CONFLICT (session_id) DO UPDATE SET seq = MAX(compaction_sequence.seq, excluded.seq)`,
+      ).run(sessionId, seq);
     });
   }
 

@@ -7538,6 +7538,8 @@ describe("Session — manual compaction wire (TASK.146)", () => {
       discardCompactionRecords: async (_sessionId: string, ids: readonly string[]) => {
         for (const id of ids) rows.delete(id);
       },
+      compactionSeqHighWater: async () => Math.max(0, ...[...rows.values()].map((record) => record.seq ?? 0)),
+      raiseCompactionSeqHighWater: async () => undefined,
       truncateCompactionRecords: async (_sessionId: string, checkpointAt: number) => {
         for (const [id, record] of [...rows]) if (record.createdAt > checkpointAt) rows.delete(id);
       },
@@ -7613,6 +7615,55 @@ describe("Session — manual compaction wire (TASK.146)", () => {
       expect(historyAfter.compactions).toBeUndefined();
       await log.flush();
       expect([...store.rows.keys()]).toEqual([]);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("GitHub #36 review 5: the pre-rewind SAFETY capture gets the CURRENT boundary, so rewinding to it later keeps valid rows", async () => {
+    // The safety checkpoint a rewind creates is itself rewindable. Session must
+    // hand its capture the sequence as it stands, or that checkpoint carries no
+    // boundary and a later rewind to it falls back to the history heuristic —
+    // which deletes a between-turns failed compaction.
+    const records: CompactionRecord[] = [];
+    const seen: { scope: string; compactionSeq?: number }[] = [];
+    const seam: SessionOptions["checkpoints"] = {
+      list: async () => [],
+      rewind: async (_id, opts) => {
+        seen.push({ scope: opts.scope, ...(opts.compactionSeq !== undefined ? { compactionSeq: opts.compactionSeq } : {}) });
+        return {
+          ok: true,
+          safetyCheckpointId: "safety-1",
+          restoredPaths: null,
+          historyItems: [],
+        };
+      },
+    };
+    const h = createHarness({
+      steps: [],
+      checkpointsSeam: seam,
+      compactionRecords: {
+        record: (entry) => { records.push(entry); },
+        list: () => records,
+        flush: () => Promise.resolve(),
+        sequence: () => records.length,
+        truncate: () => undefined,
+      },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      // Two recorded outcomes so far (one failed between-turns attempt, one
+      // later): the sequence is 2 and must ride the rewind call.
+      records.push(
+        { id: "failed", createdAt: 1, ok: false, error: "no prefix", seq: 1 },
+        { id: "later", createdAt: 2, ok: false, error: "no prefix", seq: 2 },
+      );
+      h.send({ type: "rewind_request", requestId: "rw1", checkpointId: "cp-1", scope: "files" });
+      await h.waitFor(isRewindResult);
+
+      expect(seen).toEqual([{ scope: "files", compactionSeq: 2 }]);
     } finally {
       h.close();
     }

@@ -1,13 +1,30 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { COMPACTION_RECORD_MAX_PER_SESSION, type CompactionRecord, type HistoryItem } from "@anycode/core";
+import {
+  COMPACTION_RECORD_MAX_PER_SESSION,
+  SqlitePersistenceAdapter,
+  type CompactionRecord,
+  type HistoryItem,
+} from "@anycode/core";
 import { CompactionRecordLog, type CompactionRecordStore } from "./compaction-records.js";
 
 /** In-memory stand-in for the SQLite store's two methods. */
 function fakeStore(initial: CompactionRecord[] = [], failWrites = false) {
   const rows = new Map(initial.map((record) => [record.id, record]));
   const order: string[] = initial.map((record) => record.id);
-  const store: CompactionRecordStore & { rows: Map<string, CompactionRecord> } = {
+  let highWater = Math.max(0, ...initial.map((record) => record.seq ?? 0));
+  const store: CompactionRecordStore & { rows: Map<string, CompactionRecord>; highWater: number } = {
     rows,
+    get highWater() {
+      return highWater;
+    },
+    compactionSeqHighWater: async () => highWater,
+    raiseCompactionSeqHighWater: async (_sessionId, seq) => {
+      if (failWrites) throw new Error("disk on fire");
+      highWater = Math.max(highWater, seq);
+    },
     appendCompactionRecord: async (_sessionId, record) => {
       if (failWrites) throw new Error("disk on fire");
       rows.set(record.id, record);
@@ -56,6 +73,8 @@ describe("CompactionRecordLog (GitHub #36)", () => {
         throw new Error("database locked");
       },
       discardCompactionRecords: async () => undefined,
+      compactionSeqHighWater: async () => 0,
+      raiseCompactionSeqHighWater: async () => undefined,
     };
     const errors: unknown[] = [];
     const log = new CompactionRecordLog(store, "s1", (error) => errors.push(error));
@@ -216,5 +235,89 @@ describe("CompactionRecordLog (GitHub #36)", () => {
 
     expect(store.rows.get("a")?.summary).toBe("as recorded");
     expect(log.list()[0]?.summary).toBe("as recorded");
+  });
+});
+
+describe("CompactionRecordLog — the sequence high-water mark (GitHub #36 review 5)", () => {
+  it("never reuses a number after a rewind deleted the records that held it", async () => {
+    // A number already covered by a live checkpoint's boundary means "recorded
+    // BEFORE that snapshot". Handing it out again would make the next compaction
+    // look older than it is, so a rewind to that checkpoint would KEEP it — and
+    // resurrect a summary of the conversation the user discarded.
+    const store = fakeStore([record("a", 10), record("b", 20)]);
+    const first = new CompactionRecordLog(store, "s1");
+    await first.load();
+    expect(first.sequence()).toBe(2);
+
+    // Rewind to a checkpoint whose boundary is 0: every record goes, the mark stays.
+    first.truncate(restored(0), 0);
+    await first.flush();
+    expect(store.rows.size).toBe(0);
+
+    // Reopen (a fresh log over the same store) and record again.
+    const reopened = new CompactionRecordLog(store, "s1");
+    await reopened.load();
+    expect(reopened.sequence()).toBe(2);
+    reopened.record(record("c", 30));
+    expect(reopened.list()[0]?.seq).toBe(3);
+
+    // A checkpoint taken earlier (boundary 2) must still discard it.
+    reopened.truncate(restored(0), 2);
+    await reopened.flush();
+    expect(reopened.list()).toEqual([]);
+    expect(store.rows.size).toBe(0);
+  });
+
+  it("persists the mark through a REAL database, across record deletion and reopen", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "anycode-compaction-seq-"));
+    try {
+      const dbPath = join(dir, "anycode.sqlite");
+      const adapter = new SqlitePersistenceAdapter(dbPath);
+      await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+
+      const first = new CompactionRecordLog(adapter, "s1");
+      await first.load();
+      first.record(record("one", 10));
+      first.record(record("two", 20));
+      await first.flush();
+      expect(await adapter.compactionSeqHighWater("s1")).toBe(2);
+
+      // The rewind deletes BOTH rows — and must leave the mark where it was.
+      first.truncate(restored(0), 0);
+      await first.flush();
+      expect(await adapter.listCompactionRecords("s1")).toEqual([]);
+      expect(await adapter.compactionSeqHighWater("s1")).toBe(2);
+      await adapter.close();
+
+      // REOPEN: a fresh process reads the same durable state.
+      const reopenedAdapter = new SqlitePersistenceAdapter(dbPath);
+      const reopened = new CompactionRecordLog(reopenedAdapter, "s1");
+      await reopened.load();
+      expect(reopened.sequence()).toBe(2);
+      reopened.record(record("three", 30));
+      await reopened.flush();
+      expect(reopened.list()[0]?.seq).toBe(3);
+      expect(await reopenedAdapter.compactionSeqHighWater("s1")).toBe(3);
+
+      // A checkpoint that exists from BEFORE it (boundary 2) drops it.
+      reopened.truncate(restored(0), 2);
+      await reopened.flush();
+      expect(await reopenedAdapter.listCompactionRecords("s1")).toEqual([]);
+      await reopenedAdapter.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("the mark only moves forward — a stale or replayed write cannot lower it", async () => {
+    const store = fakeStore();
+    const log = new CompactionRecordLog(store, "s1");
+
+    log.record(record("a", 10));
+    log.record(record("b", 20));
+    await log.flush();
+    expect(store.highWater).toBe(2);
+    await store.raiseCompactionSeqHighWater("s1", 1);
+    expect(store.highWater).toBe(2);
   });
 });

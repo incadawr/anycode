@@ -1025,7 +1025,15 @@ export interface SessionOptions {
    */
   checkpoints?: {
     list(opts?: { limit?: number }): Promise<CheckpointMeta[]>;
-    rewind(id: string, opts: { scope: RewindScope; currentHistory: readonly HistoryItem[] }): Promise<RewindResult>;
+    rewind(
+      id: string,
+      opts: {
+        scope: RewindScope;
+        currentHistory: readonly HistoryItem[];
+        /** GitHub #36: boundary for the pre-rewind safety checkpoint (absent = no records to judge). */
+        compactionSeq?: number;
+      },
+    ): Promise<RewindResult>;
   };
   /** Multimodal send-path capability gate, mirroring the CLI image staging guard. */
   imageInputEnabled?: () => boolean;
@@ -3672,6 +3680,12 @@ export class Session {
       const res = await this.checkpoints.rewind(checkpointId, {
         scope,
         currentHistory: [...this.engine.historyItems()],
+        // GitHub #36: the pre-rewind SAFETY checkpoint is a checkpoint the user
+        // can rewind TO later, so it must carry the same boundary type as any
+        // other — the sequence as it stands right now.
+        ...(this.compactionRecords !== undefined
+          ? { compactionSeq: this.compactionRecords.sequence() }
+          : {}),
       });
       if (!res.ok) {
         this.outbound.sendDirect({

@@ -278,7 +278,19 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
    */
   async rewind(
     checkpointId: string,
-    opts: { scope: RewindScope; currentHistory: readonly HistoryItem[] },
+    opts: {
+      scope: RewindScope;
+      currentHistory: readonly HistoryItem[];
+      /**
+       * GitHub #36 (review 5): the compaction-record sequence current NOW. The
+       * mandatory pre-rewind SAFETY checkpoint is itself a checkpoint a user can
+       * later rewind to, so it needs a boundary of its own — without one, a
+       * conversation rewind back to it falls back to the history heuristic and
+       * deletes a valid between-turns compaction row. Absent = the caller keeps
+       * no records (the CLI).
+       */
+      compactionSeq?: number;
+    },
   ): Promise<RewindResult> {
     if (!this.hasRunBinary) {
       return { ok: false, reason: NO_RUNBINARY_REASON };
@@ -299,7 +311,10 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
     // Step 2: mandatory safety checkpoint; fail-closed (no safety -> no rewind).
     let safety: { id: string; commitHash: string };
     try {
-      safety = await this.performCapture("pre-rewind", "before /rewind", opts.currentHistory);
+      // The safety checkpoint captures the CURRENT conversation, so its boundary
+      // is the CURRENT sequence — everything recorded up to now is part of the
+      // state this rewind is about to preserve.
+      safety = await this.performCapture("pre-rewind", "before /rewind", opts.currentHistory, opts.compactionSeq);
     } catch (err) {
       return { ok: false, reason: `safety checkpoint failed: ${toReason(err)}` };
     }
