@@ -66,6 +66,7 @@ import {
   skillsToSlashSkills,
   slashMenuReduce,
   slashQueryAt,
+  unknownSlashCommandNotice,
   type SlashMenuCtx,
   type SlashRunIntent,
   type SlashSkill,
@@ -1603,6 +1604,16 @@ export function Composer() {
   function trySubmitBareCommand(outgoing: string): boolean {
     const result = resolveBareSlashSubmit(outgoing, slashCtx, attachedImages.length, childSurface);
     if (result.kind === "text") {
+      // A slash-shaped draft that names no command is still not a prompt on the
+      // core engine: answer it locally instead of spending a model turn on
+      // "I don't recognize /foo". Foreign engines keep their own slash surface
+      // (Claude's allowlisted frames, Codex's own commands), so the guard is
+      // core-only — the same engine-null test the skills menu uses.
+      const unknown = skillsSupported ? unknownSlashCommandNotice(outgoing) : null;
+      if (unknown !== null) {
+        tabStore.getState().setNotice({ kind: "slash_command_rejected", text: unknown });
+        return true;
+      }
       return false;
     }
     if (result.kind === "refuse") {
