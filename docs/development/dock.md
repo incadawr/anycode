@@ -117,10 +117,13 @@ preview — the ⫿ affordance renders disabled and a programmatic click is
 inert). The dock smoke's `--split` leg (Stage 2) makes its premise explicit
 before clicking — the pin target (`git`) present and NOT the active primary,
 the browser preview focused as the primary via a real tab click, because the
-git-panel derivation effect re-focuses `git` on every re-run — and treats a
-`split_refused` answer as the documented expected outcome (a counted
-"split refused (expected)" row plus the exact pinned-state wait for both
-branches, and the 900px auto-merge sub-leg still runs). The verdict logic is
+git-panel derivation effect re-focuses `git` on every re-run — and retries a
+`split_refused` answer (browser-tab click → precondition wait → split click,
+bounded attempts). A refusal that persists while the preconditions held is a
+FAIL — an always-refusing facade must never read ALL GREEN; a refusal is the
+documented expected PASS only when the precondition wait never held. The
+pinned-state wait is exact in both branches (ok must pin, refused must stay
+`split:null`) and the 900px auto-merge sub-leg still runs. The verdict logic is
 pure and unit-covered (`scripts/dock-squash-smoke-assertions.mjs`, tested in
 `src/main/dock-squash-smoke-assertions.test.ts`).
 
