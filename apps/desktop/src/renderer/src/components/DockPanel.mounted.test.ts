@@ -177,13 +177,39 @@ describe("dock resize handle placement (GitHub #31)", () => {
     // The initiating pointer resizes.
     await act(async () => window.dispatchEvent(pointerEvent("pointermove", 700, 1)));
     expect(useDockStore.getState().width).toBe(840);
-    // pointercancel ends the drag (persists like pointerup)…
-    await act(async () => window.dispatchEvent(pointerEvent("pointercancel", 700, 1)));
-    expect(localStorage.getItem(DOCK_WIDTH_STORAGE_KEY)).toBe("840");
+    // A FOREIGN pointer's release/cancel must NOT end the drag (it once
+    // burned the once-listeners, persisted the width mid-drag and left the
+    // initiating pointer dead)…
+    await act(async () => window.dispatchEvent(pointerEvent("pointerup", 100, 2)));
+    expect(localStorage.getItem(DOCK_WIDTH_STORAGE_KEY)).toBeNull();
+    await act(async () => window.dispatchEvent(pointerEvent("pointercancel", 100, 2)));
+    expect(localStorage.getItem(DOCK_WIDTH_STORAGE_KEY)).toBeNull();
+    // …the initiating pointer still resizes afterwards…
+    await act(async () => window.dispatchEvent(pointerEvent("pointermove", 600, 1)));
+    expect(useDockStore.getState().width).toBe(940);
+    // …and ITS pointerup ends the drag and persists.
+    await act(async () => window.dispatchEvent(pointerEvent("pointerup", 600, 1)));
+    expect(localStorage.getItem(DOCK_WIDTH_STORAGE_KEY)).toBe("940");
     // …so later moves — from ANY pointer — no longer resize.
     await act(async () => window.dispatchEvent(pointerEvent("pointermove", 200, 1)));
-    expect(useDockStore.getState().width).toBe(840);
+    expect(useDockStore.getState().width).toBe(940);
     await act(async () => window.dispatchEvent(pointerEvent("pointermove", 200, 2)));
+    expect(useDockStore.getState().width).toBe(940);
+  });
+
+  it("pointercancel from the INITIATING pointer ends the drag and persists", async () => {
+    await mountBody();
+    await openDockTab();
+
+    const handle = container.querySelector(".session-content-split-open > .review-resize-handle") as HTMLElement;
+    expect(handle).not.toBeNull();
+
+    handle.dispatchEvent(pointerEvent("pointerdown", 900, 1));
+    await act(async () => window.dispatchEvent(pointerEvent("pointermove", 700, 1)));
+    expect(useDockStore.getState().width).toBe(840);
+    await act(async () => window.dispatchEvent(pointerEvent("pointercancel", 700, 1)));
+    expect(localStorage.getItem(DOCK_WIDTH_STORAGE_KEY)).toBe("840");
+    await act(async () => window.dispatchEvent(pointerEvent("pointermove", 200, 1)));
     expect(useDockStore.getState().width).toBe(840);
   });
 
