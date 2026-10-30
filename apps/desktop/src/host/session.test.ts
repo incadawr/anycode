@@ -9436,10 +9436,17 @@ describe("child status transcript", () => {
       observeChildEventDirect(h.session, { type: "text_delta", id: "text", text: "😀".repeat(200) });
       observeChildEventDirect(h.session, { type: "tool_execution_start", toolCallId: "c", toolName: "Read", input: { file_path: "/work/a" } });
       observeChildEventDirect(h.session, { type: "tool_result", outcome: { toolCallId: "c", toolName: "Read", status: "error", modelText: "private error detail", durationMs: 1 } });
+      observeChildEventDirect(h.session, { type: "tool_execution_start", toolCallId: "secret", toolName: "Bash", input: { command: "echo --password=hunter2" } });
+      observeChildEventDirect(h.session, { type: "tool_result", outcome: { toolCallId: "secret", toolName: "Read", status: "success", modelText: "secret file contents", durationMs: 1 } });
+      observeChildEventDirect(h.session, { type: "text_delta", id: "text", text: " latest progress" });
+      observeChildEventDirect(h.session, { type: "turn_end", turn: 1, finishReason: "stop" });
       const items = h.onProgress.mock.calls.map(([report]) => report).filter((report) => report.kind === "status");
+      expect(JSON.stringify(items)).not.toContain("hunter2");
+      expect(JSON.stringify(items)).not.toContain("secret file contents");
+      expect(JSON.stringify(items)).toContain("latest progress");
       expect(items).toEqual(expect.arrayContaining([
         expect.objectContaining({ itemKind: "assistant" }),
-        expect.objectContaining({ itemKind: "tool", text: "Read: /work/a", toolName: "Read" }),
+        expect.objectContaining({ itemKind: "tool", text: "Read", toolName: "Read" }),
         expect.objectContaining({ itemKind: "result", text: "Read: error" }),
       ]));
       expect(JSON.stringify(items)).not.toContain("private error detail");

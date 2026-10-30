@@ -21,7 +21,7 @@ describe("AgentStatus", () => {
     const pending = agentTool.handler({ description: "inspect", prompt: "go" }, ctx);
     options.onProgress?.({ kind: "progress", turns: 2, toolCalls: 1 });
     options.onApproval?.(true);
-    for (let i = 0; i < 12; i++) options.onStatusItem?.({ kind: "tool", text: `action ${i} ` + "x".repeat(500) }, "Read");
+    for (let i = 0; i < 12; i++) options.onStatusItem?.({ kind: "tool", text: `action ${i} ` + "word ".repeat(100) }, "Read");
     const result = await agentStatusTool.handler({ id: "child-call" }, ctx);
     expect(result.ok).toBe(true);
     const child = result.output!.children[0]!;
@@ -52,6 +52,19 @@ describe("AgentStatus", () => {
     const last = (await agentStatusTool.handler({ offset: 60 }, ctx)).output!;
     expect(last.children).toHaveLength(4);
     expect(last.next_offset).toBeUndefined();
+  });
+
+
+  it("redacts credentials and retains the latest assistant text", async () => {
+    const port: SubagentPort = { run: async () => { throw new Error("unused"); } };
+    const store = inlineChildStatusStore(port);
+    store.start("c", "inspect --password=hunter2");
+    store.append("c", { kind: "assistant", text: "early ".repeat(40) + "latest progress --token=shortsecret" });
+    const child = (await agentStatusTool.handler({ id: "c" }, context(port))).output!.children[0]!;
+    expect(child.description).not.toContain("hunter2");
+    expect(child.tail[0]!.text).toContain("latest progress");
+    expect(child.tail[0]!.text).not.toContain("shortsecret");
+    expect(child.tail[0]!.text).toContain("[redacted]");
   });
 
   it("is allowed without an approval in every mode", () => {

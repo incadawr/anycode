@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Protect child status from tool data leaks and show the latest progress across supported parent engines.
+
 ### Added
 
 - AgentStatus lets a parent inspect its own subagents’ live progress and recent activity (GitHub #29).

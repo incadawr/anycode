@@ -139,3 +139,5 @@ export type {
   WriteInput,
   WriteOutput,
 } from "./schemas.js";
+
+export { agentStatusTool, agentStatusSchema, agentStatusBridgeDecl, runAgentStatusBridge } from "./agent-status.js";
