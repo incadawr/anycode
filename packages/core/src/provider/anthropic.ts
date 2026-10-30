@@ -7,6 +7,7 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import type { LanguageModel } from "ai";
 import type { EndpointConfig } from "./endpoint.js";
+import { isMiMoModel } from "./mimo.js";
 import { wrapFetchWithQuota } from "./quota-fetch.js";
 
 export type { AnthropicEndpointConfig } from "./endpoint.js";
@@ -71,14 +72,26 @@ export function createAnthropicLanguageModel(
   if (apiKey === undefined) {
     throw new Error("The anthropic-messages transport requires an API key");
   }
+  let fetchForProvider = config.onQuotaHeaders !== undefined
+    ? wrapFetchWithQuota(globalThis.fetch, config.onQuotaHeaders, config.baseUrl)
+    : globalThis.fetch;
+  if (isMiMoModel(config.providerName, config.model)) {
+    const fetchWithQuota = fetchForProvider;
+    // The SDK accepts disabled thinking but omits it from the serialized body.
+    // MiMo enables thinking by default, so restore the omitted field.
+    fetchForProvider = (input, init) => {
+      if (typeof init?.body !== "string") return fetchWithQuota(input, init);
+      const body = JSON.parse(init.body) as Record<string, unknown>;
+      if (body.thinking === undefined) body.thinking = { type: "disabled" };
+      return fetchWithQuota(input, { ...init, body: JSON.stringify(body) });
+    };
+  }
   const provider = createAnthropic({
     baseURL: normalizeAnthropicBaseUrl(config.baseUrl),
     apiKey,
     headers: buildDualAuthHeaders(apiKey, config.headers),
-    // Taskana 4090: dormant unless an observer is set — the conditional
-    // spread keeps the options object byte-identical when unset.
-    ...(config.onQuotaHeaders !== undefined
-      ? { fetch: wrapFetchWithQuota(globalThis.fetch, config.onQuotaHeaders, config.baseUrl) }
+    ...(config.onQuotaHeaders !== undefined || isMiMoModel(config.providerName, config.model)
+      ? { fetch: fetchForProvider }
       : {}),
   });
   return provider(config.model);

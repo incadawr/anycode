@@ -116,7 +116,8 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
       expect(entry.models.map((model) => model.id)).toEqual(["mimo-v2.6-pro", "mimo-v2.6-flash"]);
       for (const model of entry.models) {
         expect(model).toMatchObject({ contextWindow: 1_048_576, usableContextWindow: 300_000, maxOutputTokens: 131_072, imageInput: true, reasoning: true });
-        expect(model.pricing).toBeUndefined();
+        expect(model.pricing).toEqual(findCatalogEntry("xiaomi-mimo-api")!.models.find((apiModel) => apiModel.id === model.id)!.pricing);
+        expect(model.pricing).toBeDefined();
         expect(model.effortLevels).toBeUndefined();
       }
     }
@@ -483,6 +484,9 @@ describe("model pricing", () => {
     "z-ai": ["glm-5.3", "glm-5.3-flash", "glm-5.3-flashx", "glm-5.2", "glm-5.1", "glm-5", "glm-4.7", "glm-4.6"],
     deepseek: ["deepseek-flash", "deepseek-v4-pro"],
     "xiaomi-mimo-api": ["mimo-v2.6-pro", "mimo-v2.6-flash"],
+    "xiaomi-mimo-sgp": ["mimo-v2.6-pro", "mimo-v2.6-flash"],
+    "xiaomi-mimo-cn": ["mimo-v2.6-pro", "mimo-v2.6-flash"],
+    "xiaomi-mimo-ams": ["mimo-v2.6-pro", "mimo-v2.6-flash"],
     moonshot: ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3"],
     openai: ["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-6-astra", "gpt-6-sol"],
   };

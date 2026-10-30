@@ -62,6 +62,17 @@ describe("catalog prices through the calculator", () => {
     }
   });
 
+  it("prices a Token Plan turn at the API list rate", () => {
+    for (const region of ["sgp", "cn", "ams"]) {
+      const selected = resolveUsagePrice(undefined, "mimo-v2.6-pro", catalogPrice(`xiaomi-mimo-${region}`, "mimo-v2.6-pro"));
+      expect(selected?.subscription).toBe(false);
+      if (!selected || selected.subscription) throw new Error("Expected catalog pricing");
+      const cost = calculateUsageCost({ inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 1_000_000 }, selected.price);
+      expect(cost?.costUsd).toBeCloseTo(1.305);
+      expect(cost?.priceBasisId).toBe("mimo-v2.6-pro-xiaomi-mimo-api-2026-10-30");
+    }
+  });
+
   it("prices GLM cache creation at the input rate in the step and session total", async () => {
     const glm = catalogPrice("z-ai", "glm-5.3");
     expect(glm).toBeDefined();
