@@ -701,11 +701,12 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
   // Taskana 4703: the ONE dock resize path (mirror of the retired
   // beginPreviewResize, now clamped live against the measured root width —
   // the boot-time clamp is the `effectiveDockWidth` computation above).
-  // GitHub #31 review: the drag tracks the INITIATING pointerId (a second
-  // finger's moves are ignored), and `pointercancel` ends the drag exactly
-  // like `pointerup` — a canceled drag must not leave live listeners behind.
-  // The clamp's floor follows the split (dockMinWidth): a pinned pane must
-  // never be squeezed over the active tab's body.
+  // GitHub #31 reviews: the drag tracks the INITIATING pointerId end to end
+  // — a second finger's moves are ignored, and only the initiating pointer's
+  // pointerup/pointercancel may end the drag (a foreign release once burned
+  // the once-listeners and persisted the width mid-drag). The clamp's floor
+  // follows the split (dockMinWidth): a pinned pane must never be squeezed
+  // over the active tab's body.
   function beginDockResize(event: ReactPointerEvent<HTMLDivElement>): void {
     event.preventDefault();
     const pointerId = event.pointerId;
@@ -723,7 +724,10 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
       useDockStore.setState({ width: nextWidth });
     }
 
-    function onUp(): void {
+    function onUp(upEvent: PointerEvent): void {
+      if (upEvent.pointerId !== pointerId) {
+        return;
+      }
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
@@ -731,8 +735,8 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
     }
 
     window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp, { once: true });
-    window.addEventListener("pointercancel", onUp, { once: true });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   }
 
   // Available-width tracking: the .session-content width changes on window
