@@ -28,7 +28,7 @@ import {
   type CodexClient,
 } from "./codex-engine.js";
 
-import { CodexDynamicToolBridge, ANYCODE_AGENT_TOOL } from "./dynamic-tool-bridge.js";
+import { CodexDynamicToolBridge, ANYCODE_AGENT_TOOL, ANYCODE_AGENT_STATUS_TOOL } from "./dynamic-tool-bridge.js";
 import { createEngineBrowserBridge } from "../browser-bridge.js";
 
 const childPath = fileURLToPath(new URL("./test-child.mjs", import.meta.url));
@@ -2888,7 +2888,7 @@ describe("CodexEngine — AnyCode dynamic tool integration", () => {
     const server = new FakeAppServer();
     await createNativeCodexSession(server, "/work", undefined, undefined, undefined, undefined, bridge);
     expect(server.calls.find((c) => c.method === "initialize")?.params).toMatchObject({ capabilities: { experimentalApi: true } });
-    expect(server.threadStartParams).toMatchObject({ dynamicTools: [expect.objectContaining({ name: ANYCODE_AGENT_TOOL })] });
+    expect(server.threadStartParams).toMatchObject({ dynamicTools: [expect.objectContaining({ name: ANYCODE_AGENT_TOOL }), expect.objectContaining({ name: ANYCODE_AGENT_STATUS_TOOL })] });
     server.calls.length = 0;
     await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, undefined, undefined, bridge);
     // 4764 review F17: the resume carries the same declarations thread/start
@@ -2896,7 +2896,7 @@ describe("CodexEngine — AnyCode dynamic tool integration", () => {
     expect(server.calls.find((c) => c.method === "thread/resume")?.params).toMatchObject({
       threadId: "persisted-thread",
       cwd: "/work",
-      dynamicTools: [expect.objectContaining({ name: ANYCODE_AGENT_TOOL })],
+      dynamicTools: [expect.objectContaining({ name: ANYCODE_AGENT_TOOL }), expect.objectContaining({ name: ANYCODE_AGENT_STATUS_TOOL })],
     });
   });
 

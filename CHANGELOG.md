@@ -9,6 +9,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Agent profile previews recognize the AgentStatus tool.
+
 - Redact more secret-bearing names in child progress and approval notices.
 
 - Redact the rest of sensitive lines in child progress and approval notices, including partial streamed values.

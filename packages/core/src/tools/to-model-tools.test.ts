@@ -6,6 +6,7 @@ import { toToolDeclarations } from "./to-model-tools.js";
 
 const ALL_TOOLS = [
   "Agent",
+  "AgentStatus",
   "ArchMap",
   "Bash",
   "Edit",
