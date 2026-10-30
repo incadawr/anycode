@@ -174,6 +174,15 @@ function codexManager(fork: HostForkFn) {
   });
 }
 
+/**
+ * vi.waitFor wrapper with a deadline sized for a loaded CI runner (the vitest
+ * default of 1 s flakes when the event loop is saturated) — see the CLI
+ * integration wait fix for the same rationale.
+ */
+async function waitForCi(check: () => void): Promise<void> {
+  await vi.waitFor(check, { timeout: 15_000, interval: 25 });
+}
+
 /** Drains the microtask exit-chain (bounded by the breakers). */
 async function flush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 25));
@@ -437,7 +446,7 @@ describe("TabHostManager — host spawn", () => {
     expect(registered).toHaveBeenCalledWith({ sessionId: "deferred-failure" });
     blocked = false;
     release();
-    await vi.waitFor(() => expect(manager.getTab(created.tab.tabId)).toBeUndefined());
+    await waitForCi(() => expect(manager.getTab(created.tab.tabId)).toBeUndefined());
     expect(manager.sessionOpenInTab("deferred-failure")).toBeUndefined();
     expect(manager.pinnedConnectionIds().has("old")).toBe(false);
     expect(registered).toHaveBeenCalledTimes(1);
@@ -528,7 +537,7 @@ describe("TabHostManager — host spawn", () => {
     missing = true;
     blocked = false;
     release();
-    await vi.waitFor(() => expect(posted.filter((entry) => entry.channel === PORT_ENVELOPE_TYPE)).toHaveLength(1));
+    await waitForCi(() => expect(posted.filter((entry) => entry.channel === PORT_ENVELOPE_TYPE)).toHaveLength(1));
     // The tab is still here, bound, and reported as a missing-workspace error —
     // that envelope is what the renderer shows instead of "Connecting to host…".
     expect(manager.listTabs()).toHaveLength(1);
@@ -607,7 +616,7 @@ describe("TabHostManager — host spawn", () => {
     } else {
       rig.hosts[0]!.emit("message", { type: WORKTREE_TRANSITION_MESSAGE_TYPE, sessionId: "replacement", fromWorkspace: "/ws", toWorkspace: "/ws/wt", projectRoot: "/ws", worktree: { id: "wt", path: "/ws/wt", branch: "feature", baseRef: "main", ownedByAnyCode: true } });
     }
-    await vi.waitFor(() => expect(created.tab.state).toBe("crash_looped"));
+    await waitForCi(() => expect(created.tab.state).toBe("crash_looped"));
     expect(created.tab.proc).toBeNull();
     expect(manager.listTabs()[0]?.activityState).toBe("idle");
     expect(logError).toHaveBeenCalledWith(expect.stringContaining("host spawn failed"), error);
@@ -7406,14 +7415,14 @@ describe("deferred host spawns during a settings refresh", () => {
         const post = host.postMessage.getMockImplementation()!;
         host.postMessage.mockImplementation((message: unknown) => { blocked = true; return post(message); });
         reconnect = manager.rebindTab(created.tab, "new");
-        await vi.waitFor(() => expect(created.tab.proc).toBeNull());
+        await waitForCi(() => expect(created.tab.proc).toBeNull());
       } else {
         blocked = true;
         if (kind === "crash respawn") host.emit("exit", 1);
         if (kind === "restart") await manager.restartTabHost(created.tab.tabId);
         if (kind === "worktree move") {
           host.emit("message", { type: WORKTREE_TRANSITION_MESSAGE_TYPE, sessionId: "session", fromWorkspace: "/ws", toWorkspace: "/ws/wt", projectRoot: "/ws", worktree: { id: "wt", path: "/ws/wt", branch: "feature", baseRef: "main", ownedByAnyCode: true } });
-          await vi.waitFor(() => expect(created.tab.workspace).toBe("/ws/wt"));
+          await waitForCi(() => expect(created.tab.workspace).toBe("/ws/wt"));
         }
       }
     }
@@ -7422,7 +7431,7 @@ describe("deferred host spawns during a settings refresh", () => {
     blocked = false;
     release();
     await reconnect;
-    await vi.waitFor(() => expect(rig.hosts).toHaveLength(count + 1));
+    await waitForCi(() => expect(rig.hosts).toHaveLength(count + 1));
     expect(created.tab.state).toBe("running");
     expect(created.tab.proc).not.toBeNull();
   });
@@ -7499,7 +7508,7 @@ describe("deferred host spawns during a settings refresh", () => {
     expect(failures).not.toHaveBeenCalled();
     phase = "ready";
     releaseB();
-    await vi.waitFor(() => expect(rig.hosts).toHaveLength(1));
+    await waitForCi(() => expect(rig.hosts).toHaveLength(1));
     expect(created.tab.proc).toBe(rig.hosts[0]);
     expect(created.tab.connectionId).toBe("new");
   });
@@ -7531,9 +7540,9 @@ it("does not rehost a worktree move racing a real close", async () => {
   if (!created.ok) throw new Error("create failed");
   const host = rig.hosts[1]!;
   host.emit("message", { type: WORKTREE_TRANSITION_MESSAGE_TYPE, sessionId: "moving", fromWorkspace: "/ws", toWorkspace: "/ws/wt", projectRoot: "/ws", worktree: { id: "wt", path: "/ws/wt", branch: "feature", baseRef: "main", ownedByAnyCode: true } });
-  await vi.waitFor(() => expect(host.postMessage).toHaveBeenCalled());
+  await waitForCi(() => expect(host.postMessage).toHaveBeenCalled());
   const closing = manager.closeTab(created.tab.tabId);
-  await vi.waitFor(() => expect(host.postMessage).toHaveBeenCalledTimes(2));
+  await waitForCi(() => expect(host.postMessage).toHaveBeenCalledTimes(2));
   host.emit("exit", 0);
   await closing;
   await flush();
@@ -7555,7 +7564,7 @@ it("starts a child after a paused settings refresh", async () => {
   expect(childRunEvents(host).find((event) => event.requestId === "deferred-child")).toBeUndefined();
   blocked = false;
   release();
-  await vi.waitFor(() => expect(rig.hosts).toHaveLength(2));
+  await waitForCi(() => expect(rig.hosts).toHaveLength(2));
   expect(childRunEvents(host)).toContainEqual(expect.objectContaining({ requestId: "deferred-child", kind: "accepted" }));
 });
 
@@ -7582,7 +7591,7 @@ it("refuses overlapping rebinds during refresh and persists the live connection"
   expect(await handleTabRebind(deps, { tabId: created.tab.tabId, connectionId: "other" })).toEqual({ ok: false, reason: "not_ready" });
   blocked = false;
   release();
-  await vi.waitFor(() => expect(rig.hosts).toHaveLength(2));
+  await waitForCi(() => expect(rig.hosts).toHaveLength(2));
   expect(envs[1]?.ANYCODE_CONNECTION_ID).toBe("new");
   expect(touchSession).toHaveBeenCalledOnce();
   expect(touchSession).toHaveBeenCalledWith("rebind-race", { connectionId: "new" });
@@ -7611,7 +7620,7 @@ it("keeps the imported model after a deferred failure and applies it on retry", 
   expect(models.get("imported")).toBe("chosen-model");
   blocked = false;
   release();
-  await vi.waitFor(() => expect(manager.sessionOpenInTab("imported")).toBeUndefined());
+  await waitForCi(() => expect(manager.sessionOpenInTab("imported")).toBeUndefined());
   expect(models.get("imported")).toBe("chosen-model");
   fail = false;
   const retry = await handleCreate(deps, { kind: "resume", sessionId: "imported" });
