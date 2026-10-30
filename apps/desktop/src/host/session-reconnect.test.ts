@@ -90,6 +90,79 @@ function renderedTextStep(text: string): ModelStreamEvent[] {
 }
 
 describe("TASK.117 — rendered reconnect (Session -> fresh desktopStore)", () => {
+  it("restores a mid-stream steer once after the turn finishes", async () => {
+    const h = createHarness({
+      steps: [toolStep("first-tool", "Write", { file_path: "/workspace/first.txt", content: "ok" }), [{ type: "start" }, { type: "text_start", id: "held" }, { type: "text_delta", id: "held", text: "waiting" }, { type: "tool_call", toolCall: { id: "steer-tool", name: "Write", input: { file_path: "/workspace/steer.txt", content: "ok" } } }, { type: "finish", finishReason: "tool_calls", usage: {} }], renderedTextStep("finished")],
+      gated: { parkAfterIndex: 3 },
+      mode: "yolo",
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor((m) => m.type === "host_ready");
+      const live = attachStore(h);
+      h.send({ type: "user_message", requestId: "prompt", text: "start" });
+      live.store.getState().appendUserText("prompt", "start");
+      await h.waitUntil(() => h.received.some((m) => m.type === "agent_event" && m.event.type === "tool_call" && m.event.toolCall.id === "steer-tool"));
+      h.send({ type: "steer_message", requestId: "steer", text: "change direction" });
+      await settle();
+      h.gated!.release();
+      await h.waitUntil(() => countLoopEnds(h) >= 1);
+      await settle();
+      feed(live.store, h, live.applied);
+      expect(texts(live.store).filter((text) => text === "change direction")).toHaveLength(1);
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some((m) => m.type === "presentation_replay_end"));
+      const snapshot = h.received.slice(before).find((m) => m.type === "presentation_snapshot");
+      expect(snapshot?.type === "presentation_snapshot" && snapshot.turns[0]?.events.flatMap((entry) => entry.event.type === "user_injected" ? [entry.event.step] : [])).toEqual([2]);
+      const fresh = createDesktopStore({ schedule: (fn) => fn() });
+      for (const message of h.received.slice(before)) fresh.getState().applyHostMessage(message);
+      expect(texts(fresh).filter((text) => text === "change direction")).toHaveLength(1);
+    } finally {
+      h.gated?.release();
+      h.close();
+    }
+  });
+
+  it("does not replay a refused steer after its next turn was accepted", async () => {
+    const h = createHarness({ steps: [renderedTextStep("first answer"), renderedTextStep("next answer")], gated: { parkAfterIndex: 2 } });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor((m) => m.type === "host_ready");
+      const live = attachStore(h);
+      h.send({ type: "user_message", requestId: "first", text: "first" });
+      await h.waitUntil(() => h.received.some((m) => m.type === "agent_event" && m.event.type === "text_delta"));
+      live.store.getState().recordPendingSteer("refused", "same words", undefined, { text: "same words", images: [] });
+      live.store.getState().markUiSteer("refused");
+      h.send({ type: "steer_message", requestId: "refused", text: "same words" });
+      await settle();
+      h.gated!.release();
+      await h.waitUntil(() => h.received.some((m) => m.type === "steer_requeued"));
+      await settle();
+      const afterRefusal = feed(live.store, h, live.applied);
+      const queued = live.store.getState().takeQueueHead("new-id");
+      expect(queued?.text).toBe("same words");
+      const requestId = live.store.getState().queueInFlight!.requestId;
+      expect(requestId).toBe("refused");
+      live.store.getState().appendUserText(requestId, "same words");
+      h.send({ type: "user_message", requestId, text: "same words" });
+      await h.waitUntil(() => countLoopEnds(h) >= 2);
+      await settle();
+      feed(live.store, h, afterRefusal);
+      expect(texts(live.store).filter((text) => text === "same words")).toHaveLength(1);
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some((m) => m.type === "presentation_replay_end"));
+      const fresh = createDesktopStore({ schedule: (fn) => fn() });
+      for (const message of h.received.slice(before)) fresh.getState().applyHostMessage(message);
+      expect(texts(fresh).filter((text) => text === "same words")).toHaveLength(1);
+      expect(fresh.getState().promptQueue).toHaveLength(0);
+    } finally {
+      h.gated?.release();
+      h.close();
+    }
+  });
+
   it("A: old 'Done' durable, then a genuinely NEW identical 'Done' turn renders twice — UI path and startProgrammaticTurn path", async () => {
     const h = createHarness({
       steps: [renderedTextStep("Done"), renderedTextStep("Done")],
@@ -258,10 +331,17 @@ describe("TASK.117 — rendered reconnect (Session -> fresh desktopStore)", () =
       const settled = fresh.getState().transcript.find((b) => b.kind === "tool_call" && b.toolCallId === "c1");
       expect(settled).toMatchObject({ status: "success" });
       expect(fresh.getState().turn.status).toBe("idle");
-      const reconnectAt = h.received.length;
+      expect(settled?.kind === "tool_call" ? settled.snapshots.after : null).not.toBeNull();
+      const beforeReload = h.received.length;
       h.send({ type: "ui_ready" });
-      await h.waitUntil(() => h.received.slice(reconnectAt).some((m) => m.type === "approval_state"));
-      expect(h.received.slice(reconnectAt)).toContainEqual({ type: "approval_state", unattended: false, pending: null });
+      await h.waitUntil(() => h.received.slice(beforeReload).some((m) => m.type === "presentation_replay_end"));
+      await h.waitUntil(() => h.received.slice(beforeReload).some((m) => m.type === "approval_state"));
+      expect(h.received.slice(beforeReload)).toContainEqual({ type: "approval_state", unattended: false, pending: null });
+      await settle();
+      const afterReload = createDesktopStore({ schedule: (fn) => fn() });
+      feed(afterReload, h, beforeReload);
+      const restored = afterReload.getState().transcript.find((b) => b.kind === "tool_call" && b.toolCallId === "c1");
+      expect(restored?.kind === "tool_call" ? restored.snapshots : null).toEqual(settled?.kind === "tool_call" ? settled.snapshots : null);
     } finally {
       h.close();
     }
@@ -453,7 +533,7 @@ describe("TASK.117 — rendered reconnect (Session -> fresh desktopStore)", () =
     }
   });
 
-  it("cancel: pending prompt is cleaned up, unpersisted text does not resurrect on reconnect", async () => {
+  it("cancel: pending prompt is cleaned up and its completed turn survives reconnect", async () => {
     const h = createHarness({ steps: [renderedTextStep("never happens")] });
     let release: (() => void) | undefined = (() => {}) as (() => void) | undefined;
     const gate = new Promise<void>((r) => {
@@ -489,7 +569,8 @@ describe("TASK.117 — rendered reconnect (Session -> fresh desktopStore)", () =
       await settle();
       const fresh = attachStore(h).store;
       expect(fresh.getState().pendingPrompt).toBeNull();
-      expect(texts(fresh)).not.toContain("cancelled prompt");
+      expect(texts(fresh)).toContain("cancelled prompt");
+      expect(fresh.getState().transcript.some((b) => b.kind === "loop_end" && b.reason === "cancelled")).toBe(true);
       expect(fresh.getState().turn.status).toBe("idle");
     } finally {
       release?.();
@@ -647,11 +728,11 @@ describe("TASK.117 — rendered reconnect (Session -> fresh desktopStore)", () =
       for (let i = 0; i < cascadeEnd; i += 1) {
         fresh.getState().applyHostMessage(h.received[i] as HostToUiMessage);
       }
-      // No durable user item for the cancelled prompt, no stale pendingPrompt
-      // field, turn idle, NO rendered cancelled text.
+      // The journal restores the completed turn despite the absent durable item.
       expect(h.engine.historyItems().filter((item) => (item.message.content ?? "") === "terminal prompt")).toHaveLength(0);
       expect(fresh.getState().pendingPrompt).toBeNull();
-      expect(texts(fresh).filter((t) => t === "terminal prompt")).toHaveLength(0);
+      expect(texts(fresh).filter((t) => t === "terminal prompt")).toHaveLength(1);
+      expect(fresh.getState().transcript.some((b) => b.kind === "loop_end" && b.reason === "cancelled")).toBe(true);
       expect(fresh.getState().turn.status).toBe("idle");
 
       // The NEXT accepted prompt is unaffected: renders, clears at terminal.
@@ -1984,4 +2065,178 @@ it("renders a real interrupted reasoning stream and its successful replay", { ti
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
+});
+
+describe("transcript presentation across reload", () => {
+  it("preserves reasoning and each completed turn footer in transcript order", async () => {
+    const step = (thought: string, answer: string): ModelStreamEvent[] => [
+      { type: "start" },
+      { type: "reasoning_start", id: "shared" },
+      { type: "reasoning_delta", id: "shared", text: thought },
+      { type: "reasoning_end", id: "shared" },
+      { type: "text_start", id: "shared" },
+      { type: "text_delta", id: "shared", text: answer },
+      { type: "text_end", id: "shared" },
+      { type: "finish", finishReason: "stop", usage: {} },
+    ];
+    const h = createHarness({ steps: [step("thinking one", "answer one"), step("thinking two", "answer two")] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor((m) => m.type === "host_ready");
+      const { store, applied } = attachStore(h);
+      let offset = applied;
+      for (const [index, prompt] of ["first", "second"].entries()) {
+        const requestId = `presentation-${index}`;
+        store.getState().appendUserText(requestId, prompt);
+        h.send({ type: "user_message", requestId, text: prompt });
+        await h.waitUntil(() => countLoopEnds(h) >= index + 1);
+        await settle();
+        offset = feed(store, h, offset);
+      }
+      const presentation = (s: ReturnType<typeof createDesktopStore>) => s.getState().transcript
+        .filter((block) => ["user_text", "assistant_text", "reasoning", "loop_end"].includes(block.kind))
+        .map((block) => block.kind === "loop_end" ? { kind: block.kind, reason: block.reason, turns: block.turns, at: block.at, durationMs: block.durationMs } :
+          block.kind === "user_text" || block.kind === "assistant_text" || block.kind === "reasoning" ? { kind: block.kind, text: block.text } : null);
+      const expected = presentation(store);
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some((m) => m.type === "session_checkpoint"));
+      await settle();
+      const fresh = createDesktopStore({ schedule: (fn) => fn() });
+      feed(fresh, h, before);
+      expect(presentation(fresh)).toEqual(expected);
+    } finally {
+      h.close();
+    }
+  });
+});
+
+it("restores interleaved streams and tools after replay overflow and repeated reconnects", { timeout: 30_000 }, async () => {
+  const { REPLAY_BUFFER_CAP } = await import("./session.js");
+  const first: ModelStreamEvent[] = [
+    { type: "start" },
+    { type: "text_start", id: "same" }, { type: "text_delta", id: "same", text: "before" }, { type: "text_end", id: "same" },
+    { type: "reasoning_start", id: "same" }, { type: "reasoning_delta", id: "same", text: "thought" }, { type: "reasoning_end", id: "same" },
+    { type: "text_start", id: "same" }, { type: "text_delta", id: "same", text: "after" }, { type: "text_end", id: "same" },
+    { type: "tool_call", toolCall: { id: "tool-one", name: "MissingTool", input: {} } },
+    { type: "finish", finishReason: "tool_calls", usage: {} },
+  ];
+  const second: ModelStreamEvent[] = [
+    { type: "start" }, { type: "reasoning_start", id: "same" }, { type: "reasoning_delta", id: "same", text: "next thought" },
+    { type: "reasoning_end", id: "same" }, { type: "text_start", id: "same" }, { type: "text_delta", id: "same", text: "second answer" },
+    { type: "text_end", id: "same" }, { type: "finish", finishReason: "stop", usage: {} },
+  ];
+  const h = createHarness({ steps: [first, renderedTextStep("tool answer"), second] });
+  const visible = (store: ReturnType<typeof createDesktopStore>) => store.getState().transcript.flatMap<{ kind: string; text: string }>((block) => {
+    if (block.kind === "user_text" || block.kind === "assistant_text" || block.kind === "reasoning") return [{ kind: block.kind, text: block.text }];
+    if (block.kind === "tool_call") return [{ kind: block.kind, text: `${block.toolName}:${block.status}` }];
+    if (block.kind === "loop_end") return [{ kind: block.kind, text: JSON.stringify([block.reason, block.turns, block.at, block.durationMs]) }];
+    return [];
+  });
+  try {
+    h.send({ type: "ui_ready" }); await h.waitFor((m) => m.type === "host_ready");
+    const live = attachStore(h); let offset = live.applied;
+    for (const [index, text] of ["one", "two"].entries()) {
+      const requestId = `turn-${index}`;
+      live.store.getState().appendUserText(requestId, text);
+      h.send({ type: "user_message", requestId, text });
+      await h.waitUntil(() => countLoopEnds(h) >= index + 1); await settle();
+      offset = feed(live.store, h, offset);
+    }
+    const expected = visible(live.store);
+    expect(expected.map((entry) => entry.kind)).toEqual(["user_text", "assistant_text", "reasoning", "assistant_text", "tool_call", "assistant_text", "loop_end", "user_text", "reasoning", "assistant_text", "loop_end"]);
+    for (let i = 0; i < REPLAY_BUFFER_CAP + 10; i++) h.outbound.emit({ type: "title_changed", title: `overflow-${i}` });
+    await settle();
+    for (let i = 0; i < 2; i++) {
+      const before = h.received.length; h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some((m) => m.type === "presentation_replay_end")); await settle();
+      const fresh = createDesktopStore({ schedule: (fn) => fn() }); feed(fresh, h, before);
+      expect(visible(fresh)).toEqual(expected);
+    }
+  } finally { h.close(); }
+});
+
+it("restores a partial reasoning stream in place and continues it after reload", { timeout: 30_000 }, async () => {
+  const step: ModelStreamEvent[] = [
+    { type: "start" }, { type: "text_start", id: "t" }, { type: "text_delta", id: "t", text: "before" }, { type: "text_end", id: "t" },
+    { type: "reasoning_start", id: "r" }, { type: "reasoning_delta", id: "r", text: "partial " },
+    { type: "reasoning_delta", id: "r", text: "continued" }, { type: "reasoning_end", id: "r" },
+    { type: "text_start", id: "t" }, { type: "text_delta", id: "t", text: "after" }, { type: "text_end", id: "t" },
+    { type: "finish", finishReason: "stop", usage: {} },
+  ];
+  const h = createHarness({ steps: [step], gated: { parkAfterIndex: 5 } });
+  const visible = (store: ReturnType<typeof createDesktopStore>) => store.getState().transcript.flatMap<{ kind: string; text: string }>((block) => {
+    if (block.kind === "user_text" || block.kind === "assistant_text" || block.kind === "reasoning") return [{ kind: block.kind, text: block.text }];
+    if (block.kind === "loop_end") return [{ kind: block.kind, text: JSON.stringify([block.reason, block.turns, block.at, block.durationMs]) }];
+    return [];
+  });
+  try {
+    h.send({ type: "ui_ready" }); await h.waitFor((m) => m.type === "host_ready");
+    const live = attachStore(h); live.store.getState().appendUserText("partial", "prompt");
+    h.send({ type: "user_message", requestId: "partial", text: "prompt" });
+    await h.waitUntil(() => h.received.some((m) => m.type === "agent_event" && m.event.type === "reasoning_delta")); await settle();
+    feed(live.store, h, live.applied);
+    const before = h.received.length; h.send({ type: "ui_ready" });
+    await h.waitUntil(() => h.received.slice(before).some((m) => m.type === "presentation_replay_end")); await settle();
+    const fresh = createDesktopStore({ schedule: (fn) => fn() }); let offset = feed(fresh, h, before);
+    expect(visible(fresh)).toEqual(visible(live.store));
+    h.gated?.release(); await h.waitUntil(() => countLoopEnds(h) >= 1); await settle();
+    // The original renderer would have received the same live tail, without
+    // receiving the reconnect handshake intended for the fresh renderer.
+    feed(live.store, h, offset); offset = feed(fresh, h, offset);
+    expect(visible(fresh)).toEqual(visible(live.store));
+    expect(visible(fresh).map((entry) => entry.kind)).toEqual(["user_text", "assistant_text", "reasoning", "assistant_text", "loop_end"]);
+    const reconnect = h.received.length; h.send({ type: "ui_ready" });
+    await h.waitUntil(() => h.received.slice(reconnect).some((m) => m.type === "presentation_replay_end")); await settle();
+    const again = createDesktopStore({ schedule: (fn) => fn() }); feed(again, h, reconnect);
+    expect(visible(again)).toEqual(visible(fresh));
+  } finally { h.gated?.release(); h.close(); }
+});
+
+it("restores native thinking and completed, cancelled, and empty failed turn footers", async () => {
+  const boot: HistoryItem[] = [{ id: "native-boot", createdAt: 1, message: { role: "user", content: "older history" }, tokenEstimate: 1 }];
+  let count = 0;
+  const engine: SessionEngine = {
+    id: "claude",
+    capabilities: {
+      supportsCorePermissions: false, supportsRewind: false, supportsWorkflow: false, supportsGitMutations: false,
+      supportsContextUsage: false, supportsContextBreakdown: false, supportsInteractiveApprovals: false, costAccounting: false,
+      supportsModelSelection: false, supportsReasoningEffort: false, supportsImages: false, supportsTasks: false,
+      supportsFileSnapshots: false, supportsManualCompact: false,
+    },
+    mode: () => "build", reasoningEffort: () => undefined, setReasoningEffort: () => {},
+    async *runTurn(): AsyncIterable<AgentEvent> {
+      const index = count++;
+      if (index < 2) {
+        yield { type: "reasoning_start", id: "reused" };
+        yield { type: "reasoning_delta", id: "reused", text: `thought ${index}` };
+        yield { type: "reasoning_end", id: "reused" };
+      }
+      yield { type: "loop_end", reason: index === 0 ? "completed" : index === 1 ? "cancelled" : "error", turns: index === 2 ? 0 : 1 };
+    },
+    historyItems: () => boot, dispose: async () => {},
+  };
+  const h = createHarness({ steps: [], engine, bootHistory: boot });
+  const visible = (store: ReturnType<typeof createDesktopStore>) => store.getState().transcript.flatMap<{ kind: string; text: string }>((block) => {
+    if (block.kind === "user_text" || block.kind === "reasoning") return [{ kind: block.kind, text: block.text }];
+    if (block.kind === "loop_end") return [{ kind: block.kind, text: JSON.stringify([block.reason, block.turns, block.at, block.durationMs]) }];
+    return [];
+  });
+  try {
+    h.send({ type: "ui_ready" }); await h.waitFor((m) => m.type === "host_ready"); await settle();
+    const live = attachStore(h); let offset = live.applied;
+    for (let i = 0; i < 3; i++) {
+      const requestId = `native-${i}`, text = `prompt ${i}`;
+      live.store.getState().appendUserText(requestId, text);
+      h.send({ type: "user_message", requestId, text });
+      await h.waitUntil(() => countLoopEnds(h) >= i + 1); await settle(); offset = feed(live.store, h, offset);
+    }
+    const expected = visible(live.store);
+    const before = h.received.length; h.send({ type: "ui_ready" });
+    await h.waitUntil(() => h.received.slice(before).some((m) => m.type === "presentation_replay_end")); await settle();
+    const fresh = createDesktopStore({ schedule: (fn) => fn() }); feed(fresh, h, before);
+    expect(visible(fresh)).toEqual(expected);
+    expect(fresh.getState().transcript.filter((b) => b.kind === "loop_end").map((b) => b.kind === "loop_end" ? b.reason : ""))
+      .toEqual(["completed", "cancelled", "error"]);
+  } finally { h.close(); }
 });

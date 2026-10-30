@@ -246,6 +246,19 @@ describe("TASK.117 supervisor correction — reconnect defects after ring overfl
         expect(postSwap.estimatedTokens).toBeLessThan(pre.estimatedTokens);
         expect(postSwap.budgetTokens).toBe(pre.budgetTokens);
 
+        // The pre-compaction ring is still present: discarded turns must not
+        // reappear when the renderer reconnects before it has overflowed.
+        const beforeCutReload = h.received.length;
+        h.send({ type: "ui_ready" });
+        await h.waitUntil(() => h.received.slice(beforeCutReload).some((m) => m.type === "presentation_replay_end"));
+        await settle();
+        const afterCut = createDesktopStore({ schedule: (fn) => fn() });
+        for (const message of h.received.slice(beforeCutReload)) afterCut.getState().applyHostMessage(message);
+        expect(afterCut.getState().transcript.some((block) =>
+          (block.kind === "user_text" || block.kind === "assistant_text") &&
+          (block.text.includes("heavy turn") || block.text === "real turn one"),
+        )).toBe(false);
+
         // ── Overflow the ring: evicts the compaction's context_usage (the
         // ONLY post-swap reading; every earlier turn's reading is stale). ──
         const { REPLAY_BUFFER_CAP } = await import("./session.js");
@@ -273,6 +286,10 @@ describe("TASK.117 supervisor correction — reconnect defects after ring overfl
         // every public field. Pre-fix, the checkpoint still carried the REAL
         // prior turn's pre-compaction reading (the defect's exact stale
         // NON-NULL state), so estimatedTokens matched `pre`, not `postSwap`.
+        expect(fresh.getState().transcript.some((block) =>
+          (block.kind === "user_text" || block.kind === "assistant_text") &&
+          (block.text.includes("heavy turn") || block.text === "real turn one"),
+        )).toBe(false);
         expect(fresh.getState().contextUsage).not.toBeNull();
         expect(fresh.getState().contextUsage).toEqual({
           estimatedTokens: postSwap.estimatedTokens,

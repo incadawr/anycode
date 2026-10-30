@@ -72,6 +72,7 @@ import {
 } from "./components/EngineControls.js";
 import type { ProfilePhase } from "./components/profile-loader.js";
 import { submitStartDraft, type StartSubmitDeps } from "./start-session.js";
+import { handleCreateTabResult } from "./components/SessionPicker.js";
 import { tabRegistry, type DesktopStoreApi, type TabRegistry } from "./tab-registry.js";
 import { useTabsStore, type TabInfo, type TabsStoreApi } from "./tabs-store.js";
 import { childLayoutStore as defaultChildLayoutStore, type ChildLayoutStoreApi, type ChildLayoutView } from "./child-layout.js";
@@ -7944,21 +7945,18 @@ export function createAutomationFacade(
       return { ok: true, view: childLayoutStore.getState().view(rootTabId) };
     },
 
-    resumeSession(sessionId: string, replacementConnectionId?: string): Promise<CreateTabResult> {
-      // Full picker path (design §3.2/§4.2): bridge -> zod -> getSession ->
-      // workspace from the persisted session's own meta. No renderer-side
-      // bookkeeping beyond this call — the resulting tab's port delivery
-      // still auto-registers it into the registry/tabs-store exactly as it
-      // would for a real picker click (tab-registry.ts's `registerPort`
-      // auto-registration, App.tsx's own comment on `handleTabCreated`); the
-      // orchestrator addresses tabs by the returned `tabId` directly rather
-      // than relying on "active tab". `replacementConnectionId` (TASK.45
-      // W10-FIX F1) forwards the caller's explicit re-pin target straight
-      // into the SAME `createTab` bridge call the session picker's own
-      // replacement flow makes — omitted entirely when undefined.
-      return bridge.createTab(
+    async resumeSession(sessionId: string, replacementConnectionId?: string): Promise<CreateTabResult> {
+      const result = await bridge.createTab(
         replacementConnectionId !== undefined ? { kind: "resume", sessionId, replacementConnectionId } : { kind: "resume", sessionId },
       );
+      handleCreateTabResult(result, {
+        onTabCreated: ({ tabId, workspace }) => {
+          tabsStore.getState().addTab({ tabId, workspace });
+          tabsStore.getState().setActiveTab(tabId);
+        },
+        onFocusTab: (tabId) => tabsStore.getState().setActiveTab(tabId),
+      });
+      return result;
     },
 
     async closeTab(tabId: string): Promise<{ ok: boolean; reason?: string }> {

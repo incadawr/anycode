@@ -1,3 +1,4 @@
+import { PresentationJournal } from "./presentation-journal.js";
 import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult, type SessionStatus, type SessionActivityState, type SetSessionEffortOutcome } from "../shared/communication.js";
 import { normalizeEffortLevels, validateSessionEffort } from "../shared/session-effort.js";
 import { safeFailureMessage } from "./safe-failure.js";
@@ -329,7 +330,11 @@ const SESSION_RESULT_LIMITATION = "Latest completed public text block only. Hist
 
 export class Outbound {
   private readonly buffer: HostToUiMessage[] = [];
+  private readonly settledRequests = new Set<string>();
   private port: WirePort | null = null;
+  private observer: ((message: HostToUiMessage) => void) | undefined;
+
+  observeEmissions(observer: ((message: HostToUiMessage) => void) | undefined): void { this.observer = observer; }
 
   constructor(private readonly cap: number = REPLAY_BUFFER_CAP) {}
 
@@ -338,8 +343,17 @@ export class Outbound {
     this.port = port;
   }
 
+  /** A settled request must not resurrect an older refusal during replay. */
+  settleRequest(requestId: string): void {
+    this.settledRequests.delete(requestId);
+    this.settledRequests.add(requestId);
+    while (this.settledRequests.size > this.cap) this.settledRequests.delete(this.settledRequests.values().next().value!);
+  }
+
   /** Buffered send: recorded for replay and posted to the current port. */
   emit(message: HostToUiMessage): void {
+    if (message.type === "turn_started") this.settleRequest(message.requestId);
+    this.observer?.(message);
     this.buffer.push(message);
     if (this.buffer.length > this.cap) {
       this.buffer.shift();
@@ -355,6 +369,7 @@ export class Outbound {
   /** Re-posts the whole ring buffer to the current port (on ui_ready). */
   replay(): void {
     for (const message of this.buffer) {
+      if (message.type === "steer_requeued" && this.settledRequests.has(message.requestId)) continue;
       this.write(message);
     }
   }
@@ -380,6 +395,7 @@ export class Outbound {
    */
   clear(): void {
     this.buffer.length = 0;
+    this.settledRequests.clear();
   }
 
   private write(message: HostToUiMessage): void {
@@ -1178,6 +1194,7 @@ const answerApprovalSchema = z.object({
 }).strict();
 
 export class Session {
+  private readonly presentationJournal: PresentationJournal;
   private readonly outbound: Outbound;
   /**
    * Taskana 4068: NOT readonly — the engine_swap_request handler re-assigns
@@ -1684,6 +1701,9 @@ export class Session {
 
   constructor(options: SessionOptions) {
     this.outbound = options.outbound;
+    this.outbound.observeEmissions((message) => {
+      if (message.type === "file_snapshot" && this.turnId !== null) this.presentationJournal.recordFileSnapshot(this.turnId, message);
+    });
     this.engine = options.engine;
     this.switchEngineFactory = options.switchEngineFactory;
     this.engineSettings = options.engineSettings;
@@ -1743,6 +1763,7 @@ export class Session {
     this.currentTitle = initialTitle.length > 0 ? options.initialTitle : undefined;
     this.titleSet = this.currentTitle !== undefined || (options.hasTitle ?? false);
     this.historyMaxItems = options.historyMaxItems ?? SESSION_HISTORY_MAX_ITEMS;
+    this.presentationJournal = new PresentationJournal(this.historyMaxItems, REPLAY_BUFFER_CAP);
     this.sessionHistory = buildSessionHistory(options.bootHistory ?? [], this.historyMaxItems);
     const publicHistory = options.bootHistory ?? this.engine.historyItems();
     for (const item of [...publicHistory].reverse()) {
@@ -2213,6 +2234,7 @@ export class Session {
         // user_injected event owns the transcript; messageTurns keeps the
         // correlation for status consumers.
         this.pendingUiSteers = this.pendingUiSteers.filter((entry) => entry.requestId !== requestId);
+        this.outbound.settleRequest(requestId);
         this.messageTurns.set(requestId, { hostTurnId: receivingTurnId, nativeTurnId: ack.turnId });
       })
       .catch(() => {
@@ -2403,6 +2425,8 @@ export class Session {
     } catch (error) {
       console.error(`[host] usage audit flush failed: ${describeError(error)}`);
     }
+    this.outbound.observeEmissions(undefined);
+    this.presentationJournal.clear();
   }
 
   private route(raw: unknown): void {
@@ -2545,6 +2569,22 @@ export class Session {
             truncated: this.sessionHistory.truncated,
           });
         }
+        const historyTracksTurns = this.engine.id === "core" && !this.engineSwitched;
+        const journalSnapshot = this.presentationJournal.snapshot(
+          historyTracksTurns ? this.engine.historyItems() : undefined,
+          this.turnId ?? undefined,
+        );
+        if (journalSnapshot.coveredTurnIds.length > 0) {
+          this.outbound.sendDirect({
+            type: "presentation_snapshot",
+            turns: journalSnapshot.turns,
+            coveredTurnIds: journalSnapshot.coveredTurnIds,
+            items: this.sessionHistory?.items ?? [],
+            truncated: this.sessionHistory?.truncated ?? false,
+            historyTracksTurns,
+            ...(this.turnId !== null ? { liveTurnId: this.turnId } : {}),
+          });
+        }
         // TASK.117: the pending-prompt state rides the same per-connect
         // cascade — a reconnecting renderer re-renders the in-flight prompt
         // bubble (or clears it) BEFORE the replay ring's turn events land.
@@ -2588,7 +2628,9 @@ export class Session {
           })
           .catch(() => {});
         this.pushSessionCheckpoint();
+        if (journalSnapshot.coveredTurnIds.length > 0) this.outbound.sendDirect({ type: "presentation_replay_start" });
         this.outbound.replay();
+        if (journalSnapshot.coveredTurnIds.length > 0) this.outbound.sendDirect({ type: "presentation_replay_end" });
         this.outbound.sendDirect(this.broker.approvalState());
         this.outbound.sendDirect({ type: "context_usage_checkpoint", contextUsage: this.checkpointContextUsage });
         // GitHub #19: re-assert the authoritative title on every ui_ready, as
@@ -3631,6 +3673,7 @@ export class Session {
         // renderer reload never resurrects the rewound-away conversation.
         this.sessionHistory = buildSessionHistory([...this.engine.historyItems()], this.historyMaxItems);
         this.outbound.clear();
+        this.presentationJournal.clear();
         // TASK.117: rewind success retires any leftover pending prompt — the
         // rewound-to state owns the transcript tail now (rewind runs
         // between turns, so this is normally already null; belt-and-braces
@@ -3731,6 +3774,7 @@ export class Session {
     this.abort = controller;
     try {
       for await (const event of engine.compactNow!({ signal: controller.signal })) {
+        if (event.type === "compaction_start" && engine.id === "core") this.presentationJournal.observeHistory(engine.historyItems(), this.turnId ?? undefined);
         // `emit` (not `sendDirect`): a reconnect mid-compaction must replay
         // the start/end pair from the ring buffer exactly like a real turn's
         // events do — a fresh renderer attach should never see a half-open
@@ -3872,6 +3916,7 @@ export class Session {
       // native engine with no readable transcript) the ring is still the only
       // record of this launch's turns, so it is kept.
       if (canonical.length > 0) {
+        this.presentationJournal.clear();
         this.outbound.clear();
       }
       this.sessionHistory = buildSessionHistory(canonical, this.historyMaxItems);
@@ -3966,7 +4011,9 @@ export class Session {
     // journal frames are only ever read as history, never as live-stream
     // deltas, so a stable non-null id is enough (renderer groups by turnId).
     const turnId = this.turnId ?? ENGINE_SWITCH_TURN_ID;
-    this.outbound.emit({ type: "agent_event", turnId, event: sanitizeAgentEvent(event) });
+    const wireEvent = sanitizeAgentEvent(event);
+    if (this.turnId !== null) this.presentationJournal.record(turnId, wireEvent, this.currentStep, this.currentAttempt);
+    this.outbound.emit({ type: "agent_event", turnId, event: wireEvent });
   }
 
   /** Taskana 4730: appends one human turn to the bounded ring (<= 3 x 500 chars). */
@@ -4861,6 +4908,7 @@ export class Session {
     this.flushPendingUsageAuditRow();
     this.abort = controller;
     this.turnStartedAt = Date.now();
+    this.presentationJournal.start(turnId, requestId, this.turnStartedAt, text, attachments, origin);
     this.outbound.emit({ type: "turn_started", requestId, turnId, startedAt: this.turnStartedAt });
     // taskana 4181: the supervisor idle-watchdog's turn-start signal, fired at
     // the exact `turn_started` emission — a turn beginning proves the
@@ -4897,7 +4945,12 @@ export class Session {
       }
       if (controller.signal.aborted || this.shuttingDown) {
         recordResult("cancelled");
-        if (!this.shuttingDown) this.outbound.emit({ type: "agent_event", turnId, event: { type: "loop_end", reason: "cancelled", turns: 0 } });
+        if (!this.shuttingDown) {
+          const event = { type: "loop_end" as const, reason: "cancelled" as const, turns: 0 };
+          const at = Date.now();
+          this.presentationJournal.record(turnId, event, undefined, undefined, at);
+          this.outbound.emit({ type: "agent_event", turnId, event, at });
+        }
         return;
       }
       // Taskana 4068: consume the one-shot engine-switch import prompt BEFORE
@@ -5037,10 +5090,18 @@ export class Session {
           this.finishRetries += 1;
           this.pendingUsageAuditRow = null;
         }
+        if (this.engine.id === "core" && (event.type === "turn_end" || event.type === "loop_end" || event.type === "compaction_start")) {
+          this.presentationJournal.observeHistory(this.engine.historyItems(), this.turnId ?? undefined);
+        }
+        const eventStep = this.engine.id === "core" ? this.currentStep : undefined;
+        const eventAttempt = eventStep !== undefined ? this.currentAttempt : undefined;
+        const eventAt = event.type === "loop_end" ? Date.now() : undefined;
+        this.presentationJournal.record(turnId, wireEvent, eventStep, eventAttempt, eventAt);
         this.outbound.emit({
           type: "agent_event",
           turnId,
-          ...(this.engine.id === "core" && this.currentStep !== undefined ? { step: this.currentStep, attempt: this.currentAttempt } : {}),
+          ...(eventStep !== undefined ? { step: eventStep, attempt: eventAttempt } : {}),
+          ...(eventAt !== undefined ? { at: eventAt } : {}),
           event: wireEvent,
         });
         if (this.child !== undefined) {

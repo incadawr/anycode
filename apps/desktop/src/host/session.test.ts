@@ -1119,6 +1119,7 @@ describe("Session — foreign-engine telemetry tap (TASK.159)", () => {
           type: "agent_event",
           turnId: expect.any(String),
           event: { type: "loop_end", reason: "completed", turns: 1 },
+          at: expect.any(Number),
         }),
       );
       expect(
@@ -1131,7 +1132,7 @@ describe("Session — foreign-engine telemetry tap (TASK.159)", () => {
     }
   });
 
-  it("no eventTap configured — the turn is byte-identical to a legacy/core-path Session (no crash, same events on the wire)", async () => {
+  it("no eventTap configured — the turn completes with its terminal timestamp", async () => {
     const engine = buildFakeEngine({
       async *runTurn(): AsyncIterable<AgentEvent> {
         yield { type: "loop_end", reason: "completed", turns: 1 };
@@ -1145,6 +1146,7 @@ describe("Session — foreign-engine telemetry tap (TASK.159)", () => {
         type: "agent_event",
         turnId: expect.any(String),
         event: { type: "loop_end", reason: "completed", turns: 1 },
+        at: expect.any(Number),
       }),
     );
   });
@@ -2577,6 +2579,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
       type: "agent_event",
       turnId: expect.any(String),
       event: { type: "loop_end", reason: "workspace_transition", turns: 1 },
+      at: expect.any(Number),
     }));
     port.send({ type: "user_message", requestId: "second", text: "must not run" });
     await vi.waitFor(() => expect(port.received).toContainEqual({

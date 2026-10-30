@@ -28,6 +28,7 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, u
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { useStore } from "zustand";
 import { startConnectionManager } from "./port.js";
+import { startTabBootstrap } from "./tab-bootstrap.js";
 import { useTabsStore } from "./tabs-store.js";
 import { tabRegistry, type DesktopStoreApi } from "./tab-registry.js";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "./tab-context.js";
@@ -1294,6 +1295,12 @@ export function App() {
   useEffect(() => {
     const stop = startConnectionManager(tabRegistry);
     return stop;
+  }, []);
+
+  useEffect(() => {
+    const api = window.anycode;
+    if (!api?.tabBootstrap || !api.selectTab) return;
+    return startTabBootstrap(api, useTabsStore, tabRegistry);
   }, []);
 
   // CUT.md §3 96-P2 item 6: the `onChanged` push subscription lives at App

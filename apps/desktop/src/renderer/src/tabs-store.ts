@@ -178,6 +178,8 @@ export interface TabsState {
   removeTab(tabId: string): void;
   /** No-op if `tabId` isn't a known tab (defensive — a stale click after the tab closed); activating a real tab also parks (not destroys) any live draft. */
   setActiveTab(tabId: string): void;
+  selectionRevision: number;
+  applyBootstrap(snapshot: import("../../shared/tabs.js").TabBootstrap, revision: number): void;
   /** Create-or-focus the New Session draft (§3-D7): an existing draft keeps its prompt/workspace; a given `workspace` overwrites either way. */
   openDraft(workspace?: string): void;
   /** No-op while `draft === null`. */
@@ -322,6 +324,7 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
   return create<TabsState>()((set, get) => ({
     tabs: [],
     activeTabId: null,
+    selectionRevision: 0,
     draft: null,
     codexModels: [],
     draftActive: false,
@@ -379,14 +382,24 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
       });
     },
 
+    applyBootstrap(snapshot, revision): void {
+      for (const tab of snapshot.tabs) get().addTab(tab);
+      if (get().selectionRevision !== revision) return;
+      const target = snapshot.tabs.find((tab) => tab.tabId === snapshot.activeTabId) ?? snapshot.tabs[0];
+      if (target && get().tabs.some((tab) => tab.tabId === target.tabId)) {
+        set({ activeTabId: target.tabId });
+      }
+    },
+
     setActiveTab(tabId): void {
       if (get().tabs.some((t) => t.tabId === tabId)) {
-        set({ activeTabId: tabId, draftActive: false });
+        set((state) => ({ activeTabId: tabId, draftActive: false, selectionRevision: state.selectionRevision + 1 }));
       }
     },
 
     openDraft(workspace): void {
       set((state) => ({
+        selectionRevision: state.selectionRevision + 1,
         draft: {
           workspace: workspace ?? state.draft?.workspace ?? null,
           prompt: state.draft?.prompt ?? "",

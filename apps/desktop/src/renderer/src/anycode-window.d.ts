@@ -413,6 +413,8 @@ export type ChildHistoryResult =
 declare global {
   interface Window {
     anycode: {
+      tabBootstrap(): Promise<import("../../shared/tabs.js").TabBootstrap>;
+      selectTab(tabId: string): void;
       createTab(request: CreateTabRequest): Promise<CreateTabResult>;
       closeTab(tabId: string): Promise<CloseTabResult>;
       // TASK.106 cut-2: re-bind a running tab's session to another provider
