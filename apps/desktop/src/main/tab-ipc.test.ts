@@ -9,8 +9,9 @@
 
 import { describe, expect, it, vi } from "vitest";
 const ipcHandlers = vi.hoisted(() => new Map<string, (...args: any[]) => any>());
-vi.mock("electron", () => ({ ipcMain: { handle: (channel: string, handler: (...args: any[]) => any) => ipcHandlers.set(channel, handler) } }));
-import { TAB_REBIND_CHANNEL } from "../shared/tabs.js";
+const ipcListeners = vi.hoisted(() => new Map<string, (...args: any[]) => any>());
+vi.mock("electron", () => ({ ipcMain: { handle: (channel: string, handler: (...args: any[]) => any) => ipcHandlers.set(channel, handler), on: (channel: string, handler: (...args: any[]) => any) => ipcListeners.set(channel, handler) } }));
+import { TAB_REBIND_CHANNEL, TAB_BOOTSTRAP_CHANNEL, TAB_SELECT_CHANNEL } from "../shared/tabs.js";
 import { EventEmitter } from "node:events";
 import { homedir, tmpdir } from "node:os";
 import { mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
@@ -2741,4 +2742,19 @@ describe("handleCreate — a deferred first fork (GitHub #6)", () => {
     expect(manager.listTabs()).toHaveLength(1);
     expect(manager.getTab(result.tabId)?.proc).not.toBeNull();
   });
+});
+
+
+it("bootstraps the selected live root tab and excludes children and stale selections", () => {
+  const tabs = [
+    { tabId: "a", workspace: "/a" }, { tabId: "b", workspace: "/b" },
+    { tabId: "child", workspace: "/a", childOf: { parentTabId: "a", requestId: "r" } },
+  ];
+  const manager = { listTabs: () => tabs } as unknown as TabHostManager;
+  registerTabIpc({ manager } as TabIpcDeps);
+  ipcListeners.get(TAB_SELECT_CHANNEL)!(null, "b");
+  ipcListeners.get(TAB_SELECT_CHANNEL)!(null, "child");
+  expect(ipcHandlers.get(TAB_BOOTSTRAP_CHANNEL)!(null)).toEqual({ tabs: tabs.slice(0, 2), activeTabId: "b" });
+  tabs.splice(1, 1);
+  expect(ipcHandlers.get(TAB_BOOTSTRAP_CHANNEL)!(null)).toEqual({ tabs: [tabs[0]], activeTabId: null });
 });

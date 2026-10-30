@@ -7,39 +7,10 @@
  * MessageList's dedicated status region, and a per-second tick inside the
  * transcript's aria-live column would spam screen readers.
  *
- * Elapsed-clock ownership (design §1.1): the store is frozen (no startedAt
- * field), and this row unmounts every time a live block suppresses it — so
- * the turn-start instant lives in a module-level map keyed by turnId. The
- * first render that OBSERVES a running turn stamps Date.now(); every later
- * mount reads the same stamp, so the clock never resets mid-turn and
- * survives tab switches. Renderer-local truth: a turn that ran in a
- * background tab clocks from when its tab was first shown (honest cut —
- * wire-level start time is a core-track concern, not R3's).
+ * The host start timestamp is passed through the store, so time spent in
+ * background tabs and across renderer reloads is included.
  */
 import { useEffect, useState } from "react";
-
-const turnStartTimes = new Map<string, number>();
-const TURN_START_CACHE_LIMIT = 32;
-
-/**
- * First-observation timestamp for a turn. Idempotent per turnId (safe under
- * StrictMode double render); Map iterates in insertion order, so eviction
- * drops the oldest finished turn once the cap is exceeded.
- */
-export function getTurnStartedAt(turnId: string): number {
-  let startedAt = turnStartTimes.get(turnId);
-  if (startedAt === undefined) {
-    startedAt = Date.now();
-    turnStartTimes.set(turnId, startedAt);
-    if (turnStartTimes.size > TURN_START_CACHE_LIMIT) {
-      const oldest = turnStartTimes.keys().next().value;
-      if (oldest !== undefined) {
-        turnStartTimes.delete(oldest);
-      }
-    }
-  }
-  return startedAt;
-}
 
 /**
  * Sober gerunds — the deliberate anti-whimsy contrast with Claude Code's

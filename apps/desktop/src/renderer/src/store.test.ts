@@ -608,7 +608,7 @@ describe("desktop store — agent_event transcript accumulation", () => {
 
     store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
     store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId });
-    expect(store.getState().turn).toEqual({ status: "running", turnId, requestId: "req-1" });
+    expect(store.getState().turn).toMatchObject({ status: "running", turnId, requestId: "req-1" });
 
     const fixture: HostToUiMessage[] = [
       { type: "agent_event", turnId, event: { type: "turn_start", turn: 1 } },
@@ -5927,7 +5927,7 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     // The matching requestId officially accepts the item — inFlight clears.
     store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId: "t1" });
     expect(store.getState().queueInFlight).toBeNull();
-    expect(store.getState().turn).toEqual({ status: "running", turnId: "t1", requestId: "req-1" });
+    expect(store.getState().turn).toMatchObject({ status: "running", turnId: "t1", requestId: "req-1" });
   });
 
   it("turn_rejected on the in-flight drain restores the item to the head and pauses (busy-race, §2.3)", () => {
@@ -9015,4 +9015,37 @@ it.each(["effort-first", "model-first"])("retains both acknowledgement kinds unt
   if (order === "effort-first") { effort(); model(); } else { model(); effort(); }
   expect(store.getState().effortSelectionAck).toMatchObject({ kind: "effort", effort: "high", model: order === "effort-first" ? "a" : "b" });
   expect(store.getState().modelSelectionAck).toMatchObject({ kind: "model", model: "b", effort: "low" });
+});
+
+
+describe("turn timing", () => {
+  it("retains the host start time when a fresh store reconnects to a background turn", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(10_000);
+      const original = createDesktopStore();
+      original.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m", sessionId: "s" });
+      original.getState().applyHostMessage({ type: "turn_started", requestId: "r", turnId: "t", startedAt: 10_000 });
+      vi.setSystemTime(35_000);
+      const restored = createDesktopStore();
+      restored.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m", sessionId: "s" });
+      restored.getState().applyHostMessage({ type: "turn_started", requestId: "r", turnId: "t", startedAt: 10_000 });
+      restored.getState().applyHostMessage({ type: "turn_started", requestId: "r", turnId: "t", startedAt: 10_000 });
+      expect(restored.getState().turn.startedAt).toBe(original.getState().turn.startedAt);
+      restored.getState().applyHostMessage({ type: "agent_event", turnId: "t", event: { type: "loop_end", reason: "completed", turns: 1 } });
+      expect(restored.getState().transcript.find((block) => block.kind === "loop_end")).toMatchObject({ durationMs: 25_000 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains the host start time through repeated announcements and clears it at completion", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r", turnId: "t", startedAt: 1234 });
+    expect(store.getState().turn.startedAt).toBe(1234);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r", turnId: "t", startedAt: 5678 });
+    expect(store.getState().turn.startedAt).toBe(1234);
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "t", event: { type: "loop_end", reason: "completed", turns: 1 } });
+    expect(store.getState().turn.startedAt).toBeUndefined();
+  });
 });

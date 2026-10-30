@@ -252,11 +252,14 @@ import {
   SESSION_DELETE_CHANNEL,
   TAB_CLOSE_CHANNEL,
   TAB_CREATE_CHANNEL,
+  TAB_BOOTSTRAP_CHANNEL,
+  TAB_SELECT_CHANNEL,
   TAB_REBIND_CHANNEL,
   WORKSPACE_PICK_CHANNEL,
 } from "../shared/tabs.js";
 import type {
   CloseTabResult,
+  TabBootstrap,
   CreateTabRequest,
   CreateTabResult,
   DeleteSessionResult,
@@ -744,6 +747,8 @@ contextBridge.exposeInMainWorld("anycode", {
     forget: (request: WorkspaceTrustForgetRequest): Promise<WorkspaceTrustForgetResult> =>
       ipcRenderer.invoke(WORKSPACE_TRUST_FORGET_CHANNEL, request) as Promise<WorkspaceTrustForgetResult>,
   },
+  tabBootstrap: (): Promise<TabBootstrap> => ipcRenderer.invoke(TAB_BOOTSTRAP_CHANNEL) as Promise<TabBootstrap>,
+  selectTab: (tabId: string): void => ipcRenderer.send(TAB_SELECT_CHANNEL, tabId),
   createTab: (req: CreateTabRequest): Promise<CreateTabResult> =>
     ipcRenderer.invoke(TAB_CREATE_CHANNEL, req) as Promise<CreateTabResult>,
   closeTab: (tabId: string): Promise<CloseTabResult> =>
