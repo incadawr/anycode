@@ -9,6 +9,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Redact more secret-bearing names in child progress and approval notices.
+
 - Redact the rest of sensitive lines in child progress and approval notices, including partial streamed values.
 
 - Redact credentials in child progress, including JSON fields and authorization headers.

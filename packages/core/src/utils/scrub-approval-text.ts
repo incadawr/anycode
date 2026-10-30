@@ -1,5 +1,5 @@
 const REDACTED = "[redacted]";
-const SECRET_NAME = "(?:token|secret|password|passwd|api[ _-]?key|auth|cookie)";
+const SECRET_NAME = "(?:pass|secret|token|key|credential|auth|cookie|session)";
 
 /** Removes secret-looking material from text shown outside the child. */
 export function scrubApprovalText(text: string): string {
