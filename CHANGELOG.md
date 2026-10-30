@@ -13,6 +13,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Editing settings.json or saving a provider while the app is running no longer risks the app picking up the previous model/connection: a settings read that overlaps a save is discarded instead of being applied after it.
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
 - Choosing No thinking for Xiaomi MiMo models now turns their reasoning off.
 - Xiaomi MiMo Token Plan sessions show a pay-as-you-go list-price cost estimate instead of “price unknown”.

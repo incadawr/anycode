@@ -56,7 +56,7 @@ import { ipcMain } from "electron";
 import { z } from "zod";
 import { findCatalogEntry } from "@anycode/core/catalog";
 import type { FileIoLogger } from "../settings/files.js";
-import { loadSettings, normalizeActiveConnection, saveSettings, withSettingsFileLock } from "../settings/files.js";
+import { loadSettings, normalizeActiveConnection, saveSettings, settingsWriteEpoch, withSettingsFileLock } from "../settings/files.js";
 import { isHttpsOrLocalhostUrl, isLoopbackUrl, settingsSchema } from "../settings/schema.js";
 import type { AnycodeSettings, CustomProviderRecord, ProviderConnection, SecretKey } from "../shared/settings.js";
 import { mergeModelIds, normalizeModelId } from "../shared/settings.js";
@@ -1054,6 +1054,9 @@ export function settingsWatchEventMatchesTarget(filename: string | Buffer | null
  *  - identical bytes are skipped, which bounds the redundant refresh an own
  *    save causes without ever forming a mutation loop (`onMutation` reloads
  *    settings, it does not write);
+ *  - a read that overlapped a settings WRITE is dropped rather than dispatched
+ *    (see `settingsWriteEpoch`): the writer's own `onMutation` publishes the
+ *    newer settings, and replaying the older bytes afterwards would undo it;
  *  - read/watch/callback failures go to `logger.warn` and leave later changes
  *    operable; credentials/content are never logged.
  *
@@ -1077,6 +1080,12 @@ export function startSettingsFileWatcher(
     if (closed) {
       return;
     }
+    // Sample the host's settings write epoch before the read and re-check it
+    // after: a user save that lands while this read is in flight already
+    // delivered its own (newer) snapshot to `onExternalChange`, so dispatching
+    // the bytes we just read would make the pre-save model/connection current
+    // again — a host started before the next watcher event would boot on it.
+    const epoch = settingsWriteEpoch(settingsPath);
     let text: string;
     try {
       text = await readFile(settingsPath, "utf8");
@@ -1084,6 +1093,16 @@ export function startSettingsFileWatcher(
       if ((err as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
         logger?.warn(`settings watcher: read failed for ${settingsPath}`, err);
       }
+      return;
+    }
+    if (closed) {
+      return;
+    }
+    if (settingsWriteEpoch(settingsPath) !== epoch) {
+      // Stale relative to a write that landed during the read. Leave `lastText`
+      // alone: the write's own directory event re-reads and dispatches the
+      // bytes that are current, whereas marking these bytes as seen would make
+      // the next comparison skip a real change.
       return;
     }
     if (text === lastText) {
