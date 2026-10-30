@@ -2646,6 +2646,21 @@ export class TabHostManager {
         this.childSpawnKeys.delete(waiter.spawnKey);
         continue;
       }
+      if (this.rebindings.has(waiter.parentTabId)) {
+        // GitHub #33: the parent is mid-rebind, and a rebind drains the
+        // children it finds. Admitting a waiter now would put it into that
+        // drain — cancelled either under a consent that only covered the
+        // children the user was shown, or (with no consent) not at all, but
+        // only after the switch's own child gate had already passed and its
+        // model write had landed. `spawnChild` refuses a fresh request for the
+        // same reason; the queue is the second door into `admitChildSpawn`, so
+        // it is held to the same rule. The waiter STAYS queued (not dropped):
+        // `drainChildren`'s synchronous prefix purges it with a `closing`
+        // refusal, and `releaseRebind` pumps once more for the path where the
+        // rebind refused before any drain.
+        i += 1;
+        continue;
+      }
       if (this.childSpawnCapBlock(parentTab) !== undefined) {
         i += 1;
         continue;
@@ -3390,6 +3405,12 @@ export class TabHostManager {
 
   releaseRebind(tabId: string): void {
     this.rebindings.delete(tabId);
+    // GitHub #33: the queue pump leaves this tab's waiters parked while the
+    // lock is held (they must not join the set being drained). Settle them now
+    // that the switch is over — the same `closing` refusal / silent drop a
+    // waiter gets when its parent's host was replaced, never a fork into a
+    // dead generation.
+    this.pumpChildSpawnQueue();
   }
 
   async rebindTab(

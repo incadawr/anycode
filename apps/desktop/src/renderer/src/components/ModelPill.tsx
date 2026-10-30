@@ -967,7 +967,7 @@ export function ModelPill() {
       priorEffort: reasoningEffort,
       ...consent,
     });
-    if (!stillThisTab()) {
+    if (!result.ok && !stillThisTab()) {
       return;
     }
     if (!result.ok) {
@@ -983,10 +983,17 @@ export function ModelPill() {
       failRebind(result.reason);
       return;
     }
-    // Main wrote the target connection's model as part of the switch, so this
-    // store's snapshot is stale until it is re-read (Settings' connection tile
-    // shows that saved model). Fail-soft: the switch itself already happened.
+    // The switch HAPPENED — that is settled main-side and does not depend on
+    // which tab this pill now renders. Main wrote the target connection's model
+    // as part of it, so the shared settings snapshot is stale until it is
+    // re-read (Settings' connection tile shows that saved model); refresh it
+    // BEFORE the tab check below, or a completed switch made just as the user
+    // moved to another tab would leave every view on the old default.
+    // Fail-soft: the switch itself already succeeded.
     void Promise.resolve(useSettingsStore.getState().load()).catch(() => undefined);
+    if (!stillThisTab()) {
+      return;
+    }
     // The transcript line is written by the pin-watching effect above once the
     // respawned host's `host_ready` has landed (§D5) — writing it now would put
     // it in a transcript `performReset` is about to wipe.
