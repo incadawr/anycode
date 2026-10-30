@@ -3454,8 +3454,8 @@ describe("SqlitePersistenceAdapter — provider_usage audit (Taskana 4083 / TASK
       raw.close();
       const reopened = new SqlitePersistenceAdapter(path);
       expect((await reopened.listProviderUsage("s1"))[0]).not.toHaveProperty("generationDurationMs");
-      await reopened.recordProviderUsage(makeUsage({ step: 2, generationDurationMs: 1250, timeToFirstTokenMs: 250 }));
-      expect((await reopened.listProviderUsage("s1"))[1]).toMatchObject({ generationDurationMs: 1250, timeToFirstTokenMs: 250 });
+      await reopened.recordProviderUsage(makeUsage({ step: 2, generationDurationMs: 1250, timeToFirstEventMs: 250 }));
+      expect((await reopened.listProviderUsage("s1"))[1]).toMatchObject({ generationDurationMs: 1250, timeToFirstEventMs: 250 });
       await reopened.close();
     } finally { await rm(dir, { recursive: true, force: true }); }
   });

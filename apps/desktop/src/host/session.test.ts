@@ -8795,14 +8795,14 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
     const { sink, records } = recordingSink();
     const h = createHarness({
       steps: [[{ type: "start" }, { type: "text_delta", id: "t", text: "hi" },
-        { type: "finish", finishReason: "stop", usage: { outputTokens: 50 }, timeToFirstTokenMs: 200, generationDurationMs: 1000 }]],
+        { type: "finish", finishReason: "stop", usage: { outputTokens: 50 }, timeToFirstEventMs: 200, generationDurationMs: 1000 }]],
       usageAudit: { sink, summary: fakeSummary({ steps: [], totals: null }) },
     });
     try {
       h.send({ type: "ui_ready" });
       await h.waitFor(isHostReady);
       await runOneTurn(h);
-      expect(records[0]).toMatchObject({ outputTokens: 50, timeToFirstTokenMs: 200, generationDurationMs: 1000 });
+      expect(records[0]).toMatchObject({ outputTokens: 50, timeToFirstEventMs: 200, generationDurationMs: 1000 });
     } finally { h.close(); }
   });
 

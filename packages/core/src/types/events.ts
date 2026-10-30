@@ -62,7 +62,7 @@ export type ModelStreamEvent =
   | { type: "tool_input_delta"; id: string; delta: string }
   | { type: "tool_input_end"; id: string }
   | { type: "tool_call"; toolCall: ProposedToolCall }
-  | { type: "finish"; finishReason: FinishReason; usage: TokenUsage; timeToFirstTokenMs?: number; generationDurationMs?: number }
+  | { type: "finish"; finishReason: FinishReason; usage: TokenUsage; timeToFirstEventMs?: number; generationDurationMs?: number }
   /**
    * `retry` (TASK.33 W7b) is additive-optional terminal-retry metadata the loop
    * attaches to every passing error event: `attemptsMade` is the count of

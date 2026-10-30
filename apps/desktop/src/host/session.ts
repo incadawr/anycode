@@ -1802,6 +1802,7 @@ export class Session {
     this.presentationJournal = new PresentationJournal(this.historyMaxItems, REPLAY_BUFFER_CAP);
     this.sessionHistory = buildSessionHistory(options.bootHistory ?? [], this.historyMaxItems);
     const publicHistory = options.bootHistory ?? this.engine.historyItems();
+    this.latestTurnId = [...publicHistory].reverse().find((item) => item.turnId !== undefined)?.turnId ?? null;
     for (const item of [...publicHistory].reverse()) {
       if (item.message.role !== "assistant" || (item.kind !== undefined && item.kind !== "normal")) continue;
       const text = item.message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
@@ -2662,6 +2663,9 @@ export class Session {
           .summary()
           .then((s) => {
             this.lastUsageSummary = s;
+            // Legacy histories may not carry turn stamps; use the latest durable
+            // parent usage only when no newer admitted or restored turn is known.
+            this.latestTurnId ??= s.steps.filter((step) => step.subagentId === undefined).at(-1)?.turnId ?? null;
             this.pushSessionCheckpoint();
           })
           .catch(() => {});
@@ -5227,7 +5231,7 @@ export class Session {
               totalTokens: event.usage.totalTokens,
               finishReason: event.finishReason,
               ...(event.generationDurationMs !== undefined ? { generationDurationMs: event.generationDurationMs } : {}),
-              ...(event.timeToFirstTokenMs !== undefined ? { timeToFirstTokenMs: event.timeToFirstTokenMs } : {}),
+              ...(event.timeToFirstEventMs !== undefined ? { timeToFirstEventMs: event.timeToFirstEventMs } : {}),
               transportRetries: this.finishRetries,
             };
           }

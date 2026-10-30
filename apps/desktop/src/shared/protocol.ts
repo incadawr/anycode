@@ -352,7 +352,7 @@ export interface WireContextBreakdown {
  */
 export interface WireUsageAuditStep {
   generationDurationMs?: number;
-  timeToFirstTokenMs?: number;
+  timeToFirstEventMs?: number;
   turnId: string;
   step: number;
   createdAt: number;
