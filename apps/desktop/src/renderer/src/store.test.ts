@@ -2983,7 +2983,8 @@ describe("desktop store — subagent_end.responseModel forwarding (TASK.161 slic
     expect(block).toMatchObject({ subagent: { toolCalls: 3, final: { status: "completed" } } });
   });
 
-  it("subagent_end without ceiling leaves the key absent on final", () => {    const { scheduler } = createManualScheduler();
+  it("subagent_end without ceiling leaves the key absent on final", () => {
+    const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
     const turnId = "turn-1";
     beginAgentToolCall(store, turnId, "call-noceil");
