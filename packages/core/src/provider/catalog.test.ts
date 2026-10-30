@@ -24,6 +24,7 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
       "anthropic",
       "z-ai",
       "deepseek",
+      "xiaomi-mimo-api",
       "xiaomi-mimo-sgp",
       "xiaomi-mimo-cn",
       "xiaomi-mimo-ams",
@@ -82,6 +83,23 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
     expect(findCatalogEntry("deepseek")?.baseUrl).toBe("https://api.deepseek.com/anthropic");
     expect(findCatalogEntry("moonshot")?.baseUrl).toBe("https://api.moonshot.ai/anthropic");
     expect(findCatalogEntry("kimi")?.baseUrl).toBe("https://api.kimi.com/coding");
+  });
+
+  it("declares the pay-as-you-go API and its model pricing", () => {
+    const entry = findCatalogEntry("xiaomi-mimo-api")!;
+    expect(entry).toMatchObject({
+      name: "Xiaomi MiMo API", brand: "Xiaomi MiMo", modeLabel: "API (pay as you go)",
+      defaultTransport: "anthropic-messages", supportedTransports: ["anthropic-messages"],
+      auth: { kind: "api_key" },
+    });
+    expect(resolveEndpoint(entry, "mimo-v2.6-pro", "sk-test").baseUrl).toBe("https://api.xiaomimimo.com/anthropic");
+    expect(entry.models.map((model) => model.id)).toEqual(["mimo-v2.6-pro", "mimo-v2.6-flash"]);
+    for (const model of entry.models) {
+      expect(model).toMatchObject({ contextWindow: 1_048_576, usableContextWindow: 300_000, maxOutputTokens: 131_072, imageInput: true, reasoning: true });
+      expect(model.effortLevels).toBeUndefined();
+    }
+    expect(entry.models[0]!.pricing).toEqual({ basisId: "mimo-v2.6-pro-xiaomi-mimo-api-2026-10-30", input: 0.435, cachedInput: 0.0036, cacheWrite: 0, output: 0.87 });
+    expect(entry.models[1]!.pricing).toEqual({ basisId: "mimo-v2.6-flash-xiaomi-mimo-api-2026-10-30", input: 0.14, cachedInput: 0.0028, cacheWrite: 0, output: 0.28 });
   });
 
   it("declares Token Plan regions, model capabilities and the Anthropic endpoint", () => {
@@ -406,7 +424,7 @@ describe("assertTransportContract (dev-time invariant, TASK.43 W5)", () => {
 describe("modelsUrl (4244)", () => {
   it("4244: deepseek declares modelsUrl at the bare origin; every other entry leaves it absent", () => {
     expect(findCatalogEntry("deepseek")?.modelsUrl).toBe("https://api.deepseek.com/models");
-    for (const id of ["anthropic", "z-ai", "xiaomi-mimo-sgp", "xiaomi-mimo-cn", "xiaomi-mimo-ams", "moonshot", "kimi", "openai", "openrouter", "vllm", "custom"]) {
+    for (const id of ["anthropic", "z-ai", "xiaomi-mimo-api", "xiaomi-mimo-sgp", "xiaomi-mimo-cn", "xiaomi-mimo-ams", "moonshot", "kimi", "openai", "openrouter", "vllm", "custom"]) {
       expect(findCatalogEntry(id)?.modelsUrl).toBeUndefined();
     }
   });
@@ -417,7 +435,7 @@ describe("brand grouping", () => {
     const providers = getBuiltinCatalog().providers;
     expect(providers.filter((entry) => entry.brand === "Kimi").map((entry) => entry.id)).toEqual(["moonshot", "kimi"]);
     expect(providers.filter((entry) => entry.brand === "Xiaomi MiMo").map((entry) => entry.id)).toEqual([
-      "xiaomi-mimo-sgp", "xiaomi-mimo-cn", "xiaomi-mimo-ams",
+      "xiaomi-mimo-api", "xiaomi-mimo-sgp", "xiaomi-mimo-cn", "xiaomi-mimo-ams",
     ]);
     for (const entry of providers.filter((entry) => !["Kimi", "Xiaomi MiMo"].includes(entry.brand ?? ""))) {
       expect(entry.brand).toBeUndefined();
@@ -464,6 +482,7 @@ describe("model pricing", () => {
     anthropic: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"],
     "z-ai": ["glm-5.3", "glm-5.3-flash", "glm-5.3-flashx", "glm-5.2", "glm-5.1", "glm-5", "glm-4.7", "glm-4.6"],
     deepseek: ["deepseek-flash", "deepseek-v4-pro"],
+    "xiaomi-mimo-api": ["mimo-v2.6-pro", "mimo-v2.6-flash"],
     moonshot: ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3"],
     openai: ["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-6-astra", "gpt-6-sol"],
   };
