@@ -547,7 +547,9 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
   })();
   useEffect(() => {
     if (parentSessionId && focusedChildId) {
-      childRelationStore.getState().dismissApprovalExpired(parentSessionId, focusedChildId);
+      const childSessionId = childSessionIdOf(focusedChildId);
+      if (childSessionId) childRelationStore.getState().dismissFinishedApprovals(parentSessionId, childSessionId);
+      else childRelationStore.getState().dismissApprovalExpired(parentSessionId, focusedChildId);
     }
   }, [parentSessionId, focusedChildId]);
   const childRelation = childRelationStore((state) =>

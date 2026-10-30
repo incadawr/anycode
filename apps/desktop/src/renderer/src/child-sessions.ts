@@ -97,6 +97,7 @@ export interface ChildRelationState {
   markChildGone(childTabId: string, approvalExpired?: boolean): void;
   noteApprovalExpired(childTabId: string): void;
   dismissApprovalExpired(parentSessionId: string, spawnToolCallId: string): void;
+  dismissFinishedApprovals(parentSessionId: string, childSessionId?: string): void;
 
   /**
    * Removes every relation whose key names `parentSessionId` — live or not
@@ -147,6 +148,17 @@ export function createChildRelationStore() {
       if (!relation || relation.live || !relation.approvalExpired) return;
       const relations = new Map(get().relations);
       relations.set(key, { ...relation, approvalExpired: false });
+      set({ relations });
+    },
+
+    dismissFinishedApprovals(parentSessionId, childSessionId): void {
+      const prefix = `${parentSessionId}\u0000`;
+      const matches = [...get().relations].filter(([key, relation]) =>
+        key.startsWith(prefix) && !relation.live && relation.approvalExpired &&
+        (childSessionId === undefined || relation.childSessionId === childSessionId));
+      if (matches.length === 0) return;
+      const relations = new Map(get().relations);
+      for (const [key, relation] of matches) relations.set(key, { ...relation, approvalExpired: false });
       set({ relations });
     },
 

@@ -127,18 +127,19 @@ it("does not count down child asks queued behind another child or the parent", a
     await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "parent-tab", store: parent } }, createElement(ConnectedChildPermissionModal))));
     await act(async () => { void brokers[0]!.requestPermission(request); void brokers[1]!.requestPermission(request); });
     expect(brokers[0]!.approvalState().pending?.deadline).toEqual(expect.any(Number));
+    await act(async () => vi.advanceTimersByTimeAsync(400));
     await act(async () => dom.window.dispatchEvent(new dom.window.Event("blur")));
     await act(async () => vi.advanceTimersByTimeAsync(5000));
     expect(brokers[0]!.pendingCount).toBe(1);
     expect(brokers[0]!.isUnattended).toBe(false);
     await act(async () => dom.window.dispatchEvent(new dom.window.Event("focus")));
-    expect(brokers[0]!.approvalState().pending?.deadline).toBe(Date.now() + 1000);
+    expect(brokers[0]!.approvalState().pending?.deadline).toBe(Date.now() + 600);
     expect(brokers[1]!.approvalState().pending?.deadline).toBeUndefined();
     await act(async () => parent.getState().applyHostMessage({ type: "permission_request", requestId: "parent-ask", toolName: "Write", input: {}, mode: "build", metadata: { name: "Write", description: "write", readOnly: false, destructive: false, riskLevel: "high", sideEffectScope: "filesystem" } }));
     await act(async () => vi.advanceTimersByTimeAsync(5000));
     expect(brokers.map((broker) => broker.pendingCount)).toEqual([1, 1]);
     await act(async () => parent.getState().applyHostMessage({ type: "permission_settled", requestId: "parent-ask", behavior: "deny", origin: "ui" }));
-    expect(brokers[0]!.approvalState().pending?.deadline).toBe(Date.now() + 1000);
+    expect(brokers[0]!.approvalState().pending?.deadline).toBe(Date.now() + 600);
     await act(async () => container.querySelector<HTMLButtonElement>(".permission-deny-button")!.click());
     expect(brokers[1]!.approvalState().pending?.deadline).toBe(Date.now() + 1000);
     await act(async () => vi.advanceTimersByTimeAsync(1000));
@@ -169,6 +170,7 @@ it("places finished-child notices below the header and clears them on visiting t
   parent.getState().applyHostMessage({ type: "host_ready", workspace: "/w", mode: "build", model: "m", sessionId: "parent" });
   childRelationStore.getState().registerChild("parent", "call", "child-tab", "child");
   childRelationStore.getState().markChildGone("child-tab", true);
+  childRelationStore.getState().registerChild("parent", "continuation", "continued-tab", "child");
   const container = document.createElement("div");
   const root = createRoot(container);
   try {
