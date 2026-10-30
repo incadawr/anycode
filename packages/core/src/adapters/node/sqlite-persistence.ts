@@ -772,7 +772,8 @@ function rowToCodexShadowCommandItem(row: CodexThreadItemRow): CodexShadowComman
 export interface ProviderUsageRecord {
   subagentId?: string;
   generationDurationMs?: number;
-  timeToFirstTokenMs?: number;
+  /** Time from request start to first provider event (stored in the legacy-named column). */
+  timeToFirstEventMs?: number;
   sessionId: string;
   turnId: string;
   step: number;
@@ -818,7 +819,7 @@ function rowToProviderUsage(row: ProviderUsageRow): ProviderUsageRecord {
   return {
     ...(row.subagent_id !== null ? { subagentId: row.subagent_id } : {}),
     ...(row.generation_duration_ms !== null ? { generationDurationMs: row.generation_duration_ms } : {}),
-    ...(row.time_to_first_token_ms !== null ? { timeToFirstTokenMs: row.time_to_first_token_ms } : {}),
+    ...(row.time_to_first_token_ms !== null ? { timeToFirstEventMs: row.time_to_first_token_ms } : {}),
     sessionId: row.session_id,
     turnId: row.turn_id,
     step: row.step,
@@ -1766,7 +1767,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       record.cacheWriteTokens ?? null,
       record.subagentId ?? null,
       record.generationDurationMs ?? null,
-      record.timeToFirstTokenMs ?? null,
+      record.timeToFirstEventMs ?? null,
     );
   }
 

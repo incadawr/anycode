@@ -943,7 +943,7 @@ export function UsageCostBlock({ ledger, turnSummary, turnSteps, generationToken
         })}
       </div>}
     </>}
-    {(generationTokensPerSecond !== undefined || turnRate !== undefined) && <div className="ctx-popover-session" title="Measured from request start through completion, including time to first output">Generation speed: session {rate(generationTokensPerSecond)} · this turn {rate(turnRate)}</div>}
+    {(generationTokensPerSecond !== undefined || turnRate !== undefined) && <div className="ctx-popover-session" title="Measured from the first provider event through completion">Generation speed: session {rate(generationTokensPerSecond)} · this turn {rate(turnRate)}</div>}
     {ledger.footnote !== null && <div className="ctx-popover-session ctx-popover-footnote" tabIndex={0} title={ledger.footnote}>{ledger.footnote}</div>}
   </div>;
 }

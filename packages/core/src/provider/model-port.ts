@@ -871,10 +871,7 @@ export class AiSdkModelPort implements ModelPort {
       try {
         const model = await this.buildAttemptModel(attemptIncludeUsage, onResponseActivity);
         const requestStartedAt = performance.now();
-        let firstTokenAt: number | undefined;
-        const observeOutput = (event: ModelStreamEvent): void => {
-          if (firstTokenAt === undefined && ((event.type === "text_delta" && event.text.length > 0) || (event.type === "reasoning_delta" && event.text.length > 0) || (event.type === "tool_input_delta" && event.delta.length > 0))) firstTokenAt = performance.now();
-        };
+        let firstEventAt: number | undefined;
         const result = streamText({
           model,
           // System prompt goes out-of-band: ai@7 rejects system-role messages
@@ -891,8 +888,7 @@ export class AiSdkModelPort implements ModelPort {
           onError: () => {},
           abortSignal: attemptController.signal,
           // Raw chunks carry provenance for Anthropic and reasoning text for Responses.
-          ...(this.config.transport === "anthropic-messages" || this.config.transport === "openai-responses"
-            ? { includeRawChunks: true } : {}),
+          includeRawChunks: true,
           ...reasoningRequestOptions(request, this.config.providerName, this.config.transport, this.config.promptCache, this.config.model),
           temperature: request.temperature,
         });
@@ -922,6 +918,11 @@ export class AiSdkModelPort implements ModelPort {
             break;
           }
 
+          // The SDK emits `start` before the provider responds. `start-step`
+          // is emitted on the first provider chunk; other chunks cover ports
+          // that do not emit that marker. Capture even untranslated raw events.
+          if (firstEventAt === undefined && outcome.value.type !== "start") firstEventAt = performance.now();
+
           // Provenance capture runs before translation because `raw` parts
           // have no core-vocabulary counterpart and are dropped by
           // `translateStreamPart` (its default arm). Last write wins: across a
@@ -935,7 +936,6 @@ export class AiSdkModelPort implements ModelPort {
 
           if (reasoningTextRecovery !== undefined) {
             for (const recovered of reasoningTextRecovery.observe(outcome.value)) {
-              observeOutput(recovered);
               if (isModelOutputEvent(recovered)) hadModelOutput = true;
               yield recovered;
             }
@@ -950,12 +950,10 @@ export class AiSdkModelPort implements ModelPort {
           if (event === null) {
             continue;
           }
-          observeOutput(event);
-          // Output usage may include hidden reasoning before any observable delta.
-          // Include the whole request so that hidden generation is never omitted.
-          if (event.type === "finish" && event.finishReason !== "error") {
+          // The first provider event can precede visible reasoning or text.
+          if (event.type === "finish" && event.finishReason !== "error" && firstEventAt !== undefined) {
             const finishedAt = performance.now();
-            event = { ...event, ...(firstTokenAt !== undefined ? { timeToFirstTokenMs: Math.max(0, firstTokenAt - requestStartedAt) } : {}), generationDurationMs: Math.max(0, finishedAt - requestStartedAt) };
+            event = { ...event, timeToFirstEventMs: Math.max(0, firstEventAt - requestStartedAt), generationDurationMs: Math.max(0, finishedAt - firstEventAt) };
           }
           if (event.type === "error") event = { ...event, error: contextualizeNetworkFailure(event.error, this.config.baseUrl) };
           // Drop provider chunk-parse artifacts that are safe to ignore (a
