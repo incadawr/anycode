@@ -44,13 +44,83 @@ describe("catalog prices through the calculator", () => {
   it("prices an all-fresh turn and an all-cached turn for a real DeepSeek row", () => {
     const pro = catalogPrice("deepseek", "deepseek-v4-pro");
     expect(pro).toBeDefined();
-    // 1M fresh input + 1M output at V4-Pro's peak rate ($1.32 / $3.96).
+    // 1M fresh input + 1M output at V4-Pro's peak rate ($1.32 / $3.96) —
+    // no timestamp means the conservative peak ceiling.
     expect(calculateUsageCost({ inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 1_000_000 }, pro)?.costUsd)
       .toBeCloseTo(5.28);
+    // The same instant made explicit is still the peak band, with the bare
+    // basis id (peak needs no suffix).
+    const peak = calculateUsageCost({ inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 1_000_000 }, pro, Date.UTC(2026, 9, 28, 2, 30));
+    expect(peak?.costUsd).toBeCloseTo(5.28);
+    expect(peak?.priceBasisId).toBe("deepseek-v4-pro-deepseek-peak-2026-10-27");
     // Same token counts, all input served from cache: $0.044 instead of $1.32.
     const cached = calculateUsageCost({ inputTokens: 1_000_000, cachedInputTokens: 1_000_000, outputTokens: 0 }, pro);
     expect(cached?.costUsd).toBeCloseTo(0.044);
     expect(cached?.cacheSavingsUsd).toBeCloseTo(1.276);
+  });
+
+  it("halves every DeepSeek rate outside the peak window, off the step's timestamp", () => {
+    // The owner's night of 28.10: Wednesday 20:00 UTC is outside the peak
+    // windows, so the peak catalog snapshot is billed at half.
+    const night = Date.UTC(2026, 9, 28, 20, 0);
+    const pro = catalogPrice("deepseek", "deepseek-v4-pro");
+    const fresh = calculateUsageCost({ inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 1_000_000 }, pro, night);
+    expect(fresh?.costUsd).toBeCloseTo(2.64);
+    expect(fresh?.priceBasisId).toBe("deepseek-v4-pro-deepseek-peak-2026-10-27+off-peak");
+    // Cache hits AND their savings are billed at the same band.
+    const cached = calculateUsageCost({ inputTokens: 1_000_000, cachedInputTokens: 1_000_000, outputTokens: 0 }, pro, night);
+    expect(cached?.costUsd).toBeCloseTo(0.022);
+    expect(cached?.cacheSavingsUsd).toBeCloseTo(0.638);
+    // Flash: $0.30 in + $1.20 out at peak, half of that off-peak.
+    const flash = calculateUsageCost(
+      { inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 1_000_000 },
+      catalogPrice("deepseek", "deepseek-flash"),
+      night,
+    );
+    expect(flash?.costUsd).toBeCloseTo(0.75);
+    expect(flash?.priceBasisId).toBe("deepseek-flash-deepseek-peak-2026-10-27+off-peak");
+  });
+
+  it("bills hour boundaries and weekends exactly", () => {
+    const pro = catalogPrice("deepseek", "deepseek-v4-pro");
+    const at = (timestampMs: number) =>
+      calculateUsageCost({ inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 1_000_000 }, pro, timestampMs);
+    // Half-open windows: 03:59:59.999 is still peak, 04:00:00.000 is not;
+    // 05:59:59.999 is off-peak, 06:00:00.000 is peak again.
+    expect(at(Date.UTC(2026, 9, 28, 3, 59, 59, 999))?.costUsd).toBeCloseTo(5.28);
+    expect(at(Date.UTC(2026, 9, 28, 4, 0))?.costUsd).toBeCloseTo(2.64);
+    expect(at(Date.UTC(2026, 9, 28, 6, 0))?.costUsd).toBeCloseTo(5.28);
+    expect(at(Date.UTC(2026, 9, 28, 5, 59, 59, 999))?.costUsd).toBeCloseTo(2.64);
+    // 02:30 UTC is peak on Friday and off-peak on Saturday, same clock time.
+    expect(at(Date.UTC(2026, 9, 30, 2, 30))?.costUsd).toBeCloseTo(5.28);
+    expect(at(Date.UTC(2026, 9, 31, 2, 30))?.costUsd).toBeCloseTo(2.64);
+  });
+
+  it("keeps flat connection/model rates flat at any timestamp", () => {
+    const night = Date.UTC(2026, 9, 28, 20, 0);
+    // A user-specified rate declares no tariff, so no hour can discount it.
+    expect(calculateUsageCost({ inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 1_000_000 }, price, night))
+      .toEqual(calculateUsageCost({ inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 1_000_000 }, price));
+    expect(calculateUsageCost({ inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 1_000_000 }, price, night)?.priceBasisId).toBe("test");
+  });
+
+  it("persists the off-peak basis id so totals survive a reopen", async () => {
+    const pro = catalogPrice("deepseek", "deepseek-v4-pro");
+    const usage = { inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 1_000_000 };
+    const night = Date.UTC(2026, 9, 28, 20, 0);
+    const cost = calculateUsageCost(usage, pro, night);
+    expect(cost).toBeDefined();
+    const db = new SqlitePersistenceAdapter(":memory:");
+    try {
+      await db.createSession({ id: "deepseek-night", workspace: "/w", model: "deepseek-v4-pro", mode: "build" });
+      await db.recordProviderUsage({ sessionId: "deepseek-night", turnId: "turn", step: 1, createdAt: night, finishReason: "stop", transportRetries: 0, ...usage, ...cost });
+      const summary = summarizeProviderUsage(await db.listProviderUsage("deepseek-night"));
+      expect(summary.steps[0]?.priceBasisId).toBe("deepseek-v4-pro-deepseek-peak-2026-10-27+off-peak");
+      expect(summary.totals?.priceBasisIds).toContain("deepseek-v4-pro-deepseek-peak-2026-10-27+off-peak");
+      expect(summary.totals?.costUsd).toBeCloseTo(2.64);
+    } finally {
+      await db.close();
+    }
   });
 
   it("prices MiMo API cache writes at zero", () => {

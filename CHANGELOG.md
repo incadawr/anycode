@@ -13,6 +13,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- DeepSeek costs now follow the provider's peak/off-peak tariff: steps outside the peak windows (01:00–04:00 and 06:00–10:00 UTC on weekdays) are priced at half rate, and the context popover labels its estimate "peak" or "off-peak".
 - Choosing No thinking for Xiaomi MiMo models now turns their reasoning off.
 - Xiaomi MiMo Token Plan sessions show a pay-as-you-go list-price cost estimate instead of “price unknown”.
 
