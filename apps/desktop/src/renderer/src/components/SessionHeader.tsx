@@ -122,6 +122,15 @@ export function sessionHeaderTitleClass(title: string): string {
   return hasWordBoundary ? "session-header-title" : "session-header-title session-header-title-wrap";
 }
 
+/**
+ * The wrap class's line clamp, mirrored here so the layout contract (a title
+ * of ANY length stays inside the header's fixed height) is testable without a
+ * browser: `.session-header-title-wrap` sets `-webkit-line-clamp` to this
+ * value. Two lines × 1.25 line-height × 13px ≈ 33px, which fits the compact
+ * header's 40px height. Keep in sync with the rule in app.css.
+ */
+export const SESSION_HEADER_TITLE_LINE_LIMIT = 2;
+
 export interface SessionHeaderProps {
   sidebarCollapsed: boolean;
   onToggleSidebar(): void;
