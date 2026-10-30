@@ -9,5 +9,6 @@
 export const SESSION_TITLE_INSTRUCTION = [
   "Read the user's message below and come up with a short title for this coding session, 3 to 6 words.",
   "Reply with the title ONLY: no quotation marks, no trailing period, no preamble or explanation.",
+  "The title is a noun phrase — never start it with the word \"Title\" and never repeat this instruction.",
   "Write the title in the same language as the user's message.",
 ].join("\n");
