@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FileSystemPort } from "../ports/file-system.js";
 import { createSkillPort, discoverSkills } from "./discovery.js";
+import { DEFAULT_TOOL_CONCURRENCY } from "../types/config.js";
 import {
   BUILTIN_SKILL_SOURCE,
   CREATING_SUBAGENTS_SKILL,
@@ -166,6 +167,13 @@ describe("in-memory built-in skills", () => {
     // Cross-links both ways with creating-subagents.
     expect(body).toContain("creating-subagents");
     expect(CREATING_SUBAGENTS_SKILL.body).toContain("using-subagents");
+  });
+
+  it("using-subagents states the REAL inline concurrency default (derived from DEFAULT_TOOL_CONCURRENCY), not a made-up cap", () => {
+    // The skill must carry the actual default width, and must not claim the
+    // old wrong "at most 2" hard cap.
+    expect(USING_SUBAGENTS_SKILL.body).toContain(`Typically ${DEFAULT_TOOL_CONCURRENCY} inline`);
+    expect(USING_SUBAGENTS_SKILL.body).not.toMatch(/at most 2 inline/i);
   });
 
   it("creating-subagents no longer claims engine profiles are a one-shot CLI invocation", () => {

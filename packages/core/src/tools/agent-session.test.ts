@@ -526,6 +526,17 @@ describe("agentTool handler — send_to (Taskana 4153)", () => {
     ).rejects.toThrow("boom");
   });
 
+  it("continue_session with tier inline (explicit) => invalid_input with the exact message", async () => {
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "inline", continue_session: "child-9" },
+      makeCtx({ sessionSubagents: sendPort({ ok: true }).port }),
+    );
+    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input" });
+    expect(result.ok === false && result.error).toBe(
+      'Agent: "continue_session" is only valid with tier "session". See the using-subagents skill.',
+    );
+  });
+
   it("send_to with tier inline (explicit) => invalid_input with the exact message", async () => {
     const result = await full.handler(
       { description: "d", prompt: "p", tier: "inline", send_to: "child-77" },
@@ -533,7 +544,7 @@ describe("agentTool handler — send_to (Taskana 4153)", () => {
     );
     expect(result).toMatchObject({ ok: false, errorKind: "invalid_input" });
     expect(result.ok === false && result.error).toBe(
-      'Agent: "send_to" is only valid with tier "session", alone (no provider/detach/continue_session).',
+      'Agent: "send_to" is only valid with tier "session", alone (no provider/detach/continue_session). See the using-subagents skill.',
     );
   });
 
@@ -556,7 +567,7 @@ describe("agentTool handler — send_to (Taskana 4153)", () => {
     );
     expect(result).toMatchObject({ ok: false, errorKind: "invalid_input" });
     expect(result.ok === false && result.error).toBe(
-      'Agent: "send_to" is only valid with tier "session", alone (no provider/detach/continue_session).',
+      'Agent: "send_to" is only valid with tier "session", alone (no provider/detach/continue_session). See the using-subagents skill.',
     );
   });
 

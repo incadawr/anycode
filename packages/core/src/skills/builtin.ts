@@ -1,4 +1,5 @@
 import type { SkillMeta } from "../ports/skills.js";
+import { DEFAULT_TOOL_CONCURRENCY } from "../types/config.js";
 
 /**
  * A trusted, in-memory skill supplied by an application surface. Built-ins
@@ -142,20 +143,11 @@ export const PREVIEW_BUILTIN_SKILLS: readonly BuiltinSkillDefinition[] = [
 ];
 
 /**
- * Guidance for creating a reusable subagent profile via a plain Write to
- * `.anycode/agents/<name>.md`. Registered unconditionally on the desktop host
- * (night-track wave-2 cut §1.5) — unlike the worktree/preview skills above,
- * there is no capability boolean to gate on: withSubagents always attaches a
- * SubagentPort and Write is always registered, so the door this skill
- * documents is always open.
- */
-/**
- * Guidance for creating a reusable subagent profile via a plain Write to
- * `.anycode/agents/<name>.md`. Registered unconditionally on the desktop host
- * (night-track wave-2 cut §1.5) — unlike the worktree/preview skills above,
- * there is no capability boolean to gate on: withSubagents always attaches a
- * SubagentPort and Write is always registered, so the door this skill
- * documents is always open.
+ * Guidance for DELEGATING through the Agent tool: tier choice, detach, model
+ * precedence, parallel limits, the shared checkout, reading a child's outcome
+ * and writing a self-contained child prompt. Registered unconditionally with
+ * the subagent builtin set — every host that can spawn an inline child can
+ * also be told how to delegate well.
  */
 export const USING_SUBAGENTS_SKILL: BuiltinSkillDefinition = {
   name: "using-subagents",
@@ -173,8 +165,10 @@ way you read what comes back.
   across many files, running one focused check. The child runs in-process,
   joins your turn, and typically has 40 turns (Settings can raise this to at
   most 200). It has NO background Bash, NO MCP tools, and NO spawn tools (an
-  inline child can never spawn grandchildren). At most 2 inline children run
-  at once; issue independent calls together in one response and they run
+  inline child can never spawn grandchildren). Typically ${DEFAULT_TOOL_CONCURRENCY} inline
+  children run at once (bounded by the tool-slot and subagent-concurrency
+  settings, either of which can lower or raise it); issue independent calls
+  together in one response and they run
   concurrently — fan out disjoint searches, never split one coherent
   investigation.
 - **session** for anything that writes, builds and iterates, or needs more
