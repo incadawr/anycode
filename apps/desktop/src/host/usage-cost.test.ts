@@ -53,6 +53,15 @@ describe("catalog prices through the calculator", () => {
     expect(cached?.cacheSavingsUsd).toBeCloseTo(1.276);
   });
 
+  it("prices MiMo API cache writes at zero", () => {
+    const usage = { inputTokens: 1_000_000, cachedInputTokens: 200_000, cacheWriteTokens: 100_000, outputTokens: 100_000 };
+    for (const [model, expected] of [["mimo-v2.6-pro", 0.39222], ["mimo-v2.6-flash", 0.12656]] as const) {
+      const cost = calculateUsageCost(usage, catalogPrice("xiaomi-mimo-api", model));
+      expect(cost, model).toBeDefined();
+      expect(cost?.costUsd, model).toBeCloseTo(expected);
+    }
+  });
+
   it("prices GLM cache creation at the input rate in the step and session total", async () => {
     const glm = catalogPrice("z-ai", "glm-5.3");
     expect(glm).toBeDefined();
