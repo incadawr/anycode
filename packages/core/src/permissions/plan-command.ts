@@ -55,7 +55,7 @@ function trustedExecutable(name: string, cwd: string | undefined): string | unde
         if (readSync(fd, magic, 0, 4, 0) !== 4) return undefined;
         const value = magic.readUInt32BE();
         // ELF, Mach-O, or universal Mach-O; never a shell script.
-        return value === 0x7f454c46 || [0xfeedface, 0xcefaedfe, 0xfeedfacf, 0xcffaedfe, 0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca].includes(value) ? real : undefined;
+        return value === 0x7f454c46 || [0xfeedface, 0xcefaedfe, 0xfeedfacf, 0xcffaedfe, 0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca].includes(value) ? candidate : undefined;
       } finally { closeSync(fd); }
     } catch {
       return undefined;
