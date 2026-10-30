@@ -2045,6 +2045,12 @@ export function filterCoveredHistoryRows(
     (block) =>
       !(
         block.kind === "compaction" &&
+        // Only the LEGACY history-derived row is the duplicate: a row that
+        // already carries a durable `recordId` IS that record's rendering
+        // (GitHub #36 review 3). Dropping it here while also treating it as
+        // already rendered below removed a successful compaction entirely —
+        // it normally has BOTH ids.
+        block.recordId === undefined &&
         block.summaryItemId !== undefined &&
         summaryItemIds.has(block.summaryItemId)
       ),
@@ -2073,16 +2079,20 @@ export function insertCompactionRecordsByTime(
 ): TranscriptBlock[] {
   if (records === undefined || records.length === 0) return [...blocks];
 
+  // ORDER MATTERS (GitHub #36 review 3): the legacy duplicates are dropped
+  // FIRST, and only then is "already rendered" read off the survivors. The
+  // other way round, a replayed successful row (which carries both a recordId
+  // and the summaryItemId the filter matches on) was removed as a duplicate
+  // AND skipped for reinsertion — the compaction disappeared entirely.
+  const kept = filterCoveredHistoryRows(blocks, records);
   const rendered = new Set(
-    blocks.flatMap((block) =>
+    kept.flatMap((block) =>
       block.kind === "compaction" && block.recordId !== undefined ? [block.recordId] : [],
     ),
   );
   const pending = records
     .filter((record) => !rendered.has(record.id))
     .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
-
-  const kept = filterCoveredHistoryRows(blocks, records);
   if (pending.length === 0) return kept;
 
   const times = kept.map(anchorOf);

@@ -109,7 +109,13 @@ describe("presentation reload — durable compaction rows keep their place (GitH
     ]);
   });
 
-  it("a row for a compaction the replayed journal already rebuilt is not inserted a second time, and keeps the replay's position", () => {
+  it("a SUCCESSFUL compaction the replayed journal already rebuilt shows exactly once — with the real payload, where the event and the record both carry the summary item id", () => {
+    // GitHub #36 review 3: the real wire payload of a successful core
+    // compaction carries recordId AND summaryItemId, and so does its durable
+    // record. That is what used to make the row vanish: the legacy-duplicate
+    // filter removed the replayed row (its summaryItemId matched a record) and
+    // the "already rendered" set had already claimed its recordId, so nothing
+    // reinserted it.
     const turnWithCompaction: PresentationTurn = {
       ...replayedTurn,
       events: [
@@ -122,6 +128,9 @@ describe("presentation reload — durable compaction rows keep their place (GitH
             postTokens: 90,
             durationMs: 5,
             summary: "summary during the turn",
+            summaryItemId: "summary-during",
+            prompt: "the instruction that was sent",
+            model: "glm-5.3",
             recordId: "during",
           },
           step: 0,
@@ -130,13 +139,27 @@ describe("presentation reload — durable compaction rows keep their place (GitH
       ],
     };
 
-    const store = restoreWith([record("during", 220)], [turnWithCompaction]);
+    const store = restoreWith(
+      [record("during", 220, { summaryItemId: "summary-during", prompt: "the instruction that was sent", model: "glm-5.3" })],
+      [turnWithCompaction],
+      [
+        ...items,
+        {
+          id: "summary-during",
+          createdAt: 221,
+          kind: "compact_summary",
+          message: { role: "user", content: "summary during the turn" },
+        },
+      ],
+    );
 
     // Exactly one row for it, and it sits where the replay put it (inside the
     // turn), not at the tail where a fresh insertion would land.
     const cards = store.getState().transcript.filter((block) => block.kind === "compaction");
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({ recordId: "during", preTokens: 900 });
+    // It is the REPLAYED row (live readings), not a reinserted record copy.
+    expect(cards[0]).toMatchObject({ summaryItemId: "summary-during" });
     // (the durable item outside the covered turns, the turn's own bubble, the
     // compaction the replay rebuilt inside that turn, then its footer)
     expect(shape(store)).toEqual(["user_text", "user_text", "compaction:during", "loop_end"]);

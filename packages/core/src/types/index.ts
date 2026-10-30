@@ -33,6 +33,7 @@ export {
   COMPACTION_RECORD_FIELD_MAX_CHARS,
   COMPACTION_RECORD_MAX_PER_SESSION,
   boundCompactionRecord,
+  compactionRecordsDiscardedByRewind,
 } from "./compaction.js";
 export type { CompactionRecord } from "./compaction.js";
 export {
