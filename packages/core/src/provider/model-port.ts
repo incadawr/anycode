@@ -314,7 +314,7 @@ export function reasoningRequestOptions(
       : REASONING_BUDGET_TOKENS[effort as "low" | "medium" | "high"];
   let maxOutputTokens = Math.max(request.maxOutputTokens ?? 0, budgetTokens + 1_024);
   // The SDK adds the thinking budget to max_tokens on the wire.
-  if (providerName?.startsWith("Xiaomi MiMo Token Plan (") && /^(mimo-v2\.6-pro|mimo-v2\.6-flash)$/.test(modelId ?? "")) {
+  if ((providerName === "Xiaomi MiMo API" || providerName?.startsWith("Xiaomi MiMo Token Plan (")) && /^(mimo-v2\.6-pro|mimo-v2\.6-flash)$/.test(modelId ?? "")) {
     maxOutputTokens = Math.min(maxOutputTokens, 131_072 - budgetTokens);
   }
   return {
