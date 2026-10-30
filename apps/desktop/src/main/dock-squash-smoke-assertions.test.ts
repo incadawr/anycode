@@ -1,15 +1,17 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error node smoke helper is deliberately JavaScript
-import { checkAutoMerged, checkPinned, checkSplitClick, checkSplitPreconditions, expectedSplitPredicate } from "../../scripts/dock-squash-smoke-assertions.mjs";
+import { checkAutoMerged, checkPinned, checkSplitPreconditions, checkSplitRetryOutcome, classifySplitClick, expectedSplitPredicate } from "../../scripts/dock-squash-smoke-assertions.mjs";
 
 /**
  * Unit coverage for `dock-squash-smoke.mjs`'s --split leg verdicts — the
  * shapes mirror the facade contract exactly (`renderer/src/automation.ts`
  * dockTabSplit/dockLayoutState, pinned by automation.test.ts), so this test
- * pins the LIVE smoke's own judgement logic: which split answers are green,
- * which are red, and which are the documented expected refusal. The old leg
- * hard-asserted `split.ok === true` and aborted the whole smoke on
- * split_refused with no branch for it.
+ * pins the LIVE smoke's own judgement logic. The review 4839 follow-up made
+ * the retry policy explicit: a split_refused is retried (browser-tab click →
+ * precondition wait → split click, bounded attempts) and only a refusal that
+ * persists with preconditions held is a FAIL — an always-refusing facade must
+ * never read ALL GREEN. A refusal is PASS-expected only when the precondition
+ * wait never held.
  */
 
 function state(overrides = {}) {
@@ -28,27 +30,84 @@ function state(overrides = {}) {
   };
 }
 
-describe("dock-squash-smoke assertions — checkSplitClick", () => {
-  it("accepts an ok click", () => {
-    expect(checkSplitClick({ ok: true })).toEqual({ status: "PASS", label: "split right → split pinned", detail: "" });
+const REFUSED = { ok: false, reason: "split_refused" };
+
+describe("dock-squash-smoke assertions — classifySplitClick", () => {
+  it("classifies an ok click as pinned", () => {
+    expect(classifySplitClick({ ok: true })).toBe("pinned");
   });
 
-  it("records split_refused as the documented expected refusal, still a counted row", () => {
-    const verdict = checkSplitClick({ ok: false, reason: "split_refused" });
+  it("classifies split_refused as refused", () => {
+    expect(classifySplitClick(REFUSED)).toBe("refused");
+  });
+
+  it("classifies tab_not_present, missing and unknown reasons as failed", () => {
+    expect(classifySplitClick({ ok: false, reason: "tab_not_present" })).toBe("failed");
+    expect(classifySplitClick(undefined)).toBe("failed");
+    expect(classifySplitClick({ ok: false })).toBe("failed");
+    expect(classifySplitClick({ ok: false, reason: 7 })).toBe("failed");
+  });
+});
+
+describe("dock-squash-smoke assertions — checkSplitRetryOutcome (the review 4839 fix)", () => {
+  it("an ok click on the first attempt passes", () => {
+    const verdict = checkSplitRetryOutcome([{ preconditionsOk: true, click: { ok: true } }]);
+    expect(verdict.status).toBe("PASS");
+    expect(verdict.label).toContain("split pinned");
+  });
+
+  it("a transient refusal then a pin passes — the retry exists for exactly this", () => {
+    const verdict = checkSplitRetryOutcome([
+      { preconditionsOk: true, click: REFUSED },
+      { preconditionsOk: true, click: { ok: true } },
+    ]);
+    expect(verdict.status).toBe("PASS");
+    expect(verdict.detail).toContain("attempt 2/2");
+    expect(verdict.detail).toContain("transient refusal");
+  });
+
+  it("an always-refusing facade with preconditions met FAILS — never ALL GREEN with split broken", () => {
+    const verdict = checkSplitRetryOutcome([
+      { preconditionsOk: true, click: REFUSED },
+      { preconditionsOk: true, click: REFUSED },
+      { preconditionsOk: true, click: REFUSED },
+    ]);
+    expect(verdict.status).toBe("FAIL");
+    expect(verdict.detail).toContain("split_refused on all 3 attempt(s)");
+    expect(verdict.detail).toContain("preconditions held");
+  });
+
+  it("a refusal is PASS-expected only when preconditions never held", () => {
+    const verdict = checkSplitRetryOutcome([
+      { preconditionsOk: false, click: REFUSED },
+      { preconditionsOk: false, click: REFUSED },
+      { preconditionsOk: false, click: REFUSED },
+    ]);
     expect(verdict.status).toBe("PASS");
     expect(verdict.label).toContain("split refused (expected");
-    expect(verdict.detail).toContain("split_refused");
+    expect(verdict.detail).toContain("precondition wait never held");
   });
 
-  it("fails on tab_not_present — a wiring defect the smoke must not swallow", () => {
-    const verdict = checkSplitClick({ ok: false, reason: "tab_not_present" });
+  it("preconditions held on ANY attempt makes an all-refused run FAIL (the premise did hold)", () => {
+    const verdict = checkSplitRetryOutcome([
+      { preconditionsOk: false, click: REFUSED },
+      { preconditionsOk: true, click: REFUSED },
+    ]);
     expect(verdict.status).toBe("FAIL");
   });
 
-  it("fails on a missing/unknown reason", () => {
-    expect(checkSplitClick(undefined).status).toBe("FAIL");
-    expect(checkSplitClick({ ok: false }).status).toBe("FAIL");
-    expect(checkSplitClick({ ok: false, reason: 7 }).status).toBe("FAIL");
+  it("a tab_not_present click fails immediately even after a pinless refusal", () => {
+    const verdict = checkSplitRetryOutcome([
+      { preconditionsOk: true, click: REFUSED },
+      { preconditionsOk: true, click: { ok: false, reason: "tab_not_present" } },
+    ]);
+    expect(verdict.status).toBe("FAIL");
+    expect(verdict.detail).toContain("tab_not_present");
+  });
+
+  it("a malformed click body fails", () => {
+    expect(checkSplitRetryOutcome([{ preconditionsOk: true, click: undefined }]).status).toBe("FAIL");
+    expect(checkSplitRetryOutcome([]).status).toBe("FAIL");
   });
 });
 

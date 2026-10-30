@@ -10,41 +10,90 @@
  *  - `POST /dock/tabs/:id/split` → `{ok:true}` | `{ok:false, reason:"tab_not_present"|"split_refused"}` (renderer automation facade, cross-review D6);
  *  - `GET /dock/state` → `{mode, width, conversationWidth, tabs:[{id,kind,title,active}], split}` (dockLayoutState).
  *
+ * Split-click policy (review 4839 follow-up): once the deterministic-primary
+ * preconditions HELD, a split_refused is retried (browser-tab click →
+ * precondition wait → split click, bounded attempts) and only a refusal that
+ * persists through every attempt with preconditions held is a FAIL — an
+ * always-refusing facade must never read ALL GREEN. A refusal is PASS-expected
+ * only when a precondition genuinely failed (the premise never held).
+ *
  * Zero npm deps; plain node >=22 ESM.
  */
 
 /**
- * Verdict for the 1800px split click.
+ * Classify a single 1800px split-click answer.
  *
- * - ok            → PASS, the pin landed.
- * - split_refused → the documented expected refusal (the tab was not
- *                   splittable at click time — e.g. it held the active
- *                   primary slot). Recorded as an explicit, counted PASS
- *                   row (`split refused (expected)`) so a red run can never
- *                   hide behind it; the auto-merge sub-leg still runs.
- * - anything else → FAIL (unknown reason string), including tab_not_present,
- *                   which is a wiring defect the smoke must not swallow.
+ * - ok            → "pinned", the pin landed.
+ * - split_refused → "refused", the store honestly reported a no-op click.
+ * - anything else → "failed", a wiring defect (including tab_not_present or a
+ *                   missing/unknown reason) the smoke must not swallow.
  */
-export function checkSplitClick(clickBody) {
+export function classifySplitClick(clickBody) {
   if (clickBody?.ok === true) {
-    return { status: "PASS", label: "split right → split pinned", detail: "" };
+    return "pinned";
   }
   const reason = typeof clickBody?.reason === "string" ? clickBody.reason : "missing_reason";
-  if (reason === "split_refused") {
+  return reason === "split_refused" ? "refused" : "failed";
+}
+
+/**
+ * Verdict for the bounded retry loop around the 1800px split click.
+ * `attempts` is the ordered list of `{ preconditionsOk, click }` pairs — one
+ * per browser-tab click → precondition wait → split click round.
+ *
+ * - any pinned click            → PASS, the split demonstrably happens.
+ * - any failed click            → FAIL immediately (unknown/tab_not_present is
+ *                                 a wiring defect, never expected).
+ * - all clicks refused:
+ *     · preconditions ever held → FAIL: preconditions held (pin target
+ *                                 present, NOT the active primary, window
+ *                                 wide) and the store still refused every
+ *                                 attempt — splitting is broken.
+ *     · preconditions never held→ PASS (expected): the premise itself never
+ *                                 held, so the refusal is the documented
+ *                                 honest answer, recorded as a counted row.
+ */
+export function checkSplitRetryOutcome(attempts) {
+  const list = Array.isArray(attempts) ? attempts : [];
+  const pinnedAttempt = list.find((a) => classifySplitClick(a?.click) === "pinned") ?? null;
+  if (pinnedAttempt !== null) {
+    const attemptNo = list.indexOf(pinnedAttempt) + 1;
     return {
       status: "PASS",
-      label: "split refused (expected: pin target not splittable at click time)",
-      detail: "facade answered {ok:false,reason:split_refused} — the store refused the pin and reported it honestly",
+      label: "split right → split pinned",
+      detail: `pinned on attempt ${attemptNo}/${list.length}${attemptNo > 1 ? " (after a transient refusal)" : ""}`,
     };
   }
-  return { status: "FAIL", label: "split right → split pinned", detail: `split failed: ${JSON.stringify(clickBody)}` };
+  const failedAttempt = list.find((a) => classifySplitClick(a?.click) === "failed") ?? null;
+  if (failedAttempt !== null) {
+    return {
+      status: "FAIL",
+      label: "split right → split pinned",
+      detail: `split failed: ${JSON.stringify(failedAttempt?.click)}`,
+    };
+  }
+  const preconditionsEverHeld = list.some((a) => a?.preconditionsOk === true);
+  if (preconditionsEverHeld || list.length === 0) {
+    return {
+      status: "FAIL",
+      label: "split right → split pinned",
+      detail: list.length === 0
+        ? "no split attempts recorded — the retry loop never ran"
+        : `split_refused on all ${list.length} attempt(s) while preconditions held (pin target present, not the active primary, window wide) — splitting is broken, not refused-for-cause`,
+    };
+  }
+  return {
+    status: "PASS",
+    label: "split refused (expected: split preconditions never held)",
+    detail: `facade answered {ok:false,reason:split_refused} on all ${list.length} attempt(s) and the precondition wait never held — the store refused the pin and reported it honestly`,
+  };
 }
 
 /**
  * Which pinned state the leg should wait for after the 1800px click. Paired
- * with checkSplitClick: an ok click must pin; a refused click must NOT (the
- * store never left split:null), so the wait predicate is exact either way —
- * a refused-then-pinned or ok-then-stuck pair is a defect this catches.
+ * with the click's classification: an ok click must pin; a refused click must
+ * NOT (the store never left split:null), so the wait predicate is exact either
+ * way — a refused-then-pinned or ok-then-stuck pair is a defect this catches.
  */
 export function expectedSplitPredicate(clickBody) {
   return typeof clickBody?.ok === "boolean"
