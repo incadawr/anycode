@@ -11,6 +11,8 @@ import { IpcPermissionBroker } from "../../../host/permission-broker.js";
 it("recovery click reaches the session and the next request prompts", async () => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, HTMLDialogElement: dom.window.HTMLDialogElement, IS_REACT_ACT_ENVIRONMENT: true });
+  dom.window.document.hasFocus = () => true;
+  Object.defineProperty(dom.window.document, "hidden", { value: false, configurable: true });
   dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
   const { act, createElement } = await import("react");
@@ -92,6 +94,8 @@ it("shows the parent's recovery control while a child view is open", async () =>
 it("does not count down child asks queued behind another child or the parent", async () => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, HTMLDialogElement: dom.window.HTMLDialogElement, IS_REACT_ACT_ENVIRONMENT: true });
+  dom.window.document.hasFocus = () => true;
+  Object.defineProperty(dom.window.document, "hidden", { value: false, configurable: true });
   dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
   const { act, createElement } = await import("react");
@@ -123,6 +127,12 @@ it("does not count down child asks queued behind another child or the parent", a
     await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "parent-tab", store: parent } }, createElement(ConnectedChildPermissionModal))));
     await act(async () => { void brokers[0]!.requestPermission(request); void brokers[1]!.requestPermission(request); });
     expect(brokers[0]!.approvalState().pending?.deadline).toEqual(expect.any(Number));
+    await act(async () => dom.window.dispatchEvent(new dom.window.Event("blur")));
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
+    expect(brokers[0]!.pendingCount).toBe(1);
+    expect(brokers[0]!.isUnattended).toBe(false);
+    await act(async () => dom.window.dispatchEvent(new dom.window.Event("focus")));
+    expect(brokers[0]!.approvalState().pending?.deadline).toBe(Date.now() + 1000);
     expect(brokers[1]!.approvalState().pending?.deadline).toBeUndefined();
     await act(async () => parent.getState().applyHostMessage({ type: "permission_request", requestId: "parent-ask", toolName: "Write", input: {}, mode: "build", metadata: { name: "Write", description: "write", readOnly: false, destructive: false, riskLevel: "high", sideEffectScope: "filesystem" } }));
     await act(async () => vi.advanceTimersByTimeAsync(5000));
@@ -137,5 +147,40 @@ it("does not count down child asks queued behind another child or the parent", a
     await act(async () => root.unmount());
     for (const broker of brokers) broker.denyAll("test cleanup", "shutdown");
     vi.useRealTimers(); childRelationStore.getState().reset(); lookup.mockRestore(); send.mockRestore(); dom.window.close();
+  }
+});
+
+it("places finished-child notices below the header and clears them on visiting that child", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, HTMLDialogElement: dom.window.HTMLDialogElement, IS_REACT_ACT_ENVIRONMENT: true });
+  Object.defineProperty(dom.window, "anycode", { value: { previewPanel: { list: async () => ({ tabId: "parent-tab", previews: [] }), setState: async () => {} }, browserAccess: { get: async () => ({ ok: true, tabs: [] }), onChanged: () => () => {} }, listSessions: async () => [], childHistory: async () => ({ ok: true, items: [] }) } });
+  const { act, createElement } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { createDesktopStore } = await import("../store.js");
+  const { TabContext } = await import("../tab-context.js");
+  const { childRelationStore } = await import("../child-sessions.js");
+  const { childLayoutStore } = await import("../child-layout.js");
+  const { useTabsStore } = await import("../tabs-store.js");
+  useTabsStore.getState().addTab({ tabId: "parent-tab", workspace: "/w" });
+  useTabsStore.getState().setSessionId("parent-tab", "parent");
+  const { ActiveTabBody } = await import("../App.js");
+  const parent = createDesktopStore();
+  parent.getState().applyHostMessage({ type: "host_ready", workspace: "/w", mode: "build", model: "m", sessionId: "parent" });
+  childRelationStore.getState().registerChild("parent", "call", "child-tab", "child");
+  childRelationStore.getState().markChildGone("child-tab", true);
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "parent-tab", store: parent } }, createElement(ActiveTabBody, { tabId: "parent-tab", sidebarCollapsed: true, onToggleSidebar: () => {}, onToast: () => {} }))));
+    const header = container.querySelector(".session-header")!;
+    const notice = container.querySelector(".approval-status")!;
+    expect(header.nextElementSibling).toBe(notice);
+    await act(async () => childLayoutStore.getState().open("parent-tab", "call"));
+    expect(childRelationStore.getState().getRelation("parent", "call")?.approvalExpired).toBe(false);
+    expect(container.querySelector(".approval-status")).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    childLayoutStore.getState().close("parent-tab"); childRelationStore.getState().reset(); useTabsStore.getState().removeTab("parent-tab"); dom.window.close(); vi.unstubAllGlobals();
   }
 });

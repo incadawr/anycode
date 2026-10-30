@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Subagent approval notices can be dismissed, and child approval timers wait while the window is hidden or unfocused (GitHub #32).
+
 ## [0.0.53] — 2026-10-30
 
 ### Changed
