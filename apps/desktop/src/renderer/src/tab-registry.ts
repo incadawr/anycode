@@ -428,6 +428,10 @@ export function createTabRegistry(
     // TASK.33 W8: snapshot what actually went on the wire so a later terminal
     // retryable failure can offer to replay this same content.
     entry.store.getState().recordSentMessage(item.text, item.images);
+    if (item.origin === undefined && entry.connection && !entry.isChild) {
+      const sessionId = entry.store.getState().sessionId;
+      if (sessionId) childRelationStore.getState().dismissFinishedApprovals(sessionId);
+    }
     entry.connection?.send({
       type: "user_message",
       requestId,
@@ -796,6 +800,10 @@ export function createTabRegistry(
       if (!entry?.connection) {
         console.warn("[tab-registry] dropping outgoing message, no active connection for tab", tabId, message);
         return;
+      }
+      if (!entry.isChild && (message.type === "user_message" || message.type === "steer_message")) {
+        const sessionId = entry.store.getState().sessionId;
+        if (sessionId) childRelationStore.getState().dismissFinishedApprovals(sessionId);
       }
       entry.connection.send(message);
     },

@@ -1097,7 +1097,7 @@ it("publishes the original deadline and unattended recovery without granting an 
 
 
 describe("child approval presentation", () => {
-  it("starts and restarts the deadline only while the request is presented", async () => {
+  it("pauses the remaining deadline while the request is not presented", async () => {
     vi.useFakeTimers();
     const messages: HostToUiMessage[] = [];
     const broker = new IpcPermissionBroker((message) => messages.push(message), 1000, null, true);
@@ -1114,8 +1114,10 @@ describe("child approval presentation", () => {
     await vi.advanceTimersByTimeAsync(5000);
     expect(broker.pendingCount).toBe(1);
     broker.setApprovalVisibility(id, true);
-    expect(broker.approvalState().pending?.deadline).toBe(Date.now() + 1000);
-    await vi.advanceTimersByTimeAsync(1000);
+    expect(broker.approvalState().pending?.deadline).toBe(Date.now() + 200);
+    await vi.advanceTimersByTimeAsync(199);
+    expect(broker.pendingCount).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
     await expect(decision).resolves.toMatchObject({ behavior: "deny" });
     expect(broker.isUnattended).toBe(true);
   });

@@ -631,6 +631,22 @@ describe("tab-registry — child-session registration (TASK.102 CUT-S2 §2.5, sl
     expect(registry.getStore("child-1")).toBeUndefined();
   });
 
+  it("clears finished notices for the parent when a user sends a message", () => {
+    const { registry, childRelationStore } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("root-1", "/ws/root", asPort(port));
+    port.emit(HOST_READY("/ws/root", "sess-root"));
+    const relations = childRelationStore.getState();
+    relations.registerChild("sess-root", "old", "old-tab", "child");
+    relations.markChildGone("old-tab", true);
+    relations.registerChild("other", "other", "other-tab", "other-child");
+    relations.markChildGone("other-tab", true);
+    registry.sendToTab("root-1", { type: "user_message", requestId: "message", text: "continue" });
+    expect(port.sent).toContainEqual({ type: "user_message", requestId: "message", text: "continue" });
+    expect(relations.getRelation("sess-root", "old")?.approvalExpired).toBe(false);
+    expect(relations.getRelation("other", "other")?.approvalExpired).toBe(true);
+  });
+
   it("retains a child expiry when the host exits immediately", () => {
     const { registry, childRelationStore } = createTestRegistry(createTabsStore());
     const port = new FakeMessagePort();
