@@ -13,6 +13,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Roles: the global profile selector always offers "Built-in roles", so you can return to the built-in defaults even with a saved profile active; saving from the built-ins now creates a fresh uniquely-named profile instead of overwriting a profile named "default", and deleting the active profile returns to the built-ins.
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
 - Choosing No thinking for Xiaomi MiMo models now turns their reasoning off.
 - Xiaomi MiMo Token Plan sessions show a pay-as-you-go list-price cost estimate instead of “price unknown”.
