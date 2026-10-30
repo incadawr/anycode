@@ -689,22 +689,14 @@ export function formatUsageAuditStepRow(step: WireUsageAuditStep): string {
   return formatUsageAuditStepParts(step).join(" · ");
 }
 
-/**
- * The CURRENT turn's audited steps, in step order. The list arrives
- * newest-first (host `pushUsageAudit` reverses the tail), so "current" is the
- * turn that owns the newest `createdAt` — never simply `list[0]`, which would
- * silently break if the host's ordering ever changed. Filtering by that
- * `turnId` is what keeps a previous turn's `step 21` from appearing beneath the
- * new turn's `step 1`: the collapsed summary and the expanded list both speak
- * about exactly one turn. Empty list (or none loaded) -> no summary, no rows.
- */
-export function currentTurnSteps(list: readonly WireUsageAuditStep[] | null): WireUsageAuditStep[] {
+/** Select audited steps for the requested turn; without an ID, select the latest recorded turn. */
+export function currentTurnSteps(list: readonly WireUsageAuditStep[] | null, turnId?: string | null): WireUsageAuditStep[] {
   if (list === null || list.length === 0) {
     return [];
   }
-  const latest = list.reduce((best, step) => (step.createdAt > best.createdAt ? step : best));
+  const selectedTurnId = turnId === undefined ? list.reduce((best, step) => (step.createdAt > best.createdAt ? step : best)).turnId : turnId;
   return list
-    .filter((step) => step.turnId === latest.turnId)
+    .filter((step) => step.turnId === selectedTurnId)
     .sort((a, b) => a.step - b.step || a.createdAt - b.createdAt);
 }
 
@@ -951,7 +943,7 @@ export function UsageCostBlock({ ledger, turnSummary, turnSteps, generationToken
         })}
       </div>}
     </>}
-    {(generationTokensPerSecond !== undefined || turnRate !== undefined) && <div className="ctx-popover-session">Generation speed: session {rate(generationTokensPerSecond)} · this turn {rate(turnRate)}</div>}
+    {(generationTokensPerSecond !== undefined || turnRate !== undefined) && <div className="ctx-popover-session" title="Measured from request start through completion, including time to first output">Generation speed: session {rate(generationTokensPerSecond)} · this turn {rate(turnRate)}</div>}
     {ledger.footnote !== null && <div className="ctx-popover-session ctx-popover-footnote" tabIndex={0} title={ledger.footnote}>{ledger.footnote}</div>}
   </div>;
 }
@@ -1010,6 +1002,7 @@ function CtxPopover({
   contextWindowAssumed: boolean;
 }) {
   const sendToHost = useTabSend();
+  const latestTurnId = useTabStore((state) => state.latestTurnId);
   const model = useTabStore((state) => state.model);
   const pinnedConnection = useTabStore((state) => state.pinnedConnection);
   const modelSettingsConnectionId = useTabStore((state) => state.modelSettingsConnectionId);
@@ -1161,7 +1154,7 @@ function CtxPopover({
   const ledger = formatUsageCostLedger(usageAudit.totals, sessionTokens);
   // Current-turn steps only (never a mix of turns): the summary line and the
   // expandable list below are both built from this one array.
-  const turnSteps = currentTurnSteps(usageAudit.list);
+  const turnSteps = currentTurnSteps(usageAudit.list, latestTurnId);
   const turnStepSummary = formatTurnStepSummary(turnSteps);
   const quotaView = buildQuotaPopoverView(quota, Date.now());
   const fillPercent = percent === null ? 0 : Math.min(100, Math.max(0, percent));
