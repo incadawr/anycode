@@ -42,6 +42,7 @@ import type { EndpointConfig } from "./endpoint.js";
 import type { ImplicitPromptCache } from "../types/config.js";
 import { blocksAutomaticReplay, classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
 import { ResponsesReasoningTextRecovery } from "./responses-reasoning-text.js";
+import { isMiMoModel } from "./mimo.js";
 import { createLanguageModel } from "./language-model.js";
 import type { ProviderQuotaUpdate } from "./quota.js";
 import type { NetworkWaiter } from "./network-waiter.js";
@@ -62,7 +63,7 @@ const GLM_MAX_TOKENS = 131_072;
 interface AnthropicReasoningOptions {
   maxOutputTokens?: number;
   // thinking optional since the DeepSeek branch (4241) sends the effort enum alone.
-  providerOptions?: { anthropic: { effort?: string; thinking?: { type: "enabled"; budgetTokens: number } | { type: "adaptive" } } };
+  providerOptions?: { anthropic: { effort?: string; thinking?: { type: "enabled"; budgetTokens: number } | { type: "adaptive" } | { type: "disabled" } } };
 }
 
 /**
@@ -249,6 +250,13 @@ export function reasoningRequestOptions(
   }
 
   if (effort === undefined || effort === "off") {
+    if (isMiMoModel(providerName, modelId)) {
+      // The picker displays No thinking when no explicit choice is stored.
+      return {
+        ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
+        providerOptions: { anthropic: { thinking: { type: "disabled" } } },
+      };
+    }
     return request.maxOutputTokens === undefined ? {} : { maxOutputTokens: request.maxOutputTokens };
   }
 
@@ -314,7 +322,7 @@ export function reasoningRequestOptions(
       : REASONING_BUDGET_TOKENS[effort as "low" | "medium" | "high"];
   let maxOutputTokens = Math.max(request.maxOutputTokens ?? 0, budgetTokens + 1_024);
   // The SDK adds the thinking budget to max_tokens on the wire.
-  if ((providerName === "Xiaomi MiMo API" || providerName?.startsWith("Xiaomi MiMo Token Plan (")) && /^(mimo-v2\.6-pro|mimo-v2\.6-flash)$/.test(modelId ?? "")) {
+  if (isMiMoModel(providerName, modelId)) {
     maxOutputTokens = Math.min(maxOutputTokens, 131_072 - budgetTokens);
   }
   return {
