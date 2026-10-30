@@ -304,6 +304,30 @@ afterEach(() => {
 });
 
 describe("AiSdkModelPort — happy path", () => {
+  it("includes hidden reasoning before the first visible response in generation duration", async () => {
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    mockStreamText.mockImplementationOnce(() => ({ fullStream: (async function* () {
+      yield startPart;
+      now = 5100; yield { type: "text-delta", id: "t", text: "answer" };
+      now = 6100; yield { ...finishPart, totalUsage: { inputTokens: 1, outputTokens: 1100, totalTokens: 1101 } };
+    })() }));
+    const events = await collect(new AiSdkModelPort(baseConfig()).streamText(baseRequest));
+    expect(events.find((event) => event.type === "finish")).toMatchObject({ timeToFirstTokenMs: 5000, generationDurationMs: 6000 });
+  });
+
+  it("measures a response with billed output but no visible deltas", async () => {
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    mockStreamText.mockImplementationOnce(() => ({ fullStream: (async function* () {
+      yield startPart;
+      now = 5100; yield finishPart;
+    })() }));
+    const finish = (await collect(new AiSdkModelPort(baseConfig()).streamText(baseRequest))).find((event) => event.type === "finish");
+    expect(finish).toMatchObject({ generationDurationMs: 5000 });
+    expect(finish).not.toHaveProperty("timeToFirstTokenMs");
+  });
+
   it("measures first output and generation duration on the successful stream attempt", async () => {
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -313,7 +337,7 @@ describe("AiSdkModelPort — happy path", () => {
       now = 1300; yield finishPart;
     })() }));
     const events = await collect(new AiSdkModelPort(baseConfig()).streamText(baseRequest));
-    expect(events.find((event) => event.type === "finish")).toMatchObject({ timeToFirstTokenMs: 200, generationDurationMs: 1000 });
+    expect(events.find((event) => event.type === "finish")).toMatchObject({ timeToFirstTokenMs: 200, generationDurationMs: 1200 });
   });
 
   it("yields translated events for a single successful attempt with no retries", async () => {
@@ -324,7 +348,7 @@ describe("AiSdkModelPort — happy path", () => {
 
     expect(events).toEqual([
       { type: "start" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, generationDurationMs: expect.any(Number) },
     ]);
     expect(mockStreamText).toHaveBeenCalledTimes(1);
   });
@@ -365,7 +389,7 @@ describe("AiSdkModelPort — retry before model output (thrown exception)", () =
     expect(events[1]).toMatchObject({ type: "stream_retry", attempt: 1, maxAttempts: 3 });
     expect(events.slice(2)).toEqual([
       { type: "start" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, generationDurationMs: expect.any(Number) },
     ]);
     expect(mockStreamText).toHaveBeenCalledTimes(2);
   });
@@ -604,7 +628,7 @@ describe("AiSdkModelPort — ignorable provider stream artifacts (slice 3.7 R1)"
 
     expect(events).toEqual([
       { type: "start" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, generationDurationMs: expect.any(Number) },
     ]);
     expect(events.some((e) => e.type === "stream_retry" || e.type === "error")).toBe(false);
     expect(warnSpy).toHaveBeenCalledTimes(1);
@@ -1120,7 +1144,7 @@ describe("AiSdkModelPort — response-model provenance and identity readback", (
     // Raw parts have no core-vocabulary counterpart and never reach the caller.
     expect(events).toEqual([
       { type: "start" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, generationDurationMs: expect.any(Number) },
     ]);
   });
 
@@ -1230,7 +1254,7 @@ describe("AiSdkModelPort — TASK.168 include_usage probe (openai-chat-completio
     expect(events).toEqual([
       { type: "start" },
       { type: "start" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, generationDurationMs: expect.any(Number) },
     ]);
     expect(mockStreamText).toHaveBeenCalledTimes(2);
     expect(mockCreateLanguageModel).toHaveBeenNthCalledWith(1, expect.objectContaining({ includeUsage: true }));
@@ -1247,7 +1271,7 @@ describe("AiSdkModelPort — TASK.168 include_usage probe (openai-chat-completio
 
     expect(events2).toEqual([
       { type: "start" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, generationDurationMs: expect.any(Number) },
     ]);
     expect(mockStreamText).toHaveBeenCalledTimes(3); // 2 above + this 1 — no re-probe attempt
     expect(mockCreateLanguageModel).toHaveBeenNthCalledWith(3, expect.objectContaining({ includeUsage: false }));
@@ -1267,7 +1291,7 @@ describe("AiSdkModelPort — TASK.168 include_usage probe (openai-chat-completio
     expect(events).toEqual([
       { type: "start" },
       { type: "start" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, generationDurationMs: expect.any(Number) },
     ]);
     expect(mockStreamText).toHaveBeenCalledTimes(2);
     expect(mockCreateLanguageModel).toHaveBeenNthCalledWith(2, expect.objectContaining({ includeUsage: false }));

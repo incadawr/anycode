@@ -804,6 +804,8 @@ export type HostToUiMessage =
        */
       cutTurnIds?: string[];
       type: "session_checkpoint";
+      /** Most recently admitted turn, including one that ended without usage. */
+      latestTurnId?: string;
       /**
        * TASK.117 supervisor correction defect 1: toolCallIds whose
        * `tool_execution_start` has been emitted and whose `tool_result` has

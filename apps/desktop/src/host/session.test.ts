@@ -8777,6 +8777,20 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
     return { turnId: turnStarted!.turnId };
   }
 
+  it("reports the latest turn in a reconnect checkpoint after it has ended", async () => {
+    const { sink } = recordingSink();
+    const h = createHarness({ steps: [usageStep({ outputTokens: 1 }, "one")], usageAudit: { sink, summary: fakeSummary({ steps: [], totals: null }) } });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      const { turnId } = await runOneTurn(h);
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some((m) => m.type === "session_checkpoint"));
+      expect(h.received.slice(before).find((m) => m.type === "session_checkpoint")).toMatchObject({ latestTurnId: turnId });
+    } finally { h.close(); }
+  });
+
   it("persists timing supplied by the model stream alongside usage", async () => {
     const { sink, records } = recordingSink();
     const h = createHarness({

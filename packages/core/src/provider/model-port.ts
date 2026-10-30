@@ -951,9 +951,11 @@ export class AiSdkModelPort implements ModelPort {
             continue;
           }
           observeOutput(event);
-          if (event.type === "finish" && firstTokenAt !== undefined) {
+          // Output usage may include hidden reasoning before any observable delta.
+          // Include the whole request so that hidden generation is never omitted.
+          if (event.type === "finish" && event.finishReason !== "error") {
             const finishedAt = performance.now();
-            event = { ...event, timeToFirstTokenMs: Math.max(0, firstTokenAt - requestStartedAt), generationDurationMs: Math.max(0, finishedAt - firstTokenAt) };
+            event = { ...event, ...(firstTokenAt !== undefined ? { timeToFirstTokenMs: Math.max(0, firstTokenAt - requestStartedAt) } : {}), generationDurationMs: Math.max(0, finishedAt - requestStartedAt) };
           }
           if (event.type === "error") event = { ...event, error: contextualizeNetworkFailure(event.error, this.config.baseUrl) };
           // Drop provider chunk-parse artifacts that are safe to ignore (a

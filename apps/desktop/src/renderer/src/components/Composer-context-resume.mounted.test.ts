@@ -57,3 +57,25 @@ it("keeps saved cost accessible without inventing a context percentage", async (
     expect(container.querySelector(".ctx-popover-bar")).toBeNull();
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
+
+
+it("never attributes a previous measured turn to a new streaming or failed turn", async () => {
+  Object.defineProperty(window, "anycode", { configurable: true, value: { listSessions: async () => [] } });
+  const store = createDesktopStore();
+  vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+  const old = { turnId: "old", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0, outputTokens: 100, generationDurationMs: 1000 };
+  store.getState().applyHostMessage({ type: "host_ready", workspace: "/w", mode: "build", model: "m", sessionId: "s", contextUsage: { estimatedTokens: 25, budgetTokens: 100, source: "provider" } });
+  store.getState().applyHostMessage({ type: "usage_audit", steps: [old], totals: { input: 0, output: 100, total: 100, stepsReported: 1, stepsWithCache: 0, generationTokensPerSecond: 100 } });
+  store.getState().applyHostMessage({ type: "turn_started", turnId: "new", requestId: "r" });
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(Composer))));
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Context window usage"]')!.click());
+    expect(container.textContent).toContain("Generation speed: session 100 t/s · this turn —");
+    await act(async () => store.getState().applyHostMessage({ type: "agent_event", turnId: "new", event: { type: "loop_end", reason: "error", turns: 1 } }));
+    expect(container.textContent).toContain("Generation speed: session 100 t/s · this turn —");
+    await act(async () => store.getState().applyHostMessage({ type: "session_checkpoint", latestTurnId: "new" }));
+    expect(container.textContent).toContain("Generation speed: session 100 t/s · this turn —");
+  } finally { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); }
+});

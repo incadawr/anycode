@@ -112,6 +112,7 @@ describe("AiSdkModelPort over a real @ai-sdk/openai-compatible SSE stream (TASK.
     expect(events.filter((e) => e.type === "error")).toEqual([]);
     expect(events.find((e) => e.type === "finish")).toEqual({
       type: "finish", finishReason: "stop",
+      timeToFirstTokenMs: expect.any(Number), generationDurationMs: expect.any(Number),
       usage: { inputTokens: 500, outputTokens: 10, totalTokens: 510,
         ...(cached !== undefined ? { cachedInputTokens: cached } : {}) },
     });
@@ -165,6 +166,7 @@ describe("AiSdkModelPort over a real @ai-sdk/openai-compatible SSE stream (TASK.
     expect(finish).toEqual({
       type: "finish",
       finishReason: "stop",
+      timeToFirstTokenMs: expect.any(Number), generationDurationMs: expect.any(Number),
       usage: { inputTokens: 12, cachedInputTokens: 3, outputTokens: 4, totalTokens: 16 },
     });
     // finish is the terminal event of the step.

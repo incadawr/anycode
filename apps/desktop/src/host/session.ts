@@ -1429,6 +1429,7 @@ export class Session {
   private relocating = false;
   private abort: AbortController | null = null;
   private turnId: string | null = null;
+  private latestTurnId: string | null = null;
   /** Epoch ms the live turn began (host clock) — rides every turn_started, including the per-connect re-assertion. */
   private turnStartedAt: number | undefined = undefined;
   /**
@@ -3329,6 +3330,7 @@ export class Session {
     if (this.engine.id !== "core") {
       if (this.lastUsageSummary !== null) this.outbound.sendDirect({
         type: "session_checkpoint",
+        ...(this.latestTurnId !== null ? { latestTurnId: this.latestTurnId } : {}),
         usageAudit: { lastStep: this.lastUsageSummary.steps.at(-1) ?? null, totals: this.lastUsageSummary.totals, totalSteps: this.lastUsageSummary.steps.length },
       });
       return;
@@ -3403,6 +3405,7 @@ export class Session {
     }
     this.outbound.sendDirect({
       type: "session_checkpoint",
+      ...(this.latestTurnId !== null ? { latestTurnId: this.latestTurnId } : {}),
       // TASK.117 acceptance defect 2: the authoritative live turn id — see
       // the protocol field's doc (the renderer's cut-replay guard exempts
       // exactly this id, never a ring-replayed turn_started's).
@@ -4961,6 +4964,7 @@ export class Session {
     const turnId = pendingTurnIdHolder?.turnId ?? randomUUID();
     const controller = new AbortController();
     this.turnId = turnId;
+    this.latestTurnId = turnId;
     this.currentStep = undefined;
     this.finishRetries = 0;
     // Taskana 4083 cross-review finding 1: a new turn starting with a staged
