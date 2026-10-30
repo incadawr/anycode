@@ -67,8 +67,19 @@ export function ConnectedChildPermissionModal() {
   const shownRequestId = forwarded?.request.requestId;
   useEffect(() => {
     if (!shownTabId || !shownRequestId) return;
-    tabRegistry.sendToTab(shownTabId, { type: "approval_visibility", requestId: shownRequestId, visible: true });
-    return () => tabRegistry.sendToTab(shownTabId, { type: "approval_visibility", requestId: shownRequestId, visible: false });
+    const sendVisibility = (visible: boolean) => tabRegistry.sendToTab(shownTabId, { type: "approval_visibility", requestId: shownRequestId, visible });
+    const update = () => sendVisibility(!document.hidden && document.hasFocus());
+    const blur = () => sendVisibility(false);
+    update();
+    document.addEventListener("visibilitychange", update);
+    window.addEventListener("focus", update);
+    window.addEventListener("blur", blur);
+    return () => {
+      document.removeEventListener("visibilitychange", update);
+      window.removeEventListener("focus", update);
+      window.removeEventListener("blur", blur);
+      sendVisibility(false);
+    };
   }, [shownTabId, shownRequestId]);
 
   // Keep the preview WebContentsView from covering the approval while it shows.
@@ -81,7 +92,9 @@ export function ConnectedChildPermissionModal() {
     <div className="banner banner-info approval-status" role="status" key={child.childTabId}>
       {childPermissionOwnerLabel(child.childSessionId, child.spawnToolCallId, transcript, backgroundChildren)}:
       {child.live ? " an unanswered request expired. New approval requests are being denied automatically." : " an unanswered request expired before this subagent finished."}
-      {child.live && <button type="button" onClick={() => tabRegistry.sendToTab(child.childTabId, { type: "approval_recover" })}>Ask me again</button>}
+      {child.live
+        ? <button type="button" onClick={() => tabRegistry.sendToTab(child.childTabId, { type: "approval_recover" })}>Ask me again</button>
+        : <button type="button" onClick={() => childRelationStore.getState().dismissApprovalExpired(parentSessionId!, child.spawnToolCallId)}>Dismiss</button>}
     </div>
   ));
   if (forwarded === null) {

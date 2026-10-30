@@ -631,6 +631,47 @@ describe("tab-registry — child-session registration (TASK.102 CUT-S2 §2.5, sl
     expect(registry.getStore("child-1")).toBeUndefined();
   });
 
+  it("clears finished notices for the parent when a user sends a message", () => {
+    const { registry, childRelationStore } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("root-1", "/ws/root", asPort(port));
+    port.emit(HOST_READY("/ws/root", "sess-root"));
+    const relations = childRelationStore.getState();
+    relations.registerChild("sess-root", "old", "old-tab", "child");
+    relations.markChildGone("old-tab", true);
+    relations.registerChild("other", "other", "other-tab", "other-child");
+    relations.markChildGone("other-tab", true);
+    registry.sendToTab("root-1", { type: "user_message", requestId: "message", text: "continue" });
+    expect(port.sent).toContainEqual({ type: "user_message", requestId: "message", text: "continue" });
+    expect(relations.getRelation("sess-root", "old")?.approvalExpired).toBe(false);
+    expect(relations.getRelation("other", "other")?.approvalExpired).toBe(true);
+  });
+
+  it("clears finished notices on queued submission, not when the queue drains", () => {
+    const { registry, childRelationStore } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("root-1", "/ws/root", asPort(port));
+    port.emit(HOST_READY("/ws/root", "sess-root"));
+    port.emit({ type: "turn_started", requestId: "running", turnId: "t1" });
+    const relations = childRelationStore.getState();
+    relations.registerChild("sess-root", "old", "old-tab", "child");
+    relations.markChildGone("old-tab", true);
+    const store = registry.getStore("root-1")!;
+    const reportId = store.getState().enqueuePrompt({ text: "report", images: [], origin: "system" });
+    expect(relations.getRelation("sess-root", "old")?.approvalExpired).toBe(true);
+    store.getState().deleteQueuedPrompt(reportId);
+    const image = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+    store.getState().enqueuePrompt({ text: "continue", images: [image] });
+    expect(relations.getRelation("sess-root", "old")?.approvalExpired).toBe(false);
+    expect(port.sent.filter((message) => (message as { type: string }).type === "user_message")).toHaveLength(0);
+
+    relations.registerChild("sess-root", "new", "new-tab", "child-2");
+    relations.markChildGone("new-tab", true);
+    port.emit({ type: "agent_event", turnId: "t1", event: { type: "loop_end", reason: "completed", turns: 1 } });
+    expect(port.sent).toContainEqual(expect.objectContaining({ type: "user_message", text: "continue", images: [image.attachment] }));
+    expect(relations.getRelation("sess-root", "new")?.approvalExpired).toBe(true);
+  });
+
   it("retains a child expiry when the host exits immediately", () => {
     const { registry, childRelationStore } = createTestRegistry(createTabsStore());
     const port = new FakeMessagePort();

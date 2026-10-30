@@ -214,6 +214,7 @@ interface PendingAsk {
   presentedAt: number | null;
   /** Taskana 4763: the deadline armed at presentation (per-tool), used for `expiresInMs`. */
   presentedTimeoutMs: number | null;
+  remainingTimeoutMs: number | null;
 }
 
 /**
@@ -303,7 +304,7 @@ export class IpcPermissionBroker implements PermissionBroker {
     }
     const requestId = randomUUID();
     return new Promise<PermissionDecision>((resolve) => {
-      const entry: PendingAsk = { resolve, request, timer: null, createdAt: Date.now(), presentedAt: null, presentedTimeoutMs: null };
+      const entry: PendingAsk = { resolve, request, timer: null, createdAt: Date.now(), presentedAt: null, presentedTimeoutMs: null, remainingTimeoutMs: null };
       this.pending.set(requestId, entry);
       this.activityChanged();
       if (this.current === null) {
@@ -559,6 +560,7 @@ export class IpcPermissionBroker implements PermissionBroker {
       this.emitApprovalState();
     } else if (!visible && entry.timer !== null) {
       clearTimeout(entry.timer);
+      entry.remainingTimeoutMs = Math.max(0, entry.presentedAt! + entry.presentedTimeoutMs! - Date.now());
       entry.timer = null;
       entry.presentedAt = null;
       entry.presentedTimeoutMs = null;
@@ -568,13 +570,14 @@ export class IpcPermissionBroker implements PermissionBroker {
 
   private armTimer(requestId: string, entry: PendingAsk): void {
     const timeoutMs = resolveAskTimeoutMs(entry.request.toolName, this.timeoutMs);
+    const remainingMs = entry.remainingTimeoutMs ?? timeoutMs;
     entry.presentedAt = Date.now();
-    entry.presentedTimeoutMs = timeoutMs;
+    entry.presentedTimeoutMs = remainingMs;
     entry.timer = setTimeout(() => {
       this.unattended = true;
       this.emitApprovalState();
       this.settle(requestId, { behavior: "deny", reason: unansweredDenyReason(entry.request.toolName, timeoutMs) }, "timeout");
-    }, timeoutMs);
+    }, remainingMs);
   }
 
   /** Pops the next queued ask (if any) and presents it, freeing the shown slot for it. */
