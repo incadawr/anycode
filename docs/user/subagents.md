@@ -47,6 +47,8 @@ any nested line makes the whole file invalid, and the profile is not loaded.
 | `maxTurns` | no | Turn budget for each run, 1 to 200. Default 40. |
 | `connection` | no | Exact connection id to run on. Ids are in `provider.connections[].id` in `~/.anycode/settings.json`. |
 | `provider` | no | Provider id (for example `z-ai` or `deepseek`) resolved to a configured connection. |
+| `permissions.allow` | no | Rules that run without asking. `Tool` or `Tool(pattern)`, comma-separated. In-process children only. |
+| `permissions.deny` | no | Rules that are refused without asking. Same shape as `permissions.allow`. In-process children only. |
 
 Unknown keys are ignored.
 
@@ -58,9 +60,51 @@ appear in the list:
    to that CLI.
 3. `connection:` and `provider:` cannot be combined, and neither can be combined
    with `engine:`.
+4. `permissions.allow`/`permissions.deny` cannot be combined with `engine:`.
+   Approvals of an engine child belong to that CLI, so the rules could not be
+   honored.
 
-A malformed `model`, `engine`, `effort` or `maxTurns` value is rejected too. It
-is never silently replaced with a default.
+A malformed `model`, `engine`, `effort`, `maxTurns` or permission rule is
+rejected too. It is never silently replaced with a default.
+
+### Profile permissions
+
+A profile can narrow its children's approvals with two lists in its
+frontmatter. Each entry is a tool name on its own (`Read`, `Write`) or a tool
+name with a pattern in parentheses (`Bash(git status*)`); separate entries with
+commas.
+
+```markdown
+---
+name: md-verify
+description: Runs one build script and reports.
+tools: Bash, Read, Grep
+permissions.allow: Bash(.anycode/bin/build.sh *), Bash(git status*)
+permissions.deny: Bash(git push*)
+---
+Run the build script and report what happened.
+```
+
+- A call that a `permissions.deny` entry matches is refused, and the child sees
+  the refusal. No prompt appears, even when the session's mode or a saved
+  always-allow rule would have run it.
+- A call that a `permissions.allow` entry matches runs without a prompt, when
+  the session's own gate would have asked. A call the session denies stays
+  denied: rules never widen the session's gate.
+- Anything else behaves exactly as it does without the profile.
+
+Matching is the same as for always-allow rules in
+[permissions.md](permissions.md): the pattern is a glob, and a shell command
+line is split on separators with the pattern applied to every segment, so one
+entry covers a whole pipeline only when every segment matches it. A `Write` or
+`Edit` allowed here still has to land inside the session workspace.
+
+These lists apply to in-process children, the default tier. A session-tier
+child (`tier: "session"`) is its own session and keeps that session's rules.
+
+The settings pane does not edit these lists. Edit them in the file — and note
+that a save from that pane rewrites the profile from its own fields, so it does
+not preserve them.
 
 ### Connection routing
 

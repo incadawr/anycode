@@ -569,6 +569,27 @@ export async function scanAgentProfilesAdmin(
               `Agent profile ${path}: provider "${err.provider}" must match ${AGENT_PROFILE_CONNECTION_RE.source} — ignored`,
             );
             break;
+          case "bad_permissions":
+            // Same claim semantics as bad_model (mirrors discovery's switch
+            // verbatim — parseAgentProfileMd is the single oracle).
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: permissions.${err.which} entry "${err.entry}" must be "Tool" or "Tool(pattern)" with a non-empty pattern and no parentheses inside it — ignored`,
+            );
+            break;
+          case "engine_permissions_conflict":
+            // Same claim semantics as bad_model.
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: "permissions" cannot be combined with "engine: ${err.engine}" — an engine child's tool approvals belong to that CLI; remove one of the two — ignored`,
+            );
+            break;
           case "engine_connection_conflict":
             // Same claim semantics as bad_model.
             if (claimed.has(err.name)) {

@@ -28,6 +28,7 @@ import { ConversationHistory, type HistorySink } from "../context/history.js";
 import { HeuristicTokenizer } from "../context/tokenizer.js";
 import { InMemoryTodoStore } from "../tools/todo-store.js";
 import { createDefaultToolRegistry } from "../tools/registry.js";
+import { bashTool } from "../tools/index.js";
 import { toToolDeclarations } from "../tools/to-model-tools.js";
 import { ModePermissionEngine, DenyPermissionBroker } from "../permissions/index.js";
 import { NodeExecutionAdapter } from "../adapters/node/node-execution.js";
@@ -5893,5 +5894,44 @@ describe("live child status transcript", () => {
       expect.objectContaining({ kind: "assistant", text: "investigation complete" }),
     ]));
     expect(JSON.stringify(items)).not.toContain("hunter2");
+  });
+});
+
+describe("buildChildConfig — md-profile permissions.allow/deny overlay", () => {
+  const profilePersona = (
+    permissions: PersonaDefinition["permissions"],
+  ): PersonaDefinition => ({ ...getPersona("general-purpose"), permissions });
+
+  it("wraps the inherited engine for one profile: deny without a prompt, allow without a prompt, else as before", () => {
+    const parent = makeParent();
+    const child = buildChildConfig(
+      parent,
+      profilePersona({
+        allow: [{ toolName: "Bash", pattern: "git status*" }],
+        deny: [{ toolName: "Bash", pattern: "git push*" }],
+      }),
+      REQ,
+    );
+    expect(child.permissionEngine).not.toBe(parent.permissionEngine);
+    const check = (command: string, mode: PermissionMode): string =>
+      child.permissionEngine.check({ toolName: "Bash", input: { command }, metadata: bashTool.metadata, mode })
+        .decision;
+    // The session's build mode asks for every shell command; the profile's allow resolves that ask.
+    expect(check("git status", "build")).toBe("allow");
+    // yolo would run a push without asking; the profile's deny refuses it anyway.
+    expect(check("git push origin main", "yolo")).toBe("deny");
+    // Neither list covers this command: the session gate decides (ask in build).
+    expect(check("rm -rf /tmp/x", "build")).toBe("ask");
+    // A plan-mode deny is never overridden by the profile's allow list.
+    expect(check("git status", "plan")).toBe("deny");
+  });
+
+  it("keeps the parent engine object-identical for personas without rules (built-ins included)", () => {
+    const parent = makeParent();
+    expect(buildChildConfig(parent, getPersona("general-purpose"), REQ).permissionEngine).toBe(parent.permissionEngine);
+    expect(buildChildConfig(parent, getPersona("explore"), REQ).permissionEngine).toBe(parent.permissionEngine);
+    // An empty overlay is not an overlay.
+    const empty = buildChildConfig(parent, profilePersona(undefined), REQ);
+    expect(empty.permissionEngine).toBe(parent.permissionEngine);
   });
 });
