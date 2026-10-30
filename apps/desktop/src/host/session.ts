@@ -1430,6 +1430,7 @@ export class Session {
   private abort: AbortController | null = null;
   private turnId: string | null = null;
   private latestTurnId: string | null = null;
+  private nativeUsageStep = 0;
   /** Epoch ms the live turn began (host clock) — rides every turn_started, including the per-connect re-assertion. */
   private turnStartedAt: number | undefined = undefined;
   /**
@@ -3177,6 +3178,19 @@ export class Session {
 
   private pushLspStatus(): void {
     this.outbound.sendDirect({ type: "lsp_status", servers: this.lsp?.status() ?? [] });
+  }
+
+  /**
+   * A native engine reports usage per model request with no host turn of its
+   * own. While such a request belongs to the live turn, stamp it with the very
+   * turn id the host reported in `turn_started` — that is the id the context
+   * popover filters by — and number its steps in arrival order. Requests that
+   * belong to no turn (compaction, an absorbed foreign turn) keep a standalone
+   * identity so they never show up as part of the user's turn.
+   */
+  recordNativeUsage(row: Omit<Parameters<ProviderUsageAudit["record"]>[0], "turnId" | "step">, belongsToTurn: boolean): void {
+    const turnId = belongsToTurn ? this.turnId : null;
+    this.recordUsageAuditRow({ ...row, turnId: turnId ?? randomUUID(), step: turnId === null ? 1 : ++this.nativeUsageStep });
   }
 
   /** Accounting must never terminate a turn when a sink throws synchronously. */
@@ -4969,6 +4983,7 @@ export class Session {
     const controller = new AbortController();
     this.turnId = turnId;
     this.latestTurnId = turnId;
+    this.nativeUsageStep = 0;
     this.currentStep = undefined;
     this.finishRetries = 0;
     // Taskana 4083 cross-review finding 1: a new turn starting with a staged
