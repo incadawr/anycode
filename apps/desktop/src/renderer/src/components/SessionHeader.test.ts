@@ -1,5 +1,12 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { computePreviewMenuVisible, derivePreviewMenuItems, sessionHeaderTitleClass, worktreeExitControlState } from "./SessionHeader.js";
+import {
+  computePreviewMenuVisible,
+  derivePreviewMenuItems,
+  SESSION_HEADER_TITLE_LINE_LIMIT,
+  sessionHeaderTitleClass,
+  worktreeExitControlState,
+} from "./SessionHeader.js";
 import type { PreviewChangedPayload, PreviewPanelInfo } from "../../../shared/preview-panel.js";
 
 describe("sessionHeaderTitleClass (audit D12 — long titles cut mid-word)", () => {
@@ -13,6 +20,35 @@ describe("sessionHeaderTitleClass (audit D12 — long titles cut mid-word)", () 
 
   it("force-wraps a single unbroken token (path/filename), which ellipsis would cut mid-word", () => {
     expect(sessionHeaderTitleClass("…outside.txt")).toBe("session-header-title session-header-title-wrap");
+  });
+});
+
+describe("session-header title-wrap clamp (audit D12 regression: the header has a fixed height)", () => {
+  const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
+
+  /** The declared body of `selector`; throws when the rule is missing. */
+  function cssRule(selector: string): string {
+    const clean = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const match = clean.match(new RegExp(`(?:^|\\n)${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{([^}]*)\\}`));
+    if (!match) throw new Error(`no CSS rule ${selector}`);
+    return match[1] ?? "";
+  }
+
+  it("the wrap rule clamps to SESSION_HEADER_TITLE_LINE_LIMIT lines, so no title length can grow the header", () => {
+    const rule = cssRule(".session-header-title-wrap");
+    // A clamp needs ALL three: the box layout, the limit, and overflow hidden
+    // (without hidden the box grows past the clamp in Chromium).
+    expect(rule).toMatch(/display:\s*-webkit-box/);
+    expect(rule).toMatch(new RegExp(`-webkit-line-clamp:\\s*${SESSION_HEADER_TITLE_LINE_LIMIT}`));
+    expect(rule).toMatch(/-webkit-box-orient:\s*vertical/);
+    expect(rule).toMatch(/overflow:\s*hidden/);
+    // The mid-word break the wrap exists for still happens at the edge.
+    expect(rule).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+
+  it("the clamp never widens the multi-word path: short/multi-word titles keep the plain ellipsis class", () => {
+    expect(sessionHeaderTitleClass("/short/path.ts")).toBe("session-header-title session-header-title-wrap");
+    expect(sessionHeaderTitleClass("fix the header bug")).toBe("session-header-title");
   });
 });
 

@@ -1460,9 +1460,16 @@ body {
 
 /* Audit D12: a title that is one unbroken token (path/filename) has no word
    boundary, so ellipsis cut it mid-word; it wraps on its own lines instead
-   (word-wrap breaks the long token at the container edge). */
+   (overflow-wrap breaks the long token at the container edge). The clamp caps
+   it at sessionHeaderTitleLineLimit() lines so a path of any length still fits
+   the header's fixed height (2 × 1.25 × 13px ≈ 33px < the 40px compact cap),
+   mirrored by SESSION_HEADER_TITLE_LINE_LIMIT in SessionHeader.tsx. */
 .session-header-title-wrap {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   white-space: normal;
+  overflow: hidden;
   overflow-wrap: anywhere;
   text-overflow: clip;
   line-height: 1.25;
@@ -5408,6 +5415,18 @@ body {
 .sidebar-project-menu-item:disabled {
   color: var(--text-3);
   cursor: not-allowed;
+}
+
+/* The disabled item's visible reason line (no hover needed): same muted
+   register as the item itself, one size step down, inherits the item's
+   left edge so it reads as the item's own explanation. */
+.sidebar-project-menu-item-note {
+  display: block;
+  margin-top: var(--sp-1);
+  white-space: normal;
+  font-size: var(--fs-xs);
+  font-weight: var(--w-normal);
+  line-height: 1.3;
 }
 
 /* Composer model chip (§2F.3, consumed by wave B) — a display-only pill
