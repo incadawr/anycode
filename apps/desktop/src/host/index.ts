@@ -475,6 +475,7 @@ import { ClaudeSettingsSeam } from "./engines/claude/settings-seam.js";
 import { ClaudeShadowTranscriptEngine, SqliteClaudeShadowTranscript } from "./engines/claude/shadow-transcript.js";
 import { ClaudeSessionRowWriter } from "./engines/claude/session-row.js";
 import { createCodexSessionTitlePersistence, createCoreSessionTitlePersistence } from "./session-title-persistence.js";
+import { createCompactionRecordLog } from "./compaction-records.js";
 import { claudeAgentPermissionMode, claudeChildPresetId, codexChildAutoAcceptsWorkspacePatches, codexChildPosture } from "./engines/child-permission-map.js";
 import { checkClaudeBinaryTrustOnDisk, CLAUDE_AGENT_BRIDGE_PROMPT } from "./engines/claude/claude-client.js";
 import { createEngineChildRunner } from "./engine-children.js";
@@ -4507,6 +4508,12 @@ async function boot(): Promise<void> {
       ? { estimatedTokens: restoredLoopContext.estimatedTokens, budgetTokens: restoredLoopContext.effectiveWindowTokens, source: "estimate" as const }
       : undefined;
     const restoredContext = await contextSnapshotOptions(persistence, sessionId, "core", currentModel, restoredLoopContext.effectiveWindowTokens, fallbackContext);
+    const compactionRecordSeam = await createCompactionRecordLog(() => persistence, sessionId).catch((error: unknown) => {
+      // Fail-soft: a session with no remembered compaction rows is far better
+      // than a session that refuses to open.
+      console.error(`[host] compaction records unavailable: ${describeError(error)}`);
+      return undefined;
+    });
     session = new Session({
       ...restoredContext,
       workspaceTrustRequired: workspaceTrustRequiredMessage,
@@ -4843,6 +4850,11 @@ async function boot(): Promise<void> {
         sessionId,
         onError: (error) => console.error(`[host] touchSession failed: ${describeError(error)}`),
       }),
+      // GitHub #36: the durable compaction rows. Loaded BEFORE Session exists so
+      // the very first handshake (a resume's session_history) already carries
+      // every compaction this session went through, not just the ones this
+      // process will produce.
+      ...(compactionRecordSeam !== undefined ? { compactionRecords: compactionRecordSeam } : {}),
       // Taskana 4083 / TASK.34: the persistent per-step provider-usage audit,
       // CORE-ONLY wiring (codex/claude boots above pass nothing — their usage
       // arrives as cumulative REPLACE snapshots, not per-step finishes).

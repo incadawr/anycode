@@ -614,6 +614,26 @@ describe("ContextManager.runCompaction — success", () => {
     expect(result.model).toBeUndefined();
   });
 
+  it("a FAILED summarization call still names the model that was asked (GitHub #36 review)", async () => {
+    const messages: ChatMessage[] = [];
+    for (let t = 0; t < 6; t += 1) {
+      messages.push(userMsg(`turn ${t}`));
+      messages.push(assistantToolCall(`c${t}`));
+      messages.push(toolResult(`c${t}`, `result ${t}`));
+    }
+    const history = buildHistory(messages);
+    // The port identifies itself before the call; a failed call must not lose
+    // that fact — the row would otherwise show a duration and no model.
+    const port = Object.assign(new ScriptedModelPort(errorScript()), { modelId: "glm-5.3" });
+    const manager = makeManager(history, port, { keepRecentMessages: 4 });
+
+    const result = await manager.runCompaction({});
+
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ prompt: COMPACTION_INSTRUCTION, model: "glm-5.3" });
+    expect("summary" in result).toBe(false);
+  });
+
   it("a refused (skipped) compaction still reports the prompt it would have sent, and never a summary (GitHub #36)", async () => {
     const history = buildHistory([userMsg("only one turn")]);
     const manager = makeManager(history, new ScriptedModelPort(summaryScript("S")), { keepRecentMessages: 10 });

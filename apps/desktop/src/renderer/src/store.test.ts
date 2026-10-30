@@ -1504,7 +1504,8 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
     const store = createDesktopStore(scheduler);
     store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
 
-    // 1. Hydration projects the persisted durable trace: a RESTORED row.
+    // 1. Hydration projects the persisted state AND the durable record: a
+    // RESTORED row sitting before the message that followed the compaction.
     store.getState().applyHostMessage({
       type: "session_history",
       sessionId: "s1",
@@ -1518,9 +1519,20 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
         },
         { id: "u2", createdAt: 11, message: { role: "user", content: "next" } },
       ],
+      compactions: [
+        {
+          id: "rec-1",
+          createdAt: 10,
+          ok: true,
+          preTokens: 170_669,
+          postTokens: 24_154,
+          summary: "Session continued. Summary of the earlier conversation:\n\nold",
+          summaryItemId: "summary-item-1",
+        },
+      ],
     });
     expect(compactionCards(store)).toHaveLength(1);
-    expect(compactionCards(store)[0]).toMatchObject({ restored: true, summaryItemId: "summary-item-1" });
+    expect(compactionCards(store)[0]).toMatchObject({ restored: true, summaryItemId: "summary-item-1", recordId: "rec-1" });
 
     // 2. The journal then replays the LIVE pair for that same compaction.
     store.getState().applyHostMessage({
@@ -1539,15 +1551,103 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
         durationMs: 3_000,
         summary: "Session continued. Summary of the earlier conversation:\n\nold",
         summaryItemId: "summary-item-1",
+        recordId: "rec-1",
       },
     });
 
-    // ONE row for one compaction — the restored copy is retired in favour of
-    // the replayed row, which now carries the live readings.
+    // ONE row for one compaction, and it is still the HYDRATED row (same id),
+    // patched in place with the live readings — the replay's running card was
+    // dropped rather than kept at the tail (which would move the row after the
+    // message that followed it).
+    const transcript = store.getState().transcript;
     const cards = compactionCards(store);
     expect(cards).toHaveLength(1);
-    expect(cards[0]).toMatchObject({ status: "done", preTokens: 170_669, postTokens: 24_154 });
-    expect(cards[0]?.restored).toBeUndefined();
+    expect(cards[0]).toMatchObject({ id: "compaction-record:rec-1", status: "done", preTokens: 170_669, postTokens: 24_154 });
+    expect(transcript.map((block) => block.kind)).toEqual(["compaction", "user_text"]);
+    expect(transcript[0]).toMatchObject({ kind: "compaction", id: "compaction-record:rec-1" });
+  });
+
+  it("GitHub #36: REOPENING a session after several compactions — one of them failed — shows every row in its own place, with its own summary or reason", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    // The persisted state a real reopen sees after three compactions:
+    //  - the FIRST summary item is gone (the second compaction folded it away);
+    //  - the second compaction FAILED — it left no history item at all;
+    //  - the third summary is the current history head, followed by the tail of
+    //    messages that predate all three compactions.
+    store.getState().applyHostMessage({
+      type: "session_history",
+      sessionId: "s1",
+      truncated: false,
+      items: [
+        {
+          id: "summary-3",
+          createdAt: 320,
+          kind: "compact_summary",
+          message: { role: "user", content: "Session continued. Summary of the earlier conversation:\n\nthird" },
+        },
+        { id: "tail-1", createdAt: 40, message: { role: "user", content: "a message from before all of it" } },
+      ],
+      compactions: [
+        {
+          id: "rec-1",
+          createdAt: 100,
+          ok: true,
+          trigger: "manual",
+          preTokens: 170_669,
+          postTokens: 24_154,
+          summary: "Session continued. Summary of the earlier conversation:\n\nfirst",
+          summaryItemId: "summary-1",
+          prompt: "instruction used the first time",
+        },
+        {
+          id: "rec-2",
+          createdAt: 200,
+          ok: false,
+          trigger: "manual",
+          preTokens: 40_000,
+          durationMs: 1_500,
+          error: "model unreachable",
+          prompt: "instruction used the second time",
+          model: "glm-5.3",
+        },
+        {
+          id: "rec-3",
+          createdAt: 320,
+          ok: true,
+          trigger: "auto",
+          preTokens: 60_000,
+          postTokens: 9_000,
+          summary: "Session continued. Summary of the earlier conversation:\n\nthird",
+          summaryItemId: "summary-3",
+          prompt: "instruction used the third time",
+        },
+      ],
+    });
+
+    const transcript = store.getState().transcript;
+    expect(transcript.map((block) => block.kind)).toEqual(["compaction", "compaction", "compaction", "user_text"]);
+    const cards = transcript.filter((block) => block.kind === "compaction");
+    // Each row keeps ITS OWN summary/reason — no row borrows another's text.
+    expect(cards[0]).toMatchObject({ status: "done", summary: expect.stringContaining("first"), recordId: "rec-1" });
+    expect(cards[1]).toMatchObject({ status: "failed", error: "model unreachable", model: "glm-5.3", recordId: "rec-2" });
+    expect(cards[1] && "summary" in cards[1] ? cards[1].summary : undefined).toBeUndefined();
+    expect(cards[2]).toMatchObject({ status: "done", summary: expect.stringContaining("third"), summaryItemId: "summary-3" });
+    // The surviving summary item is ONE row, not a row plus a bubble.
+    expect(transcript.filter((block) => block.kind === "user_text")).toHaveLength(1);
+    expect(transcript.at(-1)).toMatchObject({ kind: "user_text", text: "a message from before all of it" });
+    // Record-backed summary rows (collapsed by default) — not the legacy
+    // fallback that would open itself in the transcript. The FAILED row has no
+    // summary at all, so it claims no origin.
+    expect(cards.map((card) => card.summaryOrigin)).toEqual(["record", undefined, "record"]);
+    // And the prompts are the recorded ones, not today's instruction.
+    expect(cards.map((card) => card.prompt)).toEqual([
+      "instruction used the first time",
+      "instruction used the second time",
+      "instruction used the third time",
+    ]);
   });
 
   it("GitHub #36: re-hydrating onto a live transcript does not add a restored twin of the compaction already on screen", () => {
@@ -5147,6 +5247,7 @@ describe("desktop store — session_history hydration (task 2.1.5, design §3.3)
         summary: "[compact summary] earlier conversation",
         summaryItemId: "h2",
         restored: true,
+        summaryOrigin: "history",
       },
       { kind: "assistant_text", id: "h3:0", text: "Let me check." },
       {

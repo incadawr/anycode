@@ -1,0 +1,71 @@
+/**
+ * Durable presentation record of ONE compaction (GitHub #36).
+ *
+ * A compaction is the only operation that destroys transcript context, and the
+ * row that reports it is the only place a user can see what survived. That row
+ * cannot live in `history_items`: a compaction REPLACES the history, so the
+ * previous summary item is exactly what the next compaction drops, and a
+ * refused/failed compaction leaves no item at all. The row therefore keeps its
+ * own bounded table of records, written by the host at `compaction_end` and
+ * read back on resume so a reopened session shows every compaction it went
+ * through — with its own summary, or with the reason it did not happen.
+ *
+ * Presentation-only: nothing here is ever sent to a model, and no field ever
+ * carries a raw error object — `error` is the already-redacted wire string.
+ */
+export interface CompactionRecord {
+  /** Stable id; also stamped onto the live `compaction_end` as `recordId`, so a replayed event patches the row hydration restored instead of adding a twin. */
+  id: string;
+  /** Epoch ms the compaction ended — the ordering anchor against history items. */
+  createdAt: number;
+  /** Whether the swap actually happened. A failed record carries `error`, never `summary`. */
+  ok: boolean;
+  /** Absent when the tab that wrote the record never learned who asked (reattached mid-compaction). */
+  trigger?: "auto" | "manual";
+  preTokens?: number;
+  postTokens?: number;
+  durationMs?: number;
+  /** Redacted reason for a not-applied compaction. */
+  error?: string;
+  /** The text installed as the new history head — what the model actually sees. */
+  summary?: string;
+  /** Id of the `compact_summary` history item that held `summary` (until a later compaction dropped it). */
+  summaryItemId?: string;
+  /**
+   * The instruction that was ACTUALLY sent to the summarizing model, recorded
+   * so a reopened row never presents today's instruction as the one that
+   * produced this summary. Absent for a structural skip (no model call) and
+   * for any engine that compacts natively.
+   */
+  prompt?: string;
+  /** Model id of the summarizing call, when known — failures included. */
+  model?: string;
+}
+
+/**
+ * Hard bound on records kept per session. A compaction is rare (tens over the
+ * life of a long session), so this is generous; it exists so a pathological
+ * loop cannot grow the table without limit.
+ */
+export const COMPACTION_RECORD_MAX_PER_SESSION = 64;
+
+/**
+ * Per-field character bound. A summary is bounded in practice by the model's
+ * own output budget; this cap only guards against a pathological blob, and is
+ * far above any real summary (~50k tokens).
+ */
+export const COMPACTION_RECORD_FIELD_MAX_CHARS = 200_000;
+
+/** Clamps one record's text fields to the storage bound; leaves small values untouched. */
+export function boundCompactionRecord(record: CompactionRecord): CompactionRecord {
+  const clamp = (value: string | undefined): string | undefined =>
+    value === undefined || value.length <= COMPACTION_RECORD_FIELD_MAX_CHARS
+      ? value
+      : value.slice(0, COMPACTION_RECORD_FIELD_MAX_CHARS);
+  return {
+    ...record,
+    ...(record.error !== undefined ? { error: clamp(record.error) } : {}),
+    ...(record.summary !== undefined ? { summary: clamp(record.summary) } : {}),
+    ...(record.prompt !== undefined ? { prompt: clamp(record.prompt) } : {}),
+  };
+}

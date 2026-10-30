@@ -1,4 +1,5 @@
 import { PresentationJournal } from "./presentation-journal.js";
+import type { CompactionRecordSeam } from "./compaction-records.js";
 import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult, type SessionStatus, type SessionActivityState, type SetSessionEffortOutcome } from "../shared/communication.js";
 import { normalizeEffortLevels, validateSessionEffort } from "../shared/session-effort.js";
 import { safeFailureMessage } from "./safe-failure.js";
@@ -50,6 +51,7 @@ import type {
   CheckpointMeta,
   CodexRateLimitsWire,
   CommandHookDeclaration,
+  CompactionRecord,
   FileSystemPort,
   FinalTextAccumulator,
   HistoryItem,
@@ -90,6 +92,7 @@ import type {
   EnginePresentation,
   ShellCapabilitiesProjection,
   UiToHostMessage,
+  WireAgentEvent,
   WireBackgroundChild,
   WireCheckpointMeta,
   WireEnvStatus,
@@ -820,6 +823,14 @@ export interface SessionOptions {
   /** Narrow persistence callback for title/mode patches (design §4.2). */
   persistence?: SessionPersistence;
   /**
+   * GitHub #36: the durable presentation records of this session's compactions
+   * (host/compaction-records.ts). Wired for the core boot, whose `compaction_end`
+   * is the only one that can carry a summary/prompt/model. Absent (every test,
+   * and the native-engine boots) -> compaction rows stay live-only, exactly as
+   * before, and no wire field changes.
+   */
+  compactionRecords?: CompactionRecordSeam;
+  /**
    * Taskana 4083 / TASK.34: the persistent per-step provider-usage audit
    * (SQLite provider_usage, migration v19). Wired ONLY for the core engine's
    * boot (host/index.ts) — a foreign engine's usage arrives as cumulative
@@ -1253,6 +1264,14 @@ export class Session {
   private model: string;
   private readonly sessionId: string;
   private readonly persistence: SessionPersistence | undefined;
+  /** GitHub #36: durable compaction rows; see SessionOptions.compactionRecords. */
+  private readonly compactionRecords: CompactionRecordSeam | undefined;
+  /**
+   * The trigger of the compaction currently in flight, captured from its
+   * `compaction_start` (the `compaction_end` event does not repeat it). Null
+   * between compactions, so a record never borrows a neighbouring trigger.
+   */
+  private compactionTrigger: "auto" | "manual" | null = null;
   /** Taskana 4083 / TASK.34: see SessionOptions.usageAudit's own doc. */
   private readonly usageAudit: SessionOptions["usageAudit"];
   private readonly rules: SessionPermissionRules;
@@ -1729,6 +1748,7 @@ export class Session {
     this.saveContextUsage = options.saveContextUsage;
     this.checkpointContextUsage = options.initialContextUsage ?? null;
     this.persistence = options.persistence;
+    this.compactionRecords = options.compactionRecords;
     this.usageAudit = options.usageAudit;
     this.rules = options.rules;
     this.git = options.git;
@@ -2425,6 +2445,14 @@ export class Session {
     } catch (error) {
       console.error(`[host] usage audit flush failed: ${describeError(error)}`);
     }
+    // GitHub #36: compaction rows are presentation, but a row written here is
+    // the ONLY copy of a failed compaction's reason — drain its queue in the
+    // same pre-close window as the sinks above (fail-soft, never hangs).
+    try {
+      await this.compactionRecords?.flush();
+    } catch (error) {
+      console.error(`[host] compaction record flush failed: ${describeError(error)}`);
+    }
     this.outbound.observeEmissions(undefined);
     this.presentationJournal.clear();
   }
@@ -2567,6 +2595,7 @@ export class Session {
             sessionId: this.sessionId,
             items: this.sessionHistory.items,
             truncated: this.sessionHistory.truncated,
+            ...this.compactionRecordsField(),
           });
         }
         const historyTracksTurns = this.engine.id === "core" && !this.engineSwitched;
@@ -2581,6 +2610,7 @@ export class Session {
             coveredTurnIds: journalSnapshot.coveredTurnIds,
             items: this.sessionHistory?.items ?? [],
             truncated: this.sessionHistory?.truncated ?? false,
+            ...this.compactionRecordsField(),
             historyTracksTurns,
             ...(this.turnId !== null ? { liveTurnId: this.turnId } : {}),
           });
@@ -3700,6 +3730,7 @@ export class Session {
           sessionId: this.sessionId,
           items: this.sessionHistory.items,
           truncated: this.sessionHistory.truncated,
+          ...this.compactionRecordsField(),
         });
       }
     } catch (error) {
@@ -3779,7 +3810,7 @@ export class Session {
         // the start/end pair from the ring buffer exactly like a real turn's
         // events do — a fresh renderer attach should never see a half-open
         // "Compacting…" toast with no matching end.
-        this.outbound.emit({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: sanitizeAgentEvent(event) });
+        this.outbound.emit({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: this.recordCompactionOutcome(sanitizeAgentEvent(event)) });
         // TASK.117 supervisor correction defect 2: the manual compaction's
         // post-swap context_usage is the LATEST session-scoped reading — fold
         // it into the emission-time checkpoint exactly like runTurn's loop
@@ -5056,7 +5087,10 @@ export class Session {
         }
         this.captureSnapshotPath(event);
         this.previewArtifacts.observeStart(event);
-        const wireEvent = sanitizeAgentEvent(event);
+        // GitHub #36: the durable record is written (and its id stamped on the
+        // event) BEFORE journaling/emitting, so the live row and the replayed
+        // one are the same row.
+        const wireEvent = this.recordCompactionOutcome(sanitizeAgentEvent(event));
         // TASK.117: track the inner request ordinal (core's turn_start.turn,
         // reset per outer turn) and stamp it onto the envelope for core
         // turns — the renderer's fold checkpoint keys events and durable
@@ -5294,6 +5328,55 @@ export class Session {
       this.currentTurn = null;
       this.drainAgentInbox();
     }
+  }
+
+  /**
+   * GitHub #36: the durable compaction rows riding a history handshake. Omitted
+   * entirely when there is nothing to say, so a session that never compacted
+   * sends exactly the message it always did.
+   */
+  private compactionRecordsField(): { compactions?: CompactionRecord[] } {
+    const records = this.compactionRecords?.list() ?? [];
+    return records.length > 0 ? { compactions: [...records] } : {};
+  }
+
+  /**
+   * GitHub #36: persists one compaction outcome and stamps its durable record id
+   * onto the wire event. Returns the event unchanged whenever there is nothing
+   * to record (no seam, or not a `compaction_end`), so a session without the
+   * wiring is byte-identical to before.
+   *
+   * MUST run before the event is journaled or emitted: the replayed copy has to
+   * carry the same `recordId` as the row hydration restores, or a reconnect
+   * cannot tell the two apart and would show one compaction twice.
+   */
+  private recordCompactionOutcome(event: WireAgentEvent): WireAgentEvent {
+    if (event.type === "compaction_start") {
+      this.compactionTrigger = event.trigger;
+      return event;
+    }
+    if (event.type !== "compaction_end" || this.compactionRecords === undefined) {
+      return event;
+    }
+    const trigger = this.compactionTrigger;
+    this.compactionTrigger = null;
+    const record: CompactionRecord = {
+      id: globalThis.crypto.randomUUID(),
+      createdAt: Date.now(),
+      ok: event.ok,
+      ...(trigger !== null ? { trigger } : {}),
+      preTokens: event.preTokens,
+      ...(event.postTokens !== undefined ? { postTokens: event.postTokens } : {}),
+      durationMs: event.durationMs,
+      ...(event.error !== undefined ? { error: event.error } : {}),
+      // A failed/native compaction has no summary to record — never invent one.
+      ...(event.ok && event.summary !== undefined ? { summary: event.summary } : {}),
+      ...(event.summaryItemId !== undefined ? { summaryItemId: event.summaryItemId } : {}),
+      ...(event.prompt !== undefined ? { prompt: event.prompt } : {}),
+      ...(event.model !== undefined ? { model: event.model } : {}),
+    };
+    this.compactionRecords.record(record);
+    return { ...event, recordId: record.id };
   }
 
   private captureSnapshotPath(event: AgentEvent): void {

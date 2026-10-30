@@ -2071,6 +2071,9 @@ export class AgentLoop {
         durationMs: Date.now() - startedAt,
         error: result.error,
         prompt: result.prompt,
+        // GitHub #36: the model that was asked is known even when the call
+        // failed, so a failed row names it instead of showing only a duration.
+        ...(result.model !== undefined ? { model: result.model } : {}),
       };
     }
     return result.ok;

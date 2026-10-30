@@ -10,7 +10,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Added
 
 - The conversation-compacted row opens to show the summary that replaced the earlier messages, with a copy button, the prompt that produced it and the summarizing model and duration (GitHub #36).
-- A reopened session shows the same compaction row, with its summary, instead of the summary as an ordinary message.
+- Reopening a session shows every compaction it went through, in place: each row keeps its own summary, or — for a compaction that did not happen — its own reason, and the rows survive later compactions instead of disappearing with the history they replaced.
 
 ## [0.0.53] — 2026-10-30
 

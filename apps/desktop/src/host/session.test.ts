@@ -51,6 +51,7 @@ import {
   buildSkillsPromptSection,
   createSkillPort,
   discoverSkills,
+  type CompactionRecord,
   type ProviderUsageRecord,
   bashTool,
   createDefaultToolRegistry,
@@ -7415,6 +7416,60 @@ describe("Session — manual compaction wire (TASK.146)", () => {
     }
   });
 
+
+  it("GitHub #36: the host records the outcome and stamps its id, so the row survives a reopen instead of dying with this process", async () => {
+    const records: CompactionRecord[] = [];
+    const h = createHarness({
+      steps: [textStep("Summary of the earlier conversation.")],
+      compactionRecords: {
+        record: (record) => { records.push(record); },
+        list: () => records,
+        flush: () => Promise.resolve(),
+      },
+    });
+    try {
+      h.engine.replaceHistory!(seedManualCompactionHistory());
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "compact_request" });
+      const end = await h.waitFor(agentEventOf("compaction_end"));
+      const endEvent = end.event as Extract<WireAgentEvent, { type: "compaction_end" }>;
+      expect(endEvent.ok).toBe(true);
+
+      // ONE record for the compaction, carrying everything the reopened row
+      // needs: the summary (with core's own wrapper), the item that holds it,
+      // the instruction that was sent, and the trigger this process observed.
+      expect(records).toHaveLength(1);
+      const record = records[0]!;
+      expect(record.ok).toBe(true);
+      expect(record.trigger).toBe("manual");
+      expect(record.summary).toContain("Summary of the earlier conversation.");
+      expect(record.summaryItemId).toBe(h.engine.historyItems()[0]!.id);
+      expect(record.prompt).toContain("Write a summary of this session");
+      expect(record.postTokens!).toBeLessThan(record.preTokens!);
+
+      // The event and the record are the SAME row: the id the renderer patches
+      // by is the id the durable row is keyed by.
+      expect(endEvent.recordId).toBe(record.id);
+
+      // And the record rides the NEXT handshake — that is what makes a reopen
+      // show the row. (Scope to what this ui_ready produced: the log already
+      // holds the pre-compaction handshake.)
+      const mark = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() =>
+        h.received.slice(mark).some((message) => message.type === "session_history"),
+      );
+      const history = h.received
+        .slice(mark)
+        .filter((message): message is Extract<HostToUiMessage, { type: "session_history" }> => message.type === "session_history")
+        .at(-1)!;
+      expect(history.compactions?.map((entry) => entry.id)).toEqual([record.id]);
+    } finally {
+      h.close();
+    }
+  });
 
   it("the ctx meter falls ON THE WIRE: a successful manual compaction is followed by context_usage carrying the post-swap reading", async () => {
     // One step only: ContextManager.runCompaction's own summarization call.

@@ -34,6 +34,11 @@ import type {
   SessionWorktree,
   SessionWorktreeCleanup,
 } from "../../ports/persistence.js";
+import {
+  COMPACTION_RECORD_MAX_PER_SESSION,
+  boundCompactionRecord,
+  type CompactionRecord,
+} from "../../types/compaction.js";
 import type { HistoryItem } from "../../types/history.js";
 import type { PermissionMode } from "../../types/permissions.js";
 
@@ -376,6 +381,26 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 22, statements: ["ALTER TABLE provider_usage ADD COLUMN cache_write_tokens INTEGER"] },
   { version: 23, statements: ["ALTER TABLE provider_usage ADD COLUMN subagent_id TEXT"] },
   { version: 24, statements: ["ALTER TABLE sessions ADD COLUMN context_usage_json TEXT"] },
+  {
+    // GitHub #36: durable presentation records of compactions. Deliberately its
+    // OWN table rather than extra `history_items` rows: a compaction REPLACES
+    // the history (that is what the swap IS), so anything stored as a history
+    // item is exactly what the next compaction deletes — and a refused
+    // compaction stores no item at all. Rows are keyed by the per-session
+    // record id so a retried write (or a reconnect replay) can never double one.
+    version: 25,
+    statements: [
+      `CREATE TABLE compaction_records (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL REFERENCES sessions(id),
+        record_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        data TEXT NOT NULL,
+        UNIQUE (session_id, record_id)
+      )`,
+      `CREATE INDEX idx_compaction_records_session ON compaction_records (session_id, seq)`,
+    ],
+  },
 ];
 
 /**
@@ -1045,6 +1070,9 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     // id directly (unlike the shadow logs' native engine refs), so it cascades
     // with the same placeholders as history/checkpoints.
     counts.providerUsage = Number(db.prepare(`DELETE FROM provider_usage WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds).changes);
+    // GitHub #36: the compaction presentation records are keyed by the AnyCode
+    // session id, like history/usage above.
+    db.prepare(`DELETE FROM compaction_records WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds);
 
     // The shadow-log tables are keyed by the native engine ref (thread_id /
     // session_ref), never the AnyCode session id — see codex/shadow-log.ts
@@ -1291,6 +1319,50 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       .prepare("SELECT data FROM history_items WHERE session_id = ? ORDER BY seq ASC")
       .all(sessionId) as unknown as { data: string }[];
     return rows.map((row) => JSON.parse(row.data) as HistoryItem);
+  }
+
+  /**
+   * GitHub #36: appends one durable compaction presentation record, keeping at
+   * most `COMPACTION_RECORD_MAX_PER_SESSION` per session (the table is a view of
+   * recent compactions, not an audit log — the oldest rows roll off).
+   *
+   * Idempotent by `(session_id, record_id)`: a retried write replaces, and a
+   * reconnect that replays the same outcome can never double the row.
+   */
+  async appendCompactionRecord(sessionId: string, record: CompactionRecord): Promise<void> {
+    const bounded = boundCompactionRecord(record);
+    this.transaction((tx) => {
+      tx.prepare(
+        `INSERT INTO compaction_records (session_id, record_id, created_at, data)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT (session_id, record_id) DO UPDATE SET data = excluded.data`,
+      ).run(sessionId, bounded.id, bounded.createdAt, JSON.stringify(bounded));
+      tx.prepare(
+        `DELETE FROM compaction_records
+          WHERE session_id = ?
+            AND seq NOT IN (
+              SELECT seq FROM compaction_records WHERE session_id = ? ORDER BY seq DESC LIMIT ?
+            )`,
+      ).run(sessionId, sessionId, COMPACTION_RECORD_MAX_PER_SESSION);
+    });
+  }
+
+  /** Every kept record for one session, oldest first. Malformed rows are skipped, never thrown. */
+  async listCompactionRecords(sessionId: string): Promise<CompactionRecord[]> {
+    const db = this.open();
+    const rows = db
+      .prepare("SELECT data FROM compaction_records WHERE session_id = ? ORDER BY seq ASC")
+      .all(sessionId) as unknown as { data: string }[];
+    const records: CompactionRecord[] = [];
+    for (const row of rows) {
+      try {
+        const parsed = JSON.parse(row.data) as CompactionRecord;
+        if (typeof parsed?.id === "string" && typeof parsed?.createdAt === "number") records.push(parsed);
+      } catch {
+        // A corrupt blob must not make a session unreadable.
+      }
+    }
+    return records;
   }
 
   /**

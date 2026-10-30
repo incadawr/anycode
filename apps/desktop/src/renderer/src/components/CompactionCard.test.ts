@@ -36,8 +36,17 @@ describe("CompactionCard — the row is a disclosure (GitHub #36)", () => {
     expect(html).not.toContain("Compaction prompt");
   });
 
-  it("a restored row starts EXPANDED, so a resumed session keeps the summary it used to show as a bubble", () => {
-    const html = render(card({ restored: true, summaryItemId: "summary-1", summary: SUMMARY }));
+  it("a restored record row starts COLLAPSED — reopening a session must not spill every old summary into the flow", () => {
+    const html = render(card({ restored: true, summaryOrigin: "record", recordId: "rec-1", summary: SUMMARY }));
+
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain("Goal: make the row open");
+    // The row still says what it has, and its numbers when the record kept them.
+    expect(html).toContain("Conversation compacted earlier — summary available");
+  });
+
+  it("the LEGACY history-item row starts EXPANDED, so a resumed session keeps the summary it used to show as a bubble", () => {
+    const html = render(card({ restored: true, summaryOrigin: "history", summaryItemId: "summary-1", summary: SUMMARY }));
 
     expect(html).toContain('aria-expanded="true"');
     expect(html).toContain("Goal: make the row open");
@@ -57,11 +66,22 @@ describe("CompactionCard — the row is a disclosure (GitHub #36)", () => {
     expect(html).toContain("<details");
   });
 
-  it("a restored row has no wire prompt, so it falls back to the parity-tested mirror of the real instruction", () => {
-    const html = renderDetail(card({ restored: true, summary: SUMMARY }));
+  it("a legacy row with no recorded prompt shows the CURRENT instruction, labelled as such — never as the one that was used", () => {
+    const html = renderDetail(card({ restored: true, summaryOrigin: "history", summary: SUMMARY }));
 
-    expect(html).toContain("Compaction prompt");
+    expect(html).toContain("Compaction prompt (current instruction)");
+    expect(html).toContain("The instruction used for this summary was not recorded");
     expect(html).toContain(COMPACTION_INSTRUCTION_MIRROR.slice(0, 60));
+  });
+
+  it("a row restored from a durable record shows the prompt that was ACTUALLY sent, with no 'current instruction' hedge", () => {
+    const html = renderDetail(
+      card({ restored: true, summaryOrigin: "record", summary: SUMMARY, prompt: "the 2026-09 instruction" }),
+    );
+
+    expect(html).toContain("the 2026-09 instruction");
+    expect(html).not.toContain("current instruction");
+    expect(html).not.toContain(COMPACTION_INSTRUCTION_MIRROR.slice(0, 60));
   });
 
   it("a live row uses the EXACT prompt off the wire, never the mirror", () => {
@@ -84,6 +104,13 @@ describe("CompactionCard — the row is a disclosure (GitHub #36)", () => {
     expect(html).not.toContain('aria-label="Copy summary"');
     // The failed row keeps the alert register it has always had.
     expect(render(card({ status: "failed", error: "model unreachable" }))).toContain('role="alert"');
+  });
+
+  it("a restored record from a native engine (no summary, no prompt) shows neither a panel nor a borrowed instruction", () => {
+    const html = renderDetail(card({ restored: true, summaryOrigin: "record", preTokens: 5_000, postTokens: 400 }));
+
+    expect(html).toContain("No summary was recorded for this compaction.");
+    expect(html).not.toContain("Compaction prompt");
   });
 
   it("a FINISHED compaction whose engine exposed no summary says so instead of showing an empty panel", () => {
@@ -111,6 +138,11 @@ describe("CompactionCard — the row is a disclosure (GitHub #36)", () => {
     expect(compactionMeta(card({ durationMs: 900 }))).toBe("1s");
     expect(compactionMeta(card({}))).toBeUndefined();
 
+    // A FAILED call names the model that was asked (the host knows it before the
+    // call fails), so the row is not left with a bare duration.
+    expect(compactionMeta(card({ status: "failed", error: "model unreachable", model: "glm-5.3", durationMs: 2_000 }))).toBe(
+      "glm-5.3 · 2s",
+    );
     const html = renderDetail(card({ restored: true, summary: SUMMARY, model: "glm-5.3", durationMs: 4_200 }));
     expect(html).toContain("Summarizing call: glm-5.3 · 4s");
     expect(renderDetail(card({ restored: true, summary: SUMMARY }))).not.toContain("Summarizing call:");

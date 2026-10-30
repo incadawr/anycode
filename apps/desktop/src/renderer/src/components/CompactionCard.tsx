@@ -108,7 +108,14 @@ export function CompactionCard({ block, enter = false }: { block: CompactionBloc
   const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
   const controlsId = useId();
   const running = block.status === "running";
-  const expanded = !running && (userExpanded ?? block.restored === true);
+  // GitHub #36 follow-up: a row rebuilt from a DURABLE RECORD starts collapsed —
+  // reopening a session with five compactions must not spill five summaries into
+  // the transcript; the row says "summary available" and one click opens it.
+  // The LEGACY fallback (a summary found only as a `compact_summary` history
+  // item, i.e. written before records existed) starts expanded, because the
+  // pre-#36 transcript showed that text outright and hiding it would take
+  // content away.
+  const expanded = !running && (userExpanded ?? block.summaryOrigin === "history");
   const rowClass = `message ${block.status === "failed" ? "message-error" : "message-loop-end"}`;
 
   return (
@@ -167,11 +174,17 @@ export function CompactionDetail({ block, id }: { block: CompactionBlock; id?: s
     [],
   );
 
-  // A live core row carries the exact instruction off the wire; a restored row
-  // never saw the event, so it falls back to the parity-tested mirror. A
-  // foreign engine's row (claude) has neither — its compaction is a native
-  // `/compact`, not this instruction, so it shows no prompt at all.
-  const prompt = block.prompt ?? (block.restored === true ? COMPACTION_INSTRUCTION_MIRROR : undefined);
+  // GitHub #36 follow-up: the prompt shown is the one that was ACTUALLY sent.
+  // A live row carries it off `compaction_end.prompt`, and a row restored from a
+  // durable record carries the copy the host recorded at the time — so the card
+  // never presents today's instruction as the one that produced an old summary.
+  // The ONLY fallback is the legacy history-item row, which has no record at
+  // all: there the card shows the current instruction but says so, instead of
+  // passing it off as the historical text. A foreign engine's row (claude) has
+  // neither — its compaction is a native `/compact`, not this instruction — and
+  // shows no prompt section at all.
+  const recordedPrompt = block.prompt;
+  const prompt = recordedPrompt ?? (block.summaryOrigin === "history" ? COMPACTION_INSTRUCTION_MIRROR : undefined);
   const meta = compactionMeta(block);
 
   const onCopy = (): void => {
@@ -222,8 +235,15 @@ export function CompactionDetail({ block, id }: { block: CompactionBlock; id?: s
       )}
       {prompt !== undefined && (
         <details className="compaction-prompt">
-          <summary className="compaction-prompt-title">Compaction prompt</summary>
+          <summary className="compaction-prompt-title">
+            {recordedPrompt !== undefined ? "Compaction prompt" : "Compaction prompt (current instruction)"}
+          </summary>
           <pre className="compaction-prompt-text">{prompt}</pre>
+          {recordedPrompt === undefined && (
+            <p className="compaction-prompt-note">
+              The instruction used for this summary was not recorded; this is the current compaction prompt.
+            </p>
+          )}
         </details>
       )}
     </div>

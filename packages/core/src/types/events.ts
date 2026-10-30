@@ -250,8 +250,20 @@ export type AgentEvent =
       summaryItemId?: string;
       /** Instruction sent to the summarizing model (core-engine compaction). */
       prompt?: string;
-      /** Constructed-port model id of the summarizing call, when known. */
+      /**
+       * Constructed-port model id of the summarizing call, when known. Present
+       * on FAILED calls too — the model that was asked is known before the
+       * call fails, and a row that reports a failure must say who was asked.
+       */
       model?: string;
+      /**
+       * Id of the durable presentation record the host wrote for this outcome
+       * (GitHub #36). HOST-stamped, absent on the engine's own event: it is the
+       * join key between the live row and the one hydration restores, so a
+       * reconnect patches the row in its original position instead of adding a
+       * second copy of the same compaction.
+       */
+      recordId?: string;
     }
   | { type: "microcompact"; clearedToolResults: number; savedTokens: number }
   /**
