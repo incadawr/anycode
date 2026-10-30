@@ -243,6 +243,7 @@ describe("executeToolCall — dynamic validated-input metadata", () => {
     expect(result.status).toBe("success");
     expect(seen).toHaveLength(1);
     expect(seen[0]?.input).toEqual({ value: "remove" });
+    expect(seen[0]?.cwd).toBe(ctx.cwd);
     expect(seen[0]?.metadata).toMatchObject({
       destructive: true,
       riskLevel: "high",
@@ -2130,5 +2131,25 @@ describe("executeToolCall — ask-zone classifier (Taskana 4702)", () => {
     expect(brokerSpy).toHaveBeenCalledOnce();
     expect(outcome.status).toBe("success");
     expect(emitted).toEqual([]);
+  });
+});
+
+describe("executeToolCall — bound Bash command", () => {
+  it("uses a broker rewrite instead of a binding for the original input", async () => {
+    let executed = "";
+    const ctx = makeCtx({
+      registry: makeRegistry({ Bash: bashTool }),
+      mode: "plan",
+      hooks: makeHooks({ permissionDecision: "ask" }),
+      permissionEngine: makeEngine({ decision: "allow", resolvedCommand: "'/usr/bin/ls'" }),
+      permissionBroker: makeBroker({ behavior: "allow", updatedInput: { command: "wc -l file" } }),
+      ports: { exec: { run: async (request: { command: string }) => {
+        executed = request.command;
+        return { status: "completed", exitCode: 0, signal: null, stdout: "", stderr: "", stdoutTruncated: false, stderrTruncated: false, durationMs: 0 };
+      } } } as unknown as CorePorts,
+    });
+    const result = await executeToolCall(ctx, call({ command: "ls" }, "Bash"));
+    expect(result.status).toBe("success");
+    expect(executed).toBe("wc -l file");
   });
 });

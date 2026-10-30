@@ -11,6 +11,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - AgentStatus lets a parent inspect its own subagents’ live progress and recent activity, with credentials and secret-bearing lines redacted, across supported parent engines (GitHub #29).
 
+### Changed
+
+- Plan mode runs proven read-only Bash commands and pipelines without asking, when each command resolves to a trusted system binary; the checked binary is the one that runs. Git stays denied in plan-mode Bash, since repository config can launch programs; use the Git tool instead (GitHub #30).
+
 ### Fixed
 
 - Subagent approval notices can be dismissed, and child approval timers wait while the window is hidden or unfocused (GitHub #32).

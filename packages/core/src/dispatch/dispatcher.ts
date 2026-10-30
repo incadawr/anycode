@@ -322,6 +322,7 @@ export async function executeToolCall(
         input,
         metadata,
         mode: ctx.mode,
+        cwd: ctx.cwd,
         toolCallId,
         ...(workspace !== undefined ? { workspace } : {}),
       };
@@ -344,6 +345,7 @@ export async function executeToolCall(
         decision === "ask" && ctx.askClassifier !== undefined
           ? await tryAutoDecideAsk(ctx, request, ruling.decision, hookDecision === "ask", toolCallId, emit, parentSignal)
           : false;
+      let brokerRewroteInput = false;
       if (decision === "ask" && !autoAllowed) {
 
         const broker = await ctx.permissionBroker.requestPermission(request, {
@@ -356,6 +358,7 @@ export async function executeToolCall(
           );
         }
         if (broker.updatedInput !== undefined) {
+          brokerRewroteInput = true;
           const revalidated = tool.inputSchema.safeParse(broker.updatedInput);
           if (!revalidated.success) {
             return outcome("invalid_input", formatValidationError(toolName, revalidated.error));
@@ -380,6 +383,12 @@ export async function executeToolCall(
           emit?.({ type: "checkpoint_failed", reason: notice.reason });
         }
       }
+
+      // Execute the exact executable paths checked for this input. A broker
+      // rewrite is a separate approval and must never inherit the old binding.
+      const handlerInput = !brokerRewroteInput && toolName === "Bash" &&
+        ruling.resolvedCommand !== undefined && isRecord(input)
+        ? { ...input, command: ruling.resolvedCommand } : input;
 
       // 5. timeout + linked abort. B(2): the dispatcher races the handler against
       // timeoutMs + DISPATCH_TIMEOUT_GRACE_MS so a handler with its own inner
@@ -413,7 +422,7 @@ export async function executeToolCall(
       let terminalTimedOut = false;
       try {
         // 6. handler
-        const handlerPromise = tool.handler(input, handlerCtx);
+        const handlerPromise = tool.handler(handlerInput, handlerCtx);
         let result: ToolResult;
         if (metadata.terminalControl === true) {
           // A workspace transition has a durable commit boundary. Once its
