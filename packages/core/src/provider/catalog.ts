@@ -27,6 +27,40 @@ export interface ModelPricing {
   cachedInput: number;
   cacheWrite?: number;
   output: number;
+  /**
+   * Time-of-day tariff (DeepSeek): the listed rates above are the PEAK rates;
+   * outside the peak windows every rate is billed at `offPeakMultiplier` ×
+   * peak. Absent = the listed rates apply at every hour (all other providers,
+   * and all connection/model override rates).
+   */
+  tariff?: TariffWindow;
+}
+
+/**
+ * When the listed (peak) rates apply. Days and hours are UTC — read them with
+ * `Date#getUTCDay` / `Date#getUTCHours` of the step timestamp, never local time.
+ */
+export interface TariffWindow {
+  /** Days the peak windows apply, `Date#getUTCDay` values (0=Sun … 6=Sat). */
+  peakUtcDays: number[];
+  /** Peak windows as half-open UTC hour pairs `[startHour, endHour)`. */
+  peakUtcHours: [number, number][];
+  /** Multiplier applied to every rate outside the peak windows (DeepSeek: 0.5). */
+  offPeakMultiplier: number;
+}
+
+/**
+ * Band for one step's timestamp. "peak" iff the UTC weekday is listed AND the
+ * UTC hour falls inside some half-open `[start, end)` peak window; everything
+ * else — including the whole weekend — is "off-peak".
+ */
+export function tariffAt(tariff: TariffWindow, timestampMs: number): "peak" | "off-peak" {
+  const at = new Date(timestampMs);
+  const day = at.getUTCDay();
+  const hour = at.getUTCHours();
+  const peak = tariff.peakUtcDays.includes(day) &&
+    tariff.peakUtcHours.some(([start, end]) => hour >= start && hour < end);
+  return peak ? "peak" : "off-peak";
 }
 
 export interface CatalogModel {

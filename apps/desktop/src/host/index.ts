@@ -4305,11 +4305,15 @@ async function boot(): Promise<void> {
             let step = 0;
             const pricingRaw = currentPricingRaw();
             return (usage) => {
+              // One timestamp for both the tariff band and the row: a
+              // time-of-day price must be billed at the instant it is
+              // recorded, or the stored cost and its `createdAt` disagree.
+              const createdAt = Date.now();
               const price = envConfig.baseUrl.replace(/\/$/, "") === catalogEntry?.baseUrl.replace(/\/$/, "")
                 ? catalogEntry.models.find((item) => item.id === model)?.pricing : undefined;
               const override = resolveUsagePrice(pricingRaw, model ?? "", price);
-              const cost = override?.subscription ? { priceBasisId: "subscription" } : calculateUsageCost(usage, override?.price);
-              const row = { ...usage, ...cost, subagentId, sessionId, turnId: subagentId, step: ++step, createdAt: Date.now(), model, finishReason: "unknown", transportRetries: 0 };
+              const cost = override?.subscription ? { priceBasisId: "subscription" } : calculateUsageCost(usage, override?.price, createdAt);
+              const row = { ...usage, ...cost, subagentId, sessionId, turnId: subagentId, step: ++step, createdAt, model, finishReason: "unknown", transportRetries: 0 };
               usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve()).then(() => persistence!.recordProviderUsage(row)).catch((e) => console.error("[host] usage audit write failed", e));
             };
           },
@@ -4878,17 +4882,21 @@ async function boot(): Promise<void> {
       usageAudit: {
         sink: {
           record: (r) => {
+            // One timestamp for both the tariff band and the row: a
+            // time-of-day price must be billed at the instant it is
+            // recorded, or the stored cost and its `createdAt` disagree.
+            const createdAt = Date.now();
             // Only the exact catalog endpoint is eligible: a proxy or reseller
             // may charge a different price even when it exposes the same model.
             const price = envConfig.baseUrl.replace(/\/$/, "") === catalogEntry?.baseUrl.replace(/\/$/, "")
               ? catalogEntry.models.find((model) => model.id === r.model)?.pricing : undefined;
             const override = resolveUsagePrice(turnPricingRaw, r.model ?? "", price);
             const cost = override?.subscription ? { priceBasisId: "subscription" }
-              : calculateUsageCost(r, override?.price);
+              : calculateUsageCost(r, override?.price, createdAt);
             // Serialized (chained off the tail, never parallel) so flush()
             // below is an honest drain of every queued write IN ORDER.
             usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve())
-              .then(() => persistence!.recordProviderUsage({ ...r, ...cost, sessionId, createdAt: Date.now() }))
+              .then(() => persistence!.recordProviderUsage({ ...r, ...cost, sessionId, createdAt }))
               .catch((e) => console.error(`[host] usage audit write failed: ${e instanceof Error ? e.message : String(e)}`));
           },
           // Cross-review finding 4: shutdown drain — a serialized tail exactly

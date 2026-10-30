@@ -19,18 +19,20 @@ export type {
   CatalogAuth,
   CatalogModel,
   ModelPricing,
+  TariffWindow,
   CatalogProviderEntry,
   ProviderCatalog,
   ProviderTransport,
   ResolvedEndpoint,
 } from "./catalog.js";
-export { resolveEndpoint } from "./catalog.js";
+export { resolveEndpoint, tariffAt } from "./catalog.js";
 
 import {
   assertBrandContract,
   assertTransportContract,
   type CatalogProviderEntry,
   type ProviderCatalog,
+  type TariffWindow,
 } from "./catalog.js";
 
 /** Sentinel id for the user-supplied endpoint whose baseUrl lives in settings. */
@@ -54,6 +56,16 @@ const MIMO_MODELS: CatalogProviderEntry["models"] = [
   { id: "mimo-v2.6-pro", pricing: { basisId: "mimo-v2.6-pro-xiaomi-mimo-api-2026-10-30", input: 0.435, cachedInput: 0.0036, cacheWrite: 0, output: 0.87 }, name: "MiMo V2.6 Pro", contextWindow: 1_048_576, usableContextWindow: LARGE_MODEL_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true },
   { id: "mimo-v2.6-flash", pricing: { basisId: "mimo-v2.6-flash-xiaomi-mimo-api-2026-10-30", input: 0.14, cachedInput: 0.0028, cacheWrite: 0, output: 0.28 }, name: "MiMo V2.6 Flash", contextWindow: 1_048_576, usableContextWindow: LARGE_MODEL_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true },
 ];
+
+// DeepSeek bills by time of day (api-docs.deepseek.com/quick_start/pricing/,
+// checked 2026-10-27): 01:00–04:00 and 06:00–10:00 UTC on weekdays carry the
+// full (peak) rates listed below; every other minute of the week — including
+// the whole weekend — is billed at exactly half.
+const DEEPSEEK_TARIFF: TariffWindow = {
+  peakUtcDays: [1, 2, 3, 4, 5],
+  peakUtcHours: [[1, 4], [6, 10]],
+  offPeakMultiplier: 0.5,
+};
 
 const ENTRIES: CatalogProviderEntry[] = [
   {
@@ -213,16 +225,16 @@ const ENTRIES: CatalogProviderEntry[] = [
       // explicit pick shows AND sends `high` instead of falling back to the
       // vocabulary's first entry (`low`).
       // https://api-docs.deepseek.com/quick_start/pricing/ — checked 2026-10-27.
-      // Peak rates; usage does not distinguish peak from off-peak.
-      { id: "deepseek-flash", pricing: { basisId: "deepseek-flash-deepseek-peak-2026-10-27", input: 0.3, cachedInput: 0.006, output: 1.2 }, name: "DeepSeek-V4.1-Flash", contextWindow: 1_048_576, maxOutputTokens: 393_216, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high", todoReminderEvery: 20 },
+      // Peak rates; the tariff below tells which hours they apply to.
+      { id: "deepseek-flash", pricing: { basisId: "deepseek-flash-deepseek-peak-2026-10-27", input: 0.3, cachedInput: 0.006, output: 1.2, tariff: DEEPSEEK_TARIFF }, name: "DeepSeek-V4.1-Flash", contextWindow: 1_048_576, maxOutputTokens: 393_216, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high", todoReminderEvery: 20 },
       // Official DeepSeek pricing page, checked 2026-10-27
       // (api-docs.deepseek.com/quick_start/pricing, checked 2026-10-27) lists
-      // peak / off-peak rates; off-peak is exactly half of peak, and a usage
-      // record carries no timestamp to tell them apart, so — same convention as
-      // the Flash row above — the PEAK rate is recorded (the conservative
-      // ceiling). V4-Pro peak: $1.32 in / $0.044 cache hit / $3.96 out per 1M
-      // tokens; off-peak is $0.66 / $0.022 / $1.98.
-      { id: "deepseek-v4-pro", pricing: { basisId: "deepseek-v4-pro-deepseek-peak-2026-10-27", input: 1.32, cachedInput: 0.044, output: 3.96 }, name: "DeepSeek-V4-Pro", contextWindow: 1_048_576, maxOutputTokens: 393_216, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high", todoReminderEvery: 20 },
+      // peak / off-peak rates; off-peak is exactly half of peak. The PEAK rate
+      // is recorded (the conservative ceiling) together with the tariff window
+      // below, so each step is priced by its own timestamp: peak hours pay the
+      // ceiling, every other minute pays half. V4-Pro peak: $1.32 in / $0.044
+      // cache hit / $3.96 out per 1M tokens; off-peak is $0.66 / $0.022 / $1.98.
+      { id: "deepseek-v4-pro", pricing: { basisId: "deepseek-v4-pro-deepseek-peak-2026-10-27", input: 1.32, cachedInput: 0.044, output: 3.96, tariff: DEEPSEEK_TARIFF }, name: "DeepSeek-V4-Pro", contextWindow: 1_048_576, maxOutputTokens: 393_216, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high", todoReminderEvery: 20 },
     ],
   },
   {

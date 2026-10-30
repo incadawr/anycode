@@ -17,6 +17,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { WireUsageAuditStep, WireUsageAuditTotals } from "../../../shared/protocol.js";
+import { findCatalogEntry } from "@anycode/core/catalog";
+import { calculateUsageCost } from "../../../host/usage-cost.js";
 import {
   UsageCostBlock,
   contextWindowSettingsTarget,
@@ -172,4 +174,26 @@ it("shows the sum of model prices and points an unpriced pinned custom connectio
   expect(showCustomPricingHint(target, { ...base, subagentUnpriced: 1 })).toBe(true);
   expect(showCustomPricingHint(target, { ...base, costUsd: .01 })).toBe(false);
   expect(showCustomPricingHint(contextWindowSettingsTarget(connections, "a", "active", "custom"), { ...base, unpricedSteps: 1 })).toBe(false);
+});
+
+describe("the popover prices DeepSeek by the step's time of day", () => {
+  it("shows the off-peak price at night and labels the estimate off-peak", () => {
+    const pricing = findCatalogEntry("deepseek")!.models.find((model) => model.id === "deepseek-v4-pro")!.pricing!;
+    // Wednesday 2026-10-28 20:00 UTC — outside DeepSeek's peak windows.
+    const night = Date.UTC(2026, 9, 28, 20, 0);
+    const cost = calculateUsageCost({ inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 1_000_000 }, pricing, night);
+    expect(cost?.costUsd).toBeCloseTo(2.64); // half of the $5.28 peak ceiling
+    expect(cost?.priceBasisId).toBe("deepseek-v4-pro-deepseek-peak-2026-10-27+off-peak");
+
+    const ledger = formatUsageCostLedger({ ...base, costUsd: cost!.costUsd, priceBasisIds: [cost!.priceBasisId] }, null);
+    expect(ledger.total).toBe("Spent in this session: ≈ $2.6400");
+    expect(ledger.footnote).toBe("off-peak-rate estimates");
+
+    const markup = renderToStaticMarkup(
+      createElement(UsageCostBlock, { ledger, turnSummary: null, turnSteps: [], expanded: false, onToggle: () => {} }),
+    );
+    const text = textOf(markup);
+    expect(text).toContain("Spent in this session: ≈ $2.6400");
+    expect(text).toContain("off-peak-rate estimates");
+  });
 });
