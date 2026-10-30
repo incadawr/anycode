@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { findCatalogEntry } from "@anycode/core/catalog";
 import { SqlitePersistenceAdapter } from "@anycode/core";
@@ -110,16 +113,31 @@ describe("catalog prices through the calculator", () => {
     const night = Date.UTC(2026, 9, 28, 20, 0);
     const cost = calculateUsageCost(usage, pro, night);
     expect(cost).toBeDefined();
-    const db = new SqlitePersistenceAdapter(":memory:");
+    // A real FILE, closed and reopened: an in-memory adapter would prove only
+    // the immediate round trip, not that the band survives the exit a session
+    // takes when the popover is next opened.
+    const dir = mkdtempSync(join(tmpdir(), "anycode-usage-reopen-"));
+    const dbPath = join(dir, "usage.db");
     try {
-      await db.createSession({ id: "deepseek-night", workspace: "/w", model: "deepseek-v4-pro", mode: "build" });
-      await db.recordProviderUsage({ sessionId: "deepseek-night", turnId: "turn", step: 1, createdAt: night, finishReason: "stop", transportRetries: 0, ...usage, ...cost });
-      const summary = summarizeProviderUsage(await db.listProviderUsage("deepseek-night"));
-      expect(summary.steps[0]?.priceBasisId).toBe("deepseek-v4-pro-deepseek-peak-2026-10-27+off-peak");
-      expect(summary.totals?.priceBasisIds).toContain("deepseek-v4-pro-deepseek-peak-2026-10-27+off-peak");
-      expect(summary.totals?.costUsd).toBeCloseTo(2.64);
+      const first = new SqlitePersistenceAdapter(dbPath);
+      try {
+        await first.createSession({ id: "deepseek-night", workspace: "/w", model: "deepseek-v4-pro", mode: "build" });
+        await first.recordProviderUsage({ sessionId: "deepseek-night", turnId: "turn", step: 1, createdAt: night, finishReason: "stop", transportRetries: 0, ...usage, ...cost });
+      } finally {
+        await first.close();
+      }
+      const reopened = new SqlitePersistenceAdapter(dbPath);
+      try {
+        const summary = summarizeProviderUsage(await reopened.listProviderUsage("deepseek-night"));
+        expect(summary.steps[0]?.priceBasisId).toBe("deepseek-v4-pro-deepseek-peak-2026-10-27+off-peak");
+        expect(summary.steps[0]?.createdAt).toBe(night);
+        expect(summary.totals?.priceBasisIds).toContain("deepseek-v4-pro-deepseek-peak-2026-10-27+off-peak");
+        expect(summary.totals?.costUsd).toBeCloseTo(2.64);
+      } finally {
+        await reopened.close();
+      }
     } finally {
-      await db.close();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

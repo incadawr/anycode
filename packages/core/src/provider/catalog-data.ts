@@ -61,6 +61,12 @@ const MIMO_MODELS: CatalogProviderEntry["models"] = [
 // checked 2026-10-27): 01:00–04:00 and 06:00–10:00 UTC on weekdays carry the
 // full (peak) rates listed below; every other minute of the week — including
 // the whole weekend — is billed at exactly half.
+//
+// KNOWN LIMIT: Chinese public holidays are off-peak for the whole day on the
+// provider's page, but no holiday calendar is modelled here. A holiday that
+// falls inside a peak window is therefore priced at peak, i.e. the cost shown
+// can be up to 2x the real charge. Both prices remain ESTIMATES (the popover
+// labels them "rate estimates"), so this never reads as an exact bill.
 const DEEPSEEK_TARIFF: TariffWindow = {
   peakUtcDays: [1, 2, 3, 4, 5],
   peakUtcHours: [[1, 4], [6, 10]],

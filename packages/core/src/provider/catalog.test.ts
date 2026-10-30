@@ -5,7 +5,7 @@
 
  */
 
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { CatalogProviderEntry } from "./catalog.js";
 import { assertBrandContract, assertTransportContract, resolveEndpoint, tariffAt } from "./catalog.js";
 import {
@@ -617,10 +617,27 @@ describe("tariff windows (DeepSeek peak/off-peak)", () => {
   // The declared DeepSeek window: 01:00–04:00 and 06:00–10:00 UTC on weekdays.
   const tariff = { peakUtcDays: [1, 2, 3, 4, 5], peakUtcHours: [[1, 4], [6, 10]] as [number, number][], offPeakMultiplier: 0.5 };
 
+  // The window is defined in UTC, so this block runs where the local clock is
+  // NOT UTC — otherwise a `getHours()`/`getDay()` implementation would pass by
+  // accident on a UTC machine. New York is UTC-4 in October 2026: 02:30 UTC
+  // Wednesday is 22:30 Tuesday local, and 10:00 UTC Friday is 06:00 local, so
+  // a local-clock implementation gets these wrong in opposite directions.
+  let previousTz: string | undefined;
+  beforeAll(() => {
+    previousTz = process.env.TZ;
+    process.env.TZ = "America/New_York";
+  });
+  afterAll(() => {
+    if (previousTz === undefined) delete process.env.TZ;
+    else process.env.TZ = previousTz;
+  });
+
   it("reads the window in UTC and half-open hours", () => {
-    // 2026-10-28 is a Wednesday. Hours are read with getUTCHours, never the
-    // local clock, so 02:30 UTC is peak even on a UTC+3 machine (05:30 local).
-    expect(tariffAt(tariff, Date.UTC(2026, 9, 28, 2, 30))).toBe("peak");
+    const peakInstant = Date.UTC(2026, 9, 28, 2, 30);
+    expect(new Date(peakInstant).getHours(), "the non-UTC guard is active").not.toBe(new Date(peakInstant).getUTCHours());
+    expect(new Date(peakInstant).getDay(), "the non-UTC guard shifts the day too").not.toBe(new Date(peakInstant).getUTCDay());
+    // 2026-10-28 is a Wednesday.
+    expect(tariffAt(tariff, peakInstant)).toBe("peak");
     expect(tariffAt(tariff, Date.UTC(2026, 9, 28, 0, 59, 59, 999))).toBe("off-peak");
     expect(tariffAt(tariff, Date.UTC(2026, 9, 28, 1, 0))).toBe("peak");
     expect(tariffAt(tariff, Date.UTC(2026, 9, 28, 3, 59, 59, 999))).toBe("peak");
@@ -628,7 +645,9 @@ describe("tariff windows (DeepSeek peak/off-peak)", () => {
     expect(tariffAt(tariff, Date.UTC(2026, 9, 28, 5, 59, 59, 999))).toBe("off-peak");
     expect(tariffAt(tariff, Date.UTC(2026, 9, 28, 6, 0))).toBe("peak");
     expect(tariffAt(tariff, Date.UTC(2026, 9, 28, 9, 59, 59, 999))).toBe("peak");
-    expect(tariffAt(tariff, Date.UTC(2026, 9, 28, 10, 0))).toBe("off-peak");
+    // 10:00 UTC Friday ends the peak window in UTC while the local clock reads
+    // 06:00 — a local-clock implementation would call this one peak.
+    expect(tariffAt(tariff, Date.UTC(2026, 9, 30, 10, 0))).toBe("off-peak");
     expect(tariffAt(tariff, Date.UTC(2026, 9, 28, 20, 0))).toBe("off-peak");
   });
 
