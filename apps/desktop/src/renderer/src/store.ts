@@ -5824,6 +5824,21 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // model switch or a host restart.
             set({ imageFallback: message.imageFallback });
             return;
+          case "engine_capabilities_changed":
+            // Manual-compaction review minor: the host reports a mid-session
+            // capability revocation (Codex's app-server refuses
+            // `thread/compact/start` with -32601/-32000 on first use, so the
+            // engine flips `supportsManualCompact` off). Patch the cached
+            // EnginePresentation in place — the Compact slash row reads this
+            // projection, so `/compact` disappears for THIS session without a
+            // reconnect. No-op when the renderer has no engine projection
+            // (core session, legacy host).
+            set((state) => ({
+              ...(state.engine !== null
+                ? { engine: { ...state.engine, capabilities: message.capabilities } }
+                : {}),
+            }));
+            return;
           case "engine_switched":
             // Taskana 4068: the host swapped the live engine in place between
             // turns. The wire message carries only the ids (the full

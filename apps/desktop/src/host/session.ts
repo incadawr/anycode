@@ -89,6 +89,7 @@ import {
 } from "@anycode/core";
 import { randomUUID } from "node:crypto";
 import type {
+  EngineCapabilitiesProjection,
   EngineModelChoice,
   EnginePermissionPreset,
   HostToUiMessage,
@@ -1626,6 +1627,14 @@ export class Session {
    * lesson), and the ui_ready case itself pushes the current snapshot.
    */
   private uiReady = false;
+  /**
+   * Capabilities advertised at the last host_ready/engine push. An engine may
+   * revoke one mid-session (Codex flips `supportsManualCompact` off when the
+   * app-server answers `thread/compact/start` with -32601/-32000); onCompact
+   * diffs against this and pushes `engine_capabilities_changed` so the
+   * renderer stops offering the revoked command for THIS session.
+   */
+  private advertisedCapabilities: EngineCapabilitiesProjection | undefined;
   /** Slice P7.25/F3: unsubscribes the LSP status listener on shutdown (no leaked listener, no push-after-dispose). */
   private lspUnsubscribe: (() => void) | undefined;
   /** TASK.145 срез 2: host's pending-report queue seam; undefined for a child-mode host/legacy test (doc on SessionOptions.pendingChildReports). */
@@ -2550,6 +2559,7 @@ export class Session {
           this.child.onReady();
         }
         const presentation = enginePresentation(this.engine, this.engineSettings);
+        this.advertisedCapabilities = presentation?.capabilities;
         const bootEffortAdjustment = this.bootEffortAdjustment;
         this.bootEffortAdjustment = undefined;
         this.outbound.sendDirect({
@@ -3862,8 +3872,23 @@ export class Session {
       // is a defensive net mirroring runTurn's own catch above.
       this.outbound.emit({ type: "fatal", message: `compaction failed: ${describeError(error)}` });
     } finally {
-      // Taskana 4895: same idle-boundary apply as the rewind path above — a
-      // compaction holds `busy`, so a pick made during it was queued.
+      // Manual-compaction review minor: the engine may have REVOKED a
+      // capability during the attempt above (Codex flips
+      // `supportsManualCompact` off when the app-server refuses
+      // `thread/compact/start` with -32601/-32000). Diff the LIVE
+      // capabilities against the ones the renderer learned at session start
+      // and push an additive `engine_capabilities_changed` when they drifted,
+      // so the UI stops offering `/compact` for THIS session instead of
+      // re-refusing on every try. sendDirect, not emit: it is a present-tense
+      // fact, not replayable history — a reconnecting renderer re-reads the
+      // fresh host_ready projection instead.
+      if (this.advertisedCapabilities !== undefined && this.engine.id !== "core") {
+        const live = enginePresentation(this.engine, this.engineSettings)?.capabilities;
+        if (live !== undefined && live !== this.advertisedCapabilities) {
+          this.advertisedCapabilities = live;
+          this.outbound.sendDirect({ type: "engine_capabilities_changed", capabilities: live });
+        }
+      }
       this.applyPendingModelSelection();
       this.busy = false;
       this.abort = null;

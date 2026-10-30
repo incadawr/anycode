@@ -940,6 +940,16 @@ export type HostToUiMessage =
   // (only the untrusted UiToHostMessage direction is validated), precedent
   // mode_change_rejected above. `compact_request` itself stays payload-less.
   | { type: "compact_rejected"; reason: string }
+  // Additive (manual-compaction review minor): an engine's capabilities can be
+  // revoked MID-SESSION — the Codex app-server answers `thread/compact/start`
+  // with -32601/-32000 only on first use, at which point the engine flips
+  // `supportsManualCompact` off. The renderer learned the session-start
+  // projection from host_ready and would keep offering `/compact` (every try
+  // re-refused) until a reconnect re-read host_ready; this push re-advertises
+  // the LIVE capabilities so the command disappears immediately. Trusted
+  // host->renderer, no zod (only the untrusted UiToHostMessage direction is
+  // validated), precedent engine_switched/engine_settings_changed.
+  | { type: "engine_capabilities_changed"; capabilities: EngineCapabilitiesProjection }
   // Codex-fixes TASK.39 (cut §3.3): host acknowledges a `set_engine_preset` or a
   // `set_model` for an engine with native controls — trusted, no zod, precedent
   // mode_changed/model_changed. `appliesFrom:"next_turn"` is the ONLY value today
