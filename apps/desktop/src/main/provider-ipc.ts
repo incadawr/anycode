@@ -1056,7 +1056,11 @@ export function settingsWatchEventMatchesTarget(filename: string | Buffer | null
  *    settings, it does not write);
  *  - a read that overlapped a settings WRITE is dropped rather than dispatched
  *    (see `settingsWriteEpoch`): the writer's own `onMutation` publishes the
- *    newer settings, and replaying the older bytes afterwards would undo it;
+ *    newer settings, and replaying the older bytes afterwards would undo it.
+ *    The drop schedules one fresh read of its own, so a change is never left
+ *    waiting on a write event that may not exist (a save that failed before its
+ *    rename fires none); that retry cannot loop — it either dispatches or finds
+ *    the same bytes;
  *  - read/watch/callback failures go to `logger.warn` and leave later changes
  *    operable; credentials/content are never logged.
  *
@@ -1100,9 +1104,15 @@ export function startSettingsFileWatcher(
     }
     if (settingsWriteEpoch(settingsPath) !== epoch) {
       // Stale relative to a write that landed during the read. Leave `lastText`
-      // alone: the write's own directory event re-reads and dispatches the
-      // bytes that are current, whereas marking these bytes as seen would make
-      // the next comparison skip a real change.
+      // alone (marking these bytes as seen would make the next comparison skip
+      // a real change) and line up a read of our own rather than waiting for
+      // the write's directory event: a save that dies before its rename renames
+      // nothing, so no event is coming — and the bytes on disk can still be a
+      // real external edit that this drop would otherwise lose until some
+      // unrelated event happened to arrive. Not a loop: the retry either
+      // dispatches (advancing `lastText`) or finds identical bytes, so it
+      // repeats only while further writes keep landing, at the debounce rate.
+      schedule();
       return;
     }
     if (text === lastText) {
