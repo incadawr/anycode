@@ -924,6 +924,21 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
       >
         <SessionSurface tabId={tabId} onToast={onToast} />
 
+        {/* GitHub #31: the resize handle is a DIRECT grid child filling the
+            reserved 8px column (as before the dock refactor) — inside the
+            dock <aside> (a column flex) it collapsed to a 0px-tall strip
+            with no hit area. Column mode only; the drawer overlay is not
+            drag-resizable (same as the LSP overlay posture it mirrors). */}
+        {splitOpen && (
+          <div
+            className="review-resize-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize dock"
+            data-testid="dock-resize-handle"
+            onPointerDown={beginDockResize}
+          />
+        )}
         {/* Taskana 4703: ONE dock column replaces the git/preview/subagents
             stack. The mount gate is tabs+visible; drawer mode still mounts
             (absolute overlay) but leaves the grid untouched above. */}
@@ -931,7 +946,6 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
           <DockPanel
             mode={dockMode}
             width={effectiveDockWidth}
-            onResizeStart={beginDockResize}
             onToast={onToast}
             canSplitNow={canSplitNow}
             splitTabId={splitTabId}
