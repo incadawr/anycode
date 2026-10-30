@@ -884,6 +884,15 @@ describe("desktop store — notice channel (Wave-1 revision)", () => {
       },
     };
 
+    store.getState().applyHostMessage({ ...request, requestId: "newer" });
+    store.getState().applyHostMessage({ type: "permission_settled", requestId: "older", behavior: "deny", origin: "timeout" });
+    expect(store.getState().permission?.requestId).toBe("newer");
+    store.getState().applyHostMessage({ type: "approval_state", unattended: true, pending: null });
+    expect(store.getState().permission).toBeNull();
+    expect(store.getState().unattended).toBe(true);
+    store.getState().applyHostMessage({ type: "approval_state", unattended: false, pending: null });
+    store.setState({ notice: null });
+
     // UI-origin settlement: modal closes, no toast (the user just clicked).
     store.getState().applyHostMessage(request);
     expect(store.getState().permission?.requestId).toBe("perm-1");

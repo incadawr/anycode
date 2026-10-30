@@ -31,6 +31,7 @@ export interface ChildPermissionOwner {
 /** The small slice of a tab store these helpers read. */
 export interface ChildPermissionStoreView {
   permission: PermissionUiRequest | null;
+  unattended?: boolean;
   connection: string;
   engine: EnginePresentation | null;
   /** The child's canonical workspace — the dialog shows the real path it works in. */

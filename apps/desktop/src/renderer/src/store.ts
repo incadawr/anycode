@@ -635,6 +635,7 @@ export function findOpenCompaction(transcript: readonly TranscriptBlock[]): numb
 }
 
 export interface PermissionUiRequest {
+  deadline?: number;
   requestId: string;
   toolName: string;
   input: unknown;
@@ -1123,6 +1124,7 @@ export interface DesktopState {
   transcript: TranscriptBlock[];
   todoReminderState: { count: number; threshold: number } | null;
   permission: PermissionUiRequest | null;
+  unattended: boolean;
   /**
    * TASK.115 S1: toolCallIds of live Agent tool_call blocks whose child is
    * currently blocked on a permission ask (mirrors `SubagentSubStatus.waiting`
@@ -1541,6 +1543,7 @@ interface SessionSlice {
   transcript: TranscriptBlock[];
   todoReminderState: { count: number; threshold: number } | null;
   permission: PermissionUiRequest | null;
+  unattended: boolean;
   /** TASK.115 S1: see `DesktopState.waitingSubagents`'s own doc comment. */
   waitingSubagents: ReadonlySet<string>;
   notice: Notice | null;
@@ -1615,6 +1618,7 @@ function initialSessionSlice(): SessionSlice {
     transcript: [],
     todoReminderState: null,
     permission: null,
+    unattended: false,
     waitingSubagents: new Set<string>(),
     notice: null,
     waitingForNetwork: false,
@@ -4745,10 +4749,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             }
             return;
           }
+          case "approval_state":
+            set({ permission: message.pending, unattended: message.unattended });
+            return;
           case "permission_request":
             set({
               permission: {
                 requestId: message.requestId,
+                deadline: message.deadline,
                 toolName: message.toolName,
                 input: message.input,
                 mode: message.mode,
@@ -4893,6 +4901,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                 ? {
                     permission: {
                       requestId: message.permission.requestId,
+                      deadline: message.permission.deadline,
                       toolName: message.permission.toolName,
                       input: message.permission.input,
                       mode: message.permission.mode,
@@ -4911,7 +4920,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               message.origin === "ui"
                 ? null
                 : { kind: "permission_settled", text: PERMISSION_SETTLE_TEXT[message.origin] };
-            set((state) => ({ permission: null, notice: notice ?? state.notice }));
+            set((state) => ({ permission: state.permission?.requestId === message.requestId ? null : state.permission, notice: notice ?? state.notice }));
             return;
           }
           case "file_snapshot":

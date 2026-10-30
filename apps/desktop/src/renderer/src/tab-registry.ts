@@ -70,6 +70,7 @@ interface TabEntry {
   store: DesktopStoreApi;
   connection: HostConnection | null;
   unsubscribeMessages: (() => void) | null;
+  unsubscribeExpiry: (() => void) | null;
   terminal: TerminalConnection | null;
   unsubscribeTerminalMessages: (() => void) | null;
   /** R10 status-mirror subscription on this tab's own store; lives for the STORE's lifetime (survives respawns), dies in disposeTab. */
@@ -455,8 +456,26 @@ export function createTabRegistry(
   /** (Re)connects `port` to an existing entry: tears down the old subscription, wires the new one, kicks off the handshake. */
   function attach(entry: TabEntry, tabId: string, port: MessagePort): void {
     entry.unsubscribeMessages?.();
+    entry.unsubscribeExpiry?.();
     const connection = connectHost(port);
     entry.connection = connection;
+    if (entry.isChild) {
+      // The host-exit envelope and the UI port are independent channels. Keep
+      // this small relation-only listener until expiry arrives or the port
+      // closes, even if the child store has already been disposed.
+      const unsubscribe = connection.subscribe((message) => {
+        if (message.type === "approval_state" && message.unattended) {
+          childRelationStore.getState().noteApprovalExpired(tabId);
+          cleanup();
+        }
+      });
+      const cleanup = (): void => {
+        unsubscribe();
+        port.removeEventListener("close", cleanup);
+      };
+      port.addEventListener("close", cleanup, { once: true });
+      entry.unsubscribeExpiry = cleanup;
+    }
     entry.unsubscribeMessages = connection.subscribe((message) => {
       // sessionId lands on host_ready but isn't part of the frozen DesktopState
       // shape (store.ts §3.3) — the registry is the natural place to lift it
@@ -584,6 +603,7 @@ export function createTabRegistry(
           store: createStore(),
           connection: null,
           unsubscribeMessages: null,
+          unsubscribeExpiry: null,
           terminal: null,
           unsubscribeTerminalMessages: null,
           unsubscribeStatus: null,
@@ -700,7 +720,7 @@ export function createTabRegistry(
         // never added to the tabs-store) — flip the relation instead, so
         // C3's Open/breadcrumb read `live: false` and fall back to the
         // read-only history channel (C4) instead of a dead port.
-        childRelationStore.getState().markChildGone(tabId);
+        childRelationStore.getState().markChildGone(tabId, entry.store.getState().unattended);
         // TASK.102 CUT-S2 §10.10.2 (R2, O4/F3-R): a terminated child host
         // never respawns (main's own reap-on-terminal verdict, §0), and a
         // child's own tabId can never reach `disposeTab` — main's `closeTab`
@@ -740,6 +760,7 @@ export function createTabRegistry(
         return;
       }
       entry.unsubscribeMessages?.();
+      entry.unsubscribeExpiry?.();
       entry.unsubscribeTerminalMessages?.();
       entry.unsubscribeStatus?.();
       entry.unsubscribeQueue?.();

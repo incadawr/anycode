@@ -62,6 +62,19 @@ function createManualScheduler(): { scheduler: FrameScheduler; runPending: () =>
 class FakeMessagePort {
   onmessage: ((event: MessageEvent<HostToUiMessage>) => void) | null = null;
   sent: unknown[] = [];
+  private closeListeners = new Set<() => void>();
+
+  addEventListener(type: string, listener: () => void): void {
+    if (type === "close") this.closeListeners.add(listener);
+  }
+
+  removeEventListener(type: string, listener: () => void): void {
+    if (type === "close") this.closeListeners.delete(listener);
+  }
+
+  close(): void {
+    for (const listener of this.closeListeners) listener();
+  }
 
   postMessage(message: unknown): void {
     this.sent.push(message);
@@ -616,6 +629,40 @@ describe("tab-registry — child-session registration (TASK.102 CUT-S2 §2.5, sl
     // `relation.live` at App.tsx:500) calls `tabRegistry.getStore` at all
     // (App.tsx:611), and that branch never renders once `live` is false.
     expect(registry.getStore("child-1")).toBeUndefined();
+  });
+
+  it("retains a child expiry when the host exits immediately", () => {
+    const { registry, childRelationStore } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("child-1", "/ws/root", asPort(port), undefined, childField());
+    port.emit(HOST_READY("/ws/root", "sess-child"));
+    port.emit({ type: "approval_state", unattended: true, pending: null });
+    registry.markHostExited("child-1");
+    expect(registry.getStore("child-1")).toBeUndefined();
+    expect(childRelationStore.getState().getRelation("sess-root", "call-1")).toMatchObject({ live: false, approvalExpired: true });
+  });
+
+  it("retains a child expiry delivered after host exit without retaining its store", () => {
+    const { registry, childRelationStore } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("child-1", "/ws/root", asPort(port), undefined, childField());
+    const staleStore = registry.getStore("child-1")!;
+    registry.markHostExited("child-1");
+    expect(registry.getStore("child-1")).toBeUndefined();
+    expect(childRelationStore.getState().getRelation("sess-root", "call-1")).toMatchObject({ live: false });
+    port.emit({ type: "approval_state", unattended: true, pending: null });
+    expect(childRelationStore.getState().getRelation("sess-root", "call-1")).toMatchObject({ live: false, approvalExpired: true });
+    expect(staleStore.getState().unattended).toBe(false);
+  });
+
+  it("stops listening for child expiry after the port closes", () => {
+    const { registry, childRelationStore } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("child-1", "/ws/root", asPort(port), undefined, childField());
+    registry.markHostExited("child-1");
+    port.close();
+    port.emit({ type: "approval_state", unattended: true, pending: null });
+    expect(childRelationStore.getState().getRelation("sess-root", "call-1")?.approvalExpired).toBeUndefined();
   });
 
   it("markHostExited on a child tab disposes its entry (TASK.102 CUT-S2 §10.10.2 R2): the store is dropped, the subscription is torn down, and the tabId is closed against a stray late port — while the relation survives for C4", () => {

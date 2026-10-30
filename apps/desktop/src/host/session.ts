@@ -2589,6 +2589,7 @@ export class Session {
           .catch(() => {});
         this.pushSessionCheckpoint();
         this.outbound.replay();
+        this.outbound.sendDirect(this.broker.approvalState());
         this.outbound.sendDirect({ type: "context_usage_checkpoint", contextUsage: this.checkpointContextUsage });
         // GitHub #19: re-assert the authoritative title on every ui_ready, as
         // an un-buffered sendDirect AFTER replay(). This covers a resumed host
@@ -2716,6 +2717,13 @@ export class Session {
             this.abort = null;
             this.currentTurn = null;
           });
+        break;
+      case "approval_visibility":
+        this.broker.setApprovalVisibility(message.requestId, message.visible);
+        break;
+      case "approval_recover":
+        this.broker.noteHumanPresent();
+        this.outbound.sendDirect(this.broker.approvalState());
         break;
       case "permission_response":
         if (!this.engine.capabilities.supportsInteractiveApprovals) {
@@ -3369,6 +3377,7 @@ export class Session {
       ...(shown !== null
         ? {
             permission: {
+              deadline: this.broker.approvalState().pending?.deadline,
               requestId: shown.requestId,
               toolName: shown.request.toolName,
               input: shown.request.input,

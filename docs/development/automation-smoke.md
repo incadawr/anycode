@@ -174,3 +174,13 @@ literal owner home path (`/Users/<owner>`). When a smoke script needs a per-user
 derive it from `os.homedir()` / `os.tmpdir()` at runtime (see `apps/desktop/scripts/profile-ui-smoke.mjs`);
 when a doc or fixture needs an example path, use the placeholder `/Users/<user>`.
 History scrubbing of already-pushed commits is out of scope (see Taskana 4163).
+
+## Running approval expiry smoke
+
+```bash
+node apps/desktop/scripts/approval-expiry-smoke.mjs
+```
+
+This uses an isolated profile and a loopback provider fixture. It waits for the
+normal approval deadlines and captures the countdown, child handoff and expiry,
+recovery controls, and a denied card in the printed temporary directory.

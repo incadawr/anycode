@@ -98,9 +98,11 @@ const NO_BYPASS_CLAUSE =
   `a script that writes the file, etc.) — that circumvents the approval policy. `;
 
 function unansweredDenyReason(toolName: string, timeoutMs: number): string {
+  const seconds = Math.ceil(timeoutMs / 1000);
+  const duration = seconds % 60 === 0 ? `${seconds / 60} ${seconds === 60 ? "minute" : "minutes"}` : `${seconds} seconds`;
   return (
-    `${toolName}: no one answered the approval request (it expired after ${timeoutMs}ms). ` +
-    `This is NOT a refusal on the merits and NOT a failure of the command — there is no human at the screen. ` +
+    `${toolName}: the approval request expired unanswered after ${duration}. ` +
+    `This is NOT a refusal on the merits and NOT a failure of the command. ` +
     `Retrying this command, or a rephrased equivalent, will be denied the same way. ` +
     NO_BYPASS_CLAUSE +
     `Continue with work that needs no approval, or stop and report exactly what is blocked.`
@@ -271,6 +273,7 @@ export class IpcPermissionBroker implements PermissionBroker {
     private readonly emit: (message: HostToUiMessage) => void,
     private readonly timeoutMs: number = PERMISSION_ASK_TIMEOUT_MS,
     private readonly rules: PermissionRuleMatcher | null = null,
+    private readonly deferPresentation = false,
   ) {}
 
   requestPermission(request: PermissionRequest): Promise<PermissionDecision> {
@@ -447,7 +450,31 @@ export class IpcPermissionBroker implements PermissionBroker {
    * Idempotent and safe to call when the latch was never armed.
    */
   noteHumanPresent(): void {
-    this.unattended = false;
+    if (this.unattended) {
+      this.unattended = false;
+      this.emitApprovalState();
+    }
+  }
+
+  approvalState(): Extract<HostToUiMessage, { type: "approval_state" }> {
+    const shown = this.pendingShownRequest();
+    const entry = this.current === null ? undefined : this.pending.get(this.current);
+    const pending = shown && entry
+      ? {
+          requestId: shown.requestId,
+          toolName: shown.request.toolName,
+          input: shown.request.input,
+          mode: shown.request.mode,
+          metadata: toWireToolMeta(shown.request.metadata),
+          ...(entry.presentedAt !== null && entry.presentedTimeoutMs !== null
+            ? { deadline: entry.presentedAt + entry.presentedTimeoutMs } : {}),
+        }
+      : null;
+    return { type: "approval_state", unattended: this.unattended, pending };
+  }
+
+  private emitApprovalState(): void {
+    this.emit(this.approvalState());
   }
 
   /** Whether asks are currently short-circuited because nobody answered (diagnostics / tests). */
@@ -509,33 +536,45 @@ export class IpcPermissionBroker implements PermissionBroker {
   /** Sends `entry`'s request to the UI and arms its timeout; marks it as the shown request. */
   private present(requestId: string, entry: PendingAsk): void {
     this.current = requestId;
-    // Per-tool deadline (TASK.27): a plan review gets a reading budget instead
-    // of the generic ask deadline. Resolved here, at presentation time, so a
-    // queued ask still cannot start its clock before a human sees it.
-    const timeoutMs = resolveAskTimeoutMs(entry.request.toolName, this.timeoutMs);
-    entry.presentedAt = Date.now();
-    entry.presentedTimeoutMs = timeoutMs;
-    entry.timer = setTimeout(() => {
-      // An expired ask is evidence that nobody is watching; every later ask in
-      // this session is denied outright until a human proves otherwise.
-      this.unattended = true;
-      this.settle(
-        requestId,
-        {
-          behavior: "deny",
-          reason: unansweredDenyReason(entry.request.toolName, timeoutMs),
-        },
-        "timeout",
-      );
-    }, timeoutMs);
+    if (!this.deferPresentation) this.armTimer(requestId, entry);
     this.emit({
       type: "permission_request",
+      ...(entry.presentedAt !== null && entry.presentedTimeoutMs !== null
+        ? { deadline: entry.presentedAt + entry.presentedTimeoutMs } : {}),
       requestId,
       toolName: entry.request.toolName,
       input: entry.request.input,
       mode: entry.request.mode,
       metadata: toWireToolMeta(entry.request.metadata),
     });
+  }
+
+  /** Child requests count down only while the parent presents this request. */
+  setApprovalVisibility(requestId: string, visible: boolean): void {
+    if (!this.deferPresentation || this.current !== requestId) return;
+    const entry = this.pending.get(requestId);
+    if (!entry) return;
+    if (visible && entry.timer === null) {
+      this.armTimer(requestId, entry);
+      this.emitApprovalState();
+    } else if (!visible && entry.timer !== null) {
+      clearTimeout(entry.timer);
+      entry.timer = null;
+      entry.presentedAt = null;
+      entry.presentedTimeoutMs = null;
+      this.emitApprovalState();
+    }
+  }
+
+  private armTimer(requestId: string, entry: PendingAsk): void {
+    const timeoutMs = resolveAskTimeoutMs(entry.request.toolName, this.timeoutMs);
+    entry.presentedAt = Date.now();
+    entry.presentedTimeoutMs = timeoutMs;
+    entry.timer = setTimeout(() => {
+      this.unattended = true;
+      this.emitApprovalState();
+      this.settle(requestId, { behavior: "deny", reason: unansweredDenyReason(entry.request.toolName, timeoutMs) }, "timeout");
+    }, timeoutMs);
   }
 
   /** Pops the next queued ask (if any) and presents it, freeing the shown slot for it. */

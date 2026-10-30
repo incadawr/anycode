@@ -428,7 +428,8 @@ describe("unattended latch (TASK.138)", () => {
     const expired = await first;
     expect(expired.behavior).toBe("deny");
     const expiredReason = expired.behavior === "deny" ? expired.reason : "";
-    expect(expiredReason).toContain("no one answered");
+    expect(expiredReason).toContain("expired unanswered after 2 minutes");
+    expect(expiredReason).not.toMatch(/\d+ms/);
     expect(expiredReason).toContain("NOT a refusal on the merits");
     expect(expiredReason).toContain("rephrased equivalent");
 
@@ -1061,5 +1062,61 @@ describe("expired-ask deny reasons forbid a tool bypass (Taskana 4821)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+
+it("publishes the original deadline and unattended recovery without granting an ask", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000_000);
+  const { broker, emitted } = makeBroker();
+  const first = broker.requestPermission(request);
+  const shown = broker.approvalState().pending!;
+  expect(shown.deadline).toBe(1_120_000);
+  const queued = broker.requestPermission({ ...request, toolName: "ExitPlanMode" });
+  expect(broker.pendingSnapshot()[1]?.expiresInMs).toBeNull();
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(broker.approvalState().pending).toEqual(shown);
+  expect(broker.pendingSnapshot()[0]?.expiresInMs).toBe(90_000);
+  await vi.advanceTimersByTimeAsync(90_000);
+  expect((await first).behavior).toBe("deny");
+  expect(emitted).toContainEqual(expect.objectContaining({ type: "approval_state", unattended: true }));
+  const plan = broker.approvalState().pending!;
+  expect(plan.deadline).toBe(Date.now() + PLAN_APPROVAL_ASK_TIMEOUT_MS);
+  broker.denyAll("cancelled", "turn_cancelled");
+  await queued;
+  expect(broker.approvalState().pending).toBeNull();
+  expect((await broker.requestPermission(request)).behavior).toBe("deny");
+  broker.noteHumanPresent();
+  expect(broker.approvalState().unattended).toBe(false);
+  const next = broker.requestPermission(request);
+  expect(broker.approvalState().pending).not.toBeNull();
+  broker.denyAll("cancelled", "turn_cancelled");
+  expect((await next).behavior).toBe("deny");
+});
+
+
+describe("child approval presentation", () => {
+  it("starts and restarts the deadline only while the request is presented", async () => {
+    vi.useFakeTimers();
+    const messages: HostToUiMessage[] = [];
+    const broker = new IpcPermissionBroker((message) => messages.push(message), 1000, null, true);
+    const decision = broker.requestPermission(request);
+    const id = requestId(messages);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(broker.pendingCount).toBe(1);
+    expect(broker.approvalState().pending?.deadline).toBeUndefined();
+    broker.setApprovalVisibility(id, true);
+    const firstDeadline = broker.approvalState().pending?.deadline;
+    expect(firstDeadline).toBe(Date.now() + 1000);
+    await vi.advanceTimersByTimeAsync(800);
+    broker.setApprovalVisibility(id, false);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(broker.pendingCount).toBe(1);
+    broker.setApprovalVisibility(id, true);
+    expect(broker.approvalState().pending?.deadline).toBe(Date.now() + 1000);
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(decision).resolves.toMatchObject({ behavior: "deny" });
+    expect(broker.isUnattended).toBe(true);
   });
 });

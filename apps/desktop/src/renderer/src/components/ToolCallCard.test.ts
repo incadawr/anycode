@@ -2990,3 +2990,18 @@ describe("Queued status display (TASK.229)", () => {
     expect(running).not.toContain(">Queued<");
   });
 });
+
+
+it("does not show a diff placeholder for denied file operations", () => {
+  const before = { content: "before", truncated: false };
+  const after = { content: "after", truncated: false };
+  for (const toolName of ["Write", "Edit"]) {
+    for (const snapshots of [{ before, after: null }, { before, after }]) {
+      const html = renderToStaticMarkup(createElement(ToolCallCard, { block: mkAgentBlock({ toolName, status: "denied", snapshots }) }));
+      expect(html).not.toContain("Waiting for file snapshot");
+      expect(html).not.toContain("tool-call-diff-slot");
+    }
+    const running = renderToStaticMarkup(createElement(ToolCallCard, { block: mkAgentBlock({ toolName, status: "running", snapshots: { before, after: null } }) }));
+    expect(running).toContain("Waiting for file snapshot");
+  }
+});
