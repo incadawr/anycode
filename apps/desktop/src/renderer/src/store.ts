@@ -545,11 +545,21 @@ export type TranscriptBlock =
    * absent while the compaction is still running; `error` is present exactly
    * when `status` is "failed" and the host named a reason.
    *
-   * Renderer-only and NOT reconstructed by `projectHistoryToBlocks` — same
-   * posture as `usage_limit`/`connection_changed` above, and the same
-   * consequence: a reload loses the card. Carrying it across a reload needs
-   * the compaction to leave a mark in the persisted history, which is a wire
-   * change and deliberately not part of this cut.
+   * GitHub #36: `summary` is the text that now stands in for the compacted
+   * prefix (what the model actually sees), `summaryItemId` the persisted
+   * history item holding it, `prompt`/`model` the instruction and model of the
+   * summarizing call. All four are additive-optional — a foreign engine that
+   * compacts natively (claude) exposes no summary, and a pre-#36 host sends
+   * none of them. `restored` marks a row rebuilt from persisted history at
+   * hydration (it has the summary but never saw the live event); such a row
+   * starts expanded so a resumed transcript does not hide text the old
+   * projection rendered as a plain bubble.
+   *
+   * Renderer-only and NOT reconstructed by `projectHistoryToBlocks` from the
+   * compaction itself — same posture as `usage_limit`/`connection_changed`
+   * above — EXCEPT for the one durable trace a compaction does leave: the
+   * `compact_summary` history item, which the projection turns back into a
+   * `restored` row (GitHub #36) so a resumed session can still open it.
    */
   | {
       kind: "compaction";
@@ -561,6 +571,16 @@ export type TranscriptBlock =
       postTokens?: number;
       durationMs?: number;
       error?: string;
+      /** Model-visible summary that replaced the prefix (absent while running, or when the engine exposed none). */
+      summary?: string;
+      /** Id of the persisted `compact_summary` history item carrying `summary`. */
+      summaryItemId?: string;
+      /** Instruction sent to the summarizing model. */
+      prompt?: string;
+      /** Model id of the summarizing call, when the host knew one. */
+      model?: string;
+      /** True when this row was rebuilt from persisted history at hydration, not from a live event. */
+      restored?: boolean;
     }
   /**
    * One row per `preview_console` AgentEvent (slice 96-D, night-track
@@ -1722,12 +1742,15 @@ const defaultScheduler: FrameScheduler = {
 // Projects a resumed session's persisted `WireHistoryItem[]` into
 // `TranscriptBlock[]`, pure and side-effect free so the mapping itself is
 // unit-testable without a live store. Mapping:
-//   - `user` message (role "user", including `kind:"compact_summary"` — still
-//     a user-role item, rendered the same way) -> one `user_text` block, text
-//     run through `stripReminderBlocks` (host/core reminder-injection tags
-//     stripped presentation-only, wire payload stays honest); if the message
-//     is entirely a stripped block (trim()-empty remainder), no block is
-//     emitted at all (design slice-P7.9-cut.md §3.5).
+//   - `user` message (role "user") -> one `user_text` block, text run through
+//     `stripReminderBlocks` (host/core reminder-injection tags stripped
+//     presentation-only, wire payload stays honest); if the message is
+//     entirely a stripped block (trim()-empty remainder), no block is emitted
+//     at all (design slice-P7.9-cut.md §3.5).
+//   - `user` message carrying `kind:"compact_summary"` (GitHub #36) -> one
+//     `restored` compaction row holding the summary text, NOT a user bubble:
+//     it is the model's summary of the compacted prefix, not something the
+//     human typed, and the row is where it can be read in full / copied.
 //   - `assistant` message -> one block per part, in part order: a `text` part
 //     becomes `assistant_text`; a `tool_call` part becomes a `tool_call`
 //     block, paired with the `ToolResultPart` of the matching `toolCallId`
@@ -1754,6 +1777,27 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
 
   for (const [index, item] of items.entries()) {
     const message = item.message;
+
+    // GitHub #36: core's compaction installs its summary as a user-role
+    // `compact_summary` item — the ONE durable trace a swap leaves in history.
+    // Projecting it as an ordinary `user_text` bubble (the pre-#36 behaviour)
+    // put the model's summary in the human's voice and left nothing to open;
+    // a `restored` compaction row carries the same text (it starts expanded,
+    // so nothing that used to be visible is hidden) and adds the summary's
+    // own detail view. Marker items other engines write under the same `kind`
+    // (codex truncation markers) are ASSISTANT-role and never reach this
+    // branch, so they keep rendering as ordinary assistant text.
+    if (message.role === "user" && item.kind === "compact_summary") {
+      blocks.push({
+        kind: "compaction",
+        id: `${item.id}:0`,
+        status: "done",
+        summary: message.content,
+        summaryItemId: item.id,
+        restored: true,
+      });
+      continue;
+    }
 
     if (message.role === "user") {
       const text = stripReminderBlocks(message.content);
@@ -2985,7 +3029,27 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
     function hydrateSessionHistory(items: readonly WireHistoryItem[], truncated: boolean): void {
       flushDeltas();
       const existingIds = new Set(get().transcript.map((block) => block.id));
-      const newBlocks = projectHistoryToBlocks(items).filter((block) => !existingIds.has(block.id));
+      // GitHub #36: a compaction already rendered from a LIVE event must not
+      // gain a second, restored row for the same durable trace — identity here
+      // is the summary's history item id, which both paths carry. (The
+      // transcript is normally emptied by `host_ready` before hydration, so
+      // this only guards a repeated hydration onto a live transcript.)
+      const knownSummaryItemIds = new Set(
+        get().transcript.flatMap((block) =>
+          block.kind === "compaction" && block.summaryItemId !== undefined ? [block.summaryItemId] : [],
+        ),
+      );
+      const newBlocks = projectHistoryToBlocks(items).filter((block) => {
+        if (existingIds.has(block.id)) {
+          return false;
+        }
+        return !(
+          block.kind === "compaction" &&
+          block.restored === true &&
+          block.summaryItemId !== undefined &&
+          knownSummaryItemIds.has(block.summaryItemId)
+        );
+      });
       if (newBlocks.length > 0) {
         set((state) => ({ transcript: [...state.transcript, ...newBlocks] }));
       }
@@ -3921,17 +3985,53 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               durationMs: event.durationMs,
               ...(event.postTokens === undefined ? {} : { postTokens: event.postTokens }),
               ...(event.error === undefined ? {} : { error: event.error }),
+              // GitHub #36: what the swap actually left behind. Additive and
+              // independent of `ok` — a failed call still carries the prompt
+              // it sent, and only a successful one carries a summary.
+              ...(event.summary === undefined ? {} : { summary: event.summary }),
+              ...(event.summaryItemId === undefined ? {} : { summaryItemId: event.summaryItemId }),
+              ...(event.prompt === undefined ? {} : { prompt: event.prompt }),
+              ...(event.model === undefined ? {} : { model: event.model }),
             };
-            const openAt = findOpenCompaction(state.transcript);
+            const openAtRaw = findOpenCompaction(state.transcript);
+            // GitHub #36 dedupe: a compaction that reaches this handler a
+            // SECOND time — a reconnect journal replay of the same
+            // compaction_start/end pair — finds its durable trace already in
+            // the transcript, because hydration projected the persisted
+            // `compact_summary` item into a restored row. Patch that one and
+            // drop the stale restored copy, so one compaction stays one row
+            // (and the replayed row keeps the live readings: numbers, model,
+            // duration).
+            const restoredDupAt =
+              event.summaryItemId === undefined
+                ? -1
+                : state.transcript.findIndex(
+                    (block) =>
+                      block.kind === "compaction" &&
+                      block.restored === true &&
+                      block.summaryItemId === event.summaryItemId,
+                  );
+            const base =
+              restoredDupAt === -1
+                ? state.transcript
+                : state.transcript.filter((_, index) => index !== restoredDupAt);
+            // Rebase the open-card index onto the deduped array. The dropped
+            // row is always a FINISHED restored one (restored rows are status
+            // "done"), so it can never be the open card itself — it can only
+            // sit before it.
+            const openAt =
+              openAtRaw !== -1 && restoredDupAt !== -1 && restoredDupAt < openAtRaw
+                ? openAtRaw - 1
+                : openAtRaw;
             return {
               ...(event.ok ? { contextUsage: null } : {}),
               transcript:
                 openAt === -1
                   ? [
-                      ...state.transcript,
+                      ...base,
                       { kind: "compaction" as const, id: `compaction:${compactionSeq++}`, ...outcome },
                     ]
-                  : state.transcript.map((block, index) =>
+                  : base.map((block, index) =>
                       index === openAt && block.kind === "compaction" ? { ...block, ...outcome } : block,
                     ),
               notice: {

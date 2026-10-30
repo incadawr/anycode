@@ -1447,6 +1447,154 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
     expect(cards[0] && "trigger" in cards[0] ? cards[0].trigger : undefined).toBeUndefined();
   });
 
+  it("GitHub #36: a finished card carries the summary, its history-item id, the prompt and the model — and a failed one carries the prompt but NO summary", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_start", trigger: "manual" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: {
+        type: "compaction_end",
+        ok: true,
+        preTokens: 170_669,
+        postTokens: 24_154,
+        durationMs: 4_200,
+        summary: "Session continued. Summary of the earlier conversation:\n\n- Goal: ship #36",
+        summaryItemId: "summary-item-1",
+        prompt: "Write a summary of this session…",
+        model: "glm-5.3",
+      },
+    });
+
+    expect(compactionCards(store)[0]).toMatchObject({
+      status: "done",
+      summary: "Session continued. Summary of the earlier conversation:\n\n- Goal: ship #36",
+      summaryItemId: "summary-item-1",
+      prompt: "Write a summary of this session…",
+      model: "glm-5.3",
+      durationMs: 4_200,
+    });
+
+    // A foreign engine (or an older host) sends none of it: the card must not
+    // invent a summary — the expansion says so honestly instead.
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_start", trigger: "manual" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_end", ok: false, preTokens: 900, durationMs: 30, error: "model unreachable", prompt: "Write a summary…" },
+    });
+    const failed = compactionCards(store)[1]!;
+    expect(failed).toMatchObject({ status: "failed", error: "model unreachable", prompt: "Write a summary…" });
+    expect(failed.summary).toBeUndefined();
+  });
+
+  it("GitHub #36: a reconnect replay of the same compaction patches the row hydration restored instead of adding a second one", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    // 1. Hydration projects the persisted durable trace: a RESTORED row.
+    store.getState().applyHostMessage({
+      type: "session_history",
+      sessionId: "s1",
+      truncated: false,
+      items: [
+        {
+          id: "summary-item-1",
+          createdAt: 10,
+          kind: "compact_summary",
+          message: { role: "user", content: "Session continued. Summary of the earlier conversation:\n\nold" },
+        },
+        { id: "u2", createdAt: 11, message: { role: "user", content: "next" } },
+      ],
+    });
+    expect(compactionCards(store)).toHaveLength(1);
+    expect(compactionCards(store)[0]).toMatchObject({ restored: true, summaryItemId: "summary-item-1" });
+
+    // 2. The journal then replays the LIVE pair for that same compaction.
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "turn-1",
+      event: { type: "compaction_start", trigger: "auto" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "turn-1",
+      event: {
+        type: "compaction_end",
+        ok: true,
+        preTokens: 170_669,
+        postTokens: 24_154,
+        durationMs: 3_000,
+        summary: "Session continued. Summary of the earlier conversation:\n\nold",
+        summaryItemId: "summary-item-1",
+      },
+    });
+
+    // ONE row for one compaction — the restored copy is retired in favour of
+    // the replayed row, which now carries the live readings.
+    const cards = compactionCards(store);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ status: "done", preTokens: 170_669, postTokens: 24_154 });
+    expect(cards[0]?.restored).toBeUndefined();
+  });
+
+  it("GitHub #36: re-hydrating onto a live transcript does not add a restored twin of the compaction already on screen", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_start", trigger: "manual" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: {
+        type: "compaction_end",
+        ok: true,
+        preTokens: 1_000,
+        postTokens: 100,
+        durationMs: 10,
+        summary: "Session continued. Summary of the earlier conversation:\n\nonly one",
+        summaryItemId: "summary-item-live",
+      },
+    });
+
+    // A second `session_history` for the same session (the host resending an
+    // identical snapshot — hydration is documented as idempotent).
+    store.getState().applyHostMessage({
+      type: "session_history",
+      sessionId: "s1",
+      truncated: false,
+      items: [
+        {
+          id: "summary-item-live",
+          createdAt: 10,
+          kind: "compact_summary",
+          message: { role: "user", content: "Session continued. Summary of the earlier conversation:\n\nonly one" },
+        },
+      ],
+    });
+
+    const cards = compactionCards(store);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ id: "compaction:0", status: "done", preTokens: 1_000 });
+  });
+
   it("microcompact raises a notice with the cleared-results/saved-tokens counts", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
@@ -4984,12 +5132,22 @@ describe("desktop store — session_history hydration (task 2.1.5, design §3.3)
     },
   ];
 
-  it("projectHistoryToBlocks maps user/compact_summary/assistant-text/tool_call+result per §3.3, pairing status+modelText and skipping the tool-role item", () => {
+  it("projectHistoryToBlocks maps user/compact_summary/assistant-text/tool_call+result, pairing status+modelText and skipping the tool-role item", () => {
     const blocks = projectHistoryToBlocks(fixtureItems);
 
     expect(blocks).toEqual([
       { kind: "user_text", id: "h1:0", text: "hello", at: expect.any(Number) },
-      { kind: "user_text", id: "h2:0", text: "[compact summary] earlier conversation", at: expect.any(Number) },
+      // GitHub #36: the compacted prefix's summary is NOT rendered in the
+      // human's voice any more — it becomes a `restored` compaction row that
+      // carries the same text and can be opened for the full/copyable view.
+      {
+        kind: "compaction",
+        id: "h2:0",
+        status: "done",
+        summary: "[compact summary] earlier conversation",
+        summaryItemId: "h2",
+        restored: true,
+      },
       { kind: "assistant_text", id: "h3:0", text: "Let me check." },
       {
         kind: "tool_call",
@@ -5225,7 +5383,9 @@ describe("desktop store — session_history hydration (task 2.1.5, design §3.3)
 
     expect(store.getState().transcript.map((b) => b.kind)).toEqual([
       "user_text",
-      "user_text",
+      // GitHub #36: the compact_summary item hydrates as a compaction row, not
+      // as a second bubble in the human's voice.
+      "compaction",
       "assistant_text",
       "tool_call",
     ]);

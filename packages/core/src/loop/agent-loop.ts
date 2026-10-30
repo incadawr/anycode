@@ -2056,6 +2056,12 @@ export class AgentLoop {
         preTokens: result.preTokens,
         postTokens: result.postTokens,
         durationMs: Date.now() - startedAt,
+        // GitHub #36: what replaced the prefix rides the outcome, so the
+        // transcript row can show it without reading the DB.
+        summary: result.summary,
+        summaryItemId: result.summaryItemId,
+        prompt: result.prompt,
+        ...(result.model !== undefined ? { model: result.model } : {}),
       };
     } else {
       yield {
@@ -2064,6 +2070,7 @@ export class AgentLoop {
         preTokens: result.preTokens,
         durationMs: Date.now() - startedAt,
         error: result.error,
+        prompt: result.prompt,
       };
     }
     return result.ok;
