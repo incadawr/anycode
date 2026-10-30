@@ -69,9 +69,12 @@ describe("custom Anthropic-compatible endpoint distinguishes xhigh vs max on the
   }
 
   /**
-   * A custom (non-catalog) Anthropic-compatible endpoint declaring both
-   * `xhigh` and `max` tiers. providerName is not one of the named branches,
-   * so the request exercises the generic anthropic-messages mapping.
+   * A custom (user-added, non-catalog) Anthropic-compatible endpoint
+   * declaring both `xhigh` and `max` tiers. The wiring layer
+   * (buildCliEndpointConfig) sets providerName ONLY from a catalog entry, so
+   * a custom connection carries none — that absence is the gate for the
+   * xhigh/max wire distinction. No named branch matches either, so the
+   * request exercises the generic anthropic-messages mapping.
    */
   function customPort(): { port: AiSdkModelPort; requestFor: (effort: "xhigh" | "max") => ModelRequest } {
     const config: AnthropicEndpointConfig = {
@@ -79,7 +82,35 @@ describe("custom Anthropic-compatible endpoint distinguishes xhigh vs max on the
       baseUrl: "http://127.0.0.1:9", // never dialed — the stub intercepts
       apiKey: "test-key",
       model: "custom-reasoner-1",
-      providerName: "CustomProxy",
+      retry: { maxRetries: 0, stallTimeoutMs: 0 },
+    };
+    return {
+      port: new AiSdkModelPort(config),
+      requestFor: (effort) => ({
+        messages: [{ role: "user", content: "hi" }],
+        tools: [],
+        maxOutputTokens: 4_096,
+        reasoningEffort: effort,
+      }),
+    };
+  }
+
+  /**
+   * Regression gate: a CATALOG anthropic-transport provider without a
+   * dedicated branch (Kimi kimi.com, providerName set by the wiring layer via
+   * matchCatalogEntryByBaseUrl). These worked before the xhigh/max fix and
+   * must keep their exact pre-fix request bytes for every effort — including
+   * max: high's 24_576 budget and NO output_config.effort key. Sending the
+   * new effort field / larger budget to a strict catalog proxy is the
+   * regression this test pins out.
+   */
+  function catalogKimiPort(): { port: AiSdkModelPort; requestFor: (effort: "xhigh" | "max") => ModelRequest } {
+    const config: AnthropicEndpointConfig = {
+      transport: "anthropic-messages",
+      baseUrl: "http://127.0.0.1:9", // never dialed — the stub intercepts
+      apiKey: "test-key",
+      model: "k3",
+      providerName: "Kimi (kimi.com subscription)",
       retry: { maxRetries: 0, stallTimeoutMs: 0 },
     };
     return {
@@ -131,4 +162,18 @@ describe("custom Anthropic-compatible endpoint distinguishes xhigh vs max on the
     expect(captured[1]!.body.max_tokens).toBe(32_000 + 33_024);
     expect(captured[1]!.body.max_tokens as number).toBeGreaterThan(captured[0]!.body.max_tokens as number);
   });
+
+  it("catalog Kimi/MiMo-class providers keep their exact pre-fix bytes for max: high's budget, no effort field", async () => {
+    stubFetch();
+    const { port, requestFor } = catalogKimiPort();
+
+    await drain(port.streamText(requestFor("max")));
+
+    const body = captured[0]!.body;
+    // Pre-fix wire bytes: NO output_config.effort and high's 24_576 budget.
+    expect(body.output_config).toBeUndefined();
+    expect(body.thinking).toMatchObject({ type: "enabled", budget_tokens: 24_576 });
+    expect(body.max_tokens).toBe(24_576 + 25_600);
+  });
+
 });
