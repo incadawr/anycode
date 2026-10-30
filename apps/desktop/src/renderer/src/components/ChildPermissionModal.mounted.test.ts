@@ -10,6 +10,8 @@ import { ConnectedChildPermissionModal } from "./ChildPermissionModal.js";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+vi.spyOn(document, "hasFocus").mockReturnValue(true);
+
 HTMLDialogElement.prototype.showModal = function () { this.open = true; };
 HTMLDialogElement.prototype.close = function () { this.open = false; };
 
@@ -103,10 +105,45 @@ it("keeps the expiry visible when the child finishes immediately", async () => {
       childRelationStore.getState().markChildGone("tab-one", child.getState().unattended);
     });
     expect(container.textContent).toContain("an unanswered request expired before this subagent finished");
-    expect(container.querySelector("button")).toBeNull();
+    await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+    expect(container.textContent).not.toContain("an unanswered request expired");
   } finally {
     await act(async () => root.unmount());
     childRelationStore.getState().reset();
     lookup.mockRestore();
+  }
+});
+
+
+it("reports visibility only while the window is visible and focused", async () => {
+  const parent = createDesktopStore();
+  const child = createDesktopStore();
+  parent.getState().applyHostMessage({ type: "host_ready", workspace: "/w", mode: "build", model: "m", sessionId: "parent" });
+  child.getState().applyHostMessage({ type: "host_ready", workspace: "/w", mode: "build", model: "m", sessionId: "one" });
+  child.getState().applyHostMessage({ type: "permission_request", requestId: "ask", toolName: "Bash", input: {}, mode: "build", metadata: { name: "Bash", description: "run", readOnly: false, destructive: false, riskLevel: "medium", sideEffectScope: "process" } });
+  const lookup = vi.spyOn(tabRegistry, "getStore").mockReturnValue(child);
+  const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+  const focus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+  const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+  childRelationStore.getState().registerChild("parent", "call", "child", "one");
+  const root = createRoot(document.createElement("div"));
+  const expected = (visible: boolean) => ({ type: "approval_visibility", requestId: "ask", visible });
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "parent-tab", store: parent } }, createElement(ConnectedChildPermissionModal))));
+    expect(send).toHaveBeenLastCalledWith("child", expected(false));
+    focus.mockReturnValue(true);
+    window.dispatchEvent(new Event("focus"));
+    expect(send).toHaveBeenLastCalledWith("child", expected(true));
+    hidden.mockReturnValue(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(send).toHaveBeenLastCalledWith("child", expected(false));
+    hidden.mockReturnValue(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(send).toHaveBeenLastCalledWith("child", expected(true));
+    window.dispatchEvent(new Event("blur"));
+    expect(send).toHaveBeenLastCalledWith("child", expected(false));
+  } finally {
+    await act(async () => root.unmount());
+    childRelationStore.getState().reset(); lookup.mockRestore(); send.mockRestore(); hidden.mockRestore(); focus.mockReturnValue(true);
   }
 });

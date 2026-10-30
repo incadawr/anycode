@@ -630,6 +630,19 @@ export function createTabRegistry(
           // (undrained, for a child) renderer prompt queue.
           entry.store.getState().setChildSurface();
         } else {
+          // Enqueue is the submission boundary for queued user messages. Clear
+          // before the synchronous drainer runs, and leave system reports alone.
+          const store = entry.store;
+          const enqueuePrompt = store.getState().enqueuePrompt;
+          store.setState({
+            enqueuePrompt(item) {
+              if (item.origin === undefined) {
+                const sessionId = store.getState().sessionId;
+                if (sessionId) childRelationStore.getState().dismissFinishedApprovals(sessionId);
+              }
+              return enqueuePrompt(item);
+            },
+          });
           tabsStore.getState().addTab({ tabId, workspace, ...(openedByAgent === true ? { openedByAgent: true as const } : {}) });
           if (agentTitles.has(tabId)) tabsStore.getState().setTitle(tabId, agentTitles.get(tabId)!);
           // R10 status mirror (slice-R10-cut §2.2): ONE store-lifetime
@@ -796,6 +809,10 @@ export function createTabRegistry(
       if (!entry?.connection) {
         console.warn("[tab-registry] dropping outgoing message, no active connection for tab", tabId, message);
         return;
+      }
+      if (!entry.isChild && (message.type === "user_message" || message.type === "steer_message")) {
+        const sessionId = entry.store.getState().sessionId;
+        if (sessionId) childRelationStore.getState().dismissFinishedApprovals(sessionId);
       }
       entry.connection.send(message);
     },
