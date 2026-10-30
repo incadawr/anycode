@@ -1394,23 +1394,20 @@ describe("SqlitePersistenceAdapter", () => {
     expect(records.map((record) => record.prompt)).toEqual(["prompt one", "prompt two"]);
   });
 
-  it("truncateCompactionRecords drops exactly what came after the rewind cutoff, and keeps the rest (GitHub #36 review)", async () => {
+  it("discardCompactionRecords drops exactly the named rows and keeps the rest (GitHub #36 review)", async () => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
     const session = await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
 
-    for (const [id, createdAt] of [["before", 100], ["boundary", 200], ["after", 300], ["later", 400]] as const) {
+    for (const [id, createdAt] of [["kept", 100], ["discarded-a", 300], ["discarded-b", 400]] as const) {
       await adapter.appendCompactionRecord(session.id, { id, createdAt, ok: true, summary: `summary of ${id}` });
     }
 
-    await adapter.truncateCompactionRecords(session.id, 200);
+    await adapter.discardCompactionRecords(session.id, ["discarded-a", "discarded-b"]);
 
-    // Strictly-after only: a record stamped in the same millisecond as the
-    // checkpoint MAY describe a swap the snapshot already held, and keeping a
-    // harmless visible row beats resurrecting a discarded summary.
-    expect((await adapter.listCompactionRecords(session.id)).map((record) => record.id)).toEqual([
-      "before",
-      "boundary",
-    ]);
+    expect((await adapter.listCompactionRecords(session.id)).map((record) => record.id)).toEqual(["kept"]);
+    // An empty id list is a no-op, not a full-table delete.
+    await adapter.discardCompactionRecords(session.id, []);
+    expect((await adapter.listCompactionRecords(session.id)).map((record) => record.id)).toEqual(["kept"]);
   });
 
   it("a truncation is DURABLE — a reopened database does not resurrect the rewound-away records", async () => {
@@ -1421,7 +1418,7 @@ describe("SqlitePersistenceAdapter", () => {
     await first.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
     await first.appendCompactionRecord("s1", { id: "kept", createdAt: 100, ok: true, summary: "kept summary" });
     await first.appendCompactionRecord("s1", { id: "rewound", createdAt: 300, ok: true, summary: "discarded summary" });
-    await first.truncateCompactionRecords("s1", 200);
+    await first.discardCompactionRecords("s1", ["rewound"]);
     await first.close();
 
     const reopened = new SqlitePersistenceAdapter(dbPath);
@@ -1438,7 +1435,7 @@ describe("SqlitePersistenceAdapter", () => {
     await adapter.appendCompactionRecord(one.id, { id: "a", createdAt: 100, ok: true });
     await adapter.appendCompactionRecord(two.id, { id: "b", createdAt: 300, ok: true });
 
-    await adapter.truncateCompactionRecords(one.id, 50);
+    await adapter.discardCompactionRecords(one.id, ["a"]);
 
     expect(await adapter.listCompactionRecords(one.id)).toEqual([]);
     expect((await adapter.listCompactionRecords(two.id)).map((record) => record.id)).toEqual(["b"]);

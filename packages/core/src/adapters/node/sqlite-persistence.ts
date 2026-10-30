@@ -1349,21 +1349,26 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   }
 
   /**
-   * GitHub #36: drops every record of this session created STRICTLY AFTER
-   * `checkpointAt` (epoch ms) — the rewind cutoff. A conversation rewind
-   * discards the turns (and the compactions) behind the checkpoint; leaving
-   * their records behind would resurrect summaries of exactly the text the
-   * user just threw away, on the next reconnect AND the next reopen.
+   * GitHub #36: drops the named records of this session — the ones a
+   * conversation rewind discarded. The caller decides WHICH via
+   * `compactionRecordsDiscardedByRewind` (packages/core/src/types/compaction.ts),
+   * because that decision is about the checkpoint's conversation state, not
+   * about a clock: an automatic checkpoint is created lazily, at a turn's
+   * first write-effect tool, while the snapshot it holds is the history from
+   * BEFORE that turn — so a compaction earlier in the same turn is newer than
+   * the snapshot but older than the checkpoint row.
    *
-   * Strictly-after, not at-or-after: the cutoff is the checkpoint's own
-   * creation stamp, and a record stamped in the same millisecond may still
-   * describe a swap the checkpoint snapshot already contained. Keeping that
-   * one is the safe direction — a spurious row is visible and harmless, a
-   * resurrected summary is not.
+   * Ids deleted here are gone for good: the row (and the summary of the
+   * discarded conversation in it) must not come back on the next reconnect or
+   * the next reopen.
    */
-  async truncateCompactionRecords(sessionId: string, checkpointAt: number): Promise<void> {
+  async discardCompactionRecords(sessionId: string, ids: readonly string[]): Promise<void> {
+    if (ids.length === 0) return;
     this.transaction((tx) => {
-      tx.prepare("DELETE FROM compaction_records WHERE session_id = ? AND created_at > ?").run(sessionId, checkpointAt);
+      const placeholders = ids.map(() => "?").join(", ");
+      tx.prepare(
+        `DELETE FROM compaction_records WHERE session_id = ? AND record_id IN (${placeholders})`,
+      ).run(sessionId, ...ids);
     });
   }
 

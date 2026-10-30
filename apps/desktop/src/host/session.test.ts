@@ -104,6 +104,7 @@ import { ClaudeApprovalBridge } from "./engines/claude/approval-bridge.js";
 import { ClaudeModelCatalog } from "./engines/claude/models.js";
 import { findClaudePreset } from "./engines/claude/presets.js";
 import type { ClaudeStreamMessage } from "./engines/claude/protocol.js";
+import { CompactionRecordLog } from "./compaction-records.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import {
   MANUAL_COMPACTION_TURN_ID,
@@ -5728,7 +5729,7 @@ describe("Session — shutdown() admission funnel: exit_worktree / rewind_reques
       list: async () => [],
       rewind: async () => {
         await gate;
-        return { ok: true, safetyCheckpointId: "safety-1", restoredPaths: 0, historyItems: null, checkpointAt: 1_000 };
+        return { ok: true, safetyCheckpointId: "safety-1", restoredPaths: 0, historyItems: null };
       },
     };
     const h = createHarness({ steps: [], checkpointsSeam: seam });
@@ -7516,83 +7517,144 @@ describe("Session — manual compaction wire (TASK.146)", () => {
     }
   });
 
-  it("GitHub #36 review: a rewind to BEFORE a compaction drops its record — the row and its summary never come back on reconnect or reopen", async () => {
-    // A durable store + live seam over ONE array: "the cache" and "storage" are
-    // the same rows here, so the assertions below cover both halves of the fix.
-    const records: CompactionRecord[] = [];
-    const dropAfter = (cutoff: number): void => {
-      for (let i = records.length - 1; i >= 0; i -= 1) if (records[i]!.createdAt > cutoff) records.splice(i, 1);
+  /**
+   * An in-memory stand-in for the SQLite record store, and a REAL
+   * `CompactionRecordLog` over it, so the rewind tests exercise the production
+   * decision (which records a rewind discards) instead of a hand-rolled copy.
+   * `truncateCompactionRecords` is this store's compatibility arm for a
+   * creation-time cutoff — the rule this whole fix replaces — so the same test
+   * states the old behaviour's failure honestly.
+   */
+  function durableCompactionRecords(initial: CompactionRecord[] = []) {
+    const rows = new Map(initial.map((record) => [record.id, record]));
+    const store = {
+      rows,
+      appendCompactionRecord: async (_sessionId: string, record: CompactionRecord) => {
+        rows.set(record.id, record);
+      },
+      listCompactionRecords: async () => [...rows.values()].sort((left, right) => left.createdAt - right.createdAt),
+      discardCompactionRecords: async (_sessionId: string, ids: readonly string[]) => {
+        for (const id of ids) rows.delete(id);
+      },
+      truncateCompactionRecords: async (_sessionId: string, checkpointAt: number) => {
+        for (const [id, record] of [...rows]) if (record.createdAt > checkpointAt) rows.delete(id);
+      },
     };
-    // The pre-compaction checkpoint sits at a FIXED instant in the past; the
-    // compaction below is stamped "now", so it is strictly newer.
-    const checkpointAt = Date.now() - 60_000;
+    return { store, log: new CompactionRecordLog(store, "s1") };
+  }
+
+  it("GitHub #36 review 3: rewinding to a LAZILY created checkpoint discards a compaction that ran earlier in the same turn", async () => {
+    // The owner-visible shape this pins: an automatic checkpoint is created at
+    // the turn's first write-effect tool, AFTER the auto compaction that ran at
+    // the top of that turn, but the snapshot it holds is the history from
+    // BEFORE the turn. Its creation time is therefore NEWER than the compaction
+    // record while its conversation is OLDER — so a timestamp cutoff keeps the
+    // record and resurrects a summary of the pre-turn conversation. The cutoff
+    // has to be the checkpoint's conversation state.
+    const turnStartHistory: HistoryItem[] = [
+      { id: "pre-1", createdAt: 1, message: { role: "user", content: "first turn" } },
+      { id: "pre-2", createdAt: 2, message: { role: "assistant", content: [{ type: "text", text: "answered" }] } },
+    ];
+    const { store, log } = durableCompactionRecords();
+    const checkpointCreatedAt = Date.now() + 60_000;
     const seam: SessionOptions["checkpoints"] = {
       list: async () => [],
       rewind: async () => ({
-        ok: true,
+        ok: true as const,
         safetyCheckpointId: "safety-1",
         restoredPaths: 0,
-        historyItems: [
-          { id: "kept-1", createdAt: 1, message: { role: "user", content: "kept turn" } },
-        ],
-        checkpointAt,
+        historyItems: turnStartHistory,
+        checkpointAt: checkpointCreatedAt,
       }),
     };
     const h = createHarness({
       steps: [textStep("Summary of the earlier conversation.")],
       checkpointsSeam: seam,
-      compactionRecords: {
-        record: (entry) => { records.push(entry); },
-        list: () => records,
-        flush: () => Promise.resolve(),
-        truncate: dropAfter,
-      },
+      compactionRecords: log,
     });
     try {
       h.engine.replaceHistory!(seedManualCompactionHistory());
       h.send({ type: "ui_ready" });
       await h.waitFor(isHostReady);
 
+      // The compaction happens FIRST — earlier in the turn this checkpoint is
+      // created during.
       h.send({ type: "compact_request" });
       const end = await h.waitFor(agentEventOf("compaction_end"));
       expect((end.event as Extract<WireAgentEvent, { type: "compaction_end" }>).ok).toBe(true);
-      expect(records).toHaveLength(1);
+      expect(log.list()).toHaveLength(1);
+      await log.flush();
+      const record = log.list()[0]!;
+      // Newer than every item the checkpoint restores, older than the
+      // checkpoint row itself: exactly the window a timestamp cutoff misses.
+      expect(record.createdAt).toBeGreaterThan(Math.max(...turnStartHistory.map((item) => item.createdAt)));
+      expect(record.createdAt).toBeLessThan(checkpointCreatedAt);
 
-      // Rewind the CONVERSATION to before that compaction.
       h.send({ type: "rewind_request", requestId: "rw1", checkpointId: "cp-1", scope: "conversation" });
       const res = await h.waitFor(isRewindResult);
       expect(res.ok).toBe(true);
       expect(res.conversationRestored).toBe(true);
 
-      // The record is gone from the cache...
-      expect(records).toEqual([]);
-      // ...and the re-handshake that follows does not ship it. (Delivery over
-      // the port is asynchronous, so wait for the frame that comes AFTER the
-      // rewind rather than reading the log at the instant rewind_result lands.)
+      // THE claim: the record of the compaction this rewind discarded is gone —
+      // from the live cache, from the handshake that follows, and from storage,
+      // so the summary of the thrown-away conversation cannot come back.
+      expect(log.list()).toEqual([]);
       const rewindAt = h.received.indexOf(res);
-      await h.waitUntil(() =>
-        h.received.slice(rewindAt).some((message) => message.type === "session_history"),
-      );
+      await h.waitUntil(() => h.received.slice(rewindAt).some((message) => message.type === "session_history"));
       const historyAfter = h.received
         .slice(rewindAt)
         .filter((message): message is Extract<HostToUiMessage, { type: "session_history" }> => message.type === "session_history")
         .at(-1)!;
-      expect(historyAfter.items.map((item) => item.id)).toEqual(["kept-1"]);
+      expect(historyAfter.items.map((item) => item.id)).toEqual(["pre-1", "pre-2"]);
       expect(historyAfter.compactions).toBeUndefined();
-      const mark = h.received.length;
+      await log.flush();
+      expect([...store.rows.keys()]).toEqual([]);
+    } finally {
+      h.close();
+    }
+  });
 
-      // A fresh reconnect (the renderer dropping and re-attaching) agrees.
+  it("GitHub #36 review 3: a compaction the rewound-to state SURVIVES keeps its row — its summary item is part of the restored history", async () => {
+    // Rewind to a checkpoint taken AFTER a compaction: the summary item it
+    // restored IS that compaction's output, so the row must not be discarded
+    // just because it is newer than the older items around it.
+    const summaryItem: HistoryItem = {
+      id: "summary-1",
+      createdAt: 5,
+      kind: "compact_summary",
+      message: { role: "user", content: "Session continued. Summary of the earlier conversation:\n\nkept" },
+    };
+    const { log } = durableCompactionRecords([
+      { id: "rec-kept", createdAt: 6, ok: true, summaryItemId: "summary-1", summary: "kept summary" },
+    ]);
+    // The boot path (createCompactionRecordLog) reads storage before the
+    // session exists; do the same here so the row is the RESUMED one.
+    await log.load();
+    const seam: SessionOptions["checkpoints"] = {
+      list: async () => [],
+      rewind: async () => ({
+        ok: true,
+        safetyCheckpointId: "safety-1",
+        restoredPaths: 0,
+        historyItems: [summaryItem, { id: "tail", createdAt: 7, message: { role: "user", content: "next" } }],
+      }),
+    };
+    const h = createHarness({ steps: [], checkpointsSeam: seam, compactionRecords: log });
+    try {
       h.send({ type: "ui_ready" });
-      await h.waitUntil(() => h.received.slice(mark).some((message) => message.type === "session_history"));
-      const reconnected = h.received
-        .slice(mark)
+      await h.waitFor(isHostReady);
+      h.send({ type: "rewind_request", requestId: "rw1", checkpointId: "cp-1", scope: "conversation" });
+      const res = await h.waitFor(isRewindResult);
+      expect(res.ok).toBe(true);
+
+      expect(log.list().map((entry) => entry.id)).toEqual(["rec-kept"]);
+      const rewindAt = h.received.indexOf(res);
+      await h.waitUntil(() => h.received.slice(rewindAt).some((message) => message.type === "session_history"));
+      const historyAfter = h.received
+        .slice(rewindAt)
         .filter((message): message is Extract<HostToUiMessage, { type: "session_history" }> => message.type === "session_history")
         .at(-1)!;
-      expect(reconnected.compactions).toBeUndefined();
-
-      // And so does a REOPEN: the durable rows are gone, so a fresh host reads
-      // back nothing to resurrect.
-      expect(records).toEqual([]);
+      expect(historyAfter.compactions?.map((entry) => entry.id)).toEqual(["rec-kept"]);
     } finally {
       h.close();
     }

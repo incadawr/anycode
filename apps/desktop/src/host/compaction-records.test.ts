@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { COMPACTION_RECORD_MAX_PER_SESSION, type CompactionRecord } from "@anycode/core";
+import { COMPACTION_RECORD_MAX_PER_SESSION, type CompactionRecord, type HistoryItem } from "@anycode/core";
 import { CompactionRecordLog, type CompactionRecordStore } from "./compaction-records.js";
 
 /** In-memory stand-in for the SQLite store's two methods. */
@@ -14,20 +14,30 @@ function fakeStore(initial: CompactionRecord[] = [], failWrites = false) {
       if (!order.includes(record.id)) order.push(record.id);
     },
     listCompactionRecords: async () => order.map((id) => rows.get(id)!),
-    truncateCompactionRecords: async (_sessionId, checkpointAt) => {
+    discardCompactionRecords: async (_sessionId, ids) => {
       if (failWrites) throw new Error("disk on fire");
-      for (const [id, entry] of [...rows]) {
-        if (entry.createdAt > checkpointAt) {
-          rows.delete(id);
-          order.splice(order.indexOf(id), 1);
-        }
+      for (const id of ids) {
+        rows.delete(id);
+        const at = order.indexOf(id);
+        if (at !== -1) order.splice(at, 1);
       }
     },
   };
   return store;
 }
 
-const record = (id: string, createdAt: number): CompactionRecord => ({ id, createdAt, ok: true });
+const record = (id: string, createdAt: number, extra: Partial<CompactionRecord> = {}): CompactionRecord => ({
+  id,
+  createdAt,
+  ok: true,
+  ...extra,
+});
+
+/** The history a checkpoint restores: what the cutoff is measured against. */
+const restored = (latest: number): HistoryItem[] => [
+  { id: "kept-1", createdAt: 1, message: { role: "user", content: "kept" } },
+  { id: "kept-2", createdAt: latest, message: { role: "assistant", content: [{ type: "text", text: "kept" }] } },
+];
 
 describe("CompactionRecordLog (GitHub #36)", () => {
   it("loads what storage kept, so the very first handshake already knows the session's compactions", async () => {
@@ -45,7 +55,7 @@ describe("CompactionRecordLog (GitHub #36)", () => {
       listCompactionRecords: async () => {
         throw new Error("database locked");
       },
-      truncateCompactionRecords: async () => undefined,
+      discardCompactionRecords: async () => undefined,
     };
     const errors: unknown[] = [];
     const log = new CompactionRecordLog(store, "s1", (error) => errors.push(error));
@@ -83,12 +93,12 @@ describe("CompactionRecordLog (GitHub #36)", () => {
     expect(log.list()[0]?.id).toBe("r-3");
   });
 
-  it("truncate drops everything AFTER the cutoff from the cache at once, and from storage behind the queue", async () => {
+  it("truncate drops the records of the discarded conversation from the cache at once, and from storage behind the queue", async () => {
     const store = fakeStore([record("kept", 100), record("discarded", 300)]);
     const log = new CompactionRecordLog(store, "s1");
     await log.load();
 
-    log.truncate(200);
+    log.truncate(restored(200));
 
     // The very next (synchronous) handshake already excludes the discarded row
     // — a reconnect must not ship a summary of the rewound-away conversation.
@@ -98,28 +108,38 @@ describe("CompactionRecordLog (GitHub #36)", () => {
     expect([...store.rows.keys()]).toEqual(["kept"]);
   });
 
-  it("truncate keeps a record stamped at the cutoff itself (same-millisecond is not proof it was after the snapshot)", async () => {
-    const store = fakeStore([record("boundary", 200), record("after", 201)]);
+  it("truncate measures the checkpoint's HISTORY, not a clock: a compaction earlier in the same turn (before a lazily created checkpoint) is discarded", async () => {
+    // The checkpoint was created at t=1000 (lazily, at the turn's first
+    // write-effect tool) but its snapshot is the history from BEFORE the turn
+    // (newest item at t=200). The auto compaction ran at t=400, INSIDE that
+    // turn: newer than the snapshot, older than the checkpoint row. A
+    // timestamp cutoff would keep it and resurrect the pre-turn summary.
+    const store = fakeStore([record("pre-turn-compaction", 400, { summary: "summary of the pre-turn conversation" })]);
     const log = new CompactionRecordLog(store, "s1");
     await log.load();
 
-    log.truncate(200);
+    log.truncate(restored(200));
     await log.flush();
 
-    expect(log.list().map((entry) => entry.id)).toEqual(["boundary"]);
-    expect([...store.rows.keys()]).toEqual(["boundary"]);
+    expect(log.list()).toEqual([]);
+    expect([...store.rows.keys()]).toEqual([]);
   });
 
-  it("a failed truncate write is reported and swallowed like any other record write", async () => {
-    const errors: unknown[] = [];
-    const log = new CompactionRecordLog(fakeStore([record("a", 300)], true), "s1", (error) => errors.push(error));
+  it("truncate keeps a compaction whose own summary survived the rewind, whatever its timestamp", async () => {
+    // Rewind to a checkpoint taken AFTER that compaction: its summary item is
+    // part of the restored history, so the row still describes it.
+    const store = fakeStore([record("survived", 900, { summaryItemId: "summary-1" })]);
+    const log = new CompactionRecordLog(store, "s1");
+    await log.load();
 
-    log.truncate(200);
+    log.truncate([
+      { id: "summary-1", createdAt: 500, message: { role: "user", content: "Session continued. Summary…" } },
+      { id: "later", createdAt: 950, message: { role: "user", content: "kept" } },
+    ]);
+    await log.flush();
 
-    await expect(log.flush()).resolves.toBeUndefined();
-    expect(errors).toHaveLength(1);
-    // The cache still honours the cutoff: the current process never shows it.
-    expect(log.list()).toEqual([]);
+    expect(log.list().map((entry) => entry.id)).toEqual(["survived"]);
+    expect([...store.rows.keys()]).toEqual(["survived"]);
   });
 
   it("a failed write is reported and swallowed — a compaction row must never fail the turn that made it", async () => {

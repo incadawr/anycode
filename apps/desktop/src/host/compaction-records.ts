@@ -22,22 +22,27 @@
  *   fills that cache once at boot; `flush()` lets shutdown drain the tail.
  */
 
-import type { CompactionRecord, SqlitePersistenceAdapter } from "@anycode/core";
-import { COMPACTION_RECORD_MAX_PER_SESSION } from "@anycode/core";
+import type { CompactionRecord, HistoryItem, SqlitePersistenceAdapter } from "@anycode/core";
+import { COMPACTION_RECORD_MAX_PER_SESSION, compactionRecordsDiscardedByRewind } from "@anycode/core";
 
 /** What Session needs: a live cache for the handshake, fire-and-forget writes for events. */
 export interface CompactionRecordSeam {
   /** Records one outcome; never throws, never blocks the caller. */
   record(record: CompactionRecord): void;
   /**
-   * Drops every record created STRICTLY AFTER `checkpointAt` — the rewind
-   * cutoff (GitHub #36 review). A conversation rewind discards the turns behind
-   * the checkpoint, so their compaction rows must go too: otherwise the row
-   * (and the summary of the thrown-away conversation in it) comes back on the
-   * next reconnect and the next reopen. Removes from the live cache AND from
-   * storage, so it is gone for good.
+   * Drops the records a conversation rewind discarded, judged against the
+   * HISTORY THE CHECKPOINT RESTORES rather than against a clock (GitHub #36
+   * review 3): an automatic checkpoint is created lazily — at a turn's first
+   * write-effect tool — while the snapshot it holds is the history from before
+   * that turn, so a compaction earlier in the SAME turn is newer than the
+   * snapshot yet older than the checkpoint row. See
+   * `compactionRecordsDiscardedByRewind` for the exact rule.
+   *
+   * The live cache is filtered SYNCHRONOUSLY (the post-rewind handshake is sent
+   * in the same breath and must not ship a discarded row); storage is dropped
+   * behind the same serialized queue, so a later reopen agrees.
    */
-  truncate(checkpointAt: number): void;
+  truncate(restoredHistory: readonly HistoryItem[]): void;
   /** The kept records, oldest first — the live cache, safe to read synchronously. */
   list(): readonly CompactionRecord[];
   /** Resolves once every queued write has settled (shutdown ordering). */
@@ -48,7 +53,7 @@ export interface CompactionRecordSeam {
 export interface CompactionRecordStore {
   appendCompactionRecord(sessionId: string, record: CompactionRecord): Promise<void>;
   listCompactionRecords(sessionId: string): Promise<CompactionRecord[]>;
-  truncateCompactionRecords(sessionId: string, checkpointAt: number): Promise<void>;
+  discardCompactionRecords(sessionId: string, ids: readonly string[]): Promise<void>;
 }
 
 export class CompactionRecordLog implements CompactionRecordSeam {
@@ -88,15 +93,18 @@ export class CompactionRecordLog implements CompactionRecordSeam {
   }
 
   /**
-   * Rewind cutoff. The cache is filtered SYNCHRONOUSLY so the very next
-   * handshake (the post-rewind `session_history`, sent in the same breath)
-   * already excludes the discarded rows; storage is deleted behind the same
-   * serialized queue so a later reopen agrees.
+   * Rewind cutoff, expressed as the state the rewind restores: the cache is
+   * filtered SYNCHRONOUSLY so the very next handshake already excludes the
+   * discarded rows, and storage drops the same ids behind the serialized queue
+   * so a later reopen agrees.
    */
-  truncate(checkpointAt: number): void {
-    this.cache = this.cache.filter((record) => record.createdAt <= checkpointAt);
+  truncate(restoredHistory: readonly HistoryItem[]): void {
+    const discarded = new Set(compactionRecordsDiscardedByRewind(this.cache, restoredHistory));
+    if (discarded.size === 0) return;
+    this.cache = this.cache.filter((record) => !discarded.has(record.id));
+    const ids = [...discarded];
     this.writes = this.writes
-      .then(() => this.store.truncateCompactionRecords(this.sessionId, checkpointAt))
+      .then(() => this.store.discardCompactionRecords(this.sessionId, ids))
       .catch((error: unknown) => {
         this.onError(error);
       });

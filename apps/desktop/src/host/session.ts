@@ -3684,19 +3684,23 @@ export class Session {
         });
         return;
       }
-      const conversationRestored = res.historyItems !== null;
-      if (conversationRestored) {
-        // GitHub #36 review: the rewind discards everything after the
-        // checkpoint, and this session's compaction rows are records OF that
-        // timeline — the ones stamped after it describe swaps (and carry
-        // summaries) of the conversation being thrown away. Drop them from the
-        // live cache and from storage BEFORE the re-handshake below, so the
-        // truncated `session_history` cannot ship them and a later reopen
-        // cannot restore them.
-        this.compactionRecords?.truncate(res.checkpointAt);
+      const restoredHistory = res.historyItems;
+      const conversationRestored = restoredHistory !== null;
+      if (restoredHistory !== null) {
+        // GitHub #36 review 3: the compaction rows are records OF this
+        // conversation, so a rewind must drop the ones belonging to the part it
+        // throws away. What decides that is the STATE the checkpoint restores
+        // (`res.historyItems`), never the checkpoint row's creation time: an
+        // automatic checkpoint is created lazily at a turn's first write-effect
+        // tool while its snapshot holds the history from BEFORE that turn, so a
+        // compaction earlier in the same turn is newer than the snapshot yet
+        // older than the row. Dropped from the live cache AND storage BEFORE
+        // the re-handshake below, so neither the truncated `session_history` nor
+        // a later reopen can bring a discarded summary back.
+        this.compactionRecords?.truncate(restoredHistory);
         // Atomic swap feeding the write-behind sink (truncates persistence too),
         // exactly the CLI's /rewind conversation restore.
-        this.engine.replaceHistory(res.historyItems!);
+        this.engine.replaceHistory(restoredHistory);
         this.updateContextUsage(null);
         // drift-flag-1: rebuild the re-handshake snapshot from the TRUNCATED
         // history and drop the pre-rewind replay ring BEFORE re-sending, so a

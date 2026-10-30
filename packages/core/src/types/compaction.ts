@@ -81,3 +81,48 @@ export function boundCompactionRecord(record: CompactionRecord): CompactionRecor
     ...(record.prompt !== undefined ? { prompt: clamp(record.prompt) } : {}),
   };
 }
+
+/**
+ * Which compaction records a conversation REWIND must discard (GitHub #36
+ * review 3).
+ *
+ * The cutoff CANNOT be the checkpoint's creation time. An automatic checkpoint
+ * is created LAZILY — at the first write-effect tool of a turn — but its
+ * conversation snapshot is the history from BEFORE that turn. So a compaction
+ * that ran earlier in the same turn (auto compaction happens at the top of a
+ * turn iteration) is newer than the snapshot yet older than the checkpoint
+ * row, and a timestamp cutoff would keep its record and resurrect a summary of
+ * the pre-turn conversation.
+ *
+ * The rule is therefore stated against the checkpoint's own HISTORY, which is
+ * exactly what a rewind restores:
+ *  - a record whose summary item is still in that history SURVIVED the rewind
+ *    (its text is literally in the restored state) and is kept, whatever its
+ *    timestamp;
+ *  - otherwise a record is discarded when it is not older than every restored
+ *    item — i.e. it happened at or after the checkpoint's captured state. A
+ *    failed or skipped record carries no summary item, so this is the only
+ *    signal it has, and it is the honest one: the attempt belongs to a turn
+ *    the rewind threw away.
+ *
+ * Returns the ids to discard (bounded by the caller's retention cap).
+ */
+export function compactionRecordsDiscardedByRewind(
+  records: readonly CompactionRecord[],
+  restoredHistory: readonly { id: string; createdAt: number }[],
+): string[] {
+  let cutoff = 0;
+  const restoredIds = new Set<string>();
+  for (const item of restoredHistory) {
+    restoredIds.add(item.id);
+    if (item.createdAt > cutoff) cutoff = item.createdAt;
+  }
+  return records
+    .filter((record) => {
+      if (record.summaryItemId !== undefined && restoredIds.has(record.summaryItemId)) {
+        return false;
+      }
+      return record.createdAt >= cutoff && record.createdAt > 0;
+    })
+    .map((record) => record.id);
+}

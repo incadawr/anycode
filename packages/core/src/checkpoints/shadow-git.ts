@@ -50,14 +50,15 @@ export type RewindResult =
       ok: true;
       safetyCheckpointId: string;
       restoredPaths: number | null;
-      historyItems: HistoryItem[] | null;
       /**
-       * The target checkpoint's own creation time (epoch ms). Callers that keep
-       * durable PER-EVENT records outside the history (compaction rows) use it
-       * as the rewind cutoff: everything recorded strictly after this instant
-       * belongs to the conversation this rewind is discarding.
+       * The conversation state this checkpoint restores (null for a files-only
+       * rewind). This — NOT the checkpoint row's creation time — is what a
+       * caller keeping per-event records outside the history (compaction rows)
+       * must measure against: an automatic checkpoint is created lazily, at a
+       * turn's first write-effect tool, while the snapshot it holds is the
+       * history from before that turn.
        */
-      checkpointAt: number;
+      historyItems: HistoryItem[] | null;
     }
   | { ok: false; reason: string };
 
@@ -317,7 +318,7 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
       historyItems = JSON.parse(record.historyJson) as HistoryItem[];
     }
 
-    return { ok: true, safetyCheckpointId: safety.id, restoredPaths, historyItems, checkpointAt: record.createdAt };
+    return { ok: true, safetyCheckpointId: safety.id, restoredPaths, historyItems };
   }
 }
 
