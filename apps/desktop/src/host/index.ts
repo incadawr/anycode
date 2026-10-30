@@ -465,6 +465,7 @@ import { ENV_CLAUDE_BIN } from "../shared/engines.js";
 import { resolveClaudeConfigDir } from "../shared/claude-config-dir.js";
 import { resumeClaudeEngine, startClaudeEngine, type ClaudeInitMcpServerStatus } from "./engines/claude/claude-engine.js";
 import { prepareEngineMcpForward, missingForwardedMcpServerNames } from "./engines/mcp-forward-boot.js";
+import { probeMcpServerSpawn } from "./engines/claude/mcp-spawn-probe.js";
 import { parseClaudeEngineArgs } from "./engines/claude/draft-args.js";
 import { bridgeCallableCatalog, catalogFromProfiles } from "./engines/claude/bridge-catalog.js";
 import { createBridgePresentationStamp } from "./engines/claude/bridge-presentation-stamp.js";
@@ -2330,6 +2331,36 @@ async function bootClaudeSession(
       mcpForward.specs,
     );
     publishEngineMcpStatuses();
+    // GitHub #3 follow-up: the CLI's init names a failed server but never a
+    // reason. Once per failed stdio server, run the launch command ourselves
+    // (same env/PATH) and publish the definitive cause — spawn error, exit
+    // code, redacted stderr tail. The probe's timeout means "the command
+    // runs", which produces no detail (the row's fallback pointer stands),
+    // and a server that recovers later re-inits without this name and never
+    // probes again.
+    const claudeProbedMcpNames = new Set<string>();
+    const failedNow = [
+      ...init.mcpServerStatuses.filter((item) => item.status === "failed").map((item) => item.name),
+      ...missingForwardedMcpServerNames(init.mcpServerNames, mcpForward.claudeNames, false),
+    ];
+    for (const name of failedNow) {
+      const spec = mcpForward.specs.find((candidate) => candidate.name === name && candidate.kind === "stdio");
+      if (!spec || spec.kind !== "stdio" || claudeProbedMcpNames.has(name)) continue;
+      claudeProbedMcpNames.add(name);
+      probeMcpServerSpawn(spec, { loginPath: hostMcpLoginPath })
+        .then((outcome) => {
+          if (outcome.ok || outcome.detail === undefined) return;
+          const existing = engineMcpStatuses.find((row) => row.name === name);
+          if (existing === undefined || existing.state !== "failed") return;
+          // The probe is redacted at the source; only a winning init updates
+          // engineMcpStatuses after this.
+          existing.error = outcome.detail;
+          publishEngineMcpStatuses();
+        })
+        .catch(() => {
+          /* a broken probe must not manufacture a fake cause */
+        });
+    }
   });
 
   // The first turn-scoped `system/init` is the earliest proof the native
