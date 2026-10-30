@@ -13,6 +13,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Dev automation: every automation HTTP route now answers within a bounded facade deadline (30s) instead of hanging forever when the renderer is stuck — a stuck facade call returns a clear 504 `facade_timeout` (seen live on the model-pill pick route).
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
 - Choosing No thinking for Xiaomi MiMo models now turns their reasoning off.
 - Xiaomi MiMo Token Plan sessions show a pay-as-you-go list-price cost estimate instead of “price unknown”.

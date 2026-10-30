@@ -251,6 +251,29 @@ describe("makeFacadeCaller — envelope unwrapping", () => {
     expect(expr).toContain('"respondPermission"');
     expect(expr).toContain('["tab-a","allow"]');
   });
+
+  // The live hang: a facade call whose promise never settles (renderer stuck,
+  // page busy) parked the HTTP request forever. Every facade call must answer
+  // within a bounded deadline — as FacadeTimeoutError -> HTTP 504, not silence.
+  it("rejects with FacadeTimeoutError when the facade call never settles (deadline)", async () => {
+    const win = fakeWindow(() => new Promise(() => {}));
+    const caller = makeFacadeCaller(() => win, 20);
+    const started = Date.now();
+    await expect(caller("modelPillPick", ["tab-a", { kind: "open" }])).rejects.toMatchObject({
+      name: "FacadeTimeoutError",
+      detail: expect.stringContaining("modelPillPick"),
+    });
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("resolves normally when the facade answers within the deadline", async () => {
+    const win = fakeWindow(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      return { __facade: "ok", value: { ok: true } };
+    });
+    const caller = makeFacadeCaller(() => win, 1_000);
+    await expect(caller("modelPillPick", ["tab-a", { kind: "open" }])).resolves.toEqual({ ok: true });
+  });
 });
 
 describe("thin facade commands forward method + args", () => {

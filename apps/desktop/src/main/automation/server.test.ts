@@ -2522,6 +2522,29 @@ describe("model-pill routes (design/slice-P7.15-cut.md §2.6 W4)", () => {
     expect(calls[0]).toContain('["tab-a",{"kind":"effort","value":"high"}]');
   });
 
+  // The live hang: a facade call whose page promise never settles must still
+  // answer over HTTP within the bounded facade deadline — 504 facade_timeout,
+  // never silence. Uses the same injectable short deadline as the
+  // makeFacadeCaller unit tests.
+  it('POST /tabs/:tabId/model-pill/pick answers 504 facade_timeout when the facade call never settles', async () => {
+    const window: AutomationWindow = {
+      isDestroyed: () => false,
+      webContents: {
+        // The page expression's promise never resolves (stuck renderer).
+        executeJavaScript: vi.fn(() => new Promise(() => {})),
+        capturePage: vi.fn(async () => ({ toPNG: () => Buffer.from("PNG") })),
+      },
+    };
+    const h = await boot({ getWindow: () => window, facadeTimeoutMs: 20 });
+    const res = await fetch(url(h, "/tabs/tab-a/model-pill/pick"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ kind: "open" }),
+    });
+    expect(res.status).toBe(504);
+    expect(await res.json()).toMatchObject({ error: "facade_timeout" });
+  });
+
   describe("zod fail-closed on POST /tabs/:tabId/model-pill/pick bodies — callFacade never reached", () => {
     const BAD_BODIES: ReadonlyArray<{ label: string; body: unknown }> = [
       { label: "empty object (no kind)", body: {} },
