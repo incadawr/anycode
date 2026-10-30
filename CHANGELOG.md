@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The right-side dock is resizable again: the drag handle renders as the grid's own 8px column instead of a zero-height strip inside the dock panel (GitHub #31).
+
 ## [0.0.53] — 2026-10-30
 
 ### Changed

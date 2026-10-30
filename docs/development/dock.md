@@ -47,11 +47,16 @@ window squeezing the conversation to ~550px).
   on resize-end), `hidden` (toggle flag, not persisted).
 - `components/DockPanel.tsx` — tab strip (scrollable, one button per tab +
   per-tab close ×, ⌘W closes the active tab when the dock holds focus) and
-  the active tab's body only. One resize handle, clamped live against
-  `available`.
+  the active tab's body only. The resize handle is NOT here: App.tsx renders
+  it as the direct grid child filling the reserved 8px column (inside the
+  column-flex dock it collapsed to a 0px-tall strip with no hit area —
+  GitHub #31); the drag stays clamped live against `available`.
 - `App.tsx` — `computeSessionContentColumns(dockOpen, dockWidth)`: the
   conversation column is `minmax(min(420px,100%), 1fr)` (a real floor), plus
-  `8px <dockWidth>px` when the dock is open in column mode. Tab derivation
+  `8px <dockWidth>px` when the dock is open in column mode; the `8px` column
+  is filled by the resize handle itself, rendered as the grid's direct child
+  before the dock `<aside>` (column mode only — the drawer overlay is not
+  drag-resizable). Tab derivation
   effects mirror preview-store / child-layout / git-panel state into dock
   tabs; `usePanelMountState` keeps reporting `previewMounted` so the main-side
   WebContentsView gating (D7) is unchanged.
