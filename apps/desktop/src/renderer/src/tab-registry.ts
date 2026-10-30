@@ -428,10 +428,6 @@ export function createTabRegistry(
     // TASK.33 W8: snapshot what actually went on the wire so a later terminal
     // retryable failure can offer to replay this same content.
     entry.store.getState().recordSentMessage(item.text, item.images);
-    if (item.origin === undefined && entry.connection && !entry.isChild) {
-      const sessionId = entry.store.getState().sessionId;
-      if (sessionId) childRelationStore.getState().dismissFinishedApprovals(sessionId);
-    }
     entry.connection?.send({
       type: "user_message",
       requestId,
@@ -634,6 +630,19 @@ export function createTabRegistry(
           // (undrained, for a child) renderer prompt queue.
           entry.store.getState().setChildSurface();
         } else {
+          // Enqueue is the submission boundary for queued user messages. Clear
+          // before the synchronous drainer runs, and leave system reports alone.
+          const store = entry.store;
+          const enqueuePrompt = store.getState().enqueuePrompt;
+          store.setState({
+            enqueuePrompt(item) {
+              if (item.origin === undefined) {
+                const sessionId = store.getState().sessionId;
+                if (sessionId) childRelationStore.getState().dismissFinishedApprovals(sessionId);
+              }
+              return enqueuePrompt(item);
+            },
+          });
           tabsStore.getState().addTab({ tabId, workspace, ...(openedByAgent === true ? { openedByAgent: true as const } : {}) });
           if (agentTitles.has(tabId)) tabsStore.getState().setTitle(tabId, agentTitles.get(tabId)!);
           // R10 status mirror (slice-R10-cut §2.2): ONE store-lifetime
