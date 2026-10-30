@@ -228,6 +228,10 @@ export type SubagentProgress =
     };
 
 export interface SubagentRunOptions {
+  /** Bounded model-facing live transcript, scoped by the caller. */
+  onStatusItem?: (item: import("../subagents/status.js").ChildStatusItem, currentTool?: string) => void;
+  onApproval?: (waiting: boolean, toolName?: string) => void;
+  onStatusReset?: () => void;
   /** Linked to the Agent tool call's abort so parent-stop cascades into the child. */
   signal?: AbortSignal;
   /** Invoked on each coarse child boundary (tool_result / turn_end) — see §3.3. */

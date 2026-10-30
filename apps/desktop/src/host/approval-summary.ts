@@ -1,3 +1,6 @@
+import { scrubApprovalText } from "@anycode/core";
+export { scrubApprovalText } from "@anycode/core";
+
 /**
  * Taskana 4763: a short, scrubbed, single-line description of a pending tool
  * request, for the Sessions API (`list_pending_approvals`) and for any channel
@@ -9,21 +12,6 @@
 const MAX_LENGTH = 200;
 const FIELD_LIMIT = 160;
 const MAX_KEYS = 5;
-const REDACTED = "[redacted]";
-const SECRET_NAME = "(?:token|secret|password|passwd|api[-_]?key|auth)";
-
-/** Removes secret-looking material. Applied to every returned string. */
-export function scrubApprovalText(text: string): string {
-  return text
-    // `--password hunter2` / `--token=abc`
-    .replace(new RegExp(`(--[A-Za-z0-9_-]*${SECRET_NAME}[A-Za-z0-9_-]*)(\\s+|=)(\\S+)`, "gi"), (_m, flag: string, sep: string) => `${flag}${sep}${REDACTED}`)
-    // `API_KEY=sk-...` / `GITHUB_TOKEN=...`
-    .replace(new RegExp(`\\b([A-Za-z0-9_-]*${SECRET_NAME}[A-Za-z0-9_-]*)=(\\S+)`, "gi"), (_m, name: string) => `${name}=${REDACTED}`)
-    .replace(/Bearer\s+\S+/gi, REDACTED)
-    .replace(/\b(?:sk|pk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]{16,}/g, REDACTED)
-    .replace(/[A-Za-z0-9+/=_-]{32,}/g, REDACTED);
-}
-
 /** One line, control characters removed, capped. */
 function finish(text: string, limit: number): string {
   const flat = text.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/ {2,}/g, " ").trim();

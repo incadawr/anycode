@@ -308,9 +308,10 @@ describe("Codex AnyCode dynamic tool — Taskana 4764 browser tools", () => {
     const run = vi.fn().mockResolvedValue({ status: "completed", finalText: "x", turns: 0, toolCalls: 0, truncated: false, durationMs: 0, childSessionId: "c", parentSessionId: "p", spawnToolCallId: "s" });
     const full = new CodexDynamicToolBridge(catalog, { run, send: async () => ({ ok: false as const, reason: "unavailable" as const, message: "not exercised" }) }, undefined, undefined, empty.browser);
     const fullDecls = full.declarations();
-    expect(fullDecls).toHaveLength(11);
+    expect(fullDecls).toHaveLength(12);
     expect(fullDecls[0]).toMatchObject({ name: ANYCODE_AGENT_TOOL });
-    expect(fullDecls.slice(1).every((d) => (d as { name: string }).name.startsWith("anycode_browser_"))).toBe(true);
+    expect(fullDecls[1]).toMatchObject({ name: "anycode_agent_status" });
+    expect(fullDecls.slice(2).every((d) => (d as { name: string }).name.startsWith("anycode_browser_"))).toBe(true);
   });
 
   it("X4: anycode_browser_snapshot emits canonical-named events and answers success", async () => {
@@ -437,4 +438,13 @@ describe("Codex AnyCode dynamic tool — Taskana 4764 browser tools", () => {
     expect(successes).toEqual([true, true]);
     expect(s.portCalls).toHaveLength(2);
   });
+});
+
+it("exposes status through the owning Codex bridge", async () => {
+  const port: SessionSubagentPort = { run: async () => { throw new Error("unused"); }, send: async () => ({ ok: false, reason: "unavailable", message: "unused" }), listStatus: () => [{ id: "owned", description: "work", state: "running", startedAt: Date.now(), turns: 1, toolCalls: 0, tail: [] }] };
+  const bridge = new CodexDynamicToolBridge(catalog, port);
+  expect(bridge.declarations()).toContainEqual(expect.objectContaining({ name: "anycode_agent_status" }));
+  const response = { result: vi.fn(), error: vi.fn() };
+  await bridge.handle({ id: 1, method: "item/tool/call", params: { ...active, callId: "status", tool: "anycode_agent_status", arguments: {} } }, response, active, () => {});
+  expect(response.result).toHaveBeenCalledWith({ success: true, contentItems: [{ type: "inputText", text: expect.stringContaining("owned") }] });
 });

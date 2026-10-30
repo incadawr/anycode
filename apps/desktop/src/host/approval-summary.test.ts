@@ -12,7 +12,7 @@ describe("describeApproval (Taskana 4763)", () => {
     expect(header).toContain("[redacted]");
     const env = describeApproval("Bash", { command: "API_KEY=sk-abcdefghijklmnopqrstuvwxyz make" });
     expect(env).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
-    expect(env).toContain("make");
+    expect(env).toContain("[redacted]");
     const flag = describeApproval("Bash", { command: "deploy --password hunter2" });
     expect(flag).not.toContain("hunter2");
     expect(describeApproval("CodexExec", { command: "npm test" })).toBe("npm test");

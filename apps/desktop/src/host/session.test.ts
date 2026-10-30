@@ -9359,7 +9359,7 @@ describe("tapChildPermissions ask identity (Taskana 4821)", () => {
     });
     expect(bearer.subject).not.toContain("abc123def456ghi789abc123");
     expect(bearer.subject).toContain("[redacted]");
-    expect(bearer.subject).toContain("https://example.com/health");
+    expect(bearer.subject).not.toContain("https://example.com/health");
     // --password / -p-style flag values
     const flag = describeChildApprovalAsk("Bash", { command: "deploy --password hunter2 --verbose" });
     expect(flag.subject).not.toContain("hunter2");
@@ -9426,4 +9426,45 @@ it("keeps the switched context budget in the reconnect checkpoint before another
     const checkpoint = h.received.slice(before).find((m) => m.type === "session_checkpoint");
     expect(checkpoint).toMatchObject({contextUsage:{budgetTokens:2048}});
   } finally { h.close(); }
+});
+
+describe("child status transcript", () => {
+  it.each([
+    ['{"password":"hunter2"}', "hunter2"],
+    ["Authorization: Bearer secondsecret", "secondsecret"],
+    ["Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"],
+    ['{"password":"first second', "second"],
+    ['--password="first second"', "second"],
+    ["private_key: myprivatevalue", "myprivatevalue"],
+    ['{"credentials":"mycredentialvalue"}', "mycredentialvalue"],
+    ['--passphrase="myphrasevalue"', "myphrasevalue"],
+    ["X-Session-Id: mysessionvalue", "mysessionvalue"],
+    ["monkey=banana", "banana"],
+  ])("emits bounded live text and scrubs %s on the child wire", (credential, secret) => {
+    const h = createChildHarness({ steps: [finishStep()] });
+    try {
+      observeChildEventDirect(h.session, { type: "turn_start", turn: 1 });
+      observeChildEventDirect(h.session, { type: "text_delta", id: "text", text: "😀".repeat(200) });
+      observeChildEventDirect(h.session, { type: "tool_execution_start", toolCallId: "c", toolName: "Read", input: { file_path: "/work/a" } });
+      observeChildEventDirect(h.session, { type: "tool_result", outcome: { toolCallId: "c", toolName: "Read", status: "error", modelText: "private error detail", durationMs: 1 } });
+      observeChildEventDirect(h.session, { type: "tool_execution_start", toolCallId: "secret", toolName: "Bash", input: { command: "echo --password=hunter2" } });
+      observeChildEventDirect(h.session, { type: "tool_result", outcome: { toolCallId: "secret", toolName: "Read", status: "success", modelText: "secret file contents", durationMs: 1 } });
+      observeChildEventDirect(h.session, { type: "text_delta", id: "text", text: ` latest progress ${credential}` });
+      observeChildEventDirect(h.session, { type: "turn_end", turn: 1, finishReason: "stop" });
+      const items = h.onProgress.mock.calls.map(([report]) => report).filter((report) => report.kind === "status");
+      expect(JSON.stringify(items)).not.toContain("hunter2");
+      expect(JSON.stringify(items)).not.toContain(secret);
+      expect(JSON.stringify(items)).not.toContain("secret file contents");
+      expect(JSON.stringify(items)).toContain("latest progress");
+      expect(items).toEqual(expect.arrayContaining([
+        expect.objectContaining({ itemKind: "assistant" }),
+        expect.objectContaining({ itemKind: "tool", text: "Read", toolName: "Read" }),
+        expect.objectContaining({ itemKind: "result", text: "Read: error" }),
+      ]));
+      expect(JSON.stringify(items)).not.toContain("private error detail");
+      for (const item of items) expect(parseChildProgress({ type: CHILD_PROGRESS_TYPE, ...item })).not.toBeNull();
+      observeChildEventDirect(h.session, { type: "stream_retry", attempt: 1, maxAttempts: 2, delayMs: 0, reason: "retry" });
+      expect(h.onProgress.mock.calls.at(-1)?.[0]).toMatchObject({ kind: "status", itemKind: "reset" });
+    } finally { h.close(); }
+  });
 });

@@ -3536,6 +3536,7 @@ describe("TabHostManager — child terminal + reap (TASK.102 CUT-S2 §0/§2.6.4)
     const childHost = hosts[1]!;
 
     childHost.emit("message", childActivityMsg("Bash", "ran a command"));
+    childHost.emit("message", { type: CHILD_PROGRESS_TYPE, kind: "status", itemKind: "tool", text: "Read: file", toolName: "Read" });
     childHost.emit("message", childAttentionMsg(true));
     childHost.emit("message", childAttentionMsg(false));
 
@@ -3547,6 +3548,7 @@ describe("TabHostManager — child terminal + reap (TASK.102 CUT-S2 §0/§2.6.4)
       toolName: "Bash",
       summary: "ran a command",
     });
+    expect(events).toContainEqual({ type: CHILD_RUN_EVENT_TYPE, requestId: "p1", kind: "status", itemKind: "tool", text: "Read: file", toolName: "Read" });
     expect(events).toContainEqual({ type: CHILD_RUN_EVENT_TYPE, requestId: "p1", kind: "attention", waiting: true });
     expect(events).toContainEqual({ type: CHILD_RUN_EVENT_TYPE, requestId: "p1", kind: "attention", waiting: false });
   });

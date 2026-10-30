@@ -1346,9 +1346,23 @@ export function createSubagentRunner(
           ...(childLoopPort !== undefined ? { modelPort: childLoopPort } : {}),
           ...(childSettings !== undefined ? { modelSettings: childSettings } : {}),
         });
+        const broker = childConfig.permissionBroker;
+        let pendingApprovals = 0;
+        childConfig.permissionBroker = {
+          get isUnattended() { return broker.isUnattended; },
+          get isAwaitingApproval() { return broker.isAwaitingApproval; },
+          async requestPermission(request, options) {
+            pendingApprovals += 1;
+            runOpts.onApproval?.(true, request.toolName);
+            try { return await broker.requestPermission(request, options); }
+            finally { pendingApprovals -= 1; if (pendingApprovals === 0) runOpts.onApproval?.(false); }
+          },
+        };
         const loop = new AgentLoop(childConfig);
 
         let currentTurnText = "";
+        let statusTextAt: number | undefined;
+        let statusTextSnapshot = "";
         let finalText = "";
         // TASK.210: captured at the same turn_end as finalText above, so the
         // pair always describes the same turn (see SubagentOutcome's doc).
@@ -1418,9 +1432,15 @@ export function createSubagentRunner(
             switch (event.type) {
               case "turn_start":
                 currentTurnText = "";
+                statusTextSnapshot = "";
                 break;
               case "text_delta":
                 currentTurnText += event.text;
+                if (statusTextAt === undefined || Date.now() - statusTextAt >= 1000) {
+                  statusTextAt = Date.now();
+                  statusTextSnapshot = currentTurnText;
+                  runOpts.onStatusItem?.({ kind: "assistant", text: currentTurnText });
+                }
                 break;
               case "finish":
                 // TASK.191 slice S2. Until this branch existed the child's
@@ -1436,6 +1456,8 @@ export function createSubagentRunner(
               case "stream_retry":
                 // The step is replayed from scratch; discard the aborted attempt's text.
                 currentTurnText = "";
+                statusTextSnapshot = "";
+                runOpts.onStatusReset?.();
                 // ...and its spend: the attempt is not billed to the run (see
                 // the pendingUsage comment above).
                 pendingUsage = undefined;
@@ -1447,6 +1469,7 @@ export function createSubagentRunner(
                 // the WHOLE step from scratch (agent-loop.ts clears toolCalls on
                 // "stream_retry" before dispatch is ever reached), so a discarded
                 // attempt's proposals never produce a tool_execution_start here.
+                runOpts.onStatusItem?.({ kind: "tool", text: `${event.toolName}` }, event.toolName);
                 pendingChildCalls.set(event.toolCallId, {
                   toolName: event.toolName,
                   input: event.input,
@@ -1481,6 +1504,7 @@ export function createSubagentRunner(
                 // carries raw child input verbatim.
                 const pending = pendingChildCalls.get(event.outcome.toolCallId);
                 pendingChildCalls.delete(event.outcome.toolCallId);
+                runOpts.onStatusItem?.({ kind: "result", text: `${event.outcome.toolName}: ${event.outcome.status}` }, [...pendingChildCalls.values()].at(-1)?.toolName);
                 if (pending && event.outcome.status !== "invalid_input") {
                   if (activityEmitted < SUBAGENT_ACTIVITY_MAX_EVENTS) {
                     activityEmitted += 1;
@@ -1498,6 +1522,7 @@ export function createSubagentRunner(
               case "turn_end":
                 // Capture the just-completed turn's text; a later cutoff turn_start
                 // (max_turns) or an error before turn_end cannot overwrite it.
+                if (currentTurnText !== statusTextSnapshot) runOpts.onStatusItem?.({ kind: "assistant", text: currentTurnText });
                 finalText = currentTurnText;
                 // TASK.210: same turn, same event — always updated together with
                 // finalText above so a cutoff turn that never reaches turn_end

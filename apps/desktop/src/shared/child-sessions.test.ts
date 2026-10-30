@@ -1178,3 +1178,16 @@ describe("parseChildRunEvent — accepted maxTurns (Taskana 4820 F1)", () => {
     expect(parseChildRunEvent({ ...base, maxTurns: 2 ** 53 })).toBeNull();
   });
 });
+
+
+describe("child status wire validation", () => {
+  it("round-trips bounded status items and rejects malformed or oversized payloads", () => {
+    const item = { type: CHILD_PROGRESS_TYPE, kind: "status", itemKind: "tool", text: "Read: file", toolName: "Read" };
+    expect(parseChildProgress(item)).toEqual(item);
+    expect(parseChildProgress({ ...item, text: "x".repeat(321) })).toBeNull();
+    expect(parseChildProgress({ ...item, itemKind: "unknown" })).toBeNull();
+    const relay = { ...item, type: CHILD_RUN_EVENT_TYPE, requestId: "req-1" };
+    expect(parseChildRunEvent(relay)).toEqual(relay);
+    expect(parseChildRunEvent({ ...relay, unexpected: true })).toBeNull();
+  });
+});

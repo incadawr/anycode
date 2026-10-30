@@ -28,7 +28,7 @@ import type {
   SubagentCardEvent,
   ToolResultPresentation,
 } from "@anycode/core";
-import { buildAgentBridgeToolDecl, decodeAgentBridgeCallInput, runAgentBridgeCall } from "@anycode/core";
+import { buildAgentBridgeToolDecl, decodeAgentBridgeCallInput, runAgentBridgeCall, agentStatusBridgeDecl, runAgentStatusBridge } from "@anycode/core";
 import type { EngineBrowserBridge } from "../browser-bridge.js";
 
 export interface BridgePresentationStampDeps {
@@ -61,7 +61,7 @@ export function createBridgePresentationStamp(deps: BridgePresentationStampDeps)
       // Taskana 4764: the agent decl rides first (only when a catalog AND a
       // child port exist, exactly as before), then the browser decls.
       const decl = deps.port === undefined ? null : buildAgentBridgeToolDecl(deps.catalog, { detach: true, continueSession: true });
-      const agentDecls = decl === null ? [] : [decl];
+      const agentDecls = decl === null ? [] : [decl, agentStatusBridgeDecl];
       const browserDecls = (deps.browser?.specs ?? []).map((spec) => ({
         name: spec.claudeName,
         description: spec.description,
@@ -95,6 +95,7 @@ export function createBridgePresentationStamp(deps: BridgePresentationStampDeps)
           ...(result.images !== undefined ? { images: result.images } : {}),
         };
       }
+      if (name === "agent_status" && deps.port !== undefined) return runAgentStatusBridge(callArgs, deps.port);
       if (name !== "agent") {
         return { text: `AnyCode's MCP bridge has no tool named "${name}"`, isError: true };
       }
