@@ -487,7 +487,7 @@ describe("model pricing", () => {
     "xiaomi-mimo-sgp": ["mimo-v2.6-pro", "mimo-v2.6-flash"],
     "xiaomi-mimo-cn": ["mimo-v2.6-pro", "mimo-v2.6-flash"],
     "xiaomi-mimo-ams": ["mimo-v2.6-pro", "mimo-v2.6-flash"],
-    moonshot: ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3"],
+    moonshot: ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6"],
     openai: ["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-6-astra", "gpt-6-sol"],
   };
 
@@ -539,12 +539,22 @@ describe("model pricing", () => {
 
   it("uses the published Kimi platform rates", () => {
     const models = findCatalogEntry("moonshot")!.models;
+    // K3 table (input / output / cached input / 5m cache write), K2 table
+    // (input / output / cached input) — platform.kimi.ai/docs/pricing/chat,
+    // checked 2026-10-30. The K2 rows carry no cacheWrite: that table
+    // publishes no cache-write column, so the field stays undefined ("rate
+    // unknown" for non-zero writes) rather than guessed.
     for (const [id, input, cachedInput, cacheWrite, output] of [
       ["kimi-k3.1-pro", 2, 0.2, 2, 10],
       ["kimi-k3.1-pro-highspeed", 4, 0.2, 4, 20],
       ["kimi-k3", 3, 0.3, 3, 15],
+      ["kimi-k2.7-code", 0.95, 0.19, undefined, 4],
+      ["kimi-k2.7-code-highspeed", 1.9, 0.38, undefined, 8],
+      ["kimi-k2.6", 0.95, 0.16, undefined, 4],
     ] as const) {
-      expect(models.find((model) => model.id === id)?.pricing).toMatchObject({ input, cachedInput, cacheWrite, output });
+      const pricing = models.find((model) => model.id === id)?.pricing;
+      expect(pricing).toMatchObject({ input, cachedInput, output });
+      expect(pricing?.cacheWrite, `${id} cacheWrite`).toBe(cacheWrite);
     }
   });
 
@@ -561,9 +571,6 @@ describe("model pricing", () => {
 
   it("leaves models with no published official rate unpriced rather than guessing", () => {
     const unpriced: ReadonlyArray<readonly [string, string]> = [
-      ["moonshot", "kimi-k2.7-code"],
-      ["moonshot", "kimi-k2.7-code-highspeed"],
-      ["moonshot", "kimi-k2.6"],
       // Kimi For Coding: membership quota, no USD per-token rate (see the
       // catalog comment) — a connection states "subscription" instead.
       ["kimi", "k3.1-pro"],

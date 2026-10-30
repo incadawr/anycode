@@ -16,6 +16,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
 - Choosing No thinking for Xiaomi MiMo models now turns their reasoning off.
 - Xiaomi MiMo Token Plan sessions show a pay-as-you-go list-price cost estimate instead of “price unknown”.
+- Kimi price records now cite the platform's pricing page (platform.kimi.ai/docs/pricing/chat) instead of the site root, and the newly published Kimi K2.7 Code / K2.7 Code Highspeed / K2.6 rates are included, so those models show a cost estimate instead of “price unknown”.
 
 ## [0.0.55] — 2026-10-30
 
