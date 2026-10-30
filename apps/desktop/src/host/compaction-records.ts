@@ -30,19 +30,24 @@ export interface CompactionRecordSeam {
   /** Records one outcome; never throws, never blocks the caller. */
   record(record: CompactionRecord): void;
   /**
-   * Drops the records a conversation rewind discarded, judged against the
-   * HISTORY THE CHECKPOINT RESTORES rather than against a clock (GitHub #36
-   * review 3): an automatic checkpoint is created lazily — at a turn's first
-   * write-effect tool — while the snapshot it holds is the history from before
-   * that turn, so a compaction earlier in the SAME turn is newer than the
-   * snapshot yet older than the checkpoint row. See
-   * `compactionRecordsDiscardedByRewind` for the exact rule.
+   * The sequence the NEXT record will get, minus one — i.e. "how many outcomes
+   * have been recorded so far". Sampled at a turn's start and stored on that
+   * turn's checkpoint as its rewind boundary (GitHub #36 review 4).
+   */
+  sequence(): number;
+  /**
+   * Drops the records a conversation rewind discarded (GitHub #36). `boundary`
+   * is the sequence the checkpoint captured at its turn start: everything above
+   * it was recorded afterwards, i.e. inside the part of the conversation the
+   * rewind throws away. Absent (a checkpoint written before the boundary
+   * existed) falls back to judging by `restoredHistory`, see
+   * `compactionRecordsDiscardedByRewind`.
    *
    * The live cache is filtered SYNCHRONOUSLY (the post-rewind handshake is sent
    * in the same breath and must not ship a discarded row); storage is dropped
    * behind the same serialized queue, so a later reopen agrees.
    */
-  truncate(restoredHistory: readonly HistoryItem[]): void;
+  truncate(restoredHistory: readonly HistoryItem[], boundary?: number): void;
   /** The kept records, oldest first — the live cache, safe to read synchronously. */
   list(): readonly CompactionRecord[];
   /** Resolves once every queued write has settled (shutdown ordering). */
@@ -59,6 +64,8 @@ export interface CompactionRecordStore {
 export class CompactionRecordLog implements CompactionRecordSeam {
   private cache: CompactionRecord[] = [];
   private writes: Promise<void> = Promise.resolve();
+  /** Next sequence to hand out; seeded from storage on load so it survives a restart. */
+  private nextSeq = 1;
 
   constructor(
     private readonly store: CompactionRecordStore,
@@ -73,17 +80,38 @@ export class CompactionRecordLog implements CompactionRecordSeam {
    */
   async load(): Promise<void> {
     try {
-      this.cache = (await this.store.listCompactionRecords(this.sessionId)).slice(-COMPACTION_RECORD_MAX_PER_SESSION);
+      const stored = await this.store.listCompactionRecords(this.sessionId);
+      // Records written before the sequence existed carry none. Number them in
+      // stored order (oldest first), never below the previous record's value, so
+      // the boundary rule has a strictly increasing total order to work with —
+      // and a stored seq is never renumbered. A session that has only legacy
+      // records therefore keeps its oldest rows across any boundary, which is
+      // the harmless direction (a visible row beats a resurrected summary).
+      let seq = 0;
+      this.cache = stored
+        .map((record) => {
+          seq = Math.max(seq + 1, record.seq ?? 0);
+          return { ...record, seq };
+        })
+        .slice(-COMPACTION_RECORD_MAX_PER_SESSION);
+      this.nextSeq = (this.cache.at(-1)?.seq ?? 0) + 1;
     } catch (error) {
       this.onError(error);
       this.cache = [];
+      this.nextSeq = 1;
     }
+  }
+
+  sequence(): number {
+    return this.nextSeq - 1;
   }
 
   record(record: CompactionRecord): void {
     // Snapshot NOW: the caller's object must not be readable/writable by a
-    // later mutation while the write is queued.
-    const snapshot = structuredClone(record);
+    // later mutation while the write is queued. The sequence is assigned HERE
+    // (the store owns the counter), never by the caller.
+    const snapshot = structuredClone({ ...record, seq: record.seq ?? this.nextSeq });
+    this.nextSeq = Math.max(this.nextSeq + 1, (snapshot.seq ?? 0) + 1);
     this.cache = [...this.cache, snapshot].slice(-COMPACTION_RECORD_MAX_PER_SESSION);
     this.writes = this.writes
       .then(() => this.store.appendCompactionRecord(this.sessionId, snapshot))
@@ -98,8 +126,8 @@ export class CompactionRecordLog implements CompactionRecordSeam {
    * discarded rows, and storage drops the same ids behind the serialized queue
    * so a later reopen agrees.
    */
-  truncate(restoredHistory: readonly HistoryItem[]): void {
-    const discarded = new Set(compactionRecordsDiscardedByRewind(this.cache, restoredHistory));
+  truncate(restoredHistory: readonly HistoryItem[], boundary?: number): void {
+    const discarded = new Set(compactionRecordsDiscardedByRewind(this.cache, restoredHistory, boundary));
     if (discarded.size === 0) return;
     this.cache = this.cache.filter((record) => !discarded.has(record.id));
     const ids = [...discarded];

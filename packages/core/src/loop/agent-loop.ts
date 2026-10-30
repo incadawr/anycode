@@ -493,6 +493,16 @@ export interface AgentLoopConfig {
    */
   checkpoints?: CheckpointCapturer;
   /**
+   * GitHub #36 (review 4): the session's compaction-record sequence as it
+   * stands RIGHT NOW. Read once per turn at the same moment the pre-turn
+   * history is snapshotted, and carried into that turn's lazy checkpoint, so a
+   * rewind to it can tell "recorded before this snapshot" from "recorded
+   * after" exactly — which neither a clock nor the newest history item can.
+   * Absent (the CLI, and every loop without durable compaction rows): the
+   * checkpoint records no boundary and the rewind falls back.
+   */
+  compactionBoundary?: () => number;
+  /**
    * Fire-and-forget observer of every event yielded by runTurn/compactNow
    * (slice 6.6 telemetry seam). Called synchronously immediately before each
    * yield; exceptions are swallowed (an observer can never break a turn); MUST
@@ -1081,6 +1091,10 @@ export class AgentLoop {
     // user frame is appended. A continuation has no new frame, so this is also
     // exactly the persisted pre-resume history.
     const preTurnItems = this.config.checkpoints !== undefined ? [...this.history.items] : [];
+    // GitHub #36: the compaction boundary belongs to THIS moment, not to the
+    // lazy capture below — an auto compaction of this same turn records its
+    // outcome after the snapshot but before the first write-effect tool.
+    const preTurnCompactionSeq = this.config.checkpoints !== undefined ? this.config.compactionBoundary?.() : undefined;
 
     if (userInput !== undefined) {
       let promptText = userInput;
@@ -1232,7 +1246,11 @@ export class AgentLoop {
       let announced = false;
       dispatchCtx.checkpoint = {
         ensure: async () => {
-          pending ??= capturer.capture({ userInput: userInput ?? "", historySnapshot: preTurnItems });
+          pending ??= capturer.capture({
+            userInput: userInput ?? "",
+            historySnapshot: preTurnItems,
+            ...(preTurnCompactionSeq !== undefined ? { compactionSeq: preTurnCompactionSeq } : {}),
+          });
           const result = await pending;
           if (announced) return null;
           announced = true;

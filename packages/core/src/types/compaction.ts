@@ -18,6 +18,19 @@ export interface CompactionRecord {
   id: string;
   /** Epoch ms the compaction ended — the ordering anchor against history items. */
   createdAt: number;
+  /**
+   * Monotonic per-session sequence, assigned by the store when the outcome is
+   * recorded (1, 2, 3… for the life of the session, continuing across a
+   * restart). This — not a clock — is what a rewind compares against: a
+   * checkpoint captures the sequence CURRENT AT ITS TURN START, so "recorded
+   * before that snapshot" is a question with an exact answer even when the
+   * history has not moved (a failed or skipped compaction leaves it untouched)
+   * and even when two events share a millisecond.
+   *
+   * Absent only on records written before this field existed; the store
+   * normalizes those on load by their stored order.
+   */
+  seq?: number;
   /** Whether the swap actually happened. A failed record carries `error`, never `summary`. */
   ok: boolean;
   /** Absent when the tab that wrote the record never learned who asked (reattached mid-compaction). */
@@ -83,34 +96,47 @@ export function boundCompactionRecord(record: CompactionRecord): CompactionRecor
 }
 
 /**
- * Which compaction records a conversation REWIND must discard (GitHub #36
- * review 3).
+ * Which compaction records a conversation REWIND must discard (GitHub #36).
  *
- * The cutoff CANNOT be the checkpoint's creation time. An automatic checkpoint
- * is created LAZILY — at the first write-effect tool of a turn — but its
- * conversation snapshot is the history from BEFORE that turn. So a compaction
- * that ran earlier in the same turn (auto compaction happens at the top of a
- * turn iteration) is newer than the snapshot yet older than the checkpoint
- * row, and a timestamp cutoff would keep its record and resurrect a summary of
- * the pre-turn conversation.
+ * The boundary is a SEQUENCE, not a clock: `boundary` is the record sequence
+ * that was current when the checkpoint took its history snapshot, so a record
+ * with `seq <= boundary` existed at that moment and survives, and everything
+ * above it was created afterwards and belongs to the conversation being thrown
+ * away. That is the only test that answers the question exactly:
  *
- * The rule is therefore stated against the checkpoint's own HISTORY, which is
- * exactly what a rewind restores:
- *  - a record whose summary item is still in that history SURVIVED the rewind
- *    (its text is literally in the restored state) and is kept, whatever its
- *    timestamp;
- *  - otherwise a record is discarded when it is not older than every restored
- *    item — i.e. it happened at or after the checkpoint's captured state. A
- *    failed or skipped record carries no summary item, so this is the only
- *    signal it has, and it is the honest one: the attempt belongs to a turn
- *    the rewind threw away.
+ *  - a clock cannot: an automatic checkpoint is created LAZILY — at a turn's
+ *    first write-effect tool — while its snapshot is the history from BEFORE
+ *    that turn, so a compaction earlier in the same turn is newer than the
+ *    snapshot yet older than the checkpoint row;
+ *  - the newest restored item's timestamp cannot either, in the other
+ *    direction: a FAILED or skipped compaction changes no history at all, so
+ *    one that happened between turns is newer than every item the next turn's
+ *    checkpoint restores while still predating that checkpoint. Judging by
+ *    timestamps deleted a perfectly valid row, permanently (cache AND storage).
+ *
+ * `boundary` is absent for a checkpoint written before this field existed (and
+ * for the CLI, which keeps no compaction records). Only then does the older
+ * history-based heuristic apply, and its rule is spelled out below.
  *
  * Returns the ids to discard (bounded by the caller's retention cap).
  */
 export function compactionRecordsDiscardedByRewind(
   records: readonly CompactionRecord[],
   restoredHistory: readonly { id: string; createdAt: number }[],
+  boundary?: number,
 ): string[] {
+  if (boundary !== undefined) {
+    return records.filter((record) => (record.seq ?? 0) > boundary).map((record) => record.id);
+  }
+
+  // Legacy checkpoint (no sequence recorded): fall back to the history itself.
+  //  - a record whose summary item is still in that history SURVIVED the rewind
+  //    (its text is literally in the restored state) and is kept, whatever its
+  //    timestamp;
+  //  - otherwise a record is discarded when it is not older than every restored
+  //    item. This mis-drops a between-turns failed compaction — the reason the
+  //    sequence exists — but it is strictly better than resurrecting a summary,
+  //    and it only applies to checkpoints predating the sequence.
   let cutoff = 0;
   const restoredIds = new Set<string>();
   for (const item of restoredHistory) {

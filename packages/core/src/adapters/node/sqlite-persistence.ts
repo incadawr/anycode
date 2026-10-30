@@ -401,6 +401,28 @@ const MIGRATIONS: readonly Migration[] = [
       `CREATE INDEX idx_compaction_records_session ON compaction_records (session_id, seq)`,
     ],
   },
+  {
+    // GitHub #36 (review 4): the compaction-record sequence current when this
+    // checkpoint's HISTORY SNAPSHOT was taken (the turn start, NOT the row's
+    // creation — capture is lazy). A rewind keeps records at or below it and
+    // drops the rest, which is the only boundary that answers the question
+    // exactly: neither the checkpoint's creation time nor the newest restored
+    // item's timestamp can describe "what existed when this snapshot was made"
+    // (a failed compaction changes no history; an auto compaction of the same
+    // turn predates the row but postdates the snapshot). NULL on every
+    // checkpoint written before this column existed.
+    version: 26,
+    // A SIDE table rather than a column on `checkpoints`: an ALTER would fail
+    // outright on any historical database whose fixture/claim says v2 is applied
+    // without the table actually being there, and a boundary is optional data
+    // (absent = the legacy, history-based rewind rule). Creation cannot fail.
+    statements: [
+      `CREATE TABLE checkpoint_boundaries (
+        checkpoint_id TEXT PRIMARY KEY,
+        compaction_seq INTEGER NOT NULL
+      )`,
+    ],
+  },
 ];
 
 /**
@@ -639,6 +661,8 @@ interface CheckpointRow {
   reason: string;
   label: string;
   history_json: string;
+  /** Migration v26 (GitHub #36): absent/NULL on checkpoints written before it. */
+  compaction_seq?: number | null;
 }
 
 /**
@@ -661,6 +685,9 @@ function rowToCheckpointMeta(row: CheckpointRow): CheckpointMeta {
     createdAt: row.created_at,
     reason: row.reason as CheckpointReason,
     label: row.label,
+    // GitHub #36: a legacy row has no boundary — the rewind then falls back to
+    // judging by the restored history.
+    ...(typeof row.compaction_seq === "number" ? { compactionSeq: row.compaction_seq } : {}),
   };
 }
 
@@ -1465,6 +1492,14 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
         record.label,
         record.historyJson,
       );
+      // GitHub #36: the compaction boundary this checkpoint captured at its
+      // turn start (absent when the caller keeps no records).
+      if (record.compactionSeq !== undefined) {
+        db.prepare(
+          `INSERT INTO checkpoint_boundaries (checkpoint_id, compaction_seq) VALUES (?, ?)
+           ON CONFLICT (checkpoint_id) DO UPDATE SET compaction_seq = excluded.compaction_seq`,
+        ).run(record.id, record.compactionSeq);
+      }
       // Keep only the newest `keep` rows for this session; the subquery pins the
       // survivors by (created_at DESC, rowid DESC) so ties break deterministically.
       db.prepare(
@@ -1477,6 +1512,13 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
              LIMIT ?
            )`,
       ).run(record.sessionId, record.sessionId, keep);
+      // A pruned checkpoint must not leave its boundary behind: an orphan row is
+      // unreachable (lookups are by checkpoint id) but would outlive the table's
+      // own retention forever.
+      db.prepare(
+        `DELETE FROM checkpoint_boundaries
+          WHERE checkpoint_id NOT IN (SELECT id FROM checkpoints)`,
+      ).run();
     });
   }
 
@@ -1484,7 +1526,11 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   async listCheckpoints(sessionId: string, opts?: { limit?: number }): Promise<CheckpointMeta[]> {
     const db = this.open();
     let sql =
-      "SELECT id, session_id, commit_hash, created_at, reason, label FROM checkpoints WHERE session_id = ? ORDER BY created_at DESC, rowid DESC";
+      `SELECT c.id, c.session_id, c.commit_hash, c.created_at, c.reason, c.label, c.history_json,
+              b.compaction_seq
+         FROM checkpoints c
+         LEFT JOIN checkpoint_boundaries b ON b.checkpoint_id = c.id
+        WHERE c.session_id = ? ORDER BY c.created_at DESC, c.rowid DESC`;
     const params: (string | number)[] = [sessionId];
     if (opts?.limit !== undefined) {
       sql += " LIMIT ?";
@@ -1497,7 +1543,15 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   /** Full checkpoint record (including the pre-turn history snapshot) by id, or null. */
   async getCheckpoint(id: string): Promise<CheckpointRecord | null> {
     const db = this.open();
-    const row = db.prepare("SELECT * FROM checkpoints WHERE id = ?").get(id) as CheckpointRow | undefined;
+    const row = db
+      .prepare(
+        `SELECT c.id, c.session_id, c.commit_hash, c.created_at, c.reason, c.label, c.history_json,
+                b.compaction_seq
+           FROM checkpoints c
+           LEFT JOIN checkpoint_boundaries b ON b.checkpoint_id = c.id
+          WHERE c.id = ?`,
+      )
+      .get(id) as CheckpointRow | undefined;
     if (!row) {
       return null;
     }

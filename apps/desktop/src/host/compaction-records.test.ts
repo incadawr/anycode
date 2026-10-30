@@ -93,6 +93,57 @@ describe("CompactionRecordLog (GitHub #36)", () => {
     expect(log.list()[0]?.id).toBe("r-3");
   });
 
+  it("hands out a monotonic sequence and reports the boundary the next record would exceed", async () => {
+    const log = new CompactionRecordLog(fakeStore(), "s1");
+    expect(log.sequence()).toBe(0);
+
+    log.record(record("a", 10));
+    expect(log.list()[0]?.seq).toBe(1);
+    expect(log.sequence()).toBe(1);
+
+    log.record(record("b", 20));
+    expect(log.list().map((entry) => entry.seq)).toEqual([1, 2]);
+    expect(log.sequence()).toBe(2);
+    await log.flush();
+  });
+
+  it("continues the sequence after a restart instead of restarting at 1", async () => {
+    // The counter is durable: a reopened session must not hand out a seq a
+    // stored record already holds, or a rewind boundary would misjudge both.
+    const store = fakeStore([{ ...record("stored", 5), seq: 7 }]);
+    const log = new CompactionRecordLog(store, "s1");
+
+    await log.load();
+    expect(log.sequence()).toBe(7);
+
+    log.record(record("fresh", 30));
+    expect(log.list().at(-1)?.seq).toBe(8);
+  });
+
+  it("numbers records that predate the field by their stored order on load", async () => {
+    const store = fakeStore([record("old-1", 1), record("old-2", 2)]);
+    const log = new CompactionRecordLog(store, "s1");
+
+    await log.load();
+
+    expect(log.list().map((entry) => entry.seq)).toEqual([1, 2]);
+    expect(log.sequence()).toBe(2);
+  });
+
+  it("a sequence boundary keeps a between-turns failed row and drops only what was recorded after it", async () => {
+    const store = fakeStore([record("failed-before-turn", 400, { ok: false }), record("after", 500, { ok: false })]);
+    const log = new CompactionRecordLog(store, "s1");
+    await log.load();
+
+    // Boundary 1 = the sequence at the checkpoint's turn start: the first row
+    // existed by then (it happened between turns), the second did not.
+    log.truncate(restored(100), 1);
+    await log.flush();
+
+    expect(log.list().map((entry) => entry.id)).toEqual(["failed-before-turn"]);
+    expect([...store.rows.keys()]).toEqual(["failed-before-turn"]);
+  });
+
   it("truncate drops the records of the discarded conversation from the cache at once, and from storage behind the queue", async () => {
     const store = fakeStore([record("kept", 100), record("discarded", 300)]);
     const log = new CompactionRecordLog(store, "s1");

@@ -59,6 +59,14 @@ export type RewindResult =
        * history from before that turn.
        */
       historyItems: HistoryItem[] | null;
+      /**
+       * GitHub #36: the compaction-record sequence this checkpoint captured at
+       * its history snapshot (`CheckpointMeta.compactionSeq`). Absent on a
+       * checkpoint written before that field existed, and for any caller that
+       * keeps no records — the rewind then falls back to judging by the
+       * restored history.
+       */
+      compactionSeq?: number;
     }
   | { ok: false; reason: string };
 
@@ -202,6 +210,7 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
     reason: CheckpointReason,
     label: string,
     historySnapshot: readonly HistoryItem[],
+    compactionSeq?: number,
   ): Promise<{ id: string; commitHash: string }> {
     await this.ensureInit();
     await this.ensureLastCommitLoaded();
@@ -224,6 +233,7 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
         reason,
         label,
         historyJson: JSON.stringify(historySnapshot),
+        ...(compactionSeq !== undefined ? { compactionSeq } : {}),
       },
       { keepPerSession: CHECKPOINTS_KEEP_PER_SESSION },
     );
@@ -242,7 +252,11 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
     }
     try {
       const label = deriveCheckpointLabel(req.userInput);
-      const { id } = await this.performCapture("auto", label, req.historySnapshot);
+      // GitHub #36: the boundary is the sequence that was current when the
+      // SNAPSHOT was taken (turn start), carried on the request because the
+      // capture itself is lazy — by now an auto compaction of this same turn
+      // may already have recorded an outcome.
+      const { id } = await this.performCapture("auto", label, req.historySnapshot, req.compactionSeq);
       return { kind: "created", id, label };
     } catch (err) {
       this.disabled = true;
@@ -318,7 +332,13 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
       historyItems = JSON.parse(record.historyJson) as HistoryItem[];
     }
 
-    return { ok: true, safetyCheckpointId: safety.id, restoredPaths, historyItems };
+    return {
+      ok: true,
+      safetyCheckpointId: safety.id,
+      restoredPaths,
+      historyItems,
+      ...(record.compactionSeq !== undefined ? { compactionSeq: record.compactionSeq } : {}),
+    };
   }
 }
 
