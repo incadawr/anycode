@@ -69,7 +69,7 @@ const GLM_MAX_TOKENS = 131_072;
  * 512 keeps generous headroom for the thinking block while staying small
  * enough that the model cannot wander into a long preamble.
  */
-export const MANDATORY_THINKING_TITLE_MAX_OUTPUT_TOKENS = 512;
+const MANDATORY_THINKING_TITLE_MAX_OUTPUT_TOKENS = 512;
 
 /** Return shape of `reasoningRequestOptions` on the anthropic-messages transport. */
 interface AnthropicReasoningOptions {
