@@ -228,6 +228,10 @@ export type SubagentProgress =
     };
 
 export interface SubagentRunOptions {
+  /** Bounded model-facing live transcript, scoped by the caller. */
+  onStatusItem?: (item: import("../subagents/status.js").ChildStatusItem, currentTool?: string) => void;
+  onApproval?: (waiting: boolean, toolName?: string) => void;
+  onStatusReset?: () => void;
   /** Linked to the Agent tool call's abort so parent-stop cascades into the child. */
   signal?: AbortSignal;
   /** Invoked on each coarse child boundary (tool_result / turn_end) — see §3.3. */
@@ -281,6 +285,8 @@ export interface SubagentPort {
    * branch instead of the deprecated one-shot path in `subagents/runner.ts`).
    */
   engineProfile?(agentType: string): EngineProfileInfo | null;
+  /** Current winning core profile metadata, excluding reserved personas. */
+  coreProfile?(agentType: string): { systemPrompt: string; model?: string; effort?: ReasoningEffort } | null;
   /** Resolves an md-profile's `connection:`/`provider:` frontmatter; null for built-ins, engine profiles, and unrouted profiles. */
   profileRouting?(agentType: string): { provider?: string; connection?: string } | null;
   /**

@@ -26,8 +26,8 @@ describe("effectiveProfileTools", () => {
     ]);
   });
   it("passes the general-purpose baseline through unchanged", () => {
-    expect(effectiveProfileTools(["Read", "Write", "Edit", "Bash", "Grep", "Glob", "TodoRead", "TodoWrite", "WebFetch"]))
-      .toEqual(["Read", "Write", "Edit", "Bash", "Grep", "Glob", "TodoRead", "TodoWrite", "WebFetch"]);
+    expect(effectiveProfileTools(["Read", "Git", "Write", "Edit", "Bash", "Grep", "Glob", "TodoRead", "TodoWrite", "WebFetch"]))
+      .toEqual(["Read", "Git", "Write", "Edit", "Bash", "Grep", "Glob", "TodoRead", "TodoWrite", "WebFetch"]);
   });
 });
 

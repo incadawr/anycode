@@ -16,7 +16,7 @@
  * `permission_settled` is what removes the dialog.
  */
 import { childRelationKey, type ChildRelation } from "./child-sessions.js";
-import type { PermissionUiRequest } from "./store.js";
+import type { PermissionUiRequest, TranscriptBlock } from "./store.js";
 import type { EnginePresentation, UiToHostMessage } from "../../shared/protocol.js";
 import { buildPermissionAllowMessage } from "./components/PermissionModal.js";
 
@@ -31,6 +31,7 @@ export interface ChildPermissionOwner {
 /** The small slice of a tab store these helpers read. */
 export interface ChildPermissionStoreView {
   permission: PermissionUiRequest | null;
+  unattended?: boolean;
   connection: string;
   engine: EnginePresentation | null;
   /** The child's canonical workspace — the dialog shows the real path it works in. */
@@ -87,8 +88,19 @@ export function childPermissionSubmissionKey(childTabId: string, requestId: stri
 }
 
 /** Header label for a forwarded child ask — the dialog names its owner. */
-export function childPermissionOwnerLabel(childSessionId: string): string {
-  return `Subagent: ${childSessionId}`;
+export function childPermissionOwnerLabel(
+  childSessionId: string,
+  spawnToolCallId?: string,
+  transcript: readonly TranscriptBlock[] = [],
+  backgroundChildren: readonly { childSessionId: string; description: string }[] = [],
+): string {
+  const call = transcript.find((block) => block.kind === "tool_call" && block.toolCallId === spawnToolCallId);
+  const input = call?.kind === "tool_call" && typeof call.input === "object" && call.input !== null
+    ? (call.input as { description?: unknown }).description : undefined;
+  const candidates = [call?.kind === "tool_call" ? call.subagent?.description : undefined, input,
+    backgroundChildren.find((child) => child.childSessionId === childSessionId)?.description];
+  const description = candidates.find((value): value is string => typeof value === "string" && value.trim().length > 0);
+  return `Subagent: ${description?.trim() ?? childSessionId}`;
 }
 
 /**

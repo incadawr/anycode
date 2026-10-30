@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { findCatalogEntry } from "@anycode/core/catalog";
 import { SqlitePersistenceAdapter } from "@anycode/core";
 import { summarizeProviderUsage } from "./session.js";
-import { calculateUsageCost, connectionPricing } from "./usage-cost.js";
+import { calculateUsageCost, connectionPricing, resolveUsagePrice } from "./usage-cost.js";
 
 const price = { basisId: "test", input: 0.3, cachedInput: 0.006, output: 1.2 };
 describe("usage cost snapshots", () => {
@@ -53,6 +53,26 @@ describe("catalog prices through the calculator", () => {
     expect(cached?.cacheSavingsUsd).toBeCloseTo(1.276);
   });
 
+  it("prices MiMo API cache writes at zero", () => {
+    const usage = { inputTokens: 1_000_000, cachedInputTokens: 200_000, cacheWriteTokens: 100_000, outputTokens: 100_000 };
+    for (const [model, expected] of [["mimo-v2.6-pro", 0.39222], ["mimo-v2.6-flash", 0.12656]] as const) {
+      const cost = calculateUsageCost(usage, catalogPrice("xiaomi-mimo-api", model));
+      expect(cost, model).toBeDefined();
+      expect(cost?.costUsd, model).toBeCloseTo(expected);
+    }
+  });
+
+  it("prices a Token Plan turn at the API list rate", () => {
+    for (const region of ["sgp", "cn", "ams"]) {
+      const selected = resolveUsagePrice(undefined, "mimo-v2.6-pro", catalogPrice(`xiaomi-mimo-${region}`, "mimo-v2.6-pro"));
+      expect(selected?.subscription).toBe(false);
+      if (!selected || selected.subscription) throw new Error("Expected catalog pricing");
+      const cost = calculateUsageCost({ inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 1_000_000 }, selected.price);
+      expect(cost?.costUsd).toBeCloseTo(1.305);
+      expect(cost?.priceBasisId).toBe("mimo-v2.6-pro-xiaomi-mimo-api-2026-10-30");
+    }
+  });
+
   it("prices GLM cache creation at the input rate in the step and session total", async () => {
     const glm = catalogPrice("z-ai", "glm-5.3");
     expect(glm).toBeDefined();
@@ -85,5 +105,28 @@ describe("catalog prices through the calculator", () => {
     expect(catalogPrice("kimi", "k3")).toBeUndefined();
     expect(catalogPrice("moonshot", "kimi-k2.6")).toBeUndefined();
     expect(calculateUsageCost({ inputTokens: 1_000, cachedInputTokens: 0, outputTokens: 1_000 }, catalogPrice("kimi", "k3"))).toBeUndefined();
+  });
+});
+
+
+describe("per-model price resolution", () => {
+  const a = { input: 1, cachedInput: 0, output: 2 };
+  const b = { input: 3, cachedInput: 0, output: 4 };
+  const usage = { inputTokens: 1000, cachedInputTokens: 0, outputTokens: 1000 };
+  it("uses exact model prices, fallback, catalog and subscription in order", () => {
+    const raw = JSON.stringify({ fallback: { mode: "rates", ...b }, models: { A: a, B: b, constructor: a, bad: { input: -1 } } });
+    for (const [id, expected] of [["A", .003], ["B", .007], ["constructor", .003], ["bad", .007], ["a", .007]] as const) {
+      const selected = resolveUsagePrice(raw, id, price);
+      expect(selected?.subscription).toBe(false);
+      if (selected && !selected.subscription) expect(calculateUsageCost(usage, selected.price)?.costUsd).toBeCloseTo(expected);
+    }
+    expect(resolveUsagePrice(JSON.stringify({ models: { A: a }, fallback: { mode: "subscription" } }), "A", price)).toEqual({ subscription: true });
+    expect(resolveUsagePrice(undefined, "C", price)).toEqual({ subscription: false, price });
+    expect(resolveUsagePrice(undefined, "C", undefined)).toBeUndefined();
+    const zero = resolveUsagePrice(JSON.stringify({ models: { A: { input: 0, cachedInput: 0, output: 0 } } }), "A", price);
+    expect(zero?.subscription).toBe(false);
+    if (!zero || zero.subscription) throw new Error("Expected a zero-rate price");
+    expect(calculateUsageCost(usage, zero.price)?.costUsd).toBe(0);
+    expect(resolveUsagePrice(raw, "A", price)).toEqual(resolveUsagePrice(JSON.stringify({ fallback: { mode: "rates", ...b }, models: { A: a, B: a } }), "A", price));
   });
 });

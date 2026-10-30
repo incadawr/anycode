@@ -31,6 +31,7 @@ export interface EngineCapabilities {
   readonly costAccounting: boolean;
   readonly supportsModelSelection: boolean;
   readonly supportsReasoningEffort: boolean;
+  readonly supportsDeferredEffortChange?: boolean;
   readonly supportsImages: boolean;
   readonly supportsTasks: boolean;
   readonly supportsFileSnapshots: boolean;
@@ -42,6 +43,11 @@ export interface EngineCapabilities {
 }
 
 export interface ModelSwitchResult {
+  /** Actual model held by the engine before this switch. */
+  previousModel?: string;
+  contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
+  selectedReasoningEffort?: ReasoningEffort;
+  effortAdjustment?: { from: ReasoningEffort; to: ReasoningEffort };
   model: string;
   reasoningEffort: ReasoningEffort;
   availableEffortLevels?: ReasoningEffort[];
@@ -85,7 +91,7 @@ export interface SessionEngine {
   reasoningEffort(): ReasoningEffort | undefined;
   setReasoningEffort(effort: ReasoningEffort | undefined): void;
   setSelectedReasoningEffort?(effort: ReasoningEffort): void;
-  switchModel?(id: string, effort: ReasoningEffort): ModelSwitchResult;
+  switchModel?(id: string, effort: ReasoningEffort, effortExplicit?: boolean): ModelSwitchResult;
   todoReminderSnapshot?(): { count: number; threshold: number } | null;
   runTurn(input: string, options: RunTurnOptions): AsyncIterable<AgentEvent>;
   /** Continue a terminal-control turn after rehost without a synthetic user frame. */

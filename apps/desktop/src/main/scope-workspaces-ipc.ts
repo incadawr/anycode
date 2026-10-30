@@ -8,12 +8,14 @@ import { ipcMain } from "electron";
 import { z } from "zod";
 import {
   SCOPE_WORKSPACES_LIST_CHANNEL,
+  SCOPE_WORKSPACES_RESOLVE_CHANNEL,
   type ScopeWorkspaceEntry,
   type ScopeWorkspacesListResult,
 } from "../shared/scope-workspaces.js";
 
 export interface ScopeWorkspacesIpcDeps {
   registry: { list(): Promise<ScopeWorkspaceEntry[]> };
+  resolve?(ref: string): string | undefined;
 }
 
 const listPayloadSchema = z.object({}).strict();
@@ -42,6 +44,12 @@ export async function handleScopeWorkspacesList(
   }
 }
 
+export function handleScopeWorkspaceResolve(deps: ScopeWorkspacesIpcDeps, raw: unknown): string | null {
+  const parsed = z.object({ ref: z.string().min(1) }).strict().safeParse(raw);
+  return parsed.success ? deps.resolve?.(parsed.data.ref) ?? null : null;
+}
+
 export function registerScopeWorkspacesIpc(deps: ScopeWorkspacesIpcDeps): void {
   ipcMain.handle(SCOPE_WORKSPACES_LIST_CHANNEL, (_event, raw: unknown) => handleScopeWorkspacesList(deps, raw));
+  ipcMain.handle(SCOPE_WORKSPACES_RESOLVE_CHANNEL, (_event, raw: unknown) => handleScopeWorkspaceResolve(deps, raw));
 }

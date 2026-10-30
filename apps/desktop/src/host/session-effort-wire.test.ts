@@ -80,3 +80,41 @@ describe("session default effort through the Responses request", () => {
     }
   });
 });
+
+it("sends only a manually declared effort to a custom chat endpoint", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      bodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(`data: ${JSON.stringify({ id: "chat", object: "chat.completion.chunk", created: 1, model: "custom", choices: [{ index: 0, delta: { content: "ok" }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ id: "chat", object: "chat.completion.chunk", created: 1, model: "custom", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`);
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
+  const levels = ["low", "high"] as const;
+  const config: AgentLoopConfig = {
+    modelPort: new AiSdkModelPort({ transport: "openai-chat-completions", baseUrl, apiKey: "test-key", model: "custom", providerName: "custom", retry: { maxRetries: 0, stallTimeoutMs: 0 } }),
+    registry: createDefaultToolRegistry(), hooks: new InMemoryHookRunner(),
+    permissionEngine: new RuleAwarePermissionEngine(new ModePermissionEngine(), new SessionPermissionRules()),
+    permissionBroker: new IpcPermissionBroker(() => {}), mode: "build", cwd: "/workspace",
+    ports: { fs: new MemFs(), exec: {} as AgentLoopConfig["ports"]["exec"], http: new NodeHttpAdapter(), todos: new InMemoryTodoStore() },
+  };
+  const engine = new CoreEngine({ loop: new AgentLoop(config), config, resolveSelectedEffort: (effort) => resolveReasoningEffort("custom", undefined, effort, undefined, levels) });
+  const h = createHarness({ steps: [], engine, reasoningSupported: true, availableEffortLevels: [...levels] });
+  try {
+    h.send({ type: "ui_ready" });
+    expect((await h.waitFor(ready)).availableEffortLevels).toEqual(levels);
+    h.send({ type: "set_reasoning_effort", effort: "high" });
+    await h.waitFor((m): m is Msg<"reasoning_effort_changed"> => m.type === "reasoning_effort_changed");
+    h.send({ type: "set_reasoning_effort", effort: "xhigh" });
+    h.send({ type: "user_message", requestId: "custom", text: "hello" });
+    await h.waitUntil(() => bodies.length > 0);
+    expect(bodies[0]?.reasoning_effort).toBe("high");
+  } finally {
+    h.close();
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});

@@ -349,8 +349,8 @@ export function formatChildApprovalNotice(input: ChildApprovalNoticeInput): stri
   const expiredRecovery =
     input.askTimeoutMs !== undefined && input.askTimeoutMs > 0
       ? `If that deadline has already passed, the request was denied and further requests from this child ` +
-        `are auto-denied until a human interacts with the child session — open or answer the child session ` +
-        `(its tab) and let the child retry to resume. `
+        `are auto-denied until a human chooses Ask me again for the child or sends a message to the child. ` +
+        `That enables future requests; it does not approve or retry the denied operation. `
       : "";
   // Review F2: honest about the enforcement level. "Will not be retried
   // through another tool" overstated it — nothing mechanically stops the

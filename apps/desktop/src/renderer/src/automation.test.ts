@@ -107,6 +107,9 @@ class FakeMessagePort {
   onmessage: ((event: MessageEvent<HostToUiMessage>) => void) | null = null;
   sent: unknown[] = [];
 
+  addEventListener(): void {}
+  removeEventListener(): void {}
+
   postMessage(message: unknown): void {
     this.sent.push(message);
   }
@@ -1282,6 +1285,46 @@ describe("automation facade — tab-lifecycle passthrough (window.anycode bridge
 
     expect(bridge.createTab).toHaveBeenCalledWith({ kind: "resume", sessionId: "sess-9" });
     expect(result).toEqual({ ok: true, tabId: "t9", workspace: "/ws/resumed" });
+    expect(tabsStore.getState().activeTabId).toBe("t9");
+    expect(tabsStore.getState().draftActive).toBe(false);
+  });
+
+  it.each(["port first", "result first"])("activates a resumed tab with %s", async (order) => {
+    const tabsStore = createTabsStore();
+    const registry = createTabRegistry(tabsStore);
+    registry.registerPort("existing", "/ws", asPort(new FakeMessagePort()));
+    tabsStore.getState().openDraft();
+    let resolve!: (result: CreateTabResult) => void;
+    const resultPromise = new Promise<CreateTabResult>((done) => { resolve = done; });
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge({ createTab: () => resultPromise }));
+    const pending = facade.resumeSession("resume");
+    const port = new FakeMessagePort();
+    if (order === "port first") registry.registerPort("resumed", "/ws/resumed", asPort(port));
+    resolve({ ok: true, tabId: "resumed", workspace: "/ws/resumed" });
+    await pending;
+    if (order === "result first") registry.registerPort("resumed", "/ws/resumed", asPort(port));
+    expect(tabsStore.getState().activeTabId).toBe("resumed");
+    expect(tabsStore.getState().draftActive).toBe(false);
+    expect(tabsStore.getState().tabs.filter((tab) => tab.tabId === "resumed")).toHaveLength(1);
+    expect(registry.getStore("resumed")).toBeDefined();
+  });
+
+  it("focuses an already-open session and leaves selection alone on refusal", async () => {
+    const tabsStore = createTabsStore();
+    const registry = createTabRegistry(tabsStore);
+    registry.registerPort("first", "/first", asPort(new FakeMessagePort()));
+    registry.registerPort("second", "/second", asPort(new FakeMessagePort()));
+    tabsStore.getState().openDraft();
+    const bridge = stubBridge({ createTab: vi.fn(async (): Promise<CreateTabResult> => ({ ok: false, reason: "already_open", focusTabId: "second" })) });
+    const facade = createAutomationFacade(registry, tabsStore, bridge);
+    await facade.resumeSession("open");
+    expect(tabsStore.getState().activeTabId).toBe("second");
+    expect(tabsStore.getState().draftActive).toBe(false);
+    tabsStore.getState().openDraft();
+    vi.mocked(bridge.createTab).mockResolvedValueOnce({ ok: false, reason: "session_not_found" });
+    await facade.resumeSession("missing");
+    expect(tabsStore.getState().activeTabId).toBe("second");
+    expect(tabsStore.getState().draftActive).toBe(true);
   });
 
   it("closeTab disposes the tab locally on ok:true (mirrors App.tsx's handleCloseTab)", async () => {
@@ -11793,6 +11836,20 @@ describe("automation facade — native engine effort", () => {
     // A model pick goes through the model page, again by raw id.
     await expect(facade.modelPillPick(tabId, { kind: "model", value: "plain" })).resolves.toEqual({ ok: true });
     expect(state.clicks).toEqual(["back", "root:model", "model:plain"]);
+  });
+
+  it("allows opening and effort selection while running, but blocks native model selection", async () => {
+    const { dom, state } = nativeMenuDom();
+    const { facade, port, tabId } = nativeFacade(dom, TERRA);
+    const ready = nativeReady(TERRA);
+    if (ready.type !== "host_ready" || !ready.engine) throw new Error("missing engine");
+    ready.engine.capabilities.supportsDeferredEffortChange = true;
+    port.emit(ready);
+    port.emit({ type: "turn_started", requestId: "r", turnId: "t" });
+    await expect(facade.modelPillPick(tabId, { kind: "open" })).resolves.toEqual({ ok: true });
+    await expect(facade.modelPillPick(tabId, { kind: "model", value: "plain" })).resolves.toEqual({ ok: false, reason: "pick_disabled" });
+    await expect(facade.modelPillPick(tabId, { kind: "effort", value: "xhigh" })).resolves.toEqual({ ok: true });
+    expect(state.clicks).toEqual(["root:effort", "effort:xhigh"]);
   });
 
   it("reports effort_row_hidden only when the model advertises no levels", async () => {

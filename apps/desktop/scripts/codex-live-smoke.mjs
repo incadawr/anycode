@@ -118,7 +118,7 @@ function skip(message) {
 // src/**/*.ts, same posture as codex-contract-extract.mjs. Raising the
 // ceiling in protocol.ts means raising it here in the same commit.)
 
-const SUPPORTED_CODEX_VERSION = "<0.166.0";
+const SUPPORTED_CODEX_VERSION = "<0.167.0";
 
 function parseCodexVersion(output) {
   const match = /^codex-cli (\d+)\.(\d+)\.(\d+)\s*$/.exec(output);
@@ -1427,6 +1427,16 @@ async function step9ResumeAndCheckTranscript(ctx) {
     `resumed normalized kind order != pre-Stop normalized kind order + trailing "user_text" (fact 13: an interrupted turn persists only userMessage) — pre-Stop: [${(ctx.preStopKindOrder ?? []).join(", ")}], post-resume: [${postKindOrder.join(", ")}]`,
   );
 
+  const mountDeadline = Date.now() + 10_000;
+  let mounted;
+  do {
+    mounted = await apiOk(ctx, 9, "GET", `/transcript/scroll?tabId=${encodeURIComponent(resumedTabId)}`);
+    if (mounted?.ok === true) break;
+    await sleep(100);
+  } while (Date.now() < mountDeadline);
+  const shell = await getFullState(ctx, 9);
+  assert(9, shell?.snapshot?.activeTabId === resumedTabId, `resumed tab is not active: ${JSON.stringify(shell?.snapshot?.activeTabId)}`);
+  assert(9, mounted?.ok === true, `resumed transcript is not mounted: ${JSON.stringify(mounted)}`);
   await saveScreenshot(ctx, "step-9-resumed-transcript");
   pass(9, `resume verified: tab ${resumedTabId} shows prior turns and tool outcomes before any new prompt`);
   ctx.codexTabId = resumedTabId; // final teardown below closes/quits through this handle

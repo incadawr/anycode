@@ -23,6 +23,15 @@ export const SESSION_TITLE_SOURCE_MAX_BYTES = 1000;
 export const SESSION_TITLE_TIMEOUT_MS = 10_000;
 
 /**
+ * Default output-token ceiling for the refinement one-shot: a 3-6 word title
+ * fits comfortably, and the small cap keeps the request cheap. Providers whose
+ * replies always start with a thinking block override it through
+ * `ModelPort.titleMaxOutputTokens` — with 32 tokens that block alone hits the
+ * ceiling and the reply carries no title text.
+ */
+export const SESSION_TITLE_MAX_OUTPUT_TOKENS = 32;
+
+/**
  * Paired reminder/context tags that hosts inject around raw user input
  * (agent-loop.ts's `<hook-context>`, prompts/plan-reminder.ts's
  * `<plan-mode-reminder>`, and
@@ -112,7 +121,7 @@ export async function generateSessionTitle(opts: {
     system: SESSION_TITLE_INSTRUCTION,
     messages: [{ role: "user", content }],
     tools: [],
-    maxOutputTokens: 32,
+    maxOutputTokens: opts.modelPort.titleMaxOutputTokens ?? SESSION_TITLE_MAX_OUTPUT_TOKENS,
     reasoningEffort: opts.modelPort.titleReasoningEffort,
     temperature: 0,
     abortSignal: signal,

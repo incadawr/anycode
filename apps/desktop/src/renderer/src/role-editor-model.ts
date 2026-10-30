@@ -21,6 +21,7 @@ export interface DraftEntry {
   /** "" means "not set" — omitted from the persisted entry. */
   engine: "" | "codex" | "claude";
   connection: string;
+  provider?: string;
   model: string;
   /** UI-only Custom selection; travels with the entry through reorder/remove. */
   customModel?: boolean;
@@ -40,6 +41,7 @@ export function toDraftEntry(entry: RoleRouteEntry | undefined): DraftEntry {
   return {
     engine: entry?.engine ?? "",
     connection: entry?.connection ?? "",
+    ...(entry?.provider ? { provider: entry.provider } : {}),
     model: entry?.engine && entry.model === "default" ? "" : entry?.model ?? "",
     effort: (entry?.effort ?? "") as RoleEffortLevel,
   };
@@ -67,6 +69,9 @@ export function fromDraftEntry(entry: DraftEntry): RoleRouteEntry {
   if (entry.connection.trim() !== "") {
     out.connection = entry.connection.trim();
   }
+  if (entry.provider?.trim()) {
+    out.provider = entry.provider.trim();
+  }
   if (entry.model.trim() !== "" && !(entry.engine !== "" && entry.model.trim() === "default")) {
     out.model = entry.model.trim();
   }
@@ -76,15 +81,9 @@ export function fromDraftEntry(entry: DraftEntry): RoleRouteEntry {
   return out;
 }
 
-/**
- * Whether a draft entry selects exactly one route kind: exactly one of
- * engine/connection/provider... here: engine XOR connection (both empty means
- * "this connection, model-only" and is ALLOWED — the settings schema treats
- * an entry with no routing keys as model-on-the-session's-connection; both
- * SET is the fatal combination the schema rejects).
- */
+/** A route may select at most one engine, connection, or provider. */
 export function entryRouteValid(entry: DraftEntry): boolean {
-  return !(entry.engine !== "" && entry.connection.trim() !== "");
+  return Number(entry.engine !== "") + Number(entry.connection.trim() !== "") + Number(Boolean(entry.provider?.trim())) <= 1;
 }
 
 /** The whole draft's validity: every entry must be route-valid. */

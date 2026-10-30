@@ -258,3 +258,40 @@ describe("buildChildModelSettingsResolver", () => {
     expect(resolve("openrouter/foreign-model", "high").reasoningEffort).toBeUndefined();
   });
 });
+
+
+it("uses a connection model-window resolver independently for each child", () => {
+  const resolve = buildChildModelSettingsResolver({
+    catalogEntry: undefined, envMaxOutputTokens: undefined, envContextWindow: undefined,
+    contextWindowFor: (model) => model === "a" ? 128000 : 64000,
+  });
+  expect(resolve("a", undefined).contextWindowTokens).toBe(128000);
+  expect(resolve("b", undefined).contextWindowTokens).toBe(64000);
+});
+
+
+it("resolves xhigh for each child model and live capability set", () => {
+  const resolve = buildChildModelSettingsResolver({ catalogEntry: Z_AI_ENTRY, envMaxOutputTokens: undefined, envContextWindow: undefined,
+    liveCapabilitiesFor: (id) => ({ reasoning: true, effortLevels: id === "both" ? ["xhigh", "max"] : ["max"] }) });
+  expect(resolve("both", "xhigh").reasoningEffort).toBe("xhigh");
+  expect(resolve("only-max", "xhigh").reasoningEffort).toBe("max");
+  expect(resolve("glm-5.3", "xhigh").reasoningEffort).toBe("max");
+});
+
+it("uses the child's explicit vocabulary without inheriting another model's levels", () => {
+  const resolve = buildChildModelSettingsResolver({ catalogEntry: undefined, envMaxOutputTokens: undefined, envContextWindow: undefined, effortLevelsFor: (id) => id === "child" ? ["low", "high"] : undefined });
+  expect(resolve("child", "high").reasoningEffort).toBe("high");
+  expect(resolve("child", "xhigh").reasoningEffort).toBeUndefined();
+  expect(resolve("sibling", "high").reasoningEffort).toBeUndefined();
+});
+
+
+it("maps child effort using declared levels ahead of catalog and live capabilities", () => {
+  const resolve = buildChildModelSettingsResolver({
+    catalogEntry: Z_AI_ENTRY, envMaxOutputTokens: undefined, envContextWindow: undefined,
+    liveCapabilitiesFor: () => ({ reasoning: true, effortLevels: ["xhigh"] }),
+    effortLevelsFor: (id) => id === "glm-5.3" ? ["xhigh"] : ["max"],
+  });
+  expect(resolve("glm-5.3", "xhigh").reasoningEffort).toBe("xhigh");
+  expect(resolve("custom", "xhigh").reasoningEffort).toBe("max");
+});

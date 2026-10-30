@@ -557,3 +557,20 @@ describe("ANYCODE_PROMPT_CACHE_OPTIONS (GitHub #15)", () => {
     }
   });
 });
+
+
+describe("effort vocabulary environment", () => {
+  it("accepts and deduplicates a nonempty JSON vocabulary", () => {
+    const config = loadEnvConfig(envWith({ ANYCODE_API_KEY: "key", ANYCODE_MODEL: "m", ANYCODE_EFFORT_LEVELS: '["low","xhigh","low"]' }));
+    expect(config.effortLevels).toEqual(["low", "xhigh"]);
+  });
+  it("ignores invalid values and treats blank as absent", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (const value of ["[]", '["bogus"]', "invalid"]) {
+      expect(loadEnvConfig(envWith({ ANYCODE_API_KEY: "key", ANYCODE_MODEL: "m", ANYCODE_EFFORT_LEVELS: value })).effortLevels).toBeUndefined();
+    }
+    expect(warn).toHaveBeenCalledTimes(3);
+    expect(loadEnvConfig(envWith({ ANYCODE_API_KEY: "key", ANYCODE_MODEL: "m", ANYCODE_EFFORT_LEVELS: " " })).effortLevels).toBeUndefined();
+    warn.mockRestore();
+  });
+});

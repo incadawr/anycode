@@ -53,3 +53,11 @@ export function classifyEngineFailure(error: unknown): { code: SafeFailureCode; 
   else if (/protocol|unsupported|malformed|invalid.*response/i.test(text)) code = "engine_protocol";
   return { code, message: MESSAGES[code], ...(status !== undefined && Number.isInteger(status) && status >= 100 && status <= 599 ? { statusCode: status } : {}) };
 }
+
+/** Classify host stderr without returning its text. */
+export function classifyHostStderr(stderr: string): { kind?: string; systemCode?: string } {
+  const line = stderr.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").split(/\r?\n/).find((part) => /(?:^|\s)(?:[A-Za-z]*Error|Error):/.test(part));
+  const kind = line?.match(/\b(Error|SyntaxError|TypeError|ReferenceError|RangeError|URIError|EvalError):/)?.[1];
+  const systemCode = line?.match(/\b(EACCES|ENOENT|EPERM|EISDIR|ENOTDIR|EMFILE|ENFILE|ENOSPC|EROFS|ELOOP)\b/)?.[1];
+  return { ...(kind ? { kind } : {}), ...(systemCode ? { systemCode } : {}) };
+}

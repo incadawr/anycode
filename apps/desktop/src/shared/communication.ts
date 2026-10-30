@@ -22,6 +22,9 @@ export interface AgentDelivery {
  * cannot drift apart.
  */
 export const AGENT_MESSAGE_HEADER_PREFIX = "[AnyCode authenticated agent message ";
+export type SessionActivityState = "idle" | "running" | "waiting_approval" | "closing";
+export type SessionApiState = SessionActivityState | "crash_looped" | "missing_workspace";
+
 /**
  * What `get_session_status` answers (Sessions API). The model/effort block is
  * additive to the pre-existing state/steering fields and describes TWO things
@@ -39,13 +42,27 @@ export const AGENT_MESSAGE_HEADER_PREFIX = "[AnyCode authenticated agent message
 export interface SessionStatus {
   sessionId: string;
   engine: string;
-  state: string;
+  state: SessionActivityState;
   steering: { supported: boolean; ready: boolean; nativeTurnId?: string };
   model: string;
   effort: string | null;
   supportedEfforts: string[];
   appliedEffort: string | null;
   effortPending: boolean;
+}
+
+export interface TerminalSessionStatus {
+  sessionId: string;
+  engine: string;
+  state: "crash_looped";
+  hostFailure: import("./host-failure.js").HostFailure;
+}
+
+export interface MissingWorkspaceSessionStatus {
+  sessionId: string;
+  engine: string;
+  state: "missing_workspace";
+  missingWorkspace: true;
 }
 
 /** Internal main→host operation name (never a public MCP tool). */

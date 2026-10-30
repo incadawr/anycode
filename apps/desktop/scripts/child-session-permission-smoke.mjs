@@ -228,7 +228,7 @@ async function cdpConnect(port, timeoutMs = 60_000) {
  * present on the outer `.tool-call-card` in EVERY render, collapsed or not —
  * design/slice-P7.18-cut.md §4 W4) and reads the session-child badge's real
  * Blink geometry, plus whether ANY permission modal exists anywhere in the
- * document (the master-modal-absent half of п.6).
+ * document, including the forwarded permission dialog.
  */
 function masterBadgeGeometryJs(toolCallId) {
   return `(() => {
@@ -332,7 +332,7 @@ const CLICK_BREADCRUMB_MASTER_JS = `(() => {
 function spawnPromptPrimary(taskInstruction) {
   return (
     'Call the Agent tool exactly once, right now, in this turn. Use these exact parameter values: ' +
-    'tier: "session", agent_type: "general-purpose", description: a short 3-5 word summary of the task, ' +
+    'tier: "session", detach: false, agent_type: "general-purpose", description: a short 3-5 word summary of the task, ' +
     `and prompt: ${taskInstruction} You MUST include the tier parameter set to the literal string "session" — ` +
     'do not omit it, and do not use tier "inline". Invoke the tool now.'
   );
@@ -341,7 +341,7 @@ function spawnPromptRetry(taskInstruction) {
   return (
     'You did not call the Agent tool with the required tier parameter. The Agent tool you have access to ' +
     'accepts a `tier` parameter, and for a real child session it must be the literal string "session". Call ' +
-    `it NOW with tier set to "session", agent_type set to "general-purpose", a short description, and ${taskInstruction} ` +
+    `it NOW with tier set to "session", detach set to false, agent_type set to "general-purpose", a short description, and ${taskInstruction} ` +
     'You must invoke the tool itself, with a real tool call — do not just describe what you would do.'
   );
 }
@@ -476,7 +476,7 @@ async function step6PermissionAsk(ctx) {
     if (block === null) return undefined;
     if (block.subagent?.waiting === true) return block;
     if (block.subagent?.final !== null && block.subagent?.final !== undefined) return { neverAsked: true, block };
-    if (block.status === "success" || block.status === "error") return { neverAsked: true, block };
+    if (block.status === "error" || block.status === "cancelled") return { neverAsked: true, block };
     return undefined;
   });
   assert(step, waitingSeen !== null, `master card never reached a decidable state (waiting OR terminal) for toolCallId=${ctx.step6ToolCallId} within 30s`);
@@ -487,11 +487,9 @@ async function step6PermissionAsk(ctx) {
       `under mode="build" (either the model skipped Write, or the ask was bypassed). Final block: ${JSON.stringify(waitingSeen.block ?? waitingSeen)}`,
   );
 
-  // Master modal must NOT be up (structural: the master pane's own
-  // ConnectedPermissionModal reads the ROOT tab's own store, untouched by a
-  // child's own connection).
+  // The root has no own ask; its modal forwards the child request.
   const rootPermission = await rootPermissionState(ctx);
-  assert(step, rootPermission === null, `master's OWN /state permission field is non-null while the child is asking — the MASTER modal would be up: ${JSON.stringify(rootPermission)}`);
+  assert(step, rootPermission === null, `master's own permission state is non-null while the child is asking: ${JSON.stringify(rootPermission)}`);
 
   const badgeGeo = await ctx.cdp.eval(masterBadgeGeometryJs(ctx.step6ToolCallId));
   assert(step, badgeGeo.ok === true && badgeGeo.hasBadge === true, `master card badge not found in the DOM: ${JSON.stringify(badgeGeo)}`);
@@ -499,11 +497,18 @@ async function step6PermissionAsk(ctx) {
   assert(step, badgeGeo.rect.width > 0 && badgeGeo.rect.height > 0, `badge has zero getBoundingClientRect: ${JSON.stringify(badgeGeo.rect)}`);
   assert(step, badgeGeo.offsetHeight > 0, "badge offsetHeight is 0");
   assert(step, badgeGeo.display !== "none" && badgeGeo.visibility !== "hidden" && Number(badgeGeo.opacity) > 0, `badge not visually visible: display=${badgeGeo.display} visibility=${badgeGeo.visibility} opacity=${badgeGeo.opacity}`);
-  assert(step, badgeGeo.hitInsideBadge === true, `elementFromPoint at the badge's own center (hit tag=${badgeGeo.hitTag}) did NOT land inside the badge`);
-  assert(step, badgeGeo.globalModalPresent === false, `a permission modal exists in the DOM while viewing master — expected NONE: globalModalPresent=${badgeGeo.globalModalPresent} open=${badgeGeo.globalModalOpen}`);
+  const forwarded = await pollUntil(10_000, 200, async () => {
+    const geo = await ctx.cdp.eval(CHILD_PERMISSION_MODAL_JS);
+    return geo.ok && geo.open ? geo : undefined;
+  });
+  assert(step, forwarded !== null, "forwarded child permission did not appear in the parent");
+  const description = waitingSeen.subagent?.description;
+  assert(step, typeof description === "string" && description.trim().length > 0, "child description is missing");
+  const owner = await ctx.cdp.eval(`document.querySelector('dialog.permission-modal')?.textContent ?? ''`);
+  assert(step, owner.includes(`Subagent: ${description}`), `forwarded modal did not show the child description: ${owner}`);
   ctx.step6BadgeGeo = badgeGeo;
 
-  await saveScreenshot(ctx, "permission-step6-badge-master-no-modal");
+  await saveScreenshot(ctx, "permission-step6-forwarded-modal");
 
   // Open on the running child — the modal must now be visible in the CHILD surface.
   await apiAction(ctx, step, `/tabs/${ctx.tabId}/child/open`, { spawnToolCallId: ctx.step6ToolCallId });
@@ -539,12 +544,10 @@ async function step6PermissionAsk(ctx) {
   const settled = await pollUntil(TERMINAL_WAIT_TIMEOUT_MS, 300, async () => {
     const block = await findToolCallBlock(ctx, step, ctx.step6ToolCallId);
     if (block === null) return undefined;
-    const badgeCleared = block.subagent?.waiting !== true;
-    const terminal = block.status === "success" || block.status === "error";
-    return badgeCleared && terminal ? block : undefined;
+    return block.subagent?.final != null && block.subagent?.waiting !== true ? block : undefined;
   });
-  assert(step, settled !== null, `master card never both cleared the waiting badge AND reached a terminal status within ${TERMINAL_WAIT_TIMEOUT_MS}ms after allow`);
-  assert(step, settled.status === "success", `expected the child's task to succeed after allow, got status=${settled.status}: ${JSON.stringify(settled)}`);
+  assert(step, settled !== null, `child never reached its own final result and cleared the waiting badge within ${TERMINAL_WAIT_TIMEOUT_MS}ms after allow`);
+  assert(step, settled.subagent.final.status === "completed" && settled.subagent.final.finalTurnFinishReason !== "length", `expected the child to complete successfully after allow: ${JSON.stringify(settled.subagent.final)}`);
 
   const fileExists = existsSync(permProofPath);
   assert(step, fileExists, `Write was allowed but ${permProofPath} does not exist on disk — the effectful tool never actually ran`);
@@ -567,7 +570,7 @@ async function step6PermissionAsk(ctx) {
 
   pass(
     step,
-    `real permission-ask on a running child: badge visible on master (rect=${JSON.stringify(badgeGeo.rect)}), no master modal, ` +
+    `real permission-ask on a running child: badge visible and forwarded modal names the child (rect=${JSON.stringify(badgeGeo.rect)}), ` +
       `child-surface modal visible+real content after Open (rect=${JSON.stringify(modalGeo.rect)}, title="${modalGeo.titleText}"), ` +
       `allow via child tabId continued the child turn to success, badge cleared, ${permProofPath} written with PERMISSION-OK, ` +
       `child's durable row.mode="${childRow.mode}" (inherited from the root's own mode set before spawn)`,
@@ -689,6 +692,37 @@ async function step7Steering(ctx) {
   );
 }
 
+// Exercise handoff separately so no permission request spans its deadline.
+async function stepHandoff(ctx) {
+  const step = 6;
+  await waitUntilTab(ctx, step, ctx.tabId, { turnStatus: "idle" }, 30_000);
+  if (await ctx.cdp.eval(CHILD_PANE_MOUNTED_JS)) {
+    const back = await ctx.cdp.eval(CLICK_BREADCRUMB_MASTER_JS);
+    assert(step, back.ok === true, `could not return to master: ${JSON.stringify(back)}`);
+  }
+  const exclude = new Set([ctx.step6ToolCallId, ctx.step7ToolCallId].filter(Boolean));
+  const instruction = 'an instruction telling the subagent to call Bash with the exact command "sleep 135" and timeout 180000 milliseconds, wait for it to finish, then reply DONE without using further tools.';
+  const spawn = await spawnChild(ctx, step, instruction, 60_000, exclude);
+  assert(step, !spawn.skipped, `handoff child was not dispatched: ${spawn.skipReason}`);
+  ctx.handoffChildSessionId = spawn.entry.childSessionId;
+  const strip = await pollUntil(150_000, 250, async () => {
+    const block = await findToolCallBlock(ctx, step, spawn.toolCallId);
+    if (block?.subagent?.waiting === true || block?.subagent?.final != null) {
+      return { unexpected: block };
+    }
+    const elapsed = await ctx.cdp.eval(`document.querySelector('.background-agents-elapsed')?.textContent ?? null`);
+    return elapsed === null ? undefined : { elapsed, block };
+  });
+  assert(step, strip !== null && !strip.unexpected && /^2m |^[3-9]m |h /.test(strip.elapsed), `handoff elapsed time is incorrect or child stopped early: ${JSON.stringify(strip)}`);
+  assert(step, strip.block?.status === "success" && strip.block?.subagent?.final == null, `handoff did not leave the child running: ${JSON.stringify(strip.block)}`);
+  const exited = await pollUntil(TERMINAL_WAIT_TIMEOUT_MS, 500, async () => {
+    const { childRuns } = await getTranscriptBlocks(ctx, step, ctx.tabId);
+    return !childRuns.some((child) => child.childSessionId === spawn.entry.childSessionId) ? true : undefined;
+  });
+  assert(step, exited === true, "handoff child did not exit before cascade cleanup");
+  pass(step, `handoff displayed elapsed time ${strip.elapsed} while its child was still running`);
+}
+
 // ── п.12: SQLite cascade after root deletion ──
 
 async function step12SqliteCascade(ctx) {
@@ -699,7 +733,7 @@ async function step12SqliteCascade(ctx) {
   assert(step, rootSummary !== undefined && typeof rootSummary.sessionId === "string", `could not resolve the root tab's own sessionId off /state: ${JSON.stringify(rootSummary)}`);
   ctx.rootSessionId = rootSummary.sessionId;
 
-  const expectedChildIds = [ctx.step6ChildSessionId, ctx.step7ChildSessionId].filter((id) => typeof id === "string");
+  const expectedChildIds = [ctx.step6ChildSessionId, ctx.step7ChildSessionId, ctx.handoffChildSessionId].filter((id) => typeof id === "string");
   assert(step, expectedChildIds.length > 0, "no child session ids survived from steps 6/7 (both skipped?) — nothing for the cascade to prove");
 
   const before = await apiOk(ctx, step, "GET", "/child-runs");
@@ -764,7 +798,7 @@ async function step12SqliteCascade(ctx) {
 
   pass(
     step,
-    `cascade proven live: /child-runs showed both children before (${JSON.stringify([...beforeIds])}) and neither after; ` +
+    `cascade proven live: /child-runs showed the children before (${JSON.stringify([...beforeIds])}) and neither after; ` +
       `delete-tree deleted ${JSON.stringify(del.deletedSessionIds)}; raw post-quit scan of ${tableNames.length} tables ` +
       `(${JSON.stringify(tableNames)}) in ${ctx.profileDbPath} found ZERO residual rows referencing any deleted id`,
   );
@@ -956,6 +990,9 @@ async function run() {
     }
     if (await runTrackedStep(7, () => step7Steering(ctx))) {
       ctx.stepStatus[7] = ctx.step7Skipped ? "skipped" : "pass";
+    }
+    if (!(await runTrackedStep(6, () => stepHandoff(ctx)))) {
+      ctx.stepStatus[6] = "FAIL";
     }
     if (await runTrackedStep(12, () => step12SqliteCascade(ctx))) {
       ctx.stepStatus[12] = "pass";

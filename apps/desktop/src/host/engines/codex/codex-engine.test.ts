@@ -28,7 +28,7 @@ import {
   type CodexClient,
 } from "./codex-engine.js";
 
-import { CodexDynamicToolBridge, ANYCODE_AGENT_TOOL } from "./dynamic-tool-bridge.js";
+import { CodexDynamicToolBridge, ANYCODE_AGENT_TOOL, ANYCODE_AGENT_STATUS_TOOL } from "./dynamic-tool-bridge.js";
 import { createEngineBrowserBridge } from "../browser-bridge.js";
 
 const childPath = fileURLToPath(new URL("./test-child.mjs", import.meta.url));
@@ -493,9 +493,31 @@ describe("CodexEngine — native session boot", () => {
     expect(server.calls.find((call) => call.method === "thread/resume")?.params).toEqual({ threadId: "persisted-thread", cwd: "/work" });
   });
 
+  it("captures the native context notification during resume", async () => {
+    const server = new FakeAppServer();
+    const request = server.request.bind(server);
+    server.request = <T>(method: string, params?: unknown, opts?: { timeoutMs?: number }) => {
+      if (method === "thread/read") {
+        server.stream.push({ method: "thread/tokenUsage/updated", params: { threadId: "other", tokenUsage: { last: { totalTokens: 1 }, modelContextWindow: 2 } } });
+        server.stream.push({ method: "thread/tokenUsage/updated", params: { threadId: "persisted-thread", tokenUsage: { last: { totalTokens: 13500 }, modelContextWindow: 353400 } } });
+        server.stream.push({ method: "thread/tokenUsage/updated", params: { threadId: "persisted-thread", tokenUsage: { last: { totalTokens: -1 }, modelContextWindow: 0 } } });
+      }
+      return request<T>(method, params, opts);
+    };
+    const connected = await resumeNativeCodexSession(server, "/work", "persisted-thread");
+    expect(connected.initialContextUsage).toEqual({ estimatedTokens: 13500, budgetTokens: 353400, source: "provider" });
+    await connected.engine.dispose("session-close");
+  });
+
   it("accepts a GCP account returned by Codex 0.165", async () => {
     const server = new FakeAppServer();
     server.account = { type: "gcp" };
+    await expect(createNativeCodexSession(server, "/work")).resolves.toMatchObject({ threadId: "fresh-thread" });
+  });
+
+  it("accepts a ChatGPT account with a workspace name", async () => {
+    const server = new FakeAppServer();
+    server.account = { type: "chatgpt", workspaceName: "Workspace" };
     await expect(createNativeCodexSession(server, "/work")).resolves.toMatchObject({ threadId: "fresh-thread" });
   });
 
@@ -2873,7 +2895,7 @@ describe("CodexEngine — AnyCode dynamic tool integration", () => {
     const server = new FakeAppServer();
     await createNativeCodexSession(server, "/work", undefined, undefined, undefined, undefined, bridge);
     expect(server.calls.find((c) => c.method === "initialize")?.params).toMatchObject({ capabilities: { experimentalApi: true } });
-    expect(server.threadStartParams).toMatchObject({ dynamicTools: [expect.objectContaining({ name: ANYCODE_AGENT_TOOL })] });
+    expect(server.threadStartParams).toMatchObject({ dynamicTools: [expect.objectContaining({ name: ANYCODE_AGENT_TOOL }), expect.objectContaining({ name: ANYCODE_AGENT_STATUS_TOOL })] });
     server.calls.length = 0;
     await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, undefined, undefined, bridge);
     // 4764 review F17: the resume carries the same declarations thread/start
@@ -2881,7 +2903,7 @@ describe("CodexEngine — AnyCode dynamic tool integration", () => {
     expect(server.calls.find((c) => c.method === "thread/resume")?.params).toMatchObject({
       threadId: "persisted-thread",
       cwd: "/work",
-      dynamicTools: [expect.objectContaining({ name: ANYCODE_AGENT_TOOL })],
+      dynamicTools: [expect.objectContaining({ name: ANYCODE_AGENT_TOOL }), expect.objectContaining({ name: ANYCODE_AGENT_STATUS_TOOL })],
     });
   });
 

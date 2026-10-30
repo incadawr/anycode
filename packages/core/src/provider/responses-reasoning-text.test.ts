@@ -1,0 +1,46 @@
+import { describe, it, expect } from "vitest";
+import { ResponsesReasoningTextRecovery as Recovery } from "./responses-reasoning-text.js";
+const raw = (rawValue: unknown) => ({ type: "raw", rawValue });
+const delta = (item: string, text: string, content_index = 0) => raw({ type: "response.reasoning_text.delta", item_id: item, content_index, delta: text });
+const done = (id: string, content?: unknown) => raw({ type: "response.output_item.done", item: { type: "reasoning", id, content } });
+const textDone = (item_id: string, text: string, content_index = 0) => raw({ type: "response.reasoning_text.done", item_id, text, content_index });
+const feed = (r: Recovery, parts: unknown[]) => parts.flatMap(p => r.observe(p));
+const start = (id = "rs_1:0") => ({ type: "reasoning_start", id });
+const end = (id = "rs_1:0") => ({ type: "reasoning_end", id });
+const d = (text: string, id = "rs_1:0") => ({ type: "reasoning_delta", id, text });
+describe("Responses reasoning recovery", () => {
+ it("fills the reasoning block the SDK already opened", () => expect(feed(new Recovery(), [{type:"reasoning-start",id:"rs_1:0"},delta("rs_1","a"),delta("rs_1","b"),{type:"reasoning-end",id:"rs_1:0"},{type:"finish"}])).toEqual([d("a"),d("b")]));
+ it("synthesizes reasoning_start when no block is open and closes it on output_item.done", () => expect(feed(new Recovery(), [delta("rs_1","a"),done("rs_1")])).toEqual([start(),d("a"),end()]));
+ it("closes a synthesized block at finish-step when output_item.done never arrives", () => { const r=new Recovery(); r.observe(delta("rs_1","a")); expect(r.observe({type:"finish-step"})).toEqual([end()]); expect(r.observe({type:"finish"})).toEqual([]); });
+ it("emits reasoning_text.done text only for content parts that streamed no delta", () => expect(feed(new Recovery(), [delta("rs_1","x"),textDone("rs_1","x"),textDone("rs_1","y",1)])).toEqual([start(),d("x"),d("\n\ny")]));
+ it("separates consecutive streamed content parts with a blank line", () => expect(feed(new Recovery(), [delta("rs_1","a"),textDone("rs_1","a"),delta("rs_1","b",1),delta("rs_1","c",1)]).filter(e=>e.type === "reasoning_delta")).toEqual([d("a"),d("\n\nb"),d("c")]));
+ it("falls back to output_item.done content when nothing streamed", () => expect(feed(new Recovery(), [{type:"reasoning-start",id:"rs_1:0"},done("rs_1",[{type:"reasoning_text",text:"A"},{type:"other",text:"z"},{type:"reasoning_text",text:"B"}])])).toEqual([d("A\n\nB")]));
+ it("recovers final content parts that did not stream", () => expect(feed(new Recovery(), [delta("rs_1", "A"), done("rs_1", [{type:"reasoning_text",text:"A"},{type:"reasoning_text",text:"B"}])])).toEqual([start(),d("A"),d("\n\nB"),end()]));
+ it("flushes contiguous parts while retaining later gaps", () => {
+   const r = new Recovery();
+   expect(r.observe(delta("rs_1", "D", 3))).toEqual([]);
+   expect(r.observe(delta("rs_1", "B", 1))).toEqual([]);
+   expect(r.observe(delta("rs_1", "A"))).toEqual([start(), d("A")]);
+   expect(r.observe(textDone("rs_1", "A"))).toEqual([d("\n\nB")]);
+   expect(r.observe(delta("rs_1", "b", 1))).toEqual([d("b")]);
+   expect(r.observe(textDone("rs_1", "Bb", 1))).toEqual([]);
+   expect(r.observe(delta("rs_1", "C", 2))).toEqual([d("\n\nC")]);
+   expect(r.observe(textDone("rs_1", "C", 2))).toEqual([d("\n\nD")]);
+ });
+ it("holds later parts until preceding parts finish, while the stream stays open", () => {
+   const r = new Recovery();
+   expect(r.observe(delta("rs_1", "B", 1))).toEqual([]);
+   expect(r.observe(delta("rs_1", "A"))).toEqual([start(), d("A")]);
+   expect(r.observe(delta("rs_1", "a"))).toEqual([d("a")]);
+   expect(r.observe(textDone("rs_1", "Aa"))).toEqual([d("\n\nB")]);
+   expect(r.observe(delta("rs_1", "b", 1))).toEqual([d("b")]);
+   expect(r.observe(done("rs_1", [{type:"reasoning_text",text:"Aa"},{type:"reasoning_text",text:"Bb"}]))).toEqual([end()]);
+ });
+ it("keeps final content in index order when an earlier part did not stream", () => expect(feed(new Recovery(), [delta("rs_1", "B", 1), done("rs_1", [{type:"reasoning_text",text:"A"},{type:"reasoning_text",text:"B"}])])).toEqual([start(),d("A\n\nB"),end()]));
+ it("does not duplicate streamed text from done frames or item content", () => expect(feed(new Recovery(), [delta("rs_1","t"),textDone("rs_1","t"),done("rs_1",[{type:"reasoning_text",text:"t"}])])).toEqual([start(),d("t"),end()]));
+ it("lets a reasoning summary win over reasoning_text for the same item", () => expect(feed(new Recovery(), [{type:"reasoning-start",id:"rs_1:0"},{type:"reasoning-delta",id:"rs_1:0",text:"S"},delta("rs_1","t"),textDone("rs_1","t"),done("rs_1",[{type:"reasoning_text",text:"t"}])])).toEqual([]));
+ it("ignores reasoning_text after the item is done", () => { const r=new Recovery(); feed(r,[delta("rs_1","a"),done("rs_1")]); expect(r.observe(delta("rs_1","late"))).toEqual([]); });
+ it("keeps one block per reasoning item and closes synthesized ones in order", () => expect(feed(new Recovery(), [delta("rs_1","a"),delta("rs_2","b"),{type:"finish-step"}])).toEqual([start(),d("a"),start("rs_2:0"),d("b","rs_2:0"),end(),end("rs_2:0")]));
+ it("uses a fallback item id when item_id is missing", () => expect(new Recovery().observe(raw({type:"response.reasoning_text.delta",delta:"a"}))).toEqual([start("reasoning:0"),d("a","reasoning:0")]));
+ it("ignores malformed, empty and unrelated frames", () => expect(feed(new Recovery(), [null,"x",raw(null),delta("rs_1",""),raw({type:"response.reasoning_text.delta",delta:2}),raw({type:"response.reasoning_text.done"}),raw({type:"response.output_item.done",item:{type:"message"}}),done("rs_1","nope"),raw({type:"message_start"}),{type:"text-delta",id:"m",text:"x"}])).toEqual([]));
+});
