@@ -19,7 +19,7 @@ function renderedTextStep(text: string): ModelStreamEvent[] {
   return [{ type: "start" }, { type: "text_start", id: "t1" }, { type: "text_delta", id: "t1", text }, { type: "text_end", id: "t1" }, { type: "finish", finishReason: "stop", usage: {} }];
 }
 
-describe("TASK.117 — rendered reconnect (Session -> fresh desktopStore)", () => {
+describe("rendered reconnect (Session -> fresh desktopStore)", () => {
   it("restores a mid-stream steer once after the turn finishes", async () => {
     const h = createHarness({
       steps: [toolStep("first-tool", "Write", { file_path: "/workspace/first.txt", content: "ok" }), [{ type: "start" }, { type: "text_start", id: "held" }, { type: "text_delta", id: "held", text: "waiting" }, { type: "tool_call", toolCall: { id: "steer-tool", name: "Write", input: { file_path: "/workspace/steer.txt", content: "ok" } } }, { type: "finish", finishReason: "tool_calls", usage: {} }], renderedTextStep("finished")],
@@ -81,14 +81,15 @@ describe("TASK.117 — rendered reconnect (Session -> fresh desktopStore)", () =
   });
 
   for (const historyMaxItems of [500, 2]) {
-    it(`drains a refused steer once across reload with journal limit ${historyMaxItems}`, async () => {
+    it(`delivers a refused steer once after reconnect with journal limit ${historyMaxItems}`, async () => {
       const h = createHarness({ steps: [renderedTextStep("first answer"), renderedTextStep("next answer"), renderedTextStep("later answer")], gated: { parkAfterIndex: 2 }, historyMaxItems });
       let offset = 0;
+      const sent: UiToHostMessage[] = [];
       let listener: ((event: MessageEvent<HostToUiMessage>) => void) | null = null;
       const port = {
         get onmessage() { return listener; },
         set onmessage(value: typeof listener) { listener = value; },
-        postMessage(message: UiToHostMessage) { h.send(message); },
+        postMessage(message: UiToHostMessage) { sent.push(message); h.send(message); },
       } as unknown as MessagePort;
       const registry = () => createTabRegistry(createTabsStore(), () => createDesktopStore({ schedule: (fn) => fn() }));
       let tabs = registry();
@@ -115,6 +116,7 @@ describe("TASK.117 — rendered reconnect (Session -> fresh desktopStore)", () =
         await h.waitUntil(() => countLoopEnds(h) >= 2, 5000);
         await waitStore(() => texts(store).filter((text) => text === "same words").length === 1);
         expect(h.received.some((m) => m.type === "steer_requeued" && m.requestId === "refused")).toBe(true);
+        expect(sent.filter((m) => m.type === "user_message" && m.text === "same words")).toHaveLength(1);
         expect(h.engine.historyItems().filter((item) => item.message.role === "user" && item.message.content === "same words")).toHaveLength(1);
         expect(h.gated!.requests).toHaveLength(2);
         expect(h.gated!.requests[1]!.messages.filter((message) => message.role === "user" && message.content === "same words")).toHaveLength(1);
@@ -127,9 +129,9 @@ describe("TASK.117 — rendered reconnect (Session -> fresh desktopStore)", () =
         expect(h.outbound.ringView().some((message) => message.type === "steer_requeued" && message.requestId === "refused")).toBe(true);
         tabs.disposeTab("tab");
         tabs = registry();
+        const replayStart = h.received.length;
         tabs.registerPort("tab", "/workspace", port);
         store = tabs.getStore("tab")!;
-        const replayStart = offset;
         await h.waitUntil(() => h.received.slice(replayStart).some((m) => m.type === "presentation_replay_end"));
         await settle(15);
         if (historyMaxItems === 500) expect(texts(store).filter((text) => text === "same words")).toHaveLength(1);
@@ -139,6 +141,7 @@ describe("TASK.117 — rendered reconnect (Session -> fresh desktopStore)", () =
         }
         expect(store.getState().promptQueue).toHaveLength(0);
         expect(h.gated!.requests).toHaveLength(historyMaxItems === 500 ? 2 : 3);
+        expect(sent.filter((m) => m.type === "user_message" && m.text === "same words")).toHaveLength(1);
         expect(h.engine.historyItems().filter((item) => item.message.role === "user" && item.message.content === "same words")).toHaveLength(1);
       } finally {
         clearInterval(pump);
