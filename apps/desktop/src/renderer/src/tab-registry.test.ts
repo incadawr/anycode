@@ -618,6 +618,17 @@ describe("tab-registry — child-session registration (TASK.102 CUT-S2 §2.5, sl
     expect(registry.getStore("child-1")).toBeUndefined();
   });
 
+  it("retains a child expiry when the host exits immediately", () => {
+    const { registry, childRelationStore } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("child-1", "/ws/root", asPort(port), undefined, childField());
+    port.emit(HOST_READY("/ws/root", "sess-child"));
+    port.emit({ type: "approval_state", unattended: true, pending: null });
+    registry.markHostExited("child-1");
+    expect(registry.getStore("child-1")).toBeUndefined();
+    expect(childRelationStore.getState().getRelation("sess-root", "call-1")).toMatchObject({ live: false, approvalExpired: true });
+  });
+
   it("markHostExited on a child tab disposes its entry (TASK.102 CUT-S2 §10.10.2 R2): the store is dropped, the subscription is torn down, and the tabId is closed against a stray late port — while the relation survives for C4", () => {
     const tabsStore = createTabsStore();
     const { registry, childRelationStore } = createTestRegistry(tabsStore);

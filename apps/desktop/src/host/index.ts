@@ -1230,6 +1230,7 @@ async function bootCodexSession(
     args.child !== undefined ? buildChildBrokerEmit(emit) : emit,
     undefined, // default ask deadline
     rules,
+    args.child !== undefined,
   );
   // Taskana 4730: ask-zone classifier coverage for the Codex approval bridge.
   // Command kind only (see engine-classifier-boot.ts); the bridges take the
@@ -1891,6 +1892,7 @@ async function bootClaudeSession(
     args.child !== undefined ? buildChildBrokerEmit(emit) : emit,
     undefined, // default ask deadline
     rules,
+    args.child !== undefined,
   );
   // Taskana 4730: ask-zone classifier coverage for the Claude approval bridge
   // (same shape as the codex boot above).
@@ -3883,7 +3885,7 @@ async function boot(): Promise<void> {
     // Open'ing the child surface. Non-child boots keep the bare `emit`,
     // byte-identical to every pre-S2 host. CUT-S4 §4.1: `buildChildBrokerEmit`
     // is the exact same body, extracted so codex/claude share it too.
-    const broker = new IpcPermissionBroker(args.child !== undefined ? buildChildBrokerEmit(emit) : emit);
+    const broker = new IpcPermissionBroker(args.child !== undefined ? buildChildBrokerEmit(emit) : emit, undefined, null, args.child !== undefined);
 
     // Boot context-window resolution (slice 6.4, mirror of cli/main.ts):
     // env ANYCODE_CONTEXT_WINDOW > catalog window of the session model > absent

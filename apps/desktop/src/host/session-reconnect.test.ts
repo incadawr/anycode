@@ -243,6 +243,7 @@ describe("TASK.117 — rendered reconnect (Session -> fresh desktopStore)", () =
       // is NOT settled and there is EXACTLY ONE of it.
       expect(["proposed", "running"]).toContain(freshCards[0]?.kind === "tool_call" ? freshCards[0].status : undefined);
       expect(fresh.getState().permission?.requestId).toBe(ask.requestId);
+      expect(ask.deadline).toEqual(expect.any(Number));
       expect(fresh.getState().permission?.deadline).toBe(ask.deadline);
 
       // ── Settle the parked ask: the emitted tool_result lands on the FRESH

@@ -481,6 +481,9 @@ export function createTabRegistry(
       // §3.3 respawn semantics) — dispatch AFTER that reset, or a queued
       // initial prompt appended before it would be wiped along with it (§4.2).
       entry.store.getState().applyHostMessage(message);
+      if (entry.isChild && message.type === "approval_state" && message.unattended) {
+        childRelationStore.getState().noteApprovalExpired(tabId);
+      }
       // Taskana 4234: renderer-local provider-switch markers are restored at
       // their recorded history boundaries right after the hydrated history
       // lands (chronological insert, ids already present skipped) — same
@@ -700,7 +703,7 @@ export function createTabRegistry(
         // never added to the tabs-store) — flip the relation instead, so
         // C3's Open/breadcrumb read `live: false` and fall back to the
         // read-only history channel (C4) instead of a dead port.
-        childRelationStore.getState().markChildGone(tabId);
+        childRelationStore.getState().markChildGone(tabId, entry.store.getState().unattended);
         // TASK.102 CUT-S2 §10.10.2 (R2, O4/F3-R): a terminated child host
         // never respawns (main's own reap-on-terminal verdict, §0), and a
         // child's own tabId can never reach `disposeTab` — main's `closeTab`

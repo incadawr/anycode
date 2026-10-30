@@ -2718,6 +2718,9 @@ export class Session {
             this.currentTurn = null;
           });
         break;
+      case "approval_visibility":
+        this.broker.setApprovalVisibility(message.requestId, message.visible);
+        break;
       case "approval_recover":
         this.broker.noteHumanPresent();
         this.outbound.sendDirect(this.broker.approvalState());
