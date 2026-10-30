@@ -23,7 +23,7 @@ import type { DesktopStoreApi } from "../tab-registry.js";
 import { TabContext } from "../tab-context.js";
 import { childLayoutStore } from "../child-layout.js";
 import { useDockStore } from "../dock/dock-store.js";
-import { DOCK_WIDTH_STORAGE_KEY, DOCK_WIDTH_MAX, DOCK_WIDTH_MIN } from "../dock/dock-layout.js";
+import { DOCK_SPLIT_MIN_PX, DOCK_WIDTH_STORAGE_KEY, DOCK_WIDTH_MAX, DOCK_WIDTH_MIN, dockMinWidth } from "../dock/dock-layout.js";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -124,18 +124,19 @@ describe("dock resize handle placement (GitHub #31)", () => {
     expect(handle!.getAttribute("role")).toBe("separator");
   });
 
+  /** jsdom has no PointerEvent constructor — a MouseEvent dispatched under
+      the pointer event types carries the clientX/pointerId the handlers
+      read (0 for plain MouseEvents). */
+  function pointerEvent(type: string, x: number, pointerId = 0): MouseEvent & { pointerId: number } {
+    return Object.assign(new MouseEvent(type, { clientX: x, bubbles: true }), { pointerId });
+  }
+
   it("dragging the separator changes the width (clamped) and persists anycode.dock.width on release", async () => {
     await mountBody();
     await openDockTab();
 
     const handle = container.querySelector(".session-content-split-open > .review-resize-handle") as HTMLElement;
     expect(handle).not.toBeNull();
-
-    // jsdom has no PointerEvent constructor — a MouseEvent dispatched under
-    // the pointer event types carries the clientX the handlers read.
-    function pointerEvent(type: string, x: number): MouseEvent {
-      return new MouseEvent(type, { clientX: x, bubbles: true });
-    }
 
     // 640 → drag 120px left → 760, persisted on pointerup.
     handle.dispatchEvent(pointerEvent("pointerdown", 800));
@@ -158,5 +159,64 @@ describe("dock resize handle placement (GitHub #31)", () => {
     expect(useDockStore.getState().width).toBe(DOCK_WIDTH_MIN);
     await act(async () => window.dispatchEvent(pointerEvent("pointerup", 2400)));
     expect(localStorage.getItem(DOCK_WIDTH_STORAGE_KEY)).toBe(String(DOCK_WIDTH_MIN));
+  });
+
+  it("pointercancel ends the drag, and a foreign pointer's moves never resize", async () => {
+    await mountBody();
+    await openDockTab();
+
+    const handle = container.querySelector(".session-content-split-open > .review-resize-handle") as HTMLElement;
+    expect(handle).not.toBeNull();
+
+    // The drag starts with pointer 1.
+    handle.dispatchEvent(pointerEvent("pointerdown", 900, 1));
+    expect(useDockStore.getState().width).toBe(640);
+    // A SECOND pointer's moves (pointer 2) must be ignored entirely.
+    await act(async () => window.dispatchEvent(pointerEvent("pointermove", 100, 2)));
+    expect(useDockStore.getState().width).toBe(640);
+    // The initiating pointer resizes.
+    await act(async () => window.dispatchEvent(pointerEvent("pointermove", 700, 1)));
+    expect(useDockStore.getState().width).toBe(840);
+    // pointercancel ends the drag (persists like pointerup)…
+    await act(async () => window.dispatchEvent(pointerEvent("pointercancel", 700, 1)));
+    expect(localStorage.getItem(DOCK_WIDTH_STORAGE_KEY)).toBe("840");
+    // …so later moves — from ANY pointer — no longer resize.
+    await act(async () => window.dispatchEvent(pointerEvent("pointermove", 200, 1)));
+    expect(useDockStore.getState().width).toBe(840);
+    await act(async () => window.dispatchEvent(pointerEvent("pointermove", 200, 2)));
+    expect(useDockStore.getState().width).toBe(840);
+  });
+
+  it("with a pane pinned (split), the drag floor leaves the active pane visible — never DOCK_WIDTH_MIN", async () => {
+    await mountBody();
+    await openDockTab();
+
+    // Pin a second pane (the dock store's splitRight — the ⫿ button's path).
+    // A 1600px window is past the 1076px canSplit gate, so the pin sticks.
+    await act(async () => {
+      useDockStore.getState().open({ id: "git", kind: "git", title: "Review" });
+      useDockStore.getState().splitRight("git", true);
+    });
+    expect(useDockStore.getState().splitTabId).toBe("git");
+
+    const handle = container.querySelector(".session-content-split-open > .review-resize-handle") as HTMLElement;
+    expect(handle).not.toBeNull();
+
+    // Drag far right: with the pane pinned the dock may not shrink under
+    // DOCK_WIDTH_MIN + DOCK_SPLIT_MIN_PX (the pinned 320px pane is an
+    // absolute overlay of the dock body — at the plain min it would cover
+    // the active pane entirely).
+    handle.dispatchEvent(pointerEvent("pointerdown", 800));
+    await act(async () => window.dispatchEvent(pointerEvent("pointermove", 2400)));
+    expect(useDockStore.getState().width).toBe(DOCK_WIDTH_MIN + DOCK_SPLIT_MIN_PX);
+    await act(async () => window.dispatchEvent(pointerEvent("pointerup", 2400)));
+    expect(localStorage.getItem(DOCK_WIDTH_STORAGE_KEY)).toBe(String(DOCK_WIDTH_MIN + DOCK_SPLIT_MIN_PX));
+
+    // Unpinning restores the plain floor (the original single-pane min).
+    await act(async () => useDockStore.getState().mergeSplit());
+    handle.dispatchEvent(pointerEvent("pointerdown", 800));
+    await act(async () => window.dispatchEvent(pointerEvent("pointermove", 2400)));
+    expect(useDockStore.getState().width).toBe(DOCK_WIDTH_MIN);
+    await act(async () => window.dispatchEvent(pointerEvent("pointerup", 2400)));
   });
 });
