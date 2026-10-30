@@ -10,6 +10,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Xiaomi MiMo pay-as-you-go API is available as a provider (mimo-v2.6-pro and mimo-v2.6-flash, with per-token cost tracking).
+- A built-in using-subagents skill teaches the model how to delegate: picking the inline or session tier, detach, models, parallel limits, the shared checkout, reading max_turns and other outcomes, and writing a self-contained child prompt; Agent errors now point at it (GitHub #9).
 
 ### Fixed
 

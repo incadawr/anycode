@@ -14,7 +14,7 @@ const names = (list: readonly { name: string }[]): string[] => list.map((skill) 
 describe("buildHostBuiltinSkills", () => {
   it("always registers the unconditional skills (subagent authoring and anycode-setup)", () => {
     const list = buildHostBuiltinSkills({ worktreeAvailable: false, previewAvailable: false, anycodeSetupDocs: DOCS });
-    expect(names(list)).toEqual(["creating-subagents", "anycode-setup"]);
+    expect(names(list)).toEqual(["using-subagents", "creating-subagents", "anycode-setup"]);
   });
 
   it("adds the worktree and preview skills only when their capability is available", () => {
@@ -23,6 +23,7 @@ describe("buildHostBuiltinSkills", () => {
       "using-git-worktrees",
       "using-browser-preview",
       "control-browser",
+      "using-subagents",
       "creating-subagents",
       "anycode-setup",
     ]);

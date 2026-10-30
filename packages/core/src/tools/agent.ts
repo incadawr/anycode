@@ -161,7 +161,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         return {
           ok: false,
           errorKind: "invalid_input",
-          error: 'Agent: "provider" is only valid with tier "session".',
+          error: 'Agent: "provider" is only valid with tier "session". See the using-subagents skill.',
         };
       }
 
@@ -176,7 +176,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         return {
           ok: false,
           errorKind: "invalid_input",
-          error: 'Agent: "detach" is only valid with tier "session".',
+          error: 'Agent: "detach" is only valid with tier "session". See the using-subagents skill.',
         };
       }
 
@@ -227,7 +227,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         return {
           ok: false,
           errorKind: "invalid_input",
-          error: `Unknown agent_type "${agentType}". Available agent types: ${available.join(", ")}.`,
+          error: `Unknown agent_type "${agentType}". Available agent types: ${available.join(", ")}. See the using-subagents skill.`,
         };
       }
 
@@ -488,7 +488,7 @@ async function runSessionTier(
   if (!ctx.sessionSubagents) {
     return {
       ok: false,
-      error: "Agent: session-tier subagents are unavailable in this host.",
+      error: "Agent: session-tier subagents are unavailable in this host. See the using-subagents skill.",
     };
   }
 
