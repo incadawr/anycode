@@ -1458,6 +1458,16 @@ body {
   color: var(--text-1);
 }
 
+/* Audit D12: a title that is one unbroken token (path/filename) has no word
+   boundary, so ellipsis cut it mid-word; it wraps on its own lines instead
+   (word-wrap breaks the long token at the container edge). */
+.session-header-title-wrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  line-height: 1.25;
+}
+
 .session-header-chip {
   flex-shrink: 0;
   max-width: 22ch;
