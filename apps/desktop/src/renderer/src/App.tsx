@@ -875,6 +875,7 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
     if (childRelation !== undefined && childRelation.live) {
       return (
         <>
+          <ApprovalStatus />
           <ConnectedPermissionModal />
           {permissionForwarder}
           <ChildSessionPane
@@ -890,6 +891,7 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
     }
     return (
       <>
+        <ApprovalStatus />
         <ConnectedPermissionModal />
         {permissionForwarder}
         <ChildHistoryPane
