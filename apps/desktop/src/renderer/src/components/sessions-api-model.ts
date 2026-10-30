@@ -110,9 +110,11 @@ export function mutationRefusalText(reason: CommunicationMutationReason): string
   }
 }
 
-/** Per-tab switch wording: the switch is disabled with a reason under the env override or for an unknown tab. */
-export function sessionSwitchLabel(enabled: boolean): string {
-  return enabled ? "Sessions API: shared with external agents" : "Sessions API: not shared";
+/** Per-tab switch wording: a short row title plus the state on its secondary line. */
+export const SESSION_SWITCH_TITLE = "Sessions API";
+
+export function sessionSwitchDetail(enabled: boolean): string {
+  return enabled ? "Shared with external agents" : "Not shared";
 }
 
 export function sessionSwitchDisabledReason(envControlled: boolean, hasTab: boolean): string | null {
@@ -131,6 +133,8 @@ export function sessionApprovalsLabel(enabled: boolean): string {
 
 export const SESSION_HANDLE_LABEL = "Handle (optional)";
 export const SESSION_HANDLE_PLACEHOLDER = "Name for agents (optional)";
+/** The row's secondary line; the full explanation stays on the field's tooltip. */
+export const SESSION_HANDLE_DETAIL = "Name external agents see in list_sessions";
 /** Tooltip on the handle field: what the name is for. */
 export const SESSION_HANDLE_HINT = "A short name external agents see in list_sessions to find this session, e.g. build-bot. Leave empty to show only the session id.";
 
