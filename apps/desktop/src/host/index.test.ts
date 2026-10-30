@@ -657,13 +657,13 @@ describe("host subagent model-override wiring", () => {
   });
 
   it("Taskana 4704 F5: the respawn notice rides the FAILED child's id; a refused respawn reports honestly", async () => {
-    const source = await readHostSource();
+    const source = await readFile(new URL("./routed-child-composition.ts", import.meta.url), "utf8");
     // F5(b): the retrying notice is queued under the FAILED child's
     // spawnToolCallId (a completed marker for a spawn that DID happen,
     // consumed once the renderer acks it) — NOT under the respawn's fresh id
     // (the renderer's originId dedupe would swallow the real report of the
     // respawned child when it eventually arrives under that same id).
-    expect(source).toContain("childReportQueue.add(req.spawnToolCallId, decision.notice");
+    expect(source).toContain("options.report(req.spawnToolCallId, decision.notice");
     // F5(c): the respawn run()'s admit outcome is HANDLED — a refused
     // respawn (cap/shape) delivers an honest error report under the failed
     // child's id instead of a silent "retrying" with no follow-up.

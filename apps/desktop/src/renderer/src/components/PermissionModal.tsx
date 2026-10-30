@@ -453,6 +453,15 @@ export function PermissionModal({
   const denyRef = useRef<HTMLButtonElement>(null);
   const [alwaysAllow, setAlwaysAllow] = useState(false);
   const [pattern, setPattern] = useState("");
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (request?.deadline === undefined) return;
+    const update = () => setNow(Date.now());
+    update();
+    const timer = setInterval(update, 1000);
+    document.addEventListener("visibilitychange", update);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", update); };
+  }, [request?.requestId, request?.deadline]);
 
   // R17 a11y: capture the pre-modal focus on mount and restore it on unmount.
   // This native <dialog> hides by React-unmount (the `if (!request) return null`
@@ -634,6 +643,10 @@ export function PermissionModal({
       </div>
 
       <div className="permission-modal-body">
+        {request.deadline !== undefined && (() => {
+          const seconds = Math.max(0, Math.ceil((request.deadline - now) / 1000));
+          return <p><span aria-hidden="true">Automatically denied in {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")} if unanswered.</span><span className="visually-hidden" role="status">This request will be automatically denied if unanswered.</span></p>;
+        })()}
         {/* TASK.27: the plan IS the payload — rendered as markdown through the
             same lexer-only renderer the transcript uses (no innerHTML), instead
             of the generic JSON `Input` dump, which is unreadable for prose. */}

@@ -440,6 +440,7 @@ export function SessionSurface({ tabId, onToast, suppressPermissionModal = false
   return (
     <>
       <div className="session-conversation">
+        <ApprovalStatus />
         <HostBanner connection={connection} lastFatal={lastFatal} workspaceMissing={workspaceMissing} hostFailure={hostFailure} />
 
         <MessageList
@@ -1839,4 +1840,11 @@ export function App() {
       {window.anycode?.platform !== "darwin" && <WindowControls maximized={windowState.maximized} />}
     </main>
   );
+}
+
+function ApprovalStatus() {
+  const unattended = useTabStore((state) => state.unattended);
+  const send = useTabSend();
+  if (!unattended) return null;
+  return <div className="banner banner-info approval-status" role="status">An unanswered request expired. New approval requests are being denied automatically. <button type="button" onClick={() => send({ type: "approval_recover" })}>Ask me again</button></div>;
 }

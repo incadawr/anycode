@@ -52,3 +52,33 @@ it("updates late descriptions and answers the correct sibling", async () => {
     lookup.mockRestore(); send.mockRestore();
   }
 });
+
+
+it("shows child expiry and sends recovery only to that child", async () => {
+  const parent = createDesktopStore();
+  const first = createDesktopStore();
+  const second = createDesktopStore();
+  parent.getState().applyHostMessage({ type: "host_ready", workspace: "/w", mode: "build", model: "m", sessionId: "parent" });
+  for (const [store, id] of [[first, "one"], [second, "two"]] as const) store.getState().applyHostMessage({ type: "host_ready", workspace: "/w", mode: "build", model: "m", sessionId: id });
+  first.getState().applyHostMessage({ type: "approval_state", unattended: true, pending: null });
+  const lookup = vi.spyOn(tabRegistry, "getStore").mockImplementation((id) => id === "tab-one" ? first : id === "tab-two" ? second : undefined);
+  const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+  childRelationStore.getState().registerChild("parent", "call-one", "tab-one", "one");
+  childRelationStore.getState().registerChild("parent", "call-two", "tab-two", "two");
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "parent-tab", store: parent } }, createElement(ConnectedChildPermissionModal))));
+    expect(container.textContent).toContain("Subagent: one");
+    expect(container.textContent).toContain("denied automatically");
+    await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+    expect(send).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledWith("tab-one", { type: "approval_recover" });
+    await act(async () => first.getState().applyHostMessage({ type: "approval_state", unattended: false, pending: null }));
+    expect(container.textContent).not.toContain("denied automatically");
+  } finally {
+    await act(async () => root.unmount());
+    childRelationStore.getState().reset();
+    lookup.mockRestore(); send.mockRestore();
+  }
+});

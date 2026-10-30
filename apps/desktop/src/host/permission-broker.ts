@@ -98,9 +98,11 @@ const NO_BYPASS_CLAUSE =
   `a script that writes the file, etc.) — that circumvents the approval policy. `;
 
 function unansweredDenyReason(toolName: string, timeoutMs: number): string {
+  const seconds = Math.ceil(timeoutMs / 1000);
+  const duration = seconds % 60 === 0 ? `${seconds / 60} ${seconds === 60 ? "minute" : "minutes"}` : `${seconds} seconds`;
   return (
-    `${toolName}: no one answered the approval request (it expired after ${timeoutMs}ms). ` +
-    `This is NOT a refusal on the merits and NOT a failure of the command — there is no human at the screen. ` +
+    `${toolName}: the approval request expired unanswered after ${duration}. ` +
+    `This is NOT a refusal on the merits and NOT a failure of the command. ` +
     `Retrying this command, or a rephrased equivalent, will be denied the same way. ` +
     NO_BYPASS_CLAUSE +
     `Continue with work that needs no approval, or stop and report exactly what is blocked.`
@@ -447,7 +449,30 @@ export class IpcPermissionBroker implements PermissionBroker {
    * Idempotent and safe to call when the latch was never armed.
    */
   noteHumanPresent(): void {
-    this.unattended = false;
+    if (this.unattended) {
+      this.unattended = false;
+      this.emitApprovalState();
+    }
+  }
+
+  approvalState(): Extract<HostToUiMessage, { type: "approval_state" }> {
+    const shown = this.pendingShownRequest();
+    const entry = this.current === null ? undefined : this.pending.get(this.current);
+    const pending = shown && entry && entry.presentedAt !== null && entry.presentedTimeoutMs !== null
+      ? {
+          requestId: shown.requestId,
+          toolName: shown.request.toolName,
+          input: shown.request.input,
+          mode: shown.request.mode,
+          metadata: toWireToolMeta(shown.request.metadata),
+          deadline: entry.presentedAt + entry.presentedTimeoutMs,
+        }
+      : null;
+    return { type: "approval_state", unattended: this.unattended, pending };
+  }
+
+  private emitApprovalState(): void {
+    this.emit(this.approvalState());
   }
 
   /** Whether asks are currently short-circuited because nobody answered (diagnostics / tests). */
@@ -519,6 +544,7 @@ export class IpcPermissionBroker implements PermissionBroker {
       // An expired ask is evidence that nobody is watching; every later ask in
       // this session is denied outright until a human proves otherwise.
       this.unattended = true;
+      this.emitApprovalState();
       this.settle(
         requestId,
         {
@@ -530,6 +556,7 @@ export class IpcPermissionBroker implements PermissionBroker {
     }, timeoutMs);
     this.emit({
       type: "permission_request",
+      deadline: entry.presentedAt + timeoutMs,
       requestId,
       toolName: entry.request.toolName,
       input: entry.request.input,

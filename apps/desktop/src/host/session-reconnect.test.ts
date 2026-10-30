@@ -243,6 +243,7 @@ describe("TASK.117 — rendered reconnect (Session -> fresh desktopStore)", () =
       // is NOT settled and there is EXACTLY ONE of it.
       expect(["proposed", "running"]).toContain(freshCards[0]?.kind === "tool_call" ? freshCards[0].status : undefined);
       expect(fresh.getState().permission?.requestId).toBe(ask.requestId);
+      expect(fresh.getState().permission?.deadline).toBe(ask.deadline);
 
       // ── Settle the parked ask: the emitted tool_result lands on the FRESH
       // store (live result for a call whose proposal hydrated durable) ──
@@ -256,6 +257,10 @@ describe("TASK.117 — rendered reconnect (Session -> fresh desktopStore)", () =
       const settled = fresh.getState().transcript.find((b) => b.kind === "tool_call" && b.toolCallId === "c1");
       expect(settled).toMatchObject({ status: "success" });
       expect(fresh.getState().turn.status).toBe("idle");
+      const reconnectAt = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(reconnectAt).some((m) => m.type === "approval_state"));
+      expect(h.received.slice(reconnectAt)).toContainEqual({ type: "approval_state", unattended: false, pending: null });
     } finally {
       h.close();
     }

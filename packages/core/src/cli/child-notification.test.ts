@@ -576,8 +576,8 @@ describe("formatChildApprovalNotice (Taskana 4821)", () => {
     const text = formatChildApprovalNotice({ ...base, askTimeoutMs: 120_000 });
     expect(text).toContain("If that deadline has already passed");
     expect(text).toContain("the request was denied and further requests from this child are auto-denied");
-    expect(text).toContain("until a human interacts with the child session");
-    expect(text).toContain("open or answer the child session");
+    expect(text).toContain("until a human chooses Ask me again for the child");
+    expect(text).toContain("does not approve or retry the denied operation");
   });
 
   it("states the no-bypass consequence honestly — the child is INSTRUCTED, not mechanically prevented; suggests verifying the target (review F2)", () => {
