@@ -70,6 +70,13 @@ describe("ConfirmDialog (SSR render)", () => {
     expect(html).toContain('class="git-confirm-confirm"');
     expect(html).toContain(">Delete<");
   });
+
+  // GitHub #33: "Wait" names declining better than "Cancel" when the action is
+  // only postponed — the optional label must not change any other caller.
+  it("lets the request name the declining button, defaulting to Cancel", () => {
+    expect(renderDialog({ request: { ...request, cancelLabel: "Wait" } })).toContain(">Wait<");
+    expect(renderDialog()).not.toContain(">Wait<");
+  });
 });
 
 describe("runDialogCancel", () => {

@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Switching a session to a provider on another connection asks before it cancels running subagents, naming how many will stop (GitHub #33).
+
 ## [0.0.53] — 2026-10-30
 
 ### Changed

@@ -1263,6 +1263,21 @@ export class TabHostManager {
     return this.rootCount() >= this.effectiveMaxTabs();
   }
 
+  /**
+   * How many live child sessions (background executors or session-tier
+   * subagents) are currently tracked under `parentTabId` (GitHub #33).
+   *
+   * Read straight off `childrenByParentTab`, the same index `drainChildren`
+   * empties: an entry exists from `admitChildSpawn` until `finalizeChildRun`
+   * releases it, so the count is exactly the set a rebind/close/relocate
+   * would cancel — nothing more (a queued waiter has no host to cancel and
+   * is reported as 0 here) and nothing less (a child still tearing down is
+   * still a child that would be cut off).
+   */
+  runningChildCount(parentTabId: string): number {
+    return this.childrenByParentTab.get(parentTabId)?.size ?? 0;
+  }
+
   /** Settings value -> clamped; NO reader value -> `limits.maxTabs` verbatim (test injection of 1/3 must survive). */
   private effectiveMaxTabs(): number {
     const configured = this.maxTabsReader?.();
