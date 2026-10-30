@@ -351,6 +351,8 @@ export interface WireContextBreakdown {
  * "provider did not report", never 0.
  */
 export interface WireUsageAuditStep {
+  generationDurationMs?: number;
+  timeToFirstTokenMs?: number;
   turnId: string;
   step: number;
   createdAt: number;
@@ -369,6 +371,7 @@ export interface WireUsageAuditStep {
 
 /** Honest session totals folded from the durable step list; `stepsReported`/`stepsWithCache` expose the coverage. */
 export interface WireUsageAuditTotals {
+  generationTokensPerSecond?: number;
   input: number;
   output: number;
   total: number;

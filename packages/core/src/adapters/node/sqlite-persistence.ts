@@ -442,6 +442,10 @@ const MIGRATIONS: readonly Migration[] = [
       )`,
     ],
   },
+  { version: 30, statements: [
+    "ALTER TABLE provider_usage ADD COLUMN generation_duration_ms REAL",
+    "ALTER TABLE provider_usage ADD COLUMN time_to_first_token_ms REAL",
+  ] },
 ];
 
 /**
@@ -767,6 +771,8 @@ function rowToCodexShadowCommandItem(row: CodexThreadItemRow): CodexShadowComman
 /** One completed model step's provider-reported usage (migration v19, append-only). */
 export interface ProviderUsageRecord {
   subagentId?: string;
+  generationDurationMs?: number;
+  timeToFirstTokenMs?: number;
   sessionId: string;
   turnId: string;
   step: number;
@@ -787,6 +793,8 @@ export interface ProviderUsageRecord {
 
 interface ProviderUsageRow {
   subagent_id: string | null;
+  generation_duration_ms: number | null;
+  time_to_first_token_ms: number | null;
   session_id: string;
   turn_id: string;
   step: number;
@@ -809,6 +817,8 @@ interface ProviderUsageRow {
 function rowToProviderUsage(row: ProviderUsageRow): ProviderUsageRecord {
   return {
     ...(row.subagent_id !== null ? { subagentId: row.subagent_id } : {}),
+    ...(row.generation_duration_ms !== null ? { generationDurationMs: row.generation_duration_ms } : {}),
+    ...(row.time_to_first_token_ms !== null ? { timeToFirstTokenMs: row.time_to_first_token_ms } : {}),
     sessionId: row.session_id,
     turnId: row.turn_id,
     step: row.step,
@@ -1735,8 +1745,8 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       `INSERT OR IGNORE INTO provider_usage
          (session_id, turn_id, step, created_at, model, reasoning_effort,
           input_tokens, cached_input_tokens, output_tokens, total_tokens,
-          finish_reason, transport_retries, cost_usd, cache_savings_usd, price_basis_id, cache_write_tokens, subagent_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          finish_reason, transport_retries, cost_usd, cache_savings_usd, price_basis_id, cache_write_tokens, subagent_id, generation_duration_ms, time_to_first_token_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       record.sessionId,
       record.turnId,
@@ -1755,6 +1765,8 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       record.priceBasisId ?? null,
       record.cacheWriteTokens ?? null,
       record.subagentId ?? null,
+      record.generationDurationMs ?? null,
+      record.timeToFirstTokenMs ?? null,
     );
   }
 

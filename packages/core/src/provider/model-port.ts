@@ -870,6 +870,11 @@ export class AiSdkModelPort implements ModelPort {
 
       try {
         const model = await this.buildAttemptModel(attemptIncludeUsage, onResponseActivity);
+        const requestStartedAt = performance.now();
+        let firstTokenAt: number | undefined;
+        const observeOutput = (event: ModelStreamEvent): void => {
+          if (firstTokenAt === undefined && ((event.type === "text_delta" && event.text.length > 0) || (event.type === "reasoning_delta" && event.text.length > 0) || (event.type === "tool_input_delta" && event.delta.length > 0))) firstTokenAt = performance.now();
+        };
         const result = streamText({
           model,
           // System prompt goes out-of-band: ai@7 rejects system-role messages
@@ -930,6 +935,7 @@ export class AiSdkModelPort implements ModelPort {
 
           if (reasoningTextRecovery !== undefined) {
             for (const recovered of reasoningTextRecovery.observe(outcome.value)) {
+              observeOutput(recovered);
               if (isModelOutputEvent(recovered)) hadModelOutput = true;
               yield recovered;
             }
@@ -943,6 +949,11 @@ export class AiSdkModelPort implements ModelPort {
           });
           if (event === null) {
             continue;
+          }
+          observeOutput(event);
+          if (event.type === "finish" && firstTokenAt !== undefined) {
+            const finishedAt = performance.now();
+            event = { ...event, timeToFirstTokenMs: Math.max(0, firstTokenAt - requestStartedAt), generationDurationMs: Math.max(0, finishedAt - firstTokenAt) };
           }
           if (event.type === "error") event = { ...event, error: contextualizeNetworkFailure(event.error, this.config.baseUrl) };
           // Drop provider chunk-parse artifacts that are safe to ignore (a
