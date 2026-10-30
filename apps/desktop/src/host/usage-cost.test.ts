@@ -102,9 +102,10 @@ describe("catalog prices through the calculator", () => {
   });
 
   it("still reports no cost for a model the catalog cannot price", () => {
-    expect(catalogPrice("kimi", "k3")).toBeUndefined();
-    expect(catalogPrice("moonshot", "kimi-k2.6")).toBeUndefined();
-    expect(calculateUsageCost({ inputTokens: 1_000, cachedInputTokens: 0, outputTokens: 1_000 }, catalogPrice("kimi", "k3"))).toBeUndefined();
+    // The kimi.com subscription rows are unpriced by design (membership, not
+    // metered billing); moonshot's kimi-k2.6 gained rates on 2026-10-30.
+    expect(catalogPrice("kimi", "kimi-for-coding")).toBeUndefined();
+    expect(calculateUsageCost({ inputTokens: 1_000, cachedInputTokens: 0, outputTokens: 1_000 }, catalogPrice("kimi", "kimi-for-coding"))).toBeUndefined();
   });
 });
 
