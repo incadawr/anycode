@@ -216,7 +216,7 @@ export class ClaudeApprovalBridge {
       responder.error("Malformed can_use_tool request");
       return;
     }
-    if (this.options.bridge !== undefined && approval.toolName === `${CLAUDE_ANYCODE_MCP_TOOL_PREFIX}agent`) {
+    if (this.options.bridge !== undefined && (approval.toolName === `${CLAUDE_ANYCODE_MCP_TOOL_PREFIX}agent` || approval.toolName === `${CLAUDE_ANYCODE_MCP_TOOL_PREFIX}agent_status`)) {
       // AnyCode's own MCP door (TASK.226 S3), not a third-party tool: the
       // child session spawned behind it has its own broker for whatever it
       // actually does (plan §2.6). Allowed before the pending latch below so

@@ -103,3 +103,5 @@ export type {
 export { createChildStatusStore, CHILD_STATUS_TEXT_MAX } from "./status.js";
 export type { ChildStatus, ChildStatusItem } from "./status.js";
 export { sanitizeAndCap } from "./summarize-tool.js";
+
+export { sanitizeStatusText } from "./status.js";

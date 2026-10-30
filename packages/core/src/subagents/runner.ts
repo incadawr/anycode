@@ -1469,7 +1469,7 @@ export function createSubagentRunner(
                 // the WHOLE step from scratch (agent-loop.ts clears toolCalls on
                 // "stream_retry" before dispatch is ever reached), so a discarded
                 // attempt's proposals never produce a tool_execution_start here.
-                runOpts.onStatusItem?.({ kind: "tool", text: `${event.toolName}: ${summarizeChildToolCall(event.toolName, event.input)}` }, event.toolName);
+                runOpts.onStatusItem?.({ kind: "tool", text: `${event.toolName}` }, event.toolName);
                 pendingChildCalls.set(event.toolCallId, {
                   toolName: event.toolName,
                   input: event.input,
@@ -1504,7 +1504,7 @@ export function createSubagentRunner(
                 // carries raw child input verbatim.
                 const pending = pendingChildCalls.get(event.outcome.toolCallId);
                 pendingChildCalls.delete(event.outcome.toolCallId);
-                runOpts.onStatusItem?.({ kind: "result", text: `${event.outcome.toolName}: ${event.outcome.status}${event.outcome.status === "success" ? ` — ${event.outcome.modelText}` : ""}` }, [...pendingChildCalls.values()].at(-1)?.toolName);
+                runOpts.onStatusItem?.({ kind: "result", text: `${event.outcome.toolName}: ${event.outcome.status}` }, [...pendingChildCalls.values()].at(-1)?.toolName);
                 if (pending && event.outcome.status !== "invalid_input") {
                   if (activityEmitted < SUBAGENT_ACTIVITY_MAX_EVENTS) {
                     activityEmitted += 1;

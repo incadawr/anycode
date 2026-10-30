@@ -79,6 +79,7 @@ import {
   resetFinalText,
   summarizeChildToolCall,
   sanitizeAndCap,
+  sanitizeStatusText,
   withBackgroundTaskNotices,
   withPlanModeReminder,
   withOrchestrateReminder,
@@ -4711,7 +4712,7 @@ export class Session {
         if (this.childStatusTextAt === undefined || this.now() - this.childStatusTextAt >= 1000) {
           this.childStatusTextAt = this.now();
           this.childStatusTextSnapshot = this.childFinalText.current;
-          this.child?.onProgress({ kind: "status", itemKind: "assistant", text: sanitizeAndCap(this.childFinalText.current, 160) });
+          this.child?.onProgress({ kind: "status", itemKind: "assistant", text: sanitizeStatusText(this.childFinalText.current, 160, true) });
         }
         // Taskana 4820: a streaming turn is a sign of life — crosses the
         // throttled boundary so the parent-side stall clock keeps getting
@@ -4730,7 +4731,7 @@ export class Session {
         this.emitChildProgressBoundary();
         break;
       case "tool_execution_start":
-        this.child?.onProgress({ kind: "status", itemKind: "tool", text: sanitizeAndCap(`${event.toolName}: ${summarizeChildToolCall(event.toolName, event.input)}`, 160), toolName: sanitizeAndCap(event.toolName, 40) || "tool" });
+        this.child?.onProgress({ kind: "status", itemKind: "tool", text: sanitizeAndCap(event.toolName, 160), toolName: sanitizeAndCap(event.toolName, 40) || "tool" });
         this.pendingChildCalls.set(event.toolCallId, { toolName: event.toolName, input: event.input });
         // Taskana 4820: dispatch itself is a sign of life — a child inside
         // one long-running tool call (a 15-min Bash, a slow web fetch) is
@@ -4743,7 +4744,7 @@ export class Session {
         this.armChildToolLiveness();
         break;
       case "tool_result":
-        this.child?.onProgress({ kind: "status", itemKind: "result", text: sanitizeAndCap(`${event.outcome.toolName}: ${event.outcome.status}${event.outcome.status === "success" ? ` — ${event.outcome.modelText}` : ""}`, 160), toolName: sanitizeAndCap(event.outcome.toolName, 40) || "tool" });
+        this.child?.onProgress({ kind: "status", itemKind: "result", text: sanitizeAndCap(`${event.outcome.toolName}: ${event.outcome.status}`, 160), toolName: sanitizeAndCap(event.outcome.toolName, 40) || "tool" });
         this.childToolCalls += 1;
         this.childLastTool = event.outcome.toolName;
         // F3: the paired result settles the last open call — the liveness
@@ -4765,7 +4766,7 @@ export class Session {
         this.emitChildProgressBoundary();
         break;
       case "turn_end":
-        if (this.childFinalText.current !== this.childStatusTextSnapshot) this.child?.onProgress({ kind: "status", itemKind: "assistant", text: sanitizeAndCap(this.childFinalText.current, 160) });
+        if (this.childFinalText.current !== this.childStatusTextSnapshot) this.child?.onProgress({ kind: "status", itemKind: "assistant", text: sanitizeStatusText(this.childFinalText.current, 160, true) });
         this.childFinalText = fixateFinalText(this.childFinalText);
         // Taskana 4820 review F2: for a claude child counting model rounds,
         // turn_end (once per runTurn) is already covered by the rounds that

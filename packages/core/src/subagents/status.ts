@@ -16,6 +16,21 @@ export interface ChildStatus {
   tail: ChildStatusItem[];
 }
 
+// Status snapshots can contain model-authored credentials. Scrub before truncation.
+export function sanitizeStatusText(text: string, maxChars = CHILD_STATUS_TEXT_MAX, tail = false): string {
+  const secret = "(?:token|secret|password|passwd|api[-_]?key|auth)";
+  const cleaned = text
+    .replace(new RegExp(`(--[A-Za-z0-9_-]*${secret}[A-Za-z0-9_-]*)(\\s+|=)(\\S+)`, "gi"), "$1$2[redacted]")
+    .replace(new RegExp(`\\b([A-Za-z0-9_-]*${secret}[A-Za-z0-9_-]*)\\s*[:=]\\s*(\\S+)`, "gi"), "$1=[redacted]")
+    .replace(/Bearer\s+\S+/gi, "[redacted]")
+    .replace(/\b(?:sk|pk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]{16,}/g, "[redacted]")
+    .replace(/[A-Za-z0-9+/=_-]{32,}/g, "[redacted]");
+  if (!tail) return sanitizeAndCap(cleaned, maxChars);
+  const flat = sanitizeAndCap(cleaned, Number.MAX_SAFE_INTEGER);
+  const chars = Array.from(flat);
+  return chars.length <= maxChars ? flat : "…" + chars.slice(-(maxChars - 1)).join("");
+}
+
 const MAX_CHILDREN = 64;
 const MAX_ITEMS = 8;
 export const CHILD_STATUS_TEXT_MAX = 160;
@@ -31,7 +46,7 @@ export function createChildStatusStore() {
         const oldest = [...children.values()].find((c) => c.state === "completed" || c.state === "failed") ?? children.values().next().value;
         if (oldest) { children.delete(oldest.id); discarded += 1; }
       }
-      children.set(id, { id, ...(handle ? { handle } : {}), description: sanitizeAndCap(description, 160), state: "running", startedAt: Date.now(), turns: 0, toolCalls: 0, tail: [] });
+      children.set(id, { id, ...(handle ? { handle } : {}), description: sanitizeStatusText(description, 160), state: "running", startedAt: Date.now(), turns: 0, toolCalls: 0, tail: [] });
     },
     update(id: string, patch: Partial<Pick<ChildStatus, "state" | "turns" | "toolCalls" | "currentTool" | "endedAt">>): void {
       const child = children.get(id);
@@ -42,7 +57,7 @@ export function createChildStatusStore() {
     append(id: string, item: ChildStatusItem): void {
       const child = children.get(id);
       if (!child) return;
-      const text = sanitizeAndCap(item.text, CHILD_STATUS_TEXT_MAX);
+      const text = sanitizeStatusText(item.text, CHILD_STATUS_TEXT_MAX, item.kind === "assistant");
       if (!text) return;
       // Repeated streaming snapshots replace the current assistant excerpt.
       if (item.kind === "assistant" && child.tail.at(-1)?.kind === "assistant") child.tail.pop();

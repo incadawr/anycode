@@ -1,5 +1,5 @@
 import type { AgentEvent, AgentBridgeCatalogEntry, SessionSubagentPort, PermissionMode } from "@anycode/core";
-import { buildAgentBridgeToolDecl, decodeAgentBridgeCallInput, runAgentBridgeCall } from "@anycode/core";
+import { buildAgentBridgeToolDecl, decodeAgentBridgeCallInput, runAgentBridgeCall, agentStatusBridgeDecl, runAgentStatusBridge } from "@anycode/core";
 import type { JsonRpcServerRequest } from "./protocol.js";
 import type { ServerRequestResponder } from "./app-server-client.js";
 import type { CodexAgentCardLogPort } from "./agent-card-log.js";
@@ -7,6 +7,7 @@ import type { ActiveCodexTurn } from "./approval-bridge.js";
 import type { EngineBrowserBridge, EngineBrowserSpec } from "../browser-bridge.js";
 
 export const ANYCODE_AGENT_TOOL = "anycode_agent";
+export const ANYCODE_AGENT_STATUS_TOOL = "anycode_agent_status";
 
 /** Core children inherit the current native posture, never a wider default. */
 export function codexAgentPermissionMode(presetId: string): PermissionMode {
@@ -38,7 +39,7 @@ export class CodexDynamicToolBridge {
     // `continue_session` rides the same port: main resumes the finished child
     // for a follow-up (defect return) instead of minting a fresh one.
     const decl = this.port === undefined ? null : buildAgentBridgeToolDecl(this.catalog, { detach: true, continueSession: true });
-    const agentDecls = decl ? [{ ...decl, name: ANYCODE_AGENT_TOOL, type: "function" }] : [];
+    const agentDecls = decl ? [{ ...decl, name: ANYCODE_AGENT_TOOL, type: "function" }, { ...agentStatusBridgeDecl, name: ANYCODE_AGENT_STATUS_TOOL, type: "function" }] : [];
     // Taskana 4764: the browser tools ride dynamicTools for EVERY root boot.
     const browserDecls = (this.browser?.specs ?? []).map((spec) => ({
       type: "function" as const,
@@ -151,7 +152,7 @@ export class CodexDynamicToolBridge {
     // browser alike); only the tool-name dispatch differs.
     const browserSpec = typeof p?.tool === "string" ? this.browser?.byCodexName(p.tool) : undefined;
     if (!p || !active || p.threadId !== active.threadId || p.turnId !== active.turnId ||
-      (p.tool !== ANYCODE_AGENT_TOOL && browserSpec === undefined) || (p.namespace !== undefined && p.namespace !== null) ||
+      (p.tool !== ANYCODE_AGENT_TOOL && p.tool !== ANYCODE_AGENT_STATUS_TOOL && browserSpec === undefined) || (p.namespace !== undefined && p.namespace !== null) ||
       typeof p.callId !== "string" || !p.callId || this.pending.has(p.callId)) {
       fail("AnyCode rejected an unknown, duplicate or out-of-turn agent call");
       return;
@@ -167,6 +168,13 @@ export class CodexDynamicToolBridge {
     }
     if (browserSpec !== undefined) {
       await this.handleBrowser(browserSpec, p, respond, emit);
+      return;
+    }
+    if (p.tool === ANYCODE_AGENT_STATUS_TOOL) {
+      this.seenCalls.add(p.callId);
+      if (!this.port) { fail("AnyCode agent status is unavailable"); return; }
+      const result = await runAgentStatusBridge(p.arguments, this.port);
+      respond.result({ success: !result.isError, contentItems: [{ type: "inputText", text: result.text }] });
       return;
     }
     const input = p.arguments !== null && typeof p.arguments === "object" && !Array.isArray(p.arguments)
