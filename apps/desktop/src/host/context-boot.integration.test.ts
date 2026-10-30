@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { SqlitePersistenceAdapter } from "@anycode/core";
 import { describe, expect, it, vi } from "vitest";
 import { createDesktopStore } from "../renderer/src/store.js";
+import { makeTrustedScratchDir } from "../shared/test-scratch.js";
 import { bootHostInTempProfile } from "./boot-test-env.js";
 
 class Port extends EventEmitter {
@@ -21,7 +22,8 @@ describe("native context boot", () => {
   it("queries a legacy session and persists a new reading across a real host restart", async () => {
     const dir = mkdtempSync(join(tmpdir(), "context-boot-"));
     const saved = join(dir, "saved.sqlite");
-    const binary = join(dir, "claude.mjs");
+    const binaryDir = makeTrustedScratchDir("context-boot-claude");
+    const binary = join(binaryDir, "claude.mjs");
     const source = readFileSync(fixture, "utf8")
       .replace("const rl = createInterface", "let compacted = false;\nconst rl = createInterface")
       .replace('models: [{ value: "default", resolvedModel: "default", displayName: "Default" }]', 'models: [{ value: "default", resolvedModel: "default", displayName: "Default" }, { value: "other", resolvedModel: "other", displayName: "Other" }]')
@@ -96,7 +98,7 @@ describe("native context boot", () => {
         if (result.error) throw result.error;
         expect(result.stopped).toBe(true);
       }
-    } finally { process.argv = argv; rmSync(dir, { recursive: true, force: true }); }
+    } finally { process.argv = argv; rmSync(dir, { recursive: true, force: true }); rmSync(binaryDir, { recursive: true, force: true }); }
   }, 60000);
 });
 
@@ -177,7 +179,8 @@ describe("Codex context boot", () => {
   it("restores the saved turn reading instead of the native fallback after restart", async () => {
     const dir = mkdtempSync(join(tmpdir(), "codex-context-boot-"));
     const saved = join(dir, "saved.sqlite");
-    const binary = join(dir, "codex.mjs");
+    const binaryDir = makeTrustedScratchDir("context-boot-codex");
+    const binary = join(binaryDir, "codex.mjs");
     const fixture = resolve("apps/desktop/scripts/compact-fixtures/codex.mjs");
     const source = readFileSync(fixture, "utf8")
       .replace('case "thread/start":', `case "thread/resume": result = { thread: { id: "fixture-thread", turns: [] }, model: "gpt-fake-1" }; break;
@@ -233,6 +236,6 @@ describe("Codex context boot", () => {
         if (result.error) throw result.error;
         expect(result.stopped).toBe(true);
       }
-    } finally { process.argv = argv; rmSync(dir, { recursive: true, force: true }); }
+    } finally { process.argv = argv; rmSync(dir, { recursive: true, force: true }); rmSync(binaryDir, { recursive: true, force: true }); }
   }, 60000);
 });
