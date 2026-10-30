@@ -141,9 +141,10 @@ export const ENV_PROVIDER_TRANSPORT = "ANYCODE_PROVIDER_TRANSPORT";
  * (default-on for openai-chat-completions, the escape hatch for strict
  * servers). Literal mirror of core's `provider/env.ts`
  * `ENV_INCLUDE_USAGE` — same local-literal convention (host-env stays
- * core-free). Registered in PROVIDER_ENV_KEYS so the settings UI shows the
- * env-override warning; there is deliberately NO settings field or
- * `fillFromSettings` step: ambient/shell env is the desktop user's opt-out.
+ * core-free). Carries the ACTIVE connection's persisted `includeUsage`
+ * (`true`/`false`) through the same env-wins `fillFromSettings` step as every
+ * other connection rung, so ambient/shell env still wins; an absent setting
+ * deliberately emits nothing and leaves the transport default to core.
  */
 export const ENV_INCLUDE_USAGE = "ANYCODE_INCLUDE_USAGE";
 /**
@@ -1273,6 +1274,17 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // property of the whole ladder (env > settings), not incidental to how
   // fillFromSettings happens to be implemented.
   fillFromSettings(env, ENV_MAX_OUTPUT_TOKENS, numToStr(view.maxOutputTokens));
+  // Streaming token-usage policy (GitHub #1): the connection-level opt-in/out
+  // rides the same env rung as the ceiling above, so a launching shell's own
+  // ANYCODE_INCLUDE_USAGE always wins — including an explicit `0`/`false` over
+  // a saved `true`. `false` is a MEANING here, hence `!== undefined` rather
+  // than `numToStr`-style truthiness: an absent setting emits NOTHING and lets
+  // core's `resolveIncludeUsage` apply the transport default.
+  fillFromSettings(
+    env,
+    ENV_INCLUDE_USAGE,
+    view.includeUsage === undefined ? undefined : String(view.includeUsage),
+  );
   // Per-model context window (TASK.142): the value and its binding travel as a
   // PAIR and are written from ONE source — never two independent
   // `fillFromSettings` calls, which could pair a settings value with a stale env

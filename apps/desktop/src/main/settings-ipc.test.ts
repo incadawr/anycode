@@ -448,6 +448,59 @@ describe("handleConnectionCreate/Update — prompt cache policy (GitHub #15)", (
   });
 });
 
+// GitHub #1 (remainder): the streaming-usage policy is PER CONNECTION state with
+// the same lifecycle as `promptCache` — but with one non-negotiable difference:
+// `false` is a MEANING (an explicit opt-out), so it must reach disk and survive
+// every truthiness check, and only the `""` sentinel clears the key.
+describe("handleConnectionCreate/Update — includeUsage policy (GitHub #1)", () => {
+  it("creates false, updates true, keeps an omitted value and clears on \"\" without touching the sibling", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "m", includeUsage: false })).ok).toBe(true); // conn-1
+    expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "m" })).ok).toBe(true); // conn-2
+    let loaded = await loadSettings(settingsPath);
+    // Create persists an explicit false (Automatic is the ABSENT key, never false).
+    expect(loaded.settings.provider.connections[0]?.includeUsage).toBe(false);
+    expect("includeUsage" in (loaded.settings.provider.connections[1] ?? {})).toBe(false);
+
+    // Switching conn-1 to true leaves the sibling untouched — two connections
+    // to the same provider/model may disagree.
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", includeUsage: true })).ok).toBe(true);
+    loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.includeUsage).toBe(true);
+    expect("includeUsage" in (loaded.settings.provider.connections[1] ?? {})).toBe(false);
+
+    // An unrelated edit KEEPS an explicit false (a truthiness drop would lose it).
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", includeUsage: false })).ok).toBe(true);
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", label: "Work" })).ok).toBe(true);
+    loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.includeUsage).toBe(false);
+    expect(loaded.settings.provider.connections[0]?.label).toBe("Work");
+
+    // The `""` sentinel deletes the key (Automatic = the transport default).
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", includeUsage: "" })).ok).toBe(true);
+    loaded = await loadSettings(settingsPath);
+    expect("includeUsage" in (loaded.settings.provider.connections[0] ?? {})).toBe(false);
+  });
+
+  it("refuses nonboolean values at the IPC boundary", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "m" }); // conn-1
+    for (const bad of ["true", "off", 0, 1, null]) {
+      expect(await handleConnectionCreate(deps, { providerId: "z-ai", model: "m", includeUsage: bad })).toEqual({
+        ok: false,
+        reason: "invalid",
+      });
+      expect(await handleConnectionUpdate(deps, { id: "conn-1", includeUsage: bad })).toEqual({
+        ok: false,
+        reason: "invalid",
+      });
+    }
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections.length).toBe(1);
+    expect("includeUsage" in (loaded.settings.provider.connections[0] ?? {})).toBe(false);
+  });
+});
+
 describe("handleGet — snapshot projection", () => {
   it("returns a full snapshot with SecretStatus (never a value)", async () => {
     const snap = await handleGet(makeDeps());
