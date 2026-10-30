@@ -39,9 +39,18 @@ export const CUSTOM_PROVIDER_ID = "custom";
 /**
  * GLM-5.x advertises 1M tokens of context, but its answers degrade past ~300k
  * (owner, 2026-10-07, after long orchestration runs). Budgeting sessions on
- * the full 1M put auto-compaction at ~900k — far past that point.
+ * the full 1M put auto-compaction at ~900k — far past that point. The 1M
+ * MiMo V2.6 models share the same usable budget.
  */
-const GLM_USABLE_CONTEXT_TOKENS = 300_000;
+const LARGE_MODEL_USABLE_CONTEXT_TOKENS = 300_000;
+
+// Token Plan is a credit-based subscription with no published USD per-token
+// rate. Its console specifies interactive coding-tool use, not automated
+// scripts or backends. Models and regions are from the Token Plan console.
+const MIMO_MODELS: CatalogProviderEntry["models"] = [
+  { id: "mimo-v2.6-pro", name: "MiMo V2.6 Pro", contextWindow: 1_048_576, usableContextWindow: LARGE_MODEL_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true },
+  { id: "mimo-v2.6-flash", name: "MiMo V2.6 Flash", contextWindow: 1_048_576, usableContextWindow: LARGE_MODEL_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true },
+];
 
 const ENTRIES: CatalogProviderEntry[] = [
   {
@@ -156,17 +165,17 @@ const ENTRIES: CatalogProviderEntry[] = [
       // (docs.z.ai spec boxes; the 5.3-Flash page states "Context Length 1M",
       // "Maximum Output Tokens 128K" for the flash/flashx pair).
       // GLM-5.3: $1.4 in / $0.26 cached / $4.4 out (docs.z.ai/guides/overview/pricing, 2026-10-27).
-      { id: "glm-5.3", pricing: { basisId: "glm-5.3-zai-2026-10-27", input: 1.4, cachedInput: 0.26, cacheWrite: 1.4, output: 4.4 }, name: "GLM-5.3", contextWindow: 1_000_000, usableContextWindow: GLM_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "max" },
+      { id: "glm-5.3", pricing: { basisId: "glm-5.3-zai-2026-10-27", input: 1.4, cachedInput: 0.26, cacheWrite: 1.4, output: 4.4 }, name: "GLM-5.3", contextWindow: 1_000_000, usableContextWindow: LARGE_MODEL_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "max" },
       // GLM-5.3-Flash: $0.15 in / $0.03 cached / $0.50 out (docs.z.ai/guides/overview/pricing, 2026-10-27).
-      { id: "glm-5.3-flash", pricing: { basisId: "glm-5.3-flash-zai-2026-10-27", input: 0.15, cachedInput: 0.03, cacheWrite: 0.15, output: 0.5 }, name: "GLM-5.3 Flash", contextWindow: 1_000_000, usableContextWindow: GLM_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
+      { id: "glm-5.3-flash", pricing: { basisId: "glm-5.3-flash-zai-2026-10-27", input: 0.15, cachedInput: 0.03, cacheWrite: 0.15, output: 0.5 }, name: "GLM-5.3 Flash", contextWindow: 1_000_000, usableContextWindow: LARGE_MODEL_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
       // GLM-5.3-FlashX: the same model at ~200 tokens/s. Model code and the
       // family's "Video / Image / Text / File" input plus "thinking.type only
       // supports enabled" come from docs.z.ai/guides/vlm/glm-5.3-flash
       // (2026-10-27); $0.37 in / $0.075 cached / $1.25 out from
       // docs.z.ai/guides/overview/pricing (2026-10-27).
-      { id: "glm-5.3-flashx", pricing: { basisId: "glm-5.3-flashx-zai-2026-10-27", input: 0.37, cachedInput: 0.075, cacheWrite: 0.37, output: 1.25 }, name: "GLM-5.3 FlashX", contextWindow: 1_000_000, usableContextWindow: GLM_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
+      { id: "glm-5.3-flashx", pricing: { basisId: "glm-5.3-flashx-zai-2026-10-27", input: 0.37, cachedInput: 0.075, cacheWrite: 0.37, output: 1.25 }, name: "GLM-5.3 FlashX", contextWindow: 1_000_000, usableContextWindow: LARGE_MODEL_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
       // GLM-5.2: $1.4 in / $0.26 cached / $4.4 out (docs.z.ai/guides/overview/pricing, 2026-10-27).
-      { id: "glm-5.2", pricing: { basisId: "glm-5.2-zai-2026-10-27", input: 1.4, cachedInput: 0.26, cacheWrite: 1.4, output: 4.4 }, name: "GLM-5.2", contextWindow: 1_000_000, usableContextWindow: GLM_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["off", "high", "max"] },
+      { id: "glm-5.2", pricing: { basisId: "glm-5.2-zai-2026-10-27", input: 1.4, cachedInput: 0.26, cacheWrite: 1.4, output: 4.4 }, name: "GLM-5.2", contextWindow: 1_000_000, usableContextWindow: LARGE_MODEL_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["off", "high", "max"] },
       // GLM-5.1/5/4.7/4.6: 200K context, 128K max output (docs.z.ai spec boxes).
       // GLM-5.1: $1.4 in / $0.26 cached / $4.4 out (docs.z.ai/guides/overview/pricing, 2026-10-27).
       { id: "glm-5.1", pricing: { basisId: "glm-5.1-zai-2026-10-27", input: 1.4, cachedInput: 0.26, cacheWrite: 1.4, output: 4.4 }, name: "GLM-5.1", contextWindow: 200_000, maxOutputTokens: 131_072 },
@@ -212,6 +221,39 @@ const ENTRIES: CatalogProviderEntry[] = [
       // tokens; off-peak is $0.66 / $0.022 / $1.98.
       { id: "deepseek-v4-pro", pricing: { basisId: "deepseek-v4-pro-deepseek-peak-2026-10-27", input: 1.32, cachedInput: 0.044, output: 3.96 }, name: "DeepSeek-V4-Pro", contextWindow: 1_048_576, maxOutputTokens: 393_216, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high", todoReminderEvery: 20 },
     ],
+  },
+  {
+    id: "xiaomi-mimo-sgp",
+    name: "Xiaomi MiMo Token Plan (SGP)",
+    brand: "Xiaomi MiMo",
+    modeLabel: "Token Plan (SGP)",
+    baseUrl: "https://token-plan-sgp.xiaomimimo.com/anthropic",
+    defaultTransport: "anthropic-messages",
+    supportedTransports: ["anthropic-messages"],
+    auth: { kind: "api_key" },
+    models: MIMO_MODELS,
+  },
+  {
+    id: "xiaomi-mimo-cn",
+    name: "Xiaomi MiMo Token Plan (CN)",
+    brand: "Xiaomi MiMo",
+    modeLabel: "Token Plan (CN)",
+    baseUrl: "https://token-plan-cn.xiaomimimo.com/anthropic",
+    defaultTransport: "anthropic-messages",
+    supportedTransports: ["anthropic-messages"],
+    auth: { kind: "api_key" },
+    models: MIMO_MODELS,
+  },
+  {
+    id: "xiaomi-mimo-ams",
+    name: "Xiaomi MiMo Token Plan (AMS)",
+    brand: "Xiaomi MiMo",
+    modeLabel: "Token Plan (AMS)",
+    baseUrl: "https://token-plan-ams.xiaomimimo.com/anthropic",
+    defaultTransport: "anthropic-messages",
+    supportedTransports: ["anthropic-messages"],
+    auth: { kind: "api_key" },
+    models: MIMO_MODELS,
   },
   {
     id: "moonshot",

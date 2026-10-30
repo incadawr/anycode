@@ -312,7 +312,11 @@ export function reasoningRequestOptions(
     effort === "max" || effort === "xhigh"
       ? REASONING_BUDGET_TOKENS.high
       : REASONING_BUDGET_TOKENS[effort as "low" | "medium" | "high"];
-  const maxOutputTokens = Math.max(request.maxOutputTokens ?? 0, budgetTokens + 1_024);
+  let maxOutputTokens = Math.max(request.maxOutputTokens ?? 0, budgetTokens + 1_024);
+  // The SDK adds the thinking budget to max_tokens on the wire.
+  if (providerName?.startsWith("Xiaomi MiMo Token Plan (") && /^(mimo-v2\.6-pro|mimo-v2\.6-flash)$/.test(modelId ?? "")) {
+    maxOutputTokens = Math.min(maxOutputTokens, 131_072 - budgetTokens);
+  }
   return {
     maxOutputTokens,
     providerOptions: { anthropic: { thinking: { type: "enabled", budgetTokens } } },

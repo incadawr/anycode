@@ -24,6 +24,9 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
       "anthropic",
       "z-ai",
       "deepseek",
+      "xiaomi-mimo-sgp",
+      "xiaomi-mimo-cn",
+      "xiaomi-mimo-ams",
       "moonshot",
       "kimi",
       "openai",
@@ -79,6 +82,26 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
     expect(findCatalogEntry("deepseek")?.baseUrl).toBe("https://api.deepseek.com/anthropic");
     expect(findCatalogEntry("moonshot")?.baseUrl).toBe("https://api.moonshot.ai/anthropic");
     expect(findCatalogEntry("kimi")?.baseUrl).toBe("https://api.kimi.com/coding");
+  });
+
+  it("declares Token Plan regions, model capabilities and the Anthropic endpoint", () => {
+    for (const region of ["sgp", "cn", "ams"]) {
+      const entry = findCatalogEntry(`xiaomi-mimo-${region}`)!;
+      expect(entry).toMatchObject({
+        brand: "Xiaomi MiMo", modeLabel: `Token Plan (${region.toUpperCase()})`,
+        defaultTransport: "anthropic-messages",
+        supportedTransports: ["anthropic-messages"],
+        auth: { kind: "api_key" },
+      });
+      expect(resolveEndpoint(entry, "mimo-v2.6-pro", "tp-key").baseUrl).toBe(`https://token-plan-${region}.xiaomimimo.com/anthropic`);
+      expect(entry.transportBaseUrls).toBeUndefined();
+      expect(entry.models.map((model) => model.id)).toEqual(["mimo-v2.6-pro", "mimo-v2.6-flash"]);
+      for (const model of entry.models) {
+        expect(model).toMatchObject({ contextWindow: 1_048_576, usableContextWindow: 300_000, maxOutputTokens: 131_072, imageInput: true, reasoning: true });
+        expect(model.pricing).toBeUndefined();
+        expect(model.effortLevels).toBeUndefined();
+      }
+    }
   });
 
   it("declares the Kimi subscription entry (kimi.com sk-kimi-* keys; distinct from the moonshot platform)", () => {
@@ -383,25 +406,22 @@ describe("assertTransportContract (dev-time invariant, TASK.43 W5)", () => {
 describe("modelsUrl (4244)", () => {
   it("4244: deepseek declares modelsUrl at the bare origin; every other entry leaves it absent", () => {
     expect(findCatalogEntry("deepseek")?.modelsUrl).toBe("https://api.deepseek.com/models");
-    for (const id of ["anthropic", "z-ai", "moonshot", "kimi", "openai", "openrouter", "vllm", "custom"]) {
+    for (const id of ["anthropic", "z-ai", "xiaomi-mimo-sgp", "xiaomi-mimo-cn", "xiaomi-mimo-ams", "moonshot", "kimi", "openai", "openrouter", "vllm", "custom"]) {
       expect(findCatalogEntry(id)?.modelsUrl).toBeUndefined();
     }
   });
 });
 
-// TASK.70 (Taskana 4089): one brand = one card. Only the Kimi pair declares a
-// brand; every other entry stays brandless so the flat list is byte-identical.
-describe("brand grouping (TASK.70, Taskana 4089)", () => {
-  it("4089: the Kimi brand declares exactly two modes and no other entry declares a brand", () => {
-    const branded = getBuiltinCatalog().providers.filter((entry) => entry.brand === "Kimi");
-    // Catalog order: moonshot (index 3) precedes kimi (index 4) — same order
-    // the drawer's brand group must preserve.
-    expect(branded.map((entry) => entry.id)).toEqual(["moonshot", "kimi"]);
-    for (const entry of getBuiltinCatalog().providers) {
-      if (entry.id !== "kimi" && entry.id !== "moonshot") {
-        expect(entry.brand).toBeUndefined();
-        expect(entry.modeLabel).toBeUndefined();
-      }
+describe("brand grouping", () => {
+  it("groups Kimi modes and Xiaomi MiMo regions in catalog order", () => {
+    const providers = getBuiltinCatalog().providers;
+    expect(providers.filter((entry) => entry.brand === "Kimi").map((entry) => entry.id)).toEqual(["moonshot", "kimi"]);
+    expect(providers.filter((entry) => entry.brand === "Xiaomi MiMo").map((entry) => entry.id)).toEqual([
+      "xiaomi-mimo-sgp", "xiaomi-mimo-cn", "xiaomi-mimo-ams",
+    ]);
+    for (const entry of providers.filter((entry) => !["Kimi", "Xiaomi MiMo"].includes(entry.brand ?? ""))) {
+      expect(entry.brand).toBeUndefined();
+      expect(entry.modeLabel).toBeUndefined();
     }
   });
 });
