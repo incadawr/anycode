@@ -3,6 +3,7 @@
  * own Bash denial is narrowed; other denials remain authoritative.
  */
 
+import { isTrustedPlanCommand } from "./plan-command.js";
 import type { PermissionEngine, PermissionRequest, PermissionRuling } from "../types/permissions.js";
 import { classifyBashCommandLine, type BashCommandClass } from "./safe-command.js";
 
@@ -27,7 +28,7 @@ export class SafeCommandPermissionEngine implements PermissionEngine {
     // Plan-mode denials are relaxed only by the actual classifier, regardless of
     // any injected classifier used for build-mode approval policy.
     const safe = typeof command === "string" && (request.mode === "plan"
-      ? classifyBashCommandLine(command).class === "read-only"
+      ? isTrustedPlanCommand(command)
       : this.classify(command) === "read-only");
     if (safe) {
       return { decision: "allow", reason: "Bash: auto-approved (provably read-only command)" };
@@ -35,7 +36,7 @@ export class SafeCommandPermissionEngine implements PermissionEngine {
     if (planDeny) {
       return {
         decision: "deny",
-        reason: "Bash: command is not proven read-only or uses unsupported shell syntax (such as chains or redirects). Use Glob for listing, Read for files, or Git for status and history; only read-only commands and | pipelines are allowed in plan mode.",
+        reason: "Bash: command is not proven read-only, its executable is not trusted, or it uses unsupported shell syntax (such as chains or redirects). Use Glob for listing, Read for files, or Git for status and history; only read-only commands and | pipelines are allowed in plan mode.",
       };
     }
     return ruling;

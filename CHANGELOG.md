@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Require approval for path-qualified commands and Git commands that can run repository-configured programs.
+- Protect plan-mode Bash from executable shadowing and Git configuration hooks while preserving build-mode approvals.
 
 ### Changed
 

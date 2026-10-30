@@ -1,6 +1,9 @@
 /** Tests for safe-command permission narrowing and its production composition. */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ModePermissionEngine } from "./engine.js";
 import { RuleAwarePermissionEngine, SessionPermissionRules } from "./rules.js";
 import { SafeCommandPermissionEngine } from "./safe-command-engine.js";
@@ -13,6 +16,10 @@ const askAlways: PermissionEngine = { check: () => ({ decision: "ask", reason: "
 function bashRequest(command: unknown, mode: PermissionRequest["mode"] = "build"): PermissionRequest {
   return { toolName: "Bash", input: { command }, metadata: bashTool.metadata, mode };
 }
+
+let originalPath: string | undefined;
+beforeEach(() => { originalPath = process.env.PATH; process.env.PATH = "/usr/bin:/bin"; });
+afterEach(() => { if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath; });
 
 describe("SafeCommandPermissionEngine", () => {
   it("downgrades an ask -> allow for a provably read-only Bash command", () => {
@@ -61,12 +68,30 @@ describe("SafeCommandPermissionEngine", () => {
   });
 
 
-  it("denies untrusted executable paths and git repository program hooks in plan, and asks in build", () => {
+  it("preserves build approvals while denying path-qualified commands and Git in plan", () => {
     const engine = new SafeCommandPermissionEngine(new ModePermissionEngine());
-    for (const command of ["./tools/ls", "/tmp/evil/ls | cat", "git diff --ext-diff", "git log --textconv", "git status", "git status --short | head"]) {
-      expect(engine.check(bashRequest(command, "plan")).decision, command).toBe("deny");
-      expect(engine.check(bashRequest(command, "build")).decision, command).toBe("ask");
+    for (const command of ["./tools/ls", "/bin/ls", "git diff --ext-diff", "git log --textconv", "git status"]) {
+      const plan = engine.check(bashRequest(command, "plan"));
+      expect(plan.decision, command).toBe("deny");
+      expect(plan.reason).toContain("Git");
+      expect(engine.check(bashRequest(command, "build")).decision, command).toBe("allow");
     }
+    expect(engine.check(bashRequest("git status --short | head", "plan")).decision).toBe("deny");
+    expect(engine.check(bashRequest("git status --short | head", "build")).decision).toBe("ask");
+  });
+
+  it("denies a PATH-shadowed binary and a writable earlier PATH directory", () => {
+    const dir = mkdtempSync(join(tmpdir(), "plan-shadow-"));
+    try {
+      writeFileSync(join(dir, "ls"), "#!/bin/sh\ntouch marker\n", { mode: 0o755 });
+      process.env.PATH = `${dir}:/usr/bin:/bin`;
+      const engine = new SafeCommandPermissionEngine(new ModePermissionEngine());
+      expect(engine.check(bashRequest("ls", "plan")).decision).toBe("deny");
+      expect(engine.check(bashRequest("cat file | ls", "plan")).decision).toBe("deny");
+      expect(engine.check(bashRequest("ls", "build")).decision).toBe("allow");
+      rmSync(join(dir, "ls"));
+      expect(engine.check(bashRequest("ls", "plan")).decision).toBe("deny");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   it("preserves unrelated denials and never trusts an injected classifier for plan denials", () => {

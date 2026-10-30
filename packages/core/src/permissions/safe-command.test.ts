@@ -232,10 +232,16 @@ describe("classifyBashCommand — required positives (all MUST be read-only)", (
     expectAllReadOnly([
       "ls",
       "ls -la",
+      "/bin/ls",
       "pwd",
       "cat file.txt",
       "head -n5 f",
       "wc -l f",
+      "git status",
+      "git log --oneline",
+      "git diff",
+      "git show HEAD",
+      "git branch",
       "grep foo f",
       "whoami",
       "date",
@@ -256,7 +262,12 @@ describe("classifyBashCommand — required positives (all MUST be read-only)", (
       "dirname /a/b/c",
       "basename /a/b/c",
       "sha1sum f",
+      "git rev-parse HEAD",
+      "git ls-files",
+      "git remote", // bare remote lists remotes (read-only)
+      "git diff main feature",
       "true",
+      "/usr/bin/git status", // absolute git path -> basename git
       "  ls  ", // surrounding whitespace trimmed
       "ls\t-la", // tab-separated tokens
     ]);
@@ -264,18 +275,11 @@ describe("classifyBashCommand — required positives (all MUST be read-only)", (
 });
 
 describe("classifyBashCommand — documented lexical limits", () => {
-  it("rejects path-qualified executables in commands and pipelines", () => {
-    expectAllUnknown(["/bin/ls", "/tmp/evil/ls", "./ls", "./tools/git status"]);
-    expectAllLineUnknown(["./ls | cat", "cat f | /tmp/evil/sed -n 1p f"]);
-  });
-
-  it("rejects git commands that can run programs from repository configuration", () => {
-    expectAllUnknown([
-      "git diff --ext-diff", "git diff --textconv", "git log --textconv",
-      "git show", "git status", "git branch", "git remote", "git ls-files",
-      "git diff --no-ext-diff", "git --paginate status",
-    ]);
-    expectAllLineUnknown(["git status --short | head", "cat f | git diff --ext-diff"]);
+  it("trusts the basename of an absolute/relative path (planted-binary limit)", () => {
+    // Sanctioned lexical limit: identity is enforced by the OS sandbox (5.2), not
+    // here. `/bin/ls` must stay a positive, so a planted `/tmp/evil/ls` also passes.
+    expect(classifyBashCommand("/tmp/evil/ls")).toBe("read-only");
+    expect(classifyBashCommand("./ls")).toBe("read-only");
   });
 
   it("is quote-unaware: a metacharacter inside quotes still demotes to unknown", () => {
@@ -337,6 +341,9 @@ describe("classifyBashCommandLine — single-command routing (bit-for-bit)", () 
     const commands = [
       "ls",
       "ls -la",
+      "/bin/ls",
+      "git status",
+      "git log --oneline",
       "grep foo f",
       "date",
       "tree -o out.txt",
@@ -384,8 +391,8 @@ describe("classifyBashCommandLine — pipeline positives (DV-5 acceptance, all M
     expectAllLineReadOnly(['grep "hello world" f | wc -l']);
   });
 
-  it("rejects absolute paths in a pipeline", () => {
-    expectAllLineUnknown(["/bin/cat f | /usr/bin/head -1"]);
+  it("P7: basename-trust parity for absolute paths in a pipeline", () => {
+    expectAllLineReadOnly(["/bin/cat f | /usr/bin/head -1"]);
   });
 
   it("P8: bare-only binary, bare, piped", () => {
@@ -394,16 +401,6 @@ describe("classifyBashCommandLine — pipeline positives (DV-5 acceptance, all M
 
   it("P9: printf piped through wc", () => {
     expectAllLineReadOnly(["printf %s x | wc -c"]);
-  });
-});
-
-describe("plan-mode Git status pipelines", () => {
-  it("rejects status and other Git commands in pipelines", () => {
-    expect(classifyBashCommandLine("git status --short | head").class).toBe("unknown");
-    for (const command of ["git status --short | tee out", "git status --short > out | head", "git status --short && rm x | head", "git status --short --output out | head", "git -c alias.status=evil status --short | head", "git log --oneline | head"]) {
-      expect(classifyBashCommandLine(command).class, command).toBe("unknown");
-    }
-    expect(classifyBashCommandLine("git status --short | head").class).toBe("unknown");
   });
 });
 
