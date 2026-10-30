@@ -1,6 +1,6 @@
 /** Tests for safe-command permission narrowing and its production composition. */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,7 +8,31 @@ import { ModePermissionEngine } from "./engine.js";
 import { RuleAwarePermissionEngine, SessionPermissionRules } from "./rules.js";
 import { SafeCommandPermissionEngine } from "./safe-command-engine.js";
 import { bashTool, writeTool } from "../tools/index.js";
+import { executeToolCall } from "../dispatch/dispatcher.js";
+import { ToolRegistry } from "../tools/registry.js";
+import { NodeExecutionAdapter } from "../adapters/node/node-execution.js";
+import type { DispatchContext } from "../dispatch/dispatcher.js";
+import type { CorePorts } from "../ports/index.js";
+import type { HookRunner } from "../types/hooks.js";
 import type { PermissionEngine, PermissionRequest } from "../types/permissions.js";
+
+// Root can write system binaries even when their mode excludes writes. Model
+// ordinary-user W_OK for those paths while retaining all other real checks.
+vi.mock("node:fs", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...fs,
+    accessSync: (path: Parameters<typeof fs.accessSync>[0], mode?: number) => {
+      if (process.getuid?.() === 0 && mode === fs.constants.W_OK) {
+        const stat = fs.statSync(path);
+        if (stat.uid === 0 && (stat.mode & 0o022) === 0) {
+          throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+        }
+      }
+      return fs.accessSync(path, mode);
+    },
+  };
+});
 
 /** A base engine that returns a fixed "ask" for every request (isolates the narrowing logic). */
 const askAlways: PermissionEngine = { check: () => ({ decision: "ask", reason: "base ask" }) };
@@ -113,6 +137,32 @@ describe("SafeCommandPermissionEngine", () => {
       expect(engine.check(bashRequest("ls", "build")).decision).toBe("allow");
       rmSync(join(dir, "ls"));
       expect(engine.check(bashRequest("ls", "plan")).decision).toBe("allow");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it.each([["ls", "ls"], ["ls | head", "ls"], ["ls | head", "head"]])("executes checked binaries after PATH shadows appear: %s (%s)", async (command, shadow) => {
+    const dir = mkdtempSync(join(tmpdir(), "plan-race-"));
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(dir, "visible"), "content");
+    process.env.PATH = `${bin}:/usr/bin:/bin`;
+    const exec = new NodeExecutionAdapter();
+    const registry = { get: () => bashTool } as unknown as ToolRegistry;
+    const hooks = { runPreToolUse: async () => ({}), runObservers: async () => {} } as unknown as HookRunner;
+    try {
+      const ctx = {
+        registry, hooks, mode: "plan", cwd: dir,
+        permissionEngine: new SafeCommandPermissionEngine(new ModePermissionEngine()),
+        permissionBroker: { requestPermission: async () => ({ behavior: "deny", reason: "unexpected" }) },
+        ports: { exec: { run: (request: Parameters<typeof exec.run>[0]) => {
+          writeFileSync(join(bin, shadow), "#!/bin/sh\nprintf SHADOW\n", { mode: 0o755 });
+          return exec.run(request);
+        } } } as unknown as CorePorts,
+      } as DispatchContext;
+      const outcome = await executeToolCall(ctx, { id: "race", name: "Bash", input: { command } });
+      expect(outcome.status, command).toBe("success");
+      expect(outcome.modelText, command).toContain("visible");
+      expect(outcome.modelText, command).not.toContain("SHADOW");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
