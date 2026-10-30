@@ -30,23 +30,12 @@
  * through a doubly-conservative per-segment screen (raw metacharacter screen,
  * THEN quote-aware tokenization) — see `classifyPipelineSegment`.
  *
- * TASK.136 (RES-1 fix): the single-command path's write-flag screens
- * (`classifyBashCommand` step 4b, `classifyGit`'s flag loop) now reuse that
- * same quote-aware tokenizer (`tokenizeSegment`) to check each argument on
- * BOTH its raw and quote-stripped form — closing a hole where a quoted flag
- * (`git diff "--output" victim`) read as `unknown` to the naive whitespace
- * splitter (the token starts with `"`, not `-`) and so sailed through as
- * "read-only" while live git 2.37.1 wrote/truncated the named file. Every
- * OTHER check on this path (basename lookup, subcommand grammar, bare-only
- * arity) still runs off the plain `tokenize()` split, unchanged.
+ * Arguments are checked after quote removal as well as in their raw form, so
+ * quoting a write flag cannot hide it from the screen.
  *
- * KNOWN, SANCTIONED LIMITS (all lexical; true enforcement is the OS layer in
- * slice 5.2):
- *  - Basename trust: the first token's basename is matched against the
- *    allowlist, so `/bin/ls` classifies as read-only (a required positive) — and
- *    therefore so would a planted `/tmp/evil/ls`, or a PATH-shadowed bare `ls`.
- *    Lexical analysis cannot verify a binary's true identity; that is the OS
- *    sandbox's job (5.2). This is an accepted limit, not a defect.
+ * KNOWN LEXICAL LIMITS:
+ *  - Bare command names still rely on the execution environment's PATH. Paths
+ *    supplied as command words are rejected, including absolute paths.
  *  - Quote-unaware: metacharacters are rejected even inside quotes, so
  *    `grep "a;b" f` is (safely) demoted to "unknown". Maximum conservatism is
 
@@ -87,8 +76,8 @@ const SHELL_METACHARACTERS: ReadonlySet<string> = new Set([
 /**
  * Binaries with no subcommand grammar that are read-only by default. Each is
  * additionally screened against WRITE_CAPABLE_FLAGS (and, for the effectful
- * positional case below, restricted further). `git` is NOT here — it has a
- * subcommand grammar and is handled via GIT_SAFE_SUBCOMMANDS. `env` and
+ * positional case below, restricted further). `git` is excluded: repository
+ * configuration can run pagers, diff drivers, text converters and fsmonitor hooks. `env` and
  * `hostname` are deliberately EXCLUDED: `env cmd` executes an arbitrary program
  * and `hostname name` sets the system hostname. `rg` (ripgrep) and `file` are
  * also EXCLUDED (fail-closed): ripgrep's `--pre`/`--hostname-bin`/`-z` execute
@@ -120,25 +109,14 @@ export const READ_ONLY_BINARIES: ReadonlySet<string> = new Set([
  */
 const NO_ARGUMENT_BINARIES: ReadonlySet<string> = new Set(["date"]);
 
-/**
- * git subcommands that are read-only for ANY arguments (their args cannot
- * produce an effect), subject to the git write-flag screen. `branch`/`remote`
- * are NOT here — they have create/delete/reconfigure forms via positional args
- * or flags the screen cannot catch, so they are read-only only bare (see
- * GIT_BARE_ONLY_SUBCOMMANDS). Excluded entirely (effectful forms, none of them
- * required positives): config, tag, symbolic-ref, stash, notes, and every write
- * subcommand (add/commit/push/checkout/reset/clean/apply/worktree/merge/…).
- */
+/** Historical Git policy exported for consumers; it does not grant automatic
+ * approval, because repository configuration can run external programs. */
 export const GIT_SAFE_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "status", "log", "diff", "show", "rev-parse", "describe",
   "blame", "shortlog", "ls-files", "ls-tree", "cat-file",
 ]);
 
-/**
- * git subcommands that are read-only only when invoked bare (`git branch`,
- * `git remote`): with arguments they create/delete/reconfigure
- * (`git branch -d x`, `git branch new`, `git remote add origin url`).
- */
+/** Historical bare-only Git policy, retained for consumers. */
 export const GIT_BARE_ONLY_SUBCOMMANDS: ReadonlySet<string> = new Set(["branch", "remote"]);
 
 /**
@@ -150,12 +128,6 @@ export const GIT_BARE_ONLY_SUBCOMMANDS: ReadonlySet<string> = new Set(["branch",
  */
 export const WRITE_CAPABLE_FLAGS: ReadonlySet<string> = new Set([
   "-o", "-O", "--output", "-i", "--in-place", "-w", "--write",
-]);
-
-/** Write flags for git read-only subcommands: the general net plus config/output mutators. */
-const GIT_WRITE_FLAGS: ReadonlySet<string> = new Set([
-  ...WRITE_CAPABLE_FLAGS,
-  "--add", "--set", "--unset", "--edit",
 ]);
 
 /**
@@ -186,12 +158,6 @@ function tokenize(command: string): string[] {
   return trimmed.split(/[ \t]+/);
 }
 
-/** The token after the last `/` (path is intentionally not screened, so `/bin/ls` -> `ls`). */
-function basename(token: string): string {
-  const slash = token.lastIndexOf("/");
-  return slash === -1 ? token : token.slice(slash + 1);
-}
-
 /**
  * True when an argument token is a write-targeting flag in `flags`. Long flags
  * are normalized by dropping a `=value` suffix (`--output=f` -> `--output`);
@@ -207,50 +173,9 @@ function isWriteFlag(arg: string, flags: ReadonlySet<string>): boolean {
 }
 
 /**
- * Classifies a `git <subcommand> …` invocation (tokens[0] basename is `git`).
- * `tokens` drives subcommand/arity checks unchanged; `segmentTokens` is the
- * quote-aware split of the SAME command string (from `tokenizeSegment`,
- * defined below), consulted ONLY by the write-flag loop (TASK.136 RES-1 fix
- * — see that loop for why a single raw-string check is not enough).
- */
-function classifyGit(tokens: string[], segmentTokens: SegmentToken[] | undefined): BashCommandClass {
-  if (tokens.length < 2) {
-    // Bare `git` (prints help) — harmless, but not worth allowlisting.
-    return "unknown";
-  }
-  const subcommand = tokens[1]!;
-  if (GIT_BARE_ONLY_SUBCOMMANDS.has(subcommand)) {
-    return tokens.length === 2 ? "read-only" : "unknown";
-  }
-  if (!GIT_SAFE_SUBCOMMANDS.has(subcommand)) {
-    return "unknown";
-  }
-  if (tokens.length === 2) {
-    // No args to screen.
-    return "read-only";
-  }
-  // Args follow the subcommand: screen each on BOTH its raw (quotes intact)
-  // and quote-stripped form — `isWriteFlag` on the raw string alone is fooled
-  // by a quoted flag (`"--output"` starts with `"`, not `-`, so the verbatim
-  // check never fires; TASK.136 RES-1). `segmentTokens` is undefined only on
-  // an unterminated quote (`tokenizeSegment`'s one failure mode once the
-  // metacharacter screen has already run) — that is undecidable, not proven
-  // safe, so it fails closed to "unknown" rather than looping over nothing.
-  if (segmentTokens === undefined) {
-    return "unknown";
-  }
-  for (const token of segmentTokens.slice(2)) {
-    if (isWriteFlag(token.raw, GIT_WRITE_FLAGS) || isWriteFlag(token.unquoted, GIT_WRITE_FLAGS)) {
-      return "unknown";
-    }
-  }
-  return "read-only";
-}
-
-/**
  * Classifies a Bash command string as provably "read-only" or else "unknown".
  * Fail-closed: returns "read-only" only when the metacharacter screen, the
- * basename allowlist, and the per-binary flag/subcommand screens all pass.
+ * command allowlist, and the per-binary flag screens all pass.
  */
 export function classifyBashCommand(command: string): BashCommandClass {
   // 1. Raw-string screen: any shell metacharacter or control character means
@@ -268,20 +193,13 @@ export function classifyBashCommand(command: string): BashCommandClass {
     return "unknown";
   }
 
-  // 2b. Quote-aware split of the SAME string, reused verbatim from the
-  //     pipeline path (`tokenizeSegment`, below `classifyBashCommandLine`).
-  //     Consulted ONLY by the write-flag screens (step 4b here, and
-  //     `classifyGit`'s flag loop) — every other check in this function keeps
-  //     running off the naive `tokens` above, unchanged. `undefined` here
-  //     means an unterminated quote; see 4b for what that means downstream.
+  // Check arguments after quote removal as well as in their raw form.
   const segmentTokens = tokenizeSegment(command);
 
-  // 3. Basename of the first token against the allowlist. See the basename-trust
-  //    limit in the module doc: `/bin/ls` -> `ls` is intentionally read-only.
-  const binary = basename(tokens[0]!);
-  if (binary === "git") {
-    return classifyGit(tokens, segmentTokens);
-  }
+  // Only bare, unquoted command names are trusted; a repository can contain
+  // an arbitrary executable named like an allowlisted program.
+  const binary = tokens[0]!;
+  if (binary.includes("/")) return "unknown";
   if (!READ_ONLY_BINARIES.has(binary)) {
     return "unknown";
   }
@@ -449,7 +367,7 @@ function classifySedPipelineTokens(tokens: SegmentToken[]): BashCommandClass {
  * quote-UNAWARE raw screen runs first (same maximum-conservatism rule as the
  * single-command path), THEN quote-aware tokenization — tokenization exists
  * to CATCH what quotes hide, never to ADMIT what quotes wrap. */
-function classifyPipelineSegment(segment: string, allowGitStatus: boolean): BashCommandClass {
+function classifyPipelineSegment(segment: string): BashCommandClass {
   // 1. Quote-UNAWARE raw screen — the same maximum-conservatism rule as the
   //    single-command path: any shell metacharacter or control character
   //    anywhere in the segment (redirects < >, $, backtick, \, = env
@@ -465,31 +383,18 @@ function classifyPipelineSegment(segment: string, allowGitStatus: boolean): Bash
   if (tokens === undefined || tokens.length === 0) {
     return "unknown";
   }
-  // 3. The command word must be quote-free (D-S2-6): a quoted or
-  //    quote-assembled binary name never auto-runs. LIVE but security-inert
-  //    (ARBITRATION-S2-W1 D-W1-2): removing it would only admit
-  //    quoted-directory-prefix spellings (`"a"/cat x`) whose executed basename
-  //    is identical to an already-sanctioned unquoted twin (RES-6 basename
-  //    trust). Kept as a zero-cost strictness rule, not as a load-bearing
-  //    security guard — do NOT delete as "dead code" (MUTATION-S2.md W1
-  //    corrections; A7's slash-after-quote vectors go red on deletion).
+  // Reject quoted command words and path-qualified executables.
   const first = tokens[0]!;
   if (first.raw !== first.unquoted) {
     return "unknown";
   }
-  const binary = basename(first.raw);
-  // Plan mode admits only the narrowly specified status form in pipelines.
-  // Keep the existing build-mode pipeline policy unchanged.
-  if (binary === "git") {
-    return allowGitStatus && tokens.length === 3 &&
-      tokens[1]!.raw === "status" && tokens[2]!.raw === "--short"
-      ? "read-only" : "unknown";
-  }
+  const binary = first.raw;
+  if (binary.includes("/")) return "unknown";
   // 5. The one sed subgrammar (DV-5); every other sed form asks.
   if (binary === "sed") {
     return classifySedPipelineTokens(tokens);
   }
-  // 6. Allowlist basename — same basename-trust limit as the single path.
+  // 6. Only allowlisted bare command names pass.
   if (!READ_ONLY_BINARIES.has(binary)) {
     return "unknown";
   }
@@ -518,7 +423,7 @@ function classifyPipelineSegment(segment: string, allowGitStatus: boolean): Bash
  * `;`/`&`/`&&`/`||`/`|&`/newline chains, substitutions, redirects,
  * unbalanced quotes — is "unknown" (fail-closed).
  */
-export function classifyBashCommandLine(command: string, options?: { allowGitStatusPipeline?: boolean }): BashCommandLineClassification {
+export function classifyBashCommandLine(command: string): BashCommandLineClassification {
   const split = splitBashSegments(command);
   if (split === undefined) {
     // Substitution or unterminated quote: unsegmentable, never auto-allow.
@@ -537,7 +442,7 @@ export function classifyBashCommandLine(command: string, options?: { allowGitSta
     return { class: "unknown", shellExpression: true };
   }
   for (const segment of split.segments) {
-    if (classifyPipelineSegment(segment, options?.allowGitStatusPipeline === true) !== "read-only") {
+    if (classifyPipelineSegment(segment) !== "read-only") {
       return { class: "unknown", shellExpression: true };
     }
   }

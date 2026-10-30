@@ -27,7 +27,7 @@ export class SafeCommandPermissionEngine implements PermissionEngine {
     // Plan-mode denials are relaxed only by the actual classifier, regardless of
     // any injected classifier used for build-mode approval policy.
     const safe = typeof command === "string" && (request.mode === "plan"
-      ? classifyBashCommandLine(command, { allowGitStatusPipeline: true }).class === "read-only"
+      ? classifyBashCommandLine(command).class === "read-only"
       : this.classify(command) === "read-only");
     if (safe) {
       return { decision: "allow", reason: "Bash: auto-approved (provably read-only command)" };
