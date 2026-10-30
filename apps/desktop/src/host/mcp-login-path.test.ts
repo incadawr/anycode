@@ -198,10 +198,10 @@ describe("claudeMcpStatuses — Claude sessions surface forwarded-server failure
     ]);
   });
 
-  // The Claude CLI's `system/init` carries no error text at all, so a row that
-  // claimed a reason would be inventing one. Both templates must state the
-  // limitation and name the command that does show the reason.
-  it("never claims a reason the CLI does not report, and names the command that does", () => {
+  // The Claude CLI's `system/init` carries no error text at all, so without a
+  // probe finding both templates must state the limitation and name the
+  // command that does show the reason.
+  it("without a probe finding, never claims a reason the CLI does not report, and names the command that does", () => {
     const failed = claudeMcpStatuses([{ name: "remote", status: "failed" }], ["silent"], [stdio("remote"), stdio("silent")]);
     expect(failed).toHaveLength(2);
     for (const row of failed) {
@@ -209,6 +209,35 @@ describe("claudeMcpStatuses — Claude sessions surface forwarded-server failure
       expect(row.error).toContain("`claude mcp list`");
       expect(row.error).not.toMatch(/exited with code|stderr|spawn/i);
     }
+  });
+
+  // GitHub #3 follow-up: our own probe launch of the server command is now a
+  // legitimate reason to name. Both the reported-failed and the CLI-silent
+  // (missing) rows take the probe's redacted detail in its place.
+  it("shows the probe's spawn error / exit code / stderr tail in place of the template", () => {
+    const probeDetails = new Map([
+      ["remote", "probe: server command exited with code 127 before responding; stderr:\nlauncher: not found"],
+      ["silent", "probe could not run the server command: spawn ENOENT"],
+    ]);
+    const failed = claudeMcpStatuses([{ name: "remote", status: "failed" }], ["silent"], [stdio("remote"), stdio("silent")], probeDetails);
+    expect(failed).toHaveLength(2);
+    expect(failed[0]?.error).toBe("probe: server command exited with code 127 before responding; stderr:\nlauncher: not found");
+    expect(failed[1]?.error).toBe("probe could not run the server command: spawn ENOENT");
+  });
+
+  it("keeps the needs-auth template even when a probe detail exists, and ignores details for healthy servers", () => {
+    const probeDetails = new Map([["auth", "probe: server command exited with code 1 before responding"]]);
+    const rows = claudeMcpStatuses(
+      [
+        { name: "auth", status: "needs-auth" },
+        { name: "docs", status: "connected" },
+      ],
+      [],
+      [stdio("auth"), stdio("docs")],
+      probeDetails,
+    );
+    expect(rows[0]?.error).toBe("Claude needs authentication for this server (run `claude mcp list` to see it)");
+    expect(rows[1]?.error).toBeUndefined();
   });
 });
 

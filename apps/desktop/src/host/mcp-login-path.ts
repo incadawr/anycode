@@ -156,10 +156,11 @@ export function codexMcpStatus(
 }
 
 /**
- * The one ACTIONABLE next step for a Claude-side MCP failure. The CLI's
- * `system/init` names a status per server and nothing else — no spawn error, no
- * exit code, no stderr — so AnyCode cannot report a reason it never receives.
- * The row says exactly that and points at the CLI's own listing, which does.
+ * The one ACTIONABLE next step for a Claude-side MCP failure the probe could
+ * not explain either. The CLI's `system/init` names a status per server and
+ * nothing else — no spawn error, no exit code, no stderr — so AnyCode probes
+ * the launch command itself (`mcp-spawn-probe.ts`); only when that probe also
+ * stays silent does the row fall back to pointing at the CLI's own listing.
  */
 const CLAUDE_MCP_SEE_REASON = "Claude does not report the reason; run `claude mcp list` to see it";
 
@@ -167,14 +168,18 @@ const CLAUDE_MCP_SEE_REASON = "Claude does not report the reason; run `claude mc
  * Claude's `system/init` MCP report → status rows (GitHub #3). The CLI reports a
  * status for every server it started, and simply omits the ones it could not
  * start — the `missing` list (computed from `mcpServerNames` against what we
- * forwarded) covers that half. Claude's report carries no error text, so the row
- * states what is known (the server is not running) and where the reason lives,
- * rather than implying a diagnostic we do not have.
+ * forwarded) covers that half. Claude's report carries no error text, so the
+ * row pairs the failure with what OUR OWN probe launch of the server command
+ * found (spawn error / exit code / redacted stderr tail — the GitHub #3
+ * follow-up), falling back to the CLI-listing pointer when the probe could not
+ * reproduce a cause (its timeout means the command itself runs fine).
+ * `probeDetails` keys are exact server names.
  */
 export function claudeMcpStatuses(
   reported: readonly { name: string; status: string | null }[],
   missing: readonly string[],
   specs: readonly McpServerSpec[],
+  probeDetails: ReadonlyMap<string, string> = new Map(),
 ): McpServerStatus[] {
   const rows: McpServerStatus[] = reported.map(({ name, status }) => {
     const failed = status === "failed" || status === "needs-auth";
@@ -189,7 +194,7 @@ export function claudeMcpStatuses(
             error:
               status === "needs-auth"
                 ? "Claude needs authentication for this server (run `claude mcp list` to see it)"
-                : `Claude could not start this server (${CLAUDE_MCP_SEE_REASON})`,
+                : probeDetails.get(name) ?? `Claude could not start this server (${CLAUDE_MCP_SEE_REASON})`,
           }
         : {}),
     };
@@ -201,7 +206,7 @@ export function claudeMcpStatuses(
       state: "failed",
       toolCount: 0,
       toolsTruncated: false,
-      error: `Claude did not start this server (${CLAUDE_MCP_SEE_REASON})`,
+      error: probeDetails.get(name) ?? `Claude did not start this server (${CLAUDE_MCP_SEE_REASON})`,
     });
   }
   return rows;
