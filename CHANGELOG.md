@@ -13,6 +13,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A finished subagent's card now shows the child's exact tool-call count instead of the last throttled progress number, so a child that ran two commands no longer settles on one.
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
 - Choosing No thinking for Xiaomi MiMo models now turns their reasoning off.
 - Xiaomi MiMo Token Plan sessions show a pay-as-you-go list-price cost estimate instead of “price unknown”.

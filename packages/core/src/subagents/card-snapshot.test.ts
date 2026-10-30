@@ -202,6 +202,15 @@ describe("reduceSubagentCardEvent — subagent_end", () => {
     expect(acc.end && "responseModel" in acc.end).toBe(false);
   });
 
+  it("copies the terminal's exact toolCalls onto acc.end, and leaves the key absent when the event carries none", () => {
+    let acc = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
+    acc = reduceSubagentCardEvent(acc, end({ toolCalls: 2 }));
+    expect(acc.end?.toolCalls).toBe(2);
+    let bare = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
+    bare = reduceSubagentCardEvent(bare, end());
+    expect(bare.end && "toolCalls" in bare.end).toBe(false);
+  });
+
   // TASK.219: the terminal's own model/engine outrank the start event's
   // pre-boot accepted label for the card's identity; absent terminal fields
   // retain the start values (legacy/inline); a duplicate end keeps the FIRST
@@ -379,6 +388,27 @@ describe("finalizeSubagentCard", () => {
     const snapshot = finalizeSubagentCard(acc, fallback);
     expect(snapshot?.final).toEqual({ status: "completed", durationMs: 777 });
     expect(snapshot?.counters.turns).toBe(4);
+  });
+
+  // The live progress stream is throttled (session tier: leading-edge 1000 ms)
+  // and the inline runner's last frame can equally predate its final call, so
+  // a card settled from `counters` alone kept a LOWER tool-call count forever.
+  // The terminal's own count is the authoritative one.
+  it("the terminal's exact toolCalls wins over the last (throttled) progress count", () => {
+    let acc = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
+    acc = reduceSubagentCardEvent(acc, progress({ turns: 1, toolCalls: 1, lastTool: "Bash" }));
+    acc = reduceSubagentCardEvent(acc, end({ status: "completed", turns: 1, durationMs: 100, toolCalls: 2 }));
+    const snapshot = finalizeSubagentCard(acc, fallback);
+    expect(snapshot?.counters.toolCalls).toBe(2);
+    // The last-known tool name is unaffected by the settle.
+    expect(snapshot?.counters.lastTool).toBe("Bash");
+  });
+
+  it("a legacy end without toolCalls keeps the last progress count instead of zeroing it", () => {
+    let acc = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
+    acc = reduceSubagentCardEvent(acc, progress({ turns: 1, toolCalls: 3 }));
+    acc = reduceSubagentCardEvent(acc, end({ status: "completed", turns: 1, durationMs: 100 }));
+    expect(finalizeSubagentCard(acc, fallback)?.counters.toolCalls).toBe(3);
   });
 
   it("dropped sums ring/byte evictions and activitySuppressed", () => {

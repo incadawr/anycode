@@ -819,6 +819,51 @@ describe("agentTool — subagent_activity bridge (slice P7.18/F16b)", () => {
     });
   });
 
+  // The terminal's own exact tool-call count must reach the subagent_end
+  // AgentEvent (and thus the persisted card + live card): the progress stream
+  // is throttled on the session tier, so a card settled from `progress` alone
+  // kept a lower count forever.
+  it("copies progress.toolCalls onto the subagent_end event byte-exactly, and omits the key when the port's end carries none", async () => {
+    const emitted: ToolEmittedEvent[] = [];
+    const port: SubagentPort = {
+      run: async (_req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome> => {
+        opts.onProgress?.({ kind: "progress", turns: 1, toolCalls: 1, lastTool: "Bash" });
+        opts.onProgress?.({ kind: "end", status: "completed", turns: 1, toolCalls: 2, durationMs: 10 });
+        return { status: "completed", finalText: "ok", truncated: false, turns: 1, toolCalls: 2, durationMs: 10 };
+      },
+    };
+
+    await agentTool.handler(
+      { description: "d", prompt: "p", agent_type: "explore" },
+      makeCtx({ toolCallId: "call-toolcalls", subagents: port, emit: (e) => emitted.push(e) }),
+    );
+
+    const end = emitted.find((e) => e.type === "subagent_end");
+    expect(end).toEqual({
+      type: "subagent_end",
+      toolCallId: "call-toolcalls",
+      status: "completed",
+      turns: 1,
+      toolCalls: 2,
+      durationMs: 10,
+    });
+
+    const bare: ToolEmittedEvent[] = [];
+    const barePort: SubagentPort = {
+      run: async (_req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome> => {
+        opts.onProgress?.({ kind: "end", status: "completed", turns: 1, durationMs: 5 });
+        return { status: "completed", finalText: "ok", truncated: false, turns: 1, toolCalls: 0, durationMs: 5 };
+      },
+    };
+    await agentTool.handler(
+      { description: "d", prompt: "p", agent_type: "explore" },
+      makeCtx({ toolCallId: "call-toolcalls-bare", subagents: barePort, emit: (e) => bare.push(e) }),
+    );
+    const bareEnd = bare.find((e) => e.type === "subagent_end");
+    expect(bareEnd).toBeDefined();
+    expect(bareEnd && "toolCalls" in bareEnd).toBe(false);
+  });
+
   it("omits activitySuppressed from subagent_end when the port's end progress carries none (no silent zero)", async () => {
     const emitted: ToolEmittedEvent[] = [];
     const port: SubagentPort = {

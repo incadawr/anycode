@@ -1720,6 +1720,10 @@ export function createSubagentRunner(
           kind: "end",
           status,
           turns,
+          // The same counter the terminal outcome below carries: the last
+          // `progress` frame can predate the final tool call, so the settle
+          // reports the exact count instead of leaving the card stale.
+          toolCalls,
           durationMs: outcome.durationMs,
           ...(activitySuppressed > 0 ? { activitySuppressed } : {}),
           // TASK.171: the requested id travels on the end event too (not only
