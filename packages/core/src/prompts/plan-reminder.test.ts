@@ -22,6 +22,12 @@ describe("withPlanModeReminder", () => {
     expect(PLAN_MODE_REMINDER).toContain("ExitPlanMode");
   });
 
+  it("describes allowed Bash forms and the dedicated alternatives", () => {
+    for (const text of ["read-only", "|", "&&", ";", "redirects", "Glob", "Read", "Git"]) {
+      expect(PLAN_MODE_REMINDER).toContain(text);
+    }
+  });
+
   it("leaves an empty prompt's tag intact (pure string function, no trimming)", () => {
     expect(withPlanModeReminder("")).toBe(
       `\n<plan-mode-reminder>\n${PLAN_MODE_REMINDER}\n</plan-mode-reminder>`,

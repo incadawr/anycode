@@ -1,13 +1,4 @@
-/**
- * Tests for SafeCommandPermissionEngine (Phase 5 slice-5.1-cut.md §2.2/§6).
- * The narrowing invariant mirrors RuleAwarePermissionEngine: an "ask" from the
- * base is downgraded to "allow" ONLY for a Bash command the classifier proves
- * read-only; "allow"/"deny" verdicts pass through untouched (L3), non-Bash
- * requests are never classified, and a Bash request with no string `command`
-
- * production composition RuleAware(SafeCommand(Mode)) — both narrowing layers
- * coexisting over the untouched mode table.
- */
+/** Tests for safe-command permission narrowing and its production composition. */
 
 import { describe, expect, it } from "vitest";
 import { ModePermissionEngine } from "./engine.js";
@@ -55,11 +46,27 @@ describe("SafeCommandPermissionEngine", () => {
     expect(ruling.decision).toBe("ask");
   });
 
-  it("never overrides a base deny — a plan-mode read-only Bash stays denied [hazard g, L3]", () => {
-    // Real ModePermissionEngine: Bash is not readOnly, so plan mode -> deny.
+  it("allows proven read-only plan commands and denies unsafe forms", () => {
     const engine = new SafeCommandPermissionEngine(new ModePermissionEngine());
-    const ruling = engine.check(bashRequest("git status", "plan"));
-    expect(ruling.decision).toBe("deny");
+    for (const command of ["ls -la dir", "wc -l file", "git status --short | head"]) {
+      expect(engine.check(bashRequest(command, "plan")).decision, command).toBe("allow");
+    }
+    for (const command of ["rm file", "ls > file", "ls; rm file", "ls && rm file", "cat file | tee out", "$(touch file)"]) {
+      const ruling = engine.check(bashRequest(command, "plan"));
+      expect(ruling.decision, command).toBe("deny");
+      expect(ruling.reason).toMatch(/not proven read-only|unsupported shell syntax/);
+      for (const tool of ["Glob", "Read", "Git"]) expect(ruling.reason).toContain(tool);
+    }
+    expect(engine.check(bashRequest(null, "plan")).decision).toBe("deny");
+  });
+
+  it("preserves unrelated denials and never trusts an injected classifier for plan denials", () => {
+    const deny: PermissionEngine = { check: () => ({ decision: "deny", reason: "policy denial" }) };
+    expect(new SafeCommandPermissionEngine(deny).check(bashRequest("ls", "plan"))).toEqual({ decision: "deny", reason: "policy denial" });
+    const engine = new SafeCommandPermissionEngine(new ModePermissionEngine(), () => "read-only");
+    expect(engine.check(bashRequest("rm file", "plan")).decision).toBe("deny");
+    expect(engine.check({ ...bashRequest("rm file", "plan"), metadata: { ...bashTool.metadata, readOnly: true, needsApproval: true } }).decision).toBe("ask");
+    expect(new SafeCommandPermissionEngine(new ModePermissionEngine()).check(bashRequest("git status --short | head", "build")).decision).toBe("ask");
   });
 
   it("never overrides a base allow — a yolo-mode Bash stays allow with the base's own reason", () => {
@@ -139,13 +146,13 @@ describe("SafeCommandPermissionEngine composed with RuleAwarePermissionEngine �
     expect(ruling.decision).toBe("deny");
   });
 
-  it("a plan-mode read-only Bash is still denied through the full composition [hazard g]", () => {
+  it("a plan-mode read-only Bash is allowed through the full composition", () => {
     const { engine } = build();
-    expect(engine.check(bashRequest("git status", "plan")).decision).toBe("deny");
+    expect(engine.check(bashRequest("git status", "plan")).decision).toBe("allow");
   });
 });
 
-describe("SafeCommandPermissionEngine — TASK.35 pipelines", () => {
+describe("SafeCommandPermissionEngine — pipelines", () => {
   it("EN1: the DEFAULT classifier (no injection) allows a proven read-only pipeline, same reason string as single commands", () => {
     const engine = new SafeCommandPermissionEngine(askAlways);
     const ruling = engine.check(bashRequest("sed -n '1,5p' f | cat -A"));
@@ -166,10 +173,10 @@ describe("SafeCommandPermissionEngine — TASK.35 pipelines", () => {
     expect(engine.check(bashRequest("git status | cat")).decision).toBe("ask");
   });
 
-  it("EN4: plan mode denies a proven-safe pipeline through the composed stack — narrowing never overrides deny", () => {
+  it("EN4: plan mode allows a proven-safe pipeline through the composed stack", () => {
     const engine = new SafeCommandPermissionEngine(new ModePermissionEngine());
     const ruling = engine.check(bashRequest("sed -n '1p' f | cat", "plan"));
-    expect(ruling.decision).toBe("deny");
+    expect(ruling.decision).toBe("allow");
   });
 
   it("EN5: yolo + pipeline passes the base's own ruling through verbatim (no auto-approved reason)", () => {
@@ -185,10 +192,4 @@ describe("SafeCommandPermissionEngine — TASK.35 pipelines", () => {
     const allowingEngine = new SafeCommandPermissionEngine(askAlways, () => "read-only");
     expect(allowingEngine.check(bashRequest("cat f | sh")).decision).toBe("allow");
   });
-
-  // EN7: deny-rule-beats-allow — the system has no engine-level deny rules; deny
-  // precedence is plan-mode (EN4) plus the dispatcher's own hook-vs-engine
-  // DECISION_RANK merge, which S2 does not touch (dispatcher and its tests are
-  // zero-diff — §2 conformance criterion). No new test: named here so the
-  // reviewer knows the DoD line was considered, not skipped.
 });
