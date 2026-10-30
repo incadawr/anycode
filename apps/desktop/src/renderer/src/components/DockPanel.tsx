@@ -31,8 +31,6 @@ export interface DockPanelProps {
   mode: DockMode;
   /** Already-clamped dock width in px (clampDockWidth over the measured available width, App.tsx). */
   width: number;
-  /** The drag-resize entry (App.tsx's beginDockResize — mirror of the retired beginPreviewResize). */
-  onResizeStart(event: React.PointerEvent<HTMLDivElement>): void;
   /** Stage 2 (§3): canSplit(available) — gates the per-tab "Split right" action. */
   canSplitNow: boolean;
   /** Stage 2 (§3): the store's pinned split tab id (rendered in the secondary pane). */
@@ -74,7 +72,7 @@ function focusDockTab(tab: DockTab, tabId: string): void {
 
 const EMPTY_PREVIEWS: never[] = [];
 
-export function DockPanel({ mode, width, onResizeStart, onToast, subagents, canSplitNow, splitTabId }: DockPanelProps) {
+export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitTabId }: DockPanelProps) {
   const ctx = useContext(TabContext);
   if (!ctx) {
     throw new Error("DockPanel must be used within a <TabContext.Provider>");
@@ -252,13 +250,10 @@ export function DockPanel({ mode, width, onResizeStart, onToast, subagents, canS
           </div>
         )}
       </div>
-      <div
-        className="review-resize-handle"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize dock"
-        onPointerDown={onResizeStart}
-      />
+      {/* GitHub #31: the resize handle is NOT rendered here. As a child of the
+          column-flex .dock-panel it was a full-width 0px-tall strip with no
+          hit area; App.tsx renders it as the direct grid child filling the
+          reserved 8px column instead. */}
     </aside>
   );
 }

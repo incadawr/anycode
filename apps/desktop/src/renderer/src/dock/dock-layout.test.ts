@@ -18,6 +18,7 @@ import {
   closeTab,
   computeDockMode,
   derivePreviewTabs,
+  dockMinWidth,
   isSplittableTab,
   openTab,
   openTabInBackground,
@@ -98,6 +99,14 @@ describe("clampDockWidth", () => {
 
   it("caps at the absolute max on huge windows", () => {
     expect(clampDockWidth(2000, 2000)).toBe(960);
+  });
+
+  it("a pinned split pane raises the floor to DOCK_WIDTH_MIN + DOCK_SPLIT_MIN_PX (the pane overlays the body — the active tab must stay visible)", () => {
+    expect(dockMinWidth(false)).toBe(DOCK_WIDTH_MIN);
+    expect(dockMinWidth(true)).toBe(DOCK_WIDTH_MIN + DOCK_SPLIT_MIN_PX);
+    expect(clampDockWidth(200, 2000, dockMinWidth(true))).toBe(DOCK_WIDTH_MIN + DOCK_SPLIT_MIN_PX);
+    // The canSplit gate guarantees the window can always afford the raised floor.
+    expect(CONVERSATION_MIN_PX + DOCK_HANDLE_PX + DOCK_WIDTH_MIN + DOCK_SPLIT_MIN_PX).toBeLessThanOrEqual(CONVERSATION_MIN_PX + 2 * DOCK_WIDTH_MIN + 2 * DOCK_HANDLE_PX);
   });
 });
 

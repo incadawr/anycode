@@ -87,7 +87,7 @@ import {
 import { projectChildSplitRows } from "./child-split-projection.js";
 import { projectChildHistoryResult, type ChildHistoryResult, type ChildHistoryViewState } from "./child-history.js";
 import { ChildSplitPane, type ChildSplitRow } from "./components/ChildSplitPane.js";
-import { canSplit, clampDockWidth, computeDockMode, derivePreviewTabs, DOCK_HANDLE_PX, type DockMode } from "./dock/dock-layout.js";
+import { canSplit, clampDockWidth, computeDockMode, derivePreviewTabs, dockMinWidth, DOCK_HANDLE_PX, type DockMode } from "./dock/dock-layout.js";
 import { selectDockOpenFor, selectDockView, useDockStore } from "./dock/dock-store.js";
 import { isSessionBusy, type SubagentSubStatus, type TranscriptBlock } from "./store.js";
 import "./settings.css";
@@ -647,10 +647,13 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
     typeof window === "undefined" ? 1280 : (document.querySelector(".session-content") as HTMLElement | null)?.getBoundingClientRect().width || window.innerWidth,
   );
   const dockMode: DockMode = computeDockMode(availableWidth);
-  const effectiveDockWidth = clampDockWidth(dockWidth, availableWidth);
+  const splitTabId = useDockStore((state) => selectDockView(state, tabId).splitTabId);
+  // GitHub #31 review: while a split pane is pinned, the dock's floor rises
+  // to DOCK_WIDTH_MIN + DOCK_SPLIT_MIN_PX — the pinned pane (absolute, 320px,
+  // over the dock body's right) must never cover the active pane entirely.
+  const effectiveDockWidth = clampDockWidth(dockWidth, availableWidth, dockMinWidth(splitTabId !== null));
   // Stage 2 (§3): the split gate over the SAME measured available width.
   const canSplitNow = canSplit(availableWidth);
-  const splitTabId = useDockStore((state) => selectDockView(state, tabId).splitTabId);
   // The dock participates in the grid only in column mode — drawer mode is
   // an absolute overlay (conversation full width).
   const splitOpen = dockOpen && dockMode === "column";
@@ -705,26 +708,42 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
   // Taskana 4703: the ONE dock resize path (mirror of the retired
   // beginPreviewResize, now clamped live against the measured root width —
   // the boot-time clamp is the `effectiveDockWidth` computation above).
+  // GitHub #31 reviews: the drag tracks the INITIATING pointerId end to end
+  // — a second finger's moves are ignored, and only the initiating pointer's
+  // pointerup/pointercancel may end the drag (a foreign release once burned
+  // the once-listeners and persisted the width mid-drag). The clamp's floor
+  // follows the split (dockMinWidth): a pinned pane must never be squeezed
+  // over the active tab's body.
   function beginDockResize(event: ReactPointerEvent<HTMLDivElement>): void {
     event.preventDefault();
+    const pointerId = event.pointerId;
     const startX = event.clientX;
     const startWidth = effectiveDockWidth;
     const rootWidth = reviewRootRef.current?.getBoundingClientRect().width ?? window.innerWidth;
+    const minWidth = dockMinWidth(splitTabId !== null);
     let nextWidth = startWidth;
 
     function onMove(moveEvent: PointerEvent): void {
-      nextWidth = clampDockWidth(startWidth + startX - moveEvent.clientX, rootWidth);
+      if (moveEvent.pointerId !== pointerId) {
+        return;
+      }
+      nextWidth = clampDockWidth(startWidth + startX - moveEvent.clientX, rootWidth, minWidth);
       useDockStore.setState({ width: nextWidth });
     }
 
-    function onUp(): void {
+    function onUp(upEvent: PointerEvent): void {
+      if (upEvent.pointerId !== pointerId) {
+        return;
+      }
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
       useDockStore.getState().setWidth(nextWidth); // persists on resize-end
     }
 
     window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp, { once: true });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   }
 
   // Available-width tracking: the .session-content width changes on window
@@ -931,6 +950,21 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
       >
         <SessionSurface tabId={tabId} onToast={onToast} />
 
+        {/* GitHub #31: the resize handle is a DIRECT grid child filling the
+            reserved 8px column (as before the dock refactor) — inside the
+            dock <aside> (a column flex) it collapsed to a 0px-tall strip
+            with no hit area. Column mode only; the drawer overlay is not
+            drag-resizable (same as the LSP overlay posture it mirrors). */}
+        {splitOpen && (
+          <div
+            className="review-resize-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize dock"
+            data-testid="dock-resize-handle"
+            onPointerDown={beginDockResize}
+          />
+        )}
         {/* Taskana 4703: ONE dock column replaces the git/preview/subagents
             stack. The mount gate is tabs+visible; drawer mode still mounts
             (absolute overlay) but leaves the grid untouched above. */}
@@ -938,7 +972,6 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
           <DockPanel
             mode={dockMode}
             width={effectiveDockWidth}
-            onResizeStart={beginDockResize}
             onToast={onToast}
             canSplitNow={canSplitNow}
             splitTabId={splitTabId}
