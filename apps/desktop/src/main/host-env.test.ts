@@ -14,6 +14,7 @@ import {
   resolveContextBudgetConfig,
   resolveContextWindow,
   resolveImageInput,
+  resolveIncludeUsage,
 } from "@anycode/core";
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import {
@@ -583,6 +584,83 @@ describe("buildHostEnv — ANYCODE_PROMPT_CACHE_OPTIONS (GitHub #15)", () => {
       getSecret: noSecret,
     });
     expect(ENV_PROMPT_CACHE_OPTIONS in env).toBe(false);
+  });
+});
+
+describe("buildHostEnv — ANYCODE_INCLUDE_USAGE (GitHub #1: per-connection usage opt-out, env wins)", () => {
+  /** A connection carrying an optional persisted usage policy; `false` must survive projection. */
+  function usageConn(connectionId: string, value: boolean | undefined) {
+    const conn = connectionFixture({ connectionId, id: "z-ai", model: "m" });
+    return { ...conn, ...(value !== undefined ? { includeUsage: value } : {}) };
+  }
+  /** Core's parser, for the "the fork sees what the resolver reads" half of each case. */
+  const parse = (env: NodeJS.ProcessEnv) => loadEnvConfig({ ...env, ANYCODE_API_KEY: "sk-test", ANYCODE_MODEL: "m" });
+
+  it("emits an explicit false/true verbatim and nothing when the connection has no opinion", async () => {
+    const base = settings();
+    const off = await buildHostEnv({
+      bootEnv: {},
+      settings: { ...base, provider: providerV2Multi("conn-a", [usageConn("conn-a", false)]) },
+      getSecret: noSecret,
+    });
+    // `false` is a MEANING: the literal string, never an omitted key or "".
+    expect(off[ENV_INCLUDE_USAGE]).toBe("false");
+    expect(parse(off).includeUsage).toBe(false);
+    // Core's resolver turns that explicit false into the strict-server escape hatch.
+    expect(resolveIncludeUsage("openai-chat-completions", parse(off).includeUsage)).toBe(false);
+
+    const on = await buildHostEnv({
+      bootEnv: {},
+      settings: { ...base, provider: providerV2Multi("conn-a", [usageConn("conn-a", true)]) },
+      getSecret: noSecret,
+    });
+    expect(on[ENV_INCLUDE_USAGE]).toBe("true");
+    expect(parse(on).includeUsage).toBe(true);
+
+    const automatic = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ provider: { id: "z-ai", model: "m" } }),
+      getSecret: noSecret,
+    });
+    // Automatic emits NOTHING — core's transport-conditional default applies.
+    expect(ENV_INCLUDE_USAGE in automatic).toBe(false);
+    expect(resolveIncludeUsage("openai-chat-completions", parse(automatic).includeUsage)).toBe(true);
+  });
+
+  it("pinned connections get distinct usage policies and a shell value wins in BOTH directions", async () => {
+    const offConn = usageConn("conn-a", false);
+    const onConn = usageConn("conn-b", true);
+    const base = settings();
+    const envA = await buildHostEnv({
+      bootEnv: {},
+      settings: { ...base, provider: providerV2Multi("conn-a", [offConn, onConn]) },
+      getSecret: noSecret,
+    });
+    const envB = await buildHostEnv({
+      bootEnv: {},
+      settings: { ...base, provider: providerV2Multi("conn-b", [offConn, onConn]) },
+      getSecret: noSecret,
+    });
+    expect(envA[ENV_INCLUDE_USAGE]).toBe("false");
+    expect(envB[ENV_INCLUDE_USAGE]).toBe("true");
+
+    // A launching shell's value wins over a saved true AND over a saved false.
+    const shellOn = await buildHostEnv({
+      bootEnv: { [ENV_INCLUDE_USAGE]: "1" },
+      settings: { ...base, provider: providerV2Multi("conn-a", [offConn]) },
+      getSecret: noSecret,
+    });
+    expect(shellOn[ENV_INCLUDE_USAGE]).toBe("1");
+    expect(parse(shellOn).includeUsage).toBe(true);
+
+    const shellOff = await buildHostEnv({
+      bootEnv: { [ENV_INCLUDE_USAGE]: "0" },
+      settings: { ...base, provider: providerV2Multi("conn-b", [onConn]) },
+      getSecret: noSecret,
+    });
+    expect(shellOff[ENV_INCLUDE_USAGE]).toBe("0");
+    expect(parse(shellOff).includeUsage).toBe(false);
+    expect(resolveIncludeUsage("openai-chat-completions", parse(shellOff).includeUsage)).toBe(false);
   });
 });
 
