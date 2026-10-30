@@ -17,7 +17,7 @@ function bashRequest(command: unknown, mode: PermissionRequest["mode"] = "build"
 describe("SafeCommandPermissionEngine", () => {
   it("downgrades an ask -> allow for a provably read-only Bash command", () => {
     const engine = new SafeCommandPermissionEngine(askAlways);
-    const ruling = engine.check(bashRequest("git status"));
+    const ruling = engine.check(bashRequest("ls"));
     expect(ruling.decision).toBe("allow");
     // The reason must name the safe-command provenance (auto-approved read-only).
     expect(ruling.reason).toContain("read-only");
@@ -48,7 +48,7 @@ describe("SafeCommandPermissionEngine", () => {
 
   it("allows proven read-only plan commands and denies unsafe forms", () => {
     const engine = new SafeCommandPermissionEngine(new ModePermissionEngine());
-    for (const command of ["ls -la dir", "wc -l file", "git status --short | head"]) {
+    for (const command of ["ls -la dir", "wc -l file", "cat file | head"]) {
       expect(engine.check(bashRequest(command, "plan")).decision, command).toBe("allow");
     }
     for (const command of ["rm file", "ls > file", "ls; rm file", "ls && rm file", "cat file | tee out", "$(touch file)"]) {
@@ -58,6 +58,15 @@ describe("SafeCommandPermissionEngine", () => {
       for (const tool of ["Glob", "Read", "Git"]) expect(ruling.reason).toContain(tool);
     }
     expect(engine.check(bashRequest(null, "plan")).decision).toBe("deny");
+  });
+
+
+  it("denies untrusted executable paths and git repository program hooks in plan, and asks in build", () => {
+    const engine = new SafeCommandPermissionEngine(new ModePermissionEngine());
+    for (const command of ["./tools/ls", "/tmp/evil/ls | cat", "git diff --ext-diff", "git log --textconv", "git status", "git status --short | head"]) {
+      expect(engine.check(bashRequest(command, "plan")).decision, command).toBe("deny");
+      expect(engine.check(bashRequest(command, "build")).decision, command).toBe("ask");
+    }
   });
 
   it("preserves unrelated denials and never trusts an injected classifier for plan denials", () => {
@@ -96,7 +105,7 @@ describe("SafeCommandPermissionEngine", () => {
     // stub keeps the ask even for a normally-safe command; a "read-only" stub
     // downgrades even a normally-unsafe one.
     const denyingEngine = new SafeCommandPermissionEngine(askAlways, () => "unknown");
-    expect(denyingEngine.check(bashRequest("git status")).decision).toBe("ask");
+    expect(denyingEngine.check(bashRequest("ls")).decision).toBe("ask");
 
     const allowingEngine = new SafeCommandPermissionEngine(askAlways, () => "read-only");
     expect(allowingEngine.check(bashRequest("rm -rf /")).decision).toBe("allow");
@@ -118,7 +127,7 @@ describe("SafeCommandPermissionEngine composed with RuleAwarePermissionEngine â€
 
   it("safe Bash in build is auto-allowed by the safe-command layer (no rule needed)", () => {
     const { engine } = build();
-    expect(engine.check(bashRequest("git status")).decision).toBe("allow");
+    expect(engine.check(bashRequest("ls")).decision).toBe("allow");
   });
 
   it("unsafe Bash in build still asks when neither layer narrows it", () => {
@@ -148,7 +157,7 @@ describe("SafeCommandPermissionEngine composed with RuleAwarePermissionEngine â€
 
   it("a plan-mode read-only Bash is allowed through the full composition", () => {
     const { engine } = build();
-    expect(engine.check(bashRequest("git status", "plan")).decision).toBe("allow");
+    expect(engine.check(bashRequest("ls", "plan")).decision).toBe("allow");
   });
 });
 

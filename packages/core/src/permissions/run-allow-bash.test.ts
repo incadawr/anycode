@@ -299,7 +299,7 @@ describe("RunAllowBashPermissionEngine composed with the production chain shape 
     const engine = build(undefined);
     expect(engine.check(bashRequest("pnpm test")).decision).toBe("ask");
     // The safe-command layer beneath still narrows a provably read-only command.
-    expect(engine.check(bashRequest("git status")).decision).toBe("allow");
+    expect(engine.check(bashRequest("ls")).decision).toBe("allow");
   });
 
   it("an allow-listed command runs in build mode without asking", () => {

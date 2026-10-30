@@ -1077,12 +1077,12 @@ describe("plan-mode reminder e2e (design slice-4.3-cut.md §5.2 para.10)", () =>
 });
 
 describe("safe-command narrowing e2e (design slice-5.1-cut.md §6, R4)", () => {
-  it("build-mode: a provably read-only Bash (git status) auto-approves in the live wiring — the turn completes with NO permission prompt", async () => {
+  it("build-mode: a provably read-only Bash (ls) auto-approves in the live wiring — the turn completes with NO permission prompt", async () => {
     const { workspace, dbPath, settingsFilePath } = setupTempDirs();
     const modelPort = new SequencedModelPort([
       [
         { type: "start" },
-        { type: "tool_call", toolCall: { id: "call-1", name: "Bash", input: { command: "git status" } } },
+        { type: "tool_call", toolCall: { id: "call-1", name: "Bash", input: { command: "ls" } } },
         { type: "finish", finishReason: "tool_calls", usage: {} },
       ],
       [
