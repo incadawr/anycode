@@ -26,6 +26,10 @@ export const SESSIONS_API_FOOTER =
 export const SESSIONS_API_FOLDER_HINT = "Empty = any folder; only sessions you switch on are shared.";
 export const SESSIONS_API_FOLDER_NOTE =
   "Optional. When empty, only the sessions you switch on are shared. When set, a session must also be inside one of these exact folders (subfolders are not included; symlinks are resolved).";
+/** The mark on a listed folder that is not on disk right now (a danger chip). */
+export const SESSIONS_API_FOLDER_MISSING_LABEL = "Missing on disk";
+/** One plain-text sentence under the chip: what the mark means for the user. */
+export const SESSIONS_API_FOLDER_MISSING_NOTE = "This folder grants nothing until the folder is back; agents calling with it get folder_not_found. It is allowed again automatically once it exists — no restart needed.";
 
 /** The Advanced row that lists projects where agents may open tasks (view, plus a Turn off action; turning one on is the sidebar project menu). */
 export const SESSIONS_API_AGENT_PROJECTS_LABEL = "Agents may open tasks here";
