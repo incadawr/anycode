@@ -24,6 +24,7 @@
 
 import { join } from "node:path";
 import type { FileSystemPort } from "../ports/file-system.js";
+import type { PermissionRule, ProfilePermissionRules } from "../types/permissions.js";
 import { parseFrontmatter, splitList } from "../skills/frontmatter.js";
 import { capUtf8Bytes } from "../util/bytes.js";
 import {
@@ -90,7 +91,129 @@ export const AGENT_PROFILE_MAX_TURNS_RE = /^[0-9]+$/;
 export type AgentProfileEngine = "codex" | "claude";
 
 /** Every frontmatter key a profile understands; any other key is reported as a problem. */
-export const AGENT_PROFILE_KEYS: readonly string[] = ["name", "description", "tools", "model", "engine", "maxTurns", "effort", "model_reasoning_effort", "connection", "provider"];
+export const AGENT_PROFILE_KEYS: readonly string[] = [
+  "name",
+  "description",
+  "tools",
+  "model",
+  "engine",
+  "maxTurns",
+  "effort",
+  "model_reasoning_effort",
+  "connection",
+  "provider",
+  // The permission overlay is a flat pair of keys, not a nested block: the
+  // frontmatter parser is deliberately flat (skills/frontmatter.ts), so
+  // `permissions:` + indented `allow:`/`deny:` lines would make the whole file
+  // non-conforming. Dotted keys keep the format honest to that parser.
+  "permissions.allow",
+  "permissions.deny",
+];
+
+/**
+ * Tool-name shape for one permission-rule entry (`Bash`, `Read`, `mcp__srv__t`).
+ * Permissive about the vocabulary on purpose — this module has no tool registry
+ * (main-safe, see the preview module's data mirror) — but strict about the
+ * FORM, so a sentence cannot be mistaken for a tool name and then silently
+ * match nothing.
+ */
+export const AGENT_PROFILE_PERMISSION_TOOL_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+
+/**
+ * One permission entry: `ToolName` (matches every call to that tool) or
+ * `ToolName(pattern)`. The pattern is everything between the OUTERMOST parens
+ * of a trimmed `Tool(...)` entry — the same `pattern` field a stored
+ * always-allow rule carries, matched by permissions/rules.ts.
+ */
+export function parseAgentProfilePermissionRule(entry: string): PermissionRule | undefined {
+  const trimmed = entry.trim();
+  if (trimmed === "") {
+    return undefined;
+  }
+  const open = trimmed.indexOf("(");
+  if (open === -1) {
+    return AGENT_PROFILE_PERMISSION_TOOL_RE.test(trimmed) ? { toolName: trimmed } : undefined;
+  }
+  // A `(` that is not closed by the entry's own final `)` is malformed. The
+  // pattern itself may not contain parens: rules.ts refuses any pattern
+  // containing one (picomatch compiles parens as regex groups, so a stored
+  // pattern with parens would silently match nothing there). Refusing it here
+  // instead turns that silent no-op into a loud parse error.
+  if (!trimmed.endsWith(")")) {
+    return undefined;
+  }
+  const toolName = trimmed.slice(0, open).trim();
+  const pattern = trimmed.slice(open + 1, -1).trim();
+  if (!AGENT_PROFILE_PERMISSION_TOOL_RE.test(toolName)) {
+    return undefined;
+  }
+  if (pattern === "" || /[()]/.test(pattern)) {
+    return undefined;
+  }
+  return { toolName, pattern };
+}
+
+/**
+ * Splits a `permissions.allow`/`permissions.deny` value into entries. Accepts
+ * the same inline-list or comma list as `tools`, but splits on commas at
+ * PARENTHESIS DEPTH 0 only, so a pattern may itself contain a comma
+ * (`Bash(printf "a,b")`). Quotes are tracked for the same reason: a comma
+ * inside a quoted argument is part of the pattern, not a separator. An
+ * unbalanced paren or quote makes the split produce entries that
+ * `parseAgentProfilePermissionRule` refuses — fail-closed, never a silently
+ * truncated rule list.
+ */
+export function splitAgentProfilePermissionRules(value: string): string[] {
+  let inner = value.trim();
+  if (inner.startsWith("[") && inner.endsWith("]")) {
+    inner = inner.slice(1, -1);
+  }
+  const items: string[] = [];
+  let current = "";
+  let depth = 0;
+  let quote: "'" | '"' | undefined;
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch === undefined) {
+      continue;
+    }
+    if (quote !== undefined) {
+      if (ch === "\\" && quote === '"' && i + 1 < inner.length) {
+        current += ch + inner[i + 1];
+        i++;
+        continue;
+      }
+      current += ch;
+      if (ch === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === "(") {
+      depth++;
+      current += ch;
+      continue;
+    }
+    if (ch === ")") {
+      depth--;
+      current += ch;
+      continue;
+    }
+    if (ch === "," && depth === 0) {
+      items.push(current);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  items.push(current);
+  return items.map((item) => item.trim()).filter((item) => item !== "");
+}
 
 /**
  * Frontmatter `effort:` vocabulary — the global ReasoningEffort tiers plus
@@ -169,6 +292,14 @@ export interface ParsedAgentProfile {
    */
   effort?: AgentProfileEffort;
   /**
+   * Frontmatter `permissions.allow` / `permissions.deny` — the profile's own
+   * permission overlay, applied to this profile's children on top of the
+   * session's gate (never wider than it — see ProfilePermissionEngine). Absent
+   * when both lists are empty, i.e. the child inherits the parent's gate
+   * exactly as before the keys existed.
+   */
+  permissions?: ProfilePermissionRules;
+  /**
    * Non-fatal per-file problems (path-free suffixes) — currently only explicit
    * spawn-tool requests. The caller prefixes each with `Agent profile <path>: `.
    */
@@ -193,6 +324,8 @@ export type AgentProfileParseError =
   | { kind: "engine_tools_conflict"; name: string; engine: AgentProfileEngine }
   | { kind: "bad_connection"; name: string; connection: string }
   | { kind: "bad_provider"; name: string; provider: string }
+  | { kind: "bad_permissions"; name: string; which: "allow" | "deny"; entry: string }
+  | { kind: "engine_permissions_conflict"; name: string; engine: AgentProfileEngine }
   | { kind: "engine_connection_conflict"; name: string; engine: AgentProfileEngine }
   | { kind: "connection_provider_conflict"; name: string };
 
@@ -349,6 +482,48 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
     effort = normalizedEffort as AgentProfileEffort;
   }
 
+  // permissions.allow / permissions.deny: the profile's own overlay on the
+  // session's permission gate. A malformed ENTRY is FATAL rather than dropped:
+  // a dropped `deny` line turns a declared restriction into a silent no-op,
+  // which is the exact dishonesty every fatal branch above exists to stop. An
+  // absent or empty list is simply no rule of that kind.
+  const parseRules = (
+    which: "allow" | "deny",
+    raw: string | undefined,
+  ): { rules: PermissionRule[] } | { error: AgentProfileParseError } => {
+    const rules: PermissionRule[] = [];
+    for (const entry of splitAgentProfilePermissionRules(raw ?? "")) {
+      const rule = parseAgentProfilePermissionRule(entry);
+      if (rule === undefined) {
+        return { error: { kind: "bad_permissions", name, which, entry } };
+      }
+      rules.push(rule);
+    }
+    return { rules };
+  };
+  const allowParsed = parseRules("allow", parsed.fields["permissions.allow"]);
+  if ("error" in allowParsed) {
+    return { error: allowParsed.error };
+  }
+  const denyParsed = parseRules("deny", parsed.fields["permissions.deny"]);
+  if ("error" in denyParsed) {
+    return { error: denyParsed.error };
+  }
+  const permissions: ProfilePermissionRules | undefined =
+    allowParsed.rules.length > 0 || denyParsed.rules.length > 0
+      ? { allow: allowParsed.rules, deny: denyParsed.rules }
+      : undefined;
+
+  // engine + permissions: an engine child's tool approvals belong to that CLI
+  // (claude runs with acceptEdits, codex in its own sandbox) and never pass
+  // through this package's PermissionEngine, so a `permissions:` block there
+  // could not be honored. Same "refuse, do not half-honor" stance as
+  // engine+tools — a profile that declares a deny and silently runs without it
+  // is worse than a profile that is loudly refused.
+  if (engine !== undefined && permissions !== undefined) {
+    return { error: { kind: "engine_permissions_conflict", name, engine } };
+  }
+
   // engine + tools: TASK.97 R4 (wave2-cut.md §1.3). ENFORCE was rejected — claude's
   // `--allowedTools` is a permission allowlist, not a registry restriction (the
   // complement-ban `--disallowedTools` is an open set across CLI versions), and
@@ -398,6 +573,7 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
       ...(provider !== undefined ? { provider } : {}),
       ...(turnBudget !== undefined ? { turnBudget } : {}),
       ...(effort !== undefined ? { effort } : {}),
+      ...(permissions !== undefined ? { permissions } : {}),
     },
   };
 }
@@ -573,6 +749,28 @@ export async function discoverAgentProfiles(
               `Agent profile ${path}: provider "${err.provider}" must match ${AGENT_PROFILE_CONNECTION_RE.source} — ignored`,
             );
             break;
+          case "bad_permissions":
+            // Same claim semantics as bad_model: a malformed rule list is fatal
+            // for the WHOLE file (a silently dropped deny line would be a lie).
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: permissions.${err.which} entry "${err.entry}" must be "Tool" or "Tool(pattern)" with a non-empty pattern and no parentheses inside it — ignored`,
+            );
+            break;
+          case "engine_permissions_conflict":
+            // Same claim semantics as bad_model: an engine child's approvals
+            // belong to that CLI, so the overlay could not be honored.
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: "permissions" cannot be combined with "engine: ${err.engine}" — an engine child's tool approvals belong to that CLI; remove one of the two — ignored`,
+            );
+            break;
           case "engine_connection_conflict":
             // Same claim semantics as bad_model.
             if (claimed.has(err.name)) {
@@ -597,7 +795,8 @@ export async function discoverAgentProfiles(
         continue;
       }
 
-      const { name, description, tools, body, model, engine, connection, provider, turnBudget, effort } = result.ok;
+      const { name, description, tools, body, model, engine, connection, provider, turnBudget, effort, permissions } =
+        result.ok;
 
       // Precedence dedupe: a lower source's same-named file is shadowed silently.
       if (claimed.has(name)) {
@@ -632,6 +831,7 @@ export async function discoverAgentProfiles(
         ...(provider !== undefined ? { provider } : {}),
         ...(turnBudget !== undefined ? { turnBudget } : {}),
         ...(effort !== undefined ? { effort } : {}),
+        ...(permissions !== undefined ? { permissions } : {}),
       });
     }
   }

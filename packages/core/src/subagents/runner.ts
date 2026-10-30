@@ -21,6 +21,7 @@ import { AgentLoop, type AgentLoopConfig } from "../loop/agent-loop.js";
 import { ConversationHistory } from "../context/history.js";
 import { HeuristicTokenizer } from "../context/tokenizer.js";
 import { InMemoryTodoStore } from "../tools/todo-store.js";
+import { ProfilePermissionEngine } from "../permissions/rules.js";
 import { ToolRegistry, createDefaultToolRegistry } from "../tools/registry.js";
 import {
   SUBAGENT_WRAPUP_DEGRADED_PREFIX,
@@ -368,8 +369,14 @@ export function buildChildConfig(
     registry,
     // User PreToolUse guards apply to children too.
     hooks: parent.hooks,
-    // Fail-closed permissions inherited: same engine + broker.
-    permissionEngine: parent.permissionEngine,
+    // Fail-closed permissions inherited: same engine + broker. An md-profile
+    // that declares `permissions.allow`/`permissions.deny` wraps the inherited
+    // engine in the profile overlay — it can only narrow (deny refuses without
+    // a prompt, allow only resolves an existing ask), never widen.
+    permissionEngine:
+      persona.permissions !== undefined
+        ? new ProfilePermissionEngine(parent.permissionEngine, persona.permissions)
+        : parent.permissionEngine,
     permissionBroker: parent.permissionBroker,
     // Taskana 4730: the ask-zone classifier is inherited too — with the ROOT's
     // human-derived userContext thunk, never the child's own (model-authored)

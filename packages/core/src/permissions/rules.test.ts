@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { ModePermissionEngine } from "./engine.js";
 import {
+  ProfilePermissionEngine,
   RuleAwarePermissionEngine,
   SessionPermissionRules,
   SCOPED_RUNNER_BINARIES,
@@ -1254,5 +1255,104 @@ describe("TASK.36 — scoped project-runner rules", () => {
       });
       expect(other.decision).toBe("ask");
     });
+  });
+});
+
+describe("ProfilePermissionEngine — md-profile permissions.allow/deny overlay", () => {
+  const base = new ModePermissionEngine();
+  const bash = (engine: PermissionEngine, command: string, mode: PermissionMode = "build"): string =>
+    engine.check({ toolName: "Bash", input: { command }, metadata: bashTool.metadata, mode }).decision;
+  const write = (engine: PermissionEngine, request: Partial<PermissionRequest> = {}): string =>
+    engine.check({
+      toolName: "Write",
+      input: { file_path: "/ws/x", content: "y" },
+      metadata: writeTool.metadata,
+      mode: "build",
+      ...request,
+    }).decision;
+
+  it("deny refuses a command the session would have run, with no ask (yolo base)", () => {
+    const engine = new ProfilePermissionEngine(base, {
+      allow: [],
+      deny: [{ toolName: "Bash", pattern: "git push*" }],
+    });
+    expect(bash(engine, "git push origin main", "yolo")).toBe("deny");
+  });
+
+  it("deny is not overridden by a base allow (a session always-allow rule)", () => {
+    const sessionRules = new SessionPermissionRules();
+    sessionRules.add({ toolName: "Bash", pattern: "git *" });
+    const engine = new ProfilePermissionEngine(new RuleAwarePermissionEngine(base, sessionRules), {
+      allow: [],
+      deny: [{ toolName: "Bash", pattern: "git push*" }],
+    });
+    // The session rule would auto-allow `git push`; the profile's deny wins.
+    expect(bash(engine, "git push origin main", "build")).toBe("deny");
+    expect(bash(engine, "git status", "build")).toBe("allow");
+  });
+
+  it("allow resolves an ask to allow (build-mode Write inside the workspace)", () => {
+    const engine = new ProfilePermissionEngine(base, {
+      allow: [{ toolName: "Write" }],
+      deny: [],
+    });
+    expect(write(engine, { workspace: { root: "/ws", resolvedPath: "/ws/x" } })).toBe("allow");
+  });
+
+  it("allow never overrides a base deny (plan mode)", () => {
+    const engine = new ProfilePermissionEngine(base, {
+      allow: [{ toolName: "Write" }, { toolName: "Bash" }],
+      deny: [],
+    });
+    expect(write(engine, { mode: "plan", workspace: { root: "/ws", resolvedPath: "/ws/x" } })).toBe("deny");
+    expect(bash(engine, "git status", "plan")).toBe("deny");
+  });
+
+  it("a base allow passes through untouched (the overlay is never wider, never narrower by accident)", () => {
+    const engine = new ProfilePermissionEngine(base, {
+      allow: [{ toolName: "Bash", pattern: "git status*" }],
+      deny: [],
+    });
+    // yolo already allows everything; the overlay adds nothing and takes nothing.
+    expect(bash(engine, "git status", "yolo")).toBe("allow");
+    // An ask with no matching allow rule still asks.
+    expect(bash(engine, "rm -rf /tmp/x", "build")).toBe("ask");
+  });
+
+  it("Write allow keeps the workspace confinement of always-allow rules", () => {
+    const engine = new ProfilePermissionEngine(base, { allow: [{ toolName: "Write" }], deny: [] });
+    // No facts -> unprovable -> the ask stands.
+    expect(write(engine)).toBe("ask");
+    // Facts prove the target outside the workspace -> the ask stands.
+    expect(write(engine, { workspace: { root: "/ws", resolvedPath: "/other/x" } })).toBe("ask");
+  });
+
+  it("Bash allow rules follow the per-segment pipeline law", () => {
+    const engine = new ProfilePermissionEngine(base, { allow: [{ toolName: "Bash", pattern: "pnpm *" }], deny: [] });
+    // Every segment must match the SAME rule, so one entry never vouches for a
+    // whole pipeline: the second segment is not covered.
+    expect(bash(engine, "pnpm test && rm -rf /tmp/x", "build")).toBe("ask");
+    // All segments match -> allowed.
+    expect(bash(engine, "pnpm test && pnpm build", "build")).toBe("allow");
+  });
+
+  it("a deny rule also applies to every-segment matches only (same law as a stored rule)", () => {
+    const engine = new ProfilePermissionEngine(base, { allow: [], deny: [{ toolName: "Bash", pattern: "git push*" }] });
+    // A mixed pipeline is not covered by the deny pattern: the base gate decides.
+    expect(bash(engine, "git push origin main && true", "yolo")).toBe("allow");
+    expect(bash(engine, "git push && git push", "yolo")).toBe("deny");
+  });
+
+  it("a malformed pattern in the overlay fails closed (never matches)", () => {
+    const malformed = new ProfilePermissionEngine(base, {
+      allow: [{ toolName: "Bash", pattern: "rm (x)*" }],
+      deny: [],
+    });
+    expect(bash(malformed, "rm -rf /tmp/x", "build")).toBe("ask");
+    const valid = new ProfilePermissionEngine(base, {
+      allow: [{ toolName: "Bash", pattern: "rm -rf /tmp/x" }],
+      deny: [],
+    });
+    expect(bash(valid, "rm -rf /tmp/x", "build")).toBe("allow");
   });
 });
