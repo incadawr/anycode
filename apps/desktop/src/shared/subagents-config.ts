@@ -137,7 +137,7 @@ export type SubagentsMutationResult =
 export interface SubagentProfileDraft {
   name: string;
   description: string;
-  /** Absent ⇒ inherit the general-purpose baseline (nine non-spawn tools). */
+  /** Absent ⇒ inherit the general-purpose baseline (ten non-spawn tools). */
   tools?: string[];
   body: string;
   /** Model id children of this profile spawn on. Absent/blank ⇒ inherit the parent's. */

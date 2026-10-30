@@ -7,9 +7,90 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Xiaomi MiMo pay-as-you-go API is available as a provider (mimo-v2.6-pro and mimo-v2.6-flash, with per-token cost tracking).
+
 ### Fixed
 
+- DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
+- Choosing No thinking for Xiaomi MiMo models now turns their reasoning off.
+- Xiaomi MiMo Token Plan sessions show a pay-as-you-go list-price cost estimate instead of “price unknown”.
 - `/compact` supports idle Codex sessions and cancellation and updates the context meter from Codex’s replacement estimate and subsequent usage (GitHub #24)
+
+## [0.0.55] — 2026-10-30
+
+### Added
+
+- Xiaomi MiMo Token Plan is available as a provider (mimo-v2.6-pro and mimo-v2.6-flash; SGP, CN and AMS regions).
+
+## [0.0.54] — 2026-10-30
+
+### Added
+
+- AgentStatus lets a parent inspect its own subagents’ live progress and recent activity, with credentials and secret-bearing lines redacted, across supported parent engines (GitHub #29).
+- The conversation-compacted row opens to show the summary that replaced the earlier messages, with a copy button, the prompt that produced it and the summarizing model and duration (GitHub #36).
+- Reopening a session shows every compaction it went through, in place: each row keeps its own summary, or — for a compaction that did not happen — its own reason, and the rows survive later compactions instead of disappearing with the history they replaced.
+- Rewinding the conversation also removes the compaction rows from the discarded part of it, so their summaries do not come back on the next reconnect or reopen.
+
+### Changed
+
+- Plan mode runs proven read-only Bash commands and pipelines without asking, when each command resolves to a trusted system binary; the checked binary is the one that runs. Git stays denied in plan-mode Bash, since repository config can launch programs; use the Git tool instead (GitHub #30).
+
+### Fixed
+
+- Subagent approval notices can be dismissed, and child approval timers wait while the window is hidden or unfocused (GitHub #32).
+- Finished subagent approval notices clear when you continue the parent or visit the child, and paused approval timers retain their remaining time.
+- Queued parent messages clear finished subagent approval notices when submitted.
+- Switching a session to a provider on another connection asks before it cancels running subagents, naming how many will stop (GitHub #33).
+- The right-side dock is resizable again: the drag handle renders as the grid's own 8px column instead of a zero-height strip inside the dock panel (GitHub #31).
+- Dock resizing keeps the active pane visible while a split pane is pinned, ignores foreign pointers during the drag, and ends cleanly on pointercancel.
+
+## [0.0.53] — 2026-10-30
+
+### Changed
+
+- Settings shows compact role routes with profile and project controls (GitHub #23).
+
+### Fixed
+
+- Approval dialogs show their expiry countdown and provide recovery when requests expire unanswered.
+- Window reloads keep transcript reasoning, turn endings, the active tab and the running timer, and a steer message is shown and sent only once; resumed sessions become active.
+- Sessions API lists the same activity state as session status, including approval waits, without waiting for session hosts.
+- After switching models, the context indicator counts the system prompt and tools instead of dropping to near zero.
+- Background subagents keep their progress, elapsed time and current tool when handed off to the background, and permission requests name the subagent instead of an id.
+
+## [0.0.52] — 2026-10-30
+
+### Added
+
+- Explore agents can read Git history and status using a read-only Git tool (GitHub #22).
+
+### Fixed
+
+- The effort picker saves the level you pick even when it is already shown, and a level the new model does not support is replaced with the nearest one, with a notice.
+- A tab whose session host keeps crashing shows why it stopped, and the Sessions API reports the same reason; a missing workspace folder is reported as such.
+- Core subagents honor the requested reasoning effort when their model supports it.
+- Native session children use their agent profile’s model and instructions by default (GitHub #5).
+- A reopened session shows its context indicator and saved spend right away instead of after the next turn.
+- Custom endpoints can declare supported reasoning levels and save image input for a new connection (GitHub #2).
+
+## [0.0.51] — 2026-10-29
+
+### Changed
+
+- Codex CLI 0.166.0 is supported.
+
+### Added
+
+- Claude and Codex sessions can change reasoning effort while a turn is running; the choice applies from the next turn (GitHub #25).
+- Custom provider connections take token prices per model; each step is priced by its own model's rates (subagents included), and an unpriced custom connection points to its pricing settings (GitHub #20).
+
+### Fixed
+
+- A connection drop while the model is still only reasoning no longer ends the turn: the step is retried within the retry budget and the abandoned reasoning is not shown twice; after visible text or a tool call the turn stops with an honest message instead of a retry counter.
+- Provider connections remember separate context windows and reasoning effort for each model; switching models restores their choices, and the unknown-window hint explains the available input budget and opens the matching settings field (GitHub #26).
+- On the OpenAI Responses transport, reasoning that a provider streams as `reasoning_text` (for example through a LiteLLM gateway) now appears in the Reasoning block, and a long thinking phase no longer fails with `stream_stalled` while the provider is still sending data (GitHub #27).
 
 ## [0.0.50] — 2026-10-29
 

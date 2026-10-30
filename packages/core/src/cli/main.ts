@@ -27,6 +27,7 @@ import {
   NodeExecutionAdapter,
   NodeFileSystemAdapter,
   NodeGitAdapter,
+  NodeGitReadAdapter,
   NodeHttpAdapter,
   NodeMcpTransportFactory,
 } from "../adapters/node/index.js";
@@ -672,7 +673,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
         `[warn] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}\n`,
       ),
   );
-  const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, envConfig.reasoningEffort);
+  const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, envConfig.reasoningEffort, undefined, envConfig.effortLevels);
   // Taskana 4894: the cell model switches re-resolve from starts at the tier the
   // session actually runs at — the model's recorded provider default when the
   // user never chose one — so a switch cannot silently drop it. An explicit
@@ -686,6 +687,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   // wiring closure below.
   const settingsForChild = buildChildModelSettingsResolver({
     catalogEntry,
+    effortLevelsFor: () => envConfig.effortLevels,
     envMaxOutputTokens: envConfig.maxOutputTokens,
     envContextWindow: envConfig.contextWindowTokens,
     envContextWindowModel: envConfig.contextWindowModel,
@@ -1480,6 +1482,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
         ports: {
           fs,
           exec,
+          gitRead: new NodeGitReadAdapter(exec),
           http: new NodeHttpAdapter(),
           todos: new InMemoryTodoStore(),
         },
@@ -1909,7 +1912,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
           },
           getReasoningEffort: () => loopConfig.reasoningEffort ?? "off",
           setReasoningEffort: (effort) => {
-            const resolved = resolveReasoningEffort(currentModel, catalogEntry, effort);
+            const resolved = resolveReasoningEffort(currentModel, catalogEntry, effort, undefined, envConfig.effortLevels);
             if (effort !== "off" && resolved === undefined) {
               return `model ${currentModel} is not marked as reasoning-capable`;
             }
@@ -1949,6 +1952,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
               if (modelPortFactory === undefined) {
                 return "model switching is unavailable: this session runs on an injected model port";
               }
+              const previousModel = currentModel;
               modelPort.setPort(modelPortFactory(id));
               loop.setTodoReminderEvery(envConfig.todoReminderEvery ?? catalogEntry?.models.find((m) => m.id === id)?.todoReminderEvery);
               currentModel = id;
@@ -1979,7 +1983,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
                     `[warn] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}\n`,
                   ),
               );
-              loopConfig.reasoningEffort = resolveReasoningEffort(id, catalogEntry, selectedReasoningEffort);
+              loopConfig.reasoningEffort = resolveReasoningEffort(id, catalogEntry, selectedReasoningEffort, undefined, envConfig.effortLevels);
               liveContextWindow = contextWindow;
               loopConfig.systemPrompt = composeSystemPrompt();
               // Kept in lockstep with systemPrompt above (design slice-P7.17-cut.md
@@ -1988,6 +1992,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
               // subtraction from the freshly rebuilt systemPrompt.
               loopConfig.systemPromptComponents = composeSystemPromptComponents();
               loop.setContextWindow(contextWindow);
+              if (previousModel !== id) loop.invalidateProviderAnchor();
               loopConfig.context = { ...loopConfig.context, contextWindowTokens: contextWindow };
               void persistence.touchSession(session.id, { model: id }).catch(() => {});
               return null;

@@ -1,3 +1,5 @@
+import { contextWindowSettingsTarget } from "./components/Composer.js";
+import { modelSettingsPick, modelSettingsWrites } from "./components/ModelPill.js";
 import { agentMessageText, type AgentEnvelope } from "../../shared/communication.js";
 import { TurnTranslator } from "../../host/engines/codex/event-translator.js";
 import { CollabAgentCardIndex } from "../../host/engines/codex/collab-agent-index.js";
@@ -546,7 +548,7 @@ describe("desktop store — waiting for network (Taskana 4772)", () => {
     expect(store.getState().waitingForNetwork).toBe(false);
     const line = store.getState().transcript.find((b) => b.kind === "stream_retry");
     expect(line).toMatchObject({ attempt: 3, delayMs: 0, waitedMs: 812_400, reason: "connect timeout" });
-    expect(store.getState().notice?.text).toContain("attempt 3/8");
+    expect(store.getState().notice?.text).toContain("Retry 3");
   });
 
   // Review F2: parent and inline-subagent children share one network, so both
@@ -606,7 +608,7 @@ describe("desktop store — agent_event transcript accumulation", () => {
 
     store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
     store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId });
-    expect(store.getState().turn).toEqual({ status: "running", turnId, requestId: "req-1" });
+    expect(store.getState().turn).toMatchObject({ status: "running", turnId, requestId: "req-1" });
 
     const fixture: HostToUiMessage[] = [
       { type: "agent_event", turnId, event: { type: "turn_start", turn: 1 } },
@@ -882,6 +884,15 @@ describe("desktop store — notice channel (Wave-1 revision)", () => {
       },
     };
 
+    store.getState().applyHostMessage({ ...request, requestId: "newer" });
+    store.getState().applyHostMessage({ type: "permission_settled", requestId: "older", behavior: "deny", origin: "timeout" });
+    expect(store.getState().permission?.requestId).toBe("newer");
+    store.getState().applyHostMessage({ type: "approval_state", unattended: true, pending: null });
+    expect(store.getState().permission).toBeNull();
+    expect(store.getState().unattended).toBe(true);
+    store.getState().applyHostMessage({ type: "approval_state", unattended: false, pending: null });
+    store.setState({ notice: null });
+
     // UI-origin settlement: modal closes, no toast (the user just clicked).
     store.getState().applyHostMessage(request);
     expect(store.getState().permission?.requestId).toBe("perm-1");
@@ -1088,7 +1099,7 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
     });
 
     expect(store.getState().notice?.kind).toBe("stream_retry");
-    expect(store.getState().notice?.text.toLowerCase()).toContain("retrying");
+    expect(store.getState().notice?.text.toLowerCase()).toContain("retry");
   });
 
   it("stream_retry past maxAttempts (network budget) shows the attempt without an impossible total (Taskana 4705 review)", () => {
@@ -1103,7 +1114,7 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
       event: { type: "stream_retry", attempt: 9, maxAttempts: 8, delayMs: 500, reason: "network error" },
     });
 
-    expect(store.getState().notice?.text).toBe("Retrying… (attempt 9: network error)");
+    expect(store.getState().notice?.text).toBe("Retry 9 in 0.5 s: network error");
   });
 
   it("compaction_start and compaction_end (ok) raise notices; compaction_end (fail) surfaces the error", () => {
@@ -1464,6 +1475,291 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
     expect(cards[0] && "trigger" in cards[0] ? cards[0].trigger : undefined).toBeUndefined();
   });
 
+  it("GitHub #36: a finished card carries the summary, its history-item id, the prompt and the model — and a failed one carries the prompt but NO summary", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_start", trigger: "manual" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: {
+        type: "compaction_end",
+        ok: true,
+        preTokens: 170_669,
+        postTokens: 24_154,
+        durationMs: 4_200,
+        summary: "Session continued. Summary of the earlier conversation:\n\n- Goal: ship #36",
+        summaryItemId: "summary-item-1",
+        prompt: "Write a summary of this session…",
+        model: "glm-5.3",
+      },
+    });
+
+    expect(compactionCards(store)[0]).toMatchObject({
+      status: "done",
+      summary: "Session continued. Summary of the earlier conversation:\n\n- Goal: ship #36",
+      summaryItemId: "summary-item-1",
+      prompt: "Write a summary of this session…",
+      model: "glm-5.3",
+      durationMs: 4_200,
+    });
+
+    // A foreign engine (or an older host) sends none of it: the card must not
+    // invent a summary — the expansion says so honestly instead.
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_start", trigger: "manual" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_end", ok: false, preTokens: 900, durationMs: 30, error: "model unreachable", prompt: "Write a summary…" },
+    });
+    const failed = compactionCards(store)[1]!;
+    expect(failed).toMatchObject({ status: "failed", error: "model unreachable", prompt: "Write a summary…" });
+    expect(failed.summary).toBeUndefined();
+  });
+
+  it("GitHub #36: a reconnect replay of the same compaction patches the row hydration restored instead of adding a second one", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    // 1. Hydration projects the persisted state AND the durable record: a
+    // RESTORED row sitting before the message that followed the compaction.
+    store.getState().applyHostMessage({
+      type: "session_history",
+      sessionId: "s1",
+      truncated: false,
+      items: [
+        {
+          id: "summary-item-1",
+          createdAt: 10,
+          kind: "compact_summary",
+          message: { role: "user", content: "Session continued. Summary of the earlier conversation:\n\nold" },
+        },
+        { id: "u2", createdAt: 11, message: { role: "user", content: "next" } },
+      ],
+      compactions: [
+        {
+          id: "rec-1",
+          createdAt: 10,
+          ok: true,
+          preTokens: 170_669,
+          postTokens: 24_154,
+          summary: "Session continued. Summary of the earlier conversation:\n\nold",
+          summaryItemId: "summary-item-1",
+        },
+      ],
+    });
+    expect(compactionCards(store)).toHaveLength(1);
+    expect(compactionCards(store)[0]).toMatchObject({ restored: true, summaryItemId: "summary-item-1", recordId: "rec-1" });
+
+    // 2. The journal then replays the LIVE pair for that same compaction.
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "turn-1",
+      event: { type: "compaction_start", trigger: "auto" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "turn-1",
+      event: {
+        type: "compaction_end",
+        ok: true,
+        preTokens: 170_669,
+        postTokens: 24_154,
+        durationMs: 3_000,
+        summary: "Session continued. Summary of the earlier conversation:\n\nold",
+        summaryItemId: "summary-item-1",
+        recordId: "rec-1",
+      },
+    });
+
+    // ONE row for one compaction, and it is still the HYDRATED row (same id),
+    // patched in place with the live readings — the replay's running card was
+    // dropped rather than kept at the tail (which would move the row after the
+    // message that followed it).
+    const transcript = store.getState().transcript;
+    const cards = compactionCards(store);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ id: "compaction-record:rec-1", status: "done", preTokens: 170_669, postTokens: 24_154 });
+    expect(transcript.map((block) => block.kind)).toEqual(["compaction", "user_text"]);
+    expect(transcript[0]).toMatchObject({ kind: "compaction", id: "compaction-record:rec-1" });
+  });
+
+  it("GitHub #36: REOPENING a session after several compactions — one of them failed — shows every row in its own place, with its own summary or reason", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    // The persisted state a real reopen sees after three compactions:
+    //  - the FIRST summary item is gone (the second compaction folded it away);
+    //  - the second compaction FAILED — it left no history item at all;
+    //  - the third summary is the current history head, followed by the tail of
+    //    messages that predate all three compactions.
+    store.getState().applyHostMessage({
+      type: "session_history",
+      sessionId: "s1",
+      truncated: false,
+      items: [
+        {
+          id: "summary-3",
+          createdAt: 320,
+          kind: "compact_summary",
+          message: { role: "user", content: "Session continued. Summary of the earlier conversation:\n\nthird" },
+        },
+        { id: "tail-1", createdAt: 40, message: { role: "user", content: "a message from before all of it" } },
+      ],
+      compactions: [
+        {
+          id: "rec-1",
+          createdAt: 100,
+          ok: true,
+          trigger: "manual",
+          preTokens: 170_669,
+          postTokens: 24_154,
+          summary: "Session continued. Summary of the earlier conversation:\n\nfirst",
+          summaryItemId: "summary-1",
+          prompt: "instruction used the first time",
+        },
+        {
+          id: "rec-2",
+          createdAt: 200,
+          ok: false,
+          trigger: "manual",
+          preTokens: 40_000,
+          durationMs: 1_500,
+          error: "model unreachable",
+          prompt: "instruction used the second time",
+          model: "glm-5.3",
+        },
+        {
+          id: "rec-3",
+          createdAt: 320,
+          ok: true,
+          trigger: "auto",
+          preTokens: 60_000,
+          postTokens: 9_000,
+          summary: "Session continued. Summary of the earlier conversation:\n\nthird",
+          summaryItemId: "summary-3",
+          prompt: "instruction used the third time",
+        },
+      ],
+    });
+
+    const transcript = store.getState().transcript;
+    expect(transcript.map((block) => block.kind)).toEqual(["compaction", "compaction", "compaction", "user_text"]);
+    const cards = transcript.filter((block) => block.kind === "compaction");
+    // Each row keeps ITS OWN summary/reason — no row borrows another's text.
+    expect(cards[0]).toMatchObject({ status: "done", summary: expect.stringContaining("first"), recordId: "rec-1" });
+    expect(cards[1]).toMatchObject({ status: "failed", error: "model unreachable", model: "glm-5.3", recordId: "rec-2" });
+    expect(cards[1] && "summary" in cards[1] ? cards[1].summary : undefined).toBeUndefined();
+    expect(cards[2]).toMatchObject({ status: "done", summary: expect.stringContaining("third"), summaryItemId: "summary-3" });
+    // The surviving summary item is ONE row, not a row plus a bubble.
+    expect(transcript.filter((block) => block.kind === "user_text")).toHaveLength(1);
+    expect(transcript.at(-1)).toMatchObject({ kind: "user_text", text: "a message from before all of it" });
+    // Record-backed summary rows (collapsed by default) — not the legacy
+    // fallback that would open itself in the transcript. The FAILED row has no
+    // summary at all, so it claims no origin.
+    expect(cards.map((card) => card.summaryOrigin)).toEqual(["record", undefined, "record"]);
+    // And the prompts are the recorded ones, not today's instruction.
+    expect(cards.map((card) => card.prompt)).toEqual([
+      "instruction used the first time",
+      "instruction used the second time",
+      "instruction used the third time",
+    ]);
+  });
+
+  it("GitHub #36 review: when the retention bound drops an old record, a still-surviving summary keeps its row through the history fallback", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    // The store kept only the NEWEST record (the agreed bound). The older
+    // compaction's summary item is still the history head, so its row is not
+    // lost — it degrades to the history row, labelled as such (the card then
+    // shows the CURRENT instruction rather than pretending to know the used
+    // one), instead of vanishing or inventing an origin it cannot prove.
+    store.getState().applyHostMessage({
+      type: "session_history",
+      sessionId: "s1",
+      truncated: false,
+      items: [
+        {
+          id: "summary-old",
+          createdAt: 10,
+          kind: "compact_summary",
+          message: { role: "user", content: "Session continued. Summary of the earlier conversation:\n\nold but still head" },
+        },
+        { id: "u2", createdAt: 20, message: { role: "user", content: "next" } },
+      ],
+      compactions: [],
+    });
+
+    const cards = compactionCards(store);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      summaryOrigin: "history",
+      summary: expect.stringContaining("old but still head"),
+    });
+    expect(cards[0]?.recordId).toBeUndefined();
+    // No record survived ⇒ no fabricated prompt provenance either.
+    expect(cards[0]?.prompt).toBeUndefined();
+  });
+
+  it("GitHub #36: re-hydrating onto a live transcript does not add a restored twin of the compaction already on screen", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_start", trigger: "manual" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: {
+        type: "compaction_end",
+        ok: true,
+        preTokens: 1_000,
+        postTokens: 100,
+        durationMs: 10,
+        summary: "Session continued. Summary of the earlier conversation:\n\nonly one",
+        summaryItemId: "summary-item-live",
+      },
+    });
+
+    // A second `session_history` for the same session (the host resending an
+    // identical snapshot — hydration is documented as idempotent).
+    store.getState().applyHostMessage({
+      type: "session_history",
+      sessionId: "s1",
+      truncated: false,
+      items: [
+        {
+          id: "summary-item-live",
+          createdAt: 10,
+          kind: "compact_summary",
+          message: { role: "user", content: "Session continued. Summary of the earlier conversation:\n\nonly one" },
+        },
+      ],
+    });
+
+    const cards = compactionCards(store);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ id: "compaction:0", status: "done", preTokens: 1_000 });
+  });
+
   it("microcompact raises a notice with the cleared-results/saved-tokens counts", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
@@ -1664,7 +1960,7 @@ describe("desktop store — TASK.33 W8 retry visibility + Try-again", () => {
     expect(new Set(retryBlocks.map((b) => b.id)).size).toBe(2);
     // The one-slot notice channel is untouched — still shows only the latest attempt.
     expect(store.getState().notice?.kind).toBe("stream_retry");
-    expect(store.getState().notice?.text).toContain("attempt 2/3");
+    expect(store.getState().notice?.text).toContain("Retry 2");
   });
 
   it("repeated stream_retry + the AI SDK's synthetic start between attempts never plants an empty content block (re-cut W8 note)", () => {
@@ -5001,12 +5297,23 @@ describe("desktop store — session_history hydration (task 2.1.5, design §3.3)
     },
   ];
 
-  it("projectHistoryToBlocks maps user/compact_summary/assistant-text/tool_call+result per §3.3, pairing status+modelText and skipping the tool-role item", () => {
+  it("projectHistoryToBlocks maps user/compact_summary/assistant-text/tool_call+result, pairing status+modelText and skipping the tool-role item", () => {
     const blocks = projectHistoryToBlocks(fixtureItems);
 
     expect(blocks).toEqual([
       { kind: "user_text", id: "h1:0", text: "hello", at: expect.any(Number) },
-      { kind: "user_text", id: "h2:0", text: "[compact summary] earlier conversation", at: expect.any(Number) },
+      // GitHub #36: the compacted prefix's summary is NOT rendered in the
+      // human's voice any more — it becomes a `restored` compaction row that
+      // carries the same text and can be opened for the full/copyable view.
+      {
+        kind: "compaction",
+        id: "h2:0",
+        status: "done",
+        summary: "[compact summary] earlier conversation",
+        summaryItemId: "h2",
+        restored: true,
+        summaryOrigin: "history",
+      },
       { kind: "assistant_text", id: "h3:0", text: "Let me check." },
       {
         kind: "tool_call",
@@ -5242,7 +5549,9 @@ describe("desktop store — session_history hydration (task 2.1.5, design §3.3)
 
     expect(store.getState().transcript.map((b) => b.kind)).toEqual([
       "user_text",
-      "user_text",
+      // GitHub #36: the compact_summary item hydrates as a compaction row, not
+      // as a second bubble in the human's voice.
+      "compaction",
       "assistant_text",
       "tool_call",
     ]);
@@ -5944,7 +6253,7 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     // The matching requestId officially accepts the item — inFlight clears.
     store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId: "t1" });
     expect(store.getState().queueInFlight).toBeNull();
-    expect(store.getState().turn).toEqual({ status: "running", turnId: "t1", requestId: "req-1" });
+    expect(store.getState().turn).toMatchObject({ status: "running", turnId: "t1", requestId: "req-1" });
   });
 
   it("turn_rejected on the in-flight drain restores the item to the head and pauses (busy-race, §2.3)", () => {
@@ -6489,6 +6798,23 @@ describe("desktop store — engine_settings_changed / pendingEngineChange (Codex
       },
     };
   }
+
+  it("reasserts newer effort after an older acknowledgement and rolls it back without losing other choices", () => {
+    const store = createDesktopStore();
+    const ready = codexHostReady();
+    if (ready.type !== "host_ready" || !ready.engine?.model) throw new Error("missing engine model");
+    ready.engine.model.effort = "medium";
+    store.getState().applyHostMessage(ready);
+    store.getState().applyHostMessage({ type: "engine_settings_changed", activePresetId: "workspace", state: "pending", appliesFrom: "next_turn" });
+    store.getState().applyHostMessage({ type: "engine_settings_changed", model: "gpt-5.6-terra", effort: "medium", deferredEffort: true, state: "pending", appliesFrom: "next_turn" });
+    expect(store.getState().pendingEngineChange).toEqual({ activePresetId: "workspace", effort: "medium" });
+    store.getState().applyHostMessage({ type: "engine_settings_changed", model: "gpt-5.6-terra", effort: "high", state: "applied", appliesFrom: "next_turn" });
+    store.getState().applyHostMessage({ type: "engine_settings_changed", model: "gpt-5.6-terra", activePresetId: "workspace", effort: "medium", deferredEffort: true, state: "pending", appliesFrom: "next_turn" });
+    expect(store.getState().engine?.model?.effort).toBe("high");
+    expect(store.getState().pendingEngineChange).toEqual({ activePresetId: "workspace", effort: "medium" });
+    store.getState().applyHostMessage({ type: "engine_settings_changed", model: "gpt-5.6-terra", activePresetId: "workspace", effort: "high", state: "pending", appliesFrom: "next_turn" });
+    expect(store.getState().pendingEngineChange).toEqual({ activePresetId: "workspace" });
+  });
 
   it("marks a preset change pending on engine_settings_changed{state:\"pending\"} and does NOT touch the displayed activePresetId yet", () => {
     const store = createDesktopStore();
@@ -7643,7 +7969,7 @@ describe("TASK.242 visible agent provenance", () => {
 });
 
 describe("desktop store — background_children (detached agents strip)", () => {
-  const CHILD = { childSessionId: "child-1", agentType: "glm-lead", description: "fix it", startedAt: 1 };
+  const CHILD = { childSessionId: "child-1", agentType: "glm-lead", description: "fix it", startedAt: 1, turns: 0, toolCalls: 2, lastTool: "Write", waitingForApproval: true };
 
   it("background_children replaces the list wholesale, and an empty push clears it", () => {
     const { scheduler } = createManualScheduler();
@@ -8916,5 +9242,136 @@ describe("desktop store — Agent background handoff (GitHub #17 slice D)", () =
     const block = blocks.find((b) => b.kind === "tool_call");
     expect(block?.kind === "tool_call" && block.subagent).toBeNull();
     expect(block?.kind === "tool_call" && block.status).toBe("success");
+  });
+});
+
+
+it("switches the model, assumption and budget atomically before another response", () => {
+  const store = createDesktopStore(createManualScheduler().scheduler);
+  store.setState({contextUsage:{estimatedTokens:15500, budgetTokens:104000, source:"provider"}});
+  const seen: Array<{assumed:boolean | undefined; budget:number | undefined}> = [];
+  const unsubscribe = store.subscribe((state) => seen.push({assumed:state.contextWindowAssumed, budget:state.contextUsage?.budgetTokens}));
+  store.getState().applyHostMessage({type:"model_changed", model:"unknown", reasoningEffort:"off", contextWindowAssumed:true, contextUsage:{estimatedTokens:15500, budgetTokens:2048, source:"estimate"}});
+  unsubscribe();
+  expect(seen).toEqual([{assumed:true, budget:2048}]);
+  const first = store.getState().modelSelectionAck;
+  store.getState().applyHostMessage({type:"model_changed", model:"unknown", reasoningEffort:"off"});
+  expect(store.getState().contextUsage).toBeNull();
+  expect(store.getState().modelSelectionAck).not.toBe(first);
+});
+
+
+it("keeps the host connection identity when the active connection changes", () => {
+  const store = createDesktopStore(createManualScheduler().scheduler);
+  store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "a", sessionId: "s", modelSettingsConnectionId: "original" });
+  expect(store.getState().pinnedConnection).toBeNull();
+  const connections = [{ id: "original", providerId: "custom" }, { id: "new-active", providerId: "custom" }];
+  expect(contextWindowSettingsTarget(connections, "a", store.getState().modelSettingsConnectionId, undefined)).toEqual({ connection: connections[0], model: "a" });
+  const pending = { model: modelSettingsPick("model", "b", store.getState().modelSettingsConnectionId, undefined, "new-active", "m"), effort: modelSettingsPick("effort", "max", store.getState().modelSettingsConnectionId, undefined, "new-active", "e") };
+  expect(modelSettingsWrites(pending, { kind: "model", model: "b", effort: "max", requestId: "m", effortRequestId: "e" })).toEqual([{ id: "original", model: "b", modelOverrideModel: "b", reasoningEffort: "max" }]);
+  store.getState().applyHostMessage({ type: "model_changed", model: "b", reasoningEffort: "off" });
+  expect(store.getState().modelSettingsConnectionId).toBe("original");
+});
+
+
+describe("reasoning replay ownership", () => {
+  it("removes flushed and pending abandoned blocks, preserves prior steps, and reopens reused ids", () => {
+    const clock = createManualScheduler();
+    const store = createDesktopStore(clock.scheduler);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r", turnId: "t" });
+    const send = (step: number, attempt: number, event: WireAgentEvent) => store.getState().applyHostMessage({ type: "agent_event", turnId: "t", step, attempt, event });
+    send(1, 0, { type: "reasoning_start", id: "r" });
+    send(1, 0, { type: "reasoning_delta", id: "r", text: "previous" });
+    clock.runPending();
+    send(2, 0, { type: "reasoning_start", id: "a" });
+    send(2, 0, { type: "reasoning_delta", id: "a", text: "flushed" });
+    send(2, 0, { type: "reasoning_end", id: "a" });
+    clock.runPending();
+    send(2, 0, { type: "reasoning_start", id: "r" });
+    send(2, 0, { type: "reasoning_delta", id: "r", text: "pending" });
+    send(2, 0, { type: "reasoning_end", id: "r" });
+    send(2, 1, { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 1, reason: "network" });
+    send(2, 1, { type: "reasoning_start", id: "r" });
+    send(2, 1, { type: "reasoning_delta", id: "r", text: "winner" });
+    clock.runPending();
+    send(3, 1, { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 1, reason: "network" });
+    const reasons = store.getState().transcript.filter(b => b.kind === "reasoning");
+    expect(reasons.map(b => b.text)).toEqual(["previous", "winner"]);
+    expect(store.getState().transcript.filter(b => b.kind === "stream_retry").map(b => b.id)).toHaveLength(2);
+    expect(new Set(store.getState().transcript.filter(b => b.kind === "stream_retry").map(b => b.id)).size).toBe(2);
+  });
+});
+
+
+it("acknowledges an adjusted queued choice and persists its resolved destination level", () => {
+  const store = createDesktopStore(createManualScheduler().scheduler);
+  const pending = { effort: modelSettingsPick("effort", "off", "original", undefined, "other", "e") };
+  store.getState().applyHostMessage({ type: "model_changed", model: "glm-5.3", reasoningEffort: "low", selectedReasoningEffort: "low", requestedReasoningEffort: "off", effortRequestId: "e", availableEffortLevels: ["low", "high"], effortAdjustment: {from: "off", to: "low"} });
+  const state = store.getState();
+  expect(state).toMatchObject({model:"glm-5.3", reasoningEffort:"low", availableEffortLevels:["low", "high"], notice:{text:"glm-5.3 reasoning effort adjusted to low."}});
+  expect(modelSettingsWrites(pending, {...state.modelSelectionAck!, model: "glm-5.3"})).toEqual([{id:"original", modelOverrideModel:"glm-5.3", reasoningEffort:"low"}]);
+  expect(pending.effort).toBeUndefined();
+});
+
+it("does not consume a newer model choice on an older acknowledgement of the same value", () => {
+  const pending = { model: modelSettingsPick("model", "b", "c", undefined, undefined, "new") };
+  expect(modelSettingsWrites(pending, {kind:"model", model:"b", effort:"low", requestId:"old"})).toEqual([]);
+  expect(pending.model).toBeDefined();
+  expect(modelSettingsWrites(pending, {kind:"model", model:"b", effort:"low", requestId:"new"})).toEqual([{id:"c", model:"b"}]);
+});
+
+it("does not consume a pending effort on an unrelated model acknowledgement", () => {
+  const pending = { effort: modelSettingsPick("effort", "low", "c", undefined, undefined, "e") };
+  expect(modelSettingsWrites(pending, {kind:"model", model:"b", effort:"low"})).toEqual([]);
+  expect(pending.effort).toBeDefined();
+});
+
+
+it("shows the adjustment notice received on a destination host handshake", () => {
+  const store = createDesktopStore(createManualScheduler().scheduler);
+  store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "glm-5.3", sessionId: "s", reasoningEffort: "low", effortAdjustment: { from: "off", to: "low" } });
+  expect(store.getState().notice).toEqual({ kind: "engine_notice", text: "glm-5.3 reasoning effort adjusted to low." });
+});
+
+it.each(["effort-first", "model-first"])("retains both acknowledgement kinds until the picker observes them (%s)", (order) => {
+  const store = createDesktopStore(createManualScheduler().scheduler);
+  store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "a", sessionId: "s" });
+  const effort = () => store.getState().applyHostMessage({ type: "reasoning_effort_changed", effort: "high" });
+  const model = () => store.getState().applyHostMessage({ type: "model_changed", model: "b", reasoningEffort: "low" });
+  if (order === "effort-first") { effort(); model(); } else { model(); effort(); }
+  expect(store.getState().effortSelectionAck).toMatchObject({ kind: "effort", effort: "high", model: order === "effort-first" ? "a" : "b" });
+  expect(store.getState().modelSelectionAck).toMatchObject({ kind: "model", model: "b", effort: "low" });
+});
+
+
+describe("turn timing", () => {
+  it("retains the host start time when a fresh store reconnects to a background turn", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(10_000);
+      const original = createDesktopStore();
+      original.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m", sessionId: "s" });
+      original.getState().applyHostMessage({ type: "turn_started", requestId: "r", turnId: "t", startedAt: 10_000 });
+      vi.setSystemTime(35_000);
+      const restored = createDesktopStore();
+      restored.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m", sessionId: "s" });
+      restored.getState().applyHostMessage({ type: "turn_started", requestId: "r", turnId: "t", startedAt: 10_000 });
+      restored.getState().applyHostMessage({ type: "turn_started", requestId: "r", turnId: "t", startedAt: 10_000 });
+      expect(restored.getState().turn.startedAt).toBe(original.getState().turn.startedAt);
+      restored.getState().applyHostMessage({ type: "agent_event", turnId: "t", event: { type: "loop_end", reason: "completed", turns: 1 } });
+      expect(restored.getState().transcript.find((block) => block.kind === "loop_end")).toMatchObject({ durationMs: 25_000 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains the host start time through repeated announcements and clears it at completion", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r", turnId: "t", startedAt: 1234 });
+    expect(store.getState().turn.startedAt).toBe(1234);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r", turnId: "t", startedAt: 5678 });
+    expect(store.getState().turn.startedAt).toBe(1234);
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "t", event: { type: "loop_end", reason: "completed", turns: 1 } });
+    expect(store.getState().turn.startedAt).toBeUndefined();
   });
 });

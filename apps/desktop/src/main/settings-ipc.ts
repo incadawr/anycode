@@ -22,6 +22,8 @@ import { randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
 import { ipcMain } from "electron";
 import { z } from "zod";
+import { normalizeModelId } from "../shared/settings.js";
+import { patchModelOverride } from "../shared/model-overrides.js";
 import { SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
 import type { FileIoLogger } from "../settings/files.js";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
@@ -372,6 +374,25 @@ const CONTEXT_WINDOW_TOKENS_MIN = 1_024;
 const CONTEXT_WINDOW_TOKENS_MAX = 1_000_000;
 const contextWindowTokensSchema = z.number().int().min(CONTEXT_WINDOW_TOKENS_MIN).max(CONTEXT_WINDOW_TOKENS_MAX);
 
+const tokenRatesSchema = z.object({ input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict();
+const modelIdKey = z.string().refine((id) => normalizeModelId(id) === id);
+const modelPricingSchema = <T extends z.ZodType>(valueSchema: T) =>
+  z.unknown().transform((raw, ctx) => {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Expected a model price map" });
+      return z.NEVER;
+    }
+    const entries: [string, z.output<T>][] = [];
+    for (const [id, value] of Object.entries(raw)) {
+      const parsed = valueSchema.safeParse(value);
+      if (!modelIdKey.safeParse(id).success || !parsed.success) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid model price", path: [id] });
+        return z.NEVER;
+      }
+      entries.push([id, parsed.data]);
+    }
+    return Object.fromEntries(entries);
+  });
 const connectionPricingSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("subscription") }).strict(),
   z.object({ mode: z.literal("rates"), input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict(),
@@ -393,6 +414,7 @@ const promptCacheSchema = z
 const connectionCreateSchema = z
   .object({
     providerId: z.string().min(1),
+    modelPricing: modelPricingSchema(tokenRatesSchema).optional(),
     pricing: connectionPricingSchema.optional(),
     label: z.string().optional(),
     model: z.string().optional(),
@@ -412,6 +434,8 @@ const connectionCreateSchema = z
     // atomically with the connection, never as a second call that can be lost.
     proxyRef: z.string().min(1).optional(),
     reasoningEffort: reasoningEffortEnum.optional(),
+    reasoningSupported: z.literal(true).optional(),
+    effortLevels: z.array(reasoningEffortEnum).min(1).transform((levels) => [...new Set(levels)]).optional(),
     promptCache: promptCacheSchema.optional(),
     maxOutputTokens: maxOutputTokensSchema.optional(),
     // Per-model context window (TASK.142). Only the numeric value is accepted
@@ -430,6 +454,7 @@ const connectionCreateSchema = z
   .strict();
 const connectionUpdateSchema = z
   .object({
+    modelPricing: modelPricingSchema(z.union([tokenRatesSchema, z.literal("")])).optional(),
     pricing: z.union([connectionPricingSchema, z.literal("")]).optional(),
     id: z.string().min(1),
     label: z.string().optional(),
@@ -449,7 +474,10 @@ const connectionUpdateSchema = z
     // `"legacy"` additionally requests the one-shot conversion of this
     // connection's own legacy `proxyUrl` into a real profile.
     proxyRef: z.string().optional(),
-    reasoningEffort: reasoningEffortEnum.optional(),
+    reasoningEffort: z.union([reasoningEffortEnum, z.literal("")]).optional(),
+    modelOverrideModel: z.string().trim().min(1).optional(),
+    reasoningSupported: z.union([z.literal(true), z.literal("")]).optional(),
+    effortLevels: z.union([z.array(reasoningEffortEnum).min(1).transform((levels) => [...new Set(levels)]), z.literal("")]).optional(),
     // Opt-in prompt cache (GitHub #15) with the same `""` clear sentinel as
     // `maxOutputTokens` below: absent = keep, enabled object = set, `""` = clear.
     promptCache: z.union([promptCacheSchema, z.literal("")]).optional(),
@@ -1769,12 +1797,8 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
       ...(req.baseUrl !== undefined ? { baseUrl: req.baseUrl } : {}),
       ...(req.proxyUrl !== undefined ? { proxyUrl: req.proxyUrl } : {}),
       ...(req.proxyRef !== undefined ? { proxyRef: req.proxyRef } : {}),
-      ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort } : {}),
       ...(req.promptCache !== undefined ? { promptCache: req.promptCache } : {}),
       ...(req.maxOutputTokens !== undefined ? { maxOutputTokens: req.maxOutputTokens } : {}),
-      ...(req.contextWindowTokens !== undefined
-        ? { contextWindowTokens: req.contextWindowTokens, contextWindowModel: createContextWindowModel }
-        : {}),
       // Taskana 4088: value+binding travel together (the context-window pair
       // discipline); the binding is server-derived, never renderer-supplied.
       ...(req.imageInputOverride !== undefined
@@ -1782,6 +1806,16 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
         : {}),
       ...(req.authOptional === true ? { authOptional: true } : {}),
     };
+    if (req.contextWindowTokens !== undefined || req.reasoningEffort !== undefined || req.reasoningSupported !== undefined || req.effortLevels !== undefined) {
+      if (!createContextWindowModel) return { ok: false, reason: "invalid" };
+      patchModelOverride(connection, createContextWindowModel, {
+        ...(req.contextWindowTokens !== undefined ? { contextWindowTokens: req.contextWindowTokens } : {}),
+        ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort } : {}),
+        ...(req.reasoningSupported !== undefined ? { reasoningSupported: req.reasoningSupported } : {}),
+        ...(req.effortLevels !== undefined ? { effortLevels: req.effortLevels } : {}),
+      });
+    }
+    for (const [model, pricing] of Object.entries(req.modelPricing ?? {})) patchModelOverride(connection, model, { pricing });
     const shouldActivate = req.setActive === true || loaded.settings.provider.activeConnectionId === undefined;
     const activeConnectionId = shouldActivate ? id : loaded.settings.provider.activeConnectionId;
     // Spread the loaded provider block (FX3-L1 G-C): rebuilding it from named
@@ -1892,11 +1926,11 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
       ...(req.label !== undefined ? { label: req.label } : {}),
       ...(req.model !== undefined ? { model: req.model } : {}),
       ...(req.baseUrl !== undefined ? { baseUrl: req.baseUrl } : {}),
-      ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort } : {}),
       ...(endpointChanged
         ? { lastHealth: { status: "unchecked" as const, at: (deps.now ?? defaultNowIso)() } }
         : {}),
     };
+    for (const [model, pricing] of Object.entries(req.modelPricing ?? {})) patchModelOverride(updatedConnection, model, { pricing: pricing === "" ? undefined : pricing });
     if (req.pricing !== undefined) {
       if (req.pricing === "") delete updatedConnection.pricing;
       else updatedConnection.pricing = req.pricing;
@@ -1957,26 +1991,18 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
         updatedConnection.promptCache = req.promptCache;
       }
     }
-    // Per-model context window (TASK.142): `""` deletes BOTH keys (tokens and
-    // binding travel as a pair); a number sets tokens plus the binding derived
-    // server-side from the effective model AFTER the model update. The effective
-    // model is the request's model when the request carries one (an explicitly
-    // cleared `""` model must NOT fall back to the stored model) else the stored
-    // model. A numeric window with no nonblank effective model is rejected
-    // before saving — never silently discarded, including on a model-only edit.
-    // An absent field leaves both keys unchanged.
-    if (req.contextWindowTokens !== undefined) {
-      if (req.contextWindowTokens === "") {
-        delete updatedConnection.contextWindowTokens;
-        delete updatedConnection.contextWindowModel;
-      } else {
-        const effectiveModel = (req.model !== undefined ? req.model : existing.model)?.trim();
-        if (effectiveModel === undefined || effectiveModel === "") {
-          return { ok: false, reason: "invalid" };
-        }
-        updatedConnection.contextWindowTokens = req.contextWindowTokens;
-        updatedConnection.contextWindowModel = effectiveModel;
+    // GitHub #26: patch only the requested model, preserving every sibling.
+    if (req.contextWindowTokens !== undefined || req.reasoningEffort !== undefined || req.reasoningSupported !== undefined || req.effortLevels !== undefined) {
+      const effectiveModel = (req.modelOverrideModel ?? (req.model !== undefined ? req.model : existing.model))?.trim();
+      if (!effectiveModel && [req.contextWindowTokens, req.reasoningEffort, req.reasoningSupported, req.effortLevels].some((value) => value !== undefined && value !== "")) {
+        return { ok: false, reason: "invalid" };
       }
+      if (effectiveModel) patchModelOverride(updatedConnection, effectiveModel, {
+        ...(req.contextWindowTokens !== undefined ? { contextWindowTokens: req.contextWindowTokens === "" ? undefined : req.contextWindowTokens } : {}),
+        ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort === "" ? undefined : req.reasoningEffort } : {}),
+        ...(req.reasoningSupported !== undefined ? { reasoningSupported: req.reasoningSupported === "" ? undefined : req.reasoningSupported } : {}),
+        ...(req.effortLevels !== undefined || req.reasoningSupported === "" ? { effortLevels: req.effortLevels === "" || req.reasoningSupported === "" ? undefined : req.effortLevels } : {}),
+      });
     }
     // Per-model image-input override (Taskana 4088) — the context-window pair
     // discipline verbatim: `""` deletes BOTH keys, "on"/"off" writes BOTH with

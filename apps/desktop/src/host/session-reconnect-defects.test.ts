@@ -252,6 +252,19 @@ describe("TASK.117 supervisor correction — reconnect defects after ring overfl
         expect(postSwap.estimatedTokens).toBeLessThan(pre.estimatedTokens);
         expect(postSwap.budgetTokens).toBe(pre.budgetTokens);
 
+        // The pre-compaction ring is still present: discarded turns must not
+        // reappear when the renderer reconnects before it has overflowed.
+        const beforeCutReload = h.received.length;
+        h.send({ type: "ui_ready" });
+        await h.waitUntil(() => h.received.slice(beforeCutReload).some((m) => m.type === "presentation_replay_end"));
+        await settle();
+        const afterCut = createDesktopStore({ schedule: (fn) => fn() });
+        for (const message of h.received.slice(beforeCutReload)) afterCut.getState().applyHostMessage(message);
+        expect(afterCut.getState().transcript.some((block) =>
+          (block.kind === "user_text" || block.kind === "assistant_text") &&
+          (block.text.includes("heavy turn") || block.text === "real turn one"),
+        )).toBe(false);
+
         // ── Overflow the ring: evicts the compaction's context_usage (the
         // ONLY post-swap reading; every earlier turn's reading is stale). ──
         const { REPLAY_BUFFER_CAP } = await import("./session.js");
@@ -279,6 +292,10 @@ describe("TASK.117 supervisor correction — reconnect defects after ring overfl
         // every public field. Pre-fix, the checkpoint still carried the REAL
         // prior turn's pre-compaction reading (the defect's exact stale
         // NON-NULL state), so estimatedTokens matched `pre`, not `postSwap`.
+        expect(fresh.getState().transcript.some((block) =>
+          (block.kind === "user_text" || block.kind === "assistant_text") &&
+          (block.text.includes("heavy turn") || block.text === "real turn one"),
+        )).toBe(false);
         expect(fresh.getState().contextUsage).not.toBeNull();
         expect(fresh.getState().contextUsage).toEqual({
           estimatedTokens: postSwap.estimatedTokens,
@@ -306,12 +323,12 @@ it("retains the last real Codex context reading after compaction and replay evic
     const pre = h.received.find(m => m.type === "agent_event" && m.event.type === "context_usage"); expect(pre).toMatchObject({ event: { estimatedTokens: 47000 } });
     h.send({ type: "compact_request" }); await h.waitFor((m): m is Extract<HostToUiMessage, { type: "agent_event" }> => m.type === "agent_event" && m.event.type === "compaction_start");
     writeFileSync(join(home, "release-codex-compact-1"), "release"); await h.waitFor((m): m is Extract<HostToUiMessage, { type: "agent_event" }> => m.type === "agent_event" && m.event.type === "compaction_end"); await settle();
-    expect(h.received.filter(m => m.type === "agent_event" && m.event.type === "context_usage")).toHaveLength(1);
+    expect(h.received.filter(m => m.type === "agent_event" && m.event.type === "context_usage")).toHaveLength(2);
     const { REPLAY_BUFFER_CAP } = await import("./session.js");
     for (let i = 0; i < REPLAY_BUFFER_CAP + 1000; i++) h.outbound.emit({ type: "title_changed", title: `flood-${i}` });
     await settle(); const before = h.received.length; h.send({ type: "ui_ready" });
     await h.waitUntil(() => h!.received.slice(before).some(m => m.type === "session_checkpoint")); await settle();
     const fresh = createDesktopStore({ schedule: fn => fn() }); for (const m of h.received.slice(before)) fresh.getState().applyHostMessage(m);
-    expect(fresh.getState().contextUsage).toEqual({ estimatedTokens: 47000, budgetTokens: 100000, source: "provider" });
+    expect(fresh.getState().contextUsage).toEqual({ estimatedTokens: 8000, budgetTokens: 100000, source: "provider" });
   } finally { await client.close(); h?.close(); rmSync(home, { recursive: true, force: true }); }
 });

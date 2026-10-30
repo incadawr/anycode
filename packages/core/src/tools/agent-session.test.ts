@@ -1721,7 +1721,7 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
   const full = createAgentTool({ sessionTier: true });
 
   function roleCtx(
-    route: { entries: Array<Record<string, string | number>>; turnBudget?: number } | null,
+    route: { entries: Array<Record<string, string | number>>; skipped?: Array<{ entry: Record<string, string | number>; reason: string }>; turnBudget?: number } | null,
   ): { ctx: ToolContext; port: SessionSubagentPort; seen: () => SessionSubagentRequest | undefined } {
     let seen: SessionSubagentRequest | undefined;
     const port: SessionSubagentPort = {
@@ -1736,12 +1736,13 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
         throw new Error("inline run not expected");
       },
       listAgentTypes: () => ["general-purpose", "explore", "planner", "executor", "reviewer"],
+      coreProfile: () => ({ systemPrompt: "role body", model: "stale-primary", effort: "xhigh" }),
       resolveRoleRoute: (agentType: string) =>
         route === null
           ? null
           : ({
               entries: route.entries as never,
-              skipped: [],
+              skipped: route.skipped ?? [],
               ...(route.turnBudget !== undefined ? { turnBudget: route.turnBudget } : {}),
             } as never),
     };
@@ -1763,6 +1764,23 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
       maxTurns: 80,
       provider: "conn-glm",
     });
+  });
+
+  it("uses the role body while routing healthy, fallback, and exhausted models", async () => {
+    const primary = { entry: { model: "stale-primary" }, reason: "cooling down" };
+    const cases = [
+      { entries: [{ model: "stale-primary" }], skipped: [], model: "stale-primary" },
+      { entries: [{ model: "fallback" }], skipped: [primary], model: "fallback" },
+      { entries: [], skipped: [primary, { entry: { model: "fallback" }, reason: "unavailable" }], model: undefined },
+    ];
+    for (const { entries, skipped, model } of cases) {
+      const { ctx, seen } = roleCtx({ entries, skipped });
+      await full.handler({ description: "d", prompt: "task", tier: "session", agent_type: "executor" }, ctx);
+      expect(seen()?.prompt).toBe("role body\n\n---\n\ntask");
+      expect(seen()).not.toHaveProperty("effort");
+      if (model) expect(seen()?.model).toBe(model);
+      else expect(seen()).not.toHaveProperty("model");
+    }
   });
 
   it("NOT stamped on resumes (a resumed child keeps its own pin)", async () => {

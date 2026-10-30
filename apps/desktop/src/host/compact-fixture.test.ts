@@ -94,8 +94,11 @@ describe("Codex compact protocol fixture", () => {
       const end = await f.end(); await f.idle();
       expect(end.turnId).toBe("manual-compaction"); expect(end.event).toMatchObject({ ok: true, preTokens: 47000 });
       expect(end.event).not.toHaveProperty("postTokens");
+      // The replacement estimate rides AFTER compaction_end (yielded last);
+      // idle() can observe busy=false before the harness sees it.
+      await f.h.waitFor((m): m is Extract<HostToUiMessage, { type: "agent_event" }> => m.type === "agent_event" && m.event.type === "context_usage" && m.event.estimatedTokens === 8000);
       for (; cursor < f.h.received.length; cursor++) store.getState().applyHostMessage(f.h.received[cursor]!);
-      expect(store.getState().turn.status).toBe("idle"); expect(store.getState().contextUsage).toEqual({ estimatedTokens: 47000, budgetTokens: 100000, source: "provider" });
+      expect(store.getState().turn.status).toBe("idle"); expect(store.getState().contextUsage).toEqual({ estimatedTokens: 8000, budgetTokens: 100000, source: "provider" });
       expect(store.getState().notice?.text).toContain("before: 47000"); expect(f.rpcs().filter(r => r.method === "turn/start")).toHaveLength(initialTurns);
     } finally { await f.close(); }
   });

@@ -49,6 +49,9 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { parseSettings } from "../settings/schema.js";
+import { migrateModelOverrides } from "../shared/model-overrides.js";
 import {
   CHILD_NETWORK_RETRY_BUDGET_MS,
   ConversationHistory,
@@ -67,7 +70,7 @@ import type {
 } from "@anycode/core";
 import { BROWSER_ACCESS_HOST_MESSAGE_TYPE } from "../shared/browser-access.js";
 import { NETWORK_HINT_HOST_MESSAGE_TYPE } from "../shared/network-hints.js";
-import { SECRET_ENV_KEYS, connectionById, type ModelCapabilitiesDto } from "../shared/settings.js";
+import { SECRET_ENV_KEYS, connectionById, type ModelCapabilitiesDto, type ProviderConnection } from "../shared/settings.js";
 import { defaultSettingsPath, loadSettings } from "../settings/files.js";
 import { CREDENTIAL_REQUEST_TYPE, type CredentialRequest, type CredentialResponse } from "../shared/credentials.js";
 import type {
@@ -515,6 +518,41 @@ export async function seedAlwaysAllowRules(
 }
 
 // ── Taskana 4118: boot-time read of live per-model capabilities from settings.json ──
+
+export type ConnectionModelSettings = Pick<ProviderConnection, "modelOverrides" | "reasoningEffort" | "modelCapabilities" | "pricing">;
+
+/** null means unreadable: keep the previous snapshot until the next safe boundary. */
+export function readConnectionModelSettingsSync(
+  connectionId: string | undefined,
+  settingsPath: string = defaultSettingsPath(),
+): ConnectionModelSettings | undefined | null {
+  if (!connectionId) return undefined;
+  try {
+    const parsed = parseSettings(JSON.parse(readFileSync(settingsPath, "utf8")));
+    if (parsed.status === "corrupt") return null;
+    const found = connectionById(parsed.settings, connectionId);
+    if (found === undefined) return undefined;
+    const connection = migrateModelOverrides(found);
+    return { pricing: connection.pricing, modelOverrides: connection.modelOverrides, reasoningEffort: connection.reasoningEffort, modelCapabilities: connection.modelCapabilities };
+  } catch {
+    return null;
+  }
+}
+
+/** Read the pinned connection's user overrides without ever writing settings. */
+export async function readConnectionModelSettings(
+  connectionId: string | undefined,
+  settingsPath: string = defaultSettingsPath(),
+): Promise<ConnectionModelSettings | undefined> {
+  if (!connectionId) return undefined;
+  try {
+    const { settings } = await loadSettings(settingsPath);
+    const connection = connectionById(settings, connectionId);
+    return connection === undefined ? undefined : { pricing: connection.pricing, modelOverrides: connection.modelOverrides, reasoningEffort: connection.reasoningEffort, modelCapabilities: connection.modelCapabilities };
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Fail-soft reader of the `modelCapabilities` map main's connection-scoped

@@ -89,6 +89,7 @@ export const CLAUDE_ENGINE_CAPABILITIES: EngineCapabilities = {
   costAccounting: true,
   supportsModelSelection: true,
   supportsReasoningEffort: true,
+  supportsDeferredEffortChange: true,
   // R-W0-9 was DISPROVEN live on 2026-07-25 (CLI 2.1.220): a user frame built
   // as a content-block array delivers the image, and the model describes it.
   // The original finding (the model answered "no attached image data") dates to
@@ -1776,6 +1777,11 @@ export class ClaudeEngine implements SessionEngine {
    * window — the one thing a host-side sum of `result.usage` can never get
    * right (the window size is not on the result frame at all).
    */
+  async initialContextUsage(): Promise<{ estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" } | undefined> {
+    const event = await this.readContextUsage();
+    return event?.type === "context_usage" ? { estimatedTokens: event.estimatedTokens, budgetTokens: event.budgetTokens, source: event.source } : undefined;
+  }
+
   private async readContextUsage(): Promise<AgentEvent | null> {
     try {
       const usage = await this.client.getContextUsage();

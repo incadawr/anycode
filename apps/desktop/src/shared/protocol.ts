@@ -37,6 +37,7 @@ import type {
   ChatMessage,
   CodexRateLimitsWire,
   CommandHookDeclaration,
+  CompactionRecord,
   ImageAttachment,
   ImageMediaType,
   McpServerStatus,
@@ -93,6 +94,7 @@ export interface EngineCapabilitiesProjection {
   costAccounting: boolean;
   supportsModelSelection: boolean;
   supportsReasoningEffort: boolean;
+  supportsDeferredEffortChange?: boolean;
   supportsImages: boolean;
   supportsTasks: boolean;
   supportsFileSnapshots: boolean;
@@ -171,9 +173,21 @@ export type WireAgentEvent =
   | {
       type: "error";
       error: SerializedError;
-      retry?: { attemptsMade: number; maxAttempts?: number; retryable: boolean; hadModelOutput: boolean; code: string };
+      retry?: { attemptsMade: number; replayStopped?: "output_started"; maxAttempts?: number; retryable: boolean; hadModelOutput: boolean; code: string };
       notice?: UsageLimitNotice;
     };
+
+/** Host-owned presentation retained for the lifetime of a session. */
+export interface PresentationTurn {
+  turnId: string;
+  requestId: string;
+  startedAt: number;
+  text?: string;
+  images?: ImageAttachment[];
+  origin?: "system";
+  events: { event: WireAgentEvent; step?: number; attempt?: number; at?: number }[];
+  fileSnapshots?: Extract<HostToUiMessage, { type: "file_snapshot" }>[];
+}
 
 /** UI-safe subset of ToolMetadata (flat data only, no schemas/handlers). */
 export interface WireToolMeta {
@@ -424,6 +438,8 @@ export interface WireBackgroundChild {
 
 // ── renderer -> host ──
 export type UiToHostMessage =
+  | { type: "approval_recover" }
+  | { type: "approval_visibility"; requestId: string; visible: boolean }
   | { type: "ui_ready" } // handshake; host replies host_ready + replay
   | {
       type: "user_message";
@@ -469,12 +485,12 @@ export type UiToHostMessage =
   // drop, the set_mode discipline); acked by `orchestrate_changed`. Untrusted
   // -> validated by `setOrchestrateSchema` below (fail-closed).
   | { type: "set_orchestrate"; enabled: boolean }
-  | { type: "set_reasoning_effort"; effort: ReasoningEffort }
+  | { type: "set_reasoning_effort"; effort: ReasoningEffort; requestId?: string }
   // Slice P7.15 (F14): mid-session model switch (mirror of the CLI `/model`
   // re-budget, host-side switch not a respawn). Untrusted -> validated by
   // `setModelSchema` below (fail-closed). Honored only between turns (Session
   // silently drops it while busy, mirroring set_reasoning_effort).
-  | { type: "set_model"; model: string }
+  | { type: "set_model"; model: string; requestId?: string }
   // Codex-fixes TASK.39 (cut §3.3): switch a non-core engine's permission
   // posture. Mirrors set_model's between-turns discipline (a pending-override
   // the engine applies to the NEXT turn/start, cut §2(d)) — untrusted ->
@@ -568,7 +584,9 @@ export type HostToUiMessage =
       mode: PermissionMode;
       model: string;
       sessionId: string;
+      contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
       reasoningEffort?: ReasoningEffort;
+      effortAdjustment?: { from: ReasoningEffort; to: ReasoningEffort };
       availableEffortLevels?: ReasoningEffort[];
       /**
        * TASK.56 W2: live image-input verdict for the CURRENT model (Session's
@@ -591,6 +609,7 @@ export type HostToUiMessage =
       imageFallback?: boolean;
       /** Taskana 4127: the active model's context window is the assumed unknown-model fallback (8K). Additive + optional: absent = no hint. */
       contextWindowAssumed?: boolean;
+      modelSettingsConnectionId?: string | null;
       /**
        * Taskana 4110 (TASK.123): the engine's live steering verdict over the
        * deferred-injection slot (core) / app-server steer (codex). Absent on
@@ -625,7 +644,36 @@ export type HostToUiMessage =
    * behavior is unchanged for a textless copy.
    */
   | { type: "steer_requeued"; requestId: string; reason: string; text?: string }
-  | { type: "session_history"; sessionId: string; items: WireHistoryItem[]; truncated: boolean }
+  | {
+      type: "session_history";
+      sessionId: string;
+      items: WireHistoryItem[];
+      truncated: boolean;
+      /**
+       * GitHub #36: the session's durable compaction presentation records
+       * (newest last, bounded by the store). Additive-optional: absent on a
+       * legacy host or a session that never compacted, which is exactly the
+       * pre-#36 message. They are how a reopened session shows every compaction
+       * it went through — including the failed ones, which leave no history item.
+       */
+      compactions?: CompactionRecord[];
+    }
+  /** Presentation and history observed at the same reconnect boundary. */
+  | {
+      type: "presentation_snapshot";
+      turns: PresentationTurn[];
+      /** Includes discarded turns whose old replay events must remain suppressed. */
+      coveredTurnIds: string[];
+      items: WireHistoryItem[];
+      truncated: boolean;
+      /** GitHub #36: same durable compaction rows the `session_history` frame carries (see there). */
+      compactions?: CompactionRecord[];
+      liveTurnId?: string;
+      historyTracksTurns: boolean;
+    }
+  /** The enclosed ring events predate the presentation snapshot. */
+  | { type: "presentation_replay_start" }
+  | { type: "presentation_replay_end" }
   | { type: "worktree_notice"; message: string }
   /** `startedAt` (epoch ms, host clock): when the turn really began — a re-asserted or replayed copy carries the original, so a footer's duration survives a reconnect. Absent from older hosts. */
   | { type: "turn_started"; requestId: string; turnId: string; startedAt?: number }
@@ -638,9 +686,10 @@ export type HostToUiMessage =
    * message — the renderer treats absent as unknown and never matches
    * against it. Rides EVERY agent_event of that step (turn_start, streams,
    * tool lifecycle, turn_end alike) so replayed events and durable history
-   * items share one key space: `${turnId}:${step}`.
+   * items share one key space: `${turnId}:${step}`. Core also stamps the
+   * attempt within each step, starting at zero and advancing on retry.
    */
-  | { type: "agent_event"; turnId: string; step?: number; event: WireAgentEvent }
+  | { type: "agent_event"; turnId: string; step?: number; attempt?: number; event: WireAgentEvent; /** Host completion time for a loop_end. */ at?: number }
   /**
    * TASK.117: the host's authoritative pending-prompt push (sendDirect,
    * regenerated on every ui_ready — never ring-buffered). Present iff an
@@ -717,7 +766,9 @@ export type HostToUiMessage =
        * own text_start (same for-await, FIFO ring), so the replayed suffix
        * is contiguous with the live tail and the char count is exact.
        */
-      streams?: { step: number; streamId: string; kind: "text" | "reasoning"; text: string; replayChars: number }[];
+      streams?: { step: number; attempt?: number; streamId: string; kind: "text" | "reasoning"; text: string; replayChars: number }[];
+      /** Current core attempt, retained even while no stream is open. */
+      currentAttempt?: { step: number; attempt: number };
       /**
        * TASK.117 acceptance defect 2: the LIVE outer turn's id at push time
        * (`Session.turnId`), absent when no turn is running. The renderer's
@@ -801,6 +852,7 @@ export type HostToUiMessage =
         totalSteps: number;
       };
       permission?: {
+        deadline?: number;
         requestId: string;
         toolName: string;
         input: unknown;
@@ -809,7 +861,13 @@ export type HostToUiMessage =
       };
     }
   | {
+      type: "approval_state";
+      unattended: boolean;
+      pending: { requestId: string; toolName: string; input: unknown; mode: PermissionMode; metadata: WireToolMeta; deadline?: number } | null;
+    }
+  | {
       type: "permission_request";
+      deadline?: number;
       requestId: string;
       toolName: string;
       input: unknown;
@@ -845,7 +903,7 @@ export type HostToUiMessage =
   // precedent mode_changed). Carries the resulting state so the renderer's
   // tab-scoped orchestrateActive stays in sync even across a reconnect.
   | { type: "orchestrate_changed"; enabled: boolean }
-  | { type: "reasoning_effort_changed"; effort: ReasoningEffort; availableEffortLevels?: ReasoningEffort[] }
+  | { type: "reasoning_effort_changed"; effort: ReasoningEffort; requestId?: string; availableEffortLevels?: ReasoningEffort[] }
   // Slice P7.15 (F14): host acknowledges a `set_model` switch (trusted, no zod,
   // precedent mode_changed/reasoning_effort_changed). `reasoningEffort` is the
   // effort re-resolved for the NEW model (collapses to "off" on a non-reasoning
@@ -859,6 +917,13 @@ export type HostToUiMessage =
   // vision -> non-vision switch. Absent (older host) = no model-level gating.
   | {
       type: "model_changed";
+      requestId?: string;
+      effortRequestId?: string;
+      /** Budget and selected tier belong to this same model acknowledgement. */
+      contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
+      selectedReasoningEffort?: ReasoningEffort;
+      requestedReasoningEffort?: ReasoningEffort;
+      effortAdjustment?: { from: ReasoningEffort; to: ReasoningEffort };
       model: string;
       reasoningEffort: ReasoningEffort;
       availableEffortLevels?: ReasoningEffort[];
@@ -896,9 +961,11 @@ export type HostToUiMessage =
   // immediately) stays valid without it.
   | {
       type: "engine_settings_changed";
+      clearContextUsage?: boolean;
       model?: string;
       activePresetId?: string;
       effort?: string;
+      deferredEffort?: boolean;
       state?: "pending" | "applied";
       appliesFrom: "next_turn";
     }
@@ -907,6 +974,7 @@ export type HostToUiMessage =
   // validated), precedent model_changed above. Emitted only AFTER the new
   // engine is live and the old one disposed, so receiving it means every later
   // message flows through the replacement engine.
+  | { type: "context_usage_checkpoint"; contextUsage: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" } | null }
   | { type: "engine_switched"; requestId: string; engine: EngineId; previousEngine: EngineId }
   // Taskana 4068: non-silent refusal for engine_switch_request — mirror of
   // rewind_result's failure shape (the UI must be able to show WHY the switch
@@ -1128,6 +1196,7 @@ export const setModeSchema = z
 export const setReasoningEffortSchema = z.object({
   type: z.literal("set_reasoning_effort"),
   effort: z.enum(["off", "low", "medium", "high", "xhigh", "max"]),
+  requestId: z.string().min(1).max(128).optional(),
 }).strict();
 
 // Taskana 4704 §3.7: untrusted set_orchestrate. Mirror of setModeSchema —
@@ -1148,6 +1217,7 @@ export const setModelSchema = z
   .object({
     type: z.literal("set_model"),
     model: z.string().min(1).max(256),
+    requestId: z.string().min(1).max(128).optional(),
   })
   .strict();
 
@@ -1361,6 +1431,8 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   networkRetryNowSchema,
   exitWorktreeSchema,
   permissionResponseSchema,
+  z.object({ type: z.literal("approval_recover") }).strict(),
+  z.object({ type: z.literal("approval_visibility"), requestId: z.string(), visible: z.boolean() }).strict(),
   setModeSchema,
   setReasoningEffortSchema,
   setOrchestrateSchema,

@@ -1,3 +1,5 @@
+import { findCatalogEntry } from "@anycode/core/catalog";
+import { createConnectionModelSettings } from "./connection-model-settings.js";
 /**
  * Session integration tests over a real worker_threads MessageChannel driving
  * the real AgentLoop + dispatcher against a scripted ModelPort (design §10,
@@ -49,6 +51,7 @@ import {
   buildSkillsPromptSection,
   createSkillPort,
   discoverSkills,
+  type CompactionRecord,
   type ProviderUsageRecord,
   bashTool,
   createDefaultToolRegistry,
@@ -101,6 +104,7 @@ import { ClaudeApprovalBridge } from "./engines/claude/approval-bridge.js";
 import { ClaudeModelCatalog } from "./engines/claude/models.js";
 import { findClaudePreset } from "./engines/claude/presets.js";
 import type { ClaudeStreamMessage } from "./engines/claude/protocol.js";
+import { CompactionRecordLog } from "./compaction-records.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import {
   MANUAL_COMPACTION_TURN_ID,
@@ -1117,6 +1121,7 @@ describe("Session — foreign-engine telemetry tap (TASK.159)", () => {
           type: "agent_event",
           turnId: expect.any(String),
           event: { type: "loop_end", reason: "completed", turns: 1 },
+          at: expect.any(Number),
         }),
       );
       expect(
@@ -1129,7 +1134,7 @@ describe("Session — foreign-engine telemetry tap (TASK.159)", () => {
     }
   });
 
-  it("no eventTap configured — the turn is byte-identical to a legacy/core-path Session (no crash, same events on the wire)", async () => {
+  it("no eventTap configured — the turn completes with its terminal timestamp", async () => {
     const engine = buildFakeEngine({
       async *runTurn(): AsyncIterable<AgentEvent> {
         yield { type: "loop_end", reason: "completed", turns: 1 };
@@ -1143,6 +1148,7 @@ describe("Session — foreign-engine telemetry tap (TASK.159)", () => {
         type: "agent_event",
         turnId: expect.any(String),
         event: { type: "loop_end", reason: "completed", turns: 1 },
+        at: expect.any(Number),
       }),
     );
   });
@@ -2351,6 +2357,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
       agentType: "explore",
       description: "sweep the repo",
       startedAt: 1_000,
+      turns: 0, toolCalls: 2, lastTool: "Write", waitingForApproval: true,
     };
 
     it("pushes the current list (possibly empty) on ui_ready, mirroring pushTaskList/pushHooksList", () => {
@@ -2574,6 +2581,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
       type: "agent_event",
       turnId: expect.any(String),
       event: { type: "loop_end", reason: "workspace_transition", turns: 1 },
+      at: expect.any(Number),
     }));
     port.send({ type: "user_message", requestId: "second", text: "must not run" });
     await vi.waitFor(() => expect(port.received).toContainEqual({
@@ -3762,6 +3770,133 @@ describe("catalog defaults in a fresh session", () => {
 });
 
 describe("Session — model switch (slice P7.15 · F14)", () => {
+  it("keeps a restored provider reading on a same-model refresh and persists the emitted reading", async () => {
+    const save = vi.fn(async () => {});
+    const h = createHarness({
+      steps: [],
+      initialContextUsage: { estimatedTokens: 1234, budgetTokens: 5000, source: "provider" },
+      saveContextUsage: save,
+      switchModel: (model) => ({ model, reasoningEffort: "off", contextUsage: { estimatedTokens: 50, budgetTokens: 8000, source: "estimate" } }),
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_model", model: "scripted-model" });
+      const changed = await h.waitFor(isModelChanged);
+      const reading = { estimatedTokens: 1234, budgetTokens: 8000, source: "provider" };
+      expect(changed.contextUsage).toEqual(reading);
+      await h.waitUntil(() => save.mock.calls.length > 0);
+      expect(save).toHaveBeenLastCalledWith({ ...reading, engine: "core", model: "scripted-model" });
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.some((m) => m.type === "context_usage_checkpoint" && m.contextUsage?.budgetTokens === 8000));
+      expect(h.received.find((m) => m.type === "context_usage_checkpoint" && m.contextUsage?.budgetTokens === 8000)).toMatchObject({ contextUsage: reading });
+      const offset = h.received.length;
+      h.send({ type: "set_model", model: "other" });
+      await h.waitUntil(() => h.received.slice(offset).some(isModelChanged));
+      expect(h.received.slice(offset).find(isModelChanged)?.contextUsage).toEqual({ estimatedTokens: 50, budgetTokens: 8000, source: "estimate" });
+    } finally { h.close(); }
+  });
+
+  it("drops a fallback model provider reading when selecting the original model", async () => {
+    let loopModel = "scripted-model";
+    const save = vi.fn(async () => {});
+    const h = createHarness({
+      steps: [[{ type: "start" }, { type: "finish", finishReason: "stop", usage: { inputTokens: 1234, outputTokens: 10, totalTokens: 1244 } }]],
+      saveContextUsage: save,
+      orchestratorRouteCheck: () => ({ notice: "Fallback selected", model: "fallback" }),
+      switchModel: (model) => {
+        const previousModel = loopModel;
+        loopModel = model;
+        return { model, previousModel, reasoningEffort: "off", contextUsage: { estimatedTokens: 50, budgetTokens: 8000, source: "estimate" } };
+      },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_orchestrate", enabled: true });
+      await h.waitUntil(() => h.received.some((m) => m.type === "orchestrate_changed" && m.enabled));
+      h.send({ type: "user_message", requestId: "fallback", text: "hello" });
+      await h.waitUntil(() => h.received.some((m) => m.type === "agent_event" && m.event.type === "loop_end"));
+      expect(loopModel).toBe("fallback");
+      expect(h.received.some((m) => m.type === "agent_event" && m.event.type === "context_usage" && m.event.source === "provider")).toBe(true);
+      const offset = h.received.length;
+      const savedCount = save.mock.calls.length;
+      h.send({ type: "set_model", model: "scripted-model" });
+      await h.waitUntil(() => h.received.slice(offset).some(isModelChanged));
+      const reading = { estimatedTokens: 50, budgetTokens: 8000, source: "estimate" };
+      expect(h.received.slice(offset).find(isModelChanged)?.contextUsage).toEqual(reading);
+      await h.waitUntil(() => save.mock.calls.length > savedCount);
+      expect(save).toHaveBeenLastCalledWith({ ...reading, engine: "core", model: "scripted-model" });
+    } finally { h.close(); }
+  });
+
+  it("applies a fallback route's declared effort as an explicit selection", async () => {
+    const switchModel = vi.fn((model: string) => ({ model, reasoningEffort: "high" as const }));
+    const h = createHarness({
+      steps: [],
+      orchestratorRouteCheck: () => ({ notice: "Fallback selected", model: "fallback", effort: "high" }),
+      switchModel,
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_orchestrate", enabled: true });
+      await h.waitUntil(() => h.received.some((m) => m.type === "orchestrate_changed" && m.enabled));
+      h.send({ type: "user_message", requestId: "fallback-effort", text: "hello" });
+      await h.waitUntil(() => switchModel.mock.calls.length > 0);
+      expect(switchModel).toHaveBeenCalledWith("fallback", "high", true);
+    } finally { h.close(); }
+  });
+
+  it("replaces the original provider reading when a fallback turn fails before usage", async () => {
+    let loopModel = "scripted-model";
+    const save = vi.fn(async (_snapshot: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate"; engine: string; model: string } | null) => {});
+    const h = createHarness({
+      steps: [[{ type: "start" }, { type: "finish", finishReason: "stop", usage: { inputTokens: 1234, outputTokens: 10, totalTokens: 1244 } }]],
+      saveContextUsage: save,
+      orchestratorRouteCheck: () => ({ notice: "Fallback selected", model: "fallback" }),
+      switchModel: (model) => {
+        const previousModel = loopModel;
+        loopModel = model;
+        return { model, previousModel, reasoningEffort: "off", contextUsage: { estimatedTokens: 50, budgetTokens: model === "fallback" ? 8000 : 5000, source: "estimate" } };
+      },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "original", text: "hello" });
+      await h.waitUntil(() => h.received.some((m) => m.type === "agent_event" && m.event.type === "loop_end"));
+      expect(h.received.some((m) => m.type === "agent_event" && m.event.type === "context_usage" && m.event.source === "provider")).toBe(true);
+      await h.waitUntil(() => save.mock.calls.some(([snapshot]) => snapshot?.model === "scripted-model" && snapshot.source === "provider"));
+      vi.spyOn(h.engine, "runTurn").mockImplementation(async function* () { yield { type: "loop_end", reason: "cancelled", turns: 0 }; });
+      h.send({ type: "set_orchestrate", enabled: true });
+      await h.waitUntil(() => h.received.some((m) => m.type === "orchestrate_changed" && m.enabled));
+      const turnOffset = h.received.length;
+      h.send({ type: "user_message", requestId: "failed-fallback", text: "hello" });
+      await h.waitUntil(() => h.received.slice(turnOffset).some((m) => m.type === "agent_event" && m.event.type === "loop_end"));
+      expect(h.received.slice(turnOffset).some((m) => m.type === "agent_event" && m.event.type === "context_usage")).toBe(false);
+      expect(loopModel).toBe("fallback");
+      const checkpointOffset = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(checkpointOffset).some((m) => m.type === "context_usage_checkpoint"));
+      expect(h.received.slice(checkpointOffset).find(isHostReady)?.model).toBe("fallback");
+      const fallbackReading = { estimatedTokens: 50, budgetTokens: 8000, source: "estimate" };
+      expect(h.received.slice(checkpointOffset).find((m) => m.type === "context_usage_checkpoint")).toMatchObject({ contextUsage: fallbackReading });
+      await h.waitUntil(() => save.mock.calls.some(([snapshot]) => snapshot?.model === "fallback" && snapshot.source === "estimate"));
+      expect(save).toHaveBeenLastCalledWith({ ...fallbackReading, engine: "core", model: "fallback" });
+      for (const [model, budgetTokens] of [["fallback", 8000], ["scripted-model", 5000]] as const) {
+        const offset = h.received.length;
+        const savedCount = save.mock.calls.length;
+        h.send({ type: "set_model", model });
+        await h.waitUntil(() => h.received.slice(offset).some(isModelChanged));
+        const reading = { estimatedTokens: 50, budgetTokens, source: "estimate" };
+        expect(h.received.slice(offset).find(isModelChanged)?.contextUsage).toEqual(reading);
+        await h.waitUntil(() => save.mock.calls.length > savedCount);
+        expect(save).toHaveBeenLastCalledWith({ ...reading, engine: "core", model });
+      }
+    } finally { h.close(); }
+  });
+
   it("switches the model between turns, emits model_changed, and reports it on the next handshake", async () => {
     const h = createHarness({
       steps: [textStep("x"), finishStep()],
@@ -3938,6 +4073,37 @@ describe("Session — model switch (slice P7.15 · F14)", () => {
     } finally {
       h.close();
     }
+  });
+
+  it("acknowledges a normalized explicit queued effort at the turn boundary", async () => {
+    const entry = findCatalogEntry("z-ai")!;
+    const settings = createConnectionModelSettings({catalogEntry:entry, liveCapabilitiesFor:() => undefined});
+    let current = "glm-5.2";
+    const h = createHarness({
+      steps:[toolStep("c1", "Write", WRITE_INPUT), finishStep()],
+      selectedEffort:"off", reasoningSupported:true, availableEffortLevels:["off", "high", "max"],
+      switchModel:(id, tier, explicit) => {
+        const selectedReasoningEffort = settings.switchEffort(current, id, tier ?? "off", explicit);
+        const effortAdjustment = settings.takeAdjustment();
+        current = id;
+        return {model:id, selectedReasoningEffort, reasoningEffort:resolveReasoningEffort(id, entry, selectedReasoningEffort) ?? "off", availableEffortLevels:resolveEffortLevels(id, entry), effortAdjustment};
+      },
+    });
+    try {
+      h.send({type:"ui_ready"});
+      await h.waitFor(isHostReady);
+      h.send({type:"user_message", requestId:"r1", text:"write it"});
+      const req = await h.waitFor(isPermissionRequest);
+      h.send({type:"set_model", model:"glm-5.3", requestId:"old-model"});
+      h.send({type:"set_model", model:"glm-5.3", requestId:"new-model"});
+      h.send({type:"set_reasoning_effort", effort:"off", requestId:"old-effort"});
+      h.send({type:"set_reasoning_effort", effort:"off", requestId:"new-effort"});
+      await h.flush();
+      expect(h.received.some(isModelChanged)).toBe(false);
+      h.send({type:"permission_response", requestId:req.requestId, behavior:"deny"});
+      const changed = await h.waitFor(isModelChanged);
+      expect(changed).toMatchObject({requestId:"new-model", effortRequestId:"new-effort", model:"glm-5.3", reasoningEffort:"low", selectedReasoningEffort:"low", requestedReasoningEffort:"off", effortAdjustment:{from:"off", to:"low"}});
+    } finally { h.close(); }
   });
 
   it("silently drops a malformed id (empty / internal whitespace) and a switch with no factory wired", async () => {
@@ -7252,6 +7418,303 @@ describe("Session — manual compaction wire (TASK.146)", () => {
   });
 
 
+  it("GitHub #36: the host records the outcome and stamps its id, so the row survives a reopen instead of dying with this process", async () => {
+    const records: CompactionRecord[] = [];
+    const h = createHarness({
+      steps: [textStep("Summary of the earlier conversation.")],
+      compactionRecords: {
+        record: (record) => { records.push(record); },
+        list: () => records,
+        flush: () => Promise.resolve(),
+        sequence: () => records.length,
+        truncate: () => undefined,
+      },
+    });
+    try {
+      h.engine.replaceHistory!(seedManualCompactionHistory());
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "compact_request" });
+      const end = await h.waitFor(agentEventOf("compaction_end"));
+      const endEvent = end.event as Extract<WireAgentEvent, { type: "compaction_end" }>;
+      expect(endEvent.ok).toBe(true);
+
+      // ONE record for the compaction, carrying everything the reopened row
+      // needs: the summary (with core's own wrapper), the item that holds it,
+      // the instruction that was sent, and the trigger this process observed.
+      expect(records).toHaveLength(1);
+      const record = records[0]!;
+      expect(record.ok).toBe(true);
+      expect(record.trigger).toBe("manual");
+      expect(record.summary).toContain("Summary of the earlier conversation.");
+      expect(record.summaryItemId).toBe(h.engine.historyItems()[0]!.id);
+      expect(record.prompt).toContain("Write a summary of this session");
+      expect(record.postTokens!).toBeLessThan(record.preTokens!);
+
+      // The event and the record are the SAME row: the id the renderer patches
+      // by is the id the durable row is keyed by.
+      expect(endEvent.recordId).toBe(record.id);
+
+      // And the record rides the NEXT handshake — that is what makes a reopen
+      // show the row. (Scope to what this ui_ready produced: the log already
+      // holds the pre-compaction handshake.)
+      const mark = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() =>
+        h.received.slice(mark).some((message) => message.type === "session_history"),
+      );
+      const history = h.received
+        .slice(mark)
+        .filter((message): message is Extract<HostToUiMessage, { type: "session_history" }> => message.type === "session_history")
+        .at(-1)!;
+      expect(history.compactions?.map((entry) => entry.id)).toEqual([record.id]);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("GitHub #36 review: a skipped compaction on an EMPTY conversation is still shipped after a reopen — the history is empty, the record is not", async () => {
+    // No history at all: the compaction is a structural no-op ("no prefix
+    // before the keep-recent window"), yet it HAPPENED and its row must survive.
+    const records: CompactionRecord[] = [];
+    const h = createHarness({
+      steps: [],
+      compactionRecords: {
+        record: (entry) => { records.push(entry); },
+        list: () => records,
+        flush: () => Promise.resolve(),
+        sequence: () => records.length,
+        truncate: () => undefined,
+      },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      expect(h.engine.historyItems()).toEqual([]);
+
+      h.send({ type: "compact_request" });
+      const end = await h.waitFor(agentEventOf("compaction_end"));
+      const endEvent = end.event as Extract<WireAgentEvent, { type: "compaction_end" }>;
+      // Not applied, but recorded — with the reason and the prompt it would
+      // have sent.
+      expect(endEvent.ok).toBe(false);
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ ok: false, trigger: "manual" });
+      expect(records[0]!.error).toContain("no prefix");
+
+      // A reload/reconnect over an EMPTY history: the handshake carries no
+      // items, and without the record the row would vanish.
+      const mark = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(mark).some((message) => message.type === "session_history"));
+      const history = h.received
+        .slice(mark)
+        .filter((message): message is Extract<HostToUiMessage, { type: "session_history" }> => message.type === "session_history")
+        .at(-1)!;
+      expect(history.items).toEqual([]);
+      expect(history.compactions?.map((entry) => entry.id)).toEqual([records[0]!.id]);
+    } finally {
+      h.close();
+    }
+  });
+
+  /**
+   * An in-memory stand-in for the SQLite record store, and a REAL
+   * `CompactionRecordLog` over it, so the rewind tests exercise the production
+   * decision (which records a rewind discards) instead of a hand-rolled copy.
+   * `truncateCompactionRecords` is this store's compatibility arm for a
+   * creation-time cutoff — the rule this whole fix replaces — so the same test
+   * states the old behaviour's failure honestly.
+   */
+  function durableCompactionRecords(initial: CompactionRecord[] = []) {
+    const rows = new Map(initial.map((record) => [record.id, record]));
+    const store = {
+      rows,
+      appendCompactionRecord: async (_sessionId: string, record: CompactionRecord) => {
+        rows.set(record.id, record);
+      },
+      listCompactionRecords: async () => [...rows.values()].sort((left, right) => left.createdAt - right.createdAt),
+      discardCompactionRecords: async (_sessionId: string, ids: readonly string[]) => {
+        for (const id of ids) rows.delete(id);
+      },
+      compactionSeqHighWater: async () => Math.max(0, ...[...rows.values()].map((record) => record.seq ?? 0)),
+      raiseCompactionSeqHighWater: async () => undefined,
+      truncateCompactionRecords: async (_sessionId: string, checkpointAt: number) => {
+        for (const [id, record] of [...rows]) if (record.createdAt > checkpointAt) rows.delete(id);
+      },
+    };
+    return { store, log: new CompactionRecordLog(store, "s1") };
+  }
+
+  it("GitHub #36 review 3: rewinding to a LAZILY created checkpoint discards a compaction that ran earlier in the same turn", async () => {
+    // The owner-visible shape this pins: an automatic checkpoint is created at
+    // the turn's first write-effect tool, AFTER the auto compaction that ran at
+    // the top of that turn, but the snapshot it holds is the history from
+    // BEFORE the turn. Its creation time is therefore NEWER than the compaction
+    // record while its conversation is OLDER — so a timestamp cutoff keeps the
+    // record and resurrects a summary of the pre-turn conversation. The cutoff
+    // has to be the checkpoint's conversation state.
+    const turnStartHistory: HistoryItem[] = [
+      { id: "pre-1", createdAt: 1, message: { role: "user", content: "first turn" } },
+      { id: "pre-2", createdAt: 2, message: { role: "assistant", content: [{ type: "text", text: "answered" }] } },
+    ];
+    const { store, log } = durableCompactionRecords();
+    const checkpointCreatedAt = Date.now() + 60_000;
+    const seam: SessionOptions["checkpoints"] = {
+      list: async () => [],
+      rewind: async () => ({
+        ok: true as const,
+        safetyCheckpointId: "safety-1",
+        restoredPaths: 0,
+        historyItems: turnStartHistory,
+        // The boundary a real lazily created checkpoint carries: the sequence
+        // current at its turn start, BEFORE this turn's auto compaction ran.
+        compactionSeq: 0,
+      }),
+    };
+    const h = createHarness({
+      steps: [textStep("Summary of the earlier conversation.")],
+      checkpointsSeam: seam,
+      compactionRecords: log,
+    });
+    try {
+      h.engine.replaceHistory!(seedManualCompactionHistory());
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      // The compaction happens FIRST — earlier in the turn this checkpoint is
+      // created during.
+      h.send({ type: "compact_request" });
+      const end = await h.waitFor(agentEventOf("compaction_end"));
+      expect((end.event as Extract<WireAgentEvent, { type: "compaction_end" }>).ok).toBe(true);
+      expect(log.list()).toHaveLength(1);
+      await log.flush();
+      const record = log.list()[0]!;
+      // Newer than every item the checkpoint restores, older than the
+      // checkpoint row itself: exactly the window a timestamp cutoff misses.
+      expect(record.createdAt).toBeGreaterThan(Math.max(...turnStartHistory.map((item) => item.createdAt)));
+      expect(record.createdAt).toBeLessThan(checkpointCreatedAt);
+
+      h.send({ type: "rewind_request", requestId: "rw1", checkpointId: "cp-1", scope: "conversation" });
+      const res = await h.waitFor(isRewindResult);
+      expect(res.ok).toBe(true);
+      expect(res.conversationRestored).toBe(true);
+
+      // THE claim: the record of the compaction this rewind discarded is gone —
+      // from the live cache, from the handshake that follows, and from storage,
+      // so the summary of the thrown-away conversation cannot come back.
+      expect(log.list()).toEqual([]);
+      const rewindAt = h.received.indexOf(res);
+      await h.waitUntil(() => h.received.slice(rewindAt).some((message) => message.type === "session_history"));
+      const historyAfter = h.received
+        .slice(rewindAt)
+        .filter((message): message is Extract<HostToUiMessage, { type: "session_history" }> => message.type === "session_history")
+        .at(-1)!;
+      expect(historyAfter.items.map((item) => item.id)).toEqual(["pre-1", "pre-2"]);
+      expect(historyAfter.compactions).toBeUndefined();
+      await log.flush();
+      expect([...store.rows.keys()]).toEqual([]);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("GitHub #36 review 5: the pre-rewind SAFETY capture gets the CURRENT boundary, so rewinding to it later keeps valid rows", async () => {
+    // The safety checkpoint a rewind creates is itself rewindable. Session must
+    // hand its capture the sequence as it stands, or that checkpoint carries no
+    // boundary and a later rewind to it falls back to the history heuristic —
+    // which deletes a between-turns failed compaction.
+    const records: CompactionRecord[] = [];
+    const seen: { scope: string; compactionSeq?: number }[] = [];
+    const seam: SessionOptions["checkpoints"] = {
+      list: async () => [],
+      rewind: async (_id, opts) => {
+        seen.push({ scope: opts.scope, ...(opts.compactionSeq !== undefined ? { compactionSeq: opts.compactionSeq } : {}) });
+        return {
+          ok: true,
+          safetyCheckpointId: "safety-1",
+          restoredPaths: null,
+          historyItems: [],
+        };
+      },
+    };
+    const h = createHarness({
+      steps: [],
+      checkpointsSeam: seam,
+      compactionRecords: {
+        record: (entry) => { records.push(entry); },
+        list: () => records,
+        flush: () => Promise.resolve(),
+        sequence: () => records.length,
+        truncate: () => undefined,
+      },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      // Two recorded outcomes so far (one failed between-turns attempt, one
+      // later): the sequence is 2 and must ride the rewind call.
+      records.push(
+        { id: "failed", createdAt: 1, ok: false, error: "no prefix", seq: 1 },
+        { id: "later", createdAt: 2, ok: false, error: "no prefix", seq: 2 },
+      );
+      h.send({ type: "rewind_request", requestId: "rw1", checkpointId: "cp-1", scope: "files" });
+      await h.waitFor(isRewindResult);
+
+      expect(seen).toEqual([{ scope: "files", compactionSeq: 2 }]);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("GitHub #36 review 3: a compaction the rewound-to state SURVIVES keeps its row — its summary item is part of the restored history", async () => {
+    // Rewind to a checkpoint taken AFTER a compaction: the summary item it
+    // restored IS that compaction's output, so the row must not be discarded
+    // just because it is newer than the older items around it.
+    const summaryItem: HistoryItem = {
+      id: "summary-1",
+      createdAt: 5,
+      kind: "compact_summary",
+      message: { role: "user", content: "Session continued. Summary of the earlier conversation:\n\nkept" },
+    };
+    const { log } = durableCompactionRecords([
+      { id: "rec-kept", createdAt: 6, ok: true, summaryItemId: "summary-1", summary: "kept summary" },
+    ]);
+    // The boot path (createCompactionRecordLog) reads storage before the
+    // session exists; do the same here so the row is the RESUMED one.
+    await log.load();
+    const seam: SessionOptions["checkpoints"] = {
+      list: async () => [],
+      rewind: async () => ({
+        ok: true,
+        safetyCheckpointId: "safety-1",
+        restoredPaths: 0,
+        historyItems: [summaryItem, { id: "tail", createdAt: 7, message: { role: "user", content: "next" } }],
+      }),
+    };
+    const h = createHarness({ steps: [], checkpointsSeam: seam, compactionRecords: log });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "rewind_request", requestId: "rw1", checkpointId: "cp-1", scope: "conversation" });
+      const res = await h.waitFor(isRewindResult);
+      expect(res.ok).toBe(true);
+
+      expect(log.list().map((entry) => entry.id)).toEqual(["rec-kept"]);
+      const rewindAt = h.received.indexOf(res);
+      await h.waitUntil(() => h.received.slice(rewindAt).some((message) => message.type === "session_history"));
+      const historyAfter = h.received
+        .slice(rewindAt)
+        .filter((message): message is Extract<HostToUiMessage, { type: "session_history" }> => message.type === "session_history")
+        .at(-1)!;
+      expect(historyAfter.compactions?.map((entry) => entry.id)).toEqual(["rec-kept"]);
+    } finally {
+      h.close();
+    }
+  });
+
   it("the ctx meter falls ON THE WIRE: a successful manual compaction is followed by context_usage carrying the post-swap reading", async () => {
     // One step only: ContextManager.runCompaction's own summarization call.
     // No real turn is opened here, so nothing else consumes the script.
@@ -9255,7 +9718,7 @@ describe("tapChildPermissions ask identity (Taskana 4821)", () => {
     });
     expect(bearer.subject).not.toContain("abc123def456ghi789abc123");
     expect(bearer.subject).toContain("[redacted]");
-    expect(bearer.subject).toContain("https://example.com/health");
+    expect(bearer.subject).not.toContain("https://example.com/health");
     // --password / -p-style flag values
     const flag = describeChildApprovalAsk("Bash", { command: "deploy --password hunter2 --verbose" });
     expect(flag.subject).not.toContain("hunter2");
@@ -9304,5 +9767,63 @@ describe("durable cost summary", () => {
       { ...base, step: 3, costUsd: 0.3, cacheSavingsUsd: 0.2, priceBasisId: "new" },
     ]);
     expect(summary.totals).toMatchObject({ costUsd: 0.5, cacheSavingsUsd: expect.closeTo(0.3), unpricedSteps: 1 });
+  });
+});
+
+
+it("keeps the switched context budget in the reconnect checkpoint before another turn", async () => {
+  const h = createHarness({steps:[], switchModel:(model) => ({model, reasoningEffort:"off", contextUsage:{estimatedTokens:15500, budgetTokens:2048, source:"estimate"}})});
+  try {
+    h.send({type:"ui_ready"});
+    await h.waitFor((m) => m.type === "host_ready");
+    h.send({type:"set_model", model:"unknown"});
+    const changed = await h.waitFor((m) => m.type === "model_changed");
+    expect(changed).toMatchObject({contextUsage:{budgetTokens:2048}});
+    const before = h.received.length;
+    h.send({type:"ui_ready"});
+    await h.waitUntil(() => h.received.slice(before).some((m) => m.type === "session_checkpoint"));
+    const checkpoint = h.received.slice(before).find((m) => m.type === "session_checkpoint");
+    expect(checkpoint).toMatchObject({contextUsage:{budgetTokens:2048}});
+  } finally { h.close(); }
+});
+
+describe("child status transcript", () => {
+  it.each([
+    ['{"password":"hunter2"}', "hunter2"],
+    ["Authorization: Bearer secondsecret", "secondsecret"],
+    ["Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"],
+    ['{"password":"first second', "second"],
+    ['--password="first second"', "second"],
+    ["private_key: myprivatevalue", "myprivatevalue"],
+    ['{"credentials":"mycredentialvalue"}', "mycredentialvalue"],
+    ['--passphrase="myphrasevalue"', "myphrasevalue"],
+    ["X-Session-Id: mysessionvalue", "mysessionvalue"],
+    ["monkey=banana", "banana"],
+  ])("emits bounded live text and scrubs %s on the child wire", (credential, secret) => {
+    const h = createChildHarness({ steps: [finishStep()] });
+    try {
+      observeChildEventDirect(h.session, { type: "turn_start", turn: 1 });
+      observeChildEventDirect(h.session, { type: "text_delta", id: "text", text: "😀".repeat(200) });
+      observeChildEventDirect(h.session, { type: "tool_execution_start", toolCallId: "c", toolName: "Read", input: { file_path: "/work/a" } });
+      observeChildEventDirect(h.session, { type: "tool_result", outcome: { toolCallId: "c", toolName: "Read", status: "error", modelText: "private error detail", durationMs: 1 } });
+      observeChildEventDirect(h.session, { type: "tool_execution_start", toolCallId: "secret", toolName: "Bash", input: { command: "echo --password=hunter2" } });
+      observeChildEventDirect(h.session, { type: "tool_result", outcome: { toolCallId: "secret", toolName: "Read", status: "success", modelText: "secret file contents", durationMs: 1 } });
+      observeChildEventDirect(h.session, { type: "text_delta", id: "text", text: ` latest progress ${credential}` });
+      observeChildEventDirect(h.session, { type: "turn_end", turn: 1, finishReason: "stop" });
+      const items = h.onProgress.mock.calls.map(([report]) => report).filter((report) => report.kind === "status");
+      expect(JSON.stringify(items)).not.toContain("hunter2");
+      expect(JSON.stringify(items)).not.toContain(secret);
+      expect(JSON.stringify(items)).not.toContain("secret file contents");
+      expect(JSON.stringify(items)).toContain("latest progress");
+      expect(items).toEqual(expect.arrayContaining([
+        expect.objectContaining({ itemKind: "assistant" }),
+        expect.objectContaining({ itemKind: "tool", text: "Read", toolName: "Read" }),
+        expect.objectContaining({ itemKind: "result", text: "Read: error" }),
+      ]));
+      expect(JSON.stringify(items)).not.toContain("private error detail");
+      for (const item of items) expect(parseChildProgress({ type: CHILD_PROGRESS_TYPE, ...item })).not.toBeNull();
+      observeChildEventDirect(h.session, { type: "stream_retry", attempt: 1, maxAttempts: 2, delayMs: 0, reason: "retry" });
+      expect(h.onProgress.mock.calls.at(-1)?.[0]).toMatchObject({ kind: "status", itemKind: "reset" });
+    } finally { h.close(); }
   });
 });

@@ -62,6 +62,19 @@ function createManualScheduler(): { scheduler: FrameScheduler; runPending: () =>
 class FakeMessagePort {
   onmessage: ((event: MessageEvent<HostToUiMessage>) => void) | null = null;
   sent: unknown[] = [];
+  private closeListeners = new Set<() => void>();
+
+  addEventListener(type: string, listener: () => void): void {
+    if (type === "close") this.closeListeners.add(listener);
+  }
+
+  removeEventListener(type: string, listener: () => void): void {
+    if (type === "close") this.closeListeners.delete(listener);
+  }
+
+  close(): void {
+    for (const listener of this.closeListeners) listener();
+  }
 
   postMessage(message: unknown): void {
     this.sent.push(message);
@@ -94,7 +107,7 @@ function asTerminalPort(fake: FakeTerminalPort): MessagePort {
   return fake as unknown as MessagePort;
 }
 
-const HOST_READY = (workspace: string, sessionId: string): HostToUiMessage => ({
+const HOST_READY = (workspace: string, sessionId: string): Extract<HostToUiMessage, {type:"host_ready"}> => ({
   type: "host_ready",
   workspace,
   mode: "build",
@@ -618,6 +631,81 @@ describe("tab-registry — child-session registration (TASK.102 CUT-S2 §2.5, sl
     expect(registry.getStore("child-1")).toBeUndefined();
   });
 
+  it("clears finished notices for the parent when a user sends a message", () => {
+    const { registry, childRelationStore } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("root-1", "/ws/root", asPort(port));
+    port.emit(HOST_READY("/ws/root", "sess-root"));
+    const relations = childRelationStore.getState();
+    relations.registerChild("sess-root", "old", "old-tab", "child");
+    relations.markChildGone("old-tab", true);
+    relations.registerChild("other", "other", "other-tab", "other-child");
+    relations.markChildGone("other-tab", true);
+    registry.sendToTab("root-1", { type: "user_message", requestId: "message", text: "continue" });
+    expect(port.sent).toContainEqual({ type: "user_message", requestId: "message", text: "continue" });
+    expect(relations.getRelation("sess-root", "old")?.approvalExpired).toBe(false);
+    expect(relations.getRelation("other", "other")?.approvalExpired).toBe(true);
+  });
+
+  it("clears finished notices on queued submission, not when the queue drains", () => {
+    const { registry, childRelationStore } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("root-1", "/ws/root", asPort(port));
+    port.emit(HOST_READY("/ws/root", "sess-root"));
+    port.emit({ type: "turn_started", requestId: "running", turnId: "t1" });
+    const relations = childRelationStore.getState();
+    relations.registerChild("sess-root", "old", "old-tab", "child");
+    relations.markChildGone("old-tab", true);
+    const store = registry.getStore("root-1")!;
+    const reportId = store.getState().enqueuePrompt({ text: "report", images: [], origin: "system" });
+    expect(relations.getRelation("sess-root", "old")?.approvalExpired).toBe(true);
+    store.getState().deleteQueuedPrompt(reportId);
+    const image = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+    store.getState().enqueuePrompt({ text: "continue", images: [image] });
+    expect(relations.getRelation("sess-root", "old")?.approvalExpired).toBe(false);
+    expect(port.sent.filter((message) => (message as { type: string }).type === "user_message")).toHaveLength(0);
+
+    relations.registerChild("sess-root", "new", "new-tab", "child-2");
+    relations.markChildGone("new-tab", true);
+    port.emit({ type: "agent_event", turnId: "t1", event: { type: "loop_end", reason: "completed", turns: 1 } });
+    expect(port.sent).toContainEqual(expect.objectContaining({ type: "user_message", text: "continue", images: [image.attachment] }));
+    expect(relations.getRelation("sess-root", "new")?.approvalExpired).toBe(true);
+  });
+
+  it("retains a child expiry when the host exits immediately", () => {
+    const { registry, childRelationStore } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("child-1", "/ws/root", asPort(port), undefined, childField());
+    port.emit(HOST_READY("/ws/root", "sess-child"));
+    port.emit({ type: "approval_state", unattended: true, pending: null });
+    registry.markHostExited("child-1");
+    expect(registry.getStore("child-1")).toBeUndefined();
+    expect(childRelationStore.getState().getRelation("sess-root", "call-1")).toMatchObject({ live: false, approvalExpired: true });
+  });
+
+  it("retains a child expiry delivered after host exit without retaining its store", () => {
+    const { registry, childRelationStore } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("child-1", "/ws/root", asPort(port), undefined, childField());
+    const staleStore = registry.getStore("child-1")!;
+    registry.markHostExited("child-1");
+    expect(registry.getStore("child-1")).toBeUndefined();
+    expect(childRelationStore.getState().getRelation("sess-root", "call-1")).toMatchObject({ live: false });
+    port.emit({ type: "approval_state", unattended: true, pending: null });
+    expect(childRelationStore.getState().getRelation("sess-root", "call-1")).toMatchObject({ live: false, approvalExpired: true });
+    expect(staleStore.getState().unattended).toBe(false);
+  });
+
+  it("stops listening for child expiry after the port closes", () => {
+    const { registry, childRelationStore } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("child-1", "/ws/root", asPort(port), undefined, childField());
+    registry.markHostExited("child-1");
+    port.close();
+    port.emit({ type: "approval_state", unattended: true, pending: null });
+    expect(childRelationStore.getState().getRelation("sess-root", "call-1")?.approvalExpired).toBeUndefined();
+  });
+
   it("markHostExited on a child tab disposes its entry (TASK.102 CUT-S2 §10.10.2 R2): the store is dropped, the subscription is torn down, and the tabId is closed against a stray late port — while the relation survives for C4", () => {
     const tabsStore = createTabsStore();
     const { registry, childRelationStore } = createTestRegistry(tabsStore);
@@ -652,6 +740,18 @@ describe("tab-registry — child-session registration (TASK.102 CUT-S2 §2.5, sl
       childSessionId: "sess-child",
       live: false,
     });
+  });
+
+  it("isolates terminal reasons and clears them on a replacement port", () => {
+    const { registry } = createTestRegistry(createTabsStore());
+    registry.registerPort("one", "/ws", asPort(new FakeMessagePort()));
+    registry.registerPort("two", "/ws", asPort(new FakeMessagePort()));
+    const failure = { code: "per_tab_crash_loop" as const, message: "Stopped." };
+    registry.markHostExited("one", undefined, failure);
+    expect(registry.getStore("one")?.getState().hostFailure).toEqual(failure);
+    expect(registry.getStore("two")?.getState().hostFailure).toBeNull();
+    registry.registerPort("one", "/ws", asPort(new FakeMessagePort()));
+    expect(registry.getStore("one")?.getState().hostFailure).toBeNull();
   });
 
   it("markHostExited on a ROOT tab still paints its banner as before (child branch doesn't leak into root)", () => {
@@ -1093,6 +1193,16 @@ describe("tab-registry — queueInitialPrompt core reasoning-effort seam (TASK.1
     port.emit(HOST_READY("/ws/a", "sess-a"));
 
     expect(sentTypes(port)).toEqual(["ui_ready", "set_mode", "set_model", "set_reasoning_effort", "user_message"]);
+  });
+
+  it("sends explicit effort after a model change even when it equals the old model's boot effort", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    registry.queueInitialPrompt("tab-a", "hello", "model-b", undefined, undefined, undefined, "high");
+    port.emit({...HOST_READY("/ws/a", "sess-a"), reasoningEffort:"high"});
+    expect(sentTypes(port)).toEqual(["ui_ready", "set_model", "set_reasoning_effort", "user_message"]);
   });
 
   it("sends nothing when the pick already equals the host's boot effort", () => {

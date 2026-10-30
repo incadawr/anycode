@@ -1,5 +1,7 @@
 import { manualCompactionUnavailableReason } from "../shared/manual-compaction.js";
-import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult, type SessionStatus, type SetSessionEffortOutcome } from "../shared/communication.js";
+import { PresentationJournal } from "./presentation-journal.js";
+import type { CompactionRecordSeam } from "./compaction-records.js";
+import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult, type SessionStatus, type SessionActivityState, type SetSessionEffortOutcome } from "../shared/communication.js";
 import { normalizeEffortLevels, validateSessionEffort } from "../shared/session-effort.js";
 import { safeFailureMessage } from "./safe-failure.js";
 import { claudeNativeChildRecord } from "./claude-usage.js";
@@ -50,6 +52,7 @@ import type {
   CheckpointMeta,
   CodexRateLimitsWire,
   CommandHookDeclaration,
+  CompactionRecord,
   FileSystemPort,
   FinalTextAccumulator,
   HistoryItem,
@@ -78,6 +81,8 @@ import {
   fixateFinalText,
   resetFinalText,
   summarizeChildToolCall,
+  sanitizeAndCap,
+  sanitizeStatusText,
   withBackgroundTaskNotices,
   withPlanModeReminder,
   withOrchestrateReminder,
@@ -90,6 +95,7 @@ import type {
   EnginePresentation,
   ShellCapabilitiesProjection,
   UiToHostMessage,
+  WireAgentEvent,
   WireBackgroundChild,
   WireCheckpointMeta,
   WireEnvStatus,
@@ -228,6 +234,8 @@ export interface EngineSettingsSeam {
    * applied effort, and resolves `{ ok: false }` — never a thrown error.
    */
   selectEffortAndWait?(effort: string): Promise<EngineSettingsChange>;
+  waitForModelChanges?(): Promise<void>;
+  waitForSettingsChanges?(): Promise<void>;
   onSettingsApplied(listener: (snapshot: { model: string; activePresetId: string; effort?: string }) => void): () => void;
   /**
    * The chosen-but-not-yet-applied delta, or null. Re-asserted on every
@@ -292,6 +300,7 @@ function enginePresentation(engine: SessionEngine, settings?: EngineSettingsSeam
       costAccounting: capabilities.costAccounting,
       supportsModelSelection: capabilities.supportsModelSelection,
       supportsReasoningEffort: capabilities.supportsReasoningEffort,
+      ...(capabilities.supportsDeferredEffortChange !== undefined ? { supportsDeferredEffortChange: capabilities.supportsDeferredEffortChange } : {}),
       supportsImages: capabilities.supportsImages,
       supportsTasks: capabilities.supportsTasks,
       supportsFileSnapshots: capabilities.supportsFileSnapshots,
@@ -327,7 +336,11 @@ const SESSION_RESULT_LIMITATION = "Latest completed public text block only. Hist
 
 export class Outbound {
   private readonly buffer: HostToUiMessage[] = [];
+  private readonly settledRequests = new Set<string>();
   private port: WirePort | null = null;
+  private observer: ((message: HostToUiMessage) => void) | undefined;
+
+  observeEmissions(observer: ((message: HostToUiMessage) => void) | undefined): void { this.observer = observer; }
 
   constructor(private readonly cap: number = REPLAY_BUFFER_CAP) {}
 
@@ -336,8 +349,17 @@ export class Outbound {
     this.port = port;
   }
 
+  /** A settled request must not resurrect an older refusal during replay. */
+  settleRequest(requestId: string): void {
+    this.settledRequests.delete(requestId);
+    this.settledRequests.add(requestId);
+    while (this.settledRequests.size > this.cap) this.settledRequests.delete(this.settledRequests.values().next().value!);
+  }
+
   /** Buffered send: recorded for replay and posted to the current port. */
   emit(message: HostToUiMessage): void {
+    if (message.type === "turn_started") this.settleRequest(message.requestId);
+    this.observer?.(message);
     this.buffer.push(message);
     if (this.buffer.length > this.cap) {
       this.buffer.shift();
@@ -353,6 +375,7 @@ export class Outbound {
   /** Re-posts the whole ring buffer to the current port (on ui_ready). */
   replay(): void {
     for (const message of this.buffer) {
+      if (message.type === "steer_requeued" && this.settledRequests.has(message.requestId)) continue;
       this.write(message);
     }
   }
@@ -378,6 +401,7 @@ export class Outbound {
    */
   clear(): void {
     this.buffer.length = 0;
+    this.settledRequests.clear();
   }
 
   /** Drop readings from the previous engine while retaining transcript events. */
@@ -476,7 +500,8 @@ export interface ChildTerminalReport {
  */
 export type ChildProgressReport =
   | { kind: "progress"; turns: number; toolCalls: number; lastTool?: string }
-  | { kind: "activity"; toolName: string; summary: string };
+  | { kind: "activity"; toolName: string; summary: string }
+  | { kind: "status"; itemKind: "assistant" | "tool" | "result" | "reset"; text: string; toolName?: string };
 
 /**
  * Child-mode options (CUT-S2 §2.6.3). Presence of this option is what turns
@@ -780,6 +805,8 @@ export interface SessionOptions {
   model: string;
   /** Persistence session id, known at boot; echoed in host_ready (design §3.3). */
   sessionId: string;
+  initialContextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
+  saveContextUsage?: (snapshot: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate"; engine: string; model: string } | null) => Promise<void>;
   /**
    * Boot snapshot of the persisted history (post-repair) for transcript
    * hydration of a resumed session; emitted as `session_history` on every
@@ -807,6 +834,14 @@ export interface SessionOptions {
   initialTitle?: string;
   /** Narrow persistence callback for title/mode patches (design §4.2). */
   persistence?: SessionPersistence;
+  /**
+   * GitHub #36: the durable presentation records of this session's compactions
+   * (host/compaction-records.ts). Wired for the core boot, whose `compaction_end`
+   * is the only one that can carry a summary/prompt/model. Absent (every test,
+   * and the native-engine boots) -> compaction rows stay live-only, exactly as
+   * before, and no wire field changes.
+   */
+  compactionRecords?: CompactionRecordSeam;
   /**
    * Taskana 4083 / TASK.34: the persistent per-step provider-usage audit
    * (SQLite provider_usage, migration v19). Wired ONLY for the core engine's
@@ -937,11 +972,10 @@ export interface SessionOptions {
    * turn accept (before busy=true) ONLY while orchestrate is on and
    * roles.orchestrator.primary targets the tab's ACTIVE connection: the host
    * checks the entry's health and, when it is unhealthy and a healthy
-   * fallback exists, performs the model switch itself and returns the
-   * engine_notice line to surface. Null/undefined return => no notice, no
-   * switch. Absent seam (legacy tests) => byte-identical turns.
+   * fallback exists, returns the model selection and engine_notice line.
+   * Null/undefined return => no notice, no switch. Absent seam (legacy tests) => byte-identical turns.
    */
-  orchestratorRouteCheck?: () => string | undefined;
+  orchestratorRouteCheck?: () => string | { notice: string; model: string; effort?: ReasoningEffort } | undefined;
   /**
    * Taskana 4704 §3.7: host callback fired on every orchestrate TRANSITION
    * (after the mode switch + ack emit). The host copies the flag onto the
@@ -1003,7 +1037,15 @@ export interface SessionOptions {
    */
   checkpoints?: {
     list(opts?: { limit?: number }): Promise<CheckpointMeta[]>;
-    rewind(id: string, opts: { scope: RewindScope; currentHistory: readonly HistoryItem[] }): Promise<RewindResult>;
+    rewind(
+      id: string,
+      opts: {
+        scope: RewindScope;
+        currentHistory: readonly HistoryItem[];
+        /** GitHub #36: boundary for the pre-rewind safety checkpoint (absent = no records to judge). */
+        compactionSeq?: number;
+      },
+    ): Promise<RewindResult>;
   };
   /** Multimodal send-path capability gate, mirroring the CLI image staging guard. */
   imageInputEnabled?: () => boolean;
@@ -1025,6 +1067,7 @@ export interface SessionOptions {
    * the wire field is omitted and the UI shows no hint.
    */
   contextWindowAssumed?: () => boolean;
+  modelSettingsConnectionId?: string | null;
   /**
    * TASK.198 срез C (plan §1.3): host-owned commit for a live recognizer-
    * config push (main's RecognizerConfigChanged, TASK.198 E1). Session's own
@@ -1073,6 +1116,7 @@ export interface SessionOptions {
   reasoningSupported?: boolean;
   /** Effort levels the boot model supports (for the UI selector + set_reasoning_effort validation). */
   availableEffortLevels?: ReasoningEffort[];
+  bootEffortAdjustment?: { from: ReasoningEffort; to: ReasoningEffort };
   /**
    * Core's own effort resolution, for the models `sessionEffortState()` has to
    * describe (host/index.ts threads `resolveEffortLevels` +
@@ -1181,6 +1225,7 @@ const answerApprovalSchema = z.object({
 }).strict();
 
 export class Session {
+  private readonly presentationJournal: PresentationJournal;
   private readonly outbound: Outbound;
   /**
    * Taskana 4068: NOT readonly — the engine_swap_request handler re-assigns
@@ -1239,6 +1284,14 @@ export class Session {
   private model: string;
   private readonly sessionId: string;
   private readonly persistence: SessionPersistence | undefined;
+  /** GitHub #36: durable compaction rows; see SessionOptions.compactionRecords. */
+  private readonly compactionRecords: CompactionRecordSeam | undefined;
+  /**
+   * The trigger of the compaction currently in flight, captured from its
+   * `compaction_start` (the `compaction_end` event does not repeat it). Null
+   * between compactions, so a record never borrows a neighbouring trigger.
+   */
+  private compactionTrigger: "auto" | "manual" | null = null;
   /** Taskana 4083 / TASK.34: see SessionOptions.usageAudit's own doc. */
   private readonly usageAudit: SessionOptions["usageAudit"];
   private readonly rules: SessionPermissionRules;
@@ -1271,6 +1324,7 @@ export class Session {
   /** TASK.198 срез C: see SessionOptions.imageFallbackAvailable's own doc. */
   private readonly imageFallbackAvailable: (() => boolean) | undefined;
   private readonly contextWindowAssumed: (() => boolean) | undefined;
+  private readonly modelSettingsConnectionId: string | null | undefined;
   /** TASK.198 срез C: see SessionOptions.applyRecognizerConfig's own doc. */
   private readonly applyRecognizerConfigImpl: ((endpoint: RecognizerEndpoint | null) => void) | undefined;
   /**
@@ -1285,6 +1339,7 @@ export class Session {
   // Slice P7.15 (F14): mutable — re-resolved per new model on a set_model switch.
   private reasoningSupported: boolean;
   private availableEffortLevels: ReasoningEffort[] | undefined;
+  private bootEffortAdjustment: { from: ReasoningEffort; to: ReasoningEffort } | undefined;
   private readonly effortResolution: SessionOptions["effortResolution"];
   /** Slice P7.15 (F14): the user-selected effort tier, persisted across a model switch. */
   private selectedEffort: ReasoningEffort;
@@ -1298,6 +1353,13 @@ export class Session {
    */
   private pendingModel: string | undefined;
   private pendingEffort: ReasoningEffort | undefined;
+  private pendingModelRequestId: string | undefined;
+  private pendingEffortRequestId: string | undefined;
+  private pendingEngineEffort: { effort: string; model: string; seam: EngineSettingsSeam; engine: SessionEngine } | undefined;
+  private inFlightEngineEffort: typeof this.pendingEngineEffort;
+  private settingsBarrier: Promise<void> = Promise.resolve();
+  private settingsBarrierActive = false;
+  private settingsGeneration = 0;
 
   /**
    * Prebuilt `session_history` payload (mapping + 500-cap applied once at
@@ -1345,7 +1407,20 @@ export class Session {
   /** Injected turn-end poster; undefined in legacy tests -> the collector still runs, nothing is ever sent. */
   private readonly sendPreviewArtifacts: SessionOptions["postPreviewArtifacts"];
 
-  private busy = false;
+  private busyValue = false;
+  private activityListener?: (state: SessionActivityState) => void;
+  private get busy(): boolean { return this.busyValue; }
+  private set busy(value: boolean) {
+    this.busyValue = value;
+    this.publishActivity();
+  }
+  private publishActivity(): void {
+    this.activityListener?.(this.communicationState());
+  }
+  observeActivity(listener: (state: SessionActivityState) => void): void {
+    this.activityListener = listener;
+    this.publishActivity();
+  }
   /**
    * Taskana 4704 §2.2/§3.7: per-session orchestrate flag — a TAB-level state,
    * never a PermissionMode. Enabling it (a) switches the mode to `plan` (the
@@ -1383,6 +1458,7 @@ export class Session {
    * runTurn's event loop; undefined outside a turn / for foreign engines.
    */
   private currentStep: number | undefined;
+  private currentAttempt = 0;
   /**
    * Taskana 4083 / TASK.34: `stream_retry` events observed for the CURRENT
    * core step — the transport-retry count the usage audit row for that step
@@ -1453,6 +1529,8 @@ export class Session {
    * reading (latest-wins scalar), captured at emission for the same reason
    * as checkpointSessionTokens above. Null until the first reading.
    */
+  private readonly saveContextUsage: SessionOptions["saveContextUsage"];
+  private contextWriteTail: Promise<void> = Promise.resolve();
   private checkpointContextUsage: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" } | null = null;
   /**
    * TASK.117 acceptance defect 1: the LIVE turn's currently-open partial
@@ -1475,7 +1553,7 @@ export class Session {
    * only (captured under the same `engine.id === "core"` gate as the other
    * checkpoint fields — foreign engines ride the ring).
    */
-  private readonly liveStreams = new Map<string, { turnId: string; step: number; streamId: string; kind: "text" | "reasoning"; text: string; settled?: boolean }>();
+  private readonly liveStreams = new Map<string, { turnId: string; step: number; attempt: number; streamId: string; kind: "text" | "reasoning"; text: string; settled?: boolean }>();
   /**
    * TASK.117 supervisor correction defect 1: the LIVE turn's tool calls whose
    * `tool_execution_start` has been emitted but whose `tool_result` has not
@@ -1595,6 +1673,8 @@ export class Session {
   private readonly steerQueue: Array<{ requestId: string; text: string; images?: ImageAttachment[]; origin?: "system" }> = [];
   /** Final-text accumulator over the WHOLE child session's turn chain (packages/core/src/subagents/final-text.ts — the same reset/append/fixate semantics runner.ts applies to an inline subagent). */
   private childFinalText: FinalTextAccumulator = createFinalTextAccumulator();
+  private childStatusTextAt: number | undefined;
+  private childStatusTextSnapshot = "";
   /** Cumulative turn count across every runTurn() call this child session has made (summed from each call's own loop_end.turns). */
   private childTurns = 0;
   /** Cumulative tool_result count across the whole child session's turn chain. */
@@ -1662,10 +1742,14 @@ export class Session {
 
   constructor(options: SessionOptions) {
     this.outbound = options.outbound;
+    this.outbound.observeEmissions((message) => {
+      if (message.type === "file_snapshot" && this.turnId !== null) this.presentationJournal.recordFileSnapshot(this.turnId, message);
+    });
     this.engine = options.engine;
     this.switchEngineFactory = options.switchEngineFactory;
     this.engineSettings = options.engineSettings;
     this.broker = options.broker;
+    this.broker.observeActivity(() => this.publishActivity());
     this.reconnectGraceMs = options.reconnectGraceMs ?? UI_RECONNECT_GRACE_MS;
     this.fs = options.fs;
     this.workspace = options.workspace;
@@ -1683,7 +1767,10 @@ export class Session {
     this.reportProviderQuota = options.reportProviderQuota;
     this.model = options.model;
     this.sessionId = options.sessionId;
+    this.saveContextUsage = options.saveContextUsage;
+    this.checkpointContextUsage = options.initialContextUsage ?? null;
     this.persistence = options.persistence;
+    this.compactionRecords = options.compactionRecords;
     this.usageAudit = options.usageAudit;
     this.rules = options.rules;
     this.git = options.git;
@@ -1701,10 +1788,12 @@ export class Session {
     this.imageInputEnabled = options.imageInputEnabled;
     this.imageFallbackAvailable = options.imageFallbackAvailable;
     this.contextWindowAssumed = options.contextWindowAssumed;
+    this.modelSettingsConnectionId = options.modelSettingsConnectionId;
     this.applyRecognizerConfigImpl = options.applyRecognizerConfig;
     this.refineTitle = options.refineTitle;
     this.reasoningSupported = options.reasoningSupported ?? true;
     this.availableEffortLevels = options.availableEffortLevels;
+    this.bootEffortAdjustment = options.bootEffortAdjustment;
     this.effortResolution = options.effortResolution;
     this.selectedEffort = options.selectedEffort ?? this.engine.reasoningEffort() ?? "off";
     this.sendPreviewArtifacts = options.postPreviewArtifacts;
@@ -1716,6 +1805,7 @@ export class Session {
     this.currentTitle = initialTitle.length > 0 ? options.initialTitle : undefined;
     this.titleSet = this.currentTitle !== undefined || (options.hasTitle ?? false);
     this.historyMaxItems = options.historyMaxItems ?? SESSION_HISTORY_MAX_ITEMS;
+    this.presentationJournal = new PresentationJournal(this.historyMaxItems, REPLAY_BUFFER_CAP);
     this.sessionHistory = buildSessionHistory(options.bootHistory ?? [], this.historyMaxItems);
     const publicHistory = options.bootHistory ?? this.engine.historyItems();
     for (const item of [...publicHistory].reverse()) {
@@ -1755,6 +1845,8 @@ export class Session {
     // always after ui_ready; it is `emit` (buffered), not sendDirect, so the ack
     // survives a renderer reload via replay rather than racing it.
     this.engineSettingsUnsubscribe = this.engineSettings?.onSettingsApplied((applied) => {
+      const clearContextUsage = this.model !== applied.model;
+      if (clearContextUsage) this.updateContextUsage(null);
       this.model = applied.model;
       // SLICE-CC §1.5: for an immediate-apply seam THIS is the only honest
       // moment to persist — the engine has now acknowledged the change, so the
@@ -1766,12 +1858,14 @@ export class Session {
       }
       this.outbound.emit({
         type: "engine_settings_changed",
+        ...(clearContextUsage ? { clearContextUsage: true } : {}),
         model: applied.model,
         activePresetId: applied.activePresetId,
         ...(applied.effort !== undefined ? { effort: applied.effort } : {}),
         state: "applied",
         appliesFrom: "next_turn",
       });
+      if (this.mergedEngineSettings() !== null) this.publishPendingEngineSettings();
     });
   }
 
@@ -1874,9 +1968,9 @@ export class Session {
     ).map(([id]) => id);
   }
 
-  /** One busy-derived state for both Sessions API reads, so status and result can never disagree (Taskana 4768). */
-  private communicationState(): "idle" | "running" | "closing" {
-    return this.shuttingDown ? "closing" : this.busy ? "running" : "idle";
+  /** Shared activity state for status and result projections. */
+  private communicationState(): SessionActivityState {
+    return this.shuttingDown ? "closing" : this.broker.isAwaitingApproval ? "waiting_approval" : this.busy ? "running" : "idle";
   }
 
   communicationResult() {
@@ -1961,7 +2055,7 @@ export class Session {
     if (this.engineSettings !== undefined) {
       const applied = this.engineSettings.snapshot();
       const pending = this.engineSettings.pendingSnapshot?.() ?? null;
-      const chosen = pending ?? applied;
+      const chosen = this.mergedEngineSettings() ?? pending ?? applied;
       const supportedEfforts = normalizeEffortLevels(
         this.engineSettings.models().find((model) => model.id === chosen.model)?.efforts ?? [],
       );
@@ -2182,6 +2276,7 @@ export class Session {
         // user_injected event owns the transcript; messageTurns keeps the
         // correlation for status consumers.
         this.pendingUiSteers = this.pendingUiSteers.filter((entry) => entry.requestId !== requestId);
+        this.outbound.settleRequest(requestId);
         this.messageTurns.set(requestId, { hostTurnId: receivingTurnId, nativeTurnId: ack.turnId });
       })
       .catch(() => {
@@ -2260,6 +2355,10 @@ export class Session {
 
   closeAdmissions(): void {
     this.shuttingDown = true;
+    this.publishActivity();
+    this.pendingEngineEffort = undefined;
+    this.inFlightEngineEffort = undefined;
+    this.settingsGeneration++;
     // TASK.117: same disarm as shutdown() — once admissions close, the
     // session is on its terminal path and the disconnect grace timer must
     // never fire past the real settlement.
@@ -2353,6 +2452,7 @@ export class Session {
       await Promise.allSettled([seen]);
     }
     await Promise.allSettled([disposal]);
+    await this.contextWriteTail;
     // Taskana 4083 cross-review finding 4: the LAST finish a settling turn
     // emitted may still be STAGED for the usage audit (cross-review finding
     // 1 made the write provisional until the step is certain) — hand it to
@@ -2367,6 +2467,16 @@ export class Session {
     } catch (error) {
       console.error(`[host] usage audit flush failed: ${describeError(error)}`);
     }
+    // GitHub #36: compaction rows are presentation, but a row written here is
+    // the ONLY copy of a failed compaction's reason — drain its queue in the
+    // same pre-close window as the sinks above (fail-soft, never hangs).
+    try {
+      await this.compactionRecords?.flush();
+    } catch (error) {
+      console.error(`[host] compaction record flush failed: ${describeError(error)}`);
+    }
+    this.outbound.observeEmissions(undefined);
+    this.presentationJournal.clear();
   }
 
   private route(raw: unknown): void {
@@ -2440,6 +2550,8 @@ export class Session {
           this.child.onReady();
         }
         const presentation = enginePresentation(this.engine, this.engineSettings);
+        const bootEffortAdjustment = this.bootEffortAdjustment;
+        this.bootEffortAdjustment = undefined;
         this.outbound.sendDirect({
           type: "host_ready",
           workspace: this.workspace,
@@ -2448,7 +2560,9 @@ export class Session {
           mode: this.engine.mode(),
           model: this.model,
           sessionId: this.sessionId,
+          ...(this.checkpointContextUsage !== null ? { contextUsage: this.checkpointContextUsage } : {}),
           reasoningEffort: this.engine.reasoningEffort() ?? "off",
+          ...(bootEffortAdjustment !== undefined ? { effortAdjustment: bootEffortAdjustment } : {}),
           ...(this.availableEffortLevels !== undefined ? { availableEffortLevels: this.availableEffortLevels } : {}),
           // TASK.56 W2: live image-input verdict for the CURRENT model (the
           // seam is a closure over the active model, host/index.ts). Rides
@@ -2461,6 +2575,7 @@ export class Session {
           // claude, legacy tests) -> field absent, no fallback-aware gating.
           ...(this.imageFallbackAvailable !== undefined ? { imageFallback: this.imageFallbackAvailable() } : {}),
           ...(this.contextWindowAssumed !== undefined ? { contextWindowAssumed: this.contextWindowAssumed() } : {}),
+          ...(this.modelSettingsConnectionId !== undefined ? { modelSettingsConnectionId: this.modelSettingsConnectionId } : {}),
           // Taskana 4110 (TASK.123): the engine's live steering verdict —
           // additive-optional, absent on legacy hosts/engines without the seam
           // (mirrors imageInput/imageFallback's discipline above). 4110
@@ -2496,12 +2611,22 @@ export class Session {
         if (this.engine.id === "core" && !this.engineSwitched) {
           this.sessionHistory = buildSessionHistory([...this.engine.historyItems()], this.historyMaxItems);
         }
-        if (this.sessionHistory) {
+        this.sendSessionHistory();
+        const historyTracksTurns = this.engine.id === "core" && !this.engineSwitched;
+        const journalSnapshot = this.presentationJournal.snapshot(
+          historyTracksTurns ? this.engine.historyItems() : undefined,
+          this.turnId ?? undefined,
+        );
+        if (journalSnapshot.coveredTurnIds.length > 0) {
           this.outbound.sendDirect({
-            type: "session_history",
-            sessionId: this.sessionId,
-            items: this.sessionHistory.items,
-            truncated: this.sessionHistory.truncated,
+            type: "presentation_snapshot",
+            turns: journalSnapshot.turns,
+            coveredTurnIds: journalSnapshot.coveredTurnIds,
+            items: this.sessionHistory?.items ?? [],
+            truncated: this.sessionHistory?.truncated ?? false,
+            ...this.compactionRecordsField(),
+            historyTracksTurns,
+            ...(this.turnId !== null ? { liveTurnId: this.turnId } : {}),
           });
         }
         // TASK.117: the pending-prompt state rides the same per-connect
@@ -2547,7 +2672,11 @@ export class Session {
           })
           .catch(() => {});
         this.pushSessionCheckpoint();
+        if (journalSnapshot.coveredTurnIds.length > 0) this.outbound.sendDirect({ type: "presentation_replay_start" });
         this.outbound.replay();
+        if (journalSnapshot.coveredTurnIds.length > 0) this.outbound.sendDirect({ type: "presentation_replay_end" });
+        this.outbound.sendDirect(this.broker.approvalState());
+        this.outbound.sendDirect({ type: "context_usage_checkpoint", contextUsage: this.checkpointContextUsage });
         // GitHub #19: re-assert the authoritative title on every ui_ready, as
         // an un-buffered sendDirect AFTER replay(). This covers a resumed host
         // whose persisted title never produced an event in this process AND a
@@ -2675,6 +2804,13 @@ export class Session {
             this.currentTurn = null;
           });
         break;
+      case "approval_visibility":
+        this.broker.setApprovalVisibility(message.requestId, message.visible);
+        break;
+      case "approval_recover":
+        this.broker.noteHumanPresent();
+        this.outbound.sendDirect(this.broker.approvalState());
+        break;
       case "permission_response":
         if (!this.engine.capabilities.supportsInteractiveApprovals) {
           break;
@@ -2708,7 +2844,7 @@ export class Session {
           (this.availableEffortLevels === undefined || this.availableEffortLevels.includes(message.effort))
         ) {
           if (!this.busy) {
-            this.applyReasoningEffort(message.effort);
+            this.applyReasoningEffort(message.effort, message.requestId);
             break;
           }
           // Taskana 4895: the CORE engine queues a mid-turn pick instead of
@@ -2718,6 +2854,7 @@ export class Session {
           // is `set_engine_effort`, not this message).
           if (this.engine.id === "core") {
             this.pendingEffort = message.effort;
+            this.pendingEffortRequestId = message.requestId;
           }
         }
         break;
@@ -2738,7 +2875,14 @@ export class Session {
         // discipline is unchanged (busy => silent drop).
         if (this.engineSettings !== undefined) {
           if (this.busy) break;
-          this.onEngineSettingsChange(this.engineSettings.selectModel(id), { model: id });
+          this.queueIdleEngineSetting((seam) => {
+            const before = seam.pendingSnapshot?.() ?? seam.snapshot();
+            const result = seam.selectModel(id);
+            const hadPending = result.ok && result.model !== before.model && this.pendingEngineEffort !== undefined;
+            if (hadPending) this.pendingEngineEffort = undefined;
+            this.onEngineSettingsChange(result, { model: id });
+            if (hadPending) this.publishPendingEngineSettings();
+          });
           break;
         }
         if (this.engine.switchModel === undefined) {
@@ -2752,10 +2896,11 @@ export class Session {
         if (this.busy) {
           if (this.engine.id === "core") {
             this.pendingModel = id;
+            this.pendingModelRequestId = message.requestId;
           }
           break;
         }
-        this.applyModelSwitch(id);
+        this.applyModelSwitch(id, false, message.requestId);
         break;
       }
       case "set_engine_preset":
@@ -2793,12 +2938,33 @@ export class Session {
           });
           break;
         }
-        this.onEngineSettingsChange(this.engineSettings.selectPreset(message.presetId), { presetId: message.presetId });
+        this.queueIdleEngineSetting((seam) => this.onEngineSettingsChange(seam.selectPreset(message.presetId), { presetId: message.presetId }));
         break;
-      case "set_engine_effort":
-        if (this.engineSettings === undefined || this.busy || this.engineSettings.selectEffort === undefined) break;
-        this.onEngineSettingsChange(this.engineSettings.selectEffort(message.effort), { effort: message.effort });
+      case "set_engine_effort": {
+        const seam = this.engineSettings;
+        if (seam === undefined || seam.selectEffort === undefined) break;
+        if (this.busy) {
+          if (!this.engine.capabilities.supportsDeferredEffortChange) break;
+          const selectedBase = seam.pendingSnapshot?.() ?? seam.snapshot();
+          const selected = this.inFlightEngineEffort?.seam === seam && this.inFlightEngineEffort.model === selectedBase.model
+            ? { ...selectedBase, effort: this.inFlightEngineEffort.effort }
+            : selectedBase;
+          const levels = seam.models().find((model) => model.id === selected.model)?.efforts ?? [];
+          if (!levels.includes(message.effort)) {
+            this.outbound.emit({ type: "mode_change_rejected", reason: `Effort ${message.effort} is not supported by ${selected.model}` });
+            this.publishPendingEngineSettings();
+            break;
+          }
+          const baseline = selected.effort;
+          this.pendingEngineEffort = message.effort === baseline ? undefined : { effort: message.effort, model: selected.model, seam, engine: this.engine };
+          this.publishPendingEngineSettings();
+          break;
+        }
+        this.queueIdleEngineSetting((current) => {
+          if (current.selectEffort !== undefined) this.onEngineSettingsChange(current.selectEffort(message.effort), { effort: message.effort });
+        });
         break;
+      }
       case "git_command":
         // Slice 5.7 / TASK.40 (design §2(f)): user-initiated git command. The
         // bridge validates nothing (the zod schema already ran in `route`
@@ -2901,13 +3067,18 @@ export class Session {
    * ack-gated persist reads.
    */
   private applyPendingModelSelection(): void {
+    this.applyPendingEngineEffort();
     const model = this.pendingModel;
     const effort = this.pendingEffort;
+    const modelRequestId = this.pendingModelRequestId;
+    const effortRequestId = this.pendingEffortRequestId;
+    this.pendingModelRequestId = undefined;
+    this.pendingEffortRequestId = undefined;
     this.pendingModel = undefined;
     this.pendingEffort = undefined;
     if (model === undefined) {
       if (effort !== undefined) {
-        this.applyReasoningEffort(effort);
+        this.applyReasoningEffort(effort, effortRequestId);
       }
       return;
     }
@@ -2916,13 +3087,15 @@ export class Session {
       // switch below re-resolves it against the new model's capabilities.
       this.selectedEffort = effort;
     }
-    if (!this.applyModelSwitch(model) && effort !== undefined) {
-      this.applyReasoningEffort(effort);
+    if (!this.applyModelSwitch(model, effort !== undefined, modelRequestId, effortRequestId) && effort !== undefined) {
+      this.applyReasoningEffort(effort, effortRequestId);
     }
   }
 
   /** Taskana 4895: drops a queued mid-turn pick — used when the engine itself is about to be replaced (the pick was made against the old one). */
   private clearPendingModelSelection(): void {
+    this.pendingModelRequestId = undefined;
+    this.pendingEffortRequestId = undefined;
     this.pendingModel = undefined;
     this.pendingEffort = undefined;
   }
@@ -2932,20 +3105,40 @@ export class Session {
    * the idle route and Taskana 4895's turn-boundary apply. Returns false when
    * no switch factory is wired (a legacy engine/test double: a silent no-op).
    */
-  private applyModelSwitch(id: string): boolean {
+  /** Host-only refresh at the start of a new core turn, before its first model call. */
+  refreshModelSettings(): void {
+    if (this.engine.id === "core") this.applyModelSwitch(this.model);
+  }
+
+  private applyModelSwitch(id: string, effortExplicit = false, requestId?: string, effortRequestId?: string): boolean {
     if (this.engine.switchModel === undefined) {
       return false;
     }
     // switchModel runs the full re-budget recipe host-side and returns the
-    // effort state re-resolved for the NEW model. selectedEffort is unchanged
-    // (the user's tier persists across the switch); only the effective effort
-    // and effort-levels follow the new model's capability.
-    const result = this.engine.switchModel(id, this.selectedEffort);
+    // effort state re-resolved for the NEW model. Core also returns that
+    // model's restored selected tier, independently of its effective effort.
+    const requestedEffort = effortExplicit ? this.selectedEffort : undefined;
+    const result = effortExplicit
+      ? this.engine.switchModel(id, this.selectedEffort, true)
+      : this.engine.switchModel(id, this.selectedEffort);
+    if (result.selectedReasoningEffort !== undefined) this.selectedEffort = result.selectedReasoningEffort;
+    const oldModel = this.model;
     this.model = result.model;
+    const contextUsage = this.engine.id === "core" && (result.previousModel ?? oldModel) === this.model && result.contextUsage?.source === "estimate" && this.checkpointContextUsage?.source === "provider"
+      ? { ...this.checkpointContextUsage, budgetTokens: result.contextUsage.budgetTokens }
+      : result.contextUsage;
+    if (contextUsage !== undefined) this.updateContextUsage(contextUsage);
+    else if (oldModel !== this.model) this.updateContextUsage(null);
     this.availableEffortLevels = result.availableEffortLevels;
     this.reasoningSupported = result.availableEffortLevels !== undefined;
     this.outbound.emit({
       type: "model_changed",
+      ...(requestId !== undefined ? { requestId } : {}),
+      ...(effortRequestId !== undefined ? { effortRequestId } : {}),
+      ...(contextUsage !== undefined ? {contextUsage} : {}),
+      ...(result.selectedReasoningEffort !== undefined ? {selectedReasoningEffort: result.selectedReasoningEffort} : {}),
+      ...(requestedEffort !== undefined ? { requestedReasoningEffort: requestedEffort } : {}),
+      ...(result.effortAdjustment !== undefined ? { effortAdjustment: result.effortAdjustment } : {}),
       model: result.model,
       reasoningEffort: result.reasoningEffort,
       ...(result.availableEffortLevels !== undefined ? { availableEffortLevels: result.availableEffortLevels } : {}),
@@ -2969,7 +3162,7 @@ export class Session {
   }
 
   /** Taskana 4895: the effort half of the same recipe — remembered as the user's SELECTED tier, applied to the engine, acked to the renderer. */
-  private applyReasoningEffort(effort: ReasoningEffort): void {
+  private applyReasoningEffort(effort: ReasoningEffort, requestId?: string): void {
     // Slice P7.15 (F14): remember the user-selected tier so a later model
     // switch re-resolves effort against it (a non-reasoning model drops it,
     // but switching back restores it).
@@ -2978,6 +3171,7 @@ export class Session {
     else this.engine.setReasoningEffort(effort === "off" ? undefined : effort);
     this.outbound.emit({
       type: "reasoning_effort_changed",
+      ...(requestId !== undefined ? { requestId } : {}),
       effort,
       ...(this.availableEffortLevels !== undefined ? { availableEffortLevels: this.availableEffortLevels } : {}),
     });
@@ -3125,12 +3319,27 @@ export class Session {
    * store's handler is idempotent (set-permission-slot), so a renderer that
    * DID see the original (ring intact) just re-sets the same value.
    */
+  private updateContextUsage(usage: SessionOptions["initialContextUsage"] | null): void {
+    if (usage !== null && usage !== undefined && (!Number.isFinite(usage.estimatedTokens) || usage.estimatedTokens < 0 || !Number.isFinite(usage.budgetTokens) || usage.budgetTokens <= 0 || (usage.source !== "provider" && usage.source !== "estimate"))) return;
+    this.checkpointContextUsage = usage ?? null;
+    const snapshot = usage ? { ...usage, engine: this.engine.id, model: this.model } : null;
+    if (this.saveContextUsage) {
+      this.contextWriteTail = this.contextWriteTail.then(() => this.saveContextUsage!(snapshot)).catch((error) => {
+        console.error(`[host] context usage write failed: ${describeError(error)}`);
+      });
+    }
+  }
+
   private pushSessionCheckpoint(): void {
     if (this.engine.id !== "core") {
       // Native context telemetry needs reconnect custody without core accounting.
       if (this.checkpointContextUsage !== null) {
         this.outbound.sendDirect({ type: "session_checkpoint", contextUsage: this.checkpointContextUsage });
       }
+      if (this.lastUsageSummary !== null) this.outbound.sendDirect({
+        type: "session_checkpoint",
+        usageAudit: { lastStep: this.lastUsageSummary.steps.at(-1) ?? null, totals: this.lastUsageSummary.totals, totalSteps: this.lastUsageSummary.steps.length },
+      });
       return;
     }
     const shown = this.broker.pendingShownRequest();
@@ -3151,7 +3360,7 @@ export class Session {
         message.step !== undefined &&
         (message.event.type === "text_delta" || message.event.type === "reasoning_delta")
       ) {
-        const key = `${message.turnId}:${message.step}:${message.event.id}`;
+        const key = `${message.turnId}:${message.step}:${message.attempt ?? 0}:${message.event.id}`;
         replayCharsByKey.set(key, (replayCharsByKey.get(key) ?? 0) + message.event.text.length);
       }
     }
@@ -3208,18 +3417,20 @@ export class Session {
       // exactly this id, never a ring-replayed turn_started's).
       ...(this.turnId !== null ? { liveTurnId: this.turnId } : {}),
       ...(cutTurnIds !== undefined ? { cutTurnIds } : {}),
+      ...(this.currentStep !== undefined && this.turnId !== null ? { currentAttempt: { step: this.currentStep, attempt: this.currentAttempt } } : {}),
       // TASK.117 acceptance defect 1: the currently-open partial streams ride
       // the same per-connect checkpoint — an EMPTY liveStreams (idle turn)
       // omits the field entirely, so an older renderer / an idle host sees a
       // byte-identical message to before.
       ...(streams.length > 0
         ? {
-            streams: streams.map(({ turnId, step, streamId, kind, text }) => ({
+            streams: streams.map(({ turnId, step, attempt, streamId, kind, text }) => ({
+              attempt,
               step,
               streamId,
               kind,
               text,
-              replayChars: replayCharsByKey.get(`${turnId}:${step}:${streamId}`) ?? 0,
+              replayChars: replayCharsByKey.get(`${turnId}:${step}:${attempt}:${streamId}`) ?? 0,
             })),
           }
         : {}),
@@ -3254,6 +3465,7 @@ export class Session {
       ...(shown !== null
         ? {
             permission: {
+              deadline: this.broker.approvalState().pending?.deadline,
               requestId: shown.requestId,
               toolName: shown.request.toolName,
               input: shown.request.input,
@@ -3484,6 +3696,12 @@ export class Session {
       const res = await this.checkpoints.rewind(checkpointId, {
         scope,
         currentHistory: [...this.engine.historyItems()],
+        // GitHub #36: the pre-rewind SAFETY checkpoint is a checkpoint the user
+        // can rewind TO later, so it must carry the same boundary type as any
+        // other — the sequence as it stands right now.
+        ...(this.compactionRecords !== undefined
+          ? { compactionSeq: this.compactionRecords.sequence() }
+          : {}),
       });
       if (!res.ok) {
         this.outbound.sendDirect({
@@ -3496,16 +3714,30 @@ export class Session {
         });
         return;
       }
-      const conversationRestored = res.historyItems !== null;
-      if (conversationRestored) {
+      const restoredHistory = res.historyItems;
+      const conversationRestored = restoredHistory !== null;
+      if (restoredHistory !== null) {
+        // GitHub #36 review 4: the compaction rows are records OF this
+        // conversation, so a rewind must drop the ones belonging to the part it
+        // throws away — and the checkpoint's recorded SEQUENCE says exactly
+        // which those are (everything recorded after its turn-start snapshot;
+        // `res.compactionSeq` is absent on a checkpoint written before that
+        // field, where the restored history is the fallback). Neither a clock
+        // nor the newest history item can answer it: the capture is lazy, and a
+        // FAILED compaction changes no history at all. Dropped from the live
+        // cache AND storage BEFORE the re-handshake below, so neither the
+        // truncated `session_history` nor a later reopen brings one back.
+        this.compactionRecords?.truncate(restoredHistory, res.compactionSeq);
         // Atomic swap feeding the write-behind sink (truncates persistence too),
         // exactly the CLI's /rewind conversation restore.
-        this.engine.replaceHistory(res.historyItems!);
+        this.engine.replaceHistory(restoredHistory);
+        this.updateContextUsage(null);
         // drift-flag-1: rebuild the re-handshake snapshot from the TRUNCATED
         // history and drop the pre-rewind replay ring BEFORE re-sending, so a
         // renderer reload never resurrects the rewound-away conversation.
         this.sessionHistory = buildSessionHistory([...this.engine.historyItems()], this.historyMaxItems);
         this.outbound.clear();
+        this.presentationJournal.clear();
         // TASK.117: rewind success retires any leftover pending prompt — the
         // rewound-to state owns the transcript tail now (rewind runs
         // between turns, so this is normally already null; belt-and-braces
@@ -3525,14 +3757,10 @@ export class Session {
       // §1 ordering: the truncated session_history rides AFTER rewind_result on
       // the same port. Null when the rewound-to history is empty (rewind-to-empty
       // = correct empty transcript; the renderer's transcript-scoped clear already
-      // emptied it) — skip the emit then.
-      if (conversationRestored && this.sessionHistory) {
-        this.outbound.sendDirect({
-          type: "session_history",
-          sessionId: this.sessionId,
-          items: this.sessionHistory.items,
-          truncated: this.sessionHistory.truncated,
-        });
+      // emptied it) — skip the emit then, UNLESS records survived the cutoff
+      // below it (GitHub #36): those rows still belong to the rewound-to state.
+      if (conversationRestored) {
+        this.sendSessionHistory();
       }
     } catch (error) {
       // rewind() never throws by contract (fail-soft RewindResult), but routing
@@ -3610,11 +3838,12 @@ export class Session {
     this.abort = controller;
     try {
       for await (const event of engine.compactNow!({ signal: controller.signal })) {
+        if (event.type === "compaction_start" && engine.id === "core") this.presentationJournal.observeHistory(engine.historyItems(), this.turnId ?? undefined);
         // `emit` (not `sendDirect`): a reconnect mid-compaction must replay
         // the start/end pair from the ring buffer exactly like a real turn's
         // events do — a fresh renderer attach should never see a half-open
         // "Compacting…" toast with no matching end.
-        this.outbound.emit({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: sanitizeAgentEvent(event) });
+        this.outbound.emit({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: this.recordCompactionOutcome(sanitizeAgentEvent(event)) });
         // TASK.117 supervisor correction defect 2: the manual compaction's
         // post-swap context_usage is the LATEST session-scoped reading — fold
         // it into the emission-time checkpoint exactly like runTurn's loop
@@ -3622,12 +3851,9 @@ export class Session {
         // (sentinel-turnId event, plain emit) still restores the POST-swap
         // meter instead of a stale pre-compaction one. Latest-wins scalar,
         // same shape as checkpointContextUsage's other writers.
+        if (event.type === "compaction_end" && event.ok) this.updateContextUsage(null);
         if (event.type === "context_usage") {
-          this.checkpointContextUsage = {
-            estimatedTokens: event.estimatedTokens,
-            budgetTokens: event.budgetTokens,
-            source: event.source,
-          };
+          this.updateContextUsage({ estimatedTokens: event.estimatedTokens, budgetTokens: event.budgetTokens, source: event.source });
         }
       }
     } catch (error) {
@@ -3734,6 +3960,12 @@ export class Session {
       ) {
         next.setMode(previousEngine.mode());
       }
+      this.pendingEngineEffort = undefined;
+      this.inFlightEngineEffort = undefined;
+      this.settingsGeneration++;
+      this.settingsBarrier = Promise.resolve();
+      this.settingsBarrierActive = false;
+      this.updateContextUsage(null);
       this.engine = next;
       this.checkpointContextUsage = null;
       this.outbound.clearContextUsage();
@@ -3750,6 +3982,7 @@ export class Session {
       // native engine with no readable transcript) the ring is still the only
       // record of this launch's turns, so it is kept.
       if (canonical.length > 0) {
+        this.presentationJournal.clear();
         this.outbound.clear();
       }
       this.sessionHistory = buildSessionHistory(canonical, this.historyMaxItems);
@@ -3844,7 +4077,9 @@ export class Session {
     // journal frames are only ever read as history, never as live-stream
     // deltas, so a stable non-null id is enough (renderer groups by turnId).
     const turnId = this.turnId ?? ENGINE_SWITCH_TURN_ID;
-    this.outbound.emit({ type: "agent_event", turnId, event: sanitizeAgentEvent(event) });
+    const wireEvent = sanitizeAgentEvent(event);
+    if (this.turnId !== null) this.presentationJournal.record(turnId, wireEvent, this.currentStep, this.currentAttempt);
+    this.outbound.emit({ type: "agent_event", turnId, event: wireEvent });
   }
 
   /** Taskana 4730: appends one human turn to the bounded ring (<= 3 x 500 chars). */
@@ -4011,8 +4246,13 @@ export class Session {
     // healthy fallback when the primary is down, surfacing an engine_notice
     // line. The check runs ONLY in this idle accept path.
     if (this.orchestrate) {
-      const notice = this.orchestratorRouteCheck?.();
-      if (notice !== undefined) {
+      const route = this.orchestratorRouteCheck?.();
+      if (route !== undefined) {
+        const notice = typeof route === "string" ? route : route.notice;
+        if (typeof route !== "string") {
+          if (route.effort !== undefined) this.selectedEffort = route.effort;
+          this.applyModelSwitch(route.model, route.effort !== undefined);
+        }
         this.outbound.emit({
           type: "agent_event",
           turnId: this.turnId ?? "orchestrate-route",
@@ -4518,6 +4758,7 @@ export class Session {
   private observeChildEvent(event: AgentEvent): void {
     switch (event.type) {
       case "turn_start":
+        this.childStatusTextSnapshot = "";
         this.childFinalText = resetFinalText(this.childFinalText);
         this.childSafeError = undefined;
         break;
@@ -4529,6 +4770,11 @@ export class Session {
       }
       case "text_delta":
         this.childFinalText = appendFinalText(this.childFinalText, event.text);
+        if (this.childStatusTextAt === undefined || this.now() - this.childStatusTextAt >= 1000) {
+          this.childStatusTextAt = this.now();
+          this.childStatusTextSnapshot = this.childFinalText.current;
+          this.child?.onProgress({ kind: "status", itemKind: "assistant", text: sanitizeStatusText(this.childFinalText.current, 160, true) });
+        }
         // Taskana 4820: a streaming turn is a sign of life — crosses the
         // throttled boundary so the parent-side stall clock keeps getting
         // re-armed while the child is mid-answer (a long model turn is not
@@ -4536,6 +4782,8 @@ export class Session {
         this.emitChildProgressBoundary();
         break;
       case "stream_retry":
+        this.childStatusTextSnapshot = "";
+        this.child?.onProgress({ kind: "status", itemKind: "reset", text: "" });
         this.childFinalText = resetFinalText(this.childFinalText);
         break;
       // Taskana 4820: same rationale as text_delta — a model emitting
@@ -4544,6 +4792,7 @@ export class Session {
         this.emitChildProgressBoundary();
         break;
       case "tool_execution_start":
+        this.child?.onProgress({ kind: "status", itemKind: "tool", text: sanitizeAndCap(event.toolName, 160), toolName: sanitizeAndCap(event.toolName, 40) || "tool" });
         this.pendingChildCalls.set(event.toolCallId, { toolName: event.toolName, input: event.input });
         // Taskana 4820: dispatch itself is a sign of life — a child inside
         // one long-running tool call (a 15-min Bash, a slow web fetch) is
@@ -4556,6 +4805,7 @@ export class Session {
         this.armChildToolLiveness();
         break;
       case "tool_result":
+        this.child?.onProgress({ kind: "status", itemKind: "result", text: sanitizeAndCap(`${event.outcome.toolName}: ${event.outcome.status}`, 160), toolName: sanitizeAndCap(event.outcome.toolName, 40) || "tool" });
         this.childToolCalls += 1;
         this.childLastTool = event.outcome.toolName;
         // F3: the paired result settles the last open call — the liveness
@@ -4577,6 +4827,7 @@ export class Session {
         this.emitChildProgressBoundary();
         break;
       case "turn_end":
+        if (this.childFinalText.current !== this.childStatusTextSnapshot) this.child?.onProgress({ kind: "status", itemKind: "assistant", text: sanitizeStatusText(this.childFinalText.current, 160, true) });
         this.childFinalText = fixateFinalText(this.childFinalText);
         // Taskana 4820 review F2: for a claude child counting model rounds,
         // turn_end (once per runTurn) is already covered by the rounds that
@@ -4734,6 +4985,7 @@ export class Session {
     this.flushPendingUsageAuditRow();
     this.abort = controller;
     this.turnStartedAt = Date.now();
+    this.presentationJournal.start(turnId, requestId, this.turnStartedAt, text, attachments, origin);
     this.outbound.emit({ type: "turn_started", requestId, turnId, startedAt: this.turnStartedAt });
     // taskana 4181: the supervisor idle-watchdog's turn-start signal, fired at
     // the exact `turn_started` emission — a turn beginning proves the
@@ -4761,6 +5013,23 @@ export class Session {
     };
 
     try {
+      if (this.settingsBarrierActive && !controller.signal.aborted) {
+        await new Promise<void>((resolve) => {
+          const abort = () => resolve();
+          controller.signal.addEventListener("abort", abort, { once: true });
+          void this.settingsBarrier.finally(() => { controller.signal.removeEventListener("abort", abort); resolve(); });
+        });
+      }
+      if (controller.signal.aborted || this.shuttingDown) {
+        recordResult("cancelled");
+        if (!this.shuttingDown) {
+          const event = { type: "loop_end" as const, reason: "cancelled" as const, turns: 0 };
+          const at = Date.now();
+          this.presentationJournal.record(turnId, event, undefined, undefined, at);
+          this.outbound.emit({ type: "agent_event", turnId, event, at });
+        }
+        return;
+      }
       // Taskana 4068: consume the one-shot engine-switch import prompt BEFORE
       // the engine call — the import is PREPENDED to the user's own turn
       // input (typed text + any plan/notice augmentation) for exactly this one
@@ -4864,13 +5133,17 @@ export class Session {
         }
         this.captureSnapshotPath(event);
         this.previewArtifacts.observeStart(event);
-        const wireEvent = sanitizeAgentEvent(event);
+        // GitHub #36: the durable record is written (and its id stamped on the
+        // event) BEFORE journaling/emitting, so the live row and the replayed
+        // one are the same row.
+        const wireEvent = this.recordCompactionOutcome(sanitizeAgentEvent(event));
         // TASK.117: track the inner request ordinal (core's turn_start.turn,
         // reset per outer turn) and stamp it onto the envelope for core
         // turns — the renderer's fold checkpoint keys events and durable
         // history items by `${turnId}:${step}`.
         if (event.type === "turn_start") {
           this.currentStep = event.turn;
+          this.currentAttempt = 0;
           // TASK.117 phase-1 defect 3: the FIRST core turn_start of the turn
           // owning the pending slot hands ownership to DURABILITY — core
           // appends the user frame strictly BEFORE the first model request,
@@ -4890,13 +5163,25 @@ export class Session {
         // eventual winner's usage is ever flushed (mirrors the loop's own
         // `usage = {}` reset on this same event).
         if (this.engine.id === "core" && event.type === "stream_retry") {
+          this.currentAttempt = event.attempt;
+          for (const [key, stream] of this.liveStreams) {
+            if (stream.turnId === turnId && stream.step === this.currentStep && stream.kind === "reasoning") this.liveStreams.delete(key);
+          }
           this.finishRetries += 1;
           this.pendingUsageAuditRow = null;
         }
+        if (this.engine.id === "core" && (event.type === "turn_end" || event.type === "loop_end" || event.type === "compaction_start")) {
+          this.presentationJournal.observeHistory(this.engine.historyItems(), this.turnId ?? undefined);
+        }
+        const eventStep = this.engine.id === "core" ? this.currentStep : undefined;
+        const eventAttempt = eventStep !== undefined ? this.currentAttempt : undefined;
+        const eventAt = event.type === "loop_end" ? Date.now() : undefined;
+        this.presentationJournal.record(turnId, wireEvent, eventStep, eventAttempt, eventAt);
         this.outbound.emit({
           type: "agent_event",
           turnId,
-          ...(this.engine.id === "core" && this.currentStep !== undefined ? { step: this.currentStep } : {}),
+          ...(eventStep !== undefined ? { step: eventStep, attempt: eventAttempt } : {}),
+          ...(eventAt !== undefined ? { at: eventAt } : {}),
           event: wireEvent,
         });
         if (this.child !== undefined) {
@@ -4965,12 +5250,9 @@ export class Session {
             }
           }
         }
+        if (event.type === "compaction_end" && event.ok) this.updateContextUsage(null);
         if (event.type === "context_usage") {
-          this.checkpointContextUsage = {
-            estimatedTokens: event.estimatedTokens,
-            budgetTokens: event.budgetTokens,
-            source: event.source,
-          };
+          this.updateContextUsage({ estimatedTokens: event.estimatedTokens, budgetTokens: event.budgetTokens, source: event.source });
         }
         // Taskana 4083 cross-review finding 1: the step's turn_end proves the
         // attempt was NOT stall-discarded (a retry never yields turn_end for
@@ -4990,7 +5272,7 @@ export class Session {
         // unfinished streams ride the checkpoint.
         if (this.engine.id === "core" && this.currentStep !== undefined) {
           if (event.type === "text_start") {
-            this.liveStreams.set(`${turnId}:${this.currentStep}:${event.id}`, { turnId, step: this.currentStep, streamId: event.id, kind: "text", text: "" });
+            this.liveStreams.set(`${turnId}:${this.currentStep}:${event.id}`, { turnId, step: this.currentStep, attempt: this.currentAttempt, streamId: event.id, kind: "text", text: "" });
           } else if (event.type === "text_delta") {
             const entry = this.liveStreams.get(`${turnId}:${this.currentStep}:${event.id}`);
             if (entry !== undefined) {
@@ -5009,7 +5291,7 @@ export class Session {
               endedText.settled = true;
             }
           } else if (event.type === "reasoning_start") {
-            this.liveStreams.set(`${turnId}:${this.currentStep}:${event.id}`, { turnId, step: this.currentStep, streamId: event.id, kind: "reasoning", text: "" });
+            this.liveStreams.set(`${turnId}:${this.currentStep}:${event.id}`, { turnId, step: this.currentStep, attempt: this.currentAttempt, streamId: event.id, kind: "reasoning", text: "" });
           } else if (event.type === "reasoning_delta") {
             const entry = this.liveStreams.get(`${turnId}:${this.currentStep}:${event.id}`);
             if (entry !== undefined) {
@@ -5092,6 +5374,80 @@ export class Session {
       this.currentTurn = null;
       this.drainAgentInbox();
     }
+  }
+
+  /**
+   * Ships the hydrated history and the durable compaction rows (GitHub #36).
+   *
+   * Sent when there is a history snapshot OR at least one compaction record —
+   * NOT only for a non-empty history. A manual compaction on an EMPTY
+   * conversation is recorded (it did happen: `compaction_end { ok:false }`,
+   * "no prefix before the keep-recent window") and its row must survive a
+   * reopen even though nothing else about that session is durable. The two
+   * payload halves are independent: `items: []` is a perfectly good history.
+   */
+  private sendSessionHistory(): void {
+    const items = this.sessionHistory?.items ?? [];
+    const records = this.compactionRecordsField().compactions;
+    if (items.length === 0 && records === undefined) {
+      return;
+    }
+    this.outbound.sendDirect({
+      type: "session_history",
+      sessionId: this.sessionId,
+      items,
+      truncated: this.sessionHistory?.truncated ?? false,
+      ...(records !== undefined ? { compactions: records } : {}),
+    });
+  }
+
+  /**
+   * GitHub #36: the durable compaction rows riding a history handshake. Omitted
+   * entirely when there is nothing to say, so a session that never compacted
+   * sends exactly the message it always did.
+   */
+  private compactionRecordsField(): { compactions?: CompactionRecord[] } {
+    const records = this.compactionRecords?.list() ?? [];
+    return records.length > 0 ? { compactions: [...records] } : {};
+  }
+
+  /**
+   * GitHub #36: persists one compaction outcome and stamps its durable record id
+   * onto the wire event. Returns the event unchanged whenever there is nothing
+   * to record (no seam, or not a `compaction_end`), so a session without the
+   * wiring is byte-identical to before.
+   *
+   * MUST run before the event is journaled or emitted: the replayed copy has to
+   * carry the same `recordId` as the row hydration restores, or a reconnect
+   * cannot tell the two apart and would show one compaction twice.
+   */
+  private recordCompactionOutcome(event: WireAgentEvent): WireAgentEvent {
+    if (event.type === "compaction_start") {
+      this.compactionTrigger = event.trigger;
+      return event;
+    }
+    if (event.type !== "compaction_end" || this.compactionRecords === undefined) {
+      return event;
+    }
+    const trigger = this.compactionTrigger;
+    this.compactionTrigger = null;
+    const record: CompactionRecord = {
+      id: globalThis.crypto.randomUUID(),
+      createdAt: Date.now(),
+      ok: event.ok,
+      ...(trigger !== null ? { trigger } : {}),
+      preTokens: event.preTokens,
+      ...(event.postTokens !== undefined ? { postTokens: event.postTokens } : {}),
+      durationMs: event.durationMs,
+      ...(event.error !== undefined ? { error: event.error } : {}),
+      // A failed/native compaction has no summary to record — never invent one.
+      ...(event.ok && event.summary !== undefined ? { summary: event.summary } : {}),
+      ...(event.summaryItemId !== undefined ? { summaryItemId: event.summaryItemId } : {}),
+      ...(event.prompt !== undefined ? { prompt: event.prompt } : {}),
+      ...(event.model !== undefined ? { model: event.model } : {}),
+    };
+    this.compactionRecords.record(record);
+    return { ...event, recordId: record.id };
   }
 
   private captureSnapshotPath(event: AgentEvent): void {
@@ -5215,17 +5571,90 @@ export class Session {
    * carries only the applied snapshot. ZERO wire delta: this is the same
    * `engine_settings_changed{state:"pending"}` the change itself emits.
    */
+  private mergedEngineSettings(): { model: string; activePresetId: string; effort?: string } | null {
+    const seam = this.engineSettings;
+    if (seam === undefined) return null;
+    const pending = seam.pendingSnapshot?.() ?? null;
+    const deferred = this.pendingEngineEffort ?? this.inFlightEngineEffort;
+    if (deferred === undefined || deferred.seam !== seam || deferred.engine !== this.engine) return pending;
+    const base = pending ?? seam.snapshot();
+    return base.model === deferred.model ? { ...base, effort: deferred.effort } : pending;
+  }
+
+  private publishPendingEngineSettings(direct = false): void {
+    const pending = this.mergedEngineSettings() ?? this.engineSettings?.snapshot();
+    if (pending === undefined || this.shuttingDown) return;
+    const message = { type: "engine_settings_changed" as const, ...pending, ...((this.pendingEngineEffort ?? this.inFlightEngineEffort) !== undefined ? { deferredEffort: true } : {}), state: "pending" as const, appliesFrom: "next_turn" as const };
+    if (direct) this.outbound.sendDirect(message);
+    else this.outbound.emit(message);
+  }
+
   private pushPendingEngineSettings(): void {
-    const pending = this.engineSettings?.pendingSnapshot?.();
-    if (pending == null) return;
-    this.outbound.sendDirect({
-      type: "engine_settings_changed",
-      model: pending.model,
-      activePresetId: pending.activePresetId,
-      ...(pending.effort !== undefined ? { effort: pending.effort } : {}),
-      state: "pending",
-      appliesFrom: "next_turn",
+    if (this.mergedEngineSettings() !== null) this.publishPendingEngineSettings(true);
+  }
+
+  private queueIdleEngineSetting(operation: (seam: EngineSettingsSeam) => void | Promise<void>): void {
+    const seam = this.engineSettings;
+    const engine = this.engine;
+    const generation = this.settingsGeneration;
+    if (seam === undefined) return;
+    if (!this.settingsBarrierActive) { operation(seam); return; }
+    const barrier = this.settingsBarrier.then(async () => {
+      if (!this.shuttingDown && generation === this.settingsGeneration && this.engine === engine && this.engineSettings === seam) {
+        await operation(seam);
+        await seam.waitForSettingsChanges?.();
+      }
+    }).finally(() => {
+      if (generation === this.settingsGeneration && this.settingsBarrier === barrier) this.settingsBarrierActive = false;
     });
+    this.settingsBarrier = barrier;
+  }
+
+  private applyPendingEngineEffort(): void {
+    const pending = this.pendingEngineEffort;
+    this.pendingEngineEffort = undefined;
+    if (pending === undefined || this.shuttingDown || pending.seam !== this.engineSettings || pending.engine !== this.engine) return;
+    const selected = pending.seam.pendingSnapshot?.() ?? pending.seam.snapshot();
+    if (selected.model !== pending.model || !pending.seam.models().find((model) => model.id === pending.model)?.efforts?.includes(pending.effort)) {
+      this.outbound.emit({ type: "mode_change_rejected", reason: "The selected model no longer supports this effort" });
+      this.publishPendingEngineSettings();
+      return;
+    }
+    const generation = this.settingsGeneration;
+    if (pending.seam.selectEffortAndWait === undefined) {
+      const result = pending.seam.selectEffort?.(pending.effort);
+      if (result !== undefined) this.onEngineSettingsChange(result, { effort: pending.effort });
+      return;
+    }
+    this.inFlightEngineEffort = pending;
+    this.settingsBarrierActive = true;
+    const barrier = this.settingsBarrier.then(async () => {
+      if (this.shuttingDown || generation !== this.settingsGeneration || this.engineSettings !== pending.seam || this.engine !== pending.engine) return;
+      await pending.seam.waitForModelChanges?.();
+      if (this.shuttingDown || generation !== this.settingsGeneration || this.engineSettings !== pending.seam || this.engine !== pending.engine) return;
+      if (pending.seam.snapshot().model !== pending.model || !pending.seam.models().find((model) => model.id === pending.model)?.efforts?.includes(pending.effort)) {
+        if (this.inFlightEngineEffort === pending) this.inFlightEngineEffort = undefined;
+        this.outbound.emit({ type: "mode_change_rejected", reason: "The selected model no longer supports this effort" });
+        this.publishPendingEngineSettings();
+        return;
+      }
+      const operation = pending.seam.selectEffortAndWait;
+      if (operation === undefined) return;
+      const result = await operation.call(pending.seam, pending.effort);
+      if (this.shuttingDown || generation !== this.settingsGeneration || this.engineSettings !== pending.seam || this.engine !== pending.engine) return;
+      if (this.inFlightEngineEffort === pending) this.inFlightEngineEffort = undefined;
+      if (!result.ok) this.outbound.emit({ type: "mode_change_rejected", reason: result.reason });
+      this.publishPendingEngineSettings();
+    }).catch((error: unknown) => {
+      if (!this.shuttingDown && generation === this.settingsGeneration) {
+        if (this.inFlightEngineEffort === pending) this.inFlightEngineEffort = undefined;
+        this.outbound.emit({ type: "mode_change_rejected", reason: String(error) });
+        this.publishPendingEngineSettings();
+      }
+    }).finally(() => {
+      if (generation === this.settingsGeneration && this.settingsBarrier === barrier) this.settingsBarrierActive = false;
+    });
+    this.settingsBarrier = barrier;
   }
 
   private onEngineSettingsChange(result: EngineSettingsChange, intent: { model?: string; presetId?: string; effort?: string }): void {

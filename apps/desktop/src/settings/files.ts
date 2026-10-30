@@ -22,6 +22,11 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 import type { AnycodeSettings, ProviderConnection, SecretKey, TrustedBinaryConsent } from "../shared/settings.js";
 import { cloneDefaults, parseSettings, trustedBinaryConsentSchema } from "./schema.js";
+import { migrateModelOverrides } from "../shared/model-overrides.js";
+
+function migrateConnectionOverrides(settings: AnycodeSettings): AnycodeSettings {
+  return { ...settings, provider: { ...settings.provider, connections: settings.provider.connections.map(migrateModelOverrides) } };
+}
 
 /**
  * Repairs the `activeConnectionId` <-> non-empty `connections` invariant on
@@ -268,12 +273,12 @@ export async function loadSettings(path: string, logger?: FileIoLogger): Promise
   // read out healed too, without this binary ever writing it back.
   // TASK.159: out-of-bounds connection.maxOutputTokens is stripped the same
   // way (in memory only) on both arms.
-  return { settings: dropOutOfBoundsMaxOutputTokens(normalizeActiveConnection(result.settings)), readOnly: result.readOnly };
+  return { settings: migrateConnectionOverrides(dropOutOfBoundsMaxOutputTokens(normalizeActiveConnection(result.settings))), readOnly: result.readOnly };
 }
 
 /** Atomically persist settings.json (0644). Caller is responsible for the read-only guard. */
 export async function saveSettings(path: string, settings: AnycodeSettings): Promise<void> {
-  await atomicWrite(path, `${JSON.stringify(settings, null, 2)}\n`, SETTINGS_FILE_MODE);
+  await atomicWrite(path, `${JSON.stringify(migrateConnectionOverrides(settings), null, 2)}\n`, SETTINGS_FILE_MODE);
 }
 
 // ── secrets.json ──

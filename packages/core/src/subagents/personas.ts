@@ -105,7 +105,7 @@ export interface PersonaDefinition {
 }
 
 /**
- * general-purpose: the nine non-Agent default tools (full access under the
+ * general-purpose: the non-Agent default tools (full access under the
  * parent's inherited permission gate). WebSearch is deliberately NOT here
  * (Taskana 4095 follow-up): it is factory-built at boot only when a search
  * backend is configured, and handing it to EVERY general-purpose child would
@@ -119,6 +119,7 @@ export interface PersonaDefinition {
  */
 const GENERAL_PURPOSE_TOOLS = [
   "Read",
+  "Git",
   "Write",
   "Edit",
   "Bash",
@@ -129,16 +130,16 @@ const GENERAL_PURPOSE_TOOLS = [
   "WebFetch",
 ] as const;
 
-const EXPLORE_TOOLS = ["Read", "Grep", "Glob", "TodoRead", "TodoWrite", "WebFetch"] as const;
+const EXPLORE_TOOLS = ["Read", "Git", "Grep", "Glob", "TodoRead", "TodoWrite", "WebFetch"] as const;
 
 /** Taskana 4704 §3.1: PLANNER_TOOLS = EXPLORE_TOOLS (read-only investigation + todo planning). */
-const PLANNER_TOOLS = ["Read", "Grep", "Glob", "TodoRead", "TodoWrite", "WebFetch"] as const;
+const PLANNER_TOOLS = ["Read", "Git", "Grep", "Glob", "TodoRead", "TodoWrite", "WebFetch"] as const;
 
 /** Taskana 4704 §3.1: EXECUTOR_TOOLS = GENERAL_PURPOSE_TOOLS (full toolset under the parent's gate). */
 const EXECUTOR_TOOLS = GENERAL_PURPOSE_TOOLS;
 
 /** Taskana 4704 §3.1: a reviewer runs tests — Bash included, under the parent's permission gate. */
-const REVIEWER_TOOLS = ["Read", "Grep", "Glob", "TodoRead", "TodoWrite", "WebFetch", "Bash"] as const;
+const REVIEWER_TOOLS = ["Read", "Git", "Grep", "Glob", "TodoRead", "TodoWrite", "WebFetch", "Bash"] as const;
 
 const GENERAL_PURPOSE_SYSTEM_PROMPT = [
   "You are the general-purpose subagent: a versatile executor for one delegated subtask.",
@@ -148,6 +149,7 @@ const GENERAL_PURPOSE_SYSTEM_PROMPT = [
 
 const EXPLORE_SYSTEM_PROMPT = [
   "You are the explore subagent: a read-only reconnaissance specialist.",
+  "You can read files and Git history with Git. You cannot run arbitrary commands; use general-purpose for Bash-dependent work.",
   "You have no file-writing or command-execution tools, so do not ask the parent to grant Write, Edit, or Bash — your role is to look, not to change anything.",
   "Search and read until you can answer the parent's question, then report back the concrete facts you found: file paths, line numbers, and short excerpts.",
   "You typically run alongside sibling explorations in parallel, so stay tightly scoped and keep the work cheap.",
@@ -193,7 +195,7 @@ export const PERSONAS: Record<PersonaName, PersonaDefinition> = {
   },
   explore: {
     name: "explore",
-    description: "Read-only recon subagent (no write/exec) — for sweeping many files when only the conclusion is needed.",
+    description: "Read-only recon subagent: reads files and Git history with Git, cannot run commands; use general-purpose for Bash-dependent work.",
     tools: EXPLORE_TOOLS,
     systemPrompt: EXPLORE_SYSTEM_PROMPT,
   },

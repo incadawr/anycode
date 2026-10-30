@@ -52,6 +52,7 @@
  * status union — only the target recorded on the presentation card differs.
  */
 
+import { inlineChildStatusStore } from "../subagents/status.js";
 import type { ToolContext, ToolDefinition, ToolMetadata, ToolResult } from "../types/tools.js";
 import type { EngineProfileInfo } from "../ports/subagent.js";
 import {
@@ -89,7 +90,7 @@ const DEFAULT_AGENT_TYPE = "general-purpose";
 
 /** Base description shared by both declarations (CUT-S2 §2.1); sessionTier:true appends one sentence. */
 const BASE_DESCRIPTION =
-  'Delegate a task to a subagent. agent_type "explore" = read-only recon for sweeping several files when you only need the conclusion; "general-purpose" = the subtask needs write/exec tools. Independent Agent calls issued together in one response run concurrently — fan out disjoint searches. For a single known-file fact, Read/Grep it yourself; once delegated, do not redo the search.';
+  'Delegate a task to a subagent. agent_type "explore" = read-only recon that can read files and Git history with Git, but cannot run commands; use general-purpose for work needing Bash; "general-purpose" = the subtask needs write/exec tools. Independent Agent calls issued together in one response run concurrently — fan out disjoint searches. Use AgentStatus to inspect your children’s live progress. For a single known-file fact, Read/Grep it yourself; once delegated, do not redo the search.';
 
 const SESSION_TIER_DESCRIPTION_SUFFIX =
   ' Tier "session" spawns a full child session the user can open and steer. send_to delivers a follow-up to your own still-running child (tier session).';
@@ -411,22 +412,40 @@ async function runInlineTier(
   // mapped event ctx.emit receives keeps the persisted activity entries
   // byte-identical to what the live renderer saw.
   let acc = createSubagentCardAccumulator();
-  const outcome = await ctx.subagents.run(
-    {
-      agentType,
-      description: input.description,
-      prompt: input.prompt,
-      ...(input.model !== undefined ? { model: input.model } : {}),
-    },
-    {
-      signal: ctx.abortSignal,
-      onProgress: (progress) => {
-        const event = mapProgressToEvent(progress, ctx.toolCallId);
-        acc = reduceSubagentCardEvent(acc, event);
-        ctx.emit?.(event);
+  const status = inlineChildStatusStore(ctx.subagents);
+  const id = ctx.toolCallId;
+  status.start(id, input.description);
+  let outcome;
+  try {
+    outcome = await ctx.subagents.run(
+      {
+        agentType,
+        description: input.description,
+        prompt: input.prompt,
+        ...(input.model !== undefined ? { model: input.model } : {}),
       },
-    },
-  );
+      {
+        signal: ctx.abortSignal,
+        onStatusItem: (item, currentTool) => {
+          status.append(id, item);
+          if (currentTool !== undefined) status.update(id, { currentTool });
+          else if (item.kind === "result") status.update(id, { currentTool: undefined });
+        },
+        onApproval: (waiting, toolName) => status.update(id, { state: waiting ? "waiting for approval" : "running", ...(waiting && toolName ? { currentTool: toolName } : {}) }),
+        onStatusReset: () => status.resetAssistant(id),
+        onProgress: (progress) => {
+          if (progress.kind === "progress") status.update(id, { turns: progress.turns, toolCalls: progress.toolCalls });
+          const event = mapProgressToEvent(progress, ctx.toolCallId);
+          acc = reduceSubagentCardEvent(acc, event);
+          ctx.emit?.(event);
+        },
+      },
+    );
+  } catch (error) {
+    status.update(id, { state: "failed", endedAt: Date.now(), currentTool: undefined });
+    throw error;
+  }
+  status.update(id, { state: outcome.status === "completed" ? "completed" : "failed", turns: outcome.turns, toolCalls: outcome.toolCalls, endedAt: Date.now(), currentTool: undefined });
   // Terminal snapshot, or null when the child never reached subagent_start
   // (an early failure before the first progress callback — the card is
   // never fabricated from nothing, CUT-S1 §3 W1). The fallback status/
@@ -519,6 +538,10 @@ async function runSessionTier(
   // composition — `provider`/`detach` stay this tool's own fields (agent-
   // bridge.ts never sets either), spread on afterward.
   const resumeChildSessionId = input.continue_session;
+  const coreProfile = engineProfile === undefined && degrade === undefined
+    ? ctx.subagents?.coreProfile?.(agentType) ?? undefined
+    : undefined;
+  const profileEffort = engineProfile?.effort ?? (roleRoute === undefined ? coreProfile?.effort : undefined);
   const request: SessionSubagentRequest = {
     // TASK.218: a continuation branches the request build rather than
     // post-patching the spread — a resumed child keeps its own profile body
@@ -544,11 +567,14 @@ async function runSessionTier(
           prompt: degrade !== undefined ? `${degrade.systemPrompt}\n\n---\n\n${input.prompt}` : input.prompt,
           model: input.model,
           spawnToolCallId: ctx.toolCallId,
-          profile: engineProfile,
+          profile: engineProfile ?? (coreProfile !== undefined && roleRoute !== undefined
+            ? { systemPrompt: coreProfile.systemPrompt }
+            : coreProfile),
           // TASK.180: the profile's own turn budget rides the creating spawn only.
           ...(engineProfile?.turnBudget !== undefined ? { maxTurns: engineProfile.turnBudget } : {}),
-          // The profile's declared effort rides the creating spawn too; "xhigh" is preserved for engine children.
-          ...(engineProfile?.effort !== undefined ? { effort: engineProfile.effort } : {}),
+          // A role route supplies its own effort; otherwise preserve the profile's
+          // selection for the destination model to resolve at child boot.
+          ...(profileEffort !== undefined ? { effort: profileEffort } : {}),
         })),
     ...(resumeChildSessionId !== undefined ? { resumeChildSessionId } : {}),
     ...(input.provider !== undefined ? { provider: input.provider } : {}),

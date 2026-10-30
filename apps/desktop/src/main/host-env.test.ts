@@ -102,7 +102,11 @@ it("passes the active connection pricing snapshot and clears inherited stale val
   const configured = settings({ provider: { id: "deepseek" } });
   configured.provider.connections[0]!.pricing = { mode: "subscription" };
   const env = await buildHostEnv({ bootEnv: {}, settings: configured, getSecret: noSecret });
-  expect(env.ANYCODE_CONNECTION_PRICING).toBe('{"mode":"subscription"}');
+  expect(JSON.parse(env.ANYCODE_CONNECTION_PRICING!)).toEqual({ fallback: { mode: 'subscription' }, models: {} });
+  configured.provider.connections[0]!.modelOverrides = { a: { pricing: { input: 1, cachedInput: 0, output: 2 } } };
+  const modelOnly = await buildHostEnv({ bootEnv: {}, settings: configured, getSecret: noSecret });
+  expect(JSON.parse(modelOnly.ANYCODE_CONNECTION_PRICING!).models.a.input).toBe(1);
+  delete configured.provider.connections[0]!.modelOverrides;
   delete configured.provider.connections[0]!.pricing;
   const cleared = await buildHostEnv({ bootEnv: { ANYCODE_CONNECTION_PRICING: 'stale' }, settings: configured, getSecret: noSecret });
   expect(cleared.ANYCODE_CONNECTION_PRICING).toBeUndefined();
@@ -2307,7 +2311,7 @@ describe("TASK.141 byte-identity — a registry-free document changes not one by
     });
     expect(withEmptyRegistry).toEqual(plain);
     // And the whole object, not a filtered view: no proxy var exists at all.
-    expect(plain).toEqual({ PATH: "/usr/bin", HOME: "/home/me", ANYCODE_MODEL: "m" });
+    expect(plain).toEqual({ PATH: "/usr/bin", HOME: "/home/me", ANYCODE_MODEL: "m", ANYCODE_MODEL_SETTINGS_CONNECTION_ID: "conn-z-ai" });
   });
 
   // The DoD's second half: a document carrying ONLY legacy strings produces the
@@ -2322,6 +2326,7 @@ describe("TASK.141 byte-identity — a registry-free document changes not one by
       PATH: "/usr/bin",
       HOME: "/home/me",
       ANYCODE_MODEL: "m",
+      ANYCODE_MODEL_SETTINGS_CONNECTION_ID: "conn-z-ai",
       HTTPS_PROXY: "http://user:pass@legacy:8080",
       HTTP_PROXY: "http://user:pass@legacy:8080",
       https_proxy: "http://user:pass@legacy:8080",

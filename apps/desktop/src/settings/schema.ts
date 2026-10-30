@@ -211,6 +211,7 @@ const promptCacheSchema = z
  * every default is optional (a connection may exist with only a credential, or
  * only a remembered model). `lastHealth` is the advisory cache (W11 writes it).
  */
+const tokenRatesSchema = z.object({ input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict();
 const connectionPricingSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("subscription") }),
   z.object({ mode: z.literal("rates"), input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }),
@@ -261,6 +262,18 @@ const connectionSchema = z.object({
   // host-env emission requires BOTH a valid value and a matching model).
   contextWindowTokens: z.number().int().min(1_024).max(1_000_000).optional().catch(undefined),
   contextWindowModel: z.string().optional(),
+  // A bad entry drops locally; valid siblings and the rest of the document survive.
+  modelOverrides: z.unknown().transform((raw) => {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+    const entrySchema = z.object({
+    pricing: tokenRatesSchema.optional().catch(undefined),
+    contextWindowTokens: z.number().int().min(1_024).max(1_000_000).optional().catch(undefined),
+    reasoningEffort: reasoningEffortSchema.optional().catch(undefined),
+    reasoningSupported: z.literal(true).optional().catch(undefined),
+    effortLevels: z.array(reasoningEffortSchema).min(1).transform((levels) => [...new Set(levels)]).optional().catch(undefined),
+  }).catch({});
+    return Object.fromEntries(Object.entries(raw).map(([id, value]) => [id, entrySchema.parse(value)]));
+  }).optional(),
   // Taskana 4088 (TASK.69): per-model image-input override bound to ONE model id
   // (the TASK.142 contextWindowTokens/contextWindowModel pair discipline). The
   // binding is derived SERVER-SIDE from the effective model; the renderer never

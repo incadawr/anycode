@@ -44,7 +44,7 @@ export function pickEngineModels(
 export function routePatch(route: string): Partial<DraftEntry> {
   const engine = route === "engine:claude" ? "claude" : route === "engine:codex" ? "codex" : "";
   const id = route.startsWith("connection:") ? route.slice("connection:".length) : "";
-  return { engine, connection: id === "active" ? "" : id, model: "", customModel: false };
+  return { engine, connection: id === "active" ? "" : id, provider: undefined, model: "", customModel: false };
 }
 
 /** Only an unlisted value can remain custom; the flag also keeps an empty Custom input open. */

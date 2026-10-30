@@ -259,6 +259,16 @@ describe("ClaudeApprovalBridge — TASK.226 S3: AnyCode's own MCP door", () => {
     expect(requests).toEqual([]);
   });
 
+  it("allows agent_status without consulting the broker", async () => {
+    const { broker, requests } = brokerStub({ behavior: "deny", reason: "denied" });
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask", bridge: {} as ClaudeMcpBridge });
+    const { responder, success, error } = responderSpy();
+    await bridge.handle(inbound({ tool_name: "mcp__anycode__agent_status", tool_use_id: "status", input: { id: "child" } }), responder);
+    expect(error).not.toHaveBeenCalled();
+    expect(success).toHaveBeenCalledWith({ behavior: "allow", updatedInput: { id: "child" }, toolUseID: "status" });
+    expect(requests).toEqual([]);
+  });
+
   it("a parked human-facing approval does not block a concurrent mcp__anycode__* request, and vice versa (probes.md P1 order)", async () => {
     let settle: (decision: PermissionDecision) => void = () => {};
     const parked = new Promise<PermissionDecision>((resolve) => {

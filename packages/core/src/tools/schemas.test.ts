@@ -5,6 +5,7 @@ import {
   bashInputSchema,
   editInputSchema,
   globInputSchema,
+  gitInputSchema,
   grepInputSchema,
   readInputSchema,
   todoReadInputSchema,
@@ -86,5 +87,29 @@ describe("tool input schemas", () => {
       webFetchInputSchema.safeParse({ url: "https://example.com", prompt: "" }).success,
     ).toBe(false);
     expect(webFetchInputSchema.safeParse({ url: "https://example.com" }).success).toBe(false);
+  });
+});
+
+
+describe("Git request schema", () => {
+  it("accepts supported request shapes", () => {
+    for (const request of [
+      { operation: "show", revision: "origin/develop", path: "docs/a.md" },
+      { operation: "log", revision: "develop..HEAD", format: "oneline" },
+      { operation: "diff", revision: "HEAD", format: "name-only" },
+      { operation: "blame", path: "a", startLine: 1, endLine: 2 },
+      { operation: "ls-tree", revision: "HEAD" },
+      { operation: "rev-parse", revision: "HEAD" },
+      { operation: "branch" }, { operation: "status" },
+    ]) expect(gitInputSchema.safeParse(request).success).toBe(true);
+  });
+  it("rejects unsupported operations, fields and combinations", () => {
+    for (const request of [
+      { operation: "fetch" }, { operation: "status", argv: ["--output=x"] },
+      { operation: "branch", revision: "HEAD" }, { operation: "show" },
+      { operation: "blame", path: "a", startLine: 2, endLine: 1 },
+      { operation: "log", format: "name-only" },
+      { operation: "show", revision: "HEAD", path: "a", format: "stat" },
+    ]) expect(gitInputSchema.safeParse(request).success).toBe(false);
   });
 });

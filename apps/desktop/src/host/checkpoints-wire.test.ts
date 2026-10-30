@@ -40,6 +40,7 @@ import {
 import type { ExecutionPort } from "@anycode/core";
 import type { HostToUiMessage } from "../shared/protocol.js";
 import { buildCheckpointService } from "./checkpoints.js";
+import { CompactionRecordLog } from "./compaction-records.js";
 import { createHarness, finishStep, toolStep } from "./test-harness.js";
 
 type Of<T extends HostToUiMessage["type"]> = Extract<HostToUiMessage, { type: T }>;
@@ -115,7 +116,13 @@ describe("checkpoints-wire (P7.26/R1) — host wires per-turn checkpoint capture
 
       const userInput = "add a greeting file";
       const h = createHarness({
-        steps: [toolStep("w1", "Write", { file_path: join(workspace, "greeting.txt"), content: "hello" }), finishStep()],
+        steps: [
+          toolStep("w1", "Write", { file_path: join(workspace, "greeting.txt"), content: "hello" }),
+          finishStep(),
+          // Consumed by the post-rewind compaction below (a structural skip, so
+          // the scripted step may go unused — no model call is made).
+          finishStep(),
+        ],
         checkpoints: service ?? undefined,
         cwd: workspace,
         mode: "build",
@@ -258,5 +265,332 @@ describe("checkpoints-wire (P7.26/R1) — host wires per-turn checkpoint capture
       expect(commitBody).toContain(`parent ${prior!.commitHash}`);
     },
     30_000,
+  );
+});
+
+describe("checkpoints-wire — a rewind keeps the compaction rows that predate the checkpoint (GitHub #36 review 4)", () => {
+  const tmpDirs: string[] = [];
+  const stores: SqlitePersistenceAdapter[] = [];
+
+  function makeTmp(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    tmpDirs.push(dir);
+    return dir;
+  }
+
+  function makeStore(dbPath: string): SqlitePersistenceAdapter {
+    const store = new SqlitePersistenceAdapter(dbPath);
+    stores.push(store);
+    return store;
+  }
+
+  afterEach(async () => {
+    await Promise.all(stores.map((s) => s.close().catch(() => {})));
+    stores.length = 0;
+    for (const dir of tmpDirs) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+    tmpDirs.length = 0;
+  });
+
+  /**
+   * The shape this pins is the one a timestamp cannot express: a FAILED manual
+   * compaction changes NO history, so a checkpoint taken by the NEXT turn
+   * restores a conversation whose newest item predates that row — while the
+   * checkpoint itself was created afterwards and its snapshot already follows
+   * the compaction. Judging by the newest restored item (the previous attempt)
+   * deleted the row from the cache AND from storage, so it also vanished for
+   * good. The boundary is the record SEQUENCE captured at the turn's start.
+   */
+  it(
+    "keeps a failed manual compaction that happened between turns, and drops a compaction recorded after the checkpoint's snapshot",
+    async () => {
+      const workspace = makeTmp("anycode-cp36-ws-");
+      const dbDir = makeTmp("anycode-cp36-db-");
+      const dbPath = join(dbDir, "anycode.sqlite");
+      writeFileSync(join(workspace, "seed.txt"), "v1");
+
+      const store = makeStore(dbPath);
+      const sessionId = "sess-36";
+      await store.createSession({ id: sessionId, workspace, model: "scripted-model", mode: "build" });
+      const service = buildCheckpointService({
+        exec: new NodeExecutionAdapter(),
+        fs: new NodeFileSystemAdapter(),
+        store,
+        workspace,
+        checkpointsRoot: checkpointsRootFor(dbPath),
+        sessionId,
+      });
+      expect(service).not.toBeNull();
+      const records = new CompactionRecordLog(store, sessionId);
+
+      const h = createHarness({
+        steps: [
+          toolStep("w1", "Write", { file_path: join(workspace, "greeting.txt"), content: "hello" }),
+          finishStep(),
+          // Consumed by the post-rewind compaction below (a structural skip, so
+          // the scripted step may go unused — no model call is made).
+          finishStep(),
+        ],
+        checkpoints: service ?? undefined,
+        checkpointsSeam: service ?? undefined,
+        compactionRecords: records,
+        // Two durable items said BEFORE the compaction: the checkpoint's
+        // pre-turn snapshot restores exactly these, so its newest instant is
+        // strictly older than the failed record — the exact shape a timestamp
+        // rule misreads.
+        bootHistory: [
+          { id: "h1", createdAt: 1, message: { role: "user", content: "first" } },
+          { id: "h2", createdAt: 2, message: { role: "assistant", content: [{ type: "text", text: "answered" }] } },
+        ],
+        cwd: workspace,
+        mode: "build",
+      });
+      try {
+        h.send({ type: "ui_ready" });
+        await h.waitFor(isHostReady);
+
+        // 1. A manual compaction BETWEEN turns, on an empty conversation: it is
+        //    not applied ("no prefix…") and changes no history — but it is a
+        //    real recorded outcome, seq 1.
+        h.send({ type: "compact_request" });
+        const end = await h.waitFor(
+          (m): m is Of<"agent_event"> => m.type === "agent_event" && m.event.type === "compaction_end",
+        );
+        expect((end.event as { ok: boolean }).ok).toBe(false);
+        expect(records.list()).toHaveLength(1);
+        const failed = records.list()[0]!;
+        expect(failed.ok).toBe(false);
+
+        // 2. The NEXT turn creates the automatic checkpoint — lazily, at its
+        //    write-effect tool — and its boundary is the sequence sampled at the
+        //    turn's start, i.e. AFTER that failed row exists.
+        h.send({ type: "user_message", requestId: "r1", text: "write a file" });
+        const req = await h.waitFor(isPermissionRequest);
+        h.send({ type: "permission_response", requestId: req.requestId, behavior: "allow" });
+        await h.waitFor(toolResultOf("w1"), 15_000);
+        await h.waitFor(
+          (m): m is Of<"agent_event"> => m.type === "agent_event" && m.event.type === "loop_end",
+          15_000,
+        );
+
+        const checkpoints = await store.listCheckpoints(sessionId);
+        const auto = checkpoints.find((row) => row.reason === "auto");
+        expect(auto).toBeDefined();
+        // The restored history is OLDER than the record: the newest-item rule
+        // judged the failed row as "after the snapshot" and deleted it.
+        const full = await store.getCheckpoint(auto!.id);
+        const restored = JSON.parse(full!.historyJson) as { createdAt: number }[];
+        const newestRestored = Math.max(0, ...restored.map((item) => item.createdAt));
+        expect(newestRestored).toBe(2);
+        expect(failed.createdAt).toBeGreaterThan(newestRestored);
+
+        // 3. Rewind the conversation to it.
+        h.send({ type: "rewind_request", requestId: "rw1", checkpointId: auto!.id, scope: "conversation" });
+        const res = await h.waitFor(
+          (m): m is Of<"rewind_result"> => m.type === "rewind_result",
+          15_000,
+        );
+        expect(res.ok).toBe(true);
+        expect(res.conversationRestored).toBe(true);
+
+        // THE claim: the valid row survives — live...
+        expect(records.list().map((entry) => entry.id)).toEqual([failed.id]);
+        // ...and after a reopen (the durable side was never deleted).
+        await records.flush();
+        expect((await store.listCompactionRecords(sessionId)).map((entry) => entry.id)).toEqual([failed.id]);
+        // The mechanism: the row got the first sequence, and the checkpoint
+        // stored the boundary current at ITS turn start (which already covers
+        // that row).
+        expect(failed.seq).toBe(1);
+        expect(auto!.compactionSeq).toBe(1);
+        // ...and the row still rides the handshake the truncated transcript came with
+        // (delivery over the port is asynchronous — wait for that frame).
+        const rewindAt = h.received.indexOf(res);
+        await h.waitUntil(
+          () => h.received.slice(rewindAt).some((message) => message.type === "session_history"),
+          15_000,
+        );
+        const handshake = h.received
+          .filter((message): message is Of<"session_history"> => message.type === "session_history")
+          .at(-1);
+        expect(handshake?.compactions?.map((entry) => entry.id)).toEqual([failed.id]);
+
+        // 4. The OTHER direction, with the same real checkpoint: a compaction
+        //    recorded AFTER the snapshot (seq 2 > boundary 1) belongs to the
+        //    conversation the rewind discards and must go — while the older row
+        //    stays.
+        h.send({ type: "compact_request" });
+        await h.waitUntil(() => records.list().length === 2, 15_000);
+        expect(records.list()[1]!.ok).toBe(false);
+        const later = records.list()[1]!;
+        expect(later.seq).toBe(2);
+
+        h.send({ type: "rewind_request", requestId: "rw2", checkpointId: auto!.id, scope: "conversation" });
+        const res2 = await h.waitFor(
+          (m): m is Of<"rewind_result"> => m.type === "rewind_result" && m.requestId === "rw2",
+          15_000,
+        );
+        expect(res2.ok).toBe(true);
+        // Only the pre-checkpoint row survives; the newer one is gone live and
+        // durable.
+        await records.flush();
+        expect((await store.listCompactionRecords(sessionId)).map((entry) => entry.id)).toEqual([failed.id]);
+        expect(records.list().map((entry) => entry.id)).toEqual([failed.id]);
+        expect([failed.seq, later.seq]).toEqual([1, 2]);
+      } finally {
+        h.close();
+      }
+    },
+    30_000,
+  );
+});
+
+/**
+ * GitHub #36 review 5: the pre-rewind SAFETY checkpoint is itself a checkpoint
+ * a user can rewind to, so it must carry a boundary too. Without one, rewinding
+ * back to it falls through to the history heuristic — which deletes a valid
+ * between-turns failed compaction, because that record is newer than every
+ * history item the safety snapshot restored (a failed compaction changes no
+ * history).
+ */
+describe("checkpoints-wire — a safety checkpoint carries the compaction boundary (GitHub #36 review 5)", () => {
+  const tmpDirs: string[] = [];
+  const stores: SqlitePersistenceAdapter[] = [];
+
+  function makeTmp(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    tmpDirs.push(dir);
+    return dir;
+  }
+
+  function makeStore(dbPath: string): SqlitePersistenceAdapter {
+    const store = new SqlitePersistenceAdapter(dbPath);
+    stores.push(store);
+    return store;
+  }
+
+  afterEach(async () => {
+    await Promise.all(stores.map((s) => s.close().catch(() => {})));
+    stores.length = 0;
+    for (const dir of tmpDirs) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+    tmpDirs.length = 0;
+  });
+
+  it(
+    "keeps a failed between-turns compaction across a files-only rewind and a conversation rewind to the safety checkpoint it created",
+    async () => {
+      const workspace = makeTmp("anycode-cp36-safety-ws-");
+      const dbDir = makeTmp("anycode-cp36-safety-db-");
+      const dbPath = join(dbDir, "anycode.sqlite");
+      writeFileSync(join(workspace, "seed.txt"), "v1");
+
+      const store = makeStore(dbPath);
+      const sessionId = "sess-36-safety";
+      await store.createSession({ id: sessionId, workspace, model: "scripted-model", mode: "build" });
+      const service = buildCheckpointService({
+        exec: new NodeExecutionAdapter(),
+        fs: new NodeFileSystemAdapter(),
+        store,
+        workspace,
+        checkpointsRoot: checkpointsRootFor(dbPath),
+        sessionId,
+      });
+      expect(service).not.toBeNull();
+      const records = new CompactionRecordLog(store, sessionId);
+
+      const h = createHarness({
+        steps: [
+          toolStep("w1", "Write", { file_path: join(workspace, "greeting.txt"), content: "hello" }),
+          finishStep(),
+          finishStep(),
+        ],
+        checkpoints: service ?? undefined,
+        checkpointsSeam: service ?? undefined,
+        compactionRecords: records,
+        bootHistory: [
+          { id: "h1", createdAt: 1, message: { role: "user", content: "first" } },
+          { id: "h2", createdAt: 2, message: { role: "assistant", content: [{ type: "text", text: "answered" }] } },
+        ],
+        cwd: workspace,
+        mode: "build",
+      });
+      try {
+        h.send({ type: "ui_ready" });
+        await h.waitFor(isHostReady);
+
+        // 1. A write-effect turn leaves one automatic checkpoint behind (the
+        //    target the files-only rewind below needs).
+        h.send({ type: "user_message", requestId: "r1", text: "write a file" });
+        const req = await h.waitFor(isPermissionRequest);
+        h.send({ type: "permission_response", requestId: req.requestId, behavior: "allow" });
+        await h.waitFor(toolResultOf("w1"), 15_000);
+        await h.waitFor(
+          (m): m is Of<"agent_event"> => m.type === "agent_event" && m.event.type === "loop_end",
+          15_000,
+        );
+        const auto = (await store.listCheckpoints(sessionId)).find((row) => row.reason === "auto");
+        expect(auto).toBeDefined();
+
+        // 2. A FAILED compaction BETWEEN turns: no history change, but a real
+        //    recorded outcome (seq 1) that is newer than every history item.
+        h.send({ type: "compact_request" });
+        await h.waitUntil(() => records.list().length === 1, 15_000);
+        const failed = records.list()[0]!;
+        expect(failed.ok).toBe(false);
+        const newestItem = Math.max(...h.engine.historyItems().map((item) => item.createdAt));
+        expect(failed.createdAt).toBeGreaterThan(newestItem);
+
+        // 3. A files-only rewind to the auto checkpoint: files move, the
+        //    conversation does not — and its SAFETY checkpoint records the
+        //    current boundary (the failed row already exists).
+        h.send({ type: "rewind_request", requestId: "rw-files", checkpointId: auto!.id, scope: "files" });
+        const filesOnly = await h.waitFor(
+          (m): m is Of<"rewind_result"> => m.type === "rewind_result" && m.requestId === "rw-files",
+          20_000,
+        );
+        expect(filesOnly.ok).toBe(true);
+        expect(filesOnly.conversationRestored).toBe(false);
+        const safety = await store.getCheckpoint(filesOnly.safetyCheckpointId!);
+        expect(safety).not.toBeNull();
+        expect(safety!.reason).toBe("pre-rewind");
+
+        // 4. A conversation rewind BACK TO that safety checkpoint. The row is
+        //    newer than every restored item; only the boundary keeps it.
+        h.send({
+          type: "rewind_request",
+          requestId: "rw-safety",
+          checkpointId: filesOnly.safetyCheckpointId!,
+          scope: "conversation",
+        });
+        const back = await h.waitFor(
+          (m): m is Of<"rewind_result"> => m.type === "rewind_result" && m.requestId === "rw-safety",
+          20_000,
+        );
+        expect(back.ok).toBe(true);
+        expect(back.conversationRestored).toBe(true);
+
+        // THE claim, live and durable: the valid row survives.
+        expect(records.list().map((entry) => entry.id)).toEqual([failed.id]);
+        await records.flush();
+        expect((await store.listCompactionRecords(sessionId)).map((entry) => entry.id)).toEqual([failed.id]);
+        // ...because the safety capture recorded the boundary it was handed
+        // (REAL ARTIFACT in the durable row, not just in the returned value).
+        expect(safety!.compactionSeq).toBe(1);
+      } finally {
+        h.close();
+      }
+    },
+    40_000,
   );
 });

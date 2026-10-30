@@ -36,11 +36,14 @@ import type {
   CustomProviderRecord,
   ImplicitPromptCache,
   ProviderConnection,
+  ReasoningEffort,
   ProviderTransportId,
   SecretStatus,
   SecretKey,
   SettingsMutationResult,
+  TokenRates,
 } from "../../../shared/settings.js";
+import { applyModelReasoningOverride, contextWindowTokensField, modelOverrideFor } from "../../../shared/model-overrides.js";
 import { mergeModelIds, normalizeModelId } from "../../../shared/settings.js";
 import type { CustomProviderMutationResult, CustomProviderUpdateRequest, FetchModelsOutcome } from "../anycode-window.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
@@ -64,6 +67,7 @@ import {
   type CustomProviderBridge,
 } from "./SettingsScreen.js";
 import { X } from "./icons.js";
+import { startModelEffortLevels } from "./start-model-picker.js";
 
 /**
  * The connection `connection-create` just minted (TASK.45 W12-FIX2 §1):
@@ -350,6 +354,20 @@ export function promptCacheVisible(
   return resolved === "openai-chat-completions" || resolved === "openai-responses";
 }
 
+export function buildDrawerSavePayload(
+  params: Parameters<typeof buildConnectionUpdatePayload>[0],
+  fields: { contextWindowDirty: boolean; contextWindowTokens: number | ""; reasoningSupportedDirty: boolean; reasoningSupported: boolean; modelEffortDirty: boolean; modelEffort: ReasoningEffort | ""; imageInputDirty: boolean; effortLevelsDirty?: boolean; effortLevels?: ReasoningEffort[] },
+): ConnectionUpdateRequest {
+  return buildConnectionUpdatePayload({
+    ...params,
+    ...(fields.contextWindowDirty ? { contextWindowTokens: fields.contextWindowTokens } : {}),
+    ...(fields.reasoningSupportedDirty ? { reasoningSupported: fields.reasoningSupported ? true : "" } : {}),
+    ...(fields.modelEffortDirty ? { reasoningEffort: fields.modelEffort } : {}),
+    ...(fields.effortLevelsDirty ? { effortLevels: fields.effortLevels?.length ? fields.effortLevels : "" } : {}),
+    imageInputChanged: fields.imageInputDirty,
+  });
+}
+
 /**
  * The connection-update payload the unified `save` sends (TASK.45 W12-FIX §3;
  * TASK.58 folded the former separate `saveMetadata` into `save`):
@@ -376,9 +394,13 @@ export function buildConnectionUpdatePayload(params: {
   proxyRef: string;
   authOptional: boolean;
   maxOutputTokens: number | "";
-  contextWindowTokens: number | "";
+  contextWindowTokens?: number | "";
   imageInput: ImageInputSelection;
+  imageInputChanged?: boolean;
   promptCacheEnabled: boolean;
+  reasoningEffort?: ReasoningEffort | "";
+  reasoningSupported?: true | "";
+  effortLevels?: ReasoningEffort[] | "";
 }): ConnectionUpdateRequest {
   return {
     id: params.connectionId,
@@ -401,16 +423,15 @@ export function buildConnectionUpdatePayload(params: {
     // clearing the field back to blank must CLEAR the persisted cap, not leave
     // an old explicit value in force.
     maxOutputTokens: params.maxOutputTokens,
-    // Sent unconditionally (TASK.142), same rationale: an emptied field must
-    // CLEAR the saved pair. Only the numeric value (or `""`) travels — the
-    // model binding is derived SERVER-SIDE from the effective model, so the
-    // renderer can never attach a window to the wrong model.
-    contextWindowTokens: params.contextWindowTokens,
+    ...(params.contextWindowTokens !== undefined ? { contextWindowTokens: params.contextWindowTokens } : {}),
+    ...(params.reasoningEffort !== undefined ? { reasoningEffort: params.reasoningEffort } : {}),
+    ...(params.reasoningSupported !== undefined ? { reasoningSupported: params.reasoningSupported } : {}),
+    ...(params.effortLevels !== undefined ? { effortLevels: params.effortLevels } : {}),
     // Sent unconditionally (Taskana 4088), same rationale: "auto" must CLEAR
     // the saved override pair (`""` is main's clear sentinel), while "on"/"off"
     // persist it. The model binding is derived SERVER-SIDE, exactly like the
     // context-window pair.
-    imageInputOverride: imageInputToPayload(params.imageInput),
+    ...(params.imageInputChanged === false ? {} : {imageInputOverride: imageInputToPayload(params.imageInput)}),
     // Sent unconditionally (GitHub #15), same rationale as `transport`: the
     // enabled object SETS the policy and `""` CLEARS it (main deletes the key,
     // because Off is absence on the wire). Also sent while the field is hidden
@@ -550,12 +571,12 @@ export const IMAGE_INPUT_ONELINER = "Auto uses the catalog or the provider's mod
 export const MAX_OUTPUT_HELP =
   "Leave empty to use the provider's default. Reasoning models spend part of this budget on hidden thinking before they write anything — for a self-hosted endpoint the catalog has no model list to guess a limit from, so raise this if output keeps cutting off.";
 export const CONTEXT_WINDOW_HELP =
-  "Leave empty to use the catalog window; for a model the catalog does not know, an assumed 8192-token window is used so long sessions compact early instead of overstuffing the prompt. Saved for the model above only — switching this connection to another model ignores it.";
+  "Leave empty to use the catalog window; for a model the catalog does not know, an assumed 8192-token window is used so long sessions compact early instead of overstuffing the prompt. Saved separately for each model. Switching models restores their saved windows. Applies to new or reopened sessions.";
 export const IMAGE_INPUT_HELP =
   "Auto uses the catalog's vision mark or the image-capable list fetched from the provider's /v1/models. On / Off override it for the model above only — switching this connection to another model ignores it. A running session picks a change up when it next starts.";
 
 /** Title of the "this model only" badge (scope of the saved per-model value). */
-export const MODEL_ONLY_BADGE_TITLE = "Saved for the model above only — switching this connection to another model ignores it.";
+export const MODEL_ONLY_BADGE_TITLE = "Saved separately for each model. Switching models restores their saved windows. Applies to new or reopened sessions.";
 
 /**
  * Whether the Advanced disclosure opens by itself: true when any tuning value
@@ -644,20 +665,7 @@ export function maxOutputTokensEffectiveHint(
  * invalid). Exported for direct testing (no jsdom in this package's vitest
  * config, see file docstring).
  */
-export function contextWindowTokensField(raw: string): { ok: true; value: number | "" } | { ok: false } {
-  const trimmed = raw.trim();
-  if (trimmed === "") {
-    return { ok: true, value: "" };
-  }
-  if (!/^-?\d+$/.test(trimmed)) {
-    return { ok: false };
-  }
-  const n = Number(trimmed);
-  if (!Number.isInteger(n) || n < 1024 || n > 1000000) {
-    return { ok: false };
-  }
-  return { ok: true, value: n };
-}
+export { contextWindowTokensField } from "../../../shared/model-overrides.js";
 
 /** Shared by both write paths so create and save refuse a bad window identically. */
 const CONTEXT_WINDOW_ERROR =
@@ -716,27 +724,24 @@ export function contextWindowEffectiveHint(
 
 /**
  * TASK.142: the raw window value the drawer starts with for a saved connection.
- * The saved window is ONE model's override (`contextWindowModel`), so it is
- * prefilled ONLY when it binds to the model now shown — a window saved for
- * another model must never appear to belong to this one. Exported for direct
+ * Prefill only the selected model's map entry (or its legacy pair). A saved
+ * window for another model must never appear to belong to this one. Exported for direct
  * testing (no jsdom in this package's vitest config, see file docstring).
  */
 export function contextWindowInitialRaw(connection: {
   contextWindowTokens?: number;
   contextWindowModel?: string;
+  modelOverrides?: ProviderConnection["modelOverrides"];
   model?: string;
 }): string {
-  return connection.contextWindowTokens !== undefined &&
-    connection.contextWindowModel !== undefined &&
-    connection.contextWindowModel === (connection.model ?? "")
-    ? String(connection.contextWindowTokens)
-    : "";
+  const tokens = modelOverrideFor(connection, (connection.model ?? "").trim())?.contextWindowTokens;
+  return tokens === undefined ? "" : String(tokens);
 }
 
 /**
  * TASK.142: the "Context window (tokens)" field's full state. `model` is the
- * NORMALIZED model id the raw value belongs to (undefined while the field is
- * blank) — the reset decision compares against THIS, never against the original
+ * NORMALIZED model id the raw value belongs to, including while blank — the
+ * reset decision compares against THIS, never against the original
  * saved binding, so a whitespace-only Model edit ("B" -> " B ") is not a change
  * and must not wipe a window the user just typed.
  */
@@ -753,40 +758,39 @@ export interface ContextWindowField {
   model: string;
 }
 
-/** The saved pair a Model edit may re-prefill from. */
+/** Saved model windows, including the legacy pair accepted on read. */
 export interface ContextWindowSavedPair {
+  modelOverrides?: ProviderConnection["modelOverrides"];
   contextWindowTokens?: number;
   contextWindowModel?: string;
 }
 
 /**
- * Initial field state for the drawer (TASK.142): prefill from the saved pair
- * only when it binds to the connection's own model — same rule as
- * `contextWindowInitialRaw`.
+ * Initial field state for the drawer: prefill the connection's selected model
+ * using the same lookup as `contextWindowInitialRaw`.
  */
 export function contextWindowInitialField(
-  connection: { contextWindowTokens?: number; contextWindowModel?: string; model?: string } | undefined,
+  connection: ContextWindowSavedPair & { model?: string } | undefined,
 ): ContextWindowField {
   const raw = connection === undefined ? "" : contextWindowInitialRaw(connection);
   return raw === ""
     ? { raw: "", model: (connection?.model ?? "").trim() }
-    : { raw, model: (connection?.contextWindowModel ?? "").trim() };
+    : { raw, model: (connection?.model ?? "").trim() };
 }
 
 /**
  * TASK.142: the field state after a user route CHANGES the model. `nextModel` is
  * the model the route will actually save (the catalog-prefilled id on the
- * simplified create input, the raw input elsewhere); `saved` is the persisted
- * pair, consulted only to re-prefill when the user navigates BACK to the model
- * the saved window binds. Semantics:
+ * simplified create input, the raw input elsewhere); `saved` contains the
+ * persisted windows looked up when navigating to another model. Semantics:
  *   - an UNCHANGED normalized model (field.model === next) returns the field
  *     verbatim — a value, a whitespace-only edit, or an explicit CLEAR all
  *     survive untouched. This is the "only a normalized model change resets
  *     it" rule, and it is checked BEFORE anything that could re-prefill, so a
  *     clear is never undone by a no-op model edit (or re-clicking the selected
  *     chip);
- *   - a GENUINE model change clears the value — or re-prefills from a saved pair
- *     that binds the new model — so one model's number can never be rebound to
+ *   - a GENUINE model change loads the new model's saved window, or clears
+ *     the field when none is saved — one model's number is never rebound to
  *     another.
  * Exported for direct testing (no jsdom in this package's vitest config).
  */
@@ -799,9 +803,8 @@ export function contextWindowAfterModelInput(
   if (field.model === next) {
     return field;
   }
-  const savedBinding = saved?.contextWindowModel?.trim();
-  const savedTokens = saved?.contextWindowTokens;
-  if (savedTokens !== undefined && savedBinding !== undefined && savedBinding !== "" && savedBinding === next) {
+  const savedTokens = modelOverrideFor(saved, next)?.contextWindowTokens;
+  if (savedTokens !== undefined) {
     return { raw: String(savedTokens), model: next };
   }
   return { raw: "", model: next };
@@ -1109,7 +1112,7 @@ export interface ConnectionDrawerFieldsProps {
   secrets: readonly SecretStatus[];
   readOnly: boolean;
   /** Where to steer initial focus (a11y) — "credential" for the tile menu's "Replace key"/"Sign in". */
-  initialFocus?: "label" | "credential";
+  initialFocus?: "label" | "credential" | "context";
   store?: SettingsStoreApi;
   /** Injectable custom-provider bridge (TASK.58); defaults to the real `window.anycode.customProvider`. */
   customProvider?: CustomProviderBridge;
@@ -1187,6 +1190,26 @@ export function ConnectionDrawerFields({
     if (raw.some((v) => !v.trim()) || values.some((v) => !Number.isFinite(v) || v < 0) || (priceWrite.trim() !== "" && (!Number.isFinite(write) || write < 0))) return null;
     return { mode: "rates" as const, input: values[0]!, cachedInput: values[1]!, output: values[2]!, ...(priceWrite.trim() ? { cacheWrite: write } : {}) };
   };
+  type RateDraft = { input: string; cachedInput: string; output: string; cacheWrite: string };
+  const [modelRates, setModelRates] = useState<Record<string, RateDraft>>(() => Object.fromEntries(
+    Object.entries(editConnection?.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => {
+      const rate = value.pricing!;
+      return [id, { input: String(rate.input), cachedInput: String(rate.cachedInput), output: String(rate.output), cacheWrite: rate.cacheWrite === undefined ? "" : String(rate.cacheWrite) }];
+    }),
+  ));
+  const [dirtyRates, setDirtyRates] = useState<Set<string>>(() => new Set());
+  const modelPricingPayload = (): Record<string, TokenRates | ""> | null => {
+    const entries: [string, TokenRates | ""][] = [];
+    for (const id of dirtyRates) {
+      const draft = modelRates[id]!;
+      const raw = [draft.input, draft.cachedInput, draft.output];
+      if ([...raw, draft.cacheWrite].every((v) => !v.trim())) { entries.push([id, ""]); continue; }
+      const values = raw.map(Number), write = Number(draft.cacheWrite);
+      if (normalizeModelId(id) !== id || raw.some((v) => !v.trim()) || values.some((v) => !Number.isFinite(v) || v < 0) || (draft.cacheWrite.trim() !== "" && (!Number.isFinite(write) || write < 0))) return null;
+      entries.push([id, { input: values[0]!, cachedInput: values[1]!, output: values[2]!, ...(draft.cacheWrite.trim() ? { cacheWrite: write } : {}) }]);
+    }
+    return Object.fromEntries(entries);
+  };
   // TASK.150: stored as a string (it backs a plain `<input type="number">`) so
   // an in-progress edit (e.g. a momentarily-empty field) never gets coerced
   // through `Number()` before the user is done typing; `maxOutputTokensField`
@@ -1204,9 +1227,21 @@ export function ConnectionDrawerFields({
   // Taskana 4088: the per-model image-input select ("auto" | "on" | "off").
   // Prefilled ONLY when the saved override binds to the connection's own model
   // (the contextWindowInitialRaw rule); "auto" clears the pair on save.
+  const [reasoningSupported, setReasoningSupported] = useState(() =>
+    modelOverrideFor(editConnection, editConnection?.model ?? "")?.reasoningSupported === true,
+  );
+  const [effortLevels, setEffortLevels] = useState<ReasoningEffort[]>(() => modelOverrideFor(editConnection, editConnection?.model ?? "")?.effortLevels ?? []);
+  const [effortLevelsDirty, setEffortLevelsDirty] = useState(false);
+  const [modelEffort, setModelEffort] = useState<ReasoningEffort | "">(() =>
+    modelOverrideFor(editConnection, editConnection?.model ?? "")?.reasoningEffort ?? "",
+  );
   const [imageInput, setImageInput] = useState<ImageInputSelection>(() =>
     editConnection === undefined ? "auto" : imageInputInitialValue(editConnection),
   );
+  const [imageInputDirty, setImageInputDirty] = useState(false);
+  const [contextWindowDirty, setContextWindowDirty] = useState(false);
+  const [reasoningSupportedDirty, setReasoningSupportedDirty] = useState(false);
+  const [modelEffortDirty, setModelEffortDirty] = useState(false);
   // UI-only (never saved): the user picked the Custom segment of Max output tokens.
   const [maxOutputCustom, setMaxOutputCustom] = useState(false);
   // GitHub #15: opt-in prompt caching, prefilled from the connection's saved
@@ -1217,7 +1252,7 @@ export function ConnectionDrawerFields({
   // The Advanced disclosure is controlled: open from the start only when a
   // tuning value is already set (evaluated once, from the initial state), and
   // forced open by a rejected Advanced field on save/create.
-  const [advancedOpen, setAdvancedOpen] = useState(() => advancedHasValues({
+  const [advancedOpen, setAdvancedOpen] = useState(() => initialFocus === "context" || reasoningSupported || effortLevels.length > 0 || modelEffort !== "" || advancedHasValues({
     transport,
     maxOutputTokens,
     contextWindowRaw: contextWindow.raw,
@@ -1241,7 +1276,9 @@ export function ConnectionDrawerFields({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (initialFocus === "credential") {
+    if (initialFocus === "context") {
+      contextWindowTokensInputRef.current?.focus();
+    } else if (initialFocus === "credential") {
       secretInputRef.current?.focus();
     } else {
       labelInputRef.current?.focus();
@@ -1353,6 +1390,13 @@ export function ConnectionDrawerFields({
     targetConnection,
     imageInput,
   );
+  const knownCatalogModel = !effectiveProviderId.startsWith("custom:") &&
+    catalog.find((entry) => entry.id === effectiveProviderId)?.models.some((entry) => entry.id === effectiveFormModel.trim()) === true;
+  const reasoningLevels = startModelEffortLevels(
+    effectiveProviderId, effectiveFormModel.trim(), catalog.filter((entry) => !entry.id.startsWith("custom:")),
+    applyModelReasoningOverride(targetConnection?.modelCapabilities?.[effectiveFormModel.trim()], reasoningSupported),
+  );
+  const effectiveReasoningLevels = effortLevels.length ? effortLevels : reasoningLevels;
   const imageInputFeedHint = proxySnapshot === null ? null : imageInputEnvHint(proxySnapshot.envOverrides);
 
   /**
@@ -1372,6 +1416,18 @@ export function ConnectionDrawerFields({
     setContextWindow((field) =>
       force ? { raw: "", model: effective.trim() } : contextWindowAfterModelInput(field, effective, saved),
     );
+    if (force || contextWindow.model !== effective.trim()) {
+      const target = force ? undefined : modelOverrideFor(saved, effective.trim());
+      setReasoningSupported(target?.reasoningSupported === true);
+      setModelEffort(target?.reasoningEffort ?? "");
+      setEffortLevels(target?.effortLevels ?? []);
+      setEffortLevelsDirty(false);
+      setImageInput(force || targetConnection === undefined ? "auto" : imageInputInitialValue({...targetConnection, model: effective.trim()}));
+      setImageInputDirty(false);
+      setContextWindowDirty(false);
+      setReasoningSupportedDirty(false);
+      setModelEffortDirty(false);
+    }
     setModel(next);
   }
 
@@ -1388,7 +1444,21 @@ export function ConnectionDrawerFields({
       setError(MODEL_ID_ERROR);
       return;
     }
+    const pricing = pricingPayload();
+    const modelPricing = modelPricingPayload();
+    if (pricing === null || modelPricing === null) { setError("Enter non-negative prices per million tokens."); return; }
     const createModel = preflight.kind === "id" ? preflight.id : undefined;
+    const window = contextWindowTokensField(contextWindow.raw);
+    if (!window.ok || (window.value !== "" && createModel === undefined)) {
+      setAdvancedOpen(true);
+      setError(window.ok ? CONTEXT_WINDOW_ERROR_MODEL : CONTEXT_WINDOW_ERROR);
+      return;
+    }
+    const imageInputError = imageInputModelPreflightError(imageInput, createModel ?? "");
+    if (imageInputError !== null) {
+      setError(imageInputError);
+      return;
+    }
     const req = buildCustomProviderCreateRequest({
       name: customName,
       baseUrl: customBaseUrl,
@@ -1425,6 +1495,8 @@ export function ConnectionDrawerFields({
         reloadSnapshot,
         {
           providerId: newId,
+          ...(pricing !== "" ? { pricing } : {}),
+          modelPricing: Object.fromEntries(Object.entries(modelPricing).filter(([, value]) => value !== "")) as Record<string, TokenRates>,
           ...(createModel !== undefined ? { model: createModel } : {}),
           ...(label.trim() ? { label: label.trim() } : {}),
           ...(transport ? { transport } : {}),
@@ -1434,6 +1506,11 @@ export function ConnectionDrawerFields({
           // endpoint.
           ...connectionCreateProxyRefField(proxyRef),
           ...(promptCacheEnabled ? { promptCache: IMPLICIT_PROMPT_CACHE } : {}),
+          ...(contextWindow.raw.trim() ? { contextWindowTokens: Number(contextWindow.raw) } : {}),
+          ...(reasoningSupported ? { reasoningSupported: true as const } : {}),
+          ...(effortLevels.length ? { effortLevels } : {}),
+          ...(modelEffort !== "" ? { reasoningEffort: modelEffort } : {}),
+          ...(imageInput !== "auto" ? { imageInputOverride: imageInput } : {}),
         },
         createModel ?? null,
       );
@@ -1473,7 +1550,8 @@ export function ConnectionDrawerFields({
     // what can be typed, so silently discarding e.g. `500` would create a
     // connection whose ceiling the user believes they set.
     const pricing = pricingPayload();
-    if (pricing === null) { setError("Enter non-negative prices per million tokens."); return; }
+    const modelPricing = modelPricingPayload();
+    if (pricing === null || modelPricing === null) { setError("Enter non-negative prices per million tokens."); return; }
     const mot = maxOutputTokensField(maxOutputTokens);
     if (!mot.ok) {
       // A refused Advanced field must not stay hidden behind a closed disclosure.
@@ -1525,6 +1603,7 @@ export function ConnectionDrawerFields({
         reloadSnapshot,
         {
           providerId,
+          modelPricing: Object.fromEntries(Object.entries(modelPricing).filter(([, value]) => value !== "")) as Record<string, TokenRates>,
           ...(pricing !== "" ? { pricing } : {}),
           ...(createModel !== "" ? { model: createModel } : {}),
           ...(label.trim() ? { label: label.trim() } : {}),
@@ -1534,6 +1613,9 @@ export function ConnectionDrawerFields({
           ...(noAuth ? { authOptional: true } : {}),
           ...(mot.value !== "" ? { maxOutputTokens: mot.value } : {}),
           ...(cw.value !== "" ? { contextWindowTokens: cw.value } : {}),
+          ...(reasoningSupported ? { reasoningSupported: true as const } : {}),
+          ...(effortLevels.length ? { effortLevels } : {}),
+          ...(modelEffort !== "" ? { reasoningEffort: modelEffort } : {}),
           // Taskana 4088: create keeps the conditional-spread form (create's
           // schema has no "" sentinel — omission already means "auto"); only an
           // explicit choice travels, and the binding is server-derived.
@@ -1612,7 +1694,8 @@ export function ConnectionDrawerFields({
     // gives the specific, actionable message instead (same pattern as the
     // `modelSaveBlocked` guard just above).
     const pricing = pricingPayload();
-    if (pricing === null) { setError("Enter non-negative prices per million tokens."); return; }
+    const modelPricing = modelPricingPayload();
+    if (pricing === null || modelPricing === null) { setError("Enter non-negative prices per million tokens."); return; }
     const mot = maxOutputTokensField(maxOutputTokens);
     if (!mot.ok) {
       // A refused Advanced field must not stay hidden behind a closed disclosure.
@@ -1652,7 +1735,7 @@ export function ConnectionDrawerFields({
         modelPersistenceBridge(),
         reloadSnapshot,
         createdConnectionId,
-        { ...buildConnectionUpdatePayload({
+        { ...buildDrawerSavePayload({
           connectionId: createdConnectionId,
           label,
           model: selectedModelId ?? model,
@@ -1662,12 +1745,12 @@ export function ConnectionDrawerFields({
           proxyRef,
           authOptional: noAuth,
           maxOutputTokens: mot.value,
-          contextWindowTokens: cw.value,
           imageInput,
           promptCacheEnabled,
-        }), pricing },
+        }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty, effortLevelsDirty, effortLevels }), pricing, modelPricing },
         selectedModelId,
       );
+      if (outcome.metaOk) setDirtyRates(new Set());
       let keyRefused = false;
       let keyRefusalDetail: string | null = null;
       if (secretValue && credentialKey !== undefined) {
@@ -1848,6 +1931,16 @@ export function ConnectionDrawerFields({
         {([["Input", priceInput, setPriceInput], ["Cached input", priceCached, setPriceCached], ["Output", priceOutput, setPriceOutput], ["Cache write (optional)", priceWrite, setPriceWrite]] as const).map(([label, value, set]) => <label className="settings-field" key={label}><span className="settings-field-label">{label} · USD / 1M tokens</span><input type="number" min="0" step="any" value={value} disabled={readOnly} onChange={(e) => set(e.target.value)} /></label>)}
       </div>}
 
+      <p>Prices apply to future usage. Model rates override the connection fallback.</p>
+      <div aria-label="Per-model prices">
+        {mergeModelIds(modelSuggestions.map((item) => item.id), mergeModelIds(Object.keys(modelRates), normalizeModelId(model) ? [normalizeModelId(model)!] : [])).map((id) => {
+          const draft = (Object.hasOwn(modelRates, id) ? modelRates[id] : undefined) ?? { input: "", cachedInput: "", output: "", cacheWrite: "" };
+          return <fieldset key={id} disabled={readOnly || saving || pricingMode === "subscription"}><legend>{id}</legend>
+            {([ ["input", "Input"], ["cachedInput", "Cached input"], ["output", "Output"], ["cacheWrite", "Cache write (optional)"] ] as const).map(([key, label]) => <label className="settings-field" key={key}><span className="settings-field-label">{label} · USD / 1M tokens</span><input type="number" min="0" step="any" aria-label={`${id} ${label} · USD / 1M tokens`} value={draft[key]} onChange={(e) => { const value = e.target.value; setModelRates((previous) => ({ ...previous, [id]: { ...draft, [key]: value } })); setDirtyRates((previous) => new Set(previous).add(id)); }} /></label>)}
+          </fieldset>;
+        })}
+      </div>
+
       <label className="settings-field">
         <span className="settings-field-label">Transport</span>
         <select
@@ -1940,8 +2033,7 @@ export function ConnectionDrawerFields({
 
       {/* TASK.142: per-model context window. Same field shape as "Max output
           tokens" above (whole number in [1024, 1000000], blank = catalog/
-          assumed window); the value is saved for ONE model (the binding is
-          derived server-side), so a Model edit clears it. */}
+          assumed window); a Model edit loads that model's own saved window. */}
       <label className="settings-field">
         <span className="settings-field-label">
           Context window (tokens) <FieldHelp text={CONTEXT_WINDOW_HELP} />{" "}
@@ -1959,12 +2051,10 @@ export function ConnectionDrawerFields({
           value={contextWindow.raw}
           disabled={readOnly}
           placeholder={contextWindowPlaceholder(cwDefaultHint)}
-          onChange={(e) =>
-            // TASK.142: editing the WINDOW binds the value to whichever model
-            // is effective right now — this is the route that must never reset
-            // on its own keystrokes.
-            setContextWindow((field) => contextWindowAfterRawInput(field, e.target.value, effectiveFormModel))
-          }
+          onChange={(e) => {
+            setContextWindowDirty(true);
+            setContextWindow((field) => contextWindowAfterRawInput(field, e.target.value, effectiveFormModel));
+          }}
         />
       </label>
       <div className="settings-field-hint">{CONTEXT_WINDOW_ONELINER}</div>
@@ -1974,6 +2064,35 @@ export function ConnectionDrawerFields({
           {cwEnvHint}
         </div>
       )}
+
+      {!knownCatalogModel && <label className="settings-field">
+        <span className="settings-field-label">Reasoning support (this model)</span>
+        <select className="settings-field-input" aria-label="Reasoning support" disabled={readOnly}
+          value={reasoningSupported || effortLevels.length > 0 ? "on" : "auto"} onChange={(e) => { setReasoningSupportedDirty(true); setReasoningSupported(e.target.value === "on"); if (e.target.value === "auto") { setEffortLevels([]); setEffortLevelsDirty(true); } }}>
+          <option value="auto">Auto — catalog or provider metadata</option>
+          <option value="on">Supported</option>
+        </select>
+      </label>}
+      {!knownCatalogModel && (reasoningSupported || effortLevels.length > 0) && <fieldset className="settings-field">
+        <legend className="settings-field-label">Supported effort levels (empty uses automatic levels)</legend>
+        {(["off", "low", "medium", "high", "xhigh", "max"] as ReasoningEffort[]).map((level) => <label key={level}>
+          <input type="checkbox" disabled={readOnly} checked={effortLevels.includes(level)} onChange={(e) => {
+            setEffortLevelsDirty(true);
+            setReasoningSupported(true);
+            setReasoningSupportedDirty(true);
+            setEffortLevels((levels) => e.target.checked ? [...levels, level] : levels.filter((item) => item !== level));
+          }} /> {level}
+        </label>)}
+      </fieldset>}
+      <label className="settings-field">
+        <span className="settings-field-label">Reasoning effort (this model)</span>
+        <select className="settings-field-input" aria-label="Reasoning effort" disabled={readOnly}
+          value={modelEffort} onChange={(e) => { setModelEffortDirty(true); setModelEffort(e.target.value as ReasoningEffort | ""); }}>
+          <option value="">{editConnection?.reasoningEffort === undefined ? "Default" : `Default (connection: ${editConnection.reasoningEffort})`}</option>
+          {(effectiveReasoningLevels ?? []).map((level) => <option key={level} value={level}>{level}</option>)}
+          {modelEffort !== "" && !effectiveReasoningLevels?.includes(modelEffort) && <option value={modelEffort} disabled>{modelEffort} (unavailable)</option>}
+        </select>
+      </label>
 
       {/* Taskana 4088 (TASK.69): per-model image input. Three states: Auto
           (catalog mark, then the connection's live-fetched modality set —
@@ -1992,7 +2111,7 @@ export function ConnectionDrawerFields({
           className="settings-field-input"
           value={imageInput}
           disabled={readOnly}
-          onChange={(e) => setImageInput(e.target.value as ImageInputSelection)}
+          onChange={(e) => { setImageInput(e.target.value as ImageInputSelection); setImageInputDirty(true); }}
         >
           <option value="auto">{imageInputAutoLabel(imageInputHint)}</option>
           <option value="on">On</option>
@@ -2408,7 +2527,7 @@ export interface ConnectionDrawerProps {
   connections: readonly ProviderConnection[];
   secrets: readonly SecretStatus[];
   readOnly: boolean;
-  initialFocus?: "label" | "credential";
+  initialFocus?: "label" | "credential" | "context";
   onClose(): void;
   store?: SettingsStoreApi;
   /** Injectable custom-provider bridge (TASK.58); forwarded to the fields. */

@@ -600,6 +600,8 @@ describe("TabHostManager — host spawn", () => {
     });
     const created = manager.createTab({ workspace: "/ws", sessionId: "replacement", resume: false });
     if (!created.ok) throw new Error("create failed");
+    rig.hosts[0]!.emit("message", { type: "session_activity", state: "closing" });
+    expect(manager.listTabs()[0]?.activityState).toBe("closing");
     if (kind === "restart") {
       await manager.restartTabHost(created.tab.tabId);
     } else {
@@ -607,6 +609,7 @@ describe("TabHostManager — host spawn", () => {
     }
     await vi.waitFor(() => expect(created.tab.state).toBe("crash_looped"));
     expect(created.tab.proc).toBeNull();
+    expect(manager.listTabs()[0]?.activityState).toBe("idle");
     expect(logError).toHaveBeenCalledWith(expect.stringContaining("host spawn failed"), error);
   });
 
@@ -637,7 +640,7 @@ describe("TabHostManager — host spawn", () => {
 describe("TabHostManager — per-tab circuit breaker", () => {
   it("stops respawning a single crash-looping tab after MAX_RAPID_RESPAWNS", async () => {
     const { fork, hosts } = dyingForkRig();
-    const { window, hostExited } = windowRig();
+    const { window, hostExited, posted } = windowRig();
     const manager = makeManager(fork, window);
 
     const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
@@ -649,6 +652,10 @@ describe("TabHostManager — per-tab circuit breaker", () => {
     expect(hosts).toHaveLength(DEFAULT_BREAKER_LIMITS.maxRapidRespawns + 1);
     const tab = created.ok ? manager.getTab(created.tab.tabId) : undefined;
     expect(tab?.state).toBe("crash_looped");
+    expect(tab?.hostFailure).toMatchObject({ code: "per_tab_crash_loop", exitCode: 1 });
+    expect(manager.listTabs()[0]?.hostFailure).toEqual(tab?.hostFailure);
+    manager.deliverAllTabPorts();
+    expect(posted.at(-1)?.payload).toMatchObject({ tabId: tab?.tabId, hostFailure: tab?.hostFailure });
     // A host-exited banner for every crash.
     expect(hostExited.length).toBe(DEFAULT_BREAKER_LIMITS.maxRapidRespawns + 1);
     expect(new Set(hostExited)).toEqual(new Set([created.ok ? created.tab.tabId : ""]));
@@ -2602,7 +2609,7 @@ describe("TabHostManager — session-spawn queue (TASK.147 срез 1)", () => {
       kind: "rejected",
       reason: "limit_parent",
       message:
-        'Agent: session-subagent limit reached — this session already has 3 running child sessions. Wait for one to finish, or use tier "inline".',
+        'Agent: child session limit reached (3 running or pending). Wait for a report or stop a child before delegating more.',
     });
     expect(raw.childSpawnQueue).toHaveLength(CHILD_SPAWN_QUEUE_MAX); // never enqueued
   });
@@ -2638,7 +2645,7 @@ describe("TabHostManager — session-spawn queue (TASK.147 срез 1)", () => {
     expect(raw.childSpawnKeys.has(dedupKey)).toBe(false);
   });
 
-  it("a spawn arriving DURING its parent's drain is refused limit_parent, not parked — a waiter would otherwise be admitted by the reaps that drain is waiting for, forking a child into a parent mid-rebind", async () => {
+  it("a spawn arriving DURING its parent's drain is refused, not parked — a waiter would otherwise be admitted by the reaps that drain is waiting for, forking a child into a parent mid-rebind", async () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const manager = childManager(fork, window);
@@ -2655,19 +2662,25 @@ describe("TabHostManager — session-spawn queue (TASK.147 срез 1)", () => {
     // A rebind drains the children WITHOUT sealing the tab `closing` first
     // (only `closeTab` seals; `handleExit` instead nulls `proc`), so the
     // parent host is still live, still `running`, and can still issue a
-    // spawn while the drain awaits its reaps. Not awaited yet: an async
-    // function body runs synchronously to its first `await`, so the drain
-    // window is already open on the line below.
-    const rebinding = manager.rebindTab(tab!, "conn-new");
+    // spawn while the drain awaits its reaps. The consent is what lets the
+    // drain start at all (GitHub #33: without it the rebind refuses
+    // `children_running` before touching anything — covered by the dedicated
+    // tests below). Not awaited yet: an async function body runs
+    // synchronously to its first `await`, so the drain window is already open
+    // on the line below.
+    const rebinding = manager.rebindTab(tab!, "conn-new", undefined, { cancelChildren: true });
     rootHost.emit("message", spawnRequest({ requestId: "d4", spawnToolCallId: "drain-window-call" }));
 
     // Every child is `cancelling` and §0.7 has `cancelling` hold its slot, so
     // the cap reads FULL for the whole drain — parking here would park in
     // every rebind rather than a rare one, and the waiter would then be
-    // admitted by the very reaps the drain is waiting for.
+    // admitted by the very reaps the drain is waiting for. Since GitHub #33 the
+    // refusal is the drain's own (`closing`, the same verb a closing parent
+    // gets): a child admitted mid-drain could only be cancelled by that drain,
+    // which is exactly the cancellation the rebind asks the user about first.
     expect(childRunEvents(rootHost).find((e) => e.requestId === "d4")).toMatchObject({
       kind: "rejected",
-      reason: "limit_parent",
+      reason: "closing",
     });
     const raw = manager as unknown as { childSpawnQueue: string[]; childSpawnKeys: Map<string, string> };
     expect(raw.childSpawnQueue).toEqual([]);
@@ -2884,16 +2897,28 @@ describe("TabHostManager — a profile's effort reaches a core child's host (TAS
     expect(forkSpy.mock.calls[1]?.[2]?.env).toMatchObject({ ANYCODE_REASONING_EFFORT: "low" });
   });
 
+  it("an explicit child effort clears the parent's settings provenance marker", () => {
+    const hosts: FakeHost[] = [];
+    const fork = vi.fn<HostForkFn>(() => {
+      const host = new FakeHost(); hosts.push(host); queueMicrotask(() => host.emit("spawn"));
+      return host as unknown as UtilityProcess;
+    });
+    const manager = childManager(fork, windowRig().window, {env:() => ({ANYCODE_REASONING_EFFORT:"low", ANYCODE_REASONING_EFFORT_MODEL:"a"})});
+    expect(manager.createTab({workspace:"/ws", sessionId:"effort-provenance", resume:false, connectionId:"conn-parent"}).ok).toBe(true);
+    hosts[0]!.emit("message", spawnRequest({requestId:"explicit-child-effort", effort:"max"}));
+    expect(fork.mock.calls[1]?.[2]?.env).toMatchObject({ANYCODE_REASONING_EFFORT:"max", ANYCODE_REASONING_EFFORT_MODEL:""});
+  });
+
   it("no effort on the request leaves the connection's own tier untouched", () => {
     const { hosts, forkSpy } = rig();
     hosts[0]!.emit("message", spawnRequest({ requestId: "effort-2" }));
     expect(forkSpy.mock.calls[1]?.[2]?.env ?? {}).not.toHaveProperty("ANYCODE_REASONING_EFFORT");
   });
 
-  it("a core child's xhigh effort maps to max in the stamped env", () => {
+  it("a core child's xhigh effort is preserved in the stamped env", () => {
     const { hosts, forkSpy } = rig();
     hosts[0]!.emit("message", spawnRequest({ requestId: "effort-xhigh-core", effort: "xhigh" }));
-    expect(forkSpy.mock.calls[1]?.[2]?.env).toMatchObject({ ANYCODE_REASONING_EFFORT: "max" });
+    expect(forkSpy.mock.calls[1]?.[2]?.env).toMatchObject({ ANYCODE_REASONING_EFFORT: "xhigh" });
   });
 });
 
@@ -3511,6 +3536,7 @@ describe("TabHostManager — child terminal + reap (TASK.102 CUT-S2 §0/§2.6.4)
     const childHost = hosts[1]!;
 
     childHost.emit("message", childActivityMsg("Bash", "ran a command"));
+    childHost.emit("message", { type: CHILD_PROGRESS_TYPE, kind: "status", itemKind: "tool", text: "Read: file", toolName: "Read" });
     childHost.emit("message", childAttentionMsg(true));
     childHost.emit("message", childAttentionMsg(false));
 
@@ -3522,6 +3548,7 @@ describe("TabHostManager — child terminal + reap (TASK.102 CUT-S2 §0/§2.6.4)
       toolName: "Bash",
       summary: "ran a command",
     });
+    expect(events).toContainEqual({ type: CHILD_RUN_EVENT_TYPE, requestId: "p1", kind: "status", itemKind: "tool", text: "Read: file", toolName: "Read" });
     expect(events).toContainEqual({ type: CHILD_RUN_EVENT_TYPE, requestId: "p1", kind: "attention", waiting: true });
     expect(events).toContainEqual({ type: CHILD_RUN_EVENT_TYPE, requestId: "p1", kind: "attention", waiting: false });
   });
@@ -3834,6 +3861,31 @@ describe("TabHostManager — children are invisible outside the manager (TASK.10
     childHost.emit("message", childTerminalMsg({ status: "completed" }));
     expect(manager.getTab(childTabId)).toBeUndefined();
     expect(manager.listChildRuns()).toEqual([]);
+  });
+
+  // GitHub #33: the count a cross-connection switch is gated on — exactly the
+  // live children the rebind's own `drainChildren` would cancel.
+  it("runningChildCount() reports the tab's live children and returns to 0 once the child run finalizes", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-running-children", resume: false });
+    expect(root.ok).toBe(true);
+    const rootTabId = manager.listTabs().find((tab) => tab.childOf === undefined)?.tabId ?? "";
+
+    expect(manager.runningChildCount(rootTabId)).toBe(0);
+
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "rc-1" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "rc-1" && e.kind === "accepted");
+    expect(accepted?.kind).toBe("accepted");
+    expect(manager.runningChildCount(rootTabId)).toBe(1);
+    // A child tab's own count is its own children's, never its parent's.
+    expect(manager.runningChildCount(accepted?.kind === "accepted" ? accepted.childTabId : "")).toBe(0);
+
+    const childHost = hosts[1]!;
+    childHost.emit("message", childTerminalMsg({ status: "completed" }));
+    expect(manager.runningChildCount(rootTabId)).toBe(0);
   });
 
   it("deliverTabPort stamps the child envelope field and SKIPS the terminal channel entirely for a child tab", () => {
@@ -5262,6 +5314,193 @@ describe("TabHostManager — rebindTab (TASK.106 cut-2)", () => {
     expect(tab!.state).toBe("running");
   });
 
+  // ── GitHub #33: running children are never cancelled without consent ──────
+  // Driven through the REAL manager + REAL handleTabRebind, because the defect
+  // lived in the window between the handler's check and the manager's drain.
+
+  /** A root tab with one admitted, live child. Returns the pieces a rebind needs. */
+  function rootWithLiveChild(sessionId: string, connectionId: string) {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, {
+      env: (id?: string) => (id === undefined ? {} : { ANYCODE_CONNECTION: id }),
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId, resume: false, connectionId });
+    if (!created.ok) throw new Error("create failed");
+    const rootTabId = created.tab.tabId;
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "c-1" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "c-1" && e.kind === "accepted");
+    if (accepted?.kind !== "accepted") throw new Error("child was not admitted");
+    return { manager, hosts, rootHost, tab: created.tab, rootTabId, childTabId: accepted.childTabId };
+  }
+
+  it("refuses children_running and leaves the child running when no consent was given", async () => {
+    const { manager, tab, rootTabId, childTabId } = rootWithLiveChild("root-consent-refused", "conn-old");
+    expect(manager.runningChildCount(rootTabId)).toBe(1);
+
+    const res = await manager.rebindTab(tab, "conn-new");
+
+    expect(res).toEqual({ ok: false, reason: "children_running", runningChildren: 1 });
+    // Nothing was touched: the parent still runs on its old connection and the
+    // child it never agreed to lose is still live.
+    expect(tab.connectionId).toBe("conn-old");
+    expect(tab.state).toBe("running");
+    expect(manager.getTab(childTabId)).toBeDefined();
+    expect(manager.runningChildCount(rootTabId)).toBe(1);
+  });
+
+  it("drains the children and switches when the caller carries the user's consent", async () => {
+    const { manager, tab, rootTabId, childTabId } = rootWithLiveChild("root-consent-given", "conn-old");
+
+    const res = await manager.rebindTab(tab, "conn-new", undefined, { cancelChildren: true });
+
+    expect(res).toEqual({ ok: true });
+    expect(tab.connectionId).toBe("conn-new");
+    expect(manager.getTab(childTabId)).toBeUndefined();
+    expect(manager.runningChildCount(rootTabId)).toBe(0);
+  });
+
+  it("a child spawn during the switch's env preparation is REFUSED, so the consent gate's answer stays final", async () => {
+    // The exact window the review named: the handler validates the child count,
+    // then awaits env preparation, then calls rebindTab. On the unfixed code a
+    // child admitted inside that await was registered and then silently drained
+    // by the rebind. The rebind lock refuses the admission instead.
+    const { manager, tab, rootTabId } = rootWithLiveChild("root-race-clear", "conn-old");
+    // Consent for the one child the user was asked about would not cover a
+    // second one, so the tab is drained to zero first — the switch starts from
+    // "nothing running", the state in which the user was never asked anything.
+    await manager.rebindTab(tab, "conn-old", undefined, { cancelChildren: true });
+    expect(manager.runningChildCount(rootTabId)).toBe(0);
+    const hostCountBefore = manager.listTabs().length;
+
+    let spawnWhilePriming: ChildRunEvent | undefined;
+    const deps = {
+      manager,
+      connectionExists: () => true,
+      persistence: { touchSession: vi.fn(async () => {}) },
+      // Runs inside the handler's locked window, i.e. after the child gate and
+      // before the drain — the parent host is still alive and can still ask.
+      ensureConnectionEnv: async () => {
+        const live = manager.getTab(tab.tabId)?.proc as unknown as FakeHost;
+        live.emit("message", spawnRequest({ requestId: "late-child", spawnToolCallId: "late-call" }));
+        await Promise.resolve();
+        spawnWhilePriming = childRunEvents(live).find((e) => e.requestId === "late-child");
+      },
+    } as unknown as TabIpcDeps;
+
+    const res = await handleTabRebind(deps, { tabId: tab.tabId, connectionId: "conn-new" });
+
+    expect(res).toEqual({ ok: true, connectionId: "conn-new" });
+    // The late spawn never became a child: it was refused up front, not
+    // admitted and then cancelled behind the user's back.
+    expect(spawnWhilePriming).toMatchObject({ kind: "rejected", reason: "closing" });
+    expect(manager.runningChildCount(tab.tabId)).toBe(0);
+    expect(manager.listChildRuns()).toEqual([]);
+    expect(manager.listTabs()).toHaveLength(hostCountBefore);
+  });
+
+  // The QUEUE is the second door into `admitChildSpawn`: `spawnChild` refuses a
+  // fresh request during the lock, but a request parked earlier could still be
+  // admitted by a pump triggered from outside (another parent's child ending
+  // frees the global cap). That admission lands inside the drain window, so the
+  // rebind's own child gate had already passed and its model write had already
+  // landed — "Wait" would leave the setting changed, and with consent the new
+  // child would be drained under a confirmation that never mentioned it.
+  /** A manager whose GLOBAL child cap is 1, so a parked request is freed by any other parent's child ending. */
+  function globalCapRig(sessionId: string, connectionId: string) {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, {
+      env: (id?: string) => (id === undefined ? {} : { ANYCODE_CONNECTION: id }),
+      childRunsGlobalMax: () => 1,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId, resume: false, connectionId });
+    if (!created.ok) throw new Error("create failed");
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "cap-1" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "cap-1" && e.kind === "accepted");
+    if (accepted?.kind !== "accepted") throw new Error("first child was not admitted");
+    return { manager, hosts, rootHost, tab: created.tab, firstChildTabId: accepted.childTabId };
+  }
+
+  it("a queued spawn is NOT admitted while the rebind lock is held, and is settled once it is released", () => {
+    const { manager, rootHost, tab, firstChildTabId } = globalCapRig("root-queue-locked", "conn-old");
+    // Global cap 1 is taken by this tab's own child, so the next request parks.
+    rootHost.emit("message", spawnRequest({ requestId: "cap-2", spawnToolCallId: "cap-call-2" }));
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "cap-2")).toBe(false);
+    const raw = manager as unknown as { childSpawnQueue: string[] };
+    expect(raw.childSpawnQueue).toEqual(["cap-2"]);
+
+    expect(manager.acquireRebind(tab.tabId)).toBe(true);
+    // Free the global slot from OUTSIDE the lock's owner: this child belongs to
+    // the same tab here only for rig simplicity, but the pump it triggers is the
+    // one any other parent's completion triggers — and it must not admit cap-2.
+    const childHost = manager.getTab(firstChildTabId)?.proc as unknown as FakeHost;
+    childHost.emit("message", childTerminalMsg({ status: "completed" }));
+
+    // The waiter is still queued and, crucially, never entered the child set a
+    // drain would take: nothing to cancel behind the user's back.
+    expect(raw.childSpawnQueue).toEqual(["cap-2"]);
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "cap-2")).toBe(false);
+    expect(manager.runningChildCount(tab.tabId)).toBe(0);
+    expect(manager.listChildRuns()).toEqual([]);
+
+    // Releasing the lock settles it exactly as a post-rebind waiter should be:
+    // the parent's host is still the same live process here, so it is admitted.
+    manager.releaseRebind(tab.tabId);
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "cap-2")).toMatchObject({ kind: "accepted" });
+    expect(manager.runningChildCount(tab.tabId)).toBe(1);
+    expect(manager.getTab(tab.tabId)).toBeDefined();
+  });
+
+  it("a consented switch drains exactly the children it asked about — a queued spawn joins neither the set nor a later generation", async () => {
+    const { manager, rootHost, tab, firstChildTabId } = globalCapRig("root-queue-consent", "conn-old");
+    rootHost.emit("message", spawnRequest({ requestId: "cap-2", spawnToolCallId: "cap-call-2" }));
+    const raw = manager as unknown as { childSpawnQueue: string[] };
+    expect(raw.childSpawnQueue).toEqual(["cap-2"]);
+
+    // Hold the lock the way the handler does for the whole switch…
+    expect(manager.acquireRebind(tab.tabId)).toBe(true);
+    // …and let an unrelated completion pump the queue while it is held. On the
+    // unfixed code cap-2 is admitted here and then cancelled by the drain.
+    const childHost = manager.getTab(firstChildTabId)?.proc as unknown as FakeHost;
+    childHost.emit("message", childTerminalMsg({ status: "completed" }));
+    expect(manager.runningChildCount(tab.tabId)).toBe(0);
+
+    const res = await manager.rebindTab(tab, "conn-new", undefined, { cancelChildren: true });
+    manager.releaseRebind(tab.tabId);
+
+    expect(res).toEqual({ ok: true });
+    expect(tab.connectionId).toBe("conn-new");
+    // The drain found nothing to cancel, and the parked request was refused
+    // `closing` by the drain's own purge — never admitted into the set being
+    // drained (which the consent did not cover) and never accepted.
+    expect(manager.runningChildCount(tab.tabId)).toBe(0);
+    expect(manager.listChildRuns()).toEqual([]);
+    expect(childRunEvents(rootHost).filter((e) => e.requestId === "cap-2")).toMatchObject([
+      { kind: "rejected", reason: "closing" },
+    ]);
+  });
+
+  it("carries the prior effort only on the destination rebind spawn", async () => {
+    const envs: NodeJS.ProcessEnv[] = [];
+    const fork: HostForkFn = (_entry, _args, options) => {
+      envs.push(options?.env ?? {});
+      const host = new FakeHost();
+      queueMicrotask(() => host.emit("spawn"));
+      return host as unknown as UtilityProcess;
+    };
+    const { window } = windowRig();
+    const manager = rebindManager(fork, window, new Map([["old", {}], ["new", {ANYCODE_MODEL: "glm-5.3-flash"}]]));
+    const created = manager.createTab({workspace:"/ws", sessionId:"rebind-effort", resume:false, connectionId:"old"});
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    expect(await atHostExitDeadline(() => manager.rebindTab(created.tab, "new", "high"))).toEqual({ok:true});
+    expect(envs[0]?.ANYCODE_SWITCH_PRIOR_EFFORT).toBeUndefined();
+    expect(envs[1]).toMatchObject({ANYCODE_MODEL:"glm-5.3-flash", ANYCODE_SWITCH_PRIOR_EFFORT:"high"});
+  });
+
   it("the re-spawn's argv runs --resume with the SAME session id (history survives by construction)", async () => {
     const seenArgs: string[][] = [];
     const hosts: FakeHost[] = [];
@@ -5412,6 +5651,23 @@ describe("TASK.194 model admission before fork", () => {
     await flush();
     expect(validateChildModel).toHaveBeenCalledWith("claude-opus-5-5", "anthropic-connection");
     expect(hosts).toHaveLength(2);
+  });
+});
+
+describe("session activity messages", () => {
+  it("tracks the current host and ignores stale or invalid messages", () => {
+    const rig = liveForkRig(); const manager = makeManager(rig.fork, windowRig().window);
+    manager.createTab({ workspace: "/allowed", sessionId: "activity", resume: false });
+    const host = rig.hosts[0]!;
+    expect(manager.listTabs()[0]?.activityState).toBe("idle");
+    host.emit("message", { type: "session_activity", state: "waiting_approval" });
+    expect(manager.listTabs()[0]?.activityState).toBe("waiting_approval");
+    host.emit("message", { type: "session_activity", state: "invalid" });
+    expect(manager.listTabs()[0]?.activityState).toBe("waiting_approval");
+    host.emit("exit", 1);
+    expect(manager.listTabs()[0]?.activityState).toBe("idle");
+    host.emit("message", { type: "session_activity", state: "running" });
+    expect(manager.listTabs()[0]?.activityState).toBe("idle");
   });
 });
 
@@ -7206,6 +7462,48 @@ describe("deferred host spawns during a settings refresh", () => {
     expect(recordHostFailure).not.toHaveBeenCalled();
   });
 
+  it.each(["ready", "refused"] as const)("ignores an obsolete initial refresh while its replacement is pending (%s)", async (outcome) => {
+    const rig = shutdownableForkRig();
+    const window = windowRig();
+    let releaseA!: () => void;
+    let releaseB!: () => void;
+    const a = new Promise<void>((resolve) => { releaseA = resolve; });
+    const b = new Promise<void>((resolve) => { releaseB = resolve; });
+    let phase: "initial" | "admit" | "pending" | "old" | "ready" = "initial";
+    const failures = vi.fn();
+    const closed = vi.fn();
+    const manager = childManager(rig.fork, window.window, {
+      env: () => phase === "admit" || phase === "ready" || (phase === "old" && outcome === "ready") ? {} : undefined,
+      waitForHostEnv: () => phase === "initial" ? a : phase === "pending" ? b : undefined,
+      recordHostFailure: failures,
+      onTabClosed: closed,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "race", connectionId: "old", resume: false });
+    if (!created.ok) throw new Error("create failed");
+    phase = "admit";
+    const replacement = manager.rebindTab(created.tab, "new");
+    phase = "pending";
+    expect(await replacement).toEqual({ ok: true });
+    expect(created.tab.proc).toBeNull();
+    const deliveries = window.posted.length;
+    phase = "old";
+    releaseA();
+    await flush();
+    expect(rig.hosts).toHaveLength(0);
+    expect(window.posted).toHaveLength(deliveries);
+    expect(created.tab.proc).toBeNull();
+    expect(created.tab.connectionId).toBe("new");
+    expect(manager.getTab(created.tab.tabId)).toBe(created.tab);
+    expect(manager.listTabs()).toEqual([expect.objectContaining({ sessionId: "race", tabId: created.tab.tabId })]);
+    expect(closed).not.toHaveBeenCalled();
+    expect(failures).not.toHaveBeenCalled();
+    phase = "ready";
+    releaseB();
+    await vi.waitFor(() => expect(rig.hosts).toHaveLength(1));
+    expect(created.tab.proc).toBe(rig.hosts[0]);
+    expect(created.tab.connectionId).toBe("new");
+  });
+
   it("does not resume a deferred spawn after close", async () => {
     const rig = shutdownableForkRig();
     let blocked = false;
@@ -7472,6 +7770,23 @@ describe("TabHostManager — GitHub #17 slice A accepted acknowledgement", () =>
  * flag exists to avoid. Explicitly synchronous callers keep the FIFO queue.
  */
 describe("TabHostManager — detached spawns are refused at the cap, never parked (GitHub #17 slice B)", () => {
+  it("uses the configured per-parent count for detached refusals and keeps joins queued", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, { childRunsPerParentMax: () => 1 });
+    manager.createTab({ workspace: "/ws", sessionId: "root-small-cap", resume: false });
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "first", detach: true }));
+    rootHost.emit("message", spawnRequest({ requestId: "refused", detach: true, spawnToolCallId: "refused" }));
+    rootHost.emit("message", spawnRequest({ requestId: "queued", spawnToolCallId: "queued" }));
+    expect(childRunEvents(rootHost).find((event) => event.requestId === "refused")).toMatchObject({
+      kind: "rejected", reason: "limit_parent",
+      message: "Agent: child session limit reached (1 running or pending). Wait for a report or stop a child before delegating more.",
+    });
+    expect(childRunEvents(rootHost).some((event) => event.requestId === "queued")).toBe(false);
+    expect(hosts).toHaveLength(2);
+  });
+
   it("four detached same-step requests accept three and reject the fourth without queueing", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
@@ -7493,7 +7808,7 @@ describe("TabHostManager — detached spawns are refused at the cap, never parke
       kind: "rejected",
       reason: "limit_parent",
       message:
-        'Agent: session-subagent limit reached — this session already has 3 running child sessions. Wait for one to finish, or use tier "inline".',
+        'Agent: child session limit reached (3 running or pending). Wait for a report or stop a child before delegating more.',
     });
     // Nothing was queued, nothing was reserved, nothing forked.
     const raw = manager as unknown as { childSpawnQueue: string[]; childSpawnKeys: Map<string, string> };
@@ -7550,11 +7865,33 @@ describe("TabHostManager — detached spawns are refused at the cap, never parke
 
     hostD.emit("message", spawnRequest({ requestId: "d-global", detach: true, spawnToolCallId: "d-global-call" }));
     const refused = childRunEvents(hostD).find((e) => e.requestId === "d-global");
-    expect(refused).toMatchObject({ kind: "rejected", reason: "limit_global" });
+    expect(refused).toMatchObject({
+      kind: "rejected",
+      reason: "limit_global",
+      message: 'Agent: application-wide child session limit reached (8 running child sessions). No child was started. Wait for one to finish, or use tier "inline".',
+    });
     const raw = manager as unknown as { childSpawnQueue: string[]; childSpawnKeys: Map<string, string> };
     expect(raw.childSpawnQueue).toEqual([]);
     expect(raw.childSpawnKeys.has(["root-gD", "d-global-call"].join(String.fromCharCode(0)))).toBe(false);
     expect(hosts).toHaveLength(4 + 8);
+  });
+
+  it("reports the configured global limit when it changes below the running count", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    let globalMax = 2;
+    const manager = childManager(fork, window, { childRunsGlobalMax: () => globalMax });
+    manager.createTab({ workspace: "/ws", sessionId: "root-global-configured", resume: false });
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "first" }));
+    rootHost.emit("message", spawnRequest({ requestId: "second" }));
+    globalMax = 1;
+    rootHost.emit("message", spawnRequest({ requestId: "refused", detach: true, spawnToolCallId: "refused" }));
+    expect(childRunEvents(rootHost).find((event) => event.requestId === "refused")).toMatchObject({
+      kind: "rejected",
+      reason: "limit_global",
+      message: 'Agent: application-wide child session limit reached (1 running child session). No child was started. Wait for one to finish, or use tier "inline".',
+    });
   });
 
   it("the live per-parent resolver uses the OWNING workspace", () => {
@@ -7693,6 +8030,30 @@ describe("GitHub #6 — a missing workspace folder fails fast instead of connect
       expect(posted.channel).toBe(PORT_ENVELOPE_TYPE);
       expect(posted.payload).toMatchObject({ tabId: result.tab.tabId, workspace, missingWorkspace: true });
     }
+  });
+
+  it("replaces a retained crash cause when a rebind finds the workspace missing", async () => {
+    const rig = dyingForkRig();
+    const win = windowRig();
+    let missing = false;
+    const manager = new TabHostManager({
+      fork: rig.fork, hostEntry: "/fake", createChannel: fakeChannel,
+      getWindow: () => win.window, env: () => ({}), logger: silentLogger,
+      workspaceMissing: () => missing,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "vanished-rebind", resume: false });
+    if (!created.ok) throw new Error("create failed");
+    await flush();
+    expect(created.tab.hostFailure?.code).toBe("per_tab_crash_loop");
+    missing = true;
+    await manager.rebindTab(created.tab, "new");
+    expect(created.tab.missingWorkspace).toBe(true);
+    expect(created.tab.hostFailure).toBeUndefined();
+    expect(manager.listTabs()[0]).toMatchObject({ missingWorkspace: true });
+    expect(manager.listTabs()[0]).not.toHaveProperty("hostFailure");
+    const envelope = win.posted.filter((entry) => entry.channel === PORT_ENVELOPE_TYPE).at(-1)?.payload;
+    expect(envelope).toMatchObject({ missingWorkspace: true });
+    expect(envelope).not.toHaveProperty("hostFailure");
   });
 
   it("a folder deleted under a live tab makes the respawn refuse to fork and deliver the error", async () => {

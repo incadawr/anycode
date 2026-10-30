@@ -30,7 +30,7 @@
  * through a doubly-conservative per-segment screen (raw metacharacter screen,
  * THEN quote-aware tokenization) — see `classifyPipelineSegment`.
  *
- * TASK.136 (RES-1 fix): the single-command path's write-flag screens
+ * The single-command flag checks: the single-command path's write-flag screens
  * (`classifyBashCommand` step 4b, `classifyGit`'s flag loop) now reuse that
  * same quote-aware tokenizer (`tokenizeSegment`) to check each argument on
  * BOTH its raw and quote-stripped form — closing a hole where a quoted flag
@@ -210,7 +210,7 @@ function isWriteFlag(arg: string, flags: ReadonlySet<string>): boolean {
  * Classifies a `git <subcommand> …` invocation (tokens[0] basename is `git`).
  * `tokens` drives subcommand/arity checks unchanged; `segmentTokens` is the
  * quote-aware split of the SAME command string (from `tokenizeSegment`,
- * defined below), consulted ONLY by the write-flag loop (TASK.136 RES-1 fix
+ * defined below), consulted ONLY by the write-flag loop (the quoted-flag fix
  * — see that loop for why a single raw-string check is not enough).
  */
 function classifyGit(tokens: string[], segmentTokens: SegmentToken[] | undefined): BashCommandClass {
@@ -232,7 +232,7 @@ function classifyGit(tokens: string[], segmentTokens: SegmentToken[] | undefined
   // Args follow the subcommand: screen each on BOTH its raw (quotes intact)
   // and quote-stripped form — `isWriteFlag` on the raw string alone is fooled
   // by a quoted flag (`"--output"` starts with `"`, not `-`, so the verbatim
-  // check never fires; TASK.136 RES-1). `segmentTokens` is undefined only on
+  // check never fires; the quoted-flag fix). `segmentTokens` is undefined only on
   // an unterminated quote (`tokenizeSegment`'s one failure mode once the
   // metacharacter screen has already run) — that is undecidable, not proven
   // safe, so it fails closed to "unknown" rather than looping over nothing.
@@ -292,7 +292,7 @@ export function classifyBashCommand(command: string): BashCommandClass {
   }
 
   // 4b. Write-flag safety net across every argument, screened on BOTH the raw
-  //     (quotes intact) and quote-stripped form (TASK.136 RES-1 fix): a
+  //     (quotes intact) and quote-stripped form (the quoted-flag fix): a
   //     quoted flag like `"--output"` starts with `"`, not `-`, so checking
   //     the naive string alone never recognizes it (`git diff "--output" f`
   //     wrote `f` on live git 2.37.1 before this fix — see GP2). Fail-closed

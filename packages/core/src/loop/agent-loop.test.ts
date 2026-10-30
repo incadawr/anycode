@@ -21,6 +21,7 @@ vi.mock("../tools/to-model-tools.js", () => ({
 import { z } from "zod";
 import { APICallError } from "ai";
 import { AgentLoop, type AgentLoopConfig, type ContextBreakdown } from "./agent-loop.js";
+import { COMPACTION_INSTRUCTION } from "../prompts/compaction.js";
 import { toToolDeclarations } from "../tools/to-model-tools.js";
 import type { Tokenizer } from "../context/tokenizer.js";
 import type { AgentEvent, ModelStreamEvent } from "../types/events.js";
@@ -2871,8 +2872,20 @@ describe("AgentLoop.runTurn — terminal retry metadata (TASK.33 W7b)", () => {
       attemptsMade: 0,
       retryable: false,
       hadModelOutput: true,
+      replayStopped: "output_started",
       code: "unknown",
     });
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
+  });
+
+  it("reports the output boundary after reasoning retries and does not dispatch failed tools", async () => {
+    const modelPort = new MockModelPort([[{ type: "reasoning_delta", id: "r", text: "discard" },
+      { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 0, reason: "network" },
+      { type: "tool_call", toolCall: { id: "call", name: "Mock", input: {} } },
+      { type: "error", error: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) }]]);
+    const events = await collect(makeLoop({ modelPort }).runTurn("hi"));
+    expect(findErrorEvent(events)?.retry).toMatchObject({ attemptsMade: 1, replayStopped: "output_started", hadModelOutput: true });
+    expect(events.some(e => e.type === "tool_execution_start")).toBe(false);
     expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
   });
 
@@ -3045,6 +3058,15 @@ describe("AgentLoop.compactNow — manual compaction (design slice-2.3-cut.md, t
     expect(types(events)).toEqual(["compaction_start", "compaction_end", "context_usage"]);
     expect(events[0]).toEqual({ type: "compaction_start", trigger: "manual" });
     expect(events[1]).toMatchObject({ type: "compaction_end", ok: true });
+    // GitHub #36: the event a transcript row expands carries the evidence —
+    // the summary that replaced the prefix (the installed item's own text), the
+    // item id, and the instruction the summarizing model was given.
+    const end = events[1] as Extract<(typeof events)[number], { type: "compaction_end" }>;
+    const summaryItem = loop.history.items[0]!;
+    expect(end.summaryItemId).toBe(summaryItem.id);
+    expect(end.summary).toBe(summaryItem.message.content);
+    expect(end.summary).toContain("Summary of the earlier conversation.");
+    expect(end.prompt).toBe(COMPACTION_INSTRUCTION);
 
     const messages = loop.history.toMessages();
     expect(messages).toHaveLength(3); // [compact_summary, u2, a2]
@@ -3566,6 +3588,57 @@ describe("AgentLoop.runTurn — auto-checkpoint arc (design slice-4.7-cut.md §2
     expect(cap.calls[0]?.userInput).toBe("do the write");
   });
 
+  it("samples the compaction boundary at TURN START, not at the lazy capture — the fix the rewind cutoff rests on (GitHub #36 review 4)", async () => {
+    const cap = makeCapturer(createdResult);
+    // The recorded sequence grows DURING the turn — exactly what an automatic
+    // compaction of this turn does: it records an outcome after the turn-start
+    // snapshot, before the first write-effect tool asks for a checkpoint. The
+    // bump therefore happens where such a compaction would, INSIDE the turn and
+    // strictly BEFORE `capture` is called; sampling at capture time would hand
+    // the checkpoint a boundary that already covers that compaction, and a
+    // rewind to it would keep a row it must discard.
+    let recorded = 3;
+    const order: string[] = [];
+    const inner = new MockModelPort([writeStep("w1"), stopStep]);
+    const bumpingPort: ModelPort = {
+      streamText(request) {
+        const stream = inner.streamText(request);
+        return (async function* () {
+          for await (const event of stream) {
+            if (event.type === "tool_call" && event.toolCall.name === "Write") {
+              recorded = 4;
+              order.push("bump");
+            }
+            yield event;
+          }
+        })();
+      },
+    };
+    const capturing: CapturerProbe["port"] = {
+      capture: async (req) => {
+        order.push("capture");
+        return cap.port.capture(req);
+      },
+    };
+    const loop = makeLoop({
+      modelPort: bumpingPort,
+      registry: makeRegistry({ Write: writeMock }),
+      checkpoints: capturing,
+      compactionBoundary: () => recorded,
+    });
+    loop.history.append({ role: "user", content: "earlier" });
+
+    await collect(loop.runTurn("do the write"));
+
+    // The bump really did happen before the capture (otherwise the assertion
+    // below would be vacuous)...
+    expect(order).toEqual(["bump", "capture"]);
+    expect(recorded).toBe(4);
+    // ...and the checkpoint still carries the value read at TURN START.
+    expect(cap.calls).toHaveLength(1);
+    expect(cap.calls[0]?.compactionSeq).toBe(3);
+  });
+
   it("hands the capturer the RAW userInput, not the hook-augmented prompt", async () => {
     const cap = makeCapturer(createdResult);
     const hooks = {
@@ -3667,6 +3740,29 @@ describe("AgentLoop microcompact pressure gate", () => {
 // denominator and the manager's compaction threshold follow the new window.
 
 describe("AgentLoop.contextInfo / setContextWindow (slice 6.4)", () => {
+  it("reads the full prompt and declarations live and discards only the model anchor", async () => {
+    const declarations = [{ name: "tool", description: "help", inputJsonSchema: {} }];
+    const declarationTokens = JSON.stringify({ name: "tool", description: "help", inputSchema: {} }).length;
+    const modelPort = new MockModelPort([[{ type: "finish", finishReason: "stop", usage: { inputTokens: 5000 } }]]);
+    const loop = makeLoop({ tokenizer: lengthTokenizer, systemPrompt: "prompt", modelPort });
+    const config = (loop as unknown as { config: AgentLoopConfig }).config;
+    vi.mocked(toToolDeclarations).mockImplementation(() => declarations);
+    try {
+      expect(loop.contextInfo().estimatedTokens).toBe(6 + declarationTokens);
+      config.systemPrompt = "new prompt";
+      expect(loop.contextInfo().estimatedTokens).toBe(10 + declarationTokens);
+      declarations.length = 0;
+      expect(loop.contextInfo().estimatedTokens).toBe(10);
+      await collect(loop.runTurn("hello"));
+      const anchored = loop.contextInfo();
+      expect(anchored.source).toBe("provider");
+      loop.setContextWindow(100_000);
+      expect(loop.contextInfo().estimatedTokens).toBe(anchored.estimatedTokens);
+      loop.invalidateProviderAnchor();
+      expect(loop.contextInfo()).toMatchObject({ source: "estimate", estimatedTokens: loop.history.totalTokenEstimate() + 10 });
+    } finally { vi.mocked(toToolDeclarations).mockImplementation(() => []); }
+  });
+
   it("reports an estimate-source virgin snapshot with the default budget", () => {
     const loop = makeLoop({});
     const info = loop.contextInfo();
@@ -3746,19 +3842,16 @@ describe("AgentLoop.contextInfo / setContextWindow (slice 6.4)", () => {
 describe("AgentLoop.contextBreakdown (design slice-P7.17-cut.md §2.1)", () => {
   it("collapses the whole systemPrompt into systemPromptTokens when systemPromptComponents is absent (backward-compat)", () => {
     const loop = makeLoop({ tokenizer: lengthTokenizer, systemPrompt: "0123456789" });
-    // A history message gives the provider-anchored total (P7.17/F12 W1-FIX P2)
-    // something nonzero to anchor to; with no components, none of the raw
-    // systemPrompt weight (10) leaks into skills/meta, and the shared
-    // anchor-scale (anchor=40, rawTotal=50, k=0.8) lands on exact integers.
+    // The local total includes both history and the full prompt.
     loop.history.append({ role: "user", content: "h".repeat(40) });
     const breakdown = loop.contextBreakdown();
     expect(breakdown.skillsTokens).toBe(0);
     expect(breakdown.metaTokens).toBe(0);
     expect(breakdown.systemToolsTokens).toBe(0);
     expect(breakdown.mcpToolsTokens).toBe(0);
-    expect(breakdown.messagesTokens).toBe(32);
-    expect(breakdown.systemPromptTokens).toBe(8);
-    expect(breakdown.totalEstimatedTokens).toBe(40);
+    expect(breakdown.messagesTokens).toBe(40);
+    expect(breakdown.systemPromptTokens).toBe(10);
+    expect(breakdown.totalEstimatedTokens).toBe(50);
     expect(breakdown.totalEstimatedTokens).toBe(loop.contextInfo().estimatedTokens);
   });
 
@@ -3807,18 +3900,14 @@ describe("AgentLoop.contextBreakdown (design slice-P7.17-cut.md §2.1)", () => {
         { kind: "repoMap", text: repoMap },
       ],
     });
-    // Raw leaves before the anchor-scale: messages=50, skills=7, systemPrompt
-    // (base, by subtraction)=20, meta=5+4+3+6=18; anchor=50 (local, no
-    // provider usage — the same field contextInfo() reports), rawTotal=95,
-    // k=50/95. The kind-based bucket assignment and the base/skills/meta
-    // ordering (20 > 18 > 7) survive that single shared scale factor exactly.
+    // The full local total is 50 history tokens plus 45 prompt tokens.
     loop.history.append({ role: "user", content: "h".repeat(50) });
     const breakdown = loop.contextBreakdown();
-    expect(breakdown.skillsTokens).toBe(4);
-    expect(breakdown.metaTokens).toBe(9);
-    expect(breakdown.systemPromptTokens).toBe(11);
-    expect(breakdown.messagesTokens).toBe(26);
-    expect(breakdown.totalEstimatedTokens).toBe(50);
+    expect(breakdown.skillsTokens).toBe(7);
+    expect(breakdown.metaTokens).toBe(18);
+    expect(breakdown.systemPromptTokens).toBe(20);
+    expect(breakdown.messagesTokens).toBe(50);
+    expect(breakdown.totalEstimatedTokens).toBe(95);
     expect(breakdown.totalEstimatedTokens).toBe(
       breakdown.messagesTokens +
         breakdown.systemToolsTokens +

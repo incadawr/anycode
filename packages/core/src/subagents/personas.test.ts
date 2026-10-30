@@ -29,9 +29,10 @@ describe("personas", () => {
     ]);
   });
 
-  it("general-purpose is exactly the default tools minus Agent, Skill, and Workflow (spawn/child locks)", () => {
+  it("general-purpose is exactly the default tools minus Agent, AgentStatus, Skill, and Workflow (spawn/child locks)", () => {
     const defaults = registry.list().sort();
     // Agent and Workflow are withheld by the non-recursion lock (SPAWN_TOOLS);
+    // AgentStatus is withheld because the child cannot spawn agents.
     // Skill is withheld because a child subagent inherits no SkillPort in v1
     // (design §2.7 — persona tool lists are unchanged by slices 3.3/3.4).
     // ArchMap (TASK.233 S1) is a parent-session tool that is opt-in at the
@@ -45,10 +46,11 @@ describe("personas", () => {
     // list or the workflow step that spawned it names it explicitly.
     const expected = defaults.filter(
       (name) =>
-        name !== "Agent" && name !== "Skill" && name !== "Workflow" && name !== "ArchMap",
+        name !== "Agent" && name !== "AgentStatus" && name !== "Skill" && name !== "Workflow" && name !== "ArchMap",
     );
     expect([...PERSONAS["general-purpose"].tools].sort()).toEqual(expected);
     expect(PERSONAS["general-purpose"].tools).not.toContain("Agent");
+    expect(PERSONAS["general-purpose"].tools).not.toContain("AgentStatus");
     expect(PERSONAS["general-purpose"].tools).not.toContain("Skill");
     expect(PERSONAS["general-purpose"].tools).not.toContain("Workflow");
     expect(PERSONAS["general-purpose"].tools).not.toContain("ArchMap");
@@ -69,6 +71,7 @@ describe("personas", () => {
 
   it("explore is a strict read-only subset with no Bash (design R7)", () => {
     expect([...PERSONAS.explore.tools].sort()).toEqual([
+      "Git",
       "Glob",
       "Grep",
       "Read",

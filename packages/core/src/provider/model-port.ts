@@ -1,6 +1,8 @@
 import { contextualizeNetworkFailure } from "./network-failure.js";
 /**
  * ModelPort adapter over the AI SDK. Per call:
+ * On openai-responses, response bytes also count as watchdog activity and raw
+ * chunks recover reasoning_text events hidden by the SDK (GitHub #27).
  *  - builds the LanguageModel via createLanguageModel(config), which picks the
  *    client factory by the config's transport
  *  - invokes streamText with stopWhen: stepCountIs(1) (explicit; one model
@@ -10,41 +12,13 @@ import { contextualizeNetworkFailure } from "./network-failure.js";
  *  - consumes result.fullStream and yields translateStreamPart(part) events,
  *    dropping nulls.
  *
-
- * while no MODEL OUTPUT has yet reached the consumer from this attempt's stream
- * (see `isModelOutputEvent` in ./failure.ts): a before-content failure —
- * connect/reset/HTTP-error-before-content — is safe to replay the whole step.
- * The SDK's `fullStream` unconditionally yields a synthetic `{type:"start"}`
- * before any network I/O, and a same-attempt `{type:"error"}` is the failure
- * descriptor itself, so NEITHER closes the gate (TASK.33 W7a; without this the
- * connect-timeout retry never fired in production). Retries apply uniformly
- * whether the failure surfaces as a thrown exception from `fullStream`
- * iteration or as a translated `error` event. Before each retry the adapter
- * yields `stream_retry`, then waits the backoff delay — the wait is abortable
- * and the request's abortSignal wins instantly; an already-aborted request
- * never retries (an external abort always wins).
- *
- * Taskana 4705: a MID-STREAM failure — one that arrives after real model
- * output (content/reasoning/tool-input/`tool_call`/`finish`) was already
- * delivered — now replays the WHOLE step a bounded number of times
- * (`policy.midStreamRetries`, default 2), discarding the partial output. This
- * is safe: the consumer (agent loop) resets its accumulators on `stream_retry`,
- * and the tools of the discarded attempt were never dispatched — dispatch runs
- * only after the step's stream ends — so a replay cannot double-execute a tool
- * call. Mid-stream replays increment the SAME attempt counter as pre-content
- * retries and are additionally bounded per streamText call by
- * `midStreamRetries`; 0 restores the pre-4705 behavior (fail after any output).
- *
-
- * abortable `policy.stallTimeoutMs` timer (0 disables it). A stall aborts the
- * per-attempt controller (so the underlying SDK call is actually cancelled,
- * not merely abandoned) and is classified as a retryable stall REGARDLESS of
- * `hadModelOutput`. Pre-content stalls ride the shared
- * `attempt < policy.maxRetries` budget; a stall after real output counts as a
- * mid-stream replay (Taskana 4705) and is bounded by `midStreamRetries` once
- * the attempt budget is exhausted. A genuine external abort
- * (request.abortSignal) always wins over a stall and rejects immediately with
- * the abort reason, never retried.
+ * Retryable failures before text or tool output may replay the step. Reasoning
+ * is provisional and shares the count budget with pre-content retries. Once
+ * text or tool output begins, or a successful finish arrives, replay stops.
+ * Pre-content network failures retain their time-budget and waiting behavior;
+ * reasoning-only attempts use the count budget. Every abandoned attempt is
+ * aborted before the retry event and the backoff remains externally abortable.
+ * The legacy midStreamRetries setting no longer changes replay eligibility.
  *
  * TASK.168 adds a SEPARATE, budget-exempt one-shot retry on the
  * openai-chat-completions transport: a pre-content HTTP 400 while
@@ -66,7 +40,9 @@ import { linkAbortSignal } from "../util/abort.js";
 import type { ProviderTransport } from "./catalog.js";
 import type { EndpointConfig } from "./endpoint.js";
 import type { ImplicitPromptCache } from "../types/config.js";
-import { classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
+import { blocksAutomaticReplay, classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
+import { ResponsesReasoningTextRecovery } from "./responses-reasoning-text.js";
+import { isMiMoModel } from "./mimo.js";
 import { createLanguageModel } from "./language-model.js";
 import type { ProviderQuotaUpdate } from "./quota.js";
 import type { NetworkWaiter } from "./network-waiter.js";
@@ -83,11 +59,23 @@ const GLM_BUDGET_TOKENS = { high: 16_000, max: 32_000 } as const;
 /** Z.AI's documented max_tokens ceiling for the GLM-5/4.6 family. */
 const GLM_MAX_TOKENS = 131_072;
 
+/**
+ * Output-token ceiling for a one-shot title request on a provider that cannot
+ * turn thinking off (DeepSeek: the anthropic transport here sends the effort
+ * enum alone, and the service still reasons first). The default title cap of
+ * 32 tokens is entirely eaten by that thinking block — stop_reason
+ * `max_tokens`, zero text, heuristic title kept. A live title request on
+ * deepseek-flash produced the expected 3-6 word title at `max_tokens: 200`;
+ * 512 keeps generous headroom for the thinking block while staying small
+ * enough that the model cannot wander into a long preamble.
+ */
+const MANDATORY_THINKING_TITLE_MAX_OUTPUT_TOKENS = 512;
+
 /** Return shape of `reasoningRequestOptions` on the anthropic-messages transport. */
 interface AnthropicReasoningOptions {
   maxOutputTokens?: number;
   // thinking optional since the DeepSeek branch (4241) sends the effort enum alone.
-  providerOptions?: { anthropic: { effort?: string; thinking?: { type: "enabled"; budgetTokens: number } | { type: "adaptive" } } };
+  providerOptions?: { anthropic: { effort?: string; thinking?: { type: "enabled"; budgetTokens: number } | { type: "adaptive" } | { type: "disabled" } } };
 }
 
 /**
@@ -157,22 +145,17 @@ type ReasoningOptions = AnthropicReasoningOptions | OpenAICompatibleReasoningOpt
  * It defaults to `anthropic-messages` so pre-transport call sites keep their
  * pinned bytes.
  *
- * openai-chat-completions maps to `providerOptions.openaiCompatible.reasoningEffort`
- * (TASK.43 §4.2/§4.3): `@ai-sdk/openai-compatible` reads that exact key
- * unconditionally and serializes it as top-level `reasoning_effort` in the
- * request body. `"max"` collapses to `"high"` — chat-completions has no `xhigh`/
- * `max` tier of its own, unlike GLM's Anthropic-proxied enum above.
+ * openai-chat-completions maps to `providerOptions.openaiCompatible.reasoningEffort`.
+ * `@ai-sdk/openai-compatible` reads that key and serializes it as top-level
+ * `reasoning_effort`. Compatible providers may support different tiers, so the
+ * model capability layer determines which value to send.
  *
  * openai-responses maps to `providerOptions.openai.{reasoningEffort, store}`
  * (TASK.43 §0.2/§0.7). `store: false` is UNCONDITIONAL — it rides on every
  * request on this transport, reasoning or not (see `OpenAIResponsesReasoningOptions`
- * above). `reasoningEffort`, when present, is passed through VERBATIM
- * (including `"max"`) rather than collapsed the way chat-completions collapses
- * it: unlike chat-completions' fixed enum, real OpenAI reasoning models keep
- * gaining tiers (`minimal`, and whatever ships after this was written), and
- * which values a given model actually accepts is a capability-layer/catalog
- * question (`effortLevels`), not something this wire-mapping function should
- * guess or narrow ahead of time.
+ * above). `reasoningEffort`, when present, is passed through verbatim. Which
+ * values a model accepts is a capability-layer/catalog question (`effortLevels`),
+ * not something this wire-mapping function should guess or narrow ahead of time.
  *
  * Overloaded so a caller that passes a literal `"anthropic-messages"` transport
  * (or omits it) keeps `providerOptions.anthropic` as a NON-optional key on the
@@ -267,13 +250,11 @@ export function reasoningRequestOptions(
       };
     }
     // reasoning_effort is an enum, not a token budget: no maxOutputTokens arithmetic.
-    // "max" has no chat-completions equivalent; collapse to "high" (§4.3).
-    const mapped = effort === "max" ? "high" : effort;
     return {
       ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
       providerOptions: {
         openaiCompatible: {
-          reasoningEffort: mapped,
+          reasoningEffort: effort,
           ...(promptCache !== undefined ? { prompt_cache_options: promptCache } : {}),
         },
       },
@@ -281,6 +262,13 @@ export function reasoningRequestOptions(
   }
 
   if (effort === undefined || effort === "off") {
+    if (isMiMoModel(providerName, modelId)) {
+      // The picker displays No thinking when no explicit choice is stored.
+      return {
+        ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
+        providerOptions: { anthropic: { thinking: { type: "disabled" } } },
+      };
+    }
     return request.maxOutputTokens === undefined ? {} : { maxOutputTokens: request.maxOutputTokens };
   }
 
@@ -344,7 +332,11 @@ export function reasoningRequestOptions(
     effort === "max" || effort === "xhigh"
       ? REASONING_BUDGET_TOKENS.high
       : REASONING_BUDGET_TOKENS[effort as "low" | "medium" | "high"];
-  const maxOutputTokens = Math.max(request.maxOutputTokens ?? 0, budgetTokens + 1_024);
+  let maxOutputTokens = Math.max(request.maxOutputTokens ?? 0, budgetTokens + 1_024);
+  // The SDK adds the thinking budget to max_tokens on the wire.
+  if (isMiMoModel(providerName, modelId)) {
+    maxOutputTokens = Math.min(maxOutputTokens, 131_072 - budgetTokens);
+  }
   return {
     maxOutputTokens,
     providerOptions: { anthropic: { thinking: { type: "enabled", budgetTokens } } },
@@ -487,6 +479,7 @@ function waitTickOrHint(ms: number, box: HintBox, signal: AbortSignal | undefine
 }
 
 /**
+ * Optional lastActivityAt extends the watchdog when response bytes arrive.
  * Waits for the iterator's next result, racing it against an abortable
  * `stallTimeoutMs` watchdog (unarmed when <= 0) and `signal`. A genuine abort
  * that fires WHILE this call is pending rejects (propagating the signal's
@@ -503,6 +496,7 @@ function nextWithStallTimeout<T>(
   iterator: AsyncIterator<T>,
   stallTimeoutMs: number,
   signal: AbortSignal,
+  lastActivityAt?: () => number,
 ): Promise<IteratorResult<T> | StalledOutcome> {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -523,12 +517,22 @@ function nextWithStallTimeout<T>(
     signal.addEventListener("abort", onAbort, { once: true });
 
     if (stallTimeoutMs > 0) {
-      timer = setTimeout(() => {
+      const armedAt = Date.now();
+      const onTimer = (): void => {
         if (settled) return;
+        if (lastActivityAt !== undefined) {
+          const quietSince = Math.max(armedAt, lastActivityAt());
+          const remaining = Math.min(stallTimeoutMs, stallTimeoutMs - (Date.now() - quietSince));
+          if (remaining > 0) {
+            timer = setTimeout(onTimer, remaining);
+            return;
+          }
+        }
         settled = true;
         cleanup();
         resolve({ stalled: true });
-      }, stallTimeoutMs);
+      };
+      timer = setTimeout(onTimer, stallTimeoutMs);
     }
 
     iterator.next().then(
@@ -671,6 +675,17 @@ export class AiSdkModelPort implements ModelPort {
   }
 
   /**
+   * DeepSeek always reasons before it answers on the live service, even with
+   * the low effort enum this port's `titleReasoningEffort` sends, so the title
+   * request needs room for that thinking block (see
+   * `MANDATORY_THINKING_TITLE_MAX_OUTPUT_TOKENS`). Every other provider keeps
+   * the default title cap.
+   */
+  get titleMaxOutputTokens(): number | undefined {
+    return this.config.providerName === "DeepSeek" ? MANDATORY_THINKING_TITLE_MAX_OUTPUT_TOKENS : undefined;
+  }
+
+  /**
    * The provider's own model claim from the last raw response this port
    * observed, or undefined when none has been seen. Never derived from SDK
    * response metadata (see `rawResponseModelOf`).
@@ -697,11 +712,13 @@ export class AiSdkModelPort implements ModelPort {
    * the object identity the no-resolver path guarantees and add an
    * `includeUsage: undefined` key the pre-TASK.168 shape never carried.
    */
-  private async buildAttemptModel(includeUsage: boolean | undefined): Promise<LanguageModel> {
+  // The factory receives exactly one argument when the activity hook is absent.
+  private async buildAttemptModel(includeUsage: boolean | undefined, onResponseActivity?: () => void): Promise<LanguageModel> {
+    const create = (cfg: EndpointConfig): LanguageModel => onResponseActivity === undefined ? createLanguageModel(cfg) : createLanguageModel(cfg, onResponseActivity);
     const { resolveApiKey } = this.config;
     const usageOverridden = includeUsage !== this.config.includeUsage;
     if (resolveApiKey === undefined) {
-      return createLanguageModel(usageOverridden ? { ...this.config, includeUsage } : this.config);
+      return create(usageOverridden ? { ...this.config, includeUsage } : this.config);
     }
     let apiKey = this.config.apiKey;
     try {
@@ -712,7 +729,7 @@ export class AiSdkModelPort implements ModelPort {
     } catch {
       // Fall back to the static key: a refresh hiccup must not kill the attempt.
     }
-    return createLanguageModel(
+    return create(
       usageOverridden ? { ...this.config, apiKey, includeUsage } : { ...this.config, apiKey },
     );
   }
@@ -796,8 +813,6 @@ export class AiSdkModelPort implements ModelPort {
   async *streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
     const policy = resolveRetryPolicy(this.config.retry);
     let attempt = 0;
-    // Taskana 4705: mid-stream replays spent this turn; bounded by policy.midStreamRetries.
-    let midStreamRetries = 0;
     // Time of this step's first retryable failure; anchors networkRetryBudgetMs.
     let firstFailureAt: number | undefined;
     // Taskana 4772: monotonic time this step has already spent waiting for the network (all episodes).
@@ -821,13 +836,20 @@ export class AiSdkModelPort implements ModelPort {
         policy.maxRetries > 0 &&
         policy.networkWaitMaxMs > 0 &&
         isTransientNetworkError(error));
+    const mayRetryProvisional = (error: unknown, hadOutput: boolean): boolean => {
+      if (!hadOutput) return mayRetryOrWait(error, false);
+      firstFailureAt ??= Date.now();
+      return attempt < policy.maxRetries;
+    };
     // TASK.168: the failure that STARTED the include_usage probe, carried
     // from that attempt to the very next one (the probe retry) — see
     // `ProbeFailure`'s docstring.
     let includeUsageProbe: ProbeFailure | undefined;
 
     for (;;) {
+      if (request.abortSignal?.aborted) throw abortReason(request.abortSignal);
       let hadModelOutput = false;
+      let replayBlocked = false;
       // finish totals discard raw usage; keep the latest step's wire usage
       // inside this attempt so abandoned attempts cannot affect a retry.
       let stepRawUsage: unknown;
@@ -849,6 +871,12 @@ export class AiSdkModelPort implements ModelPort {
       // Per-attempt dedup of dropped-artifact warnings (reset with the attempt
       // on retry, alongside hadModelOutput) — slice 3.7 R1, §2.2.
       const warnedArtifacts = new Set<string>();
+      // Per-attempt recovery and byte liveness prevent cross-talk on retries (GitHub #27).
+      const reasoningTextRecovery = this.config.transport === "openai-responses" ? new ResponsesReasoningTextRecovery() : undefined;
+      let lastWireActivityAt = Number.NEGATIVE_INFINITY;
+      const onResponseActivity = this.config.transport === "openai-responses" && policy.stallTimeoutMs > 0
+        ? (): void => { lastWireActivityAt = Date.now(); } : undefined;
+      const lastActivityAt = onResponseActivity !== undefined ? (): number => lastWireActivityAt : undefined;
       // TASK.168: the effective include_usage verdict for THIS attempt —
       // forced off once the endpoint-level probe has committed, or while this
       // attempt IS itself the probe retry (both fold into the same field:
@@ -864,7 +892,7 @@ export class AiSdkModelPort implements ModelPort {
         : () => {};
 
       try {
-        const model = await this.buildAttemptModel(attemptIncludeUsage);
+        const model = await this.buildAttemptModel(attemptIncludeUsage, onResponseActivity);
         const result = streamText({
           model,
           // System prompt goes out-of-band: ai@7 rejects system-role messages
@@ -880,18 +908,16 @@ export class AiSdkModelPort implements ModelPort {
           // fullStream error already reaches our safe classifier and journal.
           onError: () => {},
           abortSignal: attemptController.signal,
-          // Raw provider chunks are the only trustworthy source of the
-          // response-side model claim, and only the anthropic-messages
-          // transport carries one (`message_start.message.model`); the flag
-          // stays off elsewhere so no other transport pays for duplicate parts.
-          ...(this.config.transport === "anthropic-messages" ? { includeRawChunks: true } : {}),
+          // Raw chunks carry provenance for Anthropic and reasoning text for Responses.
+          ...(this.config.transport === "anthropic-messages" || this.config.transport === "openai-responses"
+            ? { includeRawChunks: true } : {}),
           ...reasoningRequestOptions(request, this.config.providerName, this.config.transport, this.config.promptCache, this.config.model),
           temperature: request.temperature,
         });
 
         const iterator = result.fullStream[Symbol.asyncIterator]();
         for (;;) {
-          const outcome = await nextWithStallTimeout(iterator, policy.stallTimeoutMs, attemptController.signal);
+          const outcome = await nextWithStallTimeout(iterator, policy.stallTimeoutMs, attemptController.signal, lastActivityAt);
 
           if (isStalledOutcome(outcome)) {
             const stallError = new StreamStallError(policy.stallTimeoutMs);
@@ -900,14 +926,10 @@ export class AiSdkModelPort implements ModelPort {
             // A stall after a completed step has nothing left to deliver: end
             // the step as finished instead of replaying it (Taskana 4705 review).
             if (completedFinish) break;
-            // Stall is retryable regardless of hadModelOutput. Replays — pre-
-            // content or mid-stream — count inside maxRetries through mayRetry,
-            // the same gate the error and thrown paths use (Taskana 4705 review);
-            // after real output a replay is also bounded by midStreamRetries.
+            // A stall may replay only before committed output.
             const stallRetryAllowed =
-              mayRetry(stallError) && (!hadModelOutput || midStreamRetries < policy.midStreamRetries);
+              !replayBlocked && (hadModelOutput ? mayRetryProvisional(stallError, true) : mayRetry(stallError)) && !request.abortSignal?.aborted;
             if (stallRetryAllowed) {
-              if (hadModelOutput) midStreamRetries += 1;
               pendingRetryError = stallError;
               break;
             }
@@ -929,6 +951,12 @@ export class AiSdkModelPort implements ModelPort {
             this.#lastResponseModel = rawResponseModel;
           }
 
+          if (reasoningTextRecovery !== undefined) {
+            for (const recovered of reasoningTextRecovery.observe(outcome.value)) {
+              if (isModelOutputEvent(recovered)) hadModelOutput = true;
+              yield recovered;
+            }
+          }
           if (outcome.value.type === "finish-step") {
             stepRawUsage = outcome.value.usage.raw;
           }
@@ -985,30 +1013,20 @@ export class AiSdkModelPort implements ModelPort {
             probeRetryNeeded = true;
             break;
           }
-          // Retry a before-content failure that surfaced as an `error` STREAM
-          // PART (the connect/reset/HTTP-error-before-content class — see the
-          // gate note in ./failure.ts). Taskana 4705: after real model output
-          // the step is replayed whole (partial output discarded; its tools
-          // were never dispatched) up to policy.midStreamRetries times — these
-          // replays share the attempt counter and add their own bound. The
-          // synthetic `start` above does NOT close the gate. An already-
-          // aborted request always wins over retry (the abort reason may itself
-          // look retryable); aborting the attempt controller before breaking
-          // tears down the abandoned attempt's socket now instead of at GC,
-          // mirroring the stall path.
+          // A retryable failure can replay while output remains provisional.
           if (
             event.type === "error" &&
             !completedFinish &&
-            (hadModelOutput ? midStreamRetries < policy.midStreamRetries : true) &&
+            !replayBlocked &&
             isRetryableStreamError(event.error) &&
-            mayRetryOrWait(event.error, hadModelOutput) &&
+            mayRetryProvisional(event.error, hadModelOutput) &&
             !request.abortSignal?.aborted
           ) {
-            if (hadModelOutput) midStreamRetries += 1;
             pendingRetryError = event.error;
             attemptController.abort(pendingRetryError);
             break;
           }
+          if (blocksAutomaticReplay(event)) replayBlocked = true;
           if (isModelOutputEvent(event)) {
             hadModelOutput = true;
           }
@@ -1048,20 +1066,15 @@ export class AiSdkModelPort implements ModelPort {
           this.#includeUsageDisabledForEndpoint = true;
           probeRetryNeeded = true;
         } else if (
-          // Same gate as the error-part branch, for a failure that surfaced as
-          // a THROWN exception from `fullStream` iteration. Taskana 4705: after
-          // real model output the step replays whole up to
-          // policy.midStreamRetries times (shared attempt counter). The
-          // `!request.abortSignal?.aborted` guard makes an external abort always
-          // win over retry, even when the thrown abort reason looks retryable.
+          // Match the yielded-error gate and let external cancellation win.
           !completedFinish &&
-          (hadModelOutput ? midStreamRetries < policy.midStreamRetries : true) &&
+          !replayBlocked &&
           isRetryableStreamError(error) &&
-          mayRetryOrWait(error, hadModelOutput) &&
+          mayRetryProvisional(error, hadModelOutput) &&
           !request.abortSignal?.aborted
         ) {
-          if (hadModelOutput) midStreamRetries += 1;
           pendingRetryError = error;
+          attemptController.abort(error);
         } else {
           throw error;
         }
@@ -1100,9 +1113,9 @@ export class AiSdkModelPort implements ModelPort {
         this.#confirmIncludeUsageProbe();
         includeUsageProbe = undefined;
         if (
-          !hadModelOutput &&
+          !completedFinish && !replayBlocked &&
           isRetryableStreamError(failure.error) &&
-          mayRetryOrWait(failure.error, hadModelOutput) &&
+          mayRetryProvisional(failure.error, hadModelOutput) &&
           !request.abortSignal?.aborted
         ) {
           pendingRetryError = failure.error;

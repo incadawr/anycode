@@ -229,11 +229,24 @@ export type ProviderHealthStatus =
  * "legacy" bucket (no catalog pick) so `activeProviderView` reads back an
  * absent `provider.id`, exactly like a v1 singleton with no id.
  */
+export interface TokenRates { input: number; cachedInput: number; output: number; cacheWrite?: number }
+
 export type ConnectionPricing =
   | { mode: "subscription" }
-  | { mode: "rates"; input: number; cachedInput: number; output: number; cacheWrite?: number };
+  | ({ mode: "rates" } & TokenRates);
+
+export interface ModelOverrides {
+  effortLevels?: ReasoningEffort[];
+  pricing?: TokenRates;
+  contextWindowTokens?: number;
+  reasoningEffort?: ReasoningEffort;
+  /** User declaration for a model missing from the catalog and live metadata. */
+  reasoningSupported?: true;
+}
 
 export interface ProviderConnection {
+  /** User choices keyed by exact model id; independent of fetched capabilities. */
+  modelOverrides?: Record<string, ModelOverrides>;
   pricing?: ConnectionPricing;
   id: string;
   providerId: string;
@@ -318,16 +331,11 @@ export interface ProviderConnection {
    */
   maxOutputTokens?: number;
   /**
-   * Per-model context-window override for this connection (TASK.142), paired
-   * with `contextWindowModel` — the model id it binds to. The pair travels to
-   * the host/CLI as ANYCODE_CONTEXT_WINDOW / ANYCODE_CONTEXT_WINDOW_MODEL and
-   * governs ONLY that model; a host or CLI switch to another model ignores it
-   * (this is a model-specific override, never a connection-global one). Resolve
-   * order: this override > the catalog usable window > the assumed 8192
-   * fallback for an unknown model. Absent = no override.
+   * Legacy single-model pair. Read into modelOverrides on load; never written
+   * by new connection mutations. Runtime projections may still expose the pair
+   * to preserve ANYCODE_CONTEXT_WINDOW's model-bound environment contract.
    */
   contextWindowTokens?: number;
-  /** Model id `contextWindowTokens` is bound to (see above). Main derives it server-side from the effective model; the renderer never supplies it. */
   contextWindowModel?: string;
   /**
    * Per-model image-input override for this connection (Taskana 4088 /
@@ -1194,6 +1202,9 @@ export type SettingsPatch = Omit<DeepPartial<AnycodeSettings>, "provider">;
 // ── connection CRUD request payloads (companions to the connection-* channels) ──
 
 export interface ConnectionCreateRequest {
+  effortLevels?: ReasoningEffort[];
+  modelPricing?: Record<string, TokenRates>;
+  reasoningSupported?: true;
   pricing?: ConnectionPricing;
   providerId: string;
   label?: string;
@@ -1239,6 +1250,7 @@ export interface ConnectionCreateRequest {
 }
 
 export interface ConnectionUpdateRequest {
+  modelPricing?: Record<string, TokenRates | "">;
   pricing?: ConnectionPricing | "";
   id: string;
   label?: string;
@@ -1275,7 +1287,11 @@ export interface ConnectionUpdateRequest {
    * a corporate string converge on ONE profile) and persists the minted id.
    */
   proxyRef?: string;
-  reasoningEffort?: ReasoningEffort;
+  reasoningEffort?: ReasoningEffort | "";
+  /** Target of a model override; does not change the connection's default model. */
+  modelOverrideModel?: string;
+  effortLevels?: ReasoningEffort[] | "";
+  reasoningSupported?: true | "";
   /**
    * Opt-in prompt-cache policy (GitHub #15) with the same `""` clear sentinel
    * as `maxOutputTokens` below: absent = keep the current value, the enabled
@@ -1291,11 +1307,9 @@ export interface ConnectionUpdateRequest {
    */
   maxOutputTokens?: number | "";
   /**
-   * Per-model context-window override (TASK.142) with the same `""` clear
-   * sentinel as `maxOutputTokens` above: absent = keep the current pair, a
-   * positive integer = set tokens AND the binding (main derives the binding
-   * from the effective model), `""` = clear BOTH keys. The renderer never
-   * supplies the binding itself.
+   * Patch the current model's context window (or modelOverrideModel when
+   * supplied). Absent = keep, number = set, "" = remove this model's window.
+   * Sibling models and this model's other settings remain unchanged.
    */
   contextWindowTokens?: number | "";
   /**
@@ -1502,6 +1516,8 @@ export function activeProviderView(settings: AnycodeSettings): ActiveProviderVie
   if (connection === undefined) {
     return {};
   }
+  const model = connection.model?.trim();
+  const override = model && Object.hasOwn(connection.modelOverrides ?? {}, model) ? connection.modelOverrides?.[model] : undefined;
   return {
     pricing: connection.pricing,
     id: connection.providerId === "" ? undefined : connection.providerId,
@@ -1509,11 +1525,11 @@ export function activeProviderView(settings: AnycodeSettings): ActiveProviderVie
     baseUrl: connection.baseUrl,
     transport: connection.transport,
     proxyUrl: connection.proxyUrl,
-    reasoningEffort: connection.reasoningEffort,
+    reasoningEffort: override?.reasoningEffort ?? connection.reasoningEffort,
     promptCache: connection.promptCache,
     maxOutputTokens: connection.maxOutputTokens,
-    contextWindowTokens: connection.contextWindowTokens,
-    contextWindowModel: connection.contextWindowModel,
+    contextWindowTokens: override?.contextWindowTokens ?? connection.contextWindowTokens,
+    contextWindowModel: override?.contextWindowTokens !== undefined ? model : connection.contextWindowModel,
     // 4088-on-4118: imageInputModels projection removed (caps map instead).
     ...(connection.imageInputOverride !== undefined && connection.imageInputModel !== undefined
       ? { imageInputOverride: connection.imageInputOverride, imageInputOverrideModel: connection.imageInputModel }

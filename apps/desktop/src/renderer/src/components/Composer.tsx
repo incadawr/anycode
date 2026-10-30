@@ -1,3 +1,4 @@
+import { modelSettingsTarget } from "../model-settings-target.js";
 import { resolveProfileRoles, rolesPatch } from "../../../shared/role-profiles.js";
 /**
  * Message input + turn controls (design §5, restructured in UI-5). Sends
@@ -17,13 +18,14 @@ import { resolveProfileRoles, rolesPatch } from "../../../shared/role-profiles.j
  * wire traffic and the Enter-to-send behavior are unchanged from the pre-redesign
  * composer.
  */
-import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ClipboardEvent, DragEvent, FocusEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { CodexRateLimitsWire, ImageAttachment, ImageMediaType, PermissionMode } from "@anycode/core";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
 import { isSessionBusy, type ContextUsage, type DesktopState, type SessionTokens, type TurnState } from "../store.js";
 import { useSettingsStore } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
+import type { ProviderConnection } from "../../../shared/settings.js";
 import type { WireContextBreakdown, WireUsageAuditStep, WireUsageAuditTotals } from "../../../shared/protocol.js";
 import {
   makePasteMarker,
@@ -34,8 +36,10 @@ import {
   type PasteBlock,
 } from "../paste.js";
 import { ModeMenu, modeChangeDisabled } from "./ModeMenu.js";
+import { useOverlayFlag } from "../preview/overlay-flag.js";
+const ContextWindowSettings = lazy(() => import("./ContextWindowSettings.js"));
 import { ModelPill, modelPickDisabled } from "./ModelPill.js";
-import { EngineModelMenu, EnginePresetMenu, engineControlDisabled, nativeEffortControl } from "./EngineControls.js";
+import { EngineModelMenu, EnginePresetMenu, engineControlDisabled, engineEffortDisabled, nativeEffortControl } from "./EngineControls.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
 import { BackgroundAgents } from "./BackgroundAgents.js";
 import { PromptQueue } from "./PromptQueue.js";
@@ -448,7 +452,12 @@ export function ctxPopoverHeadline(usage: ContextUsage | null, percent: number |
 }
 
 /** Taskana 4127: shown when the active model's context window is the assumed 8K fallback. */
-export const CTX_WINDOW_ASSUMED_HINT = "Context window unknown \u2014 assumed 8K. Set it in the connection settings.";
+export const CTX_WINDOW_ASSUMED_HINT = "Context window unknown \u2014 assumed 8K total.";
+
+/** Uses the meter's actual denominator, including any overridden output reserve. */
+export function ctxWindowAssumedHint(usage: ContextUsage | null): string {
+  return `${CTX_WINDOW_ASSUMED_HINT}${usage === null ? "" : ` Available input budget after the output reserve: ${formatCtxTokenCount(usage.budgetTokens)}.`} Set it in the connection settings.`;
+}
 
 /** Ctx meter label: a leading \u2248 marks the percent as relative to an assumed window. Exported for unit testing. */
 export function ctxMeterLabel(roundedPercent: number, assumed: boolean): string {
@@ -942,6 +951,19 @@ export function UsageCostBlock({ ledger, turnSummary, turnSteps, expanded, onTog
   </div>;
 }
 
+export function contextWindowSettingsTarget(
+  connections: readonly ProviderConnection[], model: string | null,
+  hostId: string | null | undefined, pinnedId: string | undefined,
+): { connection: ProviderConnection; model: string } | null {
+  const id = modelSettingsTarget(hostId, pinnedId);
+  const connection = connections.find((item) => item.id === id);
+  return connection !== undefined && model !== null ? { connection, model } : null;
+}
+
+export function showCustomPricingHint(target: { connection: ProviderConnection } | null, totals: WireUsageAuditTotals | null): boolean {
+  return Boolean(target?.connection.providerId.startsWith("custom:") && ((totals?.unpricedSteps ?? 0) > 0 || (totals?.subagentUnpriced ?? 0) > 0));
+}
+
 /**
  * Hover/focus/click-triggered popover anchored to the ctx meter. Positioning
  * mirrors ModelPill.tsx's popover (position:fixed, anchor computed from
@@ -975,7 +997,7 @@ function CtxPopover({
   };
   turnStatus: TurnState["status"];
   quota: CodexRateLimitsWire | null;
-  percent: number;
+  percent: number | null;
   tint: string;
   /** codex-profiles cut §5.2: Codex has no per-category breakdown — the popover shows an honest message instead of a skeleton (see `ctxPopoverBodyState`'s "unsupported" branch). */
   supportsContextBreakdown: boolean;
@@ -983,6 +1005,14 @@ function CtxPopover({
   contextWindowAssumed: boolean;
 }) {
   const sendToHost = useTabSend();
+  const model = useTabStore((state) => state.model);
+  const pinnedConnection = useTabStore((state) => state.pinnedConnection);
+  const modelSettingsConnectionId = useTabStore((state) => state.modelSettingsConnectionId);
+  const snapshot = useSettingsStore((state) => state.snapshot);
+  const [settingsTarget, setSettingsTarget] = useState<{ connection: ProviderConnection; model: string } | null>(null);
+  useOverlayFlag(settingsTarget !== null);
+  const shortcutTarget = contextWindowSettingsTarget(snapshot?.settings.provider.connections ?? [], model, modelSettingsConnectionId, pinnedConnection?.connectionId);
+  const assumedHint = ctxWindowAssumedHint(contextUsage);
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<{ left: number; bottom: number; maxHeight: number } | null>(null);
   const [timedOut, setTimedOut] = useState(false);
@@ -1115,7 +1145,7 @@ function CtxPopover({
     }
   }
 
-  const roundedPercent = Math.round(percent);
+  const roundedPercent = percent === null ? null : Math.round(percent);
   const headline = ctxPopoverHeadline(contextUsage, roundedPercent);
   const rows = ctxPopoverRows(contextBreakdown);
   const loading = ctxPopoverLoading(open, contextBreakdown);
@@ -1129,7 +1159,7 @@ function CtxPopover({
   const turnSteps = currentTurnSteps(usageAudit.list);
   const turnStepSummary = formatTurnStepSummary(turnSteps);
   const quotaView = buildQuotaPopoverView(quota, Date.now());
-  const fillPercent = Math.min(100, Math.max(0, percent));
+  const fillPercent = percent === null ? 0 : Math.min(100, Math.max(0, percent));
 
   return (
     <div
@@ -1144,15 +1174,14 @@ function CtxPopover({
         ref={triggerRef}
         type="button"
         className={`composer-ctx-meter${tint}${contextWindowAssumed ? " composer-ctx-meter-assumed" : ""}`}
-        title={contextWindowAssumed ? CTX_WINDOW_ASSUMED_HINT : undefined}
+        title={contextWindowAssumed ? assumedHint : undefined}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label="Context window usage"
         onClick={handleClick}
         onFocus={handleFocus}
       >
-        <CtxRing percent={percent} />
-        {ctxMeterLabel(roundedPercent, contextWindowAssumed)}
+        {percent !== null && roundedPercent !== null ? <><CtxRing percent={percent} />{ctxMeterLabel(roundedPercent, contextWindowAssumed)}</> : "Usage"}
       </button>
 
       {open && (
@@ -1173,10 +1202,14 @@ function CtxPopover({
               scroll region keyboard access (arrow/PageDown) on top of the
               browser's scroll-into-view for the focusable rows inside. */}
           <div className="ctx-popover-body" tabIndex={0}>
-            {contextWindowAssumed && <div className="ctx-popover-assumed">{CTX_WINDOW_ASSUMED_HINT}</div>}
-            <div className="ctx-popover-bar">
+            {contextWindowAssumed && <div className="ctx-popover-assumed">
+              {assumedHint}
+              {shortcutTarget !== null && <button type="button" className="settings-button"
+                onClick={() => { close(); setSettingsTarget(shortcutTarget); }}>Set context window</button>}
+            </div>}
+            {percent !== null && <div className="ctx-popover-bar">
               <div className="ctx-popover-bar-fill" style={{ width: `${fillPercent}%` }} />
-            </div>
+            </div>}
             {bodyState === "skeleton" && (
               <div className="ctx-popover-skeleton" aria-label="Loading context breakdown">
                 <div className="ctx-popover-skeleton-row" />
@@ -1202,6 +1235,7 @@ function CtxPopover({
             )}
             <div className="ctx-popover-divider" />
             <UsageCostBlock ledger={ledger} turnSummary={turnStepSummary} turnSteps={turnSteps} expanded={stepsExpanded} onToggle={() => setStepsExpanded((value) => !value)} />
+            {showCustomPricingHint(shortcutTarget, usageAudit.totals) && <div className="ctx-popover-footnote">Set prices in the connection settings</div>}
             {usageAudit.list === null && usageAudit.totalSteps > 0 && (
               <div className="ctx-popover-session">Step history: {usageAudit.totalSteps} records — reopen to load</div>
             )}
@@ -1214,6 +1248,12 @@ function CtxPopover({
             )}
           </div>
         </div>
+      )}
+      {settingsTarget !== null && snapshot !== null && (
+        <Suspense fallback={null}>
+          <ContextWindowSettings snapshot={snapshot} connection={settingsTarget.connection} model={settingsTarget.model}
+            onClose={() => setSettingsTarget(null)} />
+        </Suspense>
       )}
     </div>
   );
@@ -1796,7 +1836,7 @@ export function Composer() {
   }
 
   function handleEngineEffortPick(effort: string): void {
-    if (!engineControlDisabled(turn.status, queueInFlight, ready)) sendToHost({ type: "set_engine_effort", effort });
+    if (!engineEffortDisabled(turn.status, queueInFlight, ready, engine?.capabilities.supportsDeferredEffortChange === true)) sendToHost({ type: "set_engine_effort", effort });
   }
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>): void {
@@ -2106,7 +2146,7 @@ export function Composer() {
               catalog — ModelPill (settings-store-backed) is core-only. */}
           {supportsModelSelection &&
             (engine?.model ? (
-              <EngineModelMenu model={engine.model} pendingModel={pendingEngineChange?.model} disabled={engineControlDisabled(turn.status, queueInFlight, ready)} onPick={handleEngineModelPick} {...(nativeEffort !== undefined ? { effort: nativeEffort } : {})} />
+              <EngineModelMenu model={engine.model} pendingModel={pendingEngineChange?.model} disabled={engineEffortDisabled(turn.status, queueInFlight, ready, engine.capabilities.supportsDeferredEffortChange === true && nativeEffort !== undefined)} modelDisabled={engineControlDisabled(turn.status, queueInFlight, ready)} onPick={handleEngineModelPick} {...(nativeEffort !== undefined ? { effort: nativeEffort } : {})} />
             ) : (
               <ModelPill />
             ))}
@@ -2122,7 +2162,7 @@ export function Composer() {
           {hintText}
         </span>
         <div className="composer-footer-right">
-          {supportsContextUsage && ctxPercent !== null && (
+          {supportsContextUsage && (ctxPercent !== null || usageAudit.totals !== null || sessionTokens !== null) && (
             <CtxPopover
               contextUsage={contextUsage}
               contextBreakdown={contextBreakdown}

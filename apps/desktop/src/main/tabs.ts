@@ -1,4 +1,6 @@
-import type { AgentDelivery } from "../shared/communication.js";
+import { hostFailure } from "./host-failure.js";
+import type { HostFailure } from "../shared/host-failure.js";
+import type { AgentDelivery, SessionActivityState } from "../shared/communication.js";
 /**
  * TabHostManager (design/phase-2.md §2.2): the multi-host generalization of the
  * MVP single-host lifecycle. One window / one renderer / N host utilityProcesses
@@ -66,9 +68,9 @@ import {
 } from "../shared/preview.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
 import { PROVIDER_QUOTA_EVENT_TYPE } from "../shared/provider-quota.js";
-import { clampSessionLimit, SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
+import { childSessionLimitMessage, clampSessionLimit, SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
 import type { RecognizerConfigChanged } from "../shared/recognizer.js";
-import { ENV_CONNECTION_ID, ENV_MAX_TURNS, ENV_MODEL, ENV_REASONING_EFFORT } from "./host-env.js";
+import { ENV_CONNECTION_ID, ENV_MAX_TURNS, ENV_MODEL, ENV_REASONING_EFFORT, ENV_REASONING_EFFORT_MODEL } from "./host-env.js";
 import type { CloseTabResult } from "../shared/tabs.js";
 import { sessionToolEnv } from "../shared/session-env.js";
 import { ENV_MCP_SECRETS } from "../shared/mcp-secrets.js";
@@ -105,7 +107,7 @@ const HOST_SHUTDOWN_MESSAGE_TYPE = "shutdown";
  * Model-visible rejection/terminal texts for the child-session admission path
  * (TASK.102 CUT-S2 §2.6.4/§2.7/§10.8.2). Every text below is now VERBATIM-
  * frozen by a cut authority — review checks byte-for-byte equality, not
- * paraphrase: limit_parent/limit_global/recursion/the provider-not-ready
+ * paraphrase: recursion/the provider-not-ready
  * template/closing/spawn_failed/the crash text are §2.7's own wording (the
  * model reads them through `tools/agent.ts`'s outcome mapping);
  * CHILD_ENGINE_NOT_READY_MESSAGE and CHILD_START_TIMEOUT_MESSAGE are
@@ -113,12 +115,12 @@ const HOST_SHUTDOWN_MESSAGE_TYPE = "shutdown";
  * wording (that wording stated a fact with no actionable next step); and
  * CHILD_CANCELLED_MESSAGE and CHILD_DUPLICATE_SPAWN_MESSAGE are §10.8.2
  * п.3/п.4's ratifications of the S2b wording AS-IS. None of these four is a
- * main-side style choice.
+ * main-side style choice. The child-limit messages use the current wording
+ * documented for users.
  */
-const CHILD_LIMIT_PARENT_MESSAGE =
-  'Agent: session-subagent limit reached — this session already has 3 running child sessions. Wait for one to finish, or use tier "inline".';
-const CHILD_LIMIT_GLOBAL_MESSAGE =
-  'Agent: application-wide session-subagent limit reached (8 running child sessions). No child was started. Wait for one to finish, or use tier "inline".';
+function childLimitGlobalMessage(limit: number): string {
+  return `Agent: application-wide child session limit reached (${limit} running child ${limit === 1 ? "session" : "sessions"}). No child was started. Wait for one to finish, or use tier "inline".`;
+}
 const CHILD_RECURSION_MESSAGE = 'Agent: a child session cannot spawn its own child sessions. Use tier "inline".';
 const CHILD_CLOSING_MESSAGE = "Agent: the child session could not be started (host is closing).";
 const CHILD_SPAWN_FAILED_MESSAGE = "Agent: the child session failed to start.";
@@ -391,6 +393,8 @@ export interface TabHost {
   pendingWorktreeCleanup?: WorktreeCleanupIntent;
   /* */
   sessionId: string;
+  activityState?: SessionActivityState;
+  lastCommunicationStatus?: Record<string, unknown>;
   /**
    * The provider connection pinned to this session (TASK.45 W10, core engine
    * only). Fixed at createTab from the active connection (new) or the session's
@@ -466,6 +470,7 @@ export interface TabHost {
    */
   workspaceTrustPending?: { hash: string };
   state: "running" | "crash_looped" | "closing";
+  hostFailure?: HostFailure;
   /**
    * Whether this tab was opened as a resume (first spawn uses --resume) vs a new
 
@@ -934,6 +939,10 @@ export interface TabSummary {
   workspace: string;
   sessionId: string;
   state: TabHost["state"];
+  activityState?: SessionActivityState;
+  hostFailure?: HostFailure;
+  missingWorkspace?: boolean;
+  engine?: EngineId;
   pid: number | null;
   /**
    * Present only for a child-session tab (TASK.102 CUT-S2 §2.6.4's "listTabs()
@@ -1177,6 +1186,13 @@ export class TabHostManager {
       const onMessage = (raw: unknown) => {
         const message = raw as { type?: string; requestId?: string; result?: unknown; error?: string };
         if (message?.type !== "communication_response" || message.requestId !== requestId) return;
+        if (!message.error && tab.proc === proc && operation === "get_session_status" && message.result && typeof message.result === "object") {
+          const status = message.result as Record<string, unknown>;
+          tab.lastCommunicationStatus = { ...tab.lastCommunicationStatus, ...Object.fromEntries(
+            ["model", "effort", "steering", "supportedEfforts", "appliedEffort", "effortPending"]
+              .filter((key) => status[key] !== undefined).map((key) => [key, status[key]]),
+          ) };
+        }
         finish(message.error ? new Error(message.error) : undefined, message.result);
       };
       const onExit = () => finish(new Error("Host disconnected; delivery unknown"));
@@ -1193,6 +1209,16 @@ export class TabHostManager {
     });
   }
 
+  /** Main-owned metadata and the last host status survive host restarts. */
+  communicationStatusDetails(sessionId: string): Record<string, unknown> {
+    const tab = [...this.tabs.values()].find((t) => t.sessionId === sessionId);
+    if (!tab) return {};
+    const model = tab.modelOverride ?? (!tab.initialResume ? tab.engineModel : null);
+    const effort = tab.effortOverride ?? (!tab.initialResume ? tab.engineEffort : null);
+    return { engine: tab.engine, ...(model != null ? { model } : {}),
+      ...(effort != null ? { effort } : {}), ...tab.lastCommunicationStatus };
+  }
+
   listTabs(): ReadonlyArray<TabSummary> {
     return [...this.tabs.values()]
       // A prepared (unpublished) tab is not a session anyone may see yet: the
@@ -1204,7 +1230,10 @@ export class TabHostManager {
       workspace: tab.workspace,
       sessionId: tab.sessionId,
       state: tab.state,
+      activityState: tab.activityState ?? "idle",
       pid: tab.proc?.pid ?? null,
+      ...(tab.hostFailure ? { hostFailure: tab.hostFailure, engine: tab.engine } : {}),
+      ...(tab.missingWorkspace ? { missingWorkspace: true, engine: tab.engine } : {}),
       ...(tab.childOf !== undefined
         ? { childOf: { parentTabId: tab.childOf.parentTabId, requestId: tab.childOf.requestId } }
         : {}),
@@ -1232,6 +1261,21 @@ export class TabHostManager {
 
   atCapacity(): boolean {
     return this.rootCount() >= this.effectiveMaxTabs();
+  }
+
+  /**
+   * How many live child sessions (background executors or session-tier
+   * subagents) are currently tracked under `parentTabId` (GitHub #33).
+   *
+   * Read straight off `childrenByParentTab`, the same index `drainChildren`
+   * empties: an entry exists from `admitChildSpawn` until `finalizeChildRun`
+   * releases it, so the count is exactly the set a rebind/close/relocate
+   * would cancel — nothing more (a queued waiter has no host to cancel and
+   * is reported as 0 here) and nothing less (a child still tearing down is
+   * still a child that would be cut off).
+   */
+  runningChildCount(parentTabId: string): number {
+    return this.childrenByParentTab.get(parentTabId)?.size ?? 0;
   }
 
   /** Settings value -> clamped; NO reader value -> `limits.maxTabs` verbatim (test injection of 1/3 must survive). */
@@ -1566,6 +1610,7 @@ export class TabHostManager {
     tab: TabHost,
     opts: {
       firstSpawn: boolean;
+      priorEffort?: ReasoningEffort;
       onDeferredInitialSpawn?: () => void;
       onDeferredFinished?: () => void;
       beforeDeferredPortDelivery?: (tab: TabHost) => void;
@@ -1578,6 +1623,7 @@ export class TabHostManager {
     if (this.deps.workspaceMissing?.(tab.workspace)) {
       this.logger.error(`[main] tab ${tab.tabId} workspace folder is missing (${tab.workspace}); refusing to spawn`);
       tab.missingWorkspace = true;
+      delete tab.hostFailure;
       tab.state = "crash_looped";
       tab.proc = null;
       return;
@@ -1700,6 +1746,7 @@ export class TabHostManager {
           }
           this.logger.error(`[main] tab ${tab.tabId} host environment refresh failed`, error);
           tab.state = "crash_looped";
+          tab.hostFailure = hostFailure("spawn_refused");
           this.deps.recordHostFailure?.(tab.sessionId, "connection_env_unavailable");
           this.notifyHostExited(tab.tabId);
           if (opts.firstSpawn) this.rollbackDeferredCreation(tab);
@@ -1716,6 +1763,7 @@ export class TabHostManager {
       this.deps.recordHostFailure?.(tab.sessionId, "connection_env_unavailable");
       tab.proc = null;
       tab.state = "crash_looped";
+      tab.hostFailure = hostFailure("spawn_refused");
       this.notifyHostExited(tab.tabId);
       return false;
     }
@@ -1738,6 +1786,7 @@ export class TabHostManager {
       );
       tab.proc = null;
       tab.state = "crash_looped";
+      tab.hostFailure = hostFailure("spawn_refused");
       this.notifyHostExited(tab.tabId);
       return false;
     }
@@ -1755,16 +1804,18 @@ export class TabHostManager {
           // is stamped per-fork from `tab.connectionId` (never baked into the shared
           // base env — a legacy/unpinned tab must not inherit another tab's pin).
           ...baseEnv,
+          ...(opts.priorEffort !== undefined || baseEnv.ANYCODE_SWITCH_PRIOR_EFFORT !== undefined
+            ? { ANYCODE_SWITCH_PRIOR_EFFORT: opts.priorEffort ?? "" } : {}),
           ...(tab.connectionId !== undefined ? { [ENV_CONNECTION_ID]: tab.connectionId } : {}),
           // S4-1 arm 2 (W4-F1): an imported session's picked model, stamped over
           // the base env's ANYCODE_MODEL (the active connection's model). Per-fork
           // like ANYCODE_CONNECTION_ID above and rides every respawn (lives on the
           // tab). Absent for every non-import spawn ⇒ nothing stamped.
           ...(tab.modelOverride !== undefined ? { [ENV_MODEL]: tab.modelOverride } : {}),
-          // Core children: xhigh maps to the existing core "max"; absent keeps
+          // Core children retain the selected tier; absent keeps
           // the absent-field behavior (nothing stamped).
           ...(tab.effortOverride !== undefined
-            ? { [ENV_REASONING_EFFORT]: tab.effortOverride === "xhigh" ? "max" : tab.effortOverride }
+            ? { [ENV_REASONING_EFFORT]: tab.effortOverride, [ENV_REASONING_EFFORT_MODEL]: "" }
             : {}),
           ...engineEnvOverlay,
           // The session's tools identify their session. Stamped
@@ -1784,6 +1835,7 @@ export class TabHostManager {
     } catch (error) {
       tab.proc = null;
       tab.state = "crash_looped";
+      tab.hostFailure = hostFailure("spawn_refused");
       this.logger.error(`[main] tab ${tab.tabId} host spawn failed`, error);
       this.deps.recordHostFailure?.(tab.sessionId, "host_crash_loop");
       this.notifyHostExited(tab.tabId);
@@ -1795,6 +1847,7 @@ export class TabHostManager {
       startupStderr = (startupStderr + chunk.toString()).slice(-16384);
     });
     tab.proc = child;
+    delete tab.hostFailure;
     tab.spawnedAt = this.now();
     tab.state = "running";
     delete tab.pendingWorktreeCleanup;
@@ -1825,6 +1878,11 @@ export class TabHostManager {
       return;
     }
     const data = message as { type?: unknown; requestId?: unknown };
+    if (data.type === "session_activity") {
+      const state = (message as { state?: unknown }).state;
+      if (tab.proc === child && (state === "idle" || state === "running" || state === "waiting_approval" || state === "closing")) tab.activityState = state;
+      return;
+    }
     if (data.type === WORKSPACE_TRUST_PENDING_MESSAGE_TYPE) {
       this.recordWorkspaceTrustPending(tab, child, message);
       return;
@@ -2026,6 +2084,18 @@ export class TabHostManager {
       reject("closing", CHILD_CLOSING_MESSAGE);
       return;
     }
+    // GitHub #33: a re-bind replaces this tab's host and drains its children;
+    // a drain (closeTab / relocateTab / crash cascade) is already tearing them
+    // down. A child admitted now could only ever be cancelled by that drain —
+    // a cancellation the user, at best, consented to for the children that
+    // existed when they were asked. Refusing here is what makes every child
+    // gate FINAL: while `rebindings` or `drainingParents` holds this tab, no
+    // new reservation can reach `childrenByParentTab`. Same refusal a closing
+    // parent gets — the tab is being torn down (and, for a rebind, re-created).
+    if (this.rebindings.has(parentTab.tabId) || this.drainingParents.has(parentTab.tabId)) {
+      reject("closing", CHILD_CLOSING_MESSAGE);
+      return;
+    }
     if (req.resumeChildSessionId !== undefined) {
       // A follow-up must not boot a second host on the child's session while
       // the finished one is still flushing/exiting: re-enter once it is gone,
@@ -2117,11 +2187,11 @@ export class TabHostManager {
       clampSessionLimit("childSessionsPerParentMax", this.childPerParentReader?.(parentTab.projectRoot)) ??
       CHILD_RUNS_PER_PARENT_MAX;
     if (perParent >= perParentMax) {
-      return { reason: "limit_parent", message: CHILD_LIMIT_PARENT_MESSAGE };
+      return { reason: "limit_parent", message: childSessionLimitMessage(perParent) };
     }
     const globalMax = clampSessionLimit("childSessionsGlobalMax", this.childGlobalReader?.()) ?? CHILD_RUNS_GLOBAL_MAX;
     if (this.childRuns.size >= globalMax) {
-      return { reason: "limit_global", message: CHILD_LIMIT_GLOBAL_MESSAGE };
+      return { reason: "limit_global", message: childLimitGlobalMessage(globalMax) };
     }
     return undefined;
   }
@@ -2574,6 +2644,21 @@ export class TabHostManager {
         this.childSpawnQueue.splice(i, 1);
         this.childSpawnWaiters.delete(requestId);
         this.childSpawnKeys.delete(waiter.spawnKey);
+        continue;
+      }
+      if (this.rebindings.has(waiter.parentTabId)) {
+        // GitHub #33: the parent is mid-rebind, and a rebind drains the
+        // children it finds. Admitting a waiter now would put it into that
+        // drain — cancelled either under a consent that only covered the
+        // children the user was shown, or (with no consent) not at all, but
+        // only after the switch's own child gate had already passed and its
+        // model write had landed. `spawnChild` refuses a fresh request for the
+        // same reason; the queue is the second door into `admitChildSpawn`, so
+        // it is held to the same rule. The waiter STAYS queued (not dropped):
+        // `drainChildren`'s synchronous prefix purges it with a `closing`
+        // refusal, and `releaseRebind` pumps once more for the path where the
+        // rebind refused before any drain.
+        i += 1;
         continue;
       }
       if (this.childSpawnCapBlock(parentTab) !== undefined) {
@@ -3138,6 +3223,9 @@ export class TabHostManager {
       case "activity":
         event = { ...base, kind: "activity", toolName: msg.toolName, summary: msg.summary };
         break;
+      case "status":
+        event = { ...base, kind: "status", itemKind: msg.itemKind, text: msg.text, ...(msg.toolName !== undefined ? { toolName: msg.toolName } : {}) };
+        break;
       case "attention":
         event = {
           ...base,
@@ -3303,6 +3391,13 @@ export class TabHostManager {
    * `handleExit` returns on that guard before `decideRespawn` ever runs.
    * `rapidRespawns` is reset for the same reason `relocateTab` resets it — a new
    * process on a new account is a new epoch, not a continuation of a crash streak.
+   *
+   * GitHub #33: `opts.cancelChildren` is the user's consent to the cancellation
+   * the drain performs. Without it a tab with live children refuses
+   * `children_running` (with the count) BEFORE the drain starts, so nothing is
+   * lost. The check is synchronous and sits immediately before `drainChildren`,
+   * and admission is refused for the whole `rebindings` window (see
+   * `spawnChild`), so no child can slip in between the check and the drain.
    */
   /** Acquire the per-tab rebind operation before asynchronous preparation. */
   acquireRebind(tabId: string): boolean {
@@ -3313,17 +3408,37 @@ export class TabHostManager {
 
   releaseRebind(tabId: string): void {
     this.rebindings.delete(tabId);
+    // GitHub #33: the queue pump leaves this tab's waiters parked while the
+    // lock is held (they must not join the set being drained). Settle them now
+    // that the switch is over — the same `closing` refusal / silent drop a
+    // waiter gets when its parent's host was replaced, never a fork into a
+    // dead generation.
+    this.pumpChildSpawnQueue();
   }
 
-  async rebindTab(tab: TabHost, connectionId: string): Promise<{ ok: true } | { ok: false; reason: "not_ready" | "spawn_failed" }> {
+  async rebindTab(
+    tab: TabHost,
+    connectionId: string,
+    priorEffort?: ReasoningEffort,
+    opts?: { cancelChildren?: boolean },
+  ): Promise<{ ok: true } | { ok: false; reason: "not_ready" | "spawn_failed" | "children_running"; runningChildren?: number }> {
     if (this.env(connectionId) === undefined) {
       this.logger.error(
         `[main] tab ${tab.tabId} rebind to ${connectionId} refused: no primed fork env for that connection`,
       );
       return { ok: false, reason: "not_ready" };
     }
-    // A rebind is as terminal for an in-flight child as a rehost is (cut §0.6):
-    // the parent is about to run on a different account entirely.
+    // GitHub #33: a rebind is as terminal for an in-flight child as a rehost is
+    // (cut §0.6) — the parent is about to run on a different account entirely.
+    // That is the mechanism's contract, but it is terminal for work the user
+    // may not see, so it needs their explicit consent. Synchronous, immediately
+    // before the drain: admission for this tab is refused while `rebindings`
+    // holds the operation (see `spawnChild`), so the set read here is the set
+    // the drain takes — nothing can appear in between.
+    const runningChildren = this.runningChildCount(tab.tabId);
+    if (runningChildren > 0 && opts?.cancelChildren !== true) {
+      return { ok: false, reason: "children_running", runningChildren };
+    }
     await this.drainChildren(tab);
     await this.shutdownTabHost(tab);
     if (this.quitting || this.closingTabs.has(tab.tabId) || this.tabs.get(tab.tabId) !== tab) return { ok: false, reason: "not_ready" };
@@ -3339,7 +3454,7 @@ export class TabHostManager {
     tab.initialResume = true;
     tab.rapidRespawns = 0;
     tab.state = "running";
-    const spawn = this.spawnTabHost(tab, { firstSpawn: false });
+    const spawn = this.spawnTabHost(tab, { firstSpawn: false, priorEffort });
     if (spawn === false) {
       tab.connectionId = previousConnectionId;
       tab.modelOverride = previousModelOverride;
@@ -3444,6 +3559,7 @@ export class TabHostManager {
       return;
     }
     tab.proc = null;
+    tab.activityState = "idle";
 
     if (this.unpublishedTabs.has(tab.tabId)) {
       // A prepared host died before anyone could use it. There is nothing to
@@ -3499,10 +3615,10 @@ export class TabHostManager {
 
 
     // its host-exited banner and awaits the replacement port below.
-    this.notifyHostExited(tab.tabId);
-
     if (decision.action === "give_up") {
       tab.state = "crash_looped";
+      tab.hostFailure = hostFailure(decision.reason, startupStderr, code, signal);
+      this.notifyHostExited(tab.tabId);
       this.logger.error(
         `[main] tab ${tab.tabId} host giving up respawn (${decision.reason}, code ${code})`,
       );
@@ -3511,6 +3627,7 @@ export class TabHostManager {
       return;
     }
 
+    this.notifyHostExited(tab.tabId);
     this.logger.error(`[main] tab ${tab.tabId} host exited unexpectedly (code ${code}); respawning`);
     if (this.spawnTabHost(tab, { firstSpawn: false }) === false) return;
     this.deliverTabPort(tab);
@@ -3615,7 +3732,8 @@ export class TabHostManager {
     if (win === null || win.isDestroyed()) {
       return;
     }
-    win.webContents.send(HOST_EXITED_ENVELOPE_TYPE, { tabId });
+    const failure = this.tabs.get(tabId)?.hostFailure;
+    win.webContents.send(HOST_EXITED_ENVELOPE_TYPE, { tabId, ...(failure ? { hostFailure: failure } : {}) });
   }
 
   /**
@@ -3641,7 +3759,7 @@ export class TabHostManager {
       this.logger.log(`[main] deliverTabPort deferred: tab ${tab.tabId} is not published yet`);
       return;
     }
-    if (tab.proc === null && !tab.missingWorkspace) {
+    if (tab.proc === null && !tab.missingWorkspace && !tab.hostFailure) {
       this.logger.warn(`[main] deliverTabPort skipped: tab ${tab.tabId} has no host`);
       return;
     }
@@ -3666,6 +3784,7 @@ export class TabHostManager {
         tabId: tab.tabId,
         workspace: tab.workspace,
         ...(tab.missingWorkspace ? { missingWorkspace: true } : {}),
+        ...(tab.hostFailure ? { hostFailure: tab.hostFailure } : {}),
         ...(tab.connectionId !== undefined && pin !== undefined
           ? { connectionId: tab.connectionId, providerId: pin.providerId }
           : {}),
@@ -3722,7 +3841,7 @@ export class TabHostManager {
    */
   deliverAllTabPorts(): void {
     for (const tab of this.tabs.values()) {
-      if (tab.proc !== null || tab.missingWorkspace) {
+      if (tab.proc !== null || tab.missingWorkspace || tab.hostFailure) {
         this.deliverTabPort(tab);
       }
     }
@@ -3798,6 +3917,7 @@ export class TabHostManager {
         tab.proc = null;
       }
     }
+    if (tab.proc === null) tab.activityState = "idle";
   }
 
   /**

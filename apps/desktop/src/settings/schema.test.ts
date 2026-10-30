@@ -2241,3 +2241,18 @@ describe("communication (Taskana 4747, additive-optional) — Sessions API setti
     }
   });
 });
+
+
+it("retains valid model pricing and unrelated fields when one rate is malformed", () => {
+  const settings = cloneDefaults();
+  settings.provider.connections = [{ id: "c", providerId: "custom:example", modelOverrides: {
+    a: { pricing: { input: 1, cachedInput: 0, output: 2 }, contextWindowTokens: 8192 },
+    b: { pricing: { input: 3, cachedInput: 0, output: 4 } },
+  } }];
+  const wire = JSON.parse(JSON.stringify(settings));
+  wire.provider.connections[0].modelOverrides.b.pricing.input = -1;
+  const parsed = parseSettings(wire).settings.provider.connections[0]!;
+  expect(parsed.modelOverrides?.a).toEqual({ pricing: { input: 1, cachedInput: 0, output: 2 }, contextWindowTokens: 8192 });
+  expect(parsed.modelOverrides?.b?.pricing).toBeUndefined();
+  expect(parseSettings(JSON.parse(JSON.stringify(parsed ? { ...settings, provider: { ...settings.provider, connections: [parsed] } } : settings))).settings.provider.connections[0]?.modelOverrides?.a?.pricing?.input).toBe(1);
+});

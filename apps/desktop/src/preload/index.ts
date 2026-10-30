@@ -55,7 +55,7 @@ import {
   type CommunicationMutationResult,
   type CommunicationRegenerateResult,
 } from "../shared/communication-config.js";
-import { SCOPE_WORKSPACES_LIST_CHANNEL, type ScopeWorkspacesListResult } from "../shared/scope-workspaces.js";
+import { SCOPE_WORKSPACES_LIST_CHANNEL, SCOPE_WORKSPACES_RESOLVE_CHANNEL, type ScopeWorkspacesListResult } from "../shared/scope-workspaces.js";
 import {
   BROWSER_ACCESS_CHANGED_CHANNEL,
   BROWSER_ACCESS_GET_CHANNEL,
@@ -252,11 +252,14 @@ import {
   SESSION_DELETE_CHANNEL,
   TAB_CLOSE_CHANNEL,
   TAB_CREATE_CHANNEL,
+  TAB_BOOTSTRAP_CHANNEL,
+  TAB_SELECT_CHANNEL,
   TAB_REBIND_CHANNEL,
   WORKSPACE_PICK_CHANNEL,
 } from "../shared/tabs.js";
 import type {
   CloseTabResult,
+  TabBootstrap,
   CreateTabRequest,
   CreateTabResult,
   DeleteSessionResult,
@@ -672,6 +675,7 @@ ipcRenderer.on(
       openedByAgent?: PortEnvelope["openedByAgent"];
       agentTitle?: string;
       missingWorkspace?: boolean;
+      hostFailure?: PortEnvelope["hostFailure"];
     },
   ) => {
     // TASK.45 W10-FIX F2: forward the additive pin metadata (connectionId/providerId)
@@ -683,6 +687,7 @@ ipcRenderer.on(
         tabId: payload.tabId,
         workspace: payload.workspace,
         ...(payload.missingWorkspace === true ? { missingWorkspace: true } : {}),
+        ...(payload.hostFailure ? { hostFailure: payload.hostFailure } : {}),
         ...(payload.connectionId !== undefined && payload.providerId !== undefined
           ? { connectionId: payload.connectionId, providerId: payload.providerId }
           : {}),
@@ -705,8 +710,8 @@ ipcRenderer.on(TAB_CLOSED_ENVELOPE_TYPE, (_event, payload: { tabId: string }) =>
   window.postMessage({ type: TAB_CLOSED_ENVELOPE_TYPE, tabId: payload.tabId }, "*");
 });
 
-ipcRenderer.on(HOST_EXITED_ENVELOPE_TYPE, (_event, payload: { tabId: string }) => {
-  window.postMessage({ type: HOST_EXITED_ENVELOPE_TYPE, tabId: payload.tabId }, "*");
+ipcRenderer.on(HOST_EXITED_ENVELOPE_TYPE, (_event, payload: { tabId: string; hostFailure?: PortEnvelope["hostFailure"] }) => {
+  window.postMessage({ type: HOST_EXITED_ENVELOPE_TYPE, tabId: payload.tabId, ...(payload.hostFailure ? { hostFailure: payload.hostFailure } : {}) }, "*");
 });
 
 // Slice 2.4.2 (design §3.4): the term-port envelope, exact copy of the
@@ -742,6 +747,8 @@ contextBridge.exposeInMainWorld("anycode", {
     forget: (request: WorkspaceTrustForgetRequest): Promise<WorkspaceTrustForgetResult> =>
       ipcRenderer.invoke(WORKSPACE_TRUST_FORGET_CHANNEL, request) as Promise<WorkspaceTrustForgetResult>,
   },
+  tabBootstrap: (): Promise<TabBootstrap> => ipcRenderer.invoke(TAB_BOOTSTRAP_CHANNEL) as Promise<TabBootstrap>,
+  selectTab: (tabId: string): void => ipcRenderer.send(TAB_SELECT_CHANNEL, tabId),
   createTab: (req: CreateTabRequest): Promise<CreateTabResult> =>
     ipcRenderer.invoke(TAB_CREATE_CHANNEL, req) as Promise<CreateTabResult>,
   closeTab: (tabId: string): Promise<CloseTabResult> =>
@@ -1163,6 +1170,7 @@ contextBridge.exposeInMainWorld("anycode", {
   scopeWorkspaces: {
     list: (): Promise<ScopeWorkspacesListResult> =>
       ipcRenderer.invoke(SCOPE_WORKSPACES_LIST_CHANNEL, {}) as Promise<ScopeWorkspacesListResult>,
+    resolve: (ref: string): Promise<string | null> => ipcRenderer.invoke(SCOPE_WORKSPACES_RESOLVE_CHANNEL, { ref }) as Promise<string | null>,
   },
   // Taskana 4759: `browserAccess.*` — the per-session "Full browser access" switch.
   // The renderer names a tabId and a boolean only; main resolves the session, checks

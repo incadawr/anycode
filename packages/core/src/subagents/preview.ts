@@ -23,8 +23,8 @@ import { SPAWN_TOOLS } from "./spawn-tools.js";
 
 /**
  * The default tool registry's tool NAMES, in registration order — a data mirror
- * of `createDefaultToolRegistry().list()` (Read, Write, Edit, Bash, Grep, Glob,
- * TodoRead, TodoWrite, WebFetch, Agent, Skill, Workflow). Kept in sync
+ * of `createDefaultToolRegistry().list()` (Read, Git, Write, Edit, Bash, Grep, Glob,
+ * TodoRead, TodoWrite, WebFetch, Agent, AgentStatus, Skill, Workflow). Kept in sync
  * by the parity test in preview.test.ts. Used to intersect a profile's requested
  * tools down to real, grantable tools (the ∩-semantics buildPersonaRegistry
  * applies).
@@ -35,6 +35,7 @@ import { SPAWN_TOOLS } from "./spawn-tools.js";
  */
 export const DEFAULT_TOOL_NAMES: readonly string[] = [
   "Read",
+  "Git",
   "Write",
   "Edit",
   "Bash",
@@ -44,6 +45,7 @@ export const DEFAULT_TOOL_NAMES: readonly string[] = [
   "TodoWrite",
   "WebFetch",
   "Agent",
+  "AgentStatus",
   "Skill",
   "Workflow",
 ];
@@ -78,7 +80,7 @@ export function effectiveProfileTools(tools: readonly string[]): string[] {
 export interface SubagentProfileDraft {
   name: string;
   description: string;
-  /** Absent ⇒ inherit the general-purpose baseline (nine non-spawn tools). */
+  /** Absent ⇒ inherit the general-purpose baseline (ten non-spawn tools). */
   tools?: readonly string[];
   /** Raw child systemPrompt body (the loader caps it + placeholders an empty one). */
   body: string;

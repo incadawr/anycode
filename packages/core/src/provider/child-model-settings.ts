@@ -21,7 +21,7 @@
 
 import type { CatalogProviderEntry } from "./catalog.js";
 import type { ReasoningEffort } from "../types/config.js";
-import { resolveContextWindow, resolveMaxOutputTokens, resolveReasoningEffort } from "./capabilities.js";
+import { resolveContextWindow, resolveMaxOutputTokens, resolveChildReasoningEffort } from "./capabilities.js";
 import type { LiveModelCapabilities } from "./capabilities.js";
 
 export interface ChildModelSettings {
@@ -44,6 +44,9 @@ export function buildChildModelSettingsResolver(deps: {
   envMaxOutputTokens: number | undefined;
   envContextWindow: number | undefined;
   envContextWindowModel?: string;
+  /** Connection-specific model overrides shared with the desktop parent resolver. */
+  contextWindowFor?: (modelId: string) => number;
+  effortLevelsFor?: (modelId: string) => readonly ReasoningEffort[] | undefined;
   onClamp?: (requested: number, clamped: number, modelId: string) => void;
   onStubFallback?: (modelId: string, applied: number) => void;
   /** Taskana 4118: live /v1/models capabilities, consulted on a catalog miss. */
@@ -54,8 +57,8 @@ export function buildChildModelSettingsResolver(deps: {
     try {
       return {
         maxOutputTokens: resolveMaxOutputTokens(modelId, catalogEntry, envMaxOutputTokens, onClamp, onStubFallback),
-        reasoningEffort: resolveReasoningEffort(modelId, catalogEntry, selectedTier, liveCapabilitiesFor?.(modelId)),
-        contextWindowTokens: resolveContextWindow(modelId, catalogEntry, envContextWindow, envContextWindowModel),
+        reasoningEffort: resolveChildReasoningEffort(modelId, catalogEntry, selectedTier, liveCapabilitiesFor?.(modelId), deps.effortLevelsFor?.(modelId)),
+        contextWindowTokens: deps.contextWindowFor?.(modelId) ?? resolveContextWindow(modelId, catalogEntry, envContextWindow, envContextWindowModel),
       };
     } catch {
       // Degrades to the same conservative unknown-model shape a catalog-miss

@@ -25,6 +25,8 @@ import {
   SESSION_DELETE_CHANNEL,
   TAB_CLOSE_CHANNEL,
   TAB_CREATE_CHANNEL,
+  TAB_BOOTSTRAP_CHANNEL,
+  TAB_SELECT_CHANNEL,
   TAB_REBIND_CHANNEL,
   WORKSPACE_PICK_CHANNEL,
 } from "../shared/tabs.js";
@@ -182,6 +184,18 @@ export interface TabIpcDeps {
    * is left as-is.
    */
   readConnectionModel?(connectionId: string): string | undefined;
+  /**
+   * GitHub #33: writes the TARGET connection's model during a re-bind —
+   * `handleConnectionUpdate`'s own settings writer, invoked from here so the
+   * write is part of the same locked operation as the child gate and the
+   * drain. The renderer no longer writes it first: a switch the user then
+   * declines must leave the connection exactly as it was, and there must be
+   * no window in which a child could be admitted between the gate and the
+   * write. Absent (legacy wiring / unit fixtures) = a request carrying `model`
+   * fails closed with `model_write_failed` rather than booting the target on a
+   * model the user did not pick.
+   */
+  writeConnectionModel?(connectionId: string, model: string): Promise<boolean>;
   /**
    * Resolves the connection a RESUMED session is pinned to (TASK.45 W10). Absent
    * = pinning disabled (legacy wiring / unit fixtures) so resume behaves as before.
@@ -353,6 +367,15 @@ const closeTabRequestSchema = z.object({ tabId: z.string().min(1) });
 const tabRebindRequestSchema: z.ZodType<TabRebindRequest> = z.object({
   tabId: z.string().min(1).max(128),
   connectionId: z.string().min(1).max(128),
+  priorEffort: z.enum(["off", "low", "medium", "high", "xhigh", "max"]).optional(),
+  // GitHub #33 (additive): the model the pick chose on the TARGET connection —
+  // written by main inside the locked rebind, never by the renderer first.
+  model: z.string().min(1).max(256).optional(),
+  // `dryRun` = validate and answer, mutate nothing; `cancelChildren` = the
+  // user's explicit consent to the cancellation a re-bind performs. Both are
+  // booleans only — no other shape is accepted.
+  dryRun: z.boolean().optional(),
+  cancelChildren: z.boolean().optional(),
 });
 
 /** TASK.106 cut-2: exported for tests (tab-ipc.test.ts) — the fail-closed re-bind request schema. */
@@ -897,8 +920,21 @@ export async function handleWorkspacePick(deps: TabIpcDeps): Promise<WorkspacePi
  *    rather than silently re-forking the host;
  *  - `connection_missing`: the id is absent from main's live registry (or no
  *    registry is wired at all — never a silent fallback);
+ *  - `children_running`: the tab has live child sessions and the request did
+ *    not carry the user's explicit `cancelChildren` consent (GitHub #33).
+ *    `rebindTab` cancels those children by design — a foreign connection is a
+ *    different account, so their in-flight work cannot continue — but that is
+ *    terminal for work the user may not have in front of them, so it is never
+ *    the silent price of a model pick. The count rides on the refusal, and the
+ *    renderer names it before anything is written;
  *  - `not_ready`: `ensureConnectionEnv` threw, or `rebindTab` found the
  *    target's env unprimed after all.
+ *
+ * GitHub #33 also adds `dryRun`: the same validation, answered WITHOUT
+ * priming an env, draining children or replacing the host, so the renderer can
+ * ask "would this switch cancel my running subagents?" before it writes the
+ * target connection's model. A dry run never mutates, so it takes no rebind
+ * lock (a question must not make a concurrent real switch refuse).
  *
  * On the commit path the session row is re-pinned only AFTER `rebindTab`
  * reports the new host spawned. The reverse order would make a refused
@@ -910,8 +946,7 @@ export async function handleWorkspacePick(deps: TabIpcDeps): Promise<WorkspacePi
  * switch simply did not stick, and the model chip says so.
  */
 export async function handleTabRebind(deps: TabIpcDeps, req: TabRebindRequest): Promise<TabRebindResult> {
-  if (!deps.manager.acquireRebind(req.tabId)) return { ok: false, reason: "not_ready" };
-  try {
+  const validate = (): TabRebindResult | undefined => {
     const tab = deps.manager.getTab(req.tabId);
     // A child session's tabId is not externally addressable —
     // the same "reads as no such tab" closeTab applies.
@@ -930,10 +965,44 @@ export async function handleTabRebind(deps: TabIpcDeps, req: TabRebindRequest): 
     if (deps.connectionExists === undefined || !deps.connectionExists(req.connectionId)) {
       return { ok: false, reason: "connection_missing" };
     }
-    // Prime the fork env BEFORE anything is mutated — the same
-    // validated-then-primed order the cut-1 `new`-tab pick established. A throw
-    // (vault read failure) is a fail-closed `not_ready`, never a spawn on an
-    // unprimed env.
+    const runningChildren = deps.manager.runningChildCount(tab.tabId);
+    if (runningChildren > 0 && req.cancelChildren !== true) {
+      return { ok: false, reason: "children_running", runningChildren };
+    }
+    return undefined;
+  };
+  if (req.dryRun === true) {
+    return validate() ?? { ok: true, connectionId: req.connectionId };
+  }
+  if (!deps.manager.acquireRebind(req.tabId)) return { ok: false, reason: "not_ready" };
+  try {
+    const blocked = validate();
+    if (blocked !== undefined) {
+      return blocked;
+    }
+    const tab = deps.manager.getTab(req.tabId);
+    // Unreachable after `validate` (which read the same live registry), but a
+    // cheap re-read keeps this narrowing honest instead of asserting.
+    if (tab === undefined) {
+      return { ok: false, reason: "unknown_tab" };
+    }
+    // GitHub #33: the target connection's model is written HERE, inside the
+    // locked operation and AFTER the child gate above, never by the renderer
+    // before it. Two properties follow, and both were broken when the renderer
+    // wrote first: a switch that does not happen (the user declined, or the
+    // drain refused) has changed no persisted setting, and the write cannot be
+    // interleaved with a child admission — `acquireRebind` refuses admission
+    // for this tab for the whole operation, so the gate checked above is still
+    // true at the drain below.
+    if (req.model !== undefined) {
+      if (deps.writeConnectionModel === undefined || !(await deps.writeConnectionModel(req.connectionId, req.model))) {
+        return { ok: false, reason: "model_write_failed" };
+      }
+    }
+    // Prime the fork env AFTER the model write and BEFORE anything is mutated —
+    // the same validated-then-primed order the cut-1 `new`-tab pick
+    // established. A throw (vault read failure) is a fail-closed `not_ready`,
+    // never a spawn on an unprimed env.
     if (deps.ensureConnectionEnv !== undefined) {
       try {
         await deps.ensureConnectionEnv(req.connectionId);
@@ -941,11 +1010,15 @@ export async function handleTabRebind(deps: TabIpcDeps, req: TabRebindRequest): 
         return { ok: false, reason: "not_ready" };
       }
     }
-    const rebound = await deps.manager.rebindTab(tab, req.connectionId);
+    const rebound = await deps.manager.rebindTab(tab, req.connectionId, req.priorEffort, {
+      cancelChildren: req.cancelChildren === true,
+    });
     if (!rebound.ok) {
       // Nothing durable was written, so the refusal leaves the session row
       // pinned where the tab still runs.
-      return { ok: false, reason: rebound.reason };
+      return rebound.reason === "children_running"
+        ? { ok: false, reason: "children_running", runningChildren: rebound.runningChildren ?? 0 }
+        : { ok: false, reason: rebound.reason };
     }
     deps.consumePendingImportModel?.(tab.sessionId);
     // Design doc §D3/D5: the target connection's own model is the authority for
@@ -969,6 +1042,16 @@ export async function handleTabRebind(deps: TabIpcDeps, req: TabRebindRequest): 
  * negative result of that channel rather than throwing across the bridge.
  */
 export function registerTabIpc(deps: TabIpcDeps): void {
+  let selectedTabId: string | null = null;
+  ipcMain.on(TAB_SELECT_CHANNEL, (_event, raw: unknown) => {
+    if (typeof raw === "string" && deps.manager.listTabs().some((tab) => tab.tabId === raw && !tab.childOf)) {
+      selectedTabId = raw;
+    }
+  });
+  ipcMain.handle(TAB_BOOTSTRAP_CHANNEL, () => {
+    const tabs = deps.manager.listTabs().filter((tab) => !tab.childOf).map(({ tabId, workspace }) => ({ tabId, workspace }));
+    return { tabs, activeTabId: tabs.some((tab) => tab.tabId === selectedTabId) ? selectedTabId : null };
+  });
   ipcMain.handle(TAB_CREATE_CHANNEL, async (_event, raw: unknown): Promise<CreateTabResult> => {
     const parsed = createTabRequestSchema.safeParse(raw);
     if (!parsed.success) {

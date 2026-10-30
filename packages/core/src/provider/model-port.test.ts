@@ -185,7 +185,7 @@ describe("reasoningRequestOptions — prompt cache options (GitHub #15)", () => 
     expect(
       reasoningRequestOptions({ ...baseRequest, reasoningEffort: "max" }, "custom", "openai-chat-completions", cache),
     ).toEqual({
-      providerOptions: { openaiCompatible: { reasoningEffort: "high", prompt_cache_options: cache } },
+      providerOptions: { openaiCompatible: { reasoningEffort: "max", prompt_cache_options: cache } },
     });
     expect(
       reasoningRequestOptions({ ...baseRequest, reasoningEffort: "max", maxOutputTokens: 2048 }, "OpenAI", "openai-responses", cache),
@@ -752,6 +752,39 @@ describe("AiSdkModelPort — abort wins over retry", () => {
   });
 });
 
+function responsesConfig(retry?: Partial<AnthropicEndpointConfig["retry"]>): EndpointConfig {
+  return { ...baseConfig(retry), transport: "openai-responses", baseUrl: "https://gw.example/v1", model: "gpt-oss" };
+}
+function rawPart(rawValue: Record<string, unknown>): FakeStep { return part({type:"raw",rawValue}); }
+function reasoningTextDelta(item_id: string, delta: string): FakeStep { return rawPart({type:"response.reasoning_text.delta",item_id,content_index:0,delta}); }
+
+describe("AiSdkModelPort — openai-responses reasoning_text recovery (#27)", () => {
+  it("yields reasoning events for raw reasoning_text deltas and closes the synthesized block before finish", async () => {
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart),reasoningTextDelta("rs_1","Let me "),reasoningTextDelta("rs_1","think."),part({type:"text-delta",id:"msg_1",text:"Hi"}),part(finishPart)]));
+    const events = await collect(new AiSdkModelPort(responsesConfig()).streamText(baseRequest));
+    expect(events.map(e=>e.type)).toEqual(["start","reasoning_start","reasoning_delta","reasoning_delta","text_delta","reasoning_end","finish"]);
+    expect(events.filter(e=>e.type.startsWith("reasoning_"))).toEqual([{type:"reasoning_start",id:"rs_1:0"},{type:"reasoning_delta",id:"rs_1:0",text:"Let me "},{type:"reasoning_delta",id:"rs_1:0",text:"think."},{type:"reasoning_end",id:"rs_1:0"}]);
+  });
+  it("ignores raw reasoning_text frames on anthropic-messages", async () => {
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart),reasoningTextDelta("rs_1","x"),part(finishPart)]));
+    expect((await collect(new AiSdkModelPort(baseConfig()).streamText(baseRequest))).filter(e=>e.type.startsWith("reasoning_"))).toEqual([]);
+  });
+  it("retries recovered reasoning even with the legacy replay cap disabled", async () => {
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), reasoningTextDelta("rs_1", "old"), throwsWith(retryableError())]))
+      .mockImplementationOnce(() => fakeResult([part(startPart), reasoningTextDelta("rs_1", "new"), part(finishPart)]));
+    const events = await collect(new AiSdkModelPort(responsesConfig({ maxRetries: 3, midStreamRetries: 0 })).streamText(baseRequest));
+    expect(events.filter(e => e.type === "stream_retry")).toHaveLength(1);
+    expect(events.at(-1)?.type).toBe("finish");
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+  });
+  it("hands no activity hook to the model factory on other transports or with the watchdog off", async () => {
+    for (const config of [baseConfig(), responsesConfig({stallTimeoutMs:0}), {...baseConfig(),transport:"openai-chat-completions" as const}, responsesConfig({stallTimeoutMs:50})]) {
+      mockStreamText.mockImplementationOnce(() => fakeResult([part(finishPart)])); await collect(new AiSdkModelPort(config).streamText(baseRequest));
+    }
+    expect(mockCreateLanguageModel.mock.calls.slice(0,3).map(c=>c.length)).toEqual([1,1,1]); expect(mockCreateLanguageModel.mock.calls[3]!.length).toBe(2); expect(typeof mockCreateLanguageModel.mock.calls[3]![1]).toBe("function");
+  });
+});
+
 describe("AiSdkModelPort — stall watchdog (design slice-2.3-cut.md, tail 4)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -765,8 +798,8 @@ describe("AiSdkModelPort — stall watchdog (design slice-2.3-cut.md, tail 4)", 
   function hangAfterTwoDeltas() {
     return {
       fullStream: (async function* () {
-        yield { type: "text-delta", id: "t1", text: "a" };
-        yield { type: "text-delta", id: "t1", text: "b" };
+        yield { type: "reasoning-delta", id: "t1", text: "a" };
+        yield { type: "reasoning-delta", id: "t1", text: "b" };
         await new Promise(() => {});
       })(),
     };
@@ -790,8 +823,8 @@ describe("AiSdkModelPort — stall watchdog (design slice-2.3-cut.md, tail 4)", 
     const port = new AiSdkModelPort(baseConfig({ maxRetries: 3, stallTimeoutMs: 50 }));
     const iterator = port.streamText(baseRequest)[Symbol.asyncIterator]();
 
-    expect((await iterator.next()).value).toMatchObject({ type: "text_delta", text: "a" });
-    expect((await iterator.next()).value).toMatchObject({ type: "text_delta", text: "b" });
+    expect((await iterator.next()).value).toMatchObject({ type: "reasoning_delta", text: "a" });
+    expect((await iterator.next()).value).toMatchObject({ type: "reasoning_delta", text: "b" });
 
     const stallPromise = iterator.next();
     await vi.advanceTimersByTimeAsync(50);
@@ -820,6 +853,16 @@ describe("AiSdkModelPort — stall watchdog (design slice-2.3-cut.md, tail 4)", 
     expect(mockStreamText).toHaveBeenCalledTimes(2);
   });
 
+  it("does not replay a stalled stream after text", async () => {
+    mockStreamText.mockImplementationOnce(() => ({ fullStream: (async function* () { yield { type: "text-delta", id: "t", text: "visible" }; await new Promise(() => {}); })() }));
+    const iterator = new AiSdkModelPort(baseConfig({ maxRetries: 8, stallTimeoutMs: 20 })).streamText(baseRequest)[Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toMatchObject({ type: "text_delta" });
+    const pending = expect(iterator.next()).rejects.toThrow(/stream stalled/);
+    await vi.advanceTimersByTimeAsync(20);
+    await pending;
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
   it("stops retrying once maxRetries is exhausted for repeated stalls and throws", async () => {
     mockStreamText.mockImplementationOnce(hangAfterStart).mockImplementationOnce(hangAfterStart);
 
@@ -844,6 +887,17 @@ describe("AiSdkModelPort — stall watchdog (design slice-2.3-cut.md, tail 4)", 
     await vi.advanceTimersByTimeAsync(20);
     await assertion;
     expect(mockStreamText).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps an openai-responses attempt alive while response bytes arrive, then stalls once they stop (#27)", async () => {
+    mockStreamText.mockImplementationOnce(hangAfterStart);
+    const iterator = new AiSdkModelPort(responsesConfig({maxRetries:0,stallTimeoutMs:50})).streamText(baseRequest)[Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toEqual({type:"start"});
+    const onActivity = mockCreateLanguageModel.mock.calls[0]![1] as () => void;
+    let settled = false; const pending = iterator.next().finally(() => { settled = true; }); pending.catch(() => {});
+    for (let i=0;i<3;i++) { await vi.advanceTimersByTimeAsync(30); onActivity(); }
+    await vi.advanceTimersByTimeAsync(30); expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(25); await expect(pending).rejects.toThrow(/stream stalled: no events for 50ms/);
   });
 
   it("does not arm the stall watchdog when stallTimeoutMs is 0", async () => {
@@ -924,7 +978,7 @@ describe("reasoningRequestOptions — transport branching (TASK.43 §0.7)", () =
   });
 
   it.each(["low", "medium", "high", "max"] as const)(
-    "passes openai-responses effort %s through VERBATIM (no chat-completions-style max->high collapse), alongside store:false",
+    "passes openai-responses effort %s through verbatim, alongside store:false",
     (effort) => {
       // forceReasoning rides along because @ai-sdk/openai decides whether to
       // emit reasoning.effort from an id-prefix heuristic (o1/o3/o4-mini/gpt-5*)
@@ -964,11 +1018,11 @@ describe("reasoningRequestOptions — transport branching (TASK.43 §0.7)", () =
     },
   );
 
-  it("collapses openai-chat-completions effort max to high (no max/xhigh tier on chat-completions)", () => {
+  it("passes openai-chat-completions effort max through unchanged", () => {
     expect(
       reasoningRequestOptions({ ...baseRequest, reasoningEffort: "max" }, "custom", "openai-chat-completions"),
     ).toEqual({
-      providerOptions: { openaiCompatible: { reasoningEffort: "high" } },
+      providerOptions: { openaiCompatible: { reasoningEffort: "max" } },
     });
   });
 
@@ -1107,24 +1161,21 @@ describe("AiSdkModelPort — response-model provenance and identity readback", (
     expect(mockStreamText).toHaveBeenCalledWith(expect.objectContaining({ includeRawChunks: true }));
   });
 
-  it("does not ask for raw chunks on the openai transports (no claim to read there)", async () => {
+  it("does not ask for raw chunks on the openai-chat-completions transport", async () => {
     mockStreamText.mockImplementationOnce(() => fakeResult([part(finishPart)]));
-    await collect(
-      new AiSdkModelPort({ ...baseConfig(), transport: "openai-chat-completions", baseUrl: "https://gw.example/v1", model: "gpt-oss" }).streamText(
-        baseRequest,
-      ),
-    );
-    const chatOptions = mockStreamText.mock.calls[0]![0] as Record<string, unknown>;
-    expect("includeRawChunks" in chatOptions).toBe(false);
-
+    await collect(new AiSdkModelPort({ ...baseConfig(), transport: "openai-chat-completions" }).streamText(baseRequest));
+    expect(mockStreamText.mock.calls[0]![0]).not.toHaveProperty("includeRawChunks");
+  });
+  it("asks the SDK for raw chunks on the openai-responses transport (reasoning_text recovery, #27)", async () => {
     mockStreamText.mockImplementationOnce(() => fakeResult([part(finishPart)]));
-    await collect(
-      new AiSdkModelPort({ ...baseConfig(), transport: "openai-responses", baseUrl: "https://gw.example/v1", model: "gpt-oss" }).streamText(
-        baseRequest,
-      ),
-    );
-    const responsesOptions = mockStreamText.mock.calls[1]![0] as Record<string, unknown>;
-    expect("includeRawChunks" in responsesOptions).toBe(false);
+    await collect(new AiSdkModelPort(responsesConfig()).streamText(baseRequest));
+    expect(mockStreamText.mock.calls[0]![0]).toHaveProperty("includeRawChunks", true);
+  });
+  it("keeps lastResponseModel undefined on openai-responses although raw chunks now flow", async () => {
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), rawPart({type:"response.created", response:{model:"gpt-claimed"}}), part(finishPart)]));
+    const port = new AiSdkModelPort(responsesConfig());
+    await collect(port.streamText(baseRequest));
+    expect(port.lastResponseModel).toBeUndefined();
   });
 });
 
@@ -1300,6 +1351,16 @@ describe("AiSdkModelPort — TASK.168 include_usage probe (openai-chat-completio
     expect(events.find((e) => e.type === "finish")).toMatchObject({ type: "finish" });
     expect(mockStreamText).toHaveBeenCalledTimes(3);
   });
+  it.each(["reasoning", "text"] as const)("reclassifies a probe failure after %s", async (kind) => {
+    mockStreamText.mockImplementationOnce(() => fakeResult([part({ type: "error", error: streamOptions400() })]))
+      .mockImplementationOnce(() => fakeResult([part({ type: kind === "reasoning" ? "reasoning-delta" : "text-delta", id: "x", text: "output" }), part({ type: "error", error: retryableError() })]))
+      .mockImplementationOnce(() => fakeResult([part(finishPart)]));
+    const events = await collect(new AiSdkModelPort(chatConfig({ retry: { maxRetries: 3, midStreamRetries: 0, baseDelayMs: 1, maxDelayMs: 1 } }), () => {}).streamText(baseRequest));
+    expect(events.filter(e => e.type === "stream_retry")).toHaveLength(kind === "reasoning" ? 1 : 0);
+    expect(events.at(-1)?.type).toBe(kind === "reasoning" ? "finish" : "error");
+    expect(mockStreamText).toHaveBeenCalledTimes(kind === "reasoning" ? 3 : 2);
+  });
+
 });
 
 it("TASK.134 makes only one attempt for a measured proxy-auth failure", async () => {
@@ -1942,61 +2003,100 @@ describe("AiSdkModelPort — mid-stream replay (Taskana 4705)", () => {
     expect(mockStreamText).toHaveBeenCalledTimes(1);
   });
 
-  it("midStreamRetries: 2 replays the whole step after a mid-stream error part and recovers", async () => {
-    const error = retryableError();
-    mockStreamText
-      .mockImplementationOnce(() => fakeResult([part(startPart), part(textDelta("hi")), part({ type: "error", error })]))
-      .mockImplementationOnce(() => fakeResult([part(startPart), part(textDelta("hi")), part(finishPart)]));
-
-    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3, midStreamRetries: 2 }));
-    const events = await collect(port.streamText(baseRequest));
-
-    expect(events.some((e) => e.type === "error")).toBe(false);
-    // maxAttempts = maxRetries(3): mid-stream replays count inside it.
-    expect(events).toEqual([
-      { type: "start" },
-      { type: "text_delta", id: "t1", text: "hi" },
-      { type: "stream_retry", attempt: 1, maxAttempts: 3, delayMs: expect.any(Number), reason: expect.any(String) },
-      { type: "start" },
-      { type: "text_delta", id: "t1", text: "hi" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
-    ]);
-    expect(mockStreamText).toHaveBeenCalledTimes(2);
+  it.each(["yielded", "thrown"] as const)("retries reasoning failures through the %s path using the shared budget", async (path) => {
+    const failure = () => path === "yielded" ? part({ type: "error", error: retryableError() }) : throwsWith(retryableError());
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), failure()]));
+    for (let i = 0; i < 4; i++) mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), part({ type: "reasoning-delta", id: "r", text: "partial" }), failure()]));
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), part(finishPart)]));
+    const events = await collect(new AiSdkModelPort(baseConfig({ maxRetries: 8, midStreamRetries: 0, networkRetryBudgetMs: 0 })).streamText(baseRequest));
+    expect(events.filter(e => e.type === "stream_retry")).toHaveLength(5);
+    expect(events.at(-1)?.type).toBe("finish");
+    expect(mockStreamText).toHaveBeenCalledTimes(6);
   });
 
-  it("both attempts dying mid-stream yields exactly 2 stream_retry events, then a terminal error (3 calls)", async () => {
-    mockStreamText.mockImplementation(() =>
-      fakeResult([part(startPart), part(textDelta("hi")), part({ type: "error", error: retryableError() })]),
-    );
+  it("retries a reasoning drop after an empty text block", async () => {
+    mockStreamText.mockImplementationOnce(() => fakeResult([
+      part(startPart), part({ type: "text-start", id: "t" }), part({ type: "text-end", id: "t" }),
+      part({ type: "reasoning-delta", id: "r", text: "partial" }), part({ type: "error", error: retryableError() }),
+    ])).mockImplementationOnce(() => fakeResult([part(startPart), part(textDelta("recovered")), part(finishPart)]));
+    const events = await collect(new AiSdkModelPort(baseConfig({ maxRetries: 1, networkRetryBudgetMs: 0 })).streamText(baseRequest));
+    expect(events.filter(e => e.type === "stream_retry")).toHaveLength(1);
+    expect(events).toContainEqual({ type: "text_delta", id: "t1", text: "recovered" });
+    expect(events.at(-1)?.type).toBe("finish");
+  });
 
-    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3, midStreamRetries: 2 }));
-    const events = await collect(port.streamText(baseRequest));
-
-    const retries = events.filter((e) => e.type === "stream_retry");
-    expect(retries).toHaveLength(2);
+  it.each(["text", "tool input", "tool call"] as const)("does not replay after %s", async (kind) => {
+    const output = kind === "text" ? textDelta("hi") : kind === "tool input" ? { type: "tool-input-start", id: "call_1", toolName: "Read" } : toolCallPart;
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), part(output), part({ type: "error", error: retryableError() })]));
+    const events = await collect(new AiSdkModelPort(baseConfig({ maxRetries: 8 })).streamText(baseRequest));
+    expect(events.some(e => e.type === "stream_retry")).toBe(false);
     expect(events.at(-1)?.type).toBe("error");
-    expect(mockStreamText).toHaveBeenCalledTimes(3);
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
   });
 
-  it("a tool-call mid-stream failure replays, and exactly ONE tool_call event follows the last stream_retry", async () => {
+  it("stops after the exact count of reasoning retries", async () => {
+    mockStreamText.mockImplementation(() => fakeResult([part({ type: "reasoning-delta", id: "r", text: "partial" }), part({ type: "error", error: retryableError() })]));
+    const events = await collect(new AiSdkModelPort(baseConfig({ maxRetries: 8, midStreamRetries: 0, networkRetryBudgetMs: 0 })).streamText(baseRequest));
+    expect(events.filter(e => e.type === "stream_retry")).toHaveLength(8);
+    expect(events.at(-1)?.type).toBe("error");
+    expect(mockStreamText).toHaveBeenCalledTimes(9);
+  });
+
+  it("stops after a reasoning retry followed by partial tool input and a thrown error", async () => {
     const error = retryableError();
-    mockStreamText
-      .mockImplementationOnce(() => fakeResult([part(startPart), part(toolCallPart), part({ type: "error", error })]))
-      .mockImplementationOnce(() => fakeResult([part(startPart), part(toolCallPart), part(finishPart)]));
-
-    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3, midStreamRetries: 1 }));
-    const events = await collect(port.streamText(baseRequest));
-
-    const lastRetryIndex = events.map((e) => e.type).lastIndexOf("stream_retry");
-    expect(lastRetryIndex).toBeGreaterThan(-1);
-    const afterRetry = events.slice(lastRetryIndex + 1);
-    expect(afterRetry.filter((e) => e.type === "tool_call")).toHaveLength(1);
-    // The pre-replay attempt's tool_call was delivered but its tools were never
-    // dispatched by the consumer (the loop resets accumulators on stream_retry);
-    // the replayed attempt re-yields the call and it alone reaches dispatch.
-    expect(events.filter((e) => e.type === "tool_call")).toHaveLength(2);
-    expect(events.some((e) => e.type === "error")).toBe(false);
+    mockStreamText.mockImplementationOnce(() => fakeResult([part({ type: "reasoning-delta", id: "r", text: "partial" }), throwsWith(error)]))
+      .mockImplementationOnce(() => fakeResult([part({ type: "tool-input-start", id: "call", toolName: "Read" }), part({ type: "tool-input-delta", id: "call", delta: "{" }), throwsWith(error)]));
+    const events: import("../types/events.js").ModelStreamEvent[] = [];
+    await expect((async () => { for await (const event of new AiSdkModelPort(baseConfig({ maxRetries: 8, midStreamRetries: 0 })).streamText(baseRequest)) events.push(event); })()).rejects.toBe(error);
+    expect(events.filter(e => e.type === "stream_retry")).toHaveLength(1);
+    expect(events.some(e => e.type === "tool_input_delta")).toBe(true);
     expect(mockStreamText).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels during the backoff after provisional reasoning", async () => {
+    mockStreamText.mockImplementationOnce(() => fakeResult([part({ type: "reasoning-delta", id: "r", text: "partial" }), part({ type: "error", error: retryableError() })]));
+    const controller = new AbortController();
+    const iterator = new AiSdkModelPort(baseConfig({ maxRetries: 8, baseDelayMs: 1000, maxDelayMs: 1000 })).streamText({ ...baseRequest, abortSignal: controller.signal })[Symbol.asyncIterator]();
+    expect((await iterator.next()).value?.type).toBe("reasoning_delta");
+    expect((await iterator.next()).value?.type).toBe("stream_retry");
+    controller.abort(new Error("cancelled"));
+    await expect(iterator.next()).rejects.toThrow("cancelled");
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses reasoning retries when the count is zero", async () => {
+    mockStreamText.mockImplementation(() => fakeResult([part({ type: "reasoning-delta", id: "r", text: "x" }), part({ type: "error", error: retryableError() })]));
+    const events = await collect(new AiSdkModelPort(baseConfig({ maxRetries: 0, networkRetryBudgetMs: 1000 })).streamText(baseRequest));
+    expect(events.some(e => e.type === "stream_retry")).toBe(false);
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([401, 429])("does not retry a non-retryable %s after reasoning", async (statusCode) => {
+    const error = new APICallError({ message: statusCode === 429 ? "Insufficient quota" : "invalid key", url: "https://example.com", requestBodyValues: {}, statusCode, isRetryable: false });
+    mockStreamText.mockImplementationOnce(() => fakeResult([part({ type: "reasoning-delta", id: "r", text: "x" }), part({ type: "error", error })]));
+    const events = await collect(new AiSdkModelPort(baseConfig({ maxRetries: 8 })).streamText(baseRequest));
+    expect(events.some(e => e.type === "stream_retry")).toBe(false);
+    expect(events.at(-1)?.type).toBe("error");
+  });
+
+  it("does not park or replay a thrown network failure after text", async () => {
+    const waiter = { probe: vi.fn(async () => false), subscribe: vi.fn(() => () => {}), monotonicNow: () => 0 };
+    const error = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(textDelta("delivered")), throwsWith(error)]));
+    const port = new AiSdkModelPort({ ...baseConfig({ maxRetries: 8, networkWaitMaxMs: 60000 }), networkWaiter: waiter });
+    await expect(collect(port.streamText(baseRequest))).rejects.toThrow("socket hang up");
+    expect(waiter.probe).not.toHaveBeenCalled();
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts a fresh retry budget for each model step", async () => {
+    for (let step = 0; step < 2; step++) {
+      mockStreamText.mockImplementationOnce(() => fakeResult([part({ type: "reasoning-delta", id: "r", text: "x" }), part({ type: "error", error: retryableError() })]));
+      mockStreamText.mockImplementationOnce(() => fakeResult([part(finishPart)]));
+    }
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 1, midStreamRetries: 0 }));
+    for (let step = 0; step < 2; step++) expect((await collect(port.streamText(baseRequest))).filter(e => e.type === "stream_retry")).toHaveLength(1);
+    expect(mockStreamText).toHaveBeenCalledTimes(4);
   });
 
   it("a quota-429 error part never auto-retries, even mid-stream-disabled defaults aside (maxRetries 8, replay on)", async () => {
@@ -2017,25 +2117,7 @@ describe("AiSdkModelPort — mid-stream replay (Taskana 4705)", () => {
     expect(mockStreamText).toHaveBeenCalledTimes(1);
   });
 
-  it("honest counts: every retry announces maxRetries as the total, mid-stream replays included (Taskana 4705 review)", async () => {
-    mockStreamText
-      // Attempt 1 fails PRE-content: maxAttempts 2 (mid-stream headroom not yet visible).
-      .mockImplementationOnce(() => fakeResult([part(startPart), throwsWith(retryableError())]))
-      // Attempt 2 fails MID-stream: the replay is a retry inside maxRetries (2).
-      .mockImplementationOnce(() => fakeResult([part(startPart), part(textDelta("hi")), throwsWith(retryableError())]))
-      // Attempt 3 (the mid-stream replay) succeeds.
-      .mockImplementationOnce(() => fakeResult([part(startPart), part(finishPart)]));
 
-    const port = new AiSdkModelPort(baseConfig({ maxRetries: 2, midStreamRetries: 2 }));
-    const events = await collect(port.streamText(baseRequest));
-
-    const retries = events.filter((e) => e.type === "stream_retry");
-    expect(retries).toHaveLength(2);
-    expect(retries[0]).toMatchObject({ attempt: 1, maxAttempts: 2 });
-    expect(retries[1]).toMatchObject({ attempt: 2, maxAttempts: 2 });
-    expect(events.at(-1)?.type).toBe("finish");
-    expect(mockStreamText).toHaveBeenCalledTimes(3);
-  });
 });
 
 describe("AiSdkModelPort — Taskana 4705 review: replay gates", () => {

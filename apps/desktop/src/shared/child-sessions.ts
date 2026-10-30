@@ -236,6 +236,7 @@ export type ChildRunEvent = { type: typeof CHILD_RUN_EVENT_TYPE; requestId: stri
   | { kind: "rejected"; reason: ChildRunRejectReason; message: string }
   | { kind: "progress"; turns: number; toolCalls: number; lastTool?: string }
   | { kind: "activity"; toolName: string; summary: string }
+  | { kind: "status"; itemKind: "assistant" | "tool" | "result" | "reset"; text: string; toolName?: string }
   | { kind: "attention"; waiting: boolean; toolName?: string; subject?: string }
   | {
       kind: "terminal";
@@ -300,6 +301,7 @@ export interface ChildStart {
 export type ChildProgress = { type: typeof CHILD_PROGRESS_TYPE } & (
   | { kind: "progress"; turns: number; toolCalls: number; lastTool?: string }
   | { kind: "activity"; toolName: string; summary: string }
+  | { kind: "status"; itemKind: "assistant" | "tool" | "result" | "reset"; text: string; toolName?: string }
   | { kind: "attention"; waiting: boolean; toolName?: string; subject?: string }
 );
 
@@ -705,6 +707,7 @@ const CHILD_RUN_EVENT_REJECTED_KEYS = ["type", "requestId", "kind", "reason", "m
 const CHILD_RUN_EVENT_SENT_KEYS = ["type", "requestId", "kind"] as const;
 const CHILD_RUN_EVENT_PROGRESS_KEYS = ["type", "requestId", "kind", "turns", "toolCalls", "lastTool"] as const;
 const CHILD_RUN_EVENT_ACTIVITY_KEYS = ["type", "requestId", "kind", "toolName", "summary"] as const;
+const CHILD_RUN_EVENT_STATUS_KEYS = ["type", "requestId", "kind", "itemKind", "text", "toolName"] as const;
 const CHILD_RUN_EVENT_ATTENTION_KEYS = ["type", "requestId", "kind", "waiting", "toolName", "subject"] as const;
 const CHILD_RUN_EVENT_TERMINAL_KEYS = [
   "type",
@@ -816,6 +819,10 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
         return null;
       }
       return { type: CHILD_RUN_EVENT_TYPE, requestId, kind: "activity", toolName: msg.toolName, summary: msg.summary };
+    }
+    case "status": {
+      if (!hasOnlyKeys(msg, CHILD_RUN_EVENT_STATUS_KEYS) || !["assistant", "tool", "result", "reset"].includes(String(msg.itemKind)) || !isCappedString(msg.text, 320) || (msg.toolName !== undefined && !isNonEmptyCappedString(msg.toolName, CHILD_TOOL_NAME_MAX_CHARS))) return null;
+      return { type: CHILD_RUN_EVENT_TYPE, requestId, kind: "status", itemKind: msg.itemKind as "assistant" | "tool" | "result" | "reset", text: msg.text, ...(msg.toolName !== undefined ? { toolName: msg.toolName as string } : {}) };
     }
     case "attention": {
       if (!hasOnlyKeys(msg, CHILD_RUN_EVENT_ATTENTION_KEYS)) {
@@ -948,6 +955,7 @@ export function parseChildStart(msg: unknown): ChildStart | null {
 
 const CHILD_PROGRESS_PROGRESS_KEYS = ["type", "kind", "turns", "toolCalls", "lastTool"] as const;
 const CHILD_PROGRESS_ACTIVITY_KEYS = ["type", "kind", "toolName", "summary"] as const;
+const CHILD_PROGRESS_STATUS_KEYS = ["type", "kind", "itemKind", "text", "toolName"] as const;
 const CHILD_PROGRESS_ATTENTION_KEYS = ["type", "kind", "waiting", "toolName", "subject"] as const;
 
 export function parseChildProgress(msg: unknown): ChildProgress | null {
@@ -987,6 +995,10 @@ export function parseChildProgress(msg: unknown): ChildProgress | null {
         return null;
       }
       return { type: CHILD_PROGRESS_TYPE, kind: "activity", toolName: msg.toolName, summary: msg.summary };
+    }
+    case "status": {
+      if (!hasOnlyKeys(msg, CHILD_PROGRESS_STATUS_KEYS) || !["assistant", "tool", "result", "reset"].includes(String(msg.itemKind)) || !isCappedString(msg.text, 320) || (msg.toolName !== undefined && !isNonEmptyCappedString(msg.toolName, CHILD_TOOL_NAME_MAX_CHARS))) return null;
+      return { type: CHILD_PROGRESS_TYPE, kind: "status", itemKind: msg.itemKind as "assistant" | "tool" | "result" | "reset", text: msg.text, ...(msg.toolName !== undefined ? { toolName: msg.toolName as string } : {}) };
     }
     case "attention": {
       if (!hasOnlyKeys(msg, CHILD_PROGRESS_ATTENTION_KEYS)) {

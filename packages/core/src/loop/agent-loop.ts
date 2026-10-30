@@ -96,7 +96,7 @@ import {
   estimateToolDeclarationTokens,
   splitToolDeclarationsByMcpPrefix,
 } from "../context/tokens.js";
-import { classifyProviderFailure, isModelOutputEvent } from "../provider/failure.js";
+import { blocksAutomaticReplay, classifyProviderFailure, isModelOutputEvent } from "../provider/failure.js";
 import { linkAbortSignal } from "../util/abort.js";
 import {
   ask,
@@ -143,8 +143,9 @@ function buildErrorMetadata(
   attemptsMade: number,
   maxAttempts: number | undefined,
   hadModelOutput: boolean,
+  replayBlocked: boolean,
 ): {
-  retry: { attemptsMade: number; maxAttempts?: number; retryable: boolean; hadModelOutput: boolean; code: string };
+  retry: { attemptsMade: number; maxAttempts?: number; retryable: boolean; hadModelOutput: boolean; code: string; replayStopped?: "output_started" };
   safe: { code: string; message: string; statusCode?: number };
 } {
   const classification = classifyProviderFailure(error);
@@ -154,6 +155,7 @@ function buildErrorMetadata(
       ...(maxAttempts !== undefined ? { maxAttempts } : {}),
       retryable: classification.retryable,
       hadModelOutput,
+      ...(replayBlocked ? { replayStopped: "output_started" as const } : {}),
       code: classification.code,
     },
     safe: classification.safe,
@@ -491,6 +493,16 @@ export interface AgentLoopConfig {
    */
   checkpoints?: CheckpointCapturer;
   /**
+   * GitHub #36 (review 4): the session's compaction-record sequence as it
+   * stands RIGHT NOW. Read once per turn at the same moment the pre-turn
+   * history is snapshotted, and carried into that turn's lazy checkpoint, so a
+   * rewind to it can tell "recorded before this snapshot" from "recorded
+   * after" exactly — which neither a clock nor the newest history item can.
+   * Absent (the CLI, and every loop without durable compaction rows): the
+   * checkpoint records no boundary and the rewind falls back.
+   */
+  compactionBoundary?: () => number;
+  /**
    * Fire-and-forget observer of every event yielded by runTurn/compactNow
    * (slice 6.6 telemetry seam). Called synchronously immediately before each
    * yield; exceptions are swallowed (an observer can never break a turn); MUST
@@ -708,6 +720,8 @@ export class AgentLoop {
       tokenizer,
       modelPort: config.modelPort,
       config: budget,
+      requestOverheadTokens: () => tokenizer.count(config.systemPrompt ?? "") +
+        estimateToolDeclarationTokens(toToolDeclarations(config.registry), tokenizer),
     });
     // TASK.229: rolling admission width for a run of parallel-safe calls. The
     // scheduler normalizes non-finite values to DEFAULT_TOOL_CONCURRENCY and
@@ -1077,6 +1091,10 @@ export class AgentLoop {
     // user frame is appended. A continuation has no new frame, so this is also
     // exactly the persisted pre-resume history.
     const preTurnItems = this.config.checkpoints !== undefined ? [...this.history.items] : [];
+    // GitHub #36: the compaction boundary belongs to THIS moment, not to the
+    // lazy capture below — an auto compaction of this same turn records its
+    // outcome after the snapshot but before the first write-effect tool.
+    const preTurnCompactionSeq = this.config.checkpoints !== undefined ? this.config.compactionBoundary?.() : undefined;
 
     if (userInput !== undefined) {
       let promptText = userInput;
@@ -1228,7 +1246,11 @@ export class AgentLoop {
       let announced = false;
       dispatchCtx.checkpoint = {
         ensure: async () => {
-          pending ??= capturer.capture({ userInput: userInput ?? "", historySnapshot: preTurnItems });
+          pending ??= capturer.capture({
+            userInput: userInput ?? "",
+            historySnapshot: preTurnItems,
+            ...(preTurnCompactionSeq !== undefined ? { compactionSeq: preTurnCompactionSeq } : {}),
+          });
           const result = await pending;
           if (announced) return null;
           announced = true;
@@ -1357,6 +1379,7 @@ export class AgentLoop {
         let attemptsMade = 0;
         let maxAttempts: number | undefined;
         let hadModelOutput = false;
+        let replayBlocked = false;
 
         // Degenerate-generation guard (TASK.210): a per-turn AbortController
         // separate from the caller's own `signal` — linked FROM it, never
@@ -1386,11 +1409,12 @@ export class AgentLoop {
             });
             for await (const event of stream) {
               if (event.type === "error") {
-                const { retry, safe } = buildErrorMetadata(event.error, attemptsMade, maxAttempts, hadModelOutput);
+                const { retry, safe } = buildErrorMetadata(event.error, attemptsMade, maxAttempts, hadModelOutput, replayBlocked);
                 yield { ...event, retry, safe };
               } else {
                 yield event;
               }
+              if (blocksAutomaticReplay(event)) replayBlocked = true;
               if (isModelOutputEvent(event)) {
                 hadModelOutput = true;
               }
@@ -1436,24 +1460,11 @@ export class AgentLoop {
                   streamErrored = true;
                   break;
                 case "stream_retry":
+                  replayBlocked = false;
                   attemptsMade += 1;
                   maxAttempts = event.maxAttempts;
-                  // hadModelOutput is deliberately NOT reset here: the STALL retry path
-                  // (model-port.ts) permits a stream_retry AFTER model output has
-                  // already reached the consumer, so once output was delivered this
-                  // turn the flag must stay true across the retry. Resetting it would
-                  // make the terminal metadata claim no output was delivered, and W8
-                  // would offer Try-again on a step whose re-send risks double-dispatch/
-                  // double-bill (TASK.33 invariant #1).
-                  //
-                  // The CONTENT accumulators below still reset: the whole step is
-                  // replayed from scratch, so every accumulator built up from the
-                  // aborted attempt's partial events must be discarded — the eventual
-                  // assistant message must reflect only the winning attempt. For a
-                  // pre-first-event retry every one of these is already a no-op. Known
-                  // cosmetic gap (out of scope for 2.3): any partial text already
-                  // rendered by the UI before the stall stays on screen; only the
-                  // written history is guaranteed clean.
+                  // Observability remains cumulative; only attempt-local content
+                  // and detectors are cleared before the replay.
                   textParts.length = 0;
                   toolCalls.length = 0;
                   finishReason = "unknown";
@@ -1501,7 +1512,7 @@ export class AgentLoop {
             if (signal?.aborted) {
               yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
             } else {
-              const { retry, safe } = buildErrorMetadata(error, attemptsMade, maxAttempts, hadModelOutput);
+              const { retry, safe } = buildErrorMetadata(error, attemptsMade, maxAttempts, hadModelOutput, replayBlocked);
               yield { type: "error", error, retry, safe };
               // The consumer may abort while paused on the yielded error event
               // (before this generator resumes) — re-check so a synchronous
@@ -1998,6 +2009,11 @@ export class AgentLoop {
     };
   }
 
+  /** Discard a provider reading when the model identity changes. */
+  invalidateProviderAnchor(): void {
+    this.context.invalidateProviderAnchor();
+  }
+
   /**
    * Mid-session context-window re-resolution (slice 6.4: the /model switch).
    * Applies the new window over the CURRENT budget config between turns; the
@@ -2058,6 +2074,12 @@ export class AgentLoop {
         preTokens: result.preTokens,
         postTokens: result.postTokens,
         durationMs: Date.now() - startedAt,
+        // GitHub #36: what replaced the prefix rides the outcome, so the
+        // transcript row can show it without reading the DB.
+        summary: result.summary,
+        summaryItemId: result.summaryItemId,
+        prompt: result.prompt,
+        ...(result.model !== undefined ? { model: result.model } : {}),
       };
     } else {
       yield {
@@ -2066,6 +2088,10 @@ export class AgentLoop {
         preTokens: result.preTokens,
         durationMs: Date.now() - startedAt,
         error: result.error,
+        prompt: result.prompt,
+        // GitHub #36: the model that was asked is known even when the call
+        // failed, so a failed row names it instead of showing only a duration.
+        ...(result.model !== undefined ? { model: result.model } : {}),
       };
     }
     return result.ok;

@@ -1462,6 +1462,7 @@ describe("scope dropdown panes (Taskana 4758)", () => {
     expect(paneHasScope("language-servers")).toBe(true);
     expect(paneHasScope("skills")).toBe(true);
     expect(paneHasScope("subagents")).toBe(true);
+    expect(paneHasScope("roles")).toBe(true);
     expect(paneHasScope("provider")).toBe(false);
     expect(paneHasScope("permissions")).toBe(false);
     expect(paneHasScope("sessions-api")).toBe(false);

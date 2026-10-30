@@ -9,10 +9,14 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { NodeGitReadAdapter } from "../adapters/node/node-git-read.js";
+import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { buildChildModelSettingsResolver } from "../provider/child-model-settings.js";
+import { resolveChildReasoningEffort } from "../provider/capabilities.js";
 import { AgentLoop, type AgentLoopConfig } from "../loop/agent-loop.js";
 import {
   SUBAGENT_WRAPUP_DEGRADED_PREFIX,
@@ -27,7 +31,8 @@ import { createDefaultToolRegistry } from "../tools/registry.js";
 import { toToolDeclarations } from "../tools/to-model-tools.js";
 import { ModePermissionEngine, DenyPermissionBroker } from "../permissions/index.js";
 import { NodeExecutionAdapter } from "../adapters/node/node-execution.js";
-import { agentTool } from "../tools/agent.js";
+import { agentTool, createAgentTool } from "../tools/agent.js";
+import type { SessionSubagentRequest, SessionSubagentPort } from "../ports/session-subagent.js";
 import type { AgentEvent, ModelStreamEvent, TokenUsage } from "../types/events.js";
 import type { ModelPort, ModelRequest } from "../ports/model.js";
 import type { AskClassifier, AskClassifierInput } from "../permissions/ask-classifier.js";
@@ -488,7 +493,7 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     const child = buildChildConfig(parent, getPersona("explore"), { ...REQ, agentType: "explore" });
 
     const declared = toToolDeclarations(child.registry).map((d) => d.name).sort();
-    expect(declared).toEqual(["Glob", "Grep", "Read", "TodoRead", "TodoWrite", "WebFetch"]);
+    expect(declared).toEqual(["Git", "Glob", "Grep", "Read", "TodoRead", "TodoWrite", "WebFetch"]);
     expect(declared).not.toContain("Bash");
     expect(declared).not.toContain("Agent");
     for (const name of declared) {
@@ -1278,11 +1283,12 @@ function fsWith(files: Record<string, string>): FileSystemPort {
 /** Discovers a single md-profile and returns its PersonaDefinition. */
 async function makeProfile(
   name: string,
-  opts: { body: string; tools?: readonly string[]; model?: string },
+  opts: { body: string; tools?: readonly string[]; model?: string; effort?: string },
 ): Promise<PersonaDefinition> {
   const lines = [`name: ${name}`, "description: test profile"];
   if (opts.tools) lines.push(`tools: ${opts.tools.join(", ")}`);
   if (opts.model) lines.push(`model: ${opts.model}`);
+  if (opts.effort) lines.push(`effort: ${opts.effort}`);
   const content = `---\n${lines.join("\n")}\n---\n${opts.body}`;
   const { profiles } = await discoverAgentProfiles(fsWith({ [`${name}.md`]: content }), PROFILE_ROOTS);
   const persona = profiles[0];
@@ -3621,28 +3627,30 @@ describe("run() — child capabilities resolved for the child's own model (TASK.
     expect(parentPort.requests.at(-1)!.reasoningEffort).toBe("low");
   });
 
-  it("an effort-only xhigh profile maps to core max at the resolver and the model request", async () => {
-    const parentPort = new ScriptedModelPort((req) => (isChildRequest(req) ? textStep("planned") : textStep("n/a")));
-    Object.assign(parentPort, { modelId: "glm-5.3" });
-    const seen: Array<[string, string | undefined]> = [];
-    const runner = createSubagentRunner(
-      makeParent({ modelPort: parentPort, reasoningEffort: "medium" }),
-      {
-        profiles: [{ ...(await makeProfile("planner", { body: "Plan." })), effort: "xhigh" }],
-        resolveChildModelSettings: (modelId, profileEffort) => {
-          seen.push([modelId, profileEffort]);
-          return { maxOutputTokens: 131_072, reasoningEffort: profileEffort, contextWindowTokens: 1_000_000 };
-        },
-      },
-    );
-
-    const outcome = await runner.run({ ...REQ, agentType: "planner" }, {});
-
-    expect(outcome.status).toBe("completed");
-    // xhigh is mapped to the existing core "max" at this core consumption boundary.
-    expect(seen).toEqual([["glm-5.3", "max"]]);
-    expect(parentPort.requests.at(-1)!.reasoningEffort).toBe("max");
-  });
+  for (const [model, expected] of [["both", "xhigh"], ["only-max", "max"]] as const) {
+    for (const path of ["effort-only", "profile-model", "explicit-model", "route"] as const) {
+      it(`${path} resolves xhigh for ${model}`, async () => {
+        const parentPort = new ScriptedModelPort(() => textStep("planned"));
+        Object.assign(parentPort, { modelId: model });
+        const childPort = new ScriptedModelPort(() => textStep("planned"));
+        const seen: Array<[string, string | undefined]> = [];
+        const resolve = buildChildModelSettingsResolver({ catalogEntry: undefined, envMaxOutputTokens: undefined, envContextWindow: undefined,
+          liveCapabilitiesFor: () => ({ reasoning: true, effortLevels: model === "both" ? ["xhigh", "max"] : ["max"] }) });
+        const profile = { ...(await makeProfile("planner", { body: "Plan." })), effort: "xhigh" as const,
+          ...(path === "profile-model" ? { model } : {}) };
+        const runner = createSubagentRunner(makeParent({ modelPort: parentPort, reasoningEffort: "medium" }), {
+          profiles: [profile],
+          ...(path === "route" ? { resolveRoleRoute: () => ({ entries: [{ model, effort: "xhigh" as const }], skipped: [] }) } : {}),
+          resolveChildModelPort: () => childPort,
+          resolveChildModelSettings: (id, tier) => { seen.push([id, tier]); return resolve(id, tier); },
+        });
+        const outcome = await runner.run({ ...REQ, agentType: "planner", ...(path === "explicit-model" ? { model } : {}) }, {});
+        expect(outcome.status).toBe("completed");
+        expect(seen).toEqual([[model, "xhigh"]]);
+        expect((path === "effort-only" ? parentPort : childPort).requests.at(-1)!.reasoningEffort).toBe(expected);
+      });
+    }
+  }
 
   it("the child's ModelRequest carries the CAPPED settings ceiling and effort, not the parent's", async () => {
     const parentPort = new ScriptedModelPort(() => textStep("parent never runs here"));
@@ -5288,6 +5296,26 @@ describe("role route chain walk (Taskana 4704 §3.2)", () => {
     expect(resolved).toEqual(["cheap-1"]);
   });
 
+  it("resolves each fallback candidate against its own effort vocabulary", async () => {
+    const seen: Array<[string, string | undefined, string | undefined]> = [];
+    const port = new ScriptedModelPort(() => textStep("done"));
+    const resolve = buildChildModelSettingsResolver({ catalogEntry: undefined, envMaxOutputTokens: undefined, envContextWindow: undefined,
+      liveCapabilitiesFor: (id) => ({ reasoning: true, effortLevels: id === "both" ? ["xhigh", "max"] : ["max"] }) });
+    const runner = createSubagentRunner(makeParent(), {
+      resolveRoleRoute: () => ({ entries: [{ model: "both", effort: "xhigh" }, { model: "only-max", effort: "xhigh" }], skipped: [] }),
+      resolveChildModelPort: () => port,
+      resolveChildModelSettings: (id, tier) => {
+        const settings = resolve(id, tier);
+        seen.push([id, tier, settings.reasoningEffort]);
+        if (id === "both") throw new Error("unavailable settings");
+        return settings;
+      },
+    });
+    expect((await runner.run({ ...REQ, agentType: "planner" }, {})).status).toBe("completed");
+    expect(seen).toEqual([["both", "xhigh", "xhigh"], ["only-max", "xhigh", "max"]]);
+    expect(port.requests.at(-1)!.reasoningEffort).toBe("max");
+  });
+
   it("a chain entry's effort rides the child settings resolution (entry tier wins)", async () => {
     const seenEfforts: Array<string | undefined> = [];
     const runner = createSubagentRunner(makeParent(), {
@@ -5712,5 +5740,158 @@ describe("inline child ask classification (Taskana 4730)", () => {
     // the ROOT thunk reads the ROOT loop's (empty here) history.
     expect(seen[0]!.userContext).toEqual([]);
     expect(brokerSpy).toHaveBeenCalledOnce();
+  });
+});
+
+
+describe("core profile session requests", () => {
+  it.each([
+    ["both", ["xhigh", "max"], "xhigh"],
+    ["max-only", ["high", "max"], "max"],
+  ] as const)("resolves a core profile's effort for the %s destination", async (model, levels, expected) => {
+    const profile = await makeProfile("worker", { body: "role", model, effort: "xhigh" });
+    const runner = createSubagentRunner(makeParent(), { profiles: [profile] });
+    const requests: SessionSubagentRequest[] = [];
+    const port: SessionSubagentPort = {
+      run: async (request) => {
+        requests.push(request);
+        return { status: "completed", finalText: "done", truncated: false, turns: 1, toolCalls: 0, durationMs: 1, childSessionId: "child", parentSessionId: "parent", spawnToolCallId: "call" };
+      },
+      send: async () => ({ ok: true }),
+    };
+    const tool = createAgentTool({ sessionTier: true });
+    const ctx = { toolCallId: "call", abortSignal: new AbortController().signal, cwd: "/work", ports: makePorts(), subagents: runner, sessionSubagents: port };
+    await tool.handler({ description: "d", prompt: "task", agent_type: "worker", tier: "session" }, ctx);
+    const request = requests[0]!;
+    expect(request.model).toBe(model);
+    expect(request.effort).toBe("xhigh");
+    expect(resolveChildReasoningEffort(request.model!, undefined, request.effort, { reasoning: true, effortLevels: [...levels] })).toBe(expected);
+    await tool.handler({ description: "d", prompt: "follow", agent_type: "worker", tier: "session", continue_session: "child" }, ctx);
+    expect(requests[1]).not.toHaveProperty("effort");
+  });
+
+  it("uses discovered current profile metadata and preserves follow-ups", async () => {
+    const body = "Привет\n\n---\n\ninside";
+    let profiles = [await makeProfile("worker", { body, model: "model-b" })];
+    const runner = createSubagentRunner(makeParent(), { profiles: () => profiles });
+    const requests: SessionSubagentRequest[] = [];
+    const messages: string[] = [];
+    const sessionPort: SessionSubagentPort = {
+      run: async (request) => {
+        requests.push(request);
+        return { status: "completed", finalText: "done", truncated: false, turns: 1, toolCalls: 0, durationMs: 1, childSessionId: "child", parentSessionId: "parent", spawnToolCallId: "call" };
+      },
+      send: async (request) => { messages.push(request.text); return { ok: true }; },
+    };
+    const tool = createAgentTool({ sessionTier: true });
+    const ctx = { toolCallId: "call", abortSignal: new AbortController().signal, cwd: "/work", ports: makePorts(), subagents: runner, sessionSubagents: sessionPort };
+    for (const [model, detach] of [[undefined, true], ["model-c", false], ["model-b", false]] as const) {
+      await tool.handler({ description: "d", prompt: "task", agent_type: "worker", tier: "session", ...(model ? { model } : {}), detach }, ctx);
+      const request = requests.at(-1)!;
+      expect(request.prompt).toBe(`${body}\n\n---\n\ntask`);
+      expect(request.model).toBe(model ?? "model-b");
+      expect(request).not.toHaveProperty("engine");
+    }
+    await tool.handler({ description: "d", prompt: "follow", agent_type: "worker", tier: "session", continue_session: "child", model: "model-c" }, ctx);
+    expect(requests.at(-1)).toMatchObject({ prompt: "follow", resumeChildSessionId: "child" });
+    expect(requests.at(-1)).not.toHaveProperty("model");
+    await tool.handler({ description: "d", prompt: "message", agent_type: "worker", tier: "session", send_to: "child" }, ctx);
+    expect(messages).toEqual(["message"]);
+    profiles = [await makeProfile("worker", { body: "updated" })];
+    await tool.handler({ description: "d", prompt: "task", agent_type: "worker", tier: "session" }, ctx);
+    expect(requests.at(-1)?.prompt).toBe("updated\n\n---\n\ntask");
+    expect(requests.at(-1)).not.toHaveProperty("model");
+    profiles = [];
+    expect(runner.coreProfile?.("worker")).toBeNull();
+  });
+
+  it("respects reserved names, overridable roles, and engine profiles", async () => {
+    const role = await makeProfile("planner", { body: "role", model: "role-model" });
+    const reserved = { ...role, name: "explore" };
+    const engine = { ...role, name: "foreign", engine: "claude" as const };
+    const runner = createSubagentRunner(makeParent(), { profiles: [role, reserved, engine] });
+    expect(runner.coreProfile?.("planner")).toEqual({ systemPrompt: "role", model: "role-model" });
+    expect(runner.coreProfile?.("explore")).toBeNull();
+    expect(runner.coreProfile?.("general-purpose")).toBeNull();
+    expect(runner.coreProfile?.("foreign")).toBeNull();
+    expect(runner.coreProfile?.("unknown")).toBeNull();
+  });
+});
+
+describe("explore Git history", () => {
+  for (const mode of ["build", "plan"] as const) {
+    it(`reads a historical file and branch commits in ${mode} without asking`, async () => {
+      const dir = await mkdtemp(join(tmpdir(), "explore-git-"));
+      const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" } });
+      try {
+        git("init", "-q", "-b", "develop"); git("config", "user.name", "Test"); git("config", "user.email", "test@example.com");
+        await writeFile(join(dir, "doc.txt"), "old history\n"); git("add", "."); git("commit", "-qm", "initial");
+        git("update-ref", "refs/remotes/origin/develop", "HEAD"); git("checkout", "-qb", "feature");
+        await writeFile(join(dir, "doc.txt"), "new history\n"); git("commit", "-qam", "feature commit");
+        const before = [git("status", "--porcelain"), git("show-ref"), git("config", "--local", "--list"), git("ls-files", "--stage")];
+        const asks: string[] = [];
+        const broker: PermissionBroker = { requestPermission: async req => { asks.push(req.toolName); return { behavior: "deny", reason: "unexpected" }; } };
+        let step = 0; let observed = "";
+        const model = new ScriptedModelPort(req => {
+          if (step++ === 0) return toolStep("g1", "Git", { operation: "show", revision: "origin/develop", path: "doc.txt" });
+          if (step === 2) { observed += JSON.stringify(req.messages); return toolStep("g2", "Git", { operation: "log", revision: "develop..HEAD", format: "oneline" }); }
+          observed += JSON.stringify(req.messages); return textStep("finished");
+        });
+        const exec = new NodeExecutionAdapter();
+        const parent = makeParent({ cwd: dir, mode, modelPort: model, permissionBroker: broker, ports: { ...makePorts(exec), gitRead: new NodeGitReadAdapter(exec) } });
+        const child = buildChildConfig(parent, getPersona("explore"), { ...REQ, agentType: "explore" });
+        const declarations = toToolDeclarations(child.registry).map(d => d.name);
+        expect(declarations).toContain("Git"); expect(declarations).not.toContain("Bash");
+        const events = await collect(new AgentLoop(child).runTurn("Read history"));
+        expect(observed).toContain("old history"); expect(observed).toContain("feature commit");
+        expect(events.filter(e => e.type === "tool_result" && e.outcome.toolName === "Git")).toHaveLength(2);
+        expect(events.filter(e => (e.type as string) === "permission_request")).toHaveLength(0);
+        step = 0; observed = "";
+        const delegated = await createSubagentRunner(parent).run({ ...REQ, agentType: "explore" }, {});
+        expect(delegated.status).toBe("completed"); expect(observed).toContain("old history"); expect(observed).toContain("feature commit");
+        expect(asks).toEqual([]);
+        expect([git("status", "--porcelain"), git("show-ref"), git("config", "--local", "--list"), git("ls-files", "--stage")]).toEqual(before);
+      } finally { await rm(dir, { recursive: true, force: true }); }
+    });
+  }
+});
+
+
+it("preserves the Git truncation notice through dispatcher formatting", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "git-output-"));
+  try {
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" } });
+    git("init", "-q"); git("config", "user.name", "Test"); git("config", "user.email", "test@example.com");
+    await writeFile(join(dir, "large.txt"), "界".repeat(40000)); git("add", "."); git("commit", "-qm", "large");
+    let modelText = "";
+    const model = new ScriptedModelPort(req => lastRole(req) === "user"
+      ? toolStep("big", "Git", { operation: "show", revision: "HEAD", path: "large.txt" })
+      : (modelText = JSON.stringify(req.messages), textStep("done")));
+    const exec = new NodeExecutionAdapter();
+    const parent = makeParent({ cwd: dir, modelPort: model, ports: { ...makePorts(exec), gitRead: new NodeGitReadAdapter(exec) } });
+    const child = buildChildConfig(parent, getPersona("explore"), { ...REQ, agentType: "explore" });
+    const events = await collect(new AgentLoop(child).runTurn("Read large file"));
+    const result = events.find(e => e.type === "tool_result" && e.outcome.toolName === "Git");
+    expect(result?.type === "tool_result" && result.outcome.modelText).toContain("Output truncated");
+    expect(modelText).toContain("Output truncated");
+    expect(result?.type === "tool_result" && Buffer.byteLength(result.outcome.modelText)).toBeLessThan(100000);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+describe("live child status transcript", () => {
+  it("publishes tool calls, results and assistant text from the actual child loop", async () => {
+    let step = 0;
+    const model = new ScriptedModelPort(() => ++step === 1
+      ? multiToolStep([{ id: "status-read", name: "TodoWrite", input: { todos: [{ content: "--password=hunter2", status: "in_progress", activeForm: "working" }] } }])
+      : textStep("investigation complete"));
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+    const items: Array<{ kind: string; text: string }> = [];
+    await runner.run(REQ, { onStatusItem: (item) => items.push(item) });
+    expect(items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "tool", text: expect.stringContaining("TodoWrite") }),
+      expect.objectContaining({ kind: "result", text: expect.stringContaining("success") }),
+      expect.objectContaining({ kind: "assistant", text: "investigation complete" }),
+    ]));
+    expect(JSON.stringify(items)).not.toContain("hunter2");
   });
 });

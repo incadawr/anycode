@@ -536,7 +536,7 @@ async function step2AssertRows(ctx) {
 
   const explore = findRow(probe, "explore");
   assert(step, explore !== undefined, `expected built-in row "explore", got rows=${JSON.stringify(probe.rows)}`);
-  assert(step, explore.toolsBadge === "6 tools", `"explore" expected toolsBadge "6 tools", got ${JSON.stringify(explore)}`);
+  assert(step, explore.toolsBadge === "7 tools", `"explore" expected toolsBadge "7 tools", got ${JSON.stringify(explore)}`);
 
   const researcher = findRow(probe, RESEARCHER_NAME);
   assert(step, researcher !== undefined, `expected user row "${RESEARCHER_NAME}", got rows=${JSON.stringify(probe.rows)}`);
@@ -551,7 +551,7 @@ async function step2AssertRows(ctx) {
 
   await settledScreenshot(ctx, "step2-subagents-pane-populated");
 
-  pass(step, `built-ins present (general-purpose="All tools", explore="6 tools"); user row "${RESEARCHER_NAME}"="3 tools"; "${BROKEN_NAME}" absent; problems=1`);
+  pass(step, `built-ins present (general-purpose="All tools", explore="7 tools"); user row "${RESEARCHER_NAME}"="3 tools"; "${BROKEN_NAME}" absent; problems=1`);
 }
 
 // -- step 3: create "summarizer" via the in-app editor driver --

@@ -176,7 +176,7 @@ export const CLAUDE_GUI_SURFACE_PROMPT =
  * bridge-less sessions and the condition remains testable at the argv seam.
  */
 export const CLAUDE_AGENT_BRIDGE_PROMPT =
-  "To delegate to an AnyCode agent profile, call the mcp__anycode__agent tool; for long tasks pass detach: true and end the turn — the agent's report arrives as your next message.";
+  "To delegate to an AnyCode agent profile, call the mcp__anycode__agent tool; for long tasks pass detach: true and end the turn — the agent's report arrives as your next message. Use mcp__anycode__agent_status to inspect background children.";
 
 /**
  * The exact argv contract §1.3 pins, including the flags W0 proved are

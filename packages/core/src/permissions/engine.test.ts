@@ -13,6 +13,7 @@ import {
   bashTool,
   editTool,
   globTool,
+  gitTool,
   grepTool,
   readTool,
   skillTool,
@@ -461,4 +462,12 @@ describe("ModePermissionEngine — TASK.32 edit-mode workspace containment", () 
       expect(ruling.reason).toBe("Write: write/side-effecting tool requires approval in edit mode");
     }
   });
+});
+
+
+it("allows read-only Git in build and plan modes", () => {
+  const engine = new ModePermissionEngine();
+  for (const mode of ["build", "plan"] as const) {
+    expect(engine.check({ toolName: "Git", input: { operation: "status" }, metadata: gitTool.metadata, mode }).decision).toBe("allow");
+  }
 });

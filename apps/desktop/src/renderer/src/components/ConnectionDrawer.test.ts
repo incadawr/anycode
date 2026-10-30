@@ -6,6 +6,8 @@
  * behavior is proven live by `provider-connections-ui-smoke.mjs` instead.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getBuiltinCatalog } from "@anycode/core/catalog";
+import { projectCatalogSummary } from "../../../main/settings-ipc.js";
 import type { CatalogSummaryEntry, ProviderConnection, SettingsMutationResult } from "../../../shared/settings.js";
 import type { FetchModelsOutcome } from "../anycode-window.js";
 import {
@@ -14,6 +16,7 @@ import {
   appendModelToConnection,
   appendModelsToConnection,
   buildConnectionUpdatePayload,
+  buildDrawerSavePayload,
   createConnectionAndPersistModel,
   liveModelSuggestions,
   maxOutputPresetSelection,
@@ -382,6 +385,24 @@ describe("providerOptionGroups (TASK.70: one brand = one card)", () => {
     { id: "custom", name: "Custom endpoint", authKind: "api_key", models: [], needsBaseUrl: true, isCustom: true },
   ];
 
+  it("projects the MiMo regions into the provider picker with their model capabilities", () => {
+    const catalog = projectCatalogSummary(getBuiltinCatalog().providers);
+    const group = providerOptionGroups(catalog).find((item) => item.label === "Xiaomi MiMo");
+    expect(group?.options).toEqual([
+      { id: "xiaomi-mimo-api", label: "API (pay as you go)" },
+      { id: "xiaomi-mimo-sgp", label: "Token Plan (SGP)" },
+      { id: "xiaomi-mimo-cn", label: "Token Plan (CN)" },
+      { id: "xiaomi-mimo-ams", label: "Token Plan (AMS)" },
+    ]);
+    const api = catalog.find((entry) => entry.id === "xiaomi-mimo-api")!;
+    expect(api).toMatchObject({ defaultTransport: "anthropic-messages", supportedTransports: ["anthropic-messages"] });
+    expect(api.models.map((model) => model.id)).toEqual(["mimo-v2.6-pro", "mimo-v2.6-flash"]);
+    const region = catalog.find((entry) => entry.id === "xiaomi-mimo-sgp")!;
+    expect(region).toMatchObject({ defaultTransport: "anthropic-messages", supportedTransports: ["anthropic-messages"] });
+    expect(region.models[0]).toMatchObject({ id: "mimo-v2.6-pro", contextWindow: 1_048_576, usableContextWindow: 300_000, maxOutputTokens: 131_072, imageInput: true, reasoning: true });
+    expect(region.models.map((model) => model.id)).toEqual(["mimo-v2.6-pro", "mimo-v2.6-flash"]);
+  });
+
   it("brandless catalog → all groups have an empty label and options labelled entry.name (or Custom endpoint… for isCustom)", () => {
     expect(providerOptionGroups(BRANDLESS)).toEqual([
       { label: "", options: [{ id: "z-ai", label: "Z.AI (GLM)" }] },
@@ -726,6 +747,17 @@ describe("buildConnectionUpdatePayload — contextWindowTokens (TASK.142, same u
     imageInput: "auto" as const,
     promptCacheEnabled: false,
   };
+
+  it("omits untouched model settings so a concurrent update survives a label save", () => {
+    const payload = buildDrawerSavePayload({ ...base, label: "renamed" }, { contextWindowDirty: false, contextWindowTokens: 8192, reasoningSupportedDirty: false, reasoningSupported: false, modelEffortDirty: false, modelEffort: "off", imageInputDirty: false });
+    const concurrent = { contextWindowTokens: 96000, reasoningSupported: true, reasoningEffort: "max" };
+    expect({ ...concurrent, ...payload }).toMatchObject(concurrent);
+    expect(payload).not.toHaveProperty("contextWindowTokens");
+    expect(payload).not.toHaveProperty("reasoningSupported");
+    expect(payload).not.toHaveProperty("reasoningEffort");
+    expect(payload).not.toHaveProperty("imageInputOverride");
+    expect(buildDrawerSavePayload(base, { contextWindowDirty: true, contextWindowTokens: "", reasoningSupportedDirty: true, reasoningSupported: true, modelEffortDirty: true, modelEffort: "max", imageInputDirty: true })).toMatchObject({ contextWindowTokens: "", reasoningSupported: true, reasoningEffort: "max", imageInputOverride: "" });
+  });
 
   it("a chosen number lands in the payload", () => {
     expect(buildConnectionUpdatePayload({ ...base, contextWindowTokens: 8192 }).contextWindowTokens).toBe(8192);
@@ -1870,7 +1902,7 @@ describe("helper text (Taskana 4749: one visible line, the full text in a ? tool
       "Leave empty to use the provider's default. Reasoning models spend part of this budget on hidden thinking before they write anything — for a self-hosted endpoint the catalog has no model list to guess a limit from, so raise this if output keeps cutting off.",
     );
     expect(CONTEXT_WINDOW_HELP).toBe(
-      "Leave empty to use the catalog window; for a model the catalog does not know, an assumed 8192-token window is used so long sessions compact early instead of overstuffing the prompt. Saved for the model above only — switching this connection to another model ignores it.",
+      "Leave empty to use the catalog window; for a model the catalog does not know, an assumed 8192-token window is used so long sessions compact early instead of overstuffing the prompt. Saved separately for each model. Switching models restores their saved windows. Applies to new or reopened sessions.",
     );
     expect(IMAGE_INPUT_HELP).toBe(
       "Auto uses the catalog's vision mark or the image-capable list fetched from the provider's /v1/models. On / Off override it for the model above only — switching this connection to another model ignores it. A running session picks a change up when it next starts.",
@@ -1892,7 +1924,7 @@ describe("ConnectionDrawer layout wiring (Taskana 4749)", () => {
     expect(source).toMatch(/<details\s+className="connection-drawer-advanced"/);
     expect(source).toMatch(/open=\{advancedOpen\}/);
     expect(source).toMatch(/onToggle=\{\(e\) => setAdvancedOpen\(e\.currentTarget\.open\)\}/);
-    expect(source).toMatch(/useState\(\(\) => advancedHasValues\(/);
+    expect(source).toMatch(/useState\(\(\) => initialFocus === "context" \|\| reasoningSupported \|\| effortLevels.length > 0 \|\| modelEffort !== "" \|\| advancedHasValues\(/);
     expect(source).not.toMatch(/AdvancedFields/);
   });
 
@@ -1901,7 +1933,7 @@ describe("ConnectionDrawer layout wiring (Taskana 4749)", () => {
   });
 
   it("both {ok:false} validation paths reopen Advanced in createConnection AND save", () => {
-    const createBlock = source.slice(source.indexOf("async function createConnection"), source.indexOf("async function save"));
+    const createBlock = source.slice(source.indexOf("  async function createConnection()"), source.indexOf("async function save"));
     const saveBlock = source.slice(source.indexOf("async function save"), source.indexOf("async function doFetchModels"));
     for (const block of [createBlock, saveBlock]) {
       // one for the max-output field, one for the context window
@@ -1962,7 +1994,19 @@ describe("ConnectionDrawer layout wiring (Taskana 4749)", () => {
 });
 
 describe("custom endpoint cache creation", () => {
-  it("sends the selected cache policy through the custom endpoint create path", async () => {
+  it("rejects image overrides before creating a provider when there is no model", async () => {
+    const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
+    const body = source.slice(source.indexOf("  async function createNewCustomEndpoint()"), source.indexOf("  /** ADD: single primary action"));
+    const ts = await import("typescript");
+    const js = ts.transpile(body + "\nreturn createNewCustomEndpoint;", { target: ts.ScriptTarget.ES2022 });
+    let error: unknown;
+    const bindings = { preflightModelId, model: "", pricingPayload: () => "", modelPricingPayload: () => ({}), contextWindowTokensField, contextWindow: { raw: "" }, imageInputModelPreflightError, imageInput: "on", setError: (value: unknown) => { error = value; } };
+    const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
+    await run();
+    expect(error).toEqual(expect.any(String));
+  });
+
+  it.each(["auto", "on", "off"] as const)("sends image input %s through the custom endpoint create path", async (imageInput) => {
     const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
     const body = source.slice(source.indexOf("  async function createNewCustomEndpoint()"), source.indexOf("  /** ADD: single primary action"));
     const ts = await import("typescript");
@@ -1970,6 +2014,8 @@ describe("custom endpoint cache creation", () => {
     const calls: unknown[] = [];
     const bindings: Record<string, unknown> = {
       preflightModelId, model: "fixture-model", buildCustomProviderCreateRequest: () => ({}),
+      pricingPayload: () => ({ mode: "subscription" }), modelPricingPayload: () => ({ "fixture-model": { input: 1, cachedInput: 0, output: 2 } }),
+      contextWindowTokensField, contextWindow: { raw: "" }, reasoningSupported: false, modelEffort: "", effortLevels: [], imageInput, imageInputModelPreflightError,
       customName: "fixture", customBaseUrl: "http://127.0.0.1", customKind: "openai-compatible",
       secretValue: "", noAuth: true, setCreating: () => {}, setError: () => {}, catalog: [],
       isCustomRecordProviderId: () => false, resolvedCustomProvider: () => ({ create: async () => ({ ok: true, providers: [] }) }),
@@ -1983,7 +2029,7 @@ describe("custom endpoint cache creation", () => {
     };
     const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
     await run();
-    expect(calls).toEqual([{ providerId: "custom:fixture", model: "fixture-model", transport: "openai-responses", promptCache: IMPLICIT_PROMPT_CACHE }]);
+    expect(calls).toEqual([{ providerId: "custom:fixture", pricing: { mode: "subscription" }, modelPricing: { "fixture-model": { input: 1, cachedInput: 0, output: 2 } }, model: "fixture-model", transport: "openai-responses", promptCache: IMPLICIT_PROMPT_CACHE, ...(imageInput === "auto" ? {} : { imageInputOverride: imageInput }) }]);
   });
 });
 
@@ -2003,4 +2049,23 @@ it("renders cache visibility for new custom endpoint kinds and transport overrid
   expect(run("openai-compatible", "anthropic-messages")).toBe(false);
   expect(run("anthropic", "openai-responses")).toBe(true);
   expect(run("openai", "", false)).toBe(false);
+});
+
+
+it("prefills each model's own context window when navigating A → B → A", () => {
+  const saved = { model: "a", modelOverrides: { a: { contextWindowTokens: 128000 }, b: { contextWindowTokens: 64000 } } };
+  let field = contextWindowInitialField(saved);
+  expect(field).toEqual({ raw: "128000", model: "a" });
+  field = contextWindowAfterModelInput(field, "b", saved);
+  expect(field).toEqual({ raw: "64000", model: "b" });
+  field = contextWindowAfterModelInput(field, "a", saved);
+  expect(field).toEqual({ raw: "128000", model: "a" });
+  field = contextWindowAfterRawInput(field, "", "a");
+  expect(contextWindowAfterModelInput(field, " a ", saved).raw).toBe("");
+  expect(saved.modelOverrides.b.contextWindowTokens).toBe(64000);
+});
+
+it("disables per-model rate inputs while a save is pending", () => {
+  const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
+  expect(source).toContain('fieldset key={id} disabled={readOnly || saving || pricingMode === "subscription"}');
 });

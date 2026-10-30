@@ -172,12 +172,8 @@ export function buildAgentBridgeToolDecl(
 
 /**
  * Params for the request builder shared by the native Agent tool's session
- * tier (tools/agent.ts's runSessionTier) and `runAgentBridgeCall` below
- * (§3.2). `profile`, when present, is exactly what an `engine:` profile
- * resolves to today (ports/subagent.ts's EngineProfileInfo) — a core
- * (non-engine) catalog entry's own default model is folded into `model` by
- * the CALLER instead. Session-child boot only receives the initial prompt, so
- * the bridge also includes the selected core profile body in that prompt.
+ * tier and the bridge. Profile metadata supplies a default model and body;
+ * an engine is present only for foreign-engine profiles.
  */
 export interface BuildSessionSubagentRequestParams {
   agentType: string;
@@ -186,7 +182,7 @@ export interface BuildSessionSubagentRequestParams {
   /** The caller's own model override (an explicit `Agent(model:…)` argument, or the bridge call's own `model` field) — NOT yet resolved against `profile.model`. */
   model?: string;
   spawnToolCallId: string;
-  profile?: EngineProfileInfo;
+  profile?: { systemPrompt: string; model?: string; engine?: EngineProfileInfo["engine"] };
   /** The profile's own `effort:` frontmatter, if any. */
   effort?: AgentProfileEffort;
   /** The profile's own turn budget (TASK.180), if any — rides the creating spawn's request only. */
@@ -208,15 +204,12 @@ export function buildSessionSubagentRequest(params: BuildSessionSubagentRequestP
   return {
     agentType,
     description,
-    prompt: profile !== undefined ? `${profile.systemPrompt}\n\n---\n\n${prompt}` : prompt,
+    prompt: profile !== undefined && (profile.engine !== undefined || profile.systemPrompt.trim()) ? `${profile.systemPrompt}\n\n---\n\n${prompt}` : prompt,
     spawnToolCallId,
     ...(resolvedModel !== undefined ? { model: resolvedModel } : {}),
-    ...(profile !== undefined ? { engine: profile.engine } : {}),
-    // xhigh is preserved verbatim for engine children; a core consumer
-    // (profile?.engine undefined) receives the existing core "max" instead.
-    ...(effort !== undefined
-      ? { effort: profile?.engine === undefined && effort === "xhigh" ? ("max" as const) : effort }
-      : {}),
+    ...(profile?.engine !== undefined ? { engine: profile.engine } : {}),
+    // Preserve the declared tier until the target model is known.
+    ...(effort !== undefined ? { effort } : {}),
     ...(maxTurns !== undefined ? { maxTurns } : {}),
   };
 }
@@ -629,23 +622,14 @@ export async function runAgentBridgeCall(
     };
   }
 
-  const profile: EngineProfileInfo | undefined =
-    entry.engine !== undefined
-      ? { engine: entry.engine, systemPrompt: entry.systemPrompt, ...(entry.model !== undefined ? { model: entry.model } : {}) }
-      : undefined;
+  const profile = continueSession === undefined
+    ? { systemPrompt: entry.systemPrompt, ...(entry.model !== undefined ? { model: entry.model } : {}), ...(entry.engine !== undefined ? { engine: entry.engine } : {}) }
+    : undefined;
   const built = buildSessionSubagentRequest({
     agentType: entry.name,
     description: input.description,
-    // A continued child already carries its profile body in its own history;
-    // only the follow-up message is sent.
-    prompt: continueSession === undefined && profile === undefined && entry.systemPrompt.trim()
-      ? `${entry.systemPrompt}\n\n---\n\n${input.prompt}` : input.prompt,
-    // A core (non-engine) entry has no `profile` for the builder to fall back
-    // onto, so its own default model is resolved here instead (scenario E,
-    // plan §9 p.4: a core profile's `model:` frontmatter must still reach the
-    // child; its body is explicitly included above).
-    // A continued child keeps the model its session was started on.
-    model: continueSession !== undefined ? undefined : profile !== undefined ? input.model : (input.model ?? entry.model),
+    prompt: input.prompt,
+    model: continueSession === undefined ? input.model : undefined,
     spawnToolCallId: deps.spawnToolCallId,
     profile,
     // A continued child keeps the tier its session was started on.

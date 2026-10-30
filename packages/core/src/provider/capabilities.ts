@@ -186,10 +186,16 @@ export function resolveReasoningEffort(
   entry: CatalogProviderEntry | undefined,
   override: ReasoningEffort | undefined,
   live?: LiveModelCapabilities,
+  explicitLevels?: readonly ReasoningEffort[],
 ): ReasoningEffort | undefined {
   if (override === "off") {
     const model = entry?.models.find((candidate) => candidate.id === modelId);
-    return model?.supportsExplicitOff ? "off" : undefined;
+    return model?.supportsExplicitOff && (explicitLevels === undefined || explicitLevels.includes("off")) ? "off" : undefined;
+  }
+  if (explicitLevels !== undefined) {
+    const fallback = (entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId))?.defaultEffort;
+    const selected = override ?? fallback;
+    return selected !== undefined && selected !== "off" && explicitLevels.includes(selected) ? selected : undefined;
   }
   const matched = (entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId));
   if (matched === undefined) {
@@ -207,7 +213,7 @@ export function resolveReasoningEffort(
     // catalog row can never push a level its own model rejects.
     const fallback = matched.defaultEffort;
     if (fallback === undefined || fallback === "off") return undefined;
-    if (matched.effortLevels !== undefined && !matched.effortLevels.includes(fallback)) {
+    if (!(matched.effortLevels ?? ["off", "low", "medium", "high"]).includes(fallback)) {
       return undefined;
     }
     return fallback;
@@ -215,7 +221,7 @@ export function resolveReasoningEffort(
   // Validate against declared effortLevels: an undeclared level is rejected
   // (fail-closed) rather than silently coerced. Models without explicit
   // effortLevels accept the legacy four-level set.
-  if (matched.effortLevels !== undefined && !matched.effortLevels.includes(override)) {
+  if (!(matched.effortLevels ?? ["off", "low", "medium", "high"]).includes(override)) {
     return undefined;
   }
   return override;
@@ -238,11 +244,27 @@ export function resolveEffortLevels(
   modelId: string,
   entry: CatalogProviderEntry | undefined,
   live?: LiveModelCapabilities,
+  explicitLevels?: readonly ReasoningEffort[],
 ): ReasoningEffort[] | undefined {
+  if (explicitLevels !== undefined) return [...explicitLevels];
   const matched = (entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId));
   if (matched === undefined) return liveEffortLevels(live); // Taskana 4118: catalog miss ⇒ live
   if (matched.reasoning !== true) return undefined; // live never resurrects a catalog model
   return matched.effortLevels ?? ["off", "low", "medium", "high"];
+}
+
+/** Resolve a child selection against its target model's effort vocabulary. */
+export function resolveChildReasoningEffort(
+  modelId: string,
+  entry: CatalogProviderEntry | undefined,
+  override: ReasoningEffort | undefined,
+  live?: LiveModelCapabilities,
+  explicitLevels?: readonly ReasoningEffort[],
+): ReasoningEffort | undefined {
+  const levels = resolveEffortLevels(modelId, entry, live, explicitLevels);
+  const selected = override === "xhigh" && levels !== undefined && !levels.includes("xhigh") && levels.includes("max")
+    ? "max" : override;
+  return resolveReasoningEffort(modelId, entry, selected, live, explicitLevels);
 }
 
 /** Live per-model capability facts a models-list endpoint declared (Taskana 4118). */

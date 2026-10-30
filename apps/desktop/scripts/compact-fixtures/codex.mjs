@@ -14,6 +14,10 @@ let compactSequence = 0;
 let turnSequence = 0;
 let timer;
 const usage = (turnId, tokens) => notify("thread/tokenUsage/updated", { turnId, tokenUsage: { last: { totalTokens: tokens }, total: { inputTokens: 47000, outputTokens: 1000, totalTokens: 48000 }, modelContextWindow: 100000 } });
+// The real backend reports the compact turn's own request counters AND a
+// zero-counter `last` reading whose totalTokens is the replacement-history
+// estimate (the engine's compactedContextUsage only trusts that shape).
+const compactEstimate = (turnId, tokens) => notify("thread/tokenUsage/updated", { turnId, tokenUsage: { last: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: tokens }, total: { inputTokens: 47000, outputTokens: 1000, totalTokens: 48000 }, modelContextWindow: 100000 } });
 const complete = (status = "completed") => {
   if (!active) return;
   clearInterval(timer);
@@ -23,7 +27,8 @@ const complete = (status = "completed") => {
     const item = turn.compact ? { type: "contextCompaction", id: `${turn.id}-item` } : { type: "agentMessage", id: `${turn.id}-message`, text: "Fixture ready." };
     turn.items.push(item);
     notify("item/completed", { turnId: turn.id, item });
-    usage(turn.id, turn.compact ? 8000 : 47000);
+    if (turn.compact) { usage(turn.id, 8000); compactEstimate(turn.id, 8000); }
+    else usage(turn.id, 47000);
   }
   turn.status = status;
   notify("turn/completed", { turn: { id: turn.id, status, items: turn.items } });

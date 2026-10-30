@@ -1962,6 +1962,12 @@ body {
   color: var(--warning);
 }
 
+.approval-status button {
+  margin-left: 0.5rem;
+  color: inherit;
+  cursor: pointer;
+}
+
 /* No-active-tab fallback (App.tsx): a quiet, centered holding state rather
    than a warning strip pinned to an otherwise-empty pane — this is a benign
    transient (a tab exists but its store/port hasn't attached yet), not an
@@ -3001,8 +3007,182 @@ body {
   color: var(--text-3);
 }
 
+/* GitHub #36: the compaction row is a disclosure — same quiet divider
+   register as a loop-end row, with a body that opens under it. The row keeps
+   its place in the transcript (a compaction happened HERE); what it adds is
+   the evidence: the summary that now stands in for the compacted prefix, and
+   the prompt that produced it. */
+.compaction-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.compaction-toggle,
+.compaction-toggle-static {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.compaction-toggle:hover {
+  color: var(--text-1);
+}
+
+.compaction-toggle-static {
+  cursor: default;
+}
+
+.compaction-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  color: var(--text-ghost);
+}
+
+.compaction-caret svg {
+  width: 12px;
+  height: 12px;
+  transition: transform var(--dur-1) var(--ease-out);
+}
+
+.compaction-toggle[aria-expanded="false"] .compaction-caret svg {
+  transform: rotate(-90deg);
+}
+
+/* A running row cannot be opened yet, so its caret reads as the collapsed one
+   it will become — never as an affordance that is not there. */
+.compaction-toggle-static .compaction-caret svg {
+  transform: rotate(-90deg);
+}
+
+.compaction-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: var(--w-normal);
+}
+
+.compaction-meta {
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+}
+
+.compaction-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.compaction-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.compaction-section-title {
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-3);
+}
+
+.compaction-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  font-size: var(--fs-2xs);
+  text-transform: none;
+  letter-spacing: normal;
+  cursor: pointer;
+}
+
+.compaction-copy:hover {
+  color: var(--text-1);
+}
+
+.compaction-copy[data-copied="true"] {
+  color: var(--success);
+}
+
+.compaction-copy svg {
+  width: 12px;
+  height: 12px;
+}
+
+.compaction-summary {
+  min-width: 0;
+  /* The summary is markdown prose, so the card's pre-wrap must not leak in:
+     each block gets its own line height and no inherited nowrap. */
+  white-space: normal;
+}
+
+.compaction-note {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+
+.compaction-prompt-title {
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  cursor: pointer;
+}
+
+/* The legacy-row disclosure: the prompt shown is TODAY's instruction, not the
+   one that produced this summary — said in a line, never implied away. */
+.compaction-prompt-note {
+  margin: var(--sp-1) 0 0;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  line-height: var(--lh-body);
+}
+
+.compaction-prompt-text {
+  margin: var(--sp-1) 0 0;
+  padding: var(--sp-2);
+  max-height: 20rem;
+  overflow: auto;
+  border-radius: var(--r-sm);
+  background: var(--bg-app);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  line-height: var(--lh-code);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* One-shot Try-again offer, rendered inline with the loop-end divider. The
-   Continue offer (Taskana 4111) shares the look but NOT the class: the
    automation Try-again probe counts `.retry-try-again-button` as "exactly one". */
 .retry-try-again-button,
 .continue-button {

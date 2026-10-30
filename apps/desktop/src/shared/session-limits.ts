@@ -55,3 +55,8 @@ export function resolveChildSessionsPerParentMax(rawLimits: unknown, explicitRol
   }
   return base;
 }
+
+/** Per-parent admission count includes running children and reserved admissions. */
+export function childSessionLimitMessage(count: number): string {
+  return `Agent: child session limit reached (${count} running or pending). Wait for a report or stop a child before delegating more.`;
+}

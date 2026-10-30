@@ -1,3 +1,4 @@
+import { childSessionLimitMessage } from "../shared/session-limits.js";
 /**
  * Host-side RPC client for `SessionSubagentPort` (TASK.102 CUT-S2 §2.6.1):
  * the parent root host's half of the `Agent tier:"session"` wire. Turns one
@@ -111,6 +112,7 @@
 
 import { randomUUID } from "node:crypto";
 import {
+  createChildStatusStore,
   DEFAULT_MAX_TURNS,
   SUBAGENT_STALL_TIMEOUT_MS,
   SubagentStallClock,
@@ -548,6 +550,7 @@ interface BackgroundChildEntry {
  * — the exact shape `tools/agent.ts`'s session-tier branch (S2b B1) awaits.
  */
 export function createChildSessionPort(options: CreateChildSessionPortOptions): ChildSessionPort {
+  const statusStore = createChildStatusStore();
   const createRequestId = options.createRequestId ?? randomUUID;
   const stallTimeoutMs = options.stallTimeoutMs ?? SUBAGENT_STALL_TIMEOUT_MS;
   const waiters = new Map<string, Waiter>();
@@ -644,7 +647,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
       if (cap !== undefined && liveDetachedCount() >= cap) {
         return Promise.resolve({
           status: "error",
-          finalText: `Agent: child limit reached (${liveDetachedCount()} running). Wait for a report or stop a child before delegating more.`,
+          finalText: childSessionLimitMessage(liveDetachedCount()),
           truncated: false,
           turns: 0,
           toolCalls: 0,
@@ -724,13 +727,21 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     // an explicit detach is in background mode before it is ever handed off).
     let handedOff = false;
     let acceptedEvent: Extract<ChildRunEvent, { kind: "accepted" }> | undefined;
-    let acceptedAt = 0;
+    let acceptedAt: number | undefined;
+    let latestProgress: Partial<BackgroundChildSnapshot> = {};
+    const retainProgress = (patch: Partial<BackgroundChildSnapshot>): void => {
+      latestProgress = { ...latestProgress, ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) };
+    };
     let terminalSeen = false;
     let joinTimer: ReturnType<typeof setTimeout> | undefined;
     // A permission ask that arrived while this run was still JOINING: a
     // handoff must seed the background waiting state and raise the parent's
     // notice once, so its later settlement retracts that same notice.
     let joiningAsk: { toolName: string; subject: string } | undefined;
+    // Coarse progress can report the last completed tool after an approval ask.
+    // Keep the pending tool authoritative until that ask settles.
+    let approvalTool: string | undefined;
+    const statusActiveTools: string[] = [];
     const syncJoinBudgetMs = options.syncJoinBudgetMs ?? CHILD_SYNC_JOIN_BUDGET_MS;
     // The request the background callbacks receive: an explicitly detached run
     // keeps its own object identity; an automatically handed-off one gets a
@@ -845,8 +856,8 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
             description: req.description,
             // Elapsed time continues from the ACTUAL admission, not the
             // handoff — a 2-minute wait is not reset to zero by the handoff.
-            startedAt: acceptedAt !== 0 ? acceptedAt : Date.now(),
-            ...(joiningAsk !== undefined ? { waitingForApproval: true } : {}),
+            startedAt: acceptedAt ?? Date.now(),
+            ...latestProgress,
           },
           cancelRequested: false,
         });
@@ -907,8 +918,10 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               // detached OR already handed off), a handoff-eligible joining run
               // that starts its budget clock here, or a plain synchronous join.
               // A duplicate accepted is a no-op: settlement happens once.
+              if (acceptedEvent !== undefined) return;
               acceptedEvent = event;
               acceptedAt = Date.now();
+              statusStore.start(event.childSessionId, req.description, req.spawnToolCallId);
               if (mode === "background" || req.detach === true) {
                 // A5 (slice D): an explicitly detached run keeps its own
                 // request object and settles with `reason: "requested"`.
@@ -969,11 +982,14 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               // returned at admit, so no live card exists for opts.onProgress
               // to update.
               stallClock.noteProgress(event.lastTool);
+              const lastTool = approvalTool ?? event.lastTool;
+              retainProgress({ turns: event.turns, toolCalls: event.toolCalls, lastTool });
+              if (acceptedEvent) statusStore.update(acceptedEvent.childSessionId, { turns: event.turns, toolCalls: event.toolCalls });
               if (mode === "background") {
                 updateBackgroundSnapshot(acceptedEvent?.childSessionId ?? "", {
                   turns: event.turns,
                   toolCalls: event.toolCalls,
-                  ...(event.lastTool !== undefined ? { lastTool: event.lastTool } : {}),
+                  ...(lastTool !== undefined ? { lastTool } : {}),
                 });
                 // Taskana 4820: a detached run's progress is the only place
                 // the parent can learn its child is about to hit its turn
@@ -1028,12 +1044,30 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
             }
             case "activity": {
               stallClock.noteProgress(event.toolName);
+              const lastTool = approvalTool ?? event.toolName;
+              retainProgress({ lastTool });
               if (mode === "background") {
-                updateBackgroundSnapshot(acceptedEvent?.childSessionId ?? "", { lastTool: event.toolName });
+                updateBackgroundSnapshot(acceptedEvent?.childSessionId ?? "", { lastTool });
                 return;
               }
               const progress: SubagentProgress = { kind: "tool", toolName: event.toolName, summary: event.summary };
               opts.onProgress?.(progress);
+              return;
+            }
+            case "status": {
+              if (acceptedEvent) {
+                if (event.itemKind === "reset") {
+                  statusStore.resetAssistant(acceptedEvent.childSessionId);
+                } else {
+                  statusStore.append(acceptedEvent.childSessionId, { kind: event.itemKind, text: event.text });
+                  if (event.itemKind === "tool" && event.toolName) statusActiveTools.push(event.toolName);
+                  if (event.itemKind === "result" && event.toolName) {
+                    const index = statusActiveTools.indexOf(event.toolName);
+                    if (index >= 0) statusActiveTools.splice(index, 1);
+                  }
+                  if (event.itemKind === "tool" || event.itemKind === "result") statusStore.update(acceptedEvent.childSessionId, { currentTool: approvalTool ?? statusActiveTools.at(-1) });
+                }
+              }
               return;
             }
             case "attention": {
@@ -1049,6 +1083,9 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               } else {
                 stallClock.resume();
               }
+              approvalTool = event.waiting ? event.toolName : undefined;
+              if (acceptedEvent) statusStore.update(acceptedEvent.childSessionId, { state: event.waiting ? "waiting for approval" : "running", currentTool: approvalTool ?? statusActiveTools.at(-1) });
+              retainProgress({ waitingForApproval: event.waiting, ...(event.waiting ? { lastTool: event.toolName } : {}) });
               if (mode === "joining") {
                 // A joining run has no parent-side notice yet, but a handoff
                 // must know whether an ask was already pending when the wait
@@ -1092,6 +1129,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               // this waiter's life — disarm the pending join budget first, so a
               // timer can never hand off a finished child.
               terminalSeen = true;
+              if (acceptedEvent) statusStore.update(acceptedEvent.childSessionId, { state: event.status === "completed" ? "completed" : "failed", turns: event.turns, toolCalls: event.toolCalls, endedAt: Date.now(), currentTool: undefined });
               clearJoinTimer();
               // TASK.240: the cancel cause lives only in this host's registry
               // row, which the detached branch below deletes — read it NOW,
@@ -1345,5 +1383,5 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     };
   }
 
-  return { run, send, listBackgroundChildren, cancelBackgroundChild, cancelAllBackgroundChildren, onBackgroundChildrenChanged };
+  return { run, send, listStatus: statusStore.list, getStatus: statusStore.get, statusDiscarded: statusStore.discarded, listBackgroundChildren, cancelBackgroundChild, cancelAllBackgroundChildren, onBackgroundChildrenChanged };
 }

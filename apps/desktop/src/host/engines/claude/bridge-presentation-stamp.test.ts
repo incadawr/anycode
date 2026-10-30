@@ -158,9 +158,10 @@ describe("bridge door — Taskana 4764 browser tools", () => {
 
     const fullDoor = createBridgePresentationStamp({ catalog: CATALOG, resolveCallCatalog: async () => CATALOG, port: dummyPort, browser: full, onEvent: () => {} });
     const tools = fullDoor.listTools();
-    expect(tools).toHaveLength(11);
+    expect(tools).toHaveLength(12);
     expect(tools[0]?.name).toBe("agent");
-    expect(tools.slice(1).every((tool) => tool.name.startsWith("browser_t"))).toBe(true);
+    expect(tools[1]?.name).toBe("agent_status");
+    expect(tools.slice(2).every((tool) => tool.name.startsWith("browser_t"))).toBe(true);
   });
 
   it("C2: browser_navigate routes to the bridge with the toolUseId; missing toolUseId, unknown name and agent-without-port keep their errors", async () => {
@@ -202,4 +203,13 @@ describe("bridge door — Taskana 4764 browser tools", () => {
     expect(result.isError).toBe(false);
     expect(stamp.entries().size).toBe(0);
   });
+});
+
+it("exposes status through the owning Claude bridge", async () => {
+  const rig = lateSettlingPort({ status: "completed", presentationWorthy: false });
+  rig.port.listStatus = () => [{ id: "owned", description: "work", state: "running", startedAt: Date.now(), turns: 1, toolCalls: 0, tail: [] }];
+  const { stamp } = stampOver(rig.port);
+  expect(stamp.listTools().map((tool) => tool.name)).toContain("agent_status");
+  expect(await stamp.callTool("agent_status", {}, new AbortController().signal, {})).toMatchObject({ isError: false, text: expect.stringContaining("owned") });
+  expect((await stamp.callTool("agent_status", { id: "foreign" }, new AbortController().signal, {})).isError).toBe(true);
 });

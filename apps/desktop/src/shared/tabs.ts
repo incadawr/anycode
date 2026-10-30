@@ -1,3 +1,4 @@
+import type { ReasoningEffort } from "@anycode/core";
 /**
  * Control-plane contract for the tab invoke-API between main and renderer
  * (design/phase-2.md §3.2, refrozen by task 2.1.1). The renderer drives tab
@@ -23,6 +24,13 @@
  * nothing above is changed.
  */
 
+export const TAB_BOOTSTRAP_CHANNEL = "anycode:tab-bootstrap";
+export const TAB_SELECT_CHANNEL = "anycode:tab-select";
+export interface TabBootstrap {
+  tabs: Array<{ tabId: string; workspace: string }>;
+  activeTabId: string | null;
+}
+
 /** invoke channel: create a tab (new session or resume). */
 export const TAB_CREATE_CHANNEL = "anycode:tab-create";
 
@@ -43,10 +51,32 @@ export const TAB_REBIND_CHANNEL = "anycode:tab-rebind";
  * registry — never a credential. Main validates BOTH against its own state
  * (the tab must be a running root core tab; the connection must exist) before
  * anything is mutated.
+ *
+ * GitHub #33 (additive): a re-bind drains the tab's running child sessions —
+ * that is the mechanism's contract, but it is terminal for work the user may
+ * have forgotten about, so it is never silent:
+ *  - `dryRun` asks main to run the SAME fail-closed validation and report the
+ *    blockers it would refuse on, WITHOUT writing anything, priming an env or
+ *    replacing the host. The renderer uses it to find out whether the switch
+ *    would cancel running subagents before it commits to anything;
+ *  - `cancelChildren` is the user's explicit consent to that cancellation. A
+ *    tab with live children refuses `children_running` without it, so no
+ *    caller can cancel someone's running subagents by accident. Main also
+ *    refuses NEW child admission while the rebind runs, so the set the user
+ *    was asked about is the set that is drained — not one that grew during
+ *    the switch;
+ *  - `model` is the model the pick chose on the target connection. Main writes
+ *    it as part of the locked operation (after the child gate, before the fork
+ *    env is primed), so a switch that ends up not happening leaves the
+ *    connection's saved model untouched.
  */
 export interface TabRebindRequest {
   tabId: string;
   connectionId: string;
+  priorEffort?: ReasoningEffort;
+  model?: string;
+  dryRun?: boolean;
+  cancelChildren?: boolean;
 }
 
 /**
@@ -60,14 +90,34 @@ export interface TabRebindRequest {
  *    `handleCreate` applies to a `new` request's connection pick);
  *  - `same_connection`: the target IS the tab's current pin (no-op refusal);
  *  - `connection_missing`: the id is absent from main's live registry;
+ *  - `children_running`: the tab has live child sessions (background or
+ *    session-tier subagents) and the request did not carry the user's
+ *    `cancelChildren` consent — the count rides along so the renderer can
+ *    name it ("3 subagents are running and will be cancelled");
+ *  - `model_write_failed`: the target connection's model could not be saved
+ *    (read-only settings, unknown connection id, or no writer wired). Nothing
+ *    was rebound and nothing else was written;
  *  - `not_ready`: the target connection's fork env could not be primed.
  *  - `spawn_failed`: the replacement host could not be started.
+ *
+ * A `dryRun` request answers with `ok: true` when nothing would block the
+ * switch, and with the same refusal it would give for real otherwise — it is
+ * a question, never a switch.
  */
 export type TabRebindResult =
   | { ok: true; connectionId: string }
+  | { ok: false; reason: "children_running"; runningChildren: number }
   | {
       ok: false;
-      reason: "unknown_tab" | "busy" | "connection_missing" | "not_ready" | "spawn_failed" | "same_connection" | "non_core";
+      reason:
+        | "unknown_tab"
+        | "busy"
+        | "connection_missing"
+        | "not_ready"
+        | "spawn_failed"
+        | "same_connection"
+        | "non_core"
+        | "model_write_failed";
     };
 
 /** Request: optional { limit?: number } — absent = full list (TASK.125). */

@@ -33,6 +33,8 @@ function childStore(tabId: string): ChildPermissionStore | undefined {
 export function ConnectedChildPermissionModal() {
   const rootHasOwn = useTabStore((state) => state.permission !== null);
   const parentSessionId = useTabStore((state) => state.sessionId);
+  const transcript = useTabStore((state) => state.transcript);
+  const backgroundChildren = useTabStore((state) => state.backgroundChildren);
   const relations = childRelationStore((state) => state.relations);
   const [, setRevision] = useState(0);
   // Read the current parent and relations on every render, so switching root
@@ -61,11 +63,42 @@ export function ConnectedChildPermissionModal() {
     displayedChildSpawnToolCallIds: [],
   });
 
+  const shownTabId = forwarded?.childTabId;
+  const shownRequestId = forwarded?.request.requestId;
+  useEffect(() => {
+    if (!shownTabId || !shownRequestId) return;
+    const sendVisibility = (visible: boolean) => tabRegistry.sendToTab(shownTabId, { type: "approval_visibility", requestId: shownRequestId, visible });
+    const update = () => sendVisibility(!document.hidden && document.hasFocus());
+    const blur = () => sendVisibility(false);
+    update();
+    document.addEventListener("visibilitychange", update);
+    window.addEventListener("focus", update);
+    window.addEventListener("blur", blur);
+    return () => {
+      document.removeEventListener("visibilitychange", update);
+      window.removeEventListener("focus", update);
+      window.removeEventListener("blur", blur);
+      sendVisibility(false);
+    };
+  }, [shownTabId, shownRequestId]);
+
   // Keep the preview WebContentsView from covering the approval while it shows.
   useOverlayFlag(forwarded !== null);
 
+  const unattendedChildren = parentSessionId === null ? [] : [...relations.entries()]
+    .filter(([key, relation]) => key.startsWith(`${parentSessionId}\u0000`) && (relation.live ? childStore(relation.childTabId)?.getState().unattended : relation.approvalExpired))
+    .map(([key, relation]) => ({ ...relation, spawnToolCallId: key.slice(parentSessionId.length + 1) }));
+  const statuses = unattendedChildren.map((child) => (
+    <div className="banner banner-info approval-status" role="status" key={child.childTabId}>
+      {childPermissionOwnerLabel(child.childSessionId, child.spawnToolCallId, transcript, backgroundChildren)}:
+      {child.live ? " an unanswered request expired. New approval requests are being denied automatically." : " an unanswered request expired before this subagent finished."}
+      {child.live
+        ? <button type="button" onClick={() => tabRegistry.sendToTab(child.childTabId, { type: "approval_recover" })}>Ask me again</button>
+        : <button type="button" onClick={() => childRelationStore.getState().dismissApprovalExpired(parentSessionId!, child.spawnToolCallId)}>Dismiss</button>}
+    </div>
+  ));
   if (forwarded === null) {
-    return null;
+    return <>{statuses}</>;
   }
 
   const childState = childStore(forwarded.childTabId)?.getState();
@@ -103,6 +136,8 @@ export function ConnectedChildPermissionModal() {
   }
 
   return (
+    <>
+    {statuses}
     <PermissionModal
       // A new ask for the same or another child remounts the dialog, so no
       // stale button or keyboard handler can answer it.
@@ -112,7 +147,8 @@ export function ConnectedChildPermissionModal() {
       onDeny={handleDeny}
       allowRemember={allowRemember}
       workspace={childState?.workspace ?? null}
-      ownerLabel={childPermissionOwnerLabel(forwarded.childSessionId)}
+      ownerLabel={childPermissionOwnerLabel(forwarded.childSessionId, forwarded.spawnToolCallId, transcript, backgroundChildren)}
     />
+    </>
   );
 }

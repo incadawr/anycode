@@ -70,6 +70,7 @@ interface TabEntry {
   store: DesktopStoreApi;
   connection: HostConnection | null;
   unsubscribeMessages: (() => void) | null;
+  unsubscribeExpiry: (() => void) | null;
   terminal: TerminalConnection | null;
   unsubscribeTerminalMessages: (() => void) | null;
   /** R10 status-mirror subscription on this tab's own store; lives for the STORE's lifetime (survives respawns), dies in disposeTab. */
@@ -157,7 +158,7 @@ export interface TabRegistry {
    * then names the folder and the way out, so the surface shows an error
    * instead of a connecting state that never resolves.
    */
-  markHostExited(tabId: string, missingWorkspacePath?: string): void;
+  markHostExited(tabId: string, missingWorkspacePath?: string, failure?: import("../../shared/host-failure.js").HostFailure): void;
   /**
    * Tears the tab down completely: unsubscribes its message listener, drops
    * the entry from the map, and removes it from the tabs-store. Marks the
@@ -353,7 +354,7 @@ export function createTabRegistry(
     // (`resolveReasoningEffort`, fail-closed), so a pick resolved against a
     // stale catalog can only be ignored, never misapplied.
     const level = reasoningEffort === undefined ? undefined : asReasoningEffort(reasoningEffort);
-    if (level !== undefined && level !== current.reasoningEffort) {
+    if (level !== undefined && (level !== current.reasoningEffort || (model !== undefined && model !== current.model))) {
       entry.connection?.send({ type: "set_reasoning_effort", effort: level });
     }
     // Start-screen Orchestrate (core only): LAST of the picks, so the host's
@@ -411,11 +412,11 @@ export function createTabRegistry(
    * head couldn't be taken (queue emptied/paused/inFlight by a racing update).
    */
   function dispatchQueuedPrompt(entry: TabEntry): void {
-    const requestId = crypto.randomUUID();
-    const item = entry.store.getState().takeQueueHead(requestId);
+    const item = entry.store.getState().takeQueueHead(crypto.randomUUID());
     if (item === null) {
       return;
     }
+    const requestId = entry.store.getState().queueInFlight!.requestId;
     // TASK.145 срез 2: `item.origin` (set only for a detached-child report,
     // QueuedPrompt.origin's own doc) rides onto BOTH the local transcript
     // append (live system-card render) and the wire `user_message` (host
@@ -455,8 +456,26 @@ export function createTabRegistry(
   /** (Re)connects `port` to an existing entry: tears down the old subscription, wires the new one, kicks off the handshake. */
   function attach(entry: TabEntry, tabId: string, port: MessagePort): void {
     entry.unsubscribeMessages?.();
+    entry.unsubscribeExpiry?.();
     const connection = connectHost(port);
     entry.connection = connection;
+    if (entry.isChild) {
+      // The host-exit envelope and the UI port are independent channels. Keep
+      // this small relation-only listener until expiry arrives or the port
+      // closes, even if the child store has already been disposed.
+      const unsubscribe = connection.subscribe((message) => {
+        if (message.type === "approval_state" && message.unattended) {
+          childRelationStore.getState().noteApprovalExpired(tabId);
+          cleanup();
+        }
+      });
+      const cleanup = (): void => {
+        unsubscribe();
+        port.removeEventListener("close", cleanup);
+      };
+      port.addEventListener("close", cleanup, { once: true });
+      entry.unsubscribeExpiry = cleanup;
+    }
     entry.unsubscribeMessages = connection.subscribe((message) => {
       // sessionId lands on host_ready but isn't part of the frozen DesktopState
       // shape (store.ts §3.3) — the registry is the natural place to lift it
@@ -487,6 +506,9 @@ export function createTabRegistry(
       // renderer-only posture as the quota notices restored on host_ready.
       if (message.type === "session_history") {
         entry.store.getState().insertConnectionChangedAt(loadConnectionSwitches(message.sessionId));
+      } else if (message.type === "presentation_snapshot") {
+        const sessionId = entry.store.getState().sessionId;
+        if (sessionId !== null) entry.store.getState().insertConnectionChangedAt(loadConnectionSwitches(sessionId));
       }
       if (message.type === "child_report") {
         // TASK.145 срез 2: acks UNCONDITIONALLY — whether store.ts's
@@ -584,6 +606,7 @@ export function createTabRegistry(
           store: createStore(),
           connection: null,
           unsubscribeMessages: null,
+          unsubscribeExpiry: null,
           terminal: null,
           unsubscribeTerminalMessages: null,
           unsubscribeStatus: null,
@@ -607,6 +630,19 @@ export function createTabRegistry(
           // (undrained, for a child) renderer prompt queue.
           entry.store.getState().setChildSurface();
         } else {
+          // Enqueue is the submission boundary for queued user messages. Clear
+          // before the synchronous drainer runs, and leave system reports alone.
+          const store = entry.store;
+          const enqueuePrompt = store.getState().enqueuePrompt;
+          store.setState({
+            enqueuePrompt(item) {
+              if (item.origin === undefined) {
+                const sessionId = store.getState().sessionId;
+                if (sessionId) childRelationStore.getState().dismissFinishedApprovals(sessionId);
+              }
+              return enqueuePrompt(item);
+            },
+          });
           tabsStore.getState().addTab({ tabId, workspace, ...(openedByAgent === true ? { openedByAgent: true as const } : {}) });
           if (agentTitles.has(tabId)) tabsStore.getState().setTitle(tabId, agentTitles.get(tabId)!);
           // R10 status mirror (slice-R10-cut §2.2): ONE store-lifetime
@@ -677,7 +713,7 @@ export function createTabRegistry(
       return true;
     },
 
-    markHostExited(tabId, missingWorkspacePath): void {
+    markHostExited(tabId, missingWorkspacePath, failure): void {
       const entry = entries.get(tabId);
       if (!entry) {
         return;
@@ -687,7 +723,7 @@ export function createTabRegistry(
       entry.connection = null;
       // GitHub #6: the path argument is the terminal missing-folder condition, and
       // only that one may hide the surface's connection lines (HostBanner).
-      entry.store.getState().setHostExited(missingWorkspacePath !== undefined);
+      entry.store.getState().setHostExited(missingWorkspacePath !== undefined, failure);
       if (missingWorkspacePath !== undefined) {
         entry.store.getState().applyHostMessage({
           type: "fatal",
@@ -700,7 +736,7 @@ export function createTabRegistry(
         // never added to the tabs-store) — flip the relation instead, so
         // C3's Open/breadcrumb read `live: false` and fall back to the
         // read-only history channel (C4) instead of a dead port.
-        childRelationStore.getState().markChildGone(tabId);
+        childRelationStore.getState().markChildGone(tabId, entry.store.getState().unattended);
         // TASK.102 CUT-S2 §10.10.2 (R2, O4/F3-R): a terminated child host
         // never respawns (main's own reap-on-terminal verdict, §0), and a
         // child's own tabId can never reach `disposeTab` — main's `closeTab`
@@ -737,9 +773,11 @@ export function createTabRegistry(
       closedTabIds.add(tabId);
       const entry = entries.get(tabId);
       if (!entry) {
+        tabsStore.getState().removeTab(tabId);
         return;
       }
       entry.unsubscribeMessages?.();
+      entry.unsubscribeExpiry?.();
       entry.unsubscribeTerminalMessages?.();
       entry.unsubscribeStatus?.();
       entry.unsubscribeQueue?.();
@@ -771,6 +809,10 @@ export function createTabRegistry(
       if (!entry?.connection) {
         console.warn("[tab-registry] dropping outgoing message, no active connection for tab", tabId, message);
         return;
+      }
+      if (!entry.isChild && (message.type === "user_message" || message.type === "steer_message")) {
+        const sessionId = entry.store.getState().sessionId;
+        if (sessionId) childRelationStore.getState().dismissFinishedApprovals(sessionId);
       }
       entry.connection.send(message);
     },

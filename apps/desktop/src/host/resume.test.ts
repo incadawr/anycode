@@ -26,8 +26,10 @@ import {
 import type { HistoryItem } from "@anycode/core";
 import type { HostToUiMessage } from "../shared/protocol.js";
 import { parseHostArgs, repairDanglingToolCalls, resolveBootSession } from "./boot.js";
-import { deriveSessionTitle } from "./session.js";
+import { deriveSessionTitle, summarizeProviderUsage } from "./session.js";
+import { createDesktopStore } from "../renderer/src/store.js";
 import { createCoreSessionTitlePersistence } from "./session-title-persistence.js";
+import { contextSnapshotOptions, parseContextSnapshot } from "./context-snapshot.js";
 import { createHarness, textStep } from "./test-harness.js";
 
 type Of<T extends HostToUiMessage["type"]> = Extract<HostToUiMessage, { type: T }>;
@@ -144,13 +146,11 @@ describe("Session — session_history hydration", () => {
       const tail = h.received.slice(before);
       expect(tail[0]?.type).toBe("host_ready");
       expect(tail[1]?.type).toBe("session_history");
-      // TASK.117: the per-connect state cascade rides between session_history
-      // and replay() — pending_prompt (bare field-clear; no turn is live at
-      // this point) and session_checkpoint (core-only control snapshot).
-      expect(tail[2]?.type).toBe("pending_prompt");
-      expect(tail[3]?.type).toBe("session_checkpoint");
-      // Everything after is the replayed buffer (turn_started first).
-      expect(tail[4]?.type).toBe("turn_started");
+      // Presentation and control checkpoints precede the explicitly bounded replay.
+      expect(tail.slice(2, 7).map((message) => message.type)).toEqual([
+        "presentation_snapshot", "pending_prompt", "session_checkpoint", "presentation_replay_start", "turn_started",
+      ]);
+      expect(tail.some((message) => message.type === "presentation_replay_end")).toBe(true);
       expect(tail.some(agentEventOf("loop_end"))).toBe(true);
     } finally {
       h.close();
@@ -781,5 +781,63 @@ describe("repairDanglingToolCalls", () => {
     } finally {
       await persistence.close();
     }
+  });
+});
+
+
+describe("context snapshot restart", () => {
+  it("persists a turn and restores it on the first handshake after reopening SQLite", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "context-restart-"));
+    const path = join(dir, "db.sqlite");
+    const db = new SqlitePersistenceAdapter(path);
+    await db.createSession({ id: "test-session", workspace: "/workspace", model: "scripted-model", mode: "build" });
+    const audit = (adapter: SqlitePersistenceAdapter) => {
+      let tail = Promise.resolve();
+      return {
+        sink: {
+          record: (record: Omit<Parameters<SqlitePersistenceAdapter["recordProviderUsage"]>[0], "sessionId" | "createdAt">) => {
+            tail = tail.then(() => adapter.recordProviderUsage({ ...record, sessionId: "test-session", createdAt: Date.now(), costUsd: 0.01 }));
+          },
+          flush: () => tail,
+        },
+        summary: { summary: async () => { await tail; return summarizeProviderUsage(await adapter.listProviderUsage("test-session")); } },
+      };
+    };
+    const first = createHarness({ steps: [textStep("hello")], usageAudit: audit(db), ...await contextSnapshotOptions(db, "test-session", "core", "scripted-model") });
+    try {
+      first.send({ type: "ui_ready" });
+      await first.waitFor(isHostReady);
+      first.send({ type: "user_message", requestId: "one", text: "hello" });
+      await first.waitFor(agentEventOf("loop_end"));
+      await first.session.shutdown();
+      const saved = await db.loadContextUsage("test-session");
+      expect(parseContextSnapshot(saved, "core", "scripted-model")).toBeDefined();
+      await db.close();
+      const reopened = new SqlitePersistenceAdapter(path);
+      const second = createHarness({ steps: [textStep("again")], usageAudit: audit(reopened), ...await contextSnapshotOptions(reopened, "test-session", "core", "scripted-model") });
+      try {
+        second.send({ type: "ui_ready" });
+        const ready = await second.waitFor(isHostReady);
+        expect(ready.contextUsage).toEqual(parseContextSnapshot(saved, "core", "scripted-model"));
+        await second.waitUntil(() => second.received.some((m) => m.type === "session_checkpoint" && m.usageAudit !== undefined));
+        const store = createDesktopStore();
+        for (const message of second.received) store.getState().applyHostMessage(message);
+        expect(store.getState().contextUsage).toEqual(ready.contextUsage);
+        expect(store.getState().usageAudit.totals?.costUsd).toBe(0.01);
+        second.send({ type: "user_message", requestId: "two", text: "again" });
+        await second.waitFor(agentEventOf("loop_end"));
+        await second.session.shutdown();
+        expect(summarizeProviderUsage(await reopened.listProviderUsage("test-session")).totals?.costUsd).toBe(0.02);
+      } finally { second.close(); await reopened.close(); }
+    } finally { first.close(); await db.close(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("validates identities and readings and reconciles the current budget", () => {
+    const value = { engine: "core", model: "m", estimatedTokens: 0, budgetTokens: 100, source: "provider" };
+    expect(parseContextSnapshot(JSON.stringify(value), "core", "m", 200)).toEqual({ estimatedTokens: 0, budgetTokens: 200, source: "provider" });
+    for (const bad of [{ ...value, estimatedTokens: -1 }, { ...value, budgetTokens: 0 }, { ...value, source: "other" }, { ...value, engine: "codex" }, { ...value, model: "other" }]) {
+      expect(parseContextSnapshot(JSON.stringify(bad), "core", "m")).toBeUndefined();
+    }
+    expect(parseContextSnapshot("invalid", "core", "m")).toBeUndefined();
   });
 });

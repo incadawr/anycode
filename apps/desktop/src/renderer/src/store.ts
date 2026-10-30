@@ -105,6 +105,7 @@ import type {
   BackgroundTaskSnapshot,
   CodexRateLimitsWire,
   CommandHookDeclaration,
+  CompactionRecord,
   GitBranchInfo,
   GitCommitInfo,
   GitDiffTarget,
@@ -176,6 +177,7 @@ export interface TurnState {
   status: "idle" | "running" | "compacting";
   turnId: string | null;
   requestId: string | null;
+  startedAt?: number;
 }
 
 /**
@@ -427,6 +429,7 @@ export const WORKFLOW_ACTIVITY_RING = 200;
 /** TASK.33 W7b terminal-error retry metadata — mirrors the core AgentEvent's `error.retry` field (types/events.ts) 1:1. */
 export interface ErrorRetryMeta {
   attemptsMade: number;
+  replayStopped?: "output_started";
   maxAttempts?: number;
   retryable: boolean;
   hadModelOutput: boolean;
@@ -507,8 +510,8 @@ export type TranscriptBlock =
    * must say so, never silently).
    */
   | { kind: "degeneration"; id: string; channel: "text" | "reasoning"; period: number; repeats: number }
-  /** `durationMs`: wall time from this renderer's `turn_started` to the loop_end; absent when the start was not seen live (a replayed/reconnected turn). */
-  | { kind: "loop_end"; id: string; reason: string; turns: number; durationMs?: number; /** Epoch ms when the turn ended (renderer clock). */ at?: number }
+  /** Wall time from turn start to completion, using host timestamps when available. */
+  | { kind: "loop_end"; id: string; reason: string; turns: number; durationMs?: number; /** Epoch ms when the turn ended. */ at?: number }
   /**
    * One persisted line per `stream_retry` AgentEvent (TASK.33 W8), ADDITIVE to
    * the existing one-slot `notice` toast (which still shows the LATEST retry
@@ -544,11 +547,31 @@ export type TranscriptBlock =
    * absent while the compaction is still running; `error` is present exactly
    * when `status` is "failed" and the host named a reason.
    *
-   * Renderer-only and NOT reconstructed by `projectHistoryToBlocks` — same
-   * posture as `usage_limit`/`connection_changed` above, and the same
-   * consequence: a reload loses the card. Carrying it across a reload needs
-   * the compaction to leave a mark in the persisted history, which is a wire
-   * change and deliberately not part of this cut.
+   * GitHub #36: `summary` is the text that now stands in for the compacted
+   * prefix (what the model actually sees), `summaryItemId` the persisted
+   * history item holding it, `prompt`/`model` the instruction and model of the
+   * summarizing call. All four are additive-optional — a foreign engine that
+   * compacts natively (claude) exposes no summary, and a pre-#36 host sends
+   * none of them. `restored` marks a row rebuilt from persisted history at
+   * hydration (it has the summary but never saw the live event); such a row
+   * starts expanded so a resumed transcript does not hide text the old
+   * projection rendered as a plain bubble.
+   *
+   * Durable (GitHub #36 follow-up): a row is NOT lost when the tab closes. The
+   * host writes one record per outcome into its own bounded table and ships
+   * them back with `session_history`/`presentation_snapshot`, so a reopened
+   * session shows EVERY compaction it went through — repeated ones each with
+   * their own summary, failed ones with their own reason — even though a later
+   * compaction replaced the history (and its summary item) that used to be the
+   * only trace. `recordId` is the join key: the live event carries the same id,
+   * so a replayed outcome patches the restored row IN PLACE instead of adding a
+   * second row at the wrong position.
+   *
+   * `restored` marks a row rebuilt at hydration rather than from a live event;
+   * `summaryOrigin` says where its summary text came from — `"record"` (a
+   * durable record: prompt/model included, collapsed by default) or
+   * `"history"` (the legacy fallback, an item still in the history: the
+   * projection expands it, because the pre-#36 transcript showed that text).
    */
   | {
       kind: "compaction";
@@ -560,6 +583,20 @@ export type TranscriptBlock =
       postTokens?: number;
       durationMs?: number;
       error?: string;
+      /** Model-visible summary that replaced the prefix (absent while running, or when the engine exposed none). */
+      summary?: string;
+      /** Id of the persisted `compact_summary` history item carrying `summary`. */
+      summaryItemId?: string;
+      /** Instruction ACTUALLY sent to the summarizing model; absent when it was not recorded. */
+      prompt?: string;
+      /** Model id of the summarizing call, when the host knew one — failures included. */
+      model?: string;
+      /** True when this row was rebuilt from persisted state at hydration, not from a live event. */
+      restored?: boolean;
+      /** Where a restored row's summary came from; absent on live rows. */
+      summaryOrigin?: "record" | "history";
+      /** The durable record this row was built from / patched by (see the block doc). */
+      recordId?: string;
     }
   /**
    * One row per `preview_console` AgentEvent (slice 96-D, night-track
@@ -635,6 +672,7 @@ export function findOpenCompaction(transcript: readonly TranscriptBlock[]): numb
 }
 
 export interface PermissionUiRequest {
+  deadline?: number;
   requestId: string;
   toolName: string;
   input: unknown;
@@ -930,7 +968,7 @@ export interface QueuedPromptImage {
 }
 
 export interface QueuedPrompt {
-  /** crypto.randomUUID() minted at enqueue; identifies the item for edit/delete. */
+  /** Queue identity for edit/delete; a refused steer retains its request id. */
   id: string;
   /** Final send text — paste markers already reconstituted at enqueue time. */
   text: string;
@@ -1003,6 +1041,14 @@ export interface PendingEngineChange {
   model?: string;
   activePresetId?: string;
   effort?: string;
+}
+
+export interface ModelSelectionAck {
+  kind: "model" | "effort";
+  model: string | null;
+  effort: ReasoningEffort;
+  requestId?: string;
+  effortRequestId?: string;
 }
 
 export interface DesktopState {
@@ -1101,6 +1147,7 @@ export interface DesktopState {
   imageFallback: boolean | undefined;
   /** Taskana 4127: host says the context window is the assumed 8K fallback (set by host_ready/model_changed). */
   contextWindowAssumed: boolean | undefined;
+  modelSettingsConnectionId: string | null | undefined;
   /**
    * Taskana 4110 (TASK.123): the host's steering verdict from `host_ready`
    * (engine-level: core's deferred-injection slot / Codex app-server steer).
@@ -1114,6 +1161,7 @@ export interface DesktopState {
   transcript: TranscriptBlock[];
   todoReminderState: { count: number; threshold: number } | null;
   permission: PermissionUiRequest | null;
+  unattended: boolean;
   /**
    * TASK.115 S1: toolCallIds of live Agent tool_call blocks whose child is
    * currently blocked on a permission ask (mirrors `SubagentSubStatus.waiting`
@@ -1144,9 +1192,12 @@ export interface DesktopState {
    */
   networkWaitEpisodes: { parent: number; subagent: number };
   /** Last `context_usage` reading (design §2.12); null before the first one arrives in a session. */
+  modelSelectionAck?: ModelSelectionAck | null;
+  effortSelectionAck?: ModelSelectionAck | null;
   contextUsage: ContextUsage | null;
   /** Last fatal message from the host (e.g. sanitizer failure); null once nothing has fired yet. */
   lastFatal: string | null;
+  hostFailure: import("../../shared/host-failure.js").HostFailure | null;
   /**
    * GitHub #6: the tab is stopped for good because its workspace folder is gone
    * (main checked before forking and delivered an error instead of a host). Part
@@ -1341,7 +1392,7 @@ export interface DesktopState {
    * error instead of a reconnecting state that can never resolve. Defaults to
    * false: every ordinary exit keeps the connection lines.
    */
-  setHostExited(missingWorkspace?: boolean): void;
+  setHostExited(missingWorkspace?: boolean, failure?: import("../../shared/host-failure.js").HostFailure): void;
   /** Records the tab's pinned connection from the tab-port envelope (TASK.45 W10-FIX F2). */
   setPinnedConnection(pinnedConnection: { connectionId: string; providerId: string }): void;
   /** Marks this tab's store as a child surface (TASK.102 CUT-S2 §10.15.1); set once, never cleared. */
@@ -1529,6 +1580,7 @@ interface SessionSlice {
   transcript: TranscriptBlock[];
   todoReminderState: { count: number; threshold: number } | null;
   permission: PermissionUiRequest | null;
+  unattended: boolean;
   /** TASK.115 S1: see `DesktopState.waitingSubagents`'s own doc comment. */
   waitingSubagents: ReadonlySet<string>;
   notice: Notice | null;
@@ -1538,6 +1590,8 @@ interface SessionSlice {
   workspaceMissing: boolean;
   /** Taskana 4772 review F2: see DesktopState.networkWaitEpisodes. */
   networkWaitEpisodes: { parent: number; subagent: number };
+  modelSelectionAck?: ModelSelectionAck | null;
+  effortSelectionAck?: ModelSelectionAck | null;
   contextUsage: ContextUsage | null;
   mcpServers: McpServerStatus[];
   lspServers: LspServerStatus[];
@@ -1601,6 +1655,7 @@ function initialSessionSlice(): SessionSlice {
     transcript: [],
     todoReminderState: null,
     permission: null,
+    unattended: false,
     waitingSubagents: new Set<string>(),
     notice: null,
     waitingForNetwork: false,
@@ -1611,6 +1666,8 @@ function initialSessionSlice(): SessionSlice {
     // (parent + inline-subagent children share one network, so both can park
     // at once). waitingForNetwork is its `sum > 0` projection.
     networkWaitEpisodes: { parent: 0, subagent: 0 },
+    modelSelectionAck: null,
+    effortSelectionAck: null,
     contextUsage: null,
     mcpServers: [],
     lspServers: [],
@@ -1701,12 +1758,15 @@ const defaultScheduler: FrameScheduler = {
 // Projects a resumed session's persisted `WireHistoryItem[]` into
 // `TranscriptBlock[]`, pure and side-effect free so the mapping itself is
 // unit-testable without a live store. Mapping:
-//   - `user` message (role "user", including `kind:"compact_summary"` — still
-//     a user-role item, rendered the same way) -> one `user_text` block, text
-//     run through `stripReminderBlocks` (host/core reminder-injection tags
-//     stripped presentation-only, wire payload stays honest); if the message
-//     is entirely a stripped block (trim()-empty remainder), no block is
-//     emitted at all (design slice-P7.9-cut.md §3.5).
+//   - `user` message (role "user") -> one `user_text` block, text run through
+//     `stripReminderBlocks` (host/core reminder-injection tags stripped
+//     presentation-only, wire payload stays honest); if the message is
+//     entirely a stripped block (trim()-empty remainder), no block is emitted
+//     at all (design slice-P7.9-cut.md §3.5).
+//   - `user` message carrying `kind:"compact_summary"` (GitHub #36) -> one
+//     `restored` compaction row holding the summary text, NOT a user bubble:
+//     it is the model's summary of the compacted prefix, not something the
+//     human typed, and the row is where it can be read in full / copied.
 //   - `assistant` message -> one block per part, in part order: a `text` part
 //     becomes `assistant_text`; a `tool_call` part becomes a `tool_call`
 //     block, paired with the `ToolResultPart` of the matching `toolCallId`
@@ -1733,6 +1793,31 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
 
   for (const [index, item] of items.entries()) {
     const message = item.message;
+
+    // GitHub #36: core's compaction installs its summary as a user-role
+    // `compact_summary` item — the ONE durable trace a swap leaves in history.
+    // Projecting it as an ordinary `user_text` bubble (the pre-#36 behaviour)
+    // put the model's summary in the human's voice and left nothing to open;
+    // a `restored` compaction row carries the same text (it starts expanded,
+    // so nothing that used to be visible is hidden) and adds the summary's
+    // own detail view. Marker items other engines write under the same `kind`
+    // (codex truncation markers) are ASSISTANT-role and never reach this
+    // branch, so they keep rendering as ordinary assistant text.
+    if (message.role === "user" && item.kind === "compact_summary") {
+      blocks.push({
+        kind: "compaction",
+        id: `${item.id}:0`,
+        status: "done",
+        summary: message.content,
+        summaryItemId: item.id,
+        restored: true,
+        // The legacy fallback: this text was found in the history, not in a
+        // durable record, so the card must not pretend to know which prompt
+        // produced it (it labels the shown instruction as the current one).
+        summaryOrigin: "history",
+      });
+      continue;
+    }
 
     if (message.role === "user") {
       const text = stripReminderBlocks(message.content);
@@ -1813,12 +1898,269 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
 }
 
 /**
+ * GitHub #36: turns one durable compaction record into its transcript row.
+ * `restored` + `summaryOrigin: "record"` mark it as history-rebuilt evidence
+ * (collapsed by default, prompt/model included), so it reads the same on every
+ * reopen instead of depending on what this process happened to witness.
+ */
+export function compactionBlockFromRecord(
+  record: CompactionRecord,
+): Extract<TranscriptBlock, { kind: "compaction" }> {
+  return {
+    kind: "compaction",
+    id: `compaction-record:${record.id}`,
+    recordId: record.id,
+    status: record.ok ? "done" : "failed",
+    restored: true,
+    ...(record.summary !== undefined ? { summaryOrigin: "record" as const } : {}),
+    ...(record.trigger !== undefined ? { trigger: record.trigger } : {}),
+    ...(record.preTokens !== undefined ? { preTokens: record.preTokens } : {}),
+    ...(record.postTokens !== undefined ? { postTokens: record.postTokens } : {}),
+    ...(record.durationMs !== undefined ? { durationMs: record.durationMs } : {}),
+    ...(record.error !== undefined ? { error: record.error } : {}),
+    ...(record.summary !== undefined ? { summary: record.summary } : {}),
+    ...(record.summaryItemId !== undefined ? { summaryItemId: record.summaryItemId } : {}),
+    ...(record.prompt !== undefined ? { prompt: record.prompt } : {}),
+    ...(record.model !== undefined ? { model: record.model } : {}),
+  };
+}
+
+/**
+ * The one-slot notice for a finished compaction. Same verdict the transcript row
+ * gives (`compactionRowText`): `compaction_end` carries one `error` channel for
+ * a refusal and a real failure alike, and the commonest one is core's
+ * deliberate no-op. The two surfaces report the same event and must not
+ * disagree about it.
+ */
+function compactionEndNotice(
+  event: Extract<WireAgentEvent, { type: "compaction_end" }>,
+): { kind: "compaction_end"; text: string } {
+  // Native engines (Codex compaction) may omit both token counts; the verdict
+  // below mirrors the transcript row's wording for the same event instead of
+  // printing "undefined". One `error` channel serves refusals and failures
+  // alike, so the ok:false branch stays "not applied", never "failed".
+  let text: string;
+  if (!event.ok) {
+    text = `Compaction not applied: ${event.error ?? "unknown error"}`;
+  } else if (event.postTokens !== undefined) {
+    text = `Conversation compacted (${event.preTokens ?? "?"} → ${event.postTokens} tokens).`;
+  } else if (event.preTokens !== undefined) {
+    text = `Conversation compacted (before: ${event.preTokens} tokens).`;
+  } else {
+    text = "Conversation compacted.";
+  }
+  return { kind: "compaction_end", text };
+}
+
+/**
+ * Where one record's row belongs among the hydrated blocks (GitHub #36).
+ *
+ * The record has to survive reopen in its ORIGINAL position, but the history it
+ * happened against is exactly what it changed. Two anchors, in order of
+ * fidelity:
+ *  1. the summary item it installed, while that item is still in the history —
+ *     the row sits immediately before it (the swap replaced the prefix with
+ *     that item);
+ *  2. otherwise the item's own clock: the block index of the first history item
+ *     created AFTER the compaction. A failed compaction changed nothing, so its
+ *     row lands before whatever was said next; a compaction whose summary a
+ *     later one folded away lands before that later summary. When nothing is
+ *     newer, the row belongs at the end.
+ *
+ * Pure and exported for the ordering pin.
+ */
+export function compactionInsertIndex(
+  record: CompactionRecord,
+  items: readonly WireHistoryItem[],
+  offsets: readonly number[],
+): number {
+  if (record.summaryItemId !== undefined) {
+    const index = items.findIndex((item) => item.id === record.summaryItemId);
+    if (index !== -1) return offsets[index] ?? 0;
+  }
+  const next = items.findIndex((item) => item.createdAt > record.createdAt);
+  return next === -1 ? (offsets[items.length] ?? 0) : (offsets[next] ?? 0);
+}
+
+/**
+ * `projectHistoryToBlocks` + the durable compaction rows (GitHub #36): the
+ * hydration projection a resumed session actually renders.
+ *
+ * A record and a still-surviving `compact_summary` item describe the SAME
+ * compaction; the record wins (it also has the prompt, the model and — for a
+ * failed call — the reason), so the item-derived fallback row is dropped rather
+ * than shown twice.
+ */
+export function projectHistoryWithCompactions(
+  items: readonly WireHistoryItem[],
+  records: readonly CompactionRecord[] | undefined,
+): TranscriptBlock[] {
+  const projected = projectHistoryToBlocks(items);
+  if (records === undefined || records.length === 0) {
+    return projected;
+  }
+
+  const blocks = filterCoveredHistoryRows(projected, records);
+
+  // Block offsets per history item: a block id is `${item.id}:${partIndex}` and
+  // the part index is numeric, so an item can only own blocks with that shape
+  // (item ids may themselves contain colons — "codex-agent-card:<call>").
+  const offsets: number[] = new Array<number>(items.length + 1).fill(blocks.length);
+  let cursor = 0;
+  items.forEach((item, index) => {
+    offsets[index] = cursor;
+    const prefix = `${item.id}:`;
+    while (cursor < blocks.length) {
+      const id = blocks[cursor]!.id;
+      if (!id.startsWith(prefix) || !/^\d+$/.test(id.slice(prefix.length))) break;
+      cursor += 1;
+    }
+  });
+  offsets[items.length] = blocks.length;
+
+  const placements = records
+    .map((record) => ({ record, at: compactionInsertIndex(record, items, offsets) }))
+    .sort(
+      (left, right) =>
+        left.at - right.at ||
+        left.record.createdAt - right.record.createdAt ||
+        left.record.id.localeCompare(right.record.id),
+    );
+
+  const merged: TranscriptBlock[] = [];
+  let emitted = 0;
+  for (const { record, at } of placements) {
+    const boundary = Math.min(Math.max(at, emitted), blocks.length);
+    merged.push(...blocks.slice(emitted, boundary));
+    merged.push(compactionBlockFromRecord(record));
+    emitted = boundary;
+  }
+  merged.push(...blocks.slice(emitted));
+  return merged;
+}
+
+/**
+ * Drops the legacy `summaryOrigin: "history"` rows a durable record already
+ * describes (GitHub #36): one compaction must never render as two rows.
+ */
+export function filterCoveredHistoryRows(
+  blocks: readonly TranscriptBlock[],
+  records: readonly CompactionRecord[] | undefined,
+): TranscriptBlock[] {
+  if (records === undefined || records.length === 0) return [...blocks];
+  const summaryItemIds = new Set(
+    records.flatMap((record) => (record.summaryItemId === undefined ? [] : [record.summaryItemId])),
+  );
+  return blocks.filter(
+    (block) =>
+      !(
+        block.kind === "compaction" &&
+        // Only the LEGACY history-derived row is the duplicate: a row that
+        // already carries a durable `recordId` IS that record's rendering
+        // (GitHub #36 review 3). Dropping it here while also treating it as
+        // already rendered below removed a successful compaction entirely —
+        // it normally has BOTH ids.
+        block.recordId === undefined &&
+        block.summaryItemId !== undefined &&
+        summaryItemIds.has(block.summaryItemId)
+      ),
+  );
+}
+
+/**
+ * Places the durable compaction rows among ALREADY REBUILT blocks (GitHub #36
+ * review) — the `presentation_snapshot` path, where the transcript is not one
+ * flat history projection but prefix blocks PLUS replayed turns.
+ *
+ * The snapshot rebuild knows two things per block: history items carry
+ * `createdAt`, turns carry `startedAt`. `anchorOf` supplies that instant (or
+ * `undefined` when the block has none), and each record is inserted before the
+ * first block that comes strictly after it. That is what keeps a compaction
+ * that happened between (or after) replayed turns in its own place, instead of
+ * ahead of every turn as a prefix-only insertion would put it.
+ *
+ * A record whose row was already rebuilt from a replayed event (same
+ * `recordId`) is left alone — the replay's position is the exact one.
+ */
+export function insertCompactionRecordsByTime(
+  blocks: readonly TranscriptBlock[],
+  records: readonly CompactionRecord[] | undefined,
+  anchorOf: (block: TranscriptBlock) => number | undefined,
+): TranscriptBlock[] {
+  if (records === undefined || records.length === 0) return [...blocks];
+
+  // ORDER MATTERS (GitHub #36 review 3): the legacy duplicates are dropped
+  // FIRST, and only then is "already rendered" read off the survivors. The
+  // other way round, a replayed successful row (which carries both a recordId
+  // and the summaryItemId the filter matches on) was removed as a duplicate
+  // AND skipped for reinsertion — the compaction disappeared entirely.
+  const kept = filterCoveredHistoryRows(blocks, records);
+  const rendered = new Set(
+    kept.flatMap((block) =>
+      block.kind === "compaction" && block.recordId !== undefined ? [block.recordId] : [],
+    ),
+  );
+  const pending = records
+    .filter((record) => !rendered.has(record.id))
+    .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+  if (pending.length === 0) return kept;
+
+  const times = kept.map(anchorOf);
+  const placements = pending.map((record) => {
+    const at = times.findIndex((time) => time !== undefined && time > record.createdAt);
+    return { record, at: at === -1 ? kept.length : at };
+  });
+
+  const merged: TranscriptBlock[] = [];
+  let emitted = 0;
+  for (const { record, at } of placements) {
+    const boundary = Math.min(Math.max(at, emitted), kept.length);
+    merged.push(...kept.slice(emitted, boundary));
+    merged.push(compactionBlockFromRecord(record));
+    emitted = boundary;
+  }
+  merged.push(...kept.slice(emitted));
+  return merged;
+}
+
+/**
+ * The instant a rebuilt block belongs to, for `insertCompactionRecordsByTime`
+ * (GitHub #36 review). Covers the three shapes a snapshot produces:
+ *  - a turn's own user bubble (`pending:<turnId>`, or the requestId for a native
+ *    host) -> that turn's host start time. NB: `appendUserText` stamps the
+ *    RENDERER clock, which during a rebuild is "now" — using it would push every
+ *    record in front of every historical bubble;
+ *  - a history item's blocks (`<itemId>:<partIdx>`) -> the item's createdAt;
+ *  - anything else -> the block's own `at`, when it has one.
+ */
+export function snapshotBlockAnchor(
+  block: TranscriptBlock,
+  itemTimes: ReadonlyMap<string, number>,
+  turnStarts: ReadonlyMap<string, number>,
+): number | undefined {
+  const separator = block.id.lastIndexOf(":");
+  if (separator > 0 && /^\d+$/.test(block.id.slice(separator + 1))) {
+    const time = itemTimes.get(block.id.slice(0, separator));
+    if (time !== undefined) return time;
+  }
+  const turnTime =
+    (block.id.startsWith("pending:") ? turnStarts.get(block.id.slice("pending:".length)) : undefined) ??
+    turnStarts.get(block.id);
+  if (turnTime !== undefined) return turnTime;
+  return block.kind === "user_text" ? block.at : undefined;
+}
+
+/**
  * Builds a desktop store instance. Each tab gets its own instance via
  * tab-registry's per-tab factory; this factory is exported so tests can
  * construct an isolated store with an injected `FrameScheduler` test double
  * instead of sharing a single store's buffered-delta state across test cases.
  */
-export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler) {
+export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler, projectionMaps?: {
+  streams: Map<string, string>;
+  reasoning: Map<string, { key: string; attempt?: number }>;
+  attempts: Map<string, number>;
+}) {
   // Buffered delta text, keyed by the minted transcript block id (see
   // `blockSeq`/`openStreamBlocks` below) that owns the block — NOT the raw
   // stream id, which repeats across steps. Mutated in place (never
@@ -1855,7 +2197,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
   // TASK.117: keyed by the STREAM SCOPE `${turnId}:${step}:${streamId}` —
   // SDK stream ids are REUSED across steps of one outer turn, so a bare-id
   // key would route a later step's deltas into the earlier step's block.
-  const openStreamBlocks = new Map<string, string>();
+  const openStreamBlocks = projectionMaps?.streams ?? new Map<string, string>();
+  let presentationReplayTurns: Set<string> | null = null;
+  let presentationReplayActive = false;
 
   function streamScope(turnId: string, step: number | undefined, streamId: string): string {
     return `${turnId}:${step ?? "_"}:${streamId}`;
@@ -1870,6 +2214,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
   // stream is past the checkpoint tail and deltas append unconditionally.
   // Entries live only while the block is open.
   const checkpointStreams = new Map<string, number>();
+  const reasoningOwners = projectionMaps?.reasoning ?? new Map<string, { key: string; attempt?: number }>();
+  const currentAttempts = projectionMaps?.attempts ?? new Map<string, number>();
+  const checkpointAttempts = new Map<string, number>();
 
   // ── TASK.117 core-only typed wire-state checkpoint (fold) ───────────────
   // A RECONNECT is: host_ready(reset) -> session_history(fresh durable) ->
@@ -2177,10 +2524,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       pendingText.clear();
       pendingReasoning.clear();
       openStreamBlocks.clear();
+      presentationReplayTurns = null;
+      presentationReplayActive = false;
       // TASK.117 acceptance defect 1: the checkpoint-stream registry dies with
       // the open blocks it tracked (blockSeq is never rewound, so the minted
       // ids can never be reused by a later text_start).
       checkpointStreams.clear();
+      reasoningOwners.clear();
+      currentAttempts.clear();
+      checkpointAttempts.clear();
       // TASK.117: the fold checkpoint mirrors durable coverage of the
       // transcript — every path that discards the transcript must discard it
       // too, or a stale suppression entry would shadow post-reset turns. The
@@ -2198,10 +2550,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
      */
     function performReset(): void {
       drainPendingDeltas();
+      turnStartedAt.clear();
       // Taskana 4234: the transcript is being discarded — the hydration
       // anchor/projection info indexing it dies with it (public reset also
       // clears the public staging fields itself).
       hydrationItemIds = null;
+      presentationAnchors.clear();
       set({ ...initialSessionSlice(), lastFatal: null });
     }
 
@@ -2211,13 +2565,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
     // non-rendering anchor (e.g. a tool item, which projects no blocks) to the
     // preceding visible boundary. Cleared on every transcript-discard path.
     let hydrationItemIds: string[] | null = null;
+    const presentationAnchors = new Map<string, string>();
 
     /** The newest transcript index owned by `itemId`'s projected blocks, or -1. */
     function lastBlockIndexOfItem(transcript: readonly TranscriptBlock[], itemId: string): number {
       const prefix = `${itemId}:`;
+      const anchor = presentationAnchors.get(itemId);
       let last = -1;
       for (let index = 0; index < transcript.length; index += 1) {
-        if (transcript[index]!.id.startsWith(prefix)) {
+        if (transcript[index]!.id.startsWith(prefix) || transcript[index]!.id === anchor) {
           last = index;
         }
       }
@@ -2943,10 +3299,45 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
      * scratch, so the first (and only) hydration lands on an empty
      * transcript.
      */
-    function hydrateSessionHistory(items: readonly WireHistoryItem[], truncated: boolean): void {
+    function hydrateSessionHistory(
+      items: readonly WireHistoryItem[],
+      truncated: boolean,
+      compactions?: readonly CompactionRecord[],
+    ): void {
       flushDeltas();
       const existingIds = new Set(get().transcript.map((block) => block.id));
-      const newBlocks = projectHistoryToBlocks(items).filter((block) => !existingIds.has(block.id));
+      // GitHub #36: a compaction already rendered from a LIVE event must not
+      // gain a second, restored row for the same durable one — identity is the
+      // durable record id (and, for the legacy summary-item fallback, the item
+      // id). (The transcript is normally emptied by `host_ready` before
+      // hydration, so this only guards a repeated hydration onto a live
+      // transcript.)
+      const knownRecordIds = new Set(
+        get().transcript.flatMap((block) =>
+          block.kind === "compaction" && block.recordId !== undefined ? [block.recordId] : [],
+        ),
+      );
+      const knownSummaryItemIds = new Set(
+        get().transcript.flatMap((block) =>
+          block.kind === "compaction" && block.summaryItemId !== undefined ? [block.summaryItemId] : [],
+        ),
+      );
+      const newBlocks = projectHistoryWithCompactions(items, compactions).filter((block) => {
+        if (existingIds.has(block.id)) {
+          return false;
+        }
+        if (block.kind !== "compaction") {
+          return true;
+        }
+        if (block.recordId !== undefined && knownRecordIds.has(block.recordId)) {
+          return false;
+        }
+        return !(
+          block.restored === true &&
+          block.summaryItemId !== undefined &&
+          knownSummaryItemIds.has(block.summaryItemId)
+        );
+      });
       if (newBlocks.length > 0) {
         set((state) => ({ transcript: [...state.transcript, ...newBlocks] }));
       }
@@ -3139,7 +3530,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
 
       if (message.conversationRestored) {
         drainPendingDeltas();
-        set({ transcript: [], waitingSubagents: new Set() });
+        set({ transcript: [], waitingSubagents: new Set(), contextUsage: null });
       }
       const shortId = message.safetyCheckpointId?.slice(0, 8);
       set({
@@ -3167,7 +3558,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
      * a reconnect never loses accounting. Foreign-engine/legacy envelopes
      * carry no `step` and never engage the fold.
      */
-    function onAgentEvent(turnId: string, event: WireAgentEvent, step: number | undefined): void {
+    function onAgentEvent(turnId: string, event: WireAgentEvent, step: number | undefined, attempt?: number, eventAt?: number): void {
+      const attemptKey = `${turnId}:${step ?? "_"}`;
+      if (attempt !== undefined) {
+        const current = currentAttempts.get(attemptKey);
+        if (current !== undefined && attempt < current) return;
+        currentAttempts.set(attemptKey, attempt);
+      }
       // `context_usage` is exempt from the turn-scoped guard: it is a
       // SESSION-scoped status-bar reading, not turn content. The Claude engine
       // reads it from `get_context_usage` AFTER the terminal result (the CLI's
@@ -3446,6 +3843,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           }
           const blockId = `reason:${blockSeq++}:${event.id}`;
           openStreamBlocks.set(scope, blockId);
+          reasoningOwners.set(blockId, { key: attemptKey, attempt });
           appendBlock({ kind: "reasoning", id: blockId, text: "", collapsed: false });
           return;
         }
@@ -3584,7 +3982,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           const loopEndId = `loop_end:${turnId}`;
           const startedAt = turnStartedAt.get(turnId);
           turnStartedAt.delete(turnId);
-          const durationMs = startedAt === undefined ? undefined : Math.max(0, Date.now() - startedAt);
+          const endedAt = eventAt ?? Date.now();
+          const durationMs = startedAt === undefined ? undefined : Math.max(0, endedAt - startedAt);
           set((state) => {
             const lastSent = state.lastSentMessage;
             const retryMeta = state.lastErrorRetry;
@@ -3612,7 +4011,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                   reason: event.reason,
                   turns: event.turns,
                   ...(durationMs !== undefined ? { durationMs } : {}),
-                  at: Date.now(),
+                  at: endedAt,
                 },
               ],
               ...(armRetry && lastSent !== null
@@ -3650,7 +4049,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             const uiPending = get().uiSteerPending;
             const requeue = state.pendingSteers.filter((entry) => uiPending.includes(entry.requestId));
             const queueAdditions: QueuedPrompt[] = requeue.map((entry) => ({
-              id: crypto.randomUUID(),
+              id: entry.requestId,
               text: entry.sentMessage.text,
               images: entry.sentMessage.images,
             }));
@@ -3747,21 +4146,18 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // later notice simply replaces an earlier one still showing);
         // context_usage is a pure status-bar reading, no notice ──
         //
-        // TASK.33 W8: ADDITIVELY to that one-slot notice (which only ever
-        // shows the latest retry), a `stream_retry` also leaves a persisted
-        // transcript line per attempt — a full history of every attempt this
-        // turn made, not just the last one. A retry fires either before any
-        // model output or as a mid-stream replay (Taskana 4705: the port
-        // replays the whole step after partial output, provider/failure.ts).
-        // In the mid-stream case the discarded attempt's text block is already
-        // on screen above this line; the replayed attempt opens a fresh block.
-        // The AI SDK's synthetic `{type:"start"}` between attempts is a no-op
-        // below (the "start"/"turn_start"/tool_input_* case), so repeated
-        // attempts never plant an empty content block (re-cut W8 note).
-        case "stream_retry":
+        // Retain a notice for each retry and discard provisional reasoning
+        // belonging to the abandoned attempt.
+        case "stream_retry": {
+          if (!stepCovered(turnId, step) && (attempt === undefined || (checkpointAttempts.get(attemptKey) ?? -1) < attempt)) {
+            const removed = new Set([...reasoningOwners].filter(([, owner]) => owner.key === attemptKey && (attempt === undefined || owner.attempt === undefined || owner.attempt < attempt)).map(([id]) => id));
+            for (const id of removed) { reasoningOwners.delete(id); pendingReasoning.delete(id); checkpointStreams.delete(id); }
+            for (const [scope, id] of openStreamBlocks) if (removed.has(id)) openStreamBlocks.delete(scope);
+            set((state) => ({ transcript: state.transcript.filter((block) => !removed.has(block.id)) }));
+          }
           appendBlock({
             kind: "stream_retry",
-            id: `stream_retry:${turnId}:${event.attempt}`,
+            id: `stream_retry:${turnId}:${step ?? "_"}:${event.attempt}`,
             attempt: event.attempt,
             maxAttempts: event.maxAttempts,
             delayMs: event.delayMs,
@@ -3796,10 +4192,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           set({
             notice: {
               kind: "stream_retry",
-              text: `Retrying… (attempt ${event.attempt > event.maxAttempts ? event.attempt : `${event.attempt}/${event.maxAttempts}`}: ${event.reason})`,
+              text: event.waitedMs !== undefined
+                ? `Retry ${event.attempt} now (network back after ${(event.waitedMs / 1000).toFixed(1)} s): ${event.reason}`
+                : `Retry ${event.attempt} in ${(event.delayMs / 1000).toFixed(1)} s: ${event.reason}`,
             },
           });
           return;
+        }
         // Taskana 4772: the adapter parked a transient network failure and is
         // probing. No transcript block and no notice: the status line says it.
         case "waiting_for_network": {
@@ -3876,33 +4275,67 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               durationMs: event.durationMs,
               ...(event.postTokens === undefined ? {} : { postTokens: event.postTokens }),
               ...(event.error === undefined ? {} : { error: event.error }),
+              // GitHub #36: what the swap actually left behind. Additive and
+              // independent of `ok` — a failed call still carries the prompt
+              // it sent, and only a successful one carries a summary.
+              ...(event.summary === undefined ? {} : { summary: event.summary }),
+              ...(event.summaryItemId === undefined ? {} : { summaryItemId: event.summaryItemId }),
+              ...(event.prompt === undefined ? {} : { prompt: event.prompt }),
+              ...(event.model === undefined ? {} : { model: event.model }),
+              // The durable id this outcome was recorded under: it is what lets
+              // a LATER snapshot/replay recognize the row as already rendered
+              // (GitHub #36) instead of adding a second one for the same
+              // compaction. Carried on the block itself, not only in `live`.
+              ...(event.recordId === undefined ? {} : { recordId: event.recordId }),
             };
-            const openAt = findOpenCompaction(state.transcript);
+            const openAtRaw = findOpenCompaction(state.transcript);
+            // GitHub #36 dedupe AND positioning: a compaction that reaches this
+            // handler a SECOND time — a reconnect journal replay of the same
+            // start/end pair — already has its durable row in the transcript,
+            // restored at its original place by hydration (`recordId`, or the
+            // legacy `summaryItemId` fallback). That row is PATCHED IN PLACE
+            // with the live reading and the replayed "running" card the start
+            // appended at the tail is dropped: the row never moves to the end
+            // of the transcript, which is where the replay appended it.
+            const restoredAt =
+              event.recordId !== undefined || event.summaryItemId !== undefined
+                ? state.transcript.findIndex(
+                    (block) =>
+                      block.kind === "compaction" &&
+                      block.restored === true &&
+                      ((event.recordId !== undefined && block.recordId === event.recordId) ||
+                        (event.summaryItemId !== undefined && block.summaryItemId === event.summaryItemId)),
+                  )
+                : -1;
+            const live = outcome;
+            if (restoredAt !== -1) {
+              const transcript = state.transcript.map((block, index) =>
+                index === restoredAt && block.kind === "compaction" ? { ...block, ...live } : block,
+              );
+              if (openAtRaw !== -1 && openAtRaw !== restoredAt) {
+                transcript.splice(openAtRaw, 1);
+              }
+              return {
+                ...(event.ok ? { contextUsage: null } : {}),
+                transcript,
+                notice: compactionEndNotice(event),
+                ...(state.turn.status === "compacting"
+                  ? { turn: { status: "idle" as const, turnId: null, requestId: null } }
+                  : {}),
+              };
+            }
             return {
+              ...(event.ok ? { contextUsage: null } : {}),
               transcript:
-                openAt === -1
+                openAtRaw === -1
                   ? [
                       ...state.transcript,
                       { kind: "compaction" as const, id: `compaction:${compactionSeq++}`, ...outcome },
                     ]
                   : state.transcript.map((block, index) =>
-                      index === openAt && block.kind === "compaction" ? { ...block, ...outcome } : block,
+                      index === openAtRaw && block.kind === "compaction" ? { ...block, ...live } : block,
                     ),
-              notice: {
-                kind: "compaction_end" as const,
-                text: event.ok
-                  ? event.postTokens !== undefined
-                    ? `Conversation compacted (${event.preTokens ?? "?"} → ${event.postTokens} tokens).`
-                    : event.preTokens !== undefined
-                      ? `Conversation compacted (before: ${event.preTokens} tokens).`
-                      : "Conversation compacted."
-                  // Same verdict the transcript row gives (MessageList's
-                  // `compactionRowText`): `compaction_end` carries one `error`
-                  // channel for a refusal and a real failure alike, and the
-                  // commonest one is core's deliberate no-op. The two surfaces
-                  // report the same event and must not disagree about it.
-                  : `Compaction not applied: ${event.error ?? "unknown error"}`,
-              },
+              notice: compactionEndNotice(event),
               ...(state.turn.status === "compacting"
                 ? { turn: { status: "idle" as const, turnId: null, requestId: null } }
                 : {}),
@@ -4331,9 +4764,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       imageInput: undefined,
       imageFallback: undefined,
       contextWindowAssumed: undefined,
+      modelSettingsConnectionId: undefined,
       steering: null,
       ...initialSessionSlice(),
       lastFatal: null,
+      hostFailure: null,
       // Prompt-queue slots (slice P7.14): outside initialSessionSlice so a
       // host respawn preserves user-typed prompts (see QueuedPrompt comment).
       promptQueue: [],
@@ -4412,6 +4847,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             });
             set({
               connection: "ready",
+              contextUsage: message.contextUsage ?? null,
               // Taskana 4234: the tab's session id, lifted for marker persistence.
               sessionId: message.sessionId,
               workspace: message.workspace,
@@ -4421,6 +4857,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               shell: message.shell ?? null,
               model: message.model,
               reasoningEffort: message.reasoningEffort ?? "off",
+              ...(message.effortAdjustment !== undefined ? { notice: { kind: "engine_notice" as const, text: `${message.model} reasoning effort adjusted to ${message.effortAdjustment.to}.` } } : {}),
               availableEffortLevels: message.availableEffortLevels,
               // TASK.56 W3: live per-model verdict off the same hello (W2
               // wire). Absent on the message -> undefined here -> no
@@ -4431,6 +4868,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               // `imageInput` alone.
               imageFallback: message.imageFallback,
               contextWindowAssumed: message.contextWindowAssumed,
+              modelSettingsConnectionId: message.modelSettingsConnectionId,
               // Taskana 4110 (TASK.123): the engine's live steering verdict.
               // Absent (legacy host / engine without the seam) -> null -> the
               // composer's steer branch never engages, the queue stays.
@@ -4448,6 +4886,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             return;
           case "reasoning_effort_changed":
             set({
+              effortSelectionAck: {kind: "effort", model: get().model, effort: message.effort, requestId: message.requestId},
               reasoningEffort: message.effort,
               ...(message.availableEffortLevels !== undefined ? { availableEffortLevels: message.availableEffortLevels } : {}),
             });
@@ -4469,9 +4908,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // message is core-only in practice. No engine-projection handling
             // needed here.
             set({
+              contextUsage: message.contextUsage ?? null,
+              modelSelectionAck: {kind: "model", model: message.model, effort: message.selectedReasoningEffort ?? message.reasoningEffort, requestId: message.requestId, effortRequestId: message.effortRequestId},
               model: message.model,
               reasoningEffort: message.reasoningEffort,
               availableEffortLevels: message.availableEffortLevels,
+              ...(message.effortAdjustment !== undefined ? { notice: { kind: "engine_notice" as const, text: `${message.model} reasoning effort adjusted to ${message.effortAdjustment.to}.` } } : {}),
               // TASK.56 W3: re-gate upfront on a mid-session model switch —
               // vision -> non-vision flips this to false in the SAME push
               // that already updates `model` (W2 re-reads the verdict after
@@ -4499,6 +4941,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             set({ notice: { kind: "worktree_notice", text: message.message } });
             return;
           case "turn_started": {
+            if (presentationReplayActive && presentationReplayTurns?.has(message.turnId)) return;
             // Taskana 4234 fallback: a turn starting means post-switch content
             // is about to land — if the hydration boundary never arrived (no
             // session_history at all), flush staged markers NOW so they
@@ -4521,13 +4964,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             const inFlight = get().queueInFlight;
             // The host's own clock when it sends one: a turn_started re-asserted
             // on reconnect would otherwise restart the footer's duration at ~0.
-            if (message.startedAt !== undefined) {
-              turnStartedAt.set(message.turnId, message.startedAt);
-            } else if (!turnStartedAt.has(message.turnId)) {
-              turnStartedAt.set(message.turnId, Date.now());
+            if (!turnStartedAt.has(message.turnId)) {
+              turnStartedAt.set(message.turnId, message.startedAt ?? Date.now());
             }
             set({
-              turn: { status: "running", turnId: message.turnId, requestId: message.requestId },
+              turn: { status: "running", turnId: message.turnId, requestId: message.requestId, startedAt: turnStartedAt.get(message.turnId) },
               // TASK.33 W8: a new turn starting — whether via the Try-again
               // click (already one-shot consumed by then) or any other
               // send — retires the previous turn's retry bookkeeping so a
@@ -4623,7 +5064,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               // steer_message it could not deliver — the text is owed a
               // next-turn send through the ordinary drainer.
               set((state) => ({
-                promptQueue: [...state.promptQueue, { id: crypto.randomUUID(), text: message.text as string, images: [] }],
+                promptQueue: [...state.promptQueue, { id: message.requestId, text: message.text as string, images: [] }],
                 steerRequeueSeen: [...state.steerRequeueSeen, message.requestId],
                 notice: { kind: "steer_requeued", text: "Steer not delivered into the running turn — queued for the next turn." },
               }));
@@ -4646,7 +5087,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             return;
           }
           case "agent_event":
-            onAgentEvent(message.turnId, message.event, message.step);
+            if (presentationReplayActive && presentationReplayTurns?.has(message.turnId) && !["context_usage", "engine_quota", "provider_quota", "engine_session_tokens", "todo_reminder_state"].includes(message.event.type)) return;
+            onAgentEvent(message.turnId, message.event, message.step, message.attempt, message.at);
             return;
           case "pending_prompt": {
             // TASK.117: the host's authoritative in-flight prompt push. A
@@ -4700,7 +5142,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // requestId — never stack a second bubble on top of it. A
             // reconnected store has no such echo, so there the bubble is the
             // prompt's only rendered form.
-            const echoed = message.requestId !== undefined && get().transcript.some((block) => block.id === message.requestId);
+            const echoed = get().transcript.some((block) => block.id === `pending:${message.turnId}` || (message.requestId !== undefined && block.id === message.requestId));
             if (!echoed) {
               appendBlock({
                 kind: "user_text",
@@ -4712,10 +5154,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             }
             return;
           }
+          case "approval_state":
+            set({ permission: message.pending, unattended: message.unattended });
+            return;
           case "permission_request":
             set({
               permission: {
                 requestId: message.requestId,
+                deadline: message.deadline,
                 toolName: message.toolName,
                 input: message.input,
                 mode: message.mode,
@@ -4766,6 +5212,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // guarded below by the replay-prefix rule). A ring delta can
             // never PRECEDE its own start (host emits through one for-await,
             // the ring is FIFO), so no open stream can be missed here.
+            if (message.currentAttempt && message.liveTurnId) {
+              const key = `${message.liveTurnId}:${message.currentAttempt.step}`;
+              currentAttempts.set(key, message.currentAttempt.attempt);
+              checkpointAttempts.set(key, message.currentAttempt.attempt);
+            }
             for (const stream of message.streams ?? []) {
               const scope = streamScope(
                 get().turn.turnId ?? "",
@@ -4785,6 +5236,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               // holds) so the replayed suffix is consumed, not re-appended
               // (see applyStreamDelta).
               checkpointStreams.set(blockId, stream.replayChars);
+              if (stream.kind === "reasoning") reasoningOwners.set(blockId, { key: `${get().turn.turnId ?? ""}:${stream.step}`, attempt: stream.attempt });
               appendBlock(
                 stream.kind === "text"
                   ? { kind: "assistant_text", id: blockId, text: stream.text }
@@ -4854,6 +5306,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                 ? {
                     permission: {
                       requestId: message.permission.requestId,
+                      deadline: message.permission.deadline,
                       toolName: message.permission.toolName,
                       input: message.permission.input,
                       mode: message.permission.mode,
@@ -4872,7 +5325,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               message.origin === "ui"
                 ? null
                 : { kind: "permission_settled", text: PERMISSION_SETTLE_TEXT[message.origin] };
-            set((state) => ({ permission: null, notice: notice ?? state.notice }));
+            set((state) => ({ permission: state.permission?.requestId === message.requestId ? null : state.permission, notice: notice ?? state.notice }));
             return;
           }
           case "file_snapshot":
@@ -4908,7 +5361,114 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             }));
             return;
           case "session_history":
-            hydrateSessionHistory(message.items, message.truncated);
+            hydrateSessionHistory(message.items, message.truncated, message.compactions);
+            return;
+          case "presentation_snapshot": {
+            // Reconstruct in an isolated store: historical terminal events must
+            // never drain queues or change the active turn in this store.
+            const maps = { streams: new Map<string, string>(), reasoning: new Map<string, { key: string; attempt?: number }>(), attempts: new Map<string, number>() };
+            const projection = createDesktopStore({ schedule: (fn) => fn() }, maps);
+            const known = new Set(message.coveredTurnIds);
+            const isCore = get().engine === null;
+            const tracksTurns = message.historyTracksTurns;
+            const retained = new Map<string, number>();
+            for (const item of message.items) {
+              if (item.turnId !== undefined && item.step !== undefined) {
+                retained.set(item.turnId, Math.min(retained.get(item.turnId) ?? Infinity, item.step));
+              }
+            }
+            // GitHub #36 review: the instants the rebuilt blocks are ordered by —
+            // a history item's clock, and a turn's host start time (keyed both by
+            // turnId and by requestId: a native host titles its bubble by the
+            // request id).
+            const itemTimes = new Map(message.items.map((item) => [item.id, item.createdAt] as const));
+            const turnStarts = new Map<string, number>();
+            for (const turn of message.turns) {
+              turnStarts.set(turn.turnId, turn.startedAt);
+              turnStarts.set(turn.requestId, turn.startedAt);
+            }
+            const prefix = message.items.filter((item) => item.turnId === undefined || !known.has(item.turnId));
+            const savedNotices = get().transcript.filter((block) => block.kind === "usage_limit");
+            // GitHub #36: the snapshot rebuilds the transcript FROM ZERO, so the
+            // durable compaction rows must ride it too — otherwise a reconnect
+            // that has a presentation snapshot would lose every resumed row.
+            // Positioning happens AFTER the turns are rebuilt (see below): the
+            // prefix alone cannot know where a compaction that happened during
+            // or after a replayed turn belongs.
+            projection.setState({
+              transcript: [...savedNotices, ...filterCoveredHistoryRows(projectHistoryToBlocks(prefix), message.compactions)],
+            });
+            presentationAnchors.clear();
+            for (const turn of message.turns) {
+              const boundary = retained.get(turn.turnId);
+              const userItems = message.items.filter((item) => item.turnId === turn.turnId && item.step === 0 && item.message.role === "user");
+              const injectedItems = [...userItems];
+              const promptIndex = injectedItems.findIndex((item) => item.message.role === "user" && item.message.content === turn.text);
+              if (promptIndex >= 0) injectedItems.splice(promptIndex, 1);
+              if (userItems.length) {
+                projection.setState((state) => ({ transcript: [...state.transcript, ...projectHistoryToBlocks(userItems)] }));
+              } else if (turn.text !== undefined && (!message.truncated || boundary === undefined || boundary === 0)) {
+                projection.getState().appendUserText(tracksTurns ? `pending:${turn.turnId}` : turn.requestId, turn.text, turn.images, turn.origin);
+              }
+              projection.getState().applyHostMessage({ type: "turn_started", turnId: turn.turnId, requestId: turn.requestId, startedAt: turn.startedAt });
+              for (const entry of turn.events) {
+                if (tracksTurns && boundary !== undefined && entry.step !== undefined && entry.step < boundary) continue;
+                const event = entry.event;
+                if (event.type === "user_injected" && event.step === 0) {
+                  const index = injectedItems.findIndex((item) => item.message.role === "user" && item.message.content === event.text);
+                  if (index >= 0) { injectedItems.splice(index, 1); continue; }
+                }
+                projection.getState().applyHostMessage({ type: "agent_event", turnId: turn.turnId, ...entry });
+              }
+              for (const snapshot of turn.fileSnapshots ?? []) projection.getState().applyHostMessage(snapshot);
+              const tail = projection.getState().transcript.at(-1);
+              if (tail) {
+                for (const item of message.items) {
+                  if (item.turnId === turn.turnId && item.message.role !== "user") presentationAnchors.set(item.id, tail.id);
+                }
+              }
+            }
+            flushDeltas();
+            openStreamBlocks.clear();
+            for (const [scope, id] of maps.streams) openStreamBlocks.set(scope, id);
+            reasoningOwners.clear();
+            for (const [id, owner] of maps.reasoning) reasoningOwners.set(id, owner);
+            currentAttempts.clear();
+            for (const [key, attempt] of maps.attempts) currentAttempts.set(key, attempt);
+            // GitHub #36 review: now that the prefix AND every replayed turn are
+            // in place, drop the session's durable compaction rows into their own
+            // positions — before the first block whose instant is later than the
+            // record's. Inserting them up front (as part of the prefix) put a
+            // compaction that happened between/after turns ahead of those turns,
+            // and a replayed event then patched the misplaced row in place.
+            const snapshotBlocks = insertCompactionRecordsByTime(
+              projection.getState().transcript,
+              message.compactions,
+              (block) => snapshotBlockAnchor(block, itemTimes, turnStarts),
+            );
+            const seenNotices = new Set(savedNotices.map((block) => block.kind === "usage_limit" ? JSON.stringify(block.notice) : ""));
+            const transcript = snapshotBlocks.filter((block) => {
+              if (block.kind !== "usage_limit" || savedNotices.includes(block)) return true;
+              return !seenNotices.has(JSON.stringify(block.notice));
+            });
+            for (const block of transcript) {
+              const match = /^(?:text|reason):(\d+):/.exec(block.id);
+              if (match) blockSeq = Math.max(blockSeq, Number(match[1]) + 1);
+              if (block.kind === "loop_end") loopEndEmitted.add(block.id);
+            }
+            set({ transcript, modelTurns: projection.getState().modelTurns, continueOffer: projection.getState().continueOffer, ...(!isCore ? { sessionTokens: projection.getState().sessionTokens } : {}) });
+            // A refused steer that became a later turn has already been sent.
+            // Its original request id survives queue draining in the journal.
+            set((state) => ({ steerRequeueSeen: [...new Set([...state.steerRequeueSeen, ...message.turns.map((turn) => turn.requestId)])] }));
+            presentationReplayTurns = known;
+            return;
+          }
+          case "presentation_replay_start":
+            presentationReplayActive = true;
+            return;
+          case "presentation_replay_end":
+            presentationReplayActive = false;
+            presentationReplayTurns = null;
             return;
           case "title_changed":
             // Phase 4 slice 4.4-T (design feature-session-titles.md §4): title
@@ -5027,6 +5587,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           // the active value before the queued change applies). No-op while
           // there is no `engine` projection at all (shouldn't happen —
           // host_ready always precedes this on the same port — defensive).
+          case "context_usage_checkpoint":
+            set({ contextUsage: message.contextUsage });
+            return;
           case "engine_settings_changed": {
             set((state) => {
               if (state.engine === null) {
@@ -5067,7 +5630,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                   const appliedModel = state.engine.model?.current;
                   const selectedModel = nextPending.model ?? appliedModel;
                   const appliedEffort = selectedModel === appliedModel ? state.engine.model?.effort : undefined;
-                  if (appliedEffort !== undefined && message.effort === appliedEffort) delete nextPending.effort;
+                  if (!message.deferredEffort && appliedEffort !== undefined && message.effort === appliedEffort) delete nextPending.effort;
                   else nextPending.effort = message.effort;
                 }
                 if (!touched) {
@@ -5099,6 +5662,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                 }
               }
               return {
+                ...(message.clearContextUsage ? { contextUsage: null } : {}),
                 engine: {
                   ...state.engine,
                   ...(nextEngineModel !== undefined ? { model: nextEngineModel } : {}),
@@ -5274,6 +5838,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             set((state) => ({
               ...(state.engine !== null ? { engine: { ...state.engine, id: message.engine } } : {}),
               pendingEngineChange: null,
+              contextUsage: null,
             }));
             return;
           case "engine_switch_failed":
@@ -5295,7 +5860,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       },
 
       setAwaitingHostReady(): void {
-        set({ connection: "awaiting_host_ready" });
+        set({ connection: "awaiting_host_ready", hostFailure: null });
       },
 
       setPinnedConnection(pinnedConnection: { connectionId: string; providerId: string }): void {
@@ -5306,7 +5871,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         set({ childSurface: true });
       },
 
-      setHostExited(missingWorkspace = false): void {
+      setHostExited(missingWorkspace = false, failure): void {
         // Slice P7.14: the host dying is an anomalous end — hold a non-empty
         // queue paused so nothing drains silently once a new host connects.
         // The connection flip AWAY from "ready" already disables the drainer,
@@ -5326,6 +5891,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // GitHub #6: only the missing-folder refusal is terminal; every other
             // exit keeps the reconnecting path open, so the flag follows the call.
             workspaceMissing: missingWorkspace,
+            hostFailure: failure ?? null,
             queueInFlight: null,
             promptQueue,
             // Taskana 4772 review F3: the host is gone, so the turn is
@@ -5369,7 +5935,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         set((state) => {
           const entry = state.pendingSteers.find((e) => e.requestId === requestId);
           if (entry === undefined) return {};
-          const queueItem: QueuedPrompt = { id: crypto.randomUUID(), text: entry.sentMessage.text, images: entry.sentMessage.images };
+          const queueItem: QueuedPrompt = { id: requestId, text: entry.sentMessage.text, images: entry.sentMessage.images };
           const at = index !== undefined && index >= 0 && index <= state.promptQueue.length ? index : state.promptQueue.length;
           const promptQueue = [...state.promptQueue.slice(0, at), queueItem, ...state.promptQueue.slice(at)];
           // Opus2 F1 (2026-10-24): mark the id seen — the host may STILL emit
@@ -5582,7 +6148,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         }
         const head = promptQueue[takeIndex]!;
         const rest = [...promptQueue.slice(0, takeIndex), ...promptQueue.slice(takeIndex + 1)];
-        set({ promptQueue: rest, queueInFlight: { requestId, item: head } });
+        const sendId = get().steerRequeueSeen.includes(head.id) ? head.id : requestId;
+        set({ promptQueue: rest, queueInFlight: { requestId: sendId, item: head } });
         return head;
       },
 

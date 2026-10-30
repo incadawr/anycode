@@ -413,6 +413,8 @@ export type ChildHistoryResult =
 declare global {
   interface Window {
     anycode: {
+      tabBootstrap(): Promise<import("../../shared/tabs.js").TabBootstrap>;
+      selectTab(tabId: string): void;
       createTab(request: CreateTabRequest): Promise<CreateTabResult>;
       closeTab(tabId: string): Promise<CloseTabResult>;
       // TASK.106 cut-2: re-bind a running tab's session to another provider
@@ -643,6 +645,7 @@ declare global {
       // Taskana 4758: the Settings scope dropdown's folder list (opaque ids only).
       scopeWorkspaces: {
         list(): Promise<ScopeWorkspacesListResult>;
+        resolve(ref: string): Promise<string | null>;
       };
       // Taskana 4759: "Full browser access" per session. Only the user can set it (the
       // main window's sender is checked); set/get resolve the EFFECTIVE value.

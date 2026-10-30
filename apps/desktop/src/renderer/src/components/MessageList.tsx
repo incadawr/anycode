@@ -31,6 +31,7 @@ import { isReplaySurface, replayStore } from "../replay.js";
 import { matchCheckpointsToTurns } from "./checkpoint-model.js";
 import { ChildReportBlock } from "./ChildReportBlock.js";
 import { AgentMessageStack } from "./AgentMessageStack.js";
+import { CompactionCard, compactionRowText } from "./CompactionCard.js";
 import { COMPOSER_INSERT_EVENT } from "./Composer.js";
 import { ImageViewer } from "./ImageViewer.js";
 import { Markdown } from "./Markdown.js";
@@ -47,7 +48,7 @@ import {
 import { PreviewConsoleRow } from "./PreviewConsoleRow.js";
 import { ToolCallCard } from "./ToolCallCard.js";
 import { ToolCallStack } from "./ToolCallStack.js";
-import { WorkingRow, formatElapsed, getTurnStartedAt } from "./WorkingRow.js";
+import { WorkingRow, formatElapsed } from "./WorkingRow.js";
 import { formatBlockTime } from "../block-time.js";
 import { formatUsageLimitReset } from "../provider-notices.js";
 
@@ -380,39 +381,11 @@ export const STARTER_CHIPS: readonly { label: string; insert: string }[] = [
 ];
 
 /**
- * The one line a compaction card shows (TASK.227). Kept a pure function of the
- * block so the wording is pinnable without mounting the list, and so the three
- * states read as one decision rather than three nested ternaries in JSX.
- *
- * Running says which compaction it is, because the two have different causes a
- * user needs to tell apart: one they asked for, one the context window forced.
- * Done reports the available readings without inventing a post-compaction size.
- *
- * The not-ok branch never says "failed": `compaction_end` carries one `error`
- * string for both outcomes, and the commonest one is a deliberate no-op
- * (context/manager.ts's empty-prefix return, whose own comment reads "nothing
- * to compact. Not a failure."). Calling that a failure would be a claim the
- * wire does not support — the CLI hedges the same ambiguity as "compaction
- * skipped/failed" (cli/render.ts). "Not applied" states the one thing that IS
- * certain of both, and leaves the verb to the host's own reason instead of
- * stuttering over it ("skipped/failed: compaction skipped: …", live 07.09).
+ * Re-exported for the renderer's tests and for the store-side wording pins: the
+ * row text now lives with the card that renders it (CompactionCard.tsx,
+ * GitHub #36), which is where the expandable detail view needs it too.
  */
-export function compactionRowText(block: Extract<TranscriptBlock, { kind: "compaction" }>): string {
-  if (block.status === "running") {
-    return block.trigger === "auto"
-      ? "Context window full — compacting conversation…"
-      : "Compacting conversation…";
-  }
-  if (block.status === "failed") {
-    return `Compaction not applied: ${block.error ?? "unknown error"}`;
-  }
-  if (block.postTokens === undefined) return block.preTokens === undefined
-    ? "Conversation compacted"
-    : `Conversation compacted (before: ${block.preTokens} tokens)`;
-  const pre = block.preTokens ?? "?";
-  const post = block.postTokens ?? "?";
-  return `Conversation compacted: ${pre} → ${post} tokens`;
-}
+export { compactionRowText };
 
 /**
  * Empty-state gate: zero blocks, no running turn (a running zero-block turn
@@ -483,28 +456,15 @@ export function needsSnap(
   return !isAtBottom(scrollTop, scrollHeight, clientHeight, 0);
 }
 
-/**
- * "(failed after N attempts)" terminal error-card suffix (TASK.33 W8) —
- * mirrors `cli/render.ts`'s error-line wording verbatim (same event.retry
- * shape, same "only surfaced when at least one retry actually happened"
- * gate) so the desktop and CLI report an identical failure the same way.
- * Exported for unit testing.
- */
+/** Human-readable retry count and output-boundary explanation. */
 export function formatErrorRetrySuffix(retry: ErrorRetryMeta | undefined): string {
-  return retry && retry.attemptsMade > 0
-    ? ` (failed after ${retry.attemptsMade} attempt${retry.attemptsMade === 1 ? "" : "s"})`
+  const suffix = retry && retry.attemptsMade > 0
+    ? ` (after ${retry.attemptsMade} automatic retr${retry.attemptsMade === 1 ? "y" : "ies"})`
     : "";
+  return suffix + (retry?.replayStopped ? " Stream interrupted after output began; automatic retry stopped." : "");
 }
 
-/**
- * One `stream_retry` transcript line's text (TASK.33 W8) — mirrors
- * `cli/render.ts`'s `[retry N/M in Xms: reason]` wording. Exported for unit
- * testing.
- *
- * Taskana 4772 review F5: `waitedMs` (a retry after a recovered network
- * wait) renders as "now (network back after N s)" — the wait duration was
- * already spent, never a pending delay.
- */
+/** A retry line includes the delay or elapsed network recovery time. */
 export function formatStreamRetryLine(
   attempt: number,
   maxAttempts: number,
@@ -523,13 +483,9 @@ export function formatDelaySeconds(delayMs: number): string {
   return `${(delayMs / 1000).toFixed(1)} s`;
 }
 
-/**
- * `N/M`, or just `N` once the attempt is past the announced total: a retry
- * granted by the transient-network budget (Taskana 4705) can outlive maxRetries,
- * and "9/8" would be a lie.
- */
-export function formatRetryAttempt(attempt: number, maxAttempts: number): string {
-  return attempt > maxAttempts ? `${attempt}` : `${attempt}/${maxAttempts}`;
+/** Show the retry ordinal without implying another retry is guaranteed. */
+export function formatRetryAttempt(attempt: number, _maxAttempts: number): string {
+  return `${attempt}`;
 }
 
 /**
@@ -953,9 +909,7 @@ export function MessageList({
   }
   const last = blocks.length > 0 ? blocks[blocks.length - 1] : undefined;
   const showWorkingRow = running && !isTailLive(last);
-  // Query the clock on EVERY running render (not just when the row shows) so
-  // the turn-start stamp anchors before the first suppression gap ends.
-  const startedAt = running && turn.turnId !== null ? getTurnStartedAt(turn.turnId) : null;
+  const startedAt = running ? turn.startedAt ?? null : null;
 
   return (
     <div
@@ -1211,18 +1165,11 @@ export function MessageList({
             // only a toast that the next notice overwrites. Appended running
             // and patched in place when it ends — a tool_call's pending->result
             // shape, in the register the other system rows already use.
+            // GitHub #36: the row is now a disclosure over the resulting
+            // summary and the prompt that produced it, so the card owns its
+            // own body/alert wrapper (CompactionCard.tsx).
             case "compaction":
-              return (
-                <div
-                  key={block.id}
-                  data-block-id={block.id}
-                  data-compaction-status={block.status}
-                  className={`message ${block.status === "failed" ? "message-error" : "message-loop-end"}${enterClass(block.id)}`}
-                  {...(block.status === "failed" ? { role: "alert" as const } : {})}
-                >
-                  {compactionRowText(block)}
-                </div>
-              );
+              return <CompactionCard key={block.id} block={block} enter={enterIds.has(block.id)} />;
             case "output_truncated":
               return (
                 <div key={block.id} className="message message-error" role="alert">

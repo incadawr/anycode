@@ -276,7 +276,7 @@ describe("renderEvent — colored output (design §3.2 palette, §5.2 item 4)", 
         safe: { code: "connect_timeout", message: "connect timeout" },
       },
     ]);
-    expect(text).toBe("\n[error] connect timeout [connect_timeout] (failed after 3 attempts)\n");
+    expect(text).toBe("\n[error] connect timeout [connect_timeout] (after 3 automatic retries)\n");
   });
 
   it("singularizes the suffix for a single attempt", () => {
@@ -288,7 +288,7 @@ describe("renderEvent — colored output (design §3.2 palette, §5.2 item 4)", 
         safe: { code: "network", message: "network error" },
       },
     ]);
-    expect(text).toBe("\n[error] network error [network] (failed after 1 attempt)\n");
+    expect(text).toBe("\n[error] network error [network] (after 1 automatic retry)\n");
   });
 
   it("omits the suffix when retry metadata is present but no retry actually happened (attemptsMade: 0)", () => {
@@ -643,14 +643,27 @@ describe("renderEvent — reasoning rendering (design §3.4, §5.2 item 4)", () 
   const end: AgentEvent = { type: "reasoning_end", id: "r-1" };
 
   it("renders header + text + trailing newline when transcript.reasoning is on (no-color)", () => {
-    const text = collect([start, delta, end], NOCOLOR, { reasoning: true });
+    const text = collect([start, delta, end, { type: "finish", finishReason: "stop", usage: {} }], NOCOLOR, { reasoning: true }).split("\n[usage]")[0];
     expect(text).toBe("\n[reasoning]\nthinking about it\n");
     expect(text).not.toContain("\x1b[");
   });
 
   it("renders header + text + trailing newline when transcript.reasoning is on (color, dim role)", () => {
-    const text = collect([start, delta, end], COLOR, { reasoning: true });
+    const text = collect([start, delta, end, { type: "text_start", id: "t" }], COLOR, { reasoning: true });
     expect(text).toBe("\x1b[2m\n[reasoning]\n\x1b[0m\x1b[2mthinking about it\x1b[0m\n");
+  });
+
+  it("streams reasoning immediately and marks a discarded attempt on retry", () => {
+    const transcript = { reasoning: true };
+    let text = "";
+    const write = (chunk: string) => { text += chunk; };
+    renderEvent(start, write, NOCOLOR, transcript);
+    renderEvent({ ...delta, text: "discard me" }, write, NOCOLOR, transcript);
+    expect(text).toBe("\n[reasoning]\ndiscard me");
+    renderEvent({ type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 1, reason: "network" }, write, NOCOLOR, transcript);
+    renderEvent(start, write, NOCOLOR, transcript);
+    renderEvent({ ...delta, text: "winner" }, write, NOCOLOR, transcript);
+    expect(text).toMatch(/discard me[\s\S]*discarded[\s\S]*retry[\s\S]*winner/);
   });
 
   it("renders nothing when transcript is absent", () => {
@@ -1253,13 +1266,13 @@ describe("stream_retry past the announced total (Taskana 4705 review)", () => {
 describe("stream_retry delay and waiting_for_network (Taskana 4772)", () => {
   it("renders the delay in seconds with one decimal, not raw float milliseconds", () => {
     expect(collect([{ type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 791.1655902966864, reason: "connect timeout" }], NOCOLOR)).toContain(
-      "[retry 1/8 in 0.8 s: connect timeout]",
+      "[retry 1 in 0.8 s: connect timeout]",
     );
     expect(collect([{ type: "stream_retry", attempt: 2, maxAttempts: 8, delayMs: 500, reason: "x" }], NOCOLOR)).toContain(
-      "[retry 2/8 in 0.5 s: x]",
+      "[retry 2 in 0.5 s: x]",
     );
     expect(collect([{ type: "stream_retry", attempt: 3, maxAttempts: 8, delayMs: 1500, reason: "x" }], NOCOLOR)).toContain(
-      "[retry 3/8 in 1.5 s: x]",
+      "[retry 3 in 1.5 s: x]",
     );
   });
 
@@ -1273,6 +1286,6 @@ describe("stream_retry delay and waiting_for_network (Taskana 4772)", () => {
   it("renders a recovered wait as retry-now with the wait duration, not a pending delay", () => {
     expect(
       collect([{ type: "stream_retry", attempt: 2, maxAttempts: 8, delayMs: 0, waitedMs: 812_400, reason: "connect timeout" }], NOCOLOR),
-    ).toContain("[retry 2/8 now (network back after 812.4 s): connect timeout]");
+    ).toContain("[retry 2 now (network back after 812.4 s): connect timeout]");
   });
 });

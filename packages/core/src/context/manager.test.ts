@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { COMPACTION_INSTRUCTION } from "../prompts/compaction.js";
 import { ContextManager, MICROCOMPACT_CLEARED_TEXT } from "./manager.js";
 import { ConversationHistory } from "./history.js";
 import { HeuristicTokenizer } from "./tokenizer.js";
@@ -567,8 +568,84 @@ describe("ContextManager.runCompaction — success", () => {
     }
   });
 
-  it("skips (ok:false) without a breaker hit when the prefix is empty", async () => {
+  it("reports what the swap left behind: the installed summary, its item id, the prompt and the model (GitHub #36)", async () => {
+    const messages: ChatMessage[] = [];
+    for (let t = 0; t < 6; t += 1) {
+      messages.push(userMsg(`turn ${t}`));
+      messages.push(assistantToolCall(`c${t}`));
+      messages.push(toolResult(`c${t}`, `result ${t}`));
+    }
+    const history = buildHistory(messages);
+    const port = Object.assign(new ScriptedModelPort(summaryScript("CONDENSED")), { modelId: "glm-5.3" });
+    const manager = makeManager(history, port, { keepRecentMessages: 4 });
+
+    const result = await manager.runCompaction({});
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The result describes the very item the swap installed — the durable link
+    // a transcript row follows, not a second copy of the text that could drift.
+    const installed = history.items[0]!;
+    expect(installed.kind).toBe("compact_summary");
+    expect(result.summaryItemId).toBe(installed.id);
+    expect(result.summary).toBe(installed.message.content);
+    expect(result.summary).toContain("CONDENSED");
+    // The prompt is the instruction core actually sent, and the model id is the
+    // constructed port's identity (not a provider claim about the response).
+    expect(result.prompt).toBe(COMPACTION_INSTRUCTION);
+    expect(port.requests[0]!.messages.at(-1)).toEqual({ role: "user", content: COMPACTION_INSTRUCTION });
+    expect(result.model).toBe("glm-5.3");
+  });
+
+  it("a port with no model id leaves the model field off instead of inventing one (GitHub #36)", async () => {
+    const messages: ChatMessage[] = [];
+    for (let t = 0; t < 6; t += 1) {
+      messages.push(userMsg(`turn ${t}`));
+      messages.push(assistantToolCall(`c${t}`));
+      messages.push(toolResult(`c${t}`, `result ${t}`));
+    }
+    const history = buildHistory(messages);
+    const manager = makeManager(history, new ScriptedModelPort(summaryScript("S")), { keepRecentMessages: 4 });
+
+    const result = await manager.runCompaction({});
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.model).toBeUndefined();
+  });
+
+  it("a FAILED summarization call still names the model that was asked (GitHub #36 review)", async () => {
+    const messages: ChatMessage[] = [];
+    for (let t = 0; t < 6; t += 1) {
+      messages.push(userMsg(`turn ${t}`));
+      messages.push(assistantToolCall(`c${t}`));
+      messages.push(toolResult(`c${t}`, `result ${t}`));
+    }
+    const history = buildHistory(messages);
+    // The port identifies itself before the call; a failed call must not lose
+    // that fact — the row would otherwise show a duration and no model.
+    const port = Object.assign(new ScriptedModelPort(errorScript()), { modelId: "glm-5.3" });
+    const manager = makeManager(history, port, { keepRecentMessages: 4 });
+
+    const result = await manager.runCompaction({});
+
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ prompt: COMPACTION_INSTRUCTION, model: "glm-5.3" });
+    expect("summary" in result).toBe(false);
+  });
+
+  it("a refused (skipped) compaction still reports the prompt it would have sent, and never a summary (GitHub #36)", async () => {
     const history = buildHistory([userMsg("only one turn")]);
+    const manager = makeManager(history, new ScriptedModelPort(summaryScript("S")), { keepRecentMessages: 10 });
+
+    const result = await manager.runCompaction({});
+
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ prompt: COMPACTION_INSTRUCTION });
+    expect("summary" in result).toBe(false);
+  });
+
+  it("skips (ok:false) without a breaker hit when the prefix is empty", async () => {    const history = buildHistory([userMsg("only one turn")]);
     const manager = makeManager(history, new ScriptedModelPort(summaryScript("S")), {
       keepRecentMessages: 10,
     });
@@ -993,4 +1070,43 @@ describe("runCompaction mid-stream replay (Taskana 4705 review)", () => {
     expect(content).toContain("CONDENSED");
     expect(content).not.toContain("STALE");
   });
+});
+
+
+describe("request overhead and model anchors", () => {
+  it("uses live overhead only without an anchor and keeps history deltas across budget changes", () => {
+    const history = buildHistory([]);
+    let overhead = 120;
+    const manager = new ContextManager({ history, tokenizer: new HeuristicTokenizer(), modelPort: new ScriptedModelPort([]), config: { ...DEFAULT_CONTEXT_BUDGET }, requestOverheadTokens: () => overhead });
+    expect(manager.estimate()).toEqual({ tokens: 120, source: "estimate" });
+    history.append(userMsg("hello world"));
+    const baseline = history.totalTokenEstimate();
+    expect(manager.estimate().tokens).toBe(baseline + 120);
+    manager.noteUsage({ inputTokens: 500 });
+    overhead = 200;
+    history.append(userMsg("more history"));
+    const delta = history.totalTokenEstimate() - baseline;
+    manager.setBudgetConfig({ ...DEFAULT_CONTEXT_BUDGET, contextWindowTokens: 100_000 });
+    expect(manager.estimate()).toEqual({ tokens: 500 + delta, source: "provider" });
+    manager.invalidateProviderAnchor();
+    expect(manager.estimate()).toEqual({ tokens: history.totalTokenEstimate() + 200, source: "estimate" });
+    manager.noteUsage({ inputTokens: 900 });
+    expect(manager.estimate()).toEqual({ tokens: 900, source: "provider" });
+  });
+
+  it("applies overhead to compaction pressure and the post-compaction estimate", async () => {
+    const history = buildHistory([userMsg("first"), userMsg("second"), userMsg("third")]);
+    const config = { ...DEFAULT_CONTEXT_BUDGET, contextWindowTokens: 1000, outputReserveTokens: 0, compactBufferTokens: 0, compactThresholdPercent: 50, keepRecentMessages: 1 };
+    let overhead = 0;
+    const manager = new ContextManager({ history, tokenizer: new HeuristicTokenizer(), modelPort: new ScriptedModelPort(summaryScript("summary")), config, requestOverheadTokens: () => overhead });
+    expect(manager.shouldAutoCompact()).toBe(false);
+    overhead = 600;
+    expect(manager.shouldAutoCompact()).toBe(true);
+    manager.noteUsage({ inputTokens: 900 });
+    const result = await manager.runCompaction({});
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.postTokens).toBe(history.totalTokenEstimate() + 600);
+    expect(manager.estimate()).toEqual({ tokens: history.totalTokenEstimate() + 600, source: "estimate" });
+  });
+
 });

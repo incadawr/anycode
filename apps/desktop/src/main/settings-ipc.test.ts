@@ -332,6 +332,34 @@ it("persists, changes, validates, and clears per-connection pricing", async () =
   expect(snapshot.settings.provider.connections[0]?.pricing).toBeUndefined();
 });
 
+it("round trips independent model prices and preserves unrelated overrides", async () => {
+  const deps = makeDeps({ catalogIds: CATALOG_IDS });
+  const a = { input: 1, cachedInput: 0, output: 2 };
+  const b = { input: 3, cachedInput: 1, output: 4 };
+  expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", contextWindowTokens: 8192, modelPricing: { a, b } })).ok).toBe(true);
+  expect((await handleGet(deps)).settings.provider.connections[0]?.modelOverrides).toMatchObject({ a: { pricing: a, contextWindowTokens: 8192 }, b: { pricing: b } });
+  expect(await handleConnectionUpdate(deps, { id: "conn-1", modelPricing: { a: { ...a, input: -1 } } })).toEqual({ ok: false, reason: "invalid" });
+  expect((await handleConnectionUpdate(deps, { id: "conn-1", modelPricing: { a: "" } })).ok).toBe(true);
+  expect((await handleGet(deps)).settings.provider.connections[0]?.modelOverrides).toEqual({ a: { contextWindowTokens: 8192 }, b: { pricing: b } });
+});
+
+it("round trips special model ids through create, update, and clear", async () => {
+  const deps = makeDeps({ catalogIds: CATALOG_IDS });
+  const rates = { input: 1, cachedInput: 0, output: 2 };
+  const modelPricing = Object.fromEntries([["__proto__", rates]]);
+  expect((await handleConnectionCreate(deps, { providerId: "z-ai", modelPricing })).ok).toBe(true);
+  let overrides = (await handleGet(deps)).settings.provider.connections[0]?.modelOverrides;
+  expect(Object.hasOwn(overrides!, "__proto__")).toBe(true);
+  expect(overrides!["__proto__"]?.pricing).toEqual(rates);
+  const updated = { ...rates, output: 4 };
+  expect((await handleConnectionUpdate(deps, { id: "conn-1", modelPricing: Object.fromEntries([["__proto__", updated]]) })).ok).toBe(true);
+  overrides = (await handleGet(deps)).settings.provider.connections[0]?.modelOverrides;
+  expect(Object.hasOwn(overrides!, "__proto__")).toBe(true);
+  expect(overrides!["__proto__"]?.pricing).toEqual(updated);
+  expect((await handleConnectionUpdate(deps, { id: "conn-1", modelPricing: Object.fromEntries([["__proto__", ""]]) })).ok).toBe(true);
+  expect(Object.hasOwn((await handleGet(deps)).settings.provider.connections[0]?.modelOverrides ?? {}, "__proto__")).toBe(false);
+});
+
 // GitHub #15: the opt-in prompt-cache policy is per-connection state with the
 // same lifecycle as `pricing`/`maxOutputTokens` — set on create, kept when the
 // update omits it, deleted by the `""` sentinel, and refused at the IPC
@@ -2735,8 +2763,8 @@ describe("connection maxOutputTokens CRUD (TASK.150) — bounded at the IPC boun
   });
 });
 
-describe("connection contextWindowTokens CRUD (TASK.142) — bounded pair at the IPC boundary, server-derived binding", () => {
-  it("create persists the numeric window AND the binding derived from the effective model", async () => {
+describe("connection contextWindowTokens CRUD — bounded model override at the IPC boundary", () => {
+  it("create persists the numeric window under the effective model", async () => {
     const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
       providerId: "z-ai",
       model: "on-prem-8b",
@@ -2745,8 +2773,8 @@ describe("connection contextWindowTokens CRUD (TASK.142) — bounded pair at the
     expect(res.ok).toBe(true);
 
     const loaded = await loadSettings(settingsPath);
-    expect(loaded.settings.provider.connections[0]?.contextWindowTokens).toBe(8192);
-    expect(loaded.settings.provider.connections[0]?.contextWindowModel).toBe("on-prem-8b");
+    expect(loaded.settings.provider.connections[0]?.modelOverrides?.["on-prem-8b"]?.contextWindowTokens).toBe(8192);
+    expect(loaded.settings.provider.connections[0]?.contextWindowModel).toBeUndefined();
   });
 
   it("create with no contextWindowTokens leaves both keys off disk entirely", async () => {
@@ -2796,8 +2824,8 @@ describe("connection contextWindowTokens CRUD (TASK.142) — bounded pair at the
     expect(res.ok).toBe(true);
 
     const loaded = await loadSettings(settingsPath);
-    expect(loaded.settings.provider.connections[0]?.contextWindowTokens).toBe(8192);
-    expect(loaded.settings.provider.connections[0]?.contextWindowModel).toBe("stored-model");
+    expect(loaded.settings.provider.connections[0]?.modelOverrides?.["stored-model"]?.contextWindowTokens).toBe(8192);
+    expect(loaded.settings.provider.connections[0]?.contextWindowModel).toBeUndefined();
   });
 
   it("update derives the binding from the request's model when the model changes in the same call", async () => {
@@ -2810,8 +2838,8 @@ describe("connection contextWindowTokens CRUD (TASK.142) — bounded pair at the
     expect(res.ok).toBe(true);
 
     const loaded = await loadSettings(settingsPath);
-    expect(loaded.settings.provider.connections[0]?.contextWindowTokens).toBe(16384);
-    expect(loaded.settings.provider.connections[0]?.contextWindowModel).toBe("new-model");
+    expect(loaded.settings.provider.connections[0]?.modelOverrides?.["new-model"]?.contextWindowTokens).toBe(16384);
+    expect(loaded.settings.provider.connections[0]?.contextWindowModel).toBeUndefined();
   });
 
   it('update with the "" sentinel deletes BOTH keys from disk', async () => {
@@ -2829,7 +2857,7 @@ describe("connection contextWindowTokens CRUD (TASK.142) — bounded pair at the
     expect(Object.hasOwn(conn, "contextWindowModel")).toBe(false);
   });
 
-  it("update without the field leaves both saved keys untouched", async () => {
+  it("update without the field preserves the saved model override", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
       providerId: "z-ai",
       model: "on-prem-8b",
@@ -2839,13 +2867,13 @@ describe("connection contextWindowTokens CRUD (TASK.142) — bounded pair at the
     expect(res.ok).toBe(true);
 
     const loaded = await loadSettings(settingsPath);
-    expect(loaded.settings.provider.connections[0]?.contextWindowTokens).toBe(8192);
-    expect(loaded.settings.provider.connections[0]?.contextWindowModel).toBe("on-prem-8b");
+    expect(loaded.settings.provider.connections[0]?.modelOverrides?.["on-prem-8b"]?.contextWindowTokens).toBe(8192);
+    expect(loaded.settings.provider.connections[0]?.contextWindowModel).toBeUndefined();
   });
 
   // A model-only edit is not a window edit: the pair stays as saved, and it is
   // the EMISSION gate that makes the now-stale binding inert (the next test).
-  it("a model-only update leaves the saved pair unchanged (the stale binding is made inert at emission, not here)", async () => {
+  it("a model-only update preserves the old model override without applying it to the new model", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
       providerId: "z-ai",
       model: "model-a",
@@ -2855,8 +2883,8 @@ describe("connection contextWindowTokens CRUD (TASK.142) — bounded pair at the
     expect(res.ok).toBe(true);
 
     const loaded = await loadSettings(settingsPath);
-    expect(loaded.settings.provider.connections[0]?.contextWindowTokens).toBe(8192);
-    expect(loaded.settings.provider.connections[0]?.contextWindowModel).toBe("model-a");
+    expect(loaded.settings.provider.connections[0]?.modelOverrides?.["model-a"]?.contextWindowTokens).toBe(8192);
+    expect(loaded.settings.provider.connections[0]?.contextWindowModel).toBeUndefined();
     // ...and the stale pair cannot govern model-b: host-env emits NEITHER half.
     const env = await buildHostEnv({
       bootEnv: { ANYCODE_API_KEY: "sk-x" },
@@ -4860,4 +4888,123 @@ describe("settings-set — browser.fullAccessDefault (Taskana 4759)", () => {
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.snapshot.settings.browser?.fullAccessDefault).not.toBe("on");
   });
+});
+
+
+describe("per-model overrides (GitHub #26)", () => {
+  it("persists exact effort levels independently and clears them with reasoning support", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", effortLevels: ["low", "high", "low"], contextWindowTokens: 64000 })).ok).toBe(true);
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", modelOverrideModel: "constructor", effortLevels: ["xhigh"] })).ok).toBe(true);
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", effortLevels: [] })).ok).toBe(false);
+    let saved = (await loadSettings(settingsPath)).settings.provider.connections[0];
+    expect(saved?.modelOverrides?.a).toEqual({ effortLevels: ["low", "high"], contextWindowTokens: 64000 });
+    expect(saved?.modelOverrides?.constructor).toEqual({ effortLevels: ["xhigh"] });
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", reasoningSupported: "" })).ok).toBe(true);
+    saved = (await loadSettings(settingsPath)).settings.provider.connections[0];
+    expect(saved?.modelOverrides?.a).toEqual({ contextWindowTokens: 64000 });
+    expect(saved?.modelOverrides?.constructor).toEqual({ effortLevels: ["xhigh"] });
+  });
+
+  it("drops only a malformed saved vocabulary while preserving the model's other settings", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", contextWindowTokens: 64000 });
+    const raw = JSON.parse(await readFile(settingsPath, "utf8"));
+    raw.provider.connections[0].modelOverrides.a.effortLevels = ["high", "invalid"];
+    await writeFile(settingsPath, JSON.stringify(raw));
+    const saved = (await loadSettings(settingsPath)).settings.provider.connections[0];
+    expect(saved?.modelOverrides?.a).toEqual({ contextWindowTokens: 64000 });
+  });
+
+  it("keeps two windows and effort choices across switches, restarts, and a targeted clear", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", contextWindowTokens: 128000, reasoningEffort: "max" })).ok).toBe(true);
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", model: "b", contextWindowTokens: 64000, reasoningEffort: "low" })).ok).toBe(true);
+    const boot = async (model: string) => {
+      expect((await handleConnectionUpdate(deps, { id: "conn-1", model })).ok).toBe(true);
+      const { settings } = await loadSettings(settingsPath);
+      return buildHostEnv({ bootEnv: { ANYCODE_API_KEY: "fake" }, settings, getSecret: async () => undefined });
+    };
+    expect(await boot("a")).toMatchObject({ ANYCODE_MODEL: "a", ANYCODE_CONTEXT_WINDOW: "128000", ANYCODE_REASONING_EFFORT: "max" });
+    expect(await boot("b")).toMatchObject({ ANYCODE_MODEL: "b", ANYCODE_CONTEXT_WINDOW: "64000", ANYCODE_REASONING_EFFORT: "low" });
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", contextWindowTokens: "" })).ok).toBe(true);
+    const saved = JSON.parse(await readFile(settingsPath, "utf8")).provider.connections[0];
+    expect(saved.modelOverrides).toEqual({ a: { contextWindowTokens: 128000, reasoningEffort: "max" }, b: { reasoningEffort: "low" } });
+    expect(saved).not.toHaveProperty("contextWindowTokens");
+    expect(saved).not.toHaveProperty("contextWindowModel");
+    expect(saved).not.toHaveProperty("reasoningEffort");
+  });
+
+  it("an effort change from another tab targets its own model without retargeting the connection default", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", reasoningEffort: "max" });
+    await handleConnectionUpdate(deps, { id: "conn-1", modelOverrideModel: "b", reasoningEffort: "low" });
+    const saved = (await loadSettings(settingsPath)).settings.provider.connections[0];
+    expect(saved?.model).toBe("a");
+    expect(saved?.modelOverrides).toEqual({ a: { reasoningEffort: "max" }, b: { reasoningEffort: "low" } });
+  });
+
+  it("migrates the legacy window and preserves the legacy effort as a fallback without overwriting a map entry", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "b" });
+    const raw = JSON.parse(await readFile(settingsPath, "utf8"));
+    Object.assign(raw.provider.connections[0], { contextWindowTokens: 32000, contextWindowModel: "a", reasoningEffort: "high", modelOverrides: { a: { contextWindowTokens: 128000 } } });
+    await writeFile(settingsPath, JSON.stringify(raw));
+    await handleConnectionUpdate(deps, { id: "conn-1", model: "b", contextWindowTokens: 64000 });
+    const { settings } = await loadSettings(settingsPath);
+    expect(settings.provider.connections[0]?.modelOverrides).toEqual({ a: { contextWindowTokens: 128000 }, b: { contextWindowTokens: 64000 } });
+    const env = await buildHostEnv({ bootEnv: { ANYCODE_API_KEY: "fake", ANYCODE_MODEL: "a" }, settings, getSecret: async () => undefined });
+    expect(env).toMatchObject({ ANYCODE_CONTEXT_WINDOW: "128000", ANYCODE_REASONING_EFFORT: "high" });
+    const disk = JSON.parse(await readFile(settingsPath, "utf8")).provider.connections[0];
+    expect(disk).not.toHaveProperty("contextWindowTokens");
+    expect(disk.reasoningEffort).toBe("high");
+  });
+
+  it("reads a legacy-only pair into the map and drops just invalid fields of a malformed sibling", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "a" });
+    const raw = JSON.parse(await readFile(settingsPath, "utf8"));
+    Object.assign(raw.provider.connections[0], { contextWindowTokens: 32000, contextWindowModel: "a", modelOverrides: { b: { contextWindowTokens: "bad", reasoningEffort: "low" } } });
+    await writeFile(settingsPath, JSON.stringify(raw));
+    const { settings, corruptBackupPath } = await loadSettings(settingsPath);
+    expect(corruptBackupPath).toBeUndefined();
+    expect(settings.provider.connections[0]?.modelOverrides).toEqual({ a: { contextWindowTokens: 32000 }, b: { reasoningEffort: "low" } });
+  });
+
+  it("uses the env-selected model's own settings and keeps an explicit shell effort authoritative", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", reasoningEffort: "max" });
+    await handleConnectionUpdate(deps, { id: "conn-1", modelOverrideModel: "b", reasoningEffort: "low", contextWindowTokens: 64000 });
+    const { settings } = await loadSettings(settingsPath);
+    const bootEnv = { ANYCODE_API_KEY: "fake", ANYCODE_MODEL: "b" };
+    expect(await buildHostEnv({ bootEnv, settings, getSecret: async () => undefined })).toMatchObject({ ANYCODE_CONTEXT_WINDOW: "64000", ANYCODE_REASONING_EFFORT: "low" });
+    expect(await buildHostEnv({ bootEnv: { ...bootEnv, ANYCODE_REASONING_EFFORT: "high" }, settings, getSecret: async () => undefined })).toMatchObject({ ANYCODE_REASONING_EFFORT: "high" });
+  });
+});
+
+
+it("a session context-window patch preserves the default model, image override, and other connection metadata", async () => {
+  const deps = makeDeps({ catalogIds: CATALOG_IDS });
+  await handleConnectionCreate(deps, {
+    providerId: "z-ai", model: "a", label: "Keep this label", imageInputOverride: "on",
+    reasoningEffort: "max", maxOutputTokens: 32768, contextWindowTokens: 128000,
+  });
+  const before = (await loadSettings(settingsPath)).settings.provider.connections[0]!;
+  const updated = await handleConnectionUpdate(deps, { id: "conn-1", modelOverrideModel: "b", contextWindowTokens: 96000 });
+  expect(updated.ok).toBe(true);
+  const after = (await loadSettings(settingsPath)).settings.provider.connections[0]!;
+  expect(after).toEqual({ ...before, modelOverrides: { ...before.modelOverrides, b: {contextWindowTokens: 96000} } });
+  expect(after.model).toBe("a");
+  expect(after.imageInputOverride).toBe("on");
+  expect(after.imageInputModel).toBe("a");
+});
+
+
+it("persists and reloads an override for every accepted exact model id", async () => {
+  const deps = makeDeps({catalogIds:CATALOG_IDS});
+  await handleConnectionCreate(deps, {providerId:"z-ai", model:"a"});
+  expect((await handleConnectionUpdate(deps, {id:"conn-1", modelOverrideModel:"__proto__", contextWindowTokens:128000})).ok).toBe(true);
+  const map = (await loadSettings(settingsPath)).settings.provider.connections[0]!.modelOverrides!;
+  expect(Object.hasOwn(map, "__proto__")).toBe(true);
+  expect(map["__proto__"]?.contextWindowTokens).toBe(128000);
 });

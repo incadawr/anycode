@@ -36,10 +36,10 @@ protocol AnyCode's Codex adapter is built against (design
 
 ## Supported version ceiling
 
-`<0.166.0` (mirrors `SUPPORTED_CODEX_VERSION` in
+`<0.167.0` (mirrors `SUPPORTED_CODEX_VERSION` in
 `host/engines/codex/protocol.ts`). TASK.173 (owner decision, 2026-08-29)
 dropped the floor this used to pair with: support is a single ceiling, not a
-closed range, so any codex-cli build below 0.166.0 is accepted by version
+closed range, so any codex-cli build below 0.167.0 is accepted by version
 number alone, however old. A build genuinely too old to speak the CONSUMED
 wire shapes fails on its own later, at whichever call first needs a shape it
 lacks, instead of being preemptively refused here. The Codex CLI's TypeScript
@@ -135,6 +135,18 @@ are identical; no existing fields or variants changed or were removed. Account
 verification accepts any non-null account, and error translation uses the
 message independently of the error code. Both behaviors have regression tests.
 Layer 2 passes against the real 0.165.0 binary. The live GUI smoke is pending.
+
+## 0.166.0 verification (2026-10-29)
+
+The real 0.165.0 and 0.166.0 extracts have identical consumed methods and
+approval decision enums; no existing fields or variants were removed. The
+changes add optional `Account.chatgpt.workspaceName`, `ThreadItem` lifecycle
+`startedAtMs` / `completedAtMs`, `imageGeneration.generationId`, and
+`ThreadUsage.nativeUsageUsdMicros`, plus the `policyCapacityUnavailable`
+`CodexErrorInfo` value. The adapter does not consume those fields; it accepts
+non-null accounts, ignores extra item fields, and translates errors by message
+independently of the code. Regression tests cover these behaviors. Layer 2
+passes against the real 0.166.0 binary. The live GUI smoke is pending.
 
 ## Raising the ceiling / updating the pin
 

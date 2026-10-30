@@ -28,6 +28,7 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, u
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { useStore } from "zustand";
 import { startConnectionManager } from "./port.js";
+import { startTabBootstrap } from "./tab-bootstrap.js";
 import { useTabsStore } from "./tabs-store.js";
 import { tabRegistry, type DesktopStoreApi } from "./tab-registry.js";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "./tab-context.js";
@@ -86,7 +87,7 @@ import {
 import { projectChildSplitRows } from "./child-split-projection.js";
 import { projectChildHistoryResult, type ChildHistoryResult, type ChildHistoryViewState } from "./child-history.js";
 import { ChildSplitPane, type ChildSplitRow } from "./components/ChildSplitPane.js";
-import { canSplit, clampDockWidth, computeDockMode, derivePreviewTabs, DOCK_HANDLE_PX, type DockMode } from "./dock/dock-layout.js";
+import { canSplit, clampDockWidth, computeDockMode, derivePreviewTabs, dockMinWidth, DOCK_HANDLE_PX, type DockMode } from "./dock/dock-layout.js";
 import { selectDockOpenFor, selectDockView, useDockStore } from "./dock/dock-store.js";
 import { isSessionBusy, type SubagentSubStatus, type TranscriptBlock } from "./store.js";
 import "./settings.css";
@@ -361,6 +362,7 @@ export function SessionSurface({ tabId, onToast, suppressPermissionModal = false
   const todoReminderState = useTabStore((state) => state.todoReminderState);
   const turn = useTabStore((state) => state.turn);
   const lastFatal = useTabStore((state) => state.lastFatal);
+  const hostFailure = useTabStore((state) => state.hostFailure);
   // GitHub #6: the terminal missing-folder condition — the only case where the
   // banner drops the connection lines instead of reporting a reconnect.
   const workspaceMissing = useTabStore((state) => state.workspaceMissing);
@@ -439,7 +441,8 @@ export function SessionSurface({ tabId, onToast, suppressPermissionModal = false
   return (
     <>
       <div className="session-conversation">
-        <HostBanner connection={connection} lastFatal={lastFatal} workspaceMissing={workspaceMissing} />
+        <ApprovalStatus />
+        <HostBanner connection={connection} lastFatal={lastFatal} workspaceMissing={workspaceMissing} hostFailure={hostFailure} />
 
         <MessageList
           key={tabId}
@@ -542,6 +545,13 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
     if (childView.kind === "split") return effectiveChildId(childView.expandedId);
     return undefined;
   })();
+  useEffect(() => {
+    if (parentSessionId && focusedChildId) {
+      const childSessionId = childSessionIdOf(focusedChildId);
+      if (childSessionId) childRelationStore.getState().dismissFinishedApprovals(parentSessionId, childSessionId);
+      else childRelationStore.getState().dismissApprovalExpired(parentSessionId, focusedChildId);
+    }
+  }, [parentSessionId, focusedChildId]);
   const childRelation = childRelationStore((state) =>
     focusedChildId !== undefined && parentSessionId !== null && parentSessionId !== undefined
       ? state.getRelation(parentSessionId, focusedChildId)
@@ -637,10 +647,13 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
     typeof window === "undefined" ? 1280 : (document.querySelector(".session-content") as HTMLElement | null)?.getBoundingClientRect().width || window.innerWidth,
   );
   const dockMode: DockMode = computeDockMode(availableWidth);
-  const effectiveDockWidth = clampDockWidth(dockWidth, availableWidth);
+  const splitTabId = useDockStore((state) => selectDockView(state, tabId).splitTabId);
+  // GitHub #31 review: while a split pane is pinned, the dock's floor rises
+  // to DOCK_WIDTH_MIN + DOCK_SPLIT_MIN_PX — the pinned pane (absolute, 320px,
+  // over the dock body's right) must never cover the active pane entirely.
+  const effectiveDockWidth = clampDockWidth(dockWidth, availableWidth, dockMinWidth(splitTabId !== null));
   // Stage 2 (§3): the split gate over the SAME measured available width.
   const canSplitNow = canSplit(availableWidth);
-  const splitTabId = useDockStore((state) => selectDockView(state, tabId).splitTabId);
   // The dock participates in the grid only in column mode — drawer mode is
   // an absolute overlay (conversation full width).
   const splitOpen = dockOpen && dockMode === "column";
@@ -695,26 +708,42 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
   // Taskana 4703: the ONE dock resize path (mirror of the retired
   // beginPreviewResize, now clamped live against the measured root width —
   // the boot-time clamp is the `effectiveDockWidth` computation above).
+  // GitHub #31 reviews: the drag tracks the INITIATING pointerId end to end
+  // — a second finger's moves are ignored, and only the initiating pointer's
+  // pointerup/pointercancel may end the drag (a foreign release once burned
+  // the once-listeners and persisted the width mid-drag). The clamp's floor
+  // follows the split (dockMinWidth): a pinned pane must never be squeezed
+  // over the active tab's body.
   function beginDockResize(event: ReactPointerEvent<HTMLDivElement>): void {
     event.preventDefault();
+    const pointerId = event.pointerId;
     const startX = event.clientX;
     const startWidth = effectiveDockWidth;
     const rootWidth = reviewRootRef.current?.getBoundingClientRect().width ?? window.innerWidth;
+    const minWidth = dockMinWidth(splitTabId !== null);
     let nextWidth = startWidth;
 
     function onMove(moveEvent: PointerEvent): void {
-      nextWidth = clampDockWidth(startWidth + startX - moveEvent.clientX, rootWidth);
+      if (moveEvent.pointerId !== pointerId) {
+        return;
+      }
+      nextWidth = clampDockWidth(startWidth + startX - moveEvent.clientX, rootWidth, minWidth);
       useDockStore.setState({ width: nextWidth });
     }
 
-    function onUp(): void {
+    function onUp(upEvent: PointerEvent): void {
+      if (upEvent.pointerId !== pointerId) {
+        return;
+      }
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
       useDockStore.getState().setWidth(nextWidth); // persists on resize-end
     }
 
     window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp, { once: true });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   }
 
   // Available-width tracking: the .session-content width changes on window
@@ -873,9 +902,10 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
     if (childRelation !== undefined && childRelation.live) {
       return (
         <>
+          <ApprovalStatus />
           <ConnectedPermissionModal />
-          {permissionForwarder}
           <ChildSessionPane
+            permissionForwarder={permissionForwarder}
             parentTabId={tabId}
             spawnToolCallId={childView.spawnToolCallId}
             relation={childRelation}
@@ -888,9 +918,10 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
     }
     return (
       <>
+        <ApprovalStatus />
         <ConnectedPermissionModal />
-        {permissionForwarder}
         <ChildHistoryPane
+          permissionForwarder={permissionForwarder}
           parentTabId={tabId}
           parentSessionId={parentSessionId}
           spawnToolCallId={childView.spawnToolCallId}
@@ -903,8 +934,8 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
 
   return (
     <>
-      {permissionForwarder}
       <SessionHeader sidebarCollapsed={sidebarCollapsed} onToggleSidebar={onToggleSidebar} onToast={onToast} />
+      {permissionForwarder}
 
       <div
         ref={attachReviewRoot}
@@ -919,6 +950,21 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
       >
         <SessionSurface tabId={tabId} onToast={onToast} />
 
+        {/* GitHub #31: the resize handle is a DIRECT grid child filling the
+            reserved 8px column (as before the dock refactor) — inside the
+            dock <aside> (a column flex) it collapsed to a 0px-tall strip
+            with no hit area. Column mode only; the drawer overlay is not
+            drag-resizable (same as the LSP overlay posture it mirrors). */}
+        {splitOpen && (
+          <div
+            className="review-resize-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize dock"
+            data-testid="dock-resize-handle"
+            onPointerDown={beginDockResize}
+          />
+        )}
         {/* Taskana 4703: ONE dock column replaces the git/preview/subagents
             stack. The mount gate is tabs+visible; drawer mode still mounts
             (absolute overlay) but leaves the grid untouched above. */}
@@ -926,7 +972,6 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
           <DockPanel
             mode={dockMode}
             width={effectiveDockWidth}
-            onResizeStart={beginDockResize}
             onToast={onToast}
             canSplitNow={canSplitNow}
             splitTabId={splitTabId}
@@ -948,6 +993,7 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
 }
 
 interface ChildSessionPaneProps {
+  permissionForwarder: ReactNode;
   parentTabId: string;
   spawnToolCallId: string;
   /** Guaranteed `live: true` by the caller above — ActiveTabBody only renders this while the child is live. */
@@ -975,6 +1021,7 @@ interface ChildSessionPaneProps {
  * the very next tick for that case.
  */
 function ChildSessionPane({
+  permissionForwarder,
   parentTabId,
   spawnToolCallId,
   relation,
@@ -1025,6 +1072,7 @@ function ChildSessionPane({
           Split
         </button>
       </header>
+      {permissionForwarder}
 
       <div className="session-content">
         {childStore ? (
@@ -1040,6 +1088,7 @@ function ChildSessionPane({
 }
 
 interface ChildHistoryPaneProps {
+  permissionForwarder: ReactNode;
   parentTabId: string;
   /** The master's own sessionId (ambient — NEVER a card-payload id, CUT-S2 §2.3's identity discipline mirrored renderer-side). Null/undefined only if this tab's own session row hasn't hydrated yet — treated as unavailable rather than crashing. */
   parentSessionId: string | null | undefined;
@@ -1071,7 +1120,7 @@ const CHILD_HISTORY_LOADING = { kind: "loading" as const };
  * `Composer` at all — "composer disabled" per §10.8.1 point 3's normative
  * §2.5 rule, since there is no live connection to send a composer draft on.
  */
-function ChildHistoryPane({ parentTabId, parentSessionId, spawnToolCallId, sidebarCollapsed, onToggleSidebar }: ChildHistoryPaneProps) {
+function ChildHistoryPane({ permissionForwarder, parentTabId, parentSessionId, spawnToolCallId, sidebarCollapsed, onToggleSidebar }: ChildHistoryPaneProps) {
   const masterTitle =
     useTabsStore((state) => state.tabs.find((tab) => tab.tabId === parentTabId)?.title) ?? "Untitled task";
   const card = useTabStore((state) => {
@@ -1117,6 +1166,7 @@ function ChildHistoryPane({ parentTabId, parentSessionId, spawnToolCallId, sideb
           Split
         </button>
       </header>
+      {permissionForwarder}
 
       <div className="session-content">
         <ChildHistoryContent parentSessionId={parentSessionId} spawnToolCallId={spawnToolCallId} />
@@ -1290,6 +1340,12 @@ export function App() {
   useEffect(() => {
     const stop = startConnectionManager(tabRegistry);
     return stop;
+  }, []);
+
+  useEffect(() => {
+    const api = window.anycode;
+    if (!api?.tabBootstrap || !api.selectTab) return;
+    return startTabBootstrap(api, useTabsStore, tabRegistry);
   }, []);
 
   // CUT.md §3 96-P2 item 6: the `onChanged` push subscription lives at App
@@ -1838,4 +1894,11 @@ export function App() {
       {window.anycode?.platform !== "darwin" && <WindowControls maximized={windowState.maximized} />}
     </main>
   );
+}
+
+function ApprovalStatus() {
+  const unattended = useTabStore((state) => state.unattended);
+  const send = useTabSend();
+  if (!unattended) return null;
+  return <div className="banner banner-info approval-status" role="status">An unanswered request expired. New approval requests are being denied automatically. <button type="button" onClick={() => send({ type: "approval_recover" })}>Ask me again</button></div>;
 }

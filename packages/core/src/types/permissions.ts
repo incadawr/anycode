@@ -18,6 +18,8 @@ export interface PermissionRequest {
   input: unknown;
   metadata: ToolMetadata;
   mode: PermissionMode;
+  /** Working directory used to execute the tool. */
+  cwd?: string;
   /* */
   toolCallId?: string;
   /** Present only when the dispatch site proved the target resolvable (TASK.32). */
@@ -48,6 +50,8 @@ export interface PermissionWorkspaceFacts {
 export interface PermissionRuling {
   decision: "allow" | "ask" | "deny";
   reason?: string;
+  /** Bash command bound to the executables checked by the permission engine. */
+  resolvedCommand?: string;
 }
 
 /** Broker resolution of an "ask" ruling. */

@@ -5,12 +5,13 @@ import { readFile, writeFile, rename, mkdir, rm, realpath } from "node:fs/promis
 import { dirname, isAbsolute } from "node:path";
 import { Server, StreamableHTTPServerTransport, CallToolRequestSchema, ListToolsRequestSchema } from "@anycode/core/communication-mcp";
 import { z } from "zod";
-import type { AgentDelivery, AgentEnvelope } from "../shared/communication.js";
+import type { AgentDelivery, AgentEnvelope, SessionActivityState } from "../shared/communication.js";
 
 export interface CommunicationManager {
-  listTabs(): ReadonlyArray<{ sessionId: string; workspace: string; state: string; pid?: number | null; childOf?: { parentTabId: string; requestId?: string } }>;
+  listTabs(): ReadonlyArray<{ sessionId: string; workspace: string; state: string; activityState?: SessionActivityState; engine?: string; missingWorkspace?: boolean; hostFailure?: import("../shared/host-failure.js").HostFailure; pid?: number | null; childOf?: { parentTabId: string; requestId?: string } }>;
   onCommunicationDelivery?(listener: (sessionId: string, delivery: AgentDelivery) => void): () => void;
-  communicationRequest(sessionId: string, operation: string, payload?: unknown, expectedWorkspace?: string): Promise<unknown>;
+  communicationStatusDetails?(sessionId: string): Record<string, unknown>;
+  communicationRequest(sessionId: string, operation: string, payload?: unknown, expectedWorkspace?: string, requestOptions?: { timeoutMs?: number }): Promise<unknown>;
 }
 /**
  * One schema for both config sources. The env file (`configFile`) additionally
@@ -350,18 +351,40 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     // One re-resolution per request at most, and none while every entry is present.
     if (retryMissing && unresolved.size > 0) await resolveMissing();
     for (const tab of options.manager.listTabs()) {
-      if (options.isSessionExposed && !options.isSessionExposed(tab.sessionId)) continue;
-      if (!restricted) { result.push(tab); continue; }
+      if (!restricted) { if (!options.isSessionExposed || options.isSessionExposed(tab.sessionId)) result.push(tab); continue; }
       let path: string;
       try { path = await resolvePath(tab.workspace); } catch { continue; }
-      if (allowed.has(path)) result.push(tab);
+      if (allowed.has(path) && (!options.isSessionExposed || options.isSessionExposed(tab.sessionId))) result.push(tab);
     }
-    return result;
+    const current = new Map(options.manager.listTabs().map((tab) => [tab.sessionId, tab]));
+    return result.flatMap((tab) => {
+      const latest = current.get(tab.sessionId);
+      return latest && latest.workspace === tab.workspace && (!options.isSessionExposed || options.isSessionExposed(tab.sessionId)) ? [latest] : [];
+    });
   };
   const requireSession = async (sessionId: string) => {
     const tab = (await tabs(true)).find((t) => t.sessionId === sessionId);
     if (!tab) throw new Error("Session unavailable or outside authorized workspace");
     return tab;
+  };
+  const terminalState = (tab: { missingWorkspace?: boolean; hostFailure?: unknown }) =>
+    tab.missingWorkspace ? "missing_workspace" : tab.hostFailure ? "crash_looped" : undefined;
+  const publicTab = (tab: Awaited<ReturnType<typeof requireSession>>) => {
+    const { activityState, ...rest } = tab;
+    return { ...rest, state: terminalState(tab) ?? activityState ?? "idle" };
+  };
+  const resolveStatus = async (tab: Awaited<ReturnType<typeof requireSession>>) => {
+    if (terminalState(tab)) return { ...options.manager.communicationStatusDetails?.(tab.sessionId), ...publicTab(tab) };
+    let status: unknown;
+    if (tab.pid !== null) {
+      try {
+        status = await options.manager.communicationRequest(tab.sessionId, "get_session_status", undefined, tab.workspace, { timeoutMs: 1500 });
+      } catch { /* Use main's last known details while the host is unavailable. */ }
+    }
+    const current = await requireSession(tab.sessionId);
+    if (terminalState(current)) return { ...options.manager.communicationStatusDetails?.(current.sessionId), ...publicTab(current) };
+    return { ...(status && typeof status === "object" ? status : {}),
+      ...options.manager.communicationStatusDetails?.(current.sessionId), ...publicTab(current) };
   };
   const approvalOn = (sessionId: string): boolean => options.isExternalApprovalEnabled?.(sessionId) === true;
   /** Access first (an unshared session never reveals anything), then the approval switch. */
@@ -496,7 +519,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     switch (name) {
       case "list_sessions": {
         z.object({}).strict().parse(raw);
-        const sessions = await tabs(true);
+        const sessions = (await tabs(true)).map(publicTab);
         // externalApproval is reported only when the switch is wired at all (Taskana 4763).
         const withApproval = (tab: (typeof sessions)[number]) => options.isExternalApprovalEnabled ? { ...tab, externalApproval: approvalOn(tab.sessionId) } : tab;
         if (!options.handleOf) return { sessions: sessions.map(withApproval) };
@@ -571,11 +594,14 @@ export async function startCommunicationServer(options: CommunicationServerOptio
           ...(typeof result?.turnId === "string" ? { turnId: result.turnId } : {}),
         };
       }
-      case "get_session_result":
       case "get_session_status": {
         const input = sessionSchema.parse(raw); const tab = await requireSession(input.sessionId);
-        const status = await options.manager.communicationRequest(input.sessionId, name, undefined, tab.workspace);
-        return { ...tab, ...(status as object) };
+        return resolveStatus(tab);
+      }
+      case "get_session_result": {
+        const input = sessionSchema.parse(raw); const tab = await requireSession(input.sessionId);
+        const result = await options.manager.communicationRequest(input.sessionId, name, undefined, tab.workspace);
+        return { ...tab, ...(result as object) };
       }
       case "send_message": {
         return sendMessage(parseOr(messageSchema, raw, 'send_message expects sessionId, payload (1..32000 chars) and mode ("next_turn" or "steer"); optional: kind, correlationId, replyTo, idempotencyKey'));

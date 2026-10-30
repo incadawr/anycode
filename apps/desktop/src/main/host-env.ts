@@ -37,7 +37,8 @@ import {
   resolveProxyLadder,
 } from "../shared/proxy.js";
 import type { AnycodeSettings, CustomProviderRecord, ProviderTransportId, SecretEnvKey, SecretKey } from "../shared/settings.js";
-import { activeProviderView, connectionById, isProxyUrl, SECRET_ENV_KEYS } from "../shared/settings.js";
+import { modelOverrideFor } from "../shared/model-overrides.js";
+import { activeConnection, activeProviderView, connectionById, isProxyUrl, SECRET_ENV_KEYS } from "../shared/settings.js";
 import { isMcpSecretKey } from "../shared/mcp-secrets.js";
 import type { RecognizerWireConfig } from "../shared/recognizer.js";
 
@@ -97,6 +98,8 @@ export const ENV_PERMISSION_CLASSIFIER = "ANYCODE_PERMISSION_CLASSIFIER";
  * `envConfig.reasoningEffort` on every fork boot — zero host/core delta here).
  */
 export const ENV_REASONING_EFFORT = "ANYCODE_REASONING_EFFORT";
+/** Internal binding for settings-derived effort; absent on a shell-global override. */
+export const ENV_REASONING_EFFORT_MODEL = "ANYCODE_REASONING_EFFORT_MODEL";
 /**
  * Explicit output-token ceiling (TASK.150). Literal mirror of core's
  * `provider/env.ts:12` ENV_MAX_OUTPUT_TOKENS — same local-literal convention
@@ -114,6 +117,10 @@ export const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
  */
 export const ENV_CONTEXT_WINDOW = "ANYCODE_CONTEXT_WINDOW";
 export const ENV_CONTEXT_WINDOW_MODEL = "ANYCODE_CONTEXT_WINDOW_MODEL";
+/** Internal provenance: a settings value must not mask later settings edits. */
+export const ENV_CONTEXT_WINDOW_FROM_SETTINGS = "ANYCODE_CONTEXT_WINDOW_FROM_SETTINGS";
+/** Captures the connection that supplied this fork's settings, including unpinned legacy tabs. */
+export const ENV_MODEL_SETTINGS_CONNECTION_ID = "ANYCODE_MODEL_SETTINGS_CONNECTION_ID";
 /**
  * 4088-on-4118 integration: the former ENV_IMAGE_INPUT_MODELS declaration is
  * GONE — the live image-modality facts ride 4118's `modelCapabilities` map
@@ -1108,7 +1115,11 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // migration the active connection ≡ the former singleton, so the ladder OUTPUT
   // stays byte-equivalent (DoD #5).
   const view = activeProviderView(settings);
-  if (view.pricing !== undefined) env.ANYCODE_CONNECTION_PRICING = JSON.stringify(view.pricing);
+  const settingsConnectionId = activeConnection(settings)?.id;
+  if (settingsConnectionId !== undefined) env[ENV_MODEL_SETTINGS_CONNECTION_ID] = settingsConnectionId;
+  else delete env[ENV_MODEL_SETTINGS_CONNECTION_ID];
+  const pricedModels = Object.fromEntries(Object.entries(activeConnection(settings)?.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => [id, value.pricing]));
+  if (view.pricing !== undefined || Object.keys(pricedModels).length) env.ANYCODE_CONNECTION_PRICING = JSON.stringify({ fallback: view.pricing, models: pricedModels });
   else delete env.ANYCODE_CONNECTION_PRICING;
   // Custom-provider route (F-G-B): a `custom:<slug>` providerId resolves from
   // `settings.provider.custom[]` — the record's baseUrl verbatim plus the
@@ -1237,7 +1248,15 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // Reasoning-effort inheritance rung (F14 §2.4): a new host boot inherits the
   // active connection's last chosen effort instead of hardcoded `off`. Env still
   // wins by construction (fillFromSettings).
-  fillFromSettings(env, ENV_REASONING_EFFORT, view.reasoningEffort);
+  const effectiveConnectionModel = env[ENV_MODEL]?.trim() ?? "";
+  const connectionModelOverride = modelOverrideFor(activeConnection(settings), effectiveConnectionModel);
+  if (!envPresent(env, ENV_REASONING_EFFORT)) {
+    delete env[ENV_REASONING_EFFORT_MODEL];
+    fillFromSettings(env, ENV_REASONING_EFFORT, connectionModelOverride?.reasoningEffort ?? activeConnection(settings)?.reasoningEffort);
+    if (envPresent(env, ENV_REASONING_EFFORT) && effectiveConnectionModel !== "") {
+      env[ENV_REASONING_EFFORT_MODEL] = effectiveConnectionModel;
+    }
+  }
   // Opt-in prompt cache (GitHub #15): the active connection's persisted policy
   // rides as one JSON value; absent = no env entry (Off). A launching shell's
   // ANYCODE_PROMPT_CACHE_OPTIONS always wins, including a literal `off` — core's
@@ -1264,6 +1283,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // from the fully merged env, because shell ANYCODE_MODEL may override
   // `view.model` — is it emitted. Anything missing/invalid/mismatched emits
   // NEITHER half.
+  delete env[ENV_CONTEXT_WINDOW_FROM_SETTINGS];
   if (envPresent(env, ENV_CONTEXT_WINDOW)) {
     // Shell wins verbatim; binding (if any) is the shell's alone.
   } else {
@@ -1271,8 +1291,8 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
     // settings so it can never attach to a settings value.
     delete env[ENV_CONTEXT_WINDOW_MODEL];
     const effectiveModel = env[ENV_MODEL]?.trim();
-    const windowTokens = view.contextWindowTokens;
-    const windowBinding = view.contextWindowModel?.trim();
+    const windowTokens = connectionModelOverride?.contextWindowTokens ?? view.contextWindowTokens;
+    const windowBinding = connectionModelOverride?.contextWindowTokens !== undefined ? effectiveConnectionModel : view.contextWindowModel?.trim();
     if (
       windowTokens !== undefined &&
       Number.isInteger(windowTokens) &&
@@ -1285,6 +1305,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
     ) {
       env[ENV_CONTEXT_WINDOW] = numToStr(windowTokens);
       env[ENV_CONTEXT_WINDOW_MODEL] = windowBinding;
+      env[ENV_CONTEXT_WINDOW_FROM_SETTINGS] = "1";
     }
   }
   // 4088-on-4118 integration: the former ANYCODE_IMAGE_INPUT_MODELS emission is

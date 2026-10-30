@@ -1,3 +1,5 @@
+import { startHostWithActivity } from "./activity-forwarding.js";
+import { contextSnapshotOptions } from "./context-snapshot.js";
 import { discoverLoginPath, mcpProblemStatuses, codexMcpStatus, claudeMcpStatuses, forwardProblemStatuses } from "./mcp-login-path.js";
 import { readRoleSettings } from "./role-settings.js";
 import { SqliteCodexAgentCardLog } from "./engines/codex/agent-card-log.js";
@@ -191,6 +193,7 @@ import {
   NodeExecutionAdapter,
   NodeFileSystemAdapter,
   NodeGitAdapter,
+  NodeGitReadAdapter,
   NodeHttpAdapter,
   NodeMcpTransportFactory,
   createModelAskClassifier,
@@ -250,7 +253,6 @@ import {
   mapChildRunStatusToNotification,
   matchCatalogEntryByBaseUrl,
   parseImageInputModelOverride,
-  resolveContextWindowInfo,
   resolveEffortLevels,
   resolveImageInput,
   type ImageModalityLookup,
@@ -258,6 +260,7 @@ import {
   resolveMaxOutputTokens,
   clampSubagentMaxOutputTokens,
   resolveReasoningEffort,
+  resolveChildReasoningEffort,
   runWrapUp,
   SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS,
   // taskana 4181: supervisor idle-watchdog defaults (see
@@ -282,7 +285,7 @@ import {
   type RoleRouteResolution,
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
-import { calculateUsageCost, connectionPricing } from "./usage-cost.js";
+import { calculateUsageCost, resolveUsagePrice } from "./usage-cost.js";
 import { summarizeWithChildren } from "./usage-summary.js";
 import { claudeNativeChildrenFromHistory, claudeUsageRecord } from "./claude-usage.js";
 import { closeProxyRelay, credentialedProxyValuesForRelay, resolveProxyRelay } from "@anycode/core/proxy-relay";
@@ -309,7 +312,6 @@ import type {
   RepoMapConfig,
   SessionSubagentOutcome,
   SessionSubagentRequest,
-  SubagentRunOptions,
   SubagentStallReport,
   SystemPromptEnv,
   TelemetryPort,
@@ -337,7 +339,8 @@ import {
 } from "./supervisor-idle-watchdog.js";
 import { attachChildReportDurability, attachEngineChildReportDurability } from "./child-report-durability.js";
 import { createSpawnModeCell } from "./spawn-mode-cell.js";
-import { RoleHealthCache, decideRoutedTerminal, entryLabel, pickEntry, resolveRoleRouteChain, respawnReportId, toCoreEntry } from "./role-route.js";
+import { createRoutedChildComposition } from "./routed-child-composition.js";
+import { RoleHealthCache, pickEntry, resolveRoleRouteChain, toCoreEntry } from "./role-route.js";
 import { parseSettings } from "../settings/schema.js";
 import { ENV_APP_VERSION, parseAppVersionEnv } from "../main/host-env.js";
 import { readFileSync, realpathSync } from "node:fs";
@@ -374,6 +377,7 @@ import {
   isChildSessionBoot,
   parseHostArgs,
   readConnectionModelCapabilities,
+  readConnectionModelSettingsSync,
   resolveChildMaxTurns,
   resolveEngineDraftPresetId,
   repairDanglingToolCalls,
@@ -434,6 +438,7 @@ const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE";
 import { resolveExtensionsHomeOverride, resolveSessionHistoryMaxItems } from "./dev-home.js";
 import { buildCheckpointService } from "./checkpoints.js";
 import { GitBridge } from "./git-bridge.js";
+import { createConnectionModelSettings } from "./connection-model-settings.js";
 import { CoreEngine } from "./engines/core-engine.js";
 import { beginEngineBootstrap, type EngineBootstrap } from "./engines/bootstrap.js";
 import { selectEnginePlugin, type EnginePlugin } from "./engines/registry.js";
@@ -470,6 +475,7 @@ import { ClaudeSettingsSeam } from "./engines/claude/settings-seam.js";
 import { ClaudeShadowTranscriptEngine, SqliteClaudeShadowTranscript } from "./engines/claude/shadow-transcript.js";
 import { ClaudeSessionRowWriter } from "./engines/claude/session-row.js";
 import { createCodexSessionTitlePersistence, createCoreSessionTitlePersistence } from "./session-title-persistence.js";
+import { createCompactionRecordLog, type CompactionRecordSeam } from "./compaction-records.js";
 import { claudeAgentPermissionMode, claudeChildPresetId, codexChildAutoAcceptsWorkspacePatches, codexChildPosture } from "./engines/child-permission-map.js";
 import { checkClaudeBinaryTrustOnDisk, CLAUDE_AGENT_BRIDGE_PROMPT } from "./engines/claude/claude-client.js";
 import { createEngineChildRunner } from "./engine-children.js";
@@ -676,161 +682,7 @@ function sendChildSessionMessage(message: ChildSpawnRequest | ChildRunCancel | C
   process.parentPort.postMessage(message);
 }
 
-/**
- * Taskana 4704 §3.6: per-spawn record of the role entry a DETACHED spawn
- * actually ran on (the host stamped it at spawn time via the Agent tool's
- * roleRoute). Keyed by `spawnToolCallId` — the stable id a terminal outcome
- * carries back. Removed at every terminal (the port's onDetachedTerminal
- * fires exactly once per detached child).
- */
-interface RoutedSpawnRecord {
-  role: string;
-  /** The entry this child is running on (already core-shaped). */
-  entry: import("@anycode/core").RoleRouteEntry;
-  /** The REMAINING chain after `entry` (health re-checked at respawn). */
-  rest: import("@anycode/core").RoleRouteEntry[];
-  /** True once this spawn already ran on a non-primary entry (visibility §3.6). */
-  usedFallback: boolean;
-  /** The reason the primary was skipped (for the visibility line); undefined when the primary was used. */
-  skipReason?: string;
-}
-const routedSpawns = new Map<string, RoutedSpawnRecord>();
-
-/**
- * Taskana 4704 §3.6 (cross-review F2): registers a detached spawn's route
- * facts at ADMIT time. Called by the host wrapper around the child port with
- * the entry the child ACTUALLY runs on (as stamped on the request) plus the
- * remaining chain — pure bookkeeping, no I/O.
- */
-function noteRoutedSpawn(
-  req: SessionSubagentRequest,
-  actualEntry: import("@anycode/core").RoleRouteEntry,
-  rest: import("@anycode/core").RoleRouteEntry[],
-  skipped: readonly { entry: import("@anycode/core").RoleRouteEntry; reason: string }[],
-): void {
-  if (!isRoleRouteName(req.agentType)) return;
-  routedSpawns.set(req.spawnToolCallId, {
-    role: req.agentType,
-    entry: actualEntry,
-    rest: [...rest],
-    usedFallback: skipped.length > 0,
-    ...(skipped.length > 0 ? { skipReason: skipped[0]!.reason } : {}),
-  });
-}
-
-/**
- * Taskana 4704 §3.6 — the visibility line for a terminal report: names the
- * role, the NON-PRIMARY entry it ran on, and why (spawn-time skip reason or
- * respawn cause). Undefined for primary-entry runs (the common case — no
- * noise). MUST run before respawnRoutedRoleChild (which consumes the record).
- */
-function detachedRouteNotice(req: SessionSubagentRequest): string | undefined {
-  const record = routedSpawns.get(req.spawnToolCallId);
-  if (record === undefined || !record.usedFallback || record.skipReason === undefined) {
-    return undefined;
-  }
-  return `Role ${record.role} ran on ${entryLabel(record.entry)} because ${record.skipReason}.`;
-}
-
-/**
- * Taskana 4704 §3.6 — the detached-terminal respawn decision (pure logic in
- * role-route.ts's decideRoutedTerminal; this wrapper performs the I/O: the
- * re-spawn through the port and the short report). Returns true when the
- * terminal was CONSUMED by a respawn (the caller must NOT deliver the child's
- * error report). False => deliver the outcome unchanged (possibly with the
- * appended exhausted-chain line).
- */
-function respawnRoutedRoleChild(outcome: SessionSubagentOutcome, req: SessionSubagentRequest): boolean {
-  const record = routedSpawns.get(req.spawnToolCallId);
-  routedSpawns.delete(req.spawnToolCallId);
-  // R2: classify the SAFE error descriptor only — never the child's free
-  // model text (see role-route.ts decideRoutedTerminal).
-  const decision = decideRoutedTerminal(record, outcome.status, outcome.finalText, roleHealth, Date.now(), outcome.errorDescriptor);
-  if (decision.action === "deliver") {
-    return false;
-  }
-  if (decision.action === "deliver_exhausted") {
-    outcome.finalText = `${outcome.finalText}\n[role ${record!.role}: all route entries failed]`;
-    return false;
-  }
-  // Respawn the same prompt/description on the next healthy entry (F5):
-  // stamp the entry's OWN routing fields and clear whatever the failed
-  // child carried (`...req` alone would keep a stale engine/connection of a
-  // DIFFERENT hop; the entry's engine XOR connection/provider XOR bare-model
-  // shape is authoritative). The respawn notice rides the FAILED child's
-  // spawnToolCallId — the real respawned report arrives under its own fresh
-  // id, so the renderer's originId dedupe (store.ts child_report) can never
-  // swallow it.
-  const respawnId = randomUUID();
-  const respawnReq: SessionSubagentRequest = {
-    agentType: req.agentType,
-    description: `[fallback] ${req.description}`,
-    prompt: req.prompt,
-    spawnToolCallId: respawnId,
-    ...(decision.entry.engine !== undefined ? { engine: decision.entry.engine } : {}),
-    ...(decision.entry.connection !== undefined ? { connectionId: decision.entry.connection } : {}),
-    ...(decision.entry.provider !== undefined ? { provider: decision.entry.provider } : {}),
-    ...(decision.entry.model !== undefined ? { model: decision.entry.model } : {}),
-    ...(decision.entry.effort !== undefined ? { effort: decision.entry.effort } : {}),
-    detach: true,
-  };
-  routedSpawns.set(respawnId, { ...decision.next, rest: [...decision.next.rest] });
-  // F5(c): the run() promise is fully handled here — a detached run settles
-  // at admit; a pre-flight/cap REFUSAL must still reach the orchestrator as
-  // an honest failure report under the FAILED child's id, never as a silent
-  // "retrying" that no report ever follows.
-  // R3 (Taskana 4704 cross-review): the honest refusal/failure report after
-  // a failed respawn rides a DISTINCT queue id — never the failed child's
-  // spawnToolCallId, which the "retrying" notice just took: the renderer
-  // dedupes child_report by originId (store.ts), so a second report under
-  // the same id is silently dropped. The distinct id is namespaced off the
-  // failed child's id (stable, one per respawn attempt, never collides with
-  // a real spawnToolCallId uuid shape) so the retrying notice AND the honest
-  // failure both reach the orchestrator.
-  void childSessionPortForRespawn
-    ?.run(respawnReq, {})
-    .then((admit) => {
-      if (admit.status === "error") {
-        routedSpawns.delete(respawnId);
-        childReportQueue.add(
-          respawnReportId(req.spawnToolCallId, "refused"),
-          formatChildTaskNotification({
-            taskId: req.spawnToolCallId,
-            toolUseId: req.spawnToolCallId,
-            agentId: "",
-            subagentType: req.agentType,
-            status: "failed",
-            summary: `Role ${record!.role} failed (${decision.reason}) and the fallback respawn on ${entryLabel(decision.entry)} was refused: ${admit.finalText}`,
-          }),
-          { status: "error", durationMs: outcome.durationMs },
-        );
-      }
-    })
-    .catch((runError: unknown) => {
-      routedSpawns.delete(respawnId);
-      console.error(`[host] routed role respawn failed: ${describeError(runError)}`);
-      childReportQueue.add(
-        respawnReportId(req.spawnToolCallId, "failed"),
-        formatChildTaskNotification({
-          taskId: req.spawnToolCallId,
-          toolUseId: req.spawnToolCallId,
-          agentId: "",
-          subagentType: req.agentType,
-          status: "failed",
-          summary: `Role ${record!.role} failed (${decision.reason}) and the fallback respawn on ${entryLabel(decision.entry)} could not start.`,
-        }),
-        { status: "error", durationMs: outcome.durationMs },
-      );
-    });
-  // The failed child's terminal is REPLACED by the short retrying notice —
-  // under the failed child's id (a completed marker for a spawn that did
-  // happen), consumed once the renderer acks it.
-  childReportQueue.add(req.spawnToolCallId, decision.notice, { status: "completed", durationMs: 0 });
-  return true;
-}
-
-/** The core boot's child port — set once constructed, used ONLY by the respawn path above. */
-let childSessionPortForRespawn: ChildSessionPort | undefined;
+let routedChildComposition: ReturnType<typeof createRoutedChildComposition> | undefined;
 
 /**
  * TASK.145 срез 1/2: builds and delivers a detached child's terminal report
@@ -849,27 +701,6 @@ let childSessionPortForRespawn: ChildSessionPort | undefined;
  * renderer's (store.ts's `child_report` case).
  */
 function deliverDetachedChildReport(outcome: SessionSubagentOutcome, req: SessionSubagentRequest): void {
-  // Taskana 4704 §3.6 — visibility: whenever a spawn actually ran on a
-  // NON-PRIMARY entry (spawn-time health skip recorded at admit, or a
-  // respawn), the delivered report text gains a first line naming the role,
-  // the entry it ran on, and why. Reports are the orchestrator's input; the
-  // child card already shows the model id (subagent_start.model). PEEKED
-  // here, BEFORE the respawn decision below (which consumes the record).
-  const routeNotice = detachedRouteNotice(req);
-  // Taskana 4704 §3.6 — detached respawn (fallback point 2). An
-  // infrastructure-class failure of a ROUTED role child marks its entry dead
-  // and re-spawns the SAME prompt on the next healthy entry (a fresh child
-  // session; the original error report is REPLACED by a short retrying
-  // notice — the eventual real terminal delivers normally). An exhausted
-  // chain delivers the original error with an appended failure line. A
-  // completed routed child marks its entry healthy. Ordinary task failures
-  // (classify => "none") NEVER fall back — they deliver unchanged.
-  if (respawnRoutedRoleChild(outcome, req)) {
-    return;
-  }
-  if (routeNotice !== undefined) {
-    outcome.finalText = `${routeNotice}\n${outcome.finalText}`;
-  }
   const fullReportPath = childNotificationSummaryOverflows(outcome.finalText)
     ? saveFullChildReport(defaultChildReportDir(), outcome.childSessionId, outcome.finalText)
     : undefined;
@@ -1400,6 +1231,7 @@ async function bootCodexSession(
     args.child !== undefined ? buildChildBrokerEmit(emit) : emit,
     undefined, // default ask deadline
     rules,
+    args.child !== undefined,
   );
   // Taskana 4730: ask-zone classifier coverage for the Codex approval bridge.
   // Command kind only (see engine-classifier-boot.ts); the bridges take the
@@ -1932,6 +1764,7 @@ async function bootCodexSession(
     workspace,
     model: connected.model,
     sessionId: connected.sessionMeta.id,
+    ...await contextSnapshotOptions(persistence!, connected.sessionMeta.id, "codex", connected.model, undefined, connected.initialContextUsage),
     usageAudit: codexUsageAudit,
     // Codex owns native thread history; never an AgentLoop history — this is
     // the resume projection built ONCE at boot (TASK.42, cut §2(e)):
@@ -2060,6 +1893,7 @@ async function bootClaudeSession(
     args.child !== undefined ? buildChildBrokerEmit(emit) : emit,
     undefined, // default ask deadline
     rules,
+    args.child !== undefined,
   );
   // Taskana 4730: ask-zone classifier coverage for the Claude approval bridge
   // (same shape as the codex boot above).
@@ -2694,6 +2528,7 @@ async function bootClaudeSession(
     workspace,
     model: connected.model,
     sessionId: rowId,
+    ...await contextSnapshotOptions(persistence!, rowId, "claude", connected.model, undefined, args.resume ? () => claudeEngine.initialContextUsage() : undefined),
     // The resume projection built above — `[]` for a fresh session, the
     // shadow-mirror transcript (incl. tool_call cards) for a resumed one.
     bootHistory,
@@ -3368,13 +3203,31 @@ async function boot(): Promise<void> {
     // names the old connection at boot. Main stamps the env from
     // `tab.connectionId` on every spawn, so it is the connection whose
     // credentials this host actually talks to; the row pin is the fallback.
-    const liveCapsConnectionId =
-      forkConnectionId !== undefined && forkConnectionId.trim() !== "" ? forkConnectionId : sessionMeta.connectionId;
+    const liveCapsConnectionId = forkConnectionId?.trim() ||
+      process.env.ANYCODE_MODEL_SETTINGS_CONNECTION_ID?.trim() || sessionMeta.connectionId;
     const liveCapsMap = await readConnectionModelCapabilities(
       liveCapsConnectionId,
       settingsPathOverride !== undefined && settingsPathOverride.trim() !== "" ? settingsPathOverride : undefined,
     );
-    const liveCapsFor = (id: string): LiveModelCapabilities | undefined => liveCapsMap?.[id];
+    const readModelSettings = () => readConnectionModelSettingsSync(liveCapsConnectionId, settingsPathOverride?.trim() || undefined);
+    const initialModelSettings = readModelSettings();
+    const connectionModelSettings = createConnectionModelSettings({
+      connection: initialModelSettings ?? undefined,
+      ...(liveCapsConnectionId ? { readConnection: readModelSettings } : {}),
+      initialReadSucceeded: Boolean(liveCapsConnectionId) && initialModelSettings !== null,
+      catalogEntry,
+      envContextWindow: envConfig.contextWindowTokens,
+      envContextWindowFromSettings: process.env.ANYCODE_CONTEXT_WINDOW_FROM_SETTINGS === "1",
+      envContextWindowModel: envConfig.contextWindowModel,
+      envReasoningEffort: envConfig.reasoningEffort,
+      envReasoningEffortModel: process.env.ANYCODE_REASONING_EFFORT_MODEL?.trim() || undefined,
+      envReasoningEffortFromSettings: Boolean(process.env.ANYCODE_REASONING_EFFORT_MODEL?.trim()),
+      liveCapabilitiesFor: (id) => liveCapsMap !== undefined && Object.hasOwn(liveCapsMap, id) ? liveCapsMap[id] : undefined,
+    });
+    const currentPricingRaw = () => connectionModelSettings.hasReadConnection() ? JSON.stringify(connectionModelSettings.pricingSnapshot()) : process.env.ANYCODE_CONNECTION_PRICING;
+    let turnPricingRaw = currentPricingRaw();
+    const liveCapsFor = (id: string): LiveModelCapabilities | undefined => connectionModelSettings.capabilitiesFor(id);
+    const effortLevelsFor = (id: string) => envConfig.effortLevels ?? connectionModelSettings.effortLevelsFor(id);
     const gitForWorkspace = (cwd: string, operationSignal?: AbortSignal) =>
       new NodeGitAdapter({
         exec: execAdapter,
@@ -3512,7 +3365,7 @@ async function boot(): Promise<void> {
 
     historySink = new WriteBehindHistorySink(persistence, sessionMeta.id);
     const tokenizer = await createDefaultTokenizer();
-    const bootContextInfo = resolveContextWindowInfo(envConfig.model, catalogEntry, envConfig.contextWindowTokens, envConfig.contextWindowModel);
+    const bootContextInfo = connectionModelSettings.contextFor(envConfig.model);
     const bootContextWindow: number | undefined = bootContextInfo.tokens;
     // Taskana 4150: a detached child is a subagent too; the 100 KB finalText cap
     // makes output beyond ~32k tokens paid-for-and-discarded, so clamp it here.
@@ -3527,10 +3380,20 @@ async function boot(): Promise<void> {
       (modelId, applied) =>
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
     ));
-    const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, envConfig.reasoningEffort, liveCapsFor(envConfig.model));
-    // Preserve explicit selections even when the current model suppresses them.
-    selectedEffort = envConfig.reasoningEffort ?? bootReasoningEffort ?? "off";
-    const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry, liveCapsFor(envConfig.model));
+    const isChildSession = isChildSessionBoot(args, sessionMeta);
+    const resolveSessionEffort = isChildSession ? resolveChildReasoningEffort : resolveReasoningEffort;
+    const bootSelectedEffort = connectionModelSettings.effortFor(envConfig.model);
+    const priorEffort = process.env.ANYCODE_SWITCH_PRIOR_EFFORT;
+    const switchFallback = (["off", "low", "medium", "high", "xhigh", "max"] as const).find((tier) => tier === priorEffort);
+    const bootCandidate = bootSelectedEffort ?? resolveSessionEffort(envConfig.model, catalogEntry, undefined, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model)) ?? switchFallback ?? "off";
+    const normalizedBootEffort = isChildSession ? bootCandidate : connectionModelSettings.normalize(envConfig.model, bootCandidate);
+    const bootAdjustment = !isChildSession && (bootSelectedEffort !== undefined || switchFallback !== undefined) && normalizedBootEffort !== bootCandidate
+      ? { from: bootCandidate, to: normalizedBootEffort } : undefined;
+    const bootReasoningEffort = resolveSessionEffort(envConfig.model, catalogEntry, normalizedBootEffort, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model));
+    // Preserve child selections even when the current model maps or suppresses them.
+    selectedEffort = normalizedBootEffort;
+    connectionModelSettings.remember(envConfig.model, selectedEffort);
+    const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model));
     // TASK.162 (F6): the same catalog + env overrides the three boot
     // resolutions above read, packaged once so an Agent-tool `model` override
     // re-resolves the child's ceiling/effort/window for ITS model instead of
@@ -3547,6 +3410,8 @@ async function boot(): Promise<void> {
       onStubFallback: (modelId, applied) =>
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
       liveCapabilitiesFor: liveCapsFor,
+      effortLevelsFor,
+      contextWindowFor: (id) => connectionModelSettings.contextFor(id).tokens,
     });
     const history = new ConversationHistory({ initial: initialHistory, sink: historySink, tokenizer });
 
@@ -4021,7 +3886,7 @@ async function boot(): Promise<void> {
     // Open'ing the child surface. Non-child boots keep the bare `emit`,
     // byte-identical to every pre-S2 host. CUT-S4 §4.1: `buildChildBrokerEmit`
     // is the exact same body, extracted so codex/claude share it too.
-    const broker = new IpcPermissionBroker(args.child !== undefined ? buildChildBrokerEmit(emit) : emit);
+    const broker = new IpcPermissionBroker(args.child !== undefined ? buildChildBrokerEmit(emit) : emit, undefined, null, args.child !== undefined);
 
     // Boot context-window resolution (slice 6.4, mirror of cli/main.ts):
     // env ANYCODE_CONTEXT_WINDOW > catalog window of the session model > absent
@@ -4086,6 +3951,13 @@ async function boot(): Promise<void> {
     // repoMapStatus side effect fires here, before Session's envStatus seam reads
     // it; the prompt is derived from these so they cannot drift.
     const bootSystemPromptComponents = composeSystemPromptComponents();
+    /**
+     * GitHub #36 (review 4): the session's durable compaction records, created
+     * BELOW (it needs the session row) but read by the checkpoint arc above it —
+     * `compactionBoundary` samples this at every turn start. `let` + a closure,
+     * never a stale copy: the loop reads it per turn.
+     */
+    let compactionRecordSeam: CompactionRecordSeam | undefined;
     const config: AgentLoopConfig = {
       modelPort,
       registry,
@@ -4136,6 +4008,7 @@ async function boot(): Promise<void> {
       ports: {
         fs: fsAdapter,
         exec: execAdapter,
+        gitRead: new NodeGitReadAdapter(execAdapter),
         http: new NodeHttpAdapter(),
         todos: new InMemoryTodoStore(),
       },
@@ -4196,7 +4069,15 @@ async function boot(): Promise<void> {
       // Per-turn checkpoint arc (slice P7.26/R1): present ONLY when the gate
       // above built a service; its absence keeps the turn byte-identical (L2 —
       // runTurn never touches the arc). Mirror of cli/main.ts:1101.
-      ...(checkpointService !== null ? { checkpoints: checkpointService } : {}),
+      ...(checkpointService !== null
+        ? {
+            checkpoints: checkpointService,
+            // GitHub #36: the boundary the checkpoint must record is the
+            // sequence current when its history SNAPSHOT is taken (turn start),
+            // so a rewind to it can tell which compaction rows predate it.
+            compactionBoundary: () => compactionRecordSeam?.sequence() ?? 0,
+          }
+        : {}),
       // Taskana 4104 (TASK.110): spill oversized tool results to the artifact
       // store (mirror of cli/main.ts:1292) — `sessionMeta.id`, not the later
       // `sessionId` const. Absent = truncation, the pre-TASK.94 behaviour.
@@ -4287,6 +4168,15 @@ async function boot(): Promise<void> {
     // further down. `undefined` for a child-session boot or a claude/codex
     // master, exactly mirroring `config.sessionSubagents`'s own absence.
     let childSessionPortHandle: ChildSessionPort | undefined;
+    routedChildComposition = createRoutedChildComposition({
+      health: roleHealth,
+      describeError,
+      resolve: resolveRoleRouteImpl,
+      prepare: (req) => stampLearnedMaxTurns(req, { adaptive: adaptiveTurnBudget, settingsBudgetSet: envConfig.subagentMaxTurns !== undefined, port: subagentBudget }),
+      record: (outcome, req) => recordAcceptedChildBudget(subagentBudget, outcome, req),
+      report: (id, text, meta) => childReportQueue.add(id, text, meta),
+      deliver: deliverDetachedChildReport,
+    });
     // A1/R1 (Taskana 4704 review): the child port (below) exists BEFORE the
     // Session, so the child spawn mode is read through the shared cell
     // (spawn-mode-cell.ts): config-derived until the Session exists, then the
@@ -4313,8 +4203,7 @@ async function boot(): Promise<void> {
         // turn count exists (the admit outcome is not evidence), so the
         // adaptive history is written here, before the report is delivered.
         onDetachedTerminal: (outcome, req) => {
-          recordAcceptedChildBudget(subagentBudget, outcome, req);
-          deliverDetachedChildReport(outcome, req);
+          routedChildComposition!.onTerminal(outcome, req);
         },
         // TASK.148 slice 2: the detached-stall delivery seam — fires
         // mid-run, zero or more times, independently of onDetachedTerminal
@@ -4341,63 +4230,7 @@ async function boot(): Promise<void> {
           readChildSessionsPerParentMax(hostSettingsPathOverride() ?? defaultSettingsPath(), rolesProjectRoot),
       });
       config.sessionSubagents = childSessionPortHandle;
-      // Taskana 4704 §3.6: the respawn path re-spawns through THIS port, and
-      // every detached spawn's route facts are recorded at admit so a
-      // terminal can classify + respawn. The wrapper records ONLY routed
-      // role spawns (noteRoutedSpawn no-ops otherwise) and never alters the
-      // outcome — the port itself stays byte-identical.
-      childSessionPortForRespawn = childSessionPortHandle;
-      const innerRun = childSessionPortHandle.run.bind(childSessionPortHandle);
-      childSessionPortHandle.run = (req: SessionSubagentRequest, opts: SubagentRunOptions) => {
-        // Cross-review F2: record ONLY spawns whose route the HOST actually
-        // stamped — a caller-passed explicit model/provider/connection is the
-        // caller's own choice, never a role-chain hop, so a later infra
-        // failure must NOT respawn it onto the chain (that would override the
-        // explicit request). R7 (re-review #3): core's routeStamped flag is
-        // the ONLY discriminator — it is set exactly when the route (not the
-        // caller) stamped the request (tools/agent.ts), so a caller's explicit
-        // model that merely equals the bare head model is never mistaken for a
-        // chain hop. Field equality is no longer consulted.
-        // GitHub #17 slice D: a SYNCHRONOUS join that can be
-        // handed off to the background needs the same route facts recorded —
-        // its real terminal arrives after the tool call returned. The snapshot
-        // (head/rest/skipped) is captured HERE, at dispatch, so a later
-        // background terminal never reads freshly changed settings.
-        if (
-          (req.detach === true || req.allowBackgroundHandoff === true) &&
-          isRoleRouteName(req.agentType) &&
-          req.resumeChildSessionId === undefined
-        ) {
-          const resolution = resolveRoleRouteImpl(req.agentType);
-          const head = resolution?.entries[0];
-          if (head !== undefined) {
-            if (req.routeStamped === true) {
-              noteRoutedSpawn(req, head, resolution!.entries.slice(1), resolution!.skipped);
-            }
-          }
-        }
-        // TASK.4721: adaptive only — a learned base budget stands in for the
-        // host default (never over an explicit request, the settings budget, or
-        // an engine child). The same object is returned when nothing applies.
-        const budgeted = stampLearnedMaxTurns(req, {
-          adaptive: adaptiveTurnBudget,
-          settingsBudgetSet: envConfig.subagentMaxTurns !== undefined,
-          port: subagentBudget,
-        });
-        // GitHub #17 slice D: ONE outcome-based continuation for
-        // every request. An admission/handoff outcome (explicit detach OR a
-        // join-budget handoff) is not a finished run — it must neither train
-        // the budget nor release the routed-spawn facts (the child's real
-        // terminal, delivered through onDetachedTerminal, still needs them).
-        // A real synchronous terminal/rejection records its budget and drops
-        // the route facts, exactly like before this slice.
-        return innerRun(budgeted, opts).then((outcome) => {
-          if (outcome.background !== undefined) return outcome;
-          routedSpawns.delete(req.spawnToolCallId);
-          recordAcceptedChildBudget(subagentBudget, outcome, budgeted);
-          return outcome;
-        });
-      };
+      routedChildComposition.attach(childSessionPortHandle);
     }
     // taskana 4181: the supervisor idle watchdog for a CORE root boot — the
     // engine-agnostic twin of the codex boot's construction above (same
@@ -4470,11 +4303,12 @@ async function boot(): Promise<void> {
           createUsageRecorder: (model) => {
             const subagentId = randomUUID();
             let step = 0;
+            const pricingRaw = currentPricingRaw();
             return (usage) => {
               const price = envConfig.baseUrl.replace(/\/$/, "") === catalogEntry?.baseUrl.replace(/\/$/, "")
                 ? catalogEntry.models.find((item) => item.id === model)?.pricing : undefined;
-              const override = connectionPricing(process.env.ANYCODE_CONNECTION_PRICING);
-              const cost = override?.subscription ? { priceBasisId: "subscription" } : calculateUsageCost(usage, override?.price ?? price);
+              const override = resolveUsagePrice(pricingRaw, model ?? "", price);
+              const cost = override?.subscription ? { priceBasisId: "subscription" } : calculateUsageCost(usage, override?.price);
               const row = { ...usage, ...cost, subagentId, sessionId, turnId: subagentId, step: ++step, createdAt: Date.now(), model, finishReason: "unknown", transportRetries: 0 };
               usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve()).then(() => persistence!.recordProviderUsage(row)).catch((e) => console.error("[host] usage audit write failed", e));
             };
@@ -4589,7 +4423,10 @@ async function boot(): Promise<void> {
     // Slice P7.15 (F14, design §2.1): the narrow mid-session model-switch
     // callback (mirror of the CLI's deps.model.set). It stays host-owned while
     // CoreEngine exposes it through the neutral SessionEngine seam.
-    const switchModelImpl = (id: string, selectedTier: ReasoningEffort) => {
+    const switchModelImpl = (id: string, selectedTier: ReasoningEffort, effortExplicit = false) => {
+        if (isChildSession) connectionModelSettings.refresh();
+        else selectedTier = connectionModelSettings.switchEffort(currentModel, id, selectedTier, effortExplicit);
+        const effortAdjustment = isChildSession ? undefined : connectionModelSettings.takeAdjustment();
         // TASK.162 (§0b): Session hands its OWN preserved user-selected tier
         // here, so this is the second (and only other) writer that keeps the
         // host cell faithful — without it a tier selected before a switch
@@ -4614,7 +4451,7 @@ async function boot(): Promise<void> {
         // model binding is absent or names THIS id (TASK.142) — a pair saved for
         // model A never leaks its window onto B, and an unknown id re-resolves
         // the assumed fallback rather than a stale previous model's window.
-        const contextInfo = resolveContextWindowInfo(id, catalogEntry, envConfig.contextWindowTokens, envConfig.contextWindowModel);
+        const contextInfo = connectionModelSettings.contextFor(id);
         const contextWindow = contextInfo.tokens;
         liveContextWindowAssumed = contextInfo.source === "assumed";
         config.maxOutputTokens = clampChildOutput(resolveMaxOutputTokens(
@@ -4626,7 +4463,7 @@ async function boot(): Promise<void> {
           (modelId, applied) =>
             console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
         ));
-        const resolvedEffort = resolveReasoningEffort(id, catalogEntry, selectedTier, liveCapsFor(id));
+        const resolvedEffort = resolveSessionEffort(id, catalogEntry, selectedTier, liveCapsFor(id), effortLevelsFor(id));
         config.reasoningEffort = resolvedEffort;
         liveContextWindow = contextWindow;
         // TASK.198 срез C (plan §9): a model switch can flip sighted<->blind,
@@ -4642,17 +4479,23 @@ async function boot(): Promise<void> {
         config.systemPrompt = composeSystemPrompt(switchedSystemPromptComponents);
         config.systemPromptComponents = switchedSystemPromptComponents;
         loop.setContextWindow(contextWindow);
+        if (previous !== id) loop.invalidateProviderAnchor();
         loop.setTodoReminderEvery(envConfig.todoReminderEvery ?? catalogEntry?.models.find((m) => m.id === id)?.todoReminderEvery);
         config.context = { ...config.context, contextWindowTokens: contextWindow };
-        const availableEffortLevels = resolveEffortLevels(id, catalogEntry, liveCapsFor(id));
+        const availableEffortLevels = resolveEffortLevels(id, catalogEntry, liveCapsFor(id), effortLevelsFor(id));
         if (persistence) {
           void persistence.touchSession(sessionId, { model: id }).catch((error) => {
             console.error(`[host] touchSession(model) failed: ${describeError(error)}`);
           });
         }
         console.log(`[host] model switched: ${previous} -> ${id}`);
+        const usage = loop.contextInfo();
         return {
           model: id,
+          previousModel: previous,
+          contextUsage: {estimatedTokens: usage.estimatedTokens, budgetTokens: usage.effectiveWindowTokens, source: usage.source},
+          selectedReasoningEffort: selectedTier,
+          ...(effortAdjustment !== undefined ? { effortAdjustment } : {}),
           reasoningEffort: resolvedEffort ?? "off",
           ...(availableEffortLevels !== undefined ? { availableEffortLevels } : {}),
         };
@@ -4661,16 +4504,33 @@ async function boot(): Promise<void> {
       loop,
       config,
       switchModelImpl,
-      resolveSelectedEffort: (effort) => resolveReasoningEffort(currentModel, catalogEntry, effort, liveCapsFor(currentModel)),
-      onBeforeTurn: refreshExtensionProfiles,
+      resolveSelectedEffort: (effort) => resolveSessionEffort(currentModel, catalogEntry, effort, liveCapsFor(currentModel), effortLevelsFor(currentModel)),
+      onBeforeTurn: async () => {
+        if (connectionModelSettings.refresh()) session?.refreshModelSettings();
+        turnPricingRaw = currentPricingRaw();
+        await refreshExtensionProfiles();
+      },
       // Preserve the selected tier independently of the model-effective tier.
       onReasoningEffortSet: (effort) => {
         selectedEffort = effort ?? "off";
+        connectionModelSettings.remember(currentModel, selectedEffort);
       },
     });
     const cleanupHandoff = sessionMeta.worktreeCleanup ?? parseCleanupIntent(process.env[WORKTREE_CLEANUP_ENV]);
     const coreHistoryMaxItems = resolveSessionHistoryMaxItems(process.env);
+    const restoredLoopContext = loop.contextInfo();
+    const fallbackContext = initialHistory.length > 0
+      ? { estimatedTokens: restoredLoopContext.estimatedTokens, budgetTokens: restoredLoopContext.effectiveWindowTokens, source: "estimate" as const }
+      : undefined;
+    const restoredContext = await contextSnapshotOptions(persistence, sessionId, "core", currentModel, restoredLoopContext.effectiveWindowTokens, fallbackContext);
+    compactionRecordSeam = await createCompactionRecordLog(() => persistence, sessionId).catch((error: unknown) => {
+      // Fail-soft: a session with no remembered compaction rows is far better
+      // than a session that refuses to open.
+      console.error(`[host] compaction records unavailable: ${describeError(error)}`);
+      return undefined;
+    });
     session = new Session({
+      ...restoredContext,
       workspaceTrustRequired: workspaceTrustRequiredMessage,
       outbound,
       engine,
@@ -4840,14 +4700,15 @@ async function boot(): Promise<void> {
       },
       model: currentModel,
       reasoningSupported: bootEffortLevels !== undefined,
+      ...(bootAdjustment !== undefined ? { bootEffortAdjustment: bootAdjustment } : {}),
       ...(bootEffortLevels !== undefined ? { availableEffortLevels: bootEffortLevels } : {}),
       // The SAME two resolvers this composition root already uses for the boot
       // vocabulary and for every model switch, so the status projection and
       // `set_session_effort` validation can describe the SELECTED model (a
       // queued change included) exactly as core will resolve it.
       effortResolution: {
-        levels: (id) => resolveEffortLevels(id, catalogEntry, liveCapsFor(id)),
-        effective: (id, tier) => resolveReasoningEffort(id, catalogEntry, tier, liveCapsFor(id)),
+        levels: (id) => resolveEffortLevels(id, catalogEntry, liveCapsFor(id), effortLevelsFor(id)),
+        effective: (id, tier) => resolveSessionEffort(id, catalogEntry, tier, liveCapsFor(id), effortLevelsFor(id)),
       },
       // Slice P7.15 (F14): the user-selected effort tier, threaded so Session can
       // re-resolve effort against the NEW model on a switch (mirror of the CLI's
@@ -4944,10 +4805,9 @@ async function boot(): Promise<void> {
         spawnModeCell.onOrchestrateChanged(enabled);
       },
       // Taskana 4704 §3.6: turn-start orchestrator-route check — the host
-      // owns the health cache AND switchModelImpl. Applies model+effort ONLY
-      // on the tab's active connection (§9-Q2: connection switching stays
-      // manual). Returns the engine_notice line when a switch happened.
-      orchestratorRouteCheck: (): string | undefined => {
+      // owns the health cache. Returns a model and effort selection only
+      // for the tab's active connection, along with the notice to surface.
+      orchestratorRouteCheck: () => {
         refreshRolesSettings();
         const orchestrator = rolesSettings?.orchestrator;
         if (orchestrator === undefined) return undefined;
@@ -4979,8 +4839,7 @@ async function boot(): Promise<void> {
         const effort = picked.entry.effort === undefined || picked.entry.effort === "xhigh"
           ? undefined
           : picked.entry.effort;
-        switchModelImpl(switchModel, effort ?? selectedEffort ?? "medium");
-        return `Orchestrator: primary route unhealthy (${reason}), running on ${switchModel}.`;
+        return { notice: `Orchestrator: primary route unhealthy (${reason}), running on ${switchModel}.`, model: switchModel, ...(effort !== undefined ? { effort } : {}) };
       },
       // Slice P7.8 (design slice-P7.8-cut.md §3.2, mirror of the `lsp` seam
       // above): telemetry reads live counters on every push; repo-map is
@@ -4992,6 +4851,7 @@ async function boot(): Promise<void> {
       },
       imageInputEnabled: media.imageInputEnabled,
       contextWindowAssumed: () => liveContextWindowAssumed,
+      modelSettingsConnectionId: liveCapsConnectionId ?? null,
       // TASK.198 срез C: core-only wiring (codex/claude Sessions never pass
       // these two — "codex/claude НЕ задеты (замыкание не установлено)").
       imageFallbackAvailable: media.recognizerConfigured,
@@ -5005,6 +4865,11 @@ async function boot(): Promise<void> {
         sessionId,
         onError: (error) => console.error(`[host] touchSession failed: ${describeError(error)}`),
       }),
+      // GitHub #36: the durable compaction rows. Loaded BEFORE Session exists so
+      // the very first handshake (a resume's session_history) already carries
+      // every compaction this session went through, not just the ones this
+      // process will produce.
+      ...(compactionRecordSeam !== undefined ? { compactionRecords: compactionRecordSeam } : {}),
       // Taskana 4083 / TASK.34: the persistent per-step provider-usage audit,
       // CORE-ONLY wiring (codex/claude boots above pass nothing — their usage
       // arrives as cumulative REPLACE snapshots, not per-step finishes).
@@ -5017,9 +4882,9 @@ async function boot(): Promise<void> {
             // may charge a different price even when it exposes the same model.
             const price = envConfig.baseUrl.replace(/\/$/, "") === catalogEntry?.baseUrl.replace(/\/$/, "")
               ? catalogEntry.models.find((model) => model.id === r.model)?.pricing : undefined;
-            const override = connectionPricing(process.env.ANYCODE_CONNECTION_PRICING);
+            const override = resolveUsagePrice(turnPricingRaw, r.model ?? "", price);
             const cost = override?.subscription ? { priceBasisId: "subscription" }
-              : calculateUsageCost(r, override?.price ?? price);
+              : calculateUsageCost(r, override?.price);
             // Serialized (chained off the tail, never parallel) so flush()
             // below is an honest drain of every queued write IN ORDER.
             usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve())
@@ -5107,7 +4972,7 @@ async function boot(): Promise<void> {
   }
 }
 
-const ready = boot();
+const ready = startHostWithActivity(boot, () => session, (message) => process.parentPort.postMessage(message));
 void ready.then(() => session?.observeAgentDeliveries((delivery) => { process.parentPort.postMessage({ type: "communication_delivery", delivery }); }));
 
 async function handleShutdown(): Promise<void> {
