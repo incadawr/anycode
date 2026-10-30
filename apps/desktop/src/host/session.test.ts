@@ -9435,6 +9435,11 @@ describe("child status transcript", () => {
     ["Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"],
     ['{"password":"first second', "second"],
     ['--password="first second"', "second"],
+    ["private_key: myprivatevalue", "myprivatevalue"],
+    ['{"credentials":"mycredentialvalue"}', "mycredentialvalue"],
+    ['--passphrase="myphrasevalue"', "myphrasevalue"],
+    ["X-Session-Id: mysessionvalue", "mysessionvalue"],
+    ["monkey=banana", "banana"],
   ])("emits bounded live text and scrubs %s on the child wire", (credential, secret) => {
     const h = createChildHarness({ steps: [finishStep()] });
     try {
