@@ -176,6 +176,9 @@ export interface SessionSubagentOutcome extends SubagentOutcome {
 export type SessionSubagentSendResult = { ok: true } | { ok: false; reason: "unavailable" | "not_running" | "not_yours" | "busy" | "host_error"; message: string };
 
 export interface SessionSubagentPort {
+  statusDiscarded?(): number;
+  listStatus?(): import("../subagents/status.js").ChildStatus[];
+  getStatus?(id: string): import("../subagents/status.js").ChildStatus | undefined;
   run(req: SessionSubagentRequest, opts: SubagentRunOptions): Promise<SessionSubagentOutcome>;
   /**
    * Taskana 4153: deliver a follow-up message to the parent's OWN RUNNING

@@ -3181,6 +3181,9 @@ export class TabHostManager {
       case "activity":
         event = { ...base, kind: "activity", toolName: msg.toolName, summary: msg.summary };
         break;
+      case "status":
+        event = { ...base, kind: "status", itemKind: msg.itemKind, text: msg.text, ...(msg.toolName !== undefined ? { toolName: msg.toolName } : {}) };
+        break;
       case "attention":
         event = {
           ...base,

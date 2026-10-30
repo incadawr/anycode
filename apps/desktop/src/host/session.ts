@@ -78,6 +78,7 @@ import {
   fixateFinalText,
   resetFinalText,
   summarizeChildToolCall,
+  sanitizeAndCap,
   withBackgroundTaskNotices,
   withPlanModeReminder,
   withOrchestrateReminder,
@@ -486,7 +487,8 @@ export interface ChildTerminalReport {
  */
 export type ChildProgressReport =
   | { kind: "progress"; turns: number; toolCalls: number; lastTool?: string }
-  | { kind: "activity"; toolName: string; summary: string };
+  | { kind: "activity"; toolName: string; summary: string }
+  | { kind: "status"; itemKind: "assistant" | "tool" | "result" | "reset"; text: string; toolName?: string };
 
 /**
  * Child-mode options (CUT-S2 §2.6.3). Presence of this option is what turns
@@ -1634,6 +1636,8 @@ export class Session {
   private readonly steerQueue: Array<{ requestId: string; text: string; images?: ImageAttachment[]; origin?: "system" }> = [];
   /** Final-text accumulator over the WHOLE child session's turn chain (packages/core/src/subagents/final-text.ts — the same reset/append/fixate semantics runner.ts applies to an inline subagent). */
   private childFinalText: FinalTextAccumulator = createFinalTextAccumulator();
+  private childStatusTextAt: number | undefined;
+  private childStatusTextSnapshot = "";
   /** Cumulative turn count across every runTurn() call this child session has made (summed from each call's own loop_end.turns). */
   private childTurns = 0;
   /** Cumulative tool_result count across the whole child session's turn chain. */
@@ -4692,6 +4696,7 @@ export class Session {
   private observeChildEvent(event: AgentEvent): void {
     switch (event.type) {
       case "turn_start":
+        this.childStatusTextSnapshot = "";
         this.childFinalText = resetFinalText(this.childFinalText);
         this.childSafeError = undefined;
         break;
@@ -4703,6 +4708,11 @@ export class Session {
       }
       case "text_delta":
         this.childFinalText = appendFinalText(this.childFinalText, event.text);
+        if (this.childStatusTextAt === undefined || this.now() - this.childStatusTextAt >= 1000) {
+          this.childStatusTextAt = this.now();
+          this.childStatusTextSnapshot = this.childFinalText.current;
+          this.child?.onProgress({ kind: "status", itemKind: "assistant", text: sanitizeAndCap(this.childFinalText.current, 160) });
+        }
         // Taskana 4820: a streaming turn is a sign of life — crosses the
         // throttled boundary so the parent-side stall clock keeps getting
         // re-armed while the child is mid-answer (a long model turn is not
@@ -4710,6 +4720,8 @@ export class Session {
         this.emitChildProgressBoundary();
         break;
       case "stream_retry":
+        this.childStatusTextSnapshot = "";
+        this.child?.onProgress({ kind: "status", itemKind: "reset", text: "" });
         this.childFinalText = resetFinalText(this.childFinalText);
         break;
       // Taskana 4820: same rationale as text_delta — a model emitting
@@ -4718,6 +4730,7 @@ export class Session {
         this.emitChildProgressBoundary();
         break;
       case "tool_execution_start":
+        this.child?.onProgress({ kind: "status", itemKind: "tool", text: sanitizeAndCap(`${event.toolName}: ${summarizeChildToolCall(event.toolName, event.input)}`, 160), toolName: sanitizeAndCap(event.toolName, 40) || "tool" });
         this.pendingChildCalls.set(event.toolCallId, { toolName: event.toolName, input: event.input });
         // Taskana 4820: dispatch itself is a sign of life — a child inside
         // one long-running tool call (a 15-min Bash, a slow web fetch) is
@@ -4730,6 +4743,7 @@ export class Session {
         this.armChildToolLiveness();
         break;
       case "tool_result":
+        this.child?.onProgress({ kind: "status", itemKind: "result", text: sanitizeAndCap(`${event.outcome.toolName}: ${event.outcome.status}${event.outcome.status === "success" ? ` — ${event.outcome.modelText}` : ""}`, 160), toolName: sanitizeAndCap(event.outcome.toolName, 40) || "tool" });
         this.childToolCalls += 1;
         this.childLastTool = event.outcome.toolName;
         // F3: the paired result settles the last open call — the liveness
@@ -4751,6 +4765,7 @@ export class Session {
         this.emitChildProgressBoundary();
         break;
       case "turn_end":
+        if (this.childFinalText.current !== this.childStatusTextSnapshot) this.child?.onProgress({ kind: "status", itemKind: "assistant", text: sanitizeAndCap(this.childFinalText.current, 160) });
         this.childFinalText = fixateFinalText(this.childFinalText);
         // Taskana 4820 review F2: for a claude child counting model rounds,
         // turn_end (once per runTurn) is already covered by the rounds that

@@ -112,6 +112,7 @@ import { childSessionLimitMessage } from "../shared/session-limits.js";
 
 import { randomUUID } from "node:crypto";
 import {
+  createChildStatusStore,
   DEFAULT_MAX_TURNS,
   SUBAGENT_STALL_TIMEOUT_MS,
   SubagentStallClock,
@@ -549,6 +550,7 @@ interface BackgroundChildEntry {
  * — the exact shape `tools/agent.ts`'s session-tier branch (S2b B1) awaits.
  */
 export function createChildSessionPort(options: CreateChildSessionPortOptions): ChildSessionPort {
+  const statusStore = createChildStatusStore();
   const createRequestId = options.createRequestId ?? randomUUID;
   const stallTimeoutMs = options.stallTimeoutMs ?? SUBAGENT_STALL_TIMEOUT_MS;
   const waiters = new Map<string, Waiter>();
@@ -739,6 +741,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     // Coarse progress can report the last completed tool after an approval ask.
     // Keep the pending tool authoritative until that ask settles.
     let approvalTool: string | undefined;
+    const statusActiveTools: string[] = [];
     const syncJoinBudgetMs = options.syncJoinBudgetMs ?? CHILD_SYNC_JOIN_BUDGET_MS;
     // The request the background callbacks receive: an explicitly detached run
     // keeps its own object identity; an automatically handed-off one gets a
@@ -918,6 +921,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               if (acceptedEvent !== undefined) return;
               acceptedEvent = event;
               acceptedAt = Date.now();
+              statusStore.start(event.childSessionId, req.description, req.spawnToolCallId);
               if (mode === "background" || req.detach === true) {
                 // A5 (slice D): an explicitly detached run keeps its own
                 // request object and settles with `reason: "requested"`.
@@ -980,6 +984,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               stallClock.noteProgress(event.lastTool);
               const lastTool = approvalTool ?? event.lastTool;
               retainProgress({ turns: event.turns, toolCalls: event.toolCalls, lastTool });
+              if (acceptedEvent) statusStore.update(acceptedEvent.childSessionId, { turns: event.turns, toolCalls: event.toolCalls });
               if (mode === "background") {
                 updateBackgroundSnapshot(acceptedEvent?.childSessionId ?? "", {
                   turns: event.turns,
@@ -1049,6 +1054,22 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               opts.onProgress?.(progress);
               return;
             }
+            case "status": {
+              if (acceptedEvent) {
+                if (event.itemKind === "reset") {
+                  statusStore.resetAssistant(acceptedEvent.childSessionId);
+                } else {
+                  statusStore.append(acceptedEvent.childSessionId, { kind: event.itemKind, text: event.text });
+                  if (event.itemKind === "tool" && event.toolName) statusActiveTools.push(event.toolName);
+                  if (event.itemKind === "result" && event.toolName) {
+                    const index = statusActiveTools.indexOf(event.toolName);
+                    if (index >= 0) statusActiveTools.splice(index, 1);
+                  }
+                  if (event.itemKind === "tool" || event.itemKind === "result") statusStore.update(acceptedEvent.childSessionId, { currentTool: approvalTool ?? statusActiveTools.at(-1) });
+                }
+              }
+              return;
+            }
             case "attention": {
               // Waiting for a human is NOT silence (TASK.148 slice 1/2): this
               // is the real PUSHED event the session tier has that the inline
@@ -1063,6 +1084,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 stallClock.resume();
               }
               approvalTool = event.waiting ? event.toolName : undefined;
+              if (acceptedEvent) statusStore.update(acceptedEvent.childSessionId, { state: event.waiting ? "waiting for approval" : "running", currentTool: approvalTool ?? statusActiveTools.at(-1) });
               retainProgress({ waitingForApproval: event.waiting, ...(event.waiting ? { lastTool: event.toolName } : {}) });
               if (mode === "joining") {
                 // A joining run has no parent-side notice yet, but a handoff
@@ -1107,6 +1129,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               // this waiter's life — disarm the pending join budget first, so a
               // timer can never hand off a finished child.
               terminalSeen = true;
+              if (acceptedEvent) statusStore.update(acceptedEvent.childSessionId, { state: event.status === "completed" ? "completed" : "failed", turns: event.turns, toolCalls: event.toolCalls, endedAt: Date.now(), currentTool: undefined });
               clearJoinTimer();
               // TASK.240: the cancel cause lives only in this host's registry
               // row, which the detached branch below deletes — read it NOW,
@@ -1360,5 +1383,5 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     };
   }
 
-  return { run, send, listBackgroundChildren, cancelBackgroundChild, cancelAllBackgroundChildren, onBackgroundChildrenChanged };
+  return { run, send, listStatus: statusStore.list, getStatus: statusStore.get, statusDiscarded: statusStore.discarded, listBackgroundChildren, cancelBackgroundChild, cancelAllBackgroundChildren, onBackgroundChildrenChanged };
 }

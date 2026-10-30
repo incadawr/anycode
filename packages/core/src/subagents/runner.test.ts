@@ -5877,3 +5877,20 @@ it("preserves the Git truncation notice through dispatcher formatting", async ()
     expect(result?.type === "tool_result" && Buffer.byteLength(result.outcome.modelText)).toBeLessThan(100000);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+describe("live child status transcript", () => {
+  it("publishes tool calls, results and assistant text from the actual child loop", async () => {
+    let step = 0;
+    const model = new ScriptedModelPort(() => ++step === 1
+      ? multiToolStep([{ id: "status-read", name: "TodoRead", input: {} }])
+      : textStep("investigation complete"));
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+    const items: Array<{ kind: string; text: string }> = [];
+    await runner.run(REQ, { onStatusItem: (item) => items.push(item) });
+    expect(items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "tool", text: expect.stringContaining("TodoRead") }),
+      expect.objectContaining({ kind: "result", text: expect.stringContaining("success") }),
+      expect.objectContaining({ kind: "assistant", text: "investigation complete" }),
+    ]));
+  });
+});
