@@ -1,7 +1,7 @@
 /** Tests for safe-command permission narrowing and its production composition. */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ModePermissionEngine } from "./engine.js";
@@ -80,7 +80,29 @@ describe("SafeCommandPermissionEngine", () => {
     expect(engine.check(bashRequest("git status --short | head", "build")).decision).toBe("ask");
   });
 
-  it("denies a PATH-shadowed binary and a writable earlier PATH directory", () => {
+  it("resolves each command along realistic PATH entries in the command cwd", () => {
+    const dir = mkdtempSync(join(tmpdir(), "plan-path-"));
+    const workspace = join(dir, "workspace");
+    const relativeBin = join(workspace, "node_modules", ".bin");
+    const writableBin = join(dir, "writable");
+    mkdirSync(relativeBin, { recursive: true });
+    mkdirSync(writableBin);
+    const engine = new SafeCommandPermissionEngine(new ModePermissionEngine());
+    const check = (command: string) => engine.check({ ...bashRequest(command, "plan"), cwd: workspace }).decision;
+    try {
+      process.env.PATH = `./node_modules/.bin:${writableBin}:/usr/bin:/bin`;
+      for (const command of ["ls", "wc", "head", "ls | head"]) expect(check(command), command).toBe("allow");
+      writeFileSync(join(writableBin, "ls"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      expect(check("ls")).toBe("deny");
+      expect(check("ls | head")).toBe("deny");
+      rmSync(join(writableBin, "ls"));
+      writeFileSync(join(relativeBin, "ls"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      expect(check("ls")).toBe("deny");
+      expect(check("git status")).toBe("deny");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("denies a PATH-shadowed binary but permits an empty writable earlier directory", () => {
     const dir = mkdtempSync(join(tmpdir(), "plan-shadow-"));
     try {
       writeFileSync(join(dir, "ls"), "#!/bin/sh\ntouch marker\n", { mode: 0o755 });
@@ -90,7 +112,7 @@ describe("SafeCommandPermissionEngine", () => {
       expect(engine.check(bashRequest("cat file | ls", "plan")).decision).toBe("deny");
       expect(engine.check(bashRequest("ls", "build")).decision).toBe("allow");
       rmSync(join(dir, "ls"));
-      expect(engine.check(bashRequest("ls", "plan")).decision).toBe("deny");
+      expect(engine.check(bashRequest("ls", "plan")).decision).toBe("allow");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
