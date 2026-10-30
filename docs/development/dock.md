@@ -98,6 +98,17 @@ below the threshold auto-calls `mergeSplit()` — no broken split survives.
 The `splitTabId` is not persisted (a boot never restores a split the window
 may no longer afford). No drag between panes (by scope decision).
 
+While a pane is pinned, the dock's resize floor rises from `DOCK_WIDTH_MIN`
+to `DOCK_WIDTH_MIN + DOCK_SPLIT_MIN_PX` (`dockMinWidth` in dock-layout.ts,
+applied to both the live drag clamp and the effective width): the pinned pane
+is an absolute 320px overlay of the dock body, so a 320px dock would cover
+the active pane entirely. The `canSplit` gate (≥1076px available) guarantees
+the window can always afford the raised floor; the auto-`mergeSplit()` below
+748…1076px stays the safety net. The drag itself (App.tsx's
+`beginDockResize`) tracks the initiating `pointerId` (a second finger's
+moves are ignored) and treats `pointercancel` exactly like `pointerup` — a
+canceled drag never leaves live listeners behind.
+
 Split rules (cross-review 4703): the pinned tab is never the active (primary)
 tab — focusing or re-opening the pinned tab unpins it — so one preview is never
 rendered twice. A web preview is never splittable: its WebContentsView is

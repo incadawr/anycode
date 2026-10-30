@@ -89,9 +89,21 @@ export function readDockWidth(storage: DockStorage): number {
  * push the conversation below its floor, but never collapses under its own
  * min either (a too-narrow window flips to drawer mode instead —
  * `computeDockMode`).
+ *
+ * `minWidth` (GitHub #31 review): a PINNED split pane (absolute,
+ * `DOCK_SPLIT_MIN_PX` wide) overlays the dock body from the right — at the
+ * plain `DOCK_WIDTH_MIN` dock width it would cover the active pane ENTIRELY.
+ * Callers that can have a split pinned pass
+ * `dockMinWidth({ splitPinned })`, which raises the floor to
+ * `DOCK_WIDTH_MIN + DOCK_SPLIT_MIN_PX` (the `canSplit` gate guarantees the
+ * window can always afford that: available >= 420 + 2*320 + 2*8).
  */
-export function clampDockWidth(width: number, available: number): number {
-  return Math.max(DOCK_WIDTH_MIN, Math.min(DOCK_WIDTH_MAX, Math.min(width, available - CONVERSATION_MIN_PX - DOCK_HANDLE_PX)));
+export function dockMinWidth(splitPinned: boolean): number {
+  return splitPinned ? DOCK_WIDTH_MIN + DOCK_SPLIT_MIN_PX : DOCK_WIDTH_MIN;
+}
+
+export function clampDockWidth(width: number, available: number, minWidth: number = DOCK_WIDTH_MIN): number {
+  return Math.max(minWidth, Math.min(DOCK_WIDTH_MAX, Math.min(width, available - CONVERSATION_MIN_PX - DOCK_HANDLE_PX)));
 }
 
 /**

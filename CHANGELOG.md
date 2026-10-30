@@ -10,6 +10,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - The right-side dock is resizable again: the drag handle renders as the grid's own 8px column instead of a zero-height strip inside the dock panel (GitHub #31).
+- Dock resizing keeps the active pane visible while a split pane is pinned, ignores foreign pointers during the drag, and ends cleanly on pointercancel.
 
 ## [0.0.53] — 2026-10-30
 
