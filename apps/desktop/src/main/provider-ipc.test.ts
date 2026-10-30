@@ -53,6 +53,34 @@ vi.mock("electron", () => ({
   },
 }));
 
+/**
+ * One-shot read gate for the settings-file watcher test: when armed, the NEXT
+ * `readFile` of the given path takes its bytes IMMEDIATELY — the pre-write
+ * snapshot — and then parks until the test opens the gate. That is the
+ * deterministic stand-in for a slow read whose bytes predate a user save that
+ * completes (and publishes its own snapshot) while it is still in flight.
+ */
+const readGate = vi.hoisted(() => ({
+  armed: false,
+  path: "",
+  started: undefined as (() => void) | undefined,
+  release: undefined as Promise<void> | undefined,
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const gatedReadFile = async (...args: unknown[]): Promise<unknown> => {
+    const bytes = await (actual.readFile as unknown as (...a: unknown[]) => Promise<unknown>)(...args);
+    if (readGate.armed && readGate.path === String(args[0])) {
+      readGate.armed = false; // one-shot: later reads (e.g. the save's own) never park
+      readGate.started?.();
+      await readGate.release;
+    }
+    return bytes;
+  };
+  return { ...actual, readFile: gatedReadFile as unknown as typeof actual.readFile };
+});
+
 /** `saveSettings` call counter (F-C zero-trace red-proofs — asserted by spy, not just by re-reading the file). */
 const saveSettingsSpy = vi.hoisted(() => ({ count: 0 }));
 /**
@@ -2303,6 +2331,69 @@ describe("startSettingsFileWatcher — external settings edits (real temp dir, p
     await delay(400);
     expect(count).toBe(settled);
     expect(count).toBeLessThanOrEqual(3);
+  });
+
+  it("drops a settings read that overlapped a real provider save, so the save's snapshot stays current", async () => {
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["a"] }] });
+    // Stands in for main/index.ts's host state: the mutation hook assigns the
+    // snapshot synchronously on entry, so the LAST entry here is what a host
+    // started next would boot on.
+    const hostSnapshots: AnycodeSettings[] = [];
+    const onMutation = (fresh: AnycodeSettings): void => {
+      hostSnapshots.push(fresh);
+    };
+    mockHandlers.clear();
+    const handle = registerProviderIpc(makeDeps({ onMutation }));
+
+    // 1. An external edit lands; the watcher's read of it starts and parks
+    //    holding the PRE-save bytes.
+    let signalReadStarted!: () => void;
+    const readStarted = new Promise<void>((resolve) => {
+      signalReadStarted = resolve;
+    });
+    let openGate!: () => void;
+    readGate.path = settingsPath;
+    readGate.started = () => {
+      readGate.started = undefined;
+      signalReadStarted();
+    };
+    readGate.release = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    readGate.armed = true;
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["a", "stale"] }] });
+    await Promise.race([
+      readStarted,
+      delay(4000).then(() => {
+        throw new Error("the watcher never started reading settings.json");
+      }),
+    ]);
+
+    // 2. The user's provider save completes while that read is still in flight,
+    //    through the production create path (real load → save → onMutation).
+    const created = await handleCustomProviderCreate(makeDeps({ onMutation }), {
+      name: "Fresh endpoint",
+      baseUrl: "https://fresh.example.com",
+      kind: "openai-compatible",
+      apiKey: "k",
+      models: ["m1"],
+    });
+    expect(created.ok).toBe(true);
+    const savedAt = hostSnapshots.length - 1;
+    expect(hostSnapshots[savedAt]?.provider.custom?.map((p) => p.id)).toEqual(["custom:fixed-id"]);
+
+    // 3. The stale read now finishes. It must not be installed on top of the
+    //    save's snapshot — that is the "next host boots on the old model /
+    //    connection" window this guard closes.
+    openGate();
+    await delay(800);
+    for (const snapshot of hostSnapshots.slice(savedAt)) {
+      expect(snapshot.provider.custom?.map((p) => p.id)).toEqual(["custom:fixed-id"]);
+    }
+    // Dropping the stale read must not wedge the watcher: the save's own
+    // directory event still republishes the bytes that are current.
+    expect(hostSnapshots.length).toBeGreaterThanOrEqual(savedAt + 2);
+    handle.dispose();
   });
 
   it("registerProviderIpc wires the existing onMutation to external edits and returns a disposer", async () => {
