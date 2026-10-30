@@ -243,6 +243,7 @@ describe("executeToolCall — dynamic validated-input metadata", () => {
     expect(result.status).toBe("success");
     expect(seen).toHaveLength(1);
     expect(seen[0]?.input).toEqual({ value: "remove" });
+    expect(seen[0]?.cwd).toBe(ctx.cwd);
     expect(seen[0]?.metadata).toMatchObject({
       destructive: true,
       riskLevel: "high",

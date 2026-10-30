@@ -322,6 +322,7 @@ export async function executeToolCall(
         input,
         metadata,
         mode: ctx.mode,
+        cwd: ctx.cwd,
         toolCallId,
         ...(workspace !== undefined ? { workspace } : {}),
       };

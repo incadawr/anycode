@@ -18,6 +18,8 @@ export interface PermissionRequest {
   input: unknown;
   metadata: ToolMetadata;
   mode: PermissionMode;
+  /** Working directory used to execute the tool. */
+  cwd?: string;
   /* */
   toolCallId?: string;
   /** Present only when the dispatch site proved the target resolvable (TASK.32). */

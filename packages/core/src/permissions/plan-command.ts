@@ -1,11 +1,9 @@
 import { accessSync, closeSync, constants, openSync, readSync, realpathSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute } from "node:path";
 import { classifyBashCommandLine } from "./safe-command.js";
 import { splitBashSegments } from "./rules.js";
 
 // Trust only root-owned, non-writable files and every directory on their paths.
-// This also prevents a writable earlier PATH entry from being populated between
-// the permission check and shell execution.
 function trustedPath(path: string, directory: boolean): boolean {
   try {
     const real = realpathSync(path);
@@ -32,22 +30,24 @@ function trustedPath(path: string, directory: boolean): boolean {
   }
 }
 
-function trustedExecutable(name: string): boolean {
+function trustedExecutable(name: string, cwd: string | undefined): boolean {
   if (!/^[a-z0-9-]+$/.test(name)) return false;
   const path = process.env.PATH;
-  if (!path) return false;
+  if (path === undefined) return false;
   for (const dir of path.split(":")) {
-    if (!isAbsolute(dir) || !trustedPath(dir, true)) return false;
-    const candidate = join(dir, name);
+    if (!isAbsolute(dir) && (!cwd || !isAbsolute(cwd))) return false;
+    // Preserve symlink/.. traversal exactly as the shell passes it to the OS.
+    const candidate = `${isAbsolute(dir) ? dir : `${cwd}/${dir}`}/${name}`;
     try {
+      const stat = statSync(candidate);
+      if (stat.isDirectory()) continue;
       accessSync(candidate, constants.X_OK);
-    } catch {
-      continue;
+    } catch (error) {
+      if (["ENOENT", "ENOTDIR", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) continue;
+      return false;
     }
     try {
       const real = realpathSync(candidate);
-      // Only system locations are accepted, even if another directory is root-owned.
-      if (!real.startsWith("/usr/bin/") && !real.startsWith("/bin/")) return false;
       if (!trustedPath(candidate, false)) return false;
       const fd = openSync(real, "r");
       try {
@@ -65,7 +65,7 @@ function trustedExecutable(name: string): boolean {
 }
 
 /** Plan mode never inherits build's basename trust or Git's lexical policy. */
-export function isTrustedPlanCommand(command: string): boolean {
+export function isTrustedPlanCommand(command: string, cwd?: string): boolean {
   if (process.platform === "win32" || !trustedPath("/bin/sh", false)) return false;
   if (Object.keys(process.env).some(key => /^(?:LD_|DYLD_|BASH_FUNC_|BASH_ENV$|ENV$)/.test(key) && process.env[key])) return false;
   if (classifyBashCommandLine(command).class !== "read-only") return false;
@@ -73,6 +73,6 @@ export function isTrustedPlanCommand(command: string): boolean {
   if (!split) return false;
   return split.segments.every(segment => {
     const name = segment.trim().split(/[ \t]+/, 1)[0] ?? "";
-    return name !== "git" && trustedExecutable(name);
+    return name !== "git" && trustedExecutable(name, cwd);
   });
 }
