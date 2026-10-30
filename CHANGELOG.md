@@ -17,6 +17,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Finished subagent approval notices clear when you continue the parent or visit the child, and paused approval timers retain their remaining time.
 - Queued parent messages clear finished subagent approval notices when submitted.
 - Switching a session to a provider on another connection asks before it cancels running subagents, naming how many will stop (GitHub #33).
+- The right-side dock is resizable again: the drag handle renders as the grid's own 8px column instead of a zero-height strip inside the dock panel (GitHub #31).
+- Dock resizing keeps the active pane visible while a split pane is pinned, ignores foreign pointers during the drag, and ends cleanly on pointercancel.
 
 ## [0.0.53] — 2026-10-30
 
