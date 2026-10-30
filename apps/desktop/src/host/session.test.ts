@@ -9427,3 +9427,25 @@ it("keeps the switched context budget in the reconnect checkpoint before another
     expect(checkpoint).toMatchObject({contextUsage:{budgetTokens:2048}});
   } finally { h.close(); }
 });
+
+describe("child status transcript", () => {
+  it("emits bounded live text, calls and safe error summaries on the child wire", () => {
+    const h = createChildHarness({ steps: [finishStep()] });
+    try {
+      observeChildEventDirect(h.session, { type: "turn_start", turn: 1 });
+      observeChildEventDirect(h.session, { type: "text_delta", id: "text", text: "😀".repeat(200) });
+      observeChildEventDirect(h.session, { type: "tool_execution_start", toolCallId: "c", toolName: "Read", input: { file_path: "/work/a" } });
+      observeChildEventDirect(h.session, { type: "tool_result", outcome: { toolCallId: "c", toolName: "Read", status: "error", modelText: "private error detail", durationMs: 1 } });
+      const items = h.onProgress.mock.calls.map(([report]) => report).filter((report) => report.kind === "status");
+      expect(items).toEqual(expect.arrayContaining([
+        expect.objectContaining({ itemKind: "assistant" }),
+        expect.objectContaining({ itemKind: "tool", text: "Read: /work/a", toolName: "Read" }),
+        expect.objectContaining({ itemKind: "result", text: "Read: error" }),
+      ]));
+      expect(JSON.stringify(items)).not.toContain("private error detail");
+      for (const item of items) expect(parseChildProgress({ type: CHILD_PROGRESS_TYPE, ...item })).not.toBeNull();
+      observeChildEventDirect(h.session, { type: "stream_retry", attempt: 1, maxAttempts: 2, delayMs: 0, reason: "retry" });
+      expect(h.onProgress.mock.calls.at(-1)?.[0]).toMatchObject({ kind: "status", itemKind: "reset" });
+    } finally { h.close(); }
+  });
+});

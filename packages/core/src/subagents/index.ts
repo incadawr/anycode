@@ -99,3 +99,7 @@ export type {
   AgentBridgeToolDecl,
   BuildSessionSubagentRequestParams,
 } from "./agent-bridge.js";
+
+export { createChildStatusStore, CHILD_STATUS_TEXT_MAX } from "./status.js";
+export type { ChildStatus, ChildStatusItem } from "./status.js";
+export { sanitizeAndCap } from "./summarize-tool.js";
