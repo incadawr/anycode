@@ -404,6 +404,17 @@ describe("classifyBashCommandLine — pipeline positives (DV-5 acceptance, all M
   });
 });
 
+describe("plan-mode Git status pipelines", () => {
+  it("admits only the narrow status form and still rejects unsafe segments and syntax", () => {
+    const options = { allowGitStatusPipeline: true };
+    expect(classifyBashCommandLine("git status --short | head", options).class).toBe("read-only");
+    for (const command of ["git status --short | tee out", "git status --short > out | head", "git status --short && rm x | head", "git status --short --output out | head", "git -c alias.status=evil status --short | head", "git log --oneline | head"]) {
+      expect(classifyBashCommandLine(command, options).class, command).toBe("unknown");
+    }
+    expect(classifyBashCommandLine("git status --short | head").class).toBe("unknown");
+  });
+});
+
 describe("classifyBashCommandLine — pipeline adversarial (all MUST be unknown)", () => {
   it("A1: separator confusion with safe-looking neighbors (the discriminators)", () => {
     expectAllLineUnknown([

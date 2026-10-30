@@ -449,7 +449,7 @@ function classifySedPipelineTokens(tokens: SegmentToken[]): BashCommandClass {
  * quote-UNAWARE raw screen runs first (same maximum-conservatism rule as the
  * single-command path), THEN quote-aware tokenization — tokenization exists
  * to CATCH what quotes hide, never to ADMIT what quotes wrap. */
-function classifyPipelineSegment(segment: string): BashCommandClass {
+function classifyPipelineSegment(segment: string, allowGitStatus: boolean): BashCommandClass {
   // 1. Quote-UNAWARE raw screen — the same maximum-conservatism rule as the
   //    single-command path: any shell metacharacter or control character
   //    anywhere in the segment (redirects < >, $, backtick, \, = env
@@ -478,9 +478,12 @@ function classifyPipelineSegment(segment: string): BashCommandClass {
     return "unknown";
   }
   const binary = basename(first.raw);
-  // 4. v1: no git segments in pipelines (DV-5 — the examples table wins).
+  // Plan mode admits only the narrowly specified status form in pipelines.
+  // Keep the existing build-mode pipeline policy unchanged.
   if (binary === "git") {
-    return "unknown";
+    return allowGitStatus && tokens.length === 3 &&
+      tokens[1]!.raw === "status" && tokens[2]!.raw === "--short"
+      ? "read-only" : "unknown";
   }
   // 5. The one sed subgrammar (DV-5); every other sed form asks.
   if (binary === "sed") {
@@ -515,7 +518,7 @@ function classifyPipelineSegment(segment: string): BashCommandClass {
  * `;`/`&`/`&&`/`||`/`|&`/newline chains, substitutions, redirects,
  * unbalanced quotes — is "unknown" (fail-closed).
  */
-export function classifyBashCommandLine(command: string): BashCommandLineClassification {
+export function classifyBashCommandLine(command: string, options?: { allowGitStatusPipeline?: boolean }): BashCommandLineClassification {
   const split = splitBashSegments(command);
   if (split === undefined) {
     // Substitution or unterminated quote: unsegmentable, never auto-allow.
@@ -534,7 +537,7 @@ export function classifyBashCommandLine(command: string): BashCommandLineClassif
     return { class: "unknown", shellExpression: true };
   }
   for (const segment of split.segments) {
-    if (classifyPipelineSegment(segment) !== "read-only") {
+    if (classifyPipelineSegment(segment, options?.allowGitStatusPipeline === true) !== "read-only") {
       return { class: "unknown", shellExpression: true };
     }
   }

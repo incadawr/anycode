@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Plan mode permits proven read-only Bash commands and pipelines (GitHub #30).
+
 ## [0.0.53] — 2026-10-30
 
 ### Changed
