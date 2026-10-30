@@ -653,6 +653,13 @@ describe("ContextManager.runCompaction — success", () => {
 
     const result = await manager.runCompaction({});
     expect(result.ok).toBe(false);
+    // UI audit v0.0.49 §C3: the reason is a plain sentence for a human, and the
+    // outcome is marked as a structural no-op — consumers must not have to
+    // parse the wording to tell it apart from a failed attempt.
+    expect(result).toMatchObject({
+      skipped: true,
+      error: "Nothing to compact yet — the conversation is too short",
+    });
     // History untouched and the model was never called.
     expect(snapshot(history)).toBe(before);
     expect((manager as unknown as { consecutiveFailures: number }).consecutiveFailures).toBe(0);
@@ -688,7 +695,9 @@ describe("ContextManager.runCompaction — success", () => {
       const result = await manager.runCompaction({});
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.error).toContain("already fully summarized");
+        expect(result.error).toContain("already summarized");
+        // Structural no-op, same as the empty-prefix case (UI audit v0.0.49 §C3).
+        expect(result.skipped).toBe(true);
       }
     }
     expect(port.requests.length).toBe(1);
@@ -749,7 +758,7 @@ describe("ContextManager.runCompaction — success", () => {
       const result = await manager.runCompaction({});
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.error).toContain("already fully summarized");
+        expect(result.error).toContain("already summarized");
       }
     }
     expect(requests.length).toBe(2);

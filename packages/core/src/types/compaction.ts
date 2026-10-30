@@ -40,6 +40,13 @@ export interface CompactionRecord {
   durationMs?: number;
   /** Redacted reason for a not-applied compaction. */
   error?: string;
+  /**
+   * True when the outcome was a structural NO-OP (nothing to compact) rather
+   * than an attempt that failed. Kept on the record so a reopened session still
+   * reads the row as a plain statement instead of a refusal (UI audit v0.0.49
+   * §C3). Absent on pre-existing records, which read as failures.
+   */
+  skipped?: true;
   /** The text installed as the new history head — what the model actually sees. */
   summary?: string;
   /** Id of the `compact_summary` history item that held `summary` (until a later compaction dropped it). */

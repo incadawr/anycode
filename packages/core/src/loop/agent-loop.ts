@@ -2088,6 +2088,9 @@ export class AgentLoop {
         preTokens: result.preTokens,
         durationMs: Date.now() - startedAt,
         error: result.error,
+        // UI audit v0.0.49 §C3: a structural no-op says so, so consumers do not
+        // have to parse the reason string to know nothing was attempted.
+        ...(result.skipped === true ? { skipped: true as const } : {}),
         prompt: result.prompt,
         // GitHub #36: the model that was asked is known even when the call
         // failed, so a failed row names it instead of showing only a duration.

@@ -106,6 +106,23 @@ describe("CompactionCard — the row is a disclosure (GitHub #36)", () => {
     expect(render(card({ status: "failed", error: "model unreachable" }))).toContain('role="alert"');
   });
 
+  it("a structural no-op is NOT an error state: plain sentence, neutral row, no alert", () => {
+    const skipped = card({
+      status: "failed",
+      skipped: true,
+      error: "Nothing to compact yet — the conversation is too short",
+    });
+    const html = render(skipped);
+
+    // The sentence appears once, in the host's own words (UI audit v0.0.49 §C3).
+    expect(html.match(/Nothing to compact yet/g) ?? []).toHaveLength(1);
+    expect(html).toContain("Nothing to compact yet — the conversation is too short");
+    expect(html).not.toContain("Compaction not applied");
+    // Nothing happened, so the row must not shout: no error tint, no alert role.
+    expect(html).not.toContain("message-error");
+    expect(html).not.toContain('role="alert"');
+  });
+
   it("a restored record from a native engine (no summary, no prompt) shows neither a panel nor a borrowed instruction", () => {
     const html = renderDetail(card({ restored: true, summaryOrigin: "record", preTokens: 5_000, postTokens: 400 }));
 
