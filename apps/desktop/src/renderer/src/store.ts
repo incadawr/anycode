@@ -931,7 +931,7 @@ export interface QueuedPromptImage {
 }
 
 export interface QueuedPrompt {
-  /** crypto.randomUUID() minted at enqueue; identifies the item for edit/delete. */
+  /** Queue identity for edit/delete; a refused steer retains its request id. */
   id: string;
   /** Final send text — paste markers already reconstituted at enqueue time. */
   text: string;
@@ -3691,7 +3691,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             const uiPending = get().uiSteerPending;
             const requeue = state.pendingSteers.filter((entry) => uiPending.includes(entry.requestId));
             const queueAdditions: QueuedPrompt[] = requeue.map((entry) => ({
-              id: crypto.randomUUID(),
+              id: entry.requestId,
               text: entry.sentMessage.text,
               images: entry.sentMessage.images,
             }));
@@ -4669,7 +4669,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               // steer_message it could not deliver — the text is owed a
               // next-turn send through the ordinary drainer.
               set((state) => ({
-                promptQueue: [...state.promptQueue, { id: crypto.randomUUID(), text: message.text as string, images: [] }],
+                promptQueue: [...state.promptQueue, { id: message.requestId, text: message.text as string, images: [] }],
                 steerRequeueSeen: [...state.steerRequeueSeen, message.requestId],
                 notice: { kind: "steer_requeued", text: "Steer not delivered into the running turn — queued for the next turn." },
               }));
@@ -5028,6 +5028,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               if (block.kind === "loop_end") loopEndEmitted.add(block.id);
             }
             set({ transcript, modelTurns: projection.getState().modelTurns, continueOffer: projection.getState().continueOffer, ...(!isCore ? { sessionTokens: projection.getState().sessionTokens } : {}) });
+            // A refused steer that became a later turn has already been sent.
+            // Its original request id survives queue draining in the journal.
+            set((state) => ({ steerRequeueSeen: [...new Set([...state.steerRequeueSeen, ...message.turns.map((turn) => turn.requestId)])] }));
             presentationReplayTurns = known;
             return;
           }
@@ -5503,7 +5506,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         set((state) => {
           const entry = state.pendingSteers.find((e) => e.requestId === requestId);
           if (entry === undefined) return {};
-          const queueItem: QueuedPrompt = { id: crypto.randomUUID(), text: entry.sentMessage.text, images: entry.sentMessage.images };
+          const queueItem: QueuedPrompt = { id: requestId, text: entry.sentMessage.text, images: entry.sentMessage.images };
           const at = index !== undefined && index >= 0 && index <= state.promptQueue.length ? index : state.promptQueue.length;
           const promptQueue = [...state.promptQueue.slice(0, at), queueItem, ...state.promptQueue.slice(at)];
           // Opus2 F1 (2026-10-24): mark the id seen — the host may STILL emit
@@ -5716,7 +5719,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         }
         const head = promptQueue[takeIndex]!;
         const rest = [...promptQueue.slice(0, takeIndex), ...promptQueue.slice(takeIndex + 1)];
-        set({ promptQueue: rest, queueInFlight: { requestId, item: head } });
+        const sendId = get().steerRequeueSeen.includes(head.id) ? head.id : requestId;
+        set({ promptQueue: rest, queueInFlight: { requestId: sendId, item: head } });
         return head;
       },
 

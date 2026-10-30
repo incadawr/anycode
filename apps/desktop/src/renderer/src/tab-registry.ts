@@ -411,11 +411,11 @@ export function createTabRegistry(
    * head couldn't be taken (queue emptied/paused/inFlight by a racing update).
    */
   function dispatchQueuedPrompt(entry: TabEntry): void {
-    const requestId = crypto.randomUUID();
-    const item = entry.store.getState().takeQueueHead(requestId);
+    const item = entry.store.getState().takeQueueHead(crypto.randomUUID());
     if (item === null) {
       return;
     }
+    const requestId = entry.store.getState().queueInFlight!.requestId;
     // TASK.145 срез 2: `item.origin` (set only for a detached-child report,
     // QueuedPrompt.origin's own doc) rides onto BOTH the local transcript
     // append (live system-card render) and the wire `user_message` (host

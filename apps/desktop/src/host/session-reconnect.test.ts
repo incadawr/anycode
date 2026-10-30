@@ -90,6 +90,79 @@ function renderedTextStep(text: string): ModelStreamEvent[] {
 }
 
 describe("TASK.117 — rendered reconnect (Session -> fresh desktopStore)", () => {
+  it("restores a mid-stream steer once after the turn finishes", async () => {
+    const h = createHarness({
+      steps: [toolStep("first-tool", "Write", { file_path: "/workspace/first.txt", content: "ok" }), [{ type: "start" }, { type: "text_start", id: "held" }, { type: "text_delta", id: "held", text: "waiting" }, { type: "tool_call", toolCall: { id: "steer-tool", name: "Write", input: { file_path: "/workspace/steer.txt", content: "ok" } } }, { type: "finish", finishReason: "tool_calls", usage: {} }], renderedTextStep("finished")],
+      gated: { parkAfterIndex: 3 },
+      mode: "yolo",
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor((m) => m.type === "host_ready");
+      const live = attachStore(h);
+      h.send({ type: "user_message", requestId: "prompt", text: "start" });
+      live.store.getState().appendUserText("prompt", "start");
+      await h.waitUntil(() => h.received.some((m) => m.type === "agent_event" && m.event.type === "tool_call" && m.event.toolCall.id === "steer-tool"));
+      h.send({ type: "steer_message", requestId: "steer", text: "change direction" });
+      await settle();
+      h.gated!.release();
+      await h.waitUntil(() => countLoopEnds(h) >= 1);
+      await settle();
+      feed(live.store, h, live.applied);
+      expect(texts(live.store).filter((text) => text === "change direction")).toHaveLength(1);
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some((m) => m.type === "presentation_replay_end"));
+      const snapshot = h.received.slice(before).find((m) => m.type === "presentation_snapshot");
+      expect(snapshot?.type === "presentation_snapshot" && snapshot.turns[0]?.events.flatMap((entry) => entry.event.type === "user_injected" ? [entry.event.step] : [])).toEqual([2]);
+      const fresh = createDesktopStore({ schedule: (fn) => fn() });
+      for (const message of h.received.slice(before)) fresh.getState().applyHostMessage(message);
+      expect(texts(fresh).filter((text) => text === "change direction")).toHaveLength(1);
+    } finally {
+      h.gated?.release();
+      h.close();
+    }
+  });
+
+  it("does not replay a refused steer after its next turn was accepted", async () => {
+    const h = createHarness({ steps: [renderedTextStep("first answer"), renderedTextStep("next answer")], gated: { parkAfterIndex: 2 } });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor((m) => m.type === "host_ready");
+      const live = attachStore(h);
+      h.send({ type: "user_message", requestId: "first", text: "first" });
+      await h.waitUntil(() => h.received.some((m) => m.type === "agent_event" && m.event.type === "text_delta"));
+      live.store.getState().recordPendingSteer("refused", "same words", undefined, { text: "same words", images: [] });
+      live.store.getState().markUiSteer("refused");
+      h.send({ type: "steer_message", requestId: "refused", text: "same words" });
+      await settle();
+      h.gated!.release();
+      await h.waitUntil(() => h.received.some((m) => m.type === "steer_requeued"));
+      await settle();
+      const afterRefusal = feed(live.store, h, live.applied);
+      const queued = live.store.getState().takeQueueHead("new-id");
+      expect(queued?.text).toBe("same words");
+      const requestId = live.store.getState().queueInFlight!.requestId;
+      expect(requestId).toBe("refused");
+      live.store.getState().appendUserText(requestId, "same words");
+      h.send({ type: "user_message", requestId, text: "same words" });
+      await h.waitUntil(() => countLoopEnds(h) >= 2);
+      await settle();
+      feed(live.store, h, afterRefusal);
+      expect(texts(live.store).filter((text) => text === "same words")).toHaveLength(1);
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some((m) => m.type === "presentation_replay_end"));
+      const fresh = createDesktopStore({ schedule: (fn) => fn() });
+      for (const message of h.received.slice(before)) fresh.getState().applyHostMessage(message);
+      expect(texts(fresh).filter((text) => text === "same words")).toHaveLength(1);
+      expect(fresh.getState().promptQueue).toHaveLength(0);
+    } finally {
+      h.gated?.release();
+      h.close();
+    }
+  });
+
   it("A: old 'Done' durable, then a genuinely NEW identical 'Done' turn renders twice — UI path and startProgrammaticTurn path", async () => {
     const h = createHarness({
       steps: [renderedTextStep("Done"), renderedTextStep("Done")],
