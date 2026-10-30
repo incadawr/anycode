@@ -16,6 +16,7 @@ import {
   pillDisplayLabel,
   pillLabel,
   providerModelsFor,
+  rebindRefusalText,
   resolvePid,
   resolvePillTarget,
   shouldPersistOnAck,
@@ -524,6 +525,14 @@ describe("chainWrite (defect #2: fast A-then-B picks must not persist the older 
     await chain;
 
     expect(order).toEqual(["A", "B", "C"]);
+  });
+});
+
+describe("rebindRefusalText (GitHub #33: a refused provider switch must read as a reason)", () => {
+  it("names the host failure and the running-subagents refusal, and passes other reasons through", () => {
+    expect(rebindRefusalText("spawn_failed")).toBe("host failed to start");
+    expect(rebindRefusalText("children_running")).toBe("subagents are running in this session");
+    expect(rebindRefusalText("not_ready")).toBe("not_ready");
   });
 });
 

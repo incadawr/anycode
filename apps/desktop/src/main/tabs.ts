@@ -1263,6 +1263,21 @@ export class TabHostManager {
     return this.rootCount() >= this.effectiveMaxTabs();
   }
 
+  /**
+   * How many live child sessions (background executors or session-tier
+   * subagents) are currently tracked under `parentTabId` (GitHub #33).
+   *
+   * Read straight off `childrenByParentTab`, the same index `drainChildren`
+   * empties: an entry exists from `admitChildSpawn` until `finalizeChildRun`
+   * releases it, so the count is exactly the set a rebind/close/relocate
+   * would cancel — nothing more (a queued waiter has no host to cancel and
+   * is reported as 0 here) and nothing less (a child still tearing down is
+   * still a child that would be cut off).
+   */
+  runningChildCount(parentTabId: string): number {
+    return this.childrenByParentTab.get(parentTabId)?.size ?? 0;
+  }
+
   /** Settings value -> clamped; NO reader value -> `limits.maxTabs` verbatim (test injection of 1/3 must survive). */
   private effectiveMaxTabs(): number {
     const configured = this.maxTabsReader?.();
@@ -2069,6 +2084,18 @@ export class TabHostManager {
       reject("closing", CHILD_CLOSING_MESSAGE);
       return;
     }
+    // GitHub #33: a re-bind replaces this tab's host and drains its children;
+    // a drain (closeTab / relocateTab / crash cascade) is already tearing them
+    // down. A child admitted now could only ever be cancelled by that drain —
+    // a cancellation the user, at best, consented to for the children that
+    // existed when they were asked. Refusing here is what makes every child
+    // gate FINAL: while `rebindings` or `drainingParents` holds this tab, no
+    // new reservation can reach `childrenByParentTab`. Same refusal a closing
+    // parent gets — the tab is being torn down (and, for a rebind, re-created).
+    if (this.rebindings.has(parentTab.tabId) || this.drainingParents.has(parentTab.tabId)) {
+      reject("closing", CHILD_CLOSING_MESSAGE);
+      return;
+    }
     if (req.resumeChildSessionId !== undefined) {
       // A follow-up must not boot a second host on the child's session while
       // the finished one is still flushing/exiting: re-enter once it is gone,
@@ -2617,6 +2644,21 @@ export class TabHostManager {
         this.childSpawnQueue.splice(i, 1);
         this.childSpawnWaiters.delete(requestId);
         this.childSpawnKeys.delete(waiter.spawnKey);
+        continue;
+      }
+      if (this.rebindings.has(waiter.parentTabId)) {
+        // GitHub #33: the parent is mid-rebind, and a rebind drains the
+        // children it finds. Admitting a waiter now would put it into that
+        // drain — cancelled either under a consent that only covered the
+        // children the user was shown, or (with no consent) not at all, but
+        // only after the switch's own child gate had already passed and its
+        // model write had landed. `spawnChild` refuses a fresh request for the
+        // same reason; the queue is the second door into `admitChildSpawn`, so
+        // it is held to the same rule. The waiter STAYS queued (not dropped):
+        // `drainChildren`'s synchronous prefix purges it with a `closing`
+        // refusal, and `releaseRebind` pumps once more for the path where the
+        // rebind refused before any drain.
+        i += 1;
         continue;
       }
       if (this.childSpawnCapBlock(parentTab) !== undefined) {
@@ -3346,6 +3388,13 @@ export class TabHostManager {
    * `handleExit` returns on that guard before `decideRespawn` ever runs.
    * `rapidRespawns` is reset for the same reason `relocateTab` resets it — a new
    * process on a new account is a new epoch, not a continuation of a crash streak.
+   *
+   * GitHub #33: `opts.cancelChildren` is the user's consent to the cancellation
+   * the drain performs. Without it a tab with live children refuses
+   * `children_running` (with the count) BEFORE the drain starts, so nothing is
+   * lost. The check is synchronous and sits immediately before `drainChildren`,
+   * and admission is refused for the whole `rebindings` window (see
+   * `spawnChild`), so no child can slip in between the check and the drain.
    */
   /** Acquire the per-tab rebind operation before asynchronous preparation. */
   acquireRebind(tabId: string): boolean {
@@ -3356,17 +3405,37 @@ export class TabHostManager {
 
   releaseRebind(tabId: string): void {
     this.rebindings.delete(tabId);
+    // GitHub #33: the queue pump leaves this tab's waiters parked while the
+    // lock is held (they must not join the set being drained). Settle them now
+    // that the switch is over — the same `closing` refusal / silent drop a
+    // waiter gets when its parent's host was replaced, never a fork into a
+    // dead generation.
+    this.pumpChildSpawnQueue();
   }
 
-  async rebindTab(tab: TabHost, connectionId: string, priorEffort?: ReasoningEffort): Promise<{ ok: true } | { ok: false; reason: "not_ready" | "spawn_failed" }> {
+  async rebindTab(
+    tab: TabHost,
+    connectionId: string,
+    priorEffort?: ReasoningEffort,
+    opts?: { cancelChildren?: boolean },
+  ): Promise<{ ok: true } | { ok: false; reason: "not_ready" | "spawn_failed" | "children_running"; runningChildren?: number }> {
     if (this.env(connectionId) === undefined) {
       this.logger.error(
         `[main] tab ${tab.tabId} rebind to ${connectionId} refused: no primed fork env for that connection`,
       );
       return { ok: false, reason: "not_ready" };
     }
-    // A rebind is as terminal for an in-flight child as a rehost is (cut §0.6):
-    // the parent is about to run on a different account entirely.
+    // GitHub #33: a rebind is as terminal for an in-flight child as a rehost is
+    // (cut §0.6) — the parent is about to run on a different account entirely.
+    // That is the mechanism's contract, but it is terminal for work the user
+    // may not see, so it needs their explicit consent. Synchronous, immediately
+    // before the drain: admission for this tab is refused while `rebindings`
+    // holds the operation (see `spawnChild`), so the set read here is the set
+    // the drain takes — nothing can appear in between.
+    const runningChildren = this.runningChildCount(tab.tabId);
+    if (runningChildren > 0 && opts?.cancelChildren !== true) {
+      return { ok: false, reason: "children_running", runningChildren };
+    }
     await this.drainChildren(tab);
     await this.shutdownTabHost(tab);
     if (this.quitting || this.closingTabs.has(tab.tabId) || this.tabs.get(tab.tabId) !== tab) return { ok: false, reason: "not_ready" };

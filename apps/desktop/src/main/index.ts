@@ -223,6 +223,7 @@ import { registerProviderIpc } from "./provider-ipc.js";
 import { flushPendingConnectionQuota, handleProviderQuotaMessage } from "./connection-quota.js";
 import {
   applyConnectionHealthEvent,
+  handleConnectionUpdate,
   handleSet,
   handleSwapCodexBinaryPath,
   projectCatalogSummary,
@@ -2838,6 +2839,17 @@ void app.whenReady().then(async () => {
     // re-bound host actually boots (the core resume boot reads its model off
     // the fork env, which after the rebind IS this connection's model).
     readConnectionModel: (id) => connectionById(currentSettings(), id)?.model,
+    // GitHub #33: the re-bind writes the target connection's model itself,
+    // through the SAME settings writer the renderer's connection-update channel
+    // uses (`handleConnectionUpdate` — one settings.json writer, so the write
+    // keeps its health-invalidation, host-env rebuild and readiness refresh).
+    // It runs inside the rebind's locked window: after the child gate, before
+    // the fork env is primed. `settingsIpcDeps` is declared further below in
+    // this same function scope, and this callback can only fire after boot has
+    // finished — the same forward-reference precedent `connectionInUse` and
+    // `onProviderHealthEvent` above already rely on.
+    writeConnectionModel: (id, model) =>
+      handleConnectionUpdate(settingsIpcDeps, { id, model }).then((result) => result.ok),
     // S4-1 arm 2: consume-once import-model override for the first resume of an
     // imported session (see the holder above). Undefined until the rollout IPC
     // wires it below; harmless (no override) for any resume before then.
