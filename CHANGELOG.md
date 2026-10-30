@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.55] — 2026-10-30
+
 ### Added
 
 - Xiaomi MiMo Token Plan is available as a provider (mimo-v2.6-pro and mimo-v2.6-flash; SGP, CN and AMS regions).
