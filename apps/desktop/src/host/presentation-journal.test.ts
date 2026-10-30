@@ -35,20 +35,40 @@ describe("presentation journal retention", () => {
   });
 
   it("keeps retained reasoning and text renderable at the event limit", () => {
-    const journal = new PresentationJournal();
+    const journal = new PresentationJournal(1, 5);
     journal.start("t", "r", 1, "prompt");
+    for (let i = 0; i < 3; i++) journal.record("t", { type: "text_end", id: `filler${i}` }, 1, 1);
     journal.record("t", { type: "reasoning_start", id: "reason" }, 1, 1);
     journal.record("t", { type: "reasoning_delta", id: "reason", text: "thinking" }, 1, 1);
     journal.record("t", { type: "text_start", id: "text" }, 1, 1);
     journal.record("t", { type: "text_delta", id: "text", text: "answer" }, 1, 1);
-    for (let i = 0; i < 5000; i++) journal.record("t", { type: "text_end", id: `filler${i}` }, 1, 1);
     const snapshot = journal.snapshot();
-    expect(snapshot.turns[0]!.events).toHaveLength(5000);
+    expect(snapshot.turns[0]!.events).toHaveLength(5);
     const store = createDesktopStore({ schedule: (fn) => fn() });
     store.getState().applyHostMessage({ type: "presentation_snapshot", ...snapshot, items: [], truncated: false, historyTracksTurns: true });
     expect(store.getState().transcript).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "reasoning", text: "thinking" }),
       expect.objectContaining({ kind: "assistant_text", text: "answer" }),
+    ]));
+  });
+
+  it("retains and renders a steer and footer after old streams fill the limit", () => {
+    const journal = new PresentationJournal(1, 4);
+    journal.start("t", "r", 1, "prompt");
+    for (const id of ["old1", "old2"]) {
+      journal.record("t", { type: "text_start", id }, 1, 1);
+      journal.record("t", { type: "text_delta", id, text: id }, 1, 1);
+    }
+    journal.record("t", { type: "user_injected", step: 1, text: "steer" }, 1, 1);
+    journal.record("t", { type: "loop_end", reason: "completed", turns: 1 }, 1, 1);
+    const snapshot = journal.snapshot();
+    expect(snapshot.turns[0]!.events.map(({ event }) => event.type)).toEqual(["text_start", "text_delta", "user_injected", "loop_end"]);
+    const store = createDesktopStore({ schedule: (fn) => fn() });
+    store.getState().applyHostMessage({ type: "presentation_snapshot", ...snapshot, items: [], truncated: false, historyTracksTurns: true });
+    expect(store.getState().transcript).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "assistant_text", text: "old2" }),
+      expect.objectContaining({ kind: "user_text", text: "steer" }),
+      expect.objectContaining({ kind: "loop_end" }),
     ]));
   });
 

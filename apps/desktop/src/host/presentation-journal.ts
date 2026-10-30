@@ -57,9 +57,8 @@ export class PresentationJournal {
 
   private trimEvents(turn: PresentationTurn): void {
     while (turn.events.length > this.replayLimit) {
-      // Keep a retained delta together with the start that makes it visible.
-      // Prefer trimming other events; if the limit cannot hold all streams,
-      // remove the oldest pair together.
+      // Remove the oldest event, together with its paired stream event if any.
+      // This keeps retained deltas renderable without sacrificing newer events.
       const starts = new Map<string, number>();
       const pairs = new Map<number, number>();
       turn.events.forEach((entry, index) => {
@@ -73,8 +72,8 @@ export class PresentationJournal {
           if (start !== undefined) { pairs.set(start, index); pairs.set(index, start); }
         }
       });
-      const unpaired = turn.events.findIndex((_, index) => !pairs.has(index));
-      const indices = unpaired >= 0 ? [unpaired] : [0, pairs.get(0)!].sort((a, b) => b - a);
+      const partner = pairs.get(0);
+      const indices = partner === undefined ? [0] : [partner, 0];
       for (const index of indices) {
         const [removed] = turn.events.splice(index, 1);
         for (const [key, entry] of this.deltas) if (entry === removed) this.deltas.delete(key);
