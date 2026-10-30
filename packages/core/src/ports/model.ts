@@ -39,6 +39,14 @@ export interface ModelPort {
   /** Provider-specific minimum effort for lightweight title requests, if needed. */
   readonly titleReasoningEffort?: ReasoningEffort;
   /**
+   * Provider-specific output-token ceiling for the one-shot title request.
+   * `undefined` means the caller's default title cap, which is sized for a
+   * title alone. A provider that always thinks before it answers needs enough
+   * room for that thinking block plus the title, or the reply stops at
+   * `max_tokens` with no text at all.
+   */
+  readonly titleMaxOutputTokens?: number;
+  /**
    * Provider-reported model id from the most recent raw response observed by
    * this port (anthropic-messages `message_start.message.model`). `undefined`
    * until a raw claim is seen and on transports/providers that expose none.
