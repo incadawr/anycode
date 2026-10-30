@@ -708,7 +708,15 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(options.tasks ? { tasks: options.tasks } : {}),
     // Mirror host boot (slice P7.26/R1): a supplied capturer is spread into
     // config.checkpoints; absent -> the arc stays dormant (byte-identical).
-    ...(options.checkpoints ? { checkpoints: options.checkpoints } : {}),
+    // GitHub #36: the boundary sampler is wired with it, exactly as host boot
+    // does — every turn's checkpoint records the compaction sequence current at
+    // its start, so a rewind can tell which rows predate the snapshot.
+    ...(options.checkpoints
+      ? {
+          checkpoints: options.checkpoints,
+          compactionBoundary: () => options.compactionRecords?.sequence() ?? 0,
+        }
+      : {}),
     // Mirror host boot (Taskana 4104): artifacts store + sessionId spread into
     // config.artifacts; absent -> spill degrades to truncation (byte-identical).
     ...(options.artifacts ? { artifacts: options.artifacts } : {}),

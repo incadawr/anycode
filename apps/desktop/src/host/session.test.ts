@@ -7426,6 +7426,7 @@ describe("Session — manual compaction wire (TASK.146)", () => {
         record: (record) => { records.push(record); },
         list: () => records,
         flush: () => Promise.resolve(),
+        sequence: () => records.length,
         truncate: () => undefined,
       },
     });
@@ -7483,6 +7484,7 @@ describe("Session — manual compaction wire (TASK.146)", () => {
         record: (entry) => { records.push(entry); },
         list: () => records,
         flush: () => Promise.resolve(),
+        sequence: () => records.length,
         truncate: () => undefined,
       },
     });
@@ -7564,7 +7566,9 @@ describe("Session — manual compaction wire (TASK.146)", () => {
         safetyCheckpointId: "safety-1",
         restoredPaths: 0,
         historyItems: turnStartHistory,
-        checkpointAt: checkpointCreatedAt,
+        // The boundary a real lazily created checkpoint carries: the sequence
+        // current at its turn start, BEFORE this turn's auto compaction ran.
+        compactionSeq: 0,
       }),
     };
     const h = createHarness({

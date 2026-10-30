@@ -475,7 +475,7 @@ import { ClaudeSettingsSeam } from "./engines/claude/settings-seam.js";
 import { ClaudeShadowTranscriptEngine, SqliteClaudeShadowTranscript } from "./engines/claude/shadow-transcript.js";
 import { ClaudeSessionRowWriter } from "./engines/claude/session-row.js";
 import { createCodexSessionTitlePersistence, createCoreSessionTitlePersistence } from "./session-title-persistence.js";
-import { createCompactionRecordLog } from "./compaction-records.js";
+import { createCompactionRecordLog, type CompactionRecordSeam } from "./compaction-records.js";
 import { claudeAgentPermissionMode, claudeChildPresetId, codexChildAutoAcceptsWorkspacePatches, codexChildPosture } from "./engines/child-permission-map.js";
 import { checkClaudeBinaryTrustOnDisk, CLAUDE_AGENT_BRIDGE_PROMPT } from "./engines/claude/claude-client.js";
 import { createEngineChildRunner } from "./engine-children.js";
@@ -3951,6 +3951,13 @@ async function boot(): Promise<void> {
     // repoMapStatus side effect fires here, before Session's envStatus seam reads
     // it; the prompt is derived from these so they cannot drift.
     const bootSystemPromptComponents = composeSystemPromptComponents();
+    /**
+     * GitHub #36 (review 4): the session's durable compaction records, created
+     * BELOW (it needs the session row) but read by the checkpoint arc above it —
+     * `compactionBoundary` samples this at every turn start. `let` + a closure,
+     * never a stale copy: the loop reads it per turn.
+     */
+    let compactionRecordSeam: CompactionRecordSeam | undefined;
     const config: AgentLoopConfig = {
       modelPort,
       registry,
@@ -4062,7 +4069,15 @@ async function boot(): Promise<void> {
       // Per-turn checkpoint arc (slice P7.26/R1): present ONLY when the gate
       // above built a service; its absence keeps the turn byte-identical (L2 —
       // runTurn never touches the arc). Mirror of cli/main.ts:1101.
-      ...(checkpointService !== null ? { checkpoints: checkpointService } : {}),
+      ...(checkpointService !== null
+        ? {
+            checkpoints: checkpointService,
+            // GitHub #36: the boundary the checkpoint must record is the
+            // sequence current when its history SNAPSHOT is taken (turn start),
+            // so a rewind to it can tell which compaction rows predate it.
+            compactionBoundary: () => compactionRecordSeam?.sequence() ?? 0,
+          }
+        : {}),
       // Taskana 4104 (TASK.110): spill oversized tool results to the artifact
       // store (mirror of cli/main.ts:1292) — `sessionMeta.id`, not the later
       // `sessionId` const. Absent = truncation, the pre-TASK.94 behaviour.
@@ -4508,7 +4523,7 @@ async function boot(): Promise<void> {
       ? { estimatedTokens: restoredLoopContext.estimatedTokens, budgetTokens: restoredLoopContext.effectiveWindowTokens, source: "estimate" as const }
       : undefined;
     const restoredContext = await contextSnapshotOptions(persistence, sessionId, "core", currentModel, restoredLoopContext.effectiveWindowTokens, fallbackContext);
-    const compactionRecordSeam = await createCompactionRecordLog(() => persistence, sessionId).catch((error: unknown) => {
+    compactionRecordSeam = await createCompactionRecordLog(() => persistence, sessionId).catch((error: unknown) => {
       // Fail-soft: a session with no remembered compaction rows is far better
       // than a session that refuses to open.
       console.error(`[host] compaction records unavailable: ${describeError(error)}`);

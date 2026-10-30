@@ -20,6 +20,17 @@ export interface CheckpointMeta {
   createdAt: number; // epoch ms
   reason: CheckpointReason;
   label: string;
+  /**
+   * GitHub #36: the session's compaction-record sequence that was current when
+   * this checkpoint's HISTORY SNAPSHOT was taken (the turn's start), not when
+   * the row was written — the capture is lazy. A rewind keeps records with
+   * `seq <= boundary` and drops the rest.
+   *
+   * Absent on checkpoints written before this field existed (and in the CLI,
+   * which keeps no compaction records): the rewind then falls back to judging
+   * by the restored history.
+   */
+  compactionSeq?: number;
 }
 
 export interface CheckpointRecord extends CheckpointMeta {
@@ -42,6 +53,14 @@ export interface TurnCheckpointRequest {
   userInput: string;
   /* */
   historySnapshot: readonly HistoryItem[];
+  /**
+   * GitHub #36: the compaction-record sequence current when `historySnapshot`
+   * was captured (the turn start), sampled there and carried here because the
+   * capture itself is lazy — it fires at the turn's first write-effect tool,
+   * by which time an auto compaction of that same turn may already have
+   * recorded an outcome. Absent = the caller keeps no records (the CLI).
+   */
+  compactionSeq?: number;
 }
 
 export type CheckpointCaptureResult =

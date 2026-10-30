@@ -3687,17 +3687,17 @@ export class Session {
       const restoredHistory = res.historyItems;
       const conversationRestored = restoredHistory !== null;
       if (restoredHistory !== null) {
-        // GitHub #36 review 3: the compaction rows are records OF this
+        // GitHub #36 review 4: the compaction rows are records OF this
         // conversation, so a rewind must drop the ones belonging to the part it
-        // throws away. What decides that is the STATE the checkpoint restores
-        // (`res.historyItems`), never the checkpoint row's creation time: an
-        // automatic checkpoint is created lazily at a turn's first write-effect
-        // tool while its snapshot holds the history from BEFORE that turn, so a
-        // compaction earlier in the same turn is newer than the snapshot yet
-        // older than the row. Dropped from the live cache AND storage BEFORE
-        // the re-handshake below, so neither the truncated `session_history` nor
-        // a later reopen can bring a discarded summary back.
-        this.compactionRecords?.truncate(restoredHistory);
+        // throws away — and the checkpoint's recorded SEQUENCE says exactly
+        // which those are (everything recorded after its turn-start snapshot;
+        // `res.compactionSeq` is absent on a checkpoint written before that
+        // field, where the restored history is the fallback). Neither a clock
+        // nor the newest history item can answer it: the capture is lazy, and a
+        // FAILED compaction changes no history at all. Dropped from the live
+        // cache AND storage BEFORE the re-handshake below, so neither the
+        // truncated `session_history` nor a later reopen brings one back.
+        this.compactionRecords?.truncate(restoredHistory, res.compactionSeq);
         // Atomic swap feeding the write-behind sink (truncates persistence too),
         // exactly the CLI's /rewind conversation restore.
         this.engine.replaceHistory(restoredHistory);

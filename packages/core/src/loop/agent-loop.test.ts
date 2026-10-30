@@ -3588,6 +3588,38 @@ describe("AgentLoop.runTurn — auto-checkpoint arc (design slice-4.7-cut.md §2
     expect(cap.calls[0]?.userInput).toBe("do the write");
   });
 
+  it("samples the compaction boundary at TURN START, not at the lazy capture — the fix the rewind cutoff rests on (GitHub #36 review 4)", async () => {
+    const cap = makeCapturer(createdResult);
+    const modelPort = new MockModelPort([writeStep("w1"), stopStep]);
+    // The recorded sequence grows DURING the turn (an auto compaction records
+    // an outcome after the turn-start snapshot). Reading the sampler lazily at
+    // capture time would hand the checkpoint a boundary that already covers
+    // that compaction, and a rewind to it would keep a row it must discard.
+    let recorded = 3;
+    const loop = makeLoop({
+      modelPort,
+      registry: makeRegistry({ Write: writeMock }),
+      checkpoints: cap.port,
+      compactionBoundary: () => recorded,
+    });
+    loop.history.append({ role: "user", content: "earlier" });
+
+    // Wraps the trick: bump the counter the moment the turn is under way, which
+    // this test simulates by mutating before the capture resolves — the loop
+    // must already hold the turn-start value.
+    const original = cap.port.capture.bind(cap.port);
+    cap.port.capture = async (req) => {
+      recorded = 4;
+      return original(req);
+    };
+
+    await collect(loop.runTurn("do the write"));
+
+    expect(cap.calls).toHaveLength(1);
+    expect(cap.calls[0]?.compactionSeq).toBe(3);
+    expect(recorded).toBe(4);
+  });
+
   it("hands the capturer the RAW userInput, not the hook-augmented prompt", async () => {
     const cap = makeCapturer(createdResult);
     const hooks = {

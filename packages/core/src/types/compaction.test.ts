@@ -23,6 +23,39 @@ const item = (id: string, createdAt: number): HistoryItem => ({
  * snapshot yet older than the checkpoint row.
  */
 describe("compactionRecordsDiscardedByRewind", () => {
+  it("with a SEQUENCE boundary, keeps a between-turns failed compaction whose record is newer than every restored item", () => {
+    // The shape a clock and the newest-item rule both get wrong: history did
+    // not move (the compaction was not applied), so the record is newer than
+    // everything the next turn's checkpoint restores — but the checkpoint's
+    // snapshot was taken AFTER it (seq 2 at that moment).
+    const records = [
+      record("failed-between-turns", 400, { ok: false, error: "no prefix", seq: 1 }),
+      record("after-snapshot", 500, { ok: false, error: "no prefix", seq: 2 }),
+    ];
+
+    expect(compactionRecordsDiscardedByRewind(records, [item("a", 100)], 1)).toEqual(["after-snapshot"]);
+  });
+
+  it("the sequence boundary is total: it ignores timestamps and summary items entirely", () => {
+    // A record whose summary IS in the restored history is still dropped when
+    // it was recorded after the snapshot — its own seq says so.
+    const records = [
+      record("kept", Number.MAX_SAFE_INTEGER, { seq: 1 }),
+      record("dropped", 0, { seq: 2, summaryItemId: "summary-1" }),
+    ];
+
+    expect(compactionRecordsDiscardedByRewind(records, [item("summary-1", 10)], 1)).toEqual(["dropped"]);
+    // An empty restore discards nothing below the boundary either — the
+    // boundary, not the (empty) history, decides.
+    expect(compactionRecordsDiscardedByRewind(records, [], 1)).toEqual(["dropped"]);
+  });
+
+  it("treats a record with no sequence as the oldest, so it survives any boundary", () => {
+    // Records written before the sequence existed; the store normalizes them on
+    // load, and a handler that sees one anyway must not delete a valid row.
+    expect(compactionRecordsDiscardedByRewind([record("legacy", 9_000)], [], 0)).toEqual([]);
+  });
+
   it("discards a compaction that happened earlier in the same turn, before a lazily created checkpoint", () => {
     // Snapshot: history from before the turn (newest item t=200). Checkpoint
     // row created at t=1000. Compaction ran at t=400, inside the turn.
