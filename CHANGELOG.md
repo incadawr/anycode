@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Queued parent messages clear finished subagent approval notices when submitted.
+
 - Finished subagent approval notices clear when you continue the parent or visit the child, and paused approval timers retain their remaining time.
 
 - Subagent approval notices can be dismissed, and child approval timers wait while the window is hidden or unfocused (GitHub #32).
