@@ -328,5 +328,31 @@ describe("model menu interaction", () => {
       expect(rebind).toHaveBeenCalledTimes(1);
       expect(harness.settings.load).not.toHaveBeenCalled();
     });
+    // GitHub #33 review 2: the switch is settled MAIN-side, so its side effects
+    // do not depend on which tab this pill happens to render when it lands.
+    it("refreshes settings after a switch that completed while the user moved to another tab", async () => {
+      let finish: (result: unknown) => void = () => {};
+      const rebind = vi.fn()
+        .mockResolvedValueOnce({ ok: true, connectionId: "d" })
+        .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+      (window.anycode as any).tabRebind = rebind;
+
+      pickForeign();
+      await vi.waitFor(() => expect(rebind).toHaveBeenCalledTimes(2));
+
+      // The user is looking at another tab when the switch completes. Main has
+      // already saved the target connection's model and moved the session.
+      harness.tabId = "tab-2";
+      render();
+      finish({ ok: true, connectionId: "d" });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // …so the shared snapshot must be re-read anyway: otherwise Settings (and
+      // every other view of the connections) keeps showing the old model until
+      // some unrelated load happens.
+      expect(harness.settings.load).toHaveBeenCalled();
+    });
   });
 });

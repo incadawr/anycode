@@ -5398,6 +5398,89 @@ describe("TabHostManager — rebindTab (TASK.106 cut-2)", () => {
     expect(manager.listTabs()).toHaveLength(hostCountBefore);
   });
 
+  // The QUEUE is the second door into `admitChildSpawn`: `spawnChild` refuses a
+  // fresh request during the lock, but a request parked earlier could still be
+  // admitted by a pump triggered from outside (another parent's child ending
+  // frees the global cap). That admission lands inside the drain window, so the
+  // rebind's own child gate had already passed and its model write had already
+  // landed — "Wait" would leave the setting changed, and with consent the new
+  // child would be drained under a confirmation that never mentioned it.
+  /** A manager whose GLOBAL child cap is 1, so a parked request is freed by any other parent's child ending. */
+  function globalCapRig(sessionId: string, connectionId: string) {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, {
+      env: (id?: string) => (id === undefined ? {} : { ANYCODE_CONNECTION: id }),
+      childRunsGlobalMax: () => 1,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId, resume: false, connectionId });
+    if (!created.ok) throw new Error("create failed");
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "cap-1" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "cap-1" && e.kind === "accepted");
+    if (accepted?.kind !== "accepted") throw new Error("first child was not admitted");
+    return { manager, hosts, rootHost, tab: created.tab, firstChildTabId: accepted.childTabId };
+  }
+
+  it("a queued spawn is NOT admitted while the rebind lock is held, and is settled once it is released", () => {
+    const { manager, rootHost, tab, firstChildTabId } = globalCapRig("root-queue-locked", "conn-old");
+    // Global cap 1 is taken by this tab's own child, so the next request parks.
+    rootHost.emit("message", spawnRequest({ requestId: "cap-2", spawnToolCallId: "cap-call-2" }));
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "cap-2")).toBe(false);
+    const raw = manager as unknown as { childSpawnQueue: string[] };
+    expect(raw.childSpawnQueue).toEqual(["cap-2"]);
+
+    expect(manager.acquireRebind(tab.tabId)).toBe(true);
+    // Free the global slot from OUTSIDE the lock's owner: this child belongs to
+    // the same tab here only for rig simplicity, but the pump it triggers is the
+    // one any other parent's completion triggers — and it must not admit cap-2.
+    const childHost = manager.getTab(firstChildTabId)?.proc as unknown as FakeHost;
+    childHost.emit("message", childTerminalMsg({ status: "completed" }));
+
+    // The waiter is still queued and, crucially, never entered the child set a
+    // drain would take: nothing to cancel behind the user's back.
+    expect(raw.childSpawnQueue).toEqual(["cap-2"]);
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "cap-2")).toBe(false);
+    expect(manager.runningChildCount(tab.tabId)).toBe(0);
+    expect(manager.listChildRuns()).toEqual([]);
+
+    // Releasing the lock settles it exactly as a post-rebind waiter should be:
+    // the parent's host is still the same live process here, so it is admitted.
+    manager.releaseRebind(tab.tabId);
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "cap-2")).toMatchObject({ kind: "accepted" });
+    expect(manager.runningChildCount(tab.tabId)).toBe(1);
+    expect(manager.getTab(tab.tabId)).toBeDefined();
+  });
+
+  it("a consented switch drains exactly the children it asked about — a queued spawn joins neither the set nor a later generation", async () => {
+    const { manager, rootHost, tab, firstChildTabId } = globalCapRig("root-queue-consent", "conn-old");
+    rootHost.emit("message", spawnRequest({ requestId: "cap-2", spawnToolCallId: "cap-call-2" }));
+    const raw = manager as unknown as { childSpawnQueue: string[] };
+    expect(raw.childSpawnQueue).toEqual(["cap-2"]);
+
+    // Hold the lock the way the handler does for the whole switch…
+    expect(manager.acquireRebind(tab.tabId)).toBe(true);
+    // …and let an unrelated completion pump the queue while it is held. On the
+    // unfixed code cap-2 is admitted here and then cancelled by the drain.
+    const childHost = manager.getTab(firstChildTabId)?.proc as unknown as FakeHost;
+    childHost.emit("message", childTerminalMsg({ status: "completed" }));
+    expect(manager.runningChildCount(tab.tabId)).toBe(0);
+
+    const res = await manager.rebindTab(tab, "conn-new", undefined, { cancelChildren: true });
+    manager.releaseRebind(tab.tabId);
+
+    expect(res).toEqual({ ok: true });
+    expect(tab.connectionId).toBe("conn-new");
+    // The drain found nothing to cancel, and the parked request was refused
+    // `closing` by the drain's own purge — never admitted into the set being
+    // drained (which the consent did not cover) and never accepted.
+    expect(manager.runningChildCount(tab.tabId)).toBe(0);
+    expect(manager.listChildRuns()).toEqual([]);
+    expect(childRunEvents(rootHost).filter((e) => e.requestId === "cap-2")).toMatchObject([
+      { kind: "rejected", reason: "closing" },
+    ]);
+  });
+
   it("carries the prior effort only on the destination rebind spawn", async () => {
     const envs: NodeJS.ProcessEnv[] = [];
     const fork: HostForkFn = (_entry, _args, options) => {
