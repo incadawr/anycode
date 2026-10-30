@@ -292,19 +292,26 @@ const ENTRIES: CatalogProviderEntry[] = [
       // 262,144-token context window" (platform.kimi.ai/docs/pricing/chat).
       // `imageInput` only where the Model List says so ("native visual
       // understanding" for K3/K3.1, "visual and text input" for K2.6).
-      // K3 rates: https://platform.kimi.ai/ checked 2026-10-27, USD per million tokens.
-      // No output ceiling is published on the model list.
-      // https://platform.kimi.ai/ — checked 2026-10-27.
-      { id: "kimi-k3.1-pro", pricing: { basisId: "kimi-k3.1-pro-kimi-2026-10-27", input: 2, cachedInput: 0.2, cacheWrite: 2, output: 10 }, name: "Kimi K3.1 Pro", contextWindow: 1_048_576, imageInput: true },
-      // https://platform.kimi.ai/ — checked 2026-10-27.
-      { id: "kimi-k3.1-pro-highspeed", pricing: { basisId: "kimi-k3.1-pro-highspeed-kimi-2026-10-27", input: 4, cachedInput: 0.2, cacheWrite: 4, output: 20 }, name: "Kimi K3.1 Pro Highspeed", contextWindow: 1_048_576, imageInput: true },
-      // https://platform.kimi.ai/ — checked 2026-10-27.
-      { id: "kimi-k3", pricing: { basisId: "kimi-k3-kimi-2026-10-27", input: 3, cachedInput: 0.3, cacheWrite: 3, output: 15 }, name: "Kimi K3", contextWindow: 1_048_576, imageInput: true },
-      // https://platform.kimi.ai/docs/pricing/chat and https://platform.kimi.ai/
-      // checked 2026-10-28: neither current page lists rates for these K2 models.
-      { id: "kimi-k2.7-code", name: "Kimi K2.7 Code", contextWindow: 262_144 },
-      { id: "kimi-k2.7-code-highspeed", name: "Kimi K2.7 Code Highspeed", contextWindow: 262_144 },
-      { id: "kimi-k2.6", name: "Kimi K2.6", contextWindow: 262_144, imageInput: true },
+      // K3 rates: https://platform.kimi.ai/docs/pricing/chat (Model Inference
+      // Pricing) checked 2026-10-30, USD per million tokens. `cacheWrite` is
+      // the table's 5m-TTL write rate (1h writes cost 2× and are not billed
+      // anywhere here); the 2026-10-27 pass had cited the site root instead
+      // of this page. No output ceiling is published on the model list.
+      // https://platform.kimi.ai/docs/pricing/chat — checked 2026-10-30.
+      { id: "kimi-k3.1-pro", pricing: { basisId: "kimi-k3.1-pro-kimi-2026-10-30", input: 2, cachedInput: 0.2, cacheWrite: 2, output: 10 }, name: "Kimi K3.1 Pro", contextWindow: 1_048_576, imageInput: true },
+      // https://platform.kimi.ai/docs/pricing/chat — checked 2026-10-30.
+      { id: "kimi-k3.1-pro-highspeed", pricing: { basisId: "kimi-k3.1-pro-highspeed-kimi-2026-10-30", input: 4, cachedInput: 0.2, cacheWrite: 4, output: 20 }, name: "Kimi K3.1 Pro Highspeed", contextWindow: 1_048_576, imageInput: true },
+      // https://platform.kimi.ai/docs/pricing/chat — checked 2026-10-30.
+      { id: "kimi-k3", pricing: { basisId: "kimi-k3-kimi-2026-10-30", input: 3, cachedInput: 0.3, cacheWrite: 3, output: 15 }, name: "Kimi K3", contextWindow: 1_048_576, imageInput: true },
+      // https://platform.kimi.ai/docs/pricing/chat — checked 2026-10-30. The
+      // K2 table (Model / Input / Output / Cached input) was filled in after
+      // the 2026-10-28 pass found no rates; it publishes no cache-write
+      // column, so `cacheWrite` stays undefined.
+      { id: "kimi-k2.7-code", pricing: { basisId: "kimi-k2.7-code-kimi-2026-10-30", input: 0.95, cachedInput: 0.19, output: 4 }, name: "Kimi K2.7 Code", contextWindow: 262_144 },
+      // https://platform.kimi.ai/docs/pricing/chat — checked 2026-10-30.
+      { id: "kimi-k2.7-code-highspeed", pricing: { basisId: "kimi-k2.7-code-highspeed-kimi-2026-10-30", input: 1.9, cachedInput: 0.38, output: 8 }, name: "Kimi K2.7 Code Highspeed", contextWindow: 262_144 },
+      // https://platform.kimi.ai/docs/pricing/chat — checked 2026-10-30.
+      { id: "kimi-k2.6", pricing: { basisId: "kimi-k2.6-kimi-2026-10-30", input: 0.95, cachedInput: 0.16, output: 4 }, name: "Kimi K2.6", contextWindow: 262_144, imageInput: true },
     ],
     retiredModels: [
       { id: "kimi-k2-0711-preview", name: "Kimi K2", contextWindow: 128_000, maxOutputTokens: 32_768 },
