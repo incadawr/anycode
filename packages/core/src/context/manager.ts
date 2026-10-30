@@ -61,6 +61,12 @@ export type RunCompactionResult =
        * called, and this is the instruction the skipped call would have used.
        */
       prompt: string;
+      /**
+       * Constructed-port model id of the summarizing call, present when the
+       * port exposes one — on failures too: the model was chosen before the
+       * call failed, so a failed row can name who was asked.
+       */
+      model?: string;
     };
 
 export class ContextManager {
@@ -233,6 +239,7 @@ export class ContextManager {
         preTokens,
         error: "compaction skipped: no prefix before the keep-recent window",
         prompt: COMPACTION_INSTRUCTION,
+        ...(modelId !== undefined ? { model: modelId } : {}),
       };
     }
     // A prefix made up entirely of existing compact_summary items (a repeated
@@ -244,6 +251,7 @@ export class ContextManager {
         preTokens,
         error: "compaction skipped: prefix already fully summarized",
         prompt: COMPACTION_INSTRUCTION,
+        ...(modelId !== undefined ? { model: modelId } : {}),
       };
     }
 
@@ -287,14 +295,14 @@ export class ContextManager {
     }
 
     if (aborted || signal?.aborted) {
-      return this.recordFailure(preTokens, "compaction aborted");
+      return this.recordFailure(preTokens, "compaction aborted", modelId);
     }
     if (streamError !== null) {
-      return this.recordFailure(preTokens, streamError);
+      return this.recordFailure(preTokens, streamError, modelId);
     }
     const trimmed = summary.trim();
     if (trimmed.length === 0) {
-      return this.recordFailure(preTokens, "compaction produced an empty summary");
+      return this.recordFailure(preTokens, "compaction produced an empty summary", modelId);
     }
 
     const summaryText = `${COMPACT_SUMMARY_PREFIX}${trimmed}`;
@@ -343,9 +351,19 @@ export class ContextManager {
     return 0;
   }
 
-  private recordFailure(preTokens: number, error: string): RunCompactionResult {
+  private recordFailure(
+    preTokens: number,
+    error: string,
+    modelId: string | undefined,
+  ): RunCompactionResult {
     this.consecutiveFailures += 1;
-    return { ok: false, preTokens, error, prompt: COMPACTION_INSTRUCTION };
+    return {
+      ok: false,
+      preTokens,
+      error,
+      prompt: COMPACTION_INSTRUCTION,
+      ...(modelId !== undefined ? { model: modelId } : {}),
+    };
   }
 }
 

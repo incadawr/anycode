@@ -7,6 +7,7 @@ import { Worker } from "node:worker_threads";
 import { SqlitePersistenceAdapter, WriteBehindHistorySink, type HistorySinkLogger } from "./sqlite-persistence.js";
 import type { CheckpointRecord } from "../../ports/checkpoints.js";
 import type { PersistencePort, SessionDeleteSummary, SessionMeta } from "../../ports/persistence.js";
+import { COMPACTION_RECORD_MAX_PER_SESSION } from "../../types/compaction.js";
 import type { HistoryItem } from "../../types/history.js";
 
 function makeItem(overrides: Partial<HistoryItem> = {}): HistoryItem {
@@ -741,7 +742,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
     expect(
       migrated.prepare(
         `SELECT project_root, continuation_pending, worktree_exit_notice_pending, worktree_cleanup_branch
@@ -812,7 +813,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["connection_id"]));
@@ -865,7 +866,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["codex_profile_id"]));
@@ -943,7 +944,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
     migrated.close();
   });
 
@@ -998,7 +999,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["parent_session_id", "spawn_tool_call_id"]));
@@ -1272,7 +1273,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
     migrated.close();
   });
 
@@ -1359,6 +1360,60 @@ describe("SqlitePersistenceAdapter", () => {
 
     const loaded = await adapter.loadHistory(session.id);
     expect(loaded).toEqual(replacement);
+  });
+
+  it("compaction records SURVIVE replaceHistory — a later compaction must not erase the rows of the earlier ones (GitHub #36)", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    const session = await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+
+    await adapter.appendCompactionRecord(session.id, {
+      id: "rec-1",
+      createdAt: 100,
+      ok: true,
+      summary: "first summary",
+      summaryItemId: "item-1",
+      prompt: "prompt one",
+    });
+    // A failed compaction leaves nothing in the history...
+    await adapter.appendCompactionRecord(session.id, {
+      id: "rec-2",
+      createdAt: 200,
+      ok: false,
+      error: "model unavailable",
+      prompt: "prompt two",
+    });
+    // ...and the next successful one REPLACES the history, deleting item-1.
+    await adapter.replaceHistory(session.id, [makeItem({ id: "item-2", kind: "compact_summary" })]);
+
+    expect(await adapter.loadHistory(session.id)).toHaveLength(1);
+    const records = await adapter.listCompactionRecords(session.id);
+    expect(records.map((record) => record.id)).toEqual(["rec-1", "rec-2"]);
+    expect(records[0]).toMatchObject({ ok: true, summary: "first summary", summaryItemId: "item-1" });
+    expect(records[1]).toMatchObject({ ok: false, error: "model unavailable" });
+    // Prompt recorded at the time, not reconstructed from today's constant.
+    expect(records.map((record) => record.prompt)).toEqual(["prompt one", "prompt two"]);
+  });
+
+  it("compaction records are idempotent per id and bounded per session", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    const session = await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+
+    const record = { id: "rec-x", createdAt: 5, ok: true, summary: "once" };
+    await adapter.appendCompactionRecord(session.id, record);
+    await adapter.appendCompactionRecord(session.id, { ...record, summary: "once, retried" });
+
+    const written = await adapter.listCompactionRecords(session.id);
+    expect(written).toHaveLength(1);
+    expect(written[0]!.summary).toBe("once, retried");
+
+    for (let i = 0; i < COMPACTION_RECORD_MAX_PER_SESSION + 5; i += 1) {
+      await adapter.appendCompactionRecord(session.id, { id: `bulk-${i}`, createdAt: 1_000 + i, ok: true });
+    }
+    const bounded = await adapter.listCompactionRecords(session.id);
+    expect(bounded).toHaveLength(COMPACTION_RECORD_MAX_PER_SESSION);
+    // The OLDEST rolled off; the newest is kept.
+    expect(bounded.some((entry) => entry.id === "rec-x")).toBe(false);
+    expect(bounded.at(-1)?.id).toBe(`bulk-${COMPACTION_RECORD_MAX_PER_SESSION + 4}`);
   });
 
   it("replaceHistory rolls back atomically on a mid-transaction error, leaving old history intact", async () => {

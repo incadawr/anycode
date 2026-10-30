@@ -43,6 +43,7 @@ import type {
   TelemetryStatus,
 } from "@anycode/core";
 import type { HostToUiMessage, UiToHostMessage, WireEnvStatus, WirePort } from "../shared/protocol.js";
+import type { CompactionRecordSeam } from "./compaction-records.js";
 import type { GitUiBridge } from "./git-bridge.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import { wirePlanExit } from "./plan-exit.js";
@@ -303,6 +304,13 @@ export interface HarnessOptions {
   initialTitle?: string;
   /** Observes every persistence patch the session writes (title recovery tests). */
   onTouch?: SessionPersistence["touch"];
+  /**
+   * GitHub #36: installs the durable compaction-record seam the real host
+   * wires (host/compaction-records.ts) — a fake that keeps every record in
+   * memory, so a test can prove what a compaction left behind without a DB.
+   * Omitted -> no seam, byte-identical to the pre-#36 session.
+   */
+  compactionRecords?: CompactionRecordSeam;
   /**
    * The STRICT twin of `onTouch`: the Sessions API title path. Wiring it here
    * proves the caller learns a failed write instead of the fail-soft `touch`
@@ -789,6 +797,7 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(options.initialTitle !== undefined ? { initialTitle: options.initialTitle } : {}),
     rules,
     persistence,
+    ...(options.compactionRecords !== undefined ? { compactionRecords: options.compactionRecords } : {}),
     refineTitle: options.refineTitle,
     git: options.git?.(outbound),
     ...(options.tasks ? { tasks: options.tasks } : {}),

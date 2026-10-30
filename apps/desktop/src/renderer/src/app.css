@@ -3158,6 +3158,15 @@ body {
   cursor: pointer;
 }
 
+/* The legacy-row disclosure: the prompt shown is TODAY's instruction, not the
+   one that produced this summary — said in a line, never implied away. */
+.compaction-prompt-note {
+  margin: var(--sp-1) 0 0;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  line-height: var(--lh-body);
+}
+
 .compaction-prompt-text {
   margin: var(--sp-1) 0 0;
   padding: var(--sp-2);
