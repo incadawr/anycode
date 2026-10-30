@@ -418,6 +418,48 @@ describe("ShadowGitCheckpoints.rewind", () => {
     expect(JSON.parse(safety.historyJson)).toEqual(currentHistory);
   });
 
+  it("gives the pre-rewind SAFETY checkpoint the CURRENT compaction boundary, so a later rewind back to it keeps valid rows (GitHub #36 review 5)", async () => {
+    // The safety capture is a checkpoint a user can rewind TO later. Without a
+    // boundary, a conversation rewind back to it falls through to the
+    // history-based heuristic and deletes a between-turns compaction row — its
+    // record is newer than the newest history item, yet it predates the safety
+    // snapshot.
+    const exec = new FakeExec(rewindResponder("a.ts\n"));
+    const store = new FakeStore();
+    store.seed([targetRecord()]);
+    const svc = makeService(exec, new FakeFs(), store);
+    const currentHistory: HistoryItem[] = [{ id: "cur", createdAt: 2, message: { role: "user", content: "now" } }];
+
+    // A files-only rewind: files move, the conversation does not — but the
+    // safety checkpoint still records the boundary as it stands (3 rows so far).
+    const res = await svc.rewind("target-id", { scope: "files", currentHistory, compactionSeq: 3 });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.historyItems).toBeNull();
+
+    const safety = store.saved.find((record) => record.reason === "pre-rewind")!;
+    expect(safety.id).toBe(res.safetyCheckpointId);
+    expect(safety.compactionSeq).toBe(3);
+
+    // Rewinding TO that safety checkpoint reports the boundary with it, which is
+    // what the caller keeps records by.
+    const back = await svc.rewind(safety.id, { scope: "conversation", currentHistory });
+    expect(back.ok).toBe(true);
+    if (back.ok) expect(back.compactionSeq).toBe(3);
+  });
+
+  it("records no boundary when the caller keeps no records (the CLI) — the rewind falls back", async () => {
+    const exec = new FakeExec(rewindResponder("a.ts\n"));
+    const store = new FakeStore();
+    store.seed([targetRecord()]);
+    const svc = makeService(exec, new FakeFs(), store);
+
+    const res = await svc.rewind("target-id", { scope: "conversation", currentHistory: [] });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.compactionSeq).toBeUndefined();
+    expect(store.saved.find((record) => record.reason === "pre-rewind")!.compactionSeq).toBeUndefined();
+  });
+
   it("ignores a 40-hex commit-header line in diff-tree output (A9)", async () => {
     const header = "abcdef0123456789abcdef0123456789abcdef01";
     const exec = new FakeExec(rewindResponder(`${header}\nsrc/a.ts\n`));
