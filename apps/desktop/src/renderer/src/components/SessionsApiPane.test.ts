@@ -25,6 +25,7 @@ const base = (over: Partial<CommunicationView> = {}): CommunicationView => ({
   status: { state: "off", workspaces: 0, sessions: 0 },
   tabs: [],
   agentProjects: [],
+  missingWorkspaces: [],
   ...over,
 });
 const listeningStatus = (sessions = 0) => ({ state: "listening" as const, url: "http://127.0.0.1:4310/mcp", port: 4310, workspaces: 0, sessions });
@@ -131,6 +132,25 @@ describe("SessionsApiPaneView (Taskana 4747)", () => {
     const html = render(props({ view: base({ workspaces: ['/x/<img src=x onerror=1>/"q"'] }) }));
     expect(html).toContain("&lt;img src=x onerror=1&gt;");
     expect(html).not.toContain("<img src=x");
+  });
+
+  it("a listed folder that is missing on disk is marked Missing with wording that explains the effect", () => {
+    const html = render(props({ view: base({ enabled: true, workspaces: ["/gone", "/kept"], missingWorkspaces: ["/gone"], status: listeningStatus() }) }));
+    const rows = html.match(/<li[^>]*>[\s\S]*?<\/li>/g) ?? [];
+    const gone = rows.find((row) => row.includes("/gone"));
+    const kept = rows.find((row) => row.includes("/kept"));
+    expect(gone).toBeDefined();
+    expect(kept).toBeDefined();
+    // The missing row states the problem in plain words (not a bare chip word).
+    expect(gone).toContain("Missing on disk");
+    expect(gone).toContain("grants nothing until the folder is back");
+    // A present folder carries no mark.
+    expect(kept).not.toContain("Missing on disk");
+  });
+
+  it("the missing mark disappears once the folder is back (no missingWorkspaces entry)", () => {
+    const html = render(props({ view: base({ enabled: true, workspaces: ["/back"], missingWorkspaces: [], status: listeningStatus() }) }));
+    expect(html).not.toContain("Missing on disk");
   });
 
   it("the folder hint says an empty list means any folder", () => {

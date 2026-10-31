@@ -49,6 +49,14 @@ export interface CommunicationStatus {
 export interface CommunicationView {
   enabled: boolean;
   workspaces: string[];
+  /**
+   * Listed folders that are not on disk right now (deleted, renamed, an unmounted
+   * drive, a removed git worktree). The Sessions API keeps running without them,
+   * but each one grants nothing until the folder is back — the pane marks them so
+   * the user sees why a folder refuses with folder_not_found. Recomputed on every
+   * view: an empty array once every folder resolves again.
+   */
+  missingWorkspaces: string[];
   port: number | null;
   defaultSessionAccess: "off" | "on";
   status: CommunicationStatus;

@@ -114,10 +114,29 @@ function agentProjectRows(deps: CommunicationIpcDeps): CommunicationView["agentP
   return deps.agentProjects.allowedKeys().map((key) => ({ key, name: basename(key) || key, displayPath: displayPathFor(key, home) }));
 }
 
-function viewOf(deps: CommunicationIpcDeps, block: Block): CommunicationView {
+/**
+ * The EXACT stored strings of listed folders that are not on disk right now
+ * (ENOENT/ENOTDIR — the same "missing" family the server tolerates at startup).
+ * A folder that exists but cannot be resolved (EACCES…) is NOT marked: that one
+ * still fails the server start, and the status chip already says so. Recomputed
+ * on every view, so a folder that comes back loses the mark without a restart.
+ */
+async function missingWorkspacesOf(deps: CommunicationIpcDeps, block: Block): Promise<string[]> {
+  const missing: string[] = [];
+  for (const workspace of block.workspaces) {
+    try { await deps.realpath(workspace); } catch (error) {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "ENOENT" || code === "ENOTDIR") missing.push(workspace);
+    }
+  }
+  return missing;
+}
+
+async function viewOf(deps: CommunicationIpcDeps, block: Block): Promise<CommunicationView> {
   return {
     enabled: block.enabled,
     workspaces: [...block.workspaces],
+    missingWorkspaces: await missingWorkspacesOf(deps, block),
     port: block.port ?? null,
     defaultSessionAccess: block.defaultSessionAccess,
     status: deps.controller.status(),
@@ -153,14 +172,14 @@ async function mutateBlock(
       return { ok: false, reason: "io_error" };
     }
     if (decided.apply) await deps.controller.apply(applyInput(decided.block));
-    return { ok: true, view: viewOf(deps, decided.block) };
+    return { ok: true, view: await viewOf(deps, decided.block) };
   });
 }
 
 export async function handleCommunicationGet(deps: CommunicationIpcDeps, raw: unknown): Promise<CommunicationGetResult> {
   if (!emptyPayload.safeParse(raw).success) return { ok: false, reason: "invalid" };
   const loaded = await loadSettings(deps.settingsPath, deps.logger);
-  return { ok: true, view: viewOf(deps, blockOf(loaded.settings)), envControlled: deps.env() !== undefined && deps.env() !== "" };
+  return { ok: true, view: await viewOf(deps, blockOf(loaded.settings)), envControlled: deps.env() !== undefined && deps.env() !== "" };
 }
 
 export async function handleSetEnabled(deps: CommunicationIpcDeps, raw: unknown): Promise<CommunicationMutationResult> {
@@ -246,7 +265,7 @@ export async function handleAgentProjectsSet(deps: CommunicationIpcDeps, raw: un
   if (deps.env() !== undefined && deps.env() !== "") return { ok: false, reason: "env_controlled" };
   if (!deps.agentProjects.setAllowed(parsed.data.workspace, parsed.data.enabled)) return { ok: false, reason: "io_error" };
   const loaded = await loadSettings(deps.settingsPath, deps.logger);
-  return { ok: true, view: viewOf(deps, blockOf(loaded.settings)) };
+  return { ok: true, view: await viewOf(deps, blockOf(loaded.settings)) };
 }
 
 /** Settings Off button: an EXACT stored key (a lookup key, never a new path); unknown => not_found. */
@@ -257,7 +276,7 @@ export async function handleAgentProjectsOff(deps: CommunicationIpcDeps, raw: un
   if (!deps.agentProjects.hasExactKey(parsed.data.key)) return { ok: false, reason: "not_found" };
   if (!deps.agentProjects.forgetExactKey(parsed.data.key)) return { ok: false, reason: "io_error" };
   const loaded = await loadSettings(deps.settingsPath, deps.logger);
-  return { ok: true, view: viewOf(deps, blockOf(loaded.settings)) };
+  return { ok: true, view: await viewOf(deps, blockOf(loaded.settings)) };
 }
 
 /** New token = stop + start with the same config. The stdio adapter reads the file per process start, so connected clients must reconnect. */
@@ -267,7 +286,7 @@ export async function handleRegenerateToken(deps: CommunicationIpcDeps, raw: unk
   const result = await deps.controller.regenerateToken();
   if (!result.ok) return { ok: false, reason: result.reason === "env_controlled" ? "env_controlled" : "not_running" };
   const loaded = await loadSettings(deps.settingsPath, deps.logger);
-  return { ok: true, view: viewOf(deps, blockOf(loaded.settings)) };
+  return { ok: true, view: await viewOf(deps, blockOf(loaded.settings)) };
 }
 
 /** Per-session switch for a live tab. The renderer names a tabId; main resolves its session and refuses unknown tabs. */
@@ -280,7 +299,7 @@ export async function handleSetSessionAccess(deps: CommunicationIpcDeps, raw: un
   // Sharing off also clears External approvals, so re-sharing never silently re-enables them (Taskana 4763).
   if (!parsed.data.enabled) deps.approvals.set(tab.sessionId, false);
   const loaded = await loadSettings(deps.settingsPath, deps.logger);
-  return { ok: true, view: viewOf(deps, blockOf(loaded.settings)) };
+  return { ok: true, view: await viewOf(deps, blockOf(loaded.settings)) };
 }
 
 /**
@@ -297,7 +316,7 @@ export async function handleSetSessionApprovals(deps: CommunicationIpcDeps, raw:
   if (parsed.data.enabled && !deps.sessions.isExposed(tab.sessionId)) return { ok: false, reason: "not_found" };
   if (!deps.approvals.set(tab.sessionId, parsed.data.enabled)) return { ok: false, reason: "not_found" };
   const loaded = await loadSettings(deps.settingsPath, deps.logger);
-  return { ok: true, view: viewOf(deps, blockOf(loaded.settings)) };
+  return { ok: true, view: await viewOf(deps, blockOf(loaded.settings)) };
 }
 
 /**
@@ -315,7 +334,7 @@ export async function handleSetSessionHandle(deps: CommunicationIpcDeps, raw: un
   const result = deps.sessions.setHandle(tab.sessionId, normalized.handle, isLive);
   if (!result.ok) return { ok: false, reason: result.reason === "unknown_session" ? "unknown_tab" : result.reason };
   const loaded = await loadSettings(deps.settingsPath, deps.logger);
-  return { ok: true, view: viewOf(deps, blockOf(loaded.settings)) };
+  return { ok: true, view: await viewOf(deps, blockOf(loaded.settings)) };
 }
 
 /** Single-quotes a path for a POSIX shell unless it is already safe. */

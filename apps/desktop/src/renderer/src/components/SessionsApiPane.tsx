@@ -20,6 +20,8 @@ import {
   SESSIONS_API_ENABLE_LABEL,
   SESSIONS_API_ENV_NOTE,
   SESSIONS_API_FOLDER_HINT,
+  SESSIONS_API_FOLDER_MISSING_LABEL,
+  SESSIONS_API_FOLDER_MISSING_NOTE,
   SESSIONS_API_FOLDER_NOTE,
   SESSIONS_API_FOOTER,
   SESSIONS_API_NODE_HINT,
@@ -198,12 +200,21 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
           </div>
           {view.workspaces.length > 0 && (
             <ul className="sessions-api-folder-list">
-              {view.workspaces.map((workspace) => (
-                <li key={workspace}>
-                  <span className="sessions-api-folder-path">{workspace}</span>
-                  <button type="button" className="settings-button" disabled={!editable} onClick={() => props.onRemoveFolder(workspace)}>Remove</button>
-                </li>
-              ))}
+              {view.workspaces.map((workspace) => {
+                const missing = view.missingWorkspaces.includes(workspace);
+                return (
+                  <li key={workspace} className={missing ? "sessions-api-folder-missing" : undefined}>
+                    <span className="sessions-api-folder-path">{workspace}</span>
+                    {missing && (
+                      <span className="settings-secret-status settings-secret-status-danger sessions-api-folder-state">
+                        {SESSIONS_API_FOLDER_MISSING_LABEL}
+                      </span>
+                    )}
+                    <button type="button" className="settings-button" disabled={!editable} onClick={() => props.onRemoveFolder(workspace)}>Remove</button>
+                    {missing && <p className="settings-field-hint">{SESSIONS_API_FOLDER_MISSING_NOTE}</p>}
+                  </li>
+                );
+              })}
             </ul>
           )}
           <p className="settings-field-hint" title={SESSIONS_API_FOLDER_NOTE}>{SESSIONS_API_FOLDER_HINT}</p>

@@ -8418,6 +8418,17 @@ body {
   color: var(--text-2);
 }
 
+/* A listed folder that is not on disk: the chip rides the row, the explanatory
+   sentence wraps under it (the row becomes two lines: entry + reason). */
+.sessions-api-folder-list li.sessions-api-folder-missing {
+  flex-wrap: wrap;
+}
+
+.sessions-api-folder-list li.sessions-api-folder-missing .settings-field-hint {
+  flex: 1 0 100%;
+  margin: 0;
+}
+
 .sessions-api-confirm {
   display: flex;
   flex-direction: column;
