@@ -150,7 +150,6 @@ const ALLOW: Entry[] = [
   { path: "packages/core/src/tools/worktrees.test.ts", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
   { path: "packages/core/src/tools/worktrees.test.ts", before: "/repo/.anycode/worktrees/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
   { path: "packages/core/src/tools/worktrees.test.ts", before: "anycode-wt/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
-  { path: "references/claude-code-2.1.212/W0-FINDINGS.md", value: ".3", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
 
   // dotted plan / slice numbering carried by the prose, not a card number
   { path: ".github/workflows/release.yml", value: " 2.6.3", note: "dotted plan / slice numbering carried by the prose, not a card number" },
@@ -392,6 +391,13 @@ describe("public tree carries no tracker card references", () => {
     expect(scanText("docs/x.md", `see ${MARK.toUpperCase()}_123`)).not.toEqual([]);
     expect(scanText(`scripts/${MARK.toUpperCase()}#123.mjs`, "clean body")).not.toEqual([]);
     expect(scanText("AGENTS.md", `history lives in ${card}`)).not.toEqual([]);
+    const findingsPath = "references/claude-code-2.1.212/W0-FINDINGS.md";
+    const finding = readFileSync(join(ROOT, findingsPath), "utf8").split("\n").find(
+      (line) => line.includes("Уточнение о механизме подтверждено."),
+    );
+    expect(finding).toBeDefined();
+    const leakedFinding = finding!.replace("о механизме", `${MARK.toUpperCase()}.3`);
+    expect(scanLine(findingsPath, leakedFinding)).not.toEqual([]);
     expect(scanText("sample.ts", `mkdtemp(join(tmp, "${PRODUCT}4294-"))`)).not.toEqual([]);
     expect(scanText("sample.ts", `// ${glued} notes`)).not.toEqual([]);
     expect(scanText("sample.ts", `// working-docs/${MARK}102-track/evidence`)).not.toEqual([]);
