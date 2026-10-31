@@ -137,7 +137,7 @@ try {
   const png = await call("Page.captureScreenshot", {format:"png"});
   writeFileSync(join(profile, "model-a-settings.png"), Buffer.from(png.data, "base64"));
   await click("Save");
-  await click("Done");
+  await click("Cancel");
   await evaluate("document.querySelector('.settings-dialog').dispatchEvent(new Event('cancel', {cancelable:true}))");
   await call("Page.reload", {});
   await poll(() => evaluate("!!document.querySelector('.sidebar-settings')"));

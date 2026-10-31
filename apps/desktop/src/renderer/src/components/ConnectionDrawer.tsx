@@ -1294,8 +1294,12 @@ export interface ConnectionDrawerFieldsProps {
   store?: SettingsStoreApi;
   /** Injectable custom-provider bridge; defaults to the real `window.anycode.customProvider`. */
   customProvider?: CustomProviderBridge;
-  /** Rendered after the form (ConnectionDrawer supplies a "Done" button; WelcomeScreen's embed omits it — App's own readiness gate unmounts Welcome once the first connection is ready). */
-  footer?: ReactNode;
+  /** Secondary action supplied by the drawer; the embedded form omits it. */
+  cancelAction?: ReactNode;
+  onCommitBegin?: () => number;
+  onCommitSuccess?: (version: number) => void;
+  onBusyChange?: (busy: boolean) => void;
+  interactionBlocked?: boolean;
   /** First-run form: keep connection tuning behind a disclosure. */
   simplified?: boolean;
   /**
@@ -1318,7 +1322,11 @@ export function ConnectionDrawerFields({
   initialFocus,
   store = useSettingsStore,
   customProvider,
-  footer,
+  cancelAction,
+  onCommitBegin,
+  onCommitSuccess,
+  onBusyChange,
+  interactionBlocked = false,
   simplified = false,
   onConnectionCreated,
 }: ConnectionDrawerFieldsProps) {
@@ -1327,6 +1335,8 @@ export function ConnectionDrawerFields({
   const contextWindowTokensInputRef = useRef<HTMLInputElement>(null);
   const secretInputRef = useRef<HTMLInputElement>(null);
   const oauthPendingProviderId = useStore(store, (s) => s.oauthPendingProviderId);
+  const consentResolution = useStore(store, (s) => s.secretConsentResolution);
+  const pendingKeyCommit = useRef<{ key: SecretKey; version: number; previous: unknown; complete: boolean } | null>(null);
   // : the settings document behind the proxy picker's seed. Read here
   // (not inside the picker) because the drawer runs the picker CONTROLLED — the
   // ref rides the drawer's own create/update payloads instead of being written
@@ -1506,6 +1516,20 @@ export function ConnectionDrawerFields({
       setSavedNotice(false);
     }, SAVED_NOTICE_MS);
   };
+  useEffect(() => {
+    const pending = pendingKeyCommit.current;
+    if (creating || saving || !pending || !consentResolution || consentResolution === pending.previous || consentResolution.key !== pending.key) return;
+    pendingKeyCommit.current = null;
+    if (consentResolution.ok) {
+      setError(current => current === "The API key is awaiting storage consent. If you decline, enter it again." ? null : current);
+      if (pending.complete && (onCommitBegin?.() ?? pending.version) === pending.version) {
+        onCommitSuccess?.(pending.version);
+        flashSavedNotice();
+      }
+    } else {
+      setError(current => current && current !== "The API key is awaiting storage consent. If you decline, enter it again." ? `${current} The API key was not saved. Enter it again to retry.` : "The API key was not saved. Enter it again to retry.");
+    }
+  }, [consentResolution, creating, saving]);
   useEffect(
     () => () => {
       if (savedNoticeTimer.current !== null) {
@@ -1756,6 +1780,8 @@ export function ConnectionDrawerFields({
       setError('Enter a name and base URL, plus an API key or check "This endpoint doesn\'t need an API key".');
       return;
     }
+    const commitVersion = onCommitBegin?.() ?? 0;
+    onBusyChange?.(true);
     setCreating(true);
     setError(null);
     try {
@@ -1813,15 +1839,18 @@ export function ConnectionDrawerFields({
       onConnectionCreated?.(outcome.createdConnectionId);
       if (outcome.partial) {
         setError(outcome.error ?? "Custom endpoint and connection created, but the model list couldn't be saved — retry with Save.");
+      } else {
+        onCommitSuccess?.(commitVersion);
       }
     } finally {
+      onBusyChange?.(false);
       setCreating(false);
     }
   }
 
   /** ADD: single primary action — create the connection AND (item 3) fold in the key's secret-set. */
   async function createConnection(): Promise<void> {
-    if (readOnly) {
+    if (readOnly || interactionBlocked) {
       return;
     }
     if (setupMissingModel) {
@@ -1889,6 +1918,8 @@ export function ConnectionDrawerFields({
     }
     // GitHub #1: create has no `""` sentinel — Automatic is simply absent.
     const usageCreateValue = usageSelectionCreateValue(usageSelection);
+    const commitVersion = onCommitBegin?.() ?? 0;
+    onBusyChange?.(true);
     setCreating(true);
     setError(null);
     try {
@@ -1944,14 +1975,18 @@ export function ConnectionDrawerFields({
       let message = outcome.partial
         ? (outcome.error ?? "Connection created, but its model list couldn't be saved — retry with Save.")
         : null;
+      let keyPending = false;
       // Item 3: fold the key's secret-set into Create for a keyed catalog
       // provider — a separate IPC channel, so custody stays intact and the
       // metadata schema never carries a credential.
       if (secretValue && authKind === "api_key" && !isCustomRecordProviderId(providerId)) {
         const value = secretValue;
+        const previousResolution = store.getState().secretConsentResolution;
         dispatchSecret({ type: "submitted" });
         const secretResult = await store.getState().setSecret(connectionSecretKey(outcome.createdConnectionId, "api_key"), value);
-        if (!secretResult.ok && secretResult.reason !== "weak_storage_needs_consent") {
+        keyPending = !secretResult.ok && secretResult.reason === "weak_storage_needs_consent";
+        if (keyPending) pendingKeyCommit.current = { key: connectionSecretKey(outcome.createdConnectionId, "api_key"), version: commitVersion, previous: previousResolution, complete: message === null };
+        if (!secretResult.ok && !keyPending) {
           message =
             message === null
               ? "Connection created, but the API key was refused — enter it again below."
@@ -1968,8 +2003,13 @@ export function ConnectionDrawerFields({
       }
       if (message !== null) {
         setError(message);
+      } else if (keyPending) {
+        setError("The API key is awaiting storage consent. If you decline, enter it again.");
+      } else {
+        onCommitSuccess?.(commitVersion);
       }
     } finally {
+      onBusyChange?.(false);
       setCreating(false);
     }
   }
@@ -1980,7 +2020,7 @@ export function ConnectionDrawerFields({
    * custody intact). Metadata and key failures are reported independently.
    */
   async function save(): Promise<void> {
-    if (readOnly || createdConnectionId === null) {
+    if (readOnly || interactionBlocked || createdConnectionId === null) {
       return;
     }
     if (modelPopupOpen || (pendingVisibleModels !== null && !pendingVisibleModels.includes(model.trim()))) {
@@ -2039,6 +2079,8 @@ export function ConnectionDrawerFields({
       setError(imageInputError);
       return;
     }
+    const commitVersion = onCommitBegin?.() ?? 0;
+    onBusyChange?.(true);
     setSaving(true);
     setError(null);
     setSavedNotice(false);
@@ -2074,6 +2116,7 @@ export function ConnectionDrawerFields({
       }
       if (outcome.metaOk) { setDirtyRates(new Set()); setPendingVisibleModels(null); setCommitFetchedModels(false); }
       let keyRefused = false;
+      let keyPending = false;
       let keyRefusalDetail: string | null = null;
       if (secretValue && credentialKey !== undefined) {
         const mutation = buildKeyMutation(effectiveProviderId, credentialKey, secretValue);
@@ -2086,9 +2129,12 @@ export function ConnectionDrawerFields({
           }
         } else {
           // The settings store parks weak-storage consent and retries this channel.
+          const previousResolution = store.getState().secretConsentResolution;
           dispatchSecret({ type: "submitted" });
           const result = await store.getState().setSecret(mutation.key, mutation.value!);
-          keyRefused = !result.ok && result.reason !== "weak_storage_needs_consent";
+          keyPending = !result.ok && result.reason === "weak_storage_needs_consent";
+          if (keyPending && credentialKey !== undefined) pendingKeyCommit.current = { key: credentialKey, version: commitVersion, previous: previousResolution, complete: outcome.metaOk && outcome.appendOk };
+          keyRefused = !result.ok && !keyPending;
         }
       }
       // Compose ONE message so a concurrent key error is never overwritten by
@@ -2103,10 +2149,14 @@ export function ConnectionDrawerFields({
         setError(keyRefusalDetail ?? "The changes were saved, but the API key was refused.");
       } else if (!outcome.appendOk) {
         setError("The changes were saved, but the model list couldn't be saved — retry Save.");
+      } else if (keyPending && credentialKey !== undefined) {
+        setError("The API key is awaiting storage consent. If you decline, enter it again.");
       } else {
+        onCommitSuccess?.(commitVersion);
         flashSavedNotice();
       }
     } finally {
+      onBusyChange?.(false);
       setSaving(false);
     }
   }
@@ -2711,7 +2761,8 @@ export function ConnectionDrawerFields({
           )}
           {pricingBlock}
           {advancedBlock}
-          <div className="settings-field-row">
+          <div className="settings-field-row connection-drawer-actions">
+            {cancelAction}
             <button
               type="button"
               className="settings-button settings-button-primary"
@@ -2721,7 +2772,7 @@ export function ConnectionDrawerFields({
               {creating ? "Connecting…" : simplified && mode === "add" ? "Connect" : mode === "add" ? "Create connection" : "Save"}
             </button>
           </div>
-          {setupMissingModel && <p className="settings-field-hint">Enter a model ID to continue.</p>}
+          {providerId === "" ? <p className="settings-field-hint">Choose a provider to continue.</p> : setupMissingModel && <p className="settings-field-hint">Enter a model ID to continue.</p>}
           {setupMissingKey && <p className="settings-field-hint">Enter your API key to continue.</p>}
         </>
       ) : (
@@ -2839,7 +2890,8 @@ export function ConnectionDrawerFields({
           {advancedBlock}
 
           {/* ONE Save (item 3): metadata + (if typed) the key, together. */}
-          <div className="settings-field-row">
+          <div className="settings-field-row connection-drawer-actions">
+            {cancelAction}
             <button
               type="button"
               className="settings-button settings-button-primary connection-drawer-save"
@@ -2864,7 +2916,6 @@ export function ConnectionDrawerFields({
         </div>
       )}
 
-      {footer}
     </div>
   );
 }
@@ -2900,6 +2951,24 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
   // is the id it reported, never a change in list length (a connection written
   // elsewhere must not turn an unsaved Add form into "Edit connection").
   const [createdId, setCreatedId] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const editVersion = useRef(0);
+  const keepEditingRef = useRef<HTMLButtonElement>(null);
+  const closeTriggerRef = useRef<HTMLElement | null>(null);
+  const markDirty = () => { editVersion.current += 1; setDirty(true); };
+  const requestClose = () => {
+    if (busy) return;
+    if (dirty) {
+      closeTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      setConfirmDiscard(true);
+    } else onClose();
+  };
+  useEffect(() => {
+    if (confirmDiscard) keepEditingRef.current?.focus();
+    else if (closeTriggerRef.current?.isConnected) { closeTriggerRef.current.focus(); closeTriggerRef.current = null; }
+  }, [confirmDiscard]);
 
   useEffect(() => {
     if (!open) {
@@ -2914,7 +2983,7 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
   }, [open]);
 
   useEffect(() => {
-    if (open) setCreatedId(null);
+    if (open) { setCreatedId(null); setDirty(false); setConfirmDiscard(false); setBusy(false); editVersion.current = 0; }
   }, [open]);
 
   useEffect(() => {
@@ -2946,30 +3015,46 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
           return;
         }
         event.preventDefault();
-        onClose();
+        if (confirmDiscard) setConfirmDiscard(false);
+        else requestClose();
+      }}
+      onChangeCapture={(event) => {
+        const target = event.target as HTMLElement;
+        if (!target.closest(".connection-drawer-model-popup")) markDirty();
+      }}
+      onClickCapture={(event) => {
+        const target = event.target as HTMLElement;
+        if (target.closest(".connection-drawer-rate-mode, .connection-drawer-model-done, .connection-drawer-segmented-btn")) markDirty();
       }}
     >
-      <div className="connection-drawer-header">
+      <div className="connection-drawer-header" inert={confirmDiscard || undefined} aria-hidden={confirmDiscard || undefined}>
         <span className="connection-drawer-title">{connectionDrawerTitle(fieldsProps.mode, createdId !== null)}</span>
-        <button type="button" className="connection-drawer-close" aria-label="Close" onClick={onClose}>
+        <button type="button" className="connection-drawer-close" aria-label="Close" disabled={busy} onClick={requestClose}>
           <X aria-hidden="true" />
         </button>
       </div>
       {/* Re-mounted (keyed) on every open so a prior connection's local form
           state (label/model/…) never leaks into the next Add/Edit — matches
           SettingsScreen's own `key={activePane}` remount discipline. */}
+      <div inert={confirmDiscard || undefined} aria-hidden={confirmDiscard || undefined}>
       <ConnectionDrawerFields
         key={fieldsProps.editConnection?.id ?? "add"}
         {...fieldsProps}
         onConnectionCreated={(connectionId) => setCreatedId(connectionId)}
-        footer={
-          <div className="connection-drawer-footer">
-            <button type="button" className="settings-button settings-button-primary" onClick={onClose}>
-              Done
-            </button>
-          </div>
-        }
+        cancelAction={<button type="button" className="settings-button" disabled={busy} onClick={requestClose}>Cancel</button>}
+        onCommitBegin={() => editVersion.current}
+        onCommitSuccess={(version) => { if (version === editVersion.current) setDirty(false); }}
+        onBusyChange={setBusy}
+        interactionBlocked={confirmDiscard}
       />
+      </div>
+      {confirmDiscard && <div className="connection-drawer-discard" role="alertdialog" aria-modal="true" aria-labelledby="connection-discard-title">
+        <p id="connection-discard-title">Discard unsaved changes?</p>
+        <div className="settings-field-row">
+          <button ref={keepEditingRef} type="button" className="settings-button" onClick={() => setConfirmDiscard(false)}>Keep editing</button>
+          <button type="button" className="settings-button settings-button-danger" disabled={busy} onClick={() => { if (!busy) onClose(); }}>Discard changes</button>
+        </div>
+      </div>}
     </dialog>
   );
 }

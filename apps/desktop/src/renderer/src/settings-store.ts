@@ -117,6 +117,10 @@ export interface SettingsAppState {
   notice: string | null;
   /** Non-null while the weak-storage consent dialog should be showing. */
   pendingConsent: PendingSecretConsent | null;
+  /** Most recent consent outcome; contains no secret value. */
+  secretConsentResolution: { key: SecretKey; ok: boolean } | null;
+  /** A consent decision is being persisted and the key retried. */
+  consentSaving: boolean;
   /**
    * Catalog provider id with an interactive OAuth flow in flight ("waiting for
    * browser sign-in…"), or null when no flow is running (slice 2.5 §5). Only
@@ -351,6 +355,8 @@ export function createSettingsStore(bridge?: SettingsBridge, updatesBridge?: Upd
       loadError: null,
       notice: null,
       pendingConsent: null,
+      secretConsentResolution: null,
+      consentSaving: false,
       oauthPendingProviderId: null,
       updateStatus: { kind: "idle" },
 
@@ -500,31 +506,35 @@ export function createSettingsStore(bridge?: SettingsBridge, updatesBridge?: Upd
 
       async acceptWeakStorageConsent(): Promise<SettingsMutationResult | null> {
         const pending = get().pendingConsent;
-        if (!pending) {
+        if (!pending || get().consentSaving) return null;
+        set({ consentSaving: true });
+        try {
+          const consentResult = await api().set({ security: { allowWeakSecretStorage: true } });
+          if (!consentResult.ok) {
+            set({ pendingConsent: null, notice: describeMutationFailure(consentResult.reason), secretConsentResolution: { key: pending.key, ok: false } });
+            return consentResult;
+          }
+          commitSnapshot(consentResult.snapshot);
+          const retryResult = await api().setSecret(pending.key, pending.value);
+          set({ pendingConsent: null });
+          if (retryResult.ok) {
+            commitSnapshot(retryResult.snapshot, { secretConsentResolution: { key: pending.key, ok: true } });
+          } else {
+            set({ notice: describeMutationFailure(retryResult.reason), secretConsentResolution: { key: pending.key, ok: false } });
+          }
+          return retryResult;
+        } catch {
+          set({ pendingConsent: null, notice: "Could not save the API key. Try again.", secretConsentResolution: { key: pending.key, ok: false } });
           return null;
+        } finally {
+          set({ consentSaving: false });
         }
-        const consentResult = await api().set({ security: { allowWeakSecretStorage: true } });
-        if (!consentResult.ok) {
-          set({ pendingConsent: null, notice: describeMutationFailure(consentResult.reason) });
-          return consentResult;
-        }
-        commitSnapshot(consentResult.snapshot);
-        const retryResult = await api().setSecret(pending.key, pending.value);
-        // Unconditional clear: whether the retry succeeded or failed for some
-        // OTHER reason, the parked plaintext must not survive past this single
-        // retry attempt (CUSTODY) — a second weak_storage_needs_consent here
-        // (shouldn't happen: consent was just persisted) would otherwise loop.
-        set({ pendingConsent: null });
-        if (retryResult.ok) {
-          commitSnapshot(retryResult.snapshot);
-        } else {
-          set({ notice: describeMutationFailure(retryResult.reason) });
-        }
-        return retryResult;
       },
 
       declineWeakStorageConsent(): void {
-        set({ pendingConsent: null });
+        if (get().consentSaving) return;
+        const pending = get().pendingConsent;
+        set({ pendingConsent: null, ...(pending ? { secretConsentResolution: { key: pending.key, ok: false } } : {}) });
       },
 
       setNotice(text: string | null): void {

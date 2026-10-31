@@ -3430,3 +3430,11 @@
 .connection-drawer-credential .settings-section-title { margin: 0 0 8px; color: var(--text-2); font-size: var(--fs-sm); font-weight: 600; text-transform: none; letter-spacing: normal; }
 .connection-drawer-rate-mode { margin-top: 4px; padding: 2px 6px; font-size: var(--fs-xs); }
 .connection-drawer-advanced-body [role="note"] { color: var(--text-2); background: var(--bg-card); border-left: 2px solid var(--border-strong); padding: 4px 8px; }
+
+/* Keep unavailable rates legible in both themes without making them editable. */
+.connection-drawer-pricing-table input:disabled { opacity: 1; color: var(--text-1); -webkit-text-fill-color: var(--text-1); }
+.connection-drawer-pricing-table input:disabled::placeholder { color: var(--text-1); opacity: 1; -webkit-text-fill-color: var(--text-1); }
+.connection-drawer-actions { justify-content: flex-end; }
+.connection-drawer-discard { position: sticky; bottom: 0; z-index: 5; padding: 12px 16px; background: var(--bg-overlay); border-top: 1px solid var(--border-strong); box-shadow: var(--shadow-dialog); }
+.connection-drawer-discard p { margin: 0 0 8px; color: var(--text-1); }
+.connection-drawer-discard .settings-field-row { justify-content: flex-end; }

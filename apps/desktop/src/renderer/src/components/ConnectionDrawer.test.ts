@@ -2211,7 +2211,7 @@ describe("custom endpoint cache creation", () => {
       modelPersistenceBridge: () => ({}), label: "", transport: "openai-responses", proxyRef: "",
       connectionCreateProxyRefField: () => ({}), promptCacheEnabled: true, IMPLICIT_PROMPT_CACHE,
       usageSelection: "auto", usageSelectionCreateValue,
-      setProviderId: () => {}, setCreatedConnectionId: () => {}, onConnectionCreated: () => {},
+      setProviderId: () => {}, setCreatedConnectionId: () => {}, onConnectionCreated: () => {}, onCommitBegin: undefined, onCommitSuccess: undefined, onBusyChange: undefined,
     };
     const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
     await run();
@@ -2242,7 +2242,7 @@ describe("custom endpoint cache creation", () => {
         modelPersistenceBridge: () => ({}), label: "", transport: "openai-chat-completions", proxyRef: "",
         connectionCreateProxyRefField: () => ({}), promptCacheEnabled: false,
         usageSelection, usageSelectionCreateValue,
-        setProviderId: () => {}, setCreatedConnectionId: () => {}, onConnectionCreated: () => {},
+        setProviderId: () => {}, setCreatedConnectionId: () => {}, onConnectionCreated: () => {}, onCommitBegin: undefined, onCommitSuccess: undefined, onBusyChange: undefined,
       };
       const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
       await run();
