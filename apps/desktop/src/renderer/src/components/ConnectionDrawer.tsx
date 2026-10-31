@@ -106,8 +106,8 @@ export function resolveCustomKeyOutcome(result: CustomProviderMutationResult): {
 /**
  * Pre-flight of a raw Model-field value before any create/update/secret/list
  * call. `blank` keeps the existing implicit/default rules (a blank catalog
- * model is refused later by `modelSaveBlocked`; a blank arbitrary endpoint is
- * fine); `id` is the normalized, persistable id; `invalid` is a nonblank value
+ * model is refused later by `modelSaveBlocked`; an existing arbitrary endpoint
+ * may remain blank, while creation requires a model); `id` is the normalized, persistable id; `invalid` is a nonblank value
  * that is not a valid model id. Validation reads the ORIGINAL string (via
  * `normalizeModelId`) so a control character is not quietly erased by
  * trimming. A valid but UNKNOWN id is `id` — catalog membership is never
@@ -1118,12 +1118,17 @@ export function modelAfterCatalogPrefill(current: string, suggestions: readonly 
   return suggestions[0]?.id ?? current;
 }
 
+export function createModelMissing(model: string, suggestions: readonly { id: string }[]): boolean {
+  return modelAfterCatalogPrefill(model, suggestions).trim() === "";
+}
+
 /**
  * Whether Save must refuse a catalog connection's empty model (TASK.108-A):
  * the readiness gate requires a model on the active connection, so an empty
  * save manufactures the false "Configure a provider (API key + model)" toast
  * later. Only a catalog connection with a known model list is held to this —
- * custom records/endpoints legitimately run arbitrary or implicit models.
+ * existing custom records/endpoints can retain arbitrary or implicit models;
+ * creation separately requires a model.
  * Exported for direct testing (no jsdom).
  */
 export function modelSaveBlocked(
@@ -1581,8 +1586,7 @@ export function ConnectionDrawerFields({
   // (the record's own key) or a keyed catalog provider (the connection key).
   // A saved custom record already owns its key; an oauth provider signs in.
   const showKeyInCreate = authKind === "api_key" && (isNewCustomEndpoint || !isCustomRecordConnection);
-  const setupMissingModel = simplified && selectedEntry !== undefined &&
-    modelAfterCatalogPrefill(model, selectedEntry.models).trim() === "";
+  const setupMissingModel = createModelMissing(model, selectedEntry?.models ?? []);
   const setupMissingKey = simplified && showKeyInCreate && !noAuth &&
     selectedEntry?.authOptional !== true && secretValue.trim() === "";
   const keyFieldDisabled = readOnly || (isNewCustomEndpoint && noAuth);
@@ -1777,6 +1781,10 @@ export function ConnectionDrawerFields({
   /** ADD: single primary action — create the connection AND (item 3) fold in the key's secret-set. */
   async function createConnection(): Promise<void> {
     if (readOnly) {
+      return;
+    }
+    if (setupMissingModel) {
+      setError("Enter a model ID to continue.");
       return;
     }
     if (isNewCustomEndpoint) {
