@@ -7,10 +7,11 @@ import { describe, expect, it } from "vitest";
 const chrome = process.env.CHROME_BIN ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
 /**
- * Audit B9/B10 were layout faults, so they are pinned in a real engine: the
- * advanced form's field-to-field gutter, the secondary hint size, and the
- * custom-provider row size (it used to inherit the 16px body size and read as
- * a heading). Markup below mirrors the drawer's classes.
+ * Layout faults need a real engine to pin them, so this runs a headless
+ * browser against the shipped stylesheet: the advanced form's field-to-field
+ * gutter, the secondary hint size, and the custom-provider row size (it used
+ * to inherit the 16px body size and read as a heading). Markup below mirrors
+ * the drawer's classes.
  */
 describe("connection drawer field rhythm", () => {
   it.skipIf(!existsSync(chrome))("separates advanced fields and sizes hints/rows like the rest of Settings", () => {

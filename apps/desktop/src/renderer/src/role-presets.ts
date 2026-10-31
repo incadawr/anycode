@@ -138,6 +138,44 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/** One route entry with every "not set" field removed, so blank and absent mean the same thing. */
+function compactEntry(entry: RoleRouteEntry | undefined): RoleRouteEntry {
+  const out: RoleRouteEntry = {};
+  if (entry?.engine !== undefined) out.engine = entry.engine;
+  if (entry?.connection?.trim()) out.connection = entry.connection.trim();
+  if (entry?.provider?.trim()) out.provider = entry.provider.trim();
+  if (entry?.model?.trim() && !(entry.engine !== undefined && entry.model.trim() === "default")) out.model = entry.model.trim();
+  if (entry?.effort !== undefined) out.effort = entry.effort;
+  return out;
+}
+
+/**
+ * A roles payload in canonical shape: blank strings dropped (an unset
+ * connection id and an absent one are the same route), `fallbacks: []` treated
+ * as absent, key order irrelevant. Comparing the editor's draft against a
+ * preset must not depend on which route keys happen to hold empty strings.
+ */
+function canonicalRoles(roles: Partial<Record<PresetRole, RoleConfig>>): Record<string, RoleConfig> {
+  const out: Record<string, RoleConfig> = {};
+  for (const role of ROLE_PRESET_ROLES) {
+    const config = roles[role];
+    if (config === undefined) continue;
+    const fallbacks = (config.fallbacks ?? []).map(compactEntry);
+    out[role] = fallbacks.length > 0
+      ? { primary: compactEntry(config.primary), fallbacks }
+      : { primary: compactEntry(config.primary) };
+  }
+  return out;
+}
+
+/** True when two roles payloads describe the same routes (blank/absent fields and key order ignored). */
+export function sameRoleRoutes(
+  a: Partial<Record<PresetRole, RoleConfig>>,
+  b: Partial<Record<PresetRole, RoleConfig>>,
+): boolean {
+  return stableJson(canonicalRoles(a)) === stableJson(canonicalRoles(b));
+}
+
 /**
  * True when a roles payload is exactly this preset's chain. The chip that is
  * highlighted must follow the VALUES the editor shows, not the last chip that
@@ -145,7 +183,7 @@ function stableJson(value: unknown): string {
  * preset describes highlights nothing.
  */
 export function presetMatchesRoles(preset: RolePreset, roles: Partial<Record<PresetRole, RoleConfig>>): boolean {
-  return stableJson(roles) === stableJson(preset.roles);
+  return sameRoleRoutes(preset.roles, roles);
 }
 
 /**

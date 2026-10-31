@@ -1605,10 +1605,6 @@ export function StartScreen({ onToast }: StartScreenProps) {
           open={startRolePickerOpen}
           connections={useSettingsStore.getState().snapshot?.settings.provider.connections ?? []}
           activeConnectionId={useSettingsStore.getState().snapshot?.settings.provider.activeConnectionId}
-          engines={{
-            claudeReady: useTabsStore.getState().availableEngines.includes("claude"),
-            codexReady: useTabsStore.getState().availableEngines.includes("codex"),
-          }}
           onSave={(roles) => void saveStartRolesAndSubmit(roles)}
           onSkip={() => {
             // Skip writes nothing: the task starts on the built-in defaults,

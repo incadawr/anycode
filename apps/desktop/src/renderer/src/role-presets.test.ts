@@ -13,7 +13,9 @@ import {
   presetMatchesRoles,
   presetUnavailableReason,
   ROLE_PRESET_ROLES,
+  sameRoleRoutes,
 } from "./role-presets.js";
+import { fromDraft, toDraft } from "./role-editor-model.js";
 
 const ACTIVE = "conn-active";
 
@@ -116,7 +118,7 @@ describe("activePresetId — the highlighted chip follows the shown values", () 
     expect(activePresetId(presets, reordered)).toBe("claude-leads-codex-builds");
   });
 
-  it("highlights nothing for a persisted engine chain when no engine is ready (the audit's Claude/Codex + 'Current connection' contradiction)", () => {
+  it("highlights nothing for a persisted engine chain when no engine is ready (the Claude/Codex chain under a 'Current connection' chip)", () => {
     const unready = deriveRolePresets({ claudeReady: false, codexReady: false }, ACTIVE);
     const readiness = { claudeReady: false, codexReady: false };
     // Persisted defaults an older profile can carry: Claude leads, Codex builds.
@@ -130,6 +132,24 @@ describe("activePresetId — the highlighted chip follows the shown values", () 
   it("highlights nothing once the user edits one route", () => {
     const edited = { ...presets[2]!.roles, orchestrator: { primary: { connection: "other" } } };
     expect(activePresetId(presets, edited)).toBeNull();
+  });
+});
+
+describe("sameRoleRoutes / blank routes", () => {
+  it("treats a blank connection id and an absent one as the same route", () => {
+    const presets = deriveRolePresets({ claudeReady: false, codexReady: false }, "");
+    // The editor round-trips through fromDraft, which drops empty strings: with
+    // no active connection the seeded chain must still read as "Current
+    // connection", not as a chain no preset describes.
+    const roundTripped = fromDraft(toDraft(presets[2]!.roles)).roles;
+    expect(presetMatchesRoles(presets[2]!, roundTripped)).toBe(true);
+    expect(activePresetId(presets, roundTripped, { claudeReady: false, codexReady: false })).toBe("this-connection");
+  });
+
+  it("does not treat an empty route as a different preset's non-empty route", () => {
+    const presets = deriveRolePresets({ claudeReady: true, codexReady: true }, ACTIVE);
+    expect(presetMatchesRoles(presets[2]!, presets[0]!.roles)).toBe(false);
+    expect(sameRoleRoutes(presets[2]!.roles, { ...presets[2]!.roles, orchestrator: { primary: {} } })).toBe(false);
   });
 });
 

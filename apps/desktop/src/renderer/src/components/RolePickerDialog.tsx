@@ -20,9 +20,9 @@ import {
   activePresetId,
   autoSelectPreset,
   deriveRolePresets,
-  presetMatchesRoles,
   presetUnavailableReason,
   ROLE_PRESET_ROLES,
+  sameRoleRoutes,
   type PresetEngineInput,
   type PresetRole,
   type RolePreset,
@@ -41,6 +41,7 @@ import {
 } from "../role-editor-model.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { useSettingsStore } from "../settings-store.js";
+import { useTabsStore } from "../tabs-store.js";
 import { resolveRoleModels, roleModelSelection, routePatch, nextCustomMode, type RoleModelSources } from "../role-model-options.js";
 import { roleOverrideNotice, type RoleProfileOverride } from "../role-profile-overrides.js";
 import { useRoleEngineModels } from "../use-role-engine-models.js";
@@ -52,7 +53,12 @@ export interface RolePickerDialogProps {
   open: boolean;
   connections: readonly ProviderConnection[];
   activeConnectionId: string | undefined;
-  engines: PresetEngineInput;
+  /**
+   * Engine readiness. Omit it — the app's call sites do — to follow the
+   * shell's live engine list; a caller that already owns a fresher verdict may
+   * pass it instead.
+   */
+  engines?: PresetEngineInput;
   /** Roles already persisted (edit mode); absent on first run. */
   initialRoles?: Partial<Record<PresetRole, RoleConfig>>;
   /** Save button label — "Save" (first run) / "Save roles" (Settings reuse). */
@@ -88,7 +94,7 @@ export function RolePickerDialog({
   open,
   connections,
   activeConnectionId,
-  engines,
+  engines: enginesProp,
   initialRoles,
   saveLabel = "Save",
   skippable = true,
@@ -99,6 +105,16 @@ export function RolePickerDialog({
   onSkip,
 }: RolePickerDialogProps) {
   const snapshot = useSettingsStore((state) => state.snapshot);
+  // Readiness defaults to the shell's live engine list. The prop exists for
+  // surfaces that own a fresher list; a caller that read the store once with
+  // `getState()` would otherwise keep a stale verdict for the dialog's whole
+  // life and either miss a signing-in engine or call a ready one "not
+  // connected".
+  const availableEngines = useTabsStore((state) => state.availableEngines);
+  const engines = useMemo<PresetEngineInput>(() => enginesProp ?? {
+    claudeReady: availableEngines.includes("claude"),
+    codexReady: availableEngines.includes("codex"),
+  }, [enginesProp, availableEngines]);
   const engineModels = useRoleEngineModels(open && engines.codexReady);
   const modelSources = useMemo<RoleModelSources>(() => ({
     connections, activeConnectionId, engineModels,
@@ -112,13 +128,17 @@ export function RolePickerDialog({
 
   const presets = deriveRolePresets(engines, activeConnectionId ?? "");
   const autoPreset = autoSelectPreset(engines, activeConnectionId ?? "");
-  const [draft, setDraft] = useState<RolesDraft>(() =>
-    initialRoles !== undefined ? toDraft(initialRoles) : toDraft(autoPreset.roles),
-  );
-  // The preset the editor last SEEDED (not the last chip clicked). A clean
-  // draft is re-seeded when engine readiness or the active connection changes;
-  // an edited draft is left alone.
-  const seededPreset = useRef<RolePreset["id"] | null>(initialRoles === undefined ? autoPreset.id : null);
+  const freshDraft = (): RolesDraft =>
+    initialRoles !== undefined
+      ? toDraft(initialRoles)
+      : toDraft(autoSelectPreset(engines, activeConnectionId ?? "").roles);
+  const [draft, setDraft] = useState<RolesDraft>(freshDraft);
+  // The draft this editor last SEEDED, or null once the choice is the user's
+  // (a clicked preset, or an edit the follow below has already noticed). Only
+  // a seeded draft may be replaced when readiness or the active connection
+  // arrives later; remembering the ROUTES (not just the preset id) is what
+  // lets an unchanged id still pick up a connection change.
+  const seededDraft = useRef<RolesDraft | null>(initialRoles === undefined ? freshDraft() : null);
   // The highlighted chip follows the VALUES shown, never a click: a persisted
   // or edited chain that no preset describes highlights nothing.
   const activePreset = activePresetId(presets, fromDraft(draft).roles, engines);
@@ -131,8 +151,9 @@ export function RolePickerDialog({
   // component mounted; `open` flips per first-run attempt).
   useEffect(() => {
     if (open) {
-      setDraft(initialRoles !== undefined ? toDraft(initialRoles) : toDraft(autoPreset.roles));
-      seededPreset.current = initialRoles === undefined ? autoPreset.id : null;
+      const seeded = freshDraft();
+      setDraft(seeded);
+      seededDraft.current = initialRoles === undefined ? seeded : null;
     }
     const dialog = dialogRef.current;
     if (dialog && open && !inline && !dialog.open) {
@@ -142,29 +163,34 @@ export function RolePickerDialog({
   }, [open]);
 
   // Readiness/connection can arrive or change while the dialog is open (the
-  // engine list is fetched asynchronously). Only an UNTOUCHED draft follows
-  // the new auto-selection — the point is that a fresh profile never keeps a
-  // default that routes to an engine that is no longer available.
+  // engine list is fetched asynchronously). Only a SEEDED draft follows the new
+  // auto-selection: a clicked preset or an edited route is the user's answer
+  // and is never replaced, and a seed that merely kept its preset id still
+  // picks up a new active connection.
   useEffect(() => {
     if (!open || initialRoles !== undefined) return;
-    const previous = seededPreset.current === null
-      ? undefined
-      : presets.find((preset) => preset.id === seededPreset.current);
-    if (previous === undefined) return;
-    if (!presetMatchesRoles(previous, fromDraft(draft).roles)) {
+    const seeded = seededDraft.current;
+    if (seeded === null) return;
+    if (!sameRoleRoutes(fromDraft(seeded).roles, fromDraft(draft).roles)) {
       // The user edited the seeded draft — stop following auto-selection.
-      seededPreset.current = null;
+      seededDraft.current = null;
       return;
     }
-    seededPreset.current = autoPreset.id;
-    if (autoPreset.id !== previous.id) setDraft(toDraft(autoPreset.roles));
+    const next = toDraft(autoPreset.roles);
+    seededDraft.current = next;
+    if (!sameRoleRoutes(fromDraft(draft).roles, fromDraft(next).roles)) setDraft(next);
+    // `open` is deliberately NOT a dependency: the open effect above seeds the
+    // draft, and following on the same commit would compare the new seed with
+    // the draft from before opening and mistake that for an edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoPreset.id, activeConnectionId]);
 
   const valid = draftValid(draft);
 
   function applyPreset(preset: RolePreset): void {
-    seededPreset.current = preset.id;
+    // An explicit pick is the answer, not a seed: a later readiness change must
+    // not overwrite it.
+    seededDraft.current = null;
     setDraft(toDraft(preset.roles));
   }
 
@@ -411,7 +437,7 @@ export function EntryRow({ label, entry, connections, modelSources, onChange, on
         </span>
       )}
       {onRemove && (
-        <button type="button" className={compact ? "settings-button role-picker-entry-remove" : "role-picker-entry-remove"} aria-label={`Remove ${label}`} onClick={onRemove}>
+        <button type="button" className={compact ? "settings-button role-picker-entry-remove" : "role-picker-entry-remove"} title={`Remove ${label}`} aria-label={`Remove ${label}`} onClick={onRemove}>
           <X />
         </button>
       )}

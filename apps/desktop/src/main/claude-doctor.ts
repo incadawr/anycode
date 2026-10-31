@@ -246,6 +246,34 @@ function signalGroupOrChild(child: ChildProcess, signal: NodeJS.Signals): void {
   }
 }
 
+/**
+ * Credential-shaped spans in text that came from OUTSIDE this process (a
+ * wrapper script's stderr). The doctor's own env is an allowlist, but nothing
+ * stops a broken wrapper from echoing its environment into its last line — and
+ * that line ends up in `ClaudeDoctorReport.error`, which crosses IPC into
+ * Settings. Everything a token is normally shaped like is replaced before the
+ * text is bounded, so a truncated fragment cannot survive either.
+ */
+const CREDENTIAL_PATTERNS: readonly RegExp[] = [
+  // Provider-style keys: sk-…, sk-ant-…, rk-…, pk-…
+  /\b(?:sk|rk|pk)-[A-Za-z0-9_-]{6,}/g,
+  // GitHub, Slack, AWS, Google API keys
+  /\bgh[pousr]_[A-Za-z0-9]{8,}/g,
+  /\bxox[abposr]-[A-Za-z0-9-]{8,}/g,
+  /\bAKIA[0-9A-Z]{12,}/g,
+  /\bAIza[0-9A-Za-z_-]{20,}/g,
+  // Bearer credentials and JWTs
+  /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi,
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
+  // `KEY=value` / `token: value` assignments for anything that reads secret-like
+  /\b(?:[A-Z0-9_]*?(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Z0-9_]*)\s*[=:]\s*\S+/gi,
+];
+
+/** Replaces credential-shaped spans with `<redacted>`. Exported for the plain-text gate. */
+export function maskCredentials(text: string): string {
+  return CREDENTIAL_PATTERNS.reduce((acc, pattern) => acc.replace(pattern, "<redacted>"), text);
+}
+
 interface PreflightResult {
   version?: string;
   error?: string;
@@ -298,15 +326,16 @@ function preflightVersion(
     child.stderr?.on("data", (chunk: Buffer) => {
       // Bounded: the report crosses IPC; a chatty wrapper must not carry the
       // whole log into the Settings pane.
-      stderr = (stderr + chunk.toString("utf8")).slice(-400);
+      stderr = (stderr + chunk.toString("utf8")).slice(-2_000);
     });
-    child.once("error", (error) => settle({ error: `Claude version check failed: ${error.message}` }));
+    child.once("error", (error) => settle({ error: `Claude version check failed: ${maskCredentials(error.message)}` }));
     child.once("close", (code) => {
       if (code !== 0) {
         // The exit code alone gives the user nothing to act on (an isolated
         // HOME, a broken wrapper script and a missing dynamic library all
-        // look the same). Carry the CLI's own last words as the cause.
-        const cause = stderr
+        // look the same). Carry the CLI's own last words as the cause —
+        // scrubbed of anything credential-shaped first, then bounded.
+        const cause = maskCredentials(stderr)
           .replace(/\u001b\[[0-9;]*m/g, "")
           .replace(/\s+/g, " ")
           .trim()

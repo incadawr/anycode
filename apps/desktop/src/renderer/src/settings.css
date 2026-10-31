@@ -101,7 +101,7 @@
 
 .connection-drawer-advanced {
   display: grid;
-  /* Audited at B10: with sp-3 a hint ("Blank = provider default.") sat as close
+  /* With the smaller spacing a hint ("Blank = provider default.") sat as close
      to the next label as to its own input, so fields read as one run-on block. */
   gap: var(--sp-4);
   border-top: 1px solid var(--border);
@@ -878,7 +878,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   /* The row inherited the dialog's 16px body size while every other list row
-     is fs-md — it read as a heading (audit B9). */
+     is fs-md — it read as a heading. */
   font-size: var(--fs-md);
   font-weight: var(--w-semibold, 600);
 }
@@ -1136,7 +1136,7 @@
 }
 
 /* The model curation list was a bare fieldset with a column of native
-   checkboxes; it is a list of rows now (audit B9). */
+   checkboxes; it is a list of rows now. */
 .connection-drawer-model-curation {
   display: grid;
   gap: var(--sp-2);

@@ -11,7 +11,6 @@ import { projectCatalogSummary } from "../../../main/settings-ipc.js";
 import type { CatalogSummaryEntry, ProviderConnection, SettingsMutationResult } from "../../../shared/settings.js";
 import type { FetchModelsOutcome } from "../anycode-window.js";
 import {
-  connectionCreatedWhileOpen,
   connectionDrawerTitle,
   MAX_OUTPUT_TOKEN_PRESETS,
   MODEL_ID_ERROR,
@@ -2027,7 +2026,7 @@ describe("custom endpoint cache creation", () => {
       },
       modelPersistenceBridge: () => ({}), label: "", transport: "openai-responses", proxyRef: "",
       connectionCreateProxyRefField: () => ({}), promptCacheEnabled: true, IMPLICIT_PROMPT_CACHE,
-      setProviderId: () => {}, setCreatedConnectionId: () => {},
+      setProviderId: () => {}, setCreatedConnectionId: () => {}, onConnectionCreated: () => {},
     };
     const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
     await run();
@@ -2082,14 +2081,13 @@ describe("connectionDrawerTitle", () => {
   });
 });
 
-describe("connectionCreatedWhileOpen", () => {
-  it("sees a new connection appear under an open add drawer", () => {
-    expect(connectionCreatedWhileOpen(2, 3, "add")).toBe(true);
-  });
-
-  it("ignores the unchanged baseline, an edit drawer, and an unknown baseline", () => {
-    expect(connectionCreatedWhileOpen(2, 2, "add")).toBe(false);
-    expect(connectionCreatedWhileOpen(2, 3, "edit")).toBe(false);
-    expect(connectionCreatedWhileOpen(null, 3, "add")).toBe(false);
+describe("the drawer header follows THIS form's own create result", () => {
+  it("is driven by the created connection id, never by a growing connection list", () => {
+    const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
+    // An unrelated connection appearing while the Add form is open must not
+    // relabel an unsaved form, so the title reads the id the form reported.
+    expect(source).toContain("onConnectionCreated={(connectionId) => setCreatedId(connectionId)}");
+    expect(source).toContain("createdId !== null");
+    expect(source).not.toContain("connections.length >");
   });
 });

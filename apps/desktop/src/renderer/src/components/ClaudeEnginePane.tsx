@@ -82,7 +82,7 @@ export function describeClaudeReportStatus(report: ClaudeDoctorReport | undefine
       // A check failure names its cause when the CLI gives one; otherwise the
       // user still gets a next step instead of a bare exit code.
       const actionable = /version check|timed out|handshake/i.test(detail)
-        ? " Run `claude --version` in a terminal to see the full error, or choose the binary under “Binary”."
+        ? " Run `claude --version` in a terminal to see the full error, or pick a different file with “Choose binary…”."
         : "";
       return { headline: "Error", detail: `${detail}${actionable}`, tone: "error" };
     }

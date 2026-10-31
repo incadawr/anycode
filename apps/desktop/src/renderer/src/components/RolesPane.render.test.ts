@@ -303,7 +303,7 @@ describe("Route selects name connections, never raw connection ids", () => {
   });
 });
 
-describe("preset chips follow the values, not the last auto-selection (audit B5)", () => {
+describe("preset chips follow the values, not the last auto-selection", () => {
   const engineChain = {
     orchestrator: { primary: { engine: "claude" as const } },
     planner: { primary: { engine: "claude" as const } },
@@ -364,6 +364,8 @@ describe("fallback order controls", () => {
     expect(order.indexOf('aria-label="Move planner fallback 1 up"')).toBeLessThan(order.indexOf('aria-label="Move planner fallback 1 down"'));
     expect(order).toContain('title="Move planner fallback 1 up"');
     expect(order).toContain("role-picker-entry-order-glyph");
+    // The third glyph of the group names its action in words too.
+    expect(html).toContain('title="Remove planner fallback 1"');
   });
 });
 
