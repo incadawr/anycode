@@ -14,7 +14,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - The Environment menu's Sessions API, External approvals, handle and Full browser access rows now match the Workspace/Branch/Changes rows: an icon, a title with a readable second line, and the switch or field on the right. Hints are no longer cut off.
-- Settings → Sessions API now marks an allowed folder that is missing on disk ("Missing on disk") and explains that it grants nothing until the folder is back; the mark clears without a restart once the folder exists again.
+- Settings → Sessions API now marks an allowed folder that is missing on disk ("Missing on disk") and explains that it grants nothing until the folder is back; the mark follows the disk while the pane stays open — it appears when a folder disappears and clears when it returns, without a restart or reopening Settings.
 
 - Turn-end footer reads "2 turns · 2m 12s · at 00:02" — the clock time is labelled, so it no longer looks like a second, unit-less duration.
 - Long tab titles — single words like paths and filenames as well as multi-word ones — wrap in the session header instead of being cut mid-word by the ellipsis, capped at two lines so any title length still fits the fixed header height.
