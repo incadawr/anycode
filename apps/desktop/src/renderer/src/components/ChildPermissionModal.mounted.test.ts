@@ -59,6 +59,48 @@ it("updates late descriptions and answers the correct sibling", async () => {
 });
 
 
+it("counts the waiting asks and lets the user switch to the second one before answering the first", async () => {
+  const parent = createDesktopStore();
+  const first = createDesktopStore();
+  const second = createDesktopStore();
+  parent.getState().applyHostMessage({ type: "host_ready", workspace: "/w", mode: "build", model: "m", sessionId: "parent" });
+  for (const [store, id] of [[first, "one"], [second, "two"]] as const) {
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/w", mode: "build", model: "m", sessionId: id });
+    store.getState().applyHostMessage({ type: "permission_request", requestId: "same", toolName: "Bash", input: { command: "ls" }, mode: "build", metadata: { name: "Bash", description: "run", readOnly: false, destructive: false, riskLevel: "medium", sideEffectScope: "process" } });
+  }
+  const lookup = vi.spyOn(tabRegistry, "getStore").mockImplementation((id) => id === "tab-one" ? first : id === "tab-two" ? second : undefined);
+  const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+  childRelationStore.getState().registerChild("parent", "call-one", "tab-one", "one");
+  childRelationStore.getState().registerChild("parent", "call-two", "tab-two", "two");
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "parent-tab", store: parent } }, createElement(ConnectedChildPermissionModal))));
+    // Both asks are pending: the header says which one is shown of how many,
+    // and the second is reachable without answering the first.
+    expect(container.textContent).toContain("Subagent: one");
+    expect(container.textContent).toContain("Request 1 of 2");
+    await act(async () => container.querySelector<HTMLButtonElement>(".permission-queue-next")!.click());
+    expect(container.textContent).toContain("Subagent: two");
+    expect(container.textContent).toContain("Request 2 of 2");
+    expect(send).toHaveBeenLastCalledWith("tab-two", { type: "approval_visibility", requestId: "same", visible: true });
+    // Answering the SECOND one is possible while the first is still pending.
+    await act(async () => container.querySelector<HTMLButtonElement>(".permission-allow-button")!.click());
+    expect(send).toHaveBeenCalledWith("tab-two", expect.objectContaining({ requestId: "same", behavior: "allow" }));
+    await act(async () => second.getState().applyHostMessage({ type: "permission_settled", requestId: "same", behavior: "allow", origin: "ui" }));
+    // One ask left — no queue line, the remaining child is shown.
+    expect(container.textContent).toContain("Subagent: one");
+    expect(container.textContent).not.toContain("Request 1 of");
+    await act(async () => container.querySelector<HTMLButtonElement>(".permission-allow-button")!.click());
+    expect(send).toHaveBeenCalledWith("tab-one", expect.objectContaining({ requestId: "same", behavior: "allow" }));
+  } finally {
+    await act(async () => root.unmount());
+    childRelationStore.getState().reset();
+    lookup.mockRestore(); send.mockRestore();
+  }
+});
+
+
 it("shows child expiry and sends recovery only to that child", async () => {
   const parent = createDesktopStore();
   const first = createDesktopStore();
