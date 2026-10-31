@@ -4151,9 +4151,34 @@ describe("Codex manual compaction", () => {
 
 
 describe("Codex service tier", () => {
+  it("restores a persisted override and sends it on the first resumed turn", async () => {
+    const server = new FakeAppServer();
+    server.threadEcho.serviceTier = "priority";
+    server.threadEcho.model = "gpt-5.6-sol";
+    const { engine } = await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, { model: "gpt-5.6-sol", fast: false, origin: "persisted" });
+    expect(engine.snapshot().fast).toBe(false);
+    await runTurn(server, engine);
+    expect(server.turnStartParams().at(-1)?.serviceTier).toBe("default");
+  });
+
+  it("refuses Fast on a model without priority tier", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await createNativeCodexSession(server, "/work");
+    engine.selectModel("gpt-5.4-mini");
+    expect(engine.selectFast(true)).toMatchObject({ ok: false });
+  });
+
+  it("does not present flex as Fast", async () => {
+    const server = new FakeAppServer();
+    server.threadEcho.serviceTier = "flex";
+    server.threadEcho.model = "gpt-5.6-sol";
+    const { engine } = await createNativeCodexSession(server, "/work");
+    expect(engine.snapshot().fast).toBeUndefined();
+  });
   it("keeps the server tier without inventing an override", async () => {
     const server = new FakeAppServer();
     server.threadEcho.serviceTier = "priority";
+    server.threadEcho.model = "gpt-5.6-sol";
     const { engine } = await createNativeCodexSession(server, "/work");
     await runTurn(server, engine);
     expect(server.turnStartParams().at(-1)).not.toHaveProperty("serviceTier");
@@ -4163,6 +4188,7 @@ describe("Codex service tier", () => {
   it("projects the effective tier and applies an explicit per-session override on the next turn", async () => {
     const server = new FakeAppServer();
     server.threadEcho.serviceTier = "priority";
+    server.threadEcho.model = "gpt-5.6-sol";
     const { engine } = await createNativeCodexSession(server, "/work");
     expect(engine.snapshot().fast).toBe(true);
     expect(engine.selectFast(false)).toMatchObject({ ok: true, fast: false });

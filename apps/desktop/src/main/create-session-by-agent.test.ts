@@ -1214,6 +1214,14 @@ describe("create_session — Codex account", () => {
 
 
 describe("create_session speed", () => {
+  it("refuses speed on a different engine as an invalid argument", async () => {
+    const r = rig();
+    expect(await createSessionForAgent({ workspace: "/ws", engine: "core", fast: true }, r.deps())).toMatchObject({ ok: false, reason: "invalid_argument" });
+  });
+  it("preserves a host refusal for unsupported Fast", async () => {
+    const r = rig({ respond: (operation) => operation === "get_session_status" ? { result: { state: "idle" } } : operation === "set_session_fast" ? { result: { ok: false, reason: "invalid_argument", detail: "unsupported" } } : undefined });
+    expect(await createSessionForAgent({ workspace: "/ws", engine: "codex", fast: true }, r.deps())).toMatchObject({ ok: false, reason: "invalid_argument", detail: "unsupported" });
+  });
   it("configures the override before publishing the session", async () => {
     const sequence: string[] = [];
     const r = rig({ sequence, respond: (operation, payload) => {

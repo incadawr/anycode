@@ -1933,6 +1933,14 @@ describe("Sessions API create_session", () => {
     expect(seen[1]).not.toHaveProperty("effort");
   });
 
+  it("rejects a non-boolean fast argument before creating a session", async () => {
+    const creator = vi.fn(async () => ({ ok: true as const, sessionId: "s", tabId: "t" }));
+    const f = await createFixture({ creator });
+    const result = await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, engine: "codex", fast: "true" } });
+    expect(result.isError).toBe(true);
+    expect(creator).not.toHaveBeenCalled();
+  });
+
   // ── create_session account (Sessions API) ───────────────────────────────
   it("forwards create_session account unchanged — main is the one that judges the registry id", async () => {
     const seen: CreateSessionRequest[] = [];
