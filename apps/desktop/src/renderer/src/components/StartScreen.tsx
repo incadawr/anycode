@@ -640,6 +640,12 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // leaves the draft untouched — there is nothing to send yet, and sending an
   // empty draft on a roles pick would be a surprise tab.
   const [startRolePickerIntent, setStartRolePickerIntent] = useState<"send" | "mode">("send");
+  // Skipping the mode-menu toggle's role dialog is an answer about THIS
+  // orchestrate choice: the next Send starts the task on the built-in roles
+  // instead of reopening the same dialog (the owner-reported "the first Send
+  // asks again"). A new orchestrate choice, or a Save that actually writes
+  // roles, makes the skip stale.
+  const startRolesSkippedRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // TASK.81: image attach state. The attachment LIST itself is store-backed
   // (`draft.images`, mirrors the store-controlled `draft.prompt` textarea —
@@ -1128,9 +1134,15 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const claudeDraftEffort = resolveDraftEngineEffort(draft.engineEffort, claudeDraftEfforts);
   const showProjectHint = draft.workspace !== null && (projectHintVisible || projectHintHovered);
 
-  /** One start-composer send; `skipRoleGate` is the first-run dialog's Skip path (built-in defaults). */
+  /**
+   * One start-composer send; `skipRoleGate` is the first-run dialog's Skip path
+   * (built-in defaults). A skipped mode-menu dialog counts the same way: the
+   * user already answered "who does the work" for this choice, so the send
+   * must not ask a second time.
+   */
   async function submit(skipRoleGate = false): Promise<void> {
-    if (!skipRoleGate && draft !== null) {
+    const rolesSkipped = startRolesSkippedRef.current;
+    if (!skipRoleGate && !rolesSkipped && draft !== null) {
       const plan = resolveStartOrchestrate(draft.engine, draft.orchestrate, draft.prompt);
       if (startSendNeedsRolePicker(plan, resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}, draft.workspace ?? undefined))) {
         setStartRolePickerIntent("send");
@@ -1142,7 +1154,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
       canSend,
       guard: submitGuardRef,
       setSubmitting,
-      submit: () => submitStartDraft(undefined, skipRoleGate ? { skipRoleGate: true } : undefined),
+      submit: () => submitStartDraft(undefined, skipRoleGate || rolesSkipped ? { skipRoleGate: true } : undefined),
       onToast,
     });
   }
@@ -1155,6 +1167,9 @@ export function StartScreen({ onToast }: StartScreenProps) {
    * which read as a no-op.
    */
   function toggleDraftOrchestrate(next: boolean): void {
+    // Every row click is a fresh choice, so an earlier Skip no longer answers
+    // it — turning orchestrate off and on again asks about roles again.
+    startRolesSkippedRef.current = false;
     useTabsStore.getState().setDraftOrchestrate(next);
     const workspace = useTabsStore.getState().draft?.workspace ?? undefined;
     if (orchestrateToggleNeedsRolePicker(next, resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}, workspace))) {
@@ -1172,8 +1187,12 @@ export function StartScreen({ onToast }: StartScreenProps) {
   async function saveStartRoles(roles: Parameters<RolePickerDialogProps["onSave"]>[0]): Promise<void> {
     setStartRolePickerOpen(false);
     const result = await useSettingsStore.getState().setPatch(rolesPatch(useSettingsStore.getState().snapshot?.settings ?? {}, roles, useTabsStore.getState().draft?.workspace ?? undefined));
-    if (result.ok && startRolePickerIntent === "send") {
-      await submit();
+    if (result.ok) {
+      // Real roles exist now, so the first-run question is answered for good.
+      startRolesSkippedRef.current = false;
+      if (startRolePickerIntent === "send") {
+        await submit();
+      }
     }
   }
 
@@ -1646,6 +1665,11 @@ export function StartScreen({ onToast }: StartScreenProps) {
             setStartRolePickerOpen(false);
             if (startRolePickerIntent === "send") {
               void submit(true);
+            } else {
+              // The mode toggle only enabled orchestrate; remember the answer
+              // so the user's own Send starts the task instead of asking the
+              // same first-run question again.
+              startRolesSkippedRef.current = true;
             }
           }}
         />

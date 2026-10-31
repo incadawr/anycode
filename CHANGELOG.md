@@ -25,6 +25,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Compacting a short conversation now says “Nothing to compact yet — the conversation is too short” once, in the transcript, instead of showing internal jargon twice (a toast on top of the message box and a red row).
 - Roles: the global profile selector always offers "Built-in roles", so you can return to the built-in defaults even with a saved profile active; saving from the built-ins now creates a fresh uniquely-named profile instead of overwriting a profile named "default", and deleting the active profile returns to the built-ins.
 - Turning Orchestrate on from the mode menu now asks for roles on the first run and the mode chip and session header say "Orchestrate", instead of the chip still reading the permission mode and the click looking like a no-op.
+- Turning Orchestrate on from the mode menu now asks for roles on the first run and the mode chip and session header say "Orchestrate", instead of the chip still reading the permission mode and the click looking like a no-op; skipping that role picker once is enough, so the next Send starts the task instead of asking again.
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
 - Choosing No thinking for Xiaomi MiMo models now turns their reasoning off.
 - Xiaomi MiMo Token Plan sessions show a pay-as-you-go list-price cost estimate instead of “price unknown”.
