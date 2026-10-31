@@ -24,7 +24,6 @@ import {
   maxOutputTokensField,
   modelAfterCatalogPrefill,
   modelSaveBlocked,
-  createModelMissing,
   preflightModelId,
   providerSelectDisplayValue,
   providerOptionGroups,
@@ -2303,21 +2302,5 @@ describe("the drawer header follows THIS form's own create result", () => {
     expect(source).toContain("onConnectionCreated={(connectionId) => setCreatedId(connectionId)}");
     expect(source).toContain("createdId !== null");
     expect(source).not.toContain("connections.length >");
-  });
-});
-
-
-describe("creating a connection without a model", () => {
-  it("blocks blank custom models while accepting manually entered and catalog models", () => {
-    expect(createModelMissing("  ", [])).toBe(true);
-    expect(createModelMissing("gateway/model", [])).toBe(false);
-    expect(createModelMissing("", [{ id: "catalog-model" }])).toBe(false);
-  });
-  it("disables Create and guards both creation paths with an explanation", () => {
-    const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
-    expect(source).toMatch(/disabled=\{readOnly \|\| creating \|\| setupMissingModel/);
-    expect(source).toContain("Enter a model ID to continue.");
-    const create = source.slice(source.indexOf("async function createConnection()"), source.indexOf("async function save()"));
-    expect(create.indexOf("if (setupMissingModel)" )).toBeLessThan(create.indexOf("createNewCustomEndpoint()"));
   });
 });

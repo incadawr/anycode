@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
 - Require a model ID when creating a connection, including custom endpoints.
 
 ### Fixed

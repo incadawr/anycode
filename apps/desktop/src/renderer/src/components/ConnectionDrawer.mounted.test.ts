@@ -164,6 +164,27 @@ it("persists the record's name and base URL, and the entered model, on the custo
   } finally { await act(async () => root.unmount()); container.remove(); rig.cleanup(); }
 });
 
+it("requires a model before creating a custom connection", async () => {
+  const rig = createScenarioRig();
+  const { container, root } = await mountAddDrawer(rig);
+  try {
+    await pickCustomTemplate(container);
+    await typeInto(container.querySelector('input[placeholder="e.g. LM Studio"]')!, "Local");
+    await typeInto(container.querySelector('input[placeholder="http://localhost:1234/v1"]')!, "http://127.0.0.1:1234/v1");
+    const noAuth = [...container.querySelectorAll("input[type=checkbox]")].find(x => x.parentElement?.textContent?.includes("doesn't need")) as HTMLInputElement;
+    await act(async () => noAuth.click());
+    const button = [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Create connection")!;
+    expect(button.disabled).toBe(true);
+    await clickCreate(container);
+    expect(rig.create).not.toHaveBeenCalled();
+    expect((await loadSettings(rig.path)).settings.provider.custom).toBeUndefined();
+    await typeInto(container.querySelector('input[placeholder="Enter a model ID"]')!, "m1");
+    expect(button.disabled).toBe(false);
+    await clickCreate(container);
+    await act(async () => { await vi.waitFor(() => expect(rig.create).toHaveBeenCalledWith(expect.objectContaining({model:"m1"}))); });
+  } finally { await act(async () => root.unmount()); container.remove(); rig.cleanup(); }
+});
+
 it("reports the connection it created so the dialog header stops saying Add, and creates no connection when the base URL is blank", async () => {
   const rig = createScenarioRig();
   const { container, root } = await mountAddDrawer(rig);
@@ -173,6 +194,7 @@ it("reports the connection it created so the dialog header stops saying Add, and
     await act(async () => root.render(createElement(ConnectionDrawerFields, {mode:"add", catalog:rig.catalog as never, connections:[], secrets:[], readOnly:false, store:rig.store, customProvider:rig.bridge as never, onConnectionCreated:(id) => { reported = id; }})));
     await pickCustomTemplate(container);
     await typeInto(container.querySelector('input[placeholder="e.g. LM Studio"]')!, "Int D Conn");
+    await typeInto(container.querySelector('input[placeholder="Enter a model ID"]')!, "m1");
     // Base URL deliberately LEFT BLANK: buildCustomProviderCreateRequest refuses,
     // no record and no connection are written.
     const noAuth = [...container.querySelectorAll("input[type=checkbox]")].find(x => x.parentElement?.textContent?.includes("doesn't need")) as HTMLInputElement;
@@ -184,7 +206,6 @@ it("reports the connection it created so the dialog header stops saying Add, and
     // Now complete the base URL and create: the id IS reported (what the dialog
     // title keys on) and the record persists its base URL.
     await typeInto(container.querySelector('input[placeholder="http://localhost:1234/v1"]')!, "http://127.0.0.1:9/v1");
-    await typeInto(container.querySelector('input[placeholder="Enter a model ID"]')!, "m1");
     await clickCreate(container);
     await act(async () => { await vi.waitFor(() => expect(reported).toBe("conn-fixture")); });
     expect((await loadSettings(rig.path)).settings.provider.custom?.[0]).toMatchObject({baseUrl:"http://127.0.0.1:9/v1"});
