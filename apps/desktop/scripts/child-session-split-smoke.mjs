@@ -1,5 +1,5 @@
 /**
- * Live smoke for  CUT-S3 §6.3 — the split/accordion layout's ONLY
+ * Live smoke for CUT-S3 §6.3 — the split/accordion layout's ONLY
  * PNG gate (S3c). Drives a REAL Electron dev instance end-to-end over the
  * automation HTTP channel and proves, on a real screen, what
  * `child-layout.test.ts`'s pure-reducer matrix structurally cannot: that the

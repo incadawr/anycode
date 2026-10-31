@@ -1,10 +1,10 @@
 /**
- * Live GUI smoke for  (design/build/design/slice-codex-fixes-cut.md
+ * Live GUI smoke for (design/build/design/slice-codex-fixes-cut.md
  * §5.6 B5-auto): drives a REAL Electron dev instance over the automation
  * HTTP channel (`main/automation/*`, automation/README.md) against a REAL
  * `codex` CLI binary (no fakes, no mocks) — the executable GUI smoke the
  * merged Codex engine has never had (cut: "the channel's start-screen
- * contract currently has no engine field/route ⇒ 's release gate is
+ * contract currently has no engine field/route ⇒'s release gate is
  * not real yet").
  *
  * Exercises, in order: programmatic Codex engine selection on the start
@@ -441,7 +441,7 @@ async function getTabState(ctx, step, tabId) {
 // The automation snapshot has no read-only signal for this: `GET
 // /start-screen`'s `availableEngines` (automation.ts's `startScreenState`) is
 // deliberately the STATIC compiled-in engine catalog (`[...ENGINE_IDS]`),
-// not draft-scoped and not readiness-gated (codex-fixes  cut §3.7) —
+// not draft-scoped and not readiness-gated (codex-fixes cut §3.7) —
 // it says "this build knows how to speak Codex", never "Codex is ready right
 // now". `GET /settings` and `GET /state` carry no codex-onboarding field
 // either. Lacking a proper readiness read, both call sites below poll the one
@@ -929,7 +929,7 @@ async function step8QuitRelaunch(ctx) {
     }
   }
 
-  // Teardown case #1 ( DoD: "0 orphan processes after each teardown case").
+  // Teardown case #1 (DoD: "0 orphan processes after each teardown case").
   await assertZeroOrphans(8, "quit before relaunch", ctx.appPgid);
 
   const t1 = Date.now();
@@ -1055,7 +1055,7 @@ function isBlankText(block) {
  */
 function normalizedKindOrder(blocks) {
   // Only the live `reasoning` block needs this filter: resume drops persisted
-  // reasoning thread items entirely (history-projection.ts, ), so
+  // reasoning thread items entirely (history-projection.ts), so
   // no reasoning-derived assistant_text can appear on the hydration side.
   return blocks
     .filter((b) => b?.kind !== "reasoning")

@@ -1,5 +1,5 @@
 /**
- * Live smoke for  CUT-S2 §4.2 пп.1,2,3,5,8 — S2d D2, the track's
+ * Live smoke for CUT-S2 §4.2 пп.1,2,3,5,8 — S2d D2, the track's
  * FIRST PNG gate. Drives a REAL Electron dev instance end-to-end and proves,
  * on a real screen, what a unit matrix structurally cannot:
  *

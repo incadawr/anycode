@@ -1,5 +1,5 @@
 /**
- * Live smoke for  part B (Orchestrate mode UI) — drives a REAL
+ * Live smoke for part B (Orchestrate mode UI) — drives a REAL
  * Electron dev instance over the automation HTTP channel, no model calls
  * (the turn is never started; only UI state and settings persistence are
  * asserted). Proves what the unit gate structurally cannot, because each
@@ -493,7 +493,7 @@ async function main() {
     const name = err instanceof SmokeFailure ? err.message.split(":")[0] : "unexpected";
     record(name, "FAIL", err?.message ?? String(err));
   } finally {
-    // Evidence json (task145 discipline).
+    // Evidence json (discipline).
     try {
       if (existsSync(settingsPath)) {
         writeFileSync(evidenceSettingsPath, readFileSync(settingsPath, "utf8"), "utf8");

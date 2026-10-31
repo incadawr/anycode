@@ -1,5 +1,5 @@
 /**
- * Live GUI smoke for  W8 (design/track-43-45-33-47-49-cut.md §"W8 —
+ * Live GUI smoke for W8 (design/track-43-45-33-47-49-cut.md §"W8 —
  * renderer retry-UX"): drives a REAL Electron dev instance end-to-end over the
  * automation HTTP channel (`main/automation/*`, see `automation/README.md`)
  * through the observable-retry UX: a failed turn's `stream_retry` lines
@@ -33,7 +33,7 @@
  * retry/catch path. That crash is real and reproducible on this machine's
  * host runtime (Node v24.17.0, not the v22 this script itself runs under —
  * the host subprocess resolves its own `node` off PATH) but is a Node/undici
- * platform edge case orthogonal to the  W8 retry-UX surface this smoke
+ * platform edge case orthogonal to the W8 retry-UX surface this smoke
  * exists to verify, so this script does not chase it further; worth a
  * separate residual (a hostile/misbehaving proxy sending a mid-handshake RST
  * could crash a live session instead of surfacing a retryable failure).
@@ -70,7 +70,7 @@
  * Each step prints `[step N] PASS/FAIL <detail>`; the first FAIL tears down
  * and exits 1. PNG evidence is written to `apps/desktop/out/retry-smoke/step-*.png`.
  *
- * Steps 1-8 are frozen (do not renumber/edit). Steps 9-11 ( FIX-A) are
+ * Steps 1-8 are frozen (do not renumber/edit). Steps 9-11 (FIX-A) are
  * a discriminating CROSS-RESPAWN extension: they re-arm a fresh Try-again
  * offer, force a REAL host respawn via the dev-only `POST
  * /tabs/:tabId/host/kill` route (never the `/tabs/:tabId/retry` state
@@ -652,7 +652,7 @@ async function step8CancelMidRetry(ctx) {
   pass(8, `cancel interrupted the in-flight retry loop (was mid-retry with ${grew} stream_retry blocks total) — turn settled idle with loop_end reason:"cancelled", no hang`);
 }
 
-// ── step 9 ( FIX-A): re-arm a FRESH Try-again offer — step 8's
+// ── step 9 (FIX-A): re-arm a FRESH Try-again offer — step 8's
 // cancelled turn arms nothing (loop_end reason:"cancelled", not "error"), so
 // a third, genuinely-retryable-to-exhaustion turn is needed before the
 // cross-respawn steps below have anything to lose ──
@@ -678,7 +678,7 @@ async function step9RearmRetryOffer(ctx) {
   pass(9, `Try-again offer re-armed on loop_end block ${ctx.retryBlockId} (live anchored button present, count=1)`);
 }
 
-// ── step 10 ( FIX-A): force a REAL host respawn via the dev-only
+// ── step 10 (FIX-A): force a REAL host respawn via the dev-only
 // host-kill lever (never the /retry state-shortcut route — that bypasses the
 // DOM and would mask the exact defect this smoke exists to catch). Proof of
 // a genuine respawn is the tab's main-plane pid changing (`manager.killHost`
@@ -713,7 +713,7 @@ async function step10RespawnHost(ctx) {
   pass(10, `host respawned (pid ${prePid} -> ${respawnedPid}); connection is ready again; state.retryOffer survived, still naming block ${ctx.retryBlockId}`);
 }
 
-// ── step 11 ( FIX-A): the discriminator. Reads the REAL post-respawn
+// ── step 11 (FIX-A): the discriminator. Reads the REAL post-respawn
 // DOM for the standalone fallback Try-again row (MessageList.tsx's
 // `showStandaloneRetry`) via the EXISTING try-again-button probe/driver
 // (zero automation-facade changes — the fallback row carries the same

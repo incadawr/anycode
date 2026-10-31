@@ -1,5 +1,5 @@
 /**
- * Live smoke for  (background/detached child sessions) — drives a REAL
+ * Live smoke for (background/detached child sessions) — drives a REAL
  * Electron dev instance end-to-end over the automation HTTP channel and proves
  * the four things the unit gate structurally cannot, because every one of them
  * is a statement about a REAL turn boundary, a REAL second OS process, and the

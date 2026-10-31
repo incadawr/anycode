@@ -27,7 +27,7 @@ import {
   MCP_IMPORT_APPLY_CHANNEL,
   MCP_IMPORT_SCAN_CHANNEL,
 } from "../shared/mcp-config.js";
-// : Settings → Language servers channels (same thin-wrapper rule
+// Settings → Language servers channels (same thin-wrapper rule
 // as mcpConfig above; main owns zod validation + path custody in
 // main/lsp-config-ipc.ts).
 import {
@@ -281,7 +281,7 @@ import type {
   TabRebindResult,
   WorkspacePickResult,
 } from "../shared/tabs.js";
-//  CUT-S2 §2.5/§10.8.1: `WireHistoryItem` read type-only off
+// CUT-S2 §2.5/§10.8.1: `WireHistoryItem` read type-only off
 // shared/protocol.ts (unrestricted read access; only EDITING
 // apps/desktop/src/shared/** is out of this slice's fence) — the same import
 // store.ts already uses for the live session_history hydration path.
@@ -330,14 +330,14 @@ import type {
   PreviewPanelStatePayload,
   PreviewSetContainerResult,
 } from "../shared/preview-panel.js";
-// : native DOM markdown preview's doc-read (M1) + navigate (M2)
+// native DOM markdown preview's doc-read (M1) + navigate (M2)
 // channels (CUT.md CONTRACTS) — mirrors the `previewPanel.setContainer`
 // style just above: shared constant, typed invoke wrapper, zero logic in
 // this file.
 import { MD_PREVIEW_NAVIGATE_CHANNEL, MD_PREVIEW_READ_CHANNEL } from "../shared/md-preview.js";
 import type { MdDocReadResult } from "../shared/md-preview.js";
 
-//  (design/slice-codex-fixes-cut.md §2(g)/§3.8): Codex onboarding
+// (design/slice-codex-fixes-cut.md §2(g)/§3.8): Codex onboarding
 // invoke/push channels. Duplicated literals, not `shared/**` exports — every
 // lane in this track froze `shared/**` as read-only after block C0 (design
 // cut §4 disjointness rules); main/codex-ipc.ts holds the byte-identical
@@ -348,7 +348,7 @@ import type { MdDocReadResult } from "../shared/md-preview.js";
 // itself IS a frozen `shared/**` type, imported (never edited) above.
 const CODEX_RECHECK_CHANNEL = "anycode:codex-recheck";
 const CODEX_PICK_BINARY_CHANNEL = "anycode:codex-pick-binary";
-// : the "use this alternate binary" invoke — the error
+// the "use this alternate binary" invoke — the error
 // card's candidate buttons. main/codex-ipc.ts holds the byte-identical source
 // of truth, same duplicated-literal convention as the two channels above.
 const CODEX_USE_BINARY_CHANNEL = "anycode:codex-use-binary";
@@ -357,7 +357,7 @@ import { CODEX_LOGIN_PROGRESS_CHANNEL, type CodexDeviceCodeProgress, type CodexL
 const CODEX_LOGIN_CANCEL_CHANNEL = "anycode:codex-login-cancel";
 const CODEX_LOGIN_OPEN_DEVICE_PAGE_CHANNEL = "anycode:codex-login-open-device-page";
 const ENGINES_CHANGED_CHANNEL = "anycode:engines-changed";
-//  (codex-profiles cut §2/§4, amended §A1): the profile control-plane
+// (codex-profiles cut §2/§4, amended §A1): the profile control-plane
 // channels — main/codex-ipc.ts holds the byte-identical source of truth, same
 // duplicated-literal convention as the four channels above.
 const CODEX_PROFILE_LIST_CHANNEL = "anycode:codex-profile-list";
@@ -369,19 +369,19 @@ const CODEX_PROFILE_REPAIR_LINK_CHANNEL = "anycode:codex-profile-repair-link";
 const CODEX_TAB_ACCOUNT_CHANNEL = "anycode:codex-tab-account";
 /** "Continue this thread on another account" (main/codex-continue.ts is the byte-identical source of truth). */
 const CODEX_CONTINUE_CHANNEL = "anycode:codex-continue";
-//  (codex-profiles cut §7, amended §A4): the binary/manifest control
+// (codex-profiles cut §7, amended §A4): the binary/manifest control
 // plane — main/codex-install.ts holds the byte-identical source of truth.
 const CODEX_INSTALL_CHANNEL = "anycode:codex-install";
 const CODEX_RISK_ACCEPT_CHANNEL = "anycode:codex-risk-accept";
 const CODEX_SUPPORT_STATUS_CHANNEL = "anycode:codex-support-status";
 const CODEX_MANIFEST_REFRESH_CHANNEL = "anycode:codex-manifest-refresh";
-//  (codex-profiles cut §8.8, lane W3-H): the rollout-import control
+// (codex-profiles cut §8.8, lane W3-H): the rollout-import control
 // plane — main/codex-rollout-ipc.ts holds the byte-identical source of truth,
 // same duplicated-literal convention as every other channel above.
 const CODEX_ROLLOUT_LIST_CHANNEL = "anycode:codex-rollout-list";
 const CODEX_ROLLOUT_PREVIEW_CHANNEL = "anycode:codex-rollout-preview";
 const CODEX_ROLLOUT_IMPORT_CHANNEL = "anycode:codex-rollout-import";
-// SLICE-CC A4 + SLICE-CC-LOGIN (, cut §1.2/§4): Claude onboarding
+// SLICE-CC A4 + SLICE-CC-LOGIN (cut §1.2/§4): Claude onboarding
 // channels — main/claude-ipc.ts holds the byte-identical source of truth,
 // same duplicated-literal convention as every Codex channel above.
 const CLAUDE_RECHECK_CHANNEL = "anycode:claude-recheck";
@@ -391,7 +391,7 @@ const CLAUDE_LOGIN_CANCEL_CHANNEL = "anycode:claude-login-cancel";
 // Doctor-spawn-loop fix: the dedicated snapshot push — main/claude-ipc.ts's
 // `CLAUDE_SNAPSHOT_CHANGED_CHANNEL` holds the byte-identical source of truth.
 const CLAUDE_SNAPSHOT_CHANGED_CHANNEL = "anycode:claude-snapshot-changed";
-//  W11-FIX (W13 live-dogfood finding): `applyConnectionHealthEvent`
+// W11-FIX (W13 live-dogfood finding): `applyConnectionHealthEvent`
 // (main/settings-ipc.ts) persists a real request outcome's advisory health
 // deliberately WITHOUT firing the normal `onMutation` broadcast (health must
 // never trigger the readiness/host-env/auto-tab side effects a real settings
@@ -402,7 +402,7 @@ const CLAUDE_SNAPSHOT_CHANGED_CHANNEL = "anycode:claude-snapshot-changed";
 // (main/index.ts holds the byte-identical source of truth).
 const PROVIDER_HEALTH_CHANGED_CHANNEL = "anycode:provider-health-changed";
 const PROVIDER_QUOTA_CHANGED_CHANNEL = "anycode:provider-quota-changed";
-//  (cut §9.2/§13.1): the custom OpenAI-compatible model-provider CRUD
+// (cut §9.2/§13.1): the custom OpenAI-compatible model-provider CRUD
 // + guarded models-fetch channels — main/provider-ipc.ts holds the
 // byte-identical source of truth, same "duplicated on purpose" convention as
 // every other channel literal in this file.
@@ -410,20 +410,20 @@ const CUSTOM_PROVIDER_CREATE_CHANNEL = "anycode:custom-provider-create";
 const CUSTOM_PROVIDER_UPDATE_CHANNEL = "anycode:custom-provider-update";
 const CUSTOM_PROVIDER_DELETE_CHANNEL = "anycode:custom-provider-delete";
 const CUSTOM_PROVIDER_FETCH_MODELS_CHANNEL = "anycode:custom-provider-fetch-models";
-// : the chat-artifact control plane (inline image preview + open/
+// the chat-artifact control plane (inline image preview + open/
 // reveal for transcript file links) — main/artifacts-ipc.ts holds the
 // byte-identical source of truth, same duplicated-literal convention as
 // every other channel in this file.
 const ARTIFACT_READ_IMAGE_CHANNEL = "anycode:artifact-read-image";
 const ARTIFACT_OPEN_CHANNEL = "anycode:artifact-open";
 const ARTIFACT_REVEAL_CHANNEL = "anycode:artifact-reveal";
-/** -A: per-tab, per-path consent grant for a previously-blocked path. */
+/** per-tab, per-path consent grant for a previously-blocked path. */
 const ARTIFACT_ALLOW_CHANNEL = "anycode:artifact-allow";
 /** Night-track wave-1: user click on a local .html/.htm/.md artifact link opens/reopens it in PreviewHost. */
 const ARTIFACT_PREVIEW_CHANNEL = "anycode:artifact-preview";
-/**  slice 2: batched existence/containment probe for path candidates the renderer's plain-text scan finds outside real markdown links. */
+/** slice 2: batched existence/containment probe for path candidates the renderer's plain-text scan finds outside real markdown links. */
 const ARTIFACT_PREVIEWABLE_CHANNEL = "anycode:artifact-previewable";
-//  CUT-S2 §2.5/§10.8.1 (slice S2c C4): the read-only completed-child
+// CUT-S2 §2.5/§10.8.1 (slice S2c C4): the read-only completed-child
 // history channel — main/tab-ipc.ts holds the byte-identical source of truth
 // for both the channel literal and `ChildHistoryResult`'s shape, same
 // duplicated-literal convention as every other channel in this file (the
@@ -439,7 +439,7 @@ export interface CodexOnboardingSnapshot {
   binaryPath: string | null;
   source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none";
   checkedAt: string;
-  /** : alternate-binary candidates the error card may offer — absent when the ladder found none. */
+  /** alternate-binary candidates the error card may offer — absent when the ladder found none. */
   alternates?: Array<{ path: string; source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none" }>;
 }
 
@@ -454,7 +454,7 @@ export type CodexUseBinaryResult =
 export type CodexLoginStartResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
   /**
-   * : `detail` is a short, non-secret explanation of a `failed`
+   * `detail` is a short, non-secret explanation of a `failed`
    * outcome (which branch refused, and why) — it exists so the UI can say
    * something more useful than "Sign-in failed. Try again.", and so the main
    * log carries a breadcrumb. Never a token/credential; absent when there is
@@ -462,7 +462,7 @@ export type CodexLoginStartResult =
    */
   | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed"; detail?: string };
 
-//  (codex-profiles cut §2/§4, amended §A1): duplicated from
+// (codex-profiles cut §2/§4, amended §A1): duplicated from
 // main/codex-ipc.ts's own `CodexProfilesSnapshot`/`CodexProfileCreateResult`/
 // `CodexProfileGuardResult` — same "shared/** froze read-only after C0"
 // reasoning as the onboarding shapes above. `CodexProfileRecord` itself IS a
@@ -484,7 +484,7 @@ export type CodexProfileCreateResult =
 
 export type CodexProfileGuardResult = { ok: true } | { ok: false; reason: string };
 
-//  (codex-profiles cut §7, amended §A4): duplicated from
+// (codex-profiles cut §7, amended §A4): duplicated from
 // main/codex-install.ts's own `CodexInstallControllerResult`/`supportStatus`/
 // `refreshManifest` return shapes.
 export type CodexInstallResult =
@@ -502,7 +502,7 @@ export interface CodexManifestRefreshResult {
   supportedRange: string;
 }
 
-//  (codex-profiles cut §8.8): duplicated from main/codex-rollout-ipc.ts's
+// (codex-profiles cut §8.8): duplicated from main/codex-rollout-ipc.ts's
 // own `CodexRolloutEntry`/`CodexRolloutListResult`/`CodexRolloutPreviewResult`/
 // `CodexRolloutImportResult` (same "shared/** froze read-only after C0"
 // reasoning as every other Codex shape above). `CodexRolloutImportReportView`
@@ -553,7 +553,7 @@ export type CodexRolloutImportResult =
   | { ok: true; sessionId: string; workspace: string; report: CodexRolloutImportReportView }
   | { ok: false; reason: "profile_not_found" | "invalid_file_name" | "not_readable" | "too_large" | "invalid_model" };
 
-//  (cut §9.2/§13.1): duplicated from main/provider-ipc.ts's own
+// (cut §9.2/§13.1): duplicated from main/provider-ipc.ts's own
 // `CustomProviderMutationResult`/`FetchModelsOutcome`/handle*-request shapes
 // (same "shared/** froze read-only after C0" reasoning as the Codex shapes
 // above). `CustomProviderRecord` itself IS a frozen shared/** type, imported
@@ -582,7 +582,7 @@ export interface CustomProviderCreateRequest {
   name: string;
   baseUrl: string;
   kind: CustomProviderRecord["kind"];
-  // : optional — a keyless local endpoint sets `authOptional: true`.
+  // optional — a keyless local endpoint sets `authOptional: true`.
   apiKey?: string;
   authOptional?: boolean;
   models?: string[];
@@ -598,7 +598,7 @@ export interface CustomProviderUpdateRequest {
   models?: string[];
 }
 
-// : duplicated from main/artifacts-ipc.ts's result shapes (same
+// duplicated from main/artifacts-ipc.ts's result shapes (same
 // "shared/** frozen" reasoning as every other shape above). The renderer
 // supplies only tabId + the model-authored path; main re-checks containment
 // and the image-extension allowlist before any read/open/reveal.
@@ -631,7 +631,7 @@ export type ArtifactActionResult =
     };
 
 /**
- * -A: result of an Allow click. An outside-roots path is exactly what
+ * result of an Allow click. An outside-roots path is exactly what
  * this channel exists to unlock, so it is NEVER a refusal reason here — only
  * a missing workspace (unknown tab) or a path that does not resolve at all
  * can fail.
@@ -639,7 +639,7 @@ export type ArtifactActionResult =
 export type ArtifactAllowResult = { ok: true; realPath: string } | { ok: false; reason: "no_workspace" | "not_found" };
 
 /**
- *  slice 2: result of the previewable-probe batch. `paths` is the
+ * slice 2: result of the previewable-probe batch. `paths` is the
  * SUBSET of the request's own strings that verified (real, in-bounds,
  * previewable-extension, regular file) — never a resolved realpath, since
  * the renderer matches spans against the exact string it sent.
@@ -661,7 +661,7 @@ export type ClaudePickBinaryResult =
   | { ok: true; snapshot: ClaudeOnboardingSnapshot }
   | { ok: false; reason: "cancelled" | "invalid" };
 
-// SLICE-CC-LOGIN (, cut §4): duplicated from main/claude-ipc.ts's own
+// SLICE-CC-LOGIN (cut §4): duplicated from main/claude-ipc.ts's own
 // `ClaudeLoginStartResult` (same "shared/** froze read-only" reasoning as
 // every shape above).
 export type ClaudeLoginStartResult =
@@ -681,20 +681,20 @@ ipcRenderer.on(
       workspace: string;
       connectionId?: string;
       providerId?: string;
-      //  CUT-S2 §2.5 (review wave R, F10 fix): present ONLY for a
+      // CUT-S2 §2.5 (review wave R, F10 fix): present ONLY for a
       // child-session tab's port delivery (`deliverTabPort`, main/tabs.ts).
       // Forwarded untouched below, same as connectionId/providerId — this
       // module does not decide root vs. child, it only relays what main
       // stamped (`classifyPortEnvelope`, child-sessions.ts, decides that).
       child?: PortEnvelope["child"];
-      // : relayed untouched (root tabs a Sessions API agent opened).
+      // relayed untouched (root tabs a Sessions API agent opened).
       openedByAgent?: PortEnvelope["openedByAgent"];
       agentTitle?: string;
       missingWorkspace?: boolean;
       hostFailure?: PortEnvelope["hostFailure"];
     },
   ) => {
-    //  W10-FIX F2: forward the additive pin metadata (connectionId/providerId)
+    // W10-FIX F2: forward the additive pin metadata (connectionId/providerId)
     // when present — additive control-plane, no session-stream change. Both fields
     // ride together (main only sets them together) or are absent for an unpinned tab.
     window.postMessage(
@@ -707,7 +707,7 @@ ipcRenderer.on(
         ...(payload.connectionId !== undefined && payload.providerId !== undefined
           ? { connectionId: payload.connectionId, providerId: payload.providerId }
           : {}),
-        //  CUT-S2 §2.5 (F10 fix): without this, EVERY child-session
+        // CUT-S2 §2.5 (F10 fix): without this, EVERY child-session
         // port envelope loses its `child` field crossing this bridge, so
         // `tab-registry.ts`'s `classifyPortEnvelope` always saw "root" —
         // every child registered as an ordinary visible tab, the exact
@@ -751,9 +751,9 @@ ipcRenderer.on(TERMINAL_PORT_ENVELOPE_TYPE, (event, payload: { tabId: string }) 
 // no ports, no arbitrary channels, no decrypted secret ever crosses back — a
 // value only travels in via setSecret.
 contextBridge.exposeInMainWorld("anycode", {
-  // : the answer to a folder's project-trust question. The payload is a
+  // the answer to a folder's project-trust question. The payload is a
   // tab id and a decision ONLY; main resolves the folder and the hash itself.
-  // : list/forget for Settings → Permissions. The renderer can only
+  // list/forget for Settings → Permissions. The renderer can only
   // send a key main itself listed (S1); main never resolves it as a path.
   workspaceTrust: {
     decide: (request: WorkspaceTrustDecideRequest): Promise<WorkspaceTrustDecideResult> =>
@@ -780,7 +780,7 @@ contextBridge.exposeInMainWorld("anycode", {
     ipcRenderer.invoke(TAB_CREATE_CHANNEL, req) as Promise<CreateTabResult>,
   closeTab: (tabId: string): Promise<CloseTabResult> =>
     ipcRenderer.invoke(TAB_CLOSE_CHANNEL, { tabId }) as Promise<CloseTabResult>,
-  //  cut-2: re-bind a running tab's session to another provider
+  // cut-2: re-bind a running tab's session to another provider
   // connection. The tab/session/terminal survive; main replaces the host
   // with a resume host on the target connection's fork env. Every refusal is
   // fail-closed and leaves the tab on its original connection.
@@ -788,14 +788,14 @@ contextBridge.exposeInMainWorld("anycode", {
     ipcRenderer.invoke(TAB_REBIND_CHANNEL, request) as Promise<TabRebindResult>,
   listSessions: (limit?: number): Promise<SessionSummary[]> =>
     ipcRenderer.invoke(SESSIONS_LIST_CHANNEL, limit !== undefined ? { limit } : undefined) as Promise<SessionSummary[]>,
-  // : hard-delete one persisted session (its  children ride
+  // hard-delete one persisted session (its children ride
   // the cascade). Main refuses a session that is open in a tab / whose
   // project has a live tab (`reason:"active"`) — the renderer only offers
   // the affordance on idle resumable rows and surfaces the refusal as a
   // notice, main's gate stays the authority.
   deleteSession: (sessionId: string): Promise<DeleteSessionResult> =>
     ipcRenderer.invoke(SESSION_DELETE_CHANNEL, { sessionId }) as Promise<DeleteSessionResult>,
-  // : bulk-delete one project's sessions older than N whole days.
+  // bulk-delete one project's sessions older than N whole days.
   // `dryRun: true` counts the candidates WITHOUT deleting — the confirm
   // dialog quotes that exact number before the committing call.
   deleteSessionsOlder: (workspace: string, olderThanDays: number, dryRun?: boolean): Promise<DeleteSessionsOlderResult> =>
@@ -804,7 +804,7 @@ contextBridge.exposeInMainWorld("anycode", {
       olderThanDays,
       ...(dryRun === undefined ? {} : { dryRun }),
     }) as Promise<DeleteSessionsOlderResult>,
-  //  CUT-S2 §2.5/§10.8.1 (slice S2c C4): the read-only completed-child
+  // CUT-S2 §2.5/§10.8.1 (slice S2c C4): the read-only completed-child
   // transcript lookup — main authorizes by (parentSessionId, spawnToolCallId)
   // relationship (`getChildSession`) before ever touching `loadHistory`; no
   // childSessionId ever crosses this bridge (the renderer does not need one).
@@ -814,7 +814,7 @@ contextBridge.exposeInMainWorld("anycode", {
     ipcRenderer.invoke(WORKSPACE_PICK_CHANNEL) as Promise<WorkspacePickResult>,
   listAvailableEngines: (): Promise<AvailableEngines> =>
     ipcRenderer.invoke(ENGINES_LIST_CHANNEL) as Promise<AvailableEngines>,
-  //  (design/slice-codex-fixes-cut.md §5.5): push fired after any
+  // (design/slice-codex-fixes-cut.md §5.5): push fired after any
   // change that could flip `listAvailableEngines()`'s result (today: every
   // Codex onboarding step). No payload — listeners re-invoke
   // `listAvailableEngines`/`codex.recheck`, same "thin unsubscribe-returning
@@ -826,7 +826,7 @@ contextBridge.exposeInMainWorld("anycode", {
     ipcRenderer.on(ENGINES_CHANGED_CHANNEL, listener);
     return () => ipcRenderer.removeListener(ENGINES_CHANGED_CHANNEL, listener);
   },
-  //  (design/slice-codex-fixes-cut.md §2(g)/§5.5): Codex onboarding
+  // (design/slice-codex-fixes-cut.md §2(g)/§5.5): Codex onboarding
   // invoke-API — main owns the discovery ladder, the bounded doctor, and the
   // native login flow (main/codex-ipc.ts). `recheck` re-runs discovery+
   // diagnosis now (used both by a "Recheck" button and by the Settings pane
@@ -836,10 +836,10 @@ contextBridge.exposeInMainWorld("anycode", {
   // (custody, cut §2(g)) — every result carries only status/version/account
   // type+plan, never a raw auth value.
   codex: {
-    // `profileId` (, cut §4.2): omitted diagnoses/signs into the
+    // `profileId` (cut §4.2): omitted diagnoses/signs into the
     // ACTIVE profile — main's own default, unchanged for every pre-existing
     // caller of these two methods.
-    // `force`: true bypasses main's doctor TTL cache (the explicit
+    // `force` true bypasses main's doctor TTL cache (the explicit
     // "Recheck all"); omitted/false lets a re-check inside the TTL reuse the
     // cached verdict — byte-identical payload to before for every existing
     // caller that passes neither argument.
@@ -863,7 +863,7 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(CODEX_LOGIN_CANCEL_CHANNEL) as Promise<void>,
     loginOpenDevicePage: (): Promise<void> =>
       ipcRenderer.invoke(CODEX_LOGIN_OPEN_DEVICE_PAGE_CHANNEL) as Promise<void>,
-    //  (cut §2/§4): the profile control-plane — settings/fs mutations
+    // (cut §2/§4): the profile control-plane — settings/fs mutations
     // only, no spawns. No credential value ever crosses this bridge in either
     // direction (custody, cut §4.4) — `listProfiles` carries only the
     // persisted record (id/label/createdAt/linkedHome/authLink/lastCheck)
@@ -889,7 +889,7 @@ contextBridge.exposeInMainWorld("anycode", {
     // the live tab's account. Refusals carry a user-facing `detail`.
     continueOnAccount: (tabId: string, accountId: string): Promise<CodexContinueResult> =>
       ipcRenderer.invoke(CODEX_CONTINUE_CHANNEL, { tabId, accountId }) as Promise<CodexContinueResult>,
-    //  (cut §7, amended §A4): the binary/manifest control plane.
+    // (cut §7, amended §A4): the binary/manifest control plane.
     install: (version?: string): Promise<CodexInstallResult> =>
       ipcRenderer.invoke(CODEX_INSTALL_CHANNEL, version ? { version } : undefined) as Promise<CodexInstallResult>,
     acceptRisk: (version: string): Promise<{ ok: boolean; error?: string }> =>
@@ -898,7 +898,7 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(CODEX_SUPPORT_STATUS_CHANNEL) as Promise<CodexSupportStatusResult>,
     manifestRefresh: (): Promise<CodexManifestRefreshResult> =>
       ipcRenderer.invoke(CODEX_MANIFEST_REFRESH_CHANNEL) as Promise<CodexManifestRefreshResult>,
-    //  (cut §8.8): the rollout-import control plane — a profile's
+    // (cut §8.8): the rollout-import control plane — a profile's
     // sessions dir is resolved main-side from `profileId` alone, never a
     // renderer-supplied path (`main/codex-rollout-ipc.ts`'s own path custody).
     // `rolloutImport`'s `model` is the ONE piece of new-session identity the
@@ -910,7 +910,7 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(CODEX_ROLLOUT_PREVIEW_CHANNEL, { profileId, fileName }) as Promise<CodexRolloutPreviewResult>,
     rolloutImport: (profileId: string, fileName: string, model: string): Promise<CodexRolloutImportResult> =>
       ipcRenderer.invoke(CODEX_ROLLOUT_IMPORT_CHANNEL, { profileId, fileName, model }) as Promise<CodexRolloutImportResult>,
-    //  (D-S4-8): the consent-card "Trust this binary" action. `path`
+    // (D-S4-8): the consent-card "Trust this binary" action. `path`
     // ONLY — the fingerprint is computed entirely main-side
     // (handleBinaryTrustGrant); this bridge never carries or constructs one.
     trustBinary: (path: string): Promise<SettingsMutationResult> =>
@@ -924,14 +924,14 @@ contextBridge.exposeInMainWorld("anycode", {
     recheck: (): Promise<ClaudeOnboardingSnapshot> => ipcRenderer.invoke(CLAUDE_RECHECK_CHANNEL) as Promise<ClaudeOnboardingSnapshot>,
     pickBinary: (): Promise<ClaudePickBinaryResult> =>
       ipcRenderer.invoke(CLAUDE_PICK_BINARY_CHANNEL) as Promise<ClaudePickBinaryResult>,
-    // SLICE-CC-LOGIN (, cut §4): the native subscription-login
+    // SLICE-CC-LOGIN (cut §4): the native subscription-login
     // invoke-API. No token/credential value ever crosses this bridge in
     // either direction (custody) — `loginStart` resolves with only
     // status/version (via the same `ClaudeOnboardingSnapshot` recheck uses).
     loginStart: (): Promise<ClaudeLoginStartResult> =>
       ipcRenderer.invoke(CLAUDE_LOGIN_START_CHANNEL) as Promise<ClaudeLoginStartResult>,
     loginCancel: (): Promise<void> => ipcRenderer.invoke(CLAUDE_LOGIN_CANCEL_CHANNEL) as Promise<void>,
-    //  (D-S4-8): the consent-card "Trust this binary" action — the
+    // (D-S4-8): the consent-card "Trust this binary" action — the
     // exact codex mirror above, same GRANT channel (the record is
     // engine-agnostic, D-S4-1), same path-only payload.
     trustBinary: (path: string): Promise<SettingsMutationResult> =>
@@ -950,7 +950,7 @@ contextBridge.exposeInMainWorld("anycode", {
       return () => ipcRenderer.removeListener(CLAUDE_SNAPSHOT_CHANGED_CHANNEL, listener);
     },
   },
-  //  S1-B (design §7): `plugins.*` — thin invoke wrappers over
+  // S1-B (design §7): `plugins.*` — thin invoke wrappers over
   // the plugins control-plane channels in main/plugins-ipc.ts. Same narrow
   // rule as skills/subagents: the renderer sends NAMEs and_KIND sources only
   // — never filesystem paths (path custody, design §4). install is two-phase:
@@ -1008,7 +1008,7 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(SECRET_CLEAR_CHANNEL, { key }) as Promise<SettingsMutationResult>,
     addRule: (rule: PermissionRuleAddRequest): Promise<SettingsMutationResult> =>
       ipcRenderer.invoke(PERMISSION_RULE_ADD_CHANNEL, rule) as Promise<SettingsMutationResult>,
-    //  (D-S4-7): revokes ONE trusted-binary consent by path — the
+    // (D-S4-7): revokes ONE trusted-binary consent by path — the
     // Permissions pane's "Trusted binaries" section's only mutating call.
     binaryTrustRevoke: (path: string): Promise<SettingsMutationResult> =>
       ipcRenderer.invoke(BINARY_TRUST_REVOKE_CHANNEL, { path }) as Promise<SettingsMutationResult>,
@@ -1016,7 +1016,7 @@ contextBridge.exposeInMainWorld("anycode", {
 
     // token ever crosses back (oauthStart resolves with a snapshot whose
     // SecretStatus flips to set:true, never the token itself).
-    // `connectionId` ( W12-FIX §1, additive/optional): scopes the
+    // `connectionId` (W12-FIX §1, additive/optional): scopes the
     // sign-in to one connection; omitted preserves the legacy provider-scoped
     // findOrCreate behavior byte-for-byte.
     oauthStart: (providerId: string, connectionId?: string): Promise<OAuthStartResult> =>
@@ -1026,11 +1026,11 @@ contextBridge.exposeInMainWorld("anycode", {
       }) as Promise<OAuthStartResult>,
     oauthCancel: (providerId: string): Promise<void> =>
       ipcRenderer.invoke(OAUTH_CANCEL_CHANNEL, { providerId }) as Promise<void>,
-    //  W10: ModelPill's model/effort write, main-authoritative by connection
+    // W10: ModelPill's model/effort write, main-authoritative by connection
     // id (off the v1-patch shim). Returns a fresh snapshot; never carries a secret.
     connectionUpdate: (req: ConnectionUpdateRequest): Promise<SettingsMutationResult> =>
       ipcRenderer.invoke(CONNECTION_UPDATE_CHANNEL, req) as Promise<SettingsMutationResult>,
-    // : the named proxy registry. Four thin invoke wrappers, no logic.
+    // the named proxy registry. Four thin invoke wrappers, no logic.
     // The password rides the UPSERT itself as a `{action}` field rather than the
     // generic `setSecret` bridge — that bridge REFUSES `proxy.profile.*` keys, so
     // that a password and the profile it belongs to can never land as two
@@ -1044,7 +1044,7 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(PROXY_REF_SET_CHANNEL, req) as Promise<SettingsMutationResult>,
     proxyCheck: (req: ProxyCheckRequest): Promise<ProxyCheckResult> =>
       ipcRenderer.invoke(PROXY_CHECK_CHANNEL, req) as Promise<ProxyCheckResult>,
-    //  W12: the connections grid/drawer's CRUD surface — main-authoritative,
+    // W12: the connections grid/drawer's CRUD surface — main-authoritative,
     // additive. No credential ever crosses these (create/update payloads are
     // `.strict()`-refused if they carry one); a value only ever travels via
     // `setSecret`.
@@ -1056,20 +1056,20 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(CONNECTION_DELETE_CHANNEL, req) as Promise<SettingsMutationResult>,
     connectionCheck: (req: ConnectionCheckRequest): Promise<SettingsMutationResult> =>
       ipcRenderer.invoke(CONNECTION_CHECK_CHANNEL, req) as Promise<SettingsMutationResult>,
-    //  срез E2: the Vision panel's "Probe" button — resolves a
+    // срез E2: the Vision panel's "Probe" button — resolves a
     // {connectionId, modelId} pair (not necessarily saved yet) through the
     // SAME production ladder a live run uses and sends one real vision
     // question through it. Always resolves a tagged `RecognizerProbeResult`,
     // never rejects (main/recognizer-probe.ts's own contract).
     recognizerProbe: (req: RecognizerProbeRequest): Promise<RecognizerProbeResult> =>
       ipcRenderer.invoke(RECOGNIZER_PROBE_CHANNEL, req) as Promise<RecognizerProbeResult>,
-    // : the Vision panel's save/off write — a SEPARATE channel from
+    // the Vision panel's save/off write — a SEPARATE channel from
     // `settings.set` because the generic merge can never DELETE a key
     // (shared/recognizer.ts's own docstring on this channel spells out why);
     // `{recognizer: null}` is the only way to turn the fallback off.
     recognizerSet: (req: RecognizerSetRequest): Promise<SettingsMutationResult> =>
       ipcRenderer.invoke(RECOGNIZER_SET_CHANNEL, req) as Promise<SettingsMutationResult>,
-    //  W11-FIX (W13 live-dogfood finding): push fired after a real
+    // W11-FIX (W13 live-dogfood finding): push fired after a real
     // request outcome updates a connection's advisory health (main's
     // `onProviderHealthEvent`). No payload — same "thin unsubscribe-returning
     // wrapper" shape as `onEnginesChanged` above; the listener re-invokes
@@ -1081,7 +1081,7 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.on(PROVIDER_HEALTH_CHANGED_CHANNEL, listener);
       return () => ipcRenderer.removeListener(PROVIDER_HEALTH_CHANGED_CHANNEL, listener);
     },
-    // : same payload-less push shape as `onProviderHealthChanged`
+    // same payload-less push shape as `onProviderHealthChanged`
     // above — fired after main's throttled `lastQuota` write lands
     // (connection-quota.ts). The listener re-invokes `settings.get()`, so a
     // snapshot refresh now RE-SHOWS the line from the persisted document
@@ -1094,7 +1094,7 @@ contextBridge.exposeInMainWorld("anycode", {
       return () => ipcRenderer.removeListener(PROVIDER_QUOTA_CHANGED_CHANNEL, listener);
     },
   },
-  //  (cut §9.2/§13.1): `customProvider.*` — four thin invoke wrappers
+  // (cut §9.2/§13.1): `customProvider.*` — four thin invoke wrappers
   // over the custom OpenAI-compatible model-provider CRUD + guarded
   // `/v1/models` preview fetch (main owns the URL/redirect/body-cap threat
   // model + vault custody in main/provider-ipc.ts). No credential ever
@@ -1140,7 +1140,7 @@ contextBridge.exposeInMainWorld("anycode", {
     importApply: (req: McpImportApplyRequest): Promise<McpImportApplyResult> =>
       ipcRenderer.invoke(MCP_IMPORT_APPLY_CHANNEL, req) as Promise<McpImportApplyResult>,
   },
-  // : `mcpSecrets.*` — write-only MCP secret store. `list` returns
+  // `mcpSecrets.*` — write-only MCP secret store. `list` returns
   // names; `set`/`delete` return names. No channel returns a value.
   mcpSecrets: {
     list: (): Promise<McpSecretsListResult> =>
@@ -1150,7 +1150,7 @@ contextBridge.exposeInMainWorld("anycode", {
     delete: (req: { name: string }): Promise<McpSecretMutationResult> =>
       ipcRenderer.invoke(MCP_SECRET_DELETE_CHANNEL, req) as Promise<McpSecretMutationResult>,
   },
-  // : `lspConfig.*` — four thin invoke wrappers over the
+  // `lspConfig.*` — four thin invoke wrappers over the
   // language-server management channels (catalog+detection+config status,
   // preset enable, disable, custom upsert). The renderer sends only
   // tabId/presetId/name/entry — never a path; detection answers carry only
@@ -1165,7 +1165,7 @@ contextBridge.exposeInMainWorld("anycode", {
     customUpsert: (req: LspCustomUpsertRequest): Promise<LspMutationResult> =>
       ipcRenderer.invoke(LSP_CUSTOM_UPSERT_CHANNEL, req) as Promise<LspMutationResult>,
   },
-  // : `communication.*` — the Sessions API (local MCP for external
+  // `communication.*` — the Sessions API (local MCP for external
   // agents) control plane. The renderer names folders only by asking for the
   // native dialog (`addWorkspace` takes NO arguments) and sends a tabId for the
   // per-session switch; no path and no token ever cross this bridge.
@@ -1192,7 +1192,7 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(COMMUNICATION_SET_SESSION_HANDLE_CHANNEL, { tabId, handle }) as Promise<CommunicationHandleResult>,
     setSessionApprovals: (tabId: string, enabled: boolean): Promise<CommunicationMutationResult> =>
       ipcRenderer.invoke(COMMUNICATION_SET_SESSION_APPROVALS_CHANNEL, { tabId, enabled }) as Promise<CommunicationMutationResult>,
-    // : per-project "Allow agents to open tasks here". The sidebar sends its workspace identity (main canonicalises); Settings sends only main-listed exact keys.
+    // per-project "Allow agents to open tasks here". The sidebar sends its workspace identity (main canonicalises); Settings sends only main-listed exact keys.
     agentProjectsGet: (workspace: string): Promise<AgentProjectsGetResult> =>
       ipcRenderer.invoke(COMMUNICATION_AGENT_PROJECTS_GET_CHANNEL, { workspace }) as Promise<AgentProjectsGetResult>,
     agentProjectsSet: (workspace: string, enabled: boolean): Promise<CommunicationMutationResult> =>
@@ -1202,14 +1202,14 @@ contextBridge.exposeInMainWorld("anycode", {
     agentProjectsOff: (key: string): Promise<CommunicationMutationResult> =>
       ipcRenderer.invoke(COMMUNICATION_AGENT_PROJECTS_OFF_CHANNEL, { key }) as Promise<CommunicationMutationResult>,
   },
-  // : the Settings scope dropdown's folder list. Opaque ids and
+  // the Settings scope dropdown's folder list. Opaque ids and
   // display fields only; no path is ever sent back through this bridge.
   scopeWorkspaces: {
     list: (): Promise<ScopeWorkspacesListResult> =>
       ipcRenderer.invoke(SCOPE_WORKSPACES_LIST_CHANNEL, {}) as Promise<ScopeWorkspacesListResult>,
     resolve: (ref: string): Promise<string | null> => ipcRenderer.invoke(SCOPE_WORKSPACES_RESOLVE_CHANNEL, { ref }) as Promise<string | null>,
   },
-  // : `browserAccess.*` — the per-session "Full browser access" switch.
+  // `browserAccess.*` — the per-session "Full browser access" switch.
   // The renderer names a tabId and a boolean only; main resolves the session, checks
   // the sender is the main window, and answers with the EFFECTIVE (trust-gated) value.
   browserAccess: {
@@ -1278,10 +1278,10 @@ contextBridge.exposeInMainWorld("anycode", {
   profile: {
     getStats: (): Promise<ProfileStatsResult> =>
       ipcRenderer.invoke(PROFILE_STATS_GET_CHANNEL) as Promise<ProfileStatsResult>,
-    //  S3: the instant, cache-only view (no directory scan main-side).
+    // S3: the instant, cache-only view (no directory scan main-side).
     getStatsCached: (): Promise<ProfileStatsCachedResult> =>
       ipcRenderer.invoke(PROFILE_STATS_CACHED_CHANNEL) as Promise<ProfileStatsCachedResult>,
-    //  S3: drop the cache and start over — still budget-cut, so this
+    // S3: drop the cache and start over — still budget-cut, so this
     // returns promptly with a backlog rather than blocking on the whole dir.
     rebuildStats: (): Promise<ProfileStatsResult> =>
       ipcRenderer.invoke(PROFILE_STATS_REBUILD_CHANNEL) as Promise<ProfileStatsResult>,
@@ -1305,7 +1305,7 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(UPDATE_DOWNLOAD_CHANNEL) as Promise<UpdateActionResult>,
     install: (): Promise<UpdateActionResult> =>
       ipcRenderer.invoke(UPDATE_INSTALL_CHANNEL) as Promise<UpdateActionResult>,
-    //  defect 2: darwin honest-manual-path action — opens the fixed
+    // defect 2: darwin honest-manual-path action — opens the fixed
     // GitHub Releases URL (main-side constant, no argument crosses here).
     openReleasesPage: (): Promise<UpdateActionResult> =>
       ipcRenderer.invoke(UPDATE_OPEN_RELEASES_CHANNEL) as Promise<UpdateActionResult>,
@@ -1333,7 +1333,7 @@ contextBridge.exposeInMainWorld("anycode", {
   paths: {
     roots: (): Promise<PathRootsResult> => ipcRenderer.invoke(PATH_ROOTS_CHANNEL) as Promise<PathRootsResult>,
   },
-  // : `artifacts.*` — the chat-artifact control plane. The renderer
+  // `artifacts.*` — the chat-artifact control plane. The renderer
   // supplies only tabId + the model-authored path from the transcript; main
   // (main/artifacts-ipc.ts) re-checks containment (workspace / ~/.anycode /
   // tmpdir, symlink-resolved) and the image-extension allowlist before any
@@ -1347,7 +1347,7 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(ARTIFACT_OPEN_CHANNEL, { tabId, path }) as Promise<ArtifactActionResult>,
     reveal: (tabId: string, path: string): Promise<ArtifactActionResult> =>
       ipcRenderer.invoke(ARTIFACT_REVEAL_CHANNEL, { tabId, path }) as Promise<ArtifactActionResult>,
-    // -A: explicit per-path consent that unlocks preview (and skips
+    // explicit per-path consent that unlocks preview (and skips
     // main's OS-confirmation modal for the SAME path on a later Open) for a
     // path outside the allowed roots. Never widens the extension/size gates.
     allow: (tabId: string, path: string): Promise<ArtifactAllowResult> =>
@@ -1357,7 +1357,7 @@ contextBridge.exposeInMainWorld("anycode", {
     // way back in once the user has closed it, short of an agent turn.
     preview: (tabId: string, path: string): Promise<PreviewResult<PreviewOpenSuccess>> =>
       ipcRenderer.invoke(ARTIFACT_PREVIEW_CHANNEL, { tabId, path }) as Promise<PreviewResult<PreviewOpenSuccess>>,
-    //  slice 2: batched yes/no probe for path candidates a plain-text
+    // slice 2: batched yes/no probe for path candidates a plain-text
     // scan found (markdown/path-spans.ts) — never opens/reads/reveals
     // anything, so it's safe to call on every render, unlike `preview` above.
     previewable: (tabId: string, paths: string[]): Promise<ArtifactPreviewableResult> =>
@@ -1397,7 +1397,7 @@ contextBridge.exposeInMainWorld("anycode", {
       return () => ipcRenderer.removeListener(PREVIEW_CHANGED_CHANNEL, listener);
     },
   },
-  // : `window.anycode.mdPreview` — the native DOM markdown preview's
+  // `window.anycode.mdPreview` — the native DOM markdown preview's
   // doc control plane (CUT.md CONTRACTS). `read` (M1) is also what a Reload
   // click re-invokes — main never caches, so there is no separate "reload"
   // method. `navigate` (M2) follows a local `.md` link, replacing the
