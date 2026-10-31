@@ -2383,7 +2383,7 @@ export function ConnectionDrawerFields({
 
       {dictionaryMatch && <div className="settings-field">
         <label><input type="checkbox" disabled={readOnly} checked={!catalogMatchDisabled} onChange={(e) => { setCatalogMatchDisabled(!e.target.checked); setCatalogMatchDirty(true); }} /> Recognized as {dictionaryMatch.name ?? dictionaryMatch.id} — use catalog defaults</label>
-        {!catalogMatchDisabled && dictionaryMatch.pricing && dictionaryMatch.pricing.cacheWrite === undefined && dictionaryMatch.pricing.tariff === undefined && <div className="settings-field-hint">Catalog reference for {dictionaryMatch.name ?? dictionaryMatch.id}: input ${dictionaryMatch.pricing.input}, cached input ${dictionaryMatch.pricing.cachedInput}, output ${dictionaryMatch.pricing.output} per million tokens. Your endpoint may charge differently.</div>}
+        {!catalogMatchDisabled && dictionaryMatch.pricing && dictionaryMatch.pricing.tariff === undefined && <div className="settings-field-hint">Catalog reference for {dictionaryMatch.name ?? dictionaryMatch.id}: input ${dictionaryMatch.pricing.input}, cached input ${dictionaryMatch.pricing.cachedInput}{dictionaryMatch.pricing.cacheWrite !== undefined && <>, cache write ${dictionaryMatch.pricing.cacheWrite}</>}, output ${dictionaryMatch.pricing.output} per million tokens. Your endpoint may charge differently.</div>}
       </div>}
       {!knownCatalogModel && <label className="settings-field">
         <span className="settings-field-label">Reasoning support (this model)</span>
