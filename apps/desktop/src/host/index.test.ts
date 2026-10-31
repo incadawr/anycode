@@ -1009,7 +1009,7 @@ describe("host boot context-window resolution shape (design slice-6.4-cut.md §2
     return bootContextWindow !== undefined ? { context: { contextWindowTokens: bootContextWindow } } : {};
   }
 
-  // changed this: an unknown model no longer omits `context` — it
+  // The fallback change means an unknown model no longer omits `context` — it
   // resolves the explicit assumed fallback (8192), so the boot window is a real
   // number and the degraded budget engages instead of the 200k default.
   it("model absent from the matched entry (anthropic catalog + test-model) -> spread yields the ASSUMED 8192 window, never no context", () => {

@@ -17,11 +17,13 @@
  * (`before` + MARK + `value`) so the table itself stays free of literal
  * references. Matching the whole token keeps an exemption narrow: allowing an
  * evidence directory does not allow a different path that starts the same way.
+ * A stored hash also binds each exemption to its exact file and line content.
  *
  * Scanning covers file names as well as bodies: a card number in a path is the
  * same leak as a card number in a comment.
  */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -53,6 +55,8 @@ const REF_SOURCE =
   ")";
 
 const newRef = () => new RegExp(REF_SOURCE, "g");
+const CONTEXTS = new Set<string>(JSON.parse(readFileSync(join(ROOT, "scripts/public-reference-contexts.json"), "utf8")));
+const contextHash = (path: string, line: string) => createHash("sha256").update(path + "\0" + line).digest("hex");
 
 /** Characters that make up one identifier, path segment or log tag. */
 const TOKEN_CHARS = /[A-Za-z0-9_./\\\u0400-\u04FF-]/;
@@ -284,9 +288,9 @@ function tokenAt(line: string, index: number, length: number): string {
   return line.slice(start, end);
 }
 
-function allowed(path: string, token: string): boolean {
+function allowed(path: string, token: string, line: string): boolean {
   const lower = token.toLowerCase();
-  return ALLOW.some(
+  return CONTEXTS.has(contextHash(path, line)) && ALLOW.some(
     (e) =>
       e.path === path && ((e.before ?? "") + MARK + e.value).toLowerCase() === lower,
   );
@@ -297,7 +301,7 @@ export function scanLine(path: string, line: string): string[] {
   const hits: string[] = [];
   for (const m of line.matchAll(newRef())) {
     const token = tokenAt(line, m.index ?? 0, m[0].length);
-    if (!allowed(path, token)) hits.push(`${path}: ${token}`);
+    if (!allowed(path, token, line)) hits.push(`${path}: ${token}`);
   }
   return hits;
 }
@@ -358,6 +362,19 @@ describe("public tree carries no tracker card references", () => {
     expect(stale).toEqual([]);
   });
 
+  it("keeps every saved context in use", () => {
+    const seen = new Set<string>();
+    for (const rel of tracked()) {
+      for (const line of readFileSync(join(ROOT, rel), "utf8").split("\n")) {
+        for (const m of line.matchAll(newRef())) {
+          const token = tokenAt(line, m.index ?? 0, m[0].length);
+          if (allowed(rel, token, line)) seen.add(contextHash(rel, line));
+        }
+      }
+    }
+    expect([...CONTEXTS].filter((hash) => !seen.has(hash))).toEqual([]);
+  });
+
   it("rejects every shape the gate exists for", () => {
     const card = MARK.toUpperCase() + ".123";
     const glued = MARK + "106-slice";
@@ -394,7 +411,13 @@ describe("public tree carries no tracker card references", () => {
   it("accepts a token only when it is listed for that exact file", () => {
     const entry = ALLOW[0];
     const token = (entry.before ?? "") + MARK + entry.value;
-    expect(scanText(entry.path, `// ${token} stays`)).toEqual([]);
+    const realLine = readFileSync(join(ROOT, entry.path), "utf8").split("\n").find(
+      (line) => line.toLowerCase().includes(token.toLowerCase()) && CONTEXTS.has(contextHash(entry.path, line)),
+    );
+    expect(realLine).toBeDefined();
+    expect(scanLine(entry.path, realLine!)).toEqual([]);
+    expect(scanLine(entry.path, `${realLine} // see ${token.toUpperCase()} for the tracker card`)).not.toEqual([]);
+    expect(scanText(entry.path, `// see ${token.toUpperCase()} for the tracker card`)).not.toEqual([]);
     // the same token in another file is still a violation
     expect(scanText("docs/other.md", `// ${token} stays`)).not.toEqual([]);
     // nor does an exemption cover a longer token that starts the same way
