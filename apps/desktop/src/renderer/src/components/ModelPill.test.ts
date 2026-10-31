@@ -191,7 +191,7 @@ describe("providerModelsFor (F2 review lane FXH: custom providers must reach the
     expect(providerModelsFor("custom:my-endpoint", catalog, [])).toBeUndefined();
   });
 
-  it("keeps catalog order and appends only the ids the catalog does not offer (TASK.183 union)", () => {
+  it("keeps catalog order and appends only the ids the catalog does not offer", () => {
     expect(providerModelsFor("z-ai", catalog, custom, ["glm-6", "glm-5.2"])).toEqual([
       { id: "glm-5.2", name: "GLM-5.2" },
       { id: "glm-6" },
