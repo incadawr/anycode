@@ -142,12 +142,12 @@ export async function handleDiagnosticsSave(
   return writeBuild(deps, built.build);
 }
 
-/** How long a previewed bundle may be saved as-is before it is rebuilt. */
+/** How long a previewed bundle may be saved as-is before a new preview is required. */
 export const DIAGNOSTICS_PREVIEW_TTL_MS = 10 * 60 * 1000;
 
 export interface DiagnosticsIpcSession {
   preview(raw: unknown): Promise<DiagnosticsPreviewResult>;
-  /** Saves EXACTLY the bundle that was previewed for the same session (rebuilt only after the TTL). */
+  /** Saves EXACTLY the bundle that was previewed for the same session (a new preview is required after the TTL). */
   save(raw: unknown): Promise<DiagnosticsSaveResult>;
 }
 
@@ -193,9 +193,7 @@ export function createDiagnosticsIpcSession(
       if (cached !== null && cached.sessionId === sessionId && now() - cached.at <= ttlMs) {
         return writeBuild(deps, cached.build);
       }
-      const built = await buildForExport(deps, sessionId);
-      if (!built.ok) return failure(built.reason);
-      return writeBuild(deps, built.build);
+      return failure("preview_required");
     },
   };
 }
