@@ -296,6 +296,21 @@ describe("projectSubagentCard", () => {
     });
   });
 
+  it("carries the inherited child's spawn-time parent model through decode and projection", () => {
+    const inherited: SubagentCardSnapshotV1 = {
+      ...VALID_SNAPSHOT,
+      identity: { agentType: "explore", description: "d", model: null, parentModel: "glm-5.2", engine: null },
+    };
+    const decoded = decodeSubagentCardSnapshot(inherited, CTX);
+    expect(decoded).toEqual(inherited);
+    expect(projectSubagentCard(decoded!)).toMatchObject({ model: null, parentModel: "glm-5.2" });
+  });
+
+  it("a legacy snapshot without parentModel projects the key absent (no fabricated model)", () => {
+    const projected = projectSubagentCard(VALID_SNAPSHOT);
+    expect("parentModel" in projected).toBe(false);
+  });
+
   it("maps a non-null model/engine identity through unchanged", () => {
     expect(projectSubagentCard(VALID_SNAPSHOT)).toMatchObject({ model: "claude-sonnet", engine: "claude" });
   });
