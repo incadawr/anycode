@@ -1,0 +1,1 @@
+export function verifiedAutomationRequest(options: { port: number; token: string; path: string; method?: string; body?: unknown; verifyPeer: (localPort: number) => void; connectImpl?: any; requestImpl?: any }): Promise<{ok: boolean; result: any}>;

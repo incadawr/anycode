@@ -2,8 +2,8 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer as createHttpServer } from "node:http";
-import { createServer } from "node:net";
-import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { connectIsolatedCdp } from "./isolated-cdp.mjs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -12,10 +12,6 @@ import { launchSmokeElectron } from "./smoke-electron-launch.mjs";
 
 const profile = mkdtempSync(join(tmpdir(), "anycode-connection-editor-acceptance-"));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-const reserve = createServer();
-await new Promise(resolve => reserve.listen(0, "127.0.0.1", resolve));
-const debugPort = reserve.address().port;
-await new Promise(resolve => reserve.close(resolve));
 let failFetch = false;
 let fetches = 0;
 const fixture = createHttpServer((request, response) => {
@@ -39,24 +35,16 @@ writeFileSync(join(profile, "settings.json"), JSON.stringify({
     {id:"conn-catalog",providerId:"vllm",label:"Catalog fixture",model:"alpha",baseUrl:fixtureUrl,authOptional:true,models:["alpha"],modelCapabilities:{alpha:{reasoning:true}}},
   ]}, tools:{}, permissions:{alwaysAllow:[]}, ui:{theme:"dark"}, security:{allowWeakSecretStorage:false},
 }));
-const env = buildSmokeEnv(process.env, profile, debugPort, binary);
+const env = buildSmokeEnv(process.env, profile, 0, binary);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const app = launchSmokeElectron(spawn, {env, cwd: repoRoot, detached:true});
-let ws;
-let nextId = 0;
-const pending = new Map();
+let ws, cdp;
 async function poll(fn, timeout=30000) {
   const deadline=Date.now()+timeout;
   while (Date.now()<deadline) { const value=await fn(); if (value) return value; await delay(100); }
   throw new Error("Timed out waiting for UI state");
 }
-function call(method,params) {
-  const id=++nextId;
-  return new Promise((resolve,reject) => {
-    const timer=setTimeout(() => { pending.delete(id); reject(new Error(`${method} timed out`)); },10000);
-    pending.set(id,{resolve,reject,timer}); ws.send(JSON.stringify({id,method,params}));
-  });
-}
+const call = (method, params) => cdp.call(method, params);
 async function evaluate(expression) {
   const result=await call("Runtime.evaluate",{expression,awaitPromise:true,returnByValue:true});
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text);
@@ -93,15 +81,8 @@ async function editConnection(id) {
 const editFirst=()=>editConnection("conn-one");
 
 try {
-  const identity = await poll(() => { try { return JSON.parse(readFileSync(join(profile, "identity.json"), "utf8")); } catch { return null; } });
-  assert.equal(identity.nonce, env.ANYCODE_SMOKE_IDENTITY);
-  assert.equal(identity.desktopRoot, realpathSync(env.ANYCODE_EXPECTED_DESKTOP_ROOT));
-  assert.equal(identity.userData, realpathSync(join(profile, "user-data")));
-  assert.equal(identity.sessionData, realpathSync(join(profile, "session-data")));
-  const target=await poll(async()=>{try{return (await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json()).find(t=>t.type==="page"&&!t.url.startsWith("devtools://"));}catch{return false;}},60000);
-  ws=new WebSocket(target.webSocketDebuggerUrl);
-  await new Promise((resolve,reject)=>{ws.onopen=resolve;ws.onerror=reject;});
-  ws.onmessage=({data})=>{const msg=JSON.parse(data);const item=pending.get(msg.id);if(!item)return;pending.delete(msg.id);clearTimeout(item.timer);msg.error?item.reject(new Error(JSON.stringify(msg.error))):item.resolve(msg.result);};
+  cdp = await connectIsolatedCdp({ profile, env, launcher: app, wait: poll });
+  ws = cdp.ws;
   await poll(()=>evaluate("!!document.querySelector('.sidebar-settings')"));
   await click('.sidebar-settings');
   await click('#settings-tab-provider');
@@ -203,6 +184,6 @@ try {
   throw error;
 } finally {
   try { ws?.close(); } catch {}
-  try { process.kill(-app.pid,"SIGTERM"); } catch { try {app.kill("SIGTERM");}catch{} }
+  if (app.exitCode === null && app.signalCode === null) try { process.kill(-app.pid,"SIGTERM"); } catch { try {app.kill("SIGTERM");}catch{} }
   await new Promise(resolve=>fixture.close(resolve));
 }
