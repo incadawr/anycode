@@ -135,6 +135,77 @@ describe("probeMcpServerSpawn — the definitive cause for a Claude-side MCP fai
     }
   });
 
+  it("keeps the launcher's stderr even when \"exit\" fires before the stderr pipe drains (Linux race)", async () => {
+    // Node may emit "exit" BEFORE the stderr pipe is drained, so settling on
+    // "exit" alone loses the tail (flaky on Linux). A launcher that floods
+    // stderr right before exiting makes the race likely; the loop makes it
+    // deterministic in aggregate. The probe must wait for the pipe to end
+    // (capped), never for the exit event alone.
+    for (let i = 0; i < 25; i += 1) {
+      const outcome = await probeMcpServerSpawn(
+        stdio("flood", {
+          command: process.execPath,
+          args: [
+            "-e",
+            "for (let i = 0; i < 50; i++) process.stderr.write(`race-line-${i}\\n`); process.exit(9)",
+          ],
+        }),
+        { timeoutMs: 5000 },
+      );
+      expect(outcome.ok).toBe(false);
+      expect(outcome.detail).toContain("exited with code 9");
+      expect(outcome.detail).toContain("race-line-49");
+    }
+  });
+
+  it("does not hang on a grandchild that inherited stderr and keeps it open past the drain cap", async () => {
+    // The child dies, but a grandchild holds the stderr fd: the probe must
+    // still settle within the exit + drain-cap window, with whatever tail
+    // arrived, and not wait for the grandchild.
+    const started = Date.now();
+    const outcome = await probeMcpServerSpawn(
+      stdio("grandchild", {
+        command: process.execPath,
+        args: [
+          "-e",
+          `const { spawn } = require("node:child_process");
+           spawn(process.execPath, ["-e", "process.stderr.write('from-grandchild\\\\n'); setInterval(() => {}, 1000);"], { stdio: ["ignore", "ignore", 2] });
+           process.stderr.write("parent-dying\\\\n");
+           process.exit(5);`,
+        ],
+      }),
+      { timeoutMs: 5000 },
+    );
+    const elapsed = Date.now() - started;
+    expect(outcome.ok).toBe(false);
+    expect(outcome.detail).toContain("exited with code 5");
+    expect(elapsed).toBeLessThan(5000);
+  });
+
+  it("does not let the main timer report ok while an exit is parked waiting for stderr to drain", async () => {
+    // The launcher dies just before the probe timeout, but a grandchild holds
+    // the stderr fd open past it: the deferred exit must still win over the
+    // main timer's "still alive => ok" verdict.
+    const started = Date.now();
+    const outcome = await probeMcpServerSpawn(
+      stdio("parked", {
+        command: process.execPath,
+        args: [
+          "-e",
+          `const { spawn } = require("node:child_process");
+           spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], { stdio: ["ignore", "ignore", 2] });
+           process.stderr.write("parked-exit\\\\n");
+           process.exit(6);`,
+        ],
+      }),
+      { timeoutMs: 300 },
+    );
+    const elapsed = Date.now() - started;
+    expect(outcome.ok).toBe(false);
+    expect(outcome.detail).toContain("exited with code 6");
+    expect(elapsed).toBeLessThan(2900);
+  });
+
   it("exposes the default timeout as a bounded constant", () => {
     expect(MCP_SPAWN_PROBE_TIMEOUT_MS).toBe(10_000);
   });
