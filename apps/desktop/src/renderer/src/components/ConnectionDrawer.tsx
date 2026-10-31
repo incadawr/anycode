@@ -354,6 +354,72 @@ export function promptCacheVisible(
   return resolved === "openai-chat-completions" || resolved === "openai-responses";
 }
 
+// ── GitHub #1: the per-connection streaming token-usage policy ──
+
+/** Visible one-liner under the usage select (full copy in the tooltip). */
+export const USAGE_ONELINER = "Applies to Chat Completions.";
+export const USAGE_HELP =
+  "Request streaming token usage on Chat Completions endpoints. Automatic requests usage and retries once without it if a server rejects it.";
+
+/**
+ * The drawer's three-state select: Automatic (the transport default), force
+ * On, force Off. Only the FIRST is a "no opinion" value — `"off"` must
+ * survive every truthiness check on its way to disk (GitHub #1).
+ */
+export type UsageSelection = "auto" | "on" | "off";
+
+/** The select value a saved connection opens with: an explicit boolean wins, absence is Automatic. */
+export function usageSelectionInitialValue(connection: ProviderConnection | undefined): UsageSelection {
+  if (connection?.includeUsage === true) return "on";
+  if (connection?.includeUsage === false) return "off";
+  return "auto";
+}
+
+/**
+ * Wire value for an UPDATE: Automatic is the channel's `""` clear sentinel
+ * (delete the key back to the transport default), On/Off are real booleans.
+ */
+export function usageSelectionUpdateValue(selection: UsageSelection): boolean | "" {
+  return selection === "auto" ? "" : selection === "on";
+}
+
+/**
+ * Wire value for a CREATE: omission already means Automatic there (create has
+ * no `""` sentinel), so `undefined` is simply left out of the payload.
+ */
+export function usageSelectionCreateValue(selection: UsageSelection): boolean | undefined {
+  return selection === "auto" ? undefined : selection === "on";
+}
+
+/**
+ * Whether the control belongs on screen: only `openai-chat-completions` honours
+ * `stream_options.include_usage`, so an Anthropic/Responses connection would be
+ * offering a switch with no effect. Resolved exactly like `promptCacheVisible`
+ * (an empty local transport means the provider's default).
+ */
+export function usageVisible(
+  transport: ProviderTransportId | "",
+  defaultTransport: ProviderTransportId | undefined,
+): boolean {
+  const resolved = transport !== "" ? transport : (defaultTransport ?? "anthropic-messages");
+  return resolved === "openai-chat-completions";
+}
+
+/** Local literal, same convention as the env hints below — renderer modules don't import main. */
+const ENV_INCLUDE_USAGE = "ANYCODE_INCLUDE_USAGE";
+
+/**
+ * Hint under the usage select while ANYCODE_INCLUDE_USAGE is live: the env rung
+ * always beats the saved connection value (`fillFromSettings` never overwrites
+ * a boot-provided slot), so the select would silently do nothing — say so.
+ * `null` when the variable isn't overriding.
+ */
+export function usageEnvHint(envOverrides: readonly string[]): string | null {
+  return envOverrides.includes(ENV_INCLUDE_USAGE)
+    ? `${ENV_INCLUDE_USAGE} is set in the environment — it overrides this setting for every new session.`
+    : null;
+}
+
 export function buildDrawerSavePayload(
   params: Parameters<typeof buildConnectionUpdatePayload>[0],
   fields: { contextWindowDirty: boolean; contextWindowTokens: number | ""; reasoningSupportedDirty: boolean; reasoningSupported: boolean; modelEffortDirty: boolean; modelEffort: ReasoningEffort | ""; imageInputDirty: boolean; effortLevelsDirty?: boolean; effortLevels?: ReasoningEffort[] },
@@ -398,6 +464,8 @@ export function buildConnectionUpdatePayload(params: {
   imageInput: ImageInputSelection;
   imageInputChanged?: boolean;
   promptCacheEnabled: boolean;
+  /** GitHub #1: the usage select's three-state value; Automatic sends the `""` clear sentinel. */
+  usage: UsageSelection;
   reasoningEffort?: ReasoningEffort | "";
   reasoningSupported?: true | "";
   effortLevels?: ReasoningEffort[] | "";
@@ -438,6 +506,12 @@ export function buildConnectionUpdatePayload(params: {
     // — a transport switch to Anthropic must not drop a saved OpenAI policy,
     // which is exactly what an omitted value would do.
     promptCache: params.promptCacheEnabled ? IMPLICIT_PROMPT_CACHE : "",
+    // Sent unconditionally (GitHub #1), same rationale: Automatic is the
+    // channel's `""` clear sentinel, On/Off persist a real boolean — and `false`
+    // is a MEANING, never dropped by a truthiness check. Also sent while the
+    // control is hidden for a non-Chat-Completions transport, so switching
+    // away and back never silently drops a saved choice.
+    includeUsage: usageSelectionUpdateValue(params.usage),
   };
 }
 
@@ -593,6 +667,8 @@ export function advancedHasValues(v: {
   label?: string;
   /** A saved opt-in prompt-cache policy (GitHub #15) must be visible on open, like every other tuned value. */
   promptCache: boolean;
+  /** A saved non-Automatic usage policy (GitHub #1) is a tuned value too. */
+  usage?: UsageSelection;
 }): boolean {
   return (
     v.transport !== "" ||
@@ -601,6 +677,7 @@ export function advancedHasValues(v: {
     v.imageInput !== "auto" ||
     v.proxyRef !== PROXY_REF_INHERIT ||
     v.promptCache ||
+    (v.usage !== undefined && v.usage !== "auto") ||
     (v.label !== undefined && v.label.trim() !== "")
   );
 }
@@ -1249,6 +1326,12 @@ export function ConnectionDrawerFields({
   // Anthropic transport, so switching transport back and forth never silently
   // drops a saved OpenAI policy.
   const [promptCacheEnabled, setPromptCacheEnabled] = useState(() => promptCacheInitialEnabled(editConnection));
+  // GitHub #1: streaming token-usage policy, prefilled from the connection. A
+  // hidden control (non-Chat-Completions transport) keeps its state, exactly
+  // like the cache policy above, so a transport switch never drops it.
+  const [usageSelection, setUsageSelection] = useState<UsageSelection>(() =>
+    usageSelectionInitialValue(editConnection),
+  );
   // The Advanced disclosure is controlled: open from the start only when a
   // tuning value is already set (evaluated once, from the initial state), and
   // forced open by a rejected Advanced field on save/create.
@@ -1259,6 +1342,7 @@ export function ConnectionDrawerFields({
     imageInput,
     proxyRef,
     promptCache: promptCacheEnabled,
+    usage: usageSelection,
     ...(simplified ? { label } : {}),
   }));
   const [secretValue, dispatchSecret] = useReducer(secretFieldReducer, "");
@@ -1319,6 +1403,12 @@ export function ConnectionDrawerFields({
   // GitHub #15: the field only applies to the two OpenAI transports. The
   // A new custom endpoint uses its selected kind as its provider default.
   const promptCacheShown = promptCacheVisible(
+    transport,
+    isNewCustomEndpoint ? CUSTOM_KIND_DEFAULT_TRANSPORT[customKind] : selectedEntry?.defaultTransport,
+  );
+  // GitHub #1: the usage select is Chat-Completions-only — the only transport
+  // that carries `stream_options.include_usage`.
+  const usageShown = usageVisible(
     transport,
     isNewCustomEndpoint ? CUSTOM_KIND_DEFAULT_TRANSPORT[customKind] : selectedEntry?.defaultTransport,
   );
@@ -1398,6 +1488,8 @@ export function ConnectionDrawerFields({
   );
   const effectiveReasoningLevels = effortLevels.length ? effortLevels : reasoningLevels;
   const imageInputFeedHint = proxySnapshot === null ? null : imageInputEnvHint(proxySnapshot.envOverrides);
+  // GitHub #1: shown only while ANYCODE_INCLUDE_USAGE overrides the rung.
+  const usageEnvHintText = proxySnapshot === null ? null : usageEnvHint(proxySnapshot.envOverrides);
 
   /**
    * TASK.142: the ONE model-changing route. `next` is what goes into the Model
@@ -1459,6 +1551,8 @@ export function ConnectionDrawerFields({
       setError(imageInputError);
       return;
     }
+    // GitHub #1: create has no `""` sentinel — Automatic is simply absent.
+    const usageCreateValue = usageSelectionCreateValue(usageSelection);
     const req = buildCustomProviderCreateRequest({
       name: customName,
       baseUrl: customBaseUrl,
@@ -1506,6 +1600,9 @@ export function ConnectionDrawerFields({
           // endpoint.
           ...connectionCreateProxyRefField(proxyRef),
           ...(promptCacheEnabled ? { promptCache: IMPLICIT_PROMPT_CACHE } : {}),
+          // GitHub #1: the usage select is rendered in this pre-create state
+          // too, so its value has to travel on THIS create as well.
+          ...(usageCreateValue !== undefined ? { includeUsage: usageCreateValue } : {}),
           ...(contextWindow.raw.trim() ? { contextWindowTokens: Number(contextWindow.raw) } : {}),
           ...(reasoningSupported ? { reasoningSupported: true as const } : {}),
           ...(effortLevels.length ? { effortLevels } : {}),
@@ -1595,6 +1692,8 @@ export function ConnectionDrawerFields({
       setError(imageInputError);
       return;
     }
+    // GitHub #1: create has no `""` sentinel — Automatic is simply absent.
+    const usageCreateValue = usageSelectionCreateValue(usageSelection);
     setCreating(true);
     setError(null);
     try {
@@ -1623,6 +1722,9 @@ export function ConnectionDrawerFields({
           // GitHub #15: create keeps the conditional-spread form (create's
           // schema has no "" sentinel — omission already means Off).
           ...(promptCacheEnabled ? { promptCache: IMPLICIT_PROMPT_CACHE } : {}),
+          // GitHub #1: Automatic is omitted on create (no `""` sentinel there),
+          // an explicit On/Off travels as a real boolean.
+          ...(usageCreateValue !== undefined ? { includeUsage: usageCreateValue } : {}),
         },
         createModel !== "" ? createModel : null,
       );
@@ -1747,6 +1849,7 @@ export function ConnectionDrawerFields({
           maxOutputTokens: mot.value,
           imageInput,
           promptCacheEnabled,
+          usage: usageSelection,
         }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty, effortLevelsDirty, effortLevels }), pricing, modelPricing },
         selectedModelId,
       );
@@ -1981,6 +2084,36 @@ export function ConnectionDrawerFields({
             </select>
           </label>
           <div className="settings-field-hint">{PROMPT_CACHE_ONELINER}</div>
+        </>
+      )}
+
+      {/* GitHub #1: per-connection streaming token-usage policy, shown only for
+          the transport that actually sends `stream_options.include_usage`. A
+          hidden control keeps its state, so switching transport back restores
+          the selection and a saved choice is never dropped by a transport edit. */}
+      {usageShown && (
+        <>
+          <label className="settings-field">
+            <span className="settings-field-label">
+              Request token usage <FieldHelp text={USAGE_HELP} />
+            </span>
+            <select
+              className="settings-field-select"
+              value={usageSelection}
+              disabled={readOnly}
+              onChange={(e) => setUsageSelection(e.target.value as UsageSelection)}
+            >
+              <option value="auto">Automatic (default)</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </label>
+          <div className="settings-field-hint">{USAGE_ONELINER}</div>
+          {usageEnvHintText !== null && (
+            <div className="settings-field-hint" role="note">
+              {usageEnvHintText}
+            </div>
+          )}
         </>
       )}
 

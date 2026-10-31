@@ -672,8 +672,16 @@ export interface SessionPersistence {
  * replayed/duplicate finish after a reconnect write nothing new.
  */
 export interface ProviderUsageAudit {
-  /** Fire-and-forget, never blocks or fails the turn (write-behind, TASK.34 invariant 3). */
-  record(record: Omit<ProviderUsageRecord, "sessionId" | "createdAt">): void;
+  /**
+   * Fire-and-forget, never blocks or fails the turn (write-behind, TASK.34 invariant 3).
+   *
+   * `finishedAt` is the instant the MODEL STEP finished, captured when its
+   * finish event arrived — not when this call happens. A step with tool calls
+   * is staged at finish and flushed only after the tools (and any approval)
+   * complete, so a writer that prices by its own clock would bill a 03:59 UTC
+   * step at the off-peak rate. Absent ⇒ the writer's own clock.
+   */
+  record(record: Omit<ProviderUsageRecord, "sessionId" | "createdAt">, finishedAt?: number): void;
   /**
    * Taskana 4083 cross-review finding 4: OPTIONAL drain of the write-behind
    * queue — resolves once every record() handed over so far has settled.
@@ -689,7 +697,7 @@ export interface ProviderUsageAudit {
 export interface ProviderUsageSummaryPort {
   summary(): Promise<{
     steps: ProviderUsageRecord[];
-    totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unknownSavingsSteps?: number; priceBasisIds?: string[]; unpricedSteps?: number; subscriptionSteps?: number; subagentCostUsd?: number; subagentUnpriced?: number; subagentSubscription?: number; subagentIncludedInReportedCost?: boolean; subagentCount?: number } | null;
+    totals: { generationTokensPerSecond?: number; input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unknownSavingsSteps?: number; priceBasisIds?: string[]; unpricedSteps?: number; subscriptionSteps?: number; subagentCostUsd?: number; subagentUnpriced?: number; subagentSubscription?: number; subagentIncludedInReportedCost?: boolean; subagentCount?: number } | null;
   }>;
 }
 
@@ -703,7 +711,7 @@ export interface ProviderUsageSummaryPort {
  */
 export function summarizeProviderUsage(steps: ProviderUsageRecord[]): {
   steps: ProviderUsageRecord[];
-  totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unknownSavingsSteps?: number; priceBasisIds?: string[]; unpricedSteps?: number; subscriptionSteps?: number; subagentCostUsd?: number; subagentUnpriced?: number; subagentSubscription?: number; subagentIncludedInReportedCost?: boolean; subagentCount?: number } | null;
+  totals: { generationTokensPerSecond?: number; input: number; output: number; total: number; stepsReported: number; stepsWithCache: number; costUsd?: number; cacheSavingsUsd?: number; unknownSavingsSteps?: number; priceBasisIds?: string[]; unpricedSteps?: number; subscriptionSteps?: number; subagentCostUsd?: number; subagentUnpriced?: number; subagentSubscription?: number; subagentIncludedInReportedCost?: boolean; subagentCount?: number } | null;
 } {
   if (steps.length === 0) {
     return { steps, totals: null };
@@ -729,6 +737,8 @@ export function summarizeProviderUsage(steps: ProviderUsageRecord[]): {
       stepsWithCache += 1;
     }
   }
+  const timed = steps.filter((step) => step.outputTokens !== undefined && Number.isFinite(step.outputTokens) && step.outputTokens >= 0 && step.generationDurationMs !== undefined && Number.isFinite(step.generationDurationMs) && step.generationDurationMs > 0);
+  const generationTokensPerSecond = timed.length ? 1000 * timed.reduce((sum, step) => sum + step.outputTokens!, 0) / timed.reduce((sum, step) => sum + step.generationDurationMs!, 0) : undefined;
   const subscriptionSteps = steps.filter((step) => step.priceBasisId === "subscription").length;
   const priced = steps.filter((step) => step.costUsd !== undefined);
   const savings = steps.filter((step) => step.cacheSavingsUsd !== undefined);
@@ -738,7 +748,7 @@ export function summarizeProviderUsage(steps: ProviderUsageRecord[]): {
     ...(savings.length ? { cacheSavingsUsd: savings.reduce((sum, step) => sum + step.cacheSavingsUsd!, 0) } : {}),
 
   };
-  return { steps, totals: { input, output, total, stepsReported, stepsWithCache, ...costs, ...(steps.length > priced.length + subscriptionSteps ? { unpricedSteps: steps.length - priced.length - subscriptionSteps } : {}), ...(priced.length || subscriptionSteps ? { unknownSavingsSteps: steps.length - savings.length - subscriptionSteps } : {}), ...(subscriptionSteps ? { subscriptionSteps } : {}) } };
+  return { steps, totals: { input, output, total, stepsReported, stepsWithCache, ...(generationTokensPerSecond !== undefined ? { generationTokensPerSecond } : {}), ...costs, ...(steps.length > priced.length + subscriptionSteps ? { unpricedSteps: steps.length - priced.length - subscriptionSteps } : {}), ...(priced.length || subscriptionSteps ? { unknownSavingsSteps: steps.length - savings.length - subscriptionSteps } : {}), ...(subscriptionSteps ? { subscriptionSteps } : {}) } };
 }
 
 export interface SessionOptions {
@@ -1427,6 +1437,8 @@ export class Session {
   private relocating = false;
   private abort: AbortController | null = null;
   private turnId: string | null = null;
+  private latestTurnId: string | null = null;
+  private nativeUsageStep = 0;
   /** Epoch ms the live turn began (host clock) — rides every turn_started, including the per-connect re-assertion. */
   private turnStartedAt: number | undefined = undefined;
   /**
@@ -1474,7 +1486,7 @@ export class Session {
    * Reconnect-safe: the SQLite PK (session_id, turn_id, step) + INSERT OR
    * IGNORE make a replayed finish after a flush a storage no-op.
    */
-  private pendingUsageAuditRow: Omit<ProviderUsageRecord, "sessionId" | "createdAt"> | null = null;
+  private pendingUsageAuditRow: (Omit<ProviderUsageRecord, "sessionId" | "createdAt"> & { finishedAt: number }) | null = null;
   /**
    * Taskana 4083 / TASK.34: the last audit summary the hydration path has
    * read (pushSessionCheckpoint is sync; the summary port is async, so the
@@ -1799,6 +1811,7 @@ export class Session {
     this.presentationJournal = new PresentationJournal(this.historyMaxItems, REPLAY_BUFFER_CAP);
     this.sessionHistory = buildSessionHistory(options.bootHistory ?? [], this.historyMaxItems);
     const publicHistory = options.bootHistory ?? this.engine.historyItems();
+    this.latestTurnId = [...publicHistory].reverse().find((item) => item.turnId !== undefined)?.turnId ?? null;
     for (const item of [...publicHistory].reverse()) {
       if (item.message.role !== "assistant" || (item.kind !== undefined && item.kind !== "normal")) continue;
       const text = item.message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
@@ -2659,6 +2672,9 @@ export class Session {
           .summary()
           .then((s) => {
             this.lastUsageSummary = s;
+            // Legacy histories may not carry turn stamps; use the latest durable
+            // parent usage only when no newer admitted or restored turn is known.
+            this.latestTurnId ??= s.steps.filter((step) => step.subagentId === undefined).at(-1)?.turnId ?? null;
             this.pushSessionCheckpoint();
           })
           .catch(() => {});
@@ -3172,10 +3188,23 @@ export class Session {
     this.outbound.sendDirect({ type: "lsp_status", servers: this.lsp?.status() ?? [] });
   }
 
+  /**
+   * A native engine reports usage per model request with no host turn of its
+   * own. While such a request belongs to the live turn, stamp it with the very
+   * turn id the host reported in `turn_started` — that is the id the context
+   * popover filters by — and number its steps in arrival order. Requests that
+   * belong to no turn (compaction, an absorbed foreign turn) keep a standalone
+   * identity so they never show up as part of the user's turn.
+   */
+  recordNativeUsage(row: Omit<Parameters<ProviderUsageAudit["record"]>[0], "turnId" | "step">, belongsToTurn: boolean): void {
+    const turnId = belongsToTurn ? this.turnId : null;
+    this.recordUsageAuditRow({ ...row, turnId: turnId ?? randomUUID(), step: turnId === null ? 1 : ++this.nativeUsageStep });
+  }
+
   /** Accounting must never terminate a turn when a sink throws synchronously. */
-  private recordUsageAuditRow(row: Parameters<ProviderUsageAudit["record"]>[0]): void {
+  private recordUsageAuditRow(row: Parameters<ProviderUsageAudit["record"]>[0], finishedAt?: number): void {
     try {
-      this.usageAudit?.sink.record(row);
+      this.usageAudit?.sink.record(row, finishedAt);
     } catch (e) {
       console.error(`[host] usage audit write failed: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -3191,12 +3220,16 @@ export class Session {
    * Clears the slot — one row is written exactly once per flush trigger.
    */
   private flushPendingUsageAuditRow(): void {
-    const row = this.pendingUsageAuditRow;
-    if (row === null) {
+    const staged = this.pendingUsageAuditRow;
+    if (staged === null) {
       return;
     }
     this.pendingUsageAuditRow = null;
-    this.recordUsageAuditRow(row);
+    // The instant travels WITH the staged row: a tool round-trip or an
+    // approval can push the flush across a tariff boundary, and the step is
+    // still billed at the moment it finished.
+    const { finishedAt, ...row } = staged;
+    this.recordUsageAuditRow(row, finishedAt);
   }
 
   /**
@@ -3327,6 +3360,7 @@ export class Session {
     if (this.engine.id !== "core") {
       if (this.lastUsageSummary !== null) this.outbound.sendDirect({
         type: "session_checkpoint",
+        ...(this.latestTurnId !== null ? { latestTurnId: this.latestTurnId } : {}),
         usageAudit: { lastStep: this.lastUsageSummary.steps.at(-1) ?? null, totals: this.lastUsageSummary.totals, totalSteps: this.lastUsageSummary.steps.length },
       });
       return;
@@ -3401,6 +3435,7 @@ export class Session {
     }
     this.outbound.sendDirect({
       type: "session_checkpoint",
+      ...(this.latestTurnId !== null ? { latestTurnId: this.latestTurnId } : {}),
       // TASK.117 acceptance defect 2: the authoritative live turn id — see
       // the protocol field's doc (the renderer's cut-replay guard exempts
       // exactly this id, never a ring-replayed turn_started's).
@@ -4959,6 +4994,8 @@ export class Session {
     const turnId = pendingTurnIdHolder?.turnId ?? randomUUID();
     const controller = new AbortController();
     this.turnId = turnId;
+    this.latestTurnId = turnId;
+    this.nativeUsageStep = 0;
     this.currentStep = undefined;
     this.finishRetries = 0;
     // Taskana 4083 cross-review finding 1: a new turn starting with a staged
@@ -5210,6 +5247,9 @@ export class Session {
           // flushPendingUsageAuditRow (where the sink is actually called).
           if (this.currentStep !== undefined) {
             this.pendingUsageAuditRow = {
+              // Captured HERE, at the finish event — never when the staged row
+              // is finally flushed (see ProviderUsageAudit.record).
+              finishedAt: Date.now(),
               turnId,
               step: this.currentStep,
               model: this.model,
@@ -5220,6 +5260,8 @@ export class Session {
               outputTokens: event.usage.outputTokens,
               totalTokens: event.usage.totalTokens,
               finishReason: event.finishReason,
+              ...(event.generationDurationMs !== undefined ? { generationDurationMs: event.generationDurationMs } : {}),
+              ...(event.timeToFirstEventMs !== undefined ? { timeToFirstEventMs: event.timeToFirstEventMs } : {}),
               transportRetries: this.finishRetries,
             };
           }

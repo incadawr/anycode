@@ -39,7 +39,7 @@ import type { ModelStreamEvent } from "../types/events.js";
 import { linkAbortSignal } from "../util/abort.js";
 import type { ProviderTransport } from "./catalog.js";
 import type { EndpointConfig } from "./endpoint.js";
-import type { ImplicitPromptCache } from "../types/config.js";
+import type { ImplicitPromptCache, ReasoningEffort } from "../types/config.js";
 import { blocksAutomaticReplay, classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
 import { ResponsesReasoningTextRecovery } from "./responses-reasoning-text.js";
 import { isMiMoModel } from "./mimo.js";
@@ -55,6 +55,14 @@ const REASONING_BUDGET_TOKENS = { low: 4_096, medium: 12_288, high: 24_576 } as 
 
 /** GLM-5.2 thinking budgets per supported effort tier. */
 const GLM_BUDGET_TOKENS = { high: 16_000, max: 32_000 } as const;
+
+/**
+ * Generic-path thinking budget for the `max` effort tier on CUSTOM
+ * (non-catalog) Anthropic-compatible endpoints — strictly larger than
+ * high/xhigh's 24_576 so `xhigh` and `max` are always distinguishable on the
+ * wire even for an endpoint that ignores the effort enum.
+ */
+const GENERIC_MAX_BUDGET_TOKENS = 32_000;
 
 /** Z.AI's documented max_tokens ceiling for the GLM-5/4.6 family. */
 const GLM_MAX_TOKENS = 131_072;
@@ -169,6 +177,7 @@ export function reasoningRequestOptions(
   transport?: "anthropic-messages",
   promptCache?: ImplicitPromptCache,
   modelId?: string,
+  declaredEffortLevels?: readonly ReasoningEffort[],
 ): AnthropicReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
@@ -176,6 +185,7 @@ export function reasoningRequestOptions(
   transport: "openai-chat-completions",
   promptCache?: ImplicitPromptCache,
   modelId?: string,
+  declaredEffortLevels?: readonly ReasoningEffort[],
 ): OpenAICompatibleReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
@@ -183,6 +193,7 @@ export function reasoningRequestOptions(
   transport: "openai-responses",
   promptCache?: ImplicitPromptCache,
   modelId?: string,
+  declaredEffortLevels?: readonly ReasoningEffort[],
 ): OpenAIResponsesReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
@@ -190,6 +201,7 @@ export function reasoningRequestOptions(
   transport: ProviderTransport,
   promptCache?: ImplicitPromptCache,
   modelId?: string,
+  declaredEffortLevels?: readonly ReasoningEffort[],
 ): ReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
@@ -197,6 +209,7 @@ export function reasoningRequestOptions(
   transport: ProviderTransport = "anthropic-messages",
   promptCache?: ImplicitPromptCache,
   modelId?: string,
+  declaredEffortLevels?: readonly ReasoningEffort[],
 ): ReasoningOptions {
   const effort = request.reasoningEffort;
 
@@ -328,10 +341,40 @@ export function reasoningRequestOptions(
   }
 
   // Default / real Anthropic (Claude): budgetTokens is the canonical extended-thinking format.
+  // xhigh vs max MUST stay distinguishable on the wire (GitHub #2 review) — but
+  // ONLY for custom (non-catalog) Anthropic-compatible endpoints, which is the
+  // card's scope. The gate is `providerName === undefined`: the wiring layer
+  // sets it from the catalog entry's name only for catalog providers, so
+  // catalog anthropic-transport providers WITHOUT a dedicated branch above
+  // (Kimi, Xiaomi MiMo, …) keep their exact pre-fix request bytes for every
+  // effort — including max (same high budget, no effort field) — rather than
+  // suddenly receiving an `output_config.effort` key and a larger budget a
+  // strict proxy could reject. Custom connections always get DISTINCT budgets
+  // (high's 24_576 for xhigh vs a strictly larger 32_000 for max), so even an
+  // endpoint that ignores output_config still sees a different
+  // thinking.budget_tokens and the tiers never collapse.
+  //
+  // `output_config.effort` is a SEPARATE, opt-in half: it is sent only where
+  // support is KNOWN. First-party Anthropic models carry it on their dedicated
+  // branch above (adaptive thinking) and keep it unchanged here. A custom
+  // endpoint gets it only when the connection DECLARED both `xhigh` and `max`
+  // in its effort vocabulary (`declaredEffortLevels`, from the same
+  // ANYCODE_EFFORT_LEVELS declaration the CLI validates the selection
+  // against) — declaring both tiers is the endpoint asserting it distinguishes
+  // them itself, which on this transport means the effort enum. Without that
+  // declaration a strict Anthropic-compatible server that only understands
+  // `thinking.budget_tokens` never sees an unknown field.
+  const customAnthropicEndpoint = providerName === undefined;
+  const declaredTiers =
+    declaredEffortLevels?.includes("xhigh") === true && declaredEffortLevels.includes("max");
   const budgetTokens =
-    effort === "max" || effort === "xhigh"
-      ? REASONING_BUDGET_TOKENS.high
-      : REASONING_BUDGET_TOKENS[effort as "low" | "medium" | "high"];
+    effort === "max" && customAnthropicEndpoint
+      ? GENERIC_MAX_BUDGET_TOKENS
+      : effort === "max" || effort === "xhigh"
+        ? REASONING_BUDGET_TOKENS.high
+        : REASONING_BUDGET_TOKENS[effort as "low" | "medium" | "high"];
+  const wireEffort =
+    customAnthropicEndpoint && declaredTiers && (effort === "max" || effort === "xhigh") ? effort : undefined;
   let maxOutputTokens = Math.max(request.maxOutputTokens ?? 0, budgetTokens + 1_024);
   // The SDK adds the thinking budget to max_tokens on the wire.
   if (isMiMoModel(providerName, modelId)) {
@@ -339,7 +382,12 @@ export function reasoningRequestOptions(
   }
   return {
     maxOutputTokens,
-    providerOptions: { anthropic: { thinking: { type: "enabled", budgetTokens } } },
+    providerOptions: {
+      anthropic: {
+        thinking: { type: "enabled", budgetTokens },
+        ...(wireEffort !== undefined ? { effort: wireEffort } : {}),
+      },
+    },
   };
 }
 
@@ -893,6 +941,13 @@ export class AiSdkModelPort implements ModelPort {
 
       try {
         const model = await this.buildAttemptModel(attemptIncludeUsage, onResponseActivity);
+        const requestStartedAt = performance.now();
+        // Generation speed is measured from the FIRST OUTPUT TOKEN — text,
+        // reasoning or tool content — never from the first stream event. A
+        // metadata chunk (`start-step`, a raw `message_start`) can arrive
+        // seconds before the model produces anything; counting that wait as
+        // generation would understate t/s and shrink time-to-first-token.
+        let firstOutputAt: number | undefined;
         const result = streamText({
           model,
           // System prompt goes out-of-band: ai@7 rejects system-role messages
@@ -909,9 +964,8 @@ export class AiSdkModelPort implements ModelPort {
           onError: () => {},
           abortSignal: attemptController.signal,
           // Raw chunks carry provenance for Anthropic and reasoning text for Responses.
-          ...(this.config.transport === "anthropic-messages" || this.config.transport === "openai-responses"
-            ? { includeRawChunks: true } : {}),
-          ...reasoningRequestOptions(request, this.config.providerName, this.config.transport, this.config.promptCache, this.config.model),
+          includeRawChunks: true,
+          ...reasoningRequestOptions(request, this.config.providerName, this.config.transport, this.config.promptCache, this.config.model, this.config.declaredEffortLevels),
           temperature: request.temperature,
         });
 
@@ -953,7 +1007,10 @@ export class AiSdkModelPort implements ModelPort {
 
           if (reasoningTextRecovery !== undefined) {
             for (const recovered of reasoningTextRecovery.observe(outcome.value)) {
-              if (isModelOutputEvent(recovered)) hadModelOutput = true;
+              if (isModelOutputEvent(recovered)) {
+                hadModelOutput = true;
+                firstOutputAt ??= performance.now();
+              }
               yield recovered;
             }
           }
@@ -966,6 +1023,18 @@ export class AiSdkModelPort implements ModelPort {
           });
           if (event === null) {
             continue;
+          }
+          // Output may begin with reasoning or a tool block, not text; any of
+          // them opens the generation window. `finish` itself is not a token,
+          // so a step that produced billed output but never streamed any is
+          // honestly left without a measurement (the popover shows a dash)
+          // instead of reporting an infinite/understated rate.
+          if (firstOutputAt === undefined && event.type !== "finish" && isModelOutputEvent(event)) {
+            firstOutputAt = performance.now();
+          }
+          if (event.type === "finish" && event.finishReason !== "error" && firstOutputAt !== undefined) {
+            const finishedAt = performance.now();
+            event = { ...event, timeToFirstEventMs: Math.max(0, firstOutputAt - requestStartedAt), generationDurationMs: Math.max(0, finishedAt - firstOutputAt) };
           }
           if (event.type === "error") event = { ...event, error: contextualizeNetworkFailure(event.error, this.config.baseUrl) };
           // Drop provider chunk-parse artifacts that are safe to ignore (a

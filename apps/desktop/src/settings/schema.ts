@@ -284,6 +284,11 @@ const connectionSchema = z.object({
   // the live image-modality facts ride modelCapabilities' per-model
   // `imageInput: true` field below.
   authOptional: z.boolean().optional(),
+  // Streaming token-usage policy (GitHub #1). `false` is an explicit opt-out
+  // and survives as-is; `.catch(undefined)` keeps the whole-document fail-soft
+  // contract, so a hand-edited non-boolean drops just this field and reads back
+  // as "Automatic" (the transport default) rather than resetting the document.
+  includeUsage: z.boolean().optional().catch(undefined),
   // Live-fetched model ids (connection-scoped fetch, main/provider-ipc.ts) —
   // advisory display data, same round-trip discipline as `lastHealth`.
   models: z.array(z.string()).optional(),

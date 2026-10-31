@@ -1163,6 +1163,8 @@ export interface DesktopState {
    */
   steering: { supported: boolean; ready: boolean } | null;
   turn: TurnState;
+  /** Last admitted turn, retained after it ends for usage selection. */
+  latestTurnId: string | null;
   transcript: TranscriptBlock[];
   todoReminderState: { count: number; threshold: number } | null;
   permission: PermissionUiRequest | null;
@@ -1582,6 +1584,7 @@ interface SessionSlice {
   /** Design TASK.40 §2(f)/§3.2: mirrors `engine` -- reset alongside it on a respawn/reset. */
   shell: ShellCapabilitiesProjection | null;
   turn: TurnState;
+  latestTurnId: string | null;
   transcript: TranscriptBlock[];
   todoReminderState: { count: number; threshold: number } | null;
   permission: PermissionUiRequest | null;
@@ -1657,6 +1660,7 @@ function initialSessionSlice(): SessionSlice {
     pendingEngineChange: null,
     shell: null,
     turn: { status: "idle", turnId: null, requestId: null },
+    latestTurnId: null,
     transcript: [],
     todoReminderState: null,
     permission: null,
@@ -4986,6 +4990,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             }
             set({
               turn: { status: "running", turnId: message.turnId, requestId: message.requestId, startedAt: turnStartedAt.get(message.turnId) },
+              latestTurnId: message.turnId,
               // TASK.33 W8: a new turn starting — whether via the Try-again
               // click (already one-shot consumed by then) or any other
               // send — retires the previous turn's retry bookkeeping so a
@@ -5190,6 +5195,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // TASK.117 acceptance defect 2: capture the host-authoritative
             // live turn id FIRST — the cut-replay guard below reads it.
             handshakeLiveTurnId = message.liveTurnId ?? null;
+            if (message.latestTurnId !== undefined || message.liveTurnId !== undefined) {
+              set({ latestTurnId: message.latestTurnId ?? message.liveTurnId ?? null });
+            }
             // TASK.117 acceptance defect 1: the positive cut-entirely list —
             // absent ONLY on an untruncated history / legacy host (null =
             // legacy strict rule; see the below-cut guard). A shipped EMPTY

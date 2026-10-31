@@ -1,3 +1,6 @@
+import { bindCodexUsage } from "../../native-usage.js";
+import { createHarness } from "../../test-harness.js";
+import { summarizeProviderUsage } from "../../session.js";
 import { readFileSync } from "node:fs";
 import * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -2662,6 +2665,29 @@ describe("CodexEngine — a re-delivered item/completed enriches the shadow row'
 describe("CodexEngine + resumeNativeCodexSession — real interleave composition (W6 class-killer)", () => {
   const LIVE_THREAD_ID = "019f554d-16be-7b21-b55e-e9ce5b023a52";
   const LIVE_TURN_ID = "019f554d-16fb-7493-bc52-fe8403dbd61c";
+
+  it("records captured Codex requests under the host turn identity", async () => {
+    const db = new SqlitePersistenceAdapter(":memory:");
+    await db.createSession({ id: "codex-host", workspace: "/work", model: "m", mode: "build" });
+    const engine = new CodexEngine(new ReplayClient(loadFixtureNotifications("w0-command-accept.jsonl"), LIVE_TURN_ID), LIVE_THREAD_ID);
+    const pending: Promise<void>[] = [];
+    const audit = { sink: { record: (row: Omit<Parameters<SqlitePersistenceAdapter["recordProviderUsage"]>[0], "sessionId" | "createdAt">) => { pending.push(db.recordProviderUsage({ ...row, sessionId: "codex-host", createdAt: Date.now() })); } }, summary: { summary: async () => { await Promise.all(pending); return summarizeProviderUsage(await db.listProviderUsage("codex-host")); } } };
+    const h = createHarness({ steps: [], engine, usageAudit: audit });
+    bindCodexUsage(engine, audit.sink, () => h.session);
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor((m) => m.type === "host_ready");
+      h.send({ type: "user_message", requestId: "r", text: "test" });
+      await h.waitUntil(() => h.received.some((m) => m.type === "agent_event" && m.event.type === "loop_end"));
+      await Promise.all(pending);
+      const started = h.received.find((m) => m.type === "turn_started");
+      expect(started?.type).toBe("turn_started");
+      const rows = await db.listProviderUsage("codex-host");
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.map((row) => row.turnId)).toEqual(rows.map(() => started!.turnId));
+      expect(rows.map((row) => row.step)).toEqual(rows.map((_, i) => i + 1));
+    } finally { h.close(); await db.close(); }
+  });
 
   it("persists captured native request usage without inventing a Codex price", async () => {
     const db = new SqlitePersistenceAdapter(":memory:");

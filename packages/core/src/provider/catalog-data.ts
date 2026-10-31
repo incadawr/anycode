@@ -19,18 +19,20 @@ export type {
   CatalogAuth,
   CatalogModel,
   ModelPricing,
+  TariffWindow,
   CatalogProviderEntry,
   ProviderCatalog,
   ProviderTransport,
   ResolvedEndpoint,
 } from "./catalog.js";
-export { resolveEndpoint } from "./catalog.js";
+export { resolveEndpoint, tariffAt } from "./catalog.js";
 
 import {
   assertBrandContract,
   assertTransportContract,
   type CatalogProviderEntry,
   type ProviderCatalog,
+  type TariffWindow,
 } from "./catalog.js";
 
 /** Sentinel id for the user-supplied endpoint whose baseUrl lives in settings. */
@@ -54,6 +56,22 @@ const MIMO_MODELS: CatalogProviderEntry["models"] = [
   { id: "mimo-v2.6-pro", pricing: { basisId: "mimo-v2.6-pro-xiaomi-mimo-api-2026-10-30", input: 0.435, cachedInput: 0.0036, cacheWrite: 0, output: 0.87 }, name: "MiMo V2.6 Pro", contextWindow: 1_048_576, usableContextWindow: LARGE_MODEL_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true },
   { id: "mimo-v2.6-flash", pricing: { basisId: "mimo-v2.6-flash-xiaomi-mimo-api-2026-10-30", input: 0.14, cachedInput: 0.0028, cacheWrite: 0, output: 0.28 }, name: "MiMo V2.6 Flash", contextWindow: 1_048_576, usableContextWindow: LARGE_MODEL_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true },
 ];
+
+// DeepSeek bills by time of day (api-docs.deepseek.com/quick_start/pricing/,
+// checked 2026-10-27): 01:00–04:00 and 06:00–10:00 UTC on weekdays carry the
+// full (peak) rates listed below; every other minute of the week — including
+// the whole weekend — is billed at exactly half.
+//
+// KNOWN LIMIT: Chinese public holidays are off-peak for the whole day on the
+// provider's page, but no holiday calendar is modelled here. A holiday that
+// falls inside a peak window is therefore priced at peak, i.e. the cost shown
+// can be up to 2x the real charge. Both prices remain ESTIMATES (the popover
+// labels them "rate estimates"), so this never reads as an exact bill.
+const DEEPSEEK_TARIFF: TariffWindow = {
+  peakUtcDays: [1, 2, 3, 4, 5],
+  peakUtcHours: [[1, 4], [6, 10]],
+  offPeakMultiplier: 0.5,
+};
 
 const ENTRIES: CatalogProviderEntry[] = [
   {
@@ -213,16 +231,16 @@ const ENTRIES: CatalogProviderEntry[] = [
       // explicit pick shows AND sends `high` instead of falling back to the
       // vocabulary's first entry (`low`).
       // https://api-docs.deepseek.com/quick_start/pricing/ — checked 2026-10-27.
-      // Peak rates; usage does not distinguish peak from off-peak.
-      { id: "deepseek-flash", pricing: { basisId: "deepseek-flash-deepseek-peak-2026-10-27", input: 0.3, cachedInput: 0.006, output: 1.2 }, name: "DeepSeek-V4.1-Flash", contextWindow: 1_048_576, maxOutputTokens: 393_216, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high", todoReminderEvery: 20 },
+      // Peak rates; the tariff below tells which hours they apply to.
+      { id: "deepseek-flash", pricing: { basisId: "deepseek-flash-deepseek-peak-2026-10-27", input: 0.3, cachedInput: 0.006, output: 1.2, tariff: DEEPSEEK_TARIFF }, name: "DeepSeek-V4.1-Flash", contextWindow: 1_048_576, maxOutputTokens: 393_216, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high", todoReminderEvery: 20 },
       // Official DeepSeek pricing page, checked 2026-10-27
       // (api-docs.deepseek.com/quick_start/pricing, checked 2026-10-27) lists
-      // peak / off-peak rates; off-peak is exactly half of peak, and a usage
-      // record carries no timestamp to tell them apart, so — same convention as
-      // the Flash row above — the PEAK rate is recorded (the conservative
-      // ceiling). V4-Pro peak: $1.32 in / $0.044 cache hit / $3.96 out per 1M
-      // tokens; off-peak is $0.66 / $0.022 / $1.98.
-      { id: "deepseek-v4-pro", pricing: { basisId: "deepseek-v4-pro-deepseek-peak-2026-10-27", input: 1.32, cachedInput: 0.044, output: 3.96 }, name: "DeepSeek-V4-Pro", contextWindow: 1_048_576, maxOutputTokens: 393_216, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high", todoReminderEvery: 20 },
+      // peak / off-peak rates; off-peak is exactly half of peak. The PEAK rate
+      // is recorded (the conservative ceiling) together with the tariff window
+      // below, so each step is priced by its own timestamp: peak hours pay the
+      // ceiling, every other minute pays half. V4-Pro peak: $1.32 in / $0.044
+      // cache hit / $3.96 out per 1M tokens; off-peak is $0.66 / $0.022 / $1.98.
+      { id: "deepseek-v4-pro", pricing: { basisId: "deepseek-v4-pro-deepseek-peak-2026-10-27", input: 1.32, cachedInput: 0.044, output: 3.96, tariff: DEEPSEEK_TARIFF }, name: "DeepSeek-V4-Pro", contextWindow: 1_048_576, maxOutputTokens: 393_216, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high", todoReminderEvery: 20 },
     ],
   },
   {
@@ -292,19 +310,26 @@ const ENTRIES: CatalogProviderEntry[] = [
       // 262,144-token context window" (platform.kimi.ai/docs/pricing/chat).
       // `imageInput` only where the Model List says so ("native visual
       // understanding" for K3/K3.1, "visual and text input" for K2.6).
-      // K3 rates: https://platform.kimi.ai/ checked 2026-10-27, USD per million tokens.
-      // No output ceiling is published on the model list.
-      // https://platform.kimi.ai/ — checked 2026-10-27.
-      { id: "kimi-k3.1-pro", pricing: { basisId: "kimi-k3.1-pro-kimi-2026-10-27", input: 2, cachedInput: 0.2, cacheWrite: 2, output: 10 }, name: "Kimi K3.1 Pro", contextWindow: 1_048_576, imageInput: true },
-      // https://platform.kimi.ai/ — checked 2026-10-27.
-      { id: "kimi-k3.1-pro-highspeed", pricing: { basisId: "kimi-k3.1-pro-highspeed-kimi-2026-10-27", input: 4, cachedInput: 0.2, cacheWrite: 4, output: 20 }, name: "Kimi K3.1 Pro Highspeed", contextWindow: 1_048_576, imageInput: true },
-      // https://platform.kimi.ai/ — checked 2026-10-27.
-      { id: "kimi-k3", pricing: { basisId: "kimi-k3-kimi-2026-10-27", input: 3, cachedInput: 0.3, cacheWrite: 3, output: 15 }, name: "Kimi K3", contextWindow: 1_048_576, imageInput: true },
-      // https://platform.kimi.ai/docs/pricing/chat and https://platform.kimi.ai/
-      // checked 2026-10-28: neither current page lists rates for these K2 models.
-      { id: "kimi-k2.7-code", name: "Kimi K2.7 Code", contextWindow: 262_144 },
-      { id: "kimi-k2.7-code-highspeed", name: "Kimi K2.7 Code Highspeed", contextWindow: 262_144 },
-      { id: "kimi-k2.6", name: "Kimi K2.6", contextWindow: 262_144, imageInput: true },
+      // K3 rates: https://platform.kimi.ai/docs/pricing/chat (Model Inference
+      // Pricing) checked 2026-10-30, USD per million tokens. `cacheWrite` is
+      // the table's 5m-TTL write rate (1h writes cost 2× and are not billed
+      // anywhere here); the 2026-10-27 pass had cited the site root instead
+      // of this page. No output ceiling is published on the model list.
+      // https://platform.kimi.ai/docs/pricing/chat — checked 2026-10-30.
+      { id: "kimi-k3.1-pro", pricing: { basisId: "kimi-k3.1-pro-kimi-2026-10-30", input: 2, cachedInput: 0.2, cacheWrite: 2, output: 10 }, name: "Kimi K3.1 Pro", contextWindow: 1_048_576, imageInput: true },
+      // https://platform.kimi.ai/docs/pricing/chat — checked 2026-10-30.
+      { id: "kimi-k3.1-pro-highspeed", pricing: { basisId: "kimi-k3.1-pro-highspeed-kimi-2026-10-30", input: 4, cachedInput: 0.2, cacheWrite: 4, output: 20 }, name: "Kimi K3.1 Pro Highspeed", contextWindow: 1_048_576, imageInput: true },
+      // https://platform.kimi.ai/docs/pricing/chat — checked 2026-10-30.
+      { id: "kimi-k3", pricing: { basisId: "kimi-k3-kimi-2026-10-30", input: 3, cachedInput: 0.3, cacheWrite: 3, output: 15 }, name: "Kimi K3", contextWindow: 1_048_576, imageInput: true },
+      // https://platform.kimi.ai/docs/pricing/chat — checked 2026-10-30. The
+      // K2 table (Model / Input / Output / Cached input) was filled in after
+      // the 2026-10-28 pass found no rates; it publishes no cache-write
+      // column, so `cacheWrite` stays undefined.
+      { id: "kimi-k2.7-code", pricing: { basisId: "kimi-k2.7-code-kimi-2026-10-30", input: 0.95, cachedInput: 0.19, output: 4 }, name: "Kimi K2.7 Code", contextWindow: 262_144 },
+      // https://platform.kimi.ai/docs/pricing/chat — checked 2026-10-30.
+      { id: "kimi-k2.7-code-highspeed", pricing: { basisId: "kimi-k2.7-code-highspeed-kimi-2026-10-30", input: 1.9, cachedInput: 0.38, output: 8 }, name: "Kimi K2.7 Code Highspeed", contextWindow: 262_144 },
+      // https://platform.kimi.ai/docs/pricing/chat — checked 2026-10-30.
+      { id: "kimi-k2.6", pricing: { basisId: "kimi-k2.6-kimi-2026-10-30", input: 0.95, cachedInput: 0.16, output: 4 }, name: "Kimi K2.6", contextWindow: 262_144, imageInput: true },
     ],
     retiredModels: [
       { id: "kimi-k2-0711-preview", name: "Kimi K2", contextWindow: 128_000, maxOutputTokens: 32_768 },

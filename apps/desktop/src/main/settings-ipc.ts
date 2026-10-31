@@ -449,6 +449,9 @@ const connectionCreateSchema = z
     // z.literal("") lives on UPDATE only.
     imageInputOverride: z.enum(["on", "off"]).optional(),
     authOptional: z.boolean().optional(),
+    // Streaming token-usage policy (GitHub #1). Strict boolean — `false` is a
+    // real opt-out, so it is accepted and persisted, never normalized away.
+    includeUsage: z.boolean().optional(),
     setActive: z.boolean().optional(),
   })
   .strict();
@@ -494,6 +497,10 @@ const connectionUpdateSchema = z
     imageInputOverride: z.union([z.enum(["on", "off"]), z.literal("")]).optional(),
     // `false` clears (removed from disk), `true` sets — see ConnectionUpdateRequest.
     authOptional: z.boolean().optional(),
+    // Streaming token-usage policy (GitHub #1) with the same `""` clear sentinel
+    // as `promptCache` above: absent = keep, boolean = set (including an
+    // explicit `false`), `""` = clear back to the transport default.
+    includeUsage: z.union([z.boolean(), z.literal("")]).optional(),
   })
   .strict();
 const connectionIdSchema = z.object({ id: z.string().min(1) }).strict();
@@ -1805,6 +1812,9 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
         ? { imageInputOverride: req.imageInputOverride, imageInputModel: req.model?.trim() }
         : {}),
       ...(req.authOptional === true ? { authOptional: true } : {}),
+      // Streaming token-usage policy (GitHub #1): `false` is an opt-out and
+      // must ride the create — conditional on `!== undefined`, never truthy.
+      ...(req.includeUsage !== undefined ? { includeUsage: req.includeUsage } : {}),
     };
     if (req.contextWindowTokens !== undefined || req.reasoningEffort !== undefined || req.reasoningSupported !== undefined || req.effortLevels !== undefined) {
       if (!createContextWindowModel) return { ok: false, reason: "invalid" };
@@ -1989,6 +1999,16 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
         delete updatedConnection.promptCache;
       } else {
         updatedConnection.promptCache = req.promptCache;
+      }
+    }
+    // Streaming token-usage policy (GitHub #1) — same clear discipline as the
+    // output ceiling above, with one crucial difference: `false` is a MEANING
+    // (an explicit opt-out), not an absence, so only `""` deletes the key.
+    if (req.includeUsage !== undefined) {
+      if (req.includeUsage === "") {
+        delete updatedConnection.includeUsage;
+      } else {
+        updatedConnection.includeUsage = req.includeUsage;
       }
     }
     // GitHub #26: patch only the requested model, preserving every sibling.

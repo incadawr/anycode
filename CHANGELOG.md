@@ -9,6 +9,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The context popover shows average model generation speed for the session and current turn.
+
+- You can turn streaming token-usage requests on or off for each Chat Completions connection in Advanced settings (GitHub #1).
 - Xiaomi MiMo pay-as-you-go API is available as a provider (mimo-v2.6-pro and mimo-v2.6-flash, with per-token cost tracking).
 
 ### Fixed
@@ -33,7 +36,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - The dock smoke's optional split leg now requires a real split: it focuses the browser preview explicitly first, retries a `split_refused` answer (re-focus → re-check → re-click), and fails both when the refusal persists with the preconditions held and when they never held — a leg that never split can no longer report a passed split or auto-merge.
 - Dev automation: every automation HTTP route now answers within a bounded facade deadline instead of hanging forever when the renderer is stuck — a stuck facade call returns a clear 504 `facade_timeout` (seen live on the model-pill pick route). Ordinary routes get 30s; the three genuinely long routes (profile refresh/rebuild, Vision probe) keep deadlines above their own real-work ceilings so legitimate slow passes still complete.
 - A finished subagent's card now shows the child's exact tool-call count instead of the last throttled progress number, so a child that ran two commands no longer settles on one.
+- Custom (non-catalog) Anthropic-compatible endpoints can now distinguish the xhigh and max thinking levels by their thinking budget, and by the effort value as well when the connection declares both levels; catalog providers and strict endpoints keep their previous request bytes.
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
+- Generation speed in the context popover is measured from the first output token instead of the first stream chunk, so a slow first response no longer shows up as slower generation, and a step that streamed no output shows a dash instead of a made-up rate.
+- DeepSeek costs now follow the provider's peak/off-peak tariff: steps outside the peak windows (01:00–04:00 and 06:00–10:00 UTC on weekdays) are estimated at half rate, and the context popover labels its estimate "peak" or "off-peak".
+- A step is priced by the moment the model finished, not by when its record is written after tools run, so a response near the peak/off-peak boundary is charged in the right band.
 - Choosing No thinking for Xiaomi MiMo models now turns their reasoning off.
 - Xiaomi MiMo Token Plan sessions show a pay-as-you-go list-price cost estimate instead of “price unknown”.
 - An unknown slash command (`/foo`, `/help`, or a command left doubled in the draft) gets a local “Unknown command” notice instead of being sent to the model as a prompt; absolute paths such as `/tmp`, `/etc` or `/Users` are checked against the filesystem root and still send; a command followed by words (`/foo argument`) and an unknown command typed on the Start screen are answered locally too, so neither opens a session or costs a turn.
@@ -43,6 +50,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Model names in the composer footer use the available width instead of being cut off next to empty space.
 - Markdown preview tables have framed cells, and the dock tab split control is a proper icon rather than a stray divider glyph.
 - The background-tasks and terminal header toggles have distinct icons, and only the current sidebar tab wears the accent bar (other open tabs keep a quieter marker).
+- Kimi price records now cite the platform's pricing page (platform.kimi.ai/docs/pricing/chat) instead of the site root, and the newly published Kimi K2.7 Code / K2.7 Code Highspeed / K2.6 rates are included, so those models show a cost estimate instead of “price unknown”.
 
 ## [0.0.55] — 2026-10-30
 

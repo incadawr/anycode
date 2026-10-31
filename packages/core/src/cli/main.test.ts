@@ -4883,6 +4883,38 @@ describe("buildCliEndpointConfig (TASK.158 endpoint-builder)", () => {
     });
     expect("promptCache" in disabled).toBe(false);
   });
+
+  it("forwards the connection's declared effort vocabulary, absent stays byte-identical", () => {
+    const declared = {
+      baseUrl: "https://gw.example.com/anthropic",
+      model: "unused-here",
+      effortLevels: ["xhigh", "max"],
+    } as unknown as Parameters<typeof buildCliEndpointConfig>[0]["envConfig"];
+
+    const enabled = buildCliEndpointConfig({
+      transport: "anthropic-messages",
+      envConfig: declared,
+      catalogEntry: undefined,
+      retryOverride: {},
+      includeUsageResolved: false,
+      model: "custom-reasoner",
+    });
+    // A custom endpoint (no catalog entry ⇒ no providerName) whose connection
+    // declared both tiers: this is the fact the model port needs to decide
+    // whether output_config.effort may ride the wire.
+    expect(enabled.providerName).toBeUndefined();
+    expect(enabled.declaredEffortLevels).toEqual(["xhigh", "max"]);
+
+    const undeclared = buildCliEndpointConfig({
+      transport: "anthropic-messages",
+      envConfig: envConfig("https://gw.example.com/anthropic"),
+      catalogEntry: undefined,
+      retryOverride: {},
+      includeUsageResolved: false,
+      model: "custom-reasoner",
+    });
+    expect("declaredEffortLevels" in undeclared).toBe(false);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────

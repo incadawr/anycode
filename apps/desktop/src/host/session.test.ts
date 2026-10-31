@@ -8763,10 +8763,22 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
     { type: "finish", finishReason: "tool_calls", usage },
   ];
 
-  /** A recording sink: captures every record() call, never throws. */
-  function recordingSink(): { sink: ProviderUsageAudit; records: Parameters<ProviderUsageAudit["record"]>[0][] } {
+  /**
+   * A recording sink: captures every record() call (record + the step's
+   * finish instant), never throws.
+   */
+  function recordingSink(): {
+    sink: ProviderUsageAudit;
+    records: Parameters<ProviderUsageAudit["record"]>[0][];
+    finishedAt: (number | undefined)[];
+  } {
     const records: Parameters<ProviderUsageAudit["record"]>[0][] = [];
-    return { sink: { record: (r) => void records.push(structuredClone(r)) }, records };
+    const finishedAt: (number | undefined)[] = [];
+    return {
+      sink: { record: (r, at) => { records.push(structuredClone(r)); finishedAt.push(at); } },
+      records,
+      finishedAt,
+    };
   }
 
   /** A fake summary port over a canned result. */
@@ -8785,6 +8797,35 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
     expect(turnStarted).toBeDefined();
     return { turnId: turnStarted!.turnId };
   }
+
+  it("reports the latest turn in a reconnect checkpoint after it has ended", async () => {
+    const { sink } = recordingSink();
+    const h = createHarness({ steps: [usageStep({ outputTokens: 1 }, "one")], usageAudit: { sink, summary: fakeSummary({ steps: [], totals: null }) } });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      const { turnId } = await runOneTurn(h);
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some((m) => m.type === "session_checkpoint"));
+      expect(h.received.slice(before).find((m) => m.type === "session_checkpoint")).toMatchObject({ latestTurnId: turnId });
+    } finally { h.close(); }
+  });
+
+  it("persists timing supplied by the model stream alongside usage", async () => {
+    const { sink, records } = recordingSink();
+    const h = createHarness({
+      steps: [[{ type: "start" }, { type: "text_delta", id: "t", text: "hi" },
+        { type: "finish", finishReason: "stop", usage: { outputTokens: 50 }, timeToFirstEventMs: 200, generationDurationMs: 1000 }]],
+      usageAudit: { sink, summary: fakeSummary({ steps: [], totals: null }) },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      await runOneTurn(h);
+      expect(records[0]).toMatchObject({ outputTokens: 50, timeToFirstEventMs: 200, generationDurationMs: 1000 });
+    } finally { h.close(); }
+  });
 
   it("normal finish: sink records ONE entry with the real outer turnId, step 1, model, finishReason", async () => {
     const { sink, records } = recordingSink();
@@ -8847,6 +8888,51 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
       expect(records[1]!.step).toBe(2);
       expect(records[1]!.inputTokens).toBe(20);
       expect(records[1]!.totalTokens).toBe(26);
+    } finally {
+      h.close();
+    }
+  });
+
+  // A step with tool calls is staged at its finish and flushed only after the
+  // tools (and any approval) complete. The FINISH instant must travel with the
+  // row: pricing the flush would move a 03:59 UTC step into DeepSeek's
+  // off-peak band.
+  it("hands the sink the step's finish instant, not the delayed flush time", async () => {
+    const { sink, records, finishedAt } = recordingSink();
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "Write" });
+    const h = createHarness({
+      steps: [
+        [
+          { type: "start" },
+          { type: "tool_call", toolCall: { id: "call-1", name: "Write", input: WRITE_INPUT } },
+          { type: "finish", finishReason: "tool_calls", usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10 } },
+        ],
+        usageStep({ inputTokens: 20, outputTokens: 6, totalTokens: 26 }, "done"),
+      ],
+      rules,
+      toolFs: new RealpathMemFs(),
+      usageAudit: { sink, summary: fakeSummary({ steps: [], totals: null }) },
+    });
+    const before = Date.now();
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      await runOneTurn(h);
+      expect(records).toHaveLength(2);
+      // Every row carries a finish instant captured when its finish event
+      // arrived — a real number for the tool step too, whose write is delayed
+      // until after the tool dispatch.
+      for (const at of finishedAt) {
+        expect(typeof at).toBe("number");
+        expect(at).toBeGreaterThanOrEqual(before);
+        expect(at).toBeLessThanOrEqual(Date.now());
+      }
+      // The staging cell is a transport detail: it must not leak into the row.
+      expect(records[0]).not.toHaveProperty("finishedAt");
+      expect(records[1]).not.toHaveProperty("finishedAt");
+      // Staged in turn order.
+      expect(finishedAt[0]!).toBeLessThanOrEqual(finishedAt[1]!);
     } finally {
       h.close();
     }
@@ -9704,6 +9790,17 @@ describe("tapChildPermissions ask identity (Taskana 4821)", () => {
 
 
 describe("durable cost summary", () => {
+  it("computes a weighted generation rate using only timed output rows", () => {
+    const base = { sessionId: "s", turnId: "t", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0 };
+    const totals = summarizeProviderUsage([
+      { ...base, outputTokens: 100, generationDurationMs: 1000 },
+      { ...base, step: 2, outputTokens: 300, generationDurationMs: 2000 },
+      { ...base, step: 3, outputTokens: 9000 },
+      { ...base, step: 4, outputTokens: 500, generationDurationMs: 0 },
+    ]).totals;
+    expect(totals?.generationTokensPerSecond).toBeCloseTo(400 / 3);
+  });
+
   it("retains the unknown count when every parent step is unpriced", () => {
     const summary = summarizeProviderUsage([{ sessionId: "s", turnId: "t", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0 }]);
     expect(summary.totals).toMatchObject({ unpricedSteps: 1 });

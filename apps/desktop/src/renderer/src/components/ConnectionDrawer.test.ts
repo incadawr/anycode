@@ -53,6 +53,12 @@ import {
   PROMPT_CACHE_ONELINER,
   promptCacheInitialEnabled,
   promptCacheVisible,
+  usageSelectionInitialValue,
+  usageSelectionCreateValue,
+  usageSelectionUpdateValue,
+  usageVisible,
+  usageEnvHint,
+  USAGE_HELP,
   formatTokenCount,
   maxOutputPlaceholder,
   contextWindowPlaceholder,
@@ -179,6 +185,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
   it('§3.3 sends transport:"" when the drawer state holds the (provider default) sentinel', () => {
     const payload = buildConnectionUpdatePayload({
       promptCacheEnabled: false,
+      usage: "auto" as const,
       connectionId: "conn-1",
       label: "Prod",
       model: "glm-4.6",
@@ -203,12 +210,14 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       contextWindowTokens: "",
       imageInputOverride: "",
       promptCache: "",
+      includeUsage: "",
     });
   });
 
   it("sends the explicit transport value when one is selected (regress)", () => {
     const payload = buildConnectionUpdatePayload({
       promptCacheEnabled: false,
+      usage: "auto" as const,
       connectionId: "conn-1",
       label: "",
       model: "",
@@ -227,6 +236,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
   it("baseUrl is sent only when the field is shown (regress, unaffected by §3)", () => {
     const shown = buildConnectionUpdatePayload({
       promptCacheEnabled: false,
+      usage: "auto" as const,
       connectionId: "conn-1",
       label: "",
       model: "",
@@ -242,6 +252,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
     expect(shown.baseUrl).toBe("https://x");
     const hidden = buildConnectionUpdatePayload({
       promptCacheEnabled: false,
+      usage: "auto" as const,
       connectionId: "conn-1",
       label: "",
       model: "",
@@ -274,6 +285,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       contextWindowTokens: "" as const,
       imageInput: "auto" as const,
     promptCacheEnabled: false,
+    usage: "auto" as const,
   };
     expect(buildConnectionUpdatePayload({ ...base, authOptional: true }).authOptional).toBe(true);
     expect(buildConnectionUpdatePayload({ ...base, authOptional: false }).authOptional).toBe(false);
@@ -293,6 +305,7 @@ describe("buildConnectionUpdatePayload — proxyRef (TASK.141, replacing TASK.13
     contextWindowTokens: "" as const,
     imageInput: "auto" as const,
     promptCacheEnabled: false,
+    usage: "auto" as const,
   };
 
   it("sends the picked profile id", () => {
@@ -628,6 +641,7 @@ describe("buildConnectionUpdatePayload — maxOutputTokens (TASK.150, same uncon
     contextWindowTokens: "" as const,
     imageInput: "auto" as const,
     promptCacheEnabled: false,
+    usage: "auto" as const,
   };
 
   it("a chosen number lands in the payload", () => {
@@ -746,6 +760,7 @@ describe("buildConnectionUpdatePayload — contextWindowTokens (TASK.142, same u
     maxOutputTokens: "" as const,
     imageInput: "auto" as const,
     promptCacheEnabled: false,
+    usage: "auto" as const,
   };
 
   it("omits untouched model settings so a concurrent update survives a label save", () => {
@@ -964,6 +979,7 @@ describe("contextWindowInitialField / contextWindowAfterModelInput / contextWind
     expect(field).toEqual({ ok: true, value: "" });
     const payload = buildConnectionUpdatePayload({
       promptCacheEnabled: false,
+      usage: "auto" as const,
       connectionId: "conn-1",
       label: "",
       model: "model-a",
@@ -1533,6 +1549,7 @@ describe("buildConnectionUpdatePayload — imageInputOverride (Taskana 4088: unc
     maxOutputTokens: "" as const,
     contextWindowTokens: "" as const,
     promptCacheEnabled: false,
+    usage: "auto" as const,
   };
 
   it('sends imageInputOverride:"on" / "off" / "" unconditionally — never omits the key', () => {
@@ -1815,6 +1832,7 @@ describe("prompt cache (GitHub #15)", () => {
     maxOutputTokens: "" as const,
     contextWindowTokens: "" as const,
     imageInput: "auto" as const,
+    usage: "auto" as const,
   };
   const conn = { id: "conn-1", providerId: "openai" } as ProviderConnection;
 
@@ -1887,6 +1905,80 @@ describe("prompt cache (GitHub #15)", () => {
 
     expect(source).toContain('<option value="off">Off (default)</option>');
     expect(source).toContain('<option value="implicit">Implicit · 30 minutes</option>');
+  });
+});
+
+// ── GitHub #1: the per-connection streaming token-usage select ──
+
+describe("usage selection (GitHub #1: Automatic / On / Off, per connection)", () => {
+  const base = {
+    connectionId: "conn-1",
+    label: "",
+    model: "",
+    transport: "" as const,
+    baseUrl: "",
+    showBaseUrl: false,
+    proxyRef: "",
+    authOptional: false,
+    maxOutputTokens: "" as const,
+    contextWindowTokens: "" as const,
+    imageInput: "auto" as const,
+    promptCacheEnabled: false,
+  };
+  const conn = { id: "conn-1", providerId: "openai" } as ProviderConnection;
+
+  it("a fresh connection opens on Automatic; an explicit false reopens as Off, never Automatic", () => {
+    expect(usageSelectionInitialValue(undefined)).toBe("auto");
+    expect(usageSelectionInitialValue(conn)).toBe("auto");
+    expect(usageSelectionInitialValue({ ...conn, includeUsage: true })).toBe("on");
+    // A truthiness prefill here would read `false` as "no opinion" — the bug.
+    expect(usageSelectionInitialValue({ ...conn, includeUsage: false })).toBe("off");
+  });
+
+  it('update sends a real boolean for On/Off and the "" clear sentinel for Automatic', () => {
+    expect(buildConnectionUpdatePayload({ ...base, usage: "on" }).includeUsage).toBe(true);
+    // `false` must survive the payload builder, not be dropped as falsy.
+    expect(buildConnectionUpdatePayload({ ...base, usage: "off" }).includeUsage).toBe(false);
+    const automatic = buildConnectionUpdatePayload({ ...base, usage: "auto" });
+    expect(automatic.includeUsage).toBe("");
+    expect("includeUsage" in automatic).toBe(true);
+    expect(usageSelectionUpdateValue("auto")).toBe("");
+  });
+
+  it('create omits Automatic (no "" sentinel there) and carries On/Off', () => {
+    expect(usageSelectionCreateValue("auto")).toBeUndefined();
+    expect(usageSelectionCreateValue("on")).toBe(true);
+    expect(usageSelectionCreateValue("off")).toBe(false);
+  });
+
+  it("is visible only for Chat Completions and opens Advanced when a non-Automatic value is saved", () => {
+    expect(usageVisible("", "openai-chat-completions")).toBe(true);
+    // Responses/Anthropic do not carry stream_options.include_usage.
+    expect(usageVisible("", "openai-responses")).toBe(false);
+    expect(usageVisible("anthropic-messages", "openai-chat-completions")).toBe(false);
+    // An explicit Chat Completions choice wins over an Anthropic catalog default.
+    expect(usageVisible("openai-chat-completions", "anthropic-messages")).toBe(true);
+    expect(usageVisible("", undefined)).toBe(false);
+
+    const tuning = {
+      transport: "",
+      maxOutputTokens: "",
+      contextWindowRaw: "",
+      imageInput: "auto" as const,
+      proxyRef: PROXY_REF_INHERIT,
+      promptCache: false,
+      usage: "auto" as const,
+    };
+    expect(advancedHasValues(tuning)).toBe(false);
+    expect(advancedHasValues({ ...tuning, usage: "off" })).toBe(true);
+  });
+
+  it("pins the env hint and the agreed copy", () => {
+    expect(usageEnvHint([])).toBeNull();
+    expect(usageEnvHint(["ANYCODE_INCLUDE_USAGE"])).toContain("ANYCODE_INCLUDE_USAGE");
+    expect(USAGE_HELP).toBe(
+      "Request streaming token usage on Chat Completions endpoints. Automatic requests usage and retries once without it if a server rejects it.",
+    );
   });
 });
 
@@ -2025,12 +2117,45 @@ describe("custom endpoint cache creation", () => {
       },
       modelPersistenceBridge: () => ({}), label: "", transport: "openai-responses", proxyRef: "",
       connectionCreateProxyRefField: () => ({}), promptCacheEnabled: true, IMPLICIT_PROMPT_CACHE,
+      usageSelection: "auto", usageSelectionCreateValue,
       setProviderId: () => {}, setCreatedConnectionId: () => {},
     };
     const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
     await run();
     expect(calls).toEqual([{ providerId: "custom:fixture", pricing: { mode: "subscription" }, modelPricing: { "fixture-model": { input: 1, cachedInput: 0, output: 2 } }, model: "fixture-model", transport: "openai-responses", promptCache: IMPLICIT_PROMPT_CACHE, ...(imageInput === "auto" ? {} : { imageInputOverride: imageInput }) }]);
   });
+
+  // GitHub #1: the usage select is rendered in the pre-create custom-endpoint
+  // state too, so its value must ride THIS create — `false` included.
+  it.each([["on", true], ["off", false]] as const)(
+    "sends an explicit usage %s through the custom endpoint create path",
+    async (usageSelection, expected) => {
+      const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
+      const body = source.slice(source.indexOf("  async function createNewCustomEndpoint()"), source.indexOf("  /** ADD: single primary action"));
+      const ts = await import("typescript");
+      const js = ts.transpile(body + "\nreturn createNewCustomEndpoint;", { target: ts.ScriptTarget.ES2022 });
+      const calls: unknown[] = [];
+      const bindings: Record<string, unknown> = {
+        preflightModelId, model: "fixture-model", buildCustomProviderCreateRequest: () => ({}),
+        pricingPayload: () => "", modelPricingPayload: () => ({}),
+        contextWindowTokensField, contextWindow: { raw: "" }, reasoningSupported: false, modelEffort: "", effortLevels: [], imageInput: "auto", imageInputModelPreflightError,
+        customName: "fixture", customBaseUrl: "http://127.0.0.1", customKind: "openai-compatible",
+        secretValue: "", noAuth: true, setCreating: () => {}, setError: () => {}, catalog: [],
+        isCustomRecordProviderId: () => false, resolvedCustomProvider: () => ({ create: async () => ({ ok: true, providers: [] }) }),
+        dispatchSecret: () => {}, resolveCreatedCustomProviderId: () => "custom:fixture", reloadSnapshot: async () => {},
+        createConnectionAndPersistModel: async (_bridge: unknown, _reload: unknown, request: unknown) => {
+          calls.push(request); return { createdConnectionId: "connection" };
+        },
+        modelPersistenceBridge: () => ({}), label: "", transport: "openai-chat-completions", proxyRef: "",
+        connectionCreateProxyRefField: () => ({}), promptCacheEnabled: false,
+        usageSelection, usageSelectionCreateValue,
+        setProviderId: () => {}, setCreatedConnectionId: () => {},
+      };
+      const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
+      await run();
+      expect(calls).toEqual([{ providerId: "custom:fixture", modelPricing: {}, model: "fixture-model", transport: "openai-chat-completions", includeUsage: expected }]);
+    },
+  );
 });
 
 
