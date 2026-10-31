@@ -39,7 +39,7 @@ import type { ModelStreamEvent } from "../types/events.js";
 import { linkAbortSignal } from "../util/abort.js";
 import type { ProviderTransport } from "./catalog.js";
 import type { EndpointConfig } from "./endpoint.js";
-import type { ImplicitPromptCache } from "../types/config.js";
+import type { ImplicitPromptCache, ReasoningEffort } from "../types/config.js";
 import { blocksAutomaticReplay, classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
 import { ResponsesReasoningTextRecovery } from "./responses-reasoning-text.js";
 import { isMiMoModel } from "./mimo.js";
@@ -177,6 +177,7 @@ export function reasoningRequestOptions(
   transport?: "anthropic-messages",
   promptCache?: ImplicitPromptCache,
   modelId?: string,
+  declaredEffortLevels?: readonly ReasoningEffort[],
 ): AnthropicReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
@@ -184,6 +185,7 @@ export function reasoningRequestOptions(
   transport: "openai-chat-completions",
   promptCache?: ImplicitPromptCache,
   modelId?: string,
+  declaredEffortLevels?: readonly ReasoningEffort[],
 ): OpenAICompatibleReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
@@ -191,6 +193,7 @@ export function reasoningRequestOptions(
   transport: "openai-responses",
   promptCache?: ImplicitPromptCache,
   modelId?: string,
+  declaredEffortLevels?: readonly ReasoningEffort[],
 ): OpenAIResponsesReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
@@ -198,6 +201,7 @@ export function reasoningRequestOptions(
   transport: ProviderTransport,
   promptCache?: ImplicitPromptCache,
   modelId?: string,
+  declaredEffortLevels?: readonly ReasoningEffort[],
 ): ReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
@@ -205,6 +209,7 @@ export function reasoningRequestOptions(
   transport: ProviderTransport = "anthropic-messages",
   promptCache?: ImplicitPromptCache,
   modelId?: string,
+  declaredEffortLevels?: readonly ReasoningEffort[],
 ): ReasoningOptions {
   const effort = request.reasoningEffort;
 
@@ -344,13 +349,24 @@ export function reasoningRequestOptions(
   // (Kimi, Xiaomi MiMo, …) keep their exact pre-fix request bytes for every
   // effort — including max (same high budget, no effort field) — rather than
   // suddenly receiving an `output_config.effort` key and a larger budget a
-  // strict proxy could reject. Custom connections get the fix: both tiers ride
-  // the effort enum (the SDK serializes providerOptions.anthropic.effort to
-  // output_config.effort — same transport the GLM/DeepSeek branches use) AND
-  // get distinct budgets (high's 24_576 vs a strictly larger 32_000 for max),
-  // so even an endpoint that ignores output_config still sees a different
-  // thinking.budget_tokens.
+  // strict proxy could reject. Custom connections always get DISTINCT budgets
+  // (high's 24_576 for xhigh vs a strictly larger 32_000 for max), so even an
+  // endpoint that ignores output_config still sees a different
+  // thinking.budget_tokens and the tiers never collapse.
+  //
+  // `output_config.effort` is a SEPARATE, opt-in half: it is sent only where
+  // support is KNOWN. First-party Anthropic models carry it on their dedicated
+  // branch above (adaptive thinking) and keep it unchanged here. A custom
+  // endpoint gets it only when the connection DECLARED both `xhigh` and `max`
+  // in its effort vocabulary (`declaredEffortLevels`, from the same
+  // ANYCODE_EFFORT_LEVELS declaration the CLI validates the selection
+  // against) — declaring both tiers is the endpoint asserting it distinguishes
+  // them itself, which on this transport means the effort enum. Without that
+  // declaration a strict Anthropic-compatible server that only understands
+  // `thinking.budget_tokens` never sees an unknown field.
   const customAnthropicEndpoint = providerName === undefined;
+  const declaredTiers =
+    declaredEffortLevels?.includes("xhigh") === true && declaredEffortLevels.includes("max");
   const budgetTokens =
     effort === "max" && customAnthropicEndpoint
       ? GENERIC_MAX_BUDGET_TOKENS
@@ -358,7 +374,7 @@ export function reasoningRequestOptions(
         ? REASONING_BUDGET_TOKENS.high
         : REASONING_BUDGET_TOKENS[effort as "low" | "medium" | "high"];
   const wireEffort =
-    customAnthropicEndpoint && (effort === "max" || effort === "xhigh") ? effort : undefined;
+    customAnthropicEndpoint && declaredTiers && (effort === "max" || effort === "xhigh") ? effort : undefined;
   let maxOutputTokens = Math.max(request.maxOutputTokens ?? 0, budgetTokens + 1_024);
   // The SDK adds the thinking budget to max_tokens on the wire.
   if (isMiMoModel(providerName, modelId)) {
@@ -944,7 +960,7 @@ export class AiSdkModelPort implements ModelPort {
           abortSignal: attemptController.signal,
           // Raw chunks carry provenance for Anthropic and reasoning text for Responses.
           includeRawChunks: true,
-          ...reasoningRequestOptions(request, this.config.providerName, this.config.transport, this.config.promptCache, this.config.model),
+          ...reasoningRequestOptions(request, this.config.providerName, this.config.transport, this.config.promptCache, this.config.model, this.config.declaredEffortLevels),
           temperature: request.temperature,
         });
 

@@ -16,7 +16,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Custom (non-catalog) Anthropic-compatible endpoints can now distinguish the xhigh and max thinking levels: both the effort value and the thinking budget differ on the wire instead of collapsing to a single budget. Catalog providers are unaffected and keep their previous request bytes.
+- Custom (non-catalog) Anthropic-compatible endpoints can now distinguish the xhigh and max thinking levels by their thinking budget, and by the effort value as well when the connection declares both levels; catalog providers and strict endpoints keep their previous request bytes.
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
 - DeepSeek costs now follow the provider's peak/off-peak tariff: steps outside the peak windows (01:00–04:00 and 06:00–10:00 UTC on weekdays) are estimated at half rate, and the context popover labels its estimate "peak" or "off-peak".
 - Choosing No thinking for Xiaomi MiMo models now turns their reasoning off.

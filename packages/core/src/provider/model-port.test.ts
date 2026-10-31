@@ -149,6 +149,28 @@ describe("reasoningRequestOptions", () => {
     expect(deepseek.providerOptions!.anthropic.effort).toBe("high");
     expect(deepseek.providerOptions!.anthropic.thinking).toBeUndefined();
   });
+
+  // GitHub #2 review, follow-up: xhigh vs max must stay distinguishable on a
+  // custom Anthropic-compatible endpoint, but `output_config.effort` may only
+  // be sent where the connection DECLARED the endpoint understands it. The
+  // budgets always differ; the enum is opt-in.
+  it("custom Anthropic endpoint: distinct budgets always, effort enum only when both tiers were declared", () => {
+    const undeclaredXhigh = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "xhigh" }, undefined);
+    const undeclaredMax = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "max" }, undefined);
+    expect(undeclaredXhigh.providerOptions!.anthropic).toEqual({ thinking: { type: "enabled", budgetTokens: 24_576 } });
+    expect(undeclaredMax.providerOptions!.anthropic).toEqual({ thinking: { type: "enabled", budgetTokens: 32_000 } });
+
+    const declaredXhigh = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "xhigh" }, undefined, undefined, undefined, undefined, ["xhigh", "max"]);
+    const declaredMax = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "max" }, undefined, undefined, undefined, undefined, ["xhigh", "max"]);
+    expect(declaredXhigh.providerOptions!.anthropic).toEqual({ thinking: { type: "enabled", budgetTokens: 24_576 }, effort: "xhigh" });
+    expect(declaredMax.providerOptions!.anthropic).toEqual({ thinking: { type: "enabled", budgetTokens: 32_000 }, effort: "max" });
+
+    // A declaration naming only ONE tier is not enough: the enum is only
+    // authorised when the endpoint claimed BOTH, which is the claim that it
+    // distinguishes them itself.
+    const oneTier = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "max" }, undefined, undefined, undefined, undefined, ["max"]);
+    expect(oneTier.providerOptions!.anthropic).toEqual({ thinking: { type: "enabled", budgetTokens: 32_000 } });
+  });
 });
 
 describe("reasoningRequestOptions — prompt cache options (GitHub #15)", () => {
