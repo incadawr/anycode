@@ -4880,14 +4880,21 @@ async function boot(): Promise<void> {
       // can never block or fail a turn.
       usageAudit: {
         sink: {
-          record: (r) => {
+          record: (r, finishedAt) => {
             // Only the exact catalog endpoint is eligible: a proxy or reseller
             // may charge a different price even when it exposes the same model.
             const price = envConfig.baseUrl.replace(/\/$/, "") === catalogEntry?.baseUrl.replace(/\/$/, "")
               ? catalogEntry.models.find((model) => model.id === r.model)?.pricing : undefined;
-            // One clock reading inside the row builder: the tariff band and
-            // `createdAt` can never disagree (see usage-recording.ts).
-            const row = sessionUsageRow(r, { price, pricingRaw: turnPricingRaw, model: r.model, now: Date.now }, sessionId);
+            // One instant inside the row builder: the tariff band and
+            // `createdAt` can never disagree (see usage-recording.ts). For a
+            // step staged at finish and flushed after tool dispatch, that
+            // instant is the FINISH captured by the session — the flush can
+            // fall on the far side of a tariff boundary.
+            const row = sessionUsageRow(
+              r,
+              { price, pricingRaw: turnPricingRaw, model: r.model, ...(finishedAt !== undefined ? { finishedAt } : {}), now: Date.now },
+              sessionId,
+            );
             // Serialized (chained off the tail, never parallel) so flush()
             // below is an honest drain of every queued write IN ORDER.
             usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve())

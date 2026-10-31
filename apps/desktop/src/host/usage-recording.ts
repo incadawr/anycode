@@ -4,11 +4,18 @@
  *
  * The one thing they must never disagree about is TIME. A tariff-carrying
  * price (DeepSeek) is billed by the step's own instant, and the row stores
- * that same instant as `createdAt` — so `priceUsageStep` reads the clock ONCE
- * and hands back both halves. Reading the clock twice would let a step that
- * finished at 03:59:59.999 be stored as a 04:00:00.000 row: the peak charge
- * would be filed under an off-peak timestamp, and every later audit (and the
- * context popover) would read a cost whose basis disagrees with its own time.
+ * that same instant as `createdAt` — so `priceUsageStep` reads ONE instant and
+ * hands back both halves. Reading two instants would let a step that finished
+ * at 03:59:59.999 be stored as a 04:00:00.000 row: the peak charge would be
+ * filed under an off-peak timestamp, and every later audit (and the context
+ * popover) would read a cost whose basis disagrees with its own time.
+ *
+ * That instant is the MODEL STEP's, not the write's: the host stages a
+ * finished step and flushes it only after the turn's tool dispatch and any
+ * approval completes, so a response finished at 03:59 and priced at 04:05
+ * would otherwise be billed off-peak. Callers pass the instant they captured
+ * at the finish (`finishedAt`); the write-clock fallback exists only for
+ * writers with no delayed flush (the inline-subagent recorder writes live).
  *
  * Both host call sites resolve the catalog/override price on their own (they
  * guard the exact-endpoint rule differently) and then go through here, so a
@@ -39,6 +46,14 @@ export interface StepPricing {
   pricingRaw: string | undefined;
   /** Absent when the provider reported no model id (e.g. an engine child). */
   model?: string;
+  /**
+   * The instant THIS model step finished, captured when its finish event
+   * arrived. A delayed write (the session sink stages at finish and flushes
+   * after tool dispatch) must price the step by this instant, not by the
+   * flush's — otherwise a step that crossed a tariff boundary is billed in
+   * the wrong band. Absent ⇒ the write clock below.
+   */
+  finishedAt?: number;
   /** Clock; defaults to `Date.now`. Tests pass a fixed instant. */
   now?: () => number;
 }
@@ -54,7 +69,7 @@ export function priceUsageStep(
   createdAt: number;
   cost: { costUsd?: number; cacheSavingsUsd?: number; priceBasisId: string } | undefined;
 } {
-  const createdAt = (pricing.now ?? Date.now)();
+  const createdAt = pricing.finishedAt ?? (pricing.now ?? Date.now)();
   const override = resolveUsagePrice(pricing.pricingRaw, pricing.model ?? "", pricing.price);
   const cost = override?.subscription
     ? { priceBasisId: "subscription" }
