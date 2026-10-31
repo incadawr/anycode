@@ -163,7 +163,7 @@ export const EMPTY_DOCK_VIEW: Readonly<{ tabs: readonly DockTab[]; activeTabId: 
   splitTabId: null,
 });
 
-/** The owner-gated triple App.tsx/DockPanel.tsx render from. */
+/** The owner-gated triple App.tsx/DockPanel.tsx render. */
 export function selectDockView(
   state: DockStoreState,
   tabId: string,

@@ -511,12 +511,12 @@ async function runTeardown(ctx, failedProbes) {
   for (const dir of [ctx.tmpWorkspace, ctx.profile]) {
     if (typeof dir === "string" && existsSync(dir)) {
       if (FLAGS.keep) {
-        console.log(`[task145-detach-smoke] --keep set, preserved: ${dir}`);
+        console.log(`[detach-smoke] --keep set, preserved: ${dir}`);
       } else {
         try {
           rmSync(dir, { recursive: true, force: true });
         } catch (err) {
-          console.warn(`[task145-detach-smoke] failed to remove ${dir}: ${err?.message ?? err}`);
+          console.warn(`[detach-smoke] failed to remove ${dir}: ${err?.message ?? err}`);
         }
       }
     }
@@ -525,7 +525,7 @@ async function runTeardown(ctx, failedProbes) {
   const results = ctx.results ?? [];
   const passCount = results.filter((r) => r.status === "PASS").length;
   const verdict = failedProbes.length === 0 ? "ALL GREEN (or documented SKIP)" : `FAILED: ${failedProbes.join(", ")}`;
-  console.log(`\n[task145-detach-smoke] ${passCount}/${results.length} probes PASS — ${verdict}`);
+  console.log(`\n[detach-smoke] ${passCount}/${results.length} probes PASS — ${verdict}`);
   for (const r of results) {
     console.log(`  [probe ${r.name}] ${r.status} ${r.detail ?? ""}`.trimEnd());
   }
@@ -536,7 +536,7 @@ async function runTeardown(ctx, failedProbes) {
     writeFileSync(resultPath, JSON.stringify({ verdict, results, at: new Date().toISOString() }, null, 2));
     console.log(`           result json: ${resultPath}`);
   } catch (err) {
-    console.warn(`[task145-detach-smoke] failed to write detach-result.json: ${err?.message ?? err}`);
+    console.warn(`[detach-smoke] failed to write detach-result.json: ${err?.message ?? err}`);
   }
 }
 
@@ -547,9 +547,9 @@ function installSignalTeardown(ctx) {
       return;
     }
     handling = true;
-    console.error(`\n[task145-detach-smoke] received ${signal} — tearing down…`);
+    console.error(`\n[detach-smoke] received ${signal} — tearing down…`);
     teardown(ctx, [`signal:${signal}`])
-      .catch((err) => console.error(`[task145-detach-smoke] teardown after ${signal} failed: ${err?.stack ?? err}`))
+      .catch((err) => console.error(`[detach-smoke] teardown after ${signal} failed: ${err?.stack ?? err}`))
       .finally(() => process.exit(1));
   };
   process.on("SIGINT", onSignal);
@@ -601,7 +601,7 @@ async function run() {
       }
     }
   } catch (err) {
-    console.error(`[task145-detach-smoke] unexpected error: ${err?.stack ?? err}`);
+    console.error(`[detach-smoke] unexpected error: ${err?.stack ?? err}`);
     failedProbes.push("launch");
   }
 
@@ -610,6 +610,6 @@ async function run() {
 }
 
 run().catch((err) => {
-  console.error(`[task145-detach-smoke] fatal: ${err?.stack ?? err}`);
+  console.error(`[detach-smoke] fatal: ${err?.stack ?? err}`);
   process.exit(1);
 });

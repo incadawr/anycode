@@ -811,7 +811,7 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
             z.array(z.string()),
           )
           .optional(),
-        // Engine-level HTTP(S) proxy — LEGACY as of, which replaced the
+        // Engine-level HTTP(S) proxy — LEGACY, which replaced the
         // field with `proxyRef` into the profile registry. Kept readable (and
         // lenient `z.string()`, for the same reason as `connections[].proxyUrl`
         // above: schema.ts is not where strictness lives) so an existing value

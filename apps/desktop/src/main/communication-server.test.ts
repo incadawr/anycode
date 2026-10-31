@@ -769,7 +769,7 @@ describe("session handles and wait_for_result", () => {
     expect(sessions.every((s) => !("handle" in s))).toBe(true);
   });
 
-  it("tools list has 11 tools in order (close_session last;)", async () => {
+  it("tools list has 11 tools in order (close_session last)", async () => {
     const f = await waitFixture();
     expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "list_pending_approvals", "answer_approval", "cancel_turn", "create_session", "close_session"]);
   });
