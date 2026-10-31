@@ -444,6 +444,57 @@ describe("diagnostics bundle (GitHub #18)", () => {
     expect(bundle.notes).toContain("telemetry records dropped to fit the size cap");
   });
 
+  it("counts only the redactions the saved archive still contains", async () => {
+    // Each record carries exactly one long-hex secret, and `finishReason` is
+    // carried by NO other section — so the number of "<secret>" markers in the
+    // saved JSON is exactly the number of redactions the archive holds.
+    const hexSecret = (index: number): string => index.toString(16).padStart(40, "0");
+    const childLines: string[] = [sessionStart(CHILD, ROOT)];
+    for (let index = 0; index < 200; index += 1) {
+      childLines.push(
+        telemetryLine({
+          v: 1,
+          ts: 1_000 + index,
+          session: CHILD,
+          t: "turn_end",
+          turn: index,
+          finishReason: hexSecret(index),
+        }),
+      );
+    }
+    const rootLines: string[] = [sessionStart(ROOT)];
+    for (let index = 0; index < 400; index += 1) {
+      rootLines.push(
+        telemetryLine({ v: 1, ts: 5_000 + index, session: ROOT, t: "turn_end", turn: index, finishReason: "stop" }),
+      );
+    }
+    // Newest record of the tree: the only redaction that can survive the trim.
+    rootLines.push(
+      telemetryLine({ v: 1, ts: 9_000, session: ROOT, t: "turn_end", turn: 400, finishReason: hexSecret(0xabc) }),
+    );
+
+    const { json, bundle, summary } = await build(
+      {
+        [`${DIR}/${ROOT}.jsonl`]: { mtimeMs: 20, content: rootLines.join("") },
+        [`${DIR}/${CHILD}.jsonl`]: { mtimeMs: 10, content: childLines.join("") },
+      },
+      { maxBytes: 4_096 },
+    );
+
+    // 201 redactions were made, but the child session (the oldest) and the
+    // oldest root records were trimmed away. A count taken at anonymisation
+    // time reported all 201 and described data the archive does not contain.
+    const archivedMarkers = (json.match(/<secret>/g) ?? []).length;
+    const childSession = bundle.telemetry.sessions.find(
+      (session) => session.id === createDiagnosticsAnonymizer({ salt: SALT }).id(CHILD),
+    );
+    expect(childSession === undefined || childSession.records.length === 0).toBe(true);
+    expect(summary.truncated).toBe(true);
+    expect(archivedMarkers).toBe(1);
+    expect(bundle.anonymization.redactions).toBe(archivedMarkers);
+    expect(summary.redactions).toBe(archivedMarkers);
+  });
+
   it("drops the last wire entry instead of re-keeping it forever when only tool shapes are left", async () => {
     // 60 distinct tool SHAPES survive after every telemetry record is trimmed,
     // and the wire log holds exactly one entry. Halving a one-entry list
