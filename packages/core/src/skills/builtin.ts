@@ -1,4 +1,5 @@
 import type { SkillMeta } from "../ports/skills.js";
+import { DEFAULT_TOOL_CONCURRENCY } from "../types/config.js";
 
 /**
  * A trusted, in-memory skill supplied by an application surface. Built-ins
@@ -142,6 +143,101 @@ export const PREVIEW_BUILTIN_SKILLS: readonly BuiltinSkillDefinition[] = [
 ];
 
 /**
+ * Guidance for DELEGATING through the Agent tool: tier choice, detach, model
+ * precedence, parallel limits, the shared checkout, reading a child's outcome
+ * and writing a self-contained child prompt. Registered unconditionally with
+ * the subagent builtin set — every host that can spawn an inline child can
+ * also be told how to delegate well.
+ */
+export const USING_SUBAGENTS_SKILL: BuiltinSkillDefinition = {
+  name: "using-subagents",
+  description:
+    "Use when delegating through the Agent tool: choosing the inline or session tier, detach, models, parallel limits and the shared checkout, reading a child's outcome, and writing a self-contained child prompt.",
+  body: `# Using subagents
+
+Load this before delegating anything non-trivial through the Agent tool. A
+delegation is only as good as the tier you pick, the prompt you write, and the
+way you read what comes back.
+
+## Choosing the tier
+
+- **inline** (the default) for short read/verify mechanics: a lookup, a grep
+  across many files, running one focused check. The child runs in-process,
+  joins your turn, and typically has 40 turns (Settings can raise this to at
+  most 200). It has NO background Bash, NO MCP tools, and NO spawn tools (an
+  inline child can never spawn grandchildren). Typically ${DEFAULT_TOOL_CONCURRENCY} inline
+  children run at once (bounded by the tool-slot and subagent-concurrency
+  settings, either of which can lower or raise it); issue independent calls
+  together in one response and they run
+  concurrently — fan out disjoint searches, never split one coherent
+  investigation.
+- **session** for anything that writes, builds and iterates, or needs more
+  than ~30 turns: the child is a full session in its own process. Defaults to
+  detach (the call returns an admit immediately and the report arrives later
+  as a message); pass \`detach: false\` to join it. Limits are typically 3
+  children per parent and 8 per app. A session child can spawn INLINE
+  grandchildren only (its own Agent tool has no session tier) — a chain never
+  recurses.
+
+\`provider\`, \`detach\`, \`continue_session\` and \`send_to\` are
+session-tier-only fields; on any other tier the call fails fast.
+
+## Models
+
+An explicit \`Agent(model: …)\` argument wins over the profile's
+\`model:\` frontmatter, which wins over inheriting the parent's model. This
+holds for BOTH tiers; if the model matters, pass it explicitly.
+
+## The shared checkout
+
+Children share the parent's checkout and CWD by default; they are not
+worktrees. Two writing children racing in one checkout corrupt work — run at
+most ONE writing child at a time, and only readers (inline explore work,
+review passes) in parallel. Give an isolated worktree (EnterWorktree) when
+the task demands real isolation.
+
+## Reading the outcome
+
+- \`max_turns\` — the child exhausted its turn budget or deadline. This is
+  NOT success: a partial report rides the message explicitly marked
+  INCOMPLETE. Retry by CONTINUING from the state the child reached (or
+  \`continue_session\` with the child's id for a session child), never by
+  re-delegating from scratch; a child that ran out of budget twice on the
+  same task needs the task split narrower or the budget raised.
+- \`cancelled\` / \`error\` — never success. An engine child that cannot
+  spawn (missing CLI, no session host) reports the reason; fix the cause, do
+  not retry the same call.
+- An empty or missing final text is not a report — check the child
+  (AgentStatus, or open the child session) before claiming anything was done.
+- Bounded retries: continue once or twice; after that, do the work yourself
+  or report the failure.
+
+## Writing the child prompt
+
+The child sees only your prompt — not this conversation. Make it
+self-contained:
+
+1. **Goal** — one sentence, the definition of done.
+2. **Files** — absolute paths or precise locations; say "read X first" when
+   order matters.
+3. **References** — any fact the child cannot discover itself (a branch name,
+   an id, a convention).
+4. **Verification** — the exact commands to run and what output counts as
+   green.
+5. **Report shape** — what to hand back (files changed, commands run, test
+   output, remaining risks).
+6. **Stop conditions** — when to stop and report rather than ask or
+   improvise.
+
+State the tier, model and any isolation in the Agent call itself, not in the
+prompt.
+
+For authoring a REUSABLE profile (\`.anycode/agents/*.md\`), see the
+creating-subagents skill.
+`,
+};
+
+/**
  * Guidance for creating a reusable subagent profile via a plain Write to
  * `.anycode/agents/<name>.md`. Registered unconditionally on the desktop host
  * (night-track wave-2 cut §1.5) — unlike the worktree/preview skills above,
@@ -157,7 +253,7 @@ export const CREATING_SUBAGENTS_SKILL: BuiltinSkillDefinition = {
 
 ## When to use
 
-Use this when the user asks for a custom or repeat subagent, or when a delegated task should run on a specific engine (codex/claude) or model rather than whatever the Agent tool would pick by default.
+Use this when the user asks for a custom or repeat subagent, or when a delegated task should run on a specific engine (codex/claude) or model rather than whatever the Agent tool would pick by default. For how to RUN a delegation (tiers, models, outcomes, prompt shape), load the using-subagents skill.
 
 ## Where
 
@@ -169,8 +265,8 @@ YAML frontmatter, then the child's prompt as the rest of the file:
 
 - \`name\` — optional, defaults to the filename. Must match \`[A-Za-z0-9][A-Za-z0-9_-]{0,63}\`. \`general-purpose\` and \`explore\` are reserved and cannot be reused.
 - \`description\` — REQUIRED. The parent model picks a profile by this line alone, so name the engine and/or purpose plainly (e.g. "Runs the delegated task on the Claude Code CLI").
-- \`model\` — optional.
-- \`engine\` — optional, \`codex\` or \`claude\`. When set, the child runs as a one-shot invocation of that real CLI in the session's workspace: \`claude\` runs with \`acceptEdits\`, \`codex\` runs in a workspace-write sandbox. The CLI must be installed on the machine; if it is missing, the spawn fails with an honest error rather than silently falling back.
+- \`model\` — optional, a default only: an explicit \`Agent(model: …)\` argument outranks it on every tier.
+- \`engine\` — optional, \`codex\` or \`claude\`. When set, the profile's children run as full child sessions of that engine's CLI (a claude child session accepts edits, a codex one runs in a workspace-write sandbox). The CLI must be installed and the host must support session children; if either is missing, the call fails with an honest error rather than silently falling back.
 - \`tools\` — optional allowlist, but it only has an effect for IN-PROCESS children (no \`engine:\` set).
 
 ## The rule: never combine \`tools:\` with \`engine:\`
@@ -189,6 +285,7 @@ There is no validation feedback on this route — a malformed frontmatter is rej
 
 /** A caller-friendly immutable list for the desktop subagent-authoring capability. */
 export const SUBAGENT_BUILTIN_SKILLS: readonly BuiltinSkillDefinition[] = [
+  USING_SUBAGENTS_SKILL,
   CREATING_SUBAGENTS_SKILL,
 ];
 

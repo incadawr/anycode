@@ -325,7 +325,7 @@ describe("runAgentBridgeCall (§3.4)", () => {
       { catalog: [CORE_ENTRY, ENGINE_ENTRY], port, spawnToolCallId: "toolu_1" },
     );
     expect(result.isError).toBe(true);
-    expect(result.text).toBe('Unknown agent_type "ghost". Available agent types: reviewer, codex-worker.');
+    expect(result.text).toBe('Unknown agent_type "ghost". Available agent types: reviewer, codex-worker. See the using-subagents skill.');
   });
 
   it("completed outcome => isError false, text is the finalText, presentation targets the session", async () => {
