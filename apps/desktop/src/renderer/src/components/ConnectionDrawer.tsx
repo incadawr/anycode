@@ -2192,7 +2192,8 @@ export function ConnectionDrawerFields({
       if (targetConnection?.visibleModels === undefined && pendingVisibleModels === null) {
         setVisibleModelDraft((current) => mergeModelIds(current, validModels.map(item => item.id)));
       }
-
+    } catch {
+      if (generation === fetchGeneration.current) setError("Could not fetch models. Your model selections are kept; try again.");
     } finally {
       setFetchingModels(false);
     }
@@ -2775,6 +2776,7 @@ export function ConnectionDrawerFields({
                   ? "API key (optional)"
                   : "API key"}
             </div>
+            {effectiveProviderId.startsWith("custom:") && <p className="settings-field-hint">This key is shared by connections using this custom provider. Replacing or clearing it affects all of them.</p>}
             {authKind === "oauth" ? (
               <OAuthCredentialBlock
                 entry={selectedEntry as CatalogSummaryEntry}

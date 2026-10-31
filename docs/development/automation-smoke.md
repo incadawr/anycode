@@ -262,3 +262,7 @@ node apps/desktop/scripts/approval-expiry-smoke.mjs
 This uses an isolated profile and a loopback provider fixture. It waits for the
 normal approval deadlines and captures the countdown, child handoff and expiry,
 recovery controls, and a denied card in the printed temporary directory.
+
+Isolated provider automation uses disposable credentials and a fixture-only storage adapter, not the operating system keychain. Startup rejects missing isolation prerequisites or profile paths that do not resolve to the disposable profile. The launcher records its worktree and profile identity for the driver to verify. Review these safeguards before running GUI automation.
+
+Custom provider records have one shared API key: all connections referencing the same record use that key, and replacing or clearing it affects every such connection. Catalog provider connection keys remain scoped to the individual connection.

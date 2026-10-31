@@ -85,6 +85,7 @@
 
 import { execFileSync, spawn } from "node:child_process";
 import { launchSmokeElectron } from "./smoke-electron-launch.mjs";
+import { buildSmokeEnv } from "./model-overrides-smoke-env.mjs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -430,19 +431,8 @@ async function launchApp(step, label, extraEnv) {
   writeFileSync(fixtureBinary, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
   const t0 = Date.now();
   const env = {
-    ...Object.fromEntries(["PATH", "TMPDIR", "USER", "LOGNAME", "LANG", "LC_ALL", "DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])),
-    ANYCODE_AUTOMATION: "1", ANYCODE_ISOLATED_SMOKE: "1",
-    ANYCODE_SUBAGENTS_HOME: profile, ANYCODE_CODEX_PROFILES_HOME: profile, ANYCODE_MCP_IMPORT_HOME: profile, ANYCODE_SKILLS_IMPORT_HOME: profile,
-    ANYCODE_PROFILE_HOME: profile,
-    ANYCODE_TELEMETRY_DIR: join(profile, "telemetry"),
+    ...buildSmokeEnv(process.env, profile, 0, fixtureBinary),
     ANYCODE_MAX_RETRIES: "0",
-    ANYCODE_USER_DATA_DIR: ctx.profileUserDataDir,
-    ANYCODE_DB_PATH: ctx.profileDbPath,
-    ANYCODE_AUTOMATION_INFO: ctx.profileAutomationInfo,
-    ANYCODE_SETTINGS_PATH: ctx.settingsPath,
-    ANYCODE_SECRETS_PATH: ctx.secretsPath,
-    ANYCODE_CODEX_BIN: fixtureBinary,
-    ANYCODE_CLAUDE_BIN: fixtureBinary,
     ...extraEnv,
   };
 
