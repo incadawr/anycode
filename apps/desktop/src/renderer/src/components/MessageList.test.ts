@@ -771,20 +771,26 @@ describe("compactionRowText (TASK.227)", () => {
     expect(compactionRowText(card({ status: "failed" }))).toBe("Compaction not applied: unknown error");
   });
 
-  // Live smoke, 07.09: two turns of history and `/compact` returns THIS string
-  // — core's empty-prefix no-op, whose own comment (context/manager.ts) reads
-  // "nothing to compact. Not a failure." The row must not call it a failure;
-  // `compaction_end` has one `error` channel for both, so it claims neither.
-  it("the commonest not-ok outcome is a deliberate no-op, so the row never asserts a failure", () => {
+  // Live smoke, 07.09: two turns of history and `/compact` returns a no-op —
+  // core's empty-prefix return, whose own comment (context/manager.ts) reads
+  // "nothing to compact. Not a failure." UI audit v0.0.49 §C3: the wire now says
+  // WHICH outcome it was (`skipped`), so the row prints the host's plain
+  // sentence verbatim instead of stacking a second verdict over it.
+  it("a structural no-op prints the host's own sentence, with no second verdict on top", () => {
     const skipped = compactionRowText(
-      card({ status: "failed", error: "compaction skipped: no prefix before the keep-recent window" }),
+      card({
+        status: "failed",
+        skipped: true,
+        error: "Nothing to compact yet — the conversation is too short",
+      }),
     );
-    expect(skipped).toBe(
-      "Compaction not applied: compaction skipped: no prefix before the keep-recent window",
-    );
+    expect(skipped).toBe("Nothing to compact yet — the conversation is too short");
     expect(skipped).not.toMatch(/^Compaction failed/);
-    // …and the label does not stutter over the verb the host already used.
-    expect(skipped).not.toMatch(/skipped\/failed: compaction skipped/);
+    // The jargon this replaced: internal vocabulary, and the "compaction …
+    // compaction" stutter — neither may come back.
+    expect(skipped).not.toMatch(/compaction skipped/i);
+    expect(skipped).not.toMatch(/keep-recent|prefix/i);
+    expect((skipped.match(/compaction/gi) ?? []).length).toBe(0);
   });
 });
 

@@ -5920,7 +5920,13 @@ body {
    opt back in; leaving items opt out (no clicking a ghost). */
 .notice-stack {
   position: fixed;
-  bottom: var(--sp-4);
+  /* UI audit v0.0.49 §C2: the corner is NOT the floor — the composer card is.
+     The live composer publishes its measured height as --composer-clearance
+     (composer-clearance.ts), so a refusal ("Cannot compact while this session
+     is busy…") lands ABOVE the card instead of on top of Stop, the send arrow
+     and the context meter. The plain corner inset stays the fallback for
+     surfaces with no live composer (start screen, welcome, empty pane). */
+  bottom: var(--composer-clearance, var(--sp-4));
   right: var(--sp-4);
   z-index: 20;
   display: flex;

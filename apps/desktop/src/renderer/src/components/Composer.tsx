@@ -37,6 +37,7 @@ import {
 } from "../paste.js";
 import { ModeMenu, modeChangeDisabled } from "./ModeMenu.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
+import { useComposerClearance } from "../composer-clearance.js";
 const ContextWindowSettings = lazy(() => import("./ContextWindowSettings.js"));
 import { ModelPill, modelPickDisabled } from "./ModelPill.js";
 import { EngineModelMenu, EnginePresetMenu, engineControlDisabled, engineEffortDisabled, nativeEffortControl } from "./EngineControls.js";
@@ -1269,6 +1270,10 @@ export function Composer() {
   const nextImageIdRef = useRef(1);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // UI audit v0.0.49 §C2: the card's measured height is what keeps the toast
+  // stack off the stop/send controls — published as --composer-clearance.
+  const cardRef = useRef<HTMLDivElement>(null);
+  useComposerClearance(cardRef);
   // Caret position to restore after a collapse re-render (§2.3).
   const pendingCaretRef = useRef<number | null>(null);
 
@@ -1948,6 +1953,7 @@ export function Composer() {
 
   return (
     <div
+      ref={cardRef}
       className={`composer${running ? " composer-running" : ""}`}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
