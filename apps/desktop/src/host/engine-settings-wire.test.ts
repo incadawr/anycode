@@ -9,7 +9,7 @@
  * accepted, what is emitted, what is persisted, and what is refused.
  */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MessageChannel, type MessagePort as NodeMessagePort } from "node:worker_threads";
 import type { AgentEvent, PermissionMode } from "@anycode/core";
 import { SessionPermissionRules } from "@anycode/core";
@@ -399,6 +399,18 @@ describe(" — set_engine_preset / set_model routing", () => {
     expect(ui.received).toContainEqual({ type: "mode_change_rejected", reason: "Cannot change speed during a turn" });
     expect(ui.touches).not.toContainEqual({ codexFast: true });
     ui.engine.finishTurn();
+  });
+
+  it("persists a speed reset returned by model selection", async () => {
+    const ui = fixture();
+    const select = ui.engine.selectModel.bind(ui.engine);
+    vi.spyOn(ui.engine, "selectModel").mockImplementation((id) => {
+      const result = select(id);
+      return result.ok ? { ...result, resetFast: true } : result;
+    });
+    ui.send({ type: "set_model", model: "gpt-5.4-mini" });
+    await ui.settle();
+    expect(ui.touches).toContainEqual({ codexFast: false });
   });
 
   it("queues speed behind the settings barrier", async () => {
