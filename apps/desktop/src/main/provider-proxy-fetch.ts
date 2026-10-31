@@ -651,15 +651,15 @@ export interface ProxyChainFetchDeps {
 export function createProxyChainFetch(deps: ProxyChainFetchDeps) {
   const fallback: typeof globalThis.fetch = deps.fallbackFetch ?? ((url, init) => globalThis.fetch(url, init));
   const configuredPartitions = new Map<string, Promise<void>>(); // INSTANCE-LOCAL, not module-level
-  return (chain: readonly ProxyScopeId[]) =>
+  return (chain: readonly ProxyScopeId[], preparedRoute?: ProxyRoute) =>
     async (url: string, init: RequestInit): Promise<Response> => {
-      const current = deps.readSettings();
-      if (current === null) {
+      const current = preparedRoute === undefined ? deps.readSettings() : null;
+      if (current === null && preparedRoute === undefined) {
         return fallback(url, init);
       }
-      let route: Awaited<ReturnType<typeof resolveProxyRoute>>;
+      let route: ProxyRoute;
       try {
-        route = await resolveProxyRoute(current, chain, deps.materializationFor(url), url);
+        route = preparedRoute ?? await resolveProxyRoute(current!, chain, deps.materializationFor(url), url);
       } catch (err) {
         // TASK.133 defect 3: a raw materialization-boundary rejection could
         // quote the authenticated proxy URL — sanitize to the fetch-shaped

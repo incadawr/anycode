@@ -7,6 +7,7 @@
  * discipline (fires on success, not on refusal).
  */
 
+import { prepareModelFetchContext } from "./model-fetch-guard.js";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -315,6 +316,55 @@ afterEach(async () => {
 function containsSecret(value: unknown): boolean {
   return JSON.stringify(value)?.includes(SECRET_VALUE) ?? false;
 }
+
+it("commits previewed model facts only for the unchanged endpoint", async () => {
+  const deps = makeDeps({ catalogIds: CATALOG_IDS });
+  await handleConnectionCreate(deps, { providerId: "z-ai", baseUrl: "http://localhost:8000/v1" });
+  const loaded = (await loadSettings(settingsPath)).settings;
+  const targetUrl = "http://localhost:8000/v1/models";
+  const prepared = await prepareModelFetchContext(loaded, loaded.provider.connections[0]!, vault, targetUrl);
+  if (!prepared.ok) throw new Error(prepared.reason);
+  const guard = prepared.guard;
+  const fetchedModels = { guard, targetUrl, baseUrl: "http://localhost:8000/v1", transport: "" as const, models: [{ id: "manual", reasoning: true, contextWindow: 8192 }] };
+  expect((await handleConnectionUpdate(deps, { id: "conn-1", fetchedModels, visibleModels: ["manual"] })).ok).toBe(true);
+  let connection = (await handleGet(deps)).settings.provider.connections[0];
+  expect(connection?.models).toEqual(["manual"]);
+  expect(connection?.modelCapabilities?.manual).toEqual({ reasoning: true, contextWindow: 8192 });
+  expect(await handleConnectionUpdate(deps, { id: "conn-1", fetchedModels, proxyUrl: "http://localhost:7777" })).toEqual({ ok: false, reason: "stale_fetch" });
+  vault.store.set("provider.connection.conn-1.apiKey", "rotated-fixture-key");
+  expect(await handleConnectionUpdate(deps, { id: "conn-1", fetchedModels })).toEqual({ ok: false, reason: "stale_fetch" });
+  vault.store.delete("provider.connection.conn-1.apiKey");
+  expect((await handleConnectionUpdate(deps, { id: "conn-1", proxyUrl: "http://localhost:7777" })).ok).toBe(true);
+  expect(await handleConnectionUpdate(deps, { id: "conn-1", fetchedModels })).toEqual({ ok: false, reason: "stale_fetch" });
+  expect((await handleConnectionUpdate(deps, { id: "conn-1", baseUrl: "http://localhost:9000/v1" })).ok).toBe(true);
+  expect(await handleConnectionUpdate(deps, { id: "conn-1", fetchedModels })).toEqual({ ok: false, reason: "stale_fetch" });
+  connection = (await handleGet(deps)).settings.provider.connections[0];
+  expect(connection?.models).toBeUndefined();
+});
+
+it("clears conditional OpenRouter pricing for a custom endpoint on refresh", async () => {
+  await writeFile(settingsPath, JSON.stringify({ version: 2, provider: { activeConnectionId: "conn-1", custom: [{ id: "custom:router", name: "Router", baseUrl: "https://openrouter.ai/api/v1", kind: "openai-compatible", models: ["m"] }], connections: [{ id: "conn-1", providerId: "custom:router", modelCapabilities: { m: { pricing: { input: 1, cachedInput: 1, output: 2 } } } }] }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false } }));
+  const loaded = (await loadSettings(settingsPath)).settings;
+  const targetUrl = "https://openrouter.ai/api/v1/models";
+  const prepared = await prepareModelFetchContext(loaded, loaded.provider.connections[0]!, vault, targetUrl);
+  if (!prepared.ok) throw new Error(prepared.reason);
+  const fetchedModels = { guard: prepared.guard, targetUrl, baseUrl: "", transport: "" as const, models: [{ id: "m", contextWindow: 8192 }] };
+  expect((await handleConnectionUpdate(makeDeps(), { id: "conn-1", fetchedModels })).ok).toBe(true);
+  expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.modelCapabilities?.m).toEqual({ contextWindow: 8192 });
+});
+
+it("persists model visibility independently per connection and clears it", async () => {
+  const deps = makeDeps({ catalogIds: CATALOG_IDS });
+  expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "a" })).ok).toBe(true);
+  expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "b" })).ok).toBe(true);
+  expect((await handleConnectionUpdate(deps, { id: "conn-1", visibleModels: ["a", "manual", "a"] })).ok).toBe(true);
+  let connections = (await handleGet(deps)).settings.provider.connections;
+  expect(connections[0]?.visibleModels).toEqual(["a", "manual"]);
+  expect(connections[1]?.visibleModels).toBeUndefined();
+  expect((await handleConnectionUpdate(deps, { id: "conn-1", visibleModels: "" })).ok).toBe(true);
+  connections = (await handleGet(deps)).settings.provider.connections;
+  expect(connections[0]?.visibleModels).toBeUndefined();
+});
 
 it("persists, changes, validates, and clears per-connection pricing", async () => {
   const deps = makeDeps({ catalogIds: CATALOG_IDS });
@@ -3289,6 +3339,16 @@ describe("handleConnectionUpdate — a baseUrl change drops the live-fetched mod
     await writeFile(settingsPath, JSON.stringify(raw));
   }
 
+  it("retains an explicitly selected model list when changing the endpoint in the same update", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai", baseUrl: "http://localhost:8000/v1" });
+    await stampFetchedModels();
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", baseUrl: "http://localhost:9000/v1", visibleModels: ["new-model"] })).ok).toBe(true);
+    const connection = (await loadSettings(settingsPath)).settings.provider.connections[0];
+    expect(connection?.visibleModels).toEqual(["new-model"]);
+    expect(connection?.models).toBeUndefined();
+  });
+
   it("re-pointing baseUrl deletes models + modelsFetchedAt (stale list from the OLD endpoint)", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", baseUrl: "http://localhost:8000/v1" }); // conn-1
     await stampFetchedModels();
@@ -4402,6 +4462,30 @@ describe("proxy registry handlers (TASK.141)", () => {
         proxyRef: "legacy",
       });
       expect(legacy).toEqual({ ok: false, reason: "invalid" });
+    });
+
+    it("retains a staged fetch through legacy proxy conversion", async () => {
+      await seed({ provider: { activeConnectionId: "conn-1", connections: [{ id: "conn-1", providerId: "z-ai", proxyUrl: "http://proxy.corp:3128" }] } });
+      const loaded = (await loadSettings(settingsPath)).settings;
+      const targetUrl = "https://example.test/v1/models";
+      const prepared = await prepareModelFetchContext(loaded, loaded.provider.connections[0]!, vault, targetUrl);
+      if (!prepared.ok) throw new Error(prepared.reason);
+      const guard = prepared.guard;
+      const result = await handleConnectionUpdate(makeDeps(), { id: "conn-1", proxyRef: "legacy", fetchedModels: { guard, targetUrl, baseUrl: "", transport: "", models: [{ id: "m" }] } });
+      expect(result.ok).toBe(true);
+      expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.models).toContain("m");
+    });
+
+    it("allows a dangling reference to be repaired to the same direct route", async () => {
+      await seed({ provider: { activeConnectionId: "conn-1", connections: [{ id: "conn-1", providerId: "z-ai", proxyRef: "proxy-gone" }] } });
+      const loaded = (await loadSettings(settingsPath)).settings;
+      const targetUrl = "https://example.test/v1/models";
+      const prepared = await prepareModelFetchContext(loaded, loaded.provider.connections[0]!, vault, targetUrl);
+      if (!prepared.ok) throw new Error(prepared.reason);
+      const guard = prepared.guard;
+      const result = await handleConnectionUpdate(makeDeps(), { id: "conn-1", proxyRef: "direct", fetchedModels: { guard, targetUrl, baseUrl: "", transport: "", models: [{ id: "m" }] } });
+      expect(result.ok).toBe(true);
+      expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.proxyRef).toBe("direct");
     });
 
     it("update sets the ref and stales the connection's health", async () => {

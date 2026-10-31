@@ -318,7 +318,7 @@ export function ProxyRefPicker({ scope, store = useSettingsStore, value, onChang
   const body = (
     <>
       <label className="settings-field">
-        <span className="settings-field-label">{proxyScopeLabel(scope)}</span>
+        <span className="settings-field-label">{proxyScopeLabel(scope)} {controlled && <span className="connection-drawer-help" tabIndex={0} role="img" aria-label={proxyScopeHint(scope)} title={proxyScopeHint(scope)}>?</span>}</span>
         <select
           className="settings-field-select"
           value={current}
@@ -341,7 +341,7 @@ export function ProxyRefPicker({ scope, store = useSettingsStore, value, onChang
             </option>
           ))}
         </select>
-        <span className="settings-field-hint">{proxyScopeHint(scope)}</span>
+        {!controlled && <span className="settings-field-hint">{proxyScopeHint(scope)}</span>}
       </label>
 
       {creating && (

@@ -439,6 +439,10 @@ const ENV_PERMISSION_CLASSIFIER = "ANYCODE_PERMISSION_CLASSIFIER";
 /** Taskana 4088: `<on|off>:<modelId>`, the drawer's per-model override (main/host-env.ts). */
 const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE";
 import { resolveExtensionsHomeOverride, resolveSessionHistoryMaxItems } from "./dev-home.js";
+
+function hostProfileHome(): string {
+  return resolveExtensionsHomeOverride(process.env) ?? homedir();
+}
 import { buildCheckpointService } from "./checkpoints.js";
 import { GitBridge } from "./git-bridge.js";
 import { createConnectionModelSettings } from "./connection-model-settings.js";
@@ -1122,7 +1126,7 @@ function toLifecycleCleanup(intent: WireWorktreeCleanupIntent): WorktreeCleanupI
 /** Codex deliberately reads only its own explicit bootstrap inputs, never provider env config. */
 function resolveCodexDbPath(env: NodeJS.ProcessEnv): string {
   const configured = env.ANYCODE_DB_PATH?.trim();
-  return configured && configured.length > 0 ? configured : join(homedir(), ".anycode", "anycode.sqlite");
+  return configured && configured.length > 0 ? configured : join(hostProfileHome(), ".anycode", "anycode.sqlite");
 }
 
 // ── child-mode wiring shared by all three boots (TASK.102 CUT-S4 §4.1) ──
@@ -1330,7 +1334,7 @@ async function bootCodexSession(
   // fail-closed, never a silent no-dir boot that would resurrect the broken
   // toolchain state.
   const bridgeRowId = args.sessionId ?? randomUUID();
-  const codexChildTempDir = args.child !== undefined ? resolveChildTempDir(bridgeRowId, codexProfilesHomeOverride ?? homedir()) : undefined;
+  const codexChildTempDir = args.child !== undefined ? resolveChildTempDir(bridgeRowId, codexProfilesHomeOverride ?? hostProfileHome()) : undefined;
   /** Best-effort, idempotent removal — child finalize AND host shutdown both call it; never fatal. */
   const cleanupCodexChildTempDir = (): void => {
     if (codexChildTempDir !== undefined) removeChildTempDir(codexChildTempDir);
@@ -1347,7 +1351,7 @@ async function bootCodexSession(
   const codexMcpForward = await prepareEngineMcpForward({
     fs: new NodeFileSystemAdapter(),
     workspace,
-    home: homedir(),
+    home: hostProfileHome(),
     tmpDir: tmpdir(),
     pid: process.pid,
     engines: ["codex"],
@@ -1380,7 +1384,7 @@ async function bootCodexSession(
   let codexChildPort: ChildSessionPort | undefined;
   let codexParentEngine: import("./engines/codex/codex-engine.js").CodexEngine | undefined;
   if (args.child === undefined) {
-    const profileRoots = buildAgentProfileRoots(workspace, homedir(), []);
+    const profileRoots = buildAgentProfileRoots(workspace, hostProfileHome(), []);
     const resolveCatalog = async () => catalogFromProfiles(
       (await discoverAgentProfiles(new NodeFileSystemAdapter(), profileRoots)).profiles,
     );
@@ -1729,7 +1733,7 @@ async function bootCodexSession(
   // own `patch` above, which is the DB-row `mode` COLUMN, an unrelated seam).
   let codexTelemetryConfig: ResolvedTelemetryConfig | null = null;
   try {
-    const loadedTelemetry = await loadTelemetryConfig(fs, workspace, homedir(), process.env, {
+    const loadedTelemetry = await loadTelemetryConfig(fs, workspace, hostProfileHome(), process.env, {
       // Taskana 4736 xfix D2: the project telemetry section is trust-gated on
       // the same `hostWorkspaceTrust` as mcp/hooks/lsp (established earlier in
       // boot()); one warning line, user-level values still load.
@@ -2016,7 +2020,7 @@ async function bootClaudeSession(
   let claudeBrowserToolNames: Set<string> | undefined;
   let agentCatalogNonEmpty = false;
   if (args.child === undefined) {
-    const discovered = await discoverAgentProfiles(fs, buildAgentProfileRoots(workspace, homedir(), []));
+    const discovered = await discoverAgentProfiles(fs, buildAgentProfileRoots(workspace, hostProfileHome(), []));
     for (const problem of discovered.problems) {
       console.warn(`[host] claude mcp bridge: agent profile: ${problem}`);
     }
@@ -2026,7 +2030,7 @@ async function bootClaudeSession(
     // the boot snapshot the CLI's tools/list handshake already cached.
     const resolveClaudeCatalog = async (): Promise<readonly AgentBridgeCatalogEntry[]> =>
       bridgeCallableCatalog(catalog, catalogFromProfiles(
-        (await discoverAgentProfiles(fs, buildAgentProfileRoots(workspace, homedir(), []))).profiles,
+        (await discoverAgentProfiles(fs, buildAgentProfileRoots(workspace, hostProfileHome(), []))).profiles,
       ));
     // The switch (plan §5 S4 p.7): an empty `tools/list` is never worth
     // announcing for the AGENT side — so the child port is created only when
@@ -2136,7 +2140,7 @@ async function bootClaudeSession(
   const mcpForward = await prepareEngineMcpForward({
     fs,
     workspace,
-    home: homedir(),
+    home: hostProfileHome(),
     tmpDir: tmpdir(),
     pid: process.pid,
     engines: ["claude"],
@@ -2497,7 +2501,7 @@ async function bootClaudeSession(
   // is per-PROCESS, so it is always 0 at the start of this boot, resume or not.
   let claudeTelemetryConfig: ResolvedTelemetryConfig | null = null;
   try {
-    const loadedTelemetry = await loadTelemetryConfig(fs, workspace, homedir(), process.env, {
+    const loadedTelemetry = await loadTelemetryConfig(fs, workspace, hostProfileHome(), process.env, {
       // Taskana 4736 xfix D2: the project telemetry section is trust-gated on
       // the same `hostWorkspaceTrust` as mcp/hooks/lsp (established earlier in
       // boot()); one warning line, user-level values still load.
@@ -2815,10 +2819,10 @@ async function boot(): Promise<void> {
     // resolved once, here. Started before the trust gate so the shell probe's
     // cost overlaps that I/O, and fail-soft by contract (discovery never
     // rejects; a broken shell yields the conventional-directory fallback).
-    const loginPathProbe = discoverLoginPath();
+    const loginPathProbe = resolveExtensionsHomeOverride(process.env) !== null ? Promise.resolve(process.env.PATH) : discoverLoginPath();
     hostWorkspaceTrust = await establishHostWorkspaceTrust(new NodeFileSystemAdapter(), {
       workspace,
-      home: homedir(),
+      home: hostProfileHome(),
       env: process.env,
       // Taskana 4739: symlink and target share one trust record.
       realpathSync,
@@ -3128,7 +3132,7 @@ async function boot(): Promise<void> {
 
     // session from argv — create (`--session`) or load (`--resume`, mirror of
     // cli/main.ts:239-259; the initial history is NOT re-appended to the sink).
-    const dbPath = envConfig.dbPath ?? join(homedir(), ".anycode", "anycode.sqlite");
+    const dbPath = envConfig.dbPath ?? join(hostProfileHome(), ".anycode", "anycode.sqlite");
     persistence = new SqlitePersistenceAdapter(dbPath);
     const forkConnectionId = process.env[ENV_CONNECTION_ID];
     const resolvedSession = await resolveBootSession(persistence, {
@@ -3401,7 +3405,7 @@ async function boot(): Promise<void> {
     // Lazy: zero git spawn until the first write-effect turn.
     const checkpointsRoot =
       dbPath === ":memory:"
-        ? join(homedir(), ".anycode", "checkpoints")
+        ? join(hostProfileHome(), ".anycode", "checkpoints")
         : join(dirname(dbPath), "checkpoints");
     const checkpointService = buildCheckpointService({
       exec: execAdapter,
@@ -3417,7 +3421,7 @@ async function boot(): Promise<void> {
     // OUTSIDE the workspace, so a spilled Bash log never shows in git status and
     // needs no write permission (ports/artifacts.ts TASK.94 verdict). Written by
     // the dispatcher; swept by main at app start; removed on TASK.114 hard delete.
-    const artifactStore = new NodeArtifactStore(artifactsRootFor(dbPath, homedir()));
+    const artifactStore = new NodeArtifactStore(artifactsRootFor(dbPath, hostProfileHome()));
 
     historySink = new WriteBehindHistorySink(persistence, sessionMeta.id);
     const tokenizer = await createDefaultTokenizer();
@@ -3488,7 +3492,7 @@ async function boot(): Promise<void> {
     let hookDeclarations: CommandHookDeclaration[] = [];
     let hookConfigError: string | undefined;
     try {
-      const declarations = await loadHookConfigs(fsAdapter, workspace, homedir(), {
+      const declarations = await loadHookConfigs(fsAdapter, workspace, hostProfileHome(), {
         projectTrusted: hostWorkspaceTrust.projectTrusted,
         onSkip: (message) => console.warn(`[host] ${message}`),
       });
@@ -3519,7 +3523,7 @@ async function boot(): Promise<void> {
     let lspServerSpecs: LspServerSpec[] = [];
     let lspIssues: string[] = [];
     try {
-      const loaded = await loadLspServerSpecs(fsAdapter, workspace, homedir(), {
+      const loaded = await loadLspServerSpecs(fsAdapter, workspace, hostProfileHome(), {
         projectTrusted: hostWorkspaceTrust.projectTrusted,
       });
       lspServerSpecs = loaded.specs;
@@ -3551,7 +3555,7 @@ async function boot(): Promise<void> {
     // no module-scope handle, no shutdown stage.
     let webSearchBackend: ResolvedWebSearchBackend | null = null;
     try {
-      const loadedWebSearch = await loadWebSearchConfig(fsAdapter, workspace, homedir(), process.env, {
+      const loadedWebSearch = await loadWebSearchConfig(fsAdapter, workspace, hostProfileHome(), process.env, {
         // Taskana 4736 xfix D2: same trust gate as the section's siblings.
         projectTrusted: hostWorkspaceTrust.projectTrusted,
       });
@@ -3572,7 +3576,7 @@ async function boot(): Promise<void> {
 
     let telemetryConfig: ResolvedTelemetryConfig | null = null;
     try {
-      const loadedTelemetry = await loadTelemetryConfig(fsAdapter, workspace, homedir(), process.env, {
+      const loadedTelemetry = await loadTelemetryConfig(fsAdapter, workspace, hostProfileHome(), process.env, {
         // Taskana 4736 xfix D2: same trust gate as the section's siblings.
         projectTrusted: hostWorkspaceTrust.projectTrusted,
       });
@@ -3583,7 +3587,7 @@ async function boot(): Promise<void> {
     }
     let repoMapConfig: RepoMapConfig | null = null;
     try {
-      const loadedRepoMap = await loadRepoMapConfig(fsAdapter, workspace, homedir(), process.env, {
+      const loadedRepoMap = await loadRepoMapConfig(fsAdapter, workspace, hostProfileHome(), process.env, {
         // Taskana 4736 xfix D2: same trust gate as the section's siblings.
         projectTrusted: hostWorkspaceTrust.projectTrusted,
       });
@@ -3603,7 +3607,7 @@ async function boot(): Promise<void> {
     let mcpSpecs: McpServerSpec[] = [];
     let mcpProblems: string[] = [];
     try {
-      const loaded = await loadMcpServerSpecs(fsAdapter, workspace, homedir(), {
+      const loaded = await loadMcpServerSpecs(fsAdapter, workspace, hostProfileHome(), {
         projectTrusted: hostWorkspaceTrust.projectTrusted,
         secrets: mcpSecrets,
         loginPath: mcpLoginPath,
@@ -3655,7 +3659,7 @@ async function boot(): Promise<void> {
     try {
       ext = await discoverExtensions(fsAdapter, {
         workspace,
-        home: resolveExtensionsHomeOverride(process.env) ?? homedir(),
+        home: hostProfileHome(),
         claimedMcpNames: new Set(mcpSpecs.map((spec) => spec.name)),
         loginPath: mcpLoginPath,
         repoMapConfig,
@@ -3670,7 +3674,7 @@ async function boot(): Promise<void> {
         // Managed store state path, consent list (deny-until-granted), and the
         // reserved builtin names — see host/plugin-wiring.ts (C1, C2, H1(a)).
         ...pluginsDiscoveryWiring({
-          home: resolveExtensionsHomeOverride(process.env) ?? homedir(),
+          home: hostProfileHome(),
           pluginsSettings,
           builtinSkillNames: builtinSkills.map((skill) => skill.name),
           builtinPersonaNames: Object.keys(PERSONAS),

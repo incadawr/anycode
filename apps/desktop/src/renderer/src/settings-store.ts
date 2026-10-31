@@ -215,6 +215,8 @@ export interface SettingsAppState {
 /** Human-readable text for a mutation refusal (design §3/ruling §1) — shared by every mutating action's failure path. */
 export function describeMutationFailure(reason: SettingsMutationReason): string {
   switch (reason) {
+    case "stale_fetch":
+      return "The connection changed after models were fetched. Fetch again or discard the fetched metadata.";
     case "invalid":
       return "Invalid value — check the fields and try again.";
     case "read_only":

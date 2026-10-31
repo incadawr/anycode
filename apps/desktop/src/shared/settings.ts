@@ -439,6 +439,8 @@ export interface ProviderConnection {
   models?: string[];
   /** ISO timestamp of the last successful connection-scoped model-list fetch. */
   modelsFetchedAt?: string;
+  /** Explicit model selection for this connection; absent preserves the provider defaults. */
+  visibleModels?: string[];
   /**
    * Taskana 4118: live per-model capabilities a connection-scoped /v1/models
    * fetch declared (OpenRouter-style `supported_parameters`/`reasoning`), keyed
@@ -1167,6 +1169,7 @@ export interface ProviderReadiness {
 // ── mutating-channel result shape (all mutators return a fresh snapshot) ──
 
 export type SettingsMutationReason =
+  | "stale_fetch"
   | "invalid"
   | "read_only"
   | "weak_storage_needs_consent"
@@ -1310,6 +1313,8 @@ export interface ConnectionCreateRequest {
 }
 
 export interface ConnectionUpdateRequest {
+  fetchedModels?: { guard: string; targetUrl: string; baseUrl: string; transport: ProviderTransportId | ""; models: ({ id: string } & ModelCapabilitiesDto)[] };
+  visibleModels?: string[] | "";
   openRouterProviders?: string[];
   modelPricing?: Record<string, TokenRates | "">;
   pricing?: ConnectionPricing | "";

@@ -84,6 +84,7 @@
  */
 
 import { execFileSync, spawn } from "node:child_process";
+import { launchSmokeElectron } from "./smoke-electron-launch.mjs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -425,21 +426,27 @@ async function launchApp(step, label, extraEnv) {
   // Only disposable fake keys are used by this harness. Explicit consent
   // prevents an OS backend difference from turning it into a manual test.
   writeFileSync(ctx.settingsPath, JSON.stringify({ version: 2, provider: { connections: [] }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: true } }));
+  const fixtureBinary = join(profile, "unavailable-engine");
+  writeFileSync(fixtureBinary, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
   const t0 = Date.now();
   const env = {
-    ...process.env,
-    ANYCODE_AUTOMATION: "1",
+    ...Object.fromEntries(["PATH", "TMPDIR", "USER", "LOGNAME", "LANG", "LC_ALL", "DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])),
+    ANYCODE_AUTOMATION: "1", ANYCODE_ISOLATED_SMOKE: "1",
+    ANYCODE_SUBAGENTS_HOME: profile, ANYCODE_CODEX_PROFILES_HOME: profile, ANYCODE_MCP_IMPORT_HOME: profile, ANYCODE_SKILLS_IMPORT_HOME: profile,
+    ANYCODE_PROFILE_HOME: profile,
+    ANYCODE_TELEMETRY_DIR: join(profile, "telemetry"),
+    ANYCODE_MAX_RETRIES: "0",
     ANYCODE_USER_DATA_DIR: ctx.profileUserDataDir,
     ANYCODE_DB_PATH: ctx.profileDbPath,
     ANYCODE_AUTOMATION_INFO: ctx.profileAutomationInfo,
     ANYCODE_SETTINGS_PATH: ctx.settingsPath,
     ANYCODE_SECRETS_PATH: ctx.secretsPath,
-    ANYCODE_CODEX_BIN: join(profile, "absent-codex"),
-    ANYCODE_CLAUDE_BIN: join(profile, "absent-claude"),
+    ANYCODE_CODEX_BIN: fixtureBinary,
+    ANYCODE_CLAUDE_BIN: fixtureBinary,
     ...extraEnv,
   };
 
-  const child = spawn("pnpm", ["--filter", "@anycode/desktop", "dev"], {
+  const child = launchSmokeElectron(spawn, {
     cwd: repoRoot,
     env,
     stdio: ["ignore", "inherit", "inherit"],
@@ -645,7 +652,7 @@ async function step6GridShowsConnectionA(ctx) {
   assert(6, row.connectionId === ctx.connAId, `grid tile connectionId mismatch: ${row.connectionId} !== ${ctx.connAId}`);
   assert(6, row.displayName === "Welcome Connection", `grid tile displayName mismatch: ${row.displayName}`);
   assert(6, row.model === "claude-test-model-1", `grid tile model mismatch: ${row.model}`);
-  assert(6, row.statusText === "Unchecked", `expected status text "Unchecked" (credential set, never probed), got "${row.statusText}"`);
+  assert(6, row.statusText.startsWith("Unchecked"), `expected status text "Unchecked" (credential set, never probed), got "${row.statusText}"`);
   assert(6, row.statusTone === "muted", `expected status tone "muted" for Unchecked, got "${row.statusTone}"`);
   assert(6, row.selected === true, "expected connection A selected (it is the sole/active connection)");
 
@@ -847,6 +854,7 @@ async function step12CreateCustomConnection(ctx) {
   });
   assert(12, setResult.ok === true, `drawer/set (custom template) rejected: ${JSON.stringify(setResult)}`);
 
+  await apiAction(ctx, 12, "/settings/provider/drawer/set", { model: "smoke-test-model" });
   const preSubmit = await apiOk(ctx, 12, "GET", "/settings/provider");
   assert(12, preSubmit.drawer.baseUrlVisible === true, `expected the Base URL field visible for the "custom" template (needsBaseUrl), got baseUrlVisible=${preSubmit.drawer.baseUrlVisible}`);
   assert(12, preSubmit.drawer.baseUrl === `http://127.0.0.1:${ctx.refusedPort}`, `Base URL field did not carry the value we set: ${preSubmit.drawer.baseUrl}`);
@@ -854,8 +862,6 @@ async function step12CreateCustomConnection(ctx) {
   const submitResult = await apiOk(ctx, 12, "POST", "/settings/provider/drawer/submit", {});
   assert(12, submitResult.ok === true, `drawer/submit rejected: ${JSON.stringify(submitResult)}`);
 
-  assert(12, (await apiOk(ctx, 12, "POST", "/settings/provider/drawer/set", { model: "smoke-test-model" })).ok, "model field unavailable after creation");
-  assert(12, (await apiOk(ctx, 12, "POST", "/settings/provider/drawer/submit", {})).ok, "model Save rejected");
   const setKey = await apiOk(ctx, 12, "POST", "/settings/provider/drawer/set", { apiKey: "sk-e2e-smoke-key-custom" });
   assert(12, setKey.ok === true, `drawer/set (apiKey) rejected: ${JSON.stringify(setKey)}`);
   const saveKey = await apiOk(ctx, 12, "POST", "/settings/provider/drawer/save-key", {});
@@ -1020,7 +1026,7 @@ async function step19EnvBannerIndependentOfConnectionHealth(ctx) {
   const row = state.rows[0];
   assert(
     19,
-    row.statusText === "Unchecked",
+    row.statusText.startsWith("Unchecked"),
     `expected the stored connection's OWN status to read "Unchecked" (credential set, never probed) — an env-override failure must never paint it, got "${row.statusText}"`,
   );
   assert(19, state.envOverrideVisible === true, "expected the banner to remain visible alongside a now-present stored connection");

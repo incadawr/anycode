@@ -12,6 +12,10 @@ import type { CatalogSummaryEntry, CustomProviderRecord, ProviderConnection, Set
 import type { CustomProviderMutationResult, FetchModelsOutcome } from "../anycode-window.js";
 import {
   connectionDrawerTitle,
+  validVisibleModelIds,
+  retainedModelSelection,
+  hasPendingFetchConnectionChanges,
+  ownRateDraft,
   MAX_OUTPUT_TOKEN_PRESETS,
   MODEL_ID_ERROR,
   appendModelToConnection,
@@ -1009,21 +1013,20 @@ describe("ConnectionDrawer wiring (TASK.142: NO route may bypass the per-model r
   // `setModel` directly (the reported defect) makes this red.
   it("`changeModel` is the only setModel caller, and all model-changing routes use it", () => {
     const setModelCalls = source.match(/(?<![.\w])setModel\(/g) ?? [];
-    // One call inside `changeModel` plus the two catalog-normalization effects.
+    // One call inside `changeModel` plus the catalog-normalization effect.
     const effectCalls = source.match(/setModel\(\(m\) => modelAfterCatalogPrefill\(/g) ?? [];
-    expect(effectCalls).toHaveLength(2);
+    expect(effectCalls).toHaveLength(1);
     expect(setModelCalls).toHaveLength(1 + effectCalls.length);
   });
 
-  it("the simplified input, the chips and the provider select all route through changeModel", () => {
+  it("the pre-create input, model picker and provider select route through changeModel", () => {
     // simplified pre-create Model input
     expect(source).toMatch(
       /changeModel\(\s*e\.target\.value,\s*modelAfterCatalogPrefill\(e\.target\.value, selectedEntry\.models\),\s*undefined,\s*\)/,
     );
-    // main Model input
-    expect(source).toMatch(/changeModel\(e\.target\.value, e\.target\.value, targetConnection\)/);
-    // model suggestion chip
-    expect(source).toMatch(/onClick=\{\(\) => changeModel\(m\.id, m\.id, targetConnection\)\}/);
+    // popup default selection and fallback
+    expect(source).toContain("setDraftDefaultModel(id)");
+    expect(source).toContain("changeModel(defaultModel, defaultModel, targetConnection)");
     // provider select
     expect(source).toMatch(/changeModel\("", "", undefined, true\)/);
   });
@@ -1191,6 +1194,15 @@ describe("updateConnectionAndPersistModel (TASK.183)", () => {
     expect(fake.reloads).toBe(1);
   });
 
+  it("reports a stale receipt without changing or appending manual selections", async () => {
+    const fake = crateBridge();
+    const bridge = { ...fake.bridge, connectionUpdate: async () => ({ ok: false as const, reason: "stale_fetch" as const }) };
+    const draft = { connectionId: "c1", visibleModels: ["manual-1", "manual-2"] };
+    expect(await updateConnectionAndPersistModel(bridge, fake.reload, "c1", draft, "manual-1")).toEqual({ metaOk: false, appendOk: false, staleFetch: true });
+    expect(draft.visibleModels).toEqual(["manual-1", "manual-2"]);
+    expect(fake.appendCalls).toEqual([]);
+  });
+
   it("never appends after a failed metadata update", async () => {
     const fake = crateBridge();
     const bridge = {
@@ -1326,18 +1338,12 @@ describe("persistCuratedModels — the checkbox list is the selector's authority
     expect(providerModelsFor("custom:rec", [], [record], undefined)?.map((m) => m.id)).toEqual(["alpha", "beta"]);
   });
 
-  it("the fetch path saves the merged curated list and never appends to the connection", () => {
+  it("fetching a custom provider does not mutate its shared model list", () => {
     const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
-    const fetchBlock = source.slice(
-      source.indexOf("async function doFetchModels"),
-      source.indexOf("async function toggleModel"),
-    );
-    expect(fetchBlock).toMatch(/persistCuratedModels\(/);
-    expect(fetchBlock).not.toMatch(/appendModelsToConnection\(/);
-    expect(fetchBlock).toMatch(/mergeCurationModelIds\(fetchedIds, curatedModelIds, model\)/);
-    // The Model field's suggestions for a custom record come from the record
-    // (plus manual ids), not from this session's raw fetch result.
-    expect(source).toMatch(/isCustomRecordConnection \? null : fetchedModels/);
+    const fetchBlock = source.slice(source.indexOf("async function doFetchModels"), source.indexOf("const labelField ="));
+    expect(fetchBlock).not.toMatch(/persistCuratedModels\(/);
+    expect(fetchBlock).toContain("validVisibleModelIds([item.id])");
+    expect(fetchBlock).toContain("Save changes to the address, transport, key or proxy before fetching models. Your selections are kept.");
   });
 });
 
@@ -1365,9 +1371,8 @@ describe("ConnectionDrawer wiring (TASK.183: pre-create Model field in BOTH crea
   it("all three actual handlers persist through the shared helpers (create/save/fetch)", () => {
     expect(source).toMatch(/createConnectionAndPersistModel\(\s*modelPersistenceBridge\(\)/);
     expect(source).toMatch(/updateConnectionAndPersistModel\(\s*modelPersistenceBridge\(\)/);
-    // A custom record's fetch saves the checkbox list (its selector), not the
-    // connection's unioned model list.
-    expect(source).toMatch(/persistCuratedModels\(\s*resolvedCustomProvider\(\)/);
+    // Model visibility is sent with the connection update.
+    expect(source).toContain("visibleModels: pendingVisibleModels");
     expect(source).not.toMatch(/selectedModels: \[\.\.\./);
   });
 });
@@ -2102,7 +2107,7 @@ describe("ConnectionDrawer layout wiring (Taskana 4749)", () => {
   const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
 
   it("the disclosure is a controlled <details> in BOTH modes, closed unless a value is set", () => {
-    expect(source).toMatch(/<details\s+className="connection-drawer-advanced"/);
+    expect(source).toMatch(/className="connection-drawer-advanced connection-drawer-band"/);
     expect(source).toMatch(/open=\{advancedOpen\}/);
     expect(source).toMatch(/onToggle=\{\(e\) => setAdvancedOpen\(e\.currentTarget\.open\)\}/);
     expect(source).toMatch(/useState\(\(\) => initialFocus === "context" \|\| reasoningSupported \|\| effortLevels.length > 0 \|\| modelEffort !== "" \|\| advancedHasValues\(/);
@@ -2160,9 +2165,8 @@ describe("ConnectionDrawer layout wiring (Taskana 4749)", () => {
     expect(source).not.toMatch(/role="note">[^<]*Auto uses the catalog/);
   });
 
-  it("the per-model scope is a 'this model only' badge on Context window and Image input", () => {
-    // JSX badges only (the doc comment on the title constant also names it).
-    expect(source.match(/>\s*this model only\s*</g)).toHaveLength(2);
+  it("the per-model scope is identified once for the group", () => {
+    expect(source).toContain("The following settings apply to this model only");
     expect(source).toMatch(/Context window \(tokens\) <FieldHelp text=\{CONTEXT_WINDOW_HELP\} \/>/);
     expect(source).toMatch(/Image input <FieldHelp text=\{IMAGE_INPUT_HELP\} \/>/);
   });
@@ -2281,7 +2285,7 @@ it("prefills each model's own context window when navigating A → B → A", () 
 
 it("disables per-model rate inputs while a save is pending", () => {
   const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
-  expect(source).toContain('fieldset key={id} disabled={readOnly || saving || pricingMode === "subscription"}');
+  expect(source).toContain('disabled={readOnly || saving || pricingMode === "subscription" || !custom}');
 });
 
 describe("connectionDrawerTitle", () => {
@@ -2303,4 +2307,25 @@ describe("the drawer header follows THIS form's own create result", () => {
     expect(source).toContain("createdId !== null");
     expect(source).not.toContain("connections.length >");
   });
+});
+
+it("ignores invalid model IDs and inherited property names in rate drafts", () => {
+  expect(validVisibleModelIds(["ok", "bad model", "__proto__", "bad\n"]).sort()).toEqual(["__proto__", "ok"]);
+  expect(ownRateDraft({}, "__proto__")).toBeUndefined();
+  expect(ownRateDraft({}, "constructor")).toBeUndefined();
+  expect(ownRateDraft(Object.fromEntries([["__proto__", 42]]), "__proto__")).toBe(42);
+});
+
+it("keeps manually entered selections when a fetched receipt is invalidated", () => {
+  const draft = ["catalog-model", "manual-model"];
+  expect(retainedModelSelection(true, draft, null)).toEqual(draft);
+  expect(retainedModelSelection(false, [], draft)).toEqual(draft);
+});
+
+it("blocks fetch for unsaved address, transport, key or proxy", () => {
+  const current = { showBaseUrl: true, baseUrl: "https://api.example", savedBaseUrl: "https://api.example", transport: "", savedTransport: "", proxyRef: "direct", savedProxyRef: "direct", secretValue: "" };
+  expect(hasPendingFetchConnectionChanges(current)).toBe(false);
+  for (const edit of [{ baseUrl: "https://other.example" }, { transport: "anthropic-messages" }, { proxyRef: "proxy-new" }, { secretValue: "fixture-key" }]) {
+    expect(hasPendingFetchConnectionChanges({ ...current, ...edit })).toBe(true);
+  }
 });
