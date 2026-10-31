@@ -30,9 +30,10 @@ export type ClaudeDoctorStatus = "not_installed" | "update_required" | "signed_o
  * credential-free diagnostic — the doctor never persists or logs a token,
  * email, or subscription tier (sentinel-leak PoC, cut §1.2 DoD-4). When a
  * failed `--version` run contributes the CLI's own last stderr line as the
- * cause, credential-shaped spans (`sk-…`, `ghp_…`, JWTs, `TOKEN=…` assignments)
- * are masked to `<redacted>` and the text is bounded before it reaches this
- * field.
+ * cause, it is redacted STRUCTURALLY before it reaches this field: any
+ * `key=value` / `"key": value` pair whose key reads secret is removed whatever
+ * the value looks like, and well-known token shapes, long opaque runs and
+ * e-mail addresses are masked too; the text is then bounded.
  */
 export interface ClaudeDoctorReport {
   status: ClaudeDoctorStatus;

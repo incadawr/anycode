@@ -45,7 +45,7 @@ import type {
 } from "../../../shared/settings.js";
 import { applyModelReasoningOverride, contextWindowTokensField, modelOverrideFor } from "../../../shared/model-overrides.js";
 import { mergeModelIds, normalizeModelId } from "../../../shared/settings.js";
-import type { CustomProviderMutationResult, CustomProviderUpdateRequest, FetchModelsOutcome } from "../anycode-window.js";
+import type { CustomProviderMutationReason, CustomProviderMutationResult, CustomProviderUpdateRequest, FetchModelsOutcome } from "../anycode-window.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 import { connectionSecretKey, customProviderSecretKey, isCustomRecordProviderId } from "./ConnectionTile.js";
 import { PROXY_REF_INHERIT, ProxyRefPicker, connectionCreateProxyRefField, proxyRefInitialValue } from "./ProxyRefPicker.js";
@@ -177,6 +177,44 @@ export async function appendModelToConnection(
   modelId: string,
 ): Promise<ModelAppendOutcome> {
   return appendModelsToConnection(bridge, reload, connectionId, [modelId]);
+}
+
+/** The one bridge call the curated-model path needs on top of the store. */
+export interface CuratedModelsBridge {
+  update(req: CustomProviderUpdateRequest): Promise<CustomProviderMutationResult>;
+}
+
+/**
+ * Persists the models a custom endpoint OFFERS (the checkbox list) on the
+ * record's own `models[]`, then refreshes the snapshot. This is the selector's
+ * authority for a `custom:<id>` provider: `providerModelsFor` falls back to the
+ * record's list, so an unticked id must not also sit on the connection's own
+ * `models[]` (that list is unioned in and would resurrect it). Fetched ids are
+ * therefore saved HERE, not appended to the connection — ticking and unticking
+ * are the same write, and a failed/thrown write is reported rather than
+ * swallowed. Exported for direct testing.
+ */
+export async function persistCuratedModels(
+  bridge: CuratedModelsBridge,
+  reload: () => Promise<void>,
+  providerId: string,
+  modelIds: readonly string[],
+): Promise<{ ok: true } | { ok: false; reason: CustomProviderMutationReason | "threw" }> {
+  let result: CustomProviderMutationResult;
+  try {
+    result = await bridge.update({ id: providerId, models: [...modelIds] });
+  } catch {
+    return { ok: false, reason: "threw" };
+  }
+  if (!result.ok) {
+    return { ok: false, reason: result.reason };
+  }
+  try {
+    await reload();
+  } catch {
+    // The list IS persisted; a refresh failure must not read as a save failure.
+  }
+  return { ok: true };
 }
 
 export interface CreateModelBridge<C> extends ModelAppendBridge {
@@ -1350,8 +1388,15 @@ export function ConnectionDrawerFields({
   const curatedModelIds = selectedEntry?.models.map((m) => m.id) ?? [];
   // What the Model field suggests (datalist + chips): the UNION (TASK.183) of
   // this session's fetched ids, the ids persisted on the connection (manual
-  // additions + earlier fetches), then the static catalog hints.
-  const modelSuggestions = liveModelSuggestions(fetchedModels, targetConnection?.models, selectedEntry?.models ?? []);
+  // additions + earlier fetches), then the static catalog hints. A custom
+  // record's session-only fetch result is NOT offered on its own: its checkbox
+  // list is the selector's authority, so an unticked id must not reappear here
+  // before it is saved.
+  const modelSuggestions = liveModelSuggestions(
+    isCustomRecordConnection ? null : fetchedModels,
+    targetConnection?.models,
+    selectedEntry?.models ?? [],
+  );
   // Show the API-key field IN the create form (item 3): a NEW custom endpoint
   // (the record's own key) or a keyed catalog provider (the connection key).
   // A saved custom record already owns its key; an oauth provider signs in.
@@ -1831,12 +1876,12 @@ export function ConnectionDrawerFields({
   /**
    * Models fetch: the guarded /v1/models GET — `{id}` for a saved custom
    * record, `{connectionId}` for a catalog connection (main resolves
-   * baseUrl/key/kind itself either way; keyless supported). TASK.183: a custom
-   * record's fetched ids are ALSO appended to its connection's own `models[]`
-   * through the general `{connectionId, addModels}` branch, so a fetch becomes
-   * durable and can never replace manual ids; a catalog connection's fetch is
-   * already merged onto the connection by main. Either way the snapshot reload
-   * makes the composer pickers see the union.
+   * baseUrl/key/kind itself either way; keyless supported). A custom record's
+   * fetched ids are merged into its OWN curated `models[]` (persisted through
+   * `persistCuratedModels`), which is what its selector reads; they are NOT
+   * appended to the connection, because that list is unioned into the selector
+   * and would keep an unticked model on offer. A catalog connection's fetch is
+   * already merged onto the connection by main.
    */
   async function doFetchModels(): Promise<void> {
     if (createdConnectionId === null) {
@@ -1854,23 +1899,22 @@ export function ConnectionDrawerFields({
       }
       setFetchedModels(outcome.models);
       if (isCustomRecordConnection) {
-        // TASK.183: persist the fetched ids on the connection (fetched-first
-        // union), keeping any manual additions made before the fetch.
-        // A fetched id the manual-entry validator refuses (inner whitespace,
-        // controls) is skipped here: main rejects an addModels request
-        // all-or-nothing, so one odd vendor id must not block the rest.
+        // Every fetched id starts ticked; the checkbox list is the selector, so
+        // it is saved where the checkboxes read from. A fetched id the
+        // manual-entry validator refuses (inner whitespace, controls) is
+        // skipped: one odd vendor id must not block the rest.
         const fetchedIds = outcome.models
           .map((m) => normalizeModelId(m.id))
           .filter((id): id is string => id !== null);
         if (fetchedIds.length > 0) {
-          const append = await appendModelsToConnection(
-            modelPersistenceBridge(),
+          const saved = await persistCuratedModels(
+            resolvedCustomProvider(),
             reloadSnapshot,
-            createdConnectionId,
-            fetchedIds,
+            effectiveProviderId,
+            mergeCurationModelIds(fetchedIds, curatedModelIds, model),
           );
-          if (!append.ok) {
-            setError("Fetched models, but the connection's model list couldn't be saved — retry Fetch or Save.");
+          if (!saved.ok) {
+            setError("Fetched models, but the list to show in the selector couldn't be saved — retry Fetch.");
           }
         }
       } else {
@@ -1886,7 +1930,7 @@ export function ConnectionDrawerFields({
     }
   }
 
-  /** Toggle a fetched model in the record's curated `models[]` (persisted via customProvider.update, like the old form). */
+  /** Toggle a model in the record's curated `models[]` — the selector's source of truth. */
   async function toggleModel(id: string): Promise<void> {
     if (!isCustomRecordConnection) {
       return;
@@ -1895,12 +1939,12 @@ export function ConnectionDrawerFields({
     setCurating(true);
     setError(null);
     try {
-      const result = await resolvedCustomProvider().update({ id: effectiveProviderId, models: next });
+      const result = await persistCuratedModels(resolvedCustomProvider(), reloadSnapshot, effectiveProviderId, next);
       if (!result.ok) {
-        setError(describeCustomProviderMutationError(result.reason));
-        return;
+        setError(result.reason === "threw"
+          ? "Couldn't update the model list — retry."
+          : describeCustomProviderMutationError(result.reason));
       }
-      await reloadSnapshot();
     } finally {
       setCurating(false);
     }

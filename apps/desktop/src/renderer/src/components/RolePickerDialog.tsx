@@ -35,6 +35,7 @@ import {
   patchEntry,
   removeFallback,
   ROLE_EFFORT_LEVELS,
+  sameDraftChoice,
   toDraft,
   toDraftEntry,
   type RolesDraft,
@@ -133,6 +134,13 @@ export function RolePickerDialog({
       ? toDraft(initialRoles)
       : toDraft(autoSelectPreset(engines, activeConnectionId ?? "").roles);
   const [draft, setDraft] = useState<RolesDraft>(freshDraft);
+  // What the draft state ACTUALLY holds once every effect of a commit has run.
+  // The follow effect must compare the seed against this, not against the
+  // render's `draft` value: when `open` flips in the same commit as a readiness
+  // or connection change, the open effect below replaces the state first, and
+  // the render value is still the pre-open draft — comparing those two called
+  // an untouched fresh seed a "user edit" and stopped all later following.
+  const draftRef = useRef<RolesDraft>(draft);
   // The draft this editor last SEEDED, or null once the choice is the user's
   // (a clicked preset, or an edit the follow below has already noticed). Only
   // a seeded draft may be replaced when readiness or the active connection
@@ -147,12 +155,19 @@ export function RolePickerDialog({
     return reason === null ? [] : [{ id: preset.id, label: preset.label, reason }];
   });
 
+  // Mirror every committed draft into the ref (declared BEFORE the seeding
+  // effect, so that effect can overwrite the mirror with the seed it installs).
+  useEffect(() => {
+    draftRef.current = draft;
+  });
+
   // Re-seed the draft whenever the dialog re-opens (the caller keeps this
   // component mounted; `open` flips per first-run attempt).
   useEffect(() => {
     if (open) {
       const seeded = freshDraft();
       setDraft(seeded);
+      draftRef.current = seeded;
       seededDraft.current = initialRoles === undefined ? seeded : null;
     }
     const dialog = dialogRef.current;
@@ -171,14 +186,19 @@ export function RolePickerDialog({
     if (!open || initialRoles !== undefined) return;
     const seeded = seededDraft.current;
     if (seeded === null) return;
-    if (!sameRoleRoutes(fromDraft(seeded).roles, fromDraft(draft).roles)) {
+    if (!sameDraftChoice(seeded, draftRef.current)) {
       // The user edited the seeded draft — stop following auto-selection.
+      // `customModel` counts: a "Custom…" input the user opened but has not
+      // typed into yet is still an answer.
       seededDraft.current = null;
       return;
     }
     const next = toDraft(autoPreset.roles);
     seededDraft.current = next;
-    if (!sameRoleRoutes(fromDraft(draft).roles, fromDraft(next).roles)) setDraft(next);
+    if (!sameRoleRoutes(fromDraft(draftRef.current).roles, fromDraft(next).roles)) {
+      setDraft(next);
+      draftRef.current = next;
+    }
     // `open` is deliberately NOT a dependency: the open effect above seeds the
     // draft, and following on the same commit would compare the new seed with
     // the draft from before opening and mistake that for an edit.

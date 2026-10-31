@@ -33,7 +33,7 @@ import { CODEX_MIN_FLOOR } from "../../../shared/codex-support.js";
 import { compareCodexVersions, parseCodexRange, parseCodexSemver, satisfiesCodexRange } from "../../../shared/codex-version-policy.js";
 import type { CodexProfileRecord, SettingsMutationResult } from "../../../shared/settings.js";
 import { describeMutationFailure } from "../settings-store.js";
-import { useTabsStore } from "../tabs-store.js";
+import { refreshEngineAvailability } from "../engine-availability.js";
 import { BinaryTrustDialog, binaryTrustRefusalOf } from "./BinaryTrustDialog.js";
 import { CodexRolloutImportDialog } from "./CodexRolloutImportDialog.js";
 
@@ -749,12 +749,12 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
   // Shell-wide re-check-without-restart (TASK.41 п.5): unrelated to this
   // pane's own row refresh above — only keeps the tabs-store's
   // `availableEngines` in sync, the same listener every onboarding surface
-  // has always registered.
+  // has always registered. Goes through the shared request ticket: this
+  // listener and the shell watcher ask the same question, and an older answer
+  // resolving late must not restore a stale verdict.
   useEffect(() => {
     return window.anycode.onEnginesChanged(() => {
-      void window.anycode.listAvailableEngines().then(({ engineIds }) => {
-        useTabsStore.getState().setAvailableEngines(engineIds);
-      });
+      refreshEngineAvailability(window.anycode);
     });
   }, []);
 

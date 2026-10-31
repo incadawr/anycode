@@ -8,8 +8,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
 import { projectCatalogSummary } from "../../../main/settings-ipc.js";
-import type { CatalogSummaryEntry, ProviderConnection, SettingsMutationResult } from "../../../shared/settings.js";
-import type { FetchModelsOutcome } from "../anycode-window.js";
+import type { CatalogSummaryEntry, CustomProviderRecord, ProviderConnection, SettingsMutationResult } from "../../../shared/settings.js";
+import type { CustomProviderMutationResult, FetchModelsOutcome } from "../anycode-window.js";
 import {
   connectionDrawerTitle,
   MAX_OUTPUT_TOKEN_PRESETS,
@@ -29,6 +29,7 @@ import {
   providerOptionGroups,
   resolveCreatedConnectionId,
   resolveCustomKeyOutcome,
+  persistCuratedModels,
   buildKeyMutation,
   resolveCreatedCustomProviderId,
   resolveDrawerOAuthStartArgs,
@@ -1239,6 +1240,86 @@ describe("provider-list agreement (TASK.183): liveModelSuggestions and providerM
   });
 });
 
+describe("persistCuratedModels — the checkbox list is the selector's authority", () => {
+  function fakeBridge(result: CustomProviderMutationResult | Error) {
+    const updates: unknown[] = [];
+    const reloads = { count: 0 };
+    return {
+      updates,
+      reloads,
+      bridge: {
+        update: vi.fn(async (req: unknown) => {
+          updates.push(req);
+          if (result instanceof Error) throw result;
+          return result;
+        }),
+      },
+      reload: async () => {
+        reloads.count += 1;
+      },
+    };
+  }
+
+  it("updates the record's own models[] and refreshes once", async () => {
+    const fake = fakeBridge({ ok: true, providers: [] });
+    await expect(persistCuratedModels(fake.bridge, fake.reload, "custom:rec", ["a", "b"]))
+      .resolves.toEqual({ ok: true });
+    expect(fake.updates).toEqual([{ id: "custom:rec", models: ["a", "b"] }]);
+    expect(fake.reloads.count).toBe(1);
+  });
+
+  it("reports a refusal without refreshing (the list did not change)", async () => {
+    const fake = fakeBridge({ ok: false, reason: "read_only" });
+    await expect(persistCuratedModels(fake.bridge, fake.reload, "custom:rec", ["a"]))
+      .resolves.toEqual({ ok: false, reason: "read_only" });
+    expect(fake.reloads.count).toBe(0);
+  });
+
+  it("reports a thrown write instead of swallowing it", async () => {
+    const fake = fakeBridge(new Error("IPC down"));
+    await expect(persistCuratedModels(fake.bridge, fake.reload, "custom:rec", ["a"]))
+      .resolves.toEqual({ ok: false, reason: "threw" });
+    expect(fake.reloads.count).toBe(0);
+  });
+
+  it("keeps the saved list when only the refresh fails", async () => {
+    const fake = fakeBridge({ ok: true, providers: [] });
+    await expect(persistCuratedModels(fake.bridge, async () => { throw new Error("reload down"); }, "custom:rec", ["a"]))
+      .resolves.toEqual({ ok: true });
+  });
+
+  it("after unticking, the record's list no longer offers the model", async () => {
+    // What the drawer now writes (record.models), with nothing appended to the
+    // connection: an unticked id cannot be resurrected by the union.
+    const fetchedIds = ["alpha", "beta"];
+    const record: CustomProviderRecord = {
+      id: "custom:rec",
+      name: "Rec",
+      baseUrl: "https://api.example.com",
+      kind: "openai-compatible",
+      models: fetchedIds,
+    };
+    const unticked = { ...record, models: fetchedIds.filter((id) => id !== "beta") };
+    expect(providerModelsFor("custom:rec", [], [unticked], undefined)?.map((m) => m.id)).toEqual(["alpha"]);
+    // And the pre-untick state offers both, so the assertion above is not empty.
+    expect(providerModelsFor("custom:rec", [], [record], undefined)?.map((m) => m.id)).toEqual(["alpha", "beta"]);
+  });
+
+  it("the fetch path saves the merged curated list and never appends to the connection", () => {
+    const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
+    const fetchBlock = source.slice(
+      source.indexOf("async function doFetchModels"),
+      source.indexOf("async function toggleModel"),
+    );
+    expect(fetchBlock).toMatch(/persistCuratedModels\(/);
+    expect(fetchBlock).not.toMatch(/appendModelsToConnection\(/);
+    expect(fetchBlock).toMatch(/mergeCurationModelIds\(fetchedIds, curatedModelIds, model\)/);
+    // The Model field's suggestions for a custom record come from the record
+    // (plus manual ids), not from this session's raw fetch result.
+    expect(source).toMatch(/isCustomRecordConnection \? null : fetchedModels/);
+  });
+});
+
 describe("ConnectionDrawer wiring (TASK.183: pre-create Model field in BOTH create flows)", () => {
   const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
 
@@ -1263,7 +1344,9 @@ describe("ConnectionDrawer wiring (TASK.183: pre-create Model field in BOTH crea
   it("all three actual handlers persist through the shared helpers (create/save/fetch)", () => {
     expect(source).toMatch(/createConnectionAndPersistModel\(\s*modelPersistenceBridge\(\)/);
     expect(source).toMatch(/updateConnectionAndPersistModel\(\s*modelPersistenceBridge\(\)/);
-    expect(source).toMatch(/appendModelsToConnection\(\s*modelPersistenceBridge\(\)/);
+    // A custom record's fetch saves the checkbox list (its selector), not the
+    // connection's unioned model list.
+    expect(source).toMatch(/persistCuratedModels\(\s*resolvedCustomProvider\(\)/);
     expect(source).not.toMatch(/selectedModels: \[\.\.\./);
   });
 });
