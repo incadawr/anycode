@@ -1,5 +1,5 @@
 /**
- * Service supervisor tests (Taskana 4750a). The supervisor is driven through
+ * Service supervisor tests. The supervisor is driven through
  * a hand-rolled fake clock and a fake spawn, so no real process is ever
  * started. Every timer is ours: `advance(ms)` runs due timers in order and
  * `flush()` lets the supervisor's promise queue settle.

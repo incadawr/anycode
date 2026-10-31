@@ -864,7 +864,7 @@ function selectedTransportInfo(
  */
 const patchSchema = z.record(z.string(), z.unknown());
 
-// TASK.119/TASK.147-с2: strict shape/range gate for the `sessionLimits` section.
+// strict shape/range gate for the `sessionLimits` section.
 // Persistence works because `mergeSettings`/`deepMerge` sets a key absent from base wholesale, and the whole-document `settingsSchema.safeParse(merged)` gate is `.passthrough()` at the top level — `sessionLimits` survives both write and reload.
 const sessionLimitsSchema = z.object({
   maxTabs: z.number().int().min(SESSION_LIMIT_RANGES.maxTabs.min).max(SESSION_LIMIT_RANGES.maxTabs.max).optional(),
@@ -1038,7 +1038,7 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
     return { ok: false, reason: "invalid" };
   }
 
-  // TASK.119/TASK.147-с2: `sessionLimits` rides the generic patch channel, but a
+  // `sessionLimits` rides the generic patch channel, but a
   // wrong-shaped or out-of-range section is refused loudly, never persisted (a
   // hand-edited file is tolerated fail-soft at READ time via readSessionLimits).
   if ("sessionLimits" in rawPatch) {

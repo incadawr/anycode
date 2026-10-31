@@ -111,7 +111,7 @@ export interface PluginsIpcDeps {
     }>;
     setAutoUpdateOfficial(value: boolean): Promise<void>;
     setMcpConsent(entries: McpConsentEntry[]): Promise<void>;
-    /** Taskana 4750a: replaces the grant for one plugin (read-modify-write under the settings lock). */
+    /** replaces the grant for one plugin (read-modify-write under the settings lock). */
     setServiceConsent(entry: ServiceConsentEntry): Promise<void>;
   };
   /** OS dialogs (path custody). */
@@ -138,9 +138,9 @@ export interface PluginsIpcDeps {
   checkIndex?(opts: { serialFloor?: number }): Promise<{ status: string; index?: PluginIndex; detail?: string; expired?: boolean }>;
   now?: () => number;
   logger?: { warn(message: string, ...args: unknown[]): void };
-  /** Taskana 4750a: called after every plugins mutation (the supervisor reconciles on it). */
+  /** called after every plugins mutation (the supervisor reconciles on it). */
   onChanged?(reason: string): void;
-  /** Taskana 4750a: the service supervisor's read model + restart (absent = no services wiring). */
+  /** the service supervisor's read model + restart (absent = no services wiring). */
   services?: {
     snapshot(): PluginServiceView[];
     logs(plugin: string, name: string): string[];
@@ -166,7 +166,7 @@ interface PendingInstall {
   /** Picked .tgz basename (file installs) — state.json provenance (xfix L3). */
   fileName?: string;
   /**
-   * Taskana 4750a: servicesHash of the definition the SHEET showed (url/file/
+   * servicesHash of the definition the SHEET showed (url/file/
    * folder). Undefined for official installs (the index carries no service
    * definitions) and for plugins without services. Commit grants service
    * consent only when the installed definition matches this hash.
@@ -195,11 +195,11 @@ const commitSchema = z.object({
   // servers" checkbox — main records the consent grant (hash main-computed)
   // when true. Optional on the wire so stale renderers keep working.
   allowMcp: z.boolean().optional(),
-  // Taskana 4750a: the sheet's "Install and allow services" grant. Optional; absent = withheld.
+  // the sheet's "Install and allow services" grant. Optional; absent = withheld.
   allowServices: z.boolean().optional(),
 });
 const nameSchema = z.object({ name: z.string().min(1) });
-// Taskana 4750a: approve-services is name-only; any extra key (a smuggled hash) is refused.
+// approve-services is name-only; any extra key (a smuggled hash) is refused.
 const approveServicesSchema = z.object({ name: z.string().min(1) }).strict();
 const serviceRefSchema = z
   .object({ plugin: z.string().regex(PLUGIN_NAME_RE), name: z.string().regex(PLUGIN_NAME_RE) })
@@ -220,7 +220,7 @@ function refusal(reason: StoreRefusal | "signature", detail?: string): { ok: fal
   return { ok: false, reason: mapped, ...(detail !== undefined ? { detail } : {}) };
 }
 
-/** Taskana 4750a: the sheet's service rows — command, args, env KEY names (never values); 4751: secret NAMES. */
+/** the sheet's service rows — command, args, env KEY names (never values); 4751: secret NAMES. */
 function servicePreviewOf(services: readonly PluginServiceSpec[] | undefined): NonNullable<PluginInstallPreview["services"]> {
   return (services ?? []).map((svc) => {
     const secretNames = serviceSecretRefs(svc);
@@ -698,7 +698,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
   }
 
   /**
-   * Taskana 4750a: grants service consent for the plugin main just installed,
+   * grants service consent for the plugin main just installed,
    * ONLY when the installed definition hashes to what the sheet previewed
    * (`previewedHash`). An official install has no previewed definition, so it
    * grants nothing and the user approves from the pane after reading the row.
@@ -1000,7 +1000,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     return { ok: true };
   });
 
-  // Taskana 4750a: the services read model (state only), bounded logs and manual restart.
+  // the services read model (state only), bounded logs and manual restart.
   ipcMain.handle(PLUGINS_SERVICES_CHANNEL, (): PluginServiceView[] => deps.services?.snapshot() ?? []);
 
   ipcMain.handle(PLUGINS_SERVICE_LOGS_CHANNEL, (_event, payload: unknown): string[] | PluginsMutationResult => {

@@ -676,7 +676,7 @@ let updaterController: UpdaterController | null = null;
 let pluginsIpc: PluginsIpc | undefined;
 /** S1-B: the periodic official-index check scheduler (cancelled at quit). */
 let pluginsScheduler: PluginsScheduler | undefined;
-/** Taskana 4750a: supervised plugin background services (stopped at quit). */
+/** supervised plugin background services (stopped at quit). */
 let serviceSupervisor: ServiceSupervisor | undefined;
 /** Every trigger (tabs, trust, consent, sessions API, plugin mutations) funnels here; never throws. */
 function reconcileServices(): void {
@@ -2606,7 +2606,7 @@ void app.whenReady().then(async () => {
     createChannel: () => new MessageChannelMain(),
     getWindow: () => win,
 
-    // Live ceilings (TASK.119/TASK.147-с2): read off the module-scope `settings`
+    // Live ceilings read off the module-scope `settings`
     // that settingsIpcDeps.onMutation reloads after every mutation — undefined
     // (section absent / settings not yet loaded) falls back to the defaults.
     maxTabs: () => readSessionLimits(settings?.sessionLimits).maxTabs,
@@ -2852,7 +2852,7 @@ void app.whenReady().then(async () => {
       artifactConsentStore.clearTab(tabId);
       reconcileServices();
     },
-    // Taskana 4750a: a newly opened folder may bring project-tier services into scope.
+    // a newly opened folder may bring project-tier services into scope.
     onTabOpened: () => reconcileServices(),
   });
 
@@ -3151,7 +3151,7 @@ void app.whenReady().then(async () => {
     onceApprovals: workspaceTrustOnceApprovals,
     logger: { error: (message) => console.error(message) },
     realpathSync,
-    // Taskana 4750a: a trust decision moves project-tier services in or out of scope.
+    // a trust decision moves project-tier services in or out of scope.
     onDecided: () => reconcileServices(),
   });
   // one-shot migration of legacy non-realpath keys to real
@@ -3614,7 +3614,7 @@ void app.whenReady().then(async () => {
     registerCommunicationIpc({
       settingsPath,
       logger: { warn: (message) => console.warn(message), error: (message) => console.error(message) },
-      // Taskana 4750a: a Sessions-API start/stop/token change moves
+      // a Sessions-API start/stop/token change moves
       // ANYCODE_SESSIONS_DISCOVERY for running services, so reconcile after each.
       controller: {
         apply: async (input) => {
@@ -3799,12 +3799,12 @@ void app.whenReady().then(async () => {
           settings = (await loadSettings(settingsPath, fileLogger)).settings;
         },
         setServiceConsent: async (entry) => {
-          // Taskana 4750a: per-plugin service grant (read-modify-write under the settings lock).
+          // per-plugin service grant (read-modify-write under the settings lock).
           await upsertPluginServiceConsent(settingsPath, entry, fileLogger);
           settings = (await loadSettings(settingsPath, fileLogger)).settings;
         },
       },
-      // Taskana 4750a: every plugins mutation (install, enable, consent, ...) re-reconciles services.
+      // every plugins mutation (install, enable, consent, ...) re-reconciles services.
       onChanged: () => reconcileServices(),
       services: {
         snapshot: () => serviceSupervisor?.snapshot() ?? [],
@@ -3829,7 +3829,7 @@ void app.whenReady().then(async () => {
       logger: fileLogger,
     });
     localPluginsIpc = pluginsIpc;
-    // Taskana 4750a: the service supervisor. Candidates come from the same admin scan
+    // the service supervisor. Candidates come from the same admin scan
     // the pane uses (managed + legacy under home, project-tier per live workspace).
     serviceSupervisor = createServiceSupervisor({
       listCandidates: () =>
@@ -4055,7 +4055,7 @@ void app.whenReady().then(async () => {
   if (communicationController !== null) {
     const controller = communicationController;
     await controller.apply(applyInputFromBlock(settings?.communication));
-    // Taskana 4750a: the first Sessions-API state is known now — services may start with it.
+    // the first Sessions-API state is known now — services may start with it.
     reconcileServices();
     app.on("before-quit", () => { void controller.dispose(); }); // dispose is idempotent
   }
@@ -4119,7 +4119,7 @@ async function shutdownEverything(): Promise<void> {
   // S1-B: cancel the plugins update scheduler's armed check.
   pluginsScheduler?.stop();
   pluginsScheduler = undefined;
-  // Taskana 4750a: stop every plugin service (tree kill, 5 s hard deadline) before the hosts go.
+  // stop every plugin service (tree kill, 5 s hard deadline) before the hosts go.
   const activeServices = serviceSupervisor;
   serviceSupervisor = undefined;
   await activeServices?.stopAll();

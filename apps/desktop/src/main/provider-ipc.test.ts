@@ -689,7 +689,7 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     expect(nonEmptyResult).toEqual({ ok: true, models: [{ id: "m" }] });
   });
 
-  // Shape-without-meaning stays invalid_response (TASK.67/TASK.113 boundary):
+  // Shape-without-meaning stays invalid_response (boundary):
   // no data, no code, no success:false — merely an unrecognizable body.
   it("keeps a 200 body without data/code/success as invalid_response (not error_payload)", async () => {
     const { origin } = await listen((req, res) => {

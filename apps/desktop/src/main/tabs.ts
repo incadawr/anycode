@@ -855,7 +855,7 @@ export interface TabHostManagerDeps {
    * it. Absent = no-op (every pre-96-A caller/test).
    */
   onTabClosed?: (tabId: string) => void;
-  /** Taskana 4750a: fires after a tab is registered (the service supervisor reconciles on it). Absent = no-op. */
+  /** fires after a tab is registered (the service supervisor reconciles on it). Absent = no-op. */
   onTabOpened?: (tabId: string) => void;
   /** accepted handle pinned as the agent tab title. */
   agentTitleOf?: (sessionId: string) => string | undefined;
@@ -864,7 +864,7 @@ export interface TabHostManagerDeps {
   now?: () => number;
   genId?: () => string;
   limits?: Partial<BreakerLimits>;
-  /** TASK.119/TASK.147-с2: LIVE limit values read from settings. `undefined` (unset/unreadable) falls back to `limits`/constants VERBATIM — the explicit-injection path is never clamped. */
+  /** LIVE limit values read from settings. `undefined` (unset/unreadable) falls back to `limits`/constants VERBATIM — the explicit-injection path is never clamped. */
   maxTabs?: () => number | undefined;
   /**
    * GitHub #17 slice B: resolved for the OWNING tab's project root
@@ -3371,7 +3371,7 @@ export class TabHostManager {
       // verbatim passthrough of the child's own model facts.
       ...(msg.model !== undefined ? { model: msg.model } : {}),
       ...(msg.responseModel !== undefined ? { responseModel: msg.responseModel } : {}),
-      // TASK.240/4055: verbatim passthrough of the child's own ceiling summary.
+      // verbatim passthrough of the child's own ceiling summary.
       ...(msg.ceiling !== undefined ? { ceiling: msg.ceiling } : {}),
       // N1 (re-review #3): the redacted safe error descriptor
       // rides verbatim to the parent host's infra classifier (R2). A
@@ -3461,7 +3461,7 @@ export class TabHostManager {
   /**
    * Re-binds a running tab to another provider connection (cut-2 §D1):
    * the provider is baked into the fork env (base env, `ANYCODE_API_KEY`,
-   * `ANYCODE_MODEL`, the proxy family — TASK.132/TASK.133 measured that mutating
+   * `ANYCODE_MODEL`, the proxy family — measured that mutating
    * a live process's env does NOT take effect), so the only honest switch is the
    * one `relocateTab` already performs for a workspace move — drain children,
    * shut the host down, mutate the tab's own fields, re-spawn on the resume path,

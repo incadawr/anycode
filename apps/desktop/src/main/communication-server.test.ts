@@ -719,7 +719,7 @@ describe("a listed folder that is missing (live config)", () => {
   }, 10000);
 });
 
-describe("session handles and wait_for_result (Taskana 4750b)", () => {
+describe("session handles and wait_for_result", () => {
   type Live = Array<{ sessionId: string; workspace: string; state: string; pid: number }>;
   async function waitFixture(extra: {
     handleOf?: (sessionId: string) => string | undefined;
