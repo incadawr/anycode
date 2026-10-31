@@ -131,6 +131,14 @@ describe("diagnostics anonymiser (GitHub #18)", () => {
     expect(new Set(scrubbed.redactions.map((event) => event.id)).size).toBe(2);
   });
 
+  it("discards a replacement swallowed by a later match", () => {
+    const anon = createDiagnosticsAnonymizer({ salt: SALT });
+    const result = anon.textWithRedactions("token=sk-abcdefghijklmnop");
+    expect(result.text).toBe("<secret>");
+    expect(result.redactions).toHaveLength(1);
+    expect(anon.redactionCount()).toBe(1);
+  });
+
   it("counts every replacement without reporting what was replaced", () => {
     const anon = createDiagnosticsAnonymizer({ salt: SALT });
     anon.text(FORBIDDEN.userPath);

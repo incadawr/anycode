@@ -719,6 +719,7 @@ function buildToolShapes(
     for (const record of session.records) {
       if (record.t !== "tool" || typeof record.tool !== "string") continue;
       const tool = record.tool.slice(0, DIAGNOSTICS_MAX_FIELD_CHARS);
+      const newTool = shapes[tool] === undefined;
       const shape = (shapes[tool] ??= {
         calls: 0,
         statuses: Object.create(null) as Record<string, number>,
@@ -726,11 +727,12 @@ function buildToolShapes(
       });
       const ids = shapeIds.get(shape) ?? [];
       shape.calls += 1;
-      ids.push(...(ledger.fields.get(record)?.get("tool") ?? []));
+      if (newTool) ids.push(...(ledger.fields.get(record)?.get("tool") ?? []));
       if (typeof record.status === "string") {
         const status = record.status.slice(0, DIAGNOSTICS_MAX_FIELD_CHARS);
+        const newStatus = shape.statuses[status] === undefined;
         shape.statuses[status] = (shape.statuses[status] ?? 0) + 1;
-        ids.push(...(ledger.fields.get(record)?.get("status") ?? []));
+        if (newStatus) ids.push(...(ledger.fields.get(record)?.get("status") ?? []));
       }
       shapeIds.set(shape, ids);
       const duration = finiteNumber(record.durationMs);

@@ -175,10 +175,7 @@ export function createDiagnosticsAnonymizer(options?: DiagnosticsAnonymizerOptio
   /**
    * Applies ONE pattern and keeps every earlier replacement's position valid in
    * the rewritten text: a replacement before a match does not move, one after
-   * it moves by the accumulated length delta, and one the match swallowed is
-   * reported at the position of the replacement that ate it (a replacement is
-   * never re-matched by a later pattern, so that case does not occur in
-   * practice; keeping the event is the safe answer if it ever does).
+   * it moves by the accumulated length delta, and one the match swallowed is discarded because it no longer survives.
    */
   function applyPattern(
     state: { text: string; redactions: DiagnosticsRedaction[] },
@@ -205,7 +202,8 @@ export function createDiagnosticsAnonymizer(options?: DiagnosticsAnonymizerOptio
       out += input.slice(cursor, start);
       for (; index < prior.length && prior[index]!.start < end; index += 1) {
         const event = prior[index]!;
-        next.push({ id: event.id, start: event.start < start ? event.start + shift : out.length });
+        if (event.start < start) next.push({ id: event.id, start: event.start + shift });
+        else redactions -= 1;
       }
       next.push({ id: nextRedactionId, start: out.length });
       nextRedactionId += 1;
