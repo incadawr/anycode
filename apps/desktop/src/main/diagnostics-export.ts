@@ -694,7 +694,17 @@ function fitBundle(bundle: DiagnosticsBundle, maxBytes: number): { bundle: Diagn
   let json = serialise();
   if (byteLength(json) < maxBytes) return { bundle, json };
 
-  while (byteLength(json) >= maxBytes) {
+  // Every branch below must REMOVE something, so this loop terminates — but it
+  // is synchronous, and a synchronous loop cannot be interrupted by a timer or
+  // a test timeout. The iteration bound is therefore the last line of defence:
+  // a future branch that stops shrinking degrades the bundle to "could not be
+  // reduced below the size cap" instead of wedging the export forever.
+  const maxIterations = 1_024;
+  for (let iterations = 0; byteLength(json) >= maxBytes; iterations += 1) {
+    if (iterations >= maxIterations) {
+      markTruncated("bundle could not be reduced below the size cap");
+      break;
+    }
     const session = oldestSessionWithRecords(bundle.telemetry.sessions);
     if (session !== undefined) {
       const drop = Math.max(1, Math.ceil(session.records.length / 2));
