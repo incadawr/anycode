@@ -104,3 +104,86 @@ it.each(["on", "off"] as const)("creates and reloads image input %s through the 
     expect(resolveImageInput("vision", undefined, override?.model === "vision" ? override.override : undefined)).toBe(setting === "on");
   } finally { await act(async () => root.unmount()); container.remove(); rmSync(dir, {recursive:true, force:true}); }
 });
+
+// ── Drawer polish: the Advanced section's vertical rhythm and rate-input
+// styling, an explicit save confirmation, and a save no longer reordering the
+// offered models ──
+
+const CATALOG = [{ id:"glm", name:"GLM", authKind:"api_key" as const, models:[{id:"glm-5.3"},{id:"glm-5.2"}] }];
+
+function catalogRig(connection: Record<string, unknown>) {
+  const snapshot = { settings: cloneDefaults(), readOnly:false, secrets:[], envOverrides:[], providerReady:true, catalog: CATALOG };
+  const update = vi.fn().mockResolvedValue({ok:true, snapshot});
+  const load = vi.fn().mockResolvedValue(undefined);
+  const fetchModels = vi.fn().mockResolvedValue({ok:true, models:[]});
+  const store = createStore(() => ({snapshot, oauthPendingProviderId:null, connectionUpdate:update, load})) as unknown as SettingsStoreApi;
+  return { snapshot, update, load, fetchModels, store, customProvider:{fetchModels} as never };
+}
+
+async function mountEdit(connection: Record<string, unknown>, rig: ReturnType<typeof catalogRig>) {
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(createElement(ConnectionDrawerFields, {
+    mode:"edit", editConnection:connection as never, catalog: CATALOG as never, connections:[connection] as never,
+    secrets:[], readOnly:false, store:rig.store, customProvider:rig.customProvider,
+  })));
+  return { container, root };
+}
+
+it("keeps the Advanced fields in a gapped column and gives the rate inputs the drawer's own styling", async () => {
+  const connection = { id:"c1", providerId:"glm", model:"glm-5.3" };
+  const rig = catalogRig(connection);
+  const { container, root } = await mountEdit(connection, rig);
+  try {
+    const advanced = container.querySelector<HTMLDetailsElement>("details.connection-drawer-advanced")!;
+    // The spacing contract lives on the inner body: a grid ON the <details>
+    // element no longer spaces its slotted contents in Chromium.
+    expect(advanced.querySelector(":scope > .connection-drawer-advanced-body")).not.toBeNull();
+    // The session-scope hint sits under Pricing.
+    expect(advanced.textContent).toContain("a session that is already open keeps the rates it started with");
+    const pricing = [...container.querySelectorAll("select")].find(s => [...s.options].some(o => o.value === "rates"))!;
+    await act(async () => { pricing.value = "rates"; pricing.dispatchEvent(new Event("change", {bubbles:true})); });
+    const rateInputs = [...container.querySelectorAll<HTMLInputElement>(".connection-drawer-rate-grid input[type=number]")];
+    expect(rateInputs).toHaveLength(4);
+    for (const input of rateInputs) {
+      expect(input.classList.contains("settings-field-input")).toBe(true);
+    }
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("confirms a successful save instead of finishing silently", async () => {
+  const connection = { id:"c1", providerId:"glm", model:"glm-5.3" };
+  const rig = catalogRig(connection);
+  const { container, root } = await mountEdit(connection, rig);
+  try {
+    expect(container.querySelector(".connection-drawer-saved")).toBeNull();
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(rig.update).toHaveBeenCalledOnce();
+    expect(container.querySelector(".connection-drawer-saved")?.textContent?.trim()).toBe("Saved");
+  } finally {
+    await act(async () => root.unmount()); container.remove();
+  }
+});
+
+it("does not append a catalog-offered model to the connection's own list", async () => {
+  // The connection list is read before the catalog by every picker, so
+  // persisting a catalog id moved that chip to the front on the first Save.
+  const connection = { id:"c1", providerId:"glm", model:"glm-5.3" };
+  const rig = catalogRig(connection);
+  const { container, root } = await mountEdit(connection, rig);
+  try {
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(rig.update).toHaveBeenCalledOnce();
+    expect(rig.fetchModels).not.toHaveBeenCalled();
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("still appends a model the catalog does not offer, so a manual id stays durable", async () => {
+  const connection = { id:"c1", providerId:"glm", model:"manual-x" };
+  const rig = catalogRig(connection);
+  const { container, root } = await mountEdit(connection, rig);
+  try {
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(rig.fetchModels).toHaveBeenCalledWith({ connectionId:"c1", addModels:["manual-x"] });
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});

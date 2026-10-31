@@ -37,6 +37,14 @@ export interface SubagentCardSnapshotV1 {
     description: string;
     /** null = the child inherited the parent's model. */
     model: string | null;
+    /**
+     * For an inherited child (`model: null`): the model the PARENT was running
+     * at spawn, so a card rendered later (after a model switch or a session
+     * resume) shows what this child actually ran on instead of the parent's
+     * current model. Absent on legacy snapshots and on children that named
+     * their own model.
+     */
+    parentModel?: string;
     engine: "codex" | "claude" | null;
   };
   counters: { turns: number; toolCalls: number; lastTool: string | null };

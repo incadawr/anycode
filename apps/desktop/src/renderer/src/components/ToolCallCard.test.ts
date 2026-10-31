@@ -51,6 +51,7 @@ import {
   PROMPT_STRIP_LINES,
   PROMPT_STRIP_MAX_CHARS,
   resolveSubagentIdentity,
+  inheritedParentModelFor,
   shouldAutoCollapse,
   subagentResponseModelNote,
   substatusKind,
@@ -470,6 +471,33 @@ describe("resolveSubagentIdentity — parent identity fallbacks", () => {
     const identity = resolveSubagentIdentity(null, null, undefined, undefined);
     expect(identity.model.label).toBeNull();
     expect(identity.engine.label).toBeNull();
+  });
+});
+
+describe("inheritedParentModelFor — what an inherited child's card may show", () => {
+  const running = { final: null, engine: null } as const;
+  const settled = { final: { status: "completed", durationMs: 1 }, engine: null } as const;
+
+  it("prefers the model recorded at spawn, even after the tab switched models", () => {
+    expect(inheritedParentModelFor({ ...settled, parentModel: "glm-5.2" }, "glm-4.5-air")).toBe("glm-5.2");
+  });
+
+  it("falls back to the live parent model only while the card is still running", () => {
+    expect(inheritedParentModelFor({ ...running }, "glm-4.5-air")).toBe("glm-4.5-air");
+  });
+
+  it("never labels a SETTLED legacy card with the current parent model", () => {
+    // A card written before the spawn-time field existed cannot know what it
+    // ran on; showing the tab's current model would be a lie after a switch.
+    expect(inheritedParentModelFor({ ...settled }, "glm-4.5-air")).toBeUndefined();
+  });
+
+  it("never hands a parent model to an engine child (it runs on its own CLI)", () => {
+    expect(inheritedParentModelFor({ final: null, engine: "codex" }, "glm-4.5-air")).toBeUndefined();
+  });
+
+  it("no subagent at all => no inherited model", () => {
+    expect(inheritedParentModelFor(null, "glm-4.5-air")).toBeUndefined();
   });
 });
 

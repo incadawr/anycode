@@ -302,6 +302,35 @@ export function resolveSubagentIdentity(
   };
 }
 
+/**
+ * The parent model a card may show as an inherited fallback, or `undefined`
+ * when it must show none.
+ *
+ * Preference order: the model recorded on the child AT SPAWN (`parentModel`,
+ * written for an inherited-port child) wins — it stays true after the parent
+ * switches models or the session is resumed, which is exactly when the live
+ * tab model would start LYING about what the child ran on. Only a card still
+ * RUNNING may fall back to the live tab model (that is what it is on right
+ * now), and never for an engine child, which runs on its own CLI's model
+ * rather than the parent's. A settled card with neither datum renders no
+ * model at all instead of a wrong one. Exported for unit testing.
+ */
+export function inheritedParentModelFor(
+  subagent: Pick<SubagentSubStatus, "parentModel" | "final" | "engine"> | null,
+  liveParentModel: string | null | undefined,
+): string | null | undefined {
+  if (subagent === null) {
+    return undefined;
+  }
+  if (subagent.parentModel !== undefined && subagent.parentModel.length > 0) {
+    return subagent.parentModel;
+  }
+  if (subagent.final === null && subagent.engine === null) {
+    return liveParentModel;
+  }
+  return undefined;
+}
+
 const WORKFLOW_FINAL_LABELS: Record<NonNullable<WorkflowSubStatus["final"]>["status"], string> = {
   completed: "Completed",
   failed: "Failed",
@@ -2184,8 +2213,19 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
   // Only an in-process child inherits the parent's port. A session-tier child
   // is its own session (a GLM child of a Codex supervisor is not "codex"), so
   // it shows only what it reported itself.
+  //
+  // The inherited-model fallback prefers the model recorded AT SPAWN over the
+  // tab's live one: after a model switch (or a resume of an old session) the
+  // tab model is no longer what this child ran on, and a settled historical
+  // card must never re-label itself with it. A live card with nothing recorded
+  // still falls back to the live model (that IS what it is running on). A
+  // settled card from before the spawn-time field existed shows no model
+  // rather than a wrong one.
+  const inheritedParentModel = inheritedParentModelFor(block.subagent, liveParentIdentity.model);
   const parentIdentity =
-    block.subagent?.sessionChild === true ? { model: undefined, engine: undefined } : liveParentIdentity;
+    block.subagent?.sessionChild === true
+      ? { model: undefined, engine: undefined }
+      : { model: inheritedParentModel, engine: liveParentIdentity.engine };
   const previewAction = useArtifactPreviewAction(previewablePathOf(block.toolName, block.input));
 
   const isDiffable = block.toolName === "Write" || block.toolName === "Edit";

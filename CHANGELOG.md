@@ -46,6 +46,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - The Claude engine panel names the cause of a failed version check (the CLI's own error output, with credentials, tokens and account e-mail addresses masked by key name and shape) and points at the binary picker instead of showing only an exit code.
 - Advanced connection fields keep a real gutter between fields and hints, and the custom-provider row uses the same text size as the rest of Settings.
 - The Tools pane's Adaptive turn budget is a labelled checkbox row instead of a lone centred checkbox, and fallback reordering shows a titled up arrow before the down arrow, with a titled remove control.
+- The connection drawer's Advanced section is readable again: fields are spaced, the custom-rate inputs use the drawer's own styling, and a successful save says so. The custom-rates hint now says rates apply to new or reopened sessions.
+- The offered model list keeps its order after a save instead of putting the chosen model first.
+- A subagent card keeps the model it ran on after you switch the connection's model or reopen the session, instead of showing the connection's current model. Cards recorded before this version keep no model rather than a wrong one.
+- Session titles ask for sentence case, so identical first messages stop producing both “ok” and “Reply Exactly Ok”.
+- Usage details say “cache not reported by provider” again instead of silently omitting the cache line when the provider sends no cached-token count.
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
 - Generation speed in the context popover is measured from the first output token instead of the first stream chunk, so a slow first response no longer shows up as slower generation, and a step that streamed no output shows a dash instead of a made-up rate.
 - DeepSeek costs now follow the provider's peak/off-peak tariff: steps outside the peak windows (01:00–04:00 and 06:00–10:00 UTC on weekdays) are estimated at half rate, and the context popover labels its estimate "peak" or "off-peak".
