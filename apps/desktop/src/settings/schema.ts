@@ -259,6 +259,7 @@ const connectionSchema = z.object({
   // document and reset every other section to defaults. A rejected value reads
   // back as "no explicit ceiling", which is the pre-TASK.150 behaviour.
   // Strictness lives at the IPC boundary (main/settings-ipc.ts).
+  openRouterProviders: z.array(z.string().trim().min(1).max(128)).max(20).optional().catch(undefined),
   maxOutputTokens: z.number().int().positive().optional().catch(undefined),
   // Per-model context window (TASK.142). Same fail-soft `.catch(undefined)` as
   // `maxOutputTokens` above — a hand-edited bad value reads back as "no
@@ -274,7 +275,8 @@ const connectionSchema = z.object({
     pricing: tokenRatesSchema.optional().catch(undefined),
     contextWindowTokens: z.number().int().min(1_024).max(1_000_000).optional().catch(undefined),
     reasoningEffort: reasoningEffortSchema.optional().catch(undefined),
-    reasoningSupported: z.literal(true).optional().catch(undefined),
+    catalogMatchDisabled: z.literal(true).optional().catch(undefined),
+    reasoningSupported: z.boolean().optional().catch(undefined),
     effortLevels: z.array(reasoningEffortSchema).min(1).transform((levels) => [...new Set(levels)]).optional().catch(undefined),
   }).catch({});
     return Object.fromEntries(Object.entries(raw).map(([id, value]) => [id, entrySchema.parse(value)]));
@@ -302,6 +304,9 @@ const connectionSchema = z.object({
   // reads back as absent instead of resetting the whole document. Values are
   // re-validated (levels remapped through the closed enum) at consumption.
   modelCapabilities: z.record(z.string().max(256), z.object({
+    contextWindow: z.number().int().positive().optional(),
+    maxOutputTokens: z.number().int().positive().optional(),
+    pricing: z.object({ input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative() }).optional(),
     reasoning: z.boolean().optional(),
     effortLevels: z.array(z.string().max(64)).max(16).optional(),
     // 4088-on-4118 integration: the live image-modality fact rides the same

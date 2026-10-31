@@ -244,3 +244,92 @@ it("refreshes manual vocabularies without borrowing a sibling's levels", () => {
   settings.refresh();
   expect(settings.effortLevelsFor("a")).toEqual(["xhigh"]);
 });
+
+it("resolves gateway catalog defaults per model and honors explicit overrides and opt-out", () => {
+  const id = "vendor/glm-5.3-fp8";
+  const makeSettings = (modelOverrides = {}) => createConnectionModelSettings({ connection: { modelOverrides }, liveCapabilitiesFor: () => undefined });
+  const defaults = makeSettings();
+  expect(defaults.contextFor(id)).toEqual({ tokens: 300_000, source: "catalog" });
+  expect(resolveEffortLevels(id, defaults.entryFor(id))).toEqual(["low", "high", "max"]);
+  expect(resolveReasoningEffort(id, defaults.entryFor(id), undefined)).toBe("max");
+  expect(defaults.entryFor(id)?.models.find(m => m.id === id)?.pricing).toBeUndefined();
+  const manual = makeSettings({ [id]: { contextWindowTokens: 64_000, effortLevels: ["low"] } });
+  expect(manual.contextFor(id).tokens).toBe(64_000);
+  expect(resolveEffortLevels(id, manual.entryFor(id), undefined, manual.effortLevelsFor(id))).toEqual(["low"]);
+  const disabled = makeSettings({ [id]: { catalogMatchDisabled: true } });
+  expect(disabled.contextFor(id).source).toBe("assumed");
+  expect(resolveEffortLevels(id, disabled.entryFor(id))).toBeUndefined();
+  expect(defaults.entryFor("vendor/glm-5.3-flash-fp8")?.models[0]?.imageInput).toBe(true);
+  expect(defaults.entryFor("vendor/glm-5.3-fp8")?.models[0]?.imageInput).not.toBe(true);
+});
+
+it("lets a gateway's explicit off setting override an always-on catalog hint", () => {
+  const model = "minimax-m3.1-flash-local";
+  const settings = createConnectionModelSettings({ connection: { modelOverrides: { [model]: { reasoningEffort: "off", effortLevels: ["off", "high"] } } }, liveCapabilitiesFor: () => undefined });
+  expect(resolveEffortLevels(model, settings.entryFor(model), undefined, settings.effortLevelsFor(model))).toEqual(["off", "high"]);
+  expect(resolveReasoningEffort(model, settings.entryFor(model), "off", undefined, settings.effortLevelsFor(model))).toBe("off");
+});
+
+it("honors manual reasoning support over a gateway dictionary denial", () => {
+  const model = "vendor/MiniMax-M3-local";
+  const settings = createConnectionModelSettings({ connection: { modelOverrides: { [model]: { reasoningSupported: true, reasoningEffort: "high" } } }, liveCapabilitiesFor: () => undefined });
+  expect(resolveEffortLevels(model, settings.entryFor(model), settings.capabilitiesFor(model))).toContain("high");
+  expect(resolveReasoningEffort(model, settings.entryFor(model), "high", settings.capabilitiesFor(model))).toBe("high");
+});
+
+it.each(["connection", "model"] as const)("honors %s off over a gateway always-on hint", (level) => {
+  const model = "minimax-m3.1-flash-local";
+  const connection = level === "connection" ? { reasoningEffort: "off" as const } : { modelOverrides: { [model]: { reasoningEffort: "off" as const } } };
+  const settings = createConnectionModelSettings({ connection, liveCapabilitiesFor: () => undefined });
+  expect(resolveReasoningEffort(model, settings.entryFor(model), settings.effortFor(model))).toBe("off");
+  expect(settings.switchEffort("other", model, "high")).toBe("off");
+});
+
+it("prefers gateway endpoint capabilities to dictionary facts in the host", () => {
+  const model = "vendor/glm-5-fp8";
+  const settings = createConnectionModelSettings({ connection: {}, liveCapabilitiesFor: () => ({ reasoning: true, effortLevels: ["low", "high"] }) });
+  expect(resolveEffortLevels(model, settings.entryFor(model), settings.capabilitiesFor(model))).toEqual(["low", "high"]);
+  expect(resolveReasoningEffort(model, settings.entryFor(model), "high", settings.capabilitiesFor(model))).toBe("high");
+});
+
+it("uses the endpoint's always-on flag and default for a dictionary match", () => {
+  const model = "vendor/glm-5.3-fp8";
+  const live = { reasoning: true, thinkingAlwaysOn: true, defaultEffort: "high" as const, effortLevels: ["low", "high"] };
+  const settings = createConnectionModelSettings({ connection: { modelCapabilities: { [model]: live } }, readConnection: () => ({ modelCapabilities: { [model]: live } }), liveCapabilitiesFor: () => undefined });
+  const entry = settings.entryFor(model);
+  expect(entry?.models.find(row => row.id === model)).toMatchObject({ thinkingAlwaysOn: true, defaultEffort: "high" });
+  expect(resolveReasoningEffort(model, entry, undefined, settings.capabilitiesFor(model))).toBe("high");
+  expect(settings.switchEffort("other", model, "off")).toBe("high");
+});
+
+it("keeps live effort levels when manual off extends the vocabulary", () => {
+  const model = "vendor/glm-5-fp8";
+  const settings = createConnectionModelSettings({ connection: { reasoningEffort: "off" }, liveCapabilitiesFor: () => ({ reasoning: true, effortLevels: ["low", "high"] }) });
+  expect(resolveEffortLevels(model, settings.entryFor(model), settings.capabilitiesFor(model))).toEqual(["off", "low", "high"]);
+});
+
+it("suppresses catalog and live reasoning when manually disabled", () => {
+  const model = "vendor/glm-5.3-fp8";
+  const settings = createConnectionModelSettings({ connection: { modelOverrides: { [model]: { reasoningSupported: false, effortLevels: ["high"] } } }, liveCapabilitiesFor: () => ({ reasoning: true, effortLevels: ["high"] }) });
+  expect(resolveEffortLevels(model, settings.entryFor(model), settings.capabilitiesFor(model), settings.effortLevelsFor(model))).toBeUndefined();
+  expect(settings.switchEffort("other", model, "high")).toBe("off");
+});
+
+it("uses cached OpenRouter limits and rates while preserving manual overrides", () => {
+  const model = "vendor/model";
+  const settings = createConnectionModelSettings({
+    catalogEntry: findCatalogEntry("openrouter"),
+    connection: { modelCapabilities: { [model]: { contextWindow: 1048576, maxOutputTokens: 524288, pricing: { input: 0.075, cachedInput: 0.075, output: 0.3 } } }, modelOverrides: { [model]: { contextWindowTokens: 64000, pricing: { input: 1, cachedInput: 1, output: 2 } } } },
+    liveCapabilitiesFor: () => undefined,
+  });
+  expect(settings.contextFor(model).tokens).toBe(64000);
+  expect(settings.entryFor(model)?.models.find(row => row.id === model)).toMatchObject({ contextWindow: 1048576, maxOutputTokens: 524288 });
+  expect(settings.pricingSnapshot()?.models[model]).toEqual({ input: 1, cachedInput: 1, output: 2 });
+});
+
+
+it("keeps manual connection rates ahead of live catalog rates", () => {
+  const manual = { mode: "rates" as const, input: 2, cachedInput: 1, output: 3 };
+  const settings = createConnectionModelSettings({ connection: { pricing: manual, modelCapabilities: { a: { pricing: { input: 9, cachedInput: 9, output: 9 } } }, modelOverrides: { b: { pricing: { input: 4, cachedInput: 4, output: 4 } } } }, liveCapabilitiesFor: () => undefined });
+  expect(settings.pricingSnapshot()).toEqual({ fallback: manual, models: { b: { input: 4, cachedInput: 4, output: 4 } } });
+});

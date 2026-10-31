@@ -5385,6 +5385,7 @@ export class Session {
               step: this.currentStep,
               model: this.model,
               reasoningEffort: this.selectedEffort,
+              costUsd: event.usage.costUsd,
               inputTokens: event.usage.inputTokens,
               cachedInputTokens: event.usage.cachedInputTokens,
               cacheWriteTokens: event.usage.cacheWriteTokens,

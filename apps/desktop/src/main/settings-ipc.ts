@@ -438,9 +438,11 @@ const connectionCreateSchema = z
     // atomically with the connection, never as a second call that can be lost.
     proxyRef: z.string().min(1).optional(),
     reasoningEffort: reasoningEffortEnum.optional(),
-    reasoningSupported: z.literal(true).optional(),
+    catalogMatchDisabled: z.literal(true).optional(),
+    reasoningSupported: z.boolean().optional(),
     effortLevels: z.array(reasoningEffortEnum).min(1).transform((levels) => [...new Set(levels)]).optional(),
     promptCache: promptCacheSchema.optional(),
+    openRouterProviders: z.array(z.string().trim().min(1).max(128)).max(20).optional(),
     maxOutputTokens: maxOutputTokensSchema.optional(),
     // Per-model context window (TASK.142). Only the numeric value is accepted
     // from the renderer; the model binding is derived server-side from the
@@ -483,13 +485,15 @@ const connectionUpdateSchema = z
     proxyRef: z.string().optional(),
     reasoningEffort: z.union([reasoningEffortEnum, z.literal("")]).optional(),
     modelOverrideModel: z.string().trim().min(1).optional(),
-    reasoningSupported: z.union([z.literal(true), z.literal("")]).optional(),
+    catalogMatchDisabled: z.union([z.literal(true), z.literal("")]).optional(),
+    reasoningSupported: z.union([z.boolean(), z.literal("")]).optional(),
     effortLevels: z.union([z.array(reasoningEffortEnum).min(1).transform((levels) => [...new Set(levels)]), z.literal("")]).optional(),
     // Opt-in prompt cache (GitHub #15) with the same `""` clear sentinel as
     // `maxOutputTokens` below: absent = keep, enabled object = set, `""` = clear.
     promptCache: z.union([promptCacheSchema, z.literal("")]).optional(),
     // Output-token ceiling (TASK.150) with the same `""` clear sentinel as
     // `transport`/`proxyRef` above.
+    openRouterProviders: z.array(z.string().trim().min(1).max(128)).max(20).optional(),
     maxOutputTokens: z.union([maxOutputTokensSchema, z.literal("")]).optional(),
     // Per-model context window (TASK.142) with the same `""` clear sentinel as
     // `maxOutputTokens` above; a number sets tokens AND the server-derived binding.
@@ -1808,6 +1812,7 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
     }
     const connection: ProviderConnection = {
       id,
+      ...(req.openRouterProviders?.length ? { openRouterProviders: req.openRouterProviders } : {}),
       ...(req.pricing !== undefined ? { pricing: req.pricing } : {}),
       providerId: req.providerId,
       ...(req.label !== undefined ? { label: req.label } : {}),
@@ -1828,11 +1833,12 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
       // must ride the create — conditional on `!== undefined`, never truthy.
       ...(req.includeUsage !== undefined ? { includeUsage: req.includeUsage } : {}),
     };
-    if (req.contextWindowTokens !== undefined || req.reasoningEffort !== undefined || req.reasoningSupported !== undefined || req.effortLevels !== undefined) {
+    if (req.catalogMatchDisabled !== undefined || req.contextWindowTokens !== undefined || req.reasoningEffort !== undefined || req.reasoningSupported !== undefined || req.effortLevels !== undefined) {
       if (!createContextWindowModel) return { ok: false, reason: "invalid" };
       patchModelOverride(connection, createContextWindowModel, {
         ...(req.contextWindowTokens !== undefined ? { contextWindowTokens: req.contextWindowTokens } : {}),
         ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort } : {}),
+        ...(req.catalogMatchDisabled !== undefined ? { catalogMatchDisabled: req.catalogMatchDisabled } : {}),
         ...(req.reasoningSupported !== undefined ? { reasoningSupported: req.reasoningSupported } : {}),
         ...(req.effortLevels !== undefined ? { effortLevels: req.effortLevels } : {}),
       });
@@ -1996,6 +2002,10 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     // has to DELETE the key, not spread `undefined` over it. Health is
     // deliberately NOT invalidated: a ceiling is not an endpoint identity, so a
     // `ready` observed a minute ago stays true.
+    if (req.openRouterProviders !== undefined) {
+      if (req.openRouterProviders.length) updatedConnection.openRouterProviders = req.openRouterProviders;
+      else delete updatedConnection.openRouterProviders;
+    }
     if (req.maxOutputTokens !== undefined) {
       if (req.maxOutputTokens === "") {
         delete updatedConnection.maxOutputTokens;
@@ -2024,14 +2034,15 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
       }
     }
     // GitHub #26: patch only the requested model, preserving every sibling.
-    if (req.contextWindowTokens !== undefined || req.reasoningEffort !== undefined || req.reasoningSupported !== undefined || req.effortLevels !== undefined) {
+    if (req.catalogMatchDisabled !== undefined || req.contextWindowTokens !== undefined || req.reasoningEffort !== undefined || req.reasoningSupported !== undefined || req.effortLevels !== undefined) {
       const effectiveModel = (req.modelOverrideModel ?? (req.model !== undefined ? req.model : existing.model))?.trim();
-      if (!effectiveModel && [req.contextWindowTokens, req.reasoningEffort, req.reasoningSupported, req.effortLevels].some((value) => value !== undefined && value !== "")) {
+      if (!effectiveModel && [req.catalogMatchDisabled, req.contextWindowTokens, req.reasoningEffort, req.reasoningSupported, req.effortLevels].some((value) => value !== undefined && value !== "")) {
         return { ok: false, reason: "invalid" };
       }
       if (effectiveModel) patchModelOverride(updatedConnection, effectiveModel, {
         ...(req.contextWindowTokens !== undefined ? { contextWindowTokens: req.contextWindowTokens === "" ? undefined : req.contextWindowTokens } : {}),
         ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort === "" ? undefined : req.reasoningEffort } : {}),
+        ...(req.catalogMatchDisabled !== undefined ? { catalogMatchDisabled: req.catalogMatchDisabled === "" ? undefined : req.catalogMatchDisabled } : {}),
         ...(req.reasoningSupported !== undefined ? { reasoningSupported: req.reasoningSupported === "" ? undefined : req.reasoningSupported } : {}),
         ...(req.effortLevels !== undefined || req.reasoningSupported === "" ? { effortLevels: req.effortLevels === "" || req.reasoningSupported === "" ? undefined : req.effortLevels } : {}),
       });

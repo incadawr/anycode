@@ -496,3 +496,32 @@ it("resolves custom connections by base URL for always-on effort", async () => {
   expect(levels).toEqual(["low", "high"]);
   expect(displayedStartEffort(undefined, conn.reasoningEffort, levels, fallback, true)).toBe("high");
 });
+
+it("offers gateway dictionary efforts and default while honoring the per-model opt-out", async () => {
+  const { modelCapabilitiesFor } = await import("../../../shared/model-overrides.js");
+  const model = "vendor/glm-5.3-fp8";
+  const connection = { id: "c", providerId: "custom:local" };
+  const caps = modelCapabilitiesFor(connection, model);
+  expect(startModelEffortLevels(connection.providerId, model, [], caps)).toEqual(["low", "high", "max"]);
+  expect(startModelDefaultEffort(connection.providerId, model, [], caps)).toBe("max");
+  const disabled = modelCapabilitiesFor({ ...connection, modelOverrides: { [model]: { catalogMatchDisabled: true } } }, model);
+  expect(startModelEffortLevels(connection.providerId, model, [], disabled)).toBeUndefined();
+});
+
+it("prefers gateway endpoint capabilities over dictionary defaults", async () => {
+  const { modelCapabilitiesFor } = await import("../../../shared/model-overrides.js");
+  const model = "vendor/glm-5-fp8";
+  const live = { reasoning: true, effortLevels: ["low", "high"] };
+  expect(modelCapabilitiesFor({ providerId: "vllm", modelCapabilities: { [model]: live } }, model)).toMatchObject(live);
+  expect(modelCapabilitiesFor({ providerId: "vllm", modelCapabilities: { "vendor/glm-5.3-fp8": live } }, "vendor/glm-5.3-fp8")).toMatchObject(live);
+  expect(modelCapabilitiesFor({ providerId: "z-ai" }, model)).toBeUndefined();
+});
+
+it("does not mutate live capabilities when applying off and honors a manual denial", async () => {
+  const { modelCapabilitiesFor } = await import("../../../shared/model-overrides.js");
+  const live = { reasoning: true, thinkingAlwaysOn: true, effortLevels: ["high"] };
+  const connection = { providerId: "vllm", reasoningEffort: "off" as const, modelCapabilities: { unknown: live } };
+  expect(modelCapabilitiesFor(connection, "unknown")?.thinkingAlwaysOn).toBe(false);
+  expect(live.thinkingAlwaysOn).toBe(true);
+  expect(modelCapabilitiesFor({ ...connection, modelOverrides: { "vendor/glm-5.3-fp8": { reasoningSupported: false } } }, "vendor/glm-5.3-fp8")?.reasoning).toBe(false);
+});

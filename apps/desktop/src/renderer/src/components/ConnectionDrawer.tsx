@@ -28,6 +28,7 @@
  */
 import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
+import { findKnownModel, isGatewayProvider } from "@anycode/core/model-dictionary";
 import type {
   CatalogSummary,
   CatalogSummaryEntry,
@@ -479,12 +480,12 @@ export function usageEnvHint(envOverrides: readonly string[]): string | null {
 
 export function buildDrawerSavePayload(
   params: Parameters<typeof buildConnectionUpdatePayload>[0],
-  fields: { contextWindowDirty: boolean; contextWindowTokens: number | ""; reasoningSupportedDirty: boolean; reasoningSupported: boolean; modelEffortDirty: boolean; modelEffort: ReasoningEffort | ""; imageInputDirty: boolean; effortLevelsDirty?: boolean; effortLevels?: ReasoningEffort[] },
+  fields: { contextWindowDirty: boolean; contextWindowTokens: number | ""; reasoningSupportedDirty: boolean; reasoningSupported: boolean | undefined; modelEffortDirty: boolean; modelEffort: ReasoningEffort | ""; imageInputDirty: boolean; effortLevelsDirty?: boolean; effortLevels?: ReasoningEffort[] },
 ): ConnectionUpdateRequest {
   return buildConnectionUpdatePayload({
     ...params,
     ...(fields.contextWindowDirty ? { contextWindowTokens: fields.contextWindowTokens } : {}),
-    ...(fields.reasoningSupportedDirty ? { reasoningSupported: fields.reasoningSupported ? true : "" } : {}),
+    ...(fields.reasoningSupportedDirty ? { reasoningSupported: fields.reasoningSupported ?? "" } : {}),
     ...(fields.modelEffortDirty ? { reasoningEffort: fields.modelEffort } : {}),
     ...(fields.effortLevelsDirty ? { effortLevels: fields.effortLevels?.length ? fields.effortLevels : "" } : {}),
     imageInputChanged: fields.imageInputDirty,
@@ -524,7 +525,7 @@ export function buildConnectionUpdatePayload(params: {
   /** GitHub #1: the usage select's three-state value; Automatic sends the `""` clear sentinel. */
   usage: UsageSelection;
   reasoningEffort?: ReasoningEffort | "";
-  reasoningSupported?: true | "";
+  reasoningSupported?: boolean | "";
   effortLevels?: ReasoningEffort[] | "";
 }): ConnectionUpdateRequest {
   return {
@@ -1395,6 +1396,7 @@ export function ConnectionDrawerFields({
   // an in-progress edit (e.g. a momentarily-empty field) never gets coerced
   // through `Number()` before the user is done typing; `maxOutputTokensField`
   // does the actual parse/validate at save time.
+  const [openRouterProviders, setOpenRouterProviders] = useState(editConnection?.openRouterProviders?.join(", ") ?? "");
   const [maxOutputTokens, setMaxOutputTokens] = useState(
     editConnection?.maxOutputTokens === undefined ? "" : String(editConnection.maxOutputTokens),
   );
@@ -1409,8 +1411,10 @@ export function ConnectionDrawerFields({
   // Prefilled ONLY when the saved override binds to the connection's own model
   // (the contextWindowInitialRaw rule); "auto" clears the pair on save.
   const [reasoningSupported, setReasoningSupported] = useState(() =>
-    modelOverrideFor(editConnection, editConnection?.model ?? "")?.reasoningSupported === true,
+    modelOverrideFor(editConnection, editConnection?.model ?? "")?.reasoningSupported,
   );
+  const [catalogMatchDisabled, setCatalogMatchDisabled] = useState(() => modelOverrideFor(editConnection, editConnection?.model ?? "")?.catalogMatchDisabled === true);
+  const [catalogMatchDirty, setCatalogMatchDirty] = useState(false);
   const [effortLevels, setEffortLevels] = useState<ReasoningEffort[]>(() => modelOverrideFor(editConnection, editConnection?.model ?? "")?.effortLevels ?? []);
   const [effortLevelsDirty, setEffortLevelsDirty] = useState(false);
   const [modelEffort, setModelEffort] = useState<ReasoningEffort | "">(() =>
@@ -1595,7 +1599,7 @@ export function ConnectionDrawerFields({
   // actually resolves to. Both read only state already in hand — the drawer's
   // own proxySnapshot and the projected catalog/snapshot.
   const motEnvHint = proxySnapshot === null ? null : maxOutputTokensEnvHint(proxySnapshot.envOverrides);
-  const motDefaultHint = maxOutputTokensEffectiveHint(
+  let motDefaultHint = maxOutputTokensEffectiveHint(
     selectedEntry,
     model.trim(),
     proxySnapshot?.defaultMaxOutputTokens,
@@ -1614,7 +1618,7 @@ export function ConnectionDrawerFields({
     simplified && createdConnectionId === null
       ? modelAfterCatalogPrefill(model, selectedEntry?.models ?? [])
       : model;
-  const cwDefaultHint = contextWindowEffectiveHint(
+  let cwDefaultHint = contextWindowEffectiveHint(
     selectedEntry,
     effectiveFormModel.trim(),
     proxySnapshot,
@@ -1623,19 +1627,28 @@ export function ConnectionDrawerFields({
   // Taskana 4088 hints for the Image-input select: what Auto resolves to for
   // the model this form will save (catalog mark, else the connection's live
   // image-modality list), and whether the live feed rides the env right now.
-  const imageInputHint = imageInputEffectiveHint(
+  let imageInputHint = imageInputEffectiveHint(
     selectedEntry,
     effectiveFormModel.trim(),
     targetConnection,
     imageInput,
   );
+  const dictionaryEligible = isNewCustomEndpoint || isCustomRecordConnection || isGatewayProvider(effectiveProviderId);
+  const dictionaryMatch = dictionaryEligible ? findKnownModel(effectiveFormModel.trim()) : undefined;
   const knownCatalogModel = !effectiveProviderId.startsWith("custom:") &&
     catalog.find((entry) => entry.id === effectiveProviderId)?.models.some((entry) => entry.id === effectiveFormModel.trim()) === true;
   const reasoningLevels = startModelEffortLevels(
     effectiveProviderId, effectiveFormModel.trim(), catalog.filter((entry) => !entry.id.startsWith("custom:")),
     applyModelReasoningOverride(targetConnection?.modelCapabilities?.[effectiveFormModel.trim()], reasoningSupported),
   );
-  const effectiveReasoningLevels = effortLevels.length ? effortLevels : reasoningLevels;
+  const dictionaryActive = !catalogMatchDisabled ? dictionaryMatch : undefined;
+  if (dictionaryActive) {
+    if (!maxOutputTokens.trim() && dictionaryActive.maxOutputTokens !== undefined) motDefaultHint = `catalog: ${dictionaryActive.maxOutputTokens}`;
+    if (!contextWindow.raw.trim()) cwDefaultHint = `catalog: ${Math.min(dictionaryActive.contextWindow, dictionaryActive.usableContextWindow ?? dictionaryActive.contextWindow)}`;
+    if (dictionaryActive.imageInput && imageInput === "auto") imageInputHint = "catalog: vision";
+  }
+  const liveReasoning = targetConnection?.modelCapabilities?.[effectiveFormModel.trim()];
+  const effectiveReasoningLevels = reasoningSupported === false ? undefined : effortLevels.length ? effortLevels : (reasoningLevels ?? (liveReasoning?.reasoning !== undefined ? undefined : !catalogMatchDisabled && dictionaryMatch?.reasoning ? (dictionaryMatch.effortLevels ?? ["off", "low", "medium", "high"]) : undefined));
   const imageInputFeedHint = proxySnapshot === null ? null : imageInputEnvHint(proxySnapshot.envOverrides);
   // GitHub #1: shown only while ANYCODE_INCLUDE_USAGE overrides the rung.
   const usageEnvHintText = proxySnapshot === null ? null : usageEnvHint(proxySnapshot.envOverrides);
@@ -1659,7 +1672,9 @@ export function ConnectionDrawerFields({
     );
     if (force || contextWindow.model !== effective.trim()) {
       const target = force ? undefined : modelOverrideFor(saved, effective.trim());
-      setReasoningSupported(target?.reasoningSupported === true);
+      setCatalogMatchDisabled(target?.catalogMatchDisabled === true);
+      setCatalogMatchDirty(false);
+      setReasoningSupported(target?.reasoningSupported);
       setModelEffort(target?.reasoningEffort ?? "");
       setEffortLevels(target?.effortLevels ?? []);
       setEffortLevelsDirty(false);
@@ -1753,7 +1768,8 @@ export function ConnectionDrawerFields({
           // too, so its value has to travel on THIS create as well.
           ...(usageCreateValue !== undefined ? { includeUsage: usageCreateValue } : {}),
           ...(contextWindow.raw.trim() ? { contextWindowTokens: Number(contextWindow.raw) } : {}),
-          ...(reasoningSupported ? { reasoningSupported: true as const } : {}),
+          ...(catalogMatchDisabled ? { catalogMatchDisabled: true as const } : {}),
+          ...(reasoningSupported !== undefined ? { reasoningSupported } : {}),
           ...(effortLevels.length ? { effortLevels } : {}),
           ...(modelEffort !== "" ? { reasoningEffort: modelEffort } : {}),
           ...(imageInput !== "auto" ? { imageInputOverride: imageInput } : {}),
@@ -1856,6 +1872,7 @@ export function ConnectionDrawerFields({
         reloadSnapshot,
         {
           providerId,
+          ...(providerId === "openrouter" && openRouterProviders.trim() ? { openRouterProviders: openRouterProviders.split(",").map(v => v.trim()).filter(Boolean) } : {}),
           modelPricing: Object.fromEntries(Object.entries(modelPricing).filter(([, value]) => value !== "")) as Record<string, TokenRates>,
           ...(pricing !== "" ? { pricing } : {}),
           ...(createModel !== "" ? { model: createModel } : {}),
@@ -1866,7 +1883,8 @@ export function ConnectionDrawerFields({
           ...(noAuth ? { authOptional: true } : {}),
           ...(mot.value !== "" ? { maxOutputTokens: mot.value } : {}),
           ...(cw.value !== "" ? { contextWindowTokens: cw.value } : {}),
-          ...(reasoningSupported ? { reasoningSupported: true as const } : {}),
+          ...(catalogMatchDisabled ? { catalogMatchDisabled: true as const } : {}),
+          ...(reasoningSupported !== undefined ? { reasoningSupported } : {}),
           ...(effortLevels.length ? { effortLevels } : {}),
           ...(modelEffort !== "" ? { reasoningEffort: modelEffort } : {}),
           // Taskana 4088: create keeps the conditional-spread form (create's
@@ -1913,6 +1931,14 @@ export function ConnectionDrawerFields({
             message === null
               ? "Connection created, but the API key was refused — enter it again below."
               : "Connection created, but neither its model list nor the API key could be saved.";
+        }
+      }
+      if (providerId === "openrouter") {
+        try {
+          const fetched = await resolvedCustomProvider().fetchModels({ connectionId: outcome.createdConnectionId });
+          if (fetched.ok) await reloadSnapshot();
+        } catch {
+          // A failed catalog refresh must not prevent creating the connection.
         }
       }
       if (message !== null) {
@@ -1995,7 +2021,7 @@ export function ConnectionDrawerFields({
         modelPersistenceBridge(),
         reloadSnapshot,
         createdConnectionId,
-        { ...buildDrawerSavePayload({
+        { ...(effectiveProviderId === "openrouter" ? { openRouterProviders: openRouterProviders.split(",").map(v => v.trim()).filter(Boolean) } : {}), ...buildDrawerSavePayload({
           connectionId: createdConnectionId,
           label,
           model: selectedModelId ?? model,
@@ -2008,7 +2034,7 @@ export function ConnectionDrawerFields({
           imageInput,
           promptCacheEnabled,
           usage: usageSelection,
-        }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty, effortLevelsDirty, effortLevels }), pricing, modelPricing },
+        }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty, effortLevelsDirty, effortLevels }), ...(catalogMatchDirty ? { catalogMatchDisabled: catalogMatchDisabled ? true as const : "" as const } : {}), pricing, modelPricing },
         selectedModelId !== null && shouldAppendModelToList(selectedModelId, catalogOfferedIds, isCustomRecordConnection)
           ? selectedModelId
           : null,
@@ -2262,6 +2288,13 @@ export function ConnectionDrawerFields({
         </>
       )}
 
+      {effectiveProviderId === "openrouter" && (
+        <label className="settings-field">
+          <span className="settings-field-label">OpenRouter providers</span>
+          <input className="settings-field-input" value={openRouterProviders} disabled={readOnly} onChange={e => setOpenRouterProviders(e.target.value)} placeholder="Provider slugs, comma-separated" />
+          <span className="settings-field-hint">Only these providers will be used; fallback is disabled. Leave empty for automatic routing.</span>
+        </label>
+      )}
       {/* GitHub #1: per-connection streaming token-usage policy, shown only for
           the transport that actually sends `stream_options.include_usage`. A
           hidden control keeps its state, so switching transport back restores
@@ -2373,12 +2406,17 @@ export function ConnectionDrawerFields({
         </div>
       )}
 
+      {dictionaryMatch && <div className="settings-field">
+        <label><input type="checkbox" disabled={readOnly} checked={!catalogMatchDisabled} onChange={(e) => { setCatalogMatchDisabled(!e.target.checked); setCatalogMatchDirty(true); }} /> Recognized as {dictionaryMatch.name ?? dictionaryMatch.id} — use catalog defaults</label>
+        {!catalogMatchDisabled && dictionaryMatch.pricing && dictionaryMatch.pricing.tariff === undefined && <div className="settings-field-hint">Catalog reference for {dictionaryMatch.name ?? dictionaryMatch.id}: input ${dictionaryMatch.pricing.input}, cached input ${dictionaryMatch.pricing.cachedInput}{dictionaryMatch.pricing.cacheWrite !== undefined && <>, cache write ${dictionaryMatch.pricing.cacheWrite}</>}, output ${dictionaryMatch.pricing.output} per million tokens. Your endpoint may charge differently.</div>}
+      </div>}
       {!knownCatalogModel && <label className="settings-field">
         <span className="settings-field-label">Reasoning support (this model)</span>
         <select className="settings-field-input" aria-label="Reasoning support" disabled={readOnly}
-          value={reasoningSupported || effortLevels.length > 0 ? "on" : "auto"} onChange={(e) => { setReasoningSupportedDirty(true); setReasoningSupported(e.target.value === "on"); if (e.target.value === "auto") { setEffortLevels([]); setEffortLevelsDirty(true); } }}>
+          value={reasoningSupported === false ? "off" : reasoningSupported || effortLevels.length > 0 ? "on" : "auto"} onChange={(e) => { setReasoningSupportedDirty(true); setReasoningSupported(e.target.value === "auto" ? undefined : e.target.value === "on"); if (e.target.value !== "on") { setEffortLevels([]); setEffortLevelsDirty(true); } }}>
           <option value="auto">Auto — catalog or provider metadata</option>
           <option value="on">Supported</option>
+          <option value="off">Not supported</option>
         </select>
       </label>}
       {!knownCatalogModel && (reasoningSupported || effortLevels.length > 0) && <fieldset className="settings-field">
