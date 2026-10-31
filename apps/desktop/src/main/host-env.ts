@@ -326,7 +326,7 @@ export function connectionSecretKey(connectionId: string, authKind: "api_key" | 
  * only ever recognized by `isKnownSecretKey`/`Vault.statuses` when its id is
  * present in the `catalogIds` array those callers are given — main is
  * expected to union this with `catalogProviderIds()` (mirrors the existing
- * `catalogProviderIds() ∪ custom[].id` seam described) before
+ * `catalogProviderIds() ∪ custom[].id` seam) before
  * passing `catalogIds` down, the same way it already includes every builtin
  * catalog id.
  */

@@ -2149,7 +2149,7 @@ export interface LspPanelState {
  * injectable-for-tests discipline as `TodoPanelDom`. `panel()` returns `null`
  * when `<aside class="lsp-panel">` isn't in the DOM at all (closed) — the
  * facade turns that into the valid-empty `LspPanelState` reading, never an
- * error. Since removed the header toggle button, `toggle()`
+ * error. Since the header toggle button was removed, `toggle()`
  * drives the Environment menu's `lsp-details` action: when the panel is open
  * it clicks the panel's own close button, otherwise it opens the Environment
  * dropdown (`.environment-trigger`) and clicks its Details action — the exact
@@ -2183,7 +2183,7 @@ export interface HooksPanelState {
  * DOM accessor DI for the Hooks-panel probe/driver (design §3 W3), same
  * injectable-for-tests discipline as `LspPanelDom`. `panel()` returns `null`
  * when `<aside class="hooks-panel">` isn't in the DOM at all (closed).
- * Since removed the header toggle button, `toggle()` drives the
+ * Since the header toggle button was removed, `toggle()` drives the
  * Environment menu's `hooks-details` action (close via the panel's own
  * `aria-label="Close hooks"` button, open via `.environment-trigger` +
  * Details) — same shape as the LSP driver above.
