@@ -168,7 +168,7 @@ export interface DispatchContext {
   /**
    * Artifact store + owning session for oversized tool results.
    * Optional: absent => a tool declaring `strategy: "artifact"` is budgeted by
-   * plain truncation, byte-identical to. Child loops DO inherit it
+   * plain truncation. Child loops DO inherit it
    * (buildChildConfig copies it), so a subagent's oversized Bash output is
    * recoverable too; a child writes under the parent's session directory,
    * which is correct because tool-call ids are globally unique.

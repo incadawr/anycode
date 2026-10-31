@@ -52,8 +52,8 @@ export interface CoreEnvConfig {
    */
   subagentStallTimeoutMs?: number;
   /**
-   * Stale-plan reminder period in tool calls (ANYCODE_TODO_REMINDER_EVERY,
-   * ); 0 disables.
+   * Stale-plan reminder period in tool calls
+   * 0 disables.
    */
   todoReminderEvery?: number;
   /**
@@ -108,7 +108,7 @@ export interface CoreEnvConfig {
    */
   providerTransport?: ProviderTransport;
   /**
-   * Explicit usage-streaming override (ANYCODE_INCLUDE_USAGE;):
+   * Explicit usage-streaming override (ANYCODE_INCLUDE_USAGE):
    * `1/true/on` → true, `0/false/off` → false, invalid ⇒ warn + ignore.
    * Undefined means "no opinion" — the transport-conditional DEFAULT is
    * applied by `resolveIncludeUsage`, never here.
