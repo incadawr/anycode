@@ -34,7 +34,8 @@ const PRODUCT = "tas" + "kana";
 const MARK = "tas" + "k";
 
 /**
- * Reference shapes:
+ * Reference shapes include paths into the internal task-detail directory,
+ * including template names without a numeric identifier, plus:
  *   1. the product name, optionally followed by a card number (optional letter);
  *   2. dotted plan numbering after the marker;
  *   3. the marker with an optional `.`/`-`/space and a number, optional letter
@@ -44,6 +45,8 @@ const MARK = "tas" + "k";
  */
 const REF_SOURCE =
   "(?:" +
+  "working-docs/" + MARK + "s/[^\\s`\"\']+" +
+  "|" +
   "[Tt][Aa][Ss][Kk][Aa][Nn][Aa](?:[ ._:#-]*\\d+[a-z]?)?" +
   "|[Tt]ask\\s+\\d+(?:\\.\\d+)+" +
   "|[Tt][Aa][Ss][Kk][.\\- ]?\\d+[a-z]?(?:-[A-ZА-Я]\\d*|-[а-я]\\d+)?" +
@@ -379,6 +382,9 @@ describe("public tree carries no tracker card references", () => {
   it("rejects every shape the gate exists for", () => {
     const card = MARK.toUpperCase() + ".123";
     const glued = MARK + "106-slice";
+    const internalDir = "working-docs/" + MARK + "s/";
+    expect(scanText("AGENTS.md", `details: ${internalDir}${MARK.toUpperCase()}.{id}.md`)).not.toEqual([]);
+    expect(scanText(`${internalDir}template.md`, "clean body")).not.toEqual([]);
     expect(scanText("docs/x.md", `see ${PRODUCT} for details`)).not.toEqual([]);
     expect(scanText("docs/x.md", `moved to ${card} yesterday`)).not.toEqual([]);
     expect(scanText("docs/x.md", `${PRODUCT}-cli did it`)).not.toEqual([]);

@@ -26,9 +26,9 @@ A lightweight task tracker lives in `working-docs/`:
 
 ### Workflow
 
-1. **Create a task:** take the next unused numeric `id`, create `working-docs/tasks/TASK.{id}.md` with the full detail, and add one row to `TASKS.md`.
-2. **Complete a task:** move its row from `TASKS.md` to `TASKS.DONE.md` with the completion date and change `Status: open` to `done` in its `TASK.{id}.md`.
-3. Put **notes that are not tasks** in `BACKLOG.md`; turn them into a `TASK.{id}` once they are ready.
+1. **Create a task:** take the next unused numeric `id`, record the full detail in the local task tracker, and add one row to `TASKS.md`.
+2. **Complete a task:** move its row from `TASKS.md` to `TASKS.DONE.md` with the completion date and change `Status: open` to `done` in its detail record.
+3. Put **notes that are not tasks** in `BACKLOG.md`; turn them into a task once they are ready.
 
 ## Track orchestration
 
