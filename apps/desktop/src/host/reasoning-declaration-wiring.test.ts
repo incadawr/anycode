@@ -11,8 +11,8 @@
  *
  * The wire half lives in `packages/core/src/provider/custom-anthropic-effort-wire.test.ts`
  * (real SDK, real POST bodies): a custom endpoint gets `output_config.effort`
- * only when its connection declared both xhigh and max, and otherwise gets
- * distinct thinking budgets with no field it never advertised.
+ * only when its connection declared the selected effort level, and otherwise
+ * gets distinct thinking budgets with no field it never advertised.
  */
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";

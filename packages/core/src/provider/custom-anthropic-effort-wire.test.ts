@@ -16,8 +16,11 @@
  *
  *  - no declared effort vocabulary  ⇒ distinct thinking budgets only, no
  *    `output_config` key at all (byte-safe for a strict server);
- *  - declared `xhigh` AND `max`     ⇒ distinct budgets AND the matching
- *    effort enum, the only on-wire way this transport can express them.
+ *  - a declared effort vocabulary   ⇒ the DECLARED level that is selected
+ *    rides `output_config.effort`, for EVERY level (low included — an
+ *    endpoint that ignores `thinking.budget_tokens` and switches tier on the
+ *    enum keeps its own default, the maximum, when no enum is sent), and the
+ *    distinct budgets stay as they were.
  *
  * Harness (zero sockets/network, mirrors deepseek-reasoning-wire.test.ts):
  * the installed SDK's default fetch is `globalThis.fetch`, so a stubbed
@@ -82,12 +85,13 @@ describe("custom Anthropic-compatible endpoint distinguishes xhigh vs max on the
    * catalog entry, so a custom connection carries none — and no named branch
    * matches either, so the request exercises the generic anthropic-messages
    * mapping. `declaredEffortLevels` is the connection's own declaration
-   * (`ANYCODE_EFFORT_LEVELS`); only a connection that declared BOTH tiers
-   * authorises the effort enum on the wire.
+   * (`ANYCODE_EFFORT_LEVELS`): a connection that declared the selected level
+   * authorises the effort enum on the wire, one that declared nothing never
+   * sees the field.
    */
   function customPort(
-    declaredEffortLevels?: readonly ("low" | "high" | "xhigh" | "max")[],
-  ): { port: AiSdkModelPort; requestFor: (effort: "xhigh" | "max") => ModelRequest } {
+    declaredEffortLevels?: readonly ("low" | "medium" | "high" | "xhigh" | "max")[],
+  ): { port: AiSdkModelPort; requestFor: (effort: "low" | "medium" | "high" | "xhigh" | "max") => ModelRequest } {
     const config: AnthropicEndpointConfig = {
       transport: "anthropic-messages",
       baseUrl: "http://127.0.0.1:9", // never dialed — the stub intercepts
@@ -116,7 +120,7 @@ describe("custom Anthropic-compatible endpoint distinguishes xhigh vs max on the
    * new effort field / larger budget to a strict catalog proxy is the
    * regression this test pins out.
    */
-  function catalogKimiPort(): { port: AiSdkModelPort; requestFor: (effort: "xhigh" | "max") => ModelRequest } {
+  function catalogKimiPort(): { port: AiSdkModelPort; requestFor: (effort: "low" | "medium" | "high" | "xhigh" | "max") => ModelRequest } {
     const config: AnthropicEndpointConfig = {
       transport: "anthropic-messages",
       baseUrl: "http://127.0.0.1:9", // never dialed — the stub intercepts
@@ -168,6 +172,45 @@ describe("custom Anthropic-compatible endpoint distinguishes xhigh vs max on the
     expect(maxBody.max_tokens).toBe(32_000 + 33_024);
   });
 
+  /**
+   * The regression this fixes: an endpoint that ignores `thinking.budget_tokens`
+   * and switches its reasoning tier on the effort enum (MiniMax and other
+   * effort-enum endpoints) keeps its OWN default — the maximum — when no enum
+   * is sent, so picking "low" did nothing. A connection that DECLARED its
+   * effort vocabulary therefore has to see the selected level on the wire,
+   * for every level, low included.
+   */
+  it("every declared level rides the effort enum on the wire", async () => {
+    stubFetch();
+    const declared = ["low", "medium", "high", "xhigh", "max"] as const;
+    const { port, requestFor } = customPort(declared);
+
+    for (const level of declared) {
+      const events = await drain(port.streamText(requestFor(level)));
+      expect(events.filter((e) => e.type === "error")).toEqual([]);
+    }
+
+    // The effort enum rides the wire (serialized by @ai-sdk/anthropic from
+    // providerOptions.anthropic.effort) and equals the selected level.
+    expect(captured.map((c) => c.body.output_config)).toMatchObject([
+      { effort: "low" },
+      { effort: "medium" },
+      { effort: "high" },
+      { effort: "xhigh" },
+      { effort: "max" },
+    ]);
+
+    // The budgets stay exactly as before the fix — the enum is an addition,
+    // not a replacement: distinct per tier, xhigh vs max still distinct.
+    expect(captured.map((c) => c.body.thinking)).toMatchObject([
+      { type: "enabled", budget_tokens: 4_096 },
+      { type: "enabled", budget_tokens: 12_288 },
+      { type: "enabled", budget_tokens: 24_576 },
+      { type: "enabled", budget_tokens: 24_576 },
+      { type: "enabled", budget_tokens: 32_000 },
+    ]);
+  });
+
   it("a connection that declared both tiers gets the matching effort enum alongside distinct budgets", async () => {
     stubFetch();
     const { port, requestFor } = customPort(["xhigh", "max"]);
@@ -177,11 +220,57 @@ describe("custom Anthropic-compatible endpoint distinguishes xhigh vs max on the
 
     // The effort enum rides the wire (serialized by @ai-sdk/anthropic from
     // providerOptions.anthropic.effort) exactly because the connection
-    // declared it distinguishes both tiers itself.
+    // declared the tier itself.
     expect(captured[0]!.body.output_config).toMatchObject({ effort: "xhigh" });
     expect(captured[1]!.body.output_config).toMatchObject({ effort: "max" });
     expect(captured[0]!.body.thinking).toMatchObject({ type: "enabled", budget_tokens: 24_576 });
     expect(captured[1]!.body.thinking).toMatchObject({ type: "enabled", budget_tokens: 32_000 });
+  });
+
+  it("a declared level the connection did not declare never rides the wire", async () => {
+    stubFetch();
+    // The connection declared "max" only; "low" was not part of its
+    // vocabulary, so no enum may be sent for it.
+    const { port, requestFor } = customPort(["max"]);
+
+    await drain(port.streamText(requestFor("low")));
+    await drain(port.streamText(requestFor("max")));
+
+    expect(captured[0]!.body.output_config).toBeUndefined();
+    expect(captured[1]!.body.output_config).toMatchObject({ effort: "max" });
+  });
+
+  it("without a declaration no level sends an effort field and the bytes stay as they are", async () => {
+    stubFetch();
+    const { port, requestFor } = customPort();
+
+    const levels = ["low", "medium", "high", "xhigh", "max"] as const;
+    for (const level of levels) {
+      const events = await drain(port.streamText(requestFor(level)));
+      expect(events.filter((e) => e.type === "error")).toEqual([]);
+    }
+
+    // No field the endpoint never advertised, for ANY level.
+    for (const capture of captured) {
+      expect(capture.body.output_config).toBeUndefined();
+    }
+
+    // The bytes are exactly the pre-fix ones: the same budgets and the same
+    // max_tokens (maxOutputTokens + budgetTokens) as before the change.
+    expect(captured.map((c) => c.body.thinking)).toMatchObject([
+      { type: "enabled", budget_tokens: 4_096 },
+      { type: "enabled", budget_tokens: 12_288 },
+      { type: "enabled", budget_tokens: 24_576 },
+      { type: "enabled", budget_tokens: 24_576 },
+      { type: "enabled", budget_tokens: 32_000 },
+    ]);
+    expect(captured.map((c) => c.body.max_tokens)).toEqual([
+      4_096 + 5_120,
+      12_288 + 13_312,
+      24_576 + 25_600,
+      24_576 + 25_600,
+      32_000 + 33_024,
+    ]);
   });
 
   it("a strict server that rejects output_config never sees the field unless the connection declared it", async () => {
@@ -208,9 +297,9 @@ describe("custom Anthropic-compatible endpoint distinguishes xhigh vs max on the
       },
     );
 
-    // Undeclared: both tiers pass through the strict server untouched.
+    // Undeclared: every level passes through the strict server untouched.
     const strict = customPort();
-    for (const effort of ["xhigh", "max"] as const) {
+    for (const effort of ["low", "medium", "high", "xhigh", "max"] as const) {
       const events = await drain(strict.port.streamText(strict.requestFor(effort)));
       expect(events.filter((e) => e.type === "error")).toEqual([]);
     }
@@ -218,7 +307,7 @@ describe("custom Anthropic-compatible endpoint distinguishes xhigh vs max on the
 
     // Declared: the same server rejects the added field — the gate is what
     // keeps it off the wire above, not a permissive server.
-    const declared = customPort(["xhigh", "max"]);
+    const declared = customPort(["low", "medium", "high", "xhigh", "max"]);
     const declaredEvents = await drain(declared.port.streamText(declared.requestFor("max")));
     expect(declaredEvents.filter((e) => e.type === "error")).toHaveLength(1);
     expect(rejected).toHaveLength(1);
@@ -236,6 +325,30 @@ describe("custom Anthropic-compatible endpoint distinguishes xhigh vs max on the
     expect(body.output_config).toBeUndefined();
     expect(body.thinking).toMatchObject({ type: "enabled", budget_tokens: 24_576 });
     expect(body.max_tokens).toBe(24_576 + 25_600);
+  });
+
+  it("a declared vocabulary never changes what a catalog provider sends", async () => {
+    stubFetch();
+    const { port, requestFor } = catalogKimiPort();
+
+    const levels = ["low", "medium", "high", "xhigh", "max"] as const;
+    for (const level of levels) {
+      await drain(port.streamText(requestFor(level)));
+    }
+
+    // A catalog provider is not a custom endpoint: the effort enum belongs to
+    // its own branch (or to no branch at all), so no declaration may add a
+    // field it never advertised.
+    for (const capture of captured) {
+      expect(capture.body.output_config).toBeUndefined();
+    }
+    expect(captured.map((c) => c.body.thinking)).toMatchObject([
+      { type: "enabled", budget_tokens: 4_096 },
+      { type: "enabled", budget_tokens: 12_288 },
+      { type: "enabled", budget_tokens: 24_576 },
+      { type: "enabled", budget_tokens: 24_576 },
+      { type: "enabled", budget_tokens: 24_576 },
+    ]);
   });
 
 });

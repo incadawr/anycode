@@ -2986,8 +2986,8 @@ async function boot(): Promise<void> {
           ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
           // The connection's declared effort vocabulary (ANYCODE_EFFORT_LEVELS):
           // the model port sends `output_config.effort` to a custom
-          // Anthropic-compatible endpoint only when that vocabulary named BOTH
-          // xhigh and max; without it the endpoint gets distinct thinking
+          // Anthropic-compatible endpoint only when that vocabulary names the
+          // selected level; without it the endpoint gets distinct thinking
           // budgets and no field it never advertised. Conditional, so an
           // undeclared connection keeps today's request bytes.
           ...(envConfig.effortLevels !== undefined ? { declaredEffortLevels: envConfig.effortLevels } : {}),

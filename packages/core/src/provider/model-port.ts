@@ -357,16 +357,28 @@ export function reasoningRequestOptions(
   // `output_config.effort` is a SEPARATE, opt-in half: it is sent only where
   // support is KNOWN. First-party Anthropic models carry it on their dedicated
   // branch above (adaptive thinking) and keep it unchanged here. A custom
-  // endpoint gets it only when the connection DECLARED both `xhigh` and `max`
-  // in its effort vocabulary (`declaredEffortLevels`, from the same
-  // ANYCODE_EFFORT_LEVELS declaration the CLI validates the selection
-  // against) — declaring both tiers is the endpoint asserting it distinguishes
-  // them itself, which on this transport means the effort enum. Without that
-  // declaration a strict Anthropic-compatible server that only understands
-  // `thinking.budget_tokens` never sees an unknown field.
+  // endpoint gets it when the connection DECLARED an effort vocabulary
+  // (`declaredEffortLevels`, from the same ANYCODE_EFFORT_LEVELS declaration
+  // the CLI validates the selection against) AND the selected tier is one of
+  // the declared levels — the declaration is the endpoint naming the effort
+  // vocabulary it speaks, and on this transport an effort enum is the only
+  // way that vocabulary can be expressed.
+  //
+  // The enum is sent for EVERY declared level (low, medium, high, xhigh,
+  // max), not only the top two: an endpoint that ignores
+  // `thinking.budget_tokens` and switches its reasoning tier on the effort
+  // enum (MiniMax and other effort-enum endpoints) otherwise keeps its own
+  // default — the maximum — no matter which level was picked, so "low"
+  // silently did nothing. The budgets stay as they were (distinct per tier,
+  // xhigh vs max still distinct), so an endpoint that ignores the enum still
+  // sees a different `thinking.budget_tokens`.
+  //
+  // Without a declaration the request bytes stay EXACTLY as before: a strict
+  // Anthropic-compatible server that only understands `thinking.budget_tokens`
+  // never sees an unknown field. A declared level that was never selected
+  // (or a selected level the connection did not declare) is likewise not
+  // sent.
   const customAnthropicEndpoint = providerName === undefined;
-  const declaredTiers =
-    declaredEffortLevels?.includes("xhigh") === true && declaredEffortLevels.includes("max");
   const budgetTokens =
     effort === "max" && customAnthropicEndpoint
       ? GENERIC_MAX_BUDGET_TOKENS
@@ -374,7 +386,7 @@ export function reasoningRequestOptions(
         ? REASONING_BUDGET_TOKENS.high
         : REASONING_BUDGET_TOKENS[effort as "low" | "medium" | "high"];
   const wireEffort =
-    customAnthropicEndpoint && declaredTiers && (effort === "max" || effort === "xhigh") ? effort : undefined;
+    customAnthropicEndpoint && declaredEffortLevels?.includes(effort) === true ? effort : undefined;
   let maxOutputTokens = Math.max(request.maxOutputTokens ?? 0, budgetTokens + 1_024);
   // The SDK adds the thinking budget to max_tokens on the wire.
   if (isMiMoModel(providerName, modelId)) {
