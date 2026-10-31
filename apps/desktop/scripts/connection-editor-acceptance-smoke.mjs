@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { buildSmokeEnv } from "./model-overrides-smoke-env.mjs";
 import { launchSmokeElectron } from "./smoke-electron-launch.mjs";
@@ -39,7 +40,8 @@ writeFileSync(join(profile, "settings.json"), JSON.stringify({
   ]}, tools:{}, permissions:{alwaysAllow:[]}, ui:{theme:"dark"}, security:{allowWeakSecretStorage:false},
 }));
 const env = buildSmokeEnv(process.env, profile, debugPort, binary);
-const app = launchSmokeElectron(spawn, {env, detached:true});
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const app = launchSmokeElectron(spawn, {env, cwd: repoRoot, detached:true});
 let ws;
 let nextId = 0;
 const pending = new Map();
@@ -91,6 +93,11 @@ async function editConnection(id) {
 const editFirst=()=>editConnection("conn-one");
 
 try {
+  const identity = await poll(() => { try { return JSON.parse(readFileSync(join(profile, "identity.json"), "utf8")); } catch { return null; } });
+  assert.equal(identity.nonce, env.ANYCODE_SMOKE_IDENTITY);
+  assert.equal(identity.desktopRoot, realpathSync(env.ANYCODE_EXPECTED_DESKTOP_ROOT));
+  assert.equal(identity.userData, realpathSync(join(profile, "user-data")));
+  assert.equal(identity.sessionData, realpathSync(join(profile, "session-data")));
   const target=await poll(async()=>{try{return (await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json()).find(t=>t.type==="page"&&!t.url.startsWith("devtools://"));}catch{return false;}},60000);
   ws=new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve,reject)=>{ws.onopen=resolve;ws.onerror=reject;});

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import {
   launchSmokeElectron,
   smokeElectronArgs,
@@ -98,4 +99,17 @@ describe("dev Electron smoke launcher", () => {
       expect(source, name).not.toContain('spawn("pnpm", ["--filter", "@anycode/desktop", "dev"');
     }
   });
+});
+
+
+it("launches isolated automation with absolute node and a controlled search path", () => {
+  const spawn = vi.fn();
+  const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+  launchSmokeElectron(spawn, { env: { ANYCODE_ISOLATED_SMOKE:"1", ANYCODE_EXPECTED_DESKTOP_ROOT:desktopRoot, PATH:"/unsafe/bin" }, cwd:resolve(desktopRoot, "../..") });
+  const [command, args, options] = spawn.mock.calls[0]! as unknown as [string, string[], {cwd:string; env:NodeJS.ProcessEnv}];
+  expect(command).toBe(process.execPath);
+  expect(args[0]).toBe(resolve(desktopRoot, "node_modules/electron-vite/bin/electron-vite.js"));
+  expect(options.cwd).toBe(desktopRoot);
+  expect(options.env.PATH).not.toContain("/unsafe/bin");
+  expect(JSON.parse(options.env.ELECTRON_CLI_ARGS!)).toContain("--use-mock-keychain");
 });

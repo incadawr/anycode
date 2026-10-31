@@ -1,3 +1,5 @@
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 /**
  * Shared launcher for GUI smoke scripts that drive a DEVELOPMENT Electron app.
  *
@@ -96,6 +98,15 @@ export function launchSmokeElectron(spawn, options = {}) {
     stdio = ["ignore", "inherit", "inherit"],
     detached = process.platform !== "win32",
   } = options;
+  if (env.ANYCODE_ISOLATED_SMOKE === "1") {
+    const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+    const repoRoot = resolve(desktopRoot, "../..");
+    if (env.ANYCODE_EXPECTED_DESKTOP_ROOT !== desktopRoot || (cwd !== undefined && resolve(cwd) !== repoRoot)) throw new Error("Isolated launcher worktree mismatch");
+    const childEnv = smokeElectronEnv(env, { remoteDebuggingPort });
+    childEnv.PATH = `/usr/bin:/bin:/usr/sbin:/sbin:${dirname(process.execPath)}`;
+    childEnv.ELECTRON_CLI_ARGS = JSON.stringify(smokeElectronSwitches(electron));
+    return spawn(process.execPath, [join(desktopRoot, "node_modules/electron-vite/bin/electron-vite.js"), "dev"], { cwd: desktopRoot, env: childEnv, stdio, detached });
+  }
   return spawn("pnpm", smokeElectronArgs(electron), {
     ...(cwd === undefined ? {} : { cwd }),
     env: smokeElectronEnv(env, { remoteDebuggingPort }),

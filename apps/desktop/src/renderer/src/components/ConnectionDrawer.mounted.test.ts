@@ -247,10 +247,10 @@ it("keeps the Advanced fields in a gapped column and gives the rate inputs the d
     // element no longer spaces its slotted contents in Chromium.
     expect(advanced.querySelector(":scope > .connection-drawer-advanced-body")).not.toBeNull();
     // The session-scope hint sits under Pricing.
-    expect(advanced.textContent).toContain("a session that is already open keeps the rates it started with");
+    expect(container.querySelector('[aria-label*="a session that is already open"]')).not.toBeNull();
     const pricing = [...container.querySelectorAll("select")].find(s => [...s.options].some(o => o.value === "rates"))!;
     await act(async () => { pricing.value = "rates"; pricing.dispatchEvent(new Event("change", {bubbles:true})); });
-    const rateInputs = [...container.querySelectorAll<HTMLInputElement>(".connection-drawer-rate-grid input[type=number]")];
+    const rateInputs = [...container.querySelectorAll<HTMLInputElement>('input[aria-label^="Connection fallback "][type=number]')];
     expect(rateInputs).toHaveLength(4);
     for (const input of rateInputs) {
       expect(input.classList.contains("settings-field-input")).toBe(true);
@@ -333,5 +333,25 @@ it("uses endpoint effort levels and saves an explicit reasoning denial", async (
     await act(async () => { support.value = "off"; support.dispatchEvent(new Event("change", {bubbles:true})); });
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
     expect(update).toHaveBeenCalledWith(expect.objectContaining({reasoningSupported:false}));
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+
+it("keeps manually selected models and shows a safe error when fetch IPC rejects", async () => {
+  const connection = { id:"c1", providerId:"glm", model:"glm-5.3", authOptional:true, modelsFetchedAt:"2026-01-01", visibleModels:["glm-5.3"] };
+  const rig = catalogRig(connection);
+  rig.fetchModels.mockRejectedValue(new Error("sensitive fixture detail"));
+  const { container, root } = await mountEdit(connection, rig);
+  try {
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Fetch models")!.click(); });
+    const manual = container.querySelector<HTMLInputElement>('input[aria-label="Manual model ID"]')!;
+    await typeInto(manual, "manual-choice");
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Add")!.click(); });
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Refresh")!.click(); });
+    expect(rig.fetchModels).toHaveBeenCalled();
+    expect(container.textContent).toContain("Your model selections are kept");
+    expect(container.textContent).not.toContain("sensitive fixture detail");
+    const choice = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find(x => x.parentElement?.textContent?.includes("manual-choice"));
+    expect(choice?.checked).toBe(true);
   } finally { await act(async () => root.unmount()); container.remove(); }
 });

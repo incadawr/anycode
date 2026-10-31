@@ -1,3 +1,4 @@
+import { initializeIsolatedSmoke, isolatedSmokeStorage } from "./isolated-smoke.js";
 import { closeSessionForAgent } from "./communication-close-session.js";
 import { TAB_CLOSED_ENVELOPE_TYPE } from "../shared/envelopes.js";
 import { applyInputFromBlock, createCommunicationController, type CommunicationController } from "./communication-controller.js";
@@ -488,6 +489,8 @@ function resolveCodexProfilesHome(env: NodeJS.ProcessEnv, isPackaged: boolean): 
  * can never disagree. `undefined` (production / gate-refused / var-absent)
  * leaves every consumer on its real `homedir()` default.
  */
+const isolatedSmoke = initializeIsolatedSmoke(app, process.env);
+if (isolatedSmoke && process.argv.includes("--self-check")) throw new Error("Incompatible automation modes");
 const selfCheckProfile = createSelfCheckProfile(process.argv);
 if (selfCheckProfile !== undefined) {
   const isolatedEnv = selfCheckEnvironment(process.env, selfCheckProfile);
@@ -505,7 +508,7 @@ const codexProfilesHome: string | undefined = selfCheckProfile ?? resolveCodexPr
 // (fail-closed for a packaged build) and off by default: a normal dev launch
 // with no automation env is byte-identical to before this slice.
 const devUserDataOverride = resolveUserDataOverride(process.env, app.isPackaged);
-if (devUserDataOverride !== null) {
+if (devUserDataOverride !== null && !isolatedSmoke) {
   // A mkdir failure here (e.g. an unwritable/invalid override path) must not
   // crash boot before a single window exists — catch, warn once, and fall
   // back to Electron's default userData profile (design codex finding
@@ -520,7 +523,7 @@ if (devUserDataOverride !== null) {
       error,
     );
   }
-} else if (isRefusedUserDataOverride(process.env, app.isPackaged)) {
+} else if (!isolatedSmoke && isRefusedUserDataOverride(process.env, app.isPackaged)) {
   console.warn("[main] ANYCODE_USER_DATA_DIR set but refused (packaged build, or a relative path)");
 }
 
@@ -2190,7 +2193,7 @@ void app.whenReady().then(async () => {
   settingsPathForQuitFlush = settingsPath;
   const loaded = await loadSettings(settingsPath, fileLogger);
   settings = loaded.settings;
-  vault = new Vault({ safeStorage: selfCheckProfile === undefined ? safeStorage : selfCheckStorage, secretsPath, logger: fileLogger });
+  vault = new Vault({ safeStorage: isolatedSmoke ? isolatedSmokeStorage : selfCheckProfile === undefined ? safeStorage : selfCheckStorage, secretsPath, logger: fileLogger });
   // Boot-time scrub of stale v1 provider secrets ( W9 §2): W9′ keys every
   // credential by connection, so a leftover legacy `provider.apiKey` /
   // `provider.<id>.{apiKey,oauth}` would lie to readiness/status projections.
@@ -3283,10 +3286,10 @@ void app.whenReady().then(async () => {
   const codexManifestCacheFile = join(codexProfilesRoot(codexProfilesHome), "manifest.json");
   // : self-check profiles get NO new automatic networking — not the
   // periodic schedule, not the refusal-path forced refresh.
-  const codexRefusalRefresh = selfCheckProfile === undefined ? createCodexManifestRefusalRefresh({ cacheFile: codexManifestCacheFile }) : null;
+  const codexRefusalRefresh = selfCheckProfile === undefined && !isolatedSmoke ? createCodexManifestRefusalRefresh({ cacheFile: codexManifestCacheFile }) : null;
   codexOnboarding = registerCodexIpc({
     bootEnv,
-    ...(selfCheckProfile !== undefined ? { fs: selfCheckBinaryFs } : {}),
+    ...(selfCheckProfile !== undefined || isolatedSmoke ? { fs: selfCheckBinaryFs } : {}),
     onDeviceCode: (progress) => sendToMainWindow(win, CODEX_LOGIN_PROGRESS_CHANNEL, progress),
     // : the doctor and `codex login` are children main spawns itself, so
     // they get the engine proxy through the same carrier the tab children use.
@@ -3379,7 +3382,7 @@ void app.whenReady().then(async () => {
   // scope for this track (profile CRUD, quotas, install/manifest — CC-E).
   claudeOnboarding = registerClaudeIpc({
     bootEnv,
-    ...(selfCheckProfile !== undefined ? { fs: selfCheckBinaryFs } : {}),
+    ...(selfCheckProfile !== undefined || isolatedSmoke ? { fs: selfCheckBinaryFs } : {}),
     // : mirror of the codex dep above. The claude doctor makes no network
     // call of its own, so this buys parity rather than function — but the doctor
     // env builder declares itself a mirror of the session child's builder, and
