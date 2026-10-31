@@ -4151,6 +4151,31 @@ describe("Codex manual compaction", () => {
 
 
 describe("Codex service tier", () => {
+  it.each([true, false])("restores stored speed %s and clears it on an unsupported model", async (fast) => {
+    const db = new SqlitePersistenceAdapter(":memory:");
+    await db.createSession({ id: "speed", workspace: "/work", model: "gpt-5.6-sol", mode: "build" });
+    const first = new FakeAppServer();
+    first.threadEcho.model = "gpt-5.6-sol";
+    const original = await createNativeCodexSession(first, "/work");
+    expect(original.engine.selectFast(fast)).toMatchObject({ ok: true });
+    await db.touchSession("speed", { codexFast: fast });
+    const row = (await db.getRootSession("speed"))!;
+    const server = new FakeAppServer();
+    server.threadEcho.model = "gpt-5.6-sol";
+    const resumed = await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, { model: row.model, fast: row.codexFast, origin: "persisted" });
+    await runTurn(server, resumed.engine);
+    expect(server.turnStartParams().at(-1)?.serviceTier).toBe(fast ? "fast" : "default");
+    expect(resumed.engine.selectModel("gpt-5.4-mini")).toMatchObject({ ok: true, resetFast: true });
+    await db.touchSession("speed", { model: "gpt-5.4-mini", codexFast: false });
+    const switched = (await db.getRootSession("speed"))!;
+    const nextServer = new FakeAppServer();
+    nextServer.threadEcho.model = "gpt-5.4-mini";
+    const next = await resumeNativeCodexSession(nextServer, "/work", "persisted-thread", undefined, undefined, { model: switched.model, fast: switched.codexFast, origin: "persisted" });
+    await runTurn(nextServer, next.engine);
+    expect(nextServer.turnStartParams().at(-1)?.serviceTier).not.toBe("fast");
+    expect(next.engine.snapshot().fast).not.toBe(true);
+  });
+
   it("restores a persisted override and sends it on the first resumed turn", async () => {
     const server = new FakeAppServer();
     server.threadEcho.serviceTier = "priority";

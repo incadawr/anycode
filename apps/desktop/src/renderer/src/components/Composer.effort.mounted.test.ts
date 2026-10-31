@@ -118,7 +118,7 @@ describe("Composer — native effort handoff", () => {
     await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab-1", store } }, createElement(Composer))));
     try {
       const speed = container.querySelector<HTMLButtonElement>('button[aria-label="Codex speed"]')!;
-      expect(speed.textContent).toBe("Standard");
+      expect(speed.textContent).toBe("Speed");
       await act(async () => speed.click());
       expect(send).toHaveBeenCalledWith("tab-1", { type: "set_engine_fast", fast: true });
     } finally { await act(async () => root.unmount()); }
