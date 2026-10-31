@@ -672,8 +672,16 @@ export interface SessionPersistence {
  * replayed/duplicate finish after a reconnect write nothing new.
  */
 export interface ProviderUsageAudit {
-  /** Fire-and-forget, never blocks or fails the turn (write-behind, TASK.34 invariant 3). */
-  record(record: Omit<ProviderUsageRecord, "sessionId" | "createdAt">): void;
+  /**
+   * Fire-and-forget, never blocks or fails the turn (write-behind, TASK.34 invariant 3).
+   *
+   * `finishedAt` is the instant the MODEL STEP finished, captured when its
+   * finish event arrived — not when this call happens. A step with tool calls
+   * is staged at finish and flushed only after the tools (and any approval)
+   * complete, so a writer that prices by its own clock would bill a 03:59 UTC
+   * step at the off-peak rate. Absent ⇒ the writer's own clock.
+   */
+  record(record: Omit<ProviderUsageRecord, "sessionId" | "createdAt">, finishedAt?: number): void;
   /**
    * Taskana 4083 cross-review finding 4: OPTIONAL drain of the write-behind
    * queue — resolves once every record() handed over so far has settled.
@@ -1478,7 +1486,7 @@ export class Session {
    * Reconnect-safe: the SQLite PK (session_id, turn_id, step) + INSERT OR
    * IGNORE make a replayed finish after a flush a storage no-op.
    */
-  private pendingUsageAuditRow: Omit<ProviderUsageRecord, "sessionId" | "createdAt"> | null = null;
+  private pendingUsageAuditRow: (Omit<ProviderUsageRecord, "sessionId" | "createdAt"> & { finishedAt: number }) | null = null;
   /**
    * Taskana 4083 / TASK.34: the last audit summary the hydration path has
    * read (pushSessionCheckpoint is sync; the summary port is async, so the
@@ -3194,9 +3202,9 @@ export class Session {
   }
 
   /** Accounting must never terminate a turn when a sink throws synchronously. */
-  private recordUsageAuditRow(row: Parameters<ProviderUsageAudit["record"]>[0]): void {
+  private recordUsageAuditRow(row: Parameters<ProviderUsageAudit["record"]>[0], finishedAt?: number): void {
     try {
-      this.usageAudit?.sink.record(row);
+      this.usageAudit?.sink.record(row, finishedAt);
     } catch (e) {
       console.error(`[host] usage audit write failed: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -3212,12 +3220,16 @@ export class Session {
    * Clears the slot — one row is written exactly once per flush trigger.
    */
   private flushPendingUsageAuditRow(): void {
-    const row = this.pendingUsageAuditRow;
-    if (row === null) {
+    const staged = this.pendingUsageAuditRow;
+    if (staged === null) {
       return;
     }
     this.pendingUsageAuditRow = null;
-    this.recordUsageAuditRow(row);
+    // The instant travels WITH the staged row: a tool round-trip or an
+    // approval can push the flush across a tariff boundary, and the step is
+    // still billed at the moment it finished.
+    const { finishedAt, ...row } = staged;
+    this.recordUsageAuditRow(row, finishedAt);
   }
 
   /**
@@ -5235,6 +5247,9 @@ export class Session {
           // flushPendingUsageAuditRow (where the sink is actually called).
           if (this.currentStep !== undefined) {
             this.pendingUsageAuditRow = {
+              // Captured HERE, at the finish event — never when the staged row
+              // is finally flushed (see ProviderUsageAudit.record).
+              finishedAt: Date.now(),
               turnId,
               step: this.currentStep,
               model: this.model,

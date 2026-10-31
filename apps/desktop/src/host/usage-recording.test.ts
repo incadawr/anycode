@@ -103,6 +103,23 @@ describe("provider-usage recording (host writers)", () => {
     expect(row.priceBasisId).toBe(PEAK_BASIS);
   });
 
+  // A step with tool calls is staged at its finish and written only after the
+  // tool round-trip (and any approval) completes. The tariff must follow the
+  // STEP, so a response finished one millisecond before the 04:00 boundary is
+  // still peak even when the write lands after it.
+  it("prices a delayed write by the step's finish instant, not the flush instant", () => {
+    const finishedInPeak = Date.UTC(2026, 9, 28, 3, 59, 59, 999);
+    const flushedOffPeak = Date.UTC(2026, 9, 28, 4, 0);
+    const row = sessionUsageRow(
+      { turnId: "turn-delayed", step: 1, finishReason: "tool_calls", transportRetries: 0, model: "deepseek-v4-pro", ...TURN_USAGE },
+      { price: pricing, pricingRaw: undefined, model: "deepseek-v4-pro", finishedAt: finishedInPeak, now: () => flushedOffPeak },
+      "delayed-session",
+    );
+    expect(row.createdAt).toBe(finishedInPeak);
+    expect(row.costUsd).toBeCloseTo(5.28);
+    expect(row.priceBasisId).toBe(PEAK_BASIS);
+  });
+
   it("keeps a flat connection rate unbanded even at night", () => {
     const row = sessionUsageRow(
       { turnId: "turn-flat", step: 1, finishReason: "stop", transportRetries: 0, model: "deepseek-v4-pro", ...TURN_USAGE },
@@ -125,14 +142,16 @@ describe("host/index.ts — usage-recording wiring", () => {
 
   it("routes both writers through the row builders", () => {
     // One call site each: the main sink and the subagent recorder.
-    expect(indexSource.split("sessionUsageRow(").length - 1).toBe(1);
-    expect(indexSource.split("subagentUsageRow(").length - 1).toBe(1);
-    // Both hand the host clock over explicitly.
-    const recorderCalls = indexSource.split("UsageRow(usage, { price").length - 1 + indexSource.split("sessionUsageRow(r, { price").length - 1;
-    expect(recorderCalls).toBe(2);
-    for (const call of indexSource.split("UsageRow(").slice(1)) {
-      expect(call.slice(0, 160)).toContain("now: Date.now");
-    }
+    const sessionCalls = indexSource.split("sessionUsageRow(").slice(1);
+    const subagentCalls = indexSource.split("subagentUsageRow(").slice(1);
+    expect(sessionCalls).toHaveLength(1);
+    expect(subagentCalls).toHaveLength(1);
+    // Both hand the host clock over explicitly; the session sink additionally
+    // forwards the finish instant the session captured, so a write delayed by
+    // tool dispatch cannot move the step's tariff band.
+    expect(sessionCalls[0]!.slice(0, 400)).toContain("now: Date.now");
+    expect(sessionCalls[0]!.slice(0, 400)).toContain("finishedAt");
+    expect(subagentCalls[0]!.slice(0, 200)).toContain("now: Date.now");
   });
 
   it("never prices a step or stamps a row on its own", () => {
