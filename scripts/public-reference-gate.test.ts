@@ -75,8 +75,6 @@ type Entry = {
  */
 const ALLOW: Entry[] = [
   // ids of internal background tasks and throwaway worktrees used as test data or log values
-  { path: "apps/desktop/scripts/detach-smoke.mjs", value: "145", note: "evidence directory of a dev smoke script (unpublished working tree)" },
-  { path: "apps/desktop/scripts/model-picker-smoke.mjs", value: "106", note: "temporary-directory prefix of a dev smoke script" },
   { path: "apps/desktop/src/host/session.test.ts", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
   { path: "apps/desktop/src/host/session.test.ts", value: "-2", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
   { path: "apps/desktop/src/host/session.test.ts", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
@@ -260,22 +258,6 @@ const ALLOW: Entry[] = [
   { path: "packages/core/src/workflow/template.ts", value: " 3.4.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
 
   // fragments of paths, evidence directories and session names from the unpublished working tree
-  { path: "apps/desktop/scripts/child-session-engine-smoke.mjs", value: "102-track", note: "evidence directory of a dev smoke script (unpublished working tree)" },
-  { path: "apps/desktop/scripts/child-session-engine-smoke.mjs", before: "working-docs/", value: "102-track/evidence/S4/", note: "evidence directory of a dev smoke script (unpublished working tree)" },
-  { path: "apps/desktop/scripts/child-session-explicit-provider-smoke.mjs", value: "102-track", note: "evidence directory of a dev smoke script (unpublished working tree)" },
-  { path: "apps/desktop/scripts/child-session-explicit-provider-smoke.mjs", before: "working-docs/", value: "102-track/evidence/S2/", note: "evidence directory of a dev smoke script (unpublished working tree)" },
-  { path: "apps/desktop/scripts/child-session-permission-smoke.mjs", value: "102-track", note: "evidence directory of a dev smoke script (unpublished working tree)" },
-  { path: "apps/desktop/scripts/child-session-permission-smoke.mjs", before: "working-docs/", value: "102-track/evidence/S2/", note: "evidence directory of a dev smoke script (unpublished working tree)" },
-  { path: "apps/desktop/scripts/child-session-race-smoke.mjs", value: "102-track", note: "evidence directory of a dev smoke script (unpublished working tree)" },
-  { path: "apps/desktop/scripts/child-session-race-smoke.mjs", before: "working-docs/", value: "102-track/evidence/S2/", note: "evidence directory of a dev smoke script (unpublished working tree)" },
-  { path: "apps/desktop/scripts/child-session-scenario-smoke.mjs", value: "102-track", note: "evidence directory of a dev smoke script (unpublished working tree)" },
-  { path: "apps/desktop/scripts/child-session-scenario-smoke.mjs", before: "working-docs/", value: "102-track/evidence/S2/", note: "evidence directory of a dev smoke script (unpublished working tree)" },
-  { path: "apps/desktop/scripts/child-session-split-smoke.mjs", value: "102-track", note: "evidence directory of a dev smoke script (unpublished working tree)" },
-  { path: "apps/desktop/scripts/child-session-split-smoke.mjs", before: "working-docs/", value: "102-track/evidence/S3/", note: "evidence directory of a dev smoke script (unpublished working tree)" },
-  { path: "apps/desktop/scripts/detach-smoke.mjs", before: "evidence/", value: "145/detach-result.json", note: "evidence directory of a dev smoke script (unpublished working tree)" },
-  { path: "apps/desktop/scripts/model-picker-smoke.mjs", before: "anycode-", value: "106-model-picker-evidence-", note: "temporary-directory prefix of a dev smoke script" },
-  { path: "apps/desktop/scripts/model-picker-smoke.mjs", before: "anycode-", value: "106-model-picker-profile-", note: "temporary-directory prefix of a dev smoke script" },
-  { path: "apps/desktop/scripts/model-picker-smoke.mjs", before: "anycode-", value: "106-model-picker-ws-", note: "temporary-directory prefix of a dev smoke script" },
   { path: "apps/desktop/src/main/codex-rollout-fixtures/agent-message-inter-agent.jsonl", before: "/Users/scrubbed/projects/tools/anycode/.anycode/worktrees/", value: "-5\\", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
   { path: "apps/desktop/src/preload/index.ts", value: " 2.4.4.", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
   { path: "apps/desktop/src/shared/credentials.ts", value: " 2.5.1.", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },

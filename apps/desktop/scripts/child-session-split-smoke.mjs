@@ -100,7 +100,7 @@
  * `0 = ALL GREEN, 1 = FAIL, 2 = SKIP (no evidence)` — 0 means the run proved
  * something, which a SKIP (no PNGs, no layout checked) did not. Evidence (5 required
  * PNGs + a JSON result dump + the redirected app-stderr log) lands in
- * `working-docs/task102-track/evidence/S3/`.
+ * `working-docs/child-session-smoke/evidence/S3/`.
  */
 
 import { execFileSync } from "node:child_process";
@@ -134,7 +134,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
 
-const EVIDENCE_DIR = join(repoRoot, "working-docs", "task102-track", "evidence", "S3");
+const EVIDENCE_DIR = join(repoRoot, "working-docs", "child-session-smoke", "evidence", "S3");
 const APP_STDERR_LOG = join(EVIDENCE_DIR, "app-stderr.log");
 const TOTAL_STEPS = 10;
 const APP_EXIT_GRACE_MS = 15_000;

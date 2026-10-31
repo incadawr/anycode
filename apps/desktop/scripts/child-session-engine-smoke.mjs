@@ -149,7 +149,7 @@
  * text matching `/not (ready|available)/i`; anything else that leaves
  * childRuns empty is a hard FAIL with the full block payload, never silently
  * absorbed. Evidence (3 PNGs, a JSON result dump, the redirected app-stderr
- * log) lands in `working-docs/task102-track/evidence/S4/`, filenames scoped
+ * log) lands in `working-docs/child-session-smoke/evidence/S4/`, filenames scoped
  * by `--engine` so a claude run and a codex run never clobber each other.
  */
 
@@ -194,7 +194,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
 
-const EVIDENCE_DIR = join(repoRoot, "working-docs", "task102-track", "evidence", "S4");
+const EVIDENCE_DIR = join(repoRoot, "working-docs", "child-session-smoke", "evidence", "S4");
 const TOTAL_STEPS = 7;
 const APP_EXIT_GRACE_MS = 15_000;
 const SIGTERM_GRACE_MS = 750;
