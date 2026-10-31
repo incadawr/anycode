@@ -119,7 +119,6 @@ const ALLOW: Entry[] = [
   { path: "apps/desktop/src/renderer/src/components/profile-loader.ts", values: ["187"] },
   { path: "apps/desktop/src/renderer/src/store.ts", values: ["56"] },
   { path: "apps/desktop/src/renderer/src/tab-registry.test.ts", values: ["198", "56"] },
-  { path: "docs/development/automation-smoke.md", values: ["106"] },
   { path: "docs/superpowers/plans/2026-08-08-child-sessions-track.md", values: ["102"] },
   { path: "packages/core/src/telemetry/admin.ts", values: ["187"] },
   { path: "packages/core/src/telemetry/stats.test.ts", values: ["187"] },
