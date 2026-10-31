@@ -473,6 +473,9 @@ export function mapProgressToEvent(progress: SubagentProgress, toolCallId: strin
         toolCallId,
         status: progress.status,
         turns: progress.turns,
+        // The terminal's own exact count, never the last (throttle-possibly
+        // stale) `subagent_progress` count: the settle is authoritative.
+        ...(progress.toolCalls !== undefined ? { toolCalls: progress.toolCalls } : {}),
         durationMs: progress.durationMs,
         ...(progress.activitySuppressed !== undefined ? { activitySuppressed: progress.activitySuppressed } : {}),
         // TASK.171: the requested id (same field/semantics as subagent_start's

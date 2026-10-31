@@ -1208,6 +1208,11 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 kind: "end",
                 status: event.status,
                 turns: event.turns,
+                // The child's own authoritative count (session.ts): progress
+                // frames cross a leading-edge 1000 ms throttle, so the last
+                // one the parent ever saw may lag behind the final call —
+                // the terminal report is the only exact one.
+                toolCalls: event.toolCalls,
                 durationMs: event.durationMs,
                 ...(event.activitySuppressed !== undefined ? { activitySuppressed: event.activitySuppressed } : {}),
                 ...(event.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: event.finalTurnFinishReason } : {}),

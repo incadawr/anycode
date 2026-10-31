@@ -267,7 +267,7 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
     );
 
     expect(onProgress).toHaveBeenCalledTimes(1);
-    const expectedEnd: SubagentProgress = { kind: "end", status: "completed", turns: 4, durationMs: 12_345 };
+    const expectedEnd: SubagentProgress = { kind: "end", status: "completed", turns: 4, toolCalls: 6, durationMs: 12_345 };
     expect(onProgress).toHaveBeenCalledWith(expectedEnd);
 
     const outcome: SessionSubagentOutcome = await pending;
@@ -317,7 +317,7 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
         }),
       );
 
-      expect(onProgress).toHaveBeenCalledWith({ kind: "end", status: "max_turns", turns: 3, durationMs: 999 });
+      expect(onProgress).toHaveBeenCalledWith({ kind: "end", status: "max_turns", turns: 3, toolCalls: 5, durationMs: 999 });
       const outcome: SessionSubagentOutcome = await pending;
       expect(outcome.status).toBe("max_turns");
       expect(outcome.finalText).toBe(text);
@@ -342,7 +342,7 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
 
       emit(terminalEvent(requestId, { childSessionId: "child-s", activitySuppressed: 7 }));
 
-      const expectedEnd: SubagentProgress = { kind: "end", status: "completed", turns: 0, durationMs: 0, activitySuppressed: 7 };
+      const expectedEnd: SubagentProgress = { kind: "end", status: "completed", turns: 0, toolCalls: 0, durationMs: 0, activitySuppressed: 7 };
       expect(onProgress).toHaveBeenCalledWith(expectedEnd);
       await pending;
     });
@@ -391,6 +391,34 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
     });
   });
 
+  // The child's progress stream crosses a leading-edge 1000 ms throttle
+  // (session.ts emitChildProgressBoundary), so the last `progress` frame the
+  // parent ever saw can lag behind the run's final tool call. The terminal
+  // report is the authoritative one — its own count must ride the end
+  // progress, otherwise the settled card keeps the throttled number forever.
+  describe("terminal toolCalls passthrough (exact count, not the throttled one)", () => {
+    it("a throttled progress frame (1 call) followed by a terminal reporting 2 puts 2 on the end-progress report", async () => {
+      const { port, sent, emit } = harness();
+      const onProgress = vi.fn();
+      const pending = port.run(
+        { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-toolcalls" },
+        { onProgress },
+      );
+      const requestId = spawns(sent)[0]!.requestId;
+      emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-tc", childTabId: "tab-tc", model: "m" });
+      emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "progress", turns: 1, toolCalls: 1, lastTool: "Bash" });
+      onProgress.mockClear();
+
+      emit(terminalEvent(requestId, { childSessionId: "child-tc", turns: 1, toolCalls: 2 }));
+
+      const ends = onProgress.mock.calls.map(([p]) => p as SubagentProgress).filter((p) => p.kind === "end");
+      expect(ends).toHaveLength(1);
+      expect(ends[0]).toMatchObject({ kind: "end", turns: 1, toolCalls: 2 });
+      const outcome = await pending;
+      expect(outcome.toolCalls).toBe(2);
+    });
+  });
+
   // TASK.219: end uses the terminal's own child-fact model fields and the
   // REQUEST's engine — never req.model nor the accepted event's model.
   describe("terminal model/responseModel/engine passthrough (TASK.219)", () => {
@@ -411,6 +439,7 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
         kind: "end",
         status: "completed",
         turns: 0,
+        toolCalls: 0,
         durationMs: 0,
         model: "booted-model",
         responseModel: "glm-5.3",
@@ -453,7 +482,7 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
 
       emit(terminalEvent(requestId, { childSessionId: "child-m3" }));
 
-      expect(onProgress).toHaveBeenCalledWith({ kind: "end", status: "completed", turns: 0, durationMs: 0, engine: "codex" });
+      expect(onProgress).toHaveBeenCalledWith({ kind: "end", status: "completed", turns: 0, toolCalls: 0, durationMs: 0, engine: "codex" });
       await pending;
     });
   });
