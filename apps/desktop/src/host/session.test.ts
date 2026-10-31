@@ -8786,7 +8786,7 @@ describe("Session — supervisor idle-watchdog seam", () => {
 });
 
 /**
- * /the persistent per-step provider-usage audit.
+ * the persistent per-step provider-usage audit.
  * Mirrors the describe's usageStep shape; the harness's new
  * `usageAudit` option threads a recording sink + summary port into Session
  * exactly the way host/index.ts wires the real SqlitePersistenceAdapter.

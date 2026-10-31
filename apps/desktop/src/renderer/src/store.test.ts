@@ -8500,7 +8500,7 @@ describe("desktop store — Codex collab feed", () => {
 });
 
 /**
- * /the durable provider-usage audit slice. The
+ * the durable provider-usage audit slice. The
  * session_checkpoint.usageAudit field REPLACE-merges lastStep/totals/
  * totalSteps (list survives); the usage_audit reply sets the list; the
  * host_ready reset (performReset) restores the initial shape.

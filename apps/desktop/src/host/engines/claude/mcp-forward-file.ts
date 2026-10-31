@@ -1,5 +1,5 @@
 /**
- * /private on-disk transport for the Claude
+ * private on-disk transport for the Claude
  * `--mcp-config` document. The document carries resolved env values
  * (including explicitly requested inheritEnv) and resolved header values —
  * the authorized 0600 private file IS the transport for those values, so:

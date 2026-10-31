@@ -422,7 +422,7 @@ export interface HarnessOptions {
    * without real git. Omitted -> Session seam absent (checkpoints fail-closed).
    */
   checkpointsSeam?: SessionOptions["checkpoints"];
-  /** /the Session-level usage-audit seam, threaded DIRECTLY into Session. Omitted -> seam absent (audit inert, byte-identical). */
+  /** the Session-level usage-audit seam, threaded DIRECTLY into Session. Omitted -> seam absent (audit inert, byte-identical). */
   usageAudit?: SessionOptions["usageAudit"];
   initialContextUsage?: SessionOptions["initialContextUsage"];
   saveContextUsage?: SessionOptions["saveContextUsage"];
@@ -746,7 +746,7 @@ export function createHarness(options: HarnessOptions): Harness {
   // seed the loop's history, so `engine.historyItems()` and the Session's
   // `bootHistory` option are THE SAME items by construction. The harness
   // used to leave the loop empty and hand `bootHistory` to Session alone,
-  // which's rebuild-on-ui_ready exposed as an impossible state (a
+  // which the rebuild-on-ui_ready exposed as an impossible state (a
   // fresh snapshot read from an engine whose history never grew). Seeding
   // here keeps every existing boot-history test meaningful with ZERO
   // per-test edits — the same invariant production maintains.

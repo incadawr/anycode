@@ -147,7 +147,7 @@ export interface SessionDeleteSummary {
     checkpoints: number;
     claudeTranscriptItems: number;
     codexThreadItems: number;
-    /** /provider_usage rows (migration v19) the cascade removed. */
+    /** provider_usage rows (migration v19) the cascade removed. */
     providerUsage: number;
   };
 }

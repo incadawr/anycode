@@ -1,5 +1,5 @@
 /**
- * The channel-echo example (a) its manifest is valid as a
+ * The channel-echo example: (a) its manifest is valid as a
  * service plugin; (b) the REAL Sessions API server and the REAL service script
  * run together and a file addressed to a handle is answered in the outbox;
  * (c) an unknown handle is answered with an error file; (d) without the

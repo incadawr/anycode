@@ -2377,7 +2377,7 @@ function resetHealthForProfileConsumers(draft: AnycodeSettings, profileId: strin
 /**
  * Resets `lastHealth` to `unchecked` on every connection whose EFFECTIVE proxy
  * path moved between `before` and the draft (§7) — the direct
- * continuation of's "the path changed ⇒ the health reading is stale".
+ * continuation of the rule "the path changed ⇒ the health reading is stale".
  *
  * Fingerprinted per connection over ITS OWN ladder (connection rung, then app),
  * so editing the profile an app default points at also stales every connection

@@ -1280,7 +1280,7 @@ export interface DesktopState {
    */
   sessionTokens: SessionTokens | null;
   /**
-   * /the DURABLE provider-usage audit slice, restored
+   * the DURABLE provider-usage audit slice, restored
    * from SQLite via `session_checkpoint.usageAudit` (REPLACE-merge: the
    * host's lastStep/totals/totalSteps win) and the `usage_audit` list reply
    * (fetched when the ctx-popover opens). `list: null` = never loaded /
@@ -1623,7 +1623,7 @@ interface SessionSlice {
   envStatus: WireEnvStatus | null;
   contextBreakdown: WireContextBreakdown | null;
   sessionTokens: SessionTokens | null;
-  /** /durable audit slice; see `DesktopState.usageAudit`'s own doc. */
+  /** durable audit slice; see `DesktopState.usageAudit`'s own doc. */
   usageAudit: {
     lastStep: WireUsageAuditStep | null;
     totals: WireUsageAuditTotals | null;
@@ -5347,7 +5347,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             set({
               ...(message.sessionTokens !== undefined ? { sessionTokens: message.sessionTokens } : {}),
               ...(message.contextUsage !== undefined ? { contextUsage: message.contextUsage } : {}),
-              // /REPLACE-merge the durable audit slice
+              // REPLACE-merge the durable audit slice
               // — lastStep/totals/totalSteps from the host win; `list`
               // survives (served separately by usage_audit).
               ...(message.usageAudit !== undefined ? { usageAudit: { ...get().usageAudit, ...message.usageAudit } } : {}),
@@ -5855,7 +5855,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             set({ backgroundChildren: message.children });
             return;
           case "usage_audit":
-            // /the durable audit list, served ONLY in
+            // the durable audit list, served ONLY in
             // response to a usage_audit_request (newest-first, last 50). The
             // host's totals win when present; the list slot is REPLACE-set
             // (list: null = never loaded / foreign host that never answers).

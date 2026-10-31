@@ -1,5 +1,5 @@
 /**
- * /one load, two forwards. `prepareEngineMcpForward`
+ * one load, two forwards. `prepareEngineMcpForward`
  * loads the MCP server specs ONCE per boot via the existing core reader
  * `loadMcpServerSpecs` (project → user → .mcp.json precedence, resolved
  * env/headers, inherited env when requested) and serializes them for each

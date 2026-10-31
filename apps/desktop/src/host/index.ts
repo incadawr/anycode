@@ -1338,7 +1338,7 @@ async function bootCodexSession(
   // Shutdown-side half: handleShutdown runs this regardless of whether the
   // child ever finalized (a killed host never reaches onTerminal).
   if (codexChildTempDir !== undefined) codexChildTempDirCleanup = cleanupCodexChildTempDir;
-  // /MCP forwarding. After profile resolution: load
+  // MCP forwarding. After profile resolution: load
   // the specs ONCE (core reader; project → user → .mcp.json winners) and
   // serialize the Codex thread config map. Identical for system, managed and
   // linked profiles and for session children — no profile config.toml writes,
@@ -2125,7 +2125,7 @@ async function bootClaudeSession(
     console.log("[host] claude mcp bridge: child boot, no bridge");
   }
 
-  // /MCP forwarding. After bridge/catalog/database
+  // MCP forwarding. After bridge/catalog/database
   // preparation and immediately before the connect options: sweep dead-pid
   // leftovers, then load the specs ONCE and materialize the private 0600
   // --mcp-config document (only when nonempty). The connect interval below
@@ -4929,7 +4929,7 @@ async function boot(): Promise<void> {
       // every compaction this session went through, not just the ones this
       // process will produce.
       ...(compactionRecordSeam !== undefined ? { compactionRecords: compactionRecordSeam } : {}),
-      // /the persistent per-step provider-usage audit,
+      // the persistent per-step provider-usage audit,
       // CORE-ONLY wiring (codex/claude boots above pass nothing — their usage
       // arrives as cumulative REPLACE snapshots, not per-step finishes).
       // Write-behind: the sink swallows+logs its own failures, so audit I/O

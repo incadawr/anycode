@@ -228,7 +228,7 @@ describe("TerminalManager — fake pty", () => {
     expect(s.spawns[0]?.env.ANYCODE_SESSION_WORKSPACE).toBe("/work/repo");
   });
 
-  // /the terminal shell is a non-engine child, so a
+  // the terminal shell is a non-engine child, so a
   // credentialed proxy URL and the engine proxy carriers are stripped from its
   // env at the spawn choke point — while clean proxies/exemptions pass through
   // and the injected env object itself is never mutated.

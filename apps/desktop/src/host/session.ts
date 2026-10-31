@@ -697,7 +697,7 @@ export interface SessionPersistence {
 }
 
 /**
- * /the host's write-behind recorder for the persistent
+ * the host's write-behind recorder for the persistent
  * per-step provider-usage audit. Fed from the SAME finish-capture
  * site that folds checkpointSessionTokens (engine gating, step identity and
  * reconnect-dedup context are shared), one call per completed core model
@@ -726,7 +726,7 @@ export interface ProviderUsageAudit {
   flush?(): Promise<void>;
 }
 
-/** /read side — the durable step list + honest totals for hydration. */
+/** read side — the durable step list + honest totals for hydration. */
 export interface ProviderUsageSummaryPort {
   summary(): Promise<{
     steps: ProviderUsageRecord[];
@@ -735,7 +735,7 @@ export interface ProviderUsageSummaryPort {
 }
 
 /**
- * /pure fold over the durable step list (host/index.ts
+ * pure fold over the durable step list (host/index.ts
  * wires it behind the summary port; exported for unit tests). Sums ONLY
  * defined values (a NULL column is "provider did not report", never 0);
  * `stepsReported` counts steps with any token field, `stepsWithCache` counts
@@ -877,7 +877,7 @@ export interface SessionOptions {
    */
   compactionRecords?: CompactionRecordSeam;
   /**
-   * /the persistent per-step provider-usage audit
+   * the persistent per-step provider-usage audit
    * (SQLite provider_usage, migration v19). Wired ONLY for the core engine's
    * boot (host/index.ts) — a foreign engine's usage arrives as cumulative
    * REPLACE snapshots, not per-step finishes, so mapping it would be
@@ -1326,7 +1326,7 @@ export class Session {
    * between compactions, so a record never borrows a neighbouring trigger.
    */
   private compactionTrigger: "auto" | "manual" | null = null;
-  /** /see SessionOptions.usageAudit's own doc. */
+  /** see SessionOptions.usageAudit's own doc. */
   private readonly usageAudit: SessionOptions["usageAudit"];
   private readonly rules: SessionPermissionRules;
   private readonly git: GitUiBridge | undefined;
@@ -1496,7 +1496,7 @@ export class Session {
   private currentStep: number | undefined;
   private currentAttempt = 0;
   /**
-   * /`stream_retry` events observed for the CURRENT
+   * `stream_retry` events observed for the CURRENT
    * core step — the transport-retry count the usage audit row for that step
    * carries (a step with no retry records 0). Reset beside `currentStep`
    * (turn start/teardown) and after each audit record (per-step scope).
@@ -1521,7 +1521,7 @@ export class Session {
    */
   private pendingUsageAuditRow: (Omit<ProviderUsageRecord, "sessionId" | "createdAt"> & { finishedAt: number }) | null = null;
   /**
-   * /the last audit summary the hydration path has
+   * the last audit summary the hydration path has
    * read (pushSessionCheckpoint is sync; the summary port is async, so the
    * ui_ready cascade kicks the read and re-pushes when it lands). Null
    * before the first read (the checkpoint then ships without usageAudit
@@ -2786,7 +2786,7 @@ export class Session {
         // fresh store's slots are then already correct, and any ring copy
         // that still replays is idempotent (permission set-slot, finish
         // once-per-step fold, context_usage latest-wins).
-        // /kick the DURABLE audit-summary read ONCE
+        // kick the DURABLE audit-summary read ONCE
         // per ui_ready, BEFORE the direct checkpoint push — pushSessionCheckpoint
         // is sync, so it ships without usageAudit when the summary hasn't
         // landed yet; the second push (if any) is just another checkpoint
@@ -3243,7 +3243,7 @@ export class Session {
 
   /**
    * Slice P7.15 (F14) — the between-turns model switch, verbatim, now shared by
-   * the idle route and's turn-boundary apply. Returns false when
+   * the idle route and the turn-boundary apply. Returns false when
    * no switch factory is wired (a legacy engine/test double: a silent no-op).
    */
   /** Host-only refresh at the start of a new core turn, before its first model call. */
@@ -3367,7 +3367,7 @@ export class Session {
   }
 
   /**
-   * /answers a `usage_audit_request` with the durable
+   * answers a `usage_audit_request` with the durable
    * audit list (newest-first, retaining the complete current turn) + totals. Any
    * engine with an audit port answers; an unwired host answers nothing. A read
    * failure answers an empty list (honest "nothing loaded" instead of a hang)
@@ -3609,7 +3609,7 @@ export class Session {
         ? { sessionTokens: this.checkpointSessionTokens, ...(this.checkpointCountedSteps.length > 0 ? { countedSteps: [...this.checkpointCountedSteps] } : {}) }
         : {}),
       ...(this.checkpointContextUsage !== null ? { contextUsage: this.checkpointContextUsage } : {}),
-      // /the durable audit slice — present only when
+      // the durable audit slice — present only when
       // the option is wired AND a summary has landed (async read kicked per
       // ui_ready). Additive-optional: an older renderer / unwired host
       // changes nothing.
@@ -5332,7 +5332,7 @@ export class Session {
             this.pendingPrompt = null;
           }
         }
-        // /count this step's transport retries for the
+        // count this step's transport retries for the
         // usage audit row (reset per finish capture and per turn boundary).
         // Cross-review finding 1: a stall-retried step re-yields the ABANDONED
         // attempt's finish BEFORE the retry (the port replays both finishes

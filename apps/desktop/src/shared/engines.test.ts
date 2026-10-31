@@ -434,7 +434,7 @@ describe("stripEngineProxyCarriers — main is the sole author of the namespace 
     }
   });
 
-  // /every carrier name THIS module will ever declare
+  // every carrier name THIS module will ever declare
   // must satisfy core's carrier predicate, so the non-engine child-env scrub
   // (@anycode/core/child-env) drops exactly the namespace main writes — a new
   // carrier added here without widening that predicate would leak through the
