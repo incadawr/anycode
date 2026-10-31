@@ -114,6 +114,23 @@ describe("diagnostics anonymiser (GitHub #18)", () => {
     expect(scrubbed.length).toBeLessThanOrEqual(4_096);
   });
 
+  it("reports where each replacement landed, so a truncated copy counts only what it kept", () => {
+    const anon = createDiagnosticsAnonymizer({ salt: SALT });
+    const prefix = "lorem ipsum ".repeat(20);
+    const scrubbed = anon.textWithRedactions(`${FORBIDDEN.userPath} ${prefix} ${FORBIDDEN.email}`);
+
+    expect(scrubbed.text).toContain("<path>");
+    expect(scrubbed.text).toContain("<email>");
+    expect(scrubbed.redactions).toHaveLength(2);
+    const [path, email] = scrubbed.redactions;
+    expect(scrubbed.text.slice(path!.start).startsWith("<path>")).toBe(true);
+    expect(scrubbed.text.slice(email!.start).startsWith("<email>")).toBe(true);
+    // One replacement is inside a 128-char saved prefix, the other is not.
+    expect(path!.start).toBeLessThan(128);
+    expect(email!.start).toBeGreaterThanOrEqual(128);
+    expect(new Set(scrubbed.redactions.map((event) => event.id)).size).toBe(2);
+  });
+
   it("counts every replacement without reporting what was replaced", () => {
     const anon = createDiagnosticsAnonymizer({ salt: SALT });
     anon.text(FORBIDDEN.userPath);

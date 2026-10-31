@@ -9,6 +9,7 @@ import {
   collectHostRingEntries,
   projectTelemetryRecord,
   renderDiagnosticsPreview,
+  DIAGNOSTICS_MAX_FIELD_CHARS,
   HOST_RING_REQUEST_TIMEOUT_MS,
   HOST_RING_TOTAL_BUDGET_MS,
   type DiagnosticsFs,
@@ -493,6 +494,162 @@ describe("diagnostics bundle (GitHub #18)", () => {
     expect(archivedMarkers).toBe(1);
     expect(bundle.anonymization.redactions).toBe(archivedMarkers);
     expect(summary.redactions).toBe(archivedMarkers);
+  });
+
+  it("counts a redaction that survives only inside a retained tool shape", async () => {
+    // The only redacted record is the OLDEST thing in the tree, so the size cap
+    // trims it away first. Its tool SHAPE was built before fitting and keeps the
+    // scrubbed status key, so one redaction is still in the saved archive.
+    const childLines: string[] = [sessionStart(CHILD, ROOT)];
+    childLines.push(
+      telemetryLine({
+        v: 1,
+        ts: 900,
+        session: CHILD,
+        t: "tool",
+        tool: "bash",
+        status: `ok ${SECRETS.apiKey}`,
+        durationMs: 1,
+      }),
+    );
+    for (let index = 1; index < 200; index += 1) {
+      childLines.push(
+        telemetryLine({ v: 1, ts: 900 + index, session: CHILD, t: "tool", tool: "bash", status: "ok", durationMs: index }),
+      );
+    }
+    const rootLines: string[] = [sessionStart(ROOT)];
+    for (let index = 0; index < 3; index += 1) {
+      rootLines.push(
+        telemetryLine({ v: 1, ts: 5_000 + index, session: ROOT, t: "turn_end", turn: index, finishReason: "stop" }),
+      );
+    }
+    const files = {
+      [`${DIR}/${ROOT}.jsonl`]: { mtimeMs: 20, content: rootLines.join("") },
+      [`${DIR}/${CHILD}.jsonl`]: { mtimeMs: 10, content: childLines.join("") },
+    };
+
+    const { json } = await build(files, { maxBytes: 4_096 });
+    const saved = JSON.parse(json) as {
+      anonymization: { redactions: number };
+      telemetry: { sessions: { records: Record<string, unknown>[] }[] };
+      toolShapes: Record<string, { statuses: Record<string, number> }>;
+    };
+
+    // The redacted record is gone; the shape that copied its status is not.
+    const survivingStatuses = saved.telemetry.sessions
+      .flatMap((session) => session.records)
+      .filter((entry) => entry.t === "tool" && entry.status === "ok <secret>");
+    expect(survivingStatuses).toEqual([]);
+    expect(JSON.stringify(saved.toolShapes)).toContain('"ok <secret>"');
+    // Exactly one replacement is in the archive, and the saved JSON says so.
+    expect((json.match(/<secret>/g) ?? []).length).toBe(1);
+    expect(saved.anonymization.redactions).toBe(1);
+  });
+
+  it("counts one replacement once when a record and its tool shape both carry it", async () => {
+    const files = {
+      [`${DIR}/${ROOT}.jsonl`]: { content: [
+        sessionStart(ROOT),
+        telemetryLine({
+          v: 1,
+          ts: 5,
+          session: ROOT,
+          t: "tool",
+          tool: "bash",
+          status: `ok ${SECRETS.apiKey}`,
+          durationMs: 1,
+        }),
+      ].join("") },
+    };
+    const { json } = await build(files);
+    const saved = JSON.parse(json) as { anonymization: { redactions: number } };
+    // The marker appears twice (record field + shape key); the REDACTION is one.
+    expect((json.match(/<secret>/g) ?? []).length).toBe(2);
+    expect(saved.anonymization.redactions).toBe(1);
+  });
+
+  it("does not count a redaction the saved field prefix truncates away", async () => {
+    // The credential sits past the 128-char prefix the bundle keeps, so the
+    // saved field holds none of it — the archive must not report scrubbing it.
+    // (The filler is words, not one long run, so it is not itself a blob shape.)
+    const filler = "lorem ipsum ".repeat(20);
+    const { json } = await build({
+      [`${DIR}/${ROOT}.jsonl`]: { content: [
+        sessionStart(ROOT),
+        telemetryLine({
+          v: 1,
+          ts: 5,
+          session: ROOT,
+          t: "turn_end",
+          turn: 1,
+          finishReason: `${filler} ${SECRETS.apiKey}`,
+        }),
+      ].join("") },
+    });
+    const saved = JSON.parse(json) as {
+      anonymization: { redactions: number };
+      telemetry: { sessions: { records: Record<string, unknown>[] }[] };
+    };
+    const carried = saved.telemetry.sessions[0]?.records.at(-1)?.finishReason;
+    expect(carried).toBe(filler.slice(0, DIAGNOSTICS_MAX_FIELD_CHARS));
+    expect(json).not.toContain("<secret>");
+    expect(saved.anonymization.redactions).toBe(0);
+  });
+
+  it("fits against the count the archive holds, so no batch is lost at the boundary", async () => {
+    // The pre-fit total is >1000 redactions (4 digits) while the archive that
+    // fits holds only a handful (1 digit). Measuring the size bound against the
+    // old number made the same archive look several bytes longer, so the fitter
+    // dropped one more batch than the cap required.
+    const hexSecret = (index: number): string => index.toString(16).padStart(40, "0");
+    const count = 1_500;
+    // The child's own start carries a redacted model, so EVERY record of that
+    // session holds exactly one redaction — whatever the trimmer leaves behind.
+    const childLines: string[] = [
+      telemetryLine({ v: 1, ts: 900, session: CHILD, t: "session_start", parentSession: ROOT, model: hexSecret(0xffff) }),
+    ];
+    for (let index = 0; index < count; index += 1) {
+      childLines.push(
+        telemetryLine({ v: 1, ts: 1_000 + index, session: CHILD, t: "turn_end", turn: index, finishReason: hexSecret(index) }),
+      );
+    }
+    const rootLines: string[] = [sessionStart(ROOT)];
+    for (let index = 0; index < 4; index += 1) {
+      rootLines.push(
+        telemetryLine({ v: 1, ts: 5_000 + index, session: ROOT, t: "turn_end", turn: index, finishReason: "stop" }),
+      );
+    }
+    const files = {
+      [`${DIR}/${ROOT}.jsonl`]: { mtimeMs: 20, content: rootLines.join("") },
+      [`${DIR}/${CHILD}.jsonl`]: { mtimeMs: 10, content: childLines.join("") },
+    };
+    const childId = createDiagnosticsAnonymizer({ salt: SALT }).id(CHILD);
+    const childRecords = (result: Awaited<ReturnType<typeof build>>): number =>
+      result.bundle.telemetry.sessions.find((session) => session.id === childId)?.records.length ?? 0;
+
+    expect(childRecords(await build(files, { maxBytes: 500_000 }))).toBe(count + 1);
+
+    // Smallest cap that still keeps this many records of the oldest session.
+    // Trimming is monotone in the cap, so a binary search finds the boundary,
+    // and the archive it produces must be flush with the cap.
+    const want = 20;
+    let low = 2_048;
+    let high = 500_000;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      if (childRecords(await build(files, { maxBytes: mid })) >= want) high = mid;
+      else low = mid + 1;
+    }
+
+    const boundary = await build(files, { maxBytes: low });
+    const kept = childRecords(boundary);
+    expect(kept).toBeGreaterThanOrEqual(want);
+    // Flush with the cap: the archive holds every record it has room for.
+    expect(Buffer.byteLength(boundary.json, "utf8")).toBe(low - 1);
+    const saved = JSON.parse(boundary.json) as { anonymization: { redactions: number } };
+    // One redaction per carried child record, all of them in the saved JSON.
+    expect((boundary.json.match(/<secret>/g) ?? []).length).toBe(kept);
+    expect(saved.anonymization.redactions).toBe(kept);
   });
 
   it("drops the last wire entry instead of re-keeping it forever when only tool shapes are left", async () => {
