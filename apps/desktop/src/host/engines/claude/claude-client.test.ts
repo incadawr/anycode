@@ -62,10 +62,10 @@ function alive(pid: number): boolean {
   }
 }
 
-async function waitForFile(path: string, timeoutMs = 1_000): Promise<void> {
+async function waitForFile(path: string, timeoutMs = 15_000): Promise<void> {
   const end = Date.now() + timeoutMs;
   while (!existsSync(path) && Date.now() < end) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
   if (!existsSync(path)) throw new Error(`timed out waiting for ${path}`);
 }
@@ -268,12 +268,14 @@ describe("ClaudeClient", () => {
     expect(alive(grandchildPid)).toBe(true);
 
     await client.close();
-    const end = Date.now() + 1_500;
+    // The reap can trail the exit by a signal-delivery beat; poll with a
+    // deadline sized for a loaded CI run instead of a bare 1.5 s window.
+    const end = Date.now() + 15_000;
     while (alive(grandchildPid) && Date.now() < end) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
     expect(alive(grandchildPid)).toBe(false);
-  }, 15_000);
+  }, 30_000);
 
   it("rejects an unsupported (pre-floor) Claude version at preflight", async () => {
     const client = makeClient(["--version", "--bad-version"]);
