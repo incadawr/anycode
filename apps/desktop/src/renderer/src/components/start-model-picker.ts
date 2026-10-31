@@ -25,6 +25,16 @@ import type { SessionSummary } from "../../../shared/tabs.js";
 import { connectionDisplayName } from "./ConnectionTile.js";
 import { providerModelsFor } from "./ModelPill.js";
 
+/** Resolve the connection's effective endpoint using the host's URL matching rule. */
+export function effortCatalogProviderId(connection: ProviderConnection | undefined, catalog: CatalogSummary | undefined, custom: readonly CustomProviderRecord[] | undefined): string | undefined {
+  if (!connection) return undefined;
+  const customRecord = custom?.find((item) => item.id === connection.providerId);
+  const baseUrl = connection.providerId.startsWith("custom:") ? customRecord?.baseUrl : connection.baseUrl?.trim() || catalog?.find((entry) => entry.id === connection.providerId)?.catalogBaseUrl;
+  if (!baseUrl?.trim()) return connection.providerId;
+  const normalize = (url: string) => { const value = url.trim().replace(/\/+$/, ""); return value.endsWith("/v1") ? value : `${value}/v1`; };
+  return catalog?.find((entry) => entry.catalogBaseUrl && normalize(entry.catalogBaseUrl) === normalize(baseUrl))?.id;
+}
+
 // ── D4: catalog-first ordering ──
 
 /**
@@ -342,10 +352,10 @@ export function startModelEffortLevels(
   liveCaps?: ModelCapabilitiesDto,
   manualLevels?: readonly string[],
 ): readonly string[] | undefined {
-  if (manualLevels !== undefined) return manualLevels;
   const matched = catalog
     ?.find((entry) => entry.id === providerId)
     ?.models.find((model) => model.id === modelId);
+  if (manualLevels !== undefined) return matched?.thinkingAlwaysOn ? manualLevels.filter((level) => level !== "off") : manualLevels;
   if (matched === undefined) {
     // Taskana 4118: catalog miss ⇒ consult the connection's live caps.
     if (liveCaps?.reasoning !== true) {
@@ -380,12 +390,20 @@ const START_MODEL_EFFORT_VOCABULARY: readonly string[] = ["off", "low", "medium"
  * `defaultEffort` names a level the model itself does not declare is treated
  * as no default at all rather than offered as a phantom level. Exported for
  * unit testing.
+ *
+ * The default is then CLIPPED to the vocabulary rather than dropped: when the
+ * recorded default is outside the offered levels, the HIGHEST offered level
+ * is the default. That mirrors core's `effectiveDefaultEffort` exactly, and
+ * it is what keeps the tier the picker SHOWS the same as the tier that is
+ * SENT — an endpoint that reads an absent effort as its own maximum (MiniMax
+ * does) would otherwise reason at `max` while the picker claimed `high`.
  */
 export function startModelDefaultEffort(
   providerId: string | undefined,
   modelId: string,
   catalog: CatalogSummary | undefined,
   liveCaps?: ModelCapabilitiesDto,
+  overrideLevels?: readonly string[],
 ): string | undefined {
   const matched = catalog
     ?.find((entry) => entry.id === providerId)
@@ -397,8 +415,18 @@ export function startModelDefaultEffort(
   if (matched?.reasoning !== true) {
     return undefined;
   }
-  const efforts = startModelEffortLevels(providerId, modelId, catalog, liveCaps);
-  return efforts !== undefined && efforts.includes(recorded) ? recorded : undefined;
+  const efforts = startModelEffortLevels(providerId, modelId, catalog, liveCaps, overrideLevels);
+  if (efforts === undefined) return undefined;
+  if (efforts.includes(recorded)) return recorded;
+  if (matched?.thinkingAlwaysOn !== true) return undefined;
+  // The recorded default is outside the offered vocabulary ⇒ the highest
+  // offered level takes its place (never `off`: an explicit "no reasoning" is
+  // a choice, not a fallback).
+  let highest: string | undefined;
+  for (const tier of START_MODEL_EFFORT_VOCABULARY) {
+    if (efforts.includes(tier) && tier !== "off") highest = tier;
+  }
+  return highest;
 }
 
 /**
@@ -460,9 +488,11 @@ export function displayedStartEffort(
   saved: string | undefined,
   levels: readonly string[] | undefined,
   providerDefault: string | undefined,
+  thinkingAlwaysOn = false,
 ): string | undefined {
   const candidate = draft ?? saved ?? providerDefault;
-  return candidate !== undefined && levels?.includes(candidate) ? candidate : undefined;
+  if (candidate !== undefined && levels?.includes(candidate)) return candidate;
+  return thinkingAlwaysOn && providerDefault !== undefined && levels?.includes(providerDefault) ? providerDefault : undefined;
 }
 
 // ── popover geometry: the popover moves, it does not grow a scrollbar ──

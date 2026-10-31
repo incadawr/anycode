@@ -75,6 +75,7 @@ import {
   buildStartModelGroups,
   buildStartModelPopularRows,
   deriveRecentModelIds,
+  effortCatalogProviderId,
   startModelDefaultEffort,
   startModelEffortLevels,
   displayedStartEffort,
@@ -771,8 +772,9 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // hides the effort level entirely — there is no app-wide effort list.
   // Taskana 4118: a model the catalog does not know falls back to the
   // connection's live-declared capabilities, when the fetch persisted any.
+  const effortProviderId = effortCatalogProviderId(chipConnection, snapshot?.catalog, snapshot?.settings.provider.custom);
   const modelEfforts = startModelEffortLevels(
-    chipConnection?.providerId,
+    effortProviderId,
     modelChip.modelId,
     snapshot?.catalog,
     modelCapabilitiesFor(chipConnection, modelChip.modelId),
@@ -781,10 +783,11 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // Taskana 4894: the provider's documented default tier for that model —
   // the level to show when neither the draft nor the connection has a pick.
   const modelDefaultEffort = startModelDefaultEffort(
-    chipConnection?.providerId,
+    effortProviderId,
     modelChip.modelId,
     snapshot?.catalog,
     modelCapabilitiesFor(chipConnection, modelChip.modelId),
+    modelOverrideFor(chipConnection, modelChip.modelId)?.effortLevels,
   );
   // Show only a draft, saved, or documented default that will actually apply.
   const selectedModelEffort = displayedStartEffort(
@@ -792,6 +795,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
     modelOverrideFor(chipConnection, modelChip.modelId)?.reasoningEffort ?? chipConnection?.reasoningEffort,
     modelEfforts,
     modelDefaultEffort,
+    snapshot?.catalog?.find((entry) => entry.id === effortProviderId)?.models.find((model) => model.id === modelChip.modelId)?.thinkingAlwaysOn === true,
   );
   // The chip carries the effort the session would actually boot with, the way
   // the active-session ModelPill does — a picked effort that is only visible

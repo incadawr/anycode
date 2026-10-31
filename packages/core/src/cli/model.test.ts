@@ -123,6 +123,28 @@ describe("matchCatalogEntryByBaseUrl", () => {
     expect(matchCatalogEntryByBaseUrl(catalog, "https://api.anthropic.com/v1")).toBe(anthropic);
   });
 
+  it("matches the MiniMax entries regardless of trailing slash / missing v1 suffix", () => {
+    // An EXISTING custom connection at the owner's MiniMax base URL
+    // ("https://api.minimax.io/anthropic/v1", 2026-10-31) now resolves to the
+    // MiniMax catalog entry — the intended behaviour: the connection then
+    // carries the entry's `providerName`, so the effort tier reaches the wire.
+    // The comparison runs both sides through `normalizeAnthropicBaseUrl`,
+    // which trims trailing slashes and appends the "/v1" suffix, so every
+    // spelling of the same endpoint lands on the same entry.
+    const international = catalog.providers.find((entry) => entry.id === "minimax");
+    expect(international).toBeDefined();
+    expect(matchCatalogEntryByBaseUrl(catalog, "https://api.minimax.io/anthropic")).toBe(international);
+    expect(matchCatalogEntryByBaseUrl(catalog, "https://api.minimax.io/anthropic/")).toBe(international);
+    expect(matchCatalogEntryByBaseUrl(catalog, "https://api.minimax.io/anthropic/v1")).toBe(international);
+    expect(matchCatalogEntryByBaseUrl(catalog, "https://api.minimax.io/anthropic/v1/")).toBe(international);
+
+    const china = catalog.providers.find((entry) => entry.id === "minimax-cn");
+    expect(china).toBeDefined();
+    expect(matchCatalogEntryByBaseUrl(catalog, "https://api.minimaxi.com/anthropic")).toBe(china);
+    expect(matchCatalogEntryByBaseUrl(catalog, "https://api.minimaxi.com/anthropic/v1")).toBe(china);
+    expect(matchCatalogEntryByBaseUrl(catalog, "https://api.minimaxi.com/anthropic/v1/")).toBe(china);
+  });
+
   it("returns undefined for an endpoint not in the catalog (and does not throw walking past the custom entry)", () => {
     // The builtin catalog's LAST entry is `custom` (baseUrl ""); a non-match
     // forces `.find` to walk the full array, including custom. Without the

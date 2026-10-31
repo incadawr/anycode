@@ -1,4 +1,5 @@
 import { tariffAt, type ModelPricing } from "@anycode/core/catalog";
+import { normalizeAnthropicBaseUrl, resolveBillingMode, type CatalogProviderEntry } from "@anycode/core";
 
 /**
  * Snapshot a cost only when the provider supplied enough information to price
@@ -23,6 +24,46 @@ export function calculateUsageCost(
   const cacheSavingsUsd = cached * (price.input - price.cachedInput) * rate / 1_000_000;
   if (!Number.isFinite(costUsd) || !Number.isFinite(cacheSavingsUsd)) return undefined;
   return { costUsd, cacheSavingsUsd, priceBasisId: offPeak ? `${price.basisId}+off-peak` : price.basisId };
+}
+
+/**
+ * The catalog's own per-token rate for a model — or `undefined` when that
+ * rate must NOT be applied.
+ *
+ * The rate is withheld when the catalog entry's endpoint serves BOTH a
+ * pay-as-you-go key and a subscription key (`sharedBillingEndpoint` — the
+ * MiniMax case, where the API key and the M Plan key are used on the SAME
+ * base URL) and the connection has not said which one it holds. An unset
+ * pricing mode then means "unknown", not "the API rate": showing a
+ * per-token estimate to a subscription user is a number that is simply wrong
+ * for them. An explicit choice (the catalog/API rate, the subscription, or
+ * custom rates) always wins — see `resolveBillingMode`.
+ *
+ * The entry is also required to be the EXACT endpoint the connection talks
+ * to: a proxy or reseller may charge a different price even when it exposes
+ * the same model.
+ */
+export function catalogRateFor(
+  entry: CatalogProviderEntry | undefined,
+  baseUrl: string,
+  model: string | undefined,
+  declaredMode: "subscription" | "rates" | "catalog" | undefined,
+): ModelPricing | undefined {
+  if (entry === undefined) return undefined;
+  if (normalizeAnthropicBaseUrl(baseUrl) !== normalizeAnthropicBaseUrl(entry.baseUrl)) return undefined;
+  if (resolveBillingMode(entry, declaredMode) !== "catalog") return undefined;
+  if (model === undefined) return undefined;
+  return entry.models.find((item) => item.id === model)?.pricing;
+}
+
+/** Read the declared billing mode from the same snapshot used to price usage. */
+export function declaredPricingMode(raw: string | undefined): "subscription" | "rates" | "catalog" | undefined {
+  try {
+    const value = raw ? JSON.parse(raw) : undefined;
+    const pricing = value && typeof value === "object" && (Object.hasOwn(value, "fallback") || Object.hasOwn(value, "models")) ? value.fallback : value;
+    const mode = pricing?.mode;
+    return mode === "subscription" || mode === "rates" || mode === "catalog" ? mode : undefined;
+  } catch { return undefined; }
 }
 
 /** Read the connection snapshot passed by main; malformed overrides stay unknown. */

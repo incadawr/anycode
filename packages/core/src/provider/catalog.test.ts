@@ -15,6 +15,7 @@ import {
   getBuiltinCatalog,
   isCustomProvider,
 } from "./catalog-data.js";
+import { MINIMAX_PROVIDER_NAMES } from "./minimax.js";
 
 describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
   it("ships the ruling-U2 + W5 public set, all api_key auth (ruling U1)", () => {
@@ -30,6 +31,8 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
       "xiaomi-mimo-ams",
       "moonshot",
       "kimi",
+      "minimax",
+      "minimax-cn",
       "openai",
       "openrouter",
       "vllm",
@@ -160,6 +163,94 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
     for (const model of kimi?.models ?? []) {
       expect(model).toMatchObject({ contextWindow: 262_144, reasoning: true, imageInput: true });
     }
+  });
+
+  it("declares the MiniMax brand: one entry per region, one shared model list", () => {
+    // One brand = one card; the two entries are its regional modes.
+    expect(findCatalogEntry("minimax")).toMatchObject({
+      name: "MiniMax",
+      brand: "MiniMax",
+      modeLabel: "International",
+      baseUrl: "https://api.minimax.io/anthropic",
+      defaultTransport: "anthropic-messages",
+      supportedTransports: ["anthropic-messages"],
+      auth: { kind: "api_key" },
+    });
+    expect(findCatalogEntry("minimax-cn")).toMatchObject({
+      name: "MiniMax (China)",
+      brand: "MiniMax",
+      modeLabel: "China",
+      baseUrl: "https://api.minimaxi.com/anthropic",
+      defaultTransport: "anthropic-messages",
+      supportedTransports: ["anthropic-messages"],
+      auth: { kind: "api_key" },
+    });
+    // The catalog carries the PREFIX without "/v1": our own
+    // `normalizeAnthropicBaseUrl` appends it and the SDK appends "/messages",
+    // giving the endpoint's documented .../anthropic/v1/messages.
+    expect(resolveEndpoint(findCatalogEntry("minimax")!, "MiniMax-M3.1-Flash", "sk-test").baseUrl)
+      .toBe("https://api.minimax.io/anthropic");
+    expect(resolveEndpoint(findCatalogEntry("minimax-cn")!, "MiniMax-M3.1-Flash", "sk-test").baseUrl)
+      .toBe("https://api.minimaxi.com/anthropic");
+
+    // Both regions serve the same two models (the Anthropic-compatible
+    // interface exposes MiniMax-M3.1-Flash and MiniMax-M3 on either host).
+    for (const id of ["minimax", "minimax-cn"]) {
+      const entry = findCatalogEntry(id)!;
+      expect(entry.models.map((model) => model.id)).toEqual(["MiniMax-M3.1-Flash", "MiniMax-M3"]);
+      const flash = entry.models[0]!;
+      expect(flash).toMatchObject({
+        contextWindow: 1_000_000,
+        maxOutputTokens: 131_072,
+        imageInput: true,
+        reasoning: true,
+        effortLevels: ["low", "medium", "high", "xhigh", "max"],
+        // The provider's own documented default ("defaults to max when
+        // omitted"), so a session with no explicit pick shows and sends the
+        // tier the endpoint would apply by itself.
+        defaultEffort: "max",
+      });
+      // No "off" tier: `none` is rejected with 400 and `thinking: disabled`
+      // is a 400 (2013), so a request that says "no thinking" cannot be served.
+      expect(flash.effortLevels).not.toContain("off");
+      expect(flash.supportsExplicitOff).toBeUndefined();
+      // M3.1-Flash's published rate (USD per 1M tokens).
+      expect(flash.pricing).toEqual({
+        basisId: "MiniMax-M3.1-Flash-minimax-2026-10-31",
+        input: 0.15,
+        cachedInput: 0.015,
+        output: 0.6,
+      });
+      // M3's rate and output ceiling are UNVERIFIED: no `pricing`, and no
+      // `maxOutputTokens` copied from its sibling (the Kimi precedent: a
+      // sibling product's number is not evidence for this one).
+      const m3 = entry.models[1]!;
+      expect(m3).toMatchObject({ contextWindow: 1_000_000, imageInput: true });
+      expect(m3.pricing).toBeUndefined();
+      expect(m3.maxOutputTokens).toBeUndefined();
+      expect(m3.effortLevels).toBeUndefined();
+      expect(m3.reasoning).not.toBe(true);
+    }
+  });
+
+  it("pins the MiniMax entry names — the wire branch keys on the display name", () => {
+    // `providerName` is set from `catalogEntry.name` by the wiring layer, so
+    // renaming an entry's display name without updating the MiniMax helper
+    // would silently disable the whole effort mapping. The names are pinned
+    // here and in the wire test.
+    expect(findCatalogEntry("minimax")?.name).toBe("MiniMax");
+    expect(findCatalogEntry("minimax-cn")?.name).toBe("MiniMax (China)");
+    expect(MINIMAX_PROVIDER_NAMES).toEqual(["MiniMax", "MiniMax (China)"]);
+  });
+
+  it("gives every catalog entry a distinct non-empty base URL", () => {
+    // The desktop host re-resolves the catalog entry by base URL
+    // (`matchCatalogEntryByBaseUrl`), so two entries sharing a base URL would
+    // make the resolution order decide which one a connection gets.
+    const baseUrls = getBuiltinCatalog().providers
+      .map((entry) => entry.baseUrl)
+      .filter((baseUrl) => baseUrl !== "");
+    expect(new Set(baseUrls).size).toBe(baseUrls.length);
   });
 
   it("custom carries an empty baseUrl and no static model hints", () => {
@@ -432,13 +523,17 @@ describe("modelsUrl (4244)", () => {
 });
 
 describe("brand grouping", () => {
-  it("groups Kimi modes and Xiaomi MiMo regions in catalog order", () => {
+  it("groups Kimi modes, Xiaomi MiMo regions and MiniMax regions in catalog order", () => {
     const providers = getBuiltinCatalog().providers;
     expect(providers.filter((entry) => entry.brand === "Kimi").map((entry) => entry.id)).toEqual(["moonshot", "kimi"]);
     expect(providers.filter((entry) => entry.brand === "Xiaomi MiMo").map((entry) => entry.id)).toEqual([
       "xiaomi-mimo-api", "xiaomi-mimo-sgp", "xiaomi-mimo-cn", "xiaomi-mimo-ams",
     ]);
-    for (const entry of providers.filter((entry) => !["Kimi", "Xiaomi MiMo"].includes(entry.brand ?? ""))) {
+    // The MiniMax group sits right after Kimi.
+    expect(providers.filter((entry) => entry.brand === "MiniMax").map((entry) => entry.id)).toEqual([
+      "minimax", "minimax-cn",
+    ]);
+    for (const entry of providers.filter((entry) => !["Kimi", "Xiaomi MiMo", "MiniMax"].includes(entry.brand ?? ""))) {
       expect(entry.brand).toBeUndefined();
       expect(entry.modeLabel).toBeUndefined();
     }
@@ -488,6 +583,8 @@ describe("model pricing", () => {
     "xiaomi-mimo-cn": ["mimo-v2.6-pro", "mimo-v2.6-flash"],
     "xiaomi-mimo-ams": ["mimo-v2.6-pro", "mimo-v2.6-flash"],
     moonshot: ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6"],
+    minimax: ["MiniMax-M3.1-Flash"],
+    "minimax-cn": ["MiniMax-M3.1-Flash"],
     openai: ["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-6-astra", "gpt-6-sol"],
   };
 

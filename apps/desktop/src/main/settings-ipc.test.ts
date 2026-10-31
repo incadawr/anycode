@@ -897,12 +897,11 @@ describe("projectCatalogSummary — value-only projection", () => {
       { id: "custom", name: "Custom", auth: { kind: "api_key" }, baseUrl: "", models: [] },
     ]);
     expect(summary).toEqual([
-      { id: "z-ai", name: "Z.AI", authKind: "api_key", models: [{ id: "glm", name: "GLM" }] },
-      { id: "acme", name: "Acme", authKind: "oauth", models: [] },
+      { id: "z-ai", name: "Z.AI", authKind: "api_key", catalogBaseUrl: "https://z", models: [{ id: "glm", name: "GLM" }] },
+      { id: "acme", name: "Acme", authKind: "oauth", catalogBaseUrl: "https://a", models: [] },
       { id: "custom", name: "Custom", authKind: "api_key", models: [], needsBaseUrl: true },
     ]);
-    // Never a baseUrl / key in the projection (custody + no secret).
-    expect(JSON.stringify(summary)).not.toContain("https://z");
+    // Only public catalog endpoint URLs are projected.
   });
 
   it("TASK.131: projects each model's own reasoning/effortLevels, and only when declared", () => {
@@ -1024,6 +1023,7 @@ describe("projectCatalogSummary — value-only projection", () => {
       {
         id: "openai",
         name: "OpenAI",
+        catalogBaseUrl: "https://api.openai.com/v1",
         authKind: "api_key",
         models: [],
         defaultTransport: "openai-responses",
@@ -1041,7 +1041,7 @@ describe("projectCatalogSummary — value-only projection", () => {
       },
       // No transport fields at all when the source entry omits them — a legacy
       // fixture's output is byte-identical to pre-W5.
-      { id: "z-ai", name: "Z.AI", authKind: "api_key", models: [] },
+      { id: "z-ai", name: "Z.AI", authKind: "api_key", catalogBaseUrl: "https://z", models: [] },
     ]);
   });
 
@@ -1089,6 +1089,7 @@ describe("projectCatalogSummary — value-only projection", () => {
       {
         id: "moonshot",
         name: "Moonshot (Kimi, platform API)",
+        catalogBaseUrl: "https://m",
         authKind: "api_key",
         models: [],
         brand: "kimi",
@@ -1097,12 +1098,13 @@ describe("projectCatalogSummary — value-only projection", () => {
       {
         id: "kimi",
         name: "Kimi (kimi.com subscription)",
+        catalogBaseUrl: "https://k",
         authKind: "api_key",
         models: [],
         brand: "kimi",
         modeLabel: "Subscription (kimi.com)",
       },
-      { id: "z-ai", name: "Z.AI", authKind: "api_key", models: [] },
+      { id: "z-ai", name: "Z.AI", authKind: "api_key", catalogBaseUrl: "https://z", models: [] },
     ]);
   });
 });

@@ -18,7 +18,7 @@ import {
   resolveChildReasoningEffort,
   UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS,
 } from "./capabilities.js";
-import { DEFAULT_MAX_OUTPUT_TOKENS } from "../types/config.js";
+import { DEFAULT_MAX_OUTPUT_TOKENS, type ReasoningEffort } from "../types/config.js";
 import { compactThresholdTokens, effectiveWindowTokens, resolveContextBudgetConfig } from "../context/budget.js";
 
 const VISION_ENTRY: CatalogProviderEntry = {
@@ -494,7 +494,7 @@ describe("resolveReasoningEffort × per-model default effort (Taskana 4894)", ()
   it("an explicit choice still wins over the default", () => {
     expect(resolveReasoningEffort("deepseek-flash", entry, "low")).toBe("low");
     expect(resolveReasoningEffort("deepseek-flash", entry, "max")).toBe("max");
-    // "off" is an explicit choice: it means no reasoning, not the default.
+    // An explicit off retains its original behavior.
     expect(resolveReasoningEffort("deepseek-flash", entry, "off")).toBeUndefined();
   });
 
@@ -505,7 +505,7 @@ describe("resolveReasoningEffort × per-model default effort (Taskana 4894)", ()
     expect(resolveReasoningEffort("glm-basic", entry, undefined)).toBeUndefined();
   });
 
-  it("a default outside the model's own vocabulary is never applied (fail-closed)", () => {
+  it("clips a default outside the model vocabulary", () => {
     expect(resolveReasoningEffort("bogus-default", entry, undefined)).toBeUndefined();
     // An explicit "off" default means "no reasoning" — the host's undefined.
     expect(resolveReasoningEffort("off-default", entry, undefined)).toBeUndefined();
@@ -560,7 +560,74 @@ describe("explicit effort vocabulary", () => {
   it("overrides catalog and live metadata and rejects undeclared choices", () => {
     expect(resolveEffortLevels("glm-5.2", entry, { reasoning: true, effortLevels: ["max"] }, ["low", "high"])).toEqual(["low", "high"]);
     expect(resolveReasoningEffort("custom", undefined, "high", undefined, ["low", "high"])).toBe("high");
+    // Without a catalog default, an unsupported choice remains unset.
     expect(resolveReasoningEffort("custom", undefined, "xhigh", undefined, ["low", "high"])).toBeUndefined();
     expect(resolveEffortLevels("sibling", undefined)).toBeUndefined();
+  });
+});
+
+describe("the effective default is always inside the effective level list", () => {
+  // MiniMax declares `low…max` with `max` as the provider's documented
+  // default. A per-model override that narrows the vocabulary below `max`
+  // used to leave the default unresolvable: the request then carried NO
+  // effort while the picker showed `max` — and MiniMax, which reads an
+  // absent effort as its own maximum, reasoned at `max` anyway. The tier
+  // the user SEES must be the tier that is SENT.
+  const miniMax: CatalogProviderEntry = {
+    id: "minimax", name: "MiniMax", baseUrl: "https://api.minimax.io/anthropic",
+    defaultTransport: "anthropic-messages", supportedTransports: ["anthropic-messages"],
+    auth: { kind: "api_key" },
+    models: [{
+      id: "MiniMax-M3.1-Flash", thinkingAlwaysOn: true, contextWindow: 1_000_000, maxOutputTokens: 131_072, reasoning: true,
+      effortLevels: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "max",
+    }],
+  };
+
+  it("falls back to the HIGHEST listed level when the catalog default is outside the list", () => {
+    // The override drops `max` (the documented default) from the vocabulary.
+    expect(resolveReasoningEffort("MiniMax-M3.1-Flash", miniMax, undefined, undefined, ["low", "medium", "high"])).toBe("high");
+    // The catalog default is inside the list ⇒ it is the default.
+    expect(resolveReasoningEffort("MiniMax-M3.1-Flash", miniMax, undefined, undefined, ["low", "medium", "high", "max"])).toBe("max");
+    expect(resolveReasoningEffort("MiniMax-M3.1-Flash", miniMax, undefined, undefined, ["low", "medium", "high", "xhigh", "max"])).toBe("max");
+  });
+
+  it("falls back for unsupported stored levels without a level override", () => {
+    expect(resolveReasoningEffort("MiniMax-M3.1-Flash", miniMax, "off")).toBe("max");
+    expect(resolveReasoningEffort("MiniMax-M3.1-Flash", miniMax, "off", undefined, ["low", "high"])).toBe("high");
+    expect(resolveReasoningEffort("MiniMax-M3.1-Flash", miniMax, "off", undefined, ["off", "low", "high"])).toBe("high");
+    expect(resolveEffortLevels("MiniMax-M3.1-Flash", miniMax, undefined, ["off", "low", "high"])).toEqual(["low", "high"]);
+    const narrowed = { ...miniMax, models: [{ ...miniMax.models[0]!, effortLevels: ["low", "high"] as ReasoningEffort[] }] };
+    expect(resolveReasoningEffort("MiniMax-M3.1-Flash", narrowed, "xhigh")).toBe("high");
+    expect(resolveReasoningEffort("custom", undefined, undefined, undefined, ["low", "high"])).toBeUndefined();
+  });
+
+  it("resolves a STORED level outside the list to that effective default", () => {
+    // The stored pick is `max`, the vocabulary moved on and no longer lists
+    // it ⇒ the effective default (`high`) is sent, not nothing: an absent
+    // effort would let MiniMax silently run at `max` while the UI claimed
+    // `high`.
+    expect(resolveReasoningEffort("MiniMax-M3.1-Flash", miniMax, "max", undefined, ["low", "medium", "high"])).toBe("high");
+    // A stored level that IS in the list is untouched.
+    expect(resolveReasoningEffort("MiniMax-M3.1-Flash", miniMax, "low", undefined, ["low", "medium", "high"])).toBe("low");
+  });
+
+  it("never resolves to `off` and never to a level outside the list", () => {
+    // A vocabulary with only `off` has no reasoning tier at all ⇒ nothing.
+    expect(resolveReasoningEffort("MiniMax-M3.1-Flash", miniMax, undefined, undefined, ["off"])).toBeUndefined();
+    // The default is never `off` even when the list contains it.
+    expect(resolveReasoningEffort("MiniMax-M3.1-Flash", miniMax, undefined, undefined, ["off", "low"])).toBe("low");
+  });
+
+  it("keeps the tier the UI shows and the tier that is sent identical", () => {
+    // The UI shows the effective default (`startModelDefaultEffort` clips the
+    // documented default to the vocabulary the picker offers); the request
+    // must carry exactly that tier.
+    const levels: ReasoningEffort[] = ["low", "medium", "high"];
+    const shown = miniMax.models[0]!.defaultEffort !== undefined && levels.includes(miniMax.models[0]!.defaultEffort!)
+      ? miniMax.models[0]!.defaultEffort
+      : [...levels].reverse()[0]!;
+    const sent = resolveReasoningEffort("MiniMax-M3.1-Flash", miniMax, undefined, undefined, levels);
+    expect(sent).toBe(shown);
+    expect(levels).toContain(sent!);
   });
 });

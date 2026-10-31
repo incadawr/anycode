@@ -57,6 +57,47 @@ const MIMO_MODELS: CatalogProviderEntry["models"] = [
   { id: "mimo-v2.6-flash", pricing: { basisId: "mimo-v2.6-flash-xiaomi-mimo-api-2026-10-30", input: 0.14, cachedInput: 0.0028, cacheWrite: 0, output: 0.28 }, name: "MiMo V2.6 Flash", contextWindow: 1_048_576, usableContextWindow: LARGE_MODEL_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true },
 ];
 
+// MiniMax models, shared by both regions (the Anthropic-compatible interface
+// exposes the same two models on api.minimax.io and api.minimaxi.com).
+// platform.minimax.io/docs/api-reference/text-anthropic-api — checked
+// 2026-10-31: "Supported Models — MiniMax-M3.1-Flash / 1,000,000 context
+// window / Frontier multimodal coding model with 1M context window and
+// tunable thinking depth" and "MiniMax-M3 / 1,000,000 / Frontier multimodal
+// coding model with 1M context window".
+//
+// Effort vocabulary (M3.1-Flash only): "output_config.effort — Fully
+// Supported: Tunes thinking depth for MiniMax-M3.1-Flash. Accepts low,
+// medium, high, xhigh, and max; defaults to max when omitted." `none` is
+// rejected with 400, so there is NO "off" tier and `supportsExplicitOff`
+// stays absent — a request that says "no thinking" cannot be served.
+//
+// `defaultEffort: "max"` is the provider's OWN documented default ("defaults
+// to max when omitted"), so a session with no explicit pick both shows and
+// sends the tier the endpoint would apply by itself.
+//
+// `maxOutputTokens: 131_072` is the owner's live figure (recommended max
+// output 128K, 2026-10-31) for M3.1-Flash. MiniMax counts thinking tokens
+// against `max_tokens` ("Thinking tokens count toward it too, so a value that
+// is too small yields stop_reason: \"max_tokens\" with no text output"), and
+// the MiniMax wire mapping sends NO thinking budget — so `max_tokens` is
+// exactly this value.
+//
+// The M3 rate is NOT published in the owner's notes and is deliberately left
+// unpriced rather than guessed: the context popover then says "price
+// unknown" instead of inventing one.
+const MINIMAX_MODELS: CatalogProviderEntry["models"] = [
+  { id: "MiniMax-M3.1-Flash", thinkingAlwaysOn: true, pricing: { basisId: "MiniMax-M3.1-Flash-minimax-2026-10-31", input: 0.15, cachedInput: 0.015, output: 0.6 }, name: "MiniMax M3.1 Flash", contextWindow: 1_000_000, maxOutputTokens: 131_072, imageInput: true, reasoning: true, effortLevels: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "max" },
+  // M3's rate is unverified — no `pricing` on purpose (see the comment above).
+  // Its OUTPUT CEILING is unverified too, so `maxOutputTokens` is deliberately
+  // omitted rather than copied from M3.1-Flash: the provider publishes no
+  // per-model output ceiling, and the Kimi precedent (catalog-data.ts, the
+  // kimi.com entry) is explicit that a sibling product's number is not
+  // evidence for this one. Without it the row resolves through
+  // `resolveMaxOutputTokens`'s default stub, observable via `onStubFallback`
+  // rather than silently.
+  { id: "MiniMax-M3", name: "MiniMax M3", contextWindow: 1_000_000, imageInput: true, reasoning: false },
+];
+
 // DeepSeek bills by time of day (api-docs.deepseek.com/quick_start/pricing/,
 // checked 2026-10-27): 01:00–04:00 and 06:00–10:00 UTC on weekdays carry the
 // full (peak) rates listed below; every other minute of the week — including
@@ -401,6 +442,49 @@ const ENTRIES: CatalogProviderEntry[] = [
       { id: "k3", name: "K3", contextWindow: 262_144, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
       { id: "k3-256k", name: "K3 256k", contextWindow: 262_144, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
     ],
+  },
+  {
+    // MiniMax, international region.
+    //
+    // The Anthropic-compatible endpoint (platform.minimax.io/docs/api-reference/
+    // text-anthropic-api, checked 2026-10-31) answers at
+    // https://api.minimax.io/anthropic/v1/messages — our own
+    // `normalizeAnthropicBaseUrl` appends the `/v1` and the SDK appends
+    // `/messages`, so the catalog carries the prefix WITHOUT `/v1` (the same
+    // convention every other anthropic-messages entry uses).
+    //
+    // ONE entry covers BOTH kinds of MiniMax key: the pay-as-you-go API key
+    // and the M Plan subscription key are used on the SAME base URL (owner's
+    // live M Plan connection, 2026-10-31) and differ only in billing. The
+    // connection states which one it is with its own pricing mode ("By
+    // subscription" in the drawer's pricing-mode select) — the same mechanism
+    // the Kimi subscription entry uses. There is deliberately NO per-token
+    // rate for a plan key, and no quota/usage UI (a separate task).
+    id: "minimax",
+    name: "MiniMax",
+    brand: "MiniMax",
+    modeLabel: "International",
+    sharedBillingEndpoint: true,
+    baseUrl: "https://api.minimax.io/anthropic",
+    defaultTransport: "anthropic-messages",
+    supportedTransports: ["anthropic-messages"],
+    auth: { kind: "api_key" },
+    models: MINIMAX_MODELS,
+  },
+  {
+    // MiniMax, China region — the same Anthropic-compatible protocol on a
+    // different host (verified live 2026-10-31: the endpoint answers with
+    // MiniMax's own auth error, i.e. the host exists and speaks the API).
+    id: "minimax-cn",
+    name: "MiniMax (China)",
+    brand: "MiniMax",
+    modeLabel: "China",
+    sharedBillingEndpoint: true,
+    baseUrl: "https://api.minimaxi.com/anthropic",
+    defaultTransport: "anthropic-messages",
+    supportedTransports: ["anthropic-messages"],
+    auth: { kind: "api_key" },
+    models: MINIMAX_MODELS,
   },
   {
     id: "openai",

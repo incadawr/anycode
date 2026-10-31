@@ -1,12 +1,13 @@
 export type {
   CatalogAuth,
+  CatalogBillingMode,
   CatalogModel,
   CatalogProviderEntry,
   ProviderCatalog,
   ProviderTransport,
   ResolvedEndpoint,
 } from "./catalog.js";
-export { resolveEndpoint } from "./catalog.js";
+export { resolveBillingMode, resolveEndpoint } from "./catalog.js";
 export {
   buildDualAuthHeaders,
   createAnthropicLanguageModel,

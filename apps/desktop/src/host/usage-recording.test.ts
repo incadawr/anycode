@@ -163,3 +163,19 @@ describe("host/index.ts — usage-recording wiring", () => {
     expect(indexSource).not.toContain('from "./usage-cost.js"');
   });
 });
+
+
+it("uses captured billing snapshots for both usage writers", () => {
+  const entry = findCatalogEntry("minimax");
+  const model = "MiniMax-M3.1-Flash";
+  const catalogEntry = entry;
+  const baseUrl = "https://api.minimax.io/anthropic";
+  const pricingRaw = JSON.stringify({ fallback: { mode: "catalog" } });
+  const usage = { inputTokens: 100, cachedInputTokens: 0, outputTokens: 10 };
+  const pricing = { catalogEntry, baseUrl, pricingRaw, model };
+  const main = sessionUsageRow({ ...usage, model, turnId: "t", step: 1, finishReason: "stop", transportRetries: 0 }, pricing, "s");
+  const child = subagentUsageRow(usage, pricing, { sessionId: "s", subagentId: "c", step: 1 });
+  expect(main.costUsd).toBeGreaterThan(0);
+  expect(child.priceBasisId).toBe(main.priceBasisId);
+  expect(subagentUsageRow(usage, { ...pricing, pricingRaw: JSON.stringify({ fallback: { mode: "subscription" } }) }, { sessionId: "s", subagentId: "c", step: 1 }).priceBasisId).toBe("subscription");
+});

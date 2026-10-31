@@ -395,6 +395,10 @@ const modelPricingSchema = <T extends z.ZodType>(valueSchema: T) =>
   });
 const connectionPricingSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("subscription") }).strict(),
+  // The EXPLICIT "the provider's per-token rate applies" choice — distinct
+  // from an absent `pricing` (nothing declared ⇒ priced as unknown on an
+  // endpoint that serves both a pay-as-you-go key and a subscription key).
+  z.object({ mode: z.literal("catalog") }).strict(),
   z.object({ mode: z.literal("rates"), input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict(),
 ]);
 
@@ -626,6 +630,7 @@ export interface CatalogEntryShape {
     effortLevels?: readonly string[];
     /** Taskana 4894: the provider's documented default tier for this model, when the catalog records one; `string`-typed to keep this module core-import-free. */
     defaultEffort?: string;
+    thinkingAlwaysOn?: boolean;
     maxOutputTokens?: number;
     /** TASK.142: the two window facts the drawer names in its context-window hint; the effective catalog window is their min. */
     contextWindow?: number;
@@ -634,6 +639,8 @@ export interface CatalogEntryShape {
   }[];
   /** True for the literal `custom` sentinel (TASK.43 W5-FIX); main supplies it from core's `isCustomProvider`. */
   isCustom?: boolean;
+  /** True when the endpoint serves both a pay-as-you-go key and a subscription key; projected only when declared. */
+  sharedBillingEndpoint?: boolean;
   /** Wire transport fields (TASK.43 W5); `string`-typed to keep this module core-import-free. */
   defaultTransport?: string;
   supportedTransports?: readonly string[];
@@ -667,6 +674,7 @@ export function projectCatalogSummary(providers: readonly CatalogEntryShape[]): 
       // provider documents a default carries it, so every legacy fixture
       // projects byte-identically.
       ...(m.defaultEffort !== undefined ? { defaultEffort: m.defaultEffort } : {}),
+      ...(m.thinkingAlwaysOn === true ? { thinkingAlwaysOn: true } : {}),
       // TASK.159: same conditional-spread precedent — only when the catalog
       // declares a ceiling, so legacy fixtures stay byte-identical.
       ...(m.maxOutputTokens !== undefined ? { maxOutputTokens: m.maxOutputTokens } : {}),
@@ -680,12 +688,16 @@ export function projectCatalogSummary(providers: readonly CatalogEntryShape[]): 
       // "unknown"): the Vision pane suggests these as recognizer models.
       ...(m.imageInput === true ? { imageInput: true } : {}),
     })),
-    ...(entry.baseUrl === "" ? { needsBaseUrl: true } : {}),
+    ...(entry.baseUrl === "" ? { needsBaseUrl: true } : { catalogBaseUrl: entry.baseUrl }),
     ...(entry.isCustom === true ? { isCustom: true } : {}),
     // TASK.70 (Taskana 4089): only when declared, same conditional-spread
     // precedent as above — legacy fixtures stay byte-identical.
     ...(entry.brand !== undefined ? { brand: entry.brand } : {}),
     ...(entry.modeLabel !== undefined ? { modeLabel: entry.modeLabel } : {}),
+    // Only when declared, same conditional-spread precedent: the drawer's
+    // pricing select uses it to require an explicit choice on an endpoint
+    // that serves both a pay-as-you-go key and a subscription key.
+    ...(entry.sharedBillingEndpoint === true ? { sharedBillingEndpoint: true, billingBaseUrl: entry.baseUrl } : {}),
     ...(entry.defaultTransport !== undefined ? { defaultTransport: entry.defaultTransport as ProviderTransportId } : {}),
     ...(entry.supportedTransports !== undefined
       ? { supportedTransports: entry.supportedTransports as ProviderTransportId[] }

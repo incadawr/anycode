@@ -124,8 +124,9 @@ export function buildSessionDrillRows(args: SessionDrillArgs): SessionDrillRows 
   const candidate = args.currentEffort ??
     modelOverrideFor(currentConnection, args.currentModelId)?.reasoningEffort ??
     currentConnection?.reasoningEffort ??
-    startModelDefaultEffort(currentConnection?.providerId, args.currentModelId, args.catalog, modelCapabilitiesFor(currentConnection, args.currentModelId));
-  const effort = candidate !== undefined && efforts?.includes(candidate) ? candidate : undefined;
+    startModelDefaultEffort(currentConnection?.providerId, args.currentModelId, args.catalog, modelCapabilitiesFor(currentConnection, args.currentModelId), modelOverrideFor(currentConnection, args.currentModelId)?.effortLevels);
+  const effort = candidate !== undefined && efforts?.includes(candidate) ? candidate :
+    startModelDefaultEffort(currentConnection?.providerId, args.currentModelId, args.catalog, modelCapabilitiesFor(currentConnection, args.currentModelId), modelOverrideFor(currentConnection, args.currentModelId)?.effortLevels);
 
   let rows: ModelDrillRow[];
   if (page.kind === "group") {
