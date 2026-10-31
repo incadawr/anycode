@@ -1,5 +1,6 @@
 import {
   modelDictionaryEntry,
+  mapForeignEffortLevels,
   resolveContextWindowInfo,
   resolveEffortLevels,
   resolveReasoningEffort,
@@ -50,10 +51,18 @@ export function createConnectionModelSettings(deps: {
       const previous = entry.models.find(row => row.id === model);
       entry = { ...entry, models: [...entry.models.filter(row => row.id !== model), { ...previous, id: model, contextWindow: live.contextWindow, ...(live.maxOutputTokens ? { maxOutputTokens: live.maxOutputTokens } : {}) }] };
     }
-    // An explicit off declaration on a gateway is stronger than the original
-    // vendor's always-on hint; the gateway may expose a different policy.
-    if (entry !== deps.catalogEntry && entry && (override?.reasoningEffort === "off" || override?.effortLevels?.includes("off"))) {
-      return { ...entry, models: entry.models.map((row) => row.id === model ? { ...row, thinkingAlwaysOn: false, supportsExplicitOff: true } : row) };
+    if (entry && (entry !== deps.catalogEntry || override?.reasoningSupported === false)) {
+      const live = capabilitiesFor(model);
+      const off = (override?.reasoningEffort ?? connection?.reasoningEffort) === "off" || override?.effortLevels?.includes("off");
+      const supported = override?.reasoningSupported;
+      if (off || supported !== undefined || live) return { ...entry, models: entry.models.map((row) => row.id !== model ? row : {
+        ...row,
+        ...(live?.reasoning !== undefined ? { reasoning: live.reasoning } : {}),
+        ...(live?.effortLevels !== undefined ? { effortLevels: mapForeignEffortLevels(live.effortLevels) } : {}),
+        ...(supported === true && !(live?.reasoning ?? row.reasoning) ? { reasoning: true, effortLevels: ["off", "low", "medium", "high", "xhigh", "max"] as ReasoningEffort[] } : {}),
+        ...(off ? { thinkingAlwaysOn: false, supportsExplicitOff: true, effortLevels: ["off" as const, ...(live?.effortLevels !== undefined ? mapForeignEffortLevels(live.effortLevels) : row.effortLevels ?? []).filter(level => level !== "off")] } : {}),
+        ...(supported === false ? { reasoning: false, thinkingAlwaysOn: false, effortLevels: undefined, defaultEffort: undefined } : {}),
+      }) };
     }
     return entry;
   }
@@ -63,7 +72,7 @@ export function createConnectionModelSettings(deps: {
     const live = deps.readConnection !== undefined
       ? map !== undefined && Object.hasOwn(map, model) ? map[model] : undefined
       : deps.liveCapabilitiesFor(model);
-    return applyModelReasoningOverride(live, modelOverrideFor(connection, model)?.reasoningSupported === true);
+    return applyModelReasoningOverride(live, modelOverrideFor(connection, model)?.reasoningSupported);
   }
 
   function effortFor(model: string): ReasoningEffort | undefined {
@@ -103,7 +112,7 @@ export function createConnectionModelSettings(deps: {
     pricingSnapshot() { return hasReadConnection ? { fallback: connection?.pricing, models: { ...Object.fromEntries(Object.entries(connection?.modelCapabilities ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => [id, value.pricing])), ...Object.fromEntries(Object.entries(connection?.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => [id, value.pricing])) } } : undefined; },
     hasReadConnection() { return hasReadConnection; },
     capabilitiesFor,
-    effortLevelsFor(model: string) { return modelOverrideFor(connection, model)?.effortLevels; },
+    effortLevelsFor(model: string) { const override = modelOverrideFor(connection, model); return override?.reasoningSupported === false ? undefined : override?.effortLevels; },
     effortFor,
     contextFor(model: string) {
       const envApplies = (!deps.envContextWindowFromSettings || !hasReadConnection) && deps.envContextWindow !== undefined &&
@@ -116,14 +125,15 @@ export function createConnectionModelSettings(deps: {
       invalidated.delete(model);
     },
     normalize(model: string, tier: ReasoningEffort): ReasoningEffort {
-      return nearestSupportedEffort(tier, resolveEffortLevels(model, entryFor(model), capabilitiesFor(model), modelOverrideFor(connection, model)?.effortLevels));
+      return nearestSupportedEffort(tier, resolveEffortLevels(model, entryFor(model), capabilitiesFor(model), (modelOverrideFor(connection, model)?.reasoningSupported === false ? undefined : modelOverrideFor(connection, model)?.effortLevels)));
     },
     takeAdjustment() { const value = adjustment; adjustment = undefined; return value; },
     switchEffort(from: string, to: string, tier: ReasoningEffort, explicit = false): ReasoningEffort {
       refresh();
       // A new persisted choice must not be replaced by Session's previous tier.
       if (!explicit && !invalidated.has(from)) selected.set(from, tier);
-      const declaredLevels = modelOverrideFor(connection, to)?.effortLevels;
+      const targetOverride = modelOverrideFor(connection, to);
+      const declaredLevels = targetOverride?.reasoningSupported === false ? undefined : targetOverride?.effortLevels;
       const levels = resolveEffortLevels(to, entryFor(to), capabilitiesFor(to), declaredLevels);
       const candidate = explicit ? tier : effortFor(to) ??
         resolveReasoningEffort(to, entryFor(to), undefined, capabilitiesFor(to), declaredLevels) ?? (levels?.length ? tier : "off");
