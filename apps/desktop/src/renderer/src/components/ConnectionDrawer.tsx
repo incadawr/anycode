@@ -1118,6 +1118,10 @@ export function modelAfterCatalogPrefill(current: string, suggestions: readonly 
   return suggestions[0]?.id ?? current;
 }
 
+export function createModelMissing(model: string, suggestions: readonly { id: string }[]): boolean {
+  return modelAfterCatalogPrefill(model, suggestions).trim() === "";
+}
+
 /**
  * Whether Save must refuse a catalog connection's empty model (-A):
  * the readiness gate requires a model on the active connection, so an empty
@@ -1581,8 +1585,7 @@ export function ConnectionDrawerFields({
   // (the record's own key) or a keyed catalog provider (the connection key).
   // A saved custom record already owns its key; an oauth provider signs in.
   const showKeyInCreate = authKind === "api_key" && (isNewCustomEndpoint || !isCustomRecordConnection);
-  const setupMissingModel = simplified && selectedEntry !== undefined &&
-    modelAfterCatalogPrefill(model, selectedEntry.models).trim() === "";
+  const setupMissingModel = createModelMissing(model, selectedEntry?.models ?? []);
   const setupMissingKey = simplified && showKeyInCreate && !noAuth &&
     selectedEntry?.authOptional !== true && secretValue.trim() === "";
   const keyFieldDisabled = readOnly || (isNewCustomEndpoint && noAuth);
@@ -1777,6 +1780,10 @@ export function ConnectionDrawerFields({
   /** ADD: single primary action — create the connection AND (item 3) fold in the key's secret-set. */
   async function createConnection(): Promise<void> {
     if (readOnly) {
+      return;
+    }
+    if (setupMissingModel) {
+      setError("Enter a model ID to continue.");
       return;
     }
     if (isNewCustomEndpoint) {
