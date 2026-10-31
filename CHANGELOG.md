@@ -7,6 +7,14 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Redesign provider connection editing with a compact model picker and per-model pricing table.
+
+### Fixed
+
+- Connection editing now protects unsaved changes when closing and keeps disabled price values readable.
+
 ## [0.0.60] — 2026-10-31
 
 ### Added
@@ -18,12 +26,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Redesign provider connection editing with a compact model picker and per-model pricing table.
 - Require a model ID when creating a connection, including custom endpoints.
 
 ### Fixed
 
-- Connection editing now protects unsaved changes when closing and keeps disabled price values readable.
 - Fix Claude session telemetry to include cached and cache-creation input tokens.
 - Diagnostics export now requires a new preview when the previous preview expires, so the saved bundle matches the reviewed data.
 
