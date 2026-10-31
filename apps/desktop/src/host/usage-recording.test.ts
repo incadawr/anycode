@@ -179,3 +179,19 @@ it("uses captured billing snapshots for both usage writers", () => {
   expect(child.priceBasisId).toBe(main.priceBasisId);
   expect(subagentUsageRow(usage, { ...pricing, pricingRaw: JSON.stringify({ fallback: { mode: "subscription" } }) }, { sessionId: "s", subagentId: "c", step: 1 }).priceBasisId).toBe("subscription");
 });
+
+it("prices MiniMax keys using the derived snapshot for a custom endpoint", async () => {
+  const { matchCatalogEntryByBaseUrl } = await import("@anycode/core");
+  const { getBuiltinCatalog } = await import("@anycode/core/catalog");
+  const { pricingSnapshotWithKeyDefault } = await import("./usage-recording.js");
+  const baseUrl = "https://api.minimax.io/anthropic/v1";
+  const catalogEntry = matchCatalogEntryByBaseUrl(getBuiltinCatalog(), baseUrl);
+  const usage = { inputTokens: 100, cachedInputTokens: 0, outputTokens: 10 };
+  const ids = { sessionId: "session", subagentId: "child", step: 1 };
+  const row = (key: string, raw?: string) => subagentUsageRow(usage, { catalogEntry, baseUrl, model: "MiniMax-M3.1-Flash", pricingRaw: pricingSnapshotWithKeyDefault(raw, catalogEntry, key) }, ids);
+  expect(row("sk-api-example").costUsd).toBeGreaterThan(0);
+  expect(row("sk-cp-example").priceBasisId).toBe("subscription");
+  expect(row("unknown").costUsd).toBeUndefined();
+  expect(row("sk-api-example", JSON.stringify({ fallback: { mode: "subscription" } })).priceBasisId).toBe("subscription");
+  expect(row("sk-cp-example", JSON.stringify({ fallback: { mode: "catalog" } })).costUsd).toBeGreaterThan(0);
+});

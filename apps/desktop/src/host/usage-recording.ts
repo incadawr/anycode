@@ -24,7 +24,7 @@
 
 import type { CatalogProviderEntry, ProviderUsageRecord } from "@anycode/core";
 import type { ModelPricing } from "@anycode/core/catalog";
-import { calculateUsageCost, catalogRateFor, declaredPricingMode, resolveUsagePrice } from "./usage-cost.js";
+import { calculateUsageCost, catalogRateFor, declaredPricingMode, pricingSnapshotWithKeyDefault, resolveUsagePrice } from "./usage-cost.js";
 
 /** Provider-reported token counts of one finished step. */
 export interface UsageTokens {
@@ -112,3 +112,5 @@ export function subagentUsageRow(
     transportRetries: 0,
   };
 }
+
+export { pricingSnapshotWithKeyDefault };
