@@ -480,12 +480,12 @@ export function usageEnvHint(envOverrides: readonly string[]): string | null {
 
 export function buildDrawerSavePayload(
   params: Parameters<typeof buildConnectionUpdatePayload>[0],
-  fields: { contextWindowDirty: boolean; contextWindowTokens: number | ""; reasoningSupportedDirty: boolean; reasoningSupported: boolean; modelEffortDirty: boolean; modelEffort: ReasoningEffort | ""; imageInputDirty: boolean; effortLevelsDirty?: boolean; effortLevels?: ReasoningEffort[] },
+  fields: { contextWindowDirty: boolean; contextWindowTokens: number | ""; reasoningSupportedDirty: boolean; reasoningSupported: boolean | undefined; modelEffortDirty: boolean; modelEffort: ReasoningEffort | ""; imageInputDirty: boolean; effortLevelsDirty?: boolean; effortLevels?: ReasoningEffort[] },
 ): ConnectionUpdateRequest {
   return buildConnectionUpdatePayload({
     ...params,
     ...(fields.contextWindowDirty ? { contextWindowTokens: fields.contextWindowTokens } : {}),
-    ...(fields.reasoningSupportedDirty ? { reasoningSupported: fields.reasoningSupported ? true : "" } : {}),
+    ...(fields.reasoningSupportedDirty ? { reasoningSupported: fields.reasoningSupported ?? "" } : {}),
     ...(fields.modelEffortDirty ? { reasoningEffort: fields.modelEffort } : {}),
     ...(fields.effortLevelsDirty ? { effortLevels: fields.effortLevels?.length ? fields.effortLevels : "" } : {}),
     imageInputChanged: fields.imageInputDirty,
@@ -525,7 +525,7 @@ export function buildConnectionUpdatePayload(params: {
   /** GitHub #1: the usage select's three-state value; Automatic sends the `""` clear sentinel. */
   usage: UsageSelection;
   reasoningEffort?: ReasoningEffort | "";
-  reasoningSupported?: true | "";
+  reasoningSupported?: boolean | "";
   effortLevels?: ReasoningEffort[] | "";
 }): ConnectionUpdateRequest {
   return {
@@ -1405,7 +1405,7 @@ export function ConnectionDrawerFields({
   // Prefilled ONLY when the saved override binds to the connection's own model
   // (the contextWindowInitialRaw rule); "auto" clears the pair on save.
   const [reasoningSupported, setReasoningSupported] = useState(() =>
-    modelOverrideFor(editConnection, editConnection?.model ?? "")?.reasoningSupported === true,
+    modelOverrideFor(editConnection, editConnection?.model ?? "")?.reasoningSupported,
   );
   const [catalogMatchDisabled, setCatalogMatchDisabled] = useState(() => modelOverrideFor(editConnection, editConnection?.model ?? "")?.catalogMatchDisabled === true);
   const [catalogMatchDirty, setCatalogMatchDirty] = useState(false);
@@ -1642,7 +1642,8 @@ export function ConnectionDrawerFields({
     if (!contextWindow.raw.trim()) cwDefaultHint = `catalog: ${Math.min(dictionaryActive.contextWindow, dictionaryActive.usableContextWindow ?? dictionaryActive.contextWindow)}`;
     if (dictionaryActive.imageInput && imageInput === "auto") imageInputHint = "catalog: vision";
   }
-  const effectiveReasoningLevels = effortLevels.length ? effortLevels : (reasoningSupported ? reasoningLevels : (!catalogMatchDisabled && dictionaryMatch?.reasoning ? (dictionaryMatch.effortLevels ?? ["off", "low", "medium", "high"]) : reasoningLevels));
+  const liveReasoning = targetConnection?.modelCapabilities?.[effectiveFormModel.trim()];
+  const effectiveReasoningLevels = reasoningSupported === false ? undefined : effortLevels.length ? effortLevels : (reasoningLevels ?? (liveReasoning?.reasoning !== undefined ? undefined : !catalogMatchDisabled && dictionaryMatch?.reasoning ? (dictionaryMatch.effortLevels ?? ["off", "low", "medium", "high"]) : undefined));
   const imageInputFeedHint = proxySnapshot === null ? null : imageInputEnvHint(proxySnapshot.envOverrides);
   // GitHub #1: shown only while ANYCODE_INCLUDE_USAGE overrides the rung.
   const usageEnvHintText = proxySnapshot === null ? null : usageEnvHint(proxySnapshot.envOverrides);
@@ -1668,7 +1669,7 @@ export function ConnectionDrawerFields({
       const target = force ? undefined : modelOverrideFor(saved, effective.trim());
       setCatalogMatchDisabled(target?.catalogMatchDisabled === true);
       setCatalogMatchDirty(false);
-      setReasoningSupported(target?.reasoningSupported === true);
+      setReasoningSupported(target?.reasoningSupported);
       setModelEffort(target?.reasoningEffort ?? "");
       setEffortLevels(target?.effortLevels ?? []);
       setEffortLevelsDirty(false);
@@ -1763,7 +1764,7 @@ export function ConnectionDrawerFields({
           ...(usageCreateValue !== undefined ? { includeUsage: usageCreateValue } : {}),
           ...(contextWindow.raw.trim() ? { contextWindowTokens: Number(contextWindow.raw) } : {}),
           ...(catalogMatchDisabled ? { catalogMatchDisabled: true as const } : {}),
-          ...(reasoningSupported ? { reasoningSupported: true as const } : {}),
+          ...(reasoningSupported !== undefined ? { reasoningSupported } : {}),
           ...(effortLevels.length ? { effortLevels } : {}),
           ...(modelEffort !== "" ? { reasoningEffort: modelEffort } : {}),
           ...(imageInput !== "auto" ? { imageInputOverride: imageInput } : {}),
@@ -1873,7 +1874,7 @@ export function ConnectionDrawerFields({
           ...(mot.value !== "" ? { maxOutputTokens: mot.value } : {}),
           ...(cw.value !== "" ? { contextWindowTokens: cw.value } : {}),
           ...(catalogMatchDisabled ? { catalogMatchDisabled: true as const } : {}),
-          ...(reasoningSupported ? { reasoningSupported: true as const } : {}),
+          ...(reasoningSupported !== undefined ? { reasoningSupported } : {}),
           ...(effortLevels.length ? { effortLevels } : {}),
           ...(modelEffort !== "" ? { reasoningEffort: modelEffort } : {}),
           // : create keeps the conditional-spread form (create's
@@ -2387,9 +2388,10 @@ export function ConnectionDrawerFields({
       {!knownCatalogModel && <label className="settings-field">
         <span className="settings-field-label">Reasoning support (this model)</span>
         <select className="settings-field-input" aria-label="Reasoning support" disabled={readOnly}
-          value={reasoningSupported || effortLevels.length > 0 ? "on" : "auto"} onChange={(e) => { setReasoningSupportedDirty(true); setReasoningSupported(e.target.value === "on"); if (e.target.value === "auto") { setEffortLevels([]); setEffortLevelsDirty(true); } }}>
+          value={reasoningSupported === false ? "off" : reasoningSupported || effortLevels.length > 0 ? "on" : "auto"} onChange={(e) => { setReasoningSupportedDirty(true); setReasoningSupported(e.target.value === "auto" ? undefined : e.target.value === "on"); if (e.target.value !== "on") { setEffortLevels([]); setEffortLevelsDirty(true); } }}>
           <option value="auto">Auto — catalog or provider metadata</option>
           <option value="on">Supported</option>
+          <option value="off">Not supported</option>
         </select>
       </label>}
       {!knownCatalogModel && (reasoningSupported || effortLevels.length > 0) && <fieldset className="settings-field">

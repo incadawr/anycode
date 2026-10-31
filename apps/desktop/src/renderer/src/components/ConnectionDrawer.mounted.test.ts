@@ -291,3 +291,22 @@ it("shows the matched model, hides complex prices and saves the opt-out", async 
     expect(update).toHaveBeenCalledWith(expect.objectContaining({id:"c", catalogMatchDisabled:true}));
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
+
+it("uses endpoint effort levels and saves an explicit reasoning denial", async () => {
+  const model = "vendor/glm-5.3-fp8";
+  const connection = { id:"c", providerId:"custom:test", model, modelCapabilities:{ [model]: { reasoning:true, effortLevels:["low", "high"] } } };
+  const snapshot = { settings: cloneDefaults(), readOnly:false, secrets:[], envOverrides:[], providerReady:true, catalog:[] };
+  const update = vi.fn().mockResolvedValue({ok:true, snapshot});
+  const store = createStore(() => ({snapshot, oauthPendingProviderId:null, connectionUpdate:update, load:vi.fn()})) as unknown as SettingsStoreApi;
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(ConnectionDrawerFields, {mode:"edit", editConnection:connection, catalog:[], connections:[connection], secrets:[], readOnly:false, store})));
+    const effort = container.querySelector('select[aria-label="Reasoning effort"]') as HTMLSelectElement;
+    expect([...effort.options].map(o => o.value)).toEqual(["", "low", "high"]);
+    const support = container.querySelector('select[aria-label="Reasoning support"]') as HTMLSelectElement;
+    await act(async () => { support.value = "off"; support.dispatchEvent(new Event("change", {bubbles:true})); });
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({reasoningSupported:false}));
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});

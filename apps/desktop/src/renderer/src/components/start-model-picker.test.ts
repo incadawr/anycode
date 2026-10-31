@@ -516,3 +516,12 @@ it("prefers gateway endpoint capabilities over dictionary defaults", async () =>
   expect(modelCapabilitiesFor({ providerId: "vllm", modelCapabilities: { "vendor/glm-5.3-fp8": live } }, "vendor/glm-5.3-fp8")).toMatchObject(live);
   expect(modelCapabilitiesFor({ providerId: "z-ai" }, model)).toBeUndefined();
 });
+
+it("does not mutate live capabilities when applying off and honors a manual denial", async () => {
+  const { modelCapabilitiesFor } = await import("../../../shared/model-overrides.js");
+  const live = { reasoning: true, thinkingAlwaysOn: true, effortLevels: ["high"] };
+  const connection = { providerId: "vllm", reasoningEffort: "off" as const, modelCapabilities: { unknown: live } };
+  expect(modelCapabilitiesFor(connection, "unknown")?.thinkingAlwaysOn).toBe(false);
+  expect(live.thinkingAlwaysOn).toBe(true);
+  expect(modelCapabilitiesFor({ ...connection, modelOverrides: { "vendor/glm-5.3-fp8": { reasoningSupported: false } } }, "vendor/glm-5.3-fp8")?.reasoning).toBe(false);
+});

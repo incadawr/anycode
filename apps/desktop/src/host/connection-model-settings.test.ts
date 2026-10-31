@@ -291,3 +291,16 @@ it("prefers gateway endpoint capabilities to dictionary facts in the host", () =
   expect(resolveEffortLevels(model, settings.entryFor(model), settings.capabilitiesFor(model))).toEqual(["low", "high"]);
   expect(resolveReasoningEffort(model, settings.entryFor(model), "high", settings.capabilitiesFor(model))).toBe("high");
 });
+
+it("keeps live effort levels when manual off extends the vocabulary", () => {
+  const model = "vendor/glm-5-fp8";
+  const settings = createConnectionModelSettings({ connection: { reasoningEffort: "off" }, liveCapabilitiesFor: () => ({ reasoning: true, effortLevels: ["low", "high"] }) });
+  expect(resolveEffortLevels(model, settings.entryFor(model), settings.capabilitiesFor(model))).toEqual(["off", "low", "high"]);
+});
+
+it("suppresses catalog and live reasoning when manually disabled", () => {
+  const model = "vendor/glm-5.3-fp8";
+  const settings = createConnectionModelSettings({ connection: { modelOverrides: { [model]: { reasoningSupported: false, effortLevels: ["high"] } } }, liveCapabilitiesFor: () => ({ reasoning: true, effortLevels: ["high"] }) });
+  expect(resolveEffortLevels(model, settings.entryFor(model), settings.capabilitiesFor(model), settings.effortLevelsFor(model))).toBeUndefined();
+  expect(settings.switchEffort("other", model, "high")).toBe("off");
+});

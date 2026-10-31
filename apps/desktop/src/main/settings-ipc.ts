@@ -439,7 +439,7 @@ const connectionCreateSchema = z
     proxyRef: z.string().min(1).optional(),
     reasoningEffort: reasoningEffortEnum.optional(),
     catalogMatchDisabled: z.literal(true).optional(),
-    reasoningSupported: z.literal(true).optional(),
+    reasoningSupported: z.boolean().optional(),
     effortLevels: z.array(reasoningEffortEnum).min(1).transform((levels) => [...new Set(levels)]).optional(),
     promptCache: promptCacheSchema.optional(),
     maxOutputTokens: maxOutputTokensSchema.optional(),
@@ -485,7 +485,7 @@ const connectionUpdateSchema = z
     reasoningEffort: z.union([reasoningEffortEnum, z.literal("")]).optional(),
     modelOverrideModel: z.string().trim().min(1).optional(),
     catalogMatchDisabled: z.union([z.literal(true), z.literal("")]).optional(),
-    reasoningSupported: z.union([z.literal(true), z.literal("")]).optional(),
+    reasoningSupported: z.union([z.boolean(), z.literal("")]).optional(),
     effortLevels: z.union([z.array(reasoningEffortEnum).min(1).transform((levels) => [...new Set(levels)]), z.literal("")]).optional(),
     // Opt-in prompt cache (GitHub #15) with the same `""` clear sentinel as
     // `maxOutputTokens` below: absent = keep, enabled object = set, `""` = clear.
