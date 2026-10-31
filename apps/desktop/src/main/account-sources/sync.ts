@@ -41,6 +41,18 @@ export function reconcileCatalog(custom: CustomProviderRecord, connection: Provi
     if (!owned.model && !models.has(model.id)) { models.add(model.id); owned.model = { value: true }; }
     else if (owned.model && !owned.model.overridden) models.add(model.id);
     const current: ModelOverrides = { ...(resultConnection.modelOverrides && Object.hasOwn(resultConnection.modelOverrides, model.id) ? resultConnection.modelOverrides[model.id] : undefined) };
+    const capabilities = model.capabilities && { ...(model.capabilities.reasoning !== undefined ? { reasoning: model.capabilities.reasoning } : {}), ...(model.capabilities.effortLevels !== undefined ? { effortLevels: model.capabilities.effortLevels } : {}), ...(model.capabilities.imageInput ? { imageInput: true as const } : {}) };
+    const currentCapabilities = resultConnection.modelCapabilities && Object.hasOwn(resultConnection.modelCapabilities, model.id) ? resultConnection.modelCapabilities[model.id] : undefined;
+    if (owned.capabilities && !same(currentCapabilities, owned.capabilities.value)) owned.capabilities.overridden = true;
+    if (!owned.capabilities?.overridden && (owned.capabilities || currentCapabilities === undefined)) {
+      if (capabilities && Object.keys(capabilities).length) {
+        Object.defineProperty(resultConnection.modelCapabilities ??= {}, model.id, { value: capabilities, writable: true, configurable: true, enumerable: true });
+        owned.capabilities = { value: capabilities };
+      } else if (owned.capabilities) {
+        if (resultConnection.modelCapabilities) delete resultConnection.modelCapabilities[model.id];
+        delete owned.capabilities;
+      }
+    }
     const values = { pricing: ratesFor(model), contextWindowTokens: model.capabilities?.contextWindowTokens };
     for (const key of ["pricing", "contextWindowTokens"] as const) {
       const prev = owned[key];

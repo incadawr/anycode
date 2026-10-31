@@ -3874,6 +3874,7 @@ void app.whenReady().then(async () => {
     const pluginsFs = new NodePluginsFs();
     accountSources = registerAccountSourcesIpc({
       home: pluginsHome, fs: pluginsFs, appVersion: app.getVersion(), settingsPath,
+      allowLoopback: __ANYCODE_DEV_AUTOMATION__ && !app.isPackaged && process.env.ANYCODE_AUTOMATION === "1",
       getSecret, fetchFor: connectionProxyFetch,
       publish: (channel, value) => { for (const window of BrowserWindow.getAllWindows()) window.webContents.send(channel, value); },
       settingsChanged: (fresh) => { settings = fresh; },

@@ -169,11 +169,12 @@ const workflowsList = z.array(z.string().min(1, "workflows entry must be a non-e
 const accountUrl = z.string().max(2048).refine((value) => {
   try {
     const url = new URL(value);
-    return url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash;
+    const loopback = url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+    return (url.protocol === "https:" || loopback) && !url.username && !url.password && !url.search && !url.hash;
   } catch {
     return false;
   }
-}, "must be an HTTPS URL without credentials, query or fragment");
+}, "must be HTTPS or loopback HTTP, without credentials, query or fragment");
 
 export const accountSourceSchema = z.object({
   id: z.string().regex(PLUGIN_NAME_RE, NAME_ERROR),

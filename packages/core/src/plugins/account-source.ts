@@ -25,7 +25,7 @@ const model = z.object({
   displayName: z.string().min(1).max(256).optional(),
   billing: z.enum(["free", "metered"]),
   ratesMicrosPerMillionTokens: rates.optional(),
-  capabilities: z.object({ contextWindowTokens: z.number().int().positive().max(100_000_000).optional() }).optional(),
+  capabilities: z.object({ contextWindowTokens: z.number().int().positive().max(100_000_000).optional(), reasoning: z.boolean().optional(), effortLevels: z.array(z.enum(["off", "low", "medium", "high", "xhigh", "max"])).max(6).optional(), imageInput: z.literal(true).optional() }).optional(),
 });
 
 export const accountCatalogSchema = z.object({

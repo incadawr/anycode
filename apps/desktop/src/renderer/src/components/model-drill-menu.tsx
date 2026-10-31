@@ -23,6 +23,14 @@ import { Fragment } from "react";
 import type { CSSProperties, KeyboardEvent, MutableRefObject, ReactElement } from "react";
 import { Check, Chevron } from "./icons.js";
 import { modelDrillEffortLabel, type ModelDrillPage, type ModelDrillRow } from "./model-drill-rows.js";
+import { useAccountSourcesStore } from "../account-sources-store.js";
+import { useSettingsStore } from "../settings-store.js";
+
+function dollarsPerMillion(micros: string): string {
+  const n = BigInt(micros);
+  const fraction = String(n % 1_000_000n).padStart(6, "0").replace(/0+$/, "");
+  return `$${n / 1_000_000n}${fraction ? `.${fraction}` : ""}`;
+}
 
 export interface ModelDrillMenuProps {
   /** The rows of the level currently on screen — a flat list, one roving-focus index across all of them. */
@@ -68,6 +76,8 @@ export interface ModelDrillMenuProps {
 
 export function ModelDrillMenu(props: ModelDrillMenuProps): ReactElement {
   const { rows, page, placement, backLabel, focusIndex, emptyText, itemRefs } = props;
+  const catalogs = useAccountSourcesStore((state) => state.snapshot.catalogs);
+  const bindings = useSettingsStore((state) => state.snapshot?.settings.plugins?.accountSources);
 
   /**
    * One row of whatever level is on screen. Two shapes only: a PICK
@@ -120,6 +130,9 @@ export function ModelDrillMenu(props: ModelDrillMenuProps): ReactElement {
       );
     }
     const current = row.current;
+    const model = row.kind === "effort" ? undefined : catalogs?.find((catalog) => catalog.connectionId === row.connectionId)?.models.find((entry) => entry.id === row.modelId);
+    const owned = row.kind === "effort" ? undefined : bindings?.find((b) => b.connectionId === row.connectionId)?.ownership[row.modelId];
+    const priceLabel = model?.billing === "free" ? "Free" : model?.ratesMicrosPerMillionTokens ? `${dollarsPerMillion(model.ratesMicrosPerMillionTokens.input)} in / ${dollarsPerMillion(model.ratesMicrosPerMillionTokens.output)} out per 1M` : model ? "Price unknown" : undefined;
     return (
       <button
         ref={attach}
@@ -139,6 +152,7 @@ export function ModelDrillMenu(props: ModelDrillMenuProps): ReactElement {
         <span className="start-model-item-name">
           {row.kind === "effort" ? modelDrillEffortLabel(row.value) : row.name}
         </span>
+        {priceLabel && <span className="start-model-item-sub">{priceLabel}{owned?.pricingOverride || owned?.pricing?.overridden ? " · local price override" : ""}</span>}
         {/* A popular pick that would SWITCH connection says which one it
             means; one from the connection already in use needs no annotation. */}
         {row.kind === "popular" && !props.isCurrentConnection(row.connectionId) && (

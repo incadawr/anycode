@@ -3,7 +3,7 @@ import { z } from "zod";
 import { accountCatalogSchema } from "@anycode/core/plugins-admin";
 import type { FileSystemPort } from "@anycode/core";
 import { loadSettings, withSettingsFileLock } from "../../settings/files.js";
-import { ACCOUNT_SOURCES_BIND_CHANNEL, ACCOUNT_SOURCES_CHANGED_CHANNEL, ACCOUNT_SOURCES_GET_CHANNEL, ACCOUNT_SOURCES_PREVIEW_CHANNEL, ACCOUNT_SOURCES_REFRESH_CHANNEL, ACCOUNT_SOURCES_UNBIND_CHANNEL, type AccountSourceCandidateView } from "../../shared/account-sources.js";
+import { ACCOUNT_SOURCES_BIND_CHANNEL, ACCOUNT_SOURCES_CATALOG_CHANGED_CHANNEL, ACCOUNT_SOURCES_CHANGED_CHANNEL, ACCOUNT_SOURCES_GET_CHANNEL, ACCOUNT_SOURCES_PREVIEW_CHANNEL, ACCOUNT_SOURCES_REFRESH_CHANNEL, ACCOUNT_SOURCES_UNBIND_CHANNEL, type AccountSourceCandidateView } from "../../shared/account-sources.js";
 import type { AnycodeSettings, SecretKey } from "../../shared/settings.js";
 import { customProviderSecretKey } from "../host-env.js";
 import { AccountBindingService, eligible } from "./binding.js";
@@ -13,6 +13,7 @@ import { persistCatalog } from "./persist.js";
 
 interface Deps {
   fs: FileSystemPort; home: string; appVersion: string; settingsPath: string;
+  allowLoopback?: boolean;
   getSecret(key: SecretKey): Promise<string | undefined>;
   fetchFor(id: string): (url: string, init: RequestInit) => Promise<Response>;
   publish(channel: string, value: unknown): void;
@@ -20,7 +21,7 @@ interface Deps {
 }
 const keySchema = z.object({ plugin: z.string().min(1).max(64), source: z.string().min(1).max(64) }).strict();
 export function registerAccountSourcesIpc(deps: Deps) {
-  const candidates = () => listAccountSourceCandidates(deps.fs, deps.home, deps.appVersion);
+  const candidates = () => listAccountSourceCandidates(deps.fs, deps.home, deps.appVersion, deps.allowLoopback === true);
   const controller = new AccountSourcesController((snapshot) => deps.publish(ACCOUNT_SOURCES_CHANGED_CHANNEL, snapshot));
   let generation = 0;
   let disposed = false;
@@ -59,10 +60,10 @@ export function registerAccountSourcesIpc(deps: Deps) {
       });
       if (turn !== generation || disposed) return;
       if (!credential) continue;
-      sources.push({ key: { plugin: b.plugin, source: b.source }, displayName: candidate.descriptor.displayName, apiBaseUrl: candidate.descriptor.apiBaseUrl, accountId: b.accountId, apiKey: credential.secret, fetcher: deps.fetchFor(b.connectionId), applyCatalog: async (catalog, current) => {
+      sources.push({ key: { plugin: b.plugin, source: b.source }, displayName: candidate.descriptor.displayName, apiBaseUrl: candidate.descriptor.apiBaseUrl, accountId: b.accountId, connectionId: b.connectionId, apiKey: credential.secret, fetcher: deps.fetchFor(b.connectionId), applyCatalog: async (catalog, current) => {
         const parsed = accountCatalogSchema.safeParse(catalog);
         if (!parsed.success) return;
-        await persistCatalog(deps.settingsPath, { ...b, gatewayBaseUrl: candidate.descriptor.gateway.baseUrl, gatewayKind: candidate.descriptor.gateway.kind }, parsed.data, current, deps.settingsChanged);
+        await persistCatalog(deps.settingsPath, { ...b, gatewayBaseUrl: candidate.descriptor.gateway.baseUrl, gatewayKind: candidate.descriptor.gateway.kind }, parsed.data, current, async (fresh) => { await deps.settingsChanged(fresh); deps.publish(ACCOUNT_SOURCES_CATALOG_CHANGED_CHANNEL, null); });
       } });
     }
     if (turn === generation && !disposed) controller.replace(sources);

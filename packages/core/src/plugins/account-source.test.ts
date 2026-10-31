@@ -18,6 +18,7 @@ describe("account source contract", () => {
       expect(pluginManifestSchema.safeParse(manifest([{ ...source, apiBaseUrl }])).success).toBe(false);
     }
     expect(pluginManifestSchema.safeParse(manifest([source, source])).success).toBe(false);
+    expect(pluginManifestSchema.safeParse(manifest([{ ...source, gateway: { ...source.gateway, baseUrl: "http://127.0.0.1:1234/v1" }, apiBaseUrl: "http://127.0.0.1:1234/account/" }])).success).toBe(true);
   });
   it("hashes authorization-relevant changes but not labels", () => {
     const parsed = pluginManifestSchema.parse(manifest([source])).accountSources![0]!;

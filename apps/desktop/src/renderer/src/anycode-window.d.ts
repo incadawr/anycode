@@ -734,6 +734,7 @@ declare global {
         bind(token: string): Promise<boolean>;
         unbind(key: import("../../shared/account-sources.js").AccountSourceKey): Promise<void>;
         refresh(key: import("../../shared/account-sources.js").AccountSourceKey): Promise<void>;
+        onCatalogChanged(callback: () => void): () => void;
         onChanged(callback: (snapshot: import("../../shared/account-sources.js").AccountSourcesSnapshot) => void): () => void;
       };
       plugins: {

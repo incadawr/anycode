@@ -1,10 +1,10 @@
-import type { AccountBudget, AccountSourceKey, AccountSourcesSnapshot, AccountSourceView } from "../../shared/account-sources.js";
+import type { AccountBudget, AccountCatalogView, AccountSourceKey, AccountSourcesSnapshot, AccountSourceView } from "../../shared/account-sources.js";
 import { AccountHttpError, fetchAccountDocument } from "./client.js";
 
 type Fetcher = (url: string, init: RequestInit) => Promise<Response>;
-export type AccountSourceRuntime = { key: AccountSourceKey; displayName: string; apiBaseUrl: string; accountId: string; fetcher: Fetcher; apiKey?: string; applyCatalog: (catalog: unknown, isCurrent: () => boolean) => Promise<unknown> };
+export type AccountSourceRuntime = { key: AccountSourceKey; displayName: string; apiBaseUrl: string; accountId: string; connectionId: string; fetcher: Fetcher; apiKey?: string; applyCatalog: (catalog: unknown, isCurrent: () => boolean) => Promise<unknown> };
 type Source = AccountSourceRuntime;
-type State = { source: Source; generation: number; abort?: AbortController; inflight?: Promise<void>; view: AccountSourceView; lastCatalog: number; lastBudget: number; nextAttempt: number; failures: number };
+type State = { source: Source; generation: number; abort?: AbortController; inflight?: Promise<void>; view: AccountSourceView; catalog?: AccountCatalogView; lastCatalog: number; lastBudget: number; nextAttempt: number; failures: number };
 const keyOf = (key: AccountSourceKey) => JSON.stringify([key.plugin, key.source]);
 const BUDGET_INTERVAL = 60_000;
 const CATALOG_INTERVAL = 900_000;
@@ -30,7 +30,7 @@ export class AccountSourcesController {
       if (!existing || Date.parse(view.budget.observedAt) > Date.parse(existing.budget!.observedAt)) groups.set(key, view);
       else if (existing.budget!.observedAt === view.budget.observedAt && JSON.stringify(existing.budget) !== JSON.stringify(view.budget)) { delete existing.budget; existing.status = "unavailable"; conflicting.add(key); }
     }
-    return { revision: this.revision, sources: [...views, ...groups.values()] };
+    return { revision: this.revision, sources: [...views, ...groups.values()], catalogs: [...this.states.values()].flatMap((s) => s.catalog ? [structuredClone(s.catalog)] : []) };
   }
   private publish(): void { this.revision++; this.changed(this.snapshot()); }
   replace(sources: Source[]): void {
@@ -58,14 +58,14 @@ export class AccountSourcesController {
         try {
           const result = await fetchAccountDocument(state.source.fetcher, state.source.apiBaseUrl, endpoint, state.source.apiKey, abort.signal);
           if (!isCurrent()) return;
-          if (result.data.accountId !== state.source.accountId) { delete state.view.budget; state.view.status = "needs_approval"; this.publish(); return; }
-          if (result.kind === "catalog") { await state.source.applyCatalog(result.data, isCurrent); if (!isCurrent()) return; state.lastCatalog = now; }
+          if (result.data.accountId !== state.source.accountId) { delete state.view.budget; delete state.catalog; state.view.status = "needs_approval"; this.publish(); return; }
+          if (result.kind === "catalog") { await state.source.applyCatalog(result.data, isCurrent); if (!isCurrent()) return; state.catalog = { connectionId: state.source.connectionId, models: result.data.models.map(({ id, displayName, billing, ratesMicrosPerMillionTokens }) => ({ id, ...(displayName ? { displayName } : {}), billing, ...(ratesMicrosPerMillionTokens ? { ratesMicrosPerMillionTokens } : {}) })) }; state.lastCatalog = now; this.publish(); }
           else { state.view.budget = result.data as AccountBudget; state.view.status = "ready"; state.view.fetchedAt = new Date(now).toISOString(); state.lastBudget = now; this.publish(); }
         } catch (error) {
           if (!isLive()) return;
           failed = true;
           if (abort.signal.aborted) { state.view.status = state.view.budget ? "stale" : "unavailable"; this.publish(); break; }
-          if (error instanceof AccountHttpError && (error.status === 401 || error.status === 403)) { delete state.view.budget; state.view.status = error.status === 401 ? "auth_required" : "access_denied"; this.publish(); return; }
+          if (error instanceof AccountHttpError && (error.status === 401 || error.status === 403)) { delete state.view.budget; delete state.catalog; state.view.status = error.status === 401 ? "auth_required" : "access_denied"; this.publish(); return; }
           if (endpoint === "budget") { state.view.status = state.view.budget ? "stale" : "unavailable"; this.publish(); }
           if (error instanceof AccountHttpError && error.status === 429 && error.retryAfter) {
             const seconds = Number(error.retryAfter); const date = Date.parse(error.retryAfter);

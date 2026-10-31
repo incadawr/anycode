@@ -3,7 +3,7 @@ import { AccountSourcesController, type AccountSourceRuntime } from "./controlle
 
 const catalog = { schemaVersion: "anycode.account-catalog.v1", accountId: "a", revision: "1", complete: true, models: [] };
 const budget = { schemaVersion: "anycode.account-budget.v1", accountId: "a", budgetId: "budget", currency: "USD", scale: 6, observedAt: "2026-10-31T12:00:00Z", windows: [] };
-function source(fetcher: AccountSourceRuntime["fetcher"]): AccountSourceRuntime { return { key: { plugin: "p", source: "s" }, displayName: "Company", apiBaseUrl: "https://gateway.example.com/", accountId: "a", fetcher, applyCatalog: vi.fn() }; }
+function source(fetcher: AccountSourceRuntime["fetcher"]): AccountSourceRuntime { return { key: { plugin: "p", source: "s" }, displayName: "Company", apiBaseUrl: "https://gateway.example.com/", accountId: "a", connectionId: "conn", fetcher, applyCatalog: vi.fn() }; }
 afterEach(() => vi.useRealTimers());
 it("coalesces refresh and ignores a late response after replacement", async () => {
   vi.useFakeTimers();

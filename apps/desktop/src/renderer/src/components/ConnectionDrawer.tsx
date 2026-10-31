@@ -1428,6 +1428,7 @@ export interface ConnectionDrawerFieldsProps {
   readOnly: boolean;
   /** Where to steer initial focus (a11y) — "credential" for the tile menu's "Replace key"/"Sign in". */
   initialFocus?: "label" | "credential" | "context";
+  initialCustom?: { name: string; baseUrl: string; kind: CustomProviderRecord["kind"] };
   store?: SettingsStoreApi;
   /** Injectable custom-provider bridge; defaults to the real `window.anycode.customProvider`. */
   customProvider?: CustomProviderBridge;
@@ -1471,6 +1472,7 @@ export function ConnectionDrawerFields({
   secrets,
   readOnly,
   initialFocus,
+  initialCustom,
   store = useSettingsStore,
   customProvider,
   cancelAction,
@@ -1500,7 +1502,7 @@ export function ConnectionDrawerFields({
   // connection"; edit mode: fixed to the connection's own id for this drawer's
   // whole lifetime (the template can never change post-creation).
   const [createdConnectionId, setCreatedConnectionId] = useState<string | null>(editConnection?.id ?? null);
-  const [providerId, setProviderId] = useState<string>(editConnection?.providerId ?? initialProviderId ?? "");
+  const [providerId, setProviderId] = useState<string>(editConnection?.providerId ?? (initialCustom ? "custom" : initialProviderId ?? ""));
   const [label, setLabel] = useState(editConnection?.label ?? "");
   // an existing catalog connection persisted with a blank model
   // (the live trap — readiness fails on it with a key-blaming toast) opens
@@ -1642,9 +1644,9 @@ export function ConnectionDrawerFields({
   }));
   const [secretValue, dispatchSecret] = useReducer(secretFieldReducer, "");
   // New-custom-endpoint (the builtin `custom` sentinel) record fields.
-  const [customName, setCustomName] = useState("");
-  const [customBaseUrl, setCustomBaseUrl] = useState("");
-  const [customKind, setCustomKind] = useState<CustomProviderRecord["kind"]>("openai-compatible");
+  const [customName, setCustomName] = useState(initialCustom?.name ?? "");
+  const [customBaseUrl, setCustomBaseUrl] = useState(initialCustom?.baseUrl ?? "");
+  const [customKind, setCustomKind] = useState<CustomProviderRecord["kind"]>(initialCustom?.kind ?? "openai-compatible");
   // Custom-provider model fetch/curation (the drawer's model step).
   const [fetchedModels, setFetchedModels] = useState<Extract<FetchModelsOutcome, { ok: true }>["models"] | null>(null);
   const [createFetchNotice, setCreateFetchNotice] = useState<string | null>(null);
@@ -1821,7 +1823,7 @@ export function ConnectionDrawerFields({
   // (the record's own key) or a keyed catalog provider (the connection key).
   // A saved custom record already owns its key; an oauth provider signs in.
   const showKeyInCreate = authKind === "api_key" && (isNewCustomEndpoint || !isCustomRecordConnection);
-  const setupMissingModel = createModelMissing(model, selectedEntry?.models ?? []);
+  const setupMissingModel = !(initialCustom && !simplified) && createModelMissing(model, selectedEntry?.models ?? []);
   const setupMissingKey = simplified && showKeyInCreate && !noAuth &&
     selectedEntry?.authOptional !== true && secretValue.trim() === "";
   const keyFieldDisabled = readOnly || (isNewCustomEndpoint && noAuth);
@@ -3208,6 +3210,7 @@ export interface ConnectionDrawerProps {
   secrets: readonly SecretStatus[];
   readOnly: boolean;
   initialFocus?: "label" | "credential" | "context";
+  initialCustom?: { name: string; baseUrl: string; kind: CustomProviderRecord["kind"] };
   onClose(): void;
   store?: SettingsStoreApi;
   /** Injectable custom-provider bridge; forwarded to the fields. */

@@ -4,6 +4,7 @@ export const ACCOUNT_SOURCES_REFRESH_CHANNEL = "anycode:account-sources-refresh"
 export const ACCOUNT_SOURCES_BIND_CHANNEL = "anycode:account-sources-bind";
 export const ACCOUNT_SOURCES_UNBIND_CHANNEL = "anycode:account-sources-unbind";
 export const ACCOUNT_SOURCES_CHANGED_CHANNEL = "anycode:account-sources-changed";
+export const ACCOUNT_SOURCES_CATALOG_CHANGED_CHANNEL = "anycode:account-sources-catalog-changed";
 export const ACCOUNT_SOURCES_PREVIEW_CHANNEL = "anycode:account-sources-preview";
 
 export interface AccountSourceKey { plugin: string; source: string }
@@ -31,7 +32,8 @@ export interface AccountSourceView {
   budget?: AccountBudget;
   fetchedAt?: string;
 }
-export interface AccountSourcesSnapshot { revision: number; sources: AccountSourceView[] }
+export interface AccountCatalogView { connectionId: string; models: { id: string; displayName?: string; billing: "free" | "metered"; ratesMicrosPerMillionTokens?: { input: string; output: string; cachedInput?: string; cacheWrite?: string } }[] }
+export interface AccountSourcesSnapshot { revision: number; sources: AccountSourceView[]; catalogs?: AccountCatalogView[] }
 export interface AccountSourceCandidateView {
   key: AccountSourceKey;
   displayName: string;

@@ -26,6 +26,7 @@ import { ConfirmDialog } from "./ConfirmDialog.js";
 import { highlight } from "./highlight.js";
 import { ArrowUp, Chevron, Collapse, Cube, Dot, Ellipsis, Folder, Gear, Plus, Search, Spinner, Trash, X } from "./icons.js";
 import { AGENT_PROJECT_SWITCH_LABEL } from "./project-agent-switch.js";
+import { AccountBudgetCard } from "./AccountBudgetCard.js";
 
 /** Label fallback when a tab/session has no title (design §2.3). */
 const UNTITLED = "Untitled task";
@@ -1381,6 +1382,7 @@ export function Sidebar({
         )}
       </div>
 
+      {!collapsed && <AccountBudgetCard collapsed={false} onSettings={onOpenSettings} />}
       <div className="sidebar-footer">
         {notice && (
           <div className="notice-toast sidebar-notice" role="status">

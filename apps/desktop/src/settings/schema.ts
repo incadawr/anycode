@@ -547,6 +547,7 @@ const accountSourceBindingSchema = z.object({
     model: z.object({ value: z.literal(true), overridden: z.boolean().optional() }).optional(),
     pricing: z.object({ value: tokenRatesSchema, overridden: z.boolean().optional() }).optional(),
     contextWindowTokens: z.object({ value: z.number().int().min(1024).max(1_000_000), overridden: z.boolean().optional() }).optional(),
+    capabilities: z.object({ value: z.object({ reasoning: z.boolean().optional(), effortLevels: z.array(z.string()).optional(), imageInput: z.literal(true).optional() }), overridden: z.boolean().optional() }).optional(),
     pricingOverride: z.literal(true).optional(),
     contextWindowTokensOverride: z.literal(true).optional(),
   })),

@@ -263,6 +263,7 @@ export interface AccountSourceModelOwnership {
   model?: { value: true; overridden?: boolean };
   pricing?: { value: TokenRates; overridden?: boolean };
   contextWindowTokens?: { value: number; overridden?: boolean };
+  capabilities?: { value: ModelCapabilitiesDto; overridden?: boolean };
   pricingOverride?: true;
   contextWindowTokensOverride?: true;
 }
