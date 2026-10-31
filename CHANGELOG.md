@@ -13,9 +13,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- The connection drawer's Advanced section is readable again: fields are spaced, the custom-rate inputs use the drawer's own styling, a successful save says so, and the title switches to Edit connection once Create has stored the connection. The custom-rates hint now says rates apply to new or reopened sessions.
-- Saving a connection no longer moves the chosen catalog model to the front of the offered model list.
-- A subagent card keeps the model it actually ran on after you switch the connection's model or reopen the session, instead of showing the connection's current model.
+- The connection drawer's Advanced section is readable again: fields are spaced, the custom-rate inputs use the drawer's own styling, and a successful save says so. The custom-rates hint now says rates apply to new or reopened sessions.
+- The offered model list keeps its order after a save instead of putting the chosen model first.
+- A subagent card keeps the model it ran on after you switch the connection's model or reopen the session, instead of showing the connection's current model. Cards recorded before this version keep no model rather than a wrong one.
 - Session titles ask for sentence case, so identical first messages stop producing both “ok” and “Reply Exactly Ok”.
 - Usage details say “cache not reported by provider” again instead of silently omitting the cache line when the provider sends no cached-token count.
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.

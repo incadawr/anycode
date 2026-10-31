@@ -311,6 +311,21 @@ describe("projectSubagentCard", () => {
     expect("parentModel" in projected).toBe(false);
   });
 
+  it("treats an empty or non-string parentModel as absent instead of dropping the card", () => {
+    // The field only ever ADDS a label, so a bad value must not cost the
+    // reader the whole card: decode keeps the identity, minus the label.
+    for (const parentModel of ["", 42, null] as const) {
+      const tampered = {
+        ...VALID_SNAPSHOT,
+        identity: { agentType: "explore", description: "d", model: null, parentModel, engine: null },
+      } as unknown as SubagentCardSnapshotV1;
+      const decoded = decodeSubagentCardSnapshot(tampered, CTX);
+      expect(decoded).not.toBeNull();
+      expect(decoded!.identity.agentType).toBe("explore");
+      expect("parentModel" in decoded!.identity).toBe(false);
+    }
+  });
+
   it("maps a non-null model/engine identity through unchanged", () => {
     expect(projectSubagentCard(VALID_SNAPSHOT)).toMatchObject({ model: "claude-sonnet", engine: "claude" });
   });

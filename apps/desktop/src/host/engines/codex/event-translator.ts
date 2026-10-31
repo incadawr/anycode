@@ -171,6 +171,14 @@ export interface TurnTranslatorOptions {
    * falls back to a translator-local index so its behavior stays isolated.
    */
   collab?: CollabAgentCardIndex;
+  /**
+   * The model this session is actually running on (the applied posture). A
+   * spawned subagent that names no model of its own runs on it, so it rides
+   * the start event as `parentModel`: the card then keeps showing what the
+   * child ran on after the session switches models or is reopened. Absent
+   * when the engine has no confirmed model id yet.
+   */
+  sessionModel?: string;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -692,6 +700,23 @@ export class TurnTranslator {
   }
 
   /**
+   * The session model a codex subagent inherits, or nothing.
+   *
+   * A spawn that names its own `model` runs on that model, so no inherited
+   * value is claimed. One that names none runs on the session's own model,
+   * which is recorded AT SPAWN (`parentModel`) so the card keeps showing what
+   * the child actually ran on after the session switches models or the thread
+   * is reopened — the live tab model would then tell a different story.
+   */
+  private inheritedParentModel(childModel: string | null): { parentModel?: string } {
+    const sessionModel = this.options.sessionModel;
+    if (childModel !== null || sessionModel === undefined || sessionModel.length === 0) {
+      return {};
+    }
+    return { parentModel: sessionModel };
+  }
+
+  /**
    * A spawn CALL start. Registers the card/receivers BEFORE applying any
    * `agentsStates` from the snapshot, opens the outer Agent card, seeds the
    * subagent region, and only THEN appends the state observations. The prompt
@@ -721,6 +746,7 @@ export class TurnTranslator {
         agentType: CODEX_SUBAGENT_PERSONA,
         description: promptText,
         ...(model !== null ? { model } : {}),
+        ...this.inheritedParentModel(model),
         engine: "codex",
       },
     ];
@@ -762,6 +788,7 @@ export class TurnTranslator {
         agentType: CODEX_SUBAGENT_PERSONA,
         description: promptText,
         ...(model !== null ? { model } : {}),
+        ...this.inheritedParentModel(model),
         engine: "codex",
       });
     } else {

@@ -1048,8 +1048,33 @@ function collabTests(): void {
       expect(events.some((event) => event.type === "subagent_end")).toBe(false);
     });
 
-    it("a COMPLETED spawn CALL with a still-running child settles the outer call but emits no child end", () => {
-      const translator = fresh();
+    it("a spawn that names no model records the session model it inherits, so a settled card keeps it", () => {
+      const events = fresh({ sessionModel: "gpt-5.4" }).onNotification(startOf(collabItem({ prompt: "p", agentsStates: {} })));
+      const start = evOf(events, "subagent_start")!;
+      // Nothing was requested, so no model is claimed for the child itself …
+      expect("model" in start).toBe(false);
+      // … but the model the session was on at spawn is recorded for the card.
+      expect(start).toMatchObject({ parentModel: "gpt-5.4", engine: "codex" });
+    });
+
+    it("a spawn that names its own model claims no inherited model", () => {
+      const events = fresh({ sessionModel: "gpt-5.4" }).onNotification(startOf(collabItem({ prompt: "p", model: "gpt-5.4-codex" })));
+      const start = evOf(events, "subagent_start")!;
+      expect(start).toMatchObject({ model: "gpt-5.4-codex" });
+      expect("parentModel" in start).toBe(false);
+    });
+
+    it("recovers the same inherited model when only the spawn COMPLETION is observed", () => {
+      const events = fresh({ sessionModel: "gpt-5.4" }).onNotification(completeOf(collabItem({ prompt: "p", status: "completed" })));
+      expect(evOf(events, "subagent_start")).toMatchObject({ parentModel: "gpt-5.4", engine: "codex" });
+    });
+
+    it("an engine with no confirmed session model records nothing (no fabricated parent model)", () => {
+      const events = fresh().onNotification(startOf(collabItem({ prompt: "p" })));
+      expect("parentModel" in evOf(events, "subagent_start")!).toBe(false);
+    });
+
+    it("a COMPLETED spawn CALL with a still-running child settles the outer call but emits no child end", () => {      const translator = fresh();
       const started = translator.onNotification(startOf(collabItem({ prompt: "p", model: "m", agentsStates: { "child-1": { status: "running" } } })));
       const completed = translator.onNotification(completeOf(collabItem({ prompt: "p", model: "m", status: "completed", agentsStates: { "child-1": { status: "running" } } })));
       const all = [...started, ...completed];

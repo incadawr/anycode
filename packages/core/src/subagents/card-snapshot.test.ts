@@ -69,6 +69,12 @@ describe("reduceSubagentCardEvent — subagent_start", () => {
     expect(reduceSubagentCardEvent(acc, end()).identity?.parentModel).toBe("glm-5.2");
   });
 
+  it("leaves an EMPTY parent model out of the snapshot (a blank id is no id)", () => {
+    const acc = reduceSubagentCardEvent(createSubagentCardAccumulator(), start({ parentModel: "" }));
+    expect(acc.identity?.model).toBeNull();
+    expect(acc.identity !== null && acc.identity !== undefined && "parentModel" in acc.identity).toBe(false);
+  });
+
   it("model/engine absent on the event => null in identity (no silent default)", () => {
     const acc = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
     expect(acc.identity?.model).toBeNull();

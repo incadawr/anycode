@@ -100,8 +100,9 @@ export function reduceSubagentCardEvent(
           description: capCodePoints(ev.description, SUBAGENT_CARD_DESCRIPTION_MAX_CHARS),
           model: ev.model !== undefined ? capCodePoints(ev.model, SUBAGENT_CARD_MODEL_MAX_CHARS) : null,
           // The parent model this inherited child actually ran on, kept apart
-          // from the child's own (honestly empty) requested model.
-          ...(ev.parentModel !== undefined
+          // from the child's own (honestly empty) requested model. An empty
+          // id is no id: it is left out rather than persisted as a blank.
+          ...(ev.parentModel !== undefined && ev.parentModel.length > 0
             ? { parentModel: capCodePoints(ev.parentModel, SUBAGENT_CARD_MODEL_MAX_CHARS) }
             : {}),
           engine: ev.engine ?? null,

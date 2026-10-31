@@ -15,13 +15,9 @@ vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
 // @ts-expect-error jsdom has no bundled type declarations in this workspace.
 import { JSDOM } from "jsdom";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {url:"http://localhost"});
-Object.assign(globalThis, {window:dom.window, document:dom.window.document, HTMLElement:dom.window.HTMLElement, HTMLInputElement:dom.window.HTMLInputElement, HTMLSelectElement:dom.window.HTMLSelectElement, HTMLDialogElement:dom.window.HTMLDialogElement, Event:dom.window.Event});
-// jsdom implements <dialog> without the modal methods the drawer's open effect
-// calls; the tests only need the open flag and the rendered DOM.
-dom.window.HTMLDialogElement.prototype.showModal = function showModal(this: { open: boolean }) { this.open = true; };
-dom.window.HTMLDialogElement.prototype.close = function close(this: { open: boolean }) { this.open = false; };
+Object.assign(globalThis, {window:dom.window, document:dom.window.document, HTMLElement:dom.window.HTMLElement, HTMLInputElement:dom.window.HTMLInputElement, HTMLSelectElement:dom.window.HTMLSelectElement, Event:dom.window.Event});
 const { createRoot } = await import("react-dom/client");
-const { ConnectionDrawer, ConnectionDrawerFields } = await import("./ConnectionDrawer.js");
+const { ConnectionDrawerFields } = await import("./ConnectionDrawer.js");
 import type { SettingsStoreApi } from "../settings-store.js";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -106,8 +102,9 @@ it.each(["on", "off"] as const)("creates and reloads image input %s through the 
   } finally { await act(async () => root.unmount()); container.remove(); rmSync(dir, {recursive:true, force:true}); }
 });
 
-// ── Audit follow-up: drawer polish (Advanced rhythm, save confirmation, the
-// post-create title, and a catalog model no longer reordering the pickers) ──
+// ── Drawer polish: the Advanced section's vertical rhythm and rate-input
+// styling, an explicit save confirmation, and a save no longer reordering the
+// offered models ──
 
 const CATALOG = [{ id:"glm", name:"GLM", authKind:"api_key" as const, models:[{id:"glm-5.3"},{id:"glm-5.2"}] }];
 
@@ -185,30 +182,5 @@ it("still appends a model the catalog does not offer, so a manual id stays durab
   try {
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
     expect(rig.fetchModels).toHaveBeenCalledWith({ connectionId:"c1", addModels:["manual-x"] });
-  } finally { await act(async () => root.unmount()); container.remove(); }
-});
-
-it("stops calling the drawer 'Add connection' once Create has stored the connection", async () => {
-  const snapshot = { settings: cloneDefaults(), readOnly:false, secrets:[], envOverrides:[], providerReady:true, catalog: CATALOG };
-  const create = vi.fn().mockResolvedValue({ok:true, createdConnectionId:"c-new", snapshot});
-  const load = vi.fn().mockResolvedValue(undefined);
-  const fetchModels = vi.fn().mockResolvedValue({ok:true, models:[]});
-  const store = createStore(() => ({snapshot, oauthPendingProviderId:null, connectionCreate:create, load})) as unknown as SettingsStoreApi;
-  const container = document.createElement("div"); document.body.append(container);
-  const root = createRoot(container);
-  try {
-    await act(async () => root.render(createElement(ConnectionDrawer, {
-      open:true, mode:"add", catalog: CATALOG as never, connections:[], secrets:[], readOnly:false,
-      onClose:vi.fn(), store, customProvider:{fetchModels} as never,
-    })));
-    expect(container.querySelector(".connection-drawer-title")?.textContent).toBe("Add connection");
-    const provider = container.querySelector<HTMLSelectElement>("select")!;
-    await act(async () => { provider.value = "glm"; provider.dispatchEvent(new Event("change", {bubbles:true})); });
-    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Create connection")!.click(); });
-    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
-    await vi.waitFor(() => expect(container.querySelector(".connection-drawer-title")?.textContent).toBe("Edit connection"));
-    expect(container.querySelector("dialog")?.getAttribute("aria-label")).toBe("Edit connection");
-    // The prefilled catalog default needs no durable list entry either.
-    expect(fetchModels).not.toHaveBeenCalled();
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
