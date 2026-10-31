@@ -2025,7 +2025,7 @@ describe("custom endpoint cache creation", () => {
       },
       modelPersistenceBridge: () => ({}), label: "", transport: "openai-responses", proxyRef: "",
       connectionCreateProxyRefField: () => ({}), promptCacheEnabled: true, IMPLICIT_PROMPT_CACHE,
-      setProviderId: () => {}, setCreatedConnectionId: () => {},
+      setProviderId: () => {}, setCreatedConnectionId: () => {}, onCreated: () => {},
     };
     const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
     await run();
