@@ -1405,6 +1405,7 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     const calls: FetchModelsParams[] = [];
     const deps = makeDeps({
       now: () => "2026-07-18T00:00:00.000Z",
+      preparedConnectionFetch: () => async () => new Response(),
       catalogEntryById: (id) =>
         (
           {
@@ -1422,6 +1423,100 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     });
     return { deps, calls };
   }
+
+  it("previews fetched models without mutating the connection", async () => {
+    await seedConnection({ id: "conn-1", providerId: "kimi", models: ["old"] });
+    const { deps } = makeCatalogDeps();
+    expect(await handleCustomProviderFetchModels(deps, { connectionId: "conn-1", preview: true })).toEqual({ ok: true, models: [{ id: "live-a" }, { id: "live-b" }], source: { baseUrl: "", transport: "", targetUrl: expect.any(String), guard: expect.stringMatching(/^[a-f0-9]{64}$/) } });
+    const connection = (await loadSettings(settingsPath)).settings.provider.connections[0];
+    expect(connection?.models).toEqual(["old"]);
+    expect(connection?.modelsFetchedAt).toBeUndefined();
+  });
+
+  it("previews a custom connection with its own provider credential without mutating siblings", async () => {
+    await seedConnection({ id: "conn-1", providerId: "custom:fixture" });
+    const raw = JSON.parse(await readFile(settingsPath, "utf8"));
+    raw.provider.custom = [{ id: "custom:fixture", name: "Fixture", baseUrl: "https://example.test/v1", kind: "openai-compatible", models: ["old"] }];
+    raw.provider.connections.push({ id: "conn-2", providerId: "custom:fixture" });
+    await writeFile(settingsPath, JSON.stringify(raw));
+    vault.store.set("provider.custom:fixture.apiKey", "fixture-key");
+    const { deps, calls } = makeCatalogDeps();
+    const result = await handleCustomProviderFetchModels(deps, { connectionId: "conn-1", preview: true });
+    expect(result.ok).toBe(true);
+    expect(calls[0]).toMatchObject({ baseUrl: "https://example.test/v1", apiKey: "fixture-key", kind: "openai-compatible" });
+    const saved = (await loadSettings(settingsPath)).settings;
+    expect(saved.provider.custom?.[0]?.models).toEqual(["old"]);
+    expect(saved.provider.connections[1]?.visibleModels).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain("fixture-key");
+  });
+
+  it("uses the prepared disk route rather than the mutable dispatcher", async () => {
+    await seedConnection({ id: "conn-1", providerId: "kimi", proxyRef: "proxy-one" });
+    const raw = JSON.parse(await readFile(settingsPath, "utf8"));
+    raw.network = { proxyProfiles: [{ id: "proxy-one", name: "One", mode: "manual", url: "http://proxy.test:8080", login: "fixture-user" }] };
+    await writeFile(settingsPath, JSON.stringify(raw));
+    vault.store.set("proxy.profile.proxy-one.password", "fixture-password");
+    const routes: unknown[] = [];
+    const { deps } = makeCatalogDeps({
+      connectionFetch: () => { throw new Error("mutable dispatcher must not be used"); },
+      preparedConnectionFetch: route => { routes.push(route); return async () => new Response(); },
+      fetchModels: async params => { await params.fetchImpl!("https://api.kimi.com/coding/v1/models", { method: "GET" }); return { ok: true, models: [{ id: "m" }] }; },
+    });
+    const result = await handleCustomProviderFetchModels(deps, { connectionId: "conn-1", preview: true });
+    expect(result.ok).toBe(true);
+    expect(routes).toHaveLength(1);
+    expect(routes[0]).toMatchObject({ kind: "proxy", proxy: { url: "http://fixture-user:fixture-password@proxy.test:8080/" } });
+    expect(JSON.stringify(result)).not.toContain("fixture-password");
+  });
+
+  it("refuses automatic fetch through a system proxy without invoking the dispatcher", async () => {
+    await seedConnection({ id: "conn-1", providerId: "kimi", proxyRef: "proxy-system" });
+    const raw = JSON.parse(await readFile(settingsPath, "utf8"));
+    raw.network = { proxyProfiles: [{ id: "proxy-system", name: "System", mode: "system" }] };
+    await writeFile(settingsPath, JSON.stringify(raw));
+    let invoked = false;
+    const { deps } = makeCatalogDeps({ fetchModels: async () => { invoked = true; return { ok: true, models: [] }; } });
+    expect(await handleCustomProviderFetchModels(deps, { connectionId: "conn-1", preview: true })).toEqual({ ok: false, reason: "system_proxy_unsupported" });
+    expect(invoked).toBe(false);
+  });
+
+  it("discards an in-flight preview after a proxy password or route change", async () => {
+    for (const change of ["password", "route"] as const) {
+      await seedConnection({ id: "conn-1", providerId: "kimi", proxyRef: "proxy-one" });
+      const raw = JSON.parse(await readFile(settingsPath, "utf8"));
+      raw.network = { proxyProfiles: [{ id: "proxy-one", name: "One", mode: "manual", url: "http://proxy.test:8080", login: "fixture-user" }] };
+      await writeFile(settingsPath, JSON.stringify(raw));
+      vault.store.set("proxy.profile.proxy-one.password", "old-fixture-password");
+      let release!: () => void;
+      let entered!: () => void;
+      const started = new Promise<void>(resolve => { entered = resolve; });
+      const blocked = new Promise<void>(resolve => { release = resolve; });
+      const { deps } = makeCatalogDeps({ fetchModels: async () => { entered(); await blocked; return { ok: true, models: [{ id: "old-model" }] }; } });
+      const result = handleCustomProviderFetchModels(deps, { connectionId: "conn-1", preview: true });
+      await started;
+      if (change === "password") vault.store.set("proxy.profile.proxy-one.password", "new-fixture-password");
+      else { raw.network.proxyProfiles[0].url = "http://other-proxy.test:8080"; await writeFile(settingsPath, JSON.stringify(raw)); }
+      release();
+      expect(await result).toEqual({ ok: false, reason: "stale_fetch" });
+      expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.models).toBeUndefined();
+    }
+  });
+
+  it("discards a preview if the connection key rotates during the request", async () => {
+    await seedConnection({ id: "conn-1", providerId: "kimi" });
+    vault.store.set(connectionApiKeySecretKey("conn-1"), "old-fixture-key");
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const { deps } = makeCatalogDeps({ fetchModels: async () => { entered(); await blocked; return { ok: true, models: [{ id: "old-model" }] }; } });
+    const result = handleCustomProviderFetchModels(deps, { connectionId: "conn-1", preview: true });
+    await started;
+    vault.store.set(connectionApiKeySecretKey("conn-1"), "new-fixture-key");
+    release();
+    expect(await result).toEqual({ ok: false, reason: "stale_fetch" });
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.models).toBeUndefined();
+  });
 
   it("removes a saved OpenRouter rate when the refreshed model has conditional pricing", async () => {
     const id = "vendor/conditional";

@@ -17,6 +17,11 @@ const port = server.address().port;
 await new Promise((resolve) => server.close(resolve));
 const fixtureRequests = [];
 const fixture = createHttpServer((request, response) => {
+  if (request.method === "GET" && request.url === "/v1/models") {
+    response.writeHead(200, {"Content-Type":"application/json"});
+    response.end(JSON.stringify({data:["a", "b", "unknown", "glm-like-52", "glm-like-53"].map(id => ({id}))}));
+    return;
+  }
   let body = "";
   request.on("data", (chunk) => { body += chunk; });
   request.on("end", () => {
@@ -96,6 +101,21 @@ try {
   await evaluate("document.querySelector('.connection-tile button[aria-haspopup=menu]').click()");
   await click("Edit");
   await poll(() => evaluate("document.querySelector('.connection-drawer')?.open"));
+  async function capture(name) {
+    await sleep(250);
+    const png = await call("Page.captureScreenshot", {format:"png"});
+    writeFileSync(join(profile, name), Buffer.from(png.data, "base64"));
+  }
+  await capture("connection-dark.png");
+  await click("Fetch models");
+  await poll(() => evaluate("!!document.querySelector('.connection-drawer-model-popup')"));
+  await capture("connection-models-dark.png");
+  await evaluate("document.querySelector('[aria-label=\"Filter models\"]').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}))");
+  await poll(() => evaluate("!document.querySelector('.connection-drawer-model-popup')"));
+  assert(await evaluate("document.querySelector('.connection-drawer').open"), "Escape must close the popup, not the drawer");
+  await evaluate("document.documentElement.dataset.theme='light'");
+  await capture("connection-light.png");
+  await evaluate("document.documentElement.dataset.theme='dark'");
   const field = label => `(() => { const label = [...document.querySelectorAll('.connection-drawer label')].find(l => l.querySelector('.settings-field-label')?.textContent.trim().startsWith(${JSON.stringify(label)})); return label?.querySelector('input'); })()`;
   async function input(expression, value) {
     await evaluate(`(() => { const input = ${expression}; if (!input) throw new Error('Input missing'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(value)}); input.dispatchEvent(new Event('input', {bubbles:true})); })()`);
@@ -105,6 +125,19 @@ try {
     await evaluate(`(() => { const s = document.querySelector('select[aria-label=${JSON.stringify(label)}]'); s.value = ${JSON.stringify(value)}; s.dispatchEvent(new Event('change', {bubbles:true})); })()`);
     await sleep(100);
   }
+  async function pickModel(id) {
+    await click("Fetch models");
+    await poll(() => evaluate("!!document.querySelector('.connection-drawer-model-popup')"));
+    const exists = await evaluate(`!![...document.querySelectorAll('.connection-drawer-popup-row button')].find(b => b.getAttribute('aria-label') === ${JSON.stringify(`Set ${id} as default`)})`);
+    if (!exists) {
+      await input("document.querySelector('[aria-label=\"Manual model ID\"]')", id);
+      await click("Add");
+    }
+    await evaluate(`[...document.querySelectorAll('.connection-drawer-popup-row button')].find(b => b.getAttribute('aria-label') === ${JSON.stringify(`Set ${id} as default`)}).click()`);
+    await poll(() => evaluate("!document.querySelector('.connection-drawer-model-popup .connection-drawer-model-heading:last-child button').disabled"));
+    await evaluate("document.querySelector('.connection-drawer-model-popup .connection-drawer-model-heading:last-child button').click()");
+    await sleep(200);
+  }
   await evaluate("document.querySelector('.connection-drawer-advanced').open = true");
   await input(field("Context window"), "128000");
   await select("Reasoning support", "on");
@@ -113,14 +146,14 @@ try {
   await select("Reasoning effort", "high");
   await click("Save");
   await poll(() => JSON.parse(readFileSync(join(profile, "settings.json"), "utf8")).provider.connections[0].modelOverrides?.a?.contextWindowTokens === 128000);
-  await input("document.querySelector('input[list=connection-drawer-model-suggestions]')", "b");
+  await pickModel("b");
   assert.equal(await evaluate(`${field("Context window")}.value`), "");
   await input(field("Context window"), "64000");
   await select("Reasoning support", "on");
   await select("Reasoning effort", "low");
   await click("Save");
   await poll(() => JSON.parse(readFileSync(join(profile, "settings.json"), "utf8")).provider.connections[0].modelOverrides?.b?.contextWindowTokens === 64000);
-  await input("document.querySelector('input[list=connection-drawer-model-suggestions]')", "a");
+  await pickModel("a");
   assert.equal(await evaluate(`${field("Context window")}.value`), "128000");
   assert.equal(await evaluate("document.querySelector('select[aria-label=\"Reasoning effort\"]').value"), "high");
   await evaluate(`${field("Context window")}.scrollIntoView({block:"center"})`);

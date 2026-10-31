@@ -29,6 +29,7 @@
 import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { findKnownModel, isGatewayProvider } from "@anycode/core/model-dictionary";
+import { getBuiltinCatalog } from "@anycode/core/catalog";
 import type {
   CatalogSummary,
   CatalogSummaryEntry,
@@ -65,12 +66,27 @@ import {
   selectProviderEntry,
   shouldShowBaseUrlField,
   showConnectionLabelField,
-  toggleSelectedModel,
   transportOptions,
   type CustomProviderBridge,
 } from "./SettingsScreen.js";
 import { X } from "./icons.js";
 import { startModelEffortLevels } from "./start-model-picker.js";
+
+export function retainedModelSelection(open: boolean, draft: readonly string[], pending: string[] | null): string[] | null {
+  return open ? [...draft] : pending;
+}
+
+export function hasPendingFetchConnectionChanges(input: { showBaseUrl: boolean; baseUrl: string; savedBaseUrl: string; transport: string; savedTransport: string; proxyRef: string; savedProxyRef: string; secretValue: string }): boolean {
+  return (input.showBaseUrl && input.baseUrl.trim() !== input.savedBaseUrl.trim()) || input.transport !== input.savedTransport || input.proxyRef !== input.savedProxyRef || input.secretValue !== "";
+}
+
+export function validVisibleModelIds(ids: readonly string[]): string[] {
+  return ids.filter(id => normalizeModelId(id) === id);
+}
+
+export function ownRateDraft<T>(drafts: Record<string, T>, id: string): T | undefined {
+  return Object.hasOwn(drafts, id) ? drafts[id] : undefined;
+}
 
 /**
  * The connection `connection-create` just minted ( W12-FIX2 §1):
@@ -297,6 +313,7 @@ export interface UpdateWithModelResult {
   metaOk: boolean;
   /** Whether a requested model-list append succeeded (true when none was requested). */
   appendOk: boolean;
+  staleFetch?: boolean;
 }
 
 /**
@@ -319,7 +336,7 @@ export async function updateConnectionAndPersistModel<U>(
     return { metaOk: false, appendOk: false };
   }
   if (!result.ok) {
-    return { metaOk: false, appendOk: false };
+    return result.reason === "stale_fetch" ? { metaOk: false, appendOk: false, staleFetch: true } : { metaOk: false, appendOk: false };
   }
   if (modelId === null) {
     return { metaOk: true, appendOk: true };
@@ -1383,9 +1400,9 @@ export function ConnectionDrawerFields({
   const modelPricingPayload = (): Record<string, TokenRates | ""> | null => {
     const entries: [string, TokenRates | ""][] = [];
     for (const id of dirtyRates) {
-      const draft = modelRates[id]!;
+      const draft = ownRateDraft(modelRates, id);
+      if (draft === undefined) { entries.push([id, ""]); continue; }
       const raw = [draft.input, draft.cachedInput, draft.output];
-      if ([...raw, draft.cacheWrite].every((v) => !v.trim())) { entries.push([id, ""]); continue; }
       const values = raw.map(Number), write = Number(draft.cacheWrite);
       if (normalizeModelId(id) !== id || raw.some((v) => !v.trim()) || values.some((v) => !Number.isFinite(v) || v < 0) || (draft.cacheWrite.trim() !== "" && (!Number.isFinite(write) || write < 0))) return null;
       entries.push([id, { input: values[0]!, cachedInput: values[1]!, output: values[2]!, ...(draft.cacheWrite.trim() ? { cacheWrite: write } : {}) }]);
@@ -1459,9 +1476,17 @@ export function ConnectionDrawerFields({
   const [customBaseUrl, setCustomBaseUrl] = useState("");
   const [customKind, setCustomKind] = useState<CustomProviderRecord["kind"]>("openai-compatible");
   // Custom-provider model fetch/curation (the drawer's model step).
-  const [fetchedModels, setFetchedModels] = useState<{ id: string }[] | null>(null);
+  const [fetchedModels, setFetchedModels] = useState<Extract<FetchModelsOutcome, { ok: true }>["models"] | null>(null);
+  const [commitFetchedModels, setCommitFetchedModels] = useState(false);
+  const [fetchedSource, setFetchedSource] = useState<{ guard: string; targetUrl: string; baseUrl: string; transport: ProviderTransportId | "" } | null>(null);
   const [fetchingModels, setFetchingModels] = useState(false);
-  const [curating, setCurating] = useState(false);
+  const fetchGeneration = useRef(0);
+  const [modelPopupOpen, setModelPopupOpen] = useState(false);
+  const [modelFilter, setModelFilter] = useState("");
+  const [manualModel, setManualModel] = useState("");
+  const [draftDefaultModel, setDraftDefaultModel] = useState("");
+  const [visibleModelDraft, setVisibleModelDraft] = useState<string[]>([]);
+  const [pendingVisibleModels, setPendingVisibleModels] = useState<string[] | null>(null);
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -1958,6 +1983,10 @@ export function ConnectionDrawerFields({
     if (readOnly || createdConnectionId === null) {
       return;
     }
+    if (modelPopupOpen || (pendingVisibleModels !== null && !pendingVisibleModels.includes(model.trim()))) {
+      setError("Finish choosing models and confirm a default before saving. Your selections are kept.");
+      return;
+    }
     // : a nonblank malformed model is refused before the metadata
     // update, the secret write or any list call (a valid, unknown id passes —
     // catalog membership is never validation).
@@ -2034,12 +2063,16 @@ export function ConnectionDrawerFields({
           imageInput,
           promptCacheEnabled,
           usage: usageSelection,
-        }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty, effortLevelsDirty, effortLevels }), ...(catalogMatchDirty ? { catalogMatchDisabled: catalogMatchDisabled ? true as const : "" as const } : {}), pricing, modelPricing },
+        }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty, effortLevelsDirty, effortLevels }), ...(isCustomRecordConnection && !showBaseUrl ? { baseUrl: undefined } : {}), ...(catalogMatchDirty ? { catalogMatchDisabled: catalogMatchDisabled ? true as const : "" as const } : {}), ...(pendingVisibleModels !== null ? { visibleModels: pendingVisibleModels } : {}), ...(commitFetchedModels && fetchedModels !== null && fetchedSource !== null ? { fetchedModels: { ...fetchedSource, models: fetchedModels } } : {}), pricing, modelPricing },
         selectedModelId !== null && shouldAppendModelToList(selectedModelId, catalogOfferedIds, isCustomRecordConnection)
           ? selectedModelId
           : null,
       );
-      if (outcome.metaOk) setDirtyRates(new Set());
+      if (outcome.staleFetch) {
+        setError("The connection, key or proxy changed after fetching. Fetch again or discard fetched metadata; your model selections are kept.");
+        return;
+      }
+      if (outcome.metaOk) { setDirtyRates(new Set()); setPendingVisibleModels(null); setCommitFetchedModels(false); }
       let keyRefused = false;
       let keyRefusalDetail: string | null = null;
       if (secretValue && credentialKey !== undefined) {
@@ -2117,70 +2150,51 @@ export function ConnectionDrawerFields({
    * and would keep an unticked model on offer. A catalog connection's fetch is
    * already merged onto the connection by main.
    */
+  function invalidateFetchedReceipt(): void {
+    fetchGeneration.current++;
+    setPendingVisibleModels(retainedModelSelection(modelPopupOpen, visibleModelDraft, pendingVisibleModels));
+    if (fetchedModels !== null || fetchingModels || commitFetchedModels) {
+      setError("Fetched metadata was discarded because the connection changed. Your model selections are kept.");
+    }
+    setFetchedModels(null); setFetchedSource(null); setCommitFetchedModels(false);
+  }
+
   async function doFetchModels(): Promise<void> {
     if (createdConnectionId === null) {
       return;
     }
+    if (proxySnapshot === null) {
+      setError("Connection settings are still loading. Your model selections are kept; try fetching again.");
+      return;
+    }
+    const savedProxyRef = proxyRefInitialValue({ kind: "connection", connectionId: createdConnectionId }, proxySnapshot.settings);
+    if (hasPendingFetchConnectionChanges({ showBaseUrl, baseUrl, savedBaseUrl: targetConnection?.baseUrl ?? "", transport, savedTransport: targetConnection?.transport ?? "", proxyRef, savedProxyRef, secretValue })) {
+      setError("Save changes to the address, transport, key or proxy before fetching models. Your selections are kept.");
+      return;
+    }
+    const generation = fetchGeneration.current;
     setFetchingModels(true);
     setError(null);
     try {
-      const outcome = isCustomRecordConnection
-        ? await resolvedCustomProvider().fetchModels({ id: effectiveProviderId })
-        : await resolvedCustomProvider().fetchModels({ connectionId: createdConnectionId });
+      const outcome = await resolvedCustomProvider().fetchModels({ connectionId: createdConnectionId, preview: true });
+      if (generation !== fetchGeneration.current) return;
       if (!outcome.ok) {
         setError(describeFetchModelsError(outcome.reason));
         return;
       }
-      setFetchedModels(outcome.models);
-      if (isCustomRecordConnection) {
-        // Every fetched id starts ticked; the checkbox list is the selector, so
-        // it is saved where the checkboxes read from. A fetched id the
-        // manual-entry validator refuses (inner whitespace, controls) is
-        // skipped: one odd vendor id must not block the rest.
-        const fetchedIds = outcome.models
-          .map((m) => normalizeModelId(m.id))
-          .filter((id): id is string => id !== null);
-        if (fetchedIds.length > 0) {
-          const saved = await persistCuratedModels(
-            resolvedCustomProvider(),
-            reloadSnapshot,
-            effectiveProviderId,
-            mergeCurationModelIds(fetchedIds, curatedModelIds, model),
-          );
-          if (!saved.ok) {
-            setError("Fetched models, but the list to show in the selector couldn't be saved — retry Fetch.");
-          }
-        }
-      } else {
-        // -A: a fetch landing on a still-blank field picks the default
-        // from the MERGED offered list (fetched first, then any already-saved
-        // ids), so a saved manual model is never lost from the prefill.
-        const merged = mergeModelIds(outcome.models.map((m) => m.id), targetConnection?.models ?? []).map((id) => ({ id }));
-        setModel((m) => modelAfterCatalogPrefill(m, merged));
-        await reloadSnapshot();
+      if (!outcome.source || outcome.source.baseUrl !== (targetConnection?.baseUrl ?? "").trim() || outcome.source.transport !== (targetConnection?.transport ?? "")) {
+        setError("The endpoint changed while fetching models. Reopen the connection and retry.");
+        return;
       }
+      setFetchedSource(outcome.source ?? null);
+      const validModels = outcome.models.filter(item => validVisibleModelIds([item.id]).length > 0);
+      setFetchedModels(validModels);
+      if (targetConnection?.visibleModels === undefined && pendingVisibleModels === null) {
+        setVisibleModelDraft((current) => mergeModelIds(current, validModels.map(item => item.id)));
+      }
+
     } finally {
       setFetchingModels(false);
-    }
-  }
-
-  /** Toggle a model in the record's curated `models[]` — the selector's source of truth. */
-  async function toggleModel(id: string): Promise<void> {
-    if (!isCustomRecordConnection) {
-      return;
-    }
-    const next = toggleSelectedModel(curatedModelIds, id);
-    setCurating(true);
-    setError(null);
-    try {
-      const result = await persistCuratedModels(resolvedCustomProvider(), reloadSnapshot, effectiveProviderId, next);
-      if (!result.ok) {
-        setError(result.reason === "threw"
-          ? "Couldn't update the model list — retry."
-          : describeCustomProviderMutationError(result.reason));
-      }
-    } finally {
-      setCurating(false);
     }
   }
 
@@ -2196,7 +2210,7 @@ export function ConnectionDrawerFields({
         placeholder="e.g. Work, Personal"
         onChange={(e) => setLabel(e.target.value)}
       />
-      <span className="settings-field-hint">A name for this saved connection only — the provider keeps its own name.</span>
+
     </label>
   );
   // On the new-custom-endpoint form the provider Name already identifies the
@@ -2205,11 +2219,53 @@ export function ConnectionDrawerFields({
 
   const maxOutputInputShown = maxOutputSegmentSelection(maxOutputTokens, maxOutputCustom) === "custom";
 
+  const pricingBlock = (
+      <section className="connection-drawer-pricing connection-drawer-band" data-section="04 · Money" aria-label="Pricing">
+        <div className="connection-drawer-pricing-heading">
+          <span className="settings-field-label">Pricing · USD / 1M tokens <FieldHelp text={sharedBillingEndpoint ? SHARED_BILLING_ONELINER : PRICING_ONELINER} /></span>
+          <select aria-label="Billing mode" className="settings-field-select" value={pricingMode} disabled={readOnly} onChange={(e) => setPricingMode(e.target.value as "unset" | "catalog" | "subscription" | "rates")}>
+            <option value="unset">{sharedBillingEndpoint ? "Unknown — choose how you are billed" : "Catalog or unknown"}</option>
+            {sharedBillingEndpoint && <option value="catalog">Catalog API rate</option>}
+            <option value="subscription">By subscription</option><option value="rates">Custom rates</option>
+          </select>
+        </div>
+        <div className="connection-drawer-pricing-scroll">
+          <table className="connection-drawer-pricing-table">
+            <thead><tr><th scope="col">Model</th>{["Input", "Cached input", "Output", "Cache write (optional)"].map(label => <th scope="col" key={label}>{label}</th>)}</tr></thead>
+            <tbody>
+              <tr><th scope="row">Connection fallback <small>{pricingMode === "rates" ? "Custom" : pricingMode === "subscription" ? "Subscription" : "Catalog or unknown"}</small></th>
+                {([["Input", priceInput, setPriceInput], ["Cached input", priceCached, setPriceCached], ["Output", priceOutput, setPriceOutput], ["Cache write (optional)", priceWrite, setPriceWrite]] as const).map(([label, value, set]) => <td key={label}><input aria-label={`Connection fallback ${label}`} className="settings-field-input" type="number" min="0" step="any" value={value} placeholder={label.startsWith("Cache write") ? "Not set" : "—"} disabled={readOnly || pricingMode !== "rates"} onChange={(e) => set(e.target.value)} /></td>)}
+              </tr>
+              {mergeModelIds(pendingVisibleModels ?? targetConnection?.visibleModels ?? modelSuggestions.map((item) => item.id), mergeModelIds(Object.keys(modelRates), normalizeModelId(model) ? [normalizeModelId(model)!] : [])).map((id) => {
+                const custom = Object.hasOwn(modelRates, id);
+                const empty = { input: "", cachedInput: "", output: "", cacheWrite: "" };
+                const provider = getBuiltinCatalog().providers.find(entry => entry.id === effectiveProviderId);
+                const normalizeUrl = (url: string) => url.trim().replace(/\/+$/, "").replace(/\/v1$/, "");
+                const actualUrl = baseUrl.trim() || provider?.baseUrl || "";
+                const catalogPrice = proxySnapshot !== null && !proxySnapshot.envOverrides.includes("ANYCODE_BASE_URL") && provider && actualUrl && normalizeUrl(actualUrl) === normalizeUrl(provider.baseUrl) && (pricingMode === "catalog" || (pricingMode === "unset" && !sharedBillingEndpoint)) ? provider.models.find(item => item.id === id)?.pricing : undefined;
+                const livePrice = pricingMode !== "rates" && pricingMode !== "subscription" ? targetConnection?.modelCapabilities?.[id]?.pricing : undefined;
+                const fallback = pricingMode === "rates" ? pricingPayload() : undefined;
+                const inherited = livePrice ?? (fallback && fallback.mode === "rates" ? fallback : undefined) ?? catalogPrice;
+                const inheritedDraft = inherited ? { input: String(inherited.input), cachedInput: String(inherited.cachedInput), output: String(inherited.output), cacheWrite: inherited.cacheWrite === undefined ? "" : String(inherited.cacheWrite) } : empty;
+                const draft = ownRateDraft(modelRates, id) ?? inheritedDraft;
+                const source = pricingMode === "subscription" ? "Subscription" : livePrice ? "Provider price" : fallback && fallback.mode === "rates" ? "Connection fallback" : catalogPrice?.tariff ? `Catalog peak: ${catalogPrice.tariff.peakUtcDays.map(day => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ")} ${catalogPrice.tariff.peakUtcHours.map(([start, end]) => `${String(start).padStart(2, "0")}–${String(end).padStart(2, "0")}`).join(", ")} UTC; other times ×${catalogPrice.tariff.offPeakMultiplier}` : catalogPrice ? "Catalog price" : "Unknown";
+                return <tr key={id}><th scope="row">{id}<small>{pricingMode === "subscription" ? (custom ? "Subscription · custom rate inactive" : "Subscription") : custom ? "Custom" : source}</small><button type="button" className="settings-button connection-drawer-rate-mode" disabled={readOnly || saving || pricingMode === "subscription"} aria-label={`${id} ${custom ? "use inherited price" : "set custom price"}`} onClick={() => { setModelRates(previous => { const next = { ...previous }; if (custom) delete next[id]; else next[id] = { ...inheritedDraft }; return next; }); setDirtyRates(previous => new Set(previous).add(id)); }}>{custom ? "Use inherited" : "Customize"}</button></th>
+                  {([ ["input", "Input"], ["cachedInput", "Cached input"], ["output", "Output"], ["cacheWrite", "Cache write (optional)"] ] as const).map(([key, label]) => <td key={key}><input aria-label={`${id} ${label}`} className="settings-field-input" type="number" min="0" step="any" placeholder={key === "cacheWrite" ? "Not set" : "—"} value={pricingMode === "subscription" ? "" : draft[key]} disabled={readOnly || saving || pricingMode === "subscription" || !custom} onChange={(e) => { const value = e.target.value; setModelRates((previous) => ({ ...previous, [id]: { ...draft, [key]: value } })); setDirtyRates((previous) => new Set(previous).add(id)); }} /></td>)}
+                </tr>;
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+  );
+
   // Everything tuning-related lives in ONE disclosure, rendered once and placed
   // before the primary button in both branches (pre-create and created).
   const advancedBlock = (
     <details
-      className="connection-drawer-advanced"
+      data-section="05 · Tune"
+      className="connection-drawer-advanced connection-drawer-band"
       open={advancedOpen}
       onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
     >
@@ -2222,28 +2278,6 @@ export function ConnectionDrawerFields({
           the rhythm now, in both engines. */}
       <div className="connection-drawer-advanced-body">
       {simplified && labelFieldVisible && labelField}
-      <label className="settings-field">
-        <span className="settings-field-label">Pricing</span>
-        <select className="settings-field-select" value={pricingMode} disabled={readOnly} onChange={(e) => setPricingMode(e.target.value as "unset" | "catalog" | "subscription" | "rates")}>
-          <option value="unset">{sharedBillingEndpoint ? "Unknown — choose how you are billed" : "Catalog or unknown"}</option>
-          {sharedBillingEndpoint && <option value="catalog">Catalog API rate</option>}
-          <option value="subscription">By subscription</option><option value="rates">Custom rates</option>
-        </select>
-        <div className="settings-field-hint">{sharedBillingEndpoint ? SHARED_BILLING_ONELINER : PRICING_ONELINER}</div>
-      </label>
-      {pricingMode === "rates" && <div className="connection-drawer-rate-grid">
-        {([["Input", priceInput, setPriceInput], ["Cached input", priceCached, setPriceCached], ["Output", priceOutput, setPriceOutput], ["Cache write (optional)", priceWrite, setPriceWrite]] as const).map(([label, value, set]) => <label className="settings-field" key={label}><span className="settings-field-label">{label} · USD / 1M tokens</span><input className="settings-field-input" type="number" min="0" step="any" value={value} disabled={readOnly} onChange={(e) => set(e.target.value)} /></label>)}
-      </div>}
-
-      <p className="settings-field-hint">Prices apply to future usage. Model rates override the connection fallback.</p>
-      <div className="connection-drawer-model-rates" aria-label="Per-model prices">
-        {mergeModelIds(modelSuggestions.map((item) => item.id), mergeModelIds(Object.keys(modelRates), normalizeModelId(model) ? [normalizeModelId(model)!] : [])).map((id) => {
-          const draft = (Object.hasOwn(modelRates, id) ? modelRates[id] : undefined) ?? { input: "", cachedInput: "", output: "", cacheWrite: "" };
-          return <fieldset key={id} disabled={readOnly || saving || pricingMode === "subscription"}><legend>{id}</legend>
-            {([ ["input", "Input"], ["cachedInput", "Cached input"], ["output", "Output"], ["cacheWrite", "Cache write (optional)"] ] as const).map(([key, label]) => <label className="settings-field" key={key}><span className="settings-field-label">{label} · USD / 1M tokens</span><input className="settings-field-input" type="number" min="0" step="any" aria-label={`${id} ${label} · USD / 1M tokens`} value={draft[key]} onChange={(e) => { const value = e.target.value; setModelRates((previous) => ({ ...previous, [id]: { ...draft, [key]: value } })); setDirtyRates((previous) => new Set(previous).add(id)); }} /></label>)}
-          </fieldset>;
-        })}
-      </div>
 
       <label className="settings-field">
         <span className="settings-field-label">Transport</span>
@@ -2251,7 +2285,12 @@ export function ConnectionDrawerFields({
           className="settings-field-select"
           value={transport}
           disabled={readOnly}
-          onChange={(e) => setTransport(e.target.value as ProviderTransportId | "")}
+          onChange={(e) => {
+            const next = e.target.value as ProviderTransportId | "";
+            if (next !== transport) { invalidateFetchedReceipt(); }
+            setTransport(next);
+            if (isNewCustomEndpoint && (next === "anthropic-messages" || (next === "" && customKind === "anthropic"))) setNoAuth(false);
+          }}
         >
           <option value="">(provider default)</option>
           {transportChoices.map((t) => (
@@ -2284,8 +2323,7 @@ export function ConnectionDrawerFields({
               <option value="implicit">Implicit · 30 minutes</option>
             </select>
           </label>
-          <div className="settings-field-hint">{PROMPT_CACHE_ONELINER}</div>
-        </>
+            </>
       )}
 
       {effectiveProviderId === "openrouter" && (
@@ -2316,8 +2354,7 @@ export function ConnectionDrawerFields({
               <option value="off">Off</option>
             </select>
           </label>
-          <div className="settings-field-hint">{USAGE_ONELINER}</div>
-          {usageEnvHintText !== null && (
+              {usageEnvHintText !== null && (
             <div className="settings-field-hint" role="note">
               {usageEnvHintText}
             </div>
@@ -2363,9 +2400,7 @@ export function ConnectionDrawerFields({
             onChange={(e) => setMaxOutputTokens(e.target.value)}
           />
         )}
-        <div className="settings-field-hint">{MAX_OUTPUT_ONELINER}</div>
-        {/* : shown only while ANYCODE_MAX_OUTPUT_TOKENS overrides the rung — editing this field then does nothing. */}
-        {motEnvHint !== null && (
+          {motEnvHint !== null && (
           <div className="settings-field-hint" role="note">
             {motEnvHint}
           </div>
@@ -2375,12 +2410,10 @@ export function ConnectionDrawerFields({
       {/* : per-model context window. Same field shape as "Max output
           tokens" above (whole number in [1024, 1000000], blank = catalog/
           assumed window); a Model edit loads that model's own saved window. */}
+      <div className="connection-drawer-scope" title={MODEL_ONLY_BADGE_TITLE}>The following settings apply to this model only</div>
       <label className="settings-field">
         <span className="settings-field-label">
-          Context window (tokens) <FieldHelp text={CONTEXT_WINDOW_HELP} />{" "}
-          <span className="connection-drawer-badge" title={MODEL_ONLY_BADGE_TITLE}>
-            this model only
-          </span>
+          Context window (tokens) <FieldHelp text={CONTEXT_WINDOW_HELP} />
         </span>
         <input
           ref={contextWindowTokensInputRef}
@@ -2398,7 +2431,6 @@ export function ConnectionDrawerFields({
           }}
         />
       </label>
-      <div className="settings-field-hint">{CONTEXT_WINDOW_ONELINER}</div>
       {/* : shown only while ANYCODE_CONTEXT_WINDOW overrides the rung — editing this field then does nothing. */}
       {cwEnvHint !== null && (
         <div className="settings-field-hint" role="note">
@@ -2421,14 +2453,16 @@ export function ConnectionDrawerFields({
       </label>}
       {!knownCatalogModel && (reasoningSupported || effortLevels.length > 0) && <fieldset className="settings-field">
         <legend className="settings-field-label">Supported effort levels (empty uses automatic levels)</legend>
+        <div className="connection-drawer-effort-levels">
         {(["off", "low", "medium", "high", "xhigh", "max"] as ReasoningEffort[]).map((level) => <label key={level}>
           <input type="checkbox" disabled={readOnly} checked={effortLevels.includes(level)} onChange={(e) => {
             setEffortLevelsDirty(true);
             setReasoningSupported(true);
             setReasoningSupportedDirty(true);
             setEffortLevels((levels) => e.target.checked ? [...levels, level] : levels.filter((item) => item !== level));
-          }} /> {level}
+          }} /> <span>{level}</span>
         </label>)}
+        </div>
       </fieldset>}
       <label className="settings-field">
         <span className="settings-field-label">Reasoning effort (this model)</span>
@@ -2448,10 +2482,7 @@ export function ConnectionDrawerFields({
           blind sibling (the glm-5.2 hazard) the moment the user switches. */}
       <label className="settings-field">
         <span className="settings-field-label">
-          Image input <FieldHelp text={IMAGE_INPUT_HELP} />{" "}
-          <span className="connection-drawer-badge" title={MODEL_ONLY_BADGE_TITLE}>
-            this model only
-          </span>
+          Image input <FieldHelp text={IMAGE_INPUT_HELP} />
         </span>
         <select
           className="settings-field-input"
@@ -2464,7 +2495,6 @@ export function ConnectionDrawerFields({
           <option value="off">Off</option>
         </select>
       </label>
-      <div className="settings-field-hint">{IMAGE_INPUT_ONELINER}</div>
       {/* : shown while the live-modality feed rides the env. */}
       {imageInputFeedHint !== null && (
         <div className="settings-field-hint" role="note">
@@ -2481,7 +2511,10 @@ export function ConnectionDrawerFields({
         scope={{ kind: "connection", connectionId: createdConnectionId ?? "" }}
         store={store}
         value={proxyRef}
-        onChange={setProxyRef}
+        onChange={(value) => {
+          if (value !== proxyRef) { invalidateFetchedReceipt(); }
+          setProxyRef(value);
+        }}
       />
       </div>
     </details>
@@ -2489,6 +2522,8 @@ export function ConnectionDrawerFields({
 
   return (
     <div className="connection-drawer-body">
+      <section className="connection-drawer-band connection-drawer-identity" data-section="01 · Who">
+      <h3>Identity</h3>
       <label className="settings-field">
         <span className="settings-field-label">Provider</span>
         <select
@@ -2554,7 +2589,7 @@ export function ConnectionDrawerFields({
               className="settings-field-select"
               value={customKind}
               disabled={readOnly}
-              onChange={(e) => setCustomKind(e.target.value as CustomProviderRecord["kind"])}
+              onChange={(e) => { const kind = e.target.value as CustomProviderRecord["kind"]; setCustomKind(kind); if (kind === "anthropic" && transport === "") setNoAuth(false); }}
             >
               <option value="openai-compatible">{customProviderKindLabel("openai-compatible")}</option>
               <option value="openai">{customProviderKindLabel("openai")}</option>
@@ -2576,11 +2611,13 @@ export function ConnectionDrawerFields({
             value={baseUrl}
             disabled={readOnly}
             placeholder="(provider default)"
-            onChange={(e) => setBaseUrl(e.target.value)}
+            onChange={(e) => { invalidateFetchedReceipt(); setBaseUrl(e.target.value); }}
           />
         </label>
       )}
 
+      </section>
+      {createdConnectionId === null && (selectedEntry || isNewCustomEndpoint) && <section className="connection-drawer-band" data-section="02 · What"><h3>Model</h3>
       {createdConnectionId === null && selectedEntry && (
         <label className="settings-field">
           <span className="settings-field-label">Model</span>
@@ -2621,12 +2658,13 @@ export function ConnectionDrawerFields({
         </label>
       )}
 
+      </section>}
       {isNewCustomEndpoint && (
-        <label className="settings-field-checkbox">
+        <label className="settings-field-checkbox connection-drawer-no-auth">
           <input
             type="checkbox"
             checked={noAuth}
-            disabled={readOnly}
+            disabled={readOnly || transport === "anthropic-messages" || (transport === "" && customKind === "anthropic")}
             onChange={(e) => {
               const checked = e.target.checked;
               setNoAuth(checked);
@@ -2642,7 +2680,7 @@ export function ConnectionDrawerFields({
           <span>This endpoint doesn't need an API key (local server, open proxy)</span>
         </label>
       )}
-      {noAuth && transport === "anthropic-messages" && (
+      {isNewCustomEndpoint && (transport === "anthropic-messages" || (transport === "" && customKind === "anthropic")) && (
         <div className="settings-field-hint" role="note">
           The Anthropic Messages transport always requires an API key — pick an OpenAI-family transport to run keyless.
         </div>
@@ -2670,6 +2708,7 @@ export function ConnectionDrawerFields({
               />
             </label>
           )}
+          {pricingBlock}
           {advancedBlock}
           <div className="settings-field-row">
             <button
@@ -2686,102 +2725,49 @@ export function ConnectionDrawerFields({
         </>
       ) : (
         <>
-          <label className="settings-field">
-            <span className="settings-field-label">Model</span>
-            <input
-              className="settings-field-input"
-              type="text"
-              list="connection-drawer-model-suggestions"
-              value={model}
-              disabled={readOnly}
-              placeholder="e.g. claude-sonnet-5"
-              onChange={(e) =>
-                // : the shared model-change route. A whitespace-only
-                // edit (same normalized id) keeps the field; a real change
-                // clears it, or re-prefills when the user returns to the saved
-                // model.
-                changeModel(e.target.value, e.target.value, targetConnection)
+          <section className="connection-drawer-model-picker connection-drawer-band" data-section="02 · What" aria-label="Models">
+            <div className="connection-drawer-model-heading">
+              <h3>Model</h3>
+              <button type="button" className="settings-button connection-drawer-model-open" disabled={readOnly || fetchingModels} aria-expanded={modelPopupOpen} onClick={() => {
+                if (modelPopupOpen) { setModelPopupOpen(false); return; }
+                setVisibleModelDraft(validVisibleModelIds(pendingVisibleModels ?? targetConnection?.visibleModels ?? mergeModelIds(modelSuggestions.map(item => item.id), normalizeModelId(model) ? [normalizeModelId(model)!] : [])));
+                setModelFilter("");
+                setDraftDefaultModel(model.trim());
+                setModelPopupOpen(true);
+                if (fetchedModels === null && targetConnection?.modelsFetchedAt === undefined && (credentialStatus?.set || noAuth || selectedEntry?.authOptional)) void doFetchModels();
+              }}>Fetch models</button>
+            </div>
+            <div className="connection-drawer-model-chips" aria-label="Selected models">
+              {(pendingVisibleModels ?? targetConnection?.visibleModels ?? mergeModelIds(modelSuggestions.map(item => item.id), normalizeModelId(model) ? [normalizeModelId(model)!] : [])).map(id => <span key={id} data-model-id={id} className={`connection-drawer-model-chip${id === model.trim() ? " connection-drawer-model-chip-selected" : ""}`}>{id === model.trim() ? "★ " : ""}{id}{id === model.trim() ? " · default" : ""}</span>)}
+            </div>
+            {modelPopupOpen && <div className="connection-drawer-model-popup" role="group" aria-label="Choose models" onKeyDown={event => {
+              if (event.key === "Escape") {
+                const opener = event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(".connection-drawer-model-open");
+                event.preventDefault(); event.stopPropagation(); setModelPopupOpen(false);
+                requestAnimationFrame(() => opener?.focus());
               }
-            />
-            <datalist id="connection-drawer-model-suggestions">
-              {modelSuggestions.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name ?? m.id}
-                </option>
-              ))}
-            </datalist>
-          </label>
-
-          {/* Click-to-fill model chips for a catalog connection: static hints
-              before any fetch, the endpoint's live list after (capped — a
-              huge list stays reachable via the datalist's type-ahead). */}
-          {!isCustomRecordConnection && !isNewCustomEndpoint && modelSuggestions.length > 0 && (
-            <div className="connection-drawer-model-chips" role="group" aria-label="Available models">
-              {modelSuggestions.slice(0, MODEL_CHIP_CAP).map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  className={`connection-drawer-model-chip${model === m.id ? " connection-drawer-model-chip-selected" : ""}`}
-                  disabled={readOnly}
-                  onClick={() => changeModel(m.id, m.id, targetConnection)}
-                >
-                  {m.name ?? m.id}
-                </button>
-              ))}
-              {modelSuggestions.length > MODEL_CHIP_CAP && (
-                <span className="settings-field-hint">
-                  +{modelSuggestions.length - MODEL_CHIP_CAP} more — type in the Model field to search
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* Models step: ONE "Fetch models" for both flavors — a custom
-              record curates its persisted `models[]` subset (checkboxes), a
-              catalog connection refreshes the live list feeding the chips/
-              datalist above (persisted onto the connection by main). The
-              literal `custom` sentinel has no endpoint of its own to ask. */}
-          {!isNewCustomEndpoint && (
-            <div className="connection-drawer-fetch-models">
-              <div className="settings-field-row">
-                <button
-                  type="button"
-                  className="settings-button"
-                  disabled={readOnly || fetchingModels || curating}
-                  onClick={() => void doFetchModels()}
-                >
-                  {fetchingModels ? "Fetching…" : "Fetch models"}
-                </button>
-                {!isCustomRecordConnection && fetchedModels === null && targetConnection?.modelsFetchedAt !== undefined && (
-                  <span className="settings-field-hint">{targetConnection.models?.length ?? 0} models loaded from the endpoint</span>
-                )}
+            }}>
+              {error !== null && <p className="settings-notice" role="alert">{error}</p>}
+              <div className="connection-drawer-model-heading"><strong>Choose models</strong><button type="button" className="settings-button" disabled={readOnly || fetchingModels} onClick={() => void doFetchModels()}>{fetchingModels ? "Fetching…" : "Refresh"}</button></div>
+              <input className="settings-field-input" aria-label="Filter models" autoFocus placeholder="Filter models" value={modelFilter} onChange={e => setModelFilter(e.target.value)} />
+              <div className="connection-drawer-popup-list">
+                {validVisibleModelIds(mergeModelIds(mergeModelIds(fetchedModels?.map(item => item.id) ?? [], modelSuggestions.map(item => item.id)), mergeModelIds(visibleModelDraft, normalizeModelId(model) ? [normalizeModelId(model)!] : []))).filter(id => id.toLowerCase().includes(modelFilter.toLowerCase())).map(id => <div className="connection-drawer-popup-row" key={id}>
+                  <label><input type="checkbox" checked={visibleModelDraft.includes(id)} disabled={readOnly || fetchingModels} onChange={e => setVisibleModelDraft(current => e.target.checked ? mergeModelIds(current, [id]) : current.filter(item => item !== id))} /> {id}</label>
+                  <button type="button" className="settings-button" aria-label={`Set ${id} as default`} aria-pressed={draftDefaultModel === id} disabled={readOnly || fetchingModels} onClick={() => { setVisibleModelDraft(current => mergeModelIds(current, [id])); setDraftDefaultModel(id); }}>{draftDefaultModel === id ? "★" : "☆"}</button>
+                </div>)}
               </div>
-              {isCustomRecordConnection && fetchedModels !== null && (
-                <fieldset className="settings-field connection-drawer-model-curation">
-                  <legend className="settings-field-label">Models to show in the selector</legend>
-                  <span className="settings-field-hint">Tick the models this connection offers. The current model is always listed and stays ticked.</span>
-                  {mergeCurationModelIds(fetchedModels.map((m) => m.id), curatedModelIds, model).map((id) => {
-                    const isCurrent = id === model.trim();
-                    return (
-                      <label key={id} className="settings-field-checkbox connection-drawer-model-curation-row">
-                        <input
-                          type="checkbox"
-                          checked={isCurrent || curatedModelIds.includes(id)}
-                          disabled={readOnly || curating || isCurrent}
-                          title={isCurrent ? "The connection's current model is always listed" : undefined}
-                          onChange={() => void toggleModel(id)}
-                        />
-                        {id}
-                        {isCurrent && <span className="settings-field-hint">current</span>}
-                      </label>
-                    );
-                  })}
-                </fieldset>
-              )}
-            </div>
-          )}
+              <div className="connection-drawer-popup-manual"><input className="settings-field-input" aria-label="Manual model ID" placeholder="Enter a model ID" value={manualModel} onChange={e => setManualModel(e.target.value)} /><button type="button" className="settings-button connection-drawer-model-add" disabled={readOnly || normalizeModelId(manualModel) === null} onClick={() => { const id = normalizeModelId(manualModel); if (id) { setVisibleModelDraft(current => mergeModelIds(current, [id])); setManualModel(""); } }}>Add</button></div>
+              <div className="connection-drawer-model-heading"><span>{visibleModelDraft.length} selected</span><button type="button" className="settings-button connection-drawer-model-done" disabled={readOnly || fetchingModels || visibleModelDraft.length === 0} onClick={() => {
+                const defaultModel = visibleModelDraft.includes(draftDefaultModel) ? draftDefaultModel : visibleModelDraft[0]!;
+                setPendingVisibleModels(visibleModelDraft);
+                setCommitFetchedModels(fetchedModels !== null);
+                changeModel(defaultModel, defaultModel, targetConnection);
+                setModelPopupOpen(false);
+              }}>Done</button></div>
+            </div>}
+          </section>
 
-          <section className="settings-section connection-drawer-credential">
+          <section className="settings-section connection-drawer-credential connection-drawer-band" data-section="03 · Trust">
             <div className="settings-section-title">
               {authKind === "oauth"
                 ? "Sign-in"
@@ -2804,13 +2790,12 @@ export function ConnectionDrawerFields({
               />
             ) : (
               <>
-                <div className="settings-field-row">
-                  {credentialStatus && (
+                <div className="connection-drawer-key-row">
+                  {credentialStatus ? (
                     <span className={`settings-secret-status settings-secret-status-${describeSecretStatus(credentialStatus).tone}`}>
                       {describeSecretStatus(credentialStatus).text}
                     </span>
-                  )}
-                </div>
+                  ) : <span className="settings-secret-status">Not set</span>}
                 <label className="settings-field">
                   <span className="settings-field-label">
                     {/* Keyed on the credential's OWN status, not `mode` — a
@@ -2829,10 +2814,12 @@ export function ConnectionDrawerFields({
                     value={secretValue}
                     disabled={readOnly}
                     placeholder="sk-…"
-                    onChange={(e) => dispatchSecret({ type: "change", value: e.target.value })}
+                    onChange={(e) => {
+                      invalidateFetchedReceipt();
+                      dispatchSecret({ type: "change", value: e.target.value });
+                    }}
                   />
                 </label>
-                <div className="settings-field-row">
                   <button
                     type="button"
                     className="settings-button settings-button-danger"
@@ -2846,6 +2833,7 @@ export function ConnectionDrawerFields({
             )}
           </section>
 
+          {pricingBlock}
           {advancedBlock}
 
           {/* ONE Save (item 3): metadata + (if typed) the key, together. */}
@@ -2867,10 +2855,11 @@ export function ConnectionDrawerFields({
         </>
       )}
 
-      {error !== null && (
-        <p className="settings-notice" role="alert">
+      {error !== null && !modelPopupOpen && (
+        <div className="settings-notice" role="alert">
           {error}
-        </p>
+          {commitFetchedModels && <button type="button" className="settings-button" onClick={() => { setFetchedModels(null); setFetchedSource(null); setCommitFetchedModels(false); setError("Fetched metadata discarded. Your model selections are kept; save or fetch again."); }}>Discard fetched metadata</button>}
+        </div>
       )}
 
       {footer}

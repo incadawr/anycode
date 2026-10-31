@@ -17,7 +17,7 @@ import { BROWSER_ACCESS_CHANGED_CHANNEL, BROWSER_ACCESS_HOST_MESSAGE_TYPE } from
 import { stdioAdapterForHost } from "./communication-adapter.js";
 import { createSelfCheckProfile, selfCheckEnvironment, runSelfCheck, selfCheckStorage, selfCheckBinaryFs, checkReloadProtection } from "./self-check.js";
 import { buildApplicationMenuTemplate, confirmReloadIfBusy, isReloadAccelerator } from "./application-menu.js";
-import { assertChildModel } from "../shared/child-model.js";
+import { assertChildModel, connectionChildModels } from "../shared/child-model.js";
 /**
 
  * thin process: no agent logic. It owns the window, workspace/env resolution,
@@ -992,7 +992,7 @@ const mcpSecretCache = new McpSecretForkCache({
     getMcpSecretValues: (names) => (vault === null ? Promise.resolve({}) : vault.getMcpSecretValues(names)),
   },
   fs: new NodeMcpConfigFs(),
-  home: () => homedir(),
+  home: () => selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged) ?? homedir(),
   logger: (line) => console.warn(line),
 });
 const getSecret = (key: Parameters<Vault["getSecretValue"]>[0]): Promise<string | undefined> =>
@@ -1700,10 +1700,7 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
   const connection = activeConnection(current);
   const custom = current.provider.custom?.find(entry => entry.id === connection?.providerId);
   const catalog = getBuiltinCatalog().providers.find(entry => entry.id === connection?.providerId);
-  env.ANYCODE_CHILD_MODELS = JSON.stringify([
-    ...(connection?.models ?? []), ...(custom?.models ?? []), ...(catalog?.models.map(model => model.id) ?? []),
-    ...(env.ANYCODE_MODEL ? [env.ANYCODE_MODEL] : []),
-  ]);
+  env.ANYCODE_CHILD_MODELS = JSON.stringify(connectionChildModels(connection, custom?.models ?? [], catalog?.models.map(model => model.id) ?? [], env.ANYCODE_MODEL));
   return env;
 }
 
@@ -2540,7 +2537,7 @@ void app.whenReady().then(async () => {
     manager: () => manager,
     sessions: () => communicationSessions,
     realpathSync,
-    readTrustStore: () => readTrustStore(nodeTrustStoreFs, defaultTrustStorePath(homedir())),
+    readTrustStore: () => readTrustStore(nodeTrustStoreFs, defaultTrustStorePath(selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged) ?? homedir())),
     mcpSecretPrime: (key) => mcpSecretCache.prime(key),
     currentSettings,
     primeNewSessionPin,
@@ -2657,11 +2654,7 @@ void app.whenReady().then(async () => {
       const connection = connectionId === undefined ? activeConnection(current) : connectionById(current, connectionId);
       const custom = current.provider.custom?.find(entry => entry.id === connection?.providerId);
       const catalog = getBuiltinCatalog().providers.find(entry => entry.id === connection?.providerId);
-      assertChildModel(model, [
-        ...(connection?.models ?? []), ...(custom?.models ?? []), ...(catalog?.models.map(model => model.id) ?? []),
-        ...(connection?.model ? [connection.model] : []),
-        ...(connection?.id === current.provider.activeConnectionId && bootEnv.ANYCODE_MODEL ? [bootEnv.ANYCODE_MODEL] : []),
-      ]);
+      assertChildModel(model, connectionChildModels(connection, custom?.models ?? [], catalog?.models.map(item => item.id) ?? [], connection?.id === current.provider.activeConnectionId ? bootEnv.ANYCODE_MODEL : undefined));
     },
     resolveProviderConnection: (provider) =>
       settings === null ? undefined : resolveProviderConnection(settings, provider)?.id,
@@ -3135,7 +3128,7 @@ void app.whenReady().then(async () => {
   // through one queue inside the module.
   registerWorkspaceTrustIpc({
     fs: nodeTrustStoreFs,
-    home: homedir(),
+    home: selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged) ?? homedir(),
     tabs: {
       workspaceTrustPendingFor: (tabId) => manager?.workspaceTrustPendingFor(tabId) ?? "unknown_tab",
       clearWorkspaceTrustPending: (tabId) => {
@@ -3159,7 +3152,7 @@ void app.whenReady().then(async () => {
   // logged and ignored, and the read-side legacy fallback keeps old keys
   // working either way.
   queueStoreMutation(() =>
-    migrateTrustStoreKeys(nodeTrustStoreFs, defaultTrustStorePath(homedir()), realpathSync),
+    migrateTrustStoreKeys(nodeTrustStoreFs, defaultTrustStorePath(selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged) ?? homedir()), realpathSync),
   )
     .then(({ migrated }) => {
       if (migrated > 0) {
@@ -3231,6 +3224,7 @@ void app.whenReady().then(async () => {
     settingsPath,
     logger: fileLogger,
     connectionFetch: connectionProxyFetch,
+    preparedConnectionFetch: (route) => fetchForProxyChain([], route),
     // Connection-scoped fetch-models resolution (structural, same discipline
     // as settingsIpcDeps' catalog injection): only id/baseUrl/defaultTransport
     // ever cross this seam.
@@ -3462,7 +3456,7 @@ void app.whenReady().then(async () => {
     // be wrong — force. (Active profile only, same shape as onChanged above.)
     void codexOnboarding?.recheck(undefined, { force: true }).catch(() => {});
   };
-  if (selfCheckProfile === undefined) {
+  if (selfCheckProfile === undefined && !(resolveSubagentsHome(process.env, app.isPackaged) && process.env.ANYCODE_ISOLATED_SMOKE === "1")) {
     void refreshCodexManifest({ cacheFile: codexManifestCacheFile })
       .then((result) => {
         // BM4: only an ACTUAL policy change re-spawns the doctor — an
@@ -3758,7 +3752,7 @@ void app.whenReady().then(async () => {
   // installs cannot race them because install IPC is registered but the
   // renderer only reaches it after load.
   if (selfCheckProfile === undefined) {
-    const pluginsHome = homedir();
+    const pluginsHome = resolveSubagentsHome(process.env, app.isPackaged) ?? homedir();
     const pluginsFs = new NodePluginsFs();
     let localPluginsIpc: PluginsIpc | undefined;
     pluginsIpc = registerPluginsIpc({

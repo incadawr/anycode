@@ -741,6 +741,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
     snapshot?.catalog,
     snapshot?.settings.provider.custom,
     chipConnection?.models,
+    chipConnection?.visibleModels,
   );
   const resolvedDefault = resolveProviderDefaultModel(view?.model, undefined, pid);
   const modelChip = computeModelChipDisplay(draft?.model ?? null, resolvedDefault, catalogModels);

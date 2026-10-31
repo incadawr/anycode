@@ -53,7 +53,7 @@ custom-provider-live-smoke, env-status-smoke, git-ui-smoke,
 keybindings-ui-smoke, lsp-hooks-ui-smoke, mcp-ui-smoke,
 model-pricing-ui-smoke, orchestrate-mode-smoke, orchestration-lab,
 orchestration-loop-live-smoke, preview-live-smoke, preview-panel-live-smoke,
-profile-ui-smoke, prompt-cache-ui-smoke, provider-connections-ui-smoke,
+profile-ui-smoke, prompt-cache-ui-smoke,
 provider-dogfood-w13-smoke, queue-smoke, reasoning-ui-smoke, retry-ui-smoke,
 rewind-ui-smoke, settings-ui-smoke, sidebar-rowcut-smoke, sidebar-ui-smoke,
 skills-ui-smoke, slash-menu-ui-smoke, start-screen-smoke,
@@ -64,6 +64,12 @@ workflow-map-smoke
 
 `sidebar-rowcut-smoke` starts `electron-vite` itself rather than `pnpm dev`;
 it needs the same switches, passed directly.
+
+For a fully isolated profile, the smoke environment also points the automation
+home overrides and telemetry directory into its temporary profile.
+`ANYCODE_ISOLATED_SMOKE=1`, combined with the dev automation gate and an
+absolute automation home, skips the login-shell PATH probe and the network
+manifest refresh. Packaged applications do not honor these overrides.
 
 ## Safe release boundary
 

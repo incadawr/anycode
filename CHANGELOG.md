@@ -16,6 +16,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Redesign provider connection editing with a compact model picker and per-model pricing table.
 - Require a model ID when creating a connection, including custom endpoints.
 
 ### Fixed

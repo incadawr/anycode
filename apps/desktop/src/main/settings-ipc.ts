@@ -19,10 +19,11 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { prepareModelFetchContext } from "./model-fetch-guard.js";
 import { isAbsolute } from "node:path";
 import { ipcMain } from "electron";
 import { z } from "zod";
-import { normalizeModelId } from "../shared/settings.js";
+import { mergeModelIds, normalizeModelId } from "../shared/settings.js";
 import { patchModelOverride } from "../shared/model-overrides.js";
 import { SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
 import type { FileIoLogger } from "../settings/files.js";
@@ -463,6 +464,8 @@ const connectionCreateSchema = z
   .strict();
 const connectionUpdateSchema = z
   .object({
+    fetchedModels: z.object({ guard: z.string().regex(/^[a-f0-9]{64}$/), targetUrl: z.string().max(4096), baseUrl: z.string(), transport: z.union([transportEnum, z.literal("")]), models: z.array(z.object({ id: modelIdKey, reasoning: z.boolean().optional(), effortLevels: z.array(z.string().max(64)).max(16).optional(), imageInput: z.literal(true).optional(), contextWindow: z.number().int().positive().optional(), maxOutputTokens: z.number().int().positive().optional(), pricing: tokenRatesSchema.optional() }).strict()).max(10000) }).strict().optional(),
+    visibleModels: z.union([z.array(modelIdKey).max(10000), z.literal("")]).optional(),
     modelPricing: modelPricingSchema(z.union([tokenRatesSchema, z.literal("")])).optional(),
     pricing: z.union([connectionPricingSchema, z.literal("")]).optional(),
     id: z.string().min(1),
@@ -1879,6 +1882,21 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     if (existing === undefined) {
       return { ok: false, reason: "not_found" };
     }
+    if (req.fetchedModels) {
+      const context = await prepareModelFetchContext(loaded.settings, existing, deps.vault, req.fetchedModels.targetUrl);
+      if (!context.ok || context.guard !== req.fetchedModels.guard) return { ok: false, reason: "stale_fetch" };
+    }
+    if (req.fetchedModels) {
+      const rung = resolveProxyLadder(loaded.settings, hostForkProxyChain(existing.id));
+      const legacyConversion = req.proxyRef === PROXY_REF_LEGACY && !existing.proxyRef && !!existing.proxyUrl;
+      const equivalentDirect = req.proxyRef === "direct" && !rung?.profile && !rung?.legacyUrl;
+      const refChanged = req.proxyRef !== undefined && (req.proxyRef || undefined) !== existing.proxyRef && !legacyConversion && !equivalentDirect;
+      const urlChanged = req.proxyUrl !== undefined && (req.proxyUrl || undefined) !== existing.proxyUrl;
+      if (refChanged || urlChanged) return { ok: false, reason: "stale_fetch" };
+    }
+    if (req.fetchedModels && ((existing.baseUrl ?? "").trim() !== req.fetchedModels.baseUrl || (existing.transport ?? "") !== req.fetchedModels.transport || (req.baseUrl !== undefined && req.baseUrl.trim() !== req.fetchedModels.baseUrl) || (req.transport !== undefined && req.transport !== req.fetchedModels.transport))) {
+      return { ok: false, reason: "stale_fetch" };
+    }
     // W12-FIX §3: `""` is the clear-to-default sentinel (mirrors the existing
     // baseUrl/model `""`-convention on this same channel) — normalize BEFORE
     // comparing/persisting so `""` never lands on disk as a value.
@@ -1958,6 +1976,10 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
         ? { lastHealth: { status: "unchecked" as const, at: (deps.now ?? defaultNowIso)() } }
         : {}),
     };
+    if (req.visibleModels !== undefined) {
+      if (req.visibleModels === "") delete updatedConnection.visibleModels;
+      else updatedConnection.visibleModels = [...new Set(req.visibleModels)];
+    }
     for (const [model, pricing] of Object.entries(req.modelPricing ?? {})) patchModelOverride(updatedConnection, model, { pricing: pricing === "" ? undefined : pricing });
     if (req.pricing !== undefined) {
       if (req.pricing === "") delete updatedConnection.pricing;
@@ -2092,9 +2114,27 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     if (baseUrlChanged) {
       delete updatedConnection.models;
       delete updatedConnection.modelsFetchedAt;
+      if (req.visibleModels === undefined) delete updatedConnection.visibleModels;
       // : capabilities belong to the origin that declared them —
       // a re-pointed connection must not keep the old endpoint's live map.
       delete updatedConnection.modelCapabilities;
+    }
+    if (req.fetchedModels && req.fetchedModels.models.length > 0) {
+      updatedConnection.models = mergeModelIds(req.fetchedModels.models.map(item => item.id), updatedConnection.models ?? []);
+      updatedConnection.modelsFetchedAt = (deps.now ?? defaultNowIso)();
+      const caps = { ...updatedConnection.modelCapabilities };
+      for (const item of req.fetchedModels.models) {
+        const { id, ...facts } = item;
+        const previous = Object.hasOwn(caps, id) ? caps[id] : undefined;
+        const next = { ...previous, ...facts };
+        let openRouterEndpoint = false;
+        try { openRouterEndpoint = new URL(req.fetchedModels.targetUrl).hostname === "openrouter.ai"; } catch { /* malformed receipt is rejected by the guard */ }
+        if (openRouterEndpoint && facts.pricing === undefined) delete next.pricing;
+        if (Object.keys(next).length) Object.defineProperty(caps, id, { value: next, enumerable: true, configurable: true, writable: true });
+        else if (Object.hasOwn(caps, id)) delete caps[id];
+      }
+      if (Object.keys(caps).length) updatedConnection.modelCapabilities = caps;
+      else delete updatedConnection.modelCapabilities;
     }
     const provider: ProviderSettingsV2 = {
       ...draft.provider,

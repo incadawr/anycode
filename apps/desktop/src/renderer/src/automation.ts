@@ -2370,6 +2370,11 @@ export interface ProviderPaneDom {
   setDrawerProvider(value: string): boolean;
   setDrawerLabel(value: string): boolean;
   setDrawerModel(value: string): boolean;
+  openDrawerModels?(): boolean;
+  addDrawerModel?(value: string): boolean;
+  commitDrawerManualModel?(): boolean;
+  chooseDrawerModel?(value: string): boolean;
+  finishDrawerModels?(): boolean;
   setDrawerTransport(value: string): boolean;
   setDrawerBaseUrl(value: string): boolean;
   setDrawerMaxOutputTokens(value: string): boolean;
@@ -5642,7 +5647,7 @@ function realProviderPaneDom(): ProviderPaneDom {
         providerId: providerSelect?.value ?? "",
         templateLocked: providerSelect?.disabled ?? false,
         label: labelInput?.value ?? "",
-        model: modelInput?.value ?? "",
+        model: modelInput?.value ?? body.querySelector<HTMLElement>(".connection-drawer-model-chip-selected")?.dataset.modelId ?? "",
         transport: transportSelect?.value ?? "",
         transportOptions: transportSelect
           ? Array.from(transportSelect.options)
@@ -5691,6 +5696,38 @@ function realProviderPaneDom(): ProviderPaneDom {
         return false;
       }
       setNativeInputValue(input, value);
+      return true;
+    },
+    openDrawerModels(): boolean {
+      const button = drawerBody()?.querySelector<HTMLButtonElement>(".connection-drawer-model-open");
+      if (!button || button.disabled) return false;
+      if (button.getAttribute("aria-expanded") !== "true") button.click();
+      return true;
+    },
+    addDrawerModel(value: string): boolean {
+      const body = drawerBody();
+      const input = body?.querySelector<HTMLInputElement>('[aria-label="Manual model ID"]');
+      if (!input || input.disabled) return false;
+      setNativeInputValue(input, value);
+      return true;
+    },
+    commitDrawerManualModel(): boolean {
+      const button = drawerBody()?.querySelector<HTMLButtonElement>(".connection-drawer-model-add");
+      if (!button || button.disabled) return false;
+      button.click();
+      return true;
+    },
+    chooseDrawerModel(value: string): boolean {
+      const buttons = drawerBody()?.querySelectorAll<HTMLButtonElement>(".connection-drawer-popup-row button");
+      const button = Array.from(buttons ?? []).find(item => item.getAttribute("aria-label") === `Set ${value} as default`);
+      if (!button || button.disabled) return false;
+      button.click();
+      return true;
+    },
+    finishDrawerModels(): boolean {
+      const button = drawerBody()?.querySelector<HTMLButtonElement>(".connection-drawer-model-done");
+      if (!button || button.disabled) return false;
+      button.click();
       return true;
     },
     setDrawerTransport(value: string): boolean {
@@ -10364,7 +10401,14 @@ export function createAutomationFacade(
         return { ok: false, reason: "label_unavailable" };
       }
       if (args.model !== undefined && !providerPaneDom.setDrawerModel(args.model)) {
-        return { ok: false, reason: "model_unavailable" };
+        const id = args.model;
+        if (!providerPaneDom.openDrawerModels?.()) return { ok: false, reason: "model_unavailable" };
+        if (!await waitUntil(() => !!providerPaneDom.chooseDrawerModel?.(id), 500)) {
+          if (!providerPaneDom.addDrawerModel?.(id)) return { ok: false, reason: "model_unavailable" };
+          if (!await waitUntil(() => !!providerPaneDom.commitDrawerManualModel?.(), 1000)) return { ok: false, reason: "model_unavailable" };
+          if (!await waitUntil(() => !!providerPaneDom.chooseDrawerModel?.(id), 1000)) return { ok: false, reason: "model_unavailable" };
+        }
+        if (!await waitUntil(() => !!providerPaneDom.finishDrawerModels?.(), PROVIDER_PANE_COMMIT_DEADLINE_MS)) return { ok: false, reason: "model_unavailable" };
       }
       if (args.transport !== undefined && !providerPaneDom.setDrawerTransport(args.transport)) {
         return { ok: false, reason: "transport_unavailable" };
