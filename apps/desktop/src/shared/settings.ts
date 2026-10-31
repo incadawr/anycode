@@ -252,7 +252,7 @@ export interface ModelOverrides {
   contextWindowTokens?: number;
   reasoningEffort?: ReasoningEffort;
   /** User declaration for a model missing from the catalog and live metadata. */
-  reasoningSupported?: true;
+  reasoningSupported?: boolean;
 }
 
 export interface ProviderConnection {
@@ -1253,7 +1253,7 @@ export interface ConnectionCreateRequest {
   catalogMatchDisabled?: true;
   effortLevels?: ReasoningEffort[];
   modelPricing?: Record<string, TokenRates>;
-  reasoningSupported?: true;
+  reasoningSupported?: boolean;
   pricing?: ConnectionPricing;
   providerId: string;
   label?: string;
@@ -1347,7 +1347,7 @@ export interface ConnectionUpdateRequest {
   modelOverrideModel?: string;
   catalogMatchDisabled?: true | "";
   effortLevels?: ReasoningEffort[] | "";
-  reasoningSupported?: true | "";
+  reasoningSupported?: boolean | "";
   /**
    * Opt-in prompt-cache policy (GitHub #15) with the same `""` clear sentinel
    * as `maxOutputTokens` below: absent = keep the current value, the enabled

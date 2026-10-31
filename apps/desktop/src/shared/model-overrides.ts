@@ -38,7 +38,8 @@ export function patchModelOverride(connection: ProviderConnection, model: string
 
 
 /** A manual declaration supplies controls only when the catalog has no facts. */
-export function applyModelReasoningOverride(live: ModelCapabilitiesDto | undefined, supported: boolean): ModelCapabilitiesDto | undefined {
+export function applyModelReasoningOverride(live: ModelCapabilitiesDto | undefined, supported: boolean | undefined): ModelCapabilitiesDto | undefined {
+  if (supported === false) return { ...live, reasoning: false, effortLevels: undefined, thinkingAlwaysOn: false, defaultEffort: undefined };
   return supported ? {
     ...live, reasoning: true,
     effortLevels: live?.effortLevels ?? ["off", "low", "medium", "high", "xhigh", "max"],
@@ -62,10 +63,11 @@ export function modelCapabilitiesFor(
     ...(known.thinkingAlwaysOn !== undefined ? { thinkingAlwaysOn: known.thinkingAlwaysOn } : {}),
     ...(known.imageInput ? { imageInput: true as const } : {}),
   } : undefined;
-  const effective = defaults ? { ...defaults, ...live } : live;
+  const effective = defaults || live ? { ...defaults, ...live } : undefined;
   if (effective && ((override?.reasoningEffort ?? connection?.reasoningEffort) === "off" || override?.effortLevels?.includes("off"))) effective.thinkingAlwaysOn = false;
+  if (override?.reasoningSupported === false) return applyModelReasoningOverride(effective, false);
   if (override?.effortLevels !== undefined) return { ...effective, reasoning: true, effortLevels: override.effortLevels };
-  return applyModelReasoningOverride(effective, override?.reasoningSupported === true);
+  return applyModelReasoningOverride(effective, override?.reasoningSupported);
 }
 
 

@@ -4961,6 +4961,17 @@ describe("per-model overrides (GitHub #26)", () => {
     expect(saved?.modelOverrides?.constructor).toEqual({ effortLevels: ["xhigh"] });
   });
 
+  it("persists and clears an explicit reasoning denial", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", reasoningSupported: false })).ok).toBe(true);
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.modelOverrides?.a?.reasoningSupported).toBe(false);
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", reasoningSupported: true })).ok).toBe(true);
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", reasoningSupported: false })).ok).toBe(true);
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.modelOverrides?.a?.reasoningSupported).toBe(false);
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", reasoningSupported: "" })).ok).toBe(true);
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.modelOverrides?.a?.reasoningSupported).toBeUndefined();
+  });
+
   it("drops only a malformed saved vocabulary while preserving the model's other settings", async () => {
     const deps = makeDeps({ catalogIds: CATALOG_IDS });
     await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", contextWindowTokens: 64000 });
