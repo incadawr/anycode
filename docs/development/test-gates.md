@@ -23,14 +23,14 @@ loop but does not replace this gate. Coordinate full-suite runs with other local
 sessions to avoid contention and misleading timeout failures.
 
 `scripts/public-reference-gate.test.ts` guards the public tree against tracker
-card references. It scans tracked files under `apps`, `packages`, `docs`,
-`CHANGELOG.md`, `scripts`, `examples` and `.github`, in bodies and in file names
-alike, and fails with `path: token` for every reference that is not covered by
-its documented allowlist. The allowlist covers shapes that only look like cards
-(internal background-task ids, worktree ids, session-name fragments) and the
-captured engine payloads under `codex-rollout-fixtures/` plus the pinned engine
-contract, where references were renamed rather than deleted. Add a new shape
-there only with a reason; do not broaden an existing one.
+card references. It scans every tracked file — bodies and file names alike,
+`AGENTS.md` and other root files included — and fails with `path: token` for
+each reference that is not exempted. Exemptions are never shape-based: each one
+names one file and one exact value, with the reason it is not a card reference
+(internal background-task ids in test data, fragments of paths under the
+unpublished working tree, plan numbering in prose). The table is checked for
+stale entries on every run, so an exemption cannot outlive the text it covers.
+Add a value only after reading it; never widen an entry to a shape or a file.
 
 Typecheck stores incremental state in this worktree's
 `node_modules/.cache/tsc/`. To force a cold check, remove that directory and
