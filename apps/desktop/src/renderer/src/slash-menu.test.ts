@@ -762,10 +762,21 @@ describe("unknownSlashCommandNotice (audit C4 — a non-command slash draft is n
     expect(unknownSlashCommandNotice("/help")).toContain("Unknown command: /help.");
   });
 
+  it("answers an unknown command that carries arguments (the command token is the first word)", () => {
+    expect(unknownSlashCommandNotice("/foo argument")).toBe(
+      "Unknown command: /foo. Type / to see the available commands.",
+    );
+    expect(unknownSlashCommandNotice("  /foo  argument  ")).toContain("Unknown command: /foo.");
+  });
+
   it("keeps an absolute path at the filesystem root going to the model", () => {
     for (const draft of ["/tmp", "/etc", "/Users", "/usr", "/private", "/custom-root"]) {
       expect(unknownSlashCommandNotice(draft, { pathRoots: roots })).toBeNull();
     }
+  });
+
+  it("keeps a root path with words after it (a path plus arguments, not a command)", () => {
+    expect(unknownSlashCommandNotice("/tmp clean this up for me", { pathRoots: roots })).toBeNull();
   });
 
   it("still answers an unknown command when no root entry has that name", () => {
@@ -775,14 +786,17 @@ describe("unknownSlashCommandNotice (audit C4 — a non-command slash draft is n
   it("keeps multi-segment paths going to the model", () => {
     expect(unknownSlashCommandNotice("/usr/local/bin/node")).toBeNull();
     expect(unknownSlashCommandNotice("/tmp/no-such-file")).toBeNull();
+    expect(unknownSlashCommandNotice("/usr/local/bin/node run this")).toBeNull();
   });
 
-  it("answers a known command id repeated (a refused-command retype)", () => {
+  it("answers a known command id repeated (a refused-command retype), bare or with arguments", () => {
     expect(unknownSlashCommandNotice("/compact/compact")).toContain("Unknown command: /compact/compact.");
+    expect(unknownSlashCommandNotice("/compact/compact now")).toContain("Unknown command: /compact/compact.");
   });
 
   it("never touches a known command, prose, a skill, or a draft not starting with a slash", () => {
     expect(unknownSlashCommandNotice("/compact")).toBeNull();
+    expect(unknownSlashCommandNotice("/orchestrate build the index")).toBeNull();
     expect(unknownSlashCommandNotice("hello /foo")).toBeNull();
     expect(unknownSlashCommandNotice("./foo")).toBeNull();
     expect(unknownSlashCommandNotice("$code-review")).toBeNull();
