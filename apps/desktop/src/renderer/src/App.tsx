@@ -187,7 +187,7 @@ export function shouldSuppressEscForDraft(draftActive: boolean): boolean {
  * engine's tool-mutation capability — the Review panel is AnyCode chrome,
  * independent of which agent is running. `undefined` (core, or a
  * not-yet-wired engine) defaults to `true`, byte-identical to core's
- * behavior (the panel was previously gated on
+ * previous behavior (the panel was previously gated on
  * `engine?.capabilities.supportsGitMutations ?? true`, which likewise always
  * fell back to `true` for a null-engine core session). Exported for unit
  * testing.

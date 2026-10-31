@@ -360,7 +360,7 @@ describe("handleSkillsImportScan / handleSkillsImportApply", () => {
     );
     await seed(
       join(home, ".codex/skills/nested/SKILL.md"),
-      "---\nname: nested\ndescription: codex nested\nmetadata:\n  owner: tracker\n---\nnested body\n",
+      "---\nname: nested\ndescription: codex nested\nmetadata:\n  owner: example\n---\nnested body\n",
     );
 
     const deps = makeDeps(ws, home);
