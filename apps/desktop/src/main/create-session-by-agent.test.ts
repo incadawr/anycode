@@ -1086,14 +1086,17 @@ describe("create_session — Codex account", () => {
     expect(r.forkEnvs).toHaveLength(0);
   });
 
-  it("the account argument is not consulted for a core session", async () => {
+  it("an `account` on a non-Codex engine is refused instead of being silently ignored", async () => {
     const r = rig();
     const listCodexAccounts = vi.fn(async () => accounts);
     const outcome = await createSessionForAgent(
       { workspace: "/ws", engine: "core", account: "Work" },
       r.deps(codexDeps({ listCodexAccounts })),
     );
-    expect(outcome.ok).toBe(true);
+    expect(outcome).toMatchObject({ ok: false, reason: "invalid_account" });
+    if (outcome.ok) throw new Error("expected a refusal");
+    expect(outcome.detail).toContain("core");
     expect(listCodexAccounts).not.toHaveBeenCalled();
+    expect(r.forkEnvs).toHaveLength(0);
   });
 });

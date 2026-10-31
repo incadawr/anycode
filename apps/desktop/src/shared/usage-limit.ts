@@ -1,5 +1,5 @@
 /**
- * Provider quota-notice parsing ( W7b-FIX #2, extended for Codex).
+ * Provider quota-notice parsing for core providers and Codex.
  *
  * Relocated here from the renderer so the HOST can parse the RAW provider
  * message at the wire boundary (sanitizeAgentEvent) and attach a numbers-only

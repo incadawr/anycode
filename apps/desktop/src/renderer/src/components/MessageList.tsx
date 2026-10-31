@@ -589,7 +589,7 @@ export function topmostVisibleUserIndex(
  * picker. Its own component because the picker needs local state, and the
  * transcript renders blocks from inside a `.map` callback (no hooks there).
  */
-function UsageLimitBlock({
+export function UsageLimitBlock({
   block,
   enterClass,
   codexContinue,
@@ -627,7 +627,11 @@ function UsageLimitBlock({
     setBusyId(accountId);
     try {
       const result = await codexContinue.continueOn(accountId);
-      if (!result.ok) setError(result.detail);
+      // Success opens the conversation in a NEW tab and leaves this one alone:
+      // keeping the picker armed invited a second click, i.e. a second tab
+      // resuming the same thread on the same account.
+      if (result.ok) setPickerOpen(false);
+      else setError(result.detail);
     } catch {
       setError("Could not continue on that account.");
     } finally {

@@ -45,6 +45,7 @@ export type CodexContinueRefusal =
   | "unknown_session"
   | "no_thread"
   | "same_account"
+  | "already_open"
   | "invalid_account"
   | "unknown_account"
   | "rollout_missing"
@@ -74,6 +75,12 @@ export interface CodexContinueDeps {
   deleteSession(sessionId: string): Promise<unknown>;
   /** Opens the app's normal resume path for a freshly created session row. */
   openResumeTab(sessionId: string): Promise<{ ok: true; tabId: string } | { ok: false; reason: string }>;
+  /**
+   * True when a live ROOT tab already resumes `threadId` on `accountId` (an
+   * earlier continue, or the user opened the imported session there). Absent =
+   * no guard; refusing here keeps one rollout from feeding two app-servers.
+   */
+  isThreadOpen?(threadId: string, accountId: string): Promise<boolean>;
   randomUUID(): string;
 }
 
@@ -176,6 +183,12 @@ export async function handleCodexContinueOnAccount(
   }
   if (target.id === currentAccountId) {
     return { ok: false, reason: "same_account", detail: "this session already runs on that account" };
+  }
+  // Idempotence: continuing a thread that is already open on the target would
+  // put two app-servers on one rollout (two live tabs resuming one thread) and
+  // leave a second session row behind.
+  if ((await deps.isThreadOpen?.(threadId, target.id)) === true) {
+    return { ok: false, reason: "already_open", detail: "this conversation is already open on that account" };
   }
   const [sourceSessionsDir, targetSessionsDir] = await Promise.all([
     deps.sessionsDir(currentAccountId),

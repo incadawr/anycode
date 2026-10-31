@@ -13,7 +13,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionMeta } from "@anycode/core";
 import type { CodexAccountOption } from "../shared/codex-account.js";
 import {
@@ -207,6 +207,18 @@ describe("handleCodexContinueOnAccount", () => {
     expect(result.ok).toBe(true);
     expect(h.created[0]).not.toHaveProperty("codexProfileId");
     expect(await readFile(join(h.systemSessionsDir, ROLLOUT_RELATIVE), "utf8")).toBe(ROLLOUT_TEXT);
+  });
+
+  it("refuses a thread already open on the target account, so a second click cannot fork a second host on one rollout", async () => {
+    const isThreadOpen = vi.fn(async () => true);
+    const h = await harness({ isThreadOpen });
+
+    const result = await handleCodexContinueOnAccount(h.deps, { tabId: "tab-1", accountId: "account-b" });
+
+    expect(result).toMatchObject({ ok: false, reason: "already_open" });
+    expect(isThreadOpen).toHaveBeenCalledWith(THREAD_ID, "account-b");
+    expect(h.created).toHaveLength(0);
+    expect(h.opened).toEqual([]);
   });
 
   it("refuses the account the tab already runs on, without copying anything", async () => {

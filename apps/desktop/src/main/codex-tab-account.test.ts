@@ -4,15 +4,15 @@ import { handleCodexTabAccount, type CodexTabAccountDeps } from "./codex-tab-acc
 function deps(over: Partial<CodexTabAccountDeps> = {}, tabs: Record<string, { engine?: string; codexProfile?: { id?: string } | null }> = {}): CodexTabAccountDeps {
   return {
     tab: (tabId) => tabs[tabId],
-    accounts: async () => ({ activeProfileId: "acc2", profiles: [{ id: "acc2", label: "Personal" }, { id: "work", label: "Work" }] }),
+    accounts: async () => ({ activeProfileId: "account-b", profiles: [{ id: "account-b", label: "Personal" }, { id: "work", label: "Work" }] }),
     ...over,
   };
 }
 
 describe("handleCodexTabAccount (the session's account line)", () => {
   it("names the profile the tab was created under and whether it is the default", async () => {
-    const result = await handleCodexTabAccount(deps({}, { "tab-1": { engine: "codex", codexProfile: { id: "acc2" } } }), "tab-1");
-    expect(result).toEqual({ ok: true, accountId: "acc2", label: "Personal", isDefault: true });
+    const result = await handleCodexTabAccount(deps({}, { "tab-1": { engine: "codex", codexProfile: { id: "account-b" } } }), "tab-1");
+    expect(result).toEqual({ ok: true, accountId: "account-b", label: "Personal", isDefault: true });
   });
 
   it("a non-default profile reports isDefault false", async () => {

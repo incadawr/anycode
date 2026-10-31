@@ -188,9 +188,9 @@ describe("resolveContainedPath", () => {
 
   it("resolves a file under <home>/.anycode (codex generated_images case) and under tmpdir", async () => {
     const { deps, home, tmp } = await makeRig();
-    await seed(join(home, ".anycode/codex/profile-acc2/generated_images/icon.png"), "png");
+    await seed(join(home, ".anycode/codex/profile-account-b/generated_images/icon.png"), "png");
     await seed(join(tmp, "scratch/plot.png"), "png");
-    expect(await resolveContainedPath(deps, TAB_ID, join(home, ".anycode/codex/profile-acc2/generated_images/icon.png"))).toHaveProperty("realPath");
+    expect(await resolveContainedPath(deps, TAB_ID, join(home, ".anycode/codex/profile-account-b/generated_images/icon.png"))).toHaveProperty("realPath");
     expect(await resolveContainedPath(deps, TAB_ID, join(tmp, "scratch/plot.png"))).toHaveProperty("realPath");
   });
 
