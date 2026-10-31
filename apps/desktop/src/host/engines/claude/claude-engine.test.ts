@@ -2455,7 +2455,7 @@ describe("ClaudeEngine.compactNow — allowlisted /compact passthrough", () => {
   });
 
   it("F4: a CLI self-started (foreign) turn finishes BEFORE the /compact frame is sent — its result is never mistaken for the compaction's verdict", async () => {
-    // The exact interleave built the send barrier for: the idle
+    // The exact interleave the send barrier was built for: the idle
     // reader has already classified a foreign assistant frame (foreignTurn
     // open) when the user hits Compact. Pre-fix, compactNow sent /compact
     // immediately and treated the FIRST result it saw as terminal — the
@@ -2489,7 +2489,7 @@ describe("ClaudeEngine.compactNow — allowlisted /compact passthrough", () => {
     });
     const engine = engineWith(transport);
     // A first owner turn flushes the constructor frames and hands the stream
- // back to the idle reader (between-turns window).
+    // back to the idle reader (between-turns window).
     await collect(engine.runTurn("first", { signal: new AbortController().signal }));
     expect(transport.sent).toEqual(["first"]);
 
@@ -2615,7 +2615,7 @@ describe("ClaudeEngine.compactNow — allowlisted /compact passthrough", () => {
   });
 
   it("F2: a system-origin turn whose model-authored text starts with '/' is neutralized — never interpreted as a slash command", async () => {
-    // The injection boundary's spawn change actually created: the
+    // The injection boundary created by the spawn change: the
     // ROOT engine session interprets a leading /command in a stream-json user
     // frame (w0-17 evidence), and host paths DO convert model output into
     // user frames — a detached child's final text (child_report ->
