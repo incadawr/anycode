@@ -56,7 +56,7 @@ import { ipcMain } from "electron";
 import { z } from "zod";
 import { findCatalogEntry } from "@anycode/core/catalog";
 import type { FileIoLogger } from "../settings/files.js";
-import { loadSettings, normalizeActiveConnection, saveSettings, withSettingsFileLock } from "../settings/files.js";
+import { loadSettings, normalizeActiveConnection, saveSettings, settingsWriteEpoch, withSettingsFileLock } from "../settings/files.js";
 import { isHttpsOrLocalhostUrl, isLoopbackUrl, settingsSchema } from "../settings/schema.js";
 import type { AnycodeSettings, CustomProviderRecord, ProviderConnection, SecretKey } from "../shared/settings.js";
 import { mergeModelIds, normalizeModelId } from "../shared/settings.js";
@@ -1054,6 +1054,13 @@ export function settingsWatchEventMatchesTarget(filename: string | Buffer | null
  *  - identical bytes are skipped, which bounds the redundant refresh an own
  *    save causes without ever forming a mutation loop (`onMutation` reloads
  *    settings, it does not write);
+ *  - a read that overlapped a settings WRITE is dropped rather than dispatched
+ *    (see `settingsWriteEpoch`): the writer's own `onMutation` publishes the
+ *    newer settings, and replaying the older bytes afterwards would undo it.
+ *    The drop schedules one fresh read of its own, so a change is never left
+ *    waiting on a write event that may not exist (a save that failed before its
+ *    rename fires none); that retry cannot loop — it either dispatches or finds
+ *    the same bytes;
  *  - read/watch/callback failures go to `logger.warn` and leave later changes
  *    operable; credentials/content are never logged.
  *
@@ -1077,6 +1084,12 @@ export function startSettingsFileWatcher(
     if (closed) {
       return;
     }
+    // Sample the host's settings write epoch before the read and re-check it
+    // after: a user save that lands while this read is in flight already
+    // delivered its own (newer) snapshot to `onExternalChange`, so dispatching
+    // the bytes we just read would make the pre-save model/connection current
+    // again — a host started before the next watcher event would boot on it.
+    const epoch = settingsWriteEpoch(settingsPath);
     let text: string;
     try {
       text = await readFile(settingsPath, "utf8");
@@ -1084,6 +1097,22 @@ export function startSettingsFileWatcher(
       if ((err as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
         logger?.warn(`settings watcher: read failed for ${settingsPath}`, err);
       }
+      return;
+    }
+    if (closed) {
+      return;
+    }
+    if (settingsWriteEpoch(settingsPath) !== epoch) {
+      // Stale relative to a write that landed during the read. Leave `lastText`
+      // alone (marking these bytes as seen would make the next comparison skip
+      // a real change) and line up a read of our own rather than waiting for
+      // the write's directory event: a save that dies before its rename renames
+      // nothing, so no event is coming — and the bytes on disk can still be a
+      // real external edit that this drop would otherwise lose until some
+      // unrelated event happened to arrive. Not a loop: the retry either
+      // dispatches (advancing `lastText`) or finds identical bytes, so it
+      // repeats only while further writes keep landing, at the debounce rate.
+      schedule();
       return;
     }
     if (text === lastText) {
