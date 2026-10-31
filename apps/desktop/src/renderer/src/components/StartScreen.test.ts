@@ -23,6 +23,7 @@ import {
   deriveRecentWorkspaces,
   draftModelEfforts,
   guardedSubmit,
+  codexAccountMenuOptions,
   isDraftCodexProfileIdStale,
   isSendKeydown,
   pickFolderForDraft,
@@ -965,5 +966,27 @@ describe("start-screen Orchestrate row (orchestrate-start.ts → ModeMenu)", () 
   it("Codex and Claude: no Orchestrate row (no aria-pressed on the chip)", () => {
     expect(startModeMenuMarkup("codex")).not.toContain("aria-pressed");
     expect(startModeMenuMarkup("claude")).not.toContain("aria-pressed");
+  });
+});
+
+describe("codexAccountMenuOptions (R1 fix: the ambient account stays pickable)", () => {
+  it("lists `system` FIRST, then the saved profiles", () => {
+    expect(
+      codexAccountMenuOptions([
+        { id: "account-a", label: "Account A", disabled: false },
+        { id: "account-b", label: "Account B", disabled: true },
+      ]),
+    ).toEqual([
+      { id: "system", label: "System", disabled: false },
+      { id: "account-a", label: "Account A", disabled: false },
+      { id: "account-b", label: "Account B", disabled: true },
+    ]);
+  });
+});
+
+describe("isDraftCodexProfileIdStale — `system` is a real pick", () => {
+  it("never treats an explicit `system` pick as stale, with or without profiles", () => {
+    expect(isDraftCodexProfileIdStale("system", [])).toBe(false);
+    expect(isDraftCodexProfileIdStale("system", [{ id: "account-a", label: "Account A", disabled: false }])).toBe(false);
   });
 });

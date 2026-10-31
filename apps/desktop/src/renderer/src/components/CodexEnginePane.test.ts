@@ -16,6 +16,8 @@ import {
   canRepairLink,
   canSignIn,
   codexDefaultAccountAction,
+  codexSystemRowVisibility,
+  type CodexAccountRowPlan,
   codexQuotaLines,
   codexVersionWarningNotice,
   deriveBinaryActions,
@@ -754,5 +756,22 @@ describe("codexDefaultAccountAction (Settings → Codex \"Make default\")", () =
 
   it("marks system as Default when nothing else is configured (an absent activeProfileId means system)", () => {
     expect(codexDefaultAccountAction("system", "system")).toEqual({ isDefault: true, showMakeDefault: false });
+  });
+});
+
+describe("codexSystemRowVisibility (R1 fix: the Default marker survives the System collapse)", () => {
+  it("keeps the System row while `system` IS the default, even when it collapses into a mirroring profile", () => {
+    const plan: CodexAccountRowPlan = { showSystemRow: false, currentEnvironmentProfileId: "account-a" };
+    expect(codexSystemRowVisibility(plan, "system")).toEqual({ showSystemRow: true, offerMakeSystemDefault: false });
+  });
+
+  it("offers the ambient account when the collapsed row is hidden and a profile is the default", () => {
+    const plan: CodexAccountRowPlan = { showSystemRow: false, currentEnvironmentProfileId: "account-a" };
+    expect(codexSystemRowVisibility(plan, "account-a")).toEqual({ showSystemRow: false, offerMakeSystemDefault: true });
+  });
+
+  it("follows the plan when the row is visible and a profile is the default", () => {
+    const plan: CodexAccountRowPlan = { showSystemRow: true, currentEnvironmentProfileId: null };
+    expect(codexSystemRowVisibility(plan, "account-a")).toEqual({ showSystemRow: true, offerMakeSystemDefault: false });
   });
 });

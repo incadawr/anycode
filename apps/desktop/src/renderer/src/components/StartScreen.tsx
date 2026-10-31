@@ -574,7 +574,22 @@ export function isDraftCodexProfileIdStale(
   draftCodexProfileId: string | undefined,
   profiles: readonly CodexProfileChipOption[],
 ): boolean {
-  return draftCodexProfileId !== undefined && !profiles.some((profile) => profile.id === draftCodexProfileId);
+  // `system` is the ambient pseudo-account: it is a real, always-valid pick
+  // (the picker lists it), even though no registry record backs it.
+  if (draftCodexProfileId === undefined || draftCodexProfileId === SYSTEM_CODEX_ACCOUNT_ID) return false;
+  return !profiles.some((profile) => profile.id === draftCodexProfileId);
+}
+
+/**
+ * The picker's full account list: the ambient `system` pseudo-account FIRST,
+ * then the saved profiles. `system` needs its own row even when a profile is
+ * the default — otherwise, once anything else is made default, "run on the
+ * ambient ~/.codex account" would be selectable only through Settings.
+ */
+export function codexAccountMenuOptions(
+  profiles: readonly CodexProfileChipOption[],
+): CodexProfileChipOption[] {
+  return [{ id: SYSTEM_CODEX_ACCOUNT_ID, label: "System", disabled: false }, ...profiles];
 }
 
 /**
@@ -1563,13 +1578,14 @@ export function StartScreen({ onToast }: StartScreenProps) {
 
             {codexProfileMenuOpen && (
               <div className="model-pill-popover" role="menu" aria-label="Codex account">
-                {codexProfileOptions.map((profile) => {
+                {codexAccountMenuOptions(codexProfileOptions).map((profile) => {
                   // With no explicit pick the DEFAULT account is what will be
-                  // submitted, so it is the row that reads as checked.
-                  // `system` has no row here — the chip's own "System" label
-                  // already stands for it.
-                  const current = profile.id === (draft.codexProfileId ?? codexDefaultProfileId);
-                  const isDefault = profile.id === codexDefaultProfileId;
+                  // submitted, so it is the row that reads as checked. `system`
+                  // has its own row: the ambient account stays selectable even
+                  // after some other account was made the default.
+                  const defaultId = codexDefaultProfileId ?? SYSTEM_CODEX_ACCOUNT_ID;
+                  const current = profile.id === (draft.codexProfileId ?? defaultId);
+                  const isDefault = profile.id === defaultId;
                   return (
                     <button
                       key={profile.id}

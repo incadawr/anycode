@@ -18,7 +18,7 @@ describe("selectCodexAccount (create_session's account argument)", () => {
     expect(selectCodexAccount("  ACC2 ", accounts)).toEqual({ ok: true, id: "acc2" });
   });
 
-  it("matches the owner's label, which is what a caller actually knows", () => {
+  it("matches the label, which is what a caller actually knows", () => {
     expect(selectCodexAccount("Personal", accounts)).toEqual({ ok: true, id: "acc2" });
     expect(selectCodexAccount("  work ", accounts)).toEqual({ ok: true, id: "work" });
   });

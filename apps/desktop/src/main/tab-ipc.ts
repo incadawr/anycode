@@ -685,7 +685,7 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     // never to the ambient `~/.codex` one. That is the whole point of the
     // default: the start screen and the Sessions API both reach
     // this line with no id, and before it existed every one of them silently
-    // spent the owner's personal plan.
+    // spent the user's personal plan.
     let codexProfile: { id?: string; home?: string; authLink?: string } | undefined;
     const resolvesCodexProfile =
       req.codexProfileId !== undefined || (engine === "codex" && deps.resolveCodexProfile !== undefined);

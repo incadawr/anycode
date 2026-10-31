@@ -24,6 +24,7 @@ import {
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageList } from "./MessageList.js";
+import type { CodexContinueController } from "../codex-continue.js";
 import { createDesktopStore, type ErrorRetryMeta, type RetryOffer, type ToolCallBlock, type TranscriptBlock } from "../store.js";
 import { agentMessageText, type AgentEnvelope } from "../../../shared/communication.js";
 
@@ -817,10 +818,14 @@ describe("usage limit — Codex account escape hatch", () => {
     onContinue: () => {},
     promptQueueLength: 0,
   };
+  const controller = (): CodexContinueController => ({
+    accounts: async () => [{ id: "work", label: "Work" }],
+    continueOn: async () => ({ ok: true }),
+  });
 
   it("offers \"Continue on another account\" on a Codex session", () => {
     const html = renderToStaticMarkup(
-      createElement(MessageList, { ...base, onSwitchCodexAccount: () => {} }),
+      createElement(MessageList, { ...base, codexContinue: controller() }),
     );
     expect(html).toContain("Continue on another account");
   });
@@ -828,5 +833,18 @@ describe("usage limit — Codex account escape hatch", () => {
   it("never offers it where the surface did not arm a Codex account switch (core/Claude quota errors)", () => {
     const html = renderToStaticMarkup(createElement(MessageList, base));
     expect(html).not.toContain("Continue on another account");
+  });
+
+  it("a notice without a reset time renders without the \"Resets at\" clause (Codex 429 need not carry one)", () => {
+    const html = renderToStaticMarkup(
+      createElement(MessageList, {
+        ...base,
+        blocks: [
+          { kind: "usage_limit", id: "usage-2", notice: { kind: "usage_limit", code: 429, engine: "codex" } },
+        ],
+      }),
+    );
+    expect(html).toContain("Provider quota is exhausted.");
+    expect(html).not.toContain("Resets at");
   });
 });
