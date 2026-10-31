@@ -1652,10 +1652,10 @@ export function StartScreen({ onToast }: StartScreenProps) {
           open={startRolePickerOpen}
           connections={useSettingsStore.getState().snapshot?.settings.provider.connections ?? []}
           activeConnectionId={useSettingsStore.getState().snapshot?.settings.provider.activeConnectionId}
-          engines={{
-            claudeReady: useTabsStore.getState().availableEngines.includes("claude"),
-            codexReady: useTabsStore.getState().availableEngines.includes("codex"),
-          }}
+          {/* No `engines` prop: RolePickerDialog defaults to the shell's LIVE
+              engine list. A getState() snapshot here froze readiness for the
+              dialog's whole life (it missed an engine that signed in while the
+              dialog was open and called a ready one "not connected"). */}
           onSave={(roles) => void saveStartRoles(roles)}
           onSkip={() => {
             // Skip writes nothing: the task starts on the built-in defaults,

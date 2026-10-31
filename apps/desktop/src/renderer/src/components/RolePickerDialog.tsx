@@ -17,10 +17,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { RoleConfig, ProviderConnection } from "../../../shared/settings.js";
 import {
+  activePresetId,
   autoSelectPreset,
   deriveRolePresets,
-  presetApplicable,
+  presetUnavailableReason,
   ROLE_PRESET_ROLES,
+  sameRoleRoutes,
   type PresetEngineInput,
   type PresetRole,
   type RolePreset,
@@ -33,12 +35,14 @@ import {
   patchEntry,
   removeFallback,
   ROLE_EFFORT_LEVELS,
+  sameDraftChoice,
   toDraft,
   toDraftEntry,
   type RolesDraft,
 } from "../role-editor-model.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { useSettingsStore } from "../settings-store.js";
+import { useTabsStore } from "../tabs-store.js";
 import { resolveRoleModels, roleModelSelection, routePatch, nextCustomMode, type RoleModelSources } from "../role-model-options.js";
 import { roleOverrideNotice, type RoleProfileOverride } from "../role-profile-overrides.js";
 import { useRoleEngineModels } from "../use-role-engine-models.js";
@@ -50,7 +54,12 @@ export interface RolePickerDialogProps {
   open: boolean;
   connections: readonly ProviderConnection[];
   activeConnectionId: string | undefined;
-  engines: PresetEngineInput;
+  /**
+   * Engine readiness. Omit it — the app's call sites do — to follow the
+   * shell's live engine list; a caller that already owns a fresher verdict may
+   * pass it instead.
+   */
+  engines?: PresetEngineInput;
   /** Roles already persisted (edit mode); absent on first run. */
   initialRoles?: Partial<Record<PresetRole, RoleConfig>>;
   /** Save button label — "Save" (first run) / "Save roles" (Settings reuse). */
@@ -86,7 +95,7 @@ export function RolePickerDialog({
   open,
   connections,
   activeConnectionId,
-  engines,
+  engines: enginesProp,
   initialRoles,
   saveLabel = "Save",
   skippable = true,
@@ -97,6 +106,16 @@ export function RolePickerDialog({
   onSkip,
 }: RolePickerDialogProps) {
   const snapshot = useSettingsStore((state) => state.snapshot);
+  // Readiness defaults to the shell's live engine list. The prop exists for
+  // surfaces that own a fresher list; a caller that read the store once with
+  // `getState()` would otherwise keep a stale verdict for the dialog's whole
+  // life and either miss a signing-in engine or call a ready one "not
+  // connected".
+  const availableEngines = useTabsStore((state) => state.availableEngines);
+  const engines = useMemo<PresetEngineInput>(() => enginesProp ?? {
+    claudeReady: availableEngines.includes("claude"),
+    codexReady: availableEngines.includes("codex"),
+  }, [enginesProp, availableEngines]);
   const engineModels = useRoleEngineModels(open && engines.codexReady);
   const modelSources = useMemo<RoleModelSources>(() => ({
     connections, activeConnectionId, engineModels,
@@ -109,17 +128,47 @@ export function RolePickerDialog({
   useOverlayFlag(open && !inline);
 
   const presets = deriveRolePresets(engines, activeConnectionId ?? "");
-  const [draft, setDraft] = useState<RolesDraft>(() =>
-    initialRoles !== undefined ? toDraft(initialRoles) : toDraft(autoSelectPreset(engines, activeConnectionId ?? "").roles),
-  );
-  const [presetId, setPresetId] = useState<RolePreset["id"]>(() => autoSelectPreset(engines, activeConnectionId ?? "").id);
+  const autoPreset = autoSelectPreset(engines, activeConnectionId ?? "");
+  const freshDraft = (): RolesDraft =>
+    initialRoles !== undefined
+      ? toDraft(initialRoles)
+      : toDraft(autoSelectPreset(engines, activeConnectionId ?? "").roles);
+  const [draft, setDraft] = useState<RolesDraft>(freshDraft);
+  // What the draft state ACTUALLY holds once every effect of a commit has run.
+  // The follow effect must compare the seed against this, not against the
+  // render's `draft` value: when `open` flips in the same commit as a readiness
+  // or connection change, the open effect below replaces the state first, and
+  // the render value is still the pre-open draft — comparing those two called
+  // an untouched fresh seed a "user edit" and stopped all later following.
+  const draftRef = useRef<RolesDraft>(draft);
+  // The draft this editor last SEEDED, or null once the choice is the user's
+  // (a clicked preset, or an edit the follow below has already noticed). Only
+  // a seeded draft may be replaced when readiness or the active connection
+  // arrives later; remembering the ROUTES (not just the preset id) is what
+  // lets an unchanged id still pick up a connection change.
+  const seededDraft = useRef<RolesDraft | null>(initialRoles === undefined ? freshDraft() : null);
+  // The highlighted chip follows the VALUES shown, never a click: a persisted
+  // or edited chain that no preset describes highlights nothing.
+  const activePreset = activePresetId(presets, fromDraft(draft).roles, engines);
+  const unavailablePresets = presets.flatMap((preset) => {
+    const reason = presetUnavailableReason(preset, engines);
+    return reason === null ? [] : [{ id: preset.id, label: preset.label, reason }];
+  });
+
+  // Mirror every committed draft into the ref (declared BEFORE the seeding
+  // effect, so that effect can overwrite the mirror with the seed it installs).
+  useEffect(() => {
+    draftRef.current = draft;
+  });
 
   // Re-seed the draft whenever the dialog re-opens (the caller keeps this
   // component mounted; `open` flips per first-run attempt).
   useEffect(() => {
     if (open) {
-      setDraft(initialRoles !== undefined ? toDraft(initialRoles) : toDraft(autoSelectPreset(engines, activeConnectionId ?? "").roles));
-      setPresetId(autoSelectPreset(engines, activeConnectionId ?? "").id);
+      const seeded = freshDraft();
+      setDraft(seeded);
+      draftRef.current = seeded;
+      seededDraft.current = initialRoles === undefined ? seeded : null;
     }
     const dialog = dialogRef.current;
     if (dialog && open && !inline && !dialog.open) {
@@ -128,10 +177,40 @@ export function RolePickerDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  // Readiness/connection can arrive or change while the dialog is open (the
+  // engine list is fetched asynchronously). Only a SEEDED draft follows the new
+  // auto-selection: a clicked preset or an edited route is the user's answer
+  // and is never replaced, and a seed that merely kept its preset id still
+  // picks up a new active connection.
+  useEffect(() => {
+    if (!open || initialRoles !== undefined) return;
+    const seeded = seededDraft.current;
+    if (seeded === null) return;
+    if (!sameDraftChoice(seeded, draftRef.current)) {
+      // The user edited the seeded draft — stop following auto-selection.
+      // `customModel` counts: a "Custom…" input the user opened but has not
+      // typed into yet is still an answer.
+      seededDraft.current = null;
+      return;
+    }
+    const next = toDraft(autoPreset.roles);
+    seededDraft.current = next;
+    if (!sameRoleRoutes(fromDraft(draftRef.current).roles, fromDraft(next).roles)) {
+      setDraft(next);
+      draftRef.current = next;
+    }
+    // `open` is deliberately NOT a dependency: the open effect above seeds the
+    // draft, and following on the same commit would compare the new seed with
+    // the draft from before opening and mistake that for an edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoPreset.id, activeConnectionId]);
+
   const valid = draftValid(draft);
 
   function applyPreset(preset: RolePreset): void {
-    setPresetId(preset.id);
+    // An explicit pick is the answer, not a seed: a later readiness change must
+    // not overwrite it.
+    seededDraft.current = null;
     setDraft(toDraft(preset.roles));
   }
 
@@ -159,16 +238,16 @@ export function RolePickerDialog({
 
         <div className="role-picker-presets" role="radiogroup" aria-label="Presets">
           {presets.map((preset) => {
-            const applicable = presetApplicable(preset, engines);
+            const applicable = presetUnavailableReason(preset, engines) === null;
             return (
               <button
                 key={preset.id}
                 type="button"
                 role="radio"
-                aria-checked={presetId === preset.id}
-                className={`role-picker-preset-chip${presetId === preset.id ? " role-picker-preset-chip-active" : ""}`}
+                aria-checked={activePreset === preset.id}
+                className={`role-picker-preset-chip${activePreset === preset.id ? " role-picker-preset-chip-active" : ""}`}
                 disabled={!applicable}
-                title={applicable ? undefined : "Requires an engine that is not ready"
+                title={applicable ? preset.description : presetUnavailableReason(preset, engines) ?? undefined
                 }
                 data-testid={`role-preset-${preset.id}`}
                 onClick={() => applyPreset(preset)}
@@ -178,6 +257,12 @@ export function RolePickerDialog({
             );
           })}
         </div>
+        {/* A disabled chip's requirement is text, not a hover-only title. */}
+        {unavailablePresets.length > 0 && (
+          <p className="role-picker-preset-note" data-testid="role-preset-requirements">
+            {unavailablePresets.map((preset) => `${preset.label}: ${preset.reason}`).join(" ")}
+          </p>
+        )}
 
         <div className="role-picker-roles">
           {ROLE_PRESET_ROLES.map((role) => (
@@ -197,6 +282,7 @@ export function RolePickerDialog({
                 entry={draft[role].primary}
                 connections={connections}
                 modelSources={modelSources}
+                engineReadiness={engines}
                 onChange={(patch) => setDraft((d) => patchEntry(d, role, null, patch))}
               />
               {draft[role].fallbacks.map((entry, index) => (
@@ -206,6 +292,7 @@ export function RolePickerDialog({
                   entry={entry}
                   connections={connections}
                   modelSources={modelSources}
+                  engineReadiness={engines}
                   onChange={(patch) => setDraft((d) => patchEntry(d, role, index, patch))}
                   onRemove={() => setDraft((d) => removeFallback(d, role, index))}
                   onMove={(delta) => setDraft((d) => moveFallback(d, role, index, delta))}
@@ -269,32 +356,40 @@ export interface EntryRowProps {
   onRemove?(): void;
   onMove?(delta: -1 | 1): void;
   compact?: boolean;
+  /** Engine readiness, when this surface can tell — a route to an engine that is not set up is marked, never silently kept. */
+  engineReadiness?: PresetEngineInput;
 }
 
 /**
  * Route labels for the connection options: a display name, never the raw
  * `conn-<uuid>` storage id (role-routes.ts owns the rule).
  */
-export function EntryRow({ label, entry, connections, modelSources, onChange, onRemove, onMove, compact = false }: EntryRowProps) {
+export function EntryRow({ label, entry, connections, modelSources, onChange, onRemove, onMove, compact = false, engineReadiness }: EntryRowProps) {
   const route = entry.engine !== "" ? `engine:${entry.engine}` : entry.connection.trim() !== "" ? `connection:${entry.connection}` : entry.provider ? `provider:${entry.provider}` : "connection:active";
   const models = resolveRoleModels(entry, modelSources);
   const selection = nextCustomMode(entry.customModel === true, entry.model, models) ? "custom" : roleModelSelection(entry.model, models, entry.engine);
+  /** "" when the route does not target an engine or that engine is ready. */
+  const engineOffline = entry.engine === "claude" && engineReadiness?.claudeReady === false
+    ? "Claude"
+    : entry.engine === "codex" && engineReadiness?.codexReady === false
+      ? "Codex"
+      : "";
   const routeLabels = useMemo(
     () => connectionRouteLabels(connections, modelSources.catalog, modelSources.custom),
     [connections, modelSources.catalog, modelSources.custom],
   );
   return (
-    <div className="role-picker-entry" data-route={route}>
+    <div className={`role-picker-entry${engineOffline ? " role-picker-entry-engine-offline" : ""}`} data-route={route}>
       <span className="role-picker-entry-label">{label}</span>
       <select
         className={compact ? "settings-field-select role-picker-entry-route" : "role-picker-entry-route"}
         aria-label={`${label} route`}
-        title={entry.engine ? `${entry.engine} engine` : entry.provider ? `Provider: ${entry.provider}` : entry.connection ? routeLabels.get(entry.connection) ?? `Unavailable connection: ${entry.connection}` : "Session’s connection"}
+        title={entry.engine ? `${entry.engine} engine${engineOffline ? ` (${engineOffline} is not connected)` : ""}` : entry.provider ? `Provider: ${entry.provider}` : entry.connection ? routeLabels.get(entry.connection) ?? `Unavailable connection: ${entry.connection}` : "Session’s connection"}
         value={route}
         onChange={(event) => onChange(routePatch(event.target.value))}
       >
-        <option value="engine:claude">Claude engine</option>
-        <option value="engine:codex">Codex engine</option>
+        <option value="engine:claude">{engineReadiness && !engineReadiness.claudeReady ? "Claude engine (not connected)" : "Claude engine"}</option>
+        <option value="engine:codex">{engineReadiness && !engineReadiness.codexReady ? "Codex engine (not connected)" : "Codex engine"}</option>
         <option value="connection:active">Session's connection</option>
         {entry.provider && <option value={`provider:${entry.provider}`}>Provider: {entry.provider}</option>}
         {entry.connection.trim() && !connections.some((connection) => connection.id === entry.connection) && <option value={`connection:${entry.connection}`}>Unavailable connection: {entry.connection}</option>}
@@ -348,16 +443,21 @@ export function EntryRow({ label, entry, connections, modelSources, onChange, on
       </select>
       {onMove && (
         <span className="role-picker-entry-order">
-          <button type="button" className={compact ? "settings-button" : undefined} aria-label={`Move ${label} up`} disabled={false} onClick={() => onMove?.(-1)}>
-            <Chevron />
+          <button type="button" className={compact ? "settings-button role-picker-entry-order-up" : "role-picker-entry-order-up"} title={`Move ${label} up`} aria-label={`Move ${label} up`} onClick={() => onMove?.(-1)}>
+            <Chevron className="role-picker-entry-order-glyph" />
           </button>
-          <button type="button" className={compact ? "settings-button" : undefined} aria-label={`Move ${label} down`} onClick={() => onMove?.(1)}>
+          <button type="button" className={compact ? "settings-button" : undefined} title={`Move ${label} down`} aria-label={`Move ${label} down`} onClick={() => onMove?.(1)}>
             <Chevron />
           </button>
         </span>
       )}
+      {engineOffline && (
+        <span className="role-picker-entry-offline" role="note" data-testid={`role-entry-offline-${label}`}>
+          {engineOffline} engine is not connected — set it up in Settings → {engineOffline}, or change the route.
+        </span>
+      )}
       {onRemove && (
-        <button type="button" className={compact ? "settings-button role-picker-entry-remove" : "role-picker-entry-remove"} aria-label={`Remove ${label}`} onClick={onRemove}>
+        <button type="button" className={compact ? "settings-button role-picker-entry-remove" : "role-picker-entry-remove"} title={`Remove ${label}`} aria-label={`Remove ${label}`} onClick={onRemove}>
           <X />
         </button>
       )}

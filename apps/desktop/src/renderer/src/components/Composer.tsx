@@ -2011,10 +2011,6 @@ export function Composer() {
         open={rolePickerOpen}
         connections={useSettingsStore.getState().snapshot?.settings.provider.connections ?? []}
         activeConnectionId={useSettingsStore.getState().snapshot?.settings.provider.activeConnectionId}
-        engines={{
-          claudeReady: useTabsStore.getState().availableEngines.includes("claude"),
-          codexReady: useTabsStore.getState().availableEngines.includes("codex"),
-        }}
         onSave={(roles) => {
           // §3.9: Save writes roles, then the stashed task proceeds under
           // orchestrate (the enable + submit are the same proceed step as

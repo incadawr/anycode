@@ -126,3 +126,100 @@ export function autoSelectPreset(engines: PresetEngineInput, activeConnectionId:
   const presets = deriveRolePresets(engines, activeConnectionId);
   return presets.find((preset) => presetApplicable(preset, engines)) ?? presets[presets.length - 1]!;
 }
+
+/** Key-order-independent serialization: the editor builds the same chains in a different insertion order than a persisted file. */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.keys(value as Record<string, unknown>).sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** One route entry with every "not set" field removed, so blank and absent mean the same thing. */
+function compactEntry(entry: RoleRouteEntry | undefined): RoleRouteEntry {
+  const out: RoleRouteEntry = {};
+  if (entry?.engine !== undefined) out.engine = entry.engine;
+  if (entry?.connection?.trim()) out.connection = entry.connection.trim();
+  if (entry?.provider?.trim()) out.provider = entry.provider.trim();
+  if (entry?.model?.trim() && !(entry.engine !== undefined && entry.model.trim() === "default")) out.model = entry.model.trim();
+  if (entry?.effort !== undefined) out.effort = entry.effort;
+  return out;
+}
+
+/**
+ * A roles payload in canonical shape: blank strings dropped (an unset
+ * connection id and an absent one are the same route), `fallbacks: []` treated
+ * as absent, key order irrelevant. Comparing the editor's draft against a
+ * preset must not depend on which route keys happen to hold empty strings.
+ */
+function canonicalRoles(roles: Partial<Record<PresetRole, RoleConfig>>): Record<string, RoleConfig> {
+  const out: Record<string, RoleConfig> = {};
+  for (const role of ROLE_PRESET_ROLES) {
+    const config = roles[role];
+    if (config === undefined) continue;
+    const fallbacks = (config.fallbacks ?? []).map(compactEntry);
+    out[role] = fallbacks.length > 0
+      ? { primary: compactEntry(config.primary), fallbacks }
+      : { primary: compactEntry(config.primary) };
+  }
+  return out;
+}
+
+/** True when two roles payloads describe the same routes (blank/absent fields and key order ignored). */
+export function sameRoleRoutes(
+  a: Partial<Record<PresetRole, RoleConfig>>,
+  b: Partial<Record<PresetRole, RoleConfig>>,
+): boolean {
+  return stableJson(canonicalRoles(a)) === stableJson(canonicalRoles(b));
+}
+
+/**
+ * True when a roles payload is exactly this preset's chain. The chip that is
+ * highlighted must follow the VALUES the editor shows, not the last chip that
+ * happened to be clicked or auto-selected: an edited or persisted chain that no
+ * preset describes highlights nothing.
+ */
+export function presetMatchesRoles(preset: RolePreset, roles: Partial<Record<PresetRole, RoleConfig>>): boolean {
+  return sameRoleRoutes(preset.roles, roles);
+}
+
+/**
+ * The one preset a roles payload equals, or null when no chip can honestly
+ * claim it. With `engines`, a preset that is not applicable on this machine
+ * is excluded too: highlighting a disabled chip ("Current connection" over a
+ * Claude/Codex chain, or an engine preset nothing is signed in for) is exactly
+ * the contradiction this exists to prevent.
+ */
+export function activePresetId(
+  presets: readonly RolePreset[],
+  roles: Partial<Record<PresetRole, RoleConfig>>,
+  engines?: PresetEngineInput,
+): RolePreset["id"] | null {
+  return presets.find(
+    (preset) => (engines === undefined || presetApplicable(preset, engines)) && presetMatchesRoles(preset, roles),
+  )?.id ?? null;
+}
+
+/**
+ * Why a preset chip is disabled, in words — a hover `title` alone leaves
+ * touch/keyboard users with no explanation. `null` for an applicable preset.
+ */
+export function presetUnavailableReason(preset: RolePreset, engines: PresetEngineInput): string | null {
+  if (presetApplicable(preset, engines)) return null;
+  switch (preset.id) {
+    case "claude-leads-codex-builds": {
+      const missing = [
+        engines.claudeReady ? null : "Claude",
+        engines.codexReady ? null : "Codex",
+      ].filter((name): name is string => name !== null).join(" and ");
+      return `Requires ${missing} to be set up and signed in.`;
+    }
+    case "all-claude":
+      return "Requires Claude to be set up and signed in.";
+    case "this-connection":
+      return null;
+  }
+}

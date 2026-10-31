@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CatalogSummary, ProviderConnection } from "../../shared/settings.js";
 import { resolveRoleModels, roleModelSelection, pickEngineModels, routePatch, nextCustomMode } from "./role-model-options.js";
 import { CLAUDE_DRAFT_MODELS } from "./claude-draft-models.js";
-import { addFallback, patchEntry, moveFallback, toDraft, fromDraft, fromDraftEntry, toDraftEntry } from "./role-editor-model.js";
+import { addFallback, patchEntry, moveFallback, toDraft, fromDraft, fromDraftEntry, toDraftEntry, sameDraftChoice } from "./role-editor-model.js";
 
 const catalog: CatalogSummary = [{ id: "vendor", name: "Vendor", authKind: "api_key", models: [
   { id: "new", name: "New model" }, { id: "old" },
@@ -82,5 +82,31 @@ describe("role model review regressions", () => {
     expect(draft.executor.fallbacks[1]!.customModel).toBe(true);
     expect(draft.executor.fallbacks[0]!.customModel).toBeUndefined();
     expect(toDraft(fromDraft(draft).roles).executor.fallbacks[1]!.customModel).toBeUndefined();
+  });
+});
+
+describe("sameDraftChoice — a draft compares by what the editor shows, not only by its persisted routes", () => {
+  it("sees an open, still-empty Custom input as a difference (fromDraft would drop it)", () => {
+    const seed = toDraft({ executor: { primary: { connection: "conn-1" } } });
+    const opened = patchEntry(seed, "executor", null, { model: "", customModel: true });
+    // The persisted routes are identical: the flag is UI-only.
+    expect(fromDraft(opened).roles).toEqual(fromDraft(seed).roles);
+    expect(sameDraftChoice(seed, opened)).toBe(false);
+  });
+
+  it("ignores the Custom flag on a fallback only when both sides agree", () => {
+    let a = addFallback(toDraft({}), "executor");
+    let b = addFallback(toDraft({}), "executor");
+    expect(sameDraftChoice(a, b)).toBe(true);
+    b = patchEntry(b, "executor", 0, { customModel: true });
+    expect(sameDraftChoice(a, b)).toBe(false);
+    a = patchEntry(a, "executor", 0, { customModel: true });
+    expect(sameDraftChoice(a, b)).toBe(true);
+  });
+
+  it("still treats blank/absent route fields as equal", () => {
+    const a = toDraft({ planner: { primary: { engine: "claude", connection: "" } } });
+    const b = toDraft({ planner: { primary: { engine: "claude" } } });
+    expect(sameDraftChoice(a, b)).toBe(true);
   });
 });

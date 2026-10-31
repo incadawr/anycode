@@ -8,6 +8,7 @@ import { discoverClaudeBinary } from "./claude-binary.js";
 import { ENV_CLAUDE_PROXY_URL, LOOPBACK_NO_PROXY, encodeEngineProxyCarrier } from "../shared/engines.js";
 import {
   buildClaudeDoctorChildEnv,
+  maskCredentials,
   meetsClaudeVersionFloor,
   parseClaudeVersion,
   runClaudeDoctor,
@@ -29,6 +30,83 @@ function fakeSpawn(extraFlags: string[] = []) {
 function freshProfileDir(): string {
   return mkdtempSync(join(scratchDir, "profile-"));
 }
+
+describe("maskCredentials", () => {
+  it("redacts provider keys, bearer credentials, JWTs and TOKEN= assignments", () => {
+    const masked = maskCredentials(
+      "sk-ant-api03-abcdef123456 ghp_abcdefgh12345678 xoxb-1234567890-abcdef " +
+        "Bearer abcdef123456.789 eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturepart " +
+        "OPENAI_API_KEY=abcd1234 GITHUB_TOKEN: zzzz",
+    );
+    for (const secret of [
+      "sk-ant-api03-abcdef123456",
+      "ghp_abcdefgh12345678",
+      "xoxb-1234567890-abcdef",
+      "abcdef123456.789",
+      "eyJhbGciOiJIUzI1NiJ9",
+      "OPENAI_API_KEY=abcd1234",
+      "zzzz",
+    ]) {
+      expect(masked).not.toContain(secret);
+    }
+    expect(masked).toContain("<redacted>");
+  });
+
+  it("leaves ordinary diagnostics intact", () => {
+    expect(maskCredentials("Error: Cannot find module '@anthropic-ai/claude-code/cli.js'"))
+      .toBe("Error: Cannot find module '@anthropic-ai/claude-code/cli.js'");
+    expect(maskCredentials("disk-usage is high; task-run failed")).toBe("disk-usage is high; task-run failed");
+    expect(maskCredentials("Error: Cannot find module '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js'"))
+      .toBe("Error: Cannot find module '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js'");
+    expect(maskCredentials("spawn EACCES at /opt/homebrew/bin/claude (errno 13)"))
+      .toBe("spawn EACCES at /opt/homebrew/bin/claude (errno 13)");
+  });
+
+  it("redacts a quoted-JSON secret and account e-mail by structure, not by value shape", () => {
+    // The reviewer's example: a quoted key defeats a `KEY=value` pattern, and
+    // an opaque value has no recognizable prefix — the KEY is what identifies
+    // it. The e-mail is account data the report may never carry.
+    const masked = maskCredentials('{"accessToken":"opaque-value","email":"alice@example.com"}');
+    expect(masked).not.toContain("opaque-value");
+    expect(masked).not.toContain("alice@example.com");
+    expect(masked).not.toContain("accessToken");
+    expect(masked).toContain("<redacted>");
+  });
+
+  it("redacts secret-named keys in JSON, key=value and key: value spellings", () => {
+    const samples: [string, string[]][] = [
+      ['{"client_secret": "s3cr3t-json"}', ["client_secret", "s3cr3t-json"]],
+      ["apiKey=plain-key-value", ["apiKey", "plain-key-value"]],
+      ["--password='p@ss w0rd'", ["password", "p@ss w0rd"]],
+      ["Cookie: session=abc123", ["Cookie", "abc123"]],
+      ["sessionId: 9f8e7d6c", ["sessionId", "9f8e7d6c"]],
+      ['"auth": "Bearer opaque-auth-value"', ["auth", "opaque-auth-value"]],
+      ["credentials: cred-value", ["credentials", "cred-value"]],
+    ];
+    for (const [input, absent] of samples) {
+      const masked = maskCredentials(input);
+      for (const secret of absent) {
+        expect(masked, `${input} -> ${masked}`).not.toContain(secret);
+      }
+    }
+  });
+
+  it("redacts a long opaque token that no prefix announces", () => {
+    const opaque = "Zx9Qv3Lm8Rt2Yb6Nw1Kf4Hs7Pd0Ga5Jc8Ee";
+    const masked = maskCredentials(`wrapper said: ${opaque} (exit 1)`);
+    expect(masked).not.toContain(opaque);
+    expect(masked).toContain("<redacted>");
+  });
+
+  it("an ordinary key does not shield a secret inside its value", () => {
+    // `info: {...}` is one assignment on the surface; the interesting pair is
+    // nested in the value.
+    const masked = maskCredentials('info: {"accessToken":"nested-secret","email":"bob@example.com"}');
+    expect(masked).not.toContain("nested-secret");
+    expect(masked).not.toContain("bob@example.com");
+    expect(masked).toContain("info:");
+  });
+});
 
 describe("parseClaudeVersion / meetsClaudeVersionFloor", () => {
   it("parses the live `<major>.<minor>.<patch> (Claude Code)` shape", () => {
@@ -268,6 +346,36 @@ describe("runClaudeDoctor — status discrimination against a fake CLI", () => {
     });
     expect(report.status).toBe("error");
     expect(report.error).toMatch(/Unrecognized Claude version/);
+  });
+
+  it("error: a non-zero --version exit carries the CLI's own cause, not just the code", async () => {
+    const report = await runClaudeDoctor("/fake/claude", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(["--nonzero-exit"]),
+      profileDir: freshProfileDir(),
+    });
+    expect(report.status).toBe("error");
+    expect(report.error).toContain("exited with code 1");
+    expect(report.error).toContain("Cannot find module '@anthropic-ai/claude-code/cli.js'");
+  });
+
+  it("error: the carried cause never reports a credential the wrapper echoed", async () => {
+    const report = await runClaudeDoctor("/fake/claude", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(["--leaky-stderr"]),
+      profileDir: freshProfileDir(),
+    });
+    expect(report.status).toBe("error");
+    expect(report.error).toContain("exited with code 1");
+    expect(report.error).toContain("<redacted>");
+    expect(report.error).not.toContain("sk-ant-api03-sentinel0secret0value");
+    expect(report.error).not.toContain("sentinel-bearer-token-value");
+    expect(report.error).not.toContain("ANTHROPIC_API_KEY=");
+    // Quoted-JSON key/value and account e-mail: the shapes a value-pattern
+    // mask alone leaves untouched.
+    expect(report.error).not.toContain("sentinel-json-token-value");
+    expect(report.error).not.toContain("accessToken");
+    expect(report.error).not.toContain("sentinel-leak@example.com");
   });
 
   it("error: trust gate refuses the path before any spawn happens", async () => {

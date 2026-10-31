@@ -457,6 +457,48 @@ export function Stack(props: IconProps) {
   );
 }
 
+/** Route — a forked route between two nodes (Settings → Roles: what each orchestration role runs on). */
+export function Route(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="3.5" cy="12" r="1.25" />
+      <circle cx="12.5" cy="4" r="1.25" />
+      <path d="M3.5 10.75V8.5a2 2 0 012-2h2.25a2 2 0 002-2V4" />
+      <path d="M9.75 4h1.5" />
+    </Icon>
+  );
+}
+
+/** Sparkle — a model/assistant identity glyph (Settings → Claude nav icon; distinct from Codex's Cube). */
+export function Sparkle(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M8 2.25l1.35 4.4 4.4 1.35-4.4 1.35L8 13.75l-1.35-4.4-4.4-1.35 4.4-1.35z" />
+    </Icon>
+  );
+}
+
+/** Package — a shipped bundle of skills/agents/workflows/MCP servers (Settings → Plugins nav icon). */
+export function Package(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M8 2.5l5.25 2.75v5.5L8 13.5l-5.25-2.75v-5.5z" />
+      <path d="M2.75 5.25L8 8l5.25-2.75M8 8v5.5" />
+    </Icon>
+  );
+}
+
+/** Plug — an external API surface (Settings → Sessions API nav icon; distinct from Network's Globe). */
+export function Plug(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M5.75 2.5v3.25M10.25 2.5v3.25" />
+      <path d="M3.75 5.75h8.5v1.5a4.25 4.25 0 01-8.5 0z" />
+      <path d="M8 11.5v2" />
+    </Icon>
+  );
+}
+
 /** Keyboard — shortcuts affordance (P7.24/F20 W3: Settings "Keyboard shortcuts" pane nav icon). */
 export function Keyboard(props: IconProps) {
   return (

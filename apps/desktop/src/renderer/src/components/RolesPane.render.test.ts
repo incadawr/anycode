@@ -7,7 +7,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { RolePickerDialog } from "./RolePickerDialog.js";
+import { EntryRow, RolePickerDialog } from "./RolePickerDialog.js";
 import { RolesPane, RolesSaveNotice, buildRoleProfileRoles, parseRoleChildLimitInput } from "./RolesPane.js";
 import { useSettingsStore } from "../settings-store.js";
 import type { SettingsSnapshot } from "../../../shared/settings.js";
@@ -300,5 +300,83 @@ describe("Route selects name connections, never raw connection ids", () => {
     }
     expect(html).toContain('>Z.AI (GLM) 2</option>');
     expect(html).toContain('>Lab endpoint</option>');
+  });
+});
+
+describe("preset chips follow the values, not the last auto-selection", () => {
+  const engineChain = {
+    orchestrator: { primary: { engine: "claude" as const } },
+    planner: { primary: { engine: "claude" as const } },
+    executor: { primary: { engine: "codex" as const }, fallbacks: [{ connection: "conn-1" }] },
+    reviewer: { primary: { engine: "claude" as const } },
+    explore: { primary: { connection: "conn-1" } },
+  };
+
+  it("a persisted Claude/Codex chain with no engine ready highlights NO chip and marks the engine routes offline", () => {
+    const html = renderToStaticMarkup(createElement(RolePickerDialog, {
+      ...base,
+      engines: { claudeReady: false, codexReady: false },
+      initialRoles: engineChain,
+    }));
+    expect(html).not.toContain("role-picker-preset-chip-active");
+    expect(html).toContain("Claude engine (not connected)");
+    expect(html).toContain("Codex engine (not connected)");
+    expect(html).toContain("Claude engine is not connected");
+  });
+
+  it("the default a fresh profile gets with no engine ready IS the current connection chip", () => {
+    const html = renderToStaticMarkup(createElement(RolePickerDialog, {
+      ...base,
+      engines: { claudeReady: false, codexReady: false },
+      activeConnectionId: "conn-1",
+    }));
+    const activeChip = html.match(/<button[^>]*role-picker-preset-chip-active[^>]*data-testid="([^"]+)"/);
+    expect(activeChip?.[1]).toBe("role-preset-this-connection");
+    expect(html).not.toContain("Claude engine is not connected");
+  });
+
+  it("disabled presets say what they need in text, not only in a hover title", () => {
+    const html = renderToStaticMarkup(createElement(RolePickerDialog, {
+      ...base,
+      engines: { claudeReady: false, codexReady: false },
+      initialRoles: engineChain,
+    }));
+    const note = html.split('data-testid="role-preset-requirements"')[1] ?? "";
+    expect(note).toContain("Claude leads, Codex builds: Requires Claude and Codex to be set up and signed in.");
+    expect(note).toContain("All Claude: Requires Claude to be set up and signed in.");
+  });
+});
+
+describe("fallback order controls", () => {
+  it("render up before down, each named, and the up glyph is rotated to point up", () => {
+    const html = renderToStaticMarkup(createElement(EntryRow, {
+      compact: true,
+      label: "planner fallback 1",
+      entry: { engine: "", connection: "conn-1", model: "", effort: "" },
+      connections: [],
+      modelSources: { connections: [], activeConnectionId: "conn-1", catalog: undefined, custom: undefined, engineModels: {} },
+      onChange: () => {},
+      onMove: () => {},
+      onRemove: () => {},
+    }));
+    const order = html.slice(html.indexOf("role-picker-entry-order"), html.indexOf("role-picker-entry-remove"));
+    // Up comes first (a down chevron rendered first is what made the pair read "down, up").
+    expect(order.indexOf('aria-label="Move planner fallback 1 up"')).toBeLessThan(order.indexOf('aria-label="Move planner fallback 1 down"'));
+    expect(order).toContain('title="Move planner fallback 1 up"');
+    expect(order).toContain("role-picker-entry-order-glyph");
+    // The third glyph of the group names its action in words too.
+    expect(html).toContain('title="Remove planner fallback 1"');
+  });
+});
+
+describe("preset chip follows the seeded draft (production fromDraft path)", () => {
+  it("highlight P1 when both engines are ready", () => {
+    const html = renderToStaticMarkup(createElement(RolePickerDialog, {
+      ...base,
+      engines: { claudeReady: true, codexReady: true },
+      activeConnectionId: "conn-1",
+    }));
+    const active = html.match(/<button[^>]*role-picker-preset-chip-active[^>]*data-testid="([^"]+)"/);
+    expect(active?.[1]).toBe("role-preset-claude-leads-codex-builds");
   });
 });
