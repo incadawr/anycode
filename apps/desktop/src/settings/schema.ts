@@ -273,6 +273,7 @@ const connectionSchema = z.object({
     pricing: tokenRatesSchema.optional().catch(undefined),
     contextWindowTokens: z.number().int().min(1_024).max(1_000_000).optional().catch(undefined),
     reasoningEffort: reasoningEffortSchema.optional().catch(undefined),
+    catalogMatchDisabled: z.literal(true).optional().catch(undefined),
     reasoningSupported: z.literal(true).optional().catch(undefined),
     effortLevels: z.array(reasoningEffortSchema).min(1).transform((levels) => [...new Set(levels)]).optional().catch(undefined),
   }).catch({});

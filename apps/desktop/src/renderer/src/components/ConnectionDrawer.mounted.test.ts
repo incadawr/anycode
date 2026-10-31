@@ -273,3 +273,21 @@ it("still appends a model the catalog does not offer, so a manual id stays durab
     expect(rig.fetchModels).toHaveBeenCalledWith({ connectionId:"c1", addModels:["manual-x"] });
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
+
+it("shows the matched model and catalog prices and saves the opt-out", async () => {
+  const connection = { id:"c", providerId:"custom:test", model:"vendor/glm-5.3-fp8" };
+  const snapshot = { settings: cloneDefaults(), readOnly:false, secrets:[], envOverrides:[], providerReady:true, catalog:[] };
+  const update = vi.fn().mockResolvedValue({ok:true, snapshot});
+  const store = createStore(() => ({snapshot, oauthPendingProviderId:null, connectionUpdate:update, load:vi.fn()})) as unknown as SettingsStoreApi;
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(ConnectionDrawerFields, {mode:"edit", editConnection:connection, catalog:[], connections:[connection], secrets:[], readOnly:false, store})));
+    expect(container.textContent).toContain("Recognized as GLM-5.3");
+    expect(container.textContent).toContain("Catalog reference for GLM-5.3");
+    const check = [...container.querySelectorAll("input[type=checkbox]")].find(c => c.parentElement?.textContent?.includes("Recognized as")) as HTMLInputElement;
+    await act(async () => check.click());
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({id:"c", catalogMatchDisabled:true}));
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});

@@ -5063,3 +5063,13 @@ it("persists and reloads an override for every accepted exact model id", async (
   expect(Object.hasOwn(map, "__proto__")).toBe(true);
   expect(map["__proto__"]?.contextWindowTokens).toBe(128000);
 });
+
+it("persists and clears catalog matching per exact model", async () => {
+  const deps = makeDeps({ catalogIds: CATALOG_IDS });
+  expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", catalogMatchDisabled: true })).ok).toBe(true);
+  expect((await handleConnectionUpdate(deps, { id: "conn-1", modelOverrideModel: "b", catalogMatchDisabled: true })).ok).toBe(true);
+  expect((await handleConnectionUpdate(deps, { id: "conn-1", catalogMatchDisabled: "" })).ok).toBe(true);
+  const saved = (await loadSettings(settingsPath)).settings.provider.connections[0];
+  expect(saved?.modelOverrides?.a).toBeUndefined();
+  expect(saved?.modelOverrides?.b?.catalogMatchDisabled).toBe(true);
+});

@@ -2196,7 +2196,7 @@ describe("custom endpoint cache creation", () => {
     const bindings: Record<string, unknown> = {
       preflightModelId, model: "fixture-model", buildCustomProviderCreateRequest: () => ({}),
       pricingPayload: () => ({ mode: "subscription" }), modelPricingPayload: () => ({ "fixture-model": { input: 1, cachedInput: 0, output: 2 } }),
-      contextWindowTokensField, contextWindow: { raw: "" }, reasoningSupported: false, modelEffort: "", effortLevels: [], imageInput, imageInputModelPreflightError,
+      contextWindowTokensField, contextWindow: { raw: "" }, catalogMatchDisabled: false, reasoningSupported: false, modelEffort: "", effortLevels: [], imageInput, imageInputModelPreflightError,
       customName: "fixture", customBaseUrl: "http://127.0.0.1", customKind: "openai-compatible",
       secretValue: "", noAuth: true, setCreating: () => {}, setError: () => {}, catalog: [],
       isCustomRecordProviderId: () => false, resolvedCustomProvider: () => ({ create: async () => ({ ok: true, providers: [] }) }),
@@ -2227,7 +2227,7 @@ describe("custom endpoint cache creation", () => {
       const bindings: Record<string, unknown> = {
         preflightModelId, model: "fixture-model", buildCustomProviderCreateRequest: () => ({}),
         pricingPayload: () => "", modelPricingPayload: () => ({}),
-        contextWindowTokensField, contextWindow: { raw: "" }, reasoningSupported: false, modelEffort: "", effortLevels: [], imageInput: "auto", imageInputModelPreflightError,
+        contextWindowTokensField, contextWindow: { raw: "" }, catalogMatchDisabled: false, reasoningSupported: false, modelEffort: "", effortLevels: [], imageInput: "auto", imageInputModelPreflightError,
         customName: "fixture", customBaseUrl: "http://127.0.0.1", customKind: "openai-compatible",
         secretValue: "", noAuth: true, setCreating: () => {}, setError: () => {}, catalog: [],
         isCustomRecordProviderId: () => false, resolvedCustomProvider: () => ({ create: async () => ({ ok: true, providers: [] }) }),
