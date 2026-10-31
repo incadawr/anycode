@@ -493,7 +493,7 @@ export interface HarnessOptions {
    * does — through the one `wirePlanExit` call, which both registers
    * `ExitPlanMode` into the registry and produces the `planExitMode`/
    * `onModeChange` pair spread into AgentLoopConfig. Omitted by default ->
-   * registry and config byte-identical to pre-(every pre-existing test
+   * registry and config byte-identical to their previous state (every pre-existing test
    * unaffected, and the tool stays invisible to the model).
    */
   planExit?: boolean;
