@@ -1925,6 +1925,14 @@ export function ConnectionDrawerFields({
               : "Connection created, but neither its model list nor the API key could be saved.";
         }
       }
+      if (providerId === "openrouter") {
+        try {
+          const fetched = await resolvedCustomProvider().fetchModels({ connectionId: outcome.createdConnectionId });
+          if (fetched.ok) await reloadSnapshot();
+        } catch {
+          // A failed catalog refresh must not prevent creating the connection.
+        }
+      }
       if (message !== null) {
         setError(message);
       }
