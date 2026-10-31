@@ -46,6 +46,7 @@ import type {
   CommunicationRegenerateResult,
   CommunicationView,
 } from "../../../shared/communication-config.js";
+import { startSessionsApiRefresh } from "./sessions-api-refresh.js";
 
 /** Subset of `window.anycode.communication` this pane drives (injectable for tests). */
 export interface CommunicationBridge {
@@ -338,14 +339,25 @@ export function SessionsApiPane({ bridge = window.anycode.communication }: Sessi
 
   useEffect(() => {
     let cancelled = false;
-    void bridge.get().then((result) => {
+    // Every read lands here: the first one and the live refreshes (see
+    // sessions-api-refresh.ts), so a folder that disappears or returns while
+    // this pane stays open updates its mark without reopening Settings.
+    const apply = (result: CommunicationGetResult): void => {
       if (cancelled || !result.ok) return;
       setView(result.view);
       setEnvControlled(result.envControlled);
+    };
+    void bridge.get().then((result) => {
+      apply(result);
+      // The port FIELD is the user's draft (Apply commits it): only the first
+      // read seeds it, refreshes leave it alone while it is being edited.
+      if (cancelled || !result.ok) return;
       setPortText(portFieldValue(result.view.port));
     });
+    const stopRefresh = startSessionsApiRefresh({ get: () => bridge.get(), onView: apply });
     return () => {
       cancelled = true;
+      stopRefresh();
     };
   }, [bridge]);
 
