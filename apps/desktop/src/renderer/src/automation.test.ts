@@ -4707,7 +4707,7 @@ describe("automation facade — Skills pane probe/driver (design/slice-P7.20-cut
   });
 });
 
-describe("automation facade — MCP pane add-server driver (/4061 item 4)", () => {
+describe("automation facade — MCP pane add-server driver (item 4)", () => {
   const noTranscriptDom6: TranscriptDom = { container: () => null, jumpButtonVisible: () => false };
   const noTodoPanelDom6: TodoPanelDom = { panel: () => null };
   const noStartScreenDom6: StartScreenDom = {

@@ -55,7 +55,7 @@
  * click handlers below feed into `bridge.setTelemetry`. The load controller
  * has its own file and its own test (`profile-loader.test.ts`) for the same
  * reason. Wiring-level assurance (does a real click actually call the bridge)
- * is the W4/-S5 automation smoke's job, same division of labor as
+ * is the automation smoke's job, same division of labor as
  * every sibling pane in this directory.
  */
 import { useEffect, useRef, useState } from "react";

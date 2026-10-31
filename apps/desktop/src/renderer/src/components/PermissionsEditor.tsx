@@ -306,7 +306,7 @@ export function PermissionsEditor({ store = useSettingsStore }: PermissionsEdito
       </div>
 
       {/*
-        /4730: the ask-zone classifier (default OFF). A classifier
+        the ask-zone classifier (default OFF). A classifier
         can only turn an "ask" into an "allow"; it never denies, and a failing
         or slow classifier always falls back to asking.
       */}

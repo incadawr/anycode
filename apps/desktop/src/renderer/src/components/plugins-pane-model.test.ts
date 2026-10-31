@@ -466,7 +466,7 @@ describe("hasNonOfficialPlugins", () => {
   });
 });
 
-// ── a: services view model ──
+// ── services view model ──
 
 const svcView = (over: Partial<PluginServiceView> = {}): PluginServiceView => ({
   plugin: "bridge",
@@ -476,7 +476,7 @@ const svcView = (over: Partial<PluginServiceView> = {}): PluginServiceView => ({
   ...over,
 });
 
-describe("serviceChip — one chip per supervised state (a)", () => {
+describe("serviceChip — one chip per supervised state", () => {
   it("maps every state to its chip text and tone", () => {
     expect(serviceChip(svcView({ state: "running" }))).toEqual({ text: "Running", tone: "muted" });
     expect(serviceChip(svcView({ state: "starting" })).text).toBe("Starting");
@@ -491,7 +491,7 @@ describe("serviceChip — one chip per supervised state (a)", () => {
   });
 });
 
-describe("services consent and actions (a)", () => {
+describe("services consent and actions", () => {
   const withServices = (over: Partial<PluginRowView> = {}) =>
     row({ tier: "third-party", managed: { enabled: true, pinned: false, active: "1.0.0" }, serviceNames: ["relay"], ...over });
 
@@ -511,7 +511,7 @@ describe("services consent and actions (a)", () => {
   });
 });
 
-describe("sessionsApiHint — only when the API is off (a)", () => {
+describe("sessionsApiHint — only when the API is off", () => {
   it("shows the enable hint for off and error, and only for plugins with services", () => {
     expect(sessionsApiHint(true, "off")).toContain("Settings → Sessions API");
     expect(sessionsApiHint(true, "error")).toContain("Settings → Sessions API");
@@ -521,7 +521,7 @@ describe("sessionsApiHint — only when the API is off (a)", () => {
   });
 });
 
-describe("sheetPrimaryLabel — services wording (a)", () => {
+describe("sheetPrimaryLabel — services wording", () => {
   const svcPreview = preview({ services: [{ name: "relay", command: "node", args: [], envKeys: [] }] });
   const bothPreview = preview({
     mcpServers: [{ name: "api", command: "node", args: [] }],

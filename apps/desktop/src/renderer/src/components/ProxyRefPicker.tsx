@@ -79,7 +79,7 @@ const ENGINE_DISPLAY_NAME: Record<"codex" | "claude", string> = {
 };
 
 /**
- * What each engine's proxy actually covers (-F3, migrated verbatim
+ * What each engine's proxy actually covers (migrated verbatim
  * from the deleted EngineProxyField; lifted the codex carve-out).
  * Both engines' subagents now run under the engine proxy same as the
  * top-level session: a codex-engine child routes through
@@ -235,7 +235,7 @@ export function connectionCreateProxyRefField(value: string): { proxyRef?: strin
 
 /**
  * Whether the "Saved." notice belongs on screen for the picker's current value
- * (-F5, migrated verbatim from the deleted EngineProxyField). The
+ * (migrated verbatim from the deleted EngineProxyField). The
  * notice is tied to `lastSavedValue` — the exact string that was last confirmed
  * persisted, captured at submit time — rather than to a bare "a save succeeded"
  * flag. If the control no longer holds that value (changed since, or nothing
@@ -293,7 +293,7 @@ export function ProxyRefPicker({ scope, store = useSettingsStore, value, onChang
   async function handleSave(): Promise<void> {
     // Captured now, not read again after the `await`: the dropdown stays live
     // while the request is in flight, so the notice must attach to what was
-    // actually submitted (-F5).
+    // actually submitted.
     const submitted = current;
     setSaving(true);
     setError(null);

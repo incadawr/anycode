@@ -3047,7 +3047,7 @@
   margin-left: 0.15rem;
 }
 
-/* ── Codex accounts (/53, codex-profiles cut §5): per-profile rows reuse .settings-mcp-list/.settings-mcp-row/.settings-mcp-name/.settings-mcp-detail; these three are new. ── */
+/* ── Codex accounts (codex-profiles cut §5): per-profile rows reuse .settings-mcp-list/.settings-mcp-row/.settings-mcp-name/.settings-mcp-detail; these three are new. ── */
 
 /* compact tiles instead of full-width stacked rows — a grid so
    cards sit side by side when space allows. Compound selector (rather than

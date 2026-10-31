@@ -1,5 +1,5 @@
 /**
- * Pure-logic tests for CodexEnginePane's exported helpers (//53,
+ * Pure-logic tests for CodexEnginePane's exported helpers (
  * codex-profiles cut §4.2/§4.4/§6.2). Same `.test.ts`-only, no-jsdom rationale
  * as every other component test in this directory: this package's vitest
  * config runs `environment: "node"`, so the status-machine/quota/custody

@@ -362,7 +362,7 @@ describe("describeSourceForSheet", () => {
   });
 });
 
-// ── a: background services in the pane ──
+// ── background services in the pane ──
 
 function findElements(root: unknown, predicate: (el: AnyElement) => boolean): AnyElement[] {
   const found: AnyElement[] = [];
@@ -395,7 +395,7 @@ function serviceRow(overrides: Partial<PluginRowView> = {}): PluginRowView {
   });
 }
 
-describe("PluginsPaneBody — background services (a)", () => {
+describe("PluginsPaneBody — background services", () => {
   it("needs approval shows Approve services and the chip", () => {
     const snap = snapshot({ plugins: [serviceRow({ servicesConsentGranted: false })] });
     const html = call(() => PluginsPaneBody(bodyPropsFor(snap)));
