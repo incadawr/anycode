@@ -512,7 +512,8 @@ describe("diagnostics bundle (GitHub #18)", () => {
         durationMs: 1,
       }),
     );
-    for (let index = 1; index < 200; index += 1) {
+    childLines.push(telemetryLine({ v: 1, ts: 901, session: CHILD, t: "tool", tool: "bash", status: `ok ${SECRETS.apiKey}`, durationMs: 1 }));
+    for (let index = 2; index < 200; index += 1) {
       childLines.push(
         telemetryLine({ v: 1, ts: 900 + index, session: CHILD, t: "tool", tool: "bash", status: "ok", durationMs: index }),
       );
