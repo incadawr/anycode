@@ -63,14 +63,14 @@ export function resolveImageInput(
 
 /**
  * Assumed context window for a model the catalog does not know (→
- * . This is NOT a provider fact: it is an explicit, conservative
+ * This is NOT a provider fact: it is an explicit, conservative
  * fallback that engages the degraded-window floor in the context budget rather
  * than letting an unknown model inherit a 24×-overstuffed default prompt.
  */
 export const UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS = 8_192;
 
 /**
- * Where a resolved context window came from. `assumed` is the
+ * Where a resolved context window came. `assumed` is the
  * conservative unknown-model fallback — the UI says so instead of letting a
  * large unknown model silently behave as 8K.
  */
@@ -163,7 +163,7 @@ export function resolveMaxOutputTokens(
 
 /**
  * The effort tier actually in force for a session (extended by
- * . Precedence:
+ * Precedence:
  *
  * 1. an explicit choice — the user's pick, the connection's persisted tier, or
  *    the `ANYCODE_REASONING_EFFORT` env value — is validated fail-closed

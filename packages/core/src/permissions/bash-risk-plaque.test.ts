@@ -96,7 +96,7 @@ describe("bash-risk-plaque — fail-closed input discipline", () => {
  * Cross-review D2: a `kind: "writeStdin"` ask (codex 0.161+) is input sent to
  * a command that is ALREADY running — the classifier never reasoned about
  * that interaction, and the Codex bridge deliberately refuses to de-risk it
- * ('s `!stdinWrite` gate: metadata stays fail-closed high). The
+ * (`!stdinWrite` gate: metadata stays fail-closed high). The
  * plaque must not assert a safety property ("provably read-only") the ask's
  * own metadata refuses to vouch for: no plaque, the reason line already says
  * what the ask is.

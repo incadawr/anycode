@@ -192,7 +192,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     // "Input Modality: Video / Image / Text / File", "Output Modality: Text",
     // "Context Length: 1M", "Maximum Output Tokens: 128K" — the "max output
     // length is never stated" claim above was true on 2026-08-28 but the page
-    // has since been filled in (site was mid-launch:'s own comment
+ // has since been filled in (site was mid-launch:comment
     // flagged "API coming soon" for 5.3 the day before). `maxOutputTokens` is
     // filled in below from that spec card. Without it, a subagent spawned on
     // glm-5.3-flash silently got DEFAULT_MAX_OUTPUT_TOKENS (32_768, a ~4x drop

@@ -300,7 +300,7 @@ export function classifyBashCommand(command: string): BashCommandClass {
   //     quote-aware split could not prove any argument flag-free, and
   //     "unprovable" is "unknown" by this module's own rule (module doc,
   //     top), not "read-only" by default. This is a real, intentional
-  //     behavior change from the pre-code, which never looked at
+  // behavior change from the code, which never looked at
   //     quote state on this path at all and would fall through to
   //     "read-only" here (see the now-updated V4 pin).
   if (segmentTokens === undefined) {
@@ -522,7 +522,7 @@ export function classifyBashCommandLine(command: string): BashCommandLineClassif
     return { class: "unknown", shellExpression: true };
   }
   if (split.segments.length === 1) {
-    // Single plain command: the pre-path, verdict-for-verdict.
+    // Single plain command: the path, verdict-for-verdict.
     return { class: classifyBashCommand(command), shellExpression: hasUnsafeCharacter(command) };
   }
   if (split.separators.some((separator) => separator !== "|")) {

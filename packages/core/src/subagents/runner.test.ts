@@ -457,7 +457,7 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     const parent = makeParent();
     const deadlineAt = Date.now() + 1_234;
     expect(buildChildConfig(parent, getPersona("explore"), REQ, { deadlineAt }).deadlineAt).toBe(deadlineAt);
-    // Byte-identical to a pre-child when no deadline is supplied.
+    // Byte-identical to a child when no deadline is supplied.
     expect(buildChildConfig(parent, getPersona("explore"), REQ).deadlineAt).toBeUndefined();
     expect("deadlineAt" in buildChildConfig(parent, getPersona("explore"), REQ)).toBe(false);
   });
@@ -3832,7 +3832,7 @@ describe("start progress — requested id is authoritative (reverses)", () => {
   });
 });
 
-describe("responseModel — the provider's own claim reaches subagent_end (telemetry gap closed by)", () => {
+describe("responseModel — the provider's own claim reaches subagent_end (telemetry gap closed)", () => {
   it("end progress carries the claim the child's port observed, ALONGSIDE the requested id", async () => {
     const childPort = makeChildPort({ modelId: "glm-5.3-flash", claims: ["glm-5.3"] });
     const runner = createSubagentRunner(makeParent(), {

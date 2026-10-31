@@ -76,7 +76,7 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
       // attribution never reached telemetry at all. `model` (the REQUESTED
       // id, owner's ruling: "модель никогда не ответит, главное какие
       // запросы мы шлем") and `responseModel` (the provider's own claim,
-      // kept as separate evidence for) are added field-by-field,
+      // kept as separate evidence) are added field-by-field,
       // same whitelist discipline as every other case here — this stays a
       // projection, never a spread of the raw event.
       //

@@ -13,7 +13,7 @@
 import { describe, expect, it } from "vitest";
 import { aggregateProfileStats, cacheHitRate, type ProfileStatsFile } from "./stats.js";
 import { PROFILE_ACTIVITY_GAP_CAP_MS, PROFILE_STATS_MAX_SCAN_BYTES } from "../types/config.js";
-// S2 (task187-aggregator-semantics.md): the per-file partial +
+// S2: the per-file partial +
 // merge path. Imported separately from the block above so that every line of
 // the pre-existing suite stays byte-identical (the slice's accept criterion).
 import {
@@ -816,8 +816,8 @@ describe("aggregateProfileStats — days is a faithful projection of lifetimeTok
 });
 
 // ---------------------------------------------------------------------------
-// S2 — per-file partials + merge (spec:
-// working-docs/build/task187-aggregator-semantics.md). Everything below this
+// S2 — per-file partials + merge.
+// Everything below this
 // banner is ADDITIVE: no line above it is modified, because the whole point of
 // the slice is that the legacy aggregator's behavior is unchanged, and a
 // touched expectation would be indistinguishable from a silent drift.

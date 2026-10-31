@@ -1,7 +1,7 @@
 /**
  * Credential-free loopback proxy relay (follow-up).
  *
- * 's scrub DROPS a `user:pass@` proxy URL from every non-engine child,
+ * scrub DROPS a `user:pass@` proxy URL from every non-engine child,
  * which closes the `env`-exfil vector but breaks npm/git/curl behind an
  * authenticating corporate proxy: the child connects directly and loses the
  * network. This module restores connectivity WITHOUT restoring the credential:
