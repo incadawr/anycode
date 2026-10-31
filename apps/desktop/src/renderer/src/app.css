@@ -570,8 +570,10 @@ body {
   color: var(--text-1);
 }
 
-/* The per-tab "Split right" affordance (⫿): same shape as the close ×;
-   disabled state is carried by title text only (the store refuses anyway). */
+/* The per-tab "Split right" affordance: a real two-pane glyph, same shape as
+   the close × (Audit C10 — the old text glyph "⫿" read as a stray divider
+   between the title and the close button). Disabled state is carried by the
+   title text and the dimmed icon (the store refuses anyway). */
 .dock-tab-split {
   display: flex;
   align-items: center;
@@ -579,10 +581,14 @@ body {
   flex-shrink: 0;
   padding: 0;
   color: var(--text-3);
-  font-size: var(--fs-xs);
   background: transparent;
   border: none;
   cursor: pointer;
+}
+
+.dock-tab-split > svg {
+  width: 12px;
+  height: 12px;
 }
 
 .dock-tab-split:hover {
@@ -1129,6 +1135,13 @@ body {
 /* TASK.119 п.4: conspicuous open-row treatment — inset accent bar + primary text. */
 .sidebar-row-open {
   color: var(--text-1);
+  /* Audit C12: only the CURRENT tab wears the accent bar. Other open tabs keep
+     a quiet inset marker (they are open in the background, not active), so two
+     rows never read as equally active. */
+  box-shadow: inset 2px 0 0 var(--border-strong);
+}
+
+.sidebar-row-open[aria-current="true"] {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
@@ -1162,6 +1175,14 @@ body {
   font-size: var(--fs-2xs);
   line-height: 1.2;
   white-space: nowrap;
+}
+
+/* The tab-level orchestrate flag: same badge shape as `agent`, accent-tinted
+   so it reads as the tab's mode rather than metadata about how it was opened. */
+.session-header-orchestrate {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: var(--accent-soft);
 }
 
 .sidebar-row-worktree {
@@ -1456,6 +1477,23 @@ body {
   font-size: var(--fs-sm);
   font-weight: var(--w-semibold);
   color: var(--text-1);
+}
+
+/* Audit D12: the one-line ellipsis cut titles at a character boundary
+   ("…outside.txt conta"), so every title wraps: between words, and inside a
+   word only when one token cannot fit (overflow-wrap). The clamp caps it at
+   sessionHeaderTitleLineLimit() lines so a title of any length still fits the
+   header's fixed height (2 × 1.25 × 13px ≈ 33px < the 40px compact cap),
+   mirrored by SESSION_HEADER_TITLE_LINE_LIMIT in SessionHeader.tsx. */
+.session-header-title-wrap {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  line-height: 1.25;
 }
 
 .session-header-chip {
@@ -1768,6 +1806,52 @@ body {
   align-items: center;
   gap: 8px;
   margin-left: auto;
+}
+
+/* The Sessions API rows (switch, External approvals, handle) stack under one
+   another exactly like the Git rows do. */
+.environment-menu-section {
+  display: flex;
+  flex-direction: column;
+}
+
+/* A row's secondary line always carries readable prose (state, hint, caption),
+   so it wraps in full instead of taking the base detail's single-line clipping.
+   Combined selector (0,2,0) so it outranks the base `.environment-menu-row-detail` rule. */
+.environment-menu-row-detail.environment-menu-row-detail-prose {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.environment-menu-row-error {
+  color: var(--danger);
+  font-family: var(--font-ui);
+  font-size: var(--fs-2xs);
+}
+
+/* The handle row's text field: sits where the Git rows' control sits. */
+.environment-menu-text-input {
+  box-sizing: border-box;
+  flex: 0 1 9rem;
+  min-width: 0;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-1);
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+}
+
+.environment-menu-text-input::placeholder {
+  color: var(--text-3);
+}
+
+.environment-menu-text-input:focus {
+  border-color: var(--border-strong);
+  outline: none;
 }
 
 .environment-menu-chevron {
@@ -3447,6 +3531,17 @@ body {
 }
 .md-table td {
   border-bottom: 1px solid var(--border);
+}
+
+/* Audit C9: a standalone document is read as a table, so its table gets the
+   framed GitHub look (cell borders + header tint) instead of the transcript's
+   row rules; scoped to the preview so conversation tables stay quiet. */
+.md-preview-view-rendered .md-table th,
+.md-preview-view-rendered .md-table td {
+  border: 1px solid var(--border);
+}
+.md-preview-view-rendered .md-table th {
+  background: var(--bg-inset);
 }
 
 .md-hr {
@@ -5400,6 +5495,18 @@ body {
   cursor: not-allowed;
 }
 
+/* The disabled item's visible reason line (no hover needed): same muted
+   register as the item itself, one size step down, inherits the item's
+   left edge so it reads as the item's own explanation. */
+.sidebar-project-menu-item-note {
+  display: block;
+  margin-top: var(--sp-1);
+  white-space: normal;
+  font-size: var(--fs-xs);
+  font-weight: var(--w-normal);
+  line-height: 1.3;
+}
+
 /* Composer model chip (§2F.3, consumed by wave B) — a display-only pill
    mirroring .session-header-chip's size tokens (--fs-xs, --r-full, 1px --border,
    capped width + ellipsis). Class name is FROZEN. */
@@ -5434,7 +5541,11 @@ body {
   position: relative;
   display: inline-flex;
   min-width: 0;
+  /* Audit C8: the chip may take the room the footer actually has; it only
+     shrinks when the row runs out (the label ellipsis then does the clipping).
+     A fixed ch cap truncated real model names beside empty space. */
   flex-shrink: 1;
+  max-width: 100%;
 }
 
 .model-pill-chip {
@@ -5442,7 +5553,7 @@ body {
   align-items: center;
   gap: var(--sp-1);
   min-width: 0;
-  max-width: 22ch;
+  max-width: 100%;
   padding: 0.15rem var(--sp-2);
   border-radius: var(--r-full);
   border: 1px solid var(--border);
@@ -5488,11 +5599,9 @@ body {
   white-space: nowrap;
 }
 
-/* The tag must not eat the label: the chip's 22ch cap is widened just enough
-   while the tag is present. */
-.model-pill-chip:has(.model-pill-midturn) {
-  max-width: 30ch;
-}
+/* The tag must not eat the label: the chip's own max-width is now the footer's
+   free space, so the tag simply shares the shrunk chip (the label ellipsis
+   yields first). */
 
 .model-pill-popover {
   position: fixed;
@@ -5845,7 +5954,13 @@ body {
    opt back in; leaving items opt out (no clicking a ghost). */
 .notice-stack {
   position: fixed;
-  bottom: var(--sp-4);
+  /* UI audit v0.0.49 §C2: the corner is NOT the floor — the composer card is.
+     The live composer publishes its measured height as --composer-clearance
+     (composer-clearance.ts), so a refusal ("Cannot compact while this session
+     is busy…") lands ABOVE the card instead of on top of Stop, the send arrow
+     and the context meter. The plain corner inset stays the fallback for
+     surfaces with no live composer (start screen, welcome, empty pane). */
+  bottom: var(--composer-clearance, var(--sp-4));
   right: var(--sp-4);
   z-index: 20;
   display: flex;
@@ -8370,6 +8485,17 @@ body {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--text-2);
+}
+
+/* A listed folder that is not on disk: the chip rides the row, the explanatory
+   sentence wraps under it (the row becomes two lines: entry + reason). */
+.sessions-api-folder-list li.sessions-api-folder-missing {
+  flex-wrap: wrap;
+}
+
+.sessions-api-folder-list li.sessions-api-folder-missing .settings-field-hint {
+  flex: 1 0 100%;
+  margin: 0;
 }
 
 .sessions-api-confirm {

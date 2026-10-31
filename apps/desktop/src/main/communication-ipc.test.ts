@@ -186,6 +186,24 @@ describe("Sessions API IPC (Taskana 4747) — writes go through the dedicated ch
     expect((await loadSettings(settingsPath)).settings.communication!.workspaces).toEqual([]);
   });
 
+  it("the view marks allowed folders that are missing on disk, and unmarks them once back", async () => {
+    const gone = join(dir, "gone");
+    const { deps } = rig({ picked: workspaceA });
+    await handleAddWorkspace(deps, {});
+    const seeded = (await loadSettings(settingsPath)).settings;
+    seeded.communication = { ...seeded.communication!, workspaces: [...seeded.communication!.workspaces, gone] };
+    await saveSettings(settingsPath, seeded);
+    // The stored entries are realpaths of the temp dirs; the gone entry was stored verbatim.
+    const first = await handleCommunicationGet(deps, {});
+    expect(first).toMatchObject({ ok: true, view: { missingWorkspaces: [gone], workspaces: expect.any(Array) } });
+    expect(first.ok && first.view.workspaces).toHaveLength(2);
+    // The folder comes back: the next view (same server instance, no restart) has no mark.
+    await (await import("node:fs/promises")).mkdir(gone);
+    const again = await handleCommunicationGet(deps, {});
+    expect(again).toMatchObject({ ok: true, view: { missingWorkspaces: [], workspaces: expect.any(Array) } });
+    expect(again.ok && again.view.workspaces).toHaveLength(2);
+  });
+
   it("set-default-access persists off/on and rejects other values", async () => {
     const { deps } = rig();
     expect((await handleSetDefaultAccess(deps, { access: "on" })).ok).toBe(true);

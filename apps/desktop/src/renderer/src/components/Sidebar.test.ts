@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionSummary } from "../../../shared/tabs.js";
 import type { TabInfo } from "../tabs-store.js";
+import { AGENT_PROJECT_SWITCH_LABEL } from "./project-agent-switch.js";
 import {
   applyHiddenProjects,
   buildSidebarGroups,
@@ -25,6 +26,7 @@ import {
   parseOlderThanDays,
   agentProjectMenuItem,
   PROJECT_MENU_ITEM_COUNT,
+  removeProjectDisabledReason,
   sidebarConfirmCopy,
   singleDeleteConfirm,
   SIDEBAR_GROUP_ROW_LIMIT,
@@ -776,8 +778,10 @@ describe("renderer native-dialog guard (TASK.114 review 15.08, TASK.126)", () =>
 describe("agent-open project switch (Taskana 4768)", () => {
   it("project menu renders the fourth checkable item reflecting the bridge state and flipping it", () => {
     expect(PROJECT_MENU_ITEM_COUNT).toBe(4);
-    expect(agentProjectMenuItem(false)).toEqual({ role: "menuitemcheckbox", checked: false, label: "Allow agents to open tasks here", next: true });
-    expect(agentProjectMenuItem(true)).toEqual({ role: "menuitemcheckbox", checked: true, label: "Allow agents to open tasks here", next: false });
+    expect(agentProjectMenuItem(false)).toEqual({ role: "menuitemcheckbox", checked: false, label: AGENT_PROJECT_SWITCH_LABEL, next: true });
+    expect(agentProjectMenuItem(true)).toEqual({ role: "menuitemcheckbox", checked: true, label: AGENT_PROJECT_SWITCH_LABEL, next: false });
+    // The Settings pane quotes this label back to the user, so it is the one source of the wording.
+    expect(AGENT_PROJECT_SWITCH_LABEL).toBe("Allow agents to open tasks here");
     const source = readFileSync(new URL("./Sidebar.tsx", import.meta.url), "utf8");
     expect(source).toMatch(/agentProjectsGet\(menuFor\.workspace\)|agentProjectsGet\(workspace\)/);
     expect(source).toMatch(/agentProjectsSet\(/);
@@ -791,5 +795,21 @@ describe("agent-open project switch (Taskana 4768)", () => {
     expect("openedByAgent" in rows.find((r) => r.tabId === "t-human")!).toBe(false);
     const source = readFileSync(new URL("./Sidebar.tsx", import.meta.url), "utf8");
     expect(source).toMatch(/sidebar-row-agent/);
+  });
+});
+
+describe("disabled \"Remove project from list\" explains itself without hover", () => {
+  it("the disabled item carries its reason as visible text, not only a title tooltip", () => {
+    expect(removeProjectDisabledReason(true)).toBe("Close this project's open tasks first.");
+    expect(removeProjectDisabledReason(false)).toBeNull();
+    // The reason is real on-screen text inside the item (a `title` alone only
+    // surfaces on hover, and screen readers skip disabled buttons in some
+    // composite menus).
+    const source = readFileSync(new URL("./Sidebar.tsx", import.meta.url), "utf8");
+    expect(source).toMatch(/sidebar-project-menu-item-note/);
+    expect(source).toMatch(/\{removeProjectDisabledReason\(menuHasOpenRow\) !== null &&/);
+    // The note is a rendered block (CSS), so it is layout, not a stray span.
+    const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
+    expect(css).toMatch(/\.sidebar-project-menu-item-note\s*\{/);
   });
 });

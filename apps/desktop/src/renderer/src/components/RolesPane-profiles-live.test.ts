@@ -162,8 +162,43 @@ describe("Editor follows the selected profile", () => {
     expect(bridge.current().roleProfiles?.activeId).toBe("default");
     // The editor now shows the profile's own route, not the preset draft.
     expect(routeSelect()?.value).toBe("connection:specific");
-    // With a profile active, the built-in defaults are no longer offered.
-    expect(container.querySelector('[aria-label="Role profile"] [value=""]')).toBeNull();
+
+    // Returning to the built-in roles is one selection away, even with a
+    // profile active: the option exists, and choosing it sets activeId to ""
+    // (the empty-string built-ins sentinel cannot collide with a profile id).
+    const builtinOption = select.options[0]!;
+    expect(builtinOption.value).toBe("");
+    expect(builtinOption.textContent).toBe("Built-in roles");
+    await act(async () => {
+      select.value = "";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(bridge.current().roleProfiles?.activeId).toBe("");
+    // The editor reset to the built-in preset draft, not the profile's routes.
+    expect(routeSelect()?.value).toBe("engine:claude");
+  });
+
+  it("returns to the built-in roles from an active profile without keeping stale routes", async () => {
+    const initial = cloneDefaults();
+    initial.roleProfiles = {
+      profiles: [{ id: "team", name: "Team", roles: { executor: { primary: { connection: "specific" } } } }],
+      activeId: "team",
+      projects: [],
+    };
+    const bridge = installBridge(initial);
+    await mount();
+    const routeSelect = (): HTMLSelectElement | null => container.querySelector<HTMLSelectElement>(
+      '[data-testid="role-picker-role-executor"] [aria-label="executor primary route"]',
+    );
+    expect(routeSelect()?.value).toBe("connection:specific");
+    const select = container.querySelector<HTMLSelectElement>('[aria-label="Role profile"]')!;
+    await act(async () => {
+      select.value = "";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(bridge.current().roleProfiles?.activeId).toBe("");
+    // The editor reset to the built-in preset draft, not Team's routes.
+    expect(routeSelect()?.value).toBe("engine:claude");
   });
 });
 
@@ -181,10 +216,10 @@ describe("Create/Duplicate without typing a name", () => {
     expect(names).toHaveLength(5);
     expect(new Set(names).size).toBe(5);
     expect(names).toEqual(["Team", "Profile 1", "Profile 2", "Profile 2 copy", "Profile 2 copy 2"]);
-    // The visible option list agrees with what was persisted (a profile is
-    // active, so the built-in defaults are not offered here).
+    // The visible option list agrees with what was persisted: the built-in
+    // roles stay selectable next to the saved profiles.
     const options = [...container.querySelectorAll('[aria-label="Role profile"] option')].map((option) => option.textContent);
-    expect(options).toEqual(names);
+    expect(options).toEqual(["Built-in roles", ...names]);
   });
 
   it("a typed name is still used as typed", async () => {
@@ -284,7 +319,9 @@ describe("Deletion confirmation", () => {
     const dialog = container.querySelector("dialog")!;
     const confirm = [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Delete")!;
     await click(confirm);
-    expect(bridge.current().roleProfiles).toEqual({ profiles: [], activeId: "default", projects: [] });
+    // Deleting the active profile returns to the built-in roles (no activeId),
+    // never to a fabricated "default" profile.
+    expect(bridge.current().roleProfiles).toEqual({ profiles: [], activeId: "", projects: [] });
   });
 });
 
@@ -461,15 +498,31 @@ describe("Control appearance and unavailable routes", () => {
 });
 
 describe("Implicit defaults", () => {
-  it("does not overwrite a saved default id when the active id is dangling", async () => {
+  it("saving from the built-ins creates a fresh profile and never touches a saved \"default\"", async () => {
     const initial = cloneDefaults();
     initial.roleProfiles = { profiles: [{ id: "default", name: "Saved", roles: { executor: { primary: { model: "keep" } } } }], activeId: "missing", projects: [] };
     const bridge = installBridge(initial);
     await mount();
     await click(buttonByText("Save roles"));
-    expect(bridge.current().roleProfiles?.profiles.find((p) => p.id === "default")?.roles.executor?.primary.model).toBe("keep");
-    expect(bridge.current().roleProfiles?.profiles).toHaveLength(2);
-    expect(bridge.current().roleProfiles?.activeId).not.toBe("default");
+    const registry = bridge.current().roleProfiles!;
+    expect(registry.profiles.find((p) => p.id === "default")?.roles.executor?.primary.model).toBe("keep");
+    expect(registry.profiles).toHaveLength(2);
+    expect(registry.activeId).not.toBe("default");
+    // The new profile owns the saved preset draft (both ids and routes).
+    expect(registry.activeId).toBe(registry.profiles[1]?.id);
+  });
+
+  it("saving from the built-ins with no saved profiles also creates a unique profile", async () => {
+    const initial = cloneDefaults();
+    initial.roleProfiles = { profiles: [], projects: [] };
+    const bridge = installBridge(initial);
+    await mount();
+    await click(buttonByText("Save roles"));
+    const registry = bridge.current().roleProfiles!;
+    expect(registry.profiles).toHaveLength(1);
+    expect(registry.activeId).toBe(registry.profiles[0]?.id);
+    expect(registry.profiles[0]?.id).not.toBe("default");
+    expect(profileNames(bridge.current())).toEqual(["Profile 1"]);
   });
 
   it("creates an effective project profile without changing a dangling global selection", async () => {

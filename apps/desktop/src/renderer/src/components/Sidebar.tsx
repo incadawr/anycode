@@ -24,6 +24,7 @@ import { handleCreateTabResult, resolveConnectionMissingAction } from "./Session
 import { ConfirmDialog } from "./ConfirmDialog.js";
 import { highlight } from "./highlight.js";
 import { ArrowUp, Chevron, Collapse, Cube, Dot, Ellipsis, Folder, Gear, Plus, Search, Spinner, Trash, X } from "./icons.js";
+import { AGENT_PROJECT_SWITCH_LABEL } from "./project-agent-switch.js";
 
 /** Label fallback when a tab/session has no title (design §2.3). */
 const UNTITLED = "Untitled task";
@@ -549,7 +550,19 @@ export const PROJECT_MENU_ITEM_COUNT = 4;
 
 /** Taskana 4768: the fourth project-menu item, a checkable switch ("Allow agents to open tasks here"). Pure so the contract is testable without a DOM. */
 export function agentProjectMenuItem(enabled: boolean): { role: "menuitemcheckbox"; checked: boolean; label: string; next: boolean } {
-  return { role: "menuitemcheckbox", checked: enabled, label: "Allow agents to open tasks here", next: !enabled };
+  return { role: "menuitemcheckbox", checked: enabled, label: AGENT_PROJECT_SWITCH_LABEL, next: !enabled };
+}
+
+/**
+ * The "Remove project from list" item's visible reason line when it is
+ * disabled. A `title` tooltip only explains itself on hover; screen readers
+ * skip disabled buttons entirely in some composite menus, so the reason is
+ * real text inside the item — read at a glance and on focus navigation past
+ * it. Null when the item is enabled (nothing to explain). Pure, tested in
+ * Sidebar.test.ts.
+ */
+export function removeProjectDisabledReason(disabled: boolean): string | null {
+  return disabled ? "Close this project's open tasks first." : null;
 }
 
 /** Nominal project-menu width (px) used only for right-edge clamping before the popover measures itself. */
@@ -1358,7 +1371,7 @@ export function Sidebar({
             tabIndex={menuFocusIndex === 1 ? 0 : -1}
             className="sidebar-project-menu-item"
             disabled={menuHasOpenRow}
-            title={menuHasOpenRow ? "Close this project's open tasks first" : undefined}
+            title={removeProjectDisabledReason(menuHasOpenRow) ?? undefined}
             onClick={() => {
               const workspace = menuFor.workspace;
               closeProjectMenu(false);
@@ -1366,6 +1379,9 @@ export function Sidebar({
             }}
           >
             Remove project from list
+            {removeProjectDisabledReason(menuHasOpenRow) !== null && (
+              <span className="sidebar-project-menu-item-note">{removeProjectDisabledReason(menuHasOpenRow)}</span>
+            )}
           </button>
           <button
             type="button"

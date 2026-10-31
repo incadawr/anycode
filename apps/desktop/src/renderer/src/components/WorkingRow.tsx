@@ -15,9 +15,12 @@ import { useEffect, useState } from "react";
 /**
  * Sober gerunds — the deliberate anti-whimsy contrast with Claude Code's
  * 184-word vocabulary (roadmap §3-a2). All four are truthful of an agent
- * turn at any phase. Fixed order, opens with "Working".
+ * turn at any phase. Fixed order, opens with "Working". "Waiting" (audit
+ * D14) reads as what the fourth band is — the agent between phases — where
+ * the old "Checking" stacked on the auto-check toasts and the permission
+ * broker's own wording.
  */
-export const WORKING_VERBS = ["Working", "Thinking", "Reviewing", "Checking"] as const;
+export const WORKING_VERBS = ["Working", "Thinking", "Reviewing", "Waiting"] as const;
 export const VERB_ROTATE_SECONDS = 12;
 
 /** Verb index derives from elapsed (not mount-local state), so suppression gaps and remounts never reset the word. */

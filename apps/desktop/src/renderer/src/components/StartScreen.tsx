@@ -90,6 +90,7 @@ import type { ModelDrillPage, ModelDrillRow } from "./model-drill-rows.js";
 import { ModeMenu, nextRovingIndex } from "./ModeMenu.js";
 import { RolePickerDialog, type RolePickerDialogProps } from "./RolePickerDialog.js";
 import {
+  orchestrateToggleNeedsRolePicker,
   resolveStartOrchestrate,
   startDraftOrchestrateRowProps,
   startOrchestrateHint,
@@ -634,6 +635,17 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // `/orchestrate` uses. Save writes the roles, Skip keeps the built-in
   // defaults — both then start the task.
   const [startRolePickerOpen, setStartRolePickerOpen] = useState(false);
+  // Why the dialog is up: `send` proceeds to start the task after Save/Skip;
+  // `mode` (the mode menu's Orchestrate row) only persists the roles and
+  // leaves the draft untouched — there is nothing to send yet, and sending an
+  // empty draft on a roles pick would be a surprise tab.
+  const [startRolePickerIntent, setStartRolePickerIntent] = useState<"send" | "mode">("send");
+  // Skipping the mode-menu toggle's role dialog is an answer about THIS
+  // orchestrate choice: the next Send starts the task on the built-in roles
+  // instead of reopening the same dialog (the owner-reported "the first Send
+  // asks again"). A new orchestrate choice, or a Save that actually writes
+  // roles, makes the skip stale.
+  const startRolesSkippedRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // TASK.81: image attach state. The attachment LIST itself is store-backed
   // (`draft.images`, mirrors the store-controlled `draft.prompt` textarea —
@@ -1122,11 +1134,18 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const claudeDraftEffort = resolveDraftEngineEffort(draft.engineEffort, claudeDraftEfforts);
   const showProjectHint = draft.workspace !== null && (projectHintVisible || projectHintHovered);
 
-  /** One start-composer send; `skipRoleGate` is the first-run dialog's Skip path (built-in defaults). */
+  /**
+   * One start-composer send; `skipRoleGate` is the first-run dialog's Skip path
+   * (built-in defaults). A skipped mode-menu dialog counts the same way: the
+   * user already answered "who does the work" for this choice, so the send
+   * must not ask a second time.
+   */
   async function submit(skipRoleGate = false): Promise<void> {
-    if (!skipRoleGate && draft !== null) {
+    const rolesSkipped = startRolesSkippedRef.current;
+    if (!skipRoleGate && !rolesSkipped && draft !== null) {
       const plan = resolveStartOrchestrate(draft.engine, draft.orchestrate, draft.prompt);
       if (startSendNeedsRolePicker(plan, resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}, draft.workspace ?? undefined))) {
+        setStartRolePickerIntent("send");
         setStartRolePickerOpen(true);
         return;
       }
@@ -1135,17 +1154,45 @@ export function StartScreen({ onToast }: StartScreenProps) {
       canSend,
       guard: submitGuardRef,
       setSubmitting,
-      submit: () => submitStartDraft(undefined, skipRoleGate ? { skipRoleGate: true } : undefined),
+      submit: () => submitStartDraft(undefined, skipRoleGate || rolesSkipped ? { skipRoleGate: true } : undefined),
       onToast,
     });
   }
 
-  /** RolePickerDialog Save: persists the roles, then sends the draft as an orchestrating send. A failed write keeps the draft and leaves the settings notice to explain it. */
-  async function saveStartRolesAndSubmit(roles: Parameters<RolePickerDialogProps["onSave"]>[0]): Promise<void> {
+  /**
+   * The mode menu's Orchestrate row. The draft flag flips immediately, so the
+   * chip reads "Orchestrate" and the row checks on the next open whatever the
+   * dialog does. The first run (no roles yet) then asks for roles through the
+   * same dialog the send gate uses — the click used to only close the menu,
+   * which read as a no-op.
+   */
+  function toggleDraftOrchestrate(next: boolean): void {
+    // Every row click is a fresh choice, so an earlier Skip no longer answers
+    // it — turning orchestrate off and on again asks about roles again.
+    startRolesSkippedRef.current = false;
+    useTabsStore.getState().setDraftOrchestrate(next);
+    const workspace = useTabsStore.getState().draft?.workspace ?? undefined;
+    if (orchestrateToggleNeedsRolePicker(next, resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}, workspace))) {
+      setStartRolePickerIntent("mode");
+      setStartRolePickerOpen(true);
+    }
+  }
+
+  /**
+   * RolePickerDialog Save: persists the roles, then either starts the draft
+   * (a send asked for them) or just closes — the mode-menu toggle has already
+   * enabled orchestrate and has nothing to send. A failed write keeps the
+   * draft and leaves the settings notice to explain it.
+   */
+  async function saveStartRoles(roles: Parameters<RolePickerDialogProps["onSave"]>[0]): Promise<void> {
     setStartRolePickerOpen(false);
     const result = await useSettingsStore.getState().setPatch(rolesPatch(useSettingsStore.getState().snapshot?.settings ?? {}, roles, useTabsStore.getState().draft?.workspace ?? undefined));
     if (result.ok) {
-      await submit();
+      // Real roles exist now, so the first-run question is answered for good.
+      startRolesSkippedRef.current = false;
+      if (startRolePickerIntent === "send") {
+        await submit();
+      }
     }
   }
 
@@ -1609,13 +1656,21 @@ export function StartScreen({ onToast }: StartScreenProps) {
             claudeReady: useTabsStore.getState().availableEngines.includes("claude"),
             codexReady: useTabsStore.getState().availableEngines.includes("codex"),
           }}
-          onSave={(roles) => void saveStartRolesAndSubmit(roles)}
+          onSave={(roles) => void saveStartRoles(roles)}
           onSkip={() => {
             // Skip writes nothing: the task starts on the built-in defaults,
             // exactly like Save's own proceed step (it used to close the
-            // dialog and send nothing at all).
+            // dialog and send nothing at all). A mode-menu toggle has no task
+            // to start — the draft stays and orchestrate stays on.
             setStartRolePickerOpen(false);
-            void submit(true);
+            if (startRolePickerIntent === "send") {
+              void submit(true);
+            } else {
+              // The mode toggle only enabled orchestrate; remember the answer
+              // so the user's own Send starts the task instead of asking the
+              // same first-run question again.
+              startRolesSkippedRef.current = true;
+            }
           }}
         />
         {/* TASK.81: image attachments, Composer.tsx's `.composer-pills` grammar
@@ -1762,7 +1817,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
                   mode={draft.mode}
                   disabled={false}
                   onChange={(mode) => useTabsStore.getState().setDraftMode(mode)}
-                  {...(startDraftOrchestrateRowProps(draft.engine, draft.orchestrate, (next) => useTabsStore.getState().setDraftOrchestrate(next)) ?? {})}
+                  {...(startDraftOrchestrateRowProps(draft.engine, draft.orchestrate, toggleDraftOrchestrate) ?? {})}
                 />
                 <div className="model-pill start-model" ref={modelRootRef}>
               <button

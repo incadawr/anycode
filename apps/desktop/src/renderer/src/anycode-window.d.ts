@@ -122,6 +122,7 @@ import type {
   CommunicationRegenerateResult,
 } from "../../shared/communication-config";
 import type { ScopeWorkspacesListResult } from "../../shared/scope-workspaces";
+import type { PathRootsResult } from "../../shared/path-roots";
 import type {
   BrowserAccessChangedPayload,
   BrowserAccessGetResult,
@@ -756,6 +757,11 @@ declare global {
       // renderer branches chrome on + the caption-button invoke-API. First three
       // take no argument; `onWindowState` returns an unsubscribe.
       platform: DesktopPlatform;
+      // Entry names under the filesystem root, for the composer's slash guard
+      // (main/path-roots-ipc.ts). No argument goes out and no path comes back.
+      paths: {
+        roots(): Promise<PathRootsResult>;
+      };
       // TASK.72: chat-artifact invoke-API (inline image preview + open/reveal
       // for transcript file links). The renderer supplies only tabId + the
       // model-authored path; main re-checks containment + the image-extension

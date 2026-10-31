@@ -542,4 +542,79 @@ describe("Composer slash-submit wiring (GitHub #14)", () => {
     expect(harness.sendToHost).not.toHaveBeenCalled();
     expect(harness.apiMethods.enqueuePrompt).not.toHaveBeenCalled();
   });
+
+  // Audit C4: an unknown slash command must not become a model turn. The
+  // draft is retained so the user can fix it, and nothing is appended, queued,
+  // steered or sent.
+  it.each(["/foo", "/help", "/compact/compact"])(
+    "answers an unknown slash command locally: %s",
+    (draft) => {
+      seed(draft, draft.length);
+      const tree = mountComposer();
+
+      (findTextarea(tree)!.props.onKeyDown as (event: ReturnType<typeof keyDown>) => void)(keyDown());
+
+      expect(harness.apiMethods.setNotice).toHaveBeenCalledWith({
+        kind: "slash_command_rejected",
+        text: `Unknown command: ${draft}. Type / to see the available commands.`,
+      });
+      expect(harness.sendToHost).not.toHaveBeenCalled();
+      expect(harness.apiMethods.appendUserText).not.toHaveBeenCalled();
+      expect(harness.apiMethods.recordSentMessage).not.toHaveBeenCalled();
+      expect(harness.apiMethods.enqueuePrompt).not.toHaveBeenCalled();
+      expect(harness.apiMethods.recordPendingSteer).not.toHaveBeenCalled();
+      expect(harness.state["composer"]?.[0]).toBe(draft);
+    },
+  );
+
+  it("still sends a path that merely starts with a slash", () => {
+    seed("/usr/local/bin/node", 19);
+    const tree = mountComposer();
+
+    (findTextarea(tree)!.props.onKeyDown as (event: ReturnType<typeof keyDown>) => void)(keyDown());
+
+    expect(harness.apiMethods.setNotice).not.toHaveBeenCalled();
+    expect(harness.apiMethods.appendUserText).toHaveBeenCalledWith(expect.any(String), "/usr/local/bin/node", undefined);
+    expect(harness.sendToHost).toHaveBeenCalledTimes(1);
+  });
+
+  // The `/foo` and `/tmp` shapes are identical, so the guard asks the root
+  // listing which names are real directories: a one-segment path like `/tmp`
+  // or `/Users` is the user's message, not a mistyped command.
+  it.each(["/tmp", "/etc", "/Users"])("still sends the root-level path %s instead of answering it", (draft) => {
+    seed(draft, draft.length);
+    const tree = mountComposer();
+
+    (findTextarea(tree)!.props.onKeyDown as (event: ReturnType<typeof keyDown>) => void)(keyDown());
+
+    expect(harness.apiMethods.setNotice).not.toHaveBeenCalled();
+    expect(harness.apiMethods.appendUserText).toHaveBeenCalledWith(expect.any(String), draft, undefined);
+    expect(harness.sendToHost).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers an unknown command that carries arguments locally, instead of spending a turn", () => {
+    const draft = "/foo argument";
+    seed(draft, draft.length);
+    const tree = mountComposer();
+
+    (findTextarea(tree)!.props.onKeyDown as (event: ReturnType<typeof keyDown>) => void)(keyDown());
+
+    expect(harness.apiMethods.setNotice).toHaveBeenCalledWith({
+      kind: "slash_command_rejected",
+      text: "Unknown command: /foo. Type / to see the available commands.",
+    });
+    expect(harness.sendToHost).not.toHaveBeenCalled();
+    expect(harness.apiMethods.appendUserText).not.toHaveBeenCalled();
+    expect(harness.state["composer"]?.[0]).toBe(draft);
+  });
+
+  it("leaves slash text to a foreign engine's own surface", () => {
+    seed("/clear", 6, makeStoreState({ engine: CODEX_ENGINE }));
+    const tree = mountComposer();
+
+    (findTextarea(tree)!.props.onKeyDown as (event: ReturnType<typeof keyDown>) => void)(keyDown());
+
+    expect(harness.apiMethods.setNotice).not.toHaveBeenCalled();
+    expect(harness.apiMethods.appendUserText).toHaveBeenCalledWith(expect.any(String), "/clear", undefined);
+  });
 });

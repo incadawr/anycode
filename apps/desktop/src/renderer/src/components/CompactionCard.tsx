@@ -63,10 +63,10 @@ function tryClipboardWrite(text: string, onSuccess: () => void): void {
  * string for both outcomes, and the commonest one is a deliberate no-op
  * (context/manager.ts's empty-prefix return, whose own comment reads "nothing
  * to compact. Not a failure."). Calling that a failure would be a claim the
- * wire does not support — the CLI hedges the same ambiguity as "compaction
- * skipped/failed" (cli/render.ts). "Not applied" states the one thing that IS
- * certain of both, and leaves the verb to the host's own reason instead of
- * stuttering over it ("skipped/failed: compaction skipped: …", live 07.09).
+ * wire does not support. The wire says WHICH of the two it was (`skipped`): a
+ * structural no-op is shown as the plain sentence the host wrote, and a real
+ * failure keeps the "Not applied" frame — it names a cause, not an outcome, so
+ * the row supplies the verdict there and nowhere else.
  */
 export function compactionRowText(block: CompactionBlock): string {
   if (block.status === "running") {
@@ -75,6 +75,15 @@ export function compactionRowText(block: CompactionBlock): string {
       : "Compacting conversation…";
   }
   if (block.status === "failed") {
+    // UI audit v0.0.49 §C3: a STRUCTURAL SKIP is not a refusal. Core's reason
+    // already reads as a sentence of its own ("Nothing to compact yet — the
+    // conversation is too short"), so the row shows it verbatim instead of
+    // prefixing a second verdict over it ("Compaction not applied: compaction
+    // skipped: …" was the jargon this replaces). A genuine failure keeps the
+    // "Not applied" frame — its reason names a cause, not an outcome.
+    if (block.skipped === true && block.error !== undefined) {
+      return block.error;
+    }
     return `Compaction not applied: ${block.error ?? "unknown error"}`;
   }
   if (block.preTokens === undefined && block.postTokens === undefined) {
@@ -116,7 +125,10 @@ export function CompactionCard({ block, enter = false }: { block: CompactionBloc
   // pre-#36 transcript showed that text outright and hiding it would take
   // content away.
   const expanded = !running && (userExpanded ?? block.summaryOrigin === "history");
-  const rowClass = `message ${block.status === "failed" ? "message-error" : "message-loop-end"}`;
+  // A structural skip is not an error state either: neutral row treatment (the
+  // done row) instead of the red failure tint, and no `role="alert"`.
+  const failed = block.status === "failed" && block.skipped !== true;
+  const rowClass = `message ${failed ? "message-error" : "message-loop-end"}`;
 
   return (
     <div
@@ -126,7 +138,7 @@ export function CompactionCard({ block, enter = false }: { block: CompactionBloc
     >
       <div
         className={`${rowClass} compaction-head`}
-        {...(block.status === "failed" ? { role: "alert" as const } : {})}
+        {...(failed ? { role: "alert" as const } : {})}
       >
         {running ? (
           <span className="compaction-toggle-static">

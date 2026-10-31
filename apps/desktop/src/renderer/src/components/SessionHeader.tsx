@@ -32,7 +32,7 @@ import { useContext, useEffect, useRef, useState } from "react";
 import { TabContext, useTabSend, useTabStore } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
 import type { ConnectionPhase, TurnState } from "../store.js";
-import { Collapse, Dot, Globe, Terminal } from "./icons.js";
+import { Collapse, Dot, Globe, TaskList, Terminal } from "./icons.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
 import { browserAccessChipVisible, useBrowserAccessState } from "./BrowserAccessRow.js";
 import { usePreviewStore } from "../preview/preview-store.js";
@@ -110,6 +110,30 @@ export function worktreeExitControlState(
   };
 }
 
+/**
+ * Audit D12: long titles were cut mid-word ("…outside.txt conta"). A title
+ * with whitespace had a word boundary, but the one-line ellipsis still cut the
+ * LAST visible word at a character boundary — so EVERY title wraps now, any
+ * number of words: the text breaks between words and only inside a word when
+ * a single token cannot fit the line (`.session-header-title-wrap`'s
+ * `overflow-wrap: anywhere`). Pure, exported for unit tests.
+ */
+export function sessionHeaderTitleClass(title: string): string {
+  // The class no longer depends on the title: `title` stays in the signature so
+  // callers and tests keep reading intent from the call, not from a constant.
+  void title;
+  return "session-header-title session-header-title-wrap";
+}
+
+/**
+ * The wrap class's line clamp, mirrored here so the layout contract (a title
+ * of ANY length stays inside the header's fixed height) is testable without a
+ * browser: `.session-header-title-wrap` sets `-webkit-line-clamp` to this
+ * value. Two lines × 1.25 line-height × 13px ≈ 33px, which fits the compact
+ * header's 40px height. Keep in sync with the rule in app.css.
+ */
+export const SESSION_HEADER_TITLE_LINE_LIMIT = 2;
+
 export interface SessionHeaderProps {
   sidebarCollapsed: boolean;
   onToggleSidebar(): void;
@@ -137,6 +161,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
   const title = tab?.title ?? (workspace ? basename(workspace) : "—");
   const worktree = tab?.worktree;
   const openedByAgent = tab?.openedByAgent === true;
+  const orchestrateActive = useTabStore((state) => state.orchestrateActive);
   const externalEngine = engine !== null;
   // TASK.91: core-only drawer gate — `engine` is null before host_ready ⇒
   // default true; claude/codex advertise supportsTasks:false so the toggle
@@ -248,9 +273,18 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
         </button>
       )}
 
-      <span className="session-header-title" title={title}>{title}</span>
+      <span className={sessionHeaderTitleClass(title)} title={title}>{title}</span>
 
       {openedByAgent && <span className="session-header-agent" title="Opened by an agent">agent</span>}
+
+      {/* The tab's orchestration flag, readable without opening the mode menu
+          (the chip spells it too, but the header is where a user looks to see
+          what a tab IS). */}
+      {orchestrateActive && (
+        <span className="session-header-agent session-header-orchestrate" data-testid="session-header-orchestrate" title="Orchestrating: child agents do the work">
+          Orchestrate
+        </span>
+      )}
 
       {worktree && (
         <span className="session-header-worktree" title={worktree.path} aria-label={`Worktree: ${worktree.branch}`}>
@@ -303,7 +337,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
         data-running={tasksRunning ? "true" : undefined}
         onClick={toggleTasksPanel}
       >
-        <Terminal />
+        <TaskList />
       </button>}
 
 

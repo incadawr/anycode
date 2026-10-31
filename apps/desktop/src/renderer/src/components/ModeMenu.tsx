@@ -112,6 +112,19 @@ export function modeChangeDisabled(_turnStatus: TurnState["status"], ready: bool
  */
 export const ORCHESTRATE_ROW_DESCRIPTION = "Delegate work to child agents";
 
+/**
+ * The chip's visible label. While the tab is orchestrate it reads
+ * "Orchestrate": that is the state a user has to be able to see WITHOUT
+ * opening the menu (the menu's checked row alone left the chip reading "Plan",
+ * indistinguishable from an ordinary plan session). Nothing is lost: enabling
+ * orchestrate moves the session to plan host-side and leaving plan turns it
+ * off, so "Plan" is implied while the flag is on (the five mode rows are still
+ * in the menu). Exported for unit testing.
+ */
+export function modeChipLabel(mode: PermissionMode, orchestrateActive: boolean): string {
+  return orchestrateActive ? "Orchestrate" : mode;
+}
+
 export interface ModeMenuProps {
   mode: PermissionMode;
   disabled: boolean;
@@ -204,9 +217,13 @@ export function ModeMenu({ mode, disabled, onChange, orchestrateActive = false, 
 
   // Taskana 4704 §3.7 (part B): the Orchestrate row renders after the five
   // modes iff BOTH the state and the handler were passed. Keyboard math below
-  // reads this count, never `PERMISSION_MODE_OPTIONS.length` directly.
+  // reads this count, never `PERMISSION_MODE_OPTIONS.length` directly. The
+  // chip mirrors the same gate so a caller that passes only the state renders
+  // neither the row nor the "Orchestrate" label (no dead state).
   const showOrchestrateRow = orchestrateActive !== undefined && onToggleOrchestrate !== undefined;
   const itemCount = PERMISSION_MODE_OPTIONS.length + (showOrchestrateRow ? 1 : 0);
+  const orchestrateOn = showOrchestrateRow && orchestrateActive;
+  const chipLabel = modeChipLabel(mode, orchestrateOn);
 
   // If the chip becomes disabled while the popover is open (e.g. host_exited
   // drops connection off "ready" mid-menu), close it — it must not float over
@@ -337,15 +354,16 @@ export function ModeMenu({ mode, disabled, onChange, orchestrateActive = false, 
       <button
         ref={chipRef}
         type="button"
-        className={`mode-chip mode-chip-${mode}${showOrchestrateRow && orchestrateActive ? " mode-chip-orchestrate" : ""}`}
+        className={`mode-chip mode-chip-${mode}${orchestrateOn ? " mode-chip-orchestrate" : ""}`}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-pressed={showOrchestrateRow ? orchestrateActive : undefined}
+        title={orchestrateOn ? "Orchestrate is on: child agents do the work, the session runs in Plan" : undefined}
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={onChipKeyDown}
       >
-        <span className="mode-chip-label">{mode}</span>
+        <span className="mode-chip-label">{chipLabel}</span>
         <Chevron className="mode-chip-chevron" />
       </button>
 

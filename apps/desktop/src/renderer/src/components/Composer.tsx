@@ -37,6 +37,7 @@ import {
 } from "../paste.js";
 import { ModeMenu, modeChangeDisabled } from "./ModeMenu.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
+import { useComposerClearance } from "../composer-clearance.js";
 const ContextWindowSettings = lazy(() => import("./ContextWindowSettings.js"));
 import { ModelPill, modelPickDisabled } from "./ModelPill.js";
 import { EngineModelMenu, EnginePresetMenu, engineControlDisabled, engineEffortDisabled, nativeEffortControl } from "./EngineControls.js";
@@ -45,7 +46,7 @@ import { BackgroundAgents } from "./BackgroundAgents.js";
 import { PromptQueue } from "./PromptQueue.js";
 import { SlashMenu } from "./SlashMenu.js";
 import { RolePickerDialog } from "./RolePickerDialog.js";
-import { needsRolePicker } from "../orchestrate-start.js";
+import { needsRolePicker, orchestrateToggleNeedsRolePicker } from "../orchestrate-start.js";
 import { ArrowUp, ImageIcon, Stop, X } from "./icons.js";
 // Reuse, not re-derive (R1 anti-clip lesson): the same fixed-position
 // viewport-clamp ModelPill's own popover uses to escape `.composer-footer-*`'s
@@ -66,10 +67,12 @@ import {
   skillsToSlashSkills,
   slashMenuReduce,
   slashQueryAt,
+  unknownSlashCommandNotice,
   type SlashMenuCtx,
   type SlashRunIntent,
   type SlashSkill,
 } from "../slash-menu.js";
+import { slashPathRootNames } from "../slash-path-roots.js";
 
 /**
  * Enqueue-vs-direct-send decision for `handleSend` (F15 prompt queue). A send
@@ -1269,6 +1272,10 @@ export function Composer() {
   const nextImageIdRef = useRef(1);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // UI audit v0.0.49 §C2: the card's measured height is what keeps the toast
+  // stack off the stop/send controls — published as --composer-clearance.
+  const cardRef = useRef<HTMLDivElement>(null);
+  useComposerClearance(cardRef);
   // Caret position to restore after a collapse re-render (§2.3).
   const pendingCaretRef = useRef<number | null>(null);
 
@@ -1299,6 +1306,9 @@ export function Composer() {
   // /orchestrate submit in flight".
   const [rolePickerOpen, setRolePickerOpen] = useState(false);
   const [pendingOrchestrateTask, setPendingOrchestrateTask] = useState<string | null>(null);
+  // True when the mode menu's Orchestrate row (not a `/orchestrate` submit)
+  // opened the first-run dialog: Save/Skip then only enable the flag.
+  const [rolePickerForToggle, setRolePickerForToggle] = useState(false);
 
   useLayoutEffect(() => {
     if (pendingCaretRef.current !== null) {
@@ -1506,6 +1516,7 @@ export function Composer() {
       return;
     }
     setPendingOrchestrateTask(task);
+    setRolePickerForToggle(false);
     // The shared first-run gate (orchestrate-start.ts) — the start screen uses the same one.
     if (needsRolePicker(resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}, projectRoot))) {
       setRolePickerOpen(true);
@@ -1519,10 +1530,23 @@ export function Composer() {
     sendToHost({ type: "set_orchestrate", enabled: true });
     const task = pendingOrchestrateTask;
     setPendingOrchestrateTask(null);
+    setRolePickerForToggle(false);
     setRolePickerOpen(false);
     if (task !== null && task.length > 0) {
       submitOrchestrateTask(task);
     }
+  }
+
+  /**
+   * The mode menu's Orchestrate row asked for first-run roles: their dialog's
+   * Save/Skip only enables orchestrate. There is no task to send here, and the
+   * enable is a between-turns wire message the host acknowledges — the chip
+   * then reads "Orchestrate".
+   */
+  function proceedOrchestrateToggle(): void {
+    setRolePickerForToggle(false);
+    setRolePickerOpen(false);
+    sendToHost({ type: "set_orchestrate", enabled: true });
   }
 
   /** Send one text as a user message through the same wire path handleSend's idle branch uses. */
@@ -1603,6 +1627,18 @@ export function Composer() {
   function trySubmitBareCommand(outgoing: string): boolean {
     const result = resolveBareSlashSubmit(outgoing, slashCtx, attachedImages.length, childSurface);
     if (result.kind === "text") {
+      // A slash-shaped draft that names no command is still not a prompt on the
+      // core engine: answer it locally instead of spending a model turn on
+      // "I don't recognize /foo". Foreign engines keep their own slash surface
+      // (Claude's allowlisted frames, Codex's own commands), so the guard is
+      // core-only — the same engine-null test the skills menu uses.
+      const unknown = skillsSupported
+        ? unknownSlashCommandNotice(outgoing, { pathRoots: slashPathRootNames() })
+        : null;
+      if (unknown !== null) {
+        tabStore.getState().setNotice({ kind: "slash_command_rejected", text: unknown });
+        return true;
+      }
       return false;
     }
     if (result.kind === "refuse") {
@@ -1808,9 +1844,20 @@ export function Composer() {
    * the host moves the session to plan itself). Same ready-only guard as
    * handleModeChange (the host silently drops a busy toggle — the
    * between-turns discipline; ready means there is no host to send to).
+   *
+   * Enabling on the first run (no roles configured) asks for roles first:
+   * the toggle used to enable orchestrate with no way to choose who does the
+   * work. The row's own click stays the trigger, so the dialog and the chip
+   * agree on what was asked for.
    */
   function handleToggleOrchestrate(next: boolean): void {
     if (!ready || next === orchestrateActive) {
+      return;
+    }
+    if (orchestrateToggleNeedsRolePicker(next, resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}, projectRoot))) {
+      setPendingOrchestrateTask(null);
+      setRolePickerForToggle(true);
+      setRolePickerOpen(true);
       return;
     }
     sendToHost({ type: "set_orchestrate", enabled: next });
@@ -1948,6 +1995,7 @@ export function Composer() {
 
   return (
     <div
+      ref={cardRef}
       className={`composer${running ? " composer-running" : ""}`}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
@@ -1965,14 +2013,19 @@ export function Composer() {
         onSave={(roles) => {
           // §3.9: Save writes roles, then the stashed task proceeds under
           // orchestrate (the enable + submit are the same proceed step as
-          // Skip — only the settings write differs).
+          // Skip — only the settings write differs). A mode-menu toggle has
+          // no stashed task: it only enables.
           void useSettingsStore.getState().setPatch(rolesPatch(useSettingsStore.getState().snapshot?.settings ?? {}, roles, projectRoot))
-            .then((result) => { if (result.ok) proceedOrchestrateSubmit(); });
+            .then((result) => {
+              if (!result.ok) return;
+              if (rolePickerForToggle) proceedOrchestrateToggle();
+              else proceedOrchestrateSubmit();
+            });
         }}
         onSkip={() => {
           // §3.9: Skip writes nothing; built-in defaults apply.
-          setRolePickerOpen(false);
-          proceedOrchestrateSubmit();
+          if (rolePickerForToggle) proceedOrchestrateToggle();
+          else proceedOrchestrateSubmit();
         }}
       />
       {isNewSession && <EnvironmentMenu placement="composer" />}

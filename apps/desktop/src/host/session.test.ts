@@ -7500,8 +7500,15 @@ describe("Session — manual compaction wire (TASK.146)", () => {
       // have sent.
       expect(endEvent.ok).toBe(false);
       expect(records).toHaveLength(1);
-      expect(records[0]).toMatchObject({ ok: false, trigger: "manual" });
-      expect(records[0]!.error).toContain("no prefix");
+      // Not applied, but recorded — as a STRUCTURAL NO-OP (UI audit v0.0.49
+      // §C3: plain sentence, flagged so a reopened row never reads as a
+      // refusal) with the prompt it would have sent.
+      expect(records[0]).toMatchObject({
+        ok: false,
+        trigger: "manual",
+        skipped: true,
+        error: "Nothing to compact yet — the conversation is too short",
+      });
 
       // A reload/reconnect over an EMPTY history: the handshake carries no
       // items, and without the record the row would vanish.
@@ -7514,6 +7521,8 @@ describe("Session — manual compaction wire (TASK.146)", () => {
         .at(-1)!;
       expect(history.items).toEqual([]);
       expect(history.compactions?.map((entry) => entry.id)).toEqual([records[0]!.id]);
+      // …and the reopen still knows it was a no-op, not a failure.
+      expect(history.compactions?.[0]).toMatchObject({ skipped: true });
     } finally {
       h.close();
     }

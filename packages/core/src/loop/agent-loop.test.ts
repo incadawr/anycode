@@ -3154,7 +3154,14 @@ describe("AgentLoop.compactNow — manual compaction (design slice-2.3-cut.md, t
     // cycle reports no context_usage (TASK.146).
     expect(types(events)).toEqual(["compaction_start", "compaction_end"]);
     expect(events[0]).toEqual({ type: "compaction_start", trigger: "manual" });
-    expect(events[1]).toMatchObject({ type: "compaction_end", ok: false });
+    expect(events[1]).toMatchObject({
+      type: "compaction_end",
+      ok: false,
+      // UI audit v0.0.49 §C3: the no-op is flagged as such and its reason is a
+      // plain sentence — the desktop row and the CLI line both print it as-is.
+      skipped: true,
+      error: "Nothing to compact yet — the conversation is too short",
+    });
     expect(modelPort.step).toBe(0);
   });
 

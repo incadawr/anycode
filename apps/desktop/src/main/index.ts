@@ -166,6 +166,7 @@ import { sendToMainWindow } from "./main-window-send.js";
 import { NodeMcpConfigFs, registerMcpConfigIpc } from "./mcp-config-ipc.js";
 import { createScopeWorkspaceRegistry } from "./scope-workspaces.js";
 import { registerScopeWorkspacesIpc } from "./scope-workspaces-ipc.js";
+import { registerPathRootsIpc } from "./path-roots-ipc.js";
 import { McpSecretForkCache } from "./mcp-secret-fork-cache.js";
 import { registerMcpSecretsIpc } from "./mcp-secrets-ipc.js";
 // Taskana 4743: Settings → Language servers control plane (same deps-bag shape
@@ -3431,6 +3432,10 @@ void app.whenReady().then(async () => {
     now: () => Date.now(),
   });
   registerScopeWorkspacesIpc({ registry: scopeRegistry, resolve: (ref) => scopeRegistry.resolve(ref, (tabId) => manager?.getTab(tabId)?.projectRoot ?? manager?.getTab(tabId)?.workspace) });
+  // The filesystem-root entry names the slash guard needs to tell an absolute
+  // path (`/tmp`, `/Users`) from a mistyped command (`/foo`). No argument
+  // crosses this channel and only names come back (shared/path-roots.ts).
+  registerPathRootsIpc();
 
   registerMcpConfigIpc({
     home: () => (selfCheckProfile ?? resolveMcpImportHome(process.env, app.isPackaged)) ?? homedir(),

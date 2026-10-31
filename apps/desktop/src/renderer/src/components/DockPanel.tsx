@@ -25,7 +25,7 @@ import type { ToastKind } from "../toasts.js";
 import { ChildSplitPane, type ChildSplitRow } from "./ChildSplitPane.js";
 import { GitPanel } from "./GitPanel.js";
 import { PreviewPanel } from "./PreviewPanel.js";
-import { X } from "./icons.js";
+import { Split, X } from "./icons.js";
 
 export interface DockPanelProps {
   mode: DockMode;
@@ -208,7 +208,7 @@ export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitT
                   splitRight(tab.id, splitAllowed);
                 }}
               >
-                ⫿
+                <Split />
               </button>
               <button
                 type="button"

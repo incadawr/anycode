@@ -61,6 +61,27 @@ function classifyConsoleLevel(level: "info" | "warning" | "error" | "debug"): Pr
   return "log"; // "info" | "debug"
 }
 
+/**
+ * Electron's OWN security warnings are not the page's console output. In a dev
+ * build Electron writes them into the same `console-message` channel with a
+ * literal `%c` formatting marker at the very START of the string
+ * ("%cElectron Security Warning (…)") and at the warning level; fed through as
+ * preview-console rows they looked like the page logging a warning and put raw
+ * console text into the conversation. They say nothing about the user's
+ * document, so they are dropped at capture time — the page's real warnings keep
+ * flowing, including a page message that merely QUOTES the phrase (in the
+ * middle of a warning, or inside a page error), which is the page's own
+ * diagnostic output. Exported for the adapter's own wiring test.
+ */
+export const ELECTRON_INTERNAL_WARNING_PREFIX = "%cElectron Security Warning";
+
+export function isElectronInternalWarning(message: string, level?: string): boolean {
+  if (level !== undefined && level !== "warning") {
+    return false;
+  }
+  return message.startsWith(ELECTRON_INTERNAL_WARNING_PREFIX);
+}
+
 /** Exported: md-window-adapter.ts (TASK.99 M3) reuses this for the md-preview window's own `capturePage()` — same `PreviewCapturedImage` wrapping, zero duplication. */
 export function wrapCapturedImage(image: NativeImage): PreviewCapturedImage {
   return {
@@ -175,6 +196,14 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
     console.warn("[preview] debugger attach failed; pageerror capture degraded to console-message only");
   }
   wc.on("console-message", (event) => {
+    // Electron's own security warning is not a page console message (see
+    // isElectronInternalWarning) — never surface it in the transcript. The
+    // check needs BOTH the message's own `%c` marker at the start and the
+    // warning level, so a page warning/error that merely contains the phrase
+    // still reaches the transcript.
+    if (isElectronInternalWarning(event.message, event.level)) {
+      return;
+    }
     // Sliced BEFORE the listener (cut §1.3/F3) — the giant string still
     // arrives in main once (Chromium delivers it; unavoidable) but is never
     // re-serialized host-ward at size. preview-host.ts's own slice at

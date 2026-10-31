@@ -7,7 +7,7 @@ import {
   portFieldValue,
   regenerateEnabled,
   sessionSwitchDisabledReason,
-  sessionSwitchLabel,
+  sessionSwitchDetail,
   sessionsApiStatusLine,
   sessionsApiStatusTone,
   settingsEditable,
@@ -17,7 +17,11 @@ import {
   SESSIONS_API_NODE_HINT,
   SESSIONS_API_PANE_ID,
   SESSIONS_API_REGENERATE_CONFIRM,
+  SESSIONS_API_AGENT_PROJECTS_HINT,
+  SESSIONS_API_AGENT_PROJECTS_EMPTY,
+  SESSIONS_API_SHARE_HINT,
 } from "./sessions-api-model.js";
+import { AGENT_PROJECT_SWITCH_LABEL } from "./project-agent-switch.js";
 import type { CommunicationMutationReason, CommunicationStatus } from "../../../shared/communication-config.js";
 
 const listening: CommunicationStatus = { state: "listening", url: "http://127.0.0.1:4310/mcp", port: 4310, workspaces: 0, sessions: 1 };
@@ -83,8 +87,8 @@ describe("Sessions API pane model (Taskana 4747)", () => {
   });
 
   it("per-tab switch: label wording and disabled reasons", () => {
-    expect(sessionSwitchLabel(true)).toMatch(/shared/);
-    expect(sessionSwitchLabel(false)).toMatch(/not shared/);
+    expect(sessionSwitchDetail(true)).toBe("Shared with external agents");
+    expect(sessionSwitchDetail(false)).toBe("Not shared");
     expect(sessionSwitchDisabledReason(true, true)).toMatch(/ANYCODE_COMMUNICATION_CONFIG/);
     expect(sessionSwitchDisabledReason(false, false)).toMatch(/Open a session/);
     expect(sessionSwitchDisabledReason(false, true)).toBeNull();
@@ -95,6 +99,31 @@ describe("Sessions API pane model (Taskana 4747)", () => {
     expect(SESSIONS_API_NODE_HINT).toMatch(/Node 22\+/);
     expect(SESSIONS_API_DESCRIPTION).toMatch(/Local only\.$/);
     expect(SESSIONS_API_REGENERATE_CONFIRM).toMatch(/restart the external client's MCP connection/);
+  });
+});
+
+describe("Sessions API pane discoverability copy (audit D9)", () => {
+  it("the project switch is named where it lives: the sidebar project ⋯ menu", () => {
+    expect(SESSIONS_API_AGENT_PROJECTS_HINT).toMatch(/sidebar project ⋯ menu|project ⋯ menu in the sidebar/);
+    expect(SESSIONS_API_AGENT_PROJECTS_EMPTY).toMatch(/sidebar project ⋯ menu|project ⋯ menu in the sidebar/);
+  });
+
+  it("the shared-sessions hint says how a session is shared, not only how many are", () => {
+    expect(SESSIONS_API_SHARE_HINT).toMatch(/session's ⋯ environment menu/);
+    expect(SESSIONS_API_SHARE_HINT).toMatch(/Currently shared/);
+  });
+
+  it("the shared-sessions hint also names the project switch that gates new agent-opened tasks", () => {
+    // The exact label the sidebar project menu renders — one constant, so copy and menu cannot drift.
+    expect(SESSIONS_API_SHARE_HINT).toContain(`“${AGENT_PROJECT_SWITCH_LABEL}”`);
+    const sentence = SESSIONS_API_SHARE_HINT.slice(SESSIONS_API_SHARE_HINT.indexOf("Agents may open"));
+    expect(sentence).toMatch(/open new tasks in a project only when/);
+    expect(sentence).toMatch(/sidebar project ⋯ menu/);
+    expect(sentence).toMatch(/is on/);
+  });
+
+  it("the pane subtitle mentions the per-session switch (sharing is opt-in per session)", () => {
+    expect(SESSIONS_API_DESCRIPTION).toMatch(/sessions you choose/i);
   });
 });
 

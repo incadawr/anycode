@@ -505,6 +505,66 @@ export function resolveBareSlashSubmit(
   return { kind: "run", intent: command.run };
 }
 
+/**
+ * Submit-time guard for a slash-shaped draft that names NO registry command.
+ * Without it `/foo`, `/help` or `/compact/compact` (a doubled token left by a
+ * refused command plus a retype) travel to the model as an ordinary user turn
+ * and cost a whole turn to answer "I don't recognize that".
+ *
+ * Deliberately narrow, because a leading `/` is also how a user writes a path:
+ * only a draft whose FIRST word is a command token is considered (so prose never
+ * matches and `/foo argument` is answered rather than sent), and only two
+ * shapes count —
+ *   - a single `/name` whose `name` is not a registry id (`/foo`, `/help`), or
+ *   - a token built from one KNOWN id repeated (`/compact/compact`), which is
+ *     never a plausible path and is exactly what a refused command retyped
+ *     after the token stays in the draft looks like.
+ * `/foo` and `/tmp` are spelled identically, so `pathRoots` settles it: a name
+ * that exists directly under the filesystem root is the user's absolute path
+ * (`/tmp`, `/etc`, `/Users`) and keeps going to the model. Multi-segment paths
+ * (`/usr/local/bin/node`, `/tmp/no-such-file`) are never command-shaped at all.
+ * Skill invocations are unaffected twice over: they are written `$name`, and
+ * a name that is a known registry id is never reported as unknown.
+ *
+ * Returns the user-facing notice text, or `null` for "ordinary text".
+ */
+export interface UnknownSlashCommandOptions {
+  /** Names directly under the filesystem root (see slash-path-roots.ts). */
+  pathRoots?: ReadonlySet<string>;
+}
+
+export function unknownSlashCommandNotice(
+  text: string,
+  options: UnknownSlashCommandOptions = {},
+): string | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("/")) {
+    return null;
+  }
+  // Only the FIRST word is the command token; the words after it (`/foo arg`)
+  // are what the user meant to pass the command, not a new sentence.
+  const token = trimmed.split(/\s/, 1)[0] ?? "";
+  const segments = token.slice(1).split("/");
+  const first = segments[0] ?? "";
+  // A command id is a word; anything else (`.`/`:`/`%`/empty) is not a command
+  // the menu could ever have offered, so it is far more likely a path or prose.
+  if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(first)) {
+    return null;
+  }
+  // An absolute path names an entry of the filesystem root: `/tmp`, `/etc`,
+  // `/Users`, or any other real top-level directory. Such a draft — with or
+  // without words after it — is the user's message, not a command.
+  if (segments.length === 1 && options.pathRoots?.has(first) === true) {
+    return null;
+  }
+  const isKnown = (name: string): boolean => SLASH_COMMANDS.some((command) => command.id === name);
+  const unknownSingle = segments.length === 1 && !isKnown(first);
+  const unknownDoubled = segments.length > 1 && segments.every((segment) => segment === first) && isKnown(first);
+  return unknownSingle || unknownDoubled
+    ? `Unknown command: ${token}. Type / to see the available commands.`
+    : null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Trigger detection (cut §4.3)
 // ─────────────────────────────────────────────────────────────────────────

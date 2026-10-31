@@ -401,6 +401,51 @@ describe("createElectronPreviewWindow — event adaptation", () => {
     ]);
   });
 
+  it("drops Electron's own security warning but keeps the page's warnings", () => {
+    const win = createElectronPreviewWindow({ previewId: "p6b" });
+    const fake = latestWindow();
+    const messages: Array<{ level: string; message: string }> = [];
+    win.webContents.onConsoleMessage((level, message) => messages.push({ level, message }));
+
+    fake.webContents.emit("console-message", {
+      level: "warning",
+      message: "%cElectron Security Warning (Insecure Content-Security-Policy) This renderer process has either no Content Security Policy set…",
+    });
+    fake.webContents.emit("console-message", { level: "warning", message: "deprecated API used" });
+
+    expect(messages).toEqual([{ level: "warn", message: "deprecated API used" }]);
+  });
+
+  it("keeps a page's own message that merely mentions Electron Security Warning", () => {
+    // The page quoting the phrase (a warning explaining the CSP row, or an
+    // error from a page script) is the page's diagnostic output, not Electron's
+    // internal row: only the `%c`-prefixed warning at the warning level is ours
+    // to drop.
+    const win = createElectronPreviewWindow({ previewId: "p6c" });
+    const fake = latestWindow();
+    const messages: Array<{ level: string; message: string }> = [];
+    win.webContents.onConsoleMessage((level, message) => messages.push({ level, message }));
+
+    fake.webContents.emit("console-message", {
+      level: "warning",
+      message: "app.js:42 Electron Security Warning (fake) — this page's own note about strict CSP",
+    });
+    fake.webContents.emit("console-message", {
+      level: "error",
+      message: "Electron Security Warning (Insecure Content-Security-Policy) crashed my parser",
+    });
+    fake.webContents.emit("console-message", {
+      level: "error",
+      message: "%cElectron Security Warning (Insecure Content-Security-Policy) echoed by the page at error level",
+    });
+
+    expect(messages).toEqual([
+      { level: "warn", message: "app.js:42 Electron Security Warning (fake) — this page's own note about strict CSP" },
+      { level: "error", message: "Electron Security Warning (Insecure Content-Security-Policy) crashed my parser" },
+      { level: "error", message: "%cElectron Security Warning (Insecure Content-Security-Policy) echoed by the page at error level" },
+    ]);
+  });
+
   it("classifies a CDP Runtime.exceptionThrown as a distinct pageerror, not error", () => {
     const win = createElectronPreviewWindow({ previewId: "p7" });
     const fake = latestWindow();

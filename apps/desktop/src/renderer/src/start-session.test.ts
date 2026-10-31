@@ -51,6 +51,43 @@ describe("start-screen submission of bare commands", () => {
   });
 });
 
+describe("start-screen submission of unknown slash commands (audit C4)", () => {
+  it.each(["/foo", "/foo argument", "/compact/compact"])(
+    "answers %s locally instead of creating a session and spending a turn",
+    async (draft) => {
+      const { deps, tabsStore, createTab, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+      tabsStore.getState().openDraft("/ws/a");
+      tabsStore.getState().setDraftPrompt(draft);
+      const onToast = vi.fn();
+      await guardedSubmit({ canSend: true, guard: { current: false }, setSubmitting: vi.fn(), submit: () => submitStartDraft(deps), onToast });
+      expect(onToast).toHaveBeenCalledWith("shell_error", expect.stringContaining(`Unknown command: ${draft.split(" ")[0]}.`));
+      expect(createTab).not.toHaveBeenCalled();
+      expect(queueInitialPrompt).not.toHaveBeenCalled();
+      expect(tabsStore.getState().draft?.prompt).toBe(draft);
+    },
+  );
+
+  it.each(["/tmp", "/usr/local/bin/node"])("still sends the path %s", async (draft) => {
+    const { deps, tabsStore, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt(draft);
+
+    await expect(submitStartDraft(deps)).resolves.toEqual({ ok: true, tabId: "t1" });
+    expect(queueInitialPrompt.mock.calls[0]?.[0]).toBe("t1");
+    expect(queueInitialPrompt.mock.calls[0]?.[1]).toBe(draft);
+  });
+
+  it("leaves a foreign engine's slash surface alone", async () => {
+    const { deps, tabsStore, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftEngine("claude");
+    tabsStore.getState().setDraftPrompt("/clear");
+
+    await expect(submitStartDraft(deps)).resolves.toEqual({ ok: true, tabId: "t1" });
+    expect(queueInitialPrompt.mock.calls[0]?.[1]).toBe("/clear");
+  });
+});
+
 describe("submitStartDraft — Orchestrate (start screen)", () => {
   it("first-run role gate: an orchestrating send with no roles refuses before createTab, and leaves the draft untouched", async () => {
     const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
