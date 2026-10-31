@@ -10,6 +10,7 @@ import type { WorkspaceTransition } from "../ports/worktrees.js";
 import type { ProviderQuotaUpdate } from "../provider/quota.js";
 
 export interface TokenUsage {
+  costUsd?: number;
   inputTokens?: number;
   /** Input tokens served from the provider prompt cache; included in inputTokens. */
   cachedInputTokens?: number;

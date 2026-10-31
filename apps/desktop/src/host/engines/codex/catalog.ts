@@ -45,6 +45,7 @@ export interface CodexModelEntry {
   supportsImages?: boolean;
   /** `supportedReasoningEfforts[].reasoningEffort` — a free-form non-empty string in this protocol, NOT core's ReasoningEffort union. */
   efforts: string[];
+  supportsFast?: boolean;
   defaultEffort?: string;
   isDefault: boolean;
 }
@@ -90,6 +91,9 @@ function decodeModel(value: unknown): CodexModelEntry | null {
     label: text(model.displayName) ?? id,
     supportsImages: Array.isArray(model.inputModalities) && model.inputModalities.includes("image"),
     efforts,
+    supportsFast: Array.isArray(model.serviceTiers)
+      ? model.serviceTiers.some((tier) => record(tier)?.id === "priority")
+      : (Array.isArray(model.additionalSpeedTiers) && model.additionalSpeedTiers.includes("fast")) || model.defaultServiceTier === "priority",
     ...(defaultEffort !== undefined ? { defaultEffort } : {}),
     isDefault: model.isDefault === true,
   };
@@ -189,6 +193,7 @@ export class CodexModelCatalog {
     return this.entries.map((entry) => ({
       id: entry.id,
       label: entry.label,
+      ...(entry.supportsFast ? { supportsFast: true } : {}),
       ...(entry.efforts.length > 0 ? { efforts: [...entry.efforts] } : {}),
     }));
   }

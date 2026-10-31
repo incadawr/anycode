@@ -164,6 +164,27 @@ it("persists the record's name and base URL, and the entered model, on the custo
   } finally { await act(async () => root.unmount()); container.remove(); rig.cleanup(); }
 });
 
+it("requires a model before creating a custom connection", async () => {
+  const rig = createScenarioRig();
+  const { container, root } = await mountAddDrawer(rig);
+  try {
+    await pickCustomTemplate(container);
+    await typeInto(container.querySelector('input[placeholder="e.g. LM Studio"]')!, "Local");
+    await typeInto(container.querySelector('input[placeholder="http://localhost:1234/v1"]')!, "http://127.0.0.1:1234/v1");
+    const noAuth = [...container.querySelectorAll("input[type=checkbox]")].find(x => x.parentElement?.textContent?.includes("doesn't need")) as HTMLInputElement;
+    await act(async () => noAuth.click());
+    const button = [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Create connection")!;
+    expect(button.disabled).toBe(true);
+    await clickCreate(container);
+    expect(rig.create).not.toHaveBeenCalled();
+    expect((await loadSettings(rig.path)).settings.provider.custom).toBeUndefined();
+    await typeInto(container.querySelector('input[placeholder="Enter a model ID"]')!, "m1");
+    expect(button.disabled).toBe(false);
+    await clickCreate(container);
+    await act(async () => { await vi.waitFor(() => expect(rig.create).toHaveBeenCalledWith(expect.objectContaining({model:"m1"}))); });
+  } finally { await act(async () => root.unmount()); container.remove(); rig.cleanup(); }
+});
+
 it("reports the connection it created so the dialog header stops saying Add, and creates no connection when the base URL is blank", async () => {
   const rig = createScenarioRig();
   const { container, root } = await mountAddDrawer(rig);
@@ -173,6 +194,7 @@ it("reports the connection it created so the dialog header stops saying Add, and
     await act(async () => root.render(createElement(ConnectionDrawerFields, {mode:"add", catalog:rig.catalog as never, connections:[], secrets:[], readOnly:false, store:rig.store, customProvider:rig.bridge as never, onConnectionCreated:(id) => { reported = id; }})));
     await pickCustomTemplate(container);
     await typeInto(container.querySelector('input[placeholder="e.g. LM Studio"]')!, "Int D Conn");
+    await typeInto(container.querySelector('input[placeholder="Enter a model ID"]')!, "m1");
     // Base URL deliberately LEFT BLANK: buildCustomProviderCreateRequest refuses,
     // no record and no connection are written.
     const noAuth = [...container.querySelectorAll("input[type=checkbox]")].find(x => x.parentElement?.textContent?.includes("doesn't need")) as HTMLInputElement;
@@ -184,7 +206,6 @@ it("reports the connection it created so the dialog header stops saying Add, and
     // Now complete the base URL and create: the id IS reported (what the dialog
     // title keys on) and the record persists its base URL.
     await typeInto(container.querySelector('input[placeholder="http://localhost:1234/v1"]')!, "http://127.0.0.1:9/v1");
-    await typeInto(container.querySelector('input[placeholder="Enter a model ID"]')!, "m1");
     await clickCreate(container);
     await act(async () => { await vi.waitFor(() => expect(reported).toBe("conn-fixture")); });
     expect((await loadSettings(rig.path)).settings.provider.custom?.[0]).toMatchObject({baseUrl:"http://127.0.0.1:9/v1"});
@@ -271,5 +292,46 @@ it("still appends a model the catalog does not offer, so a manual id stays durab
   try {
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
     expect(rig.fetchModels).toHaveBeenCalledWith({ connectionId:"c1", addModels:["manual-x"] });
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it.each([
+  ["vendor/glm-5.3-fp8", "GLM-5.3", "1.4", "0.26", "1.4", "4.4"],
+  ["vendor/glm-5.3-flash-fp8", "GLM-5.3 Flash", "0.15", "0.03", "0.15", "0.5"],
+])("shows all reference rates for %s and saves the opt-out", async (model, name, input, cached, write, output) => {
+  const connection = { id:"c", providerId:"custom:test", model };
+  const snapshot = { settings: cloneDefaults(), readOnly:false, secrets:[], envOverrides:[], providerReady:true, catalog:[] };
+  const update = vi.fn().mockResolvedValue({ok:true, snapshot});
+  const store = createStore(() => ({snapshot, oauthPendingProviderId:null, connectionUpdate:update, load:vi.fn()})) as unknown as SettingsStoreApi;
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(ConnectionDrawerFields, {mode:"edit", editConnection:connection, catalog:[], connections:[connection], secrets:[], readOnly:false, store})));
+    expect(container.textContent).toContain(`Recognized as ${name}`);
+    expect(container.textContent).toContain(`Catalog reference for ${name}: input $${input}, cached input $${cached}, cache write $${write}, output $${output} per million tokens.`);
+    const check = [...container.querySelectorAll("input[type=checkbox]")].find(c => c.parentElement?.textContent?.includes("Recognized as")) as HTMLInputElement;
+    await act(async () => check.click());
+    expect(container.textContent).not.toContain(`Catalog reference for ${name}`);
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({id:"c", catalogMatchDisabled:true}));
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("uses endpoint effort levels and saves an explicit reasoning denial", async () => {
+  const model = "vendor/glm-5.3-fp8";
+  const connection = { id:"c", providerId:"custom:test", model, modelCapabilities:{ [model]: { reasoning:true, effortLevels:["low", "high"] } } };
+  const snapshot = { settings: cloneDefaults(), readOnly:false, secrets:[], envOverrides:[], providerReady:true, catalog:[] };
+  const update = vi.fn().mockResolvedValue({ok:true, snapshot});
+  const store = createStore(() => ({snapshot, oauthPendingProviderId:null, connectionUpdate:update, load:vi.fn()})) as unknown as SettingsStoreApi;
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(ConnectionDrawerFields, {mode:"edit", editConnection:connection, catalog:[], connections:[connection], secrets:[], readOnly:false, store})));
+    const effort = container.querySelector('select[aria-label="Reasoning effort"]') as HTMLSelectElement;
+    expect([...effort.options].map(o => o.value)).toEqual(["", "low", "high"]);
+    const support = container.querySelector('select[aria-label="Reasoning support"]') as HTMLSelectElement;
+    await act(async () => { support.value = "off"; support.dispatchEvent(new Event("change", {bubbles:true})); });
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({reasoningSupported:false}));
   } finally { await act(async () => root.unmount()); container.remove(); }
 });

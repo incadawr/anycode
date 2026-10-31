@@ -127,3 +127,42 @@ describe("persisted model settings through the host", () => {
     } finally { release?.(); await new Promise<void>(resolve => server.close(() => resolve())); }
   }, 60000);
 });
+
+it("runs a renamed catalog model against a local OpenAI-compatible endpoint", async () => {
+  const requests: any[] = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", chunk => { body += chunk; });
+    req.on("end", () => { const input = JSON.parse(body); requests.push(input); respond(res, input.model); });
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("No fixture address");
+  const url = `http://127.0.0.1:${address.port}/v1`;
+  const model = "vendor/glm-5.3-fp8";
+  try {
+    const result = await bootHostInTempProfile(async ({ parent }) => {
+      const port = new Port(); parent.emit("message", { ports: [port], data: {} });
+      await vi.waitFor(() => expect(port.listenerCount("message")).toBeGreaterThan(0), { timeout: 15000 });
+      port.send({ type: "ui_ready" });
+      await vi.waitFor(() => expect(port.messages.some(m => m.type === "host_ready")).toBe(true));
+      port.send({ type: "user_message", requestId: "catalog", text: "hello" });
+      await vi.waitFor(() => expect(requests.some(r => r.tools?.length)).toBe(true), { timeout: 15000 });
+      const request = requests.find(r => r.tools?.length);
+      expect(request.model).toBe(model);
+      expect(request.reasoning_effort).toBe("max");
+      expect(request.max_tokens).toBe(131_072);
+      await vi.waitFor(() => expect(port.messages.some(m => m.type === "agent_event" && m.event?.type === "loop_end")).toBe(true), { timeout: 15000 });
+    }, { boot: async () => {
+      const path = process.env.ANYCODE_SETTINGS_PATH!;
+      expect((await handleCustomProviderCreate({ vault, settingsPath: path, genId: () => "custom:fixture" }, { name: "Fixture", baseUrl: url, kind: "openai-compatible", authOptional: true })).ok).toBe(true);
+      expect((await handleConnectionCreate({ vault, settingsPath: path, bootEnv: {}, catalogIds: ["custom:fixture"], isCustom: () => true, genConnectionId: () => "conn-fixture" }, { providerId: "custom:fixture", model, transport: "openai-chat-completions" })).ok).toBe(true);
+      const loaded = (await loadSettings(path)).settings;
+      const env = await buildHostEnv({ bootEnv: {}, settings: loaded, getSecret: async () => undefined });
+      Object.assign(process.env, env, { ANYCODE_API_KEY: "test", ANYCODE_BASE_URL: url, ANYCODE_MODEL_SETTINGS_CONNECTION_ID: "conn-fixture" });
+      vi.resetModules(); await import("./index.js");
+    }});
+    if (result.error !== null) throw result.error;
+    expect(result.stopped).toBe(true);
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+}, 45000);

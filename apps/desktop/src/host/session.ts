@@ -1,7 +1,7 @@
 import { manualCompactionUnavailableReason } from "../shared/manual-compaction.js";
 import { PresentationJournal } from "./presentation-journal.js";
 import type { CompactionRecordSeam } from "./compaction-records.js";
-import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult, type SessionStatus, type SessionActivityState, type SetSessionEffortOutcome, type SetSessionModelOutcome } from "../shared/communication.js";
+import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult, type SessionStatus, type SessionActivityState, type SetSessionEffortOutcome, type SetSessionFastOutcome, type SetSessionModelOutcome } from "../shared/communication.js";
 import { normalizeEffortLevels, validateSessionEffort } from "../shared/session-effort.js";
 import { safeFailureMessage } from "./safe-failure.js";
 import { claudeNativeChildRecord } from "./claude-usage.js";
@@ -212,17 +212,18 @@ function isSuccessfulModelDeliveryEvent(event: AgentEvent): boolean {
  *    no settings-updated notification at all).
  */
 export type EngineSettingsChange =
-  | { ok: true; model: string; activePresetId: string; effort?: string }
+  | { ok: true; model: string; activePresetId: string; effort?: string; fast?: boolean; resetFast?: boolean }
   | { ok: false; reason: string };
 
 export interface EngineSettingsSeam {
   models(): EngineModelChoice[];
   presets(): EnginePermissionPreset[];
   /** The APPLIED settings — what a `turn/start` actually carried. Never a merely-chosen value (see `pendingSnapshot`). */
-  snapshot(): { model: string; activePresetId: string; effort?: string };
+  snapshot(): { model: string; activePresetId: string; effort?: string; fast?: boolean };
   selectModel(id: string): EngineSettingsChange;
   selectPreset(id: string): EngineSettingsChange;
   selectEffort?(effort: string): EngineSettingsChange;
+  selectFast?(fast: boolean): EngineSettingsChange;
   /**
    * Maps a caller-requested model id onto a choice this session can actually
    * run, or null when it offers nothing under that id (`set_session_model`).
@@ -258,14 +259,14 @@ export interface EngineSettingsSeam {
   selectEffortAndWait?(effort: string): Promise<EngineSettingsChange>;
   waitForModelChanges?(): Promise<void>;
   waitForSettingsChanges?(): Promise<void>;
-  onSettingsApplied(listener: (snapshot: { model: string; activePresetId: string; effort?: string }) => void): () => void;
+  onSettingsApplied(listener: (snapshot: { model: string; activePresetId: string; effort?: string; fast?: boolean }) => void): () => void;
   /**
    * The chosen-but-not-yet-applied delta, or null. Re-asserted on every
    * `ui_ready` so a renderer reload cannot lose (or mis-fold) the pending badge:
    * the original `state:"pending"` message is a one-shot in the replay ring.
    * Optional — an engine with no two-phase ack simply has nothing pending.
    */
-  pendingSnapshot?(): { model: string; activePresetId: string; effort?: string } | null;
+  pendingSnapshot?(): { model: string; activePresetId: string; effort?: string; fast?: boolean } | null;
   /**
    * True when the engine applies a settings change over its OWN acknowledged
    * control request instead of on the next `turn/start` (Claude, SLICE-CC
@@ -332,6 +333,7 @@ function enginePresentation(engine: SessionEngine, settings?: EngineSettingsSeam
     ...(snapshot !== undefined && presets.length > 0
       ? { permissions: { presets, activePresetId: snapshot.activePresetId } }
       : {}),
+    ...(snapshot?.fast !== undefined ? { fast: snapshot.fast } : {}),
     ...(quota !== null ? { quota } : {}),
   };
 }
@@ -680,7 +682,7 @@ export interface SessionPersistence {
    * is a plain TEXT column — no migration, cut §2(k).4). The host maps it to
    * that column at the persistence boundary, where the cast is visible.
    */
-  touch(patch: { title?: string; mode?: PermissionMode; model?: string; enginePreset?: string }): void | Promise<void>;
+  touch(patch: { title?: string; mode?: PermissionMode; model?: string; enginePreset?: string; codexFast?: boolean | null }): void | Promise<void>;
   /**
    * Writes a title whose caller must be able to CONFIRM it — the Sessions API
    * `set_agent_title` acknowledgement promises the next boot reads this title
@@ -1905,6 +1907,7 @@ export class Session {
         model: applied.model,
         activePresetId: applied.activePresetId,
         ...(applied.effort !== undefined ? { effort: applied.effort } : {}),
+        ...(applied.fast !== undefined ? { fast: applied.fast } : {}),
         state: "applied",
         appliesFrom: "next_turn",
       });
@@ -2162,6 +2165,19 @@ export class Session {
     if (this.effortResolution !== undefined) return this.effortResolution.effective(model, tier) ?? null;
     if (tier === undefined) return null;
     return this.coreEffortLevelsFor(model)?.includes(tier) === true ? tier : null;
+  }
+
+  /** Select the Codex speed before a newly created session is published. */
+  async communicationSetFast(payload: unknown): Promise<SetSessionFastOutcome> {
+    if (typeof payload !== "boolean") return { ok: false, reason: "invalid_argument", detail: "fast must be a boolean" };
+    if (this.shuttingDown || this.relocating || this.busy || this.agentInbox.length > 0 ||
+        this.engine.id !== "codex" || !this.engineSettings?.selectFast ) {
+      return { ok: false, reason: "not_ready", detail: "Codex speed control unavailable" };
+    }
+    const result = this.engineSettings.selectFast(payload);
+    if (!result.ok) return { ok: false, reason: "invalid_argument", detail: result.reason };
+    this.onEngineSettingsChange(result, { fast: payload });
+    return { ok: true };
   }
 
   /**
@@ -3055,6 +3071,16 @@ export class Session {
         }
         this.queueIdleEngineSetting((seam) => this.onEngineSettingsChange(seam.selectPreset(message.presetId), { presetId: message.presetId }));
         break;
+      case "set_engine_fast": {
+        if (this.busy) {
+          this.outbound.emit({ type: "mode_change_rejected", reason: "Cannot change speed during a turn" });
+          break;
+        }
+        this.queueIdleEngineSetting((seam) => {
+          if (seam.selectFast) this.onEngineSettingsChange(seam.selectFast(message.fast), { fast: message.fast });
+        });
+        break;
+      }
       case "set_engine_effort": {
         const seam = this.engineSettings;
         if (seam === undefined || seam.selectEffort === undefined) break;
@@ -5385,6 +5411,7 @@ export class Session {
               step: this.currentStep,
               model: this.model,
               reasoningEffort: this.selectedEffort,
+              costUsd: event.usage.costUsd,
               inputTokens: event.usage.inputTokens,
               cachedInputTokens: event.usage.cachedInputTokens,
               cacheWriteTokens: event.usage.cacheWriteTokens,
@@ -5730,7 +5757,7 @@ export class Session {
    * carries only the applied snapshot. ZERO wire delta: this is the same
    * `engine_settings_changed{state:"pending"}` the change itself emits.
    */
-  private mergedEngineSettings(): { model: string; activePresetId: string; effort?: string } | null {
+  private mergedEngineSettings(): { model: string; activePresetId: string; effort?: string; fast?: boolean } | null {
     const seam = this.engineSettings;
     if (seam === undefined) return null;
     const pending = seam.pendingSnapshot?.() ?? null;
@@ -5816,7 +5843,7 @@ export class Session {
     this.settingsBarrier = barrier;
   }
 
-  private onEngineSettingsChange(result: EngineSettingsChange, intent: { model?: string; presetId?: string; effort?: string }): void {
+  private onEngineSettingsChange(result: EngineSettingsChange, intent: { model?: string; presetId?: string; effort?: string; fast?: boolean }): void {
     if (!result.ok) {
       this.outbound.emit({ type: "mode_change_rejected", reason: result.reason });
       return;
@@ -5834,6 +5861,8 @@ export class Session {
         // before the next turn still resumes under the chosen posture.
         this.persistence?.touch({ model: result.model });
       }
+      if (intent.fast !== undefined) this.persistence?.touch({ codexFast: intent.fast });
+      else if (result.resetFast) this.persistence?.touch({ codexFast: null });
       if (intent.presetId !== undefined) {
         this.persistence?.touch({ enginePreset: result.activePresetId });
       }
@@ -5843,6 +5872,7 @@ export class Session {
       model: result.model,
       activePresetId: result.activePresetId,
       ...(result.effort !== undefined ? { effort: result.effort } : {}),
+      ...(result.fast !== undefined ? { fast: result.fast } : {}),
       state: "pending",
       appliesFrom: "next_turn",
     });

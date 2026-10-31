@@ -1,6 +1,6 @@
 import { bindCodexUsage } from "../../native-usage.js";
-import { createHarness } from "../../test-harness.js";
-import { summarizeProviderUsage } from "../../session.js";
+import { createHarness, MemFs } from "../../test-harness.js";
+import { summarizeProviderUsage, Session, Outbound } from "../../session.js";
 import { readFileSync } from "node:fs";
 import * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { describe, beforeEach, afterEach, expect, it, vi } from "vitest";
 import type { AgentEvent, SessionSubagentPort } from "@anycode/core";
-import { NodeFileSystemAdapter, SqlitePersistenceAdapter } from "@anycode/core";
+import { NodeFileSystemAdapter, SqlitePersistenceAdapter, SessionPermissionRules } from "@anycode/core";
 import type { HostToUiMessage } from "../../../shared/protocol.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
 import { CodexApprovalBridge } from "./approval-bridge.js";
@@ -4146,5 +4146,98 @@ describe("Codex manual compaction", () => {
   it("sends no new native work when the compaction correlation baseline cannot be read", async () => {
     const { server, engine } = setup(); server.threadReadResult = {}; const bad = driveCompact(engine); await bad.done; expect(server.compactCalls).toBe(0); expect(bad.events.at(-1)).toMatchObject({ ok: false });
     server.threadReadResult = { thread: { id: THREAD, turns: [] } }; const retry = driveCompact(engine); await tick(40); server.startCompact(); finish(server); await retry.done; expect(retry.events.find(e => e.type === "compaction_end")).toMatchObject({ ok: true });
+  });
+});
+
+
+describe("Codex service tier", () => {
+  it.each(["priority", "fast", "default", null, "flex", undefined])(
+    "keeps model selection and respawn consistent for server tier %s", async tier => {
+      for (const choice of [undefined, true, false]) {
+        for (const unsupported of [false, true]) {
+          const server = new FakeAppServer();
+          server.threadEcho.model = "gpt-5.6-sol";
+          server.threadEcho.serviceTier = tier;
+          const { engine } = await createNativeCodexSession(server, "/work");
+          const db = new SqlitePersistenceAdapter(":memory:");
+          await db.createSession({ id: "speed", workspace: "/work", model: "gpt-5.6-sol", mode: "build" });
+          const outbound = new Outbound();
+          const writes: Promise<void>[] = [];
+          const session = new Session({ outbound, engine, engineSettings: engine,
+            broker: new IpcPermissionBroker(message => outbound.emit(message)), fs: new MemFs(),
+            workspace: "/work", model: "gpt-5.6-sol", sessionId: "speed", rules: new SessionPermissionRules(),
+            persistence: { touch: patch => { writes.push(db.touchSession("speed", patch)); } } });
+          if (choice !== undefined) await session.communicationSetFast(choice);
+          expect(await session.communicationSetModel({ model: unsupported ? "gpt-5.4-mini" : "gpt-5.6-sol" })).toMatchObject({ ok: true });
+          await Promise.all(writes);
+          await runTurn(server, engine);
+          const expected = unsupported ? undefined : choice ?? (tier === "priority" || tier === "fast" ? true : tier === "default" || tier === null ? false : undefined);
+          expect(engine.snapshot().fast).toBe(expected);
+          const override = server.turnStartParams().at(-1)?.serviceTier;
+          if (!unsupported && choice === false) expect(override).toBe("default");
+          else if (!unsupported && choice === true) expect(override).toBe("fast");
+          else expect(override).toBeUndefined();
+          const nextServer = new FakeAppServer();
+          nextServer.threadEcho.model = unsupported ? "gpt-5.4-mini" : "gpt-5.6-sol";
+          nextServer.threadEcho.serviceTier = override ?? tier;
+          const row = (await db.getRootSession("speed"))!;
+          const resumed = await resumeNativeCodexSession(nextServer, "/work", "persisted-thread", undefined, undefined,
+            { model: row.model, ...(row.codexFast !== undefined ? { fast: row.codexFast } : {}), origin: "persisted" });
+          await runTurn(nextServer, resumed.engine);
+          expect(resumed.engine.snapshot().fast).toBe(expected);
+          expect(nextServer.turnStartParams().at(-1)?.serviceTier).toBe(!unsupported && choice !== undefined ? (choice ? "fast" : "default") : undefined);
+        }
+      }
+    },
+  );
+  it("restores a persisted override and sends it on the first resumed turn", async () => {
+    const server = new FakeAppServer();
+    server.threadEcho.serviceTier = "priority";
+    server.threadEcho.model = "gpt-5.6-sol";
+    const { engine } = await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, { model: "gpt-5.6-sol", fast: false, origin: "persisted" });
+    expect(engine.snapshot().fast).toBe(false);
+    await runTurn(server, engine);
+    expect(server.turnStartParams().at(-1)?.serviceTier).toBe("default");
+  });
+
+  it("refuses Fast on a model without priority tier", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await createNativeCodexSession(server, "/work");
+    expect(engine.selectModel("gpt-5.4-mini")).toMatchObject({ ok: true, resetFast: true });
+    expect(engine.selectFast(true)).toMatchObject({ ok: false });
+  });
+
+  it("does not present flex as Fast", async () => {
+    const server = new FakeAppServer();
+    server.threadEcho.serviceTier = "flex";
+    server.threadEcho.model = "gpt-5.6-sol";
+    const { engine } = await createNativeCodexSession(server, "/work");
+    expect(engine.snapshot().fast).toBeUndefined();
+  });
+  it("keeps the server tier without inventing an override", async () => {
+    const server = new FakeAppServer();
+    server.threadEcho.serviceTier = "priority";
+    server.threadEcho.model = "gpt-5.6-sol";
+    const { engine } = await createNativeCodexSession(server, "/work");
+    await runTurn(server, engine);
+    expect(server.turnStartParams().at(-1)).not.toHaveProperty("serviceTier");
+    expect(engine.snapshot().fast).toBe(true);
+  });
+
+  it("projects the effective tier and applies an explicit per-session override on the next turn", async () => {
+    const server = new FakeAppServer();
+    server.threadEcho.serviceTier = "priority";
+    server.threadEcho.model = "gpt-5.6-sol";
+    const { engine } = await createNativeCodexSession(server, "/work");
+    expect(engine.snapshot().fast).toBe(true);
+    expect(engine.selectFast(false)).toMatchObject({ ok: true, fast: false });
+    expect(engine.snapshot().fast).toBe(true);
+    await runTurn(server, engine);
+    expect(server.turnStartParams().at(-1)?.serviceTier).toBe("default");
+    expect(engine.snapshot().fast).toBe(false);
+    engine.selectFast(true);
+    await runTurn(server, engine);
+    expect(server.turnStartParams().at(-1)?.serviceTier).toBe("fast");
+    expect(engine.snapshot().fast).toBe(true);
   });
 });

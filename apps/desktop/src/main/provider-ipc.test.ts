@@ -38,6 +38,7 @@ import {
 import { Vault, type SecretSetResult } from "./vault.js";
 import { createProxyChainFetch, type ProxyDispatchRequest } from "./provider-proxy-fetch.js";
 import { hostForkProxyChain } from "../shared/proxy.js";
+import { calculateUsageCost, resolveUsagePrice } from "../host/usage-cost.js";
 
 // Capture ipcMain.handle registrations so a test can drive the real
 // `registerProviderIpc` wiring without an Electron runtime. `mock`-prefixed so
@@ -354,6 +355,26 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
         { id: "a", reasoning: true, effortLevels: ["xhigh", "high", "low"] },
         { id: "b" },
       ],
+    });
+  });
+
+  it("maps OpenRouter limits and per-token prices", async () => {
+    const result = await fetchCustomProviderModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl: async () => new Response(JSON.stringify({ data: [{ id: "vendor/model", context_length: 1048576, top_provider: { max_completion_tokens: 524288 }, pricing: { prompt: "0.000000075", completion: "0.0000003" }, supported_parameters: ["reasoning_effort"] }] })) });
+    expect(result).toEqual({ ok: true, models: [{ id: "vendor/model", contextWindow: 1048576, maxOutputTokens: 524288, pricing: { input: 0.075, cachedInput: 0.075, output: 0.3 }, reasoning: true, effortLevels: ["off", "low", "medium", "high", "xhigh"] }] });
+  });
+
+  it("omits catalog prices with conditional overrides", async () => {
+    const result = await fetchCustomProviderModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl: async () => new Response(JSON.stringify({ data: [{ id: "vendor/model", context_length: 1000, pricing: { prompt: "0.1", completion: "0.2", overrides: [{ prompt: "0.3" }] } }] })) });
+    expect(result).toEqual({ ok: true, models: [{ id: "vendor/model", contextWindow: 1000 }] });
+  });
+
+  it("exposes effort controls when a model declares reasoning_effort", async () => {
+    const { origin } = await listen((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "model", supported_parameters: ["reasoning_effort"] }] }));
+    });
+    expect(await fetchCustomProviderModels({ baseUrl: origin })).toEqual({
+      ok: true, models: [{ id: "model", reasoning: true, effortLevels: ["off", "low", "medium", "high", "xhigh"] }],
     });
   });
 
@@ -1401,6 +1422,18 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     });
     return { deps, calls };
   }
+
+  it("removes a saved OpenRouter rate when the refreshed model has conditional pricing", async () => {
+    const id = "vendor/conditional";
+    await seedConnection({ id: "conditional", providerId: "kimi", baseUrl: "https://openrouter.ai/api/v1", modelCapabilities: { [id]: { contextWindow: 1000, pricing: { input: 1, cachedInput: 1, output: 2 } } } });
+    const { deps } = makeCatalogDeps({ fetchModels: async () => fetchCustomProviderModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl: async () => new Response(JSON.stringify({ data: [{ id, context_length: 2000, pricing: { prompt: "0.1", completion: "0.2", overrides: [{ prompt: "0.3" }] } }] })) }) });
+    expect((await handleCustomProviderFetchModels(deps, { connectionId: "conditional" })).ok).toBe(true);
+    const connection = (await loadSettings(settingsPath)).settings.provider.connections[0]!;
+    expect(connection.modelCapabilities?.[id]).toEqual({ contextWindow: 2000 });
+    const selected = resolveUsagePrice(JSON.stringify({ models: { [id]: connection.modelCapabilities?.[id]?.pricing } }), id, undefined);
+    expect(selected).toBeUndefined();
+    expect(calculateUsageCost({ inputTokens: 1000000, cachedInputTokens: 0, outputTokens: 1000000 }, selected && !selected.subscription ? selected.price : undefined)).toBeUndefined();
+  });
 
   it("resolves entry baseUrl (+/v1), anthropic auth kind from the transport, and the connection vault key; persists the fetched ids", async () => {
     await seedConnection({ id: "conn-1", providerId: "kimi" });

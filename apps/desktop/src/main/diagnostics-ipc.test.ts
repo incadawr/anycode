@@ -206,7 +206,7 @@ describe("diagnostics preview -> save session (GitHub #18)", () => {
     expect(save.mock.calls[0]![0].content).toContain('"build":1');
   });
 
-  it("rebuilds when the preview cache has expired", async () => {
+  it("requires a new preview when the cache has expired", async () => {
     let builds = 0;
     let clock = 1_000;
     const save = vi.fn(async (_payload: { defaultFileName: string; content: string }) => ({ saved: true }));
@@ -223,6 +223,10 @@ describe("diagnostics preview -> save session (GitHub #18)", () => {
     );
     await session.preview(REQUEST);
     clock += 101;
+    expect(await session.save(REQUEST)).toEqual({ ok: false, reason: "preview_required" });
+    expect(builds).toBe(1);
+    expect(save).not.toHaveBeenCalled();
+    await session.preview(REQUEST);
     await session.save(REQUEST);
     expect(builds).toBe(2);
     expect(save.mock.calls[0]![0].content).toContain('"build":2');
@@ -240,11 +244,11 @@ describe("diagnostics preview -> save session (GitHub #18)", () => {
     });
     await session.preview({ sessionId: "sess_a" });
     await session.save({ sessionId: "sess_b" });
-    expect(built).toEqual(["sess_a", "sess_b"]);
-    expect(save.mock.calls[0]![0].content).toContain('"sessionId":"sess_b"');
+    expect(built).toEqual(["sess_a"]);
+    expect(save).not.toHaveBeenCalled();
   });
 
-  it("drops a failed preview and rebuilds on save", async () => {
+  it("requires a new preview after a failed preview", async () => {
     let builds = 0;
     const session = createDiagnosticsIpcSession({
       build: async () => {
@@ -255,7 +259,7 @@ describe("diagnostics preview -> save session (GitHub #18)", () => {
       save: async () => ({ saved: true }),
     });
     expect((await session.preview(REQUEST)).ok).toBe(false);
-    expect((await session.save(REQUEST)).ok).toBe(true);
-    expect(builds).toBe(2);
+    expect(await session.save(REQUEST)).toEqual({ ok: false, reason: "preview_required" });
+    expect(builds).toBe(1);
   });
 });

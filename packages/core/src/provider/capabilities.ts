@@ -357,6 +357,8 @@ export function resolveChildReasoningEffort(
 /** Live per-model capability facts a models-list endpoint declared. */
 export interface LiveModelCapabilities {
   reasoning?: boolean;
+  thinkingAlwaysOn?: boolean;
+  defaultEffort?: ReasoningEffort;
   /** Raw foreign effort levels, UNMAPPED — mapped fail-closed at resolution. */
   effortLevels?: string[];
   /**

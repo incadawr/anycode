@@ -576,6 +576,23 @@ function nativeEffortSession(engine: NativeEffortEngine, sessionId = "native-ses
   };
 }
 
+describe("session speed configuration", () => {
+  it("rejects invalid payloads and unavailable session states", async () => {
+    const engine = new NativeEffortEngine([{ id: "m" }]);
+    const rig = nativeEffortSession(engine);
+    expect(await rig.session.communicationSetFast("true")).toMatchObject({ ok: false, reason: "invalid_argument" });
+    for (const key of ["shuttingDown", "relocating", "busy"] as const) {
+      const state = rig.session as unknown as Record<string, unknown>;
+      state[key] = true;
+      expect(await rig.session.communicationSetFast(true)).toMatchObject({ ok: false, reason: "not_ready" });
+      state[key] = false;
+    }
+    Object.assign(engine, { id: "core", selectFast: () => ({ ok: true }) });
+    expect(await rig.session.communicationSetFast(true)).toMatchObject({ ok: false, reason: "not_ready" });
+    rig.close();
+  });
+});
+
 describe("session effort configuration and status", () => {
   it("configures native effort before the first agent turn", async () => {
     const engine = new NativeEffortEngine([{ id: "gpt-6.1-terra", label: "Terra", efforts: ["low", "medium", "high", "xhigh"] }], "medium");
