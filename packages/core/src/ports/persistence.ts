@@ -80,6 +80,7 @@ export interface SessionMeta {
    * session (Codex owns its own account).
    */
   codexProfileId?: string;
+  codexFast?: boolean;
   /**
    * Present ONLY on a child session (TASK.102 S2a §2.4): the parent session
    * that spawned it via `Agent(tier:"session")`. Root sessions never have
@@ -123,6 +124,7 @@ export type SessionMetaPatch = Partial<
     | "codexProfileId"
   >
 > & {
+  codexFast?: boolean | null;
   /** `null` atomically clears the active worktree identity fields. */
   worktree?: SessionWorktree | null;
   /** `null` atomically clears the deferred cleanup ledger. */

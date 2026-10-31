@@ -84,6 +84,21 @@ describe("CodexModelCatalog", () => {
     expect(seen).toEqual([1_234]);
   });
 
+  it("projects Fast only when the model advertises a Fast tier", async () => {
+    const catalog = await CodexModelCatalog.load(pagedClient([{ data: [
+      { id: "priority", serviceTiers: [{ id: "priority" }] },
+      { id: "legacy", additionalSpeedTiers: ["fast"] },
+      { id: "flex", serviceTiers: [{ id: "flex" }] },
+      { id: "none", serviceTiers: [] },
+    ], nextCursor: null }]));
+    expect(catalog.choices()).toEqual([
+      { id: "priority", label: "priority", supportsFast: true },
+      { id: "legacy", label: "legacy", supportsFast: true },
+      { id: "flex", label: "flex" },
+      { id: "none", label: "none" },
+    ]);
+  });
+
   it("decodes image input only when the model explicitly advertises it", async () => {
     const client = pagedClient([
       {

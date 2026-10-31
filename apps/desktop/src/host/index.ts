@@ -1,3 +1,4 @@
+import { SET_SESSION_FAST_OPERATION } from "../shared/communication.js";
 import { startHostWithActivity } from "./activity-forwarding.js";
 import { contextSnapshotOptions } from "./context-snapshot.js";
 import { discoverLoginPath, mcpProblemStatuses, codexMcpStatus, claudeMcpStatuses, forwardProblemStatuses } from "./mcp-login-path.js";
@@ -1568,6 +1569,7 @@ async function bootCodexSession(
           selection: {
             model: existing.model,
             presetId: existing.mode,
+            ...(existing.codexFast !== undefined ? { fast: existing.codexFast } : {}),
             origin: "persisted",
           },
         });
@@ -5213,6 +5215,7 @@ process.parentPort.on("message", (event) => {
           // session-wide effort before a freshly created session is published.
           // Structured failures (invalid_effort / not_ready) are returned as
           // RESULTS so their code survives the IPC boundary intact.
+          case SET_SESSION_FAST_OPERATION: result = await session.communicationSetFast(communication.payload); break;
           case "set_session_effort": result = await session.communicationSetEffort(communication.payload); break;
           // Internal main→host (never a public MCP tool): applies + CONFIRMS the
           // model a freshly created session was asked to run, before it is
