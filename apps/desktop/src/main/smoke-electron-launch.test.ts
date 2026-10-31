@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { createRequire } from "node:module";
 import {
   launchSmokeElectron,
   smokeElectronArgs,
@@ -111,5 +112,10 @@ it("launches isolated automation with absolute node and a controlled search path
   expect(args[0]).toBe(resolve(desktopRoot, "node_modules/electron-vite/bin/electron-vite.js"));
   expect(options.cwd).toBe(desktopRoot);
   expect(options.env.PATH).not.toContain("/unsafe/bin");
-  expect(JSON.parse(options.env.ELECTRON_CLI_ARGS!)).toContain("--use-mock-keychain");
+  const require = createRequire(resolve(desktopRoot, "node_modules/electron-vite/package.json"));
+  const { cac } = require("cac") as { cac: (name: string) => { command: (name: string) => { alias: (name: string) => unknown }; parse: (argv: string[], options: { run: boolean }) => { options: Record<string, unknown> } } };
+  const parser = cac("electron-vite");
+  parser.command("[root]").alias("dev");
+  const parsed = parser.parse([command, ...args], {run:false});
+  expect(parsed.options["--"]).toEqual(AUTOMATION_SWITCHES);
 });
