@@ -119,12 +119,14 @@ before clicking — the pin target (`git`) present and NOT the active primary,
 the browser preview focused as the primary via a real tab click, because the
 git-panel derivation effect re-focuses `git` on every re-run — and retries a
 `split_refused` answer (browser-tab click → precondition wait → split click,
-bounded attempts). A refusal that persists while the preconditions held is a
-FAIL — an always-refusing facade must never read ALL GREEN; a refusal is the
-documented expected PASS only when the precondition wait never held. The
-pinned-state wait is exact in both branches (ok must pin, refused must stay
-`split:null`) and the 900px auto-merge sub-leg still runs. The verdict logic is
-pure and unit-covered (`scripts/dock-squash-smoke-assertions.mjs`, tested in
+bounded attempts). Every all-refused run is a FAIL: with the preconditions held
+the store refused a split that should have happened, and with them never held
+the leg's own focus click did not take, so no split was ever exercised — a
+refusal is not a documented expected PASS in either case. The pinned-state wait
+is exact (an ok click must pin) and the 900px auto-merge sub-leg only counts a
+reading taken after a pin actually landed, so a leg that never split can never
+read ALL GREEN. The verdict logic is pure and unit-covered
+(`scripts/dock-squash-smoke-assertions.mjs`, tested in
 `src/main/dock-squash-smoke-assertions.test.ts`).
 
 Split rules (cross-review 4703): the pinned tab is never the active (primary)

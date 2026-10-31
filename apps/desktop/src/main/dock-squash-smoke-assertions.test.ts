@@ -8,9 +8,11 @@ import { checkAutoMerged, checkPinned, checkSplitPreconditions, checkSplitRetryO
  * dockTabSplit/dockLayoutState, pinned by automation.test.ts), so this test
  * pins the LIVE smoke's own judgement logic. The retry policy is explicit: a
  * split_refused is retried (browser-tab click → precondition wait → split
- * click, bounded attempts) and only a refusal that persists with preconditions
- * held is a FAIL — an always-refusing facade must never read ALL GREEN. A
- * refusal is PASS-expected only when the precondition wait never held.
+ * click, bounded attempts) and every all-refused run is a FAIL — an
+ * always-refusing facade must never read ALL GREEN, and a premise that never
+ * held (the leg's own focus click did not take) means the split was never
+ * exercised, which is equally a FAIL. The auto-merge verdict similarly only
+ * counts a reading taken after a pin actually landed.
  */
 
 function state(overrides = {}) {
@@ -76,15 +78,27 @@ describe("dock-squash-smoke assertions — checkSplitRetryOutcome (bounded retry
     expect(verdict.detail).toContain("preconditions held");
   });
 
-  it("a refusal is PASS-expected only when preconditions never held", () => {
+  it("a refusal whose preconditions NEVER held FAILS — the leg never exercised a split (a broken focus click cannot read green)", () => {
     const verdict = checkSplitRetryOutcome([
       { preconditionsOk: false, click: REFUSED },
       { preconditionsOk: false, click: REFUSED },
       { preconditionsOk: false, click: REFUSED },
     ]);
-    expect(verdict.status).toBe("PASS");
-    expect(verdict.label).toContain("split refused (expected");
-    expect(verdict.detail).toContain("precondition wait never held");
+    expect(verdict.status).toBe("FAIL");
+    expect(verdict.detail).toContain("split preconditions never held");
+    expect(verdict.detail).toContain("never exercised a split");
+  });
+
+  it("the review scenario: the browser-tab click does not take focus, git stays primary, all splits refused → FAIL (not a green \"expected refusal\")", () => {
+    const stuckOnGit = state({ tabs: state().tabs.map((t) => ({ ...t, active: t.id === "git" })) });
+    const precondition = checkSplitPreconditions(stuckOnGit, "git");
+    expect(precondition.ok).toBe(false);
+    const verdict = checkSplitRetryOutcome([
+      { preconditionsOk: false, click: REFUSED },
+      { preconditionsOk: false, click: REFUSED },
+      { preconditionsOk: false, click: REFUSED },
+    ]);
+    expect(verdict.status).toBe("FAIL");
   });
 
   it("preconditions held on ANY attempt makes an all-refused run FAIL (the premise did hold)", () => {
@@ -151,12 +165,18 @@ describe("dock-squash-smoke assertions — checkPinned", () => {
 });
 
 describe("dock-squash-smoke assertions — checkAutoMerged", () => {
-  it("split:null at 900px passes regardless of how the click went", () => {
-    expect(checkAutoMerged(state({ split: null })).status).toBe("PASS");
+  it("a pinned split at 900px that reads split:null passes", () => {
+    expect(checkAutoMerged(state({ split: null }), true).status).toBe("PASS");
   });
 
   it("a surviving pin at 900px fails", () => {
-    expect(checkAutoMerged(state({ split: "git" })).status).toBe("FAIL");
+    expect(checkAutoMerged(state({ split: "git" }), true).status).toBe("FAIL");
+  });
+
+  it("split:null with no pin FAILS — a leg that never split cannot report a passed auto-merge", () => {
+    const verdict = checkAutoMerged(state({ split: null }), false);
+    expect(verdict.status).toBe("FAIL");
+    expect(verdict.detail).toContain("auto-merge was not exercised");
   });
 });
 

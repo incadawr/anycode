@@ -438,11 +438,12 @@ async function step9SplitLeg(ctx) {
   // (App.tsx's `open()` re-focuses an existing tab), which left `git` as the
   // primary, isSplittableTab refused the pin and the facade honestly
   // answered split_refused — the smoke aborted on a step-defect premise.
-  // Bounded retry: once preconditions HELD, a split_refused is retried
-  // (browser-tab click → precondition wait → split click) and a refusal that
-  // persists through every attempt with preconditions held is a FAIL — an
-  // always-refusing facade must never read ALL GREEN. A refusal is
-  // PASS-expected only when the precondition wait never held.
+  // Bounded retry: a split_refused is retried (browser-tab click →
+  // precondition wait → split click). EVERY all-refused outcome is a FAIL:
+  // with the preconditions held the store refused a split that should have
+  // happened, and with them never held the leg never exercised a split at
+  // all — the focus path it drives itself is broken. Neither may read ALL
+  // GREEN, and the 900px auto-merge sub-leg only counts once a pin landed.
   const SPLIT_MAX_ATTEMPTS = 3;
   const browserTabId = `preview:${ctx.htmlPreviewId}`;
   const attempts = [];
@@ -498,7 +499,9 @@ async function step9SplitLeg(ctx) {
 
   await apiOk(ctx, 9, "POST", "/window/size", { width: 900, height: 700 });
   const merged = await waitForDockState(ctx, 9, (s) => s.split === null, "auto-merged (split:null)", 30_000);
-  const mergeVerdict = checkAutoMerged(merged);
+  // Only a reading taken after a pin actually landed proves the merge; a
+  // leg that never split must not report a passed auto-merge.
+  const mergeVerdict = checkAutoMerged(merged, split?.ok === true);
   record(mergeVerdict.label, mergeVerdict.status, mergeVerdict.detail);
 }
 
