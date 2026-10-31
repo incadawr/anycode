@@ -23,13 +23,14 @@ import { useOverlayFlag } from "../preview/overlay-flag.js";
 export interface ConsentDialogProps {
   /** Show the dialog — mirrors settings-store's `pendingConsent !== null`. */
   open: boolean;
+  busy?: boolean;
   /** "Store anyway" — the caller persists the consent flag and retries the parked secret-set. */
   onAccept(): void;
   /** Cancel / Esc / close — the caller discards the parked secret without ever retrying the write. */
   onDecline(): void;
 }
 
-export function ConsentDialog({ open, onAccept, onDecline }: ConsentDialogProps) {
+export function ConsentDialog({ open, busy = false, onAccept, onDecline }: ConsentDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const declineRef = useRef<HTMLButtonElement>(null);
   // D8 overlay wiring: the preview WebContentsView must hide while this
@@ -89,7 +90,7 @@ export function ConsentDialog({ open, onAccept, onDecline }: ConsentDialogProps)
         // source of truth for visibility, then treat it as an explicit
         // decline — same fail-closed pattern as PermissionModal's Esc=deny.
         event.preventDefault();
-        onDecline();
+        if (!busy) onDecline();
       }}
     >
       <div className="consent-dialog-header">
@@ -113,11 +114,11 @@ export function ConsentDialog({ open, onAccept, onDecline }: ConsentDialogProps)
       </div>
 
       <div className="consent-dialog-actions">
-        <button type="button" ref={declineRef} className="consent-decline-button" onClick={onDecline}>
+        <button type="button" ref={declineRef} className="consent-decline-button" disabled={busy} onClick={onDecline}>
           Cancel
         </button>
-        <button type="button" className="consent-accept-button" onClick={onAccept}>
-          Store anyway
+        <button type="button" className="consent-accept-button" disabled={busy} onClick={onAccept}>
+          {busy ? "Saving…" : "Store anyway"}
         </button>
       </div>
     </dialog>

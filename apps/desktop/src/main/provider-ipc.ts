@@ -49,6 +49,8 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { prepareModelFetchContext } from "./model-fetch-guard.js";
+import type { ProxyRoute } from "./provider-proxy-fetch.js";
 import { readFileSync, watch, type FSWatcher } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, dirname } from "node:path";
@@ -99,10 +101,12 @@ export type FetchModelsFailureReason =
   | "empty_models"
   // the settings file (or a newer-version file this binary refuses to
   // write) is read-only — a manual model addition cannot be persisted.
-  | "read_only";
+  | "read_only"
+  | "system_proxy_unsupported"
+  | "stale_fetch";
 
 export type FetchModelsOutcome =
-  | { ok: true; models: { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true; contextWindow?: number; maxOutputTokens?: number; pricing?: { input: number; cachedInput: number; output: number } }[] }
+  | { ok: true; models: { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true; contextWindow?: number; maxOutputTokens?: number; pricing?: { input: number; cachedInput: number; output: number } }[]; source?: { baseUrl: string; transport: string; targetUrl: string; guard: string } }
   | { ok: false; reason: FetchModelsFailureReason };
 
 /** Minimal fetch surface this module needs (injectable; defaults to global fetch — mirrors oauth.ts's `FetchLike`). */
@@ -449,6 +453,7 @@ export interface ProviderIpcDeps {
   fetchModels?: (params: FetchModelsParams) => Promise<FetchModelsOutcome>;
   /** per-connection fetch (proxy routing); supplied by main/index.ts. */
   connectionFetch?: (connectionId: string) => FetchLike;
+  preparedConnectionFetch?: (route: ProxyRoute) => FetchLike;
   /**
    * Catalog lookup for the connection-scoped fetch (`{connectionId}` request
    * shape). Absent = that shape is refused `invalid_request` (fail-closed) —
@@ -764,7 +769,7 @@ const fetchModelsSchema = z.union([
   // dispatched to `handleConnectionAddModels`, never to the network fetch.
   z.object({ connectionId: z.string().min(1), addModels: z.array(z.string()).min(1) }).strict(),
   z.object({ id: z.string().min(1) }).strict(),
-  z.object({ connectionId: z.string().min(1) }).strict(),
+  z.object({ connectionId: z.string().min(1), preview: z.literal(true).optional() }).strict(),
   z.object({ baseUrl: z.string().min(1), apiKey: z.string().optional(), kind: kindSchema.optional() }).strict(),
 ]);
 
@@ -856,6 +861,7 @@ async function handleConnectionFetchModels(
   deps: ProviderIpcDeps,
   connectionId: string,
   fetchModels: (params: FetchModelsParams) => Promise<FetchModelsOutcome>,
+  preview = false,
 ): Promise<FetchModelsOutcome> {
   const entryById = deps.catalogEntryById;
   if (entryById === undefined) {
@@ -872,39 +878,52 @@ async function handleConnectionFetchModels(
     // sentinel is refused too — its credential is the bare legacy key, not
     // this connection-scoped one, so resolving it here would pair the wrong
     // key with a user-typed origin.
+    const custom = preview ? loaded.settings.provider.custom?.find(item => item.id === connection.providerId) : undefined;
     const entry = entryById(connection.providerId);
-    if (entry === undefined || entry.id === "custom") {
-      return undefined;
-    }
-    const baseUrl = connection.baseUrl?.trim() ? connection.baseUrl.trim() : entry.baseUrl;
-    const transport = connection.transport ?? entry.defaultTransport;
-    const apiKey = await deps.vault.getSecretValue(connectionApiKeySecretKey(connectionId));
-    // A user-overridden baseUrl (gateway/proxy) opts out of the catalog's
-    // models URL: the list must come from the origin the user pointed at.
-    const modelsUrl = connection.baseUrl?.trim() ? undefined : findCatalogEntry(connection.providerId)?.modelsUrl;
+    if (custom === undefined && (entry === undefined || entry.id === "custom")) return undefined;
+    const baseUrl = custom?.baseUrl ?? (connection.baseUrl?.trim() ? connection.baseUrl.trim() : entry!.baseUrl);
+    if (!baseUrl.trim()) return { error: "invalid_url" as const };
+    const transport = connection.transport ?? entry?.defaultTransport;
+    const modelsUrl = custom || connection.baseUrl?.trim() ? undefined : findCatalogEntry(connection.providerId)?.modelsUrl;
+    const requestBase = custom ? baseUrl : catalogModelsBaseUrl(baseUrl);
+    const targetUrl = modelsUrl ? modelsUrl.replace(/\/+$/, "") : `${requestBase.replace(/\/+$/, "")}${MODELS_PATH}`;
+    const prepared = preview ? await prepareModelFetchContext(loaded.settings, connection, deps.vault, targetUrl) : undefined;
+    if (prepared && !prepared.ok) return { error: prepared.reason } as const;
+    const apiKey = prepared ? prepared.apiKey : await deps.vault.getSecretValue(connectionApiKeySecretKey(connectionId));
     return {
-      baseUrl,
+      baseUrl: requestBase,
+      savedBaseUrl: (connection.baseUrl ?? "").trim(),
+      savedTransport: connection.transport ?? "",
+      targetUrl,
+      prepared,
       apiKey,
-      kind: (transport === "anthropic-messages" ? "anthropic" : "openai-compatible") as CustomProviderRecord["kind"],
+      kind: custom?.kind ?? (transport === "anthropic-messages" ? "anthropic" : "openai-compatible") as CustomProviderRecord["kind"],
       ...(modelsUrl !== undefined ? { modelsUrl } : {}),
     };
   });
-  if (resolved === undefined) {
-    return { ok: false, reason: "invalid_request" };
-  }
-  if (resolved.baseUrl === "") {
-    return { ok: false, reason: "invalid_url" };
-  }
+  if (resolved === undefined) return { ok: false, reason: "invalid_request" };
+  if ("error" in resolved) return { ok: false, reason: resolved.error ?? "network_error" };
+  if (resolved.baseUrl === "") return { ok: false, reason: "invalid_url" };
+  if (preview && (!resolved.prepared?.ok || !deps.preparedConnectionFetch)) return { ok: false, reason: "network_error" };
   const outcome = await fetchModels({
-    baseUrl: catalogModelsBaseUrl(resolved.baseUrl),
+    baseUrl: resolved.baseUrl,
     apiKey: resolved.apiKey,
     kind: resolved.kind,
     ...(resolved.modelsUrl !== undefined ? { modelsUrl: resolved.modelsUrl } : {}),
-    ...(deps.connectionFetch !== undefined ? { fetchImpl: deps.connectionFetch(connectionId) } : {}),
+    ...(preview ? { fetchImpl: deps.preparedConnectionFetch!(resolved.prepared!.route) } : deps.connectionFetch !== undefined ? { fetchImpl: deps.connectionFetch(connectionId) } : {}),
   });
-  if (!outcome.ok || outcome.models.length === 0) {
-    return outcome;
+  if (!outcome.ok) return outcome;
+  if (preview) {
+    const unchanged = await withSettingsFileLock(deps.settingsPath, async () => {
+      const loaded = await loadSettings(deps.settingsPath, deps.logger);
+      const current = loaded.settings.provider.connections.find(item => item.id === connectionId);
+      if (!current || !resolved.prepared?.ok) return false;
+      const currentContext = await prepareModelFetchContext(loaded.settings, current, deps.vault, resolved.targetUrl);
+      return currentContext.ok && currentContext.guard === resolved.prepared.guard;
+    });
+    return unchanged ? { ...outcome, source: { baseUrl: resolved.savedBaseUrl, transport: resolved.savedTransport, targetUrl: resolved.targetUrl, guard: resolved.prepared!.guard } } : { ok: false, reason: "stale_fetch" };
   }
+  if (outcome.models.length === 0) return outcome;
   await withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
@@ -997,7 +1016,7 @@ export async function handleCustomProviderFetchModels(deps: ProviderIpcDeps, raw
     return handleConnectionAddModels(deps, parsed.data.connectionId, parsed.data.addModels);
   }
   if ("connectionId" in parsed.data) {
-    return handleConnectionFetchModels(deps, parsed.data.connectionId, fetchModels);
+    return handleConnectionFetchModels(deps, parsed.data.connectionId, fetchModels, parsed.data.preview === true);
   }
   if ("id" in parsed.data) {
     const { id } = parsed.data;

@@ -358,12 +358,14 @@ export type FetchModelsFailureReason =
   | "invalid_response"
   | "error_payload"
   | "empty_models"
-  | "read_only";
+  | "read_only"
+  | "system_proxy_unsupported"
+  | "stale_fetch";
 
 // a successful fetch may carry live per-model capabilities
 // (OpenRouter-style reasoning meta); both fields are optional additive metadata.
 export type FetchModelsOutcome =
-  | { ok: true; models: { id: string; reasoning?: boolean; effortLevels?: string[] }[] }
+  | { ok: true; models: { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true; contextWindow?: number; maxOutputTokens?: number; pricing?: { input: number; cachedInput: number; output: number } }[]; source?: { guard: string; targetUrl: string; baseUrl: string; transport: ProviderTransportId | "" } }
   | { ok: false; reason: FetchModelsFailureReason };
 
 export interface CustomProviderCreateRequest {
@@ -608,7 +610,7 @@ declare global {
           req:
             | { id: string }
             | { connectionId: string; addModels: string[] }
-            | { connectionId: string }
+            | { connectionId: string; preview?: true }
             | { baseUrl: string; apiKey?: string; kind?: CustomProviderRecord["kind"] },
         ): Promise<FetchModelsOutcome>;
       };

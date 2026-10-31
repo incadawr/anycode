@@ -130,7 +130,7 @@ try {
   }
   await click("Save");
   await poll(() => JSON.parse(readFileSync(join(profile, "settings.json"), "utf8")).provider.connections[0].modelOverrides?.b?.pricing?.output === 4);
-  await click("Done");
+  await click("Cancel");
   await evaluate("document.querySelector('.settings-dialog').dispatchEvent(new Event('cancel', {cancelable:true}))");
   await call("Page.reload", {});
   await poll(() => evaluate("!!document.querySelector('.sidebar-settings')"));

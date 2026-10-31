@@ -1,3 +1,9 @@
+import type { ProviderConnection } from "./settings.js";
+
+export function connectionChildModels(connection: ProviderConnection | undefined, customModels: readonly string[], catalogModels: readonly string[], environmentModel?: string): string[] {
+  return [...new Set([...(connection?.models ?? []), ...(connection?.visibleModels ?? []), ...customModels, ...catalogModels, ...(connection?.model ? [connection.model] : []), ...(environmentModel ? [environmentModel] : [])])];
+}
+
 /** A model override is an exact id on the selected connection, never an alias
  * sent speculatively to an unrelated compatible API. */
 export function assertChildModel(model: string, allowedModels: readonly string[]): void {
