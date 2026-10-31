@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
@@ -9,12 +9,14 @@ export function initializeIsolatedSmoke(app: {
   getAppPath(): string;
   setPath(name: "userData" | "sessionData", path: string): void;
   getPath(name: "userData" | "sessionData"): string;
-}, env: NodeJS.ProcessEnv): boolean {
+}, env: NodeJS.ProcessEnv, makeDirectory: (path: string) => void = mkdirSync): boolean {
   if (env.ANYCODE_ISOLATED_SMOKE === undefined) return false;
   try {
     if (env.ANYCODE_ISOLATED_SMOKE !== "1" || env.ANYCODE_AUTOMATION !== "1" || app.isPackaged || !app.commandLine.hasSwitch("use-mock-keychain")) throw new Error();
     const root = env.ANYCODE_ISOLATED_ROOT;
     if (!root || !isAbsolute(root) || lstatSync(root).isSymbolicLink() || !lstatSync(root).isDirectory()) throw new Error();
+    const rootStat = lstatSync(root);
+    if ((rootStat.mode & 0o077) !== 0 || (typeof process.getuid === "function" && rootStat.uid !== process.getuid())) throw new Error();
     const canonicalRoot = realpathSync(root);
     if (dirname(canonicalRoot) !== realpathSync(tmpdir())) throw new Error();
     const expected: Record<string, string> = {
@@ -27,17 +29,22 @@ export function initializeIsolatedSmoke(app: {
       ANYCODE_CODEX_BIN: join(root, "unavailable-engine"), ANYCODE_CLAUDE_BIN: join(root, "unavailable-engine"),
     };
     for (const [key, value] of Object.entries(expected)) if (env[key] !== value) throw new Error();
-    for (const leaf of ["user-data", "session-data", "telemetry", "db.sqlite", "automation.json", "settings.json", "secrets.json", "codex-home", "claude-home", "unavailable-engine", "identity.json"]) {
-      try { if (lstatSync(join(root, leaf)).isSymbolicLink()) throw new Error(); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    // The harness may pre-seed settings and its inert executable only. Every
+    // other application path must be created inside this fresh private root.
+    for (const leaf of readdirSync(root)) {
+      if (leaf !== "settings.json" && leaf !== "unavailable-engine") throw new Error();
+      const stat = lstatSync(join(root, leaf));
+      if (!stat.isFile() || stat.nlink !== 1 || (typeof process.getuid === "function" && stat.uid !== process.getuid())) throw new Error();
     }
     const binary = join(root, "unavailable-engine");
     if (!lstatSync(binary).isFile() || readFileSync(binary, "utf8") !== "#!/bin/sh\nexit 1\n") throw new Error();
     if (!env.ANYCODE_EXPECTED_DESKTOP_ROOT || realpathSync(app.getAppPath()) !== realpathSync(env.ANYCODE_EXPECTED_DESKTOP_ROOT) || !env.ANYCODE_SMOKE_IDENTITY) throw new Error();
     const userData = join(root, "user-data");
     const sessionData = join(root, "session-data");
-    mkdirSync(userData, { recursive: true });
-    mkdirSync(sessionData, { recursive: true });
+    // Only fresh directories are accepted: nested links in a reused profile
+    // could redirect Chromium outside the disposable root.
+    makeDirectory(userData);
+    makeDirectory(sessionData);
     if (realpathSync(userData) !== join(canonicalRoot, "user-data") || realpathSync(sessionData) !== join(canonicalRoot, "session-data")) throw new Error();
     app.setPath("userData", userData);
     app.setPath("sessionData", sessionData);

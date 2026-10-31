@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -24,7 +24,7 @@ describe("isolated automation startup", () => {
     expect(app.getPath("sessionData")).toBe(join(root, "session-data"));
     expect(env.PATH).not.toContain("dangerous");
   });
-  it.each(["gate", "keychain", "packaged", "path", "worktree", "setPath", "ignoredPath", "mkdir", "symlink"])("fails closed for %s", (fault) => {
+  it.each(["gate", "keychain", "packaged", "path", "worktree", "setPath", "ignoredPath", "mkdir", "symlink", "nestedSymlink", "hardlink"])("fails closed for %s", (fault) => {
     const { env, app, root } = fixture();
     if (fault === "gate") delete env.ANYCODE_AUTOMATION;
     if (fault === "keychain") app.commandLine.hasSwitch.mockReturnValue(false);
@@ -35,8 +35,18 @@ describe("isolated automation startup", () => {
     if (fault === "ignoredPath") app.getPath.mockReturnValue(tmpdir());
     if (fault === "mkdir") writeFileSync(join(root, "user-data"), "fixture");
     if (fault === "symlink") symlinkSync(tmpdir(), join(root, "user-data"));
+    if (fault === "hardlink") linkSync(join(root, "unavailable-engine"), join(root, "settings.json"));
+    if (fault === "nestedSymlink") { mkdirSync(join(root, "session-data")); symlinkSync(tmpdir(), join(root, "session-data", "Cache")); }
     expect(() => initializeIsolatedSmoke(app, env)).toThrow("startup aborted");
     if (["gate", "keychain", "packaged", "path", "worktree", "symlink"].includes(fault)) expect(app.setPath).not.toHaveBeenCalled();
+  });
+  it("aborts before setting an Electron path when directory creation fails", () => {
+    const { app, env } = fixture();
+    const makeDirectory = vi.fn(() => { throw new Error("synthetic failure"); });
+    expect(() => initializeIsolatedSmoke(app, env, makeDirectory)).toThrow("startup aborted");
+    expect(makeDirectory).toHaveBeenCalledOnce();
+    expect(app.setPath).not.toHaveBeenCalled();
+    expect(app.getPath).not.toHaveBeenCalled();
   });
   it("uses fixture storage without any operating system dependency", () => {
     expect(isolatedSmokeStorage.isEncryptionAvailable()).toBe(true);
