@@ -166,6 +166,94 @@ describe("ClaudeSettingsSeam (cut §1.5 D3, hazard (д))", () => {
 });
 
 /**
+ * The ACKNOWLEDGED MODEL path (`selectModelAndWait`, used by the Sessions API's
+ * session preparation through `set_session_model`): a created session must not
+ * be published before the CLI has adopted the model, and an id the live catalog
+ * offers nothing for must be a REFUSAL — never a quiet default.
+ */
+describe("ClaudeSettingsSeam — acknowledged model selection (set_session_model)", () => {
+  /** The live catalog's two-ids-per-model shape: the value on the wire, the full id the CLI reports. */
+  function twoIdCatalog(): ClaudeModelCatalog {
+    return ClaudeModelCatalog.fromInitialize([
+      { value: "model-a", resolvedModel: "claude-model-a-1", displayName: "A" },
+      { value: "model-b", resolvedModel: "claude-model-b-2", displayName: "B" },
+    ]);
+  }
+
+  function buildTwoIdEngine(transport: ClaudeTransport): ClaudeEngine {
+    return new ClaudeEngine(transport, "session-ref-1", undefined, {
+      catalog: twoIdCatalog(),
+      model: "model-a",
+      preset: findClaudePreset("ask")!,
+      effortsByModel: new Map(),
+      notices: [],
+    });
+  }
+
+  it("a FULL resolved id is translated to the catalog value and resolved only on the ack", async () => {
+    const transport = new ControlledTransport();
+    const engine = buildTwoIdEngine(transport);
+    const seam = new ClaudeSettingsSeam(engine);
+    const applied = vi.fn();
+    seam.onSettingsApplied(applied);
+
+    expect(seam.resolveModelId("claude-model-b-2")).toBe("model-b");
+    expect(seam.resolveModelId("claude-imaginary-9")).toBeNull();
+
+    const change = seam.selectModelAndWait("claude-model-b-2");
+    // In flight: nothing is published yet.
+    expect(seam.pendingSnapshot()).toEqual({ model: "model-b", activePresetId: "ask" });
+    expect(applied).not.toHaveBeenCalled();
+
+    transport.settleControl();
+    expect(await change).toEqual({ ok: true, model: "model-b", activePresetId: "ask" });
+    expect(seam.pendingSnapshot()).toBeNull();
+    expect(applied).toHaveBeenCalledWith({ model: "model-b", activePresetId: "ask" });
+    expect(seam.snapshot().model).toBe("model-b");
+  });
+
+  it("the alias for the same model behaves identically", async () => {
+    const transport = new ControlledTransport();
+    const seam = new ClaudeSettingsSeam(buildTwoIdEngine(transport));
+    const change = seam.selectModelAndWait("model-b");
+    transport.settleControl();
+    expect(await change).toEqual({ ok: true, model: "model-b", activePresetId: "ask" });
+  });
+
+  it("an id absent from the catalog is refused WITHOUT touching the wire, and nothing is pending", async () => {
+    const transport = new ControlledTransport();
+    const spy = vi.spyOn(transport, "controlRequest");
+    const seam = new ClaudeSettingsSeam(buildTwoIdEngine(transport));
+
+    expect(await seam.selectModelAndWait("claude-imaginary-9")).toEqual({
+      ok: false,
+      reason: 'Claude model "claude-imaginary-9" is not available for this account.',
+    });
+    expect(spy).not.toHaveBeenCalled();
+    expect(seam.pendingSnapshot()).toBeNull();
+    expect(seam.snapshot().model).toBe("model-a");
+  });
+
+  it("a rejected ack resolves { ok: false } and leaves the previous model applied", async () => {
+    const transport = new ControlledTransport();
+    const engine = buildTwoIdEngine(transport);
+    const seam = new ClaudeSettingsSeam(engine);
+    const applied = vi.fn();
+    seam.onSettingsApplied(applied);
+
+    const change = seam.selectModelAndWait("claude-model-b-2");
+    transport.rejectControl("claude refused");
+    const result = await change;
+
+    expect(result.ok).toBe(false);
+    expect(seam.pendingSnapshot()).toBeNull();
+    expect(applied).not.toHaveBeenCalled();
+    expect(seam.snapshot().model).toBe("model-a");
+    expect(engine.resolveModelId("claude-model-a-1")).toBe("model-a");
+  });
+});
+
+/**
  * The ACKNOWLEDGED effort path (`selectEffortAndWait`, used by the Sessions
  * API's session preparation): a created session must not be published before
  * the CLI has actually adopted the effort, so this method resolves only on the

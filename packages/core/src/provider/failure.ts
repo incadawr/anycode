@@ -9,6 +9,9 @@ import { classifyNetworkConfigurationFailure } from "./network-failure.js";
 import type { ModelStreamEvent } from "../types/events.js";
 import { isQuotaExhaustion, isRetryableStreamError, USAGE_LIMIT_PATTERN, matchesFailureText } from "./retry.js";
 
+export { MiniMaxBalanceFailure } from "./minimax-failure.js";
+import { MiniMaxBalanceFailure, unwrapMiniMaxFailure } from "./minimax-failure.js";
+
 /** True when `e` is model-generated output (content/reasoning/tool/finish), false for `start`/`error`/`stream_retry`. */
 export function isModelOutputEvent(e: ModelStreamEvent): boolean {
   switch (e.type) {
@@ -141,6 +144,7 @@ function extractMessage(error: unknown): string {
  * fallback logic.
  */
 export function extractStatusCode(error: unknown): number | undefined {
+  error = unwrapMiniMaxFailure(error);
   if (APICallError.isInstance(error)) return error.statusCode;
   if (!error || typeof error !== "object") return undefined;
   const candidate = error as { statusCode?: unknown; status?: unknown };
@@ -186,6 +190,10 @@ function isNetworkFailure(error: unknown, message: string): boolean {
  * These divergences are pinned in failure.test.ts (double-assert pins).
  */
 export function classifyProviderFailure(error: unknown): ProviderFailureClassification {
+  if (error instanceof MiniMaxBalanceFailure) {
+    const result = classifyProviderFailure(error.original);
+    return { ...result, safe: { ...result.safe, message: `${result.safe.message}. This is a pay-as-you-go key; for the M Plan subscription use a key starting with sk-cp-.` } };
+  }
   const statusCode = extractStatusCode(error);
   const message = extractMessage(error);
 

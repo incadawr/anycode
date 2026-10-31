@@ -1,3 +1,5 @@
+import { unwrapMiniMaxFailure } from "./minimax-failure.js";
+
 /** Shared measured undici tunnel/TLS shapes (desktop proxy-probe, TASK.134). */
 export const TUNNEL_STATUS_RE = /Proxy response \((\d{3})\)\s*!==\s*200/;
 export function isTlsCode(code: string | undefined, message: string): boolean {
@@ -50,6 +52,7 @@ export type NetworkConfigurationFailure = "proxy_unreachable" | "proxy_auth" | "
 export function classifyNetworkConfigurationFailure(
   error: unknown, env: Record<string, string | undefined> = process.env, targetUrl?: string,
 ): NetworkConfigurationFailure | undefined {
+  error = unwrapMiniMaxFailure(error);
   if (error instanceof NetworkConfigurationError) return error.configurationCode;
   const proxyForTarget = effectiveProxy(env, targetUrl);
   const seen = new Set<unknown>();

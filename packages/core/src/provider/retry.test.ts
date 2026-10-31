@@ -5,6 +5,7 @@
 
 import { APICallError } from "ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MiniMaxBalanceFailure } from "./minimax-failure.js";
 import { DEFAULT_RETRY_AFTER_CAP_MS, DEFAULT_STREAM_STALL_TIMEOUT_MS } from "../types/config.js";
 import {
   DEFAULT_RETRY_POLICY,
@@ -105,6 +106,12 @@ describe("retryDelayMs", () => {
   it("honors a numeric (seconds) retry-after header over backoff", () => {
     const error = apiCallError({ statusCode: 429, responseHeaders: { "retry-after": "2" } });
     expect(retryDelayMs(0, error, policy)).toBe(2_000);
+  });
+
+  it.each([429, 503])("preserves Retry-After for wrapped HTTP %d failures", (statusCode) => {
+    const error = apiCallError({ statusCode, responseHeaders: { "Retry-After": "30" } });
+    expect(retryDelayMs(0, error, policy)).toBe(30_000);
+    expect(retryDelayMs(0, new MiniMaxBalanceFailure(error), policy)).toBe(30_000);
   });
 
   it("is case-insensitive when reading the retry-after header", () => {

@@ -47,6 +47,21 @@ describe("diagnostics IPC (GitHub #18)", () => {
     expect(result.preview).toContain("anycode-diagnostics");
   });
 
+  it("previews the WHOLE bundle, the same text that save writes (no silent cut)", async () => {
+    const json = JSON.stringify({ format: "anycode-diagnostics", filler: "a".repeat(20_000), tail: "LAST-RECORD" });
+    const save = vi.fn(async () => ({ saved: true }));
+    const d = deps({ build: async () => build({ json }), save });
+
+    const preview = await handleDiagnosticsPreview(d, REQUEST);
+    expect(preview).toMatchObject({ ok: true, preview: json });
+    if (!preview.ok) return;
+    expect(preview.preview).toContain("LAST-RECORD");
+    expect(preview.preview).not.toContain("truncated");
+
+    await handleDiagnosticsSave(d, REQUEST);
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ content: json }));
+  });
+
   it("refuses a missing, malformed or path-shaped session id without building", async () => {
     const buildSpy = vi.fn(async () => build());
     const bad: unknown[] = [

@@ -3605,6 +3605,10 @@ void app.whenReady().then(async () => {
   // Taskana 4747: the Sessions API control plane. Folders come only from the native
   // dialog below; the renderer never sends a path. The stdio adapter is copied to
   // userData so an external client config survives app updates.
+  // Refreshed on every start, unconditionally: an MCP client config copied before
+  // an update points at this copy, so it must stop being an outdated adapter even
+  // when nobody opens the Sessions API settings again.
+  stdioAdapterForHost(app.getPath("userData"));
   if (communicationController !== null && communicationSessions !== null && communicationApprovals !== null && communicationAgentProjects !== null) {
     const commController = communicationController;
     registerCommunicationIpc({

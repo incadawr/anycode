@@ -66,6 +66,28 @@ export function describeDiagnosticsSections(summary: DiagnosticsSummary): string
     .join(" · ");
 }
 
+/** Characters shown before the reviewer has to ask for more (one "Show more" step). */
+export const DIAGNOSTICS_PREVIEW_PAGE_CHARS = 8_000;
+
+/**
+ * The first `shownChars` of the bundle text, plus how many characters are left
+ * hidden. A cut never splits a UTF-16 surrogate pair (the visible part grows by
+ * one unit instead), so the page never shows a broken glyph.
+ */
+export function pageDiagnosticsPreview(text: string, shownChars: number): { visible: string; hiddenChars: number } {
+  let end = Math.min(Math.max(0, shownChars), text.length);
+  if (end > 0 && end < text.length) {
+    const last = text.charCodeAt(end - 1);
+    if (last >= 0xd800 && last <= 0xdbff) end += 1;
+  }
+  return { visible: text.slice(0, end), hiddenChars: text.length - end };
+}
+
+/** The line under the preview: says exactly what is hidden and that the save has it all. */
+export function describeDiagnosticsHidden(visibleChars: number, totalChars: number): string {
+  return `Showing the first ${visibleChars.toLocaleString("en-US")} of ${totalChars.toLocaleString("en-US")} characters. The saved file contains all of them.`;
+}
+
 /**
  * The row lives in the environment dropdown of the ACTIVE tab, so it exports
  * the tree of the session the person is actually looking at. Without a bound
@@ -80,6 +102,7 @@ export function DiagnosticsExportSection() {
 
 export function DiagnosticsExportRow({ sessionId }: { sessionId: string | null }) {
   const [phase, setPhase] = useState<DiagnosticsExportPhase>({ step: "idle" });
+  const [shownChars, setShownChars] = useState(DIAGNOSTICS_PREVIEW_PAGE_CHARS);
   const bridge = typeof window !== "undefined" ? window.anycode?.diagnostics : undefined;
   const busy = phase.step === "previewing" || phase.step === "saving";
   const available = bridge !== undefined && sessionId !== null;
@@ -104,6 +127,7 @@ export function DiagnosticsExportRow({ sessionId }: { sessionId: string | null }
       setPhase({ step: "error", reason: result.reason });
       return;
     }
+    setShownChars(DIAGNOSTICS_PREVIEW_PAGE_CHARS);
     setPhase({ step: "preview", preview: result.preview, summary: result.summary });
   };
 
@@ -125,6 +149,7 @@ export function DiagnosticsExportRow({ sessionId }: { sessionId: string | null }
   };
 
   const showActions = phase.step === "preview" || phase.step === "saving";
+  const page = showActions ? pageDiagnosticsPreview(phase.preview, shownChars) : null;
 
   return (
     <>
@@ -170,10 +195,31 @@ export function DiagnosticsExportRow({ sessionId }: { sessionId: string | null }
           )}
         </span>
       </div>
-      {showActions && (
+      {showActions && page !== null && (
         <>
           <div className="environment-menu-note">{describeDiagnosticsSections(phase.summary)}</div>
-          <pre className="environment-menu-diagnostics-preview">{phase.preview}</pre>
+          <pre className="environment-menu-diagnostics-preview">{page.visible}</pre>
+          {page.hiddenChars > 0 && (
+            <div className="environment-menu-note environment-menu-row-detail-wrap">
+              <span>{describeDiagnosticsHidden(page.visible.length, phase.preview.length)}</span>{" "}
+              <button
+                type="button"
+                className="environment-menu-open"
+                data-environment-action="diagnostics-show-more"
+                onClick={() => setShownChars(shownChars + DIAGNOSTICS_PREVIEW_PAGE_CHARS)}
+              >
+                Show more
+              </button>{" "}
+              <button
+                type="button"
+                className="environment-menu-open"
+                data-environment-action="diagnostics-show-all"
+                onClick={() => setShownChars(phase.preview.length)}
+              >
+                Show all
+              </button>
+            </div>
+          )}
         </>
       )}
     </>

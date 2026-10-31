@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { classifyNetworkConfigurationFailure, contextualizeNetworkFailure } from "./network-failure.js";
+import { classifyNetworkConfigurationFailure, contextualizeNetworkFailure, NetworkConfigurationError } from "./network-failure.js";
+import { MiniMaxBalanceFailure } from "./minimax-failure.js";
 import { isRetryableStreamError } from "./retry.js";
 import { classifyProviderFailure } from "./failure.js";
 afterEach(() => vi.unstubAllEnvs());
@@ -22,6 +23,14 @@ describe("proxy/TLS failure without credential exposure", () => {
     expect(isRetryableStreamError(error)).toBe(false);
     expect(classifyProviderFailure(error).retryable).toBe(false);
     expect(JSON.stringify(classifyProviderFailure(error))).not.toContain("secret-poison");
+  });
+  it.each([
+    [new Error("TLS handshake failed"), "tls"],
+    [new Error("Proxy response (407) !== 200"), "proxy_auth"],
+    [new NetworkConfigurationError("proxy_unreachable", new Error("underlying failure")), "proxy_unreachable"],
+  ])("classifies wrapped network configuration failures like the original", (error, expected) => {
+    expect(classifyNetworkConfigurationFailure(error)).toBe(expected);
+    expect(classifyNetworkConfigurationFailure(new MiniMaxBalanceFailure(error))).toBe(expected);
   });
   it("bounds cyclic and aggregate cause chains", () => {
     const error: { cause?: unknown } = {}; error.cause = error;

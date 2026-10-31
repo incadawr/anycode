@@ -66,6 +66,20 @@ export function declaredPricingMode(raw: string | undefined): "subscription" | "
   } catch { return undefined; }
 }
 
+/** Add a key-derived default without changing an explicit connection choice. */
+export function pricingSnapshotWithKeyDefault(raw: string | undefined, entry: CatalogProviderEntry | undefined, key: string | undefined): string | undefined {
+  if (entry?.id !== "minimax" && entry?.id !== "minimax-cn") return raw;
+  if (declaredPricingMode(raw) !== undefined) return raw;
+  const mode = key?.startsWith("sk-cp-") ? "subscription" : key?.startsWith("sk-api-") ? "catalog" : undefined;
+  if (mode === undefined) return raw;
+  let value: unknown;
+  try { value = raw ? JSON.parse(raw) : undefined; } catch { return raw; }
+  if (value !== undefined && (value === null || typeof value !== "object" || Array.isArray(value))) return raw;
+  const object = (value ?? {}) as Record<string, unknown>;
+  if (Object.hasOwn(object, "mode")) return raw;
+  return JSON.stringify({ ...object, fallback: { mode, keyDerived: true } });
+}
+
 /** Read the connection snapshot passed by main; malformed overrides stay unknown. */
 export function connectionPricing(raw: string | undefined): { subscription: true } | { subscription: false; price: ModelPricing } | undefined {
   if (!raw) return undefined;
@@ -87,7 +101,7 @@ export function resolveUsagePrice(raw: string | undefined, model: string, catalo
   const envelope = Object.hasOwn(object, "fallback") || Object.hasOwn(object, "models");
   const fallback = envelope ? object.fallback : object;
   const fallbackPrice = connectionPricing(fallback === undefined ? undefined : JSON.stringify(fallback));
-  if (fallbackPrice?.subscription) return fallbackPrice;
+  if (fallbackPrice?.subscription && !(fallback && typeof fallback === "object" && (fallback as Record<string, unknown>).keyDerived === true)) return fallbackPrice;
   const models = object.models;
   if (envelope && models !== null && typeof models === "object" && !Array.isArray(models) && Object.hasOwn(models, model)) {
     const candidate = (models as Record<string, unknown>)[model];

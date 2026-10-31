@@ -746,7 +746,7 @@ describe("agent title resume wiring (production create_session → handle rename
 describe("create_session — effort preparation before publication", () => {
   const IDLE_STATUS = { sessionId: "sess-1", engine: "codex", state: "idle", steering: { supported: true, ready: false }, model: "gpt-6.1-terra", effort: null, supportedEfforts: ["low", "xhigh"], appliedEffort: null, effortPending: false };
 
-  it("configures effort before sharing or delivering the tab", async () => {
+  it("confirms the model, then the effort, before sharing or delivering the tab", async () => {
     const sequence: string[] = [];
     const requests: Array<{ operation: string; payload: unknown }> = [];
     const r = rig({
@@ -754,6 +754,10 @@ describe("create_session — effort preparation before publication", () => {
       respond: (operation, payload) => {
         requests.push({ operation, payload });
         if (operation === "get_session_status") return { result: IDLE_STATUS };
+        if (operation === "set_session_model") {
+          sequence.push("model-configured");
+          return { result: { ok: true, status: IDLE_STATUS } };
+        }
         if (operation === "set_session_effort") {
           sequence.push("effort-configured");
           return { result: { ok: true, status: { ...IDLE_STATUS, effort: "xhigh" } } };
@@ -774,12 +778,14 @@ describe("create_session — effort preparation before publication", () => {
     const outcome = await createSessionForAgent({ workspace: "/ws", engine: "codex", model: "gpt-6.1-terra", effort: "xhigh" }, r.deps());
     expect(outcome.ok).toBe(true);
 
-    // Readiness was probed first, then exactly one effort mutation carrying the
-    // RAW requested value.
-    expect(r.operations).toEqual(["get_session_status", "set_session_effort"]);
-    expect(requests[1]).toEqual({ operation: "set_session_effort", payload: { effort: "xhigh" } });
-    // Publication (registration) came after the effort, and the port last.
-    expect(sequence).toEqual(["effort-configured", "registered", "port-delivered"]);
+    // Readiness was probed first, then exactly one model mutation and one
+    // effort mutation, each carrying the RAW requested value. The model comes
+    // first: the effort is validated against the model the session really runs.
+    expect(r.operations).toEqual(["get_session_status", "set_session_model", "set_session_effort"]);
+    expect(requests[1]).toEqual({ operation: "set_session_model", payload: { model: "gpt-6.1-terra" } });
+    expect(requests[2]).toEqual({ operation: "set_session_effort", payload: { effort: "xhigh" } });
+    // Publication (registration) came after both, and the port last.
+    expect(sequence).toEqual(["model-configured", "effort-configured", "registered", "port-delivered"]);
     expect(delivered).toEqual([{ published: true, exposed: true }]);
   });
 
@@ -854,6 +860,7 @@ describe("create_session — effort preparation before publication", () => {
       sequence,
       respond: (operation) => {
         if (operation === "get_session_status") return { result: IDLE_STATUS };
+        if (operation === "set_session_model") return { result: { ok: true, status: IDLE_STATUS } };
         if (operation === "set_session_effort") return { result: { ok: false, reason: "invalid_effort", detail } };
         return undefined;
       },
@@ -897,6 +904,7 @@ describe("create_session — effort preparation before publication", () => {
       killExitDelayMs: 30,
       respond: (operation) => {
         if (operation === "get_session_status") return { result: IDLE_STATUS };
+        if (operation === "set_session_model") return { result: { ok: true, status: IDLE_STATUS } };
         if (operation === "set_session_effort") return { result: { ok: false, reason: "invalid_effort", detail } };
         return undefined;
       },
@@ -926,6 +934,7 @@ describe("create_session — effort preparation before publication", () => {
       holdKillExit: true,
       respond: (operation) => {
         if (operation === "get_session_status") return { result: IDLE_STATUS };
+        if (operation === "set_session_model") return { result: { ok: true, status: IDLE_STATUS } };
         if (operation === "set_session_effort") return { result: { ok: false, reason: "invalid_effort", detail } };
         return undefined;
       },
@@ -959,6 +968,7 @@ describe("create_session — effort preparation before publication", () => {
     const r = rig({
       respond: (operation) => {
         if (operation === "get_session_status") return { result: { ...IDLE_STATUS, engine: "claude", model: "claude-1" } };
+        if (operation === "set_session_model") return { result: { ok: true, status: { ...IDLE_STATUS, engine: "claude", model: "claude-1" } } };
         // Hold the acknowledgement, exactly like a control request still in flight.
         if (operation === "set_session_effort") return { defer: true };
         return undefined;
@@ -982,6 +992,107 @@ describe("create_session — effort preparation before publication", () => {
     expect(outcome.ok).toBe(true);
     expect(r.manager.listTabs().map((tab) => tab.sessionId)).toEqual(["sess-0"]);
     expect(delivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("confirms a FULL Claude model id on the new host, verbatim, before publication", async () => {
+    // The reported defect: `create_session {engine:"claude", model:"claude-haiku-5-5"}`
+    // opened a session that really ran the default model, because the value was
+    // resolved privately at boot and silently replaced. Now the SAME request is
+    // handed to the host's own catalog (`set_session_model`) before the tab
+    // exists for anyone, and an alias travels exactly the same way.
+    const requests: Array<{ operation: string; payload: unknown }> = [];
+    const r = rig({
+      respond: (operation, payload) => {
+        requests.push({ operation, payload });
+        if (operation === "get_session_status") return { result: { ...IDLE_STATUS, engine: "claude", model: "default" } };
+        if (operation === "set_session_model") {
+          return { result: { ok: true, status: { ...IDLE_STATUS, engine: "claude", model: "haiku" } } };
+        }
+        return undefined;
+      },
+    });
+    const outcome = await createSessionForAgent(
+      { workspace: "/ws", engine: "claude", model: "claude-haiku-5-5" },
+      r.deps(),
+    );
+    expect(outcome.ok).toBe(true);
+    expect(r.operations).toEqual(["get_session_status", "set_session_model"]);
+    expect(requests[1]).toEqual({ operation: "set_session_model", payload: { model: "claude-haiku-5-5" } });
+    // The argv still carries the request to the fork (the boot applies it too).
+    expect(r.forkArgs[0]).toEqual(expect.arrayContaining(["--engine-model", "claude-haiku-5-5"]));
+  });
+
+  it("an alias reaches the engine the same way, unchanged", async () => {
+    const requests: Array<{ operation: string; payload: unknown }> = [];
+    const r = rig({
+      respond: (operation, payload) => {
+        requests.push({ operation, payload });
+        if (operation === "get_session_status") return { result: { ...IDLE_STATUS, engine: "claude", model: "default" } };
+        if (operation === "set_session_model") return { result: { ok: true, status: { ...IDLE_STATUS, engine: "claude", model: "haiku" } } };
+        return undefined;
+      },
+    });
+    expect((await createSessionForAgent({ workspace: "/ws", engine: "claude", model: "haiku" }, r.deps())).ok).toBe(true);
+    expect(requests[1]).toEqual({ operation: "set_session_model", payload: { model: "haiku" } });
+  });
+
+  it("an unusable model is refused invalid_model and the prepared tab is rolled back", async () => {
+    // No silent default: a value the account offers nothing for is an explicit
+    // refusal carrying the host's complete detail, and nothing survives —
+    // no tab, no sharing, no handle, no leftover session row.
+    const detail = 'engine=claude; model="claude-imaginary-9"; available=["default","haiku"]; reason=not_advertised';
+    const sequence: string[] = [];
+    const exposed = new Map<string, boolean>();
+    const setHandle = vi.fn(() => ({ ok: true as const }));
+    const sessions: SessionAccessStore = {
+      isExposed: (id) => exposed.get(id) === true,
+      register: () => {},
+      remove: () => {},
+      set: (id, enabled) => (exposed.set(id, enabled), true),
+      exposedCount: () => exposed.size,
+      getHandle: () => undefined,
+      setHandle,
+      sessionIdByHandle: () => undefined,
+      getConfirmedTitle: () => undefined,
+      confirmTitle: () => {},
+    };
+    const r = rig({
+      sessions,
+      sequence,
+      respond: (operation) => {
+        if (operation === "get_session_status") return { result: { ...IDLE_STATUS, engine: "claude", model: "default" } };
+        if (operation === "set_session_model") return { result: { ok: false, reason: "invalid_model", detail } };
+        return undefined;
+      },
+    });
+    const deleted: string[] = [];
+    const outcome = await createSessionForAgent(
+      { workspace: "/ws", engine: "claude", model: "claude-imaginary-9", handle: "worker-1" },
+      r.deps({ deleteSessionRow: async (sessionId) => { sequence.push(`row-deleted:${sessionId}`); deleted.push(sessionId); } }),
+    );
+
+    expect(outcome).toEqual({ ok: false, reason: "invalid_model", detail });
+    expect(sequence).toEqual(["host-shutdown", "host-exit", "row-deleted:sess-0"]);
+    expect(deleted).toEqual(["sess-0"]);
+    expect(r.manager.listTabs()).toEqual([]);
+    expect(exposed.size).toBe(0);
+    expect(setHandle).not.toHaveBeenCalled();
+    // No effort was attempted after the model was refused.
+    expect(r.operations).toEqual(["get_session_status", "set_session_model"]);
+  });
+
+  it("a codex model the account does not offer is refused invalid_model, never replaced by the default", async () => {
+    const detail = 'engine=codex; model="gpt-imaginary"; available=["gpt-6.1-terra"]; reason=not_advertised';
+    const r = rig({
+      respond: (operation) => {
+        if (operation === "get_session_status") return { result: IDLE_STATUS };
+        if (operation === "set_session_model") return { result: { ok: false, reason: "invalid_model", detail } };
+        return undefined;
+      },
+    });
+    const outcome = await createSessionForAgent({ workspace: "/ws", engine: "codex", model: "gpt-imaginary" }, r.deps());
+    expect(outcome).toEqual({ ok: false, reason: "invalid_model", detail });
+    expect(r.manager.listTabs()).toEqual([]);
   });
 
   it("keeps non-active connection priming before host spawn", async () => {
