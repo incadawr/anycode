@@ -5,7 +5,7 @@ export { SafeCommandPermissionEngine } from "./safe-command-engine.js";
 export { classifyBashCommand } from "./safe-command.js";
 export type { BashCommandClass } from "./safe-command.js";
 export { isWithinWorkspace, isProvablyInsideWorkspace, WORKSPACE_CONFINED_WRITE_TOOLS } from "./workspace-policy.js";
-//  (cross-review F1): the desktop's claude/codex approval bridges
+// (cross-review F1): the desktop's claude/codex approval bridges
 // mint the SAME dispatch-site workspace facts the core dispatcher does, so a
 // foreign engine's Write/Edit approvals can be workspace-confined by
 // IpcPermissionBroker's rule seam. Exported through the permissions barrel
@@ -14,7 +14,7 @@ export { isWithinWorkspace, isProvablyInsideWorkspace, WORKSPACE_CONFINED_WRITE_
 export { resolveWorkspaceWriteFacts } from "../util/path-containment.js";
 export { classifyBashCommandLine } from "./safe-command.js";
 export type { BashCommandLineClassification } from "./safe-command.js";
-// : the shared classification-to-plaque mapping (CLI terminal
+// the shared classification-to-plaque mapping (CLI terminal
 // broker, desktop modal, Codex commandExecution approvals).
 export {
   BASH_RISK_PLAQUE,
@@ -25,13 +25,13 @@ export {
   WRITE_CAPABLE_BINARIES,
 } from "./bash-risk-plaque.js";
 export type { BashRiskFacts, BashRiskPlaque } from "./bash-risk-plaque.js";
-//  handoff (invariant 2): the ONE Bash segment splitter, exported.
+// handoff (invariant 2): the ONE Bash segment splitter, exported.
 export { splitBashSegments } from "./rules.js";
 export type { BashSegments, BashSeparatorKind } from "./rules.js";
-//  slice 2: per-run Bash allow-list decorator (ANYCODE_RUN_ALLOW_BASH).
+// slice 2: per-run Bash allow-list decorator (ANYCODE_RUN_ALLOW_BASH).
 export { parseRunAllowBash, RunAllowBashPermissionEngine } from "./run-allow-bash.js";
 export type { RunAllowBashEntry } from "./run-allow-bash.js";
-//  Stage 1: ask-zone classifier (pure core) and its external-command implementation.
+// Stage 1: ask-zone classifier (pure core) and its external-command implementation.
 export {
   ASK_CLASSIFIER_DEFAULT_TIMEOUT_MS,
   ASK_CLASSIFIER_MAX_COMMAND_CHARS,
@@ -56,7 +56,7 @@ export type {
 } from "./ask-classifier.js";
 export { createCommandAskClassifier, parseClassifierCommand } from "./command-classifier.js";
 export type { CommandClassifierOptions } from "./command-classifier.js";
-//  (4702 remainder), implementation B: a model-completion classifier.
+// (4702 remainder), implementation B: a model-completion classifier.
 export {
   MODEL_CLASSIFIER_MAX_OUTPUT_TOKENS,
   MODEL_CLASSIFIER_MAX_REPLY_CHARS,
@@ -66,7 +66,7 @@ export {
   createModelAskClassifier,
 } from "./model-classifier.js";
 export type { ModelClassifierOptions } from "./model-classifier.js";
-// : the ONE shared consultation + event shape (dispatcher and the
+// the ONE shared consultation + event shape (dispatcher and the
 // engine-session broker decorator both emit through this).
 export { consultAskClassifier, isPermissionAutoDecidedEvent } from "./ask-classifier-consult.js";
 export type { AskClassifierConsultConfig, AskClassifierConsultation } from "./ask-classifier-consult.js";

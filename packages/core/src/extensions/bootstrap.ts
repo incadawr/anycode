@@ -101,7 +101,7 @@ export interface DiscoverExtensionsOptions extends ProjectTrustOptions, McpResol
   /** Server names already claimed by explicit config (so it always wins over plugins). */
   claimedMcpNames?: Set<string>;
   /**
-   *  S1-A (design §7 host wiring): managed plugin state path,
+   * S1-A (design §7 host wiring): managed plugin state path,
    * app version, reserved builtin name sets, and the MCP consent list — all
    * OPTIONAL passthroughs to discoverPlugins; absent on legacy callers
    * (CLI, older host wiring), keeping their boot byte-identical.
@@ -354,7 +354,7 @@ export async function discoverExtensions(
 
   // Workflow discovery is the fourth subsystem (design §2.9): independent
   // fail-soft block, symmetric with the three above. Roots are project >
-  // user > plugin roots ( S1-A, design §8: plugin workflow roots
+  // user > plugin roots (S1-A, design §8: plugin workflow roots
   // sit BETWEEN user and bundled — a plugin preset shadows the bundled
   // deep-research while project/user definitions shadow the plugin) >
   // bundled presets.

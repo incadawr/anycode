@@ -30,9 +30,9 @@ export interface ProfileStats {
   subagentRuns: number;
   /** True when the scan stopped early on PROFILE_STATS_MAX_SCAN_BYTES. */
   truncated: boolean;
-  /** Telemetry track ( slice 1) additions — additive, §2.6 of
+  /** Telemetry track (slice 1) additions — additive, §2.6 of
    *  telemetry-track-plan.md; these are projections over the SAME single scan.
-   *  (S10: the pre- `dailyTokens`/`topTools`/`topModels` top-N/single-map
+   *  (S10: the pre-`dailyTokens`/`topTools`/`topModels` top-N/single-map
    *  fields these superseded have been removed — `days`/`models` below are the
    *  only wire source for daily totals and tool/model breakdowns now.) */
   /** dayKey (same `dayKey(ts)` call used throughout this module) -> that day's stats. */
@@ -104,7 +104,7 @@ export interface AggregateProfileStatsOptions {
   dayKey?: (ts: number) => string;
   /** Cumulative processed-line char budget for the WHOLE scan; defaults to
    *  PROFILE_STATS_MAX_SCAN_BYTES. `Infinity` disables truncation entirely —
-   *  that is the uncapped oracle the  S2 equivalence harness compares
+   *  that is the uncapped oracle the S2 equivalence harness compares
    *  the per-file partial path against (partials never truncate a file, so
    *  equivalence is only ever claimed for FULL files). Additive: existing
    *  callers that omit it keep the exact previous behavior. */
@@ -142,7 +142,7 @@ interface SessionAgg {
   timestamps: number[];
   model: string | undefined;
   tokens: number;
-  /** Telemetry track ( slice 1, deferred join — trap 158-1): usage
+  /** Telemetry track (slice 1, deferred join — trap 158-1): usage
    *  tokens NOT overridden by a `sub.model` (master-tier, or a subagent that
    *  ran on the session's own model), bucketed by dayKey. Joined to
    *  `model ?? "(unknown)"` and to `engine` only AFTER the scan, because
@@ -339,7 +339,7 @@ export type ActivityCluster = [start: number, end: number];
  * the CANONICAL form: sorted by start, pairwise disjoint, and split exactly
  * where a gap exceeds the cap.
  *
- * WHY CLUSTERS EXIST ( S3): the incremental cache computes a
+ * WHY CLUSTERS EXIST (S3): the incremental cache computes a
  * cross-file session's exact activity over SEVERAL passes, one participant
  * file at a time. Clusters are the state it carries between passes because
  * this fold is associative and commutative — participants may arrive in any
@@ -429,7 +429,7 @@ export function aggregateProfileStats(
 
   const sessions = new Map<string, SessionAgg>();
 
-  // Telemetry track ( slice 1): per-day aggregate, keyed by the SAME
+  // Telemetry track (slice 1): per-day aggregate, keyed by the SAME
   // dayKey(ts) call used everywhere else in this scan (158-trap-2 — never a
   // second formatter). Model attribution inside a day is a deferred join
   // (158-trap-1); see the post-scan fold below.
@@ -564,7 +564,7 @@ export function aggregateProfileStats(
     if (active > longestSessionMs) longestSessionMs = active;
   }
 
-  // Telemetry track ( slice 1) — deferred joins, post-scan (158-trap-1/2):
+  // Telemetry track (slice 1) — deferred joins, post-scan (158-trap-1/2):
   // full model list + per-day model breakdown + engineTokens + days[d].sessions.
   // Session-level attribution ONLY (`session.tokensByDay`, built above from
   // usage records with no sub.model override) feeds `sessions`/`engine` here;
@@ -712,7 +712,7 @@ export function aggregateProfileStats(
 }
 
 // ---------------------------------------------------------------------------
-//  S2 — per-file partials + merge.
+// S2 — per-file partials + merge.
 //
 // Why a second path exists at all: opening the owner's ~58 763 sink files
 // costs ~16 s per Profile-pane open, and 90 % of that is the file opens

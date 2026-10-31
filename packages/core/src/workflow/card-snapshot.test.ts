@@ -1,5 +1,5 @@
 /**
- * Pure reducer tests for the persisted workflow card snapshot ( slice
+ * Pure reducer tests for the persisted workflow card snapshot (slice
  * S5). Hermetic: feeds WorkflowCardEvent values directly into the three pure
  * functions, no ports/tools involved. Mirror of subagents/card-snapshot.test.ts.
  */
@@ -62,7 +62,7 @@ function end(overrides: Partial<Extract<WorkflowCardEvent, { type: "workflow_end
 }
 
 describe("reduceWorkflowCardEvent — workflow_start", () => {
-  it("creates identity and the full step graph, dependsOn included ( S5 pin: dependsOn survives into the snapshot)", () => {
+  it("creates identity and the full step graph, dependsOn included (S5 pin: dependsOn survives into the snapshot)", () => {
     const acc = reduceWorkflowCardEvent(createWorkflowCardAccumulator(), start());
     expect(acc.started).toBe(true);
     expect(acc.identity).toEqual({ workflow: "build", totalSteps: 2 });
@@ -140,7 +140,7 @@ describe("reduceWorkflowCardEvent — workflow_step_activity", () => {
     expect(acc.entries).toEqual([]);
   });
 
-  it("ring cap: keeps the last WORKFLOW_CARD_ACTIVITY_RING entries across the WHOLE RUN, tail survives, dropped counts the eviction ( S5 pin: ring eviction)", () => {
+  it("ring cap: keeps the last WORKFLOW_CARD_ACTIVITY_RING entries across the WHOLE RUN, tail survives, dropped counts the eviction (S5 pin: ring eviction)", () => {
     let acc = reduceWorkflowCardEvent(createWorkflowCardAccumulator(), start());
     const total = WORKFLOW_CARD_ACTIVITY_RING + 11;
     for (let i = 0; i < total; i += 1) {
@@ -181,7 +181,7 @@ describe("reduceWorkflowCardEvent — workflow_step_end", () => {
     expect(acc.results.get("a")).toEqual({ status: "completed", turns: 3, durationMs: 250 });
   });
 
-  it("copies usage through untouched when present ( S5 pin: per-step spend)", () => {
+  it("copies usage through untouched when present (S5 pin: per-step spend)", () => {
     let acc = reduceWorkflowCardEvent(createWorkflowCardAccumulator(), start());
     acc = reduceWorkflowCardEvent(
       acc,
@@ -197,7 +197,7 @@ describe("reduceWorkflowCardEvent — workflow_step_end", () => {
     expect(result && "usage" in result).toBe(false);
   });
 
-  it("records a 'skipped' step end (never-launched step,  S3's synthetic end)", () => {
+  it("records a 'skipped' step end (never-launched step, S3's synthetic end)", () => {
     let acc = reduceWorkflowCardEvent(createWorkflowCardAccumulator(), start());
     acc = reduceWorkflowCardEvent(acc, stepEnd({ stepId: "b", status: "skipped", turns: 0, durationMs: 0 }));
     expect(acc.results.get("b")).toEqual({ status: "skipped", turns: 0, durationMs: 0 });
@@ -216,7 +216,7 @@ describe("reduceWorkflowCardEvent — workflow_step_end", () => {
     expect(acc.results.get("a")).toEqual({ status: "completed", turns: 2, durationMs: 100 });
   });
 
-  it("copies failure and unlaunched through untouched when present ( slice S2)", () => {
+  it("copies failure and unlaunched through untouched when present (slice S2)", () => {
     let acc = reduceWorkflowCardEvent(createWorkflowCardAccumulator(), start());
     acc = reduceWorkflowCardEvent(
       acc,
@@ -271,7 +271,7 @@ describe("reduceWorkflowCardEvent — workflow_end", () => {
 describe("finalizeWorkflowCard", () => {
   const fallback = { status: "failed" as const, durationMs: 42 };
 
-  it("returns null when the run never started ( S5 pin: the card is never fabricated)", () => {
+  it("returns null when the run never started (S5 pin: the card is never fabricated)", () => {
     const snapshot = finalizeWorkflowCard(createWorkflowCardAccumulator(), fallback);
     expect(snapshot).toBeNull();
   });
@@ -299,7 +299,7 @@ describe("finalizeWorkflowCard", () => {
     expect(snapshot?.steps.every((s) => !("result" in s))).toBe(true);
   });
 
-  it("produces the full V1 shape: dependsOn on the graph, a skipped step's result, dropped, activity, final ( S5 pins: dependsOn + skipped + dropped + usage)", () => {
+  it("produces the full V1 shape: dependsOn on the graph, a skipped step's result, dropped, activity, final (S5 pins: dependsOn + skipped + dropped + usage)", () => {
     let acc = reduceWorkflowCardEvent(createWorkflowCardAccumulator(), start());
     acc = reduceWorkflowCardEvent(acc, activity("a", "Read", "file.ts"));
     acc = reduceWorkflowCardEvent(
@@ -307,7 +307,7 @@ describe("finalizeWorkflowCard", () => {
       stepEnd({ stepId: "a", status: "completed", turns: 2, durationMs: 500, usage: { totalTokens: 40 } }),
     );
     // "b" depends on "a"; here it never actually launched (engine fail-fast) —
-    //  slice S3's synthetic skipped end.
+    // slice S3's synthetic skipped end.
     acc = reduceWorkflowCardEvent(acc, stepEnd({ stepId: "b", status: "skipped", turns: 0, durationMs: 0 }));
     acc = reduceWorkflowCardEvent(acc, end({ status: "failed", completedSteps: 1, totalSteps: 2, durationMs: 600 }));
 

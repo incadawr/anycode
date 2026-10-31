@@ -1,5 +1,5 @@
 /**
- *  Stage 1: the ask-zone classifier's pure core. Pins the
+ * Stage 1: the ask-zone classifier's pure core. Pins the
  * eligibility gate (what may even be CONSULTED), the verdict validator (what
  * the classifier may say back), the fail-closed wrapper `classifyAsk`, and the
  * bounded user-context helper. Invariant under test everywhere: the classifier
@@ -111,7 +111,7 @@ describe("isClassifiableAsk — eligibility gate", () => {
     expect([...SHELL_PIPE_TARGETS]).toContain("sh");
   });
 
-  //  xfix D2 (belt-and-braces): a pipe into a script-RUNTIME
+  // xfix D2 (belt-and-braces): a pipe into a script-RUNTIME
   // binary (node/python/perl/ruby/env/deno/bun) is the same
   // "download and run" shape as a pipe into a shell — never classifiable,
   // whatever the classifier's context says.

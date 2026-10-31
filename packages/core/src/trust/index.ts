@@ -77,7 +77,7 @@ export async function resolveWorkspaceTrust(
   fs: FileSystemPort,
   opts: WorkspaceTrustOptions,
 ): Promise<WorkspaceTrustResult> {
-  // : the folder key is the REAL path when a realpath is
+  // the folder key is the REAL path when a realpath is
   // injected; the legacy `resolve` key is kept for the read fallback below so
   // pre-4739 records keep working until the startup migration rewrites them.
   const folder = canonicalWorkspaceKey(opts.workspace, opts.realpathSync);

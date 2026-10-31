@@ -1,5 +1,5 @@
 /**
- * Tests for parseRunAllowBash + RunAllowBashPermissionEngine ( slices
+ * Tests for parseRunAllowBash + RunAllowBashPermissionEngine (slices
  * 2–3). Mirrors safe-command-engine.test.ts's structure: unit tests against a
  * fixed "ask always" base to isolate the narrowing logic, then a composed
  * suite over the real production chain shape (ModePermissionEngine ->

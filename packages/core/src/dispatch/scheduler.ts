@@ -3,7 +3,7 @@
  * (proposal order preserved, batches sequential, parallel inside a batch up to
  * maxConcurrency) and executes them through the dispatcher.
  *
- *  execution model: planning still produces cap-bounded SAFE batches and
+ * execution model: planning still produces cap-bounded SAFE batches and
  * solo barriers, but execution merges adjacent safe batches (including a safe
  * cap-remainder) into ONE run served by a rolling FIFO slot pool — as soon as
  * any safe handler finishes, the next waiting call starts. Solo barriers

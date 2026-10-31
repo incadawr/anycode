@@ -175,7 +175,7 @@ async function loadSource(
  * []}` silently at zero cost; a present-but-invalid/misconfigured section
  * yields `{backend: null, issues: [...]}` (boot warns, never fails).
  *
- *  xfix D2: `opts.projectTrusted === false` skips the PROJECT
+ * xfix D2: `opts.projectTrusted === false` skips the PROJECT
  * source only (the section carries a network endpoint every query is sent
  * to — exactly the same trust question as project MCP/hooks): the user
  * section still loads, and one issue line reports the skipped file. Absent

@@ -99,7 +99,7 @@ const MIGRATIONS: readonly Migration[] = [
   {
     version: 4,
     statements: [
-      // Codex shadow command log (codex-fixes , cut §2(e)): the native
+      // Codex shadow command log (codex-fixes, cut §2(e)): the native
       // `thread/read` never persists `commandExecution` items, not even
       // successful ones, so a relaunch would otherwise lose every command's
       // output. `(thread_id, item_id)` is the primary key so a duplicate live
@@ -194,7 +194,7 @@ const MIGRATIONS: readonly Migration[] = [
   {
     version: 10,
     statements: [
-      // Provider connection pinned to a session ( W10). Additive-only,
+      // Provider connection pinned to a session (W10). Additive-only,
       // nullable: every pre-v10 row reads back NULL (no connectionId), which is
       // the documented legacy-session fallback. New core sessions store their
       // pinned connection id here so resume resolves the same account/credential.
@@ -248,7 +248,7 @@ const MIGRATIONS: readonly Migration[] = [
     // reachable on an existing install rather than only on a fresh one.
     version: 16,
     statements: [
-      // Child-session identity ( S2a §2.4): a child session's row
+      // Child-session identity (S2a §2.4): a child session's row
       // carries the parent it was spawned from plus the exact Agent
       // tool-call id that spawned it. Both NULL is a root session (every
       // pre-v16 row, and every root session created after v16) — root-only
@@ -257,7 +257,7 @@ const MIGRATIONS: readonly Migration[] = [
       // stays OFF app-wide; the cascade delete is explicit, see
       // deleteSessionTree).
       "ALTER TABLE sessions ADD COLUMN parent_session_id TEXT",
-      // CHECK ( S2 review MAJOR, opus+Luna): the pair is structural,
+      // CHECK (S2 review MAJOR, opus+Luna): the pair is structural,
       // not advisory — a one-sided row (parent set, spawn NULL, or vice
       // versa) is invisible to listRootSessions/getRootSession (excluded by
       // `parent_session_id IS NULL`) yet unreachable via getChildSession
@@ -313,7 +313,7 @@ const MIGRATIONS: readonly Migration[] = [
     ],
   },
   {
-    // Vision-fallback image registry counter ( plan §2, slice B1):
+    // Vision-fallback image registry counter (plan §2, slice B1):
     // the NEXT ref reserveImageRef will hand out for this session. An atomic
     // persistent counter, not a history scan — a scan would reuse a number
     // after compaction dropped the highest-ref image (plan §2 finding). Every
@@ -333,7 +333,7 @@ const MIGRATIONS: readonly Migration[] = [
     statements: ["ALTER TABLE sessions ADD COLUMN next_image_ref INTEGER NOT NULL DEFAULT 1"],
   },
   {
-    // Persistent per-step provider-usage audit ( / ):
+    // Persistent per-step provider-usage audit:
     // append-only, one row per COMPLETED model step (a core `finish`). The
     // PK (session_id, turn_id, step) makes the write idempotent per step —
     // a replayed/duplicate finish after a renderer reconnect writes nothing
@@ -362,7 +362,7 @@ const MIGRATIONS: readonly Migration[] = [
     ],
   },
   {
-    //  ( residual): durable pending detached-child reports.
+    // (residual): durable pending detached-child reports.
     // The host snapshots ChildReportQueue's whole state here on every mutation
     // and restores it before the Session's first ui_ready. Nullable: NULL (every
     // pre-v20 row, and every session with nothing pending) = nothing to restore.
@@ -454,7 +454,7 @@ const MIGRATIONS: readonly Migration[] = [
  *
  * The column names the last time the session was ACTIVE — that is how every
  * consumer already reads it: the sidebar's row order and its `7d` age label,
- * the session picker, the maintenance sweep. Until  only metadata
+ * the session picker, the maintenance sweep. Until only metadata
  * edits (title/model/mode/worktree) ever wrote it, so a session could talk for
  * hours without its own row moving. Measured on the owner's live database
  * before this fix: `updated_at` lagged the last message by up to 3.3 days, and
@@ -480,7 +480,7 @@ function touchSessionActivity(db: DatabaseSync, sessionId: string, items: readon
 }
 
 /**
- * : the ONE activity-read rule, shared by listRootSessions (row order
+ * the ONE activity-read rule, shared by listRootSessions (row order
  * + the projected `updatedAt` the sidebar's age label reads) and
  * listSessionsOlderThan (bulk-delete cutoff) — one rule, not two. Writes keep
  * the shipped monotonic `updated_at` (touchSessionActivity + migration 17);
@@ -695,7 +695,7 @@ interface CheckpointRow {
  * An empty string is NOT NULL in SQL (it would sail past the migration v13
  * CHECK's `IS NULL` comparisons on both sides at once) but reads back as
  * root through `rowToSessionMeta`'s `length > 0` guard — the exact
- * SQL-vs-projection discrepancy  S2 review flagged (opus+Luna).
+ * SQL-vs-projection discrepancy S2 review flagged (opus+Luna).
  * Folding an empty string to `null` here, at the single write site, keeps
  * "absent" meaning exactly one thing on disk.
  */
@@ -721,7 +721,7 @@ function rowToCheckpointMeta(row: CheckpointRow): CheckpointMeta {
 const CHECKPOINTS_KEEP_PER_SESSION = 50;
 
 // ---------------------------------------------------------------------------
-// Codex shadow command log (migration v4, codex-fixes  cut §2(e);
+// Codex shadow command log (migration v4, codex-fixes cut §2(e);
 // `seq_in_turn` added + all pre-existing rows deleted by migration v5, W6 —
 // v4-era rows were written in a coordinate space `thread/read`'s actual
 // native-item subset cannot be reconciled against, see MIGRATIONS above)
@@ -766,7 +766,7 @@ function rowToCodexShadowCommandItem(row: CodexThreadItemRow): CodexShadowComman
 }
 
 // ---------------------------------------------------------------------------
-// Provider usage audit ( / ) — migration v19. One row per
+// Provider usage audit — migration v19. One row per
 // completed core model step, written fire-and-forget by the desktop host's
 // write-behind recorder. Numbers and enums only — no keys, no payloads, no
 // prompts; a NULL token column means "provider did not report", never 0.
@@ -889,7 +889,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       mkdirSync(dirname(this.dbPath), { recursive: true });
     }
     const db = new DatabaseSync(this.dbPath);
-    //  CUT-S2 §10.15.2: without a busy handler, a second concurrent
+    // CUT-S2 §10.15.2: without a busy handler, a second concurrent
     // writer's write-lock acquisition (below, and every write this adapter
     // does afterwards) fails IMMEDIATELY with "database is locked" instead of
     // waiting for the first writer to release it. Must be set before the WAL
@@ -967,14 +967,14 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   }
 
   /**
-   * Root-only, filtered BEFORE any LIMIT ( S2a A2): the WHERE clause
+   * Root-only, filtered BEFORE any LIMIT (S2a A2): the WHERE clause
    * carries `parent_session_id IS NULL` in the SAME query as the optional
    * workspace filter and the LIMIT, so SQLite excludes every child row before
    * counting rows toward the limit. A post-query JS `.filter()` here would be
    * the exact anti-facade CUT-S2 §5.6 warns about — an old root session could
    * silently starve a `limit:1` page out from behind a pile of fresh children.
    *
-   * : row order and the returned `updatedAt` both follow the shared
+   * row order and the returned `updatedAt` both follow the shared
    * activity rule (SESSION_LAST_ACTIVITY_SQL) — a metadata edit after the
    * last history record no longer floats the row.
    */
@@ -1005,7 +1005,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
 
   /**
    * Maintenance selection: every row, including children — no filter; an
-   * optional `limit` caps the page ( S2 review MINOR) without
+   * optional `limit` caps the page (S2 review MINOR) without
    * narrowing WHICH rows are eligible — omitting it still returns everyone.
    */
   async listSessionsForMaintenance(opts?: { limit?: number }): Promise<SessionMeta[]> {
@@ -1040,7 +1040,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   }
 
   /**
-   * Authorized child access ( S2a §2.4): the WHERE clause matches
+   * Authorized child access (S2a §2.4): the WHERE clause matches
    * BOTH `parent_session_id` and `spawn_tool_call_id` against the caller's
    * claimed parent — a row that belongs to a DIFFERENT parent simply never
    * matches, so this is authorization by construction, not a permission
@@ -1063,7 +1063,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   }
 
   /**
-   * Transactional cascade delete ( S2a §2.4, cut §1 p.4 — no PRAGMA
+   * Transactional cascade delete (S2a §2.4, cut §1 p.4 — no PRAGMA
    * foreign_keys, explicit DELETEs instead). The recursive CTE walks
    * `parent_session_id` links from `rootId` outward (root sessions have no
    * children of their own children in S2, but this does not assume that —
@@ -1071,7 +1071,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
    * `rootId` does not name an actual session, making an unknown id a clean
    * no-op rather than a special case.
    *
-   * `UNION` (not `UNION ALL`,  S2 review MAJOR, opus): nothing in the
+   * `UNION` (not `UNION ALL`, S2 review MAJOR, opus): nothing in the
    * schema forbids `parent_session_id` from forming a cycle (no CHECK, no
    * FK — cut §1 p.4), and `DatabaseSync` is synchronous, so a `UNION ALL`
    * recursive step re-deriving the same id forever would not throw or time
@@ -1092,7 +1092,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
 
   /**
    * The cascade ENGINE (body of `deleteSessionTree` above), factored out to
-   * run inside an ALREADY-open transaction — 's `deleteSessions`
+   * run inside an ALREADY-open transaction —'s `deleteSessions`
    * batch-delete calls it per root inside ONE transaction. Adds per-table
    * `counts` (rows each DELETE removed) for `SessionDeleteSummary`; the
    * public `deleteSessionTree` contract (three reviews + live smoke) drops
@@ -1126,7 +1126,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     const idPlaceholders = deletedSessionIds.map(() => "?").join(", ");
     counts.historyItems = Number(db.prepare(`DELETE FROM history_items WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds).changes);
     counts.checkpoints = Number(db.prepare(`DELETE FROM checkpoints WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds).changes);
-    //  / : the usage audit is keyed by the AnyCode session
+    // /the usage audit is keyed by the AnyCode session
     // id directly (unlike the shadow logs' native engine refs), so it cascades
     // with the same placeholders as history/checkpoints.
     counts.providerUsage = Number(db.prepare(`DELETE FROM provider_usage WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds).changes);
@@ -1140,7 +1140,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     // and claude/shadow-transcript.ts. That ref is opaque and nothing
     // enforces its uniqueness ACROSS engines, so the SAME literal ref can
     // legally name a codex thread on one session and an unrelated claude
-    // transcript on another ( S2 review BLOCKER, Luna). Scoping
+    // transcript on another (S2 review BLOCKER, Luna). Scoping
     // each ref's DELETE to the deleted row's OWN `engine_id` — rather than
     // trying both tables for every ref — means a collision with a
     // SURVIVING sibling's ref in the other engine's table can never be
@@ -1484,7 +1484,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
 
   /**
    * Atomically reserves and returns the session's next vision-fallback image
-   * ref ( plan §2). ONE UPDATE statement does the whole job: the
+   * ref (plan §2). ONE UPDATE statement does the whole job: the
    * RETURNING expression is evaluated against the row's POST-update state
    * (SQLite semantics), so `next_image_ref - 1` there is exactly the
    * pre-increment value — the number to hand out — while the stored column
@@ -1506,7 +1506,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   }
 
   /**
-   *  ( residual): writes the parent session's pending
+   * (residual): writes the parent session's pending
    * detached-child-report queue snapshot. Deliberately does NOT touch
    * updated_at — that column is the sidebar's LAST-ACTIVITY order
    * (touchSessionActivity's contract) and a durability bookkeeping write
@@ -1728,7 +1728,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   }
 
   // -------------------------------------------------------------------------
-  // Provider usage audit ( / , migration v19). Additive to
+  // Provider usage audit (migration v19). Additive to
   // PersistencePort — host-only usage, never consumed through that interface
   // (mirrors the shadow-log precedents above).
 
@@ -1818,9 +1818,9 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
 
   // -------------------------------------------------------------------------
   // Session hard-delete. The cascade ENGINE is `deleteSessionTree`
-  // above ( S2a §2.4 — recursive CTE, cycle guard via plain UNION,
+  // above (S2a §2.4 — recursive CTE, cycle guard via plain UNION,
   // per-engine scoping of shadow-table ref deletes; three reviews + live
-  // smoke). The  methods below are THIN WRAPPERS over that engine:
+  // smoke). The methods below are THIN WRAPPERS over that engine:
   // they add the `SessionDeleteSummary` aggregate (deleted roots, every
   // removed row, per-table counts) and the bulk "older than" selection.
   // The active-session gate is the caller's job (main/tab-ipc.ts).
@@ -1843,13 +1843,13 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     target.counts.providerUsage += add.counts.providerUsage;
   }
 
-  /** : one root — `deleteSessionTree`'s engine + the summary aggregate. */
+  /** one root — `deleteSessionTree`'s engine + the summary aggregate. */
   async deleteSession(rootId: string): Promise<SessionDeleteSummary> {
     return this.deleteSessions([rootId]);
   }
 
   /**
-   * : every root's cascade in ONE transaction (a mid-batch failure
+   * every root's cascade in ONE transaction (a mid-batch failure
    * rolls back all earlier roots of the same call). `deleted` names only the
    * roots that actually left the table; unknown ids are a no-op.
    */
@@ -1884,7 +1884,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     // a week-fresh session under a "older than 7 days" filter for an
     // IRREVERSIBLE bulk delete. Fallback to `updated_at` for sessions with
     // no history (never resumed/flushed) — their only activity witness.
-    // : the expression lives in SESSION_LAST_ACTIVITY_SQL, shared
+    // the expression lives in SESSION_LAST_ACTIVITY_SQL, shared
     // with listRootSessions.
     const rows = db
       .prepare(

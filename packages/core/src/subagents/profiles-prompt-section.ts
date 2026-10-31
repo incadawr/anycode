@@ -16,7 +16,7 @@
  * mentioned ONLY in the header below, which is only ever emitted when the
  * section is non-empty — so the "" invariant holds regardless.
  *
- *  R1: each line gains an optional `[engine: …]`/`[model: …]`/
+ * R1: each line gains an optional `[engine: …]`/`[model: …]`/
  * `[engine: …, model: …]` bracket marker so the model can see which profiles
  * run on a foreign CLI — the live incident this fixes: a profile-picking
  * prompt naming "claude" fell through to general-purpose because the section
@@ -39,7 +39,7 @@ function compareByName(a: PersonaDefinition, b: PersonaDefinition): number {
 }
 
 /**
- * Renders one profile's line, with the  R1 bracket marker present only
+ * Renders one profile's line, with the R1 bracket marker present only
  * when the profile carries `engine` and/or `model` (§2.1, verbatim). Absent
  * both, the line is byte-identical to the pre-R1 format.
  */

@@ -1,5 +1,6 @@
 /**
- * Main-safe LSP admin barrel (subpath `@anycode/core/lsp-admin`, ). Re-exports the entry schema and the config-write patchers so the
+ * Main-safe LSP admin barrel (subpath `@anycode/core/lsp-admin`,
+ * 4743). Re-exports the entry schema and the config-write patchers so the
  * Electron main process can manage `lspServers` entries WITHOUT importing the
  * full `@anycode/core` barrel (which drags the ai-SDK into main — the same
  * rule `@anycode/core/mcp-admin` documents).

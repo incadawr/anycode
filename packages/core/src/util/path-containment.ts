@@ -36,7 +36,7 @@ import type { PermissionWorkspaceFacts } from "../types/permissions.js";
  * on it THROWS, so we fail closed (undefined). A live symlink resolves to its
  * real target and is then containment-checked normally.
  *
- * B1/M1 (fix cycle 1,  S1 adversarial review): presence is TRI-STATE,
+ * B1/M1 (fix cycle 1, S1 adversarial review): presence is TRI-STATE,
  * not boolean. Only an `lstat` rejection whose `.code` is literally `"ENOENT"`
  * proves genuine absence. Any OTHER `lstat` failure (EACCES/EIO/ESTALE under a
  * network/removable mount, EMFILE/ENFILE under fd pressure, ENAMETOOLONG, ...)
@@ -263,7 +263,7 @@ export async function isUnderOwnRootsResolved(
 
 /**
  * Dispatch-site workspace-containment facts for a Write/Edit permission check
- * ( DV-3). Resolves BOTH sides to real paths so the pure engine can
+ * (DV-3). Resolves BOTH sides to real paths so the pure engine can
  * decide lexically: the workspace root via `realpath` (must EXIST — a missing
  * root cannot anchor trust), the target via `realpathExistingAncestor`.
  * Fail-closed to `undefined` (= containment unprovable) on: port missing or

@@ -1,5 +1,5 @@
 /**
- *  — "docs in bundle sync with repo" as a SOURCE test. A true
+ * "docs in bundle sync with repo" as a SOURCE test. A true
  * asar-level test needs a package build (CI-only), so drift is caught here
  * instead: the anycode-setup skill's topic table and the docs/user/ index are
  * asserted against the real tree in every checkout, the same tree that

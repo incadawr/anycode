@@ -1,5 +1,5 @@
 /**
- * ArchMap tool ( slice S1): a read-only TS/JS import-graph scanner.
+ * ArchMap tool (slice S1): a read-only TS/JS import-graph scanner.
  * Topology, not policy — the graph is derived from the imports that actually
  * exist in the source, with no level assignment and no Dependency Rule
  * verdict (later slices). The model gets a compact summary; the full JSON

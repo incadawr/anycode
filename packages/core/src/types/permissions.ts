@@ -28,7 +28,7 @@ export interface PermissionRequest {
 
 /**
  * Dispatch-site workspace facts for a filesystem-write permission check
- * (, DV-2/DV-3). Built ONLY by the dispatcher, ONLY for the
+ * (DV-2/DV-3). Built ONLY by the dispatcher, ONLY for the
  * Write/Edit/MultiEdit tools (WORKSPACE_CONFINED_WRITE_TOOLS), and ONLY when
  * the target could be fully symlink-resolved: `root` is the realpath of the
  * workspace root (DispatchContext.cwd), `resolvedPath` is the
@@ -110,11 +110,11 @@ export interface PermissionBroker {
     options?: { signal?: AbortSignal },
   ): Promise<PermissionDecision>;
 
-  /** True once an unanswered ask concluded nobody is at the screen ( latch). Absent on brokers that cannot tell. */
+  /** True once an unanswered ask concluded nobody is at the screen (latch). Absent on brokers that cannot tell. */
   readonly isUnattended?: boolean;
   /**
    * True while at least one ask is parked awaiting a decision — shown to the
-   * user or still queued behind another ( slice 1). Optional, like
+   * user or still queued behind another (slice 1). Optional, like
    * `isUnattended` above, so every existing implementation/test double keeps
    * compiling unchanged; a broker that omits it reads as "never waiting".
    *

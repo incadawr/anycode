@@ -130,7 +130,7 @@ function todoWriteCount(outcome: ToolCallOutcome): number | undefined {
 }
 
 /**
- * Terminal metadata for an `{type:"error"}` event ( W7b / W7b-FIX #2):
+ * Terminal metadata for an `{type:"error"}` event (W7b / W7b-FIX #2):
  * BOTH the retry counters AND the redacted `safe` descriptor, derived from ONE
  * `classifyProviderFailure` call so the two can never diverge. Called at yield
  * time for every error event this turn — terminality is not knowable yet (a
@@ -203,7 +203,7 @@ function buildInspectImageFollowup(ref: number): string {
 }
 
 /**
- * Vision-fallback wiring bundle ( plan §1/§2/§3, slice B1). See
+ * Vision-fallback wiring bundle (plan §1/§2/§3, slice B1). See
  * AgentLoopConfig.recognizer's own doc for the field-level contract.
  */
 export interface AgentLoopRecognizerConfig {
@@ -239,8 +239,8 @@ export interface AgentLoopConfig {
   permissionEngine: PermissionEngine;
   permissionBroker: PermissionBroker;
   /**
-   *  Stage 1: optional ask-zone classifier (default off). Threaded
-   * to the dispatcher only. : INLINE subagent children now inherit
+   * Stage 1: optional ask-zone classifier (default off). Threaded
+   * to the dispatcher only. INLINE subagent children now inherit
    * it via buildChildConfig — but with the ROOT's human-derived `userContext`
    * thunk when the wiring supplied one: a child's OWN history is model-authored
    * (its "user" messages are the parent model's prompts — an injection
@@ -264,7 +264,7 @@ export interface AgentLoopConfig {
   subagentMaxTurns?: number;
   /**
    * Silence threshold handed to an inline child's SubagentStallClock
-   * (ANYCODE_SUBAGENT_STALL_MS / `tools.subagentStallTimeoutMs`, 
+   * (ANYCODE_SUBAGENT_STALL_MS / `tools.subagentStallTimeoutMs`,
    * slice 1). SUBAGENT_STALL_TIMEOUT_MS when omitted. Read by
    * subagents/runner.ts, exactly parallel to `subagentMaxTurns` above — this
    * loop's own config carries the field only so the wiring layer has one
@@ -272,7 +272,7 @@ export interface AgentLoopConfig {
    */
   subagentStallTimeoutMs?: number;
   /**
-   * : learned base-budget port for inline children (adaptive mode
+   * learned base-budget port for inline children (adaptive mode
    * only). `learned` reads the base budget for a role/model key (undefined
    * when there is too little history); `record` appends one ACCEPTED child
    * run (the runner applies the training filter before calling it). Core does
@@ -289,7 +289,7 @@ export interface AgentLoopConfig {
    * step; the check sits beside the maxTurns check and exits the same way
    * (loop_end "max_turns" — budget exhausted). A turn already in flight when it
    * expires plays out to the end, so the history stays balanced. Unset => no
-   * deadline (parent loops are byte-identical to pre- behaviour). Set by
+   * deadline (parent loops are byte-identical to pre-behaviour). Set by
    * the subagent runner from the wall-clock budget of one spawn; the value is
    * absolute rather than a duration because the anchor is SubagentPort.run
    * entry — a child that spent its budget parked in the concurrency semaphore
@@ -297,7 +297,7 @@ export interface AgentLoopConfig {
    */
   deadlineAt?: number;
   /**
-   * Turn-ceiling decision ladder ( cut-1). Omitted => the defaults
+   * Turn-ceiling decision ladder (cut-1). Omitted => the defaults
    * apply: the ladder is ON, its window is CEILING_DECISION_TIMEOUT_MS and it
    * may hand out at most `maxTurns` extra turns in total, over at most
    * MAX_CEILING_ROUNDS rounds. `{ enabled: false }` restores the pre-
@@ -310,7 +310,7 @@ export interface AgentLoopConfig {
    * on each of the text/reasoning stream channels aborts the model request
    * and cuts the turn when it catches a tandem-repeat loop. Omitted => ON,
    * matching the ladder's own default-on posture. `{ enabled: false }`
-   * disables both channels and restores pre- behaviour byte-for-byte.
+   * disables both channels and restores pre-behaviour byte-for-byte.
    * Exempt on a supervised root exactly like the ceiling
    * (`ceiling.supervisedRoot() === true`, checked live at the moment a
    * verdict fires) — a human watching the screen can just press Stop.
@@ -345,7 +345,7 @@ export interface AgentLoopConfig {
   context?: Partial<ContextBudgetConfig>;
   /**
    * Rolling width for a run of parallel-safe tool calls (DEFAULT_TOOL_CONCURRENCY
-   * when omitted). : a batch is a bounded FIFO slot pool — as soon as ANY
+   * when omitted). a batch is a bounded FIFO slot pool — as soon as ANY
    * safe handler finishes, the next waiting call starts; it need not wait for the
    * whole group. Solo barriers (destructive/unknown/non-concurrentSafe/terminal
    * control) still drain completely before the next group. This is a SEPARATE
@@ -370,7 +370,7 @@ export interface AgentLoopConfig {
    */
   subagents?: SubagentPort;
   /**
-   * Session-tier subagent entry ( CUT-S2 §2.2/§0.2). Placed into the
+   * Session-tier subagent entry (CUT-S2 §2.2/§0.2). Placed into the
    * DispatchContext (right alongside `subagents` above) so the Agent tool's
    * `tier:"session"` branch can spawn a full child session in its own
    * process. Attached by the desktop root host's wiring ONLY (host/index.ts,
@@ -424,7 +424,7 @@ export interface AgentLoopConfig {
    */
   media?: MediaCapabilityPort;
   /**
-   * Vision-fallback wiring ( plan §1/§2/§3, slice B1) — the ONLY new
+   * Vision-fallback wiring (plan §1/§2/§3, slice B1) — the ONLY new
    * AgentLoopConfig field the feature adds. `reserveRef` is called for
    * EVERY image this loop appends (a user attachment or a tool-result),
    * regardless of `endpoint`'s presence or the current model's sightedness,
@@ -467,7 +467,7 @@ export interface AgentLoopConfig {
    */
   planExitMode?: Exclude<PermissionMode, "plan" | "yolo">;
   /**
-   *  §3.3: true while this session tab runs in orchestrate mode.
+   * §3.3: true while this session tab runs in orchestrate mode.
    * The loop copies it into the DispatchContext; the dispatcher copies it into
    * every ToolContext; the Agent tool reads it (sole consumer) to default a
    * `tier:"session"` call with no explicit detach/send_to/continue_session to
@@ -477,7 +477,7 @@ export interface AgentLoopConfig {
   orchestrate?: boolean;
   /**
    * Notifies the client of a mode change made by the exit arc (CLI:
-   * touchSession; desktop: since ). Never fired by setMode() — a
+   * touchSession; desktop: since). Never fired by setMode() — a
    * user-initiated mid-turn mode change owns its own notification
    * via its caller (desktop: Session.onSetMode).
    */
@@ -513,7 +513,7 @@ export interface AgentLoopConfig {
    */
   eventTap?: (event: AgentEvent) => void;
   /**
-   * Telemetry track ( §2.2): factory for an inline subagent's child
+   * Telemetry track (§2.2): factory for an inline subagent's child
    * eventTap, keyed by the spawn about to run. NEVER called by AgentLoop
    * itself — read only by subagents/runner.ts's buildChildConfig, which
    * composes the returned closure into the CHILD config's own `eventTap`.
@@ -627,7 +627,7 @@ export class AgentLoop {
   private activeDispatchCtx: DispatchContext | null = null;
 
   /**
-   *  ( rework): user frames scheduled for injection
+   * (rework): user frames scheduled for injection
    * between the CURRENT turn's steps. Written by `queueInjection` from
    * outside the generator (host CoreEngine.steer), flushed at the single
    * legal seam — after step N's tool results are ALL appended, the loop
@@ -643,7 +643,7 @@ export class AgentLoop {
    */
   private injectionQueue: { text: string; onDelivered?: (step: number) => void }[] = [];
   /**
-   * : true exactly while a runTurn/continueTurn
+   * true exactly while a runTurn/continueTurn
    * generator of this loop is active (set at runTurnInner entry, cleared in
    * its `finally`). `queueInjection`'s honest gate: a caller sees false and
    * must not queue (the frame could never land in a turn).
@@ -651,7 +651,7 @@ export class AgentLoop {
   private turnActive = false;
 
   /**
-   * Ceiling-ladder state ( cut-1). It lives on the LOOP, not inside one
+   * Ceiling-ladder state (cut-1). It lives on the LOOP, not inside one
    * runTurnInner, because MAX_CEILING_ROUNDS bounds the extensions of a SESSION:
    * kept locally, a follow-up user message would start with a fresh round
    * counter and the ladder could be walked again by simply sending "continue".
@@ -702,7 +702,7 @@ export class AgentLoop {
   /** Vision-fallback overview-caption cache (plan §7); shared when the wiring supplies one, private to this loop otherwise. */
   private readonly askCache: AskCache;
   /**
-   * : this loop's OWN human-context thunk for the ask-zone
+   * this loop's OWN human-context thunk for the ask-zone
    * classifier (recentUserTurns over the live history), memoized on first use
    * so `humanUserContext()` below hands children the SAME function the root's
    * dispatch context uses — without mutating the shared AgentLoopConfig.
@@ -723,7 +723,7 @@ export class AgentLoop {
       requestOverheadTokens: () => tokenizer.count(config.systemPrompt ?? "") +
         estimateToolDeclarationTokens(toToolDeclarations(config.registry), tokenizer),
     });
-    // : rolling admission width for a run of parallel-safe calls. The
+    // rolling admission width for a run of parallel-safe calls. The
     // scheduler normalizes non-finite values to DEFAULT_TOOL_CONCURRENCY and
     // floors/clamps finite ones >= 1; see AgentLoopConfig.toolConcurrency for
     // how this interacts with the separate inline child semaphore.
@@ -731,10 +731,10 @@ export class AgentLoop {
       maxConcurrency: config.toolConcurrency ?? DEFAULT_TOOL_CONCURRENCY,
     };
     this.askCache = config.recognizer?.cache ?? new AskCache();
-    // : resolved once here; `null` means the reminder is off.
+    // resolved once here; `null` means the reminder is off.
     const every = resolveTodoReminderEvery(config.todoReminder);
     this.todoReminder = every === null ? null : new TodoReminderTracker(every);
-    // : hand this loop's human-context thunk to the subagent port
+    // hand this loop's human-context thunk to the subagent port
     // so inline children classify asks against the HUMAN's turns. Runs only
     // when a classifier is configured; without one humanUserContext() is
     // undefined and nothing changes (byte-identical pre-4730).
@@ -744,7 +744,7 @@ export class AgentLoop {
   }
 
   /**
-   * : the ROOT human-context thunk for the ask-zone classifier —
+   * the ROOT human-context thunk for the ask-zone classifier —
    * recentUserTurns over THIS loop's live history, memoized so every consumer
    * (this loop's dispatch context, and the inline children spawned from it via
    * the runner's child-config copy) shares ONE function. Returns undefined
@@ -759,7 +759,7 @@ export class AgentLoop {
   }
 
   /**
-   * Resolves a `#N` ref against the LIVE history ( plan §2): reads
+   * Resolves a `#N` ref against the LIVE history (plan §2): reads
    * `this.history.items` at call time, never a snapshot, so a ref cleared
    * by a compaction that ran AFTER a tool's ToolContext was built still
    * correctly reads back undefined — an honest "no longer available", not
@@ -963,9 +963,9 @@ export class AgentLoop {
       attachments?: ImageAttachment[];
       /** Ephemeral context added to this turn's system prompt, never history. */
       systemContext?: string;
-      /**  срез 2: stamps the appended user HistoryItem's `origin` (host-injected, not human-typed). See HistoryItem.origin's doc. */
+      /** срез 2: stamps the appended user HistoryItem's `origin` (host-injected, not human-typed). See HistoryItem.origin's doc. */
       origin?: "system";
-      /** : outer turn UUID stamp threaded onto every HistoryItem this turn appends (see runTurnInner's own doc). */
+      /** outer turn UUID stamp threaded onto every HistoryItem this turn appends (see runTurnInner's own doc). */
       turnId?: string;
     },
   ): AsyncGenerator<AgentEvent, void, unknown> {
@@ -1009,7 +1009,7 @@ export class AgentLoop {
   }
 
   /**
-   *  ( rework): schedules `text` for injection between
+   * (rework): schedules `text` for injection between
    * the current turn's steps, at the single legal seam (all of step N's tool
    * results appended, loop continuing). Returns false when no turn is
    * running — callers must not queue in that state (the frame could never
@@ -1027,7 +1027,7 @@ export class AgentLoop {
   }
 
   /**
-   *  ( rework): drains every still-pending injection
+   * (rework): drains every still-pending injection
    * frame WITHOUT appending (the turn ended before its seam could flush —
    * sentinel exit, cancel, error, transition, ceiling or deadline refusal)
    * and reports each waiter with `onDelivered(-1)` in send order. The
@@ -1043,7 +1043,7 @@ export class AgentLoop {
     return frames;
   }
 
-  /** : true exactly while a turn generator of this loop is active. */
+  /** true exactly while a turn generator of this loop is active. */
   hasActiveTurn(): boolean {
     return this.turnActive;
   }
@@ -1057,7 +1057,7 @@ export class AgentLoop {
       systemContext?: string;
       origin?: "system";
       /**
-       *  causal stamps (optional, presentation-only): the HOST-OWNED
+       * causal stamps (optional, presentation-only): the HOST-OWNED
        * outer turn UUID this run belongs to. When present, every HistoryItem
        * this run appends is stamped with it plus the item's inner step
        * ordinal (user frame = 0, assistant/tool = the emitting step's
@@ -1073,7 +1073,7 @@ export class AgentLoop {
     const deadlineAt = this.config.deadlineAt;
     const turnId = options?.turnId;
 
-    // : the turn is active for the WHOLE generator
+    // the turn is active for the WHOLE generator
     // lifetime (cleared in the finally below) — queueInjection's honest gate.
     this.turnActive = true;
 
@@ -1141,7 +1141,7 @@ export class AgentLoop {
     // Two sanctioned mid-turn mode mutations exist: (1) a broker-approved
     // ExitPlanMode advancing plan -> planExitMode (design slice-4.3-cut.md
     // §2.3), applied via the PlanModeControl mutation below rather than by
-    // re-reading config; (2) the user-initiated setMode(), which
+    // re-reading config; (2) the user-initiated setMode() which
     // reaches this same running turn via activeDispatchCtx. The mode is read
     // HERE — after the UserPromptSubmit await above, not at generator entry —
     // and consumed by the context literal below in the same synchronous
@@ -1167,7 +1167,7 @@ export class AgentLoop {
       tasks: this.config.tasks,
       lsp: this.config.lsp,
       media: this.config.media,
-      // Vision-fallback image lookup ( plan §2, slice B1): a closure
+      // Vision-fallback image lookup (plan §2, slice B1): a closure
       // over THIS history, resolved live on every call — never a snapshot —
       // so a ref cleared by a LATER compaction correctly reads back
       // undefined. Present whenever the wiring supplied `recognizer` at
@@ -1178,7 +1178,7 @@ export class AgentLoop {
       preview: this.config.preview,
       artifacts: this.config.artifacts,
     };
-    //  §3.3: orchestrate rides the dispatch context (read at
+    // §3.3: orchestrate rides the dispatch context (read at
     // dispatch time so a between-turns toggle lands next turn, same
     // discipline as mode above). Copied into ToolContext by the dispatcher.
     // Set as a plain assignment (not a spread) — the prologue guard requires
@@ -1187,10 +1187,10 @@ export class AgentLoop {
       dispatchCtx.orchestrate = true;
     }
 
-    // : the optional ask-zone classifier rides the dispatch context
+    // the optional ask-zone classifier rides the dispatch context
     // as a plain assignment (the prologue guard forbids spreads in this stretch).
     // The user context is a thunk over the live history, read at ask time, and
-    // carries human turns only (recentUserTurns). : a config-supplied
+    // carries human turns only (recentUserTurns). a config-supplied
     // thunk (a child's inherited ROOT thunk) wins over deriving from this loop's
     // own history — a child's "user" messages are the parent model's prompts.
     const askClassifierConfig = this.config.askClassifier;
@@ -1211,7 +1211,7 @@ export class AgentLoop {
     // Plan-mode exit arc (design slice-4.3-cut.md §2.3): built ONLY when the
     // wiring opted in via planExitMode. exitPlan is ONE of the two sanctioned
     // mid-turn mode mutations (the other is the user-initiated setMode(),
-    // ) — it advances dispatchCtx.mode (so later tool calls THIS turn
+    // it advances dispatchCtx.mode (so later tool calls THIS turn
     // gate under the target) and config.mode (so later turns and lazily-spawned
     // children inherit it), then notifies the client. When planExitMode is unset
     // this block does not run, so dispatchCtx.planMode stays absent and the turn
@@ -1273,7 +1273,7 @@ export class AgentLoop {
         turn += 1;
         yield { type: "turn_start", turn };
 
-        // Budget exhaustion, two kinds — and since  they exit
+        // Budget exhaustion, two kinds — and since they exit
         // differently. Both are checked here — after turn_start, before
         // compaction and the model step — so a turn already in flight finishes
         // its tool dispatch and no tool_call is left unanswered.
@@ -1297,7 +1297,7 @@ export class AgentLoop {
         // produced before the slice.
         const effectiveMaxTurns = maxTurns + this.ceilingGrantedTurns;
         if (turn > effectiveMaxTurns) {
-          //  remainder (owner rule 2026-08-22): a supervised root has
+          // remainder (owner rule 2026-08-22): a supervised root has
           // NO turn ceiling at all — checked live on every trip, never cached,
           // so a session that starts supervised and goes quiet mid-run falls
           // under the ladder from that point on. No decision call, no grant,
@@ -1339,7 +1339,7 @@ export class AgentLoop {
           return;
         }
 
-        // : the injection seam. Placed AFTER every exit
+        // the injection seam. Placed AFTER every exit
         // gate of this iteration (cancel, wall-clock deadline, turn ceiling,
         // compaction-cancel) and immediately before the model request, so a
         // flushed frame is ALWAYS carried by the very next streamText call: a
@@ -1370,7 +1370,7 @@ export class AgentLoop {
         let usage: TokenUsage = {};
         let streamErrored = false;
         let sawFinish = false;
-        // Terminal-retry metadata counters ( W7b): attemptsMade counts
+        // Terminal-retry metadata counters (W7b): attemptsMade counts
         // stream_retry events seen THIS TURN, and hadModelOutput records whether any
         // model output reached the consumer this turn. Unlike the content
         // accumulators below, NEITHER is reset on stream_retry — a retry increments
@@ -1474,7 +1474,7 @@ export class AgentLoop {
                   // The replayed attempt repeats the same content from scratch, so
                   // without this a genuinely healthy retry would look to the
                   // detector like a 2x (soon 3x) tandem repeat of itself and
-                  // false-positive ( plan §8).
+                  // false-positive (plan §8).
                   textDegenerationDetector.reset();
                   reasoningDegenerationDetector.reset();
                   break;
@@ -1493,7 +1493,7 @@ export class AgentLoop {
             if (degenerationVerdict) {
               // The step proposed while mid-loop is not trustworthy — discard
               // it rather than dispatch a tool call the model never finished
-              // reasoning its way to ( plan §3).
+              // reasoning its way to (plan §3).
               toolCalls.length = 0;
               finishReason = "degenerate";
               yield {
@@ -1508,7 +1508,7 @@ export class AgentLoop {
             // The stream iterator threw. An abort is a clean cancellation; anything
             // else is an unrecoverable stream error — surfaced as an {type:"error"}
             // event (transcript block / CLI line / host log) before loop_end so the
-            // real provider failure is diagnosable ( DoD-c), never swallowed.
+            // real provider failure is diagnosable (DoD-c), never swallowed.
             if (signal?.aborted) {
               yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
             } else {
@@ -1541,7 +1541,7 @@ export class AgentLoop {
         // event) is a provider artifact — the turn continues instead of dying.
         // A synthetic SDK finish with finishReason "error" does not count as a real finish.
         //
-        //  (codex review finding): `!degenerationVerdict` is REQUIRED
+        // (codex review finding): `!degenerationVerdict` is REQUIRED
         // here, not cosmetic. The guard's own cutoff never produces a real
         // `finish` either (the stream is aborted mid-attempt), so an attempt
         // that saw a forgiven `error` event BEFORE the loop started would
@@ -1609,11 +1609,11 @@ export class AgentLoop {
 
         // Append every result in PROPOSAL order (invariant: full pairing). The
         // ceiling ladder's per-round activity measure is counted on the same
-        // pass: only `success` counts ( §1.6) — denied, error,
+        // pass: only `success` counts (§1.6) — denied, error,
         // timed_out, cancelled, invalid_input and max_turns are all outcomes in
         // which nothing was established, and a round of those earns no
         // extension.
-        // : feed the stale-plan reminder counter with the same
+        // feed the stale-plan reminder counter with the same
         // settled calls, then append the nudge (if due) to the LAST appended
         // tool result in history only — the yielded tool_result events keep the
         // original outcome text.
@@ -1646,7 +1646,7 @@ export class AgentLoop {
               this.ceilingSuccessfulToolCalls += 1;
               // /4055: only non-read-only successes count as PRODUCTIVE
               // progress, with one carve-out — a successful Agent/Workflow
-              // DISPATCH counts too ( follow-up: an orchestrator's
+              // DISPATCH counts too (follow-up: an orchestrator's
               // whole round can be nothing but dispatches). Unknown tools and
               // other readOnly tools fail closed inside the helper.
               if (isProductiveToolCall(call.name, this.config.registry)) {
@@ -1696,7 +1696,7 @@ export class AgentLoop {
       if (this.activeDispatchCtx === dispatchCtx) {
         this.activeDispatchCtx = null;
       }
-      //  ( rework): the turn ends — frames still pending
+      // (rework): the turn ends — frames still pending
       // in the injection queue die with it (never appended on an exit path:
       // the seam sits after every exit gate, so nothing is ever both appended
       // and reported undelivered); each waiter is told so via onDelivered(-1)
@@ -1710,7 +1710,7 @@ export class AgentLoop {
   }
 
   /**
-   * One round of the turn-ceiling ladder ( cut-1). Returns a tri-state
+   * One round of the turn-ceiling ladder (cut-1). Returns a tri-state
    * CeilingDecision: "granted" when a grant was issued (the effective cap is
    * raised and `ceiling_grant` has been emitted), "done" when the verdict was
    * a readable done:true declaration that the work is finished (event-free),
@@ -1753,7 +1753,7 @@ export class AgentLoop {
     // decision it is about to buy can still honestly report done:true. The
     // PRODUCTIVE judgment happens at the verdict itself: a readable
     // continuation request from a round with zero productive calls refuses as
-    // "stalled" (below), which is the distinction  asked for.
+    // "stalled" (below), which is the distinction asked for.
     if (round >= 2 && this.ceilingSuccessfulToolCalls <= 0) {
       yield { type: "ceiling_refused", reason: "no_successful_tool_calls", turn, round };
       return "refused";
@@ -1888,7 +1888,7 @@ export class AgentLoop {
     }
     // The auto path reports the post-compaction context on the model step that
     // follows it inside the same turn; a manual compaction has no following
-    // step, so the reading is reported here or not at all (: a consumer
+    // step, so the reading is reported here or not at all (a consumer
     // whose ctx meter is driven by context_usage — the desktop renderer — would
     // otherwise keep showing the pre-compaction number until the next turn).
     // runCompaction cleared the stale provider baseline before returning, so

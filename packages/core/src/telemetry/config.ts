@@ -80,7 +80,7 @@ function defaultTelemetryDir(home: string): string {
 }
 
 /**
- * : stable, discoverable redirect target for a test-gated resolution
+ * stable, discoverable redirect target for a test-gated resolution
  * that would otherwise land on the real default dir. Fixed name (no
  * mkdtemp-style random suffix) under the OS temp dir so a human can find it
  * by path alone after the fact — the exact path is also echoed into
@@ -97,7 +97,7 @@ function isAbsolutePath(path: string): boolean {
 }
 
 /** Resolves a schema-valid section into a directory, or records a business-rule issue and returns null.
- *  `overrideDir`: the validated `ANYCODE_TELEMETRY_DIR` value, if any — applies ONLY once
+ *  `overrideDir` the validated `ANYCODE_TELEMETRY_DIR` value, if any — applies ONLY once
  *  `config.enabled` is already true (it redirects WHERE, never decides WHETHER) and, being itself an
  *  explicit directory, wins over both a file `dir` and the test gate below.
  *  `underTestGate` (/166): when set and no `overrideDir` applies, a section without an explicit
@@ -228,7 +228,7 @@ export async function loadTelemetryConfig(
     overrideDir = dirOverrideRaw;
   }
 
-  //  fail-closed test gate: keyed off the AMBIENT runner env, never the
+  // fail-closed test gate: keyed off the AMBIENT runner env, never the
   // injected `env` argument above — tests inject synthetic env objects, which is
   // exactly the hole that let ~54k gate-fixture files accumulate in the owner's
   // real ~/.anycode/telemetry. Under the gate:
@@ -236,7 +236,7 @@ export async function loadTelemetryConfig(
   //    CLI-test leak path: tmp cwd + the owner's real ~/.anycode/config.json) —
   //    this is about which config FILES get read at all, independent of the
   //    override, and stays in force even when overrideDir is set;
-  //  - : any resolution that would land on the DEFAULT dir is
+  //  - any resolution that would land on the DEFAULT dir is
   //    redirected to a stable temp dir instead of refused (see resolveSection)
   //    — unless overrideDir already supplied an explicit directory, in which
   //    case that wins and the redirect never triggers.
@@ -244,7 +244,7 @@ export async function loadTelemetryConfig(
   // consults that one path via the existing seenPaths dedup below.
   const underTestGate = globalThis.process?.env?.VITEST !== undefined;
 
-  //  xfix D2: the project telemetry section writes session
+  // xfix D2: the project telemetry section writes session
   // content to a project-chosen `dir` — same trust question as project
   // MCP/hooks, so the untrusted workspace's source is skipped (one issue
   // line) and only user-level telemetry can claim the section.
@@ -253,7 +253,7 @@ export async function loadTelemetryConfig(
 
   const issues: string[] = [];
   const seenPaths = new Set<string>();
-  //  xfix D2: the user source must still load when the project
+  // xfix D2: the user source must still load when the project
   // source is trust-skipped, so the underTestGate restriction (project-only
   // under VITEST, /166) yields only when BOTH sources are consulted;
   // with the gate closed the user source is the only one left, and the test

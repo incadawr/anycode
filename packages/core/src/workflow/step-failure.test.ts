@@ -1,5 +1,5 @@
 /**
- *  slice S1: the per-step failure record and the model-facing summary.
+ * slice S1: the per-step failure record and the model-facing summary.
  *
  * The arithmetic tests here deliberately re-derive the framing from the format
  * strings themselves rather than from a number copied out of the plan: a

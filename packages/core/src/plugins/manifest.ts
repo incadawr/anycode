@@ -1,5 +1,5 @@
 /**
- * Plugin manifest schema v1 (, design §2). A plugin is a
+ * Plugin manifest schema v1 (design §2). A plugin is a
  * directory carrying `<dir>/.anycode-plugin/plugin.json`.
  *
  * v1 is ADDITIVE over the legacy (pre-4732) shape: every field the legacy
@@ -68,7 +68,7 @@ function isValidServiceCommand(command: string): boolean {
  * One background service a plugin declares (a). A service is a
  * long-lived process AnyCode supervises after the plugin is enabled AND the
  * user consents to its exact definition (`servicesHash`). `env` values are
- * literal strings, except `${secret:NAME}` ( part 0): main resolves
+ * literal strings, except `${secret:NAME}` (part 0): main resolves
  * it from the vault at spawn time. The manifest itself never holds a value.
  */
 export const pluginServiceSchema = z.object({
@@ -91,7 +91,7 @@ export const pluginServiceSchema = z.object({
 export type PluginServiceSpec = z.output<typeof pluginServiceSchema>;
 
 /**
- *  part 0: a `${secret:NAME}` reference inside a service env VALUE.
+ * part 0: a `${secret:NAME}` reference inside a service env VALUE.
  * Same name shape as MCP secrets (4752). `${env:X}` and any other text are NOT
  * references and stay literal.
  */

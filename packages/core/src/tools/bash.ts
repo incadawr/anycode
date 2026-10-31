@@ -28,7 +28,7 @@ const metadata: ToolMetadata = {
   maxTimeoutMs: BASH_MAX_TIMEOUT_MS,
   maxOutputBytes: BASH_EXEC_MAX_OUTPUT_BYTES,
   // A build log's verdict is its last lines, so an oversized run keeps the tail.
-  // Bash is the first tool to opt into the artifact strategy ( §3), and
+  // Bash is the first tool to opt into the artifact strategy (§3), and
   // for the reason the task was written: the failure in a test run is as often
   // in the middle of the log as at its end, and re-running the command to see
   // it costs the whole command again. With no store wired the strategy simply
@@ -102,7 +102,7 @@ interface PersistedBashFields {
 
 /**
  * Envelope for an oversized run whose output was spilled to an artifact
- * ( §2). Bash needs its own because what gets persisted is a serialized
+ * (§2). Bash needs its own because what gets persisted is a serialized
  * BashOutput — the generic envelope's preview would open on a JSON fragment,
  * burying the one fact the model always needs (did it pass?) inside quoting.
  * Here the verdict comes first, stderr second (it is where diagnostics live,
@@ -110,7 +110,7 @@ interface PersistedBashFields {
  *
  * The stated path points at the JSON document, not at raw stdout: the
  * dispatcher persists what it rendered for the model, so a later Grep over the
- * artifact searches escaped JSON. That is a known limit of v1 ( design,
+ * artifact searches escaped JSON. That is a known limit of v1 (design,
  * assumption 5) — persisting raw stdout would have to happen in the execution
  * adapter, which this task does not touch.
  *

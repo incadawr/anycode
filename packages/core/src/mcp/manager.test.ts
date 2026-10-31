@@ -246,7 +246,7 @@ describe("McpManager — lifecycle (item 3)", () => {
   });
 });
 
-/** An in-process MCP server that advertises `instructions` in its initialize result ( B). */
+/** An in-process MCP server that advertises `instructions` in its initialize result (B). */
 function instructedServer(instructions: string | undefined): McpServer {
   const server = new McpServer(
     { name: "srv", version: "0" },
@@ -258,7 +258,7 @@ function instructedServer(instructions: string | undefined): McpServer {
   return server;
 }
 
-describe("McpManager — server instructions (, part B)", () => {
+describe("McpManager — server instructions (part B)", () => {
   let manager: McpManager | undefined;
 
   afterEach(async () => {
@@ -359,7 +359,7 @@ describe("McpManager — server instructions (, part B)", () => {
   });
 });
 
-describe("McpManager — secret redaction in diagnostics (, C-13)", () => {
+describe("McpManager — secret redaction in diagnostics (C-13)", () => {
   let manager: McpManager | undefined;
 
   afterEach(async () => {

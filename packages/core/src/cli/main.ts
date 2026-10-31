@@ -45,7 +45,7 @@ import { JsonlTelemetrySink } from "../adapters/node/node-telemetry.js";
 // Artifact store: same direct-import pattern as the sinks above —
 // the adapters/node barrel is frozen.
 import { NodeArtifactStore } from "../adapters/node/node-artifacts.js";
-// Credential-free loopback proxy relay ( follow-up / ):
+// Credential-free loopback proxy relay (follow-up):
 // started before the first child spawn when the env holds a credentialed
 // proxy; the exec adapter below re-reads its URL per spawn.
 import { closeProxyRelay, credentialedProxyValuesForRelay, resolveProxyRelay } from "../adapters/node/proxy-relay.js";
@@ -190,7 +190,7 @@ export {
 } from "./render.js";
 export { KNOWN_SLASH_COMMANDS, isSlashCommand, parseAllowCommand, handleSlashCommand } from "./commands.js";
 export type { AllowCommandParse, SlashCommandDeps } from "./commands.js";
-//  (slice 1) — framework-free completion/composer cores, re-exported
+// (slice 1) — framework-free completion/composer cores, re-exported
 // for main.test.ts-style importers. tui.tsx is deliberately NOT re-exported:
 // it pulls ink/react into every importer of this barrel; main.ts lazy-imports
 // it inside the --tui branch only.
@@ -207,7 +207,7 @@ function basenameOf(path: string): string {
 
 /**
  * The ONE place the CLI builds an `EndpointConfig` for `AiSdkModelPort`
- * ( P3): both production construction sites below (`baseModelPort`
+ * (P3): both production construction sites below (`baseModelPort`
  * and the `/model` hot-swap factory) funnel through this helper so the
  * include-usage wiring is pinned by a unit test instead of two eyeball
  * comparisons. Field order mirrors the previous inline literals byte-for-byte;
@@ -215,7 +215,7 @@ function basenameOf(path: string): string {
  * `resolveIncludeUsage` (called once after the transport ladder, where the
  * resolved transport lives) already produced the verdict the caller passes as
  * part of `includeUsageResolved`, and a `false` spreads nothing, keeping the
- * anthropic-messages path byte-identical to the pre- literals.
+ * anthropic-messages path byte-identical to the pre-literals.
  * `options?.modelPort` short-circuits BEFORE this helper at both call sites,
  * exactly as before — an injected test port bypasses config construction.
  */
@@ -247,7 +247,7 @@ export function buildCliEndpointConfig(args: {
     // CLI and desktop interpret the provider env identically. Absent = no
     // field, byte-identical to today.
     ...(envConfig.promptCache !== undefined ? { promptCache: envConfig.promptCache } : {}),
-    // : the CLI waits for the network via TCP probes (no OS hints).
+    // the CLI waits for the network via TCP probes (no OS hints).
     networkWaiter: createProbeOnlyNetworkWaiter(),
   };
 }
@@ -279,7 +279,7 @@ export interface CliOptions {
   /** Test-only override of interactivity (design slice-4.1-cut.md §2.5); default: input.isTTY && output.isTTY. */
   interactive?: boolean;
   /**
-   * Test-only hook ( slice 1): receives the Ink composer's handle
+   * Test-only hook (slice 1): receives the Ink composer's handle
    * when --tui engages, so tests can drive keypresses through the same
    * emit() pipeline (PassThrough stdin supports no raw mode, so the TUI is
    * otherwise inputless under a test harness). Production never sets it.
@@ -364,13 +364,13 @@ export async function resolveCliProjectTrust(deps: {
   io: { input: Readable; output: Writable };
   warn: (text: string) => void;
   /**
-   * : injected realpath for key canonicalisation (symlink and
+   * injected realpath for key canonicalisation (symlink and
    * target share one trust record). Defaults to `node:fs`'s realpathSync.
    */
   realpathSync?: (path: string) => string;
 }): Promise<boolean> {
   const storePath = defaultTrustStorePath(deps.home);
-  // : canonicalise once; persist under the same real key the
+  // canonicalise once; persist under the same real key the
   // resolver looks up (writeTrustDecision's own resolve() is idempotent on an
   // already-real path).
   const key = canonicalWorkspaceKey(deps.cwd, deps.realpathSync ?? realpathSync);
@@ -446,7 +446,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   const input = options?.input ?? process.stdin;
   const output = options?.output ?? process.stdout;
 
-  //  rework (defect 1): while the Ink TUI is mounted, every REPL
+  // rework (defect 1): while the Ink TUI is mounted, every REPL
   // byte goes through its transcript store (rendered via <Static>) — NEVER
   // straight to stdout, which Ink's frame clear would eat. The sink starts
   // undefined; the --tui branch below points it at handle.print. The name is
@@ -522,7 +522,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   const outputIsTTY = (output as NodeJS.WriteStream).isTTY === true;
   const interactive =
     (options?.interactive ?? (inputIsTTY && outputIsTTY)) && !parsedArgs.print;
-  //  (slice 1): opt-in Ink composer. Gated on `interactive`, so
+  // (slice 1): opt-in Ink composer. Gated on `interactive`, so
   // --tui without a TTY or alongside --print is silently ignored (falls back
   // to the readline REPL) — the flag is a preference, not an error.
   const tui = parsedArgs.tui === true && interactive;
@@ -603,7 +603,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   // resolutions below share the same lookup.
   const catalogEntry = matchCatalogEntryByBaseUrl(getBuiltinCatalog(), envConfig.baseUrl);
 
-  // Single back-compat resolution point for the wire transport ( §0.4):
+  // Single back-compat resolution point for the wire transport (§0.4):
   // the mandatory discriminant is applied here, once, instead of being defaulted
   // inside EndpointConfig. Env always wins; the catalog's declared default is
   // next; anthropic-messages is the final legacy fallback. Every built-in
@@ -621,7 +621,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
     ...(envConfig.stallTimeoutMs !== undefined ? { stallTimeoutMs: envConfig.stallTimeoutMs } : {}),
   };
 
-  // : resolved ONCE here, right after the transport ladder, because the
+  // resolved ONCE here, right after the transport ladder, because the
   // verdict is transport-conditional — an explicit ANYCODE_INCLUDE_USAGE wins
   // outright; unset defaults to true only for `openai-chat-completions` (the
   // one transport that honours stream_options.include_usage). Both port
@@ -680,12 +680,12 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
       ),
   );
   const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, envConfig.reasoningEffort, undefined, envConfig.effortLevels);
-  // : the cell model switches re-resolve from starts at the tier the
+  // the cell model switches re-resolve from starts at the tier the
   // session actually runs at — the model's recorded provider default when the
   // user never chose one — so a switch cannot silently drop it. An explicit
   // choice (env `ANYCODE_REASONING_EFFORT`) still wins, `"off"` stays `"off"`.
   let selectedReasoningEffort = bootReasoningEffort ?? "off";
-  //  (F6): the same catalog + env overrides the boot above reads,
+  // (F6): the same catalog + env overrides the boot above reads,
   // packaged once so an Agent-tool `model` override re-resolves the child's
   // ceiling/effort/window for ITS model instead of inheriting the parent's.
   // Built here (not per spawn) because every input is boot-fixed; the one live
@@ -739,12 +739,12 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   // path too (defense-in-depth). Local one-liner: no desktop code imported.
   delete env[ENV_API_KEY];
 
-  //  follow-up: when this CLI holds a credentialed
+  // follow-up: when this CLI holds a credentialed
   // proxy, start the credential-free loopback relay for it BEFORE the exec
   // adapter below can spawn anything, so the first Bash child already sees
   // the relay URL instead of a dropped proxy var. No-op otherwise; a refused
-  // upstream (https:// scheme &c) logs once and keeps 's drop
-  // behaviour.  rework: the boot scan finds the first
+  // upstream (https:// scheme &c) logs once and keeps's drop
+  // behaviour. rework: the boot scan finds the first
   // credentialed proxy value in `env` (process.env in production, the
   // injected test env otherwise — the same source the adapter's spawns read)
   // and starts the relay for THAT upstream; the relay registry keeps one
@@ -819,7 +819,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   // (mcp/extensions blocks above). Construction below never spawns anything
 
   // on the first matching Edit/Write.
-  // : workspace trust gates the project's own spawn declarations
+  // workspace trust gates the project's own spawn declarations
   // (project MCP, hooks, LSP, project-tier plugin MCP) before ANY of them load.
   // Decision is computed once per process; user-level config is never gated.
   const projectTrusted = await resolveCliProjectTrust({
@@ -1034,7 +1034,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   } catch (error) {
     bootWrite(`[warn] mcp startup failed; continuing with zero MCP servers: ${error instanceof Error ? error.message : String(error)}\n`);
   }
-  //  part B: connected servers' `instructions`, computed ONCE after
+  // part B: connected servers' `instructions`, computed ONCE after
   // start (same as the desktop host). Empty => "" keeps the prompt byte-identical.
   const mcpInstructionsSection = buildMcpInstructionsSection(mcpManager.instructions());
 
@@ -1074,7 +1074,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
       resolveImageInput(systemPromptEnv.modelId ?? "", catalogEntry, envConfig.imageInput),
   };
 
-  // Vision-fallback media-projection decorator ( plan §3, slice B1):
+  // Vision-fallback media-projection decorator (plan §3, slice B1):
   // ONE external wrapper around the SwitchableModelPort built above, so
   // every consumer of loopConfig.modelPort (the main turn loop, the
   // ceiling-ladder verdict request, LLM auto/manual compaction, and inline-
@@ -1241,7 +1241,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
       mode,
     }));
 
-  //  part A: the session's tools (Bash, hooks) see their session id
+  // part A: the session's tools (Bash, hooks) see their session id
   // and workspace. `??=` keeps a value the caller already set; the CLI has no
   // launch-directive collision (ANYCODE_WORKSPACE is not written here).
   process.env.ANYCODE_SESSION_ID ??= session.id;
@@ -1290,7 +1290,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
     buildSystemPrompt({
       toolNames,
       env: systemPromptEnv,
-      // : the one-line LSP notice rides along exactly while the
+      // the one-line LSP notice rides along exactly while the
       // session carries a LspPort (>=1 configured server), naming the covered
       // extensions; `lsp` null => [] => the section renders "" (byte-identity).
       lspCoveredExtensions: lsp !== null ? lspServerSpecs.flatMap((s) => s.extensions) : [],
@@ -1324,7 +1324,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   // Boot context-window resolution (slice 6.4, design slice-6.4-cut.md §2-C3):
   // env ANYCODE_CONTEXT_WINDOW (when its model binding is absent or names the
   // boot model) > catalog window of the boot model > the assumed 8192 fallback
-  // (UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS, ). The result is always a
+  // (UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS). The result is always a
   // number, so loopConfig.context is always populated and an unknown model boots
   // at the degraded 8192 window rather than the DEFAULT_CONTEXT_WINDOW_TOKENS.
   // Telemetry sink (slice 6.6, design slice-6.6-cut.md §2-C1): opt-in — a
@@ -1354,7 +1354,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
     });
   }
   const telemetryTap = telemetry === null ? undefined : buildTelemetryTap(telemetry, session.id);
-  //  §2.2: factory for an inline subagent's child eventTap, so its
+  // §2.2: factory for an inline subagent's child eventTap, so its
   // usage/tool/turn_end records land in THIS session's file (marked `sub`)
   // instead of nowhere. `telemetryPort` is captured into a local const
   // because TS does not carry a `let`-narrowing across a closure boundary —
@@ -1440,9 +1440,9 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
         history,
         tokenizer,
 
-        //  remainder (owner rule 2026-08-22): a supervised interactive
+        // remainder (owner rule 2026-08-22): a supervised interactive
         // root has no turn ceiling at all. The CLI has no unattended latch
-        // (that is a desktop-only,  concept) so the predicate is the
+        // (that is a desktop-only, concept) so the predicate is the
         // constant `() => true` — installed ONLY on the genuinely interactive
         // REPL path (`interactive`, computed above from
         // `inputIsTTY && outputIsTTY && !parsedArgs.print`, test-overridable
@@ -1454,7 +1454,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
         // Headless print stays on the ladder by omission, which is the safe
         // default: a missed exemption is recoverable, a wrongly-unbounded
         // headless run is not.
-        // : the adaptive flag (`ANYCODE_ADAPTIVE_TURN_BUDGET`) rides the
+        // the adaptive flag (`ANYCODE_ADAPTIVE_TURN_BUDGET`) rides the
         // same ceiling object; absent when both are off => ladder, unchanged.
         ...(interactive || envConfig.adaptiveTurnBudget === true
           ? {
@@ -1468,7 +1468,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
         // — unlike checkpoints/tasks/lsp below, images carry no lifecycle to
 
         media,
-        // Vision-fallback ref reservation ( plan §2, slice B1):
+        // Vision-fallback ref reservation (plan §2, slice B1):
         // wired UNCONDITIONALLY (this CLI always has a real persistence
         // adapter by this point) so every image gets a stable #N the
         // instant it is appended — independent of the current model's
@@ -1497,7 +1497,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
         toolConcurrency: envConfig.toolConcurrency,
         maxTurns: envConfig.maxTurns,
         subagentMaxTurns: envConfig.subagentMaxTurns,
-        //  slice 1: subagent stall-detector override, ANYCODE_SUBAGENT_STALL_MS.
+        // slice 1: subagent stall-detector override, ANYCODE_SUBAGENT_STALL_MS.
         subagentStallTimeoutMs: envConfig.subagentStallTimeoutMs,
         ...((envConfig.todoReminderEvery ?? catalogEntry?.models.find((m) => m.id === envConfig.model)?.todoReminderEvery) !== undefined
           ? { todoReminder: { everyToolCalls: envConfig.todoReminderEvery ?? catalogEntry?.models.find((m) => m.id === envConfig.model)?.todoReminderEvery } }
@@ -1569,7 +1569,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
         // loop never reports directly — its activity reaches the tap as the
         // parent's subagent_* events.
         ...(telemetryTap !== undefined ? { eventTap: telemetryTap } : {}),
-        //  §2.2: the FACTORY only — buildChildConfig calls it once per
+        // §2.2: the FACTORY only — buildChildConfig calls it once per
         // spawn. The loop itself never reads this field.
         ...(subagentEventTap !== undefined ? { subagentEventTap } : {}),
       },
@@ -1587,11 +1587,11 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
         profiles: ext.profiles,
         env: systemPromptEnv,
         memorySection: ext.memorySection,
-        // : cheap-model default for inline explore children
+        // cheap-model default for inline explore children
         // (ANYCODE_EXPLORE_MODEL); absent ⇒ explore inherits the parent's port.
         ...(envConfig.exploreModel !== undefined ? { exploreModel: envConfig.exploreModel } : {}),
         ...(modelPortFactory !== undefined ? { resolveChildModelPort: modelPortFactory } : {}),
-        //  (F6) + §0b adjudication: gated on the same factory as the
+        // (F6) + §0b adjudication: gated on the same factory as the
         // port above — without a port there is no override spawn to resolve
         // settings for. The tier handed to the resolver is `selectedReasoningEffort`
         // read AT SPAWN TIME: the live USER-SELECTED tier, which `/reasoning`
@@ -1736,20 +1736,20 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
     return count;
   };
 
-  //  (rework): in --tui mode the readline interface still exists
+  // (rework): in --tui mode the readline interface still exists
   // (hidden — `terminal: false`, and its prompt() calls are guarded below) as
   // the NON-TUI fallback prompter vehicle, but every visible byte and every
   // y/N question now routes through the Ink app (Static transcript + confirm
   // mode): readline never draws and never reads while the TUI is mounted.
   const rl = createInterface({ input, output, prompt: "> ", terminal: tui ? false : undefined });
 
-  //  (rework, defect 1): while the TUI is mounted the status line
+  // (rework, defect 1): while the TUI is mounted the status line
   // is force-disabled — its raw \r+EL2 writes on the shared output stream
   // interleave with Ink's frame diff and corrupt it. Ink's composer frame is
   // the only live-updating line in TUI mode.
   const status = createStatusLine({ output, enabled: tui ? false : statusEnabled, theme });
 
-  //  (slice 1): the Ink composer. startTui is lazily imported so
+  // (slice 1): the Ink composer. startTui is lazily imported so
   // ink/react load only when the flag engages (non-TUI runs stay lean);
   // submissions land in a queue drained by the lineStream generator below,
   // which the REPL loop consumes exactly like readline's own lines. Ctrl+C in
@@ -1784,7 +1784,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
     options?.onTuiHandle?.(tuiHandle);
   }
 
-  //  (rework, defect 2): the TUI's in-app ask() becomes the
+  // (rework, defect 2): the TUI's in-app ask() becomes the
   // TerminalPrompter for BOTH the permission broker and the /rewind + /commit
   // y/N confirms while the TUI is mounted. The answer is produced inside the
   // TUI (confirm mode routes keys away from the composer), so it can never be
@@ -1832,7 +1832,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
 
   rl.on("SIGINT", handleSigint);
 
-  //  (slice 1): TUI mode never calls rl.prompt() — the Ink
+  // (slice 1): TUI mode never calls rl.prompt() — the Ink
   // composer renders its own "> " line and readline must stay invisible.
   const showPrompt = (): void => {
     if (tuiHandle) {
@@ -2011,7 +2011,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
           // sessions through a narrow list callback — this workspace by default,
           // all workspaces on `/sessions all` (the handler drops the filter).
           sessions: {
-            // Root-only ( S2a §2.4): /sessions [all] must never
+            // Root-only (S2a §2.4): /sessions [all] must never
             // surface a child session, even with the workspace filter dropped.
             list: (o) => persistence.listRootSessions(o),
             currentId: session.id,
@@ -2202,7 +2202,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
 
   // timer outlives the REPL (design §3.3 unref + explicit dispose).
   status.dispose();
-  //  (slice 1): unmount the Ink composer BEFORE the readline
+  // (slice 1): unmount the Ink composer BEFORE the readline
   // interface closes so the terminal is restored exactly once, in order.
   // The rework drops the tuiPrint sink FIRST: after this point tuiWrite
   // degrades to the raw output writer, so any late byte (title flush warn,
@@ -2219,7 +2219,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   // own Promise.race), so this can never hang the CLI's exit; `tasks` is `null`
 
   await tasks?.disposeAll();
-  // Credential-free loopback proxy relay ( follow-up): destroy its
+  // Credential-free loopback proxy relay (follow-up): destroy its
   // sockets AFTER the children are reaped — every live tunnel collapses
   // immediately rather than on its own TCP timeout.
   closeProxyRelay();

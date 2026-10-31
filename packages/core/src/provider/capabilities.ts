@@ -5,7 +5,7 @@
  * whether image attachments are allowed. The CLI wires this into a
  * MediaCapabilityPort closure so a /model switch is honored on the next call.
  *
- *  adds the `liveModality` rung: a connection-scoped set
+ * adds the `liveModality` rung: a connection-scoped set
  * of model ids a live `/v1/models` fetch declared image-capable
  * (`architecture.input_modalities` containing "image"). It sits BETWEEN the
  * override and the catalog and is ADDITIVE ONLY: a live `true` promotes an
@@ -36,7 +36,7 @@ export type ImageModalityLookup = (modelId: string) => boolean | undefined;
 /**
  * Fail-closed capability verdict: an explicit override wins (`on` ⇒ true,
  * `off` ⇒ false); otherwise the live-modality rung may PROMOTE (true ⇒ true,
- * never demote — ); otherwise the static catalog hint decides (the
+ * never demote); otherwise the static catalog hint decides (the
  * matched model's `imageInput === true`); otherwise false. An unknown model
  * id, a missing entry, or an unmarked model all resolve to false — the CLI
  * then returns an explicit, actionable error naming the override instead of
@@ -62,8 +62,8 @@ export function resolveImageInput(
 }
 
 /**
- * Assumed context window for a model the catalog does not know ( →
- * ). This is NOT a provider fact: it is an explicit, conservative
+ * Assumed context window for a model the catalog does not know (→
+ * . This is NOT a provider fact: it is an explicit, conservative
  * fallback that engages the degraded-window floor in the context budget rather
  * than letting an unknown model inherit a 24×-overstuffed default prompt.
  */
@@ -115,24 +115,24 @@ export function resolveContextWindow(
 }
 
 /**
- * Output-token resolution ( →  → ): precedence is an
+ * Output-token resolution (→ →): precedence is an
  * explicit override clamped by the matched catalog model's `maxOutputTokens`
  * ceiling, else the catalog hint, else the DEFAULT / Claude-native fallbacks. A
  * below-catalog override is legal (deliberate economy) and passes through
  * untouched; an above-catalog one is clamped to the ceiling — a request the
  * provider will 400 is worth nothing. When there is no catalog entry, no model
  * match, or no declared ceiling there is nothing to clamp against and the
- * override wins as-is (: an on-prem endpoint whose model the catalog
+ * override wins as-is (an on-prem endpoint whose model the catalog
  * does not know must not gain a say). The claude- special case sits AFTER the
  * lookup, as before: a Claude model's undefined ceiling is intentional (the
  * anthropic-messages SDK carries its own accurate per-model default, measured
- * ) and is never treated as a stub.
+ * and is never treated as a stub.
  *
  * Neither fallback is silent. `onClamp`, when provided, fires exactly once,
  * only on an actual clamp — env handle and connection field arrive here
  * indistinguishably, so a stale catalog pinning a model low would otherwise
  * quietly swallow even the escape hatch, undiagnosable. `onStubFallback`
- *, when provided, fires exactly once when the DEFAULT_MAX_OUTPUT_TOKENS
+ * when provided, fires exactly once when the DEFAULT_MAX_OUTPUT_TOKENS
  * stub is what actually gets applied — i.e. the model matched no catalog
  * ceiling (or matched nothing at all, e.g. every model on `vllm`/`custom`/
  * `openrouter`, whose `models: []` by construction) and no override was given
@@ -162,8 +162,8 @@ export function resolveMaxOutputTokens(
 }
 
 /**
- * The effort tier actually in force for a session (, extended by
- * ). Precedence:
+ * The effort tier actually in force for a session (extended by
+ * . Precedence:
  *
  * 1. an explicit choice — the user's pick, the connection's persisted tier, or
  *    the `ANYCODE_REASONING_EFFORT` env value — is validated fail-closed
@@ -178,7 +178,7 @@ export function resolveMaxOutputTokens(
  * 3. no recorded default ⇒ `undefined`, the pre-4894 behaviour: nothing is
  *    sent and the endpoint applies its own default.
  *
- * A live-only model (catalog miss, ) has no default fact: live
+ * A live-only model (catalog miss) has no default fact: live
  * capabilities declare a vocabulary, never a default, so rung 2 is skipped.
  */
 export function resolveReasoningEffort(
@@ -202,7 +202,7 @@ export function resolveReasoningEffort(
     const matched = (entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId));
     if (matched === undefined) {
       if (override === undefined) return undefined;
-      // : catalog miss ⇒ consult live capabilities, if any. The
+      // catalog miss ⇒ consult live capabilities, if any. The
       // override must still be inside the live-mapped vocabulary (fail-closed:
       // a level the endpoint never declared never reaches the wire).
       const levels = liveEffortLevels(live);
@@ -210,7 +210,7 @@ export function resolveReasoningEffort(
     }
     if (matched.reasoning !== true) return undefined;
     if (override === undefined) {
-      // : no explicit choice ⇒ the model's recorded provider default.
+      // no explicit choice ⇒ the model's recorded provider default.
       // Validated against the declared vocabulary like any other level, so a
       // catalog row can never push a level its own model rejects.
       const fallback = matched.defaultEffort;
@@ -253,7 +253,7 @@ export function resolveReasoningEffort(
   const matched = (entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId));
   if (matched === undefined) {
     if (override === undefined) return undefined;
-    // : catalog miss ⇒ consult live capabilities, if any. The
+    // catalog miss ⇒ consult live capabilities, if any. The
     // override must still be inside the live-mapped vocabulary (fail-closed:
     // a level the endpoint never declared never reaches the wire).
     const levels = liveEffortLevels(live);
@@ -261,7 +261,7 @@ export function resolveReasoningEffort(
   }
   if (matched.reasoning !== true) return undefined;
   if (override === undefined) {
-    // : no explicit choice ⇒ the model's recorded provider default.
+    // no explicit choice ⇒ the model's recorded provider default.
     // Validated against the declared vocabulary like any other level, so a
     // catalog row can never push a level its own model rejects.
     return effectiveDefaultEffort(modelId, entry, matched.effortLevels ?? ["off", "low", "medium", "high"]);
@@ -321,7 +321,7 @@ const EFFORT_ORDER: readonly ReasoningEffort[] = ["off", "low", "medium", "high"
  * selector). A reasoning model without explicit `effortLevels` falls back to
  * the legacy `["off", "low", "medium", "high"]` set (Anthropic budgetTokens).
  *
- * : on a catalog miss (unknown id, or an entry like `openrouter`/
+ * on a catalog miss (unknown id, or an entry like `openrouter`/
  * `vllm`/`custom` whose `models` is empty), live capabilities — when the model
  * is live-declared `reasoning: true` — supply the vocabulary instead. Live
  * never resurrects or narrows a catalog-known model: the catalog is checked
@@ -335,7 +335,7 @@ export function resolveEffortLevels(
 ): ReasoningEffort[] | undefined {
   const matched = (entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId));
   if (explicitLevels !== undefined) return matched?.thinkingAlwaysOn ? explicitLevels.filter((level) => level !== "off") : [...explicitLevels];
-  if (matched === undefined) return liveEffortLevels(live); // : catalog miss ⇒ live
+  if (matched === undefined) return liveEffortLevels(live); // catalog miss ⇒ live
   if (matched.reasoning !== true) return undefined; // live never resurrects a catalog model
   return matched.effortLevels ?? ["off", "low", "medium", "high"];
 }

@@ -84,11 +84,11 @@ describe("parseAgentProfileMd", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  §2.3: `maxTurns:` frontmatter becomes PersonaDefinition.turnBudget.
+// §2.3: `maxTurns:` frontmatter becomes PersonaDefinition.turnBudget.
 // Fatal-on-invalid mirrors `model:` — a profile that asks for a budget and
 // silently gets a different one is worse than one that is loudly refused.
 
-describe("parseAgentProfileMd — maxTurns frontmatter ( §2.3)", () => {
+describe("parseAgentProfileMd — maxTurns frontmatter (§2.3)", () => {
   it("maps a valid maxTurns onto turnBudget", () => {
     const res = parseAgentProfileMd(md({ name: "scout", description: "d", maxTurns: "12" }, "b"), "f");
     expect("ok" in res && res.ok.turnBudget).toBe(12);
@@ -126,12 +126,12 @@ describe("parseAgentProfileMd — maxTurns frontmatter ( §2.3)", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  R4 (wave2-cut.md §1.3/§2.3): `engine:` + explicit `tools:` refused at
+// R4 (wave2-cut.md §1.3/§2.3): `engine:` + explicit `tools:` refused at
 // parse — asymmetric half-enforcement across CLIs is worse than an honest
 // refusal. An ABSENT `tools:` line on an engine profile stays valid; `tools:`
 // alone (no `engine:`) is unaffected.
 
-describe("parseAgentProfileMd — engine + tools conflict ( R4)", () => {
+describe("parseAgentProfileMd — engine + tools conflict (R4)", () => {
   it("refuses engine + explicit tools with engine_tools_conflict (name + engine)", () => {
     const res = parseAgentProfileMd(
       md({ name: "scout", description: "d", engine: "claude", tools: "Read, Grep" }, "b"),
@@ -320,7 +320,7 @@ describe("parseAgentProfileMd — effort frontmatter and unknown keys (/)", () =
 });
 
 // ---------------------------------------------------------------------------
-// : `connection:`/`provider:` frontmatter — a profile selects the
+// `connection:`/`provider:` frontmatter — a profile selects the
 // connection its child runs on. Fatal-on-invalid (mirrors `model:`): a profile
 // that asks for a connection and silently runs on the parent's is the exact
 // dishonesty this task forbids. The two keys are mutually exclusive and neither

@@ -161,7 +161,7 @@ describe("appendAlwaysAllowRule", () => {
     expect(parsed.permissions.alwaysAllow).toEqual([{ toolName: "Read" }]);
   });
 
-  it("appends into a version:2 file (write-gate widened for  settings v2), leaving the connections graph untouched", async () => {
+  it("appends into a version:2 file (write-gate widened for settings v2), leaving the connections graph untouched", async () => {
     const dir = await freshDir();
     const path = settingsPath(dir);
     const original = {

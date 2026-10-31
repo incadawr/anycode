@@ -77,7 +77,7 @@ interface ServerRecord {
   pid?: number;
   stderrTail: string;
   /**
-   *  cross-review F2: bumped on every spawn. Callbacks of a
+   * cross-review F2: bumped on every spawn. Callbacks of a
    * superseded child (late exit, trailing stdout, init settlement) compare
    * against it and no-op, so they cannot crash the respawned server.
    */
@@ -231,7 +231,7 @@ export class LspManager implements LspPort {
   }
 
   /**
-   * : restart every CRASHED server (the Environment menu's
+   * restart every CRASHED server (the Environment menu's
    * "Restart" action). Resets the record to a clean not_started state
    * (no stale pid/client/handle/stderr) and immediately spawns it again —
    * init then proceeds exactly like a first touch (lazy-spawn path).

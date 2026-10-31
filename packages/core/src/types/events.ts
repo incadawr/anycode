@@ -72,7 +72,7 @@ export type ModelStreamEvent =
    */
   | { type: "finish"; finishReason: FinishReason; usage: TokenUsage; timeToFirstEventMs?: number; generationDurationMs?: number }
   /**
-   * `retry` ( W7b) is additive-optional terminal-retry metadata the loop
+   * `retry` (W7b) is additive-optional terminal-retry metadata the loop
    * attaches to every passing error event: `attemptsMade` is the count of
    * `stream_retry` events already seen this turn, `maxAttempts` comes from the
    * last `stream_retry` event (absent when the turn never retried — the port
@@ -89,7 +89,7 @@ export type ModelStreamEvent =
        * across a process boundary: a provider error can embed a response body or
        * auth header in its `.message`/`.stack`. Every trust-boundary surface (wire
        * serializer, CLI stdout/stream-json, renderer) renders from `safe`, never
-       * this field ( W7b-FIX #2).
+       * this field (W7b-FIX #2).
        */
       error: unknown;
       retry?: {
@@ -124,14 +124,14 @@ export type ModelStreamEvent =
       maxAttempts: number;
       delayMs: number;
       /**
-       *  review F5: present only on a retry that follows a
+       * review F5: present only on a retry that follows a
        * recovered network wait — the episode's duration (the retry fired at
        * once; `delayMs` is 0). Rendered as "now (network back after N s)",
        * never as a pending delay. Absent on every ordinary retry.
        */
       waitedMs?: number;
       /**
-       *  review F2: on a RECOVERY retry (waitedMs present), which
+       * review F2: on a RECOVERY retry (waitedMs present), which
        * waiting source recovered — mirrors `waiting_for_network.waitSource`,
        * so a tab-level banner counting episodes per source decrements the
        * right one. Absent otherwise and on legacy replays.
@@ -140,7 +140,7 @@ export type ModelStreamEvent =
       reason: string;
     }
   /**
-   * : the adapter parked a pre-content transient network failure and
+   * the adapter parked a pre-content transient network failure and
    * is probing until the endpoint is reachable again (or the wait bound is hit,
    * which ends the turn with the original error). Emitted once per waiting
    * episode, before the probing begins; a recovery is announced by the usual
@@ -156,7 +156,7 @@ export type ModelStreamEvent =
    */
   | { type: "waiting_for_network"; waitSource?: "parent" | "subagent" }
   /**
-   * Provider-reported quota from response headers ( / ).
+   * Provider-reported quota from response headers.
    * Emitted after a model attempt completes, at most once per attempt;
    * null-suppressed (a provider that reports nothing emits nothing). This is
    * the FIRST core-loop-emitted quota variant — the engine-external
@@ -205,7 +205,7 @@ export type AgentEvent =
   | { type: "turn_start"; turn: number }
   | { type: "turn_end"; turn: number; finishReason: FinishReason }
   /**
-   * : a user frame injected between steps of the
+   * a user frame injected between steps of the
    * running turn at the single legal seam (all of the step's tool results
    * appended, loop continuing — never between a tool_call and its result).
    * Additive: rides the existing agent_event envelope on the desktop wire
@@ -232,7 +232,7 @@ export type AgentEvent =
    * inside a turn; `"manual"` is a user-initiated one, reaching the same
    * cycle through `AgentLoop.compactNow` — from the CLI's `/compact`
    * (cli/commands.ts) and from the desktop's Compact slash-menu row
-   * (, host/session.ts's `compact_request`).
+   * (host/session.ts's `compact_request`).
    */
   | { type: "compaction_start"; trigger: "auto" | "manual" }
   /**
@@ -285,7 +285,7 @@ export type AgentEvent =
     }
   | { type: "microcompact"; clearedToolResults: number; savedTokens: number }
   /**
-   * One granted extension of the turn ceiling ( cut-1). Additive: it
+   * One granted extension of the turn ceiling (cut-1). Additive: it
    * rides the existing agent_event envelope on the desktop wire with no
    * protocol change (protocol.ts projects new AgentEvent variants
    * automatically), same precedent as `engine_notice` above. Emitted ONLY when
@@ -304,7 +304,7 @@ export type AgentEvent =
       remaining: string[];
       nextAction?: string;
       /**
-       * /4055: which grant path produced this round — the 
+       * /4055: which grant path produced this round — the
        * decreasing ladder (default) or the progress-scaled adaptive mode
        * (CeilingConfig.adaptive). Additive-optional: absent on replays from
        * before the field existed, which reads as the legacy ladder path.
@@ -363,7 +363,7 @@ export type AgentEvent =
       /**
        * REQUESTED child model id (request override, else the persona's own
        * `model:`) — what we put in the request, not the constructed port's
-       * own identity (, reverses 's port-identity readback:
+       * own identity (reverses's port-identity readback:
        * see `subagent_end.model` below for the same field on the other end
        * of a run). Absent ⇒ the child inherited the parent's model.
        */
@@ -385,11 +385,11 @@ export type AgentEvent =
        * child (mirrors SubagentProgress's `start` variant, ports/subagent.ts).
        * Additive: absent on a replay from before this field existed, which
        * falls back to legacy (engine-agnostic) rendering — never infer the
-       * engine from `agentType` ( R5, wave2-cut §5.4).
+       * engine from `agentType` (R5, wave2-cut §5.4).
        */
       engine?: "codex" | "claude";
       /**
-       *  §3.10: set when the spawn used a ROLE ROUTE entry — the
+       * §3.10: set when the spawn used a ROLE ROUTE entry — the
        * host's entryKey(role, entry) identity (e.g. "executor|codex|"). Lets
        * telemetry correlate a spawn with its route chain position without
        * carrying the whole entry. Additive-optional: absent for every
@@ -398,7 +398,7 @@ export type AgentEvent =
        */
       route?: string;
       /**
-       *  §3.10: set when the spawn ran on a NON-PRIMARY route
+       * §3.10: set when the spawn ran on a NON-PRIMARY route
        * entry (spawn-time health skip or a respawn) — the short skip reason
        * (e.g. "quota"). Absent on primary-entry runs; never task-failure
        * text (fallbacks are infrastructure-only, §2.7).
@@ -412,7 +412,7 @@ export type AgentEvent =
       toolCalls: number;
       lastTool?: string;
       /**
-       * : the provider's own model claim, live (first response frame
+       * the provider's own model claim, live (first response frame
        * onward). Same semantics as `subagent_end.responseModel` — a claim, never
        * proof of serving, never merged into `model`. Absent until observed.
        */
@@ -438,7 +438,7 @@ export type AgentEvent =
       durationMs: number;
       /**
        * Count of subagent_activity events the runner withheld past
-       * SUBAGENT_ACTIVITY_MAX_EVENTS this run ( slice S1 W2, CUT-S1
+       * SUBAGENT_ACTIVITY_MAX_EVENTS this run (slice S1 W2, CUT-S1
        * §0.5). Additive-optional: absent on a replay from before this field
        * existed (falls back to the pre-S1 "silently bounded" behavior), and
        * absent whenever the run never actually crossed the cap. Feeds the
@@ -463,7 +463,7 @@ export type AgentEvent =
        * off its own port at terminal), children that inherited the
        * parent's port, and providers that expose no raw claim. This is the
        * provider's CLAIM, not proof of serving — a SEPARATE datum from
-       * `model` above ( owner's ruling: the request, not the
+       * `model` above (owner's ruling: the request, not the
        * provider's claim, decides "which model did the child run on"); kept
        * distinct because it is the only instrument for the open z.ai
        * accounting investigation.
@@ -514,7 +514,7 @@ export type AgentEvent =
    */
   | { type: "subagent_attention"; toolCallId: string; waiting: boolean }
   /**
-   * Stall report ( slice 1, subagents/stall-clock.ts). REPORTS ONLY —
+   * Stall report (slice 1, subagents/stall-clock.ts). REPORTS ONLY —
    * the child keeps running; nothing about this event ever kills, aborts or
    * ends the loop. Fired at most once per unbroken silent stretch past
    * SUBAGENT_STALL_TIMEOUT_MS (re-armed only by a genuine later sign of life),
@@ -549,7 +549,7 @@ export type AgentEvent =
   // change (protocol.ts projects new AgentEvent variants automatically). Coarse
 
   // progress surfaces as workflow_step_progress, not subagent_*.
-  // : this event says the run has a valid graph and WILL settle with
+  // this event says the run has a valid graph and WILL settle with
   // one workflow_step_end per step — it does NOT say any child has launched.
   // A step's actual launch is workflow_step_running (post-semaphore); a step
   // whose terminal is reached without the engine ever calling subagents.run
@@ -560,7 +560,7 @@ export type AgentEvent =
       workflow: string;
       totalSteps: number;
       /**
-       *  slice S3: the run's step graph (id/agentType/dependsOn), so
+       * slice S3: the run's step graph (id/agentType/dependsOn), so
        * the desktop card can hold and order all N steps before the first
        * `workflow_step_start` arrives, rather than discovering steps one at a
        * time in event-ARRIVAL order.
@@ -579,7 +579,7 @@ export type AgentEvent =
       steps: readonly { id: string; agentType: string; dependsOn?: readonly string[] }[];
     }
   | { type: "workflow_step_start"; toolCallId: string; stepId: string; agentType: string }
-  //  slice S3: the step's REAL (post-semaphore) start, distinct from
+  // slice S3: the step's REAL (post-semaphore) start, distinct from
   // workflow_step_start above — that one fires the instant a step becomes
   // ready, BEFORE it may have to wait behind the shared subagent semaphore.
   // A step carrying workflow_step_start but no workflow_step_running yet is
@@ -595,14 +595,14 @@ export type AgentEvent =
       toolCalls: number;
       lastTool?: string;
       /**
-       *  slice S2: the step's token spend, cumulative since that step
+       * slice S2: the step's token spend, cumulative since that step
        * started. The receiver REPLACES its stored value rather than adding, so
        * a dropped or duplicated event leaves the total intact. Absent means the
        * tier reported no spend at all — not that the step spent nothing.
        */
       usage?: TokenUsage;
     }
-  // Per-step tool activity ( slice S1). The workflow mirror of
+  // Per-step tool activity (slice S1). The workflow mirror of
   // `subagent_activity` above, and additive in the same way. Before this
   // variant a workflow run was a black box: `workflow_step_progress` carries
   // counters only, so the parent could see THAT a step had made 7 tool calls
@@ -616,10 +616,10 @@ export type AgentEvent =
       status: "completed" | "max_turns" | "cancelled" | "error" | "skipped";
       turns: number;
       durationMs: number;
-      /**  slice S2: the step's final spend, from its SubagentOutcome. */
+      /** slice S2: the step's final spend, from its SubagentOutcome. */
       usage?: TokenUsage;
       /**
-       * : present only for a step that did not complete. Shape
+       * present only for a step that did not complete. Shape
        * duplicated from `workflow/step-failure.ts`'s `StepFailure` rather than
        * imported, for the same reason `workflow_start`'s `steps` field above
        * duplicates `WorkflowStepGraphNode`: `workflow/step-failure.ts` imports
@@ -647,7 +647,7 @@ export type AgentEvent =
   | { type: "checkpoint_created"; id: string; label: string }
   | { type: "checkpoint_failed"; reason: string }
   /**
-   *  Stage 1: one consulted ask-zone decision. Emitted by the
+   * Stage 1: one consulted ask-zone decision. Emitted by the
    * dispatcher for every Bash ask the classifier was consulted on: `allow`
    * skipped the broker; `ask` went to the broker (by verdict, or by `error`
    * when the classifier failed, timed out or answered badly). Additive: absent
@@ -666,7 +666,7 @@ export type AgentEvent =
       error?: string;
     }
   /**
-   * External-engine notice (codex-fixes , cut §2(i)/§3.4): a warning,
+   * External-engine notice (codex-fixes, cut §2(i)/§3.4): a warning,
    * retry, or informational notice from an engine that owns its own runtime
    * outside AnyCode's core loop (e.g. Codex app-server auth/quota/network
    * retries). Additive — the core loop itself NEVER emits this variant, so
@@ -729,7 +729,7 @@ export type AgentEvent =
       suppressed?: number;
     }
   /**
-   *  review F2: ONE completed model round on an external engine
+   * review F2: ONE completed model round on an external engine
    * whose native "turn" is coarser than a model round. Claude Code emits a
    * `message_start` stream event exactly once per assistant message; every
    * other engine-visible boundary (turn_start/turn_end) fires once per

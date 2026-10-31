@@ -91,7 +91,7 @@ export class InProcessTaskManager implements BackgroundTaskPort {
   private readonly tasks = new Map<string, TaskRecord>();
   private notices: BackgroundTaskNotice[] = [];
   private counter = 0;
-  /** : settled-listener set (host live-push); see onTaskSettled. */
+  /** settled-listener set (host live-push); see onTaskSettled. */
   private readonly settledListeners = new Set<(notice: BackgroundTaskNotice) => void>();
 
   constructor(private readonly exec: ExecutionPort) {}
@@ -183,7 +183,7 @@ export class InProcessTaskManager implements BackgroundTaskPort {
   }
 
   /**
-   * : live "a task just left running" registration for the host's
+   * live "a task just left running" registration for the host's
    * idle push (a task finishing BETWEEN turns must reach the desktop panel
    * immediately, not at the next turn teardown). Mirrors `drainNotices`'s
    * payload (a BackgroundTaskNotice) but is a side channel, never drained:
@@ -247,7 +247,7 @@ export class InProcessTaskManager implements BackgroundTaskPort {
       durationMs: record.endedAt - record.startedAt,
     };
     this.notices.push(notice);
-    // : fire the live listeners only for the FIRST terminal (the
+    // fire the live listeners only for the FIRST terminal (the
     // same idempotency guard as the notice push above) — a settle is a
     // one-shot event, never a state-reading API.
     for (const listener of this.settledListeners) {

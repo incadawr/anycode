@@ -1,5 +1,5 @@
 /**
- * plugins/admin tests ( S1-A, design §7/§8): the Plugins-pane
+ * plugins/admin tests (S1-A, design §7/§8): the Plugins-pane
  * scan enumerates every plugin with tier/status/capabilities/consent —
  * managed entries with bookkeeping, project + legacy dir plugins, corrupt
  * state fail-soft, and deterministic tier-then-name ordering.

@@ -128,7 +128,7 @@ function lastRole(req: ModelRequest): "user" | "assistant" | "tool" | "none" {
 }
 
 /**
- * The wrap-up rescue call ( §4), recognized the way the design specifies:
+ * The wrap-up rescue call (§4), recognized the way the design specifies:
  * zero tool declarations AND a trailing synthetic user message carrying the
  * wrap-up instruction. Both halves are asserted so a script cannot mistake an
  * ordinary child step for the rescue.
@@ -208,7 +208,7 @@ function makePorts(exec?: ExecutionPort): CorePorts {
   };
 }
 
-/**  §2.2 wiring tests: a bare recording TelemetryPort (mirror of
+/** §2.2 wiring tests: a bare recording TelemetryPort (mirror of
  *  telemetry/records.test.ts's own fixture) so a test can assert exactly what
  *  buildSubagentTelemetryTap wrote through the parent's subagentEventTap. */
 function makeRecordingPort(): { port: TelemetryPort; records: TelemetryRecord[] } {
@@ -293,7 +293,7 @@ describe("buildChildConfig — §4.1 derivation table", () => {
 
     // registry: NEW, the defaults minus Agent (lock #1, structural). The
     // persona list IS the expected set now: WebSearch is not a built-in
-    // persona tool ( follow-up) — it reaches a child registry
+    // persona tool (follow-up) — it reaches a child registry
     // only through an explicit extras.requestTools (a workflow step's
     // `tools:`) or an md-profile's own `tools:` line, pinned below.
     expect(child.registry).not.toBe(parent.registry);
@@ -328,7 +328,7 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     expect(child.history).not.toBe(buildChildConfig(parent, getPersona("general-purpose"), REQ).history);
   });
 
-  it("WebSearch reaches a child registry ONLY when the child asks for it by name ( follow-up)", async () => {
+  it("WebSearch reaches a child registry ONLY when the child asks for it by name (follow-up)", async () => {
     const parent = makeParent();
     const { createWebSearchTool } = await import("../tools/web-search.js");
     const webSearch = createWebSearchTool({
@@ -457,12 +457,12 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     const parent = makeParent();
     const deadlineAt = Date.now() + 1_234;
     expect(buildChildConfig(parent, getPersona("explore"), REQ, { deadlineAt }).deadlineAt).toBe(deadlineAt);
-    // Byte-identical to a pre- child when no deadline is supplied.
+    // Byte-identical to a pre-child when no deadline is supplied.
     expect(buildChildConfig(parent, getPersona("explore"), REQ).deadlineAt).toBeUndefined();
     expect("deadlineAt" in buildChildConfig(parent, getPersona("explore"), REQ)).toBe(false);
   });
 
-  // The ceiling ladder applies to children too ( §1.5/§1.7), but with
+  // The ceiling ladder applies to children too (§1.5/§1.7), but with
   // the two clamps only a child needs: the total (budget + every grant) stays
   // under SUBAGENT_MAX_TURNS_CEILING like an explicit request would, and the
   // decision window is additionally bounded by what is left of the parent's
@@ -503,12 +503,12 @@ describe("buildChildConfig — §4.1 derivation table", () => {
   });
 });
 
-//  §2.2: the inline subagent tap. Decision (а) — child records land in
+// §2.2: the inline subagent tap. Decision (а) — child records land in
 // the PARENT's own telemetry file, marked with `sub`. `buildSubagentTelemetryTap`
 // itself (whitelist mapping, sub stamping, model omission) is pinned exhaustively
 // in telemetry/records.test.ts; these tests pin the WIRING — buildChildConfig
 // installs the closure the parent's factory returns as the child's own eventTap.
-describe("subagentEventTap wiring ( §2.2)", () => {
+describe("subagentEventTap wiring (§2.2)", () => {
   it("builds the child's eventTap from parent.subagentEventTap, stamped with the child's agentType", () => {
     const { port, records } = makeRecordingPort();
     const parent = makeParent({
@@ -647,7 +647,7 @@ describe("createSubagentRunner — parent spawns child", () => {
     expect(loop.history.unansweredToolCallIds()).toEqual([]);
   });
 
-  //  review F2: when the child inherits the PARENT's port (no
+  // review F2: when the child inherits the PARENT's port (no
   // override), the runner wraps it so the child's network-wait events are
   // labelled `waitSource: "subagent"` — a tab-level banner counting episodes
   // per source must not clear when only the child of a simultaneously parked
@@ -793,7 +793,7 @@ describe("output cap + status mapping", () => {
     expect(outcome.finalText.length).toBe(100_000);
   });
 
-  it("outcome carries the final turn's finishReason (, provider-side length cutoff)", async () => {
+  it("outcome carries the final turn's finishReason (provider-side length cutoff)", async () => {
     const model = new ScriptedModelPort(() => [
       { type: "start" },
       { type: "text_delta", id: "t", text: "cut short by the provider's own output ceiling" },
@@ -944,11 +944,11 @@ describe("output cap + status mapping", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  child budget visibility: the child's own ceiling ladder (its
+// child budget visibility: the child's own ceiling ladder (its
 // ceiling_grant/ceiling_refused events) folds into SubagentOutcome.ceiling and
 // the kind:end progress — numbers + the closed refusal enum only.
 
-describe(" child budget visibility", () => {
+describe("child budget visibility", () => {
   /**
    * A child script that trips the ceiling once: round 1 grants (verdict with
    * a remaining list), the granted round does read-only work only, and round
@@ -1864,12 +1864,12 @@ describe("subagent activity feed (slice P7.18/F16b)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Honest activitySuppressed count ( slice S1 W2, CUT-S1 §0.5/§3 W2).
+// Honest activitySuppressed count (slice S1 W2, CUT-S1 §0.5/§3 W2).
 // The activity feed silently stopped emitting past SUBAGENT_ACTIVITY_MAX_EVENTS
 // (P7.18/F16b); S1 makes the withheld count observable on subagent_end so the
 // persisted card's "+N earlier" is never a lie relative to what actually ran.
 
-describe("subagent activitySuppressed ( slice S1 W2)", () => {
+describe("subagent activitySuppressed (slice S1 W2)", () => {
   it("emits exactly SUBAGENT_ACTIVITY_MAX_EVENTS activity rows and reports the EXACT suppressed count on end", async () => {
     const overflow = SUBAGENT_ACTIVITY_MAX_EVENTS + 37;
     let step = 0;
@@ -2204,7 +2204,7 @@ describe("explore default model", () => {
     expect(start).toMatchObject({ kind: "start", agentType: "explore", model: "cheap-1" });
   });
 
-  //  follow-up: the env default is a host-configured convenience,
+  // follow-up: the env default is a host-configured convenience,
   // never the caller's intent — a rejected id must degrade to the parent's
   // model (with a notice), not fail every explore call on the connection.
   it("a disallowed explore default falls back to the parent's model with a notice", async () => {
@@ -2224,7 +2224,7 @@ describe("explore default model", () => {
     expect(resolved).toEqual(["glm-cheap"]);
     // The run happened on the PARENT's port, exactly once.
     expect(parentModel.calls).toBe(1);
-    //  §3.2: the notice now rides the GENERIC role-chain wording —
+    // §3.2: the notice now rides the GENERIC role-chain wording —
     // the 4131 explore default is a one-entry chain, so the all-entries-failed
     // notice names the role and lists the resolver's rejection reason.
     expect(outcome.finalText).toContain(
@@ -2249,7 +2249,7 @@ describe("explore default model", () => {
     await runner.run({ ...REQ, agentType: "explore" }, { onProgress: (p) => progress.push(p) });
 
     const start = progress.find((p) => p.kind === "start");
-    //  discipline: absent model means "inherited the parent's port" —
+    // discipline: absent model means "inherited the parent's port" —
     // which is now literally true after the fallback.
     expect(start).toMatchObject({ kind: "start", agentType: "explore" });
     expect(start && "model" in start && start.model !== undefined).toBe(false);
@@ -2488,7 +2488,7 @@ describe("engine persona (one-shot foreign CLI run)", () => {
     expect(parentModel.calls).toBe(0);
   });
 
-  it(" CUT-S4 §2.4: without runEngineChild, the error text names the S4 migration (deprecated-live workflow path) verbatim, not the pre-S4 'not supported' wording", async () => {
+  it("CUT-S4 §2.4: without runEngineChild, the error text names the S4 migration (deprecated-live workflow path) verbatim, not the pre-S4 'not supported' wording", async () => {
     const runner = createSubagentRunner(makeParent(), {
       profiles: [enginePersona], // no runEngineChild
     });
@@ -2564,13 +2564,13 @@ describe("engine persona (one-shot foreign CLI run)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// engineProfile() port method ( CUT-S4 §2.1): tools/agent.ts's new
+// engineProfile() port method (CUT-S4 §2.1): tools/agent.ts's new
 // routing branch resolves an md-profile's `engine:` frontmatter through this
 // method BEFORE the tier branch. Realized through the SAME thunk mechanism as
 // listAgentTypes (currentProfiles()) — no second list/cache. Built-in personas
 // always resolve to null (they never have an `engine`).
 
-describe("engineProfile() ( CUT-S4 §2.1)", () => {
+describe("engineProfile(CUT-S4 §2.1)", () => {
   const codexPersona: PersonaDefinition = {
     name: "codex-worker",
     description: "runs on the codex engine",
@@ -2612,7 +2612,7 @@ describe("engineProfile() ( CUT-S4 §2.1)", () => {
     expect(runner.engineProfile?.("codex-worker")).toEqual({ engine: "codex", systemPrompt: "PERSONA BODY" });
   });
 
-  //  CUT-S4 model plumbing fix: a profile's own `model:` frontmatter
+  // CUT-S4 model plumbing fix: a profile's own `model:` frontmatter
   // was parsed and validated (profiles.ts) and stored on PersonaDefinition,
   // but engineProfile() dropped it before it ever reached tools/agent.ts's
   // session-tier request — the child booted on the engine CLI's own default
@@ -2716,7 +2716,7 @@ describe("profileRouting()", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  — wall-clock budget + wrap-up rescue. The measurement that motivated
+// wall-clock budget + wrap-up rescue. The measurement that motivated
 // this: one child in three died on the 8-turn cap having spent 13-66% of its
 // 600s, and the partial the parent received was the preamble of the cut-off
 // turn ("now let me check X"), not the findings. The budget is now time; the
@@ -2730,7 +2730,7 @@ describe("profileRouting()", () => {
 /** Fixed wall-clock origin for the fake-Date tests. */
 const CLOCK_BASE = 1_700_000_000_000;
 
-describe("subagent budget constants ( §2.1)", () => {
+describe("subagent budget constants (§2.1)", () => {
   it("a wrap-up started at the loop deadline still returns before the dispatcher wall", () => {
     expect(SUBAGENT_LOOP_DEADLINE_MS + SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS).toBeLessThanOrEqual(
       SUBAGENT_OUTCOME_DEADLINE_MS,
@@ -2745,7 +2745,7 @@ describe("subagent budget constants ( §2.1)", () => {
   });
 });
 
-describe("child wall-clock deadline ( §3, DoD-1)", () => {
+describe("child wall-clock deadline (§3, DoD-1)", () => {
   it("ends the child with max_turns when the deadline passes, well short of the turn budget", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(CLOCK_BASE);
@@ -2802,7 +2802,7 @@ describe("child wall-clock deadline ( §3, DoD-1)", () => {
   });
 });
 
-describe("wrap-up rescue end-to-end ( §4, DoD-2)", () => {
+describe("wrap-up rescue end-to-end (§4, DoD-2)", () => {
   const scoutBody = "You are the tiny scout profile body.";
   const scout: PersonaDefinition = {
     name: "tiny-scout",
@@ -2876,7 +2876,7 @@ describe("wrap-up rescue end-to-end ( §4, DoD-2)", () => {
   });
 });
 
-describe("wrap-up has no tools by construction ( §4.1, DoD-3)", () => {
+describe("wrap-up has no tools by construction (§4.1, DoD-3)", () => {
   it("ignores a tool call proposed in the rescue reply — there is no dispatcher on that path", async () => {
     const readFile = vi.fn(async (path: string) => `body of ${path}`);
     const ports: CorePorts = {
@@ -2910,7 +2910,7 @@ describe("wrap-up has no tools by construction ( §4.1, DoD-3)", () => {
   });
 });
 
-describe("wrap-up leaves the child history untouched ( §4.3, DoD-4)", () => {
+describe("wrap-up leaves the child history untouched (§4.3, DoD-4)", () => {
   it("adds no item to loop.history — the instruction exists only in the request", async () => {
     const realAppend = ConversationHistory.prototype.append;
     const histories: ConversationHistory[] = [];
@@ -2955,7 +2955,7 @@ describe("wrap-up leaves the child history untouched ( §4.3, DoD-4)", () => {
   });
 });
 
-describe("wrap-up degrades without ever worsening the outcome ( §7 F4, DoD-5)", () => {
+describe("wrap-up degrades without ever worsening the outcome (§7 F4, DoD-5)", () => {
   /** A child that runs `turns` tool steps, then answers the rescue via `wrapUp`. */
   function makePort(wrapUp: (yieldEvent: (e: ModelStreamEvent) => void) => Promise<void>): {
     port: ModelPort;
@@ -2997,7 +2997,7 @@ describe("wrap-up degrades without ever worsening the outcome ( §7 F4, DoD-5)",
 
     expect(outcome.status).toBe("max_turns");
     expect(outcome.finalText).toBe(`${SUBAGENT_WRAPUP_DEGRADED_PREFIX}\n\nturn-2`);
-    // 2 loop turns + 1 refused ceiling round-1 call (; the script's
+    // 2 loop turns + 1 refused ceiling round-1 call; the script's
     // else-branch answers it with a plain "TodoRead" tool call) + 1 wrap-up.
     expect(calls()).toBe(4);
   });
@@ -3071,7 +3071,7 @@ describe("wrap-up degrades without ever worsening the outcome ( §7 F4, DoD-5)",
     };
   }
 
-  it("(e ) tool-only turns + a throwing wrap-up with NO partial yields the distinct failure notice", async () => {
+  it("(e) tool-only turns + a throwing wrap-up with NO partial yields the distinct failure notice", async () => {
     const port = makeToolOnlyPort(async () => {
       throw new Error("wrapup boom");
     });
@@ -3084,7 +3084,7 @@ describe("wrap-up degrades without ever worsening the outcome ( §7 F4, DoD-5)",
     expect(outcome.finalText.trim().length).toBeGreaterThan(0);
   });
 
-  it("(f ) a tool/reasoning-only wrap-up reply (no text_delta) with no partial yields the failure notice", async () => {
+  it("(f) a tool/reasoning-only wrap-up reply (no text_delta) with no partial yields the failure notice", async () => {
     const port = makeToolOnlyPort(async (emit) => {
       emit({ type: "start" });
       // No text_delta at all — only a finish (a reasoning-only reply).
@@ -3099,7 +3099,7 @@ describe("wrap-up degrades without ever worsening the outcome ( §7 F4, DoD-5)",
   });
 });
 
-describe("wrap-up usage reporting ( —  gap closed)", () => {
+describe("wrap-up usage reporting (gap closed)", () => {
   /** start + one text_delta + finish carrying the supplied usage. */
   function usageStep(text: string, usage: TokenUsage): ModelStreamEvent[] {
     return [
@@ -3331,7 +3331,7 @@ describe("wrap-up usage reporting ( —  gap closed)", () => {
   });
 });
 
-describe("wrap-up window gate ( §4.3, DoD-6)", () => {
+describe("wrap-up window gate (§4.3, DoD-6)", () => {
   /** Runs a 2-turn child whose second step advances the clock by `elapsedMs`. */
   async function runWithElapsed(elapsedMs: number): Promise<{
     outcome: SubagentOutcome;
@@ -3374,7 +3374,7 @@ describe("wrap-up window gate ( §4.3, DoD-6)", () => {
     const { outcome, calls } = await runWithElapsed(400_000);
     expect(outcome.status).toBe("max_turns");
     expect(outcome.finalText).toBe("REPORT: rescued in time");
-    // 2 loop turns + 1 refused ceiling round-1 call (, still inside
+    // 2 loop turns + 1 refused ceiling round-1 call (still inside
     // SUBAGENT_LOOP_DEADLINE_MS at 400s elapsed) + 1 wrap-up.
     expect(calls).toBe(4);
   });
@@ -3416,7 +3416,7 @@ describe("wrap-up window gate ( §4.3, DoD-6)", () => {
   });
 });
 
-describe("wrap-up lifecycle and semaphore ( §7 F8, DoD-7)", () => {
+describe("wrap-up lifecycle and semaphore (§7 F8, DoD-7)", () => {
   it("holds the permit across the rescue and fires exactly one SubagentStop per spawn, after it", async () => {
     let releaseGate: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
@@ -3493,7 +3493,7 @@ describe("wrap-up lifecycle and semaphore ( §7 F8, DoD-7)", () => {
   });
 });
 
-describe("hand-built maxTurns guard ( §2.4, F10)", () => {
+describe("hand-built maxTurns guard (§2.4, F10)", () => {
   it("refuses a non-integer or non-positive budget before anything is spawned", async () => {
     const model = new ScriptedModelPort(() => textStep("never"));
     const { hooks, calls } = recordingHooks();
@@ -3513,7 +3513,7 @@ describe("hand-built maxTurns guard ( §2.4, F10)", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  +  (slice B1): the child-spawn seam.
+// + (slice B1): the child-spawn seam.
 //   * capabilities re-resolved for the CHILD's own model (defect F6);
 //   * the start card reports the CONSTRUCTED port's identity, not an echo;
 //   * the provider's own model CLAIM travels out on subagent_end.
@@ -3584,7 +3584,7 @@ describe("clampSubagentMaxOutputTokens", () => {
   });
 });
 
-describe("buildChildConfig — child-model settings (, defect F6)", () => {
+describe("buildChildConfig — child-model settings (defect F6)", () => {
   const PARENT_CONTEXT = { contextWindowTokens: 200_000, keepRecentMessages: 7 };
 
   it("replaces the effort wholesale and caps the ceiling at SUBAGENT_MAX_OUTPUT_TOKENS, overlaying ONLY contextWindowTokens", () => {
@@ -3789,9 +3789,9 @@ describe("run() — child capabilities resolved for the child's own model", () =
   });
 });
 
-describe("start progress — requested id is authoritative (, reverses )", () => {
+describe("start progress — requested id is authoritative (reverses)", () => {
   it("reports the REQUESTED string even when the constructed port's modelId differs", async () => {
-    // Owner's  ruling: "модель никогда не ответит, главное какие
+    // Owner's ruling: "модель никогда не ответит, главное какие
     // запросы мы шлем" — the request is what we control and can prove; a
     // port's own modelId is our construction too, not independent evidence,
     // so it must never outrank the request even when a future port
@@ -3832,7 +3832,7 @@ describe("start progress — requested id is authoritative (, reverses )", () =>
   });
 });
 
-describe("responseModel — the provider's own claim reaches subagent_end (, telemetry gap closed by )", () => {
+describe("responseModel — the provider's own claim reaches subagent_end (telemetry gap closed by)", () => {
   it("end progress carries the claim the child's port observed, ALONGSIDE the requested id", async () => {
     const childPort = makeChildPort({ modelId: "glm-5.3-flash", claims: ["glm-5.3"] });
     const runner = createSubagentRunner(makeParent(), {
@@ -3852,7 +3852,7 @@ describe("responseModel — the provider's own claim reaches subagent_end (, tel
     expect(endOf(progress).responseModel).toBe("glm-5.3");
   });
 
-  it("a provider that reports nothing back leaves responseModel ABSENT without touching the requested id ( (c))", async () => {
+  it("a provider that reports nothing back leaves responseModel ABSENT without touching the requested id ((c))", async () => {
     // No `claims` supplied: makeChildPort's port never sets lastResponseModel
     // at all, mirroring a transport with no raw message_start.message.model
     // to read (e.g. a non-anthropic-messages provider). The requested id must
@@ -3989,7 +3989,7 @@ describe("responseModel — live on progress from the first response frame", () 
 });
 
 // ---------------------------------------------------------------------------
-// Stall clock wiring — inline tier ( slice 1). A stall detector that
+// Stall clock wiring — inline tier (slice 1). A stall detector that
 // REPORTS, never kills: silence past SUBAGENT_STALL_TIMEOUT_MS must produce
 // exactly one "stalled" progress while the run keeps going; a sign of life
 // resets it; a broker.isAwaitingApproval wait must never be counted as
@@ -4055,7 +4055,7 @@ function stalledReports(calls: SubagentProgress[]): Extract<SubagentProgress, { 
   return calls.filter((p): p is Extract<SubagentProgress, { kind: "stalled" }> => p.kind === "stalled");
 }
 
-describe("stall clock wiring — inline tier ( slice 1)", () => {
+describe("stall clock wiring — inline tier (slice 1)", () => {
   it("silence past SUBAGENT_STALL_TIMEOUT_MS emits exactly one stalled progress, and the child is still running afterward (no end, no loop_end)", async () => {
     vi.useFakeTimers();
     try {
@@ -4140,7 +4140,7 @@ describe("stall clock wiring — inline tier ( slice 1)", () => {
       broker.waiting = true;
 
       // Blocked far longer than the whole threshold — proves the wait is
-      // never counted as silence (the exact defect  removes).
+      // never counted as silence (the exact defect removes).
       await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS + 50_000);
       expect(stalledReports(progress)).toHaveLength(0);
 
@@ -4202,7 +4202,7 @@ describe("stall clock wiring — inline tier ( slice 1)", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  slice S2 — the child's token spend.
+// slice S2 — the child's token spend.
 //
 // Every test below drives the REAL seam (runner -> buildChildConfig -> AgentLoop)
 // with only the ModelPort scripted, so what is pinned is the actual path a live
@@ -4229,7 +4229,7 @@ function usageToolStep(id: string, usage: TokenUsage): ModelStreamEvent[] {
   ];
 }
 
-describe("subagent token spend ( slice S2)", () => {
+describe("subagent token spend (slice S2)", () => {
   it("sums the child's per-call usage into the outcome and onto progress events", async () => {
     let step = 0;
     const model = new ScriptedModelPort(() => {
@@ -4326,7 +4326,7 @@ describe("subagent token spend ( slice S2)", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  slice S5. A child that died on a provider failure used to report its
+// slice S5. A child that died on a provider failure used to report its
 // PREVIOUS turn's text as its final text: the loop's {type:"error"} event rode
 // this iterator past a switch that had no case for it, so the class "the child
 // failed on the provider" had no reason on ANY tier. The reason now leads
@@ -4344,7 +4344,7 @@ class StatusError extends Error {
   }
 }
 
-describe("provider-error reason in finalText ( slice S5)", () => {
+describe("provider-error reason in finalText (slice S5)", () => {
   it("reports the safe descriptor as the final text when the child's stream throws", async () => {
     const errorModel: ModelPort = {
       streamText(): AsyncIterable<ModelStreamEvent> {
@@ -4456,7 +4456,7 @@ describe("provider-error reason in finalText ( slice S5)", () => {
   });
 });
 
-// : persona.turnBudget relays through engineProfile() the same way
+// persona.turnBudget relays through engineProfile() the same way
 // model does — present when the profile declares one, key entirely absent
 // otherwise.
 describe("engineProfile() — turnBudget relay", () => {
@@ -4961,7 +4961,7 @@ describe("configurable inline child width", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Inline Agent admission interplay ( I1): toolConcurrency bounds the
+// Inline Agent admission interplay (I1): toolConcurrency bounds the
 // active inline Agent HANDLERS in a parent step; the runner's maxConcurrent
 // separately bounds the active CHILD runs. An Agent handler parked on the child
 // semaphore still holds its tool slot, so effective inline admission is
@@ -4969,7 +4969,7 @@ describe("configurable inline child width", () => {
 // the session tier and detached children outlive their handlers: neither is
 // bounded by these two ceilings.
 
-describe("inline Agent admission interplay ( I1)", () => {
+describe("inline Agent admission interplay (I1)", () => {
   interface InterplayModel {
     port: ModelPort;
     childCalls: () => number;
@@ -5136,12 +5136,12 @@ describe("inline Agent admission interplay ( I1)", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  §3.1: resolution flip for OVERRIDABLE role personas. A same-named
+// §3.1: resolution flip for OVERRIDABLE role personas. A same-named
 // md-profile now WINS over the built-in persona (planner/executor/reviewer);
 // without a profile the built-in runs; general-purpose/explore keep their
 // guarantees (a same-named md-profile cannot exist — parse-time lock).
 
-describe("role persona resolution flip ( §3.1)", () => {
+describe("role persona resolution flip (§3.1)", () => {
   it("(a) an md-profile named planner WINS over the built-in persona", async () => {
     const persona = await makeProfile("planner", { body: "OVERRIDE PLANNER BODY" });
     const model = new ScriptedModelPort(() => textStep("override-ran"));
@@ -5232,13 +5232,13 @@ describe("role persona resolution flip ( §3.1)", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  §3.2: the generic role chain (generalises the 4131 explore
+// §3.2: the generic role chain (generalises the 4131 explore
 // default). Entries walk in order through the existing resolvers; first
 // resolver-wins; all-fail degrades to the parent model with a notice listing
 // every reason; an explicit req.model bypasses the chain; exploreModel-only
 // hosts keep working via a one-entry chain.
 
-describe("role route chain walk ( §3.2)", () => {
+describe("role route chain walk (§3.2)", () => {
   it("(d) two entries, first resolver throws → second used, no notice", async () => {
     const parentModel = new ScriptedModelPort(() => textStep("parent-report"));
     const goodModel = new ScriptedModelPort(() => textStep("entry2-report"));
@@ -5402,7 +5402,7 @@ describe("role route chain walk ( §3.2)", () => {
     expect(parentModel.calls).toBe(1);
   });
 
-  // F4 ( cross-review): a settings-derived role persona carries
+  // F4 (cross-review): a settings-derived role persona carries
   // its PRIMARY model verbatim (persona.model set, no connection/engine).
   // That persona-model IS the chain head of a settings route — a rejected
   // primary must degrade to the next entry, not hard-error with the
@@ -5453,7 +5453,7 @@ describe("role route chain walk ( §3.2)", () => {
     expect(outcome.finalText).toContain("md-model-1");
   });
 
-  // R4 ( cross-review, part 1): the resolver's entries are the
+  // R4 (cross-review, part 1): the resolver's entries are the
   // HEALTH-FILTERED chain — when the settings primary sits in `skipped`
   // (cooldown), the walk starts at the first HEALTHY entry and never
   // re-prepends the dead primary. Before R4 the persona's model was pushed
@@ -5513,7 +5513,7 @@ describe("role route chain walk ( §3.2)", () => {
     expect(outcome.finalText).not.toContain("primary-1");
   });
 
-  // N3 ( re-review #3): the WHOLE settings chain is cooling down.
+  // N3 (re-review #3): the WHOLE settings chain is cooling down.
   // The resolver returns no entries and every entry in `skipped`. The
   // settings-derived persona's dead primary must NOT be re-run through the
   // explicit-id path — the documented last resort is the parent's model.
@@ -5548,7 +5548,7 @@ describe("role route chain walk ( §3.2)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// : adaptive mode is reachable and the base budget is learned.
+// adaptive mode is reachable and the base budget is learned.
 // ---------------------------------------------------------------------------
 
 /** Fake SubagentBudgetPort: fixed learned value + a record spy. */
@@ -5570,7 +5570,7 @@ function makeBudgetPort(learnedValue: number | undefined = undefined) {
   };
 }
 
-describe(" adaptive turn budget — buildChildConfig", () => {
+describe("adaptive turn budget — buildChildConfig", () => {
   it("adaptive OFF: the ceiling carries no adaptive key and the budget is byte-identical to the ladder path", () => {
     const { port, learnedKeys } = makeBudgetPort(77);
     const parent = makeParent({ subagentBudget: port });
@@ -5617,7 +5617,7 @@ describe(" adaptive turn budget — buildChildConfig", () => {
   });
 });
 
-describe(" adaptive turn budget — history recording", () => {
+describe("adaptive turn budget — history recording", () => {
   it("records a completed child and never a plain max_turns cut-off", async () => {
     const { port, records } = makeBudgetPort(undefined);
     const completed = new ScriptedModelPort(() => textStep("done"));
@@ -5654,7 +5654,7 @@ describe(" adaptive turn budget — history recording", () => {
 });
 
 // ---------------------------------------------------------------------------
-// : inline children inherit the ask-zone classifier with the ROOT
+// inline children inherit the ask-zone classifier with the ROOT
 // human-derived userContext thunk — never the child's own (model-authored)
 // history. A classifier absent on the parent stays absent on the child.
 // ---------------------------------------------------------------------------
@@ -5710,7 +5710,7 @@ describe("buildChildConfig — askClassifier inheritance", () => {
 });
 
 // ---------------------------------------------------------------------------
-// : end-to-end inline-child inheritance — the AgentLoop registers
+// end-to-end inline-child inheritance — the AgentLoop registers
 // its human-context thunk on the subagent port; a child spawned through that
 // port classifies its Bash asks against the HUMAN's turns, never its own
 // (model-authored) history, and still reaches the broker on ask.

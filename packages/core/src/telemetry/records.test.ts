@@ -149,7 +149,7 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     expect(telemetryRecordFor(event)).toEqual({ t: "subagent_start", agentType: "sonnet" });
   });
 
-  it("subagent_start with route+fallbackReason ( §3.10) copies both field-by-field", () => {
+  it("subagent_start with route+fallbackReason (§3.10) copies both field-by-field", () => {
     const event: AgentEvent = {
       type: "subagent_start",
       toolCallId: "call-r",
@@ -257,11 +257,11 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     expect("lastRefusal" in rec.ceiling).toBe(false);
   });
 
-  // : closes the gap where a completed child's model attribution
+  // closes the gap where a completed child's model attribution
   // never reached telemetry at all — `model` (the REQUESTED id) and
   // `responseModel` (the provider's own claim) are now whitelisted onto
   // subagent_end, field-by-field, same as every other case in this file.
-  it("subagent_end with model+responseModel (toolCallId still dropped,  gap closed)", () => {
+  it("subagent_end with model+responseModel (toolCallId still dropped, gap closed)", () => {
     const event: AgentEvent = {
       type: "subagent_end",
       toolCallId: "call-2",
@@ -354,7 +354,7 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     });
   });
 
-  it("workflow_step_end (toolCallId/stepId/failure/usage dropped, unlaunched copied when true,  S4)", () => {
+  it("workflow_step_end (toolCallId/stepId/failure/usage dropped, unlaunched copied when true, S4)", () => {
     const event: AgentEvent = {
       type: "workflow_step_end",
       toolCallId: "call-4",
@@ -409,7 +409,7 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     });
   });
 
-  it("degeneration (channel/period/repeats/turn copied field-by-field, )", () => {
+  it("degeneration (channel/period/repeats/turn copied field-by-field)", () => {
     const event: AgentEvent = {
       type: "degeneration",
       channel: "text",
@@ -426,7 +426,7 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     });
   });
 
-  it("ceiling_refused (reason/turn/round copied exactly, )", () => {
+  it("ceiling_refused (reason/turn/round copied exactly)", () => {
     const event: AgentEvent = {
       type: "ceiling_refused",
       reason: "rounds_exhausted",
@@ -441,7 +441,7 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     });
   });
 
-  it("ceiling_grant (numeric projection only — remaining/nextAction dropped, )", () => {
+  it("ceiling_grant (numeric projection only — remaining/nextAction dropped)", () => {
     const event: AgentEvent = {
       type: "ceiling_grant",
       round: 2,
@@ -659,7 +659,7 @@ describe("buildTelemetryTap", () => {
     expect(records).toHaveLength(0);
   });
 
-  // : the real writer boundary — a tap bound to a live JsonlTelemetrySink
+  // the real writer boundary — a tap bound to a live JsonlTelemetrySink
   // lands the refusal and its paired loop_end as adjacent parseable JSONL lines.
   it("writes a ceiling_refused + paired loop_end to a real JsonlTelemetrySink file", async () => {
     const tmpDir = await mkdtemp(join(tmpdir(), "anycode-telemetry-refusal-"));

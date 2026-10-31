@@ -21,7 +21,7 @@
  * version here validates agent_type, enforces the fail-closed "unavailable"
  * lock, and keeps the run() seam clean.
  *
- *  срез 1 adds `detach` (session-tier only, same "FULL declaration
+ * срез 1 adds `detach` (session-tier only, same "FULL declaration
  * only" discipline as `tier`/`provider`): `runSessionTier` below just
  * forwards it onto `SessionSubagentRequest` after the same fail-fast
  * tier-mismatch check `provider` already has. Everything past that point —
@@ -36,7 +36,7 @@
  * rule) and no presentation card is built for a call that has not actually
  * finished.
  *
- *  CUT-S2 §2.1/§3 B1 widens this into a FACTORY, `createAgentTool`.
+ * CUT-S2 §2.1/§3 B1 widens this into a FACTORY, `createAgentTool`.
  * A single handler now branches on `tier`: "inline" (default, unchanged
  * behavior above) runs through `ctx.subagents` (SubagentPort, in-process
  * child loop); "session" runs through `ctx.sessionSubagents`
@@ -78,7 +78,7 @@ import {
 import type { SubagentCardTarget, ToolResultPresentation } from "../types/subagent-card.js";
 import { agentInputSchema, restrictedAgentInputSchema, type AgentInput, type AgentOutput } from "./schemas.js";
 
-//  срез S1 (F9): outcomeToResult/formatResultForModel/mapProgressToEvent
+// срез S1 (F9): outcomeToResult/formatResultForModel/mapProgressToEvent
 // moved to subagents/agent-bridge.ts so the in-process MCP bridge (host-side,
 // срез S3+) runs a claude-CLI-initiated subagent call through the exact same
 // projection code — re-exported here so anything importing them off this
@@ -165,7 +165,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         };
       }
 
-      //  срез 1: same precedent as the provider check above — an
+      // срез 1: same precedent as the provider check above — an
       // explicit `detach:true` on a tier that cannot honor it (only
       // "session" spawns a real child process to detach FROM) is a fail-fast
       // invalid_input, not a silent downgrade to sync-join. `detach:false`
@@ -180,7 +180,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         };
       }
 
-      // : `continue_session` is session-tier only (a resumed child is
+      // `continue_session` is session-tier only (a resumed child is
       // a full child session by construction) and cannot re-target a
       // connection — the resumed child keeps the one it was started on
       // (mirrors main's CHILD_RESUME_OVERRIDE_MESSAGE contract). `model` is
@@ -201,7 +201,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         };
       }
 
-      //  /  wire: `send_to` addresses a STILL-RUNNING own
+      // wire: `send_to` addresses a STILL-RUNNING own
       // child — the running twin of `continue_session` (finished-only). Same
       // fail-fast precedent as provider/detach/continue_session above: it is
       // session-tier-only and must stand ALONE (no provider/detach/
@@ -231,7 +231,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         };
       }
 
-      // Engine-profile routing ( CUT-S4 §2.2), BEFORE the tier branch:
+      // Engine-profile routing (CUT-S4 §2.2), BEFORE the tier branch:
       // an md-profile declaring `engine:` frontmatter no longer runs as a
       // bare one-shot foreign CLI call (the permission-gate hole S4 closes) —
       // it always runs as a child SESSION instead, through the exact same
@@ -263,7 +263,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
             error: 'Agent: "provider" is not valid for an engine-profile agent — the child runs on its own CLI account.',
           };
         }
-        // : continuations are core-child-only, same refusal the
+        // continuations are core-child-only, same refusal the
         // agent bridge (agent-bridge.ts) gives for an engine entry.
         if (input.continue_session !== undefined) {
           return {
@@ -272,7 +272,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
             error: `Agent: continue_session is supported only for AnyCode (core) profiles; "${agentType}" runs on ${engineProfile.engine}. Start a new call instead.`,
           };
         }
-        // : a running follow-up is core-child-only too — engine
+        // a running follow-up is core-child-only too — engine
         // children are not addressable yet (out-of-scope #2), same family of
         // refusal as continue_session above.
         if (input.send_to !== undefined) {
@@ -292,7 +292,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
               `as child sessions and are unavailable in this host.`,
           };
         }
-        // : a settings-derived role whose PRIMARY is an engine entry
+        // a settings-derived role whose PRIMARY is an engine entry
         // carries the engine profile too. When its route chain is cooling the
         // profile's engine/model must not run the dead primary: an exhausted
         // chain degrades to the parent's model (no engine/model stamped, the
@@ -340,7 +340,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         };
       }
 
-      //  §3.2/§3.6: role-route resolution (settings roles +
+      // §3.2/§3.6: role-route resolution (settings roles +
       // host health cache). Returns null for everything but a ROLE persona
       // with configured roles — built-in defaults apply then.
       const roleRoute = ctx.subagents?.resolveRoleRoute?.(agentType) ?? null;
@@ -405,7 +405,7 @@ async function runInlineTier(
   // carrying THIS Agent call's toolCallId so the desktop card correlates them.
   // The dispatcher turns any throw into an error-outcome, so the loop stays sound.
   //
-  // Presentation accumulation ( slice S1 W3, CUT-S1 §3 W3): the
+  // Presentation accumulation (slice S1 W3, CUT-S1 §3 W3): the
   // accumulator is fed from every progress callback UNCONDITIONALLY — it
   // must survive even when ctx.emit is absent (a handler running outside
   // the batch runner still needs a persisted card). Feeding it the SAME
@@ -462,13 +462,13 @@ async function runInlineTier(
 }
 
 /**
- * Session tier ( CUT-S2 §2.1/§2.2). Fail-closed when the host wired
+ * Session tier (CUT-S2 §2.1/§2.2). Fail-closed when the host wired
  * no SessionSubagentPort — this is non-recursion lock #2 firing at runtime
  * (buildChildConfig never copies `sessionSubagents`, so every child session
  * lands here even though its restricted SCHEMA already made "session"
  * unreachable — belt and suspenders, CUT-S2 §0.2).
  *
- * `engineProfile` ( CUT-S4 §2.2), when present, is the caller's proof
+ * `engineProfile` (CUT-S4 §2.2), when present, is the caller's proof
  * the routing branch above already resolved agentType to a foreign-engine
  * md-profile: the request's prompt becomes the persona body + the caller's
  * own prompt (byte-identical to the one-shot composition subagents/runner.ts
@@ -492,7 +492,7 @@ async function runSessionTier(
     };
   }
 
-  //  /  wire: a send_to call DELIVERS instead of spawning
+  // wire: a send_to call DELIVERS instead of spawning
   // — the entire request-build machinery below is for a spawn/continuation
   // and never runs for one. The handler's earlier validation already
   // guaranteed send_to stands alone (tier session, no provider/detach/
@@ -532,7 +532,7 @@ async function runSessionTier(
   // (subagents/runner.ts — `req.model ?? persona.model`). Absent both, no
   // model key rides the request at all.
   //
-  //  срез S1: the request itself is built by the SHARED
+  // срез S1: the request itself is built by the SHARED
   // buildSessionSubagentRequest (subagents/agent-bridge.ts) so a
   // claude-CLI-initiated subagent call goes through byte-identical
   // composition — `provider`/`detach` stay this tool's own fields (agent-
@@ -543,7 +543,7 @@ async function runSessionTier(
     : undefined;
   const profileEffort = engineProfile?.effort ?? (roleRoute === undefined ? coreProfile?.effort : undefined);
   const request: SessionSubagentRequest = {
-    // : a continuation branches the request build rather than
+    // a continuation branches the request build rather than
     // post-patching the spread — a resumed child keeps its own profile body
     // and model (both already in its history), so NEITHER a model override
     // NOR the profile's own defaults ride the request: model AND profile are
@@ -561,7 +561,7 @@ async function runSessionTier(
       : buildSessionSubagentRequest({
           agentType,
           description: input.description,
-          // : a degraded engine-role spawn carries no profile
+          // a degraded engine-role spawn carries no profile
           // (so no engine/model rides), but keeps the role body in the prompt
           // with the same composition buildSessionSubagentRequest uses.
           prompt: degrade !== undefined ? `${degrade.systemPrompt}\n\n---\n\n${input.prompt}` : input.prompt,
@@ -570,7 +570,7 @@ async function runSessionTier(
           profile: engineProfile ?? (coreProfile !== undefined && roleRoute !== undefined
             ? { systemPrompt: coreProfile.systemPrompt }
             : coreProfile),
-          // : the profile's own turn budget rides the creating spawn only.
+          // the profile's own turn budget rides the creating spawn only.
           ...(engineProfile?.turnBudget !== undefined ? { maxTurns: engineProfile.turnBudget } : {}),
           // A role route supplies its own effort; otherwise preserve the profile's
           // selection for the destination model to resolve at child boot.
@@ -578,13 +578,13 @@ async function runSessionTier(
         })),
     ...(resumeChildSessionId !== undefined ? { resumeChildSessionId } : {}),
     ...(input.provider !== undefined ? { provider: input.provider } : {}),
-    // : a routed profile's declared target rides the CREATING spawn
+    // a routed profile's declared target rides the CREATING spawn
     // only; a continuation keeps the child's original connection (main resumes
     // the child's own pin and never re-reads routing). Exactly one of these two
     // keys can be present — the parser refuses both-keys profiles and the
     // handler above refused a routed profile with an explicit `provider`.
     //
-    // R6 ( cross-review): a role-route resolution (settings
+    // R6 (cross-review): a role-route resolution (settings
     // roles) REPLACES the profile-routing fields below rather than merging
     // with them — the runSessionTier signature threads roleRoute AFTER
     // routing for exactly this reason (TS spread order = precedence order):
@@ -597,7 +597,7 @@ async function runSessionTier(
     // when no role route resolved.
     ...(resumeChildSessionId === undefined && routing?.provider !== undefined && roleRoute === undefined ? { provider: routing.provider } : {}),
     ...(resumeChildSessionId === undefined && routing?.connection !== undefined && roleRoute === undefined ? { connectionId: routing.connection } : {}),
-    //  §3.3: the role route's resolved FIRST entry stamps the
+    // §3.3: the role route's resolved FIRST entry stamps the
     // fresh spawn exactly like `routing` above (R6: and REPLACES it — the
     // guarded spreads above skip the routing keys when a role route
     // resolved, so exactly ONE of the two mechanisms stamps this request) —
@@ -622,11 +622,11 @@ async function runSessionTier(
           degraded: degrade !== undefined,
         })
       : {}),
-    //  срез 1: only ever `true` here — the validation check above
+    // срез 1: only ever `true` here — the validation check above
     // already refused `detach:true` on any tier but "session", and `false`/
     // absent is dropped rather than riding the wire as an explicit `false`
     // (byte-compatible default, same discipline as every other optional
-    // field on this request).  §2.3: an orchestrate session's
+    // field on this request). §2.3: an orchestrate session's
     // default-detach ALSO lands here (mechanical, not prose).
     // GitHub #17 slice D: a session request that will actually
     // JOIN carries the host's internal handoff eligibility — when the child
@@ -683,7 +683,7 @@ async function runSessionTier(
   // (that would claim completed work), the transient live card is cleared by
   // the renderer through the structured handoff marker, and the running child
   // shows up in the existing background-agents strip instead.
-  // : a role-route notice (degraded or fallback spawn) rides the
+  // a role-route notice (degraded or fallback spawn) rides the
   // model-visible text on a FRESH spawn only — a resume keeps its own history.
   const notice =
     degrade?.notice ??

@@ -1,5 +1,5 @@
 /**
- * Child-env proxy sanitisation ( / ).
+ * Child-env proxy sanitisation.
  *
  * Non-engine children (Bash tool + background tasks + hooks via `run`,
  * rg/git plumbing via `runBinary`, LSP servers via `spawnPersistent`, and the
@@ -24,7 +24,7 @@
  * `http://127.0.0.1:<port>`: children regain the network, still see no
  * credential, and the `ANYCODE_*_PROXY_URL` carriers stay removed. Callers
  * that have not resolved a relay pass nothing and keep the plain drop.
- *  rework: that relay URL embeds the per-relay random auth token
+ * rework: that relay URL embeds the per-relay random auth token
  * as USERINFO (`http://anycode:<token>@127.0.0.1:<port>`) — curl/git/npm and
  * node's undici all turn userinfo into a `Proxy-Authorization: Basic` header
  * on CONNECT and plain-HTTP alike, so the token rides the standard proxy-URL
@@ -61,7 +61,7 @@ export function proxyValueHasUserinfo(value: string): boolean {
 }
 
 /**
- *  rework: the relay URL's own userinfo shape — `anycode` is the
+ * rework: the relay URL's own userinfo shape — `anycode` is the
  * fixed user every relay URL carries (`http://anycode:<token>@127.0.0.1:<port>`),
  * the token being the relay's cross-user auth boundary.
  */
@@ -100,7 +100,7 @@ export function clearRelayUrlValidatorForTest(): void {
 }
 
 /**
- *  rework: true ONLY for a relay URL this host minted —
+ * rework: true ONLY for a relay URL this host minted —
  * `http://anycode:<token>@127.0.0.1:<port>` (loopback host, our fixed user, a
  * non-empty token password) whose port and token live in this process's relay
  * registry (cross-review F4). This is the exact exemption the `@`-detectors
@@ -110,7 +110,7 @@ export function clearRelayUrlValidatorForTest(): void {
  * recognises it back. Anything else with an `@` — a different host, a
  * different user, an empty password, a non-loopback address, OR the right
  * shape on a port this process does not own — is NOT exempt and keeps the
- *  drop/swap treatment.
+ * drop/swap treatment.
  */
 export function isCredentialFreeRelayUrl(value: string): boolean {
   let url: URL;
@@ -134,7 +134,7 @@ export function proxyValueCarriesCredential(value: string): boolean {
 }
 
 /**
- *  rework (blocker B2): the per-value relay resolver swap sites
+ * rework (blocker B2): the per-value relay resolver swap sites
  * use — given the CREDENTIALED upstream value about to be swapped out, the
  * credential-free relay URL fronting THAT upstream (never a relay fronting a
  * different one), or undefined when no relay serves it (fail-closed drop).
@@ -148,7 +148,7 @@ export type RelayUrlLookup = (upstreamUrl: string) => string | undefined;
  * is every `ANYCODE_*_PROXY_URL` engine carrier regardless of value. Never
  * mutates `env`; exact names only, no case normalisation.
  *
- * `relayUrl` ( follow-up): when the host runs a credential-free
+ * `relayUrl` (follow-up): when the host runs a credential-free
  * loopback relay, the dropped credentialed variables are REPLACED by it
  * instead of vanishing — npm/git/curl keep working behind the authenticating
  * proxy while the child still sees no credential. The relay URL is written
@@ -167,7 +167,7 @@ export type RelayUrlLookup = (upstreamUrl: string) => string | undefined;
  * value, never the carrier machinery.
  */
 export function sanitizeChildEnv(env: NodeJS.ProcessEnv, relayUrl?: string | RelayUrlLookup): NodeJS.ProcessEnv {
-  //  rework (B2): a STRING relayUrl remains the one-relay shape
+  // rework (B2): a STRING relayUrl remains the one-relay shape
   // callers with a single known upstream use; a LOOKUP resolves the relay of
   // EACH dropped value's own upstream — never a relay fronting a different
   // proxy, which would silently re-route the child through the wrong path.
@@ -175,7 +175,7 @@ export function sanitizeChildEnv(env: NodeJS.ProcessEnv, relayUrl?: string | Rel
   const out: NodeJS.ProcessEnv = {};
   /** The four-case HTTP(S)_PROXY names the scrub actually removed (cross-review F3). */
   const droppedNames = new Set<string>();
-  /** The four-case HTTP(S)_PROXY swap decisions per name ( rework): the relay of THAT name's dropped value, or undefined to leave it dropped. */
+  /** The four-case HTTP(S)_PROXY swap decisions per name (rework): the relay of THAT name's dropped value, or undefined to leave it dropped. */
   const swapForName = new Map<string, string | undefined>();
   /** The relay of the first dropped NON-four-name value (ALL_PROXY, npm_config_proxy, …): the F4 remedy for wholly-absent pairs — those names' remedy lands in the four HTTP(S)_PROXY names because that is where proxy-aware children read. */
   let familyFallback: string | undefined;
@@ -231,12 +231,12 @@ export function sanitizeChildEnv(env: NodeJS.ProcessEnv, relayUrl?: string | Rel
  * them to unset — are preserved as-is). Returns a NEW object; neither input is
  * mutated.
  *
- * `relayUrl` ( follow-up): the credential-free loopback relay URL
+ * `relayUrl` (follow-up): the credential-free loopback relay URL
  * (`http://127.0.0.1:<port>`, from `resolveProxyRelay`). When set AND the
  * merge actually dropped a credentialed proxy value, the four-case
  * HTTP(S)_PROXY family is rewritten to the relay URL — see
  * `sanitizeChildEnv`. Without a relay (or when nothing was dropped) the
- * behaviour is byte-identical to the  scrub.
+ * behaviour is byte-identical to the scrub.
  */
 export function buildChildEnv(
   base: NodeJS.ProcessEnv,

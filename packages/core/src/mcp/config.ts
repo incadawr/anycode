@@ -25,7 +25,8 @@ import { resolve } from "node:path";
 import { z } from "zod";
 import type { FileSystemPort } from "../ports/file-system.js";
 import type { McpHttpServerSpec, McpServerSpec, McpStdioServerSpec } from "../ports/mcp.js";
-// The stdio env scrub + relay URL live in adapters/node ( / ); neither module imports this loader back, so the graph stays acyclic.
+// The stdio env scrub + relay URL live in adapters/node (
+// 4074); neither module imports this loader back, so the graph stays acyclic.
 import { sanitizeChildEnv } from "../adapters/node/child-env.js";
 import { proxyRelayLookup } from "../adapters/node/proxy-relay.js";
 
@@ -112,7 +113,7 @@ export function isProjectGated(workspace: string, home: string, opts?: ProjectTr
 // secret-carrying.
 
 /**
- *  part C: resolves a `${secret:NAME}` reference to its value, or
+ * part C: resolves a `${secret:NAME}` reference to its value, or
  * `undefined` when the name is not set. The desktop host supplies one built from
  * the values main handed it at fork time; the terminal CLI supplies none.
  */
@@ -226,7 +227,7 @@ function missingRefMessage(name: string, path: string, missing: { kind: "env" | 
 // scrubbed before it ever reaches this loader) — config env still applies on
 // top, so an explicit `env` entry can override an inherited value.
 //
-//  follow-up: `inheritEnv:true` also passes the full env through
+// follow-up: `inheritEnv:true` also passes the full env through
 // `sanitizeChildEnv` — a credentialed proxy URL (and the engine carriers)
 // never reach an MCP stdio server either; when the loopback relay is up
 // (proxy-relay.ts) the dropped values are replaced by the credential-free
@@ -271,7 +272,7 @@ function buildStdioEnv(configEnv: Record<string, string>, inheritEnv: boolean, l
       }
       base[key] = value;
     }
-    //  follow-up: scrub + relay-rewrite the inherited half. The
+    // follow-up: scrub + relay-rewrite the inherited half. The
     // config env still applies ON TOP (an explicit `env` entry can override
     // even the relay URL — a server that must not be proxied at all).
     const sanitized = sanitizeChildEnv(base, proxyRelayLookup());

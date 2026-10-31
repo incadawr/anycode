@@ -1,5 +1,5 @@
 /**
- * Session-tier Agent tool tests ( CUT-S2 §2.1/§3 B1). Covers the
+ * Session-tier Agent tool tests (CUT-S2 §2.1/§3 B1). Covers the
  * FACTORY's two declarations (restricted default vs. full sessionTier:true)
  * and the real `tier:"session"` branch that runs through
  * `ctx.sessionSubagents` (SessionSubagentPort) — the parts `agent.test.ts`
@@ -251,7 +251,7 @@ describe("agentTool handler — session-tier fail-closed lock (CUT-S2 §2.1)", (
 // ---------------------------------------------------------------------------
 // Outcome mapping (CUT-S2 §2.1: "маппинг outcome→result ОБЩИЙ для обоих
 // ярусов") — all four terminal statuses through the session-tier port,
-// mirroring agent.test.ts's  inline coverage byte-for-byte.
+// mirroring agent.test.ts's inline coverage byte-for-byte.
 
 describe("agentTool handler — session-tier outcome mapping, all 4 terminal statuses (CUT-S2 §2.1)", () => {
   const full = createAgentTool({ sessionTier: true });
@@ -263,7 +263,7 @@ describe("agentTool handler — session-tier outcome mapping, all 4 terminal sta
     );
     expect(result.ok).toBe(true);
     expect(result.errorKind).toBeUndefined();
-    // : successful session outcomes now append the follow-up note
+    // successful session outcomes now append the follow-up note
     // (discoverability off the output id, not the presentation card).
     expect(full.formatResultForModel?.(result)).toBe(
       "child session done\n\n[Child session id: child-1. Pass it as continue_session in a later agent call to send a follow-up to this same child in its existing conversation.]",
@@ -285,7 +285,7 @@ describe("agentTool handler — session-tier outcome mapping, all 4 terminal sta
     expect(result.ok).toBe(false);
     expect(result.errorKind).toBe("max_turns");
     expect(result.error).toContain("partial child work");
-    // Wording is shared with the inline tier (outcomeToResult):  made
+    // Wording is shared with the inline tier (outcomeToResult): made
     // the status cover the wall-clock deadline too, so it names the budget, not
     // the turn cap, and marks the partial INCOMPLETE.
     expect(result.error).toContain("ran out of budget");
@@ -327,12 +327,12 @@ describe("agentTool handler — session-tier outcome mapping, all 4 terminal sta
     expect(result.error).toBe("Agent: the subagent failed.");
   });
 
-  it("the tool's OWN output field never leaks parent/spawn ids; childSessionId now rides it ( discoverability seam)", async () => {
+  it("the tool's OWN output field never leaks parent/spawn ids; childSessionId now rides it (discoverability seam)", async () => {
     const result = await full.handler(
       { description: "d", prompt: "p", tier: "session" },
       makeCtx({ sessionSubagents: portReturning(BASE_SESSION_OUTCOME) }),
     );
-    //  (supervisor correction 1): childSessionId IS on the output now
+    // (supervisor correction 1): childSessionId IS on the output now
     // — discoverability must not depend on a presentation card. The other
     // two ids still ride only the presentation target.
     expect(result.output?.childSessionId).toBe("child-1");
@@ -342,7 +342,7 @@ describe("agentTool handler — session-tier outcome mapping, all 4 terminal sta
 });
 
 // ---------------------------------------------------------------------------
-// : continue_session (native Agent tool) — the child-session id
+// continue_session (native Agent tool) — the child-session id
 // follow-up. Model ignored (not rejected) on continuation, provider refused,
 // request built with neither model nor profile defaults.
 
@@ -444,7 +444,7 @@ describe("agentTool handler — continue_session", () => {
 });
 
 // ---------------------------------------------------------------------------
-// send_to ( /  wire): delivering a follow-up to the
+// send_to (wire): delivering a follow-up to the
 // parent's OWN STILL-RUNNING child through SessionSubagentPort.send — the
 // running twin of continue_session (finished-only). The original sync-join
 // run() call keeps waiting; this call only DELIVERS and returns immediately.
@@ -915,7 +915,7 @@ describe("agentTool handler — subagent_attention bridges from a session-tier p
 });
 
 // ---------------------------------------------------------------------------
-// Engine-profile routing ( CUT-S4 §2.2): BEFORE the tier branch, the
+// Engine-profile routing (CUT-S4 §2.2): BEFORE the tier branch, the
 // handler asks ctx.subagents.engineProfile(agentType). When it resolves
 // non-null the call is routed to a child SESSION regardless of `tier` (a
 // silent inline->session upgrade, never a refusal — the one-shot in-process
@@ -934,7 +934,7 @@ function enginePort(agentType: string, profile: EngineProfileInfo | null): Subag
   };
 }
 
-describe("agentTool handler — engine-profile routing ( CUT-S4 §2.2)", () => {
+describe("agentTool handler — engine-profile routing (CUT-S4 §2.2)", () => {
   const full = createAgentTool({ sessionTier: true });
   // "claude", not "codex": this describe block exercises the GENERAL
   // engine-profile routing mechanism (provider rejection, availability
@@ -1158,7 +1158,7 @@ describe("agentTool handler — engine-profile model default (model plumbing fix
 });
 
 // ---------------------------------------------------------------------------
-// Codex engine profiles now run for real ( lifts 
+// Codex engine profiles now run for real (lifts
 // S4-codex-cut): the refusal existed only because a codex child's flush had
 // no trustworthy transcript source (`historyItems()` is a boot-time
 // snapshot, frozen). `CodexEngine.readTranscript()` now re-runs the resume
@@ -1248,12 +1248,12 @@ describe("agentTool export sanity (CUT-S2 §2.1)", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  срез 1: `detach` (session-tier only). Same non-recursion-lock
+// срез 1: `detach` (session-tier only). Same non-recursion-lock
 // discipline as `provider`/`tier` above — restricted schema never declares
 // it, the handler refuses it on the wrong tier, and (unlike `provider`) a
 // plain `false` is a legitimate no-op on any tier rather than a violation.
 
-describe("createAgentTool — detach declaration ( срез 1)", () => {
+describe("createAgentTool — detach declaration (срез 1)", () => {
   it("restricted (default) has NO detach key and no \"background\" leak anywhere in the serialized JSON schema", () => {
     const restricted = createAgentTool();
     const jsonSchema = z.toJSONSchema(restricted.inputSchema) as { properties?: Record<string, unknown> };
@@ -1281,7 +1281,7 @@ describe("createAgentTool — detach declaration ( срез 1)", () => {
   });
 });
 
-describe("agentTool handler — detach validation ( срез 1, precedent: provider check agent.ts:207-212)", () => {
+describe("agentTool handler — detach validation (срез 1, precedent: provider check agent.ts:207-212)", () => {
   it("detach:true with tier:\"inline\" (explicit) => invalid_input with the exact message", async () => {
     const full = createAgentTool({ sessionTier: true });
     const result = await full.handler({ description: "d", prompt: "p", tier: "inline", detach: true }, makeCtx());
@@ -1318,7 +1318,7 @@ describe("agentTool handler — detach validation ( срез 1, precedent: provi
   });
 });
 
-describe("agentTool handler — detach forwarding onto SessionSubagentRequest ( срез 1)", () => {
+describe("agentTool handler — detach forwarding onto SessionSubagentRequest (срез 1)", () => {
   const full = createAgentTool({ sessionTier: true });
 
   it("forwards detach:true onto the request when input.detach is true", async () => {
@@ -1368,7 +1368,7 @@ describe("agentTool handler — detach forwarding onto SessionSubagentRequest ( 
 });
 
 // ---------------------------------------------------------------------------
-//  срез 1: the ADMIT-shaped outcome a detached port returns (this is
+// срез 1: the ADMIT-shaped outcome a detached port returns (this is
 // what child-session-port.ts's `run()` actually resolves with at "accepted",
 // never waiting for the child's own terminal — see that file's own tests for
 // the port-level split). This suite proves agent.ts's SHARED outcome-mapping
@@ -1378,7 +1378,7 @@ describe("agentTool handler — detach forwarding onto SessionSubagentRequest ( 
 // presentation card is fabricated because no `subagent_start` progress ever
 // preceded it.
 
-describe("agentTool handler — detach admit outcome mapping ( срез 1, zero special-casing in agent.ts)", () => {
+describe("agentTool handler — detach admit outcome mapping (срез 1, zero special-casing in agent.ts)", () => {
   const full = createAgentTool({ sessionTier: true });
 
   function admitOnlyPort(finalText: string, childSessionId: string): SessionSubagentPort {
@@ -1440,7 +1440,7 @@ describe("agentTool handler — detach admit outcome mapping ( срез 1, zero 
   });
 });
 
-// : an engine profile's turnBudget frontmatter reaches the captured
+// an engine profile's turnBudget frontmatter reaches the captured
 // SessionSubagentRequest as maxTurns; absent budget leaves the key off.
 describe("agentTool handler — engine-profile turn budget", () => {
   const full = createAgentTool({ sessionTier: true });
@@ -1624,14 +1624,14 @@ describe("agentTool handler — profile routing", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  §2.3/§3.3: orchestrate default-detach + role-route stamping.
+// §2.3/§3.3: orchestrate default-detach + role-route stamping.
 // An orchestrate session defaults tier:"session" (no explicit detach/send_to/
 // continue_session) to detach:true — mechanical, not prose. The role route
 // (settings roles + host health) stamps provider/connection/model/effort/
 // maxTurns on fresh spawns; explicit model still wins; a connection-carrying
 // route refuses the inline tier.
 
-describe("agentTool handler — orchestrate default-detach ( §2.3)", () => {
+describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
   const full = createAgentTool({ sessionTier: true });
 
   function capturingPort(): { port: SessionSubagentPort; seen: () => SessionSubagentRequest | undefined } {
@@ -1728,7 +1728,7 @@ describe("agentTool handler — orchestrate default-detach ( §2.3)", () => {
   });
 });
 
-describe("agentTool handler — role route stamping ( §3.3)", () => {
+describe("agentTool handler — role route stamping (§3.3)", () => {
   const full = createAgentTool({ sessionTier: true });
 
   function roleCtx(
@@ -1865,7 +1865,7 @@ describe("agentTool handler — role route stamping ( §3.3)", () => {
     expect(inlineSeen).toBeDefined();
   });
 
-  // F5(a) ( cross-review): an engine entry (role primary pinned
+  // F5(a cross-review): an engine entry (role primary pinned
   // to claude/codex by settings) stamps `engine` on the creating spawn —
   // without it the host's respawn bookkeeping would boot core for a role
   // pinned to codex.
@@ -1929,7 +1929,7 @@ describe("agentTool handler — role route stamping ( §3.3)", () => {
     expect(inlineSeen).toBe(true);
   });
 
-  // R6 ( cross-review): a settings-derived role persona whose
+  // R6 (cross-review): a settings-derived role persona whose
   // primary carries a CONNECTION makes BOTH mechanisms non-null — the
   // persona's frontmatter mirrors the primary (profileRouting non-null) and
   // the settings role route resolves (roleRoute non-null). The request must
@@ -2011,7 +2011,7 @@ describe("agentTool handler — role route stamping ( §3.3)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// : a settings-derived role whose PRIMARY is an engine entry must
+// a settings-derived role whose PRIMARY is an engine entry must
 // not run on the dead primary's engine/model when its route chain is cooling.
 // The session tier degrades to the parent's model (exhausted chain) or takes
 // the healthy fallback entry (cooling primary), and says so in a notice.
@@ -2221,7 +2221,7 @@ describe("agentTool handler — role-route degrade at the session tier", () => {
   });
 });
 
-// : an engine-profile role (a settings-derived role whose primary is
+// an engine-profile role (a settings-derived role whose primary is
 // an engine entry) runs as a child session on the ENGINE path too, so an
 // orchestrate session must default it to detach:true exactly like the
 // non-engine session tier. Explicit detach:false still wins; the refusals for

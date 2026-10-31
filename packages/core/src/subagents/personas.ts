@@ -20,7 +20,7 @@ import type { ReasoningEffort } from "../types/config.js";
 import type { ProfilePermissionRules } from "../types/permissions.js";
 
 /**
- * : the three orchestration role personas join the registry as
+ * the three orchestration role personas join the registry as
  * BUILT-IN personas whose names are OVERRIDABLE by a same-named md-profile
  * (profile wins — see OVERRIDABLE_PERSONAS and the runner's resolution order).
  * general-purpose/explore stay hard-reserved.
@@ -31,7 +31,7 @@ export type PersonaName = "general-purpose" | "explore" | "planner" | "executor"
 export type RolePersonaName = "planner" | "executor" | "reviewer";
 
 /**
- * Role turn budgets ( §2.9): planner 30, executor 80, reviewer 40.
+ * Role turn budgets (§2.9): planner 30, executor 80, reviewer 40.
  * explore keeps DEFAULT_SUBAGENT_MAX_TURNS (it is not a role persona here).
  */
 export const ROLE_TURN_BUDGETS: Record<RolePersonaName, number> = {
@@ -119,7 +119,7 @@ export interface PersonaDefinition {
 /**
  * general-purpose: the non-Agent default tools (full access under the
  * parent's inherited permission gate). WebSearch is deliberately NOT here
- * ( follow-up): it is factory-built at boot only when a search
+ * (follow-up): it is factory-built at boot only when a search
  * backend is configured, and handing it to EVERY general-purpose child would
  * make paid search calls a new silent default. A child gets it only when its
  * persona/profile `tools:` list — or a workflow step's `tools:` list — names
@@ -144,13 +144,13 @@ const GENERAL_PURPOSE_TOOLS = [
 
 const EXPLORE_TOOLS = ["Read", "Git", "Grep", "Glob", "TodoRead", "TodoWrite", "WebFetch"] as const;
 
-/**  §3.1: PLANNER_TOOLS = EXPLORE_TOOLS (read-only investigation + todo planning). */
+/** §3.1: PLANNER_TOOLS = EXPLORE_TOOLS (read-only investigation + todo planning). */
 const PLANNER_TOOLS = ["Read", "Git", "Grep", "Glob", "TodoRead", "TodoWrite", "WebFetch"] as const;
 
-/**  §3.1: EXECUTOR_TOOLS = GENERAL_PURPOSE_TOOLS (full toolset under the parent's gate). */
+/** §3.1: EXECUTOR_TOOLS = GENERAL_PURPOSE_TOOLS (full toolset under the parent's gate). */
 const EXECUTOR_TOOLS = GENERAL_PURPOSE_TOOLS;
 
-/**  §3.1: a reviewer runs tests — Bash included, under the parent's permission gate. */
+/** §3.1: a reviewer runs tests — Bash included, under the parent's permission gate. */
 const REVIEWER_TOOLS = ["Read", "Git", "Grep", "Glob", "TodoRead", "TodoWrite", "WebFetch", "Bash"] as const;
 
 const GENERAL_PURPOSE_SYSTEM_PROMPT = [
@@ -167,7 +167,7 @@ const EXPLORE_SYSTEM_PROMPT = [
   "You typically run alongside sibling explorations in parallel, so stay tightly scoped and keep the work cheap.",
 ].join(" ");
 
-//  §3.4 — role persona prompt bodies (verbatim from the design).
+// §3.4 — role persona prompt bodies (verbatim from the design).
 const PLANNER_SYSTEM_PROMPT = [
   "You are the planner: a read-only senior engineer who turns a task into an executor brief.",
   "Investigate the code first with Read, Grep and Glob; never edit anything.",
@@ -211,7 +211,7 @@ export const PERSONAS: Record<PersonaName, PersonaDefinition> = {
     tools: EXPLORE_TOOLS,
     systemPrompt: EXPLORE_SYSTEM_PROMPT,
   },
-  //  §3.1: role personas. turnBudget comes from ROLE_TURN_BUDGETS
+  // §3.1: role personas. turnBudget comes from ROLE_TURN_BUDGETS
   // (§2.9); the built-in defaults are overridable by a same-named md-profile
   // (OVERRIDABLE_PERSONAS below) and by settings-derived role personas
   // (host wiring §3.6) — precedence: md-profile > settings-derived > built-in.
@@ -239,7 +239,7 @@ export const PERSONAS: Record<PersonaName, PersonaDefinition> = {
 };
 
 /**
- *  §2.1: built-in persona names a same-named md-profile (or a
+ * §2.1: built-in persona names a same-named md-profile (or a
  * settings-derived role persona) may OVERRIDE. general-purpose/explore stay
  * hard-reserved (isReservedPersonaName true) — they are the frozen legacy
  * vocabulary; the three role personas are deliberately overridable so an

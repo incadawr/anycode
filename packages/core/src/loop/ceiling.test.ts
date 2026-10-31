@@ -1,5 +1,5 @@
 /**
- * Unit tests for the turn-ceiling decision ladder primitive ( cut-1).
+ * Unit tests for the turn-ceiling decision ladder primitive (cut-1).
  * Covers the pure functions (grant math, window clamp, verdict gate, schema
  * parser) and the one call primitive (requestCeilingVerdict) in isolation from
  * AgentLoop — the loop-integration seam is exercised separately in
@@ -489,10 +489,10 @@ describe("buildCeilingDecisionPrompt", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  adaptive budget: progress-scaled grants, a productive
+// adaptive budget: progress-scaled grants, a productive
 // (non-read-only) progress measure, and an honest-report prompt variant.
 
-describe(" adaptive budget", () => {
+describe("adaptive budget", () => {
   it("adaptiveGrantForRound: +50% then +25% of the base budget, ceil, floored at 1", () => {
     expect(adaptiveGrantForRound(1, 8)).toBe(4); // ceil(8 * 0.5)
     expect(adaptiveGrantForRound(2, 8)).toBe(2); // ceil(8 * 0.25)
@@ -520,7 +520,7 @@ describe(" adaptive budget", () => {
     expect(isProductiveToolCall("NotARegisteredTool", registry)).toBe(false);
   });
 
-  //  follow-up: the dispatch allowlist — a successful Agent or
+  // follow-up: the dispatch allowlist — a successful Agent or
   // Workflow call is an orchestrator's WORK even though both tools are
   // readOnly (the flag is load-bearing for permissions and stays as-is).
   it("isProductiveToolCall: a successful Agent/Workflow dispatch counts despite readOnly (4055 follow-up)", () => {

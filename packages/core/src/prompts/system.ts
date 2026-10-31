@@ -48,14 +48,14 @@ export interface SystemPromptOptions {
   toolNames?: readonly string[];
   env?: SystemPromptEnv;
   /**
-   *  plan §5: true exactly while InspectImage is registered for this
+   * plan §5: true exactly while InspectImage is registered for this
    * turn (blind model + a configured recognizer, decided by the wiring
    * layer). Absent/false renders nothing, so every existing caller's output
    * stays byte-identical — this is additive-optional, not a behavior change.
    */
   visionFallbackEnabled?: boolean;
   /**
-   * : dot-prefixed extensions covered by the session's configured
+   * dot-prefixed extensions covered by the session's configured
    * language servers (".ts", ".tsx"), decided by the wiring layer exactly when
    * a LspPort exists. Absent/[]/[""] renders nothing, so every existing
    * caller's output stays byte-identical — additive-optional, like
@@ -106,7 +106,7 @@ export function renderEnvSection(env?: SystemPromptEnv): string {
 }
 
 /**
- * Vision-fallback section ( plan §5, sample conditional section —
+ * Vision-fallback section (plan §5, sample conditional section —
  * renderToolDisciplineSection above). Rendered only while the wiring layer
  * says InspectImage is actually registered; "" otherwise so buildSystemPrompt's
  * empty-section filter drops it with no gap.

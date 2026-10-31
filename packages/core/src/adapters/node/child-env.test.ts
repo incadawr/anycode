@@ -1,5 +1,5 @@
 /**
- *  /  unit suite for the non-engine child-env scrub.
+ * unit suite for the non-engine child-env scrub.
  * Every edge is its own `it`, exactly as the brief (§2.1) enumerates them.
  */
 
@@ -14,7 +14,7 @@ import {
   sanitizeChildEnv,
 } from "./child-env.js";
 
-//  part A (A-4): the session-identity pair is ordinary (not a proxy
+// part A (A-4): the session-identity pair is ordinary (not a proxy
 // carrier) and survives the non-engine scrub, while the proxy-scrub still runs.
 describe("buildChildEnv keeps the session tool env", () => {
   it("keeps ANYCODE_SESSION_ID and ANYCODE_SESSION_WORKSPACE, drops a carrier and a credentialed proxy", () => {
@@ -169,7 +169,7 @@ describe("sanitizeChildEnv", () => {
   });
 });
 
-describe("relayUrl rewrite ( follow-up / )", () => {
+describe("relayUrl rewrite (follow-up)", () => {
   const RELAY = "http://127.0.0.1:47557";
 
   it("replaces the dropped credentialed vars with the relay URL (all four cases), keeping NO_PROXY as-is", () => {
@@ -201,7 +201,7 @@ describe("relayUrl rewrite ( follow-up / )", () => {
     expect(out.HTTPS_PROXY).toBe(RELAY);
   });
 
-  it(": a tokened relay URL (path segment) replaces the family verbatim", () => {
+  it("a tokened relay URL (path segment) replaces the family verbatim", () => {
     const RELAY_TOKENED = "http://127.0.0.1:47557/AbCdEf1234567890_-XyZ";
     const out = sanitizeChildEnv(
       {
@@ -295,14 +295,14 @@ describe("relayUrl rewrite ( follow-up / )", () => {
   });
 });
 
-// ──  rework: the relay URL's own userinfo and the per-value swap ──
+// ── rework: the relay URL's own userinfo and the per-value swap ──
 //
 // Cross-review F4 (opus2): the exemption is registry-gated — a relay URL is
 // "credential-free" only when THIS process minted it (port + token live in
 // the live relay registry). The suite therefore mints REAL relays through
 // `resolveProxyRelay` in beforeAll (and closes them in afterAll) instead of
 // hard-coding fixture URLs a foreign process could also have shaped.
-describe("relay-URL userinfo exemption + per-value swap ( rework)", () => {
+describe("relay-URL userinfo exemption + per-value swap (rework)", () => {
   let RELAY_A = "";
   let RELAY_B = "";
 
@@ -374,7 +374,7 @@ describe("relay-URL userinfo exemption + per-value swap ( rework)", () => {
   it("proxyValueCarriesCredential: an @ is a credential EXCEPT the relay URL's own token userinfo", () => {
     expect(proxyValueCarriesCredential("http://u:p@corp:3128")).toBe(true);
     expect(proxyValueCarriesCredential(RELAY_A)).toBe(false);
-    // The raw @-detector still sees both (back-compat: proxyValueHasUserinfo is the  shape).
+    // The raw @-detector still sees both (back-compat: proxyValueHasUserinfo is the shape).
     expect(proxyValueHasUserinfo(RELAY_A)).toBe(true);
   });
 

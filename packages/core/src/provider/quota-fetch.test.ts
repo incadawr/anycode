@@ -1,5 +1,5 @@
 /**
- * Tests for wrapFetchWithQuota ( / , §3 test 2).
+ * Tests for wrapFetchWithQuota (§3 test 2).
  * Real node:http loopback server (pattern: apps/desktop provider-ipc.test.ts)
  * returning fixture headers — no external network.
  */

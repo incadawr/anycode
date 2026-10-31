@@ -29,7 +29,7 @@ import { SPAWN_TOOLS } from "./spawn-tools.js";
  * tools down to real, grantable tools (the ∩-semantics buildPersonaRegistry
  * applies).
  *
- * ArchMap is deliberately NOT here ( made it opt-in): personas keep
+ * ArchMap is deliberately NOT here (made it opt-in): personas keep
  * their explicit lists and never grant it to children, and a profile naming
  * "ArchMap" is filtered by the ∩-semantics exactly like any other unknown tool.
  */

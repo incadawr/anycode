@@ -82,7 +82,7 @@ describe("isRetryableStreamError", () => {
 });
 
 describe("retryDelayMs", () => {
-  // : midStreamRetries added to the policy shape; 0 here — these
+  // midStreamRetries added to the policy shape; 0 here — these
   // fixtures test delay math only, not replay accounting.
   const policy: RetryPolicy = {
     maxRetries: 3,
@@ -202,7 +202,7 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(new Error("boom", { cause: connect }))).toBe(true);
   });
 
-  it("accepts a bare ENETUNREACH (: Wi-Fi off on macOS)", () => {
+  it("accepts a bare ENETUNREACH (Wi-Fi off on macOS)", () => {
     expect(isTransientNetworkError(Object.assign(new Error("connect ENETUNREACH"), { code: "ENETUNREACH" }))).toBe(true);
   });
 
@@ -262,7 +262,7 @@ describe("isQuotaExhaustion — quota never auto-retries", () => {
   });
 });
 
-describe("isQuotaExhaustion — rate limits stay retryable ( review)", () => {
+describe("isQuotaExhaustion — rate limits stay retryable (review)", () => {
   it("a 429 'quota ... per minute' rate limit is NOT quota and stays retryable", () => {
     const error = apiCallError({ statusCode: 429, isRetryable: false });
     error.message = "RESOURCE_EXHAUSTED: Quota exceeded for quota metric 'requests' per minute";

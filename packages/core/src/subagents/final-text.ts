@@ -1,5 +1,5 @@
 /**
- * Pure final-text accumulator ( CUT-S2 §2.6.3, slice S2b B4). A
+ * Pure final-text accumulator (CUT-S2 §2.6.3, slice S2b B4). A
  * child-mode host's terminal tap uses this to derive the SAME "final text"
  * an inline subagent's outcome would carry for an identical event sequence —
  * mirroring, verbatim, the text-lifecycle rules `createSubagentRunner`
@@ -19,11 +19,11 @@
  *    ever written by `fixate`, never by `reset`/`append`.
  *
  * The four rules above stay verbatim, but the two tiers DIVERGE on one class
- * since  slice S5: runner.ts now prefixes an `error` outcome's
+ * since slice S5: runner.ts now prefixes an `error` outcome's
  * `finalText` with the provider failure's `safe` descriptor, so a child that
  * dies on the provider carries a reason instead of the previous turn's text.
  * This accumulator deliberately does NOT mirror that — the session tier's own
- * missing error branch is  — so for an event sequence containing
+ * missing error branch is — so for an event sequence containing
  * `error` the two tiers no longer produce the same final text.
  *
  * A child-mode host chains further turns across its whole lifetime for

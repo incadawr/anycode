@@ -1,5 +1,5 @@
 /**
- * Ink smoke tests for the TUI shell ( slice 1, §3.4).
+ * Ink smoke tests for the TUI shell (slice 1, §3.4).
  *
  * Drives startTui with PassThrough stdin/stdout and injects ANSI tokens
  * ("\r" Enter, "\t" Tab, "\u001b[A" ArrowUp, printable chars) through the
@@ -166,7 +166,7 @@ describe("startTui ink smoke", () => {
   });
 });
 
-describe("startTui Static transcript ( rework, defect 1)", () => {
+describe("startTui Static transcript (rework, defect 1)", () => {
   it("5. print() renders lines that survive composer redraws (Static)", async () => {
     const h = harness();
     h.handle.print("AnyCode CLI — banner line\n");
@@ -221,7 +221,7 @@ describe("startTui Static transcript ( rework, defect 1)", () => {
   });
 });
 
-describe("startTui confirm mode ( rework, defect 2)", () => {
+describe("startTui confirm mode (rework, defect 2)", () => {
   it("8. ask() renders the question; 'n' answers it and never reaches onSubmit", async () => {
     const h = harness();
     const answer = h.handle.ask("stage everything and commit? [y/N]");

@@ -1,5 +1,5 @@
 /**
- * : the shared classification-to-plaque mapping, born in the
+ * the shared classification-to-plaque mapping, born in the
  * desktop PermissionModal (7d633a64, hardened by 4ebfbe12) and moved VERBATIM
  * to core so the CLI terminal broker, the desktop modal and the Codex
  * commandExecution approvals render the SAME note. These pins hold the move to
@@ -52,7 +52,7 @@ describe("bash-risk-plaque — the three-way split", () => {
     expect(bashRiskPlaque("Bash", { command: "mytool build ." })).toBe(BASH_RISK_PLAQUE.unknownBinary);
   });
 
-  it("unknown shell expression → no plaque (the  shell hint's case alone)", () => {
+  it("unknown shell expression → no plaque (the shell hint's case alone)", () => {
     expect(bashRiskPlaque("Bash", { command: "cat f | tee out" })).toBeNull();
   });
 });

@@ -20,7 +20,7 @@ import { contextualizeNetworkFailure } from "./network-failure.js";
  * aborted before the retry event and the backoff remains externally abortable.
  * The legacy midStreamRetries setting no longer changes replay eligibility.
  *
- *  adds a SEPARATE, budget-exempt one-shot retry on the
+ * adds a SEPARATE, budget-exempt one-shot retry on the
  * openai-chat-completions transport: a pre-content HTTP 400 while
  * `includeUsage` is on is retried ONCE with the flag forced off (no backoff,
  * no `stream_retry` event, never counted against `policy.maxRetries`). A
@@ -102,7 +102,7 @@ interface OpenAICompatibleReasoningOptions {
 
 /**
  * Return shape on the openai-responses transport. Unlike the other two
- * transports, `providerOptions` is NON-optional: `store: false` ( §0.2)
+ * transports, `providerOptions` is NON-optional: `store: false` (§0.2)
  * must ride on EVERY openai-responses request regardless of whether reasoning
  * was requested — real OpenAI defaults `store` to `true` server-side when the
  * field is absent from the body, which would silently start a second,
@@ -160,7 +160,7 @@ type ReasoningOptions = AnthropicReasoningOptions | OpenAICompatibleReasoningOpt
  * model capability layer determines which value to send.
  *
  * openai-responses maps to `providerOptions.openai.{reasoningEffort, store}`
- * ( §0.2/§0.7). `store: false` is UNCONDITIONAL — it rides on every
+ * (§0.2/§0.7). `store: false` is UNCONDITIONAL — it rides on every
  * request on this transport, reasoning or not (see `OpenAIResponsesReasoningOptions`
  * above). `reasoningEffort`, when present, is passed through verbatim. Which
  * values a model accepts is a capability-layer/catalog question (`effortLevels`),
@@ -404,7 +404,7 @@ export function reasoningRequestOptions(
     };
   }
 
-  // DeepSeek (TASK 4241): distinct low/high/max effort tiers, default high —
+  // DeepSeek: distinct low/high/max effort tiers, default high —
   // SUPPLIED FACT from the live GET /models listing (2026-10-10). Mechanism is
   // LOCAL SDK EVIDENCE: @ai-sdk/anthropic@4.0.7 serializes
   // providerOptions.anthropic.effort to output_config.effort whether or not
@@ -491,7 +491,7 @@ interface StalledOutcome {
 }
 
 /**
- * : a failure captured for the `stream_options.include_usage` probe.
+ * a failure captured for the `stream_options.include_usage` probe.
  * `kind` records whether it arrived as a thrown exception or a stream
  * `error` part, so it can be replayed (on rollback) or re-classified (on
  * confirm) through the SAME channel it would have used had the probe never
@@ -567,7 +567,7 @@ function abortableDelay(ms: number, signal: AbortSignal | undefined): Promise<vo
   });
 }
 
-/** : first probe tick while waiting for the network; doubles per failed tick up to the cap. */
+/** first probe tick while waiting for the network; doubles per failed tick up to the cap. */
 const NETWORK_WAIT_FIRST_TICK_MS = 5_000;
 const NETWORK_WAIT_MAX_TICK_MS = 60_000;
 
@@ -715,7 +715,7 @@ class StreamStallError extends Error {
  * `stream_retry.reason` rides the wire and is rendered verbatim by the CLI and
  * renderer, so it must be a whitelist-derived safe message — NEVER raw
  * provider `error.message` text, which can embed a response body or auth
- * header ( W7b-FIX #2). A `StreamStallError` is locally generated, not
+ * header (W7b-FIX #2). A `StreamStallError` is locally generated, not
  * provider text, so it gets its own fixed, non-interpolated whitelist reason
  * (W7b-FIX #3) rather than falling into `classifyProviderFailure`'s generic
  * "unknown" -> "request failed" bucket.
@@ -762,7 +762,7 @@ export class AiSdkModelPort implements ModelPort {
   #lastResponseModel: string | undefined;
 
   /**
-   * : latest quota update observed by this attempt's
+   * latest quota update observed by this attempt's
    * wrapped fetch (`config.onQuotaHeaders` writes it via the constructor
    * passthrough below). Fetch resolves before the SDK decodes the body, so
    * it is populated by the time the `finish` part translates; consumed and
@@ -772,7 +772,7 @@ export class AiSdkModelPort implements ModelPort {
   #lastQuota: ProviderQuotaUpdate | null = null;
 
   /**
-   * : permanent, per-PORT-INSTANCE memory that a strict
+   * permanent, per-PORT-INSTANCE memory that a strict
    * openai-chat-completions endpoint has already been confirmed (by a
    * one-shot probe retry) to reject `stream_options.include_usage`. Once
    * true, every subsequent attempt on THIS port builds its model with the
@@ -791,7 +791,7 @@ export class AiSdkModelPort implements ModelPort {
     private readonly config: EndpointConfig,
     private readonly onDiagnostic: DiagnosticSink = consoleDiagnosticSink,
   ) {
-    // : rebind the config's observer through a port-owned shim so
+    // rebind the config's observer through a port-owned shim so
     // the latest update lands in `#lastQuota` before being forwarded — the
     // shim is built HERE (port-owned), while the factories only ever see the
     // config object this port hands them via buildAttemptModel.
@@ -844,12 +844,12 @@ export class AiSdkModelPort implements ModelPort {
    * auth failure).
    *
    * `includeUsage` is the CALLER-resolved effective value for this attempt
-   * (: `this.config.includeUsage` unless the endpoint-level probe has
+   * (`this.config.includeUsage` unless the endpoint-level probe has
    * already disabled it, or unless this very attempt IS the probe retry).
    * When it matches the config's own value — the overwhelming majority of
    * attempts — the config is forwarded UNTOUCHED: spreading would both break
    * the object identity the no-resolver path guarantees and add an
-   * `includeUsage: undefined` key the pre- shape never carried.
+   * `includeUsage: undefined` key the pre-shape never carried.
    */
   // The factory receives exactly one argument when the activity hook is absent.
   private async buildAttemptModel(includeUsage: boolean | undefined, onResponseActivity?: () => void, onKey?: (key: string | undefined) => void): Promise<LanguageModel> {
@@ -876,7 +876,7 @@ export class AiSdkModelPort implements ModelPort {
   }
 
   /**
-   * Commits the  include_usage probe: called exactly once, the
+   * Commits the include_usage probe: called exactly once, the
    * moment a probe retry (see `includeUsageProbeEligible`) demonstrates the
    * flag was the cause of a pre-content HTTP 400 by NOT reproducing that same
    * failure. `#includeUsageDisabledForEndpoint` is already `true` by the time
@@ -895,7 +895,7 @@ export class AiSdkModelPort implements ModelPort {
   }
 
   /**
-   * : parks a pre-content transient network failure. Yields
+   * parks a pre-content transient network failure. Yields
    * `waiting_for_network` once, probes at once, then probes on a 5 s -> 60 s
    * tick (or immediately again when the waiter reports a hint) until the
    * endpoint answers. Returns the episode's monotonic duration on recovery.
@@ -956,7 +956,7 @@ export class AiSdkModelPort implements ModelPort {
     let attempt = 0;
     // Time of this step's first retryable failure; anchors networkRetryBudgetMs.
     let firstFailureAt: number | undefined;
-    // : monotonic time this step has already spent waiting for the network (all episodes).
+    // monotonic time this step has already spent waiting for the network (all episodes).
     let networkWaitSpentMs = 0;
     // Count-bounded retry gate; past maxRetries only a transient NETWORK error
     // may continue, and only inside the wall-clock budget (0 retries = off).
@@ -967,7 +967,7 @@ export class AiSdkModelPort implements ModelPort {
       if (!isTransientNetworkError(error)) return false;
       return Date.now() - firstFailureAt < policy.networkRetryBudgetMs;
     };
-    // : with a network waiter, a pre-content transient network failure
+    // with a network waiter, a pre-content transient network failure
     // is also retryable past the count and the wall-clock budget: the seam below
     // waits for the network instead of failing the turn.
     const mayRetryOrWait = (error: unknown, hadOutput: boolean): boolean =>
@@ -982,7 +982,7 @@ export class AiSdkModelPort implements ModelPort {
       firstFailureAt ??= Date.now();
       return attempt < policy.maxRetries;
     };
-    // : the failure that STARTED the include_usage probe, carried
+    // the failure that STARTED the include_usage probe, carried
     // from that attempt to the very next one (the probe retry) — see
     // `ProbeFailure`'s docstring.
     let includeUsageProbe: ProbeFailure | undefined;
@@ -994,18 +994,18 @@ export class AiSdkModelPort implements ModelPort {
       // finish totals discard raw usage; keep the latest step's wire usage
       // inside this attempt so abandoned attempts cannot affect a retry.
       let stepRawUsage: unknown;
-      //  review: set once a non-error `finish` is yielded. The step
+      // review: set once a non-error `finish` is yielded. The step
       // is then complete; replaying it would re-bill the provider and drop the
       // usage of the attempt the caller already received, so it is never replayed.
       let completedFinish = false;
       let pendingRetryError: unknown = NO_RETRY;
-      // : set instead of pendingRetryError when this pass ends by
+      // set instead of pendingRetryError when this pass ends by
       // starting an include_usage probe — that retry is immediate (no
       // backoff), doesn't consume the connect/stall retry budget, and never
       // emits a `stream_retry` wire event, so it deliberately bypasses the
       // pendingRetryError machinery below.
       let probeRetryNeeded = false;
-      // : THIS pass's own failure while a probe was already pending
+      // THIS pass's own failure while a probe was already pending
       // (i.e. this pass IS the probe retry), captured here and resolved once
       // OUTSIDE the try/catch below — see `ProbeFailure`'s docstring for why.
       let pendingProbeFailure: ProbeFailure | undefined;
@@ -1018,7 +1018,7 @@ export class AiSdkModelPort implements ModelPort {
       const onResponseActivity = this.config.transport === "openai-responses" && policy.stallTimeoutMs > 0
         ? (): void => { lastWireActivityAt = Date.now(); } : undefined;
       const lastActivityAt = onResponseActivity !== undefined ? (): number => lastWireActivityAt : undefined;
-      // : the effective include_usage verdict for THIS attempt —
+      // the effective include_usage verdict for THIS attempt —
       // forced off once the endpoint-level probe has committed, or while this
       // attempt IS itself the probe retry (both fold into the same field:
       // the probe sets it optimistically before the retry runs).
@@ -1072,7 +1072,7 @@ export class AiSdkModelPort implements ModelPort {
             // Actually cancel the underlying SDK call; it will never be read again.
             attemptController.abort(stallError);
             // A stall after a completed step has nothing left to deliver: end
-            // the step as finished instead of replaying it ( review).
+            // the step as finished instead of replaying it (review).
             if (completedFinish) break;
             // A stall may replay only before committed output.
             const stallRetryAllowed =
@@ -1146,7 +1146,7 @@ export class AiSdkModelPort implements ModelPort {
             continue;
           }
           if (event.type === "error") event = { ...event, error: contextualizeNetworkFailure(contextualizeMiniMaxBalance(event.error, this.config.providerName, attemptKey), this.config.baseUrl) };
-          // : this pass IS a probe retry (started by a previous
+          // this pass IS a probe retry (started by a previous
           // pass) — defer this failure's fate to the resolution block after
           // the try/catch instead of classifying it here, regardless of
           // whether it would otherwise look retryable. Never reachable for
@@ -1159,7 +1159,7 @@ export class AiSdkModelPort implements ModelPort {
             attemptController.abort(event.error);
             break;
           }
-          // : start a probe when this pre-content 400 is the FIRST
+          // start a probe when this pre-content 400 is the FIRST
           // sign the flag might be the cause.
           if (
             event.type === "error" &&
@@ -1198,7 +1198,7 @@ export class AiSdkModelPort implements ModelPort {
             completedFinish = true;
           }
           yield event;
-          // : emit the attempt's quota observation immediately
+          // emit the attempt's quota observation immediately
           // after `finish` — the wrapped fetch populated `#lastQuota` before
           // the SDK decoded any body part, so by the time finish translates
           // the headers have long since been seen. One emission per attempt;
@@ -1211,7 +1211,7 @@ export class AiSdkModelPort implements ModelPort {
         }
       } catch (rawError) {
         const error = contextualizeNetworkFailure(contextualizeMiniMaxBalance(rawError, this.config.providerName, attemptKey), this.config.baseUrl);
-        // : mirror of the error-part branch above, for a failure that
+        // mirror of the error-part branch above, for a failure that
         // surfaced as a THROWN exception (e.g. a synchronous validation
         // error, or a rejection from `fullStream` iteration before any part
         // was read) instead of a stream part.
@@ -1246,7 +1246,7 @@ export class AiSdkModelPort implements ModelPort {
         disposeLink();
       }
 
-      // : resolve a deferred probe-retry failure OUTSIDE the
+      // resolve a deferred probe-retry failure OUTSIDE the
       // try/catch above — deliberately, so a rollback's `throw` propagates
       // straight out of the generator instead of risking re-entry into this
       // same pass's own `catch`.
@@ -1299,7 +1299,7 @@ export class AiSdkModelPort implements ModelPort {
         continue;
       }
 
-      // : reaching here with a still-pending probe means THIS pass
+      // reaching here with a still-pending probe means THIS pass
       // was the probe retry itself and it finished with NO error part or
       // thrown exception at all (a clean finish, or a stall — the one
       // non-error outcome that also breaks the inner loop without going
@@ -1314,7 +1314,7 @@ export class AiSdkModelPort implements ModelPort {
         return;
       }
 
-      // : a pre-content transient network failure with a waiter
+      // a pre-content transient network failure with a waiter
       // first gets a gate probe (only while the count budget lasts; a server
       // blip on a reachable network keeps the ordinary backoff). If the endpoint
       // is unreachable, the turn waits for the network instead of failing.

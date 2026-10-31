@@ -385,7 +385,7 @@ describe("AgentLoop.runTurn — image attachments (design slice-6.2-cut.md §2-C
     expect(Object.keys(user!)).toEqual(["role", "content"]);
   });
 
-  it(" срез 2: options.origin stamps the appended user HistoryItem's origin, never the message itself (role/content stay byte-identical either way)", async () => {
+  it("срез 2: options.origin stamps the appended user HistoryItem's origin, never the message itself (role/content stay byte-identical either way)", async () => {
     const loop = makeLoop({ modelPort: new MockModelPort([completeStep]) });
     await collect(loop.runTurn("background report", { origin: "system" }));
     const [item] = loop.history.items;
@@ -393,7 +393,7 @@ describe("AgentLoop.runTurn — image attachments (design slice-6.2-cut.md §2-C
     expect(item!.message).toEqual({ role: "user", content: "background report" });
   });
 
-  it(" срез 2: origin is absent by default (an ordinary runTurn call never stamps it)", async () => {
+  it("срез 2: origin is absent by default (an ordinary runTurn call never stamps it)", async () => {
     const loop = makeLoop({ modelPort: new MockModelPort([completeStep]) });
     await collect(loop.runTurn("plain text"));
     const [item] = loop.history.items;
@@ -436,7 +436,7 @@ describe("AgentLoop.runTurn — image attachments (design slice-6.2-cut.md §2-C
   });
 
   // ---------------------------------------------------------------------------
-  // presentation ( slice S1 W3, CUT-S1 §3 W3): same carry-through
+  // presentation (slice S1 W3, CUT-S1 §3 W3): same carry-through
   // precedent as images just above — a handler result's `presentation` rides
   // ToolCallOutcome.result into the ToolResultPart via buildToolResultMessage.
 
@@ -509,7 +509,7 @@ describe("AgentLoop.runTurn — image attachments (design slice-6.2-cut.md §2-C
   });
 });
 
-describe("AgentLoop.runTurn — vision fallback ( plan §1/§2/§3, slice B1)", () => {
+describe("AgentLoop.runTurn — vision fallback (plan §1/§2/§3, slice B1)", () => {
   const img: ImageAttachment = { mediaType: "image/png", data: "AAAA", sourcePath: "/shot.png" };
   const completeStep: ModelStreamEvent[] = [
     { type: "start" },
@@ -636,7 +636,7 @@ describe("AgentLoop.runTurn — vision fallback ( plan §1/§2/§3, slice B1)", 
     };
   }
 
-  it(" slice G: forwards a user-attached image's cssSize into the overview caption's Viewport CSS size prompt line", async () => {
+  it("slice G: forwards a user-attached image's cssSize into the overview caption's Viewport CSS size prompt line", async () => {
     const reserve = makeReserve(1);
     const requests: ModelRequest[] = [];
     const imgWithCss: ImageAttachment = { ...pngImg, cssSize: { width: 550, height: 400 } };
@@ -656,7 +656,7 @@ describe("AgentLoop.runTurn — vision fallback ( plan §1/§2/§3, slice B1)", 
     expect(prompt).toContain("Viewport CSS size: 550x400px");
   });
 
-  it(" slice G additivity pin: a user-attached image with no cssSize omits the Viewport CSS size line from the overview caption prompt (byte-identical to pre-slice behaviour)", async () => {
+  it("slice G additivity pin: a user-attached image with no cssSize omits the Viewport CSS size line from the overview caption prompt (byte-identical to pre-slice behaviour)", async () => {
     const reserve = makeReserve(1);
     const requests: ModelRequest[] = [];
     const loop = makeLoop({
@@ -1103,7 +1103,7 @@ describe("AgentLoop.runTurn — max turns", () => {
   });
 });
 
-describe("AgentLoop.runTurn — wall-clock deadline ( §3)", () => {
+describe("AgentLoop.runTurn — wall-clock deadline (§3)", () => {
   /**
    * A model port that advances the (faked) clock past `deadlineAt` once it has
    * served `afterCalls` steps, so the deadline is crossed by work the loop
@@ -1158,7 +1158,7 @@ describe("AgentLoop.runTurn — wall-clock deadline ( §3)", () => {
     try {
       const modelPort = new ClockAdvancingPort(3, BASE + 60_000);
       // This test's concern is the deadline/turn-budget interaction (
-      // §3), not the ceiling ladder (, covered separately in its own
+      // §3), not the ceiling ladder (covered separately in its own
       // describe block below) — disabled explicitly so `modelPort.calls` keeps
       // meaning exactly "one call per loop turn".
       const loop = makeLoop({ modelPort, maxTurns: 10, ceiling: { enabled: false } });
@@ -1189,7 +1189,7 @@ describe("AgentLoop.runTurn — wall-clock deadline ( §3)", () => {
   });
 });
 
-describe("AgentLoop.runTurn — ceiling decision ladder ( cut-1)", () => {
+describe("AgentLoop.runTurn — ceiling decision ladder (cut-1)", () => {
   /** One successful `Mock` tool-call turn — the loop's normal per-turn step. */
   function toolTurnStep(id: string): ModelStreamEvent[] {
     return [
@@ -1233,7 +1233,7 @@ describe("AgentLoop.runTurn — ceiling decision ladder ( cut-1)", () => {
   const grantEvents = (events: AgentEvent[]) =>
     events.filter((e): e is Extract<AgentEvent, { type: "ceiling_grant" }> => e.type === "ceiling_grant");
 
-  // : every refused round emits exactly one ceiling_refused immediately
+  // every refused round emits exactly one ceiling_refused immediately
   // before its paired loop_end.
   const refusedEvents = (events: AgentEvent[]) =>
     events.filter((e): e is Extract<AgentEvent, { type: "ceiling_refused" }> => e.type === "ceiling_refused");
@@ -1425,7 +1425,7 @@ describe("AgentLoop.runTurn — ceiling decision ladder ( cut-1)", () => {
     });
   });
 
-  it("{ enabled: false } restores the pre- wall — no decision call is ever attempted", async () => {
+  it("{ enabled: false } restores the pre-wall — no decision call is ever attempted", async () => {
     const modelPort = new MockModelPort([toolTurnStep("c1"), toolTurnStep("c2")]);
     const loop = makeLoop({ modelPort, maxTurns: 1, registry, ceiling: { enabled: false } });
 
@@ -1454,7 +1454,7 @@ describe("AgentLoop.runTurn — ceiling decision ladder ( cut-1)", () => {
       }
       const modelPort = new ClockAdvancingOnFirstCallPort();
       // Both walls line up on turn 2: turn(2) > maxTurns(1) AND deadlineAt has
-      // just passed. Per  §1.8 the deadline branch is checked FIRST.
+      // just passed. Per §1.8 the deadline branch is checked FIRST.
       const loop = makeLoop({ modelPort, maxTurns: 1, deadlineAt: BASE + 5_000, registry });
 
       const events = await collect(loop.runTurn("go"));
@@ -1622,7 +1622,7 @@ describe("AgentLoop.runTurn — ceiling decision ladder ( cut-1)", () => {
     // never reaches the model (MAX_CEILING_ROUNDS gate is cheap).
     expect(modelPort.requests).toHaveLength(19);
 
-    // : the refused 4th round announces itself exactly once, with the
+    // the refused 4th round announces itself exactly once, with the
     // completed-turn count (16) and the would-be round number (MAX+1 = 4).
     expect(refusedEvents(events)).toEqual([
       { type: "ceiling_refused", reason: "rounds_exhausted", turn: 16, round: 4 },
@@ -1840,7 +1840,7 @@ describe("AgentLoop.runTurn — ceiling_refused events", () => {
   });
 });
 
-describe("AgentLoop.runTurn —  adaptive budget", () => {
+describe("AgentLoop.runTurn — adaptive budget", () => {
   /** One successful tool-call turn with a PARAMETERIZED tool name. */
   function toolTurnStep(id: string, name = "Mock"): ModelStreamEvent[] {
     return [
@@ -2182,7 +2182,7 @@ describe("AgentLoop.runTurn —  adaptive budget", () => {
   });
 
   // -------------------------------------------------------------------------
-  //  follow-up: the dispatch allowlist. Agent and Workflow are
+  // follow-up: the dispatch allowlist. Agent and Workflow are
   // readOnly (the flag is load-bearing for permissions and stays as-is), but
   // a SUCCESSFUL dispatch is an orchestrator's work — without the allowlist a
   // dispatch-only session counted 0 productive calls every round and was
@@ -2307,7 +2307,7 @@ describe("AgentLoop.runTurn —  adaptive budget", () => {
   });
 });
 
-describe("AgentLoop.runTurn — supervised root has no turn ceiling ( remainder, owner rule 2026-08-22)", () => {
+describe("AgentLoop.runTurn — supervised root has no turn ceiling (remainder, owner rule 2026-08-22)", () => {
   /** One successful `Mock` tool-call turn — the loop's normal per-turn step. */
   function toolTurnStep(id: string): ModelStreamEvent[] {
     return [
@@ -2605,7 +2605,7 @@ describe("AgentLoop.runTurn — stream errors", () => {
 
     const events = await collect(loop.runTurn("hi"));
     // The throw path must surface the real provider failure as a visible
-    // {type:"error"} event before loop_end ( DoD-c), never swallowed.
+    // {type:"error"} event before loop_end (DoD-c), never swallowed.
     const errorEvent = events.find((e) => e.type === "error");
     expect(errorEvent).toMatchObject({ type: "error", error: { message: "network dead" } });
     expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
@@ -2638,7 +2638,7 @@ describe("AgentLoop.runTurn — stream errors", () => {
     // renders from it, never from `error`.
     expect(errorEvent?.safe).toEqual({ code: "server", message: "server error", statusCode: 500 });
     expect(JSON.stringify(errorEvent?.safe)).not.toContain("sk-test");
-    // Host-local diagnosability ( DoD-c): the RAW error still rides the
+    // Host-local diagnosability (DoD-c): the RAW error still rides the
     // in-process event so session.ts's process log keeps the original text.
     expect((errorEvent?.error as Error).message).toContain("sk-test");
   });
@@ -2667,7 +2667,7 @@ describe("AgentLoop.runTurn — stream errors", () => {
     expect(events.some((e) => e.type === "loop_end" && e.reason === "error")).toBe(false);
   });
 
-  it("does not forgive an in-stream error when the only finish is a synthetic finishReason:\"error\" ( finish-gate hole)", async () => {
+  it("does not forgive an in-stream error when the only finish is a synthetic finishReason:\"error\" (finish-gate hole)", async () => {
     const modelPort = new MockModelPort([
       [
         { type: "start" },
@@ -2682,7 +2682,7 @@ describe("AgentLoop.runTurn — stream errors", () => {
     expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
   });
 
-  it("forgives an in-stream error when finish still arrives ( finish-gate)", async () => {
+  it("forgives an in-stream error when finish still arrives (finish-gate)", async () => {
     const modelPort = new MockModelPort([
       [
         { type: "start" },
@@ -2804,7 +2804,7 @@ describe("AgentLoop.runTurn — stream_retry resets step accumulators (design sl
   });
 });
 
-describe("AgentLoop.runTurn — terminal retry metadata ( W7b)", () => {
+describe("AgentLoop.runTurn — terminal retry metadata (W7b)", () => {
   function findErrorEvent(events: AgentEvent[]): Extract<AgentEvent, { type: "error" }> | undefined {
     return events.find((e): e is Extract<AgentEvent, { type: "error" }> => e.type === "error");
   }
@@ -2953,7 +2953,7 @@ describe("AgentLoop.runTurn — terminal retry metadata ( W7b)", () => {
     // delivered this turn, hadModelOutput must STAY true across the retry — a
     // reset would make the terminal metadata claim no output was delivered and
     // W8 would offer Try-again on a step whose re-send risks double-dispatch
-    // ( invariant #1).
+    // (invariant #1).
     const modelPort = new MockModelPort([
       [
         { type: "start" },
@@ -3869,7 +3869,7 @@ describe("AgentLoop.contextBreakdown (design slice-P7.17-cut.md §2.1)", () => {
     expect(breakdown.totalEstimatedTokens).toBe(0);
   });
 
-  it(": an \"mcp\" component counts into metaTokens exactly like \"profiles\" (not skills, not base)", () => {
+  it("an \"mcp\" component counts into metaTokens exactly like \"profiles\" (not skills, not base)", () => {
     const build = (kind: "profiles" | "mcp") => {
       const base = "x".repeat(20);
       const section = "q".repeat(9);
@@ -4235,7 +4235,7 @@ describe("AgentLoop eventTap seam (slice 6.6)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// AgentLoop.setMode (, CUT-S3 §6a): the user-initiated mid-turn
+// AgentLoop.setMode (CUT-S3 §6a): the user-initiated mid-turn
 // permission-mode change. Reuses MockModelPort/makeLoop/makeTool/makeRegistry/
 // collect/toolResult/ModePermissionEngine and the recordingAllowBroker/
 // writeMock/makePlanLoop conventions from the plan-exit arc above. Where a
@@ -4542,7 +4542,7 @@ describe("AgentLoop.setMode — mid-turn permission-mode change", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  fix wave 1 (ARBITRATION-S3-W1 D-S3-16): the prologue hook-await
+// fix wave 1 (ARBITRATION-S3-W1 D-S3-16): the prologue hook-await
 // window. A setMode() landing while runTurn's UserPromptSubmit await is
 // pending must gate the turn it lands in, not be silently lost for the whole
 // turn (wave-1 BLOCKER B1). The real InMemoryHookRunner is used — the same
@@ -4550,7 +4550,7 @@ describe("AgentLoop.setMode — mid-turn permission-mode change", () => {
 // open on an explicit gate promise, so the interleaving is deterministic
 // (no wall-clock timing).
 
-describe("AgentLoop.setMode — prologue hook-await window ( W1, H-series)", () => {
+describe("AgentLoop.setMode — prologue hook-await window (W1, H-series)", () => {
   function gatedUserPromptHooks(): { hooks: InMemoryHookRunner; release: () => void } {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -4654,7 +4654,7 @@ describe("AgentLoop.setMode — prologue hook-await window ( W1, H-series)", () 
 });
 
 // ---------------------------------------------------------------------------
-//  — degenerate-generation guard
+// degenerate-generation guard
 
 describe("AgentLoop.runTurn — degenerate-generation guard", () => {
   const registry = makeRegistry({ Mock: makeTool() });
@@ -4822,7 +4822,7 @@ describe("AgentLoop.runTurn — degenerate-generation guard", () => {
 });
 
 // ---------------------------------------------------------------------------
-// : stale todo plan reminder.
+// stale todo plan reminder.
 
 describe("AgentLoop.runTurn — stale todo reminder", () => {
   function todoStep(...items: Array<{ content: string; status: "pending" | "in_progress" | "completed" }>): ModelStreamEvent[] {
@@ -5009,13 +5009,13 @@ describe("AgentLoop.runTurn — stale todo reminder", () => {
   });
 });
 
-// : the deferred-injection slot — queueInjection from
+// the deferred-injection slot — queueInjection from
 // outside a RUNNING generator, flushed at the single legal seam (all of step
 // N's tool results appended, loop continuing). Script: step1 proposes a tool
 // whose handler parks on a test-controlled deferred, step2 proposes another,
 // step3 finishes text-only.
 
-describe("AgentLoop.queueInjection ( / )", () => {
+describe("AgentLoop.queueInjection", () => {
   /** A tool handler that parks until the test releases it (resolve captured). */
   function makeParkingTool(): { tool: AnyToolDefinition; release: () => void } {
     let release!: () => void;
@@ -5396,7 +5396,7 @@ describe("AgentLoop.queueInjection ( / )", () => {
     expect(loop.queueInjection("x")).toBe(false);
   });
 });
-// : provider_quota is pure transport telemetry — the
+// provider_quota is pure transport telemetry — the
 // loop forwards it verbatim, neither accumulating it into the step state nor
 // resetting anything on its account, and a stream_retry around it changes
 // nothing about that.

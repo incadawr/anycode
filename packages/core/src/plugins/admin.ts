@@ -1,5 +1,5 @@
 /**
- * Main-safe plugins admin barrel + the Plugins-pane scan ( S1-A,
+ * Main-safe plugins admin barrel + the Plugins-pane scan (S1-A,
  * design §7/§8). `scanPluginsAdmin` enumerates EVERY plugin — managed store
  * entries (with their state: enabled/pinned/versions/source), project and
  * legacy hand-dropped dirs — running the SAME tiered discovery the boot path
@@ -399,6 +399,6 @@ export {
   expandServiceSecrets,
 } from "./manifest.js";
 export type { PluginManifest, PluginCapabilities, PluginServiceSpec } from "./manifest.js";
-//  S1-B: the desktop main store reuses the same semver helpers
+// S1-B: the desktop main store reuses the same semver helpers
 // discovery's engines gating uses (one implementation of the grammar).
 export { isValidSemver, parseSemver, rangeMatches, normalizeSemverRange } from "../util/semver-range.js";

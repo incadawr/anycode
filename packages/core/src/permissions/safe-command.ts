@@ -22,7 +22,7 @@
  * the one exported Bash splitter (`splitBashSegments` from `./rules.js`, the
  * ONE splitter — invariant 2) and no other core types.
  *
- *  (`classifyBashCommandLine`, below `classifyBashCommand`): widens
+ * (`classifyBashCommandLine`, below `classifyBashCommand`): widens
  * auto-allow to Bash PIPELINES under grammar v1 (`|` only). A line the
  * splitter reads as one segment routes to `classifyBashCommand` on the
  * ORIGINAL string, bit-for-bit. The widening surface is exactly all-`|`
@@ -54,14 +54,14 @@
  *    not bundled short flags (`-ao`) or attached short values (`-ofile`). It is
  *    NOT the source of safety: every allowlisted binary is read-only BY NATURE,
  *    and the WRITE_CAPABLE_FLAGS screen is pure defense in depth — no entry may
- *    LEAN on it ( fix wave 1 removed `tree` for exactly that reason; see
+ *    LEAN on it (fix wave 1 removed `tree` for exactly that reason; see
  *    the READ_ONLY_BINARIES doc below).
  *    A binary whose write/exec surface the screen cannot exhaust is NOT a
  *    candidate for the allowlist: ripgrep (`--pre`/`--pre-glob` run an arbitrary
  *    program per file, `--hostname-bin` runs one unconditionally, `-z` spawns
  *    external decompressors), `file` (`-C`/`--compile` writes a `magic.mgc`
  *    into cwd), and `tree` (`-o FILE` writes, and `-no FILE`/`-o<FILE>` cluster
- *    spellings evade any verbatim flag net —  fix wave 1) are therefore
+ *    spellings evade any verbatim flag net — fix wave 1) are therefore
  *    DELIBERATELY excluded — fail-closed, plain search is
  *    covered by grep/egrep/fgrep. Any binary ADDED via U1-P5 tuning must be
  *    read-only by nature (not merely "denylist a few flags") before it is trusted.
@@ -95,7 +95,7 @@ const SHELL_METACHARACTERS: ReadonlySet<string> = new Set([
  * arbitrary programs and `file -C` writes to cwd — write/exec surfaces the flag
  * screen cannot exhaust. Plain search is served by grep/egrep/fgrep instead.
  *
- * `tree` was REMOVED ( fix wave 1, W1-BLOCKER-1): `tree -o FILE` writes
+ * `tree` was REMOVED (fix wave 1, W1-BLOCKER-1): `tree -o FILE` writes
  * its listing to FILE, and the verbatim flag net cannot exhaust that surface —
  * short clusters and attached values (`tree -no FILE`, `tree -o<FILE>`) spell
  * the same write without ever producing the token `-o`. Under the module-doc
@@ -300,7 +300,7 @@ export function classifyBashCommand(command: string): BashCommandClass {
   //     quote-aware split could not prove any argument flag-free, and
   //     "unprovable" is "unknown" by this module's own rule (module doc,
   //     top), not "read-only" by default. This is a real, intentional
-  //     behavior change from the pre- code, which never looked at
+  //     behavior change from the pre-code, which never looked at
   //     quote state on this path at all and would fall through to
   //     "read-only" here (see the now-updated V4 pin).
   if (segmentTokens === undefined) {
@@ -445,7 +445,7 @@ function classifySedPipelineTokens(tokens: SegmentToken[]): BashCommandClass {
   return "read-only";
 }
 
-/** Classifies ONE pipeline segment (, §4.2). Doubly conservative: the
+/** Classifies ONE pipeline segment (§4.2). Doubly conservative: the
  * quote-UNAWARE raw screen runs first (same maximum-conservatism rule as the
  * single-command path), THEN quote-aware tokenization — tokenization exists
  * to CATCH what quotes hide, never to ADMIT what quotes wrap. */
@@ -507,7 +507,7 @@ function classifyPipelineSegment(segment: string): BashCommandClass {
 }
 
 /**
- * Classifies a full Bash command line, pipelines included (, DV-5).
+ * Classifies a full Bash command line, pipelines included (DV-5).
  * Grammar v1: the ONLY accepted compound form is `cmd | cmd | …` — every
  * separator `|`, no blank segments, every segment independently provable
  * read-only via the pipeline segment screens. A single-segment line routes to
@@ -522,7 +522,7 @@ export function classifyBashCommandLine(command: string): BashCommandLineClassif
     return { class: "unknown", shellExpression: true };
   }
   if (split.segments.length === 1) {
-    // Single plain command: the pre- path, verdict-for-verdict.
+    // Single plain command: the pre-path, verdict-for-verdict.
     return { class: classifyBashCommand(command), shellExpression: hasUnsafeCharacter(command) };
   }
   if (split.separators.some((separator) => separator !== "|")) {
@@ -541,9 +541,9 @@ export function classifyBashCommandLine(command: string): BashCommandLineClassif
   return { class: "read-only", shellExpression: true };
 }
 
-// : the scoped-runner grammar lives once in rules.ts; re-exported here so
+// the scoped-runner grammar lives once in rules.ts; re-exported here so
 // the desktop renderer reaches it through this EXISTING package.json subpath
-// (the exports map is frozen outside 's allowed paths). This module
+// (the exports map is frozen outside's allowed paths). This module
 // already imports splitBashSegments from ./rules.js, so no new dependency edge.
 export {
   SCOPED_PATTERN_PREFIX,

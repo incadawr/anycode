@@ -286,7 +286,7 @@ describe("executeToolCall — artifact spill", () => {
     expect(outcome.modelText.startsWith("<persisted-output>")).toBe(false);
   });
 
-  // Fallback: absent store => truncate, byte-identical to .
+  // Fallback: absent store => truncate, byte-identical to.
   it("falls back to truncation when no artifact store is threaded", async () => {
     const registry = new ToolRegistry();
     registry.register(bashTool);
@@ -445,7 +445,7 @@ describe("executeToolCall — artifact spill", () => {
     expect(path.startsWith(artifactsRoot)).toBe(true);
   });
 
-  it("does not spill when the rendered output fits the model budget (byte-identical to )", async () => {
+  it("does not spill when the rendered output fits the model budget (byte-identical to)", async () => {
     // Bash JSON of a short stdout fits well under BASH_RESULT_MAX_MODEL_BYTES.
     const stdout = "hello\n";
     const outcome = await executeToolCall(bashCtx(stdout), {

@@ -9,7 +9,7 @@ export const ENV_BASE_URL = "ANYCODE_BASE_URL";
 export const ENV_MODEL = "ANYCODE_MODEL";
 /**
  * Default model id for the built-in explore persona's inline children
- *: recon sweeps many files and needs little intelligence, so
+ * recon sweeps many files and needs little intelligence, so
  * they can run on a cheaper model. Absent/blank ⇒ explore inherits the
  * parent's port (byte-identical to pre-4131). NOT validated against any
  * catalog here — the runner's resolveChildModelPort owns id validation and
@@ -19,7 +19,7 @@ export const ENV_EXPLORE_MODEL = "ANYCODE_EXPLORE_MODEL";
 export const ENV_MAX_TURNS = "ANYCODE_MAX_TURNS";
 export const ENV_SUBAGENT_MAX_TURNS = "ANYCODE_SUBAGENT_MAX_TURNS";
 /**
- * Subagent stall-detector silence threshold ( slice 1). Deliberately a
+ * Subagent stall-detector silence threshold (slice 1). Deliberately a
  * DIFFERENT name from ENV_STALL_TIMEOUT_MS below (ANYCODE_STALL_TIMEOUT_MS) —
  * that one is the per-attempt HTTP stream watchdog; this one bounds silence
  * across a whole subagent run.
@@ -65,7 +65,7 @@ export const ENV_IMAGE_INPUT = "ANYCODE_IMAGE_INPUT";
  * (`imageInput?: true` per model) instead of the fork env.
  */
 /**
- * : the active connection's per-model image-input override as ONE
+ * the active connection's per-model image-input override as ONE
  * value `<on|off>:<modelId>` (value and binding travel in a single var so they
  * can never be half-inherited). The host applies it ONLY while the session's
  * current model equals the bound id, so a mid-session switch to another model
@@ -81,7 +81,7 @@ export const ENV_INCLUDE_USAGE = "ANYCODE_INCLUDE_USAGE";
  * controls. Absent/blank = no override.
  */
 export const ENV_PROMPT_CACHE_OPTIONS = "ANYCODE_PROMPT_CACHE_OPTIONS";
-/** : adaptive turn budget (boolean; mirror of `tools.adaptiveTurnBudget`). */
+/** adaptive turn budget (boolean; mirror of `tools.adaptiveTurnBudget`). */
 export const ENV_ADAPTIVE_TURN_BUDGET = "ANYCODE_ADAPTIVE_TURN_BUDGET";
 
 const PROVIDER_TRANSPORT_VALUES: readonly ProviderTransport[] = [
@@ -94,7 +94,7 @@ export const DEFAULT_BASE_URL = "https://api.anthropic.com";
 
 /**
  * `CoreEnvConfig` plus the model binding for the context-window override
- *. Declared here rather than in `types/config.ts` so the added field
+ * . Declared here rather than in `types/config.ts` so the added field
  * stays entirely inside `provider/**`.
  */
 export type ModelBoundCoreEnvConfig = CoreEnvConfig & { contextWindowModel?: string };
@@ -127,12 +127,12 @@ export function parseImageInputModelOverride(
  * Reads ANYCODE_API_KEY, ANYCODE_BASE_URL (default: native Anthropic),
  * ANYCODE_MODEL (required), and the optional integers ANYCODE_MAX_TURNS /
  * ANYCODE_MAX_OUTPUT_TOKENS / ANYCODE_CONTEXT_WINDOW / ANYCODE_MAX_RETRIES /
- * ANYCODE_NETWORK_RETRY_BUDGET_MS ( — the transient-network retry
+ * ANYCODE_NETWORK_RETRY_BUDGET_MS (the transient-network retry
  * wall-clock budget that extends past ANYCODE_MAX_RETRIES) /
  * ANYCODE_TOOL_CONCURRENCY / ANYCODE_STALL_TIMEOUT_MS / ANYCODE_SUBAGENT_STALL_MS
- * ( slice 1 — the subagent silence detector, distinct from the stream
- * watchdog) / ANYCODE_TODO_REMINDER_EVERY ( — the stale-plan
- * reminder period in tool calls) / ANYCODE_SUPERVISOR_IDLE_MS ( — the supervisor idle
+ * (slice 1 — the subagent silence detector, distinct from the stream
+ * watchdog) / ANYCODE_TODO_REMINDER_EVERY (the stale-plan
+ * reminder period in tool calls) / ANYCODE_SUPERVISOR_IDLE_MS (the supervisor idle
  * watchdog, distinct from both; must be a POSITIVE integer, a nonpositive
  * value throws) plus ANYCODE_DB_PATH.
  * ANYCODE_CONTEXT_WINDOW_MODEL is an optional nonblank model id that
@@ -143,7 +143,7 @@ export function parseImageInputModelOverride(
  * explore inherits the parent's model.
  * ANYCODE_REASONING_EFFORT is an optional off|low|medium|high|max selector
  * (per-model levels are gated downstream by the catalog; unsupported → off).
- * ANYCODE_PROVIDER_TRANSPORT selects the wire protocol ( §0.4); an
+ * ANYCODE_PROVIDER_TRANSPORT selects the wire protocol (§0.4); an
  * invalid value throws (never a silent anthropic fallback). ANYCODE_API_KEY is
  * required when the resolved transport is undefined or `anthropic-messages`
  * (byte-compat: that path is fail-closed), and optional for the two OpenAI
@@ -271,7 +271,7 @@ export function readPromptCacheOptions(env: NodeJS.ProcessEnv): ImplicitPromptCa
 }
 
 /**
- * Parses ANYCODE_PROVIDER_TRANSPORT ( §0.4/W4). Unlike
+ * Parses ANYCODE_PROVIDER_TRANSPORT (§0.4/W4). Unlike
  * ANYCODE_IMAGE_INPUT, an unrecognized value THROWS rather than warning and
  * falling back: a typo here must never silently route an OpenAI endpoint
  * through the anthropic-messages transport (the exact 400/404-class bug this
@@ -365,7 +365,7 @@ function readOptionalInteger(env: NodeJS.ProcessEnv, name: string): number | und
 }
 
 /**
- *  (P4): like readOptionalInteger but rejects non-POSITIVE values
+ * (P4): like readOptionalInteger but rejects non-POSITIVE values
  * too. For a reminder-spammer's delay a negative/zero integer is worse than a
  * typo: it would clamp to an immediate-fire loop. Only the supervisor idle
  * knob uses this; see readOptionalInteger for the pre-existing family.

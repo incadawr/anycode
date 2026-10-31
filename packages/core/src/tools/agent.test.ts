@@ -142,7 +142,7 @@ describe("agentTool", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  — honest outcome mapping. Only `completed` is success; max_turns and
+// honest outcome mapping. Only `completed` is success; max_turns and
 // cancelled must NOT pass as ok:true. Covers all four terminal outcomes with
 // empty and non-empty partial finalText, the regression scenario (8 turns,
 // empty finalText), and the model-visible text the parent receives.
@@ -171,7 +171,7 @@ describe("agentTool — honest outcome mapping", () => {
     // The partial result is forwarded so it is not lost...
     expect(result.error).toContain("I found three files but did not finish the analysis.");
     // ...behind a marker the parent model cannot read as a finished report
-    // ( §5), and the message names the budget and the turns spent.
+    // (§5), and the message names the budget and the turns spent.
     expect(result.error).toContain("INCOMPLETE SUBAGENT RESULT");
     expect(result.error).toContain("ran out of budget");
     expect(result.error).toContain("8 turns");
@@ -182,7 +182,7 @@ describe("agentTool — honest outcome mapping", () => {
     // The model-visible text is the error (non-empty), never an empty success.
     expect(agentTool.formatResultForModel?.(result)).toBe(result.error);
     // "raise maxTurns" is gone: the Agent schema has no such field, so the
-    // advice was unactionable ( §2.6/§5).
+    // advice was unactionable (§2.6/§5).
     expect(agentTool.formatResultForModel?.(result)).not.toContain("raise maxTurns");
   });
 
@@ -265,7 +265,7 @@ describe("agentTool — honest outcome mapping", () => {
     expect(modelText).not.toContain("raise maxTurns");
   });
 
-  it("the dispatcher wall comes from SUBAGENT_TIME_BUDGET_MS ( §5)", () => {
+  it("the dispatcher wall comes from SUBAGENT_TIME_BUDGET_MS (§5)", () => {
     expect(agentTool.metadata.timeoutMs).toBe(SUBAGENT_TIME_BUDGET_MS);
     expect(agentTool.metadata.maxTimeoutMs).toBe(SUBAGENT_TIME_BUDGET_MS);
   });
@@ -386,7 +386,7 @@ describe("agentTool — honest outcome mapping", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  — degeneration/length/byte-cap markers. (а) a guard-cut turn is
+// degeneration/length/byte-cap markers. (а) a guard-cut turn is
 // never ok:true; (б)/(в) are prefixes applied only in formatResultForModel,
 // never in output.finalText (cards/persistence keep the raw text).
 
@@ -722,7 +722,7 @@ describe("agentTool — subagent_activity bridge (slice P7.18/F16b)", () => {
     expect(emitted.some((e) => e.type === "subagent_progress")).toBe(true);
   });
 
-  it("forwards progress.engine onto the subagent_start event when the port reports one ( R5)", async () => {
+  it("forwards progress.engine onto the subagent_start event when the port reports one (R5)", async () => {
     const emitted: ToolEmittedEvent[] = [];
     const port: SubagentPort = {
       run: async (_req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome> => {
@@ -789,7 +789,7 @@ describe("agentTool — subagent_activity bridge (slice P7.18/F16b)", () => {
   );
 
   // -------------------------------------------------------------------------
-  // activitySuppressed bridge ( slice S1 W2, CUT-S1 §3 W2): the port's
+  // activitySuppressed bridge (slice S1 W2, CUT-S1 §3 W2): the port's
   // { kind:"end", activitySuppressed } progress field copies byte-identically
   // onto the subagent_end AgentEvent, so the persisted card's dropped count
   // (fed by this event, W3) is never silently zeroed at the bridge.
@@ -884,7 +884,7 @@ describe("agentTool — subagent_activity bridge (slice P7.18/F16b)", () => {
   });
 
   // -------------------------------------------------------------------------
-  // : mapProgressToEvent's "end" case now bridges TWO distinct model
+  // mapProgressToEvent's "end" case now bridges TWO distinct model
   // fields — `model` (the requested id) and `responseModel` (the provider's
   // own claim) — onto the subagent_end AgentEvent, neither one a fallback for
   // the other.
@@ -993,7 +993,7 @@ describe("agentTool — subagent_activity bridge (slice P7.18/F16b)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// mapProgressToEvent's attention case ( CUT-S2 §2.2/§0.8): a
+// mapProgressToEvent's attention case (CUT-S2 §2.2/§0.8): a
 // { kind:"attention" } SubagentProgress maps 1:1 onto a subagent_attention
 // AgentEvent stamped with the Agent tool call's id, mirroring the existing
 // start/progress/tool/end bridges.
@@ -1017,7 +1017,7 @@ describe("agentTool — subagent_activity bridge (slice P7.18/F16b)", () => {
 //       green while the live waiting-badge never appears — B1's OWN tests
 //       (agent-session.test.ts per the CUT's test plan) are what must prove
 //       (b) end to end; this file does not, and must not attempt to.
-describe("agentTool — mapProgressToEvent's attention case ( CUT-S2 §2.2, bridge-only — see scope comment above)", () => {
+describe("agentTool — mapProgressToEvent's attention case (CUT-S2 §2.2, bridge-only — see scope comment above)", () => {
   it("maps an attention progress (waiting:true) onto a subagent_attention event stamped with toolCallId — bridge only, not proof any real port emits one (see scope comment)", async () => {
     const emitted: ToolEmittedEvent[] = [];
     const port: SubagentPort = {
@@ -1090,13 +1090,13 @@ describe("agentTool — mapProgressToEvent's attention case ( CUT-S2 §2.2, brid
 });
 
 // ---------------------------------------------------------------------------
-// mapProgressToEvent's stalled case ( slice 1): a { kind:"stalled" }
+// mapProgressToEvent's stalled case (slice 1): a { kind:"stalled" }
 // SubagentProgress maps 1:1 onto a subagent_stalled AgentEvent stamped with
 // the Agent tool call's id. Bridge-only, same scope discipline as the
 // attention tests above — this proves the SHARED mapping function, not that
 // any real port (runner.ts / child-session-port.ts) ever produces one; that
 // is each of those modules' own job.
-describe("agentTool — mapProgressToEvent's stalled case ( slice 1, bridge-only)", () => {
+describe("agentTool — mapProgressToEvent's stalled case (slice 1, bridge-only)", () => {
   it("maps a stalled progress onto a subagent_stalled event stamped with toolCallId", async () => {
     const emitted: ToolEmittedEvent[] = [];
     const port: SubagentPort = {
@@ -1158,7 +1158,7 @@ describe("agentTool — mapProgressToEvent's stalled case ( slice 1, bridge-only
 });
 
 // ---------------------------------------------------------------------------
-// Presentation attach ( slice S1 W3, CUT-S1 §3 W3): the handler
+// Presentation attach (slice S1 W3, CUT-S1 §3 W3): the handler
 // accumulates every bridged progress event into a card-snapshot accumulator
 // (ALWAYS, regardless of whether ctx.emit is wired) and attaches the
 // finalized snapshot as `result.presentation.subagent` on ALL FOUR settle
@@ -1190,7 +1190,7 @@ function scriptedPresentationPort(
   };
 }
 
-describe("agentTool — presentation attach across all four settle branches ( slice S1 W3)", () => {
+describe("agentTool — presentation attach across all four settle branches (slice S1 W3)", () => {
   it("completed (ok branch) carries result.presentation.subagent with the finalized card", async () => {
     const outcome: SubagentOutcome = {
       status: "completed",

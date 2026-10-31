@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { redactSecrets } from "./redact.js";
 
-describe("redactSecrets (, C-12)", () => {
+describe("redactSecrets (C-12)", () => {
   it("replaces every occurrence of each value with [redacted]", () => {
     expect(redactSecrets("token=ghp_abcd1234 and again ghp_abcd1234", ["ghp_abcd1234"])).toBe(
       "token=[redacted] and again [redacted]",

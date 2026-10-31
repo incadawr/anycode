@@ -1,5 +1,5 @@
 /**
- * InspectImage tool ( plan §5): lets a blind model ask a separate
+ * InspectImage tool (plan §5): lets a blind model ask a separate
  * vision-capable recognizer endpoint about a specific attachment already
  * living in history, addressed by its `#N` registry number (assigned at
  * append time by loop/agent-loop.ts's stampImageRefs, slice B1). Repeated

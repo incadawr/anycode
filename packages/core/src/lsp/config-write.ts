@@ -12,7 +12,7 @@
  * path (`serializeConfigWrite`), so a concurrent MCP patch and an LSP patch
  * targeting the same config.json cannot lose an update.
  *
- * Shape discipline ( brief §2.2): `lspServers` is an ARRAY, not a
+ * Shape discipline (brief §2.2): `lspServers` is an ARRAY, not a
  * keyed record. A MISSING key is simply created on upsert; a PRESENT key that
  * is not an array is refused (`invalid_shape`) — we never clobber a value we
  * do not understand, and we never "repair" it into an array either.

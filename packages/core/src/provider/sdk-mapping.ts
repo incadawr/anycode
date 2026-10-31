@@ -23,7 +23,7 @@ import type { ProviderTransport } from "./catalog.js";
  * `transport` is threaded through because message policy is NOT protocol-neutral
  * even though the SDK types are: an image inside a tool RESULT survives the
  * anthropic-messages wire but has no representation on the OpenAI transports
- * ( §5.1), so `toSdkToolResultPart` below branches on it. The
+ * (§5.1), so `toSdkToolResultPart` below branches on it. The
  * anthropic-messages mapping is byte-pinned by sdk-mapping.test.ts /
  * image-wire.integration.test.ts and untouched by the OpenAI branch. Taking the
  * transport as a required parameter means adding a protocol cannot forget this
@@ -99,7 +99,7 @@ function toSdkAssistantPart(part: AssistantPart) {
 
 /**
  * Placeholder text substituted for an omitted tool-result image on the OpenAI
- * transports ( §5.1). Exported for tests asserting the strip is
+ * transports (§5.1). Exported for tests asserting the strip is
  * observable, not silent.
  */
 export const OPENAI_TOOL_RESULT_IMAGE_OMITTED_NOTE =
