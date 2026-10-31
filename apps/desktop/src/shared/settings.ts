@@ -259,6 +259,7 @@ export interface ModelOverrides {
 }
 
 export interface ProviderConnection {
+  openRouterProviders?: string[];
   /** User choices keyed by exact model id; independent of fetched capabilities. */
   modelOverrides?: Record<string, ModelOverrides>;
   pricing?: ConnectionPricing;
@@ -1253,6 +1254,7 @@ export type SettingsPatch = Omit<DeepPartial<AnycodeSettings>, "provider">;
 // ── connection CRUD request payloads (companions to the connection-* channels) ──
 
 export interface ConnectionCreateRequest {
+  openRouterProviders?: string[];
   catalogMatchDisabled?: true;
   effortLevels?: ReasoningEffort[];
   modelPricing?: Record<string, TokenRates>;
@@ -1308,6 +1310,7 @@ export interface ConnectionCreateRequest {
 }
 
 export interface ConnectionUpdateRequest {
+  openRouterProviders?: string[];
   modelPricing?: Record<string, TokenRates | "">;
   pricing?: ConnectionPricing | "";
   id: string;
