@@ -2,8 +2,10 @@
  * Settings → Roles profile controls, rendered from a real settings snapshot:
  * - B4: the profile name field follows the selection, so Rename starts from the
  *   current name instead of a dead empty box.
- * - The global select offers "Built-in defaults" only while no profile is
- *   active — it is not a selectable target next to saved profiles.
+ * - The global select ALWAYS offers "Built-in roles" next to the saved
+ *   profiles: returning to the built-ins with a profile active must be a
+ *   selection away, not a dead end (the built-ins have no id of their own, so
+ *   the empty value can never collide with a saved profile's id).
  * - B7 regression: the Project select labelled options with the full absolute
  *   path instead of the folder name.
  */
@@ -41,18 +43,18 @@ const withProfile = {
 } satisfies SettingsSnapshot;
 
 describe("Global role profile select", () => {
-  it("shows only saved profiles while one is active and seeds the name field", () => {
+  it("offers the built-in roles next to saved profiles even while one is active", () => {
     useSettingsStore.setState({ snapshot: withProfile });
     const html = renderToStaticMarkup(createElement(RolesPane));
-    // With a profile active the built-in defaults are not a selectable target.
-    expect(html).not.toContain('<option value="">Default</option>');
+    // With a profile active the built-ins remain a selectable target.
+    expect(html).toContain('<option value="">Built-in roles</option>');
     expect(html).toContain('<option value="p" selected="">Profile 1</option>');
     // The name field follows the selection, so Rename starts from the current
     // name instead of an empty box (canRenameProfile covers the enable rule).
     expect(html).toContain('aria-label="Profile actions"');
   });
 
-  it("still offers the built-in defaults while no saved profile is active", () => {
+  it("marks the built-in roles as the selection while no saved profile is active", () => {
     useSettingsStore.setState({
       snapshot: {
         ...withProfile,
@@ -62,7 +64,22 @@ describe("Global role profile select", () => {
       },
     });
     const html = renderToStaticMarkup(createElement(RolesPane));
-    expect(html).toContain('<option value="" selected="">Default</option>');
+    expect(html).toContain('<option value="" selected="">Built-in roles</option>');
+    expect(html).toContain('<option value="p">Profile 1</option>');
+  });
+
+  it("loads a pre-fix registry whose activeId is absent and selects the built-ins", () => {
+    useSettingsStore.setState({
+      snapshot: {
+        ...withProfile,
+        settings: {
+          ...withProfile.settings,
+          roleProfiles: { profiles: withProfile.settings.roleProfiles.profiles, projects: [] },
+        },
+      },
+    });
+    const html = renderToStaticMarkup(createElement(RolesPane));
+    expect(html).toContain('<option value="" selected="">Built-in roles</option>');
     expect(html).toContain('<option value="p">Profile 1</option>');
   });
 });

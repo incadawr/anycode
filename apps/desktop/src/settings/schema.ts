@@ -452,7 +452,9 @@ export const rolesSchema = rolesValueSchema.optional().catch(undefined);
 // Strict registry shape also serves the write boundary. Arrays replace atomically on merge.
 export const roleProfilesSchema = z.object({
   profiles: z.array(z.object({ id: z.string().min(1), name: z.string().trim().min(1), roles: rolesValueSchema }).strict()),
-  activeId: z.string().min(1),
+  // "" (or absent, or a dangling id) means the built-in roles are active —
+  // profile ids are min(1), so the empty string can never collide with one.
+  activeId: z.string().optional(),
   projects: z.array(z.object({ projectRoot: z.string().refine(isAbsolute), profileId: z.string().min(1) }).strict()),
 }).strict().refine((value) => new Set(value.profiles.map((p) => p.id)).size === value.profiles.length && new Set(value.projects.map((p) => p.projectRoot)).size === value.projects.length);
 
@@ -470,7 +472,9 @@ const strictRolesSchema = z.object({
 }).strict();
 export const roleProfilesWriteSchema = z.object({
   profiles: z.array(z.object({ id: z.string().min(1), name: z.string().trim().min(1), roles: strictRolesSchema }).strict()),
-  activeId: z.string().min(1),
+  // "" (or absent, or a dangling id) means the built-in roles are active —
+  // profile ids are min(1), so the empty string can never collide with one.
+  activeId: z.string().optional(),
   projects: z.array(z.object({ projectRoot: z.string().refine(isAbsolute), profileId: z.string().min(1) }).strict()),
 }).strict().refine((value) => new Set(value.profiles.map((p) => p.id)).size === value.profiles.length && new Set(value.projects.map((p) => p.projectRoot)).size === value.projects.length);
 
