@@ -42,6 +42,10 @@ import {
   classifySplitClick,
   expectedSplitPredicate,
 } from "./dock-squash-smoke-assertions.mjs";
+// Shared launcher: a dev Electron spawned from an agent shell blocks in
+// SecItemAdd and dies on the GPU process unless the automation switches
+// (mock keychain, no sandbox, no GPU) reach the app through electron-vite.
+import { launchSmokeElectron } from "./smoke-electron-launch.mjs";
 import {
   closeSync,
   copyFileSync,
@@ -235,7 +239,7 @@ async function step2LaunchApp(ctx) {
   delete env.ANYCODE_WORKSPACE;
 
   const logFd = openSync(ctx.logPath, "a");
-  const child = spawn("pnpm", ["--filter", "@anycode/desktop", "dev"], {
+  const child = launchSmokeElectron(spawn, {
     cwd: repoRoot,
     env,
     stdio: ["ignore", logFd, logFd],

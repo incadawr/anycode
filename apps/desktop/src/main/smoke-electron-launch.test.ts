@@ -86,6 +86,7 @@ describe("dev Electron smoke launcher", () => {
       "approval-expiry-smoke",
       "model-overrides-ui-smoke",
       "renderer-reload-smoke-support",
+      "dock-squash-smoke",
     ];
     for (const name of drivers) {
       const source = readFileSync(
