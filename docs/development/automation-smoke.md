@@ -229,7 +229,7 @@ version 1 are separate tests and should retain their old fixtures.
 literal owner home path (`/Users/<owner>`). When a smoke script needs a per-user default,
 derive it from `os.homedir()` / `os.tmpdir()` at runtime (see `apps/desktop/scripts/profile-ui-smoke.mjs`);
 when a doc or fixture needs an example path, use the placeholder `/Users/<user>`.
-History scrubbing of already-pushed commits is out of scope (see ).
+History scrubbing of already-pushed commits is out of scope (see).
 
 
 ## Codex manual compaction smoke
