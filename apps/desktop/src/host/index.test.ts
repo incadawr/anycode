@@ -3069,6 +3069,11 @@ describe("per-model context window production wiring (TASK.142: pin the REAL cal
     // Taskana 4118: the production block now closes over a `liveCapsFor`
     // binding (undefined map ⇒ catalog-only, the pre-4118 shape).
     const liveCapsFor = (_id: string) => undefined as never;
+    const connectionModelSettings = (await import("./connection-model-settings.js")).createConnectionModelSettings({
+      catalogEntry: zAiEntry, envContextWindow: envConfig.contextWindowTokens,
+      envContextWindowModel: envConfig.contextWindowModel, liveCapabilitiesFor: liveCapsFor,
+    });
+    const entryFor = (id: string) => connectionModelSettings.entryFor(id);
     const deps = new Function(
       "envConfig",
       "catalogEntry",
@@ -3076,12 +3081,9 @@ describe("per-model context window production wiring (TASK.142: pin the REAL cal
       "liveCapsFor",
       "effortLevelsFor",
       "connectionModelSettings",
+      "entryFor",
       `return ({${production[0]!}});`,
-    )(envConfig, zAiEntry, console, liveCapsFor, () => undefined,
-      (await import("./connection-model-settings.js")).createConnectionModelSettings({
-        catalogEntry: zAiEntry, envContextWindow: envConfig.contextWindowTokens,
-        envContextWindowModel: envConfig.contextWindowModel, liveCapabilitiesFor: liveCapsFor,
-      })) as Parameters<typeof buildChildModelSettingsResolver>[0];
+    )(envConfig, zAiEntry, console, liveCapsFor, () => undefined, connectionModelSettings, entryFor) as Parameters<typeof buildChildModelSettingsResolver>[0];
     expect(deps.envContextWindowModel).toBe("glm-5.2");
 
     const resolve = buildChildModelSettingsResolver(deps);
