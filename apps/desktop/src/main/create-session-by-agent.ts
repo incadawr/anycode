@@ -20,8 +20,10 @@ import type { NewSessionPin, ResumePinResult } from "./session-pin.js";
 import type { TabHostManager } from "./tabs.js";
 import {
   SET_SESSION_EFFORT_OPERATION,
+  SET_SESSION_FAST_OPERATION,
   SET_SESSION_MODEL_OPERATION,
   type SetSessionEffortOutcome,
+  type SetSessionFastOutcome,
   type SetSessionModelOutcome,
   type SetSessionModelPayload,
 } from "../shared/communication.js";
@@ -134,7 +136,7 @@ export async function createSessionForAgent(
   if (trust.folders[key]?.decision !== "trusted") return { ok: false, reason: "not_trusted" };
   if (tabs.atCapacity()) return { ok: false, reason: "too_many" };
   const engine = request.engine ?? "core";
-  if (request.fast !== undefined && engine !== "codex") return { ok: false, reason: "not_ready", detail: "fast is only available for Codex" };
+  if (request.fast !== undefined && engine !== "codex") return { ok: false, reason: "invalid_argument", detail: "fast is only available for Codex" };
   if (request.account !== undefined && engine !== "codex") {
     // `account` names a Codex account; on any other engine there is nothing it
     // could select, so the caller gets an honest refusal instead of a session
@@ -306,7 +308,7 @@ export async function createSessionForAgent(
    * Only the id minted by this attempt is ever deleted.
    */
   const abortPrepared = async (
-    reason: "invalid_model" | "invalid_effort" | "not_ready",
+    reason: "invalid_model" | "invalid_effort" | "invalid_argument" | "not_ready",
     detail?: string,
   ): Promise<CreateSessionOutcome> => {
     const deleteRow = async (): Promise<void> => {
@@ -402,10 +404,11 @@ export async function createSessionForAgent(
       }
     }
     if (request.fast !== undefined) {
-      let result: unknown;
-      try { result = await tabs.communicationRequest(sessionId, "set_session_fast", request.fast, tab.workspace, { timeoutMs: remaining(deadline) }); }
+      let result: SetSessionFastOutcome | null;
+      try { result = await tabs.communicationRequest(sessionId, SET_SESSION_FAST_OPERATION, request.fast, tab.workspace, { timeoutMs: remaining(deadline) }) as SetSessionFastOutcome | null; }
       catch { return abortPrepared("not_ready", "the new session could not configure its speed"); }
-      if (!result || typeof result !== "object" || !("ok" in result) || result.ok !== true) return abortPrepared("not_ready", "the new session could not configure its speed");
+      if (!result || typeof result !== "object" || typeof result.ok !== "boolean") return abortPrepared("not_ready", "the new session could not configure its speed");
+      if (!result.ok) return abortPrepared(result.reason === "invalid_argument" ? "invalid_argument" : "not_ready", result.detail);
     }
     // 4. Only now does this session exist for anyone else.
     if (!tabs.publishPreparedTab(tab.tabId)) {

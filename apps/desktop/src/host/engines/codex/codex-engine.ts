@@ -226,6 +226,7 @@ export interface CodexSessionSelection {
   presetId?: string;
   /** Draft effort tier (profile `effort:`), resolved against the live catalog; unrecognized degrades to the model default. */
   effort?: string;
+  fast?: boolean;
   /**
    * Taskana 4682: exclude /tmp and $TMPDIR from the workspaceWrite writable
    * roots (codex children). The 4682 rework pairs this with `childTempDir`:
@@ -354,6 +355,7 @@ function buildSettings(
   requestedEffort?: string,
   excludeTmpRoots?: boolean,
   childTempDir?: string,
+  requestedFast?: boolean,
 ): CodexEngineSettings {
   driftNotice(preset, result, notices);
   // The model is the SERVER-CONFIRMED one from the thread echo, so the effort is
@@ -378,7 +380,9 @@ function buildSettings(
     preset,
     ...(effort !== undefined ? { effort } : {}),
     effortsByModel,
-    ...(["priority", "fast", "default"].includes(result.serviceTier as string) || result.serviceTier === null ? { fast: result.serviceTier === "priority" || result.serviceTier === "fast" } : {}),
+    ...(catalog.get(model)?.supportsFast && (["priority", "fast", "default"].includes(result.serviceTier as string) || result.serviceTier === null) ? { fast: result.serviceTier === "priority" || result.serviceTier === "fast" } : {}),
+    ...(requestedFast !== undefined && catalog.get(model)?.supportsFast ? { fast: requestedFast, speedOverride: requestedFast } : {}),
+    ...(!catalog.get(model)?.supportsFast && (requestedFast === true || result.serviceTier === "priority" || result.serviceTier === "fast") ? { speedOverride: false } : {}),
     ...(excludeTmpRoots !== undefined ? { excludeTmpRoots } : {}),
     ...(childTempDir !== undefined ? { childTempDir } : {}),
     notices,
@@ -632,7 +636,7 @@ export async function createNativeCodexSession(
   }, { timeoutMs: bounds.bootRpcMs });
   const native = nativeThread(result, "thread/start");
   const quota = await pullQuotaSnapshot(client, bounds.bootRpcMs);
-  const settings = buildSettings(workspace, catalog, preset, result, native.model, notices, selection?.effort, selection?.excludeTmpRoots, selection?.childTempDir);
+  const settings = buildSettings(workspace, catalog, preset, result, native.model, notices, selection?.effort, selection?.excludeTmpRoots, selection?.childTempDir, selection?.fast);
   return {
     // A fresh thread has zero prior turns: no history to hydrate, and the
     // FIRST turn this launch runs is native turn ordinal 0 (cut §2(e)).
@@ -739,7 +743,7 @@ export async function resumeNativeCodexSession(
   // say so (recoverable, TASK.39 DoD-2), rather than burning the user's turn.
   const stored = resolveModel(catalog, selection, notices);
   const model = stored ?? native.model;
-  const settings = buildSettings(workspace, catalog, preset, resumed, model, notices, selection?.effort, selection?.excludeTmpRoots, selection?.childTempDir);
+  const settings = buildSettings(workspace, catalog, preset, resumed, model, notices, selection?.effort, selection?.excludeTmpRoots, selection?.childTempDir, selection?.fast);
   return {
     engine: new CodexEngine(client, native.threadId, approvals, overrides, settings, shadowLog, baseTurnOrdinal, historyItems, quota, agentBridge, agentCardLog),
     threadId: native.threadId,
@@ -1099,6 +1103,10 @@ export class CodexEngine implements SessionEngine {
     }
     this.rememberCurrentModelEffort();
     settings.model = id;
+    if (!settings.catalog.get(id)?.supportsFast) {
+      delete settings.fast;
+      settings.speedOverride = false;
+    } else if (settings.fast === undefined) settings.fast = false;
     // Each model keeps its own remembered effort. Switching restores that
     // model's last valid choice (or its catalog default).
     const effort = this.resolveEffortForModel(id);
@@ -1121,6 +1129,7 @@ export class CodexEngine implements SessionEngine {
 
   selectFast(fast: boolean): CodexSettingsChange {
     if (!this.settings) return { ok: false, reason: "Codex speed control is unavailable." };
+    if (fast && !this.settings.catalog.get(this.settings.model)?.supportsFast) return { ok: false, reason: `Codex Fast is not available for model "${this.settings.model}".` };
     this.settings.fast = fast;
     this.settings.speedOverride = fast;
     return this.markPending();

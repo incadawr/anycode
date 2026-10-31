@@ -1,7 +1,7 @@
 import { manualCompactionUnavailableReason } from "../shared/manual-compaction.js";
 import { PresentationJournal } from "./presentation-journal.js";
 import type { CompactionRecordSeam } from "./compaction-records.js";
-import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult, type SessionStatus, type SessionActivityState, type SetSessionEffortOutcome, type SetSessionModelOutcome } from "../shared/communication.js";
+import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult, type SessionStatus, type SessionActivityState, type SetSessionEffortOutcome, type SetSessionFastOutcome, type SetSessionModelOutcome } from "../shared/communication.js";
 import { normalizeEffortLevels, validateSessionEffort } from "../shared/session-effort.js";
 import { safeFailureMessage } from "./safe-failure.js";
 import { claudeNativeChildRecord } from "./claude-usage.js";
@@ -682,7 +682,7 @@ export interface SessionPersistence {
    * is a plain TEXT column — no migration, cut §2(k).4). The host maps it to
    * that column at the persistence boundary, where the cast is visible.
    */
-  touch(patch: { title?: string; mode?: PermissionMode; model?: string; enginePreset?: string }): void | Promise<void>;
+  touch(patch: { title?: string; mode?: PermissionMode; model?: string; enginePreset?: string; codexFast?: boolean }): void | Promise<void>;
   /**
    * Writes a title whose caller must be able to CONFIRM it — the Sessions API
    * `set_agent_title` acknowledgement promises the next boot reads this title
@@ -2168,14 +2168,15 @@ export class Session {
   }
 
   /** Select the Codex speed before a newly created session is published. */
-  async communicationSetFast(payload: unknown): Promise<{ ok: boolean; detail?: string }> {
+  async communicationSetFast(payload: unknown): Promise<SetSessionFastOutcome> {
+    if (typeof payload !== "boolean") return { ok: false, reason: "invalid_argument", detail: "fast must be a boolean" };
     if (this.shuttingDown || this.relocating || this.busy || this.agentInbox.length > 0 ||
-        this.engine.id !== "codex" || !this.engineSettings?.selectFast || typeof payload !== "boolean") {
-      return { ok: false, detail: "Codex speed control unavailable" };
+        this.engine.id !== "codex" || !this.engineSettings?.selectFast ) {
+      return { ok: false, reason: "not_ready", detail: "Codex speed control unavailable" };
     }
     const result = this.engineSettings.selectFast(payload);
-    if (!result.ok) return { ok: false, detail: result.reason };
-    this.onEngineSettingsChange(result, {});
+    if (!result.ok) return { ok: false, reason: "invalid_argument", detail: result.reason };
+    this.onEngineSettingsChange(result, { fast: payload });
     return { ok: true };
   }
 
@@ -3076,7 +3077,7 @@ export class Session {
           break;
         }
         this.queueIdleEngineSetting((seam) => {
-          if (seam.selectFast) this.onEngineSettingsChange(seam.selectFast(message.fast), {});
+          if (seam.selectFast) this.onEngineSettingsChange(seam.selectFast(message.fast), { fast: message.fast });
         });
         break;
       }
@@ -5841,7 +5842,7 @@ export class Session {
     this.settingsBarrier = barrier;
   }
 
-  private onEngineSettingsChange(result: EngineSettingsChange, intent: { model?: string; presetId?: string; effort?: string }): void {
+  private onEngineSettingsChange(result: EngineSettingsChange, intent: { model?: string; presetId?: string; effort?: string; fast?: boolean }): void {
     if (!result.ok) {
       this.outbound.emit({ type: "mode_change_rejected", reason: result.reason });
       return;
@@ -5859,6 +5860,7 @@ export class Session {
         // before the next turn still resumes under the chosen posture.
         this.persistence?.touch({ model: result.model });
       }
+      if (intent.fast !== undefined) this.persistence?.touch({ codexFast: intent.fast });
       if (intent.presetId !== undefined) {
         this.persistence?.touch({ enginePreset: result.activePresetId });
       }

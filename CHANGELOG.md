@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
 - Show and switch Codex Fast mode per session, including via the Sessions API.
 
 ### Fixed

@@ -71,6 +71,16 @@ describe("SqlitePersistenceAdapter", () => {
       expect(fetched).toEqual(created);
     });
 
+    it("persists both explicit Codex speed choices", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await adapter.createSession({ id: "speed", workspace: "/w", model: "m", mode: "build" });
+      expect((await adapter.getRootSession("speed"))?.codexFast).toBeUndefined();
+      await adapter.touchSession("speed", { codexFast: true });
+      expect((await adapter.getRootSession("speed"))?.codexFast).toBe(true);
+      await adapter.touchSession("speed", { codexFast: false });
+      expect((await adapter.getRootSession("speed"))?.codexFast).toBe(false);
+    });
+
     it("getSession returns null for an unknown id", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       expect(await adapter.getRootSession("missing")).toBeNull();
@@ -742,7 +752,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31]);
     expect(
       migrated.prepare(
         `SELECT project_root, continuation_pending, worktree_exit_notice_pending, worktree_cleanup_branch
@@ -813,7 +823,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["connection_id"]));
@@ -866,7 +876,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["codex_profile_id"]));
@@ -944,7 +954,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31]);
     migrated.close();
   });
 
@@ -999,7 +1009,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["parent_session_id", "spawn_tool_call_id"]));
@@ -1273,7 +1283,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31]);
     migrated.close();
   });
 
@@ -3450,7 +3460,7 @@ describe("SqlitePersistenceAdapter — provider_usage audit (Taskana 4083 / TASK
       await first.recordProviderUsage(makeUsage());
       await first.close();
       const raw = new DatabaseSync(path);
-      raw.exec("ALTER TABLE provider_usage DROP COLUMN generation_duration_ms; ALTER TABLE provider_usage DROP COLUMN time_to_first_token_ms; DELETE FROM schema_migrations WHERE version = 30");
+      raw.exec("ALTER TABLE provider_usage DROP COLUMN generation_duration_ms; ALTER TABLE provider_usage DROP COLUMN time_to_first_token_ms; ALTER TABLE sessions DROP COLUMN codex_fast; DELETE FROM schema_migrations WHERE version IN (30, 31)");
       raw.close();
       const reopened = new SqlitePersistenceAdapter(path);
       expect((await reopened.listProviderUsage("s1"))[0]).not.toHaveProperty("generationDurationMs");

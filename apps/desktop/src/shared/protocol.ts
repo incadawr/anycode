@@ -104,6 +104,7 @@ export interface EngineCapabilitiesProjection {
 
 /** One selectable model choice for a non-core engine's draft/mid-session picker (TASK.39, cut §3.1). */
 export interface EngineModelChoice {
+  supportsFast?: boolean;
   id: string;
   label?: string;
   efforts?: string[];
