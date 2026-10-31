@@ -1914,6 +1914,17 @@ describe("ClaudeEngine — session-cumulative token accounting (TASK.159)", () =
     } as unknown as ClaudeStreamMessage;
   }
 
+  it("includes cache reads and writes in cumulative input usage", async () => {
+    const transport = new FakeTransport({ frames: [INIT, resultFrame({ input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100, cache_creation_input_tokens: 20 })] });
+    const engine = engineWith(transport);
+    const first = await collect(engine.runTurn("one", { signal: new AbortController().signal }));
+    expect(first.find((event) => event.type === "engine_session_tokens")).toEqual({ type: "engine_session_tokens", input: 130, output: 5, total: 135, cachedInput: 100 });
+    transport.enqueue(INIT);
+    transport.enqueue(resultFrame({ input_tokens: 2, output_tokens: 3, cache_read_input_tokens: 40, cache_creation_input_tokens: 5 }));
+    const second = await collect(engine.runTurn("two", { signal: new AbortController().signal }));
+    expect(second.find((event) => event.type === "engine_session_tokens")).toEqual({ type: "engine_session_tokens", input: 177, output: 8, total: 185, cachedInput: 140 });
+  });
+
   it("two turns with usage 10/5 each -> engine_session_tokens is CUMULATIVE (15, then 30), never per-turn (double-count pin)", async () => {
     const transport = new FakeTransport({ frames: [INIT, resultFrame({ input_tokens: 10, output_tokens: 5 })] });
     const engine = engineWith(transport);
