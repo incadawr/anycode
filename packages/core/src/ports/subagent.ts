@@ -158,7 +158,14 @@ export type SubagentProgress =
   // `engine` is set only for an engine persona (md-profile `engine:`) — a
   // one-shot foreign CLI run (Codex or Claude Code) in place of an in-process
   // child.
-  | { kind: "start"; agentType: string; description: string; model?: string; engine?: "codex" | "claude"; route?: string; fallbackReason?: string }
+  // `parentModel` records the model in force on the PARENT at spawn time. It
+  // is only there when the child inherited the parent's port (`model` absent):
+  // the child's own identity stays honestly empty (an absent request model
+  // means "inherited"), but
+  // a card rendered later — after the parent switched models or the session
+  // was resumed — can still show what that child actually ran on instead of
+  // the parent's CURRENT model. A host without a parent model id omits it.
+  | { kind: "start"; agentType: string; description: string; model?: string; parentModel?: string; engine?: "codex" | "claude"; route?: string; fallbackReason?: string }
   // `usage` (TASK.191 slice S2) is CUMULATIVE from the start of the run, not a
   // per-turn delta: the receiver REPLACES rather than adds, so a dropped or
   // duplicated progress event cannot corrupt the total. Same discipline as

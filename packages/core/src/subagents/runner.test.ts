@@ -2231,6 +2231,23 @@ describe("explore default model (Taskana 4131)", () => {
     expect(start && "model" in start && start.model !== undefined).toBe(false);
   });
 
+  it("records the parent model on an inherited child's start progress", async () => {
+    // `model` stays absent for an inherited child (only the request is
+    // reported there), but the persisted card still needs the model it RAN
+    // on: after the parent switches or the session is resumed, the card would
+    // otherwise re-label itself with the parent's current model.
+    const progress: SubagentProgress[] = [];
+    const inner = new ScriptedModelPort(() => textStep("parent-report"));
+    const parentModel: ModelPort = { streamText: (request) => inner.streamText(request), modelId: "glm-5.2" };
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {});
+
+    await runner.run({ ...REQ, agentType: "explore" }, { onProgress: (p) => progress.push(p) });
+
+    const start = progress.find((p) => p.kind === "start");
+    expect(start).toMatchObject({ kind: "start", parentModel: "glm-5.2" });
+    expect(start && "model" in start && start.model !== undefined).toBe(false);
+  });
+
   it("an allowed explore default is used with no fallback notice", async () => {
     const parentModel = new ScriptedModelPort(() => textStep("parent-report"));
     const cheapModel = new ScriptedModelPort(() => textStep("cheap-report"));

@@ -1267,6 +1267,13 @@ export function createSubagentRunner(
           // `responseModel` on the end event below — see that comment for why
           // it is deliberately NOT merged into this field.
           ...(requestedModel !== undefined ? { model: requestedModel } : {}),
+          // An absent `model` still means "inherited" (only what we asked
+          // for is reported there), but the card still has to say what the
+          // child ran on AFTER the parent switches models or the session is
+          // resumed: record the parent model in force right now, at spawn.
+          ...(requestedModel === undefined && parent.modelPort.modelId !== undefined
+            ? { parentModel: parent.modelPort.modelId }
+            : {}),
           // Taskana 4704 §3.10: the inline chain walk's route identity +
           // fallback reason (the chain head won, an earlier entry was skipped
           // — infrastructure rejects or "needs session tier" hops). Absent

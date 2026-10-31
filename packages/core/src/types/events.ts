@@ -351,6 +351,17 @@ export type AgentEvent =
        */
       model?: string;
       /**
+       * The model the PARENT was running when this child was spawned —
+       * present only alongside an absent `model`, i.e. for a child that
+       * inherited the parent's port. `model` keeps its meaning (what
+       * we asked for), while this records the fact the persisted card needs
+       * later: after a model switch or a session resume, the child's card
+       * must keep showing the model it actually ran on rather than whatever
+       * the parent is on now. Additive-optional; absent on replays from
+       * before this field existed.
+       */
+      parentModel?: string;
+      /**
        * Set only for an engine persona (md-profile `engine:`) — a one-shot
        * foreign CLI run (Codex or Claude Code) in place of an in-process
        * child (mirrors SubagentProgress's `start` variant, ports/subagent.ts).

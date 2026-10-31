@@ -59,6 +59,16 @@ describe("reduceSubagentCardEvent — subagent_start", () => {
     expect(acc.dropped).toBe(0);
   });
 
+  it("keeps the parent model an inherited child ran on, apart from its own model", () => {
+    const acc = reduceSubagentCardEvent(createSubagentCardAccumulator(), start({ parentModel: "glm-5.2" }));
+    // The child named no model of its own ...
+    expect(acc.identity?.model).toBeNull();
+    // ... but the model the parent was on at spawn is recorded for the card.
+    expect(acc.identity?.parentModel).toBe("glm-5.2");
+    // A terminal event without its own model keeps it.
+    expect(reduceSubagentCardEvent(acc, end()).identity?.parentModel).toBe("glm-5.2");
+  });
+
   it("model/engine absent on the event => null in identity (no silent default)", () => {
     const acc = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
     expect(acc.identity?.model).toBeNull();

@@ -221,6 +221,14 @@ export interface SubagentSubStatus {
   /** Resolved child model id; null when the child inherited the parent's model. */
   model: string | null;
   /**
+   * The model the PARENT was running at spawn, present only for an inherited
+   * child (see `model`). It is the historical fact the card shows once the
+   * parent switches models or the session is resumed: without it a settled
+   * card would re-label itself with whatever model the tab is on NOW. Absent
+   * on legacy persisted cards and for children that named their own model.
+   */
+  parentModel?: string;
+  /**
    * Set only for an engine persona (md-profile `engine:`) — a one-shot
    * foreign CLI run (Codex or Claude Code) in place of an in-process child;
    * null for an in-process child AND for a legacy transcript replayed from
@@ -2771,6 +2779,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       description: string,
       model: string | null,
       engine: "codex" | "claude" | null,
+      parentModel?: string,
     ): void {
       flushDeltas();
       set((state) => ({
@@ -2782,6 +2791,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                   agentType,
                   description,
                   model,
+                  ...(parentModel === undefined ? {} : { parentModel }),
                   engine,
                   turns: 0,
                   toolCalls: 0,
@@ -4395,6 +4405,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             event.description,
             event.model ?? null,
             event.engine ?? null,
+            event.parentModel,
           );
           return;
         case "subagent_progress":
