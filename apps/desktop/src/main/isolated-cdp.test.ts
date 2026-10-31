@@ -34,7 +34,9 @@ describe("isolated browser ownership", () => {
     mkdirSync(join(root, "user-data")); mkdirSync(join(root, "session-data"));
     const env = buildSmokeEnv({}, root, 0, join(root, "unavailable-engine"));
     writeFileSync(join(root, "identity.json"), JSON.stringify({pid:300, nonce:env.ANYCODE_SMOKE_IDENTITY, desktopRoot:realpathSync(env.ANYCODE_EXPECTED_DESKTOP_ROOT!), userData:realpathSync(join(root,"user-data")), sessionData:realpathSync(join(root,"session-data"))}));
-    writeFileSync(join(root, "user-data", "DevToolsActivePort"), `54321\n${browserPath}\n`);
+    // Electron writes the endpoint beneath sessionData, independently of userData.
+    writeFileSync(join(root, "session-data", "DevToolsActivePort"), `54321\n${browserPath}\n`);
+    writeFileSync(join(root, "user-data", "DevToolsActivePort"), "invalid stale endpoint");
     const socket = vi.fn();
     const wait = async (fn: () => unknown) => fn();
     const badIdentity = {...env, ANYCODE_SMOKE_IDENTITY:"wrong-nonce"};
@@ -43,10 +45,10 @@ describe("isolated browser ownership", () => {
     const run = vi.fn(() => "999\n");
     await expect(connectIsolatedCdp({profile:root, env, launcher:{pid:100}, wait, openSocket:socket, run})).rejects.toThrow("another process");
     expect(socket).not.toHaveBeenCalled();
-    writeFileSync(join(root, "user-data", "DevToolsActivePort"), "54321\n/devtools/page/foreign\n");
+    writeFileSync(join(root, "session-data", "DevToolsActivePort"), "54321\n/devtools/page/foreign\n");
     await expect(connectIsolatedCdp({profile:root, env, launcher:{pid:100}, wait, openSocket:socket, run})).rejects.toThrow("Invalid debugging endpoint");
     expect(socket).not.toHaveBeenCalled();
-    writeFileSync(join(root, "user-data", "DevToolsActivePort"), `54321\n${browserPath}\n`);
+    writeFileSync(join(root, "session-data", "DevToolsActivePort"), `54321\n${browserPath}\n`);
     const sent: Array<Record<string, unknown>> = [];
     let connectedUrl = "";
     const openSocket = async ({port, path, verifyPeer}: {port:number; path:string; verifyPeer:(localPort:number)=>void}) => {
