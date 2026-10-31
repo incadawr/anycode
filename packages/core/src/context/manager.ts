@@ -229,7 +229,7 @@ export class ContextManager {
    * tool_call is ever separated from its result. The prefix is summarized via
    * modelPort (text only; tool calls ignored) and the whole history is swapped
    * for [compact_summary user item, ...tail] in one replaceAll. On an empty
-   * prefix — or one consisting only of existing compact_summary items (TASK.228,
+   * prefix — or one consisting only of existing compact_summary items (
    * a repeated compaction of an already-summarized prefix) — the call is a
    * structural no-op (not a breaker failure). On
    * error/empty-summary/abort the history is untouched and the failure counter
@@ -293,7 +293,7 @@ export class ContextManager {
         if (event.type === "text_delta") {
           summary += event.text;
         } else if (event.type === "stream_retry") {
-          // Taskana 4705 review: a mid-stream replay discards the partial
+          // review: a mid-stream replay discards the partial
           // attempt; keeping its text would install a duplicated summary.
           summary = "";
         } else if (event.type === "error") {
@@ -393,7 +393,7 @@ function isAbortError(error: unknown): boolean {
  * Redacted description of a compaction stream failure. Surfaces as
  * `compaction_end.error`, which crosses the host↔renderer wire and is rendered
  * by the CLI, so it must be the whitelist-derived safe message — NEVER the raw
- * `error.message`, which can embed a response body or auth header (TASK.33
+ * `error.message`, which can embed a response body or auth header (
  * W7b-FIX #2).
  */
 function errorText(error: unknown): string {

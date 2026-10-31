@@ -1,5 +1,5 @@
 /**
- * Taskana 4702 Stage 1: the ask-zone classifier — pure core (no I/O).
+ * Stage 1: the ask-zone classifier — pure core (no I/O).
  *
  * The classifier is consulted ONLY on a call the deterministic layer already
  * left as "ask" (the dispatcher's ask branch, decision 1 of the card). Its one
@@ -50,7 +50,7 @@ export const SHELL_PIPE_TARGETS: ReadonlySet<string> = new Set([
   "ksh",
   "fish",
   "eval",
-  // Taskana 4730 xfix D2: script RUNTIMES are the same "download and run"
+  // xfix D2: script RUNTIMES are the same "download and run"
   // shape as a shell — a pipe into node/python/perl/ruby/env/deno/bun
   // executes attacker-controlled code exactly like `curl | sh`, so it is
   // never classifiable no matter what the context says.

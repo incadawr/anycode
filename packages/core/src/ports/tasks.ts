@@ -53,7 +53,7 @@ export interface BackgroundTaskPort {
   kill(taskId: string): boolean;
   list(): BackgroundTaskSnapshot[];
   /**
-   * Taskana 4097: registers a listener fired exactly once per task, at the
+   * registers a listener fired exactly once per task, at the
    * moment the task LEAVES "running" (finalize — natural exit, timeout, kill,
    * or spawn error). Returns an unsubscribe fn. Optional so legacy
    * ports/fakes stay source-compatible (the desktop panel must learn a task

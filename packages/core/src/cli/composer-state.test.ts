@@ -21,7 +21,7 @@ function visibleCommands(state: ReturnType<typeof drive>): string[] {
   return visibleCompletions(state, COMPLETIONS).map((c) => c.command);
 }
 
-describe("reduceComposer (Taskana 4082)", () => {
+describe("reduceComposer", () => {
   it("1. text '/c' opens the popup with input '/c', selected 0 and 3 visible items", () => {
     const state = drive(undefined, { type: "text", value: "/c" });
     expect(state.input).toBe("/c");
@@ -183,7 +183,7 @@ describe("reduceComposer (Taskana 4082)", () => {
   });
 });
 
-describe("reduceComposer cursor editing + multiline (Taskana 4082 rework)", () => {
+describe("reduceComposer cursor editing + multiline (rework)", () => {
   it("12. insert at cursor: 'ab' + cursor-left + 'X' => 'aXb', cursor 2", () => {
     const state = drive(
       undefined,

@@ -81,7 +81,7 @@ export { SPAWN_TOOLS };
 
 /**
  * How often the inline stall clock polls the shared broker's live
- * `isAwaitingApproval` reader (TASK.148 slice 1). An inline child has no
+ * `isAwaitingApproval` reader (slice 1). An inline child has no
  * `permission_request`/`permission_settled` EVENT stream of its own to hook a
  * pause on (it shares the parent's broker — ports/subagent.ts), so this is a
  * plain point-in-time read, not a push. Cheap relative to
@@ -92,7 +92,7 @@ export { SPAWN_TOOLS };
 const INLINE_STALL_POLL_INTERVAL_MS = 2_000;
 
 /**
- * Capability settings a child spawned on its OWN model gets (TASK.162).
+ * Capability settings a child spawned on its OWN model gets.
  * Declared STRUCTURALLY here — a deliberate mirror of
  * `provider/child-model-settings.ts`'s `ChildModelSettings`, not an import of
  * it: the runner must keep zero catalog/provider dependencies, and the shape
@@ -140,7 +140,7 @@ export interface SubagentRunnerOptions {
   memorySection?: string;
   /**
    * Default model id for the built-in EXPLORE persona's inline children
-   * (Taskana 4131): recon needs little intelligence, so a host may point it at
+   * recon needs little intelligence, so a host may point it at
    * a cheaper model. Applied ONLY when the resolved persona is exactly the
    * built-in "explore" and neither the request nor a profile sets a model;
    * precedence: req.model > md-profile model (never explore) > this option >
@@ -148,10 +148,10 @@ export interface SubagentRunnerOptions {
    * behaviour byte-identical. Flows through the SAME resolveChildModelPort /
    * resolveChildModelSettings path an explicit override uses (including the
    * honest "not supported in this host" error-outcome when no resolver is
-   * wired), so explore-on-a-cheap-model gets correct TASK.162 child settings
+   * wired), so explore-on-a-cheap-model gets correct child settings
    * (output ceiling / effort / context window) resolved for THAT model.
    *
-   * Taskana 4131 follow-up: a default the ACTIVE connection rejects (id
+   * follow-up: a default the ACTIVE connection rejects (id
    * disallowed/unknown, e.g. after the owner switched the session to another
    * provider) degrades to the parent's model — the run's outcome.finalText
    * carries a one-line notice. An EXPLICIT Agent(model:) that is rejected
@@ -159,7 +159,7 @@ export interface SubagentRunnerOptions {
    */
   exploreModel?: string;
   /**
-   * Taskana 4704 §3.2: resolves the ROLE route chain (planner/executor/
+   * §3.2: resolves the ROLE route chain (planner/executor/
    * reviewer/explore) host-side — settings `roles` + health cache are HOST
    * state. The runner walks the returned entries in order (via the existing
    * resolveChildModelPort/resolveChildModelSettings resolvers) ONLY when the
@@ -183,7 +183,7 @@ export interface SubagentRunnerOptions {
   resolveChildModelPort?: (modelId: string) => ModelPort;
   /**
    * Resolves the CHILD model's own capability settings for one spawn
-   * (TASK.162, defect F6): without it `buildChildConfig` hands the child the
+   * (defect F6): without it `buildChildConfig` hands the child the
    * output ceiling, reasoning effort and context window that were resolved for
    * the PARENT's model. Additive-optional, exactly like
    * `resolveChildModelPort` above: a host that omits it keeps the legacy
@@ -212,7 +212,7 @@ export interface SubagentRunnerOptions {
    * cannot run an engine persona at all: `run()` returns a honest error-outcome
    * rather than silently falling back to the in-process loop.
    *
-   * @deprecated TASK.102 CUT-S4 §0.3/§2.4: engine profiles are migrated to
+   * @deprecated CUT-S4 §0.3/§2.4: engine profiles are migrated to
    * session-tier child sessions — `tools/agent.ts` now routes an engine
    * agent_type to `ctx.sessionSubagents` BEFORE this runner's `run()` is ever
    * reached, on every host that wires a SessionSubagentPort (the desktop root
@@ -225,7 +225,7 @@ export interface SubagentRunnerOptions {
    */
   runEngineChild?: (spec: EngineChildSpec, opts: SubagentRunOptions) => Promise<SubagentOutcome>;
   /**
-   * Max INLINE child loops this runner admits at once (TASK.229). Resolution
+   * Max INLINE child loops this runner admits at once. Resolution
    * precedence, highest first: this option > the `ANYCODE_SUBAGENT_CONCURRENCY`
    * environment variable > `DEFAULT_TOOL_CONCURRENCY` (currently 4). Width is
    * SNAPSHOTTED at runner construction, so changing the option or env later in
@@ -239,7 +239,7 @@ export interface SubagentRunnerOptions {
   /**
    * The WebSearch tool instance (factory-built at boot when a search backend
    * is configured) threaded into a child registry ONLY when that child's
-   * declared tool list names "WebSearch" explicitly (Taskana 4095 follow-up):
+   * declared tool list names "WebSearch" explicitly (follow-up):
    * an md-profile's `tools:` frontmatter, or a workflow step's `tools:` entry
    * resolved onto the SubagentRequest. Absent — every existing wiring stays
    * byte-compatible: the child registry simply has no WebSearch and a list
@@ -260,7 +260,7 @@ export interface SubagentRunnerOptions {
  */
 /**
  * Tool names a SubagentRequest (a workflow step's `tools:`) may add beyond the
- * persona's own list (Taskana 4095 follow-up). Only backend-conditional,
+ * persona's own list (follow-up). Only backend-conditional,
  * opt-in tools belong here; anything else in a request is ignored.
  */
 export const REQUEST_OPT_IN_TOOLS: readonly string[] = ["WebSearch"];
@@ -281,7 +281,7 @@ export function buildChildConfig(
      */
     webSearchTool?: AnyToolDefinition;
     /**
-     * Capability settings resolved for the CHILD's own model (TASK.162).
+     * Capability settings resolved for the CHILD's own model.
      * Present => WHOLESALE replacement of the three parent-derived rows below
      * (maxOutputTokens / reasoningEffort / context window): an `undefined`
      * INSIDE the settings is that model's resolution, not a gap to patch from
@@ -291,7 +291,7 @@ export function buildChildConfig(
      */
     modelSettings?: ResolvedChildModelSettings;
     /**
-     * Absolute epoch-ms wall-clock budget for the child loop (TASK.74 §3). The
+     * Absolute epoch-ms wall-clock budget for the child loop (§3). The
      * runner anchors it at SubagentPort.run entry — pre-semaphore — so a child
      * that queued behind siblings inherits only the remaining time. Absent =>
      * the child loop runs without a deadline (existing callers unchanged).
@@ -299,13 +299,13 @@ export function buildChildConfig(
     deadlineAt?: number;
     /**
      * Absolute epoch-ms by which the outcome must be on its way back to the
-     * parent (TASK.124 §1.11). Clamps the ceiling ladder's decision window: a
+     * parent (§1.11). Clamps the ceiling ladder's decision window: a
      * child that would answer after the Agent call has already timed out must
      * stop instead, so the parent gets a partial rather than nothing.
      */
     outcomeDeadlineAt?: number;
     /**
-     * Taskana 4730: the ROOT loop's human-context thunk for the ask-zone
+     * the ROOT loop's human-context thunk for the ask-zone
      * classifier. Supplied by createSubagentRunner from the PARENT LOOP
      * (never the parent CONFIG — the config object is shared and must not be
      * mutated); copied onto the child's askClassifier so the child consults
@@ -319,7 +319,7 @@ export function buildChildConfig(
   },
 ): AgentLoopConfig {
   const tokenizer = parent.tokenizer ?? new HeuristicTokenizer();
-  // Taskana 4095 follow-up: the effective tool list is the persona's own plus
+  // follow-up: the effective tool list is the persona's own plus
   // the REQUEST's extras (SubagentRequest.tools — a workflow step's declared
   // `tools:`). The only extra today is "WebSearch", which general-purpose no
   // longer lists by default (paid search is opt-in per child); merging here
@@ -338,10 +338,10 @@ export function buildChildConfig(
   // lock #1: SPAWN_TOOLS = Agent + Workflow are dropped). Built once so its name
   // snapshot drives the child's tool-discipline section AND is the child registry.
   const registry = buildPersonaRegistry(effectivePersona, extras?.webSearchTool);
-  // TASK.160 §2.2, reaffirmed by TASK.171: same precedence as the
+  // §2.2, reaffirmed by: same precedence as the
   // model-override resolution in run() (request > persona default) — the
   // spawn identity stamped onto every telemetry record this child produces,
-  // when the parent wired a tap factory. TASK.171 (owner's ruling — "модель
+  // when the parent wired a tap factory. (owner's ruling — "модель
   // никогда не ответит, главное какие запросы мы шлем"): this REQUEST ECHO
   // is now the single authoritative answer to "which model did the child run
   // on," used identically here and by run()'s own `requestedModel` below —
@@ -351,7 +351,7 @@ export function buildChildConfig(
   // read near the end of run()) is a separate, distinctly-named datum for a
   // different question — what the provider reported, not what we asked for.
   const spawnModel = req.model ?? persona.model;
-  // TASK.4721: adaptive mode (ceiling.adaptive, set by the host/CLI from
+  // adaptive mode (ceiling.adaptive, set by the host/CLI from
   // `tools.adaptiveTurnBudget`) lets the learned base budget stand in for the
   // host default. It sits BELOW every explicit bound in the chain below.
   const adaptive = parent.ceiling?.adaptive === true;
@@ -378,7 +378,7 @@ export function buildChildConfig(
         ? new ProfilePermissionEngine(parent.permissionEngine, persona.permissions)
         : parent.permissionEngine,
     permissionBroker: parent.permissionBroker,
-    // Taskana 4730: the ask-zone classifier is inherited too — with the ROOT's
+    // the ask-zone classifier is inherited too — with the ROOT's
     // human-derived userContext thunk, never the child's own (model-authored)
     // history. Children of children keep the ROOT thunk: this field is copied
     // from the parent CONFIG (which a child's own buildChildConfig reads), and
@@ -409,13 +409,13 @@ export function buildChildConfig(
     // ceiling clamps — until 2026-08-16 the DEFAULT was the clamp, so a caller
     // could lower the budget but nothing could raise it. Turns are the runaway
     // guard, not the working budget: deadlineAt below is what usually ends a
-    // long run (TASK.74 §2.4, carried into TASK.124).
+    // long run (§2.4, carried into).
     maxTurns: Math.min(
       req.maxTurns ?? persona.turnBudget ?? parent.subagentMaxTurns ?? learned ?? DEFAULT_SUBAGENT_MAX_TURNS,
       SUBAGENT_MAX_TURNS_CEILING,
     ),
     ...(extras?.deadlineAt !== undefined ? { deadlineAt: extras.deadlineAt } : {}),
-    // Ceiling ladder with the two clamps only a child needs (TASK.124 §1.12):
+    // Ceiling ladder with the two clamps only a child needs (§1.12):
     // maxTurnsCeiling keeps the budget PLUS every grant under the same runaway
     // guard that bounds an explicit request, and outcomeDeadlineAt shrinks (and
     // eventually cancels) the decision call as the dispatcher's wall approaches.
@@ -436,7 +436,7 @@ export function buildChildConfig(
       env: extras?.env,
       memorySection: extras?.memorySection,
     }),
-    // TASK.162 (F6): with settings resolved for the child's OWN model, the
+    // (F6): with settings resolved for the child's OWN model, the
     // capability rows come from there wholesale; without them the child
     // inherits the parent's already-resolved values. On top of either path
     // the resolved ceiling is clamped to SUBAGENT_MAX_OUTPUT_TOKENS and an
@@ -459,20 +459,20 @@ export function buildChildConfig(
       extras?.modelSettings !== undefined
         ? { ...parent.context, contextWindowTokens: extras.modelSettings.contextWindowTokens }
         : parent.context,
-    // Artifact store INHERITED (TASK.94) — one of the few parent facilities a
+    // Artifact store INHERITED — one of the few parent facilities a
     // child gets, because it is not a capability the child can act with: it
     // only decides whether the child's own oversized tool output is recoverable
     // or destroyed. Artifacts land in the parent session's directory, which the
     // parent's own cleanup then collects.
     artifacts: parent.artifacts,
-    // TASK.160 §2.2: the child's own eventTap, built from the parent's tap
+    // §2.2: the child's own eventTap, built from the parent's tap
     // FACTORY (never the factory itself — structural non-recursion: this
     // object literal does not list `subagentEventTap`, so a grandchild
     // spawned by THIS child cannot inherit a tap of its own; the
     // grandchild's activity reaches telemetry only as this child's
     // subagent_start/subagent_end events, same as today). Absent factory
     // (telemetry disabled, or a caller — e.g. the workflow engine — that
-    // never wires one) => no eventTap, byte-identical to pre-TASK.160.
+    // never wires one) => no eventTap, byte-identical to pre-.
     ...(parent.subagentEventTap !== undefined
       ? {
           eventTap: parent.subagentEventTap({
@@ -506,7 +506,7 @@ export function buildChildConfig(
  * resolved onto the request — it is registered after the names sourced from
  * the default registry. Absent tool + listed name keeps the generic miss
  * path: a silent skip, never an error. The built-in general-purpose persona
- * deliberately does NOT list it (Taskana 4095 follow-up: paid search must
+ * deliberately does NOT list it (follow-up: paid search must
  * never become a silent default for every child).
  */
 function buildPersonaRegistry(
@@ -588,7 +588,7 @@ class SemaphoreAbortError extends Error {
 }
 
 /**
- * Environment variable carrying the inline child-concurrency width (TASK.229).
+ * Environment variable carrying the inline child-concurrency width.
  * Trimmed signed-decimal-integer text; empty/whitespace is treated as absent.
  * Malformed/fractional/non-finite/unsafe values warn and fall back to the
  * default. Zero/negative values clamp to 1.
@@ -596,7 +596,7 @@ class SemaphoreAbortError extends Error {
 export const ENV_SUBAGENT_CONCURRENCY = "ANYCODE_SUBAGENT_CONCURRENCY";
 
 /**
- * Resolves the semaphore width for one runner (TASK.229). Precedence:
+ * Resolves the semaphore width for one runner. Precedence:
  * `opts.maxConcurrent` > `ANYCODE_SUBAGENT_CONCURRENCY` > DEFAULT_TOOL_CONCURRENCY.
  *
  * Snapshotted at construction. A finite option is floored and clamped >= 1; an
@@ -664,7 +664,7 @@ export function createSubagentRunner(
 ): SubagentPort {
   const semaphore = new Semaphore(resolveSubagentConcurrency(opts));
 
-  // Taskana 4730: the PARENT LOOP's human-context thunk for the ask-zone
+  // the PARENT LOOP's human-context thunk for the ask-zone
   // classifier. The runner is built from the parent CONFIG (withSubagents runs
   // before `new AgentLoop`), but the thunk lives on the loop (memoized over
   // the loop's live history) — so the loop registers it here after
@@ -694,7 +694,7 @@ export function createSubagentRunner(
 
   return {
     listAgentTypes(): string[] {
-      // Taskana 4704: dedupe — an overridable role name (planner/executor/
+      // dedupe — an overridable role name (planner/executor/
       // reviewer) can now appear both as a built-in and as a profile; the
       // callable set lists it once. Hard-reserved built-ins never share a name
       // with a discovered profile (parse-time lock), so no shadowing here.
@@ -704,12 +704,12 @@ export function createSubagentRunner(
       }
       return [...names];
     },
-    // TASK.102 CUT-S4 §2.1: resolves an md-profile's `engine:` frontmatter for
+    // CUT-S4 §2.1: resolves an md-profile's `engine:` frontmatter for
     // tools/agent.ts's routing branch. Reads the SAME thunk (currentProfiles())
     // as listAgentTypes above — no second list/cache, so a profile rescanned
     // mid-session is visible here too. Built-ins are never engine profiles.
     engineProfile(agentType: string): EngineProfileInfo | null {
-      // Taskana 4704: overridable role personas consult the md-profile map
+      // overridable role personas consult the md-profile map
       // FIRST (profile wins); hard-reserved built-ins still short-circuit to
       // null immediately.
       if (isKnownPersona(agentType) && isReservedPersonaName(agentType)) {
@@ -727,7 +727,7 @@ export function createSubagentRunner(
         engine: persona.engine,
         systemPrompt: persona.systemPrompt,
         ...(persona.model !== undefined ? { model: persona.model } : {}),
-        // TASK.180: persona.turnBudget rides through the same as model —
+        // persona.turnBudget rides through the same as model —
         // omitted entirely when absent, never a present-but-undefined key.
         ...(persona.turnBudget !== undefined ? { turnBudget: persona.turnBudget } : {}),
         // persona.effort rides through the same as model — omitted entirely
@@ -735,7 +735,7 @@ export function createSubagentRunner(
         ...(persona.effort !== undefined ? { effort: persona.effort } : {}),
       };
     },
-    // Taskana 4269: resolves an md-profile's `connection:`/`provider:` frontmatter
+    // resolves an md-profile's `connection:`/`provider:` frontmatter
     // for tools/agent.ts's routing branch. Reads the SAME thunk (currentProfiles())
     // as engineProfile above — a mid-session rescan is visible here too. Built-ins
     // and engine profiles never route (engine children run on their own CLI account;
@@ -751,7 +751,7 @@ export function createSubagentRunner(
       };
     },
     profileRouting(agentType: string): { provider?: string; connection?: string } | null {
-      // Taskana 4704: same flip as engineProfile — overridable role personas
+      // same flip as engineProfile — overridable role personas
       // consult the profile map first; hard-reserved built-ins never route.
       if (isKnownPersona(agentType) && isReservedPersonaName(agentType)) {
         return null;
@@ -768,14 +768,14 @@ export function createSubagentRunner(
         ...(persona.connection !== undefined ? { connection: persona.connection } : {}),
       };
     },
-    // Taskana 4704 §3.6 (cross-review F2): the host-side role-route chain,
+    // §3.6 (cross-review F2): the host-side role-route chain,
     // exposed on THIS port so tools/agent.ts's `ctx.subagents?.resolveRoleRoute`
     // reads the real resolver in production (SubagentRunnerOptions.resolveRoleRoute
     // used to be reachable only through faked tests — session-tier route stamping,
     // maxTurns from turnBudget and the inline connection refusal were all dead).
     // Pure delegation: the host owns settings + health; core only walks the chain.
     resolveRoleRoute: opts?.resolveRoleRoute ?? ((agentType: string) => null),
-    // Taskana 4730: the owning AgentLoop registers its human-context thunk
+    // the owning AgentLoop registers its human-context thunk
     // here right after construction (the loop owns the live history the thunk
     // reads; the runner is built from the config, before the loop exists).
     // Never read by anything but buildChildConfig's extras below.
@@ -787,7 +787,7 @@ export function createSubagentRunner(
       const { signal, onProgress } = runOpts;
       const profileMap = currentProfiles();
 
-      // Resolve the persona (Taskana 4704 resolution order): md-profile WINS
+      // Resolve the persona (resolution order): md-profile WINS
       // for overridable role names (planner/executor/reviewer) and for any
       // non-builtin name; the BUILT-IN wins for the hard-reserved names
       // (general-purpose/explore), keeping the second rubicon structural —
@@ -813,7 +813,7 @@ export function createSubagentRunner(
         };
       }
 
-      // Taskana 4269: a routed profile runs ONLY as a session-tier child (its
+      // a routed profile runs ONLY as a session-tier child (its
       // declared connection must be prepared and pinned by the host). This port
       // has no session tier — the workflow engine and any direct caller bypassing
       // tools/agent.ts land here. Refuse honestly instead of silently running the
@@ -857,7 +857,7 @@ export function createSubagentRunner(
       // outranks inheriting the parent's port (or, for an engine persona, the
       // engine's own default). Shared by both the engine and in-process paths.
       //
-      // Taskana 4704 §3.2: the 4131 explore default folds into the GENERIC
+      // §3.2: the 4131 explore default folds into the GENERIC
       // role chain. A route is consulted only when the caller named no model
       // (an explicit Agent(model:) always wins) and the persona carries no
       // `model` of its own (md-profile frontmatter keeps its default). The
@@ -869,7 +869,7 @@ export function createSubagentRunner(
         req.model === undefined && persona.model === undefined && persona.name === "explore"
           ? opts?.exploreModel
           : undefined;
-      // F4 (Taskana 4704 cross-review): a settings-derived role persona
+      // F4 (cross-review): a settings-derived role persona
       // carries its PRIMARY entry verbatim (host/index.ts derives it, model
       // included), which used to disable the chain walk (`persona.model !==
       // undefined`) and turn a rejected primary into a hard error with no
@@ -884,7 +884,7 @@ export function createSubagentRunner(
       if (req.model === undefined && isRoleRouteName(req.agentType)) {
         const routeResolution = opts?.resolveRoleRoute?.(req.agentType) ?? null;
         if (routeResolution !== null && persona.model !== undefined && persona.connection === undefined && persona.engine === undefined) {
-          // R4 (Taskana 4704 cross-review): the persona is the settings route's
+          // R4 (cross-review): the persona is the settings route's
           // PRIMARY when its model is the chain's primary — recognized against
           // the resolver's HEALTH-FILTERED result: either the filtered head IS
           // the persona's model (primary healthy — F4's original case, the
@@ -961,7 +961,7 @@ export function createSubagentRunner(
         chainEntries = walkable;
       }
       let requestedModel: string | undefined = req.model ?? persona.model ?? exploreDefault;
-      // Taskana 4704 §3.2 (generalised from the 4131 follow-up): route entries
+      // §3.2 (generalised from the 4131 follow-up): route entries
       // are HOST-CONFIGURED conveniences, not the caller's intent. If resolving
       // a chain entry fails (the id is disallowed/unknown on the ACTIVE
       // connection), the walk moves to the next entry; if ALL entries fail, the
@@ -970,12 +970,12 @@ export function createSubagentRunner(
       // finalText (the existing wrap-up-notice channel) so the parent model
       // sees it exactly once, with the child's own report.
       let roleFallbackNotice: string | undefined;
-      // Taskana 4704 §3.10: route visibility fields for the start progress —
+      // §3.10: route visibility fields for the start progress —
       // `route` (the entry identity the walk settled on: "role|target|model")
       // and `fallbackReason` (why an earlier entry was skipped). Filled by the
       // chain walk below; undefined for every non-routed spawn.
       let roleRouteStart: { route: string; fallbackReason?: string } | undefined;
-      // N3 (Taskana 4704 re-review #3): a settings-derived role persona whose
+      // N3 (re-review #3): a settings-derived role persona whose
       // ENTIRE route chain is cooling down (the R4 check recognised its dead
       // primary, so the walk is armed, yet no healthy entry is left) must not
       // fall through to the explicit-id path and re-run the dead primary. The
@@ -1013,7 +1013,7 @@ export function createSubagentRunner(
         }
 
         try {
-          // Release-to-continuation race (TASK.229): the abort may have landed
+          // Release-to-continuation race: the abort may have landed
           // between the permit handoff and this continuation. Re-check before
           // any start progress or engine run; the `finally` still releases.
           if (signal?.aborted) {
@@ -1045,7 +1045,7 @@ export function createSubagentRunner(
             status: outcome.status,
             turns: outcome.turns,
             durationMs: outcome.durationMs,
-            // TASK.171: the requested id, echoed onto the end event too (not
+            // the requested id, echoed onto the end event too (not
             // only start) so a completed run's telemetry/end record is
             // self-describing on its own — an engine child has no port to
             // read a provider claim off, so `responseModel` never applies here.
@@ -1066,7 +1066,7 @@ export function createSubagentRunner(
 
       let childModelPort: ModelPort | undefined;
       let childSettings: ResolvedChildModelSettings | undefined;
-      // TASK.4057: the provider's claim as observed NOW on the child's own port
+      // the provider's claim as observed NOW on the child's own port
       // (undefined until its first response frame; always undefined when the
       // child inherited the parent's port). Read-only: the end-of-run read below
       // is unchanged and stays the authoritative final value.
@@ -1089,7 +1089,7 @@ export function createSubagentRunner(
             durationMs: Date.now() - startedAt,
           };
         }
-        // Taskana 4704 §3.2: chain walking (generalised from the 4131 explore
+        // §3.2: chain walking (generalised from the 4131 explore
         // degrade). A chain entry is the ONE kind of id here that no caller
         // asked for (host settings, not req.model, not a profile's own
         // frontmatter). Walk entries in order via the existing resolvers; the
@@ -1107,7 +1107,7 @@ export function createSubagentRunner(
             const candidate = entry.model!;
             try {
               childModelPort = resolve(candidate);
-              // TASK.162 (F6): capabilities re-resolved for the child's OWN
+              // (F6): capabilities re-resolved for the child's OWN
               // model. The entry's own effort (role-configured tier) is passed
               // as profileEffort, mirroring the persona.effort path below.
               try {
@@ -1123,7 +1123,7 @@ export function createSubagentRunner(
                 continue;
               }
               requestedModel = candidate;
-              // Taskana 4704 §3.10: the entry the walk settled on + the first
+              // §3.10: the entry the walk settled on + the first
               // skip reason (if any entry was rejected before it).
               roleRouteStart = {
                 route: `${req.agentType}|${entry.engine ?? entry.connection ?? entry.provider ?? ""}|${candidate}`,
@@ -1144,7 +1144,7 @@ export function createSubagentRunner(
           // The resolver owns the id→port mapping and may reject an id this
           // module cannot validate (no catalogue here). The port contract is
           // outcomes-not-throws, so a rejection becomes an error outcome.
-          // (Taskana 4704: the 4131 exploreDefault degrade case is subsumed —
+          // (the 4131 exploreDefault degrade case is subsumed —
           // exploreModel now rides the chain walk above; when the walk is not
           // applicable (no resolver), the explicit-path error texts below
           // keep their byte-compat wording including the exploreDefault case.)
@@ -1169,7 +1169,7 @@ export function createSubagentRunner(
           }
         }
 
-        // TASK.162 (F6): capabilities re-resolved for the child's OWN model.
+        // (F6): capabilities re-resolved for the child's OWN model.
         // The host's closure — not this module — supplies the live
         // USER-SELECTED reasoning tier it re-resolves against (adjudicated
         // 2026-08-28: `parent.reasoningEffort` is banned as the tier source,
@@ -1180,7 +1180,7 @@ export function createSubagentRunner(
         // A throw is an error-outcome, same posture as the port resolver
         // right above: falling back to the parent's already-resolved values
         // would silently reinstate the very defect this resolver removes.
-        // (Taskana 4704 §3.2: the chain walk above already resolved settings
+        // (§3.2: the chain walk above already resolved settings
         // for its winning entry; this branch now serves only the legacy
         // single-id path (explicit req.model / persona.model) and the 4131
         // exploreDefault compat case. When the port fallback above already
@@ -1242,7 +1242,7 @@ export function createSubagentRunner(
         return cancelledOutcome(startedAt);
       }
 
-      // TASK.148 slice 1: declared outside the try below so the `finally`
+      // slice 1: declared outside the try below so the `finally`
       // (semaphore release) can always dispose them, on every exit path —
       // including a throw from buildChildConfig/AgentLoop construction that
       // never reaches the loop at all.
@@ -1250,7 +1250,7 @@ export function createSubagentRunner(
       let stallPollTimer: ReturnType<typeof setInterval> | undefined;
 
       try {
-        // Release-to-continuation race (TASK.229): the permit may have been
+        // Release-to-continuation race: the permit may have been
         // handed to this waiter in the same turn the parent aborted. Re-check
         // inside the permit's try/finally, before any start progress, child
         // construction or model call, so the `finally` still releases the slot.
@@ -1261,7 +1261,7 @@ export function createSubagentRunner(
           kind: "start",
           agentType: persona.name,
           description: req.description,
-          // TASK.171 REVERSES TASK.161 here: this used to read the id back off
+          // REVERSES here: this used to read the id back off
           // the CONSTRUCTED port (`childModelPort?.modelId ?? requestedModel`),
           // so the card and telemetry's `spawnModel` (buildChildConfig, ~line
           // 208) could disagree the moment a port canonicalized an id. Owner's
@@ -1284,14 +1284,14 @@ export function createSubagentRunner(
           parent.modelPort.modelId.length > 0
             ? { parentModel: parent.modelPort.modelId }
             : {}),
-          // Taskana 4704 §3.10: the inline chain walk's route identity +
+          // §3.10: the inline chain walk's route identity +
           // fallback reason (the chain head won, an earlier entry was skipped
           // — infrastructure rejects or "needs session tier" hops). Absent
           // for every non-routed spawn and when the walk never ran.
           ...(roleRouteStart !== undefined ? roleRouteStart : {}),
         });
 
-        // TASK.148 slice 1: measures SILENCE (time since the child's last
+        // slice 1: measures SILENCE (time since the child's last
         // sign of life), never total run time — the three wall constants
         // above stay the untouched last-resort backstop. Reports, never
         // kills: onStall only ever bridges into a subagent_stalled progress
@@ -1329,7 +1329,7 @@ export function createSubagentRunner(
         // below must reach the model through the SAME port/system prompt/output
         // limits the loop used, including the resolveChildModelPort branch.
         //
-        // Taskana 4772 review F2: when the child inherited the PARENT's port
+        // review F2: when the child inherited the PARENT's port
         // (no override resolved), wrap it so the port's waiting_for_network /
         // recovery stream_retry events are labelled `waitSource: "subagent"` —
         // the parent and the child share one network, so both can park at
@@ -1347,7 +1347,7 @@ export function createSubagentRunner(
         const childConfig = buildChildConfig(parent, persona, req, {
           env: opts?.env,
           memorySection: opts?.memorySection,
-          // Taskana 4730: the root loop's human-context thunk when the parent
+          // the root loop's human-context thunk when the parent
           // loop registered one (registerHumanUserContext below). Undefined
           // when no classifier is configured — the child then carries no
           // askClassifier at all (parent.askClassifier absent).
@@ -1381,12 +1381,12 @@ export function createSubagentRunner(
         let statusTextAt: number | undefined;
         let statusTextSnapshot = "";
         let finalText = "";
-        // TASK.210: captured at the same turn_end as finalText above, so the
+        // captured at the same turn_end as finalText above, so the
         // pair always describes the same turn (see SubagentOutcome's doc).
         let finalTurnFinishReason: SubagentOutcome["finalTurnFinishReason"];
         let toolCalls = 0;
         let lastTool: string | undefined;
-        // TASK.191 slice S2: the run's own token spend, summed from the
+        // slice S2: the run's own token spend, summed from the
         // per-model-call `finish` events the child's loop already yields into
         // this very iterator (nobody read them before this slice).
         //
@@ -1417,7 +1417,7 @@ export function createSubagentRunner(
         // while counters (subagent_progress) and start/end continue unaffected.
         let activityEmitted = 0;
         // Count of tool_result-eligible child calls withheld past the cap
-        // (TASK.102 slice S1 W2, CUT-S1 §0.5): reported on end-progress so the
+        // (slice S1 W2, CUT-S1 §0.5): reported on end-progress so the
         // persisted card's dropped-activity count is honest, not silently
         // bounded. invalid_input calls are excluded — same eligibility test as
         // emission below, they never actually ran.
@@ -1436,7 +1436,7 @@ export function createSubagentRunner(
         let ceilingRounds = 0;
         let ceilingGrantedTurns = 0;
         let ceilingLastRefusal: CeilingRefusalReason | undefined;
-        // TASK.193 slice S5: the redacted reason the child died on, if it died on
+        // slice S5: the redacted reason the child died on, if it died on
         // the provider. Set from the loop's {type:"error"} event (case below) or,
         // failing that, from the bare catch — never from the raw thrown value.
         let lastErrorText: string | undefined;
@@ -1460,7 +1460,7 @@ export function createSubagentRunner(
                 }
                 break;
               case "finish":
-                // TASK.191 slice S2. Until this branch existed the child's
+                // slice S2. Until this branch existed the child's
                 // token spend rode this iterator past a switch that had no
                 // case for it — the numbers were never missing, only unread.
                 //
@@ -1495,7 +1495,7 @@ export function createSubagentRunner(
               case "tool_result": {
                 toolCalls += 1;
                 lastTool = event.outcome.toolName;
-                // Sign of life (TASK.148 slice 1): a completed tool call resets
+                // Sign of life (slice 1): a completed tool call resets
                 // the silence window, once per event — the "tool" activity
                 // branch below shares this same boundary, not a second reset.
                 stallClock?.noteProgress(lastTool);
@@ -1541,12 +1541,12 @@ export function createSubagentRunner(
                 // (max_turns) or an error before turn_end cannot overwrite it.
                 if (currentTurnText !== statusTextSnapshot) runOpts.onStatusItem?.({ kind: "assistant", text: currentTurnText });
                 finalText = currentTurnText;
-                // TASK.210: same turn, same event — always updated together with
+                // same turn, same event — always updated together with
                 // finalText above so a cutoff turn that never reaches turn_end
                 // leaves BOTH pinned to the prior turn's pair, never just one.
                 finalTurnFinishReason = event.finishReason;
                 turnEndCount += 1;
-                // Sign of life (TASK.148 slice 1): a turn boundary is progress
+                // Sign of life (slice 1): a turn boundary is progress
                 // even on a turn that made no tool calls at all.
                 stallClock?.noteProgress();
                 // The turn survived; its parked spend is now owed. Consumed
@@ -1584,7 +1584,7 @@ export function createSubagentRunner(
                 ceilingLastRefusal = event.reason;
                 break;
               case "error":
-                // TASK.193 (inline-tier mirror of TASK.190's finding): this event was
+                // (inline-tier mirror of's finding): this event was
                 // never read here, so a child that died on a provider failure reported
                 // its PREVIOUS turn's text as its final text. Only the whitelist-derived
                 // `safe` descriptor may cross a trust boundary (types/events.ts); the raw
@@ -1604,7 +1604,7 @@ export function createSubagentRunner(
         } catch {
           // A throw with no loop_end (e.g. the stream iterator rejected) is an error.
           loopReason = loopReason ?? "error";
-          // TASK.193 slice S5: a structural failure with no error event still owes the
+          // slice S5: a structural failure with no error event still owes the
           // caller a reason, but nothing about the caught value may be quoted — not even
           // `error.name`, which is provider-controlled text (host/serialize.ts's
           // redactedWireError pins the same rule). Hence a fixed internal constant.
@@ -1616,7 +1616,7 @@ export function createSubagentRunner(
         const status: SubagentOutcome["status"] = loopReason ?? "error";
         const turns = loopTurns ?? turnEndCount;
 
-        // Wrap-up rescue (TASK.74 §4). A child cut off by its budget otherwise
+        // Wrap-up rescue (§4). A child cut off by its budget otherwise
         // hands the parent the preamble of the turn that was cut — what it was
         // about to do, not what it found. One tool-free model call converts the
         // history it already has into a report. Deliberately NOT run when:
@@ -1655,7 +1655,7 @@ export function createSubagentRunner(
           }
         }
 
-        // TASK.161: the provider's own model CLAIM, read as a PROPERTY off the
+        // the provider's own model CLAIM, read as a PROPERTY off the
         // child's dedicated port — deliberately here, AFTER the wrap-up block
         // above, because the rescue call streams through this same port object
         // (runWrapUp -> config.modelPort.streamText) and its claim is the last
@@ -1666,13 +1666,13 @@ export function createSubagentRunner(
         // reports nothing on purpose: the parent's shared port carries
         // whichever call streamed last, which is not attributable to this child.
         //
-        // TASK.171 (owner's ruling, verbatim: "модель никогда не ответит,
+        // (owner's ruling, verbatim: "модель никогда не ответит,
         // главное какие запросы мы шлем и что в них фигурирует"): this claim
         // is evidence ABOUT the provider, never the answer to "which model did
         // the child run on" — that question is answered exclusively by
         // `requestedModel` (below, and at the start event above). Kept as its
         // own field, distinctly named, specifically because it is the only
-        // instrument for the open z.ai accounting investigation (TASK.174);
+        // instrument for the open z.ai accounting investigation;
         // dropping it would destroy that evidence. A provider/transport that
         // never surfaces a raw claim (childModelPort has no
         // `lastResponseModel`, or the child inherited the parent's shared
@@ -1680,7 +1680,7 @@ export function createSubagentRunner(
         // or otherwise touches `requestedModel`.
         const responseModel = childModelPort?.lastResponseModel;
 
-        // TASK.193 slice S5: an errored child leads with WHY it died. Applied after
+        // slice S5: an errored child leads with WHY it died. Applied after
         // the wrap-up rescue (which only runs for max_turns) and before the cap, so
         // the reason is inside the byte budget rather than appended past it. Any
         // text the child had already produced is kept BEHIND the reason: it is the
@@ -1703,7 +1703,7 @@ export function createSubagentRunner(
             : undefined;
         const outcome: SubagentOutcome = {
           status,
-          // Taskana 4131 follow-up: the fallback notice rides the SAME field
+          // follow-up: the fallback notice rides the SAME field
           // the wrap-up prefixes already use (the child's report below, an
           // "Agent:"-prefixed line above it) — exactly once, model-visible
           // through outcomeToResult, and capped so it can never crowd out the
@@ -1722,7 +1722,7 @@ export function createSubagentRunner(
           ...(ceiling !== undefined ? { ceiling } : {}),
         };
 
-        // TASK.4721: learn from ACCEPTED runs only (the training filter lives in
+        // learn from ACCEPTED runs only (the training filter lives in
         // budget-learning.ts). Adaptive off => the store is never touched.
         if (parent.ceiling?.adaptive === true && parent.subagentBudget !== undefined && isAcceptedBudgetSample(outcome)) {
           const budgetModel = req.model ?? persona.model;
@@ -1743,7 +1743,7 @@ export function createSubagentRunner(
           toolCalls,
           durationMs: outcome.durationMs,
           ...(activitySuppressed > 0 ? { activitySuppressed } : {}),
-          // TASK.171: the requested id travels on the end event too (not only
+          // the requested id travels on the end event too (not only
           // start), so the end record — the one telemetry's whitelist can
           // finally carry (records.ts, subagent_end case) — is self-describing:
           // both "what we asked for" and "what the provider claimed" recover
@@ -1764,7 +1764,7 @@ export function createSubagentRunner(
         return outcome;
       } finally {
         semaphore.release();
-        // TASK.148 slice 1: stop the clock/poll on EVERY exit from the try
+        // slice 1: stop the clock/poll on EVERY exit from the try
         // above (normal return, an early return this function doesn't have,
         // or a throw before either was ever constructed — both are still
         // `undefined` then, and the optional calls below are no-ops).
@@ -1788,7 +1788,7 @@ function hasAnyUsage(usage: TokenUsage): boolean {
 }
 
 /**
- * Folds one model call's reported spend into a run total (TASK.191 slice S2).
+ * Folds one model call's reported spend into a run total (slice S2).
  *
  * Fields are summed INDEPENDENTLY and an absent field stays absent rather than
  * becoming zero: "the provider did not report this" and "the provider reported
@@ -1824,7 +1824,7 @@ function mergeUsage(base: TokenUsage | undefined, delta: TokenUsage): TokenUsage
 
 /**
  * One tool-free model call asking a budget-exhausted child to report what it
- * actually established (TASK.74 §4.3). Runs OUTSIDE the AgentLoop, straight
+ * actually established (§4.3). Runs OUTSIDE the AgentLoop, straight
  * against the child's own ModelPort, which makes the no-tools rule structural:
  * there is no dispatcher on this path, so a tool call the model proposes anyway
  * has nothing to execute it. Stream retries and the stall watchdog still apply
@@ -1834,14 +1834,14 @@ function mergeUsage(base: TokenUsage | undefined, delta: TokenUsage): TokenUsage
  * request's `messages`, so the transcript stays exactly as `loop_end` left it —
  * balanced and terminal. Compaction is not available here; an overflowing
  * history therefore fails the call, which degrades to `fallback` like every
- * other failure — observable via `degraded: true` (TASK.196): the caller
+ * other failure — observable via `degraded: true` the caller
  * marks the fallback so a raw partial is clearly distinguished from a real
  * report. Returns `{ text, degraded: false }` for a non-whitespace reply, or
  * `{ text: fallback, degraded: true, usage? }` whenever the call throws,
  * aborts, times out or produces nothing but whitespace — the rescue can only
  * improve the outcome, never worsen it.
  *
- * TASK.160 (gap closed): wrap-up stream events now reach `config.eventTap`
+ * (gap closed): wrap-up stream events now reach `config.eventTap`
  * (the very tap buildChildConfig installs from `parent.subagentEventTap`)
  * with the existing ModelStreamEvent shapes — they are a subset of
  * AgentEvent, so no new event shape was invented. Tap observer exceptions
@@ -1878,7 +1878,7 @@ export async function runWrapUp(
       abortSignal: controller.signal,
     });
     for await (const event of stream) {
-      // Forward every event to the child config's tap (TASK.160): the wrap-up
+      // Forward every event to the child config's tap: the wrap-up
       // runs outside the AgentLoop, so this wrapper is the only bridge. An
       // observer must never break the rescue (same contract as
       // AgentLoop.runTurn's eventTap wrapper).
@@ -1922,7 +1922,7 @@ export async function runWrapUp(
 }
 
 /**
- * Taskana 4772 review F2: labels the inherited parent port's network-wait
+ * review F2: labels the inherited parent port's network-wait
  * events with `waitSource: "subagent"`. Pure delegation otherwise — modelId
  * and lastResponseModel forward to the wrapped port (the shared-port caveat
  * in ModelPort.lastResponseModel's doc already covers exactly this shape).

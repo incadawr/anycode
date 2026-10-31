@@ -1,5 +1,5 @@
 /**
- * TASK.4721: the base subagent turn budget learned from accepted-task history.
+ * the base subagent turn budget learned from accepted-task history.
  *
  * Only the ADAPTIVE mode consults this (`CeilingConfig.adaptive` on, via the
  * `tools.adaptiveTurnBudget` setting). The learned value sits BELOW every

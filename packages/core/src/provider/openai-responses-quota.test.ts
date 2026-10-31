@@ -1,6 +1,6 @@
 /**
- * Quota-fetch wiring tests for the openai-responses factory (Taskana 4090 /
- * TASK.71, §3 test 3). The SDK factory's options are spied via vi.mock for
+ * Quota-fetch wiring tests for the openai-responses factory (
+ * §3 test 3). The SDK factory's options are spied via vi.mock for
  * the dormancy pins; the COMPOSITION case (quota wrapper OUTER over the
  * Authorization-stripping fetch) is asserted against a real node:http
  * loopback server — the wrapper must both observe quota headers AND still
@@ -57,7 +57,7 @@ function config(overrides: Partial<EndpointConfig> = {}): EndpointConfig {
   };
 }
 
-describe("createOpenAIResponsesLanguageModel quota fetch wiring (Taskana 4090)", () => {
+describe("createOpenAIResponsesLanguageModel quota fetch wiring", () => {
   it("installs the Responses stream adapter without a quota observer", () => {
     createModel(config());
     const options = mockCreateOpenAI.mock.calls.at(-1)![0];

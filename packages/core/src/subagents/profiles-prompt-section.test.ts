@@ -5,7 +5,7 @@
  * appearing only when the section is non-empty, and the line-wise
  * PROFILES_PROMPT_SECTION_MAX_CHARS cap (never mid-line).
  *
- * TASK.97 R1 (wave2-cut.md §2.1/§3 Slice A): the bracket marker carrying
+ * R1 (wave2-cut.md §2.1/§3 Slice A): the bracket marker carrying
  * engine/model, discriminating on the MARKER TOKEN actually appearing in the
  * profile's own line — not on section length or line count, per the DoD
  * wording ("proves engine presence in the line, not section length").
@@ -55,7 +55,7 @@ describe("buildProfilesPromptSection — structure and content", () => {
   });
 });
 
-describe("buildProfilesPromptSection — TASK.97 R1 engine/model marker", () => {
+describe("buildProfilesPromptSection — R1 engine/model marker", () => {
   it("an engine profile's OWN line carries the engine token (discriminates on the line, not section length)", () => {
     const section = buildProfilesPromptSection([
       profile({ name: "claude-builder", description: "Runs on Claude Code", engine: "claude" }),

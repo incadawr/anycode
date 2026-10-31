@@ -587,13 +587,13 @@ describe("TerminalPermissionBroker with a real readline prompter", () => {
 });
 
 /**
- * Taskana 4070: the CLI ask block carries the SAME one-line per-command risk
+ * the CLI ask block carries the SAME one-line per-command risk
  * plaque the desktop modal shows. The raw command stays in the header, always
  * visible; the plaque line sits between header and the y/n/a hint; a shell
  * expression shows no plaque at all (its honest story is already the
  * header's). Presentation only — no answer mapping or rule reads the plaque.
  */
-describe("TerminalPermissionBroker ask presentation — Bash risk plaque (Taskana 4070)", () => {
+describe("TerminalPermissionBroker ask presentation — Bash risk plaque", () => {
   /** Renders one Bash ask through the manual prompter and hands back its question text. */
   async function renderBashAsk(command: unknown): Promise<string> {
     const { prompter, asks } = makeManualPrompter();

@@ -34,7 +34,7 @@ export function isWithinWorkspace(candidatePath: string, workspaceRoot: string):
 
 /**
  * File-write tools whose always-allow rules are confined to the session
- * workspace (Taskana 4294). The dispatcher mints workspace facts for exactly
+ * workspace. The dispatcher mints workspace facts for exactly
  * these; RuleAwarePermissionEngine refuses to downgrade their "ask" unless the
  * facts prove the target inside. NOT the edit-mode widening set (engine.ts
  * keeps its literal Write/Edit pair).

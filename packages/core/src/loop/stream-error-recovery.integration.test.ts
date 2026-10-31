@@ -1,5 +1,5 @@
 /**
- * Integration proof of TASK.2 DoD-a/b (design/slice-P7.7-cut.md §3.2): a
+ * Integration proof of DoD-a/b (design/slice-P7.7-cut.md §3.2): a
  * malformed message-level SSE chunk (known top-level type, unparsable body)
  * makes the REAL AiSdkModelPort (untouched — model-port.ts is codex-WIP,
  * imported only) yield a mid-stream `{type:"error"}` event. The loop-level
@@ -137,7 +137,7 @@ async function collect(iter: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
   return events;
 }
 
-describe("AgentLoop stream-error recovery over a real AiSdkModelPort (P7.7 TASK.2)", () => {
+describe("AgentLoop stream-error recovery over a real AiSdkModelPort (P7.7)", () => {
   let server: Server | undefined;
   let warnSpy: ReturnType<typeof vi.spyOn>;
 

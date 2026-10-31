@@ -1,5 +1,5 @@
 /**
- * Agent MCP-bridge core logic (TASK.226 срез S1). Covers the three pieces
+ * Agent MCP-bridge core logic (срез S1). Covers the three pieces
  * agent-bridge.ts adds on top of the moved projection helpers (already
  * proven byte-identical by tools/agent.test.ts and tools/agent-session.test.ts,
  * which stay green unmodified — see this file's own parity block below):
@@ -338,7 +338,7 @@ describe("runAgentBridgeCall (§3.4)", () => {
       },
     );
     expect(result.isError).toBe(false);
-    // TASK.218: successful session outcomes append the follow-up note —
+    // successful session outcomes append the follow-up note —
     // this BASE_OUTCOME carries a childSessionId, so the note rides along.
     expect(result.text).toBe(
       "child session done\n\n[Child session id: child-1. Pass it as continue_session in a later agent call to send a follow-up to this same child in its existing conversation.]",
@@ -441,7 +441,7 @@ describe("runAgentBridgeCall (§3.4)", () => {
     }
   });
 
-  it("forwards a live progress responseModel onto subagent_progress, and omits the key when absent (TASK.4057)", async () => {
+  it("forwards a live progress responseModel onto subagent_progress, and omits the key when absent", async () => {
     const events: SubagentCardEvent[] = [];
     const port: SessionSubagentPort = {
       run: async (req, opts: SubagentRunOptions) => {
@@ -540,7 +540,7 @@ describe("runAgentBridgeCall — detach", () => {
     );
     expect(seen?.detach).toBe(true);
     expect(seen?.prompt).toBe("LEAD BODY\n\n---\n\ndo it");
-    // TASK.218: the detached admit passthrough now also carries the
+    // the detached admit passthrough now also carries the
     // follow-up note (off the OUTPUT childSessionId — no card is fabricated).
     expect(result.isError).toBe(false);
     expect(result.text).toContain("Agent: child session child-9 started in the background.");
@@ -617,7 +617,7 @@ describe("runAgentBridgeCall — continue_session (follow-up to a finished child
     expect(decodeAgentBridgeCallInput({ agent_type: "a", description: "d", prompt: "p", continue_session: 7 })).toBeNull();
   });
 
-  it("TASK.218 decl copy: continue_session names where the id comes from; detach mentions continue_session", () => {
+  it("decl copy: continue_session names where the id comes from; detach mentions continue_session", () => {
     const opted = buildAgentBridgeToolDecl([ENTRY], { continueSession: true, detach: true })?.inputSchema as {
       properties?: Record<string, { description?: string }>;
     };
@@ -627,7 +627,7 @@ describe("runAgentBridgeCall — continue_session (follow-up to a finished child
   });
 });
 
-describe("runAgentBridgeCall — childSessionId discoverability (TASK.218)", () => {
+describe("runAgentBridgeCall — childSessionId discoverability", () => {
   const ENTRY: AgentBridgeCatalogEntry = { name: "glm-lead", description: "Leads", model: "glm-5.3", systemPrompt: "LEAD BODY" };
 
   it("sync call: the result text carries the child session id and the continue_session hint (with progress)", async () => {
@@ -706,7 +706,7 @@ describe("runAgentBridgeCall — childSessionId discoverability (TASK.218)", () 
   });
 });
 
-describe("decodeAgentBridgeCallInput (TASK.226 срез S4)", () => {
+describe("decodeAgentBridgeCallInput (срез S4)", () => {
   it("a well-formed args object decodes verbatim, including the optional model", () => {
     expect(
       decodeAgentBridgeCallInput({ agent_type: "reviewer", description: "d", prompt: "p", model: "opus" }),
@@ -814,9 +814,9 @@ describe("runAgentBridgeCall — profile effort (TASK.127/TASK.217)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// TASK.180 — profile turn budget (maxTurns) on the session-tier request.
+// profile turn budget (maxTurns) on the session-tier request.
 
-describe("buildSessionSubagentRequest — maxTurns (TASK.180)", () => {
+describe("buildSessionSubagentRequest — maxTurns", () => {
   it("forwards a defined maxTurns onto the request", () => {
     const request = buildSessionSubagentRequest({
       agentType: "reviewer",
@@ -839,7 +839,7 @@ describe("buildSessionSubagentRequest — maxTurns (TASK.180)", () => {
   });
 });
 
-describe("runAgentBridgeCall — catalog maxTurns (TASK.180)", () => {
+describe("runAgentBridgeCall — catalog maxTurns", () => {
   it("a fresh bridge call forwards the catalog entry's budget onto the request", async () => {
     let seen: SessionSubagentRequest | undefined;
     const port: SessionSubagentPort = {
@@ -890,13 +890,13 @@ describe("runAgentBridgeCall — catalog maxTurns (TASK.180)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Taskana 4269 — profile connection routing on the bridge path (the codex
+// profile connection routing on the bridge path (the codex
 // supervisor bridge and the Claude MCP bridge share runAgentBridgeCall). A
 // routed catalog entry's declared target rides the CREATING spawn only; a
 // continuation keeps the child's original connection. The tool description
 // surfaces the route as a `[connection: …]` / `[provider: …]` marker.
 
-describe("runAgentBridgeCall — profile connection routing (Taskana 4269)", () => {
+describe("runAgentBridgeCall — profile connection routing", () => {
   function capturePort(): { port: SessionSubagentPort; seen: () => SessionSubagentRequest | undefined } {
     let seen: SessionSubagentRequest | undefined;
     return {

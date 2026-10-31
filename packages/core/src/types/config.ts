@@ -20,7 +20,7 @@ export interface CoreEnvConfig {
   /**
    * API key for the endpoint (ANYCODE_API_KEY). Required (throws) when the
    * resolved transport is `anthropic-messages` or unset; optional for the two
-   * OpenAI transports, which may point at a no-auth local endpoint (TASK.43 §0.4).
+   * OpenAI transports, which may point at a no-auth local endpoint (§0.4).
    */
   apiKey?: string;
   /** Base URL of the endpoint (ANYCODE_BASE_URL); default is the native Anthropic API. */
@@ -29,7 +29,7 @@ export interface CoreEnvConfig {
   model: string;
   /**
    * Default model id for the built-in explore persona's inline children
-   * (ANYCODE_EXPLORE_MODEL, Taskana 4131). undefined ⇒ explore inherits the
+   * (ANYCODE_EXPLORE_MODEL). undefined ⇒ explore inherits the
    * parent's port.
    */
   exploreModel?: string;
@@ -38,13 +38,13 @@ export interface CoreEnvConfig {
   /** Turn budget override for subagent child loops (ANYCODE_SUBAGENT_MAX_TURNS). */
   subagentMaxTurns?: number;
   /**
-   * TASK.4721: adaptive turn budget (ANYCODE_ADAPTIVE_TURN_BUDGET, mirror of
+   * adaptive turn budget (ANYCODE_ADAPTIVE_TURN_BUDGET, mirror of
    * `tools.adaptiveTurnBudget`). true => progress-scaled grants and a base
    * budget learned from accepted history; absent/false => the ladder, unchanged.
    */
   adaptiveTurnBudget?: boolean;
   /**
-   * Subagent stall-detector silence threshold override in ms (TASK.148 slice 1,
+   * Subagent stall-detector silence threshold override in ms (slice 1,
    * ANYCODE_SUBAGENT_STALL_MS). NOT the per-attempt stream watchdog
    * (`stallTimeoutMs` below, ANYCODE_STALL_TIMEOUT_MS) — this one bounds how
    * long a whole child run may go without a progress signal before a
@@ -53,11 +53,11 @@ export interface CoreEnvConfig {
   subagentStallTimeoutMs?: number;
   /**
    * Stale-plan reminder period in tool calls (ANYCODE_TODO_REMINDER_EVERY,
-   * Taskana 4665); 0 disables.
+   * ); 0 disables.
    */
   todoReminderEvery?: number;
   /**
-   * Supervisor idle-watchdog first-reminder threshold override in ms (taskana
+   * Supervisor idle-watchdog first-reminder threshold override in ms (
    * 4181, ANYCODE_SUPERVISOR_IDLE_MS). NOT the subagent stall detector
    * (`subagentStallTimeoutMs` above, ANYCODE_SUBAGENT_STALL_MS) — this one
    * bounds how long an idle supervisor (turn ended, no live detached children,
@@ -81,13 +81,13 @@ export interface CoreEnvConfig {
   maxRetries?: number;
   /**
    * Transient-network retry wall-clock budget in ms (ANYCODE_NETWORK_RETRY_BUDGET_MS,
-   * Taskana 4705): pre-content NETWORK failures may retry past `maxRetries`
+   * pre-content NETWORK failures may retry past `maxRetries`
    * while inside this budget; 0 disables the extension.
    */
   networkRetryBudgetMs?: number;
   /**
    * Maximum wait for the network before a pre-content transient failure fails
-   * the turn (ANYCODE_NETWORK_WAIT_MAX_MS, Taskana 4772); 0 disables waiting.
+   * the turn (ANYCODE_NETWORK_WAIT_MAX_MS); 0 disables waiting.
    */
   networkWaitMaxMs?: number;
   /** SQLite database path override (ANYCODE_DB_PATH); default is ~/.anycode/anycode.sqlite. */
@@ -104,11 +104,11 @@ export interface CoreEnvConfig {
   /**
    * Wire transport override (ANYCODE_PROVIDER_TRANSPORT); undefined when unset.
    * An invalid value throws at load time rather than silently falling back to
-   * `anthropic-messages` (TASK.43 §0.4).
+   * `anthropic-messages` (§0.4).
    */
   providerTransport?: ProviderTransport;
   /**
-   * Explicit usage-streaming override (ANYCODE_INCLUDE_USAGE; TASK.158):
+   * Explicit usage-streaming override (ANYCODE_INCLUDE_USAGE;):
    * `1/true/on` → true, `0/false/off` → false, invalid ⇒ warn + ignore.
    * Undefined means "no opinion" — the transport-conditional DEFAULT is
    * applied by `resolveIncludeUsage`, never here.
@@ -120,7 +120,7 @@ export interface CoreEnvConfig {
 export const DEFAULT_MAX_TURNS = 100;
 
 /**
- * Fallback for non-Claude model ids missing a catalog output limit (TASK.150).
+ * Fallback for non-Claude model ids missing a catalog output limit.
  *
  * This is the value EVERY on-prem / free-text model id lands on: the `vllm`,
  * `custom` and `openrouter` catalog entries carry `models: []` by construction
@@ -155,7 +155,7 @@ export const DEFAULT_MAX_OUTPUT_BYTES = 262_144;
 
 /**
  * Model-visible result budget applied by the dispatcher to any tool that
- * declares no `metadata.resultBudget` (TASK.93). The point of a default is that
+ * declares no `metadata.resultBudget`. The point of a default is that
  * there is no "unbounded" branch to fall into: a tool omitting the field is
  * bounded, not exempt.
  */
@@ -171,7 +171,7 @@ export const BASH_RESULT_MAX_MODEL_BYTES = 30_000;
 export const BASH_EXEC_MAX_OUTPUT_BYTES = 1_048_576;
 
 /**
- * Token ceiling on a single Read result (TASK.93 §4). The budget that matters
+ * Token ceiling on a single Read result (§4). The budget that matters
  * for a file read is what the model is charged, not what the file weighs.
  */
 export const READ_MAX_TOKENS = 25_000;
@@ -194,7 +194,7 @@ export const READ_CONTENT_MAX_BYTES = 90_000;
 export const MCP_RESULT_MAX_MODEL_BYTES = 50_000;
 
 // ---------------------------------------------------------------------------
-// TASK.94 constants (artifact spill)
+// constants (artifact spill)
 
 /**
  * Age ceiling on a session's artifact directory, enforced by the start-up
@@ -304,13 +304,13 @@ export const SUBAGENT_MAX_TURNS_CEILING = 200;
  * deadlines below are carved out of.
  *
  * What bounds a subagent is its TURN budget (DEFAULT_SUBAGENT_MAX_TURNS plus
- * the TASK.124 ladder), not the clock. This wall was 600_000, and at that size
+ * the ladder), not the clock. This wall was 600_000, and at that size
  * it did not act as a backstop — it was the thing that decided a run. An inline
  * child was cut mid-work at eight minutes; a session child, which is a separate
  * host process with its own turn ceiling, its own permission prompts and a
  * human in front of it, derives no deadline from this constant at all, so the
  * wall was its ONLY clock and ten minutes spent waiting for a person to answer
- * a permission dialog spent the entire budget (TASK.148).
+ * a permission dialog spent the entire budget.
  *
  * No reference implementation bounds a subagent by wall-clock work time; they
  * watch for absence of PROGRESS instead. Until that detector exists here, the
@@ -342,7 +342,7 @@ export const SUBAGENT_OUTCOME_DEADLINE_MS = 21_590_000;
 export const SUBAGENT_WRAPUP_MIN_WINDOW_MS = 15_000;
 
 /**
- * Silence threshold for the subagent STALL detector (TASK.148 slice 1,
+ * Silence threshold for the subagent STALL detector (slice 1,
  * subagents/stall-clock.ts). Distinct from — and never confused with —
  * ANYCODE_STALL_TIMEOUT_MS/DEFAULT_STREAM_STALL_TIMEOUT_MS above: that one
  * watches a single provider HTTP stream; this one watches a whole child RUN
@@ -354,13 +354,13 @@ export const SUBAGENT_WRAPUP_MIN_WINDOW_MS = 15_000;
  * genuinely hung child is noticed in minutes instead of at nightfall, while a
  * legitimately long single tool call merely produces one honest "silent for
  * 10 minutes, currently running X" report rather than a kill: the detector
- * REPORTS, it never aborts the run (design owner's framing, TASK.148: "разве
+ * REPORTS, it never aborts the run (design owner's framing: "разве
  * это агент должен килять?"). Configurable via ANYCODE_SUBAGENT_STALL_MS.
  */
 export const SUBAGENT_STALL_TIMEOUT_MS = 600_000;
 
 /**
- * Supervisor idle-watchdog thresholds (taskana 4181). Distinct from
+ * Supervisor idle-watchdog thresholds. Distinct from
  * SUBAGENT_STALL_TIMEOUT_MS above: that one watches a RUNNING child's silence;
  * these watch a SUPERVISOR that has gone idle after ending its turn with no
  * live detached children and no terminal marker (READY/BLOCKED/DONE/ACCEPT) in
@@ -377,16 +377,16 @@ export const SUBAGENT_STALL_TIMEOUT_MS = 600_000;
  * configurable via ANYCODE_SUPERVISOR_IDLE_MS (packages/core/src/provider/env.ts).
  */
 export const SUPERVISOR_IDLE_FIRST_MS = 15 * 60_000;
-/** Supervisor idle-watchdog repeat cadence (taskana 4181); see SUPERVISOR_IDLE_FIRST_MS. */
+/** Supervisor idle-watchdog repeat cadence; see SUPERVISOR_IDLE_FIRST_MS. */
 export const SUPERVISOR_IDLE_REPEAT_MS = 10 * 60_000;
 /**
  * After this many ignored reminders the text escalates to the OWNER variant
- * (taskana 4181); see SUPERVISOR_IDLE_FIRST_MS for the full contract.
+ * ; see SUPERVISOR_IDLE_FIRST_MS for the full contract.
  */
 export const SUPERVISOR_IDLE_ESCALATE_AFTER = 2;
 
 // ---------------------------------------------------------------------------
-// TASK.124 constants (turn-ceiling decision ladder)
+// constants (turn-ceiling decision ladder)
 
 /**
  * How many times ONE session's turn ceiling may be extended by the decision
@@ -457,7 +457,7 @@ export const SUBAGENT_ACTIVITY_MAX_EVENTS = 500;
 export const SUBAGENT_ACTIVITY_TOOL_NAME_MAX_CHARS = 80;
 
 /**
- * Persisted subagent card constants (TASK.102 slice S1, CUT-S1 §2.2). The ring
+ * Persisted subagent card constants (slice S1, CUT-S1 §2.2). The ring
  * cap MUST equal the renderer's own SUBAGENT_ACTIVITY_RING (store.ts) — the S1
  * renderer test asserts this equality directly (a parity test, not a shared
  * import) so a future drift between the two is caught by the compiler, not by
@@ -471,7 +471,7 @@ export const SUBAGENT_CARD_DESCRIPTION_MAX_CHARS = 500;
 export const SUBAGENT_CARD_MODEL_MAX_CHARS = 200;
 
 /**
- * Persisted workflow card constants (TASK.191 slice S5). Deliberately its OWN
+ * Persisted workflow card constants (slice S5). Deliberately its OWN
  * ring, not a reuse of SUBAGENT_CARD_ACTIVITY_RING: a workflow's activity feed
  * is ONE lane shared by every concurrent step of the run (WorkflowCardSnapshotV1's
  * own doc), not one child's own history, so at equal size a multi-step DAG would
@@ -481,7 +481,7 @@ export const SUBAGENT_CARD_MODEL_MAX_CHARS = 200;
  * SUBAGENT_CARD_ACTIVITY_RING must equal SUBAGENT_ACTIVITY_RING there: after a
  * reload, "+N earlier" must never read shorter than the live feed already showed.
  * That live ring is already 2x SUBAGENT_ACTIVITY_RING for this exact reason
- * (TASK.191 slice S1) — mirrored here at the same 2x factor, including the byte
+ * (slice S1) — mirrored here at the same 2x factor, including the byte
  * cap, which has no live-side analog but scales with the same reasoning.
  */
 export const WORKFLOW_CARD_ACTIVITY_RING = 200;
@@ -489,7 +489,7 @@ export const WORKFLOW_CARD_ACTIVITY_RING = 200;
 export const WORKFLOW_CARD_ACTIVITY_MAX_BYTES = 65_536;
 
 // ---------------------------------------------------------------------------
-// TASK.210 constants (degenerate-generation guard, loop/degeneration-detector.ts)
+// constants (degenerate-generation guard, loop/degeneration-detector.ts)
 //
 // Live incident: a subagent's final turn repeated a ~296-char phrase 341
 // times (46,148 of 58,088 chars), ran 24m32s against a ~20s median, and was
@@ -509,7 +509,7 @@ export const DEGENERATION_MIN_RUN_CHARS = 2_048;
 
 /**
  * How many consecutive repeats of the same period must appear before the run
- * counts as degenerate. The number off the TASK.210 board ("the same
+ * counts as degenerate. The number off the board ("the same
  * fragment three times"). Two repeats is a legal rhetorical figure and, more
  * importantly, exactly what a replayed stream_retry produces without a reset
  * (see the reset() call on the stream_retry branch in agent-loop.ts) — three
@@ -526,7 +526,7 @@ export const DEGENERATION_MIN_REPEATS = 3;
  * "length", which the subagent/tools marker (b) names after the fact. The
  * measured incident (period 296) is 9x above this boundary.
  *
- * Raised from the original 8 to 32 (codex review finding, TASK.210 second
+ * Raised from the original 8 to 32 (codex review finding, second
  * pass): 8 was chosen typologically ("phrase, not separator") but a
  * period-8 run is also exactly what legitimate base64/structured-data blocks
  * can look like — e.g. `"AAECAwQF".repeat(n)` is valid base64 for a
@@ -544,7 +544,7 @@ export const DEGENERATION_MIN_PERIOD_CHARS = 32;
  * Tail window kept per channel, in UTF-16 code units (2x MIN_RUN_CHARS).
  * Bounds both memory (two bounded strings per turn) and per-check cost.
  *
- * HARD STRUCTURAL BLIND SPOT (codex review finding, TASK.210 second pass):
+ * HARD STRUCTURAL BLIND SPOT (codex review finding, second pass):
  * the check needs MIN_REPEATS whole periods to fit in the window, so a
  * period above WINDOW_CHARS/MIN_REPEATS ≈ 1,365 chars can NEVER be detected —
  * not "detected late", never detected, no matter how long the loop runs,
@@ -567,7 +567,7 @@ export const DEGENERATION_WINDOW_CHARS = 4_096;
  * characters.
  *
  * Amortized cost per fed character is O(WINDOW/STRIDE) = O(8) PASSES over the
- * buffer — NOT <=8 primitive operations (codex review correction, TASK.210
+ * buffer — NOT <=8 primitive operations (codex review correction,
  * second pass: the original docstring conflated "number of linear passes"
  * with "number of primitive operations per character"). Each pass is itself
  * O(WINDOW), so the true amortized cost is on the order of a few tens of
@@ -590,7 +590,7 @@ export const DEGENERATION_WINDOW_CHARS = 4_096;
 export const DEGENERATION_CHECK_STRIDE_CHARS = 512;
 
 /**
- * TASK.145 срез 1 (cli/child-notification.ts): cap on a detached child's
+ * срез 1 (cli/child-notification.ts): cap on a detached child's
  * report `summary` field inside the `<task-notification>` block delivered to
  * the parent session. The summary is the child's FINAL ANSWER only, never its
  * transcript, so it may be as long as a real deliverable: a planner's plan or
@@ -628,10 +628,10 @@ export const MCP_RESULT_MAX_BYTES = 100_000;
 /** Ring-buffer cap on captured stderr from a stdio MCP server (diagnostics). */
 export const MCP_STDERR_CAP_BYTES = 8_192;
 
-/** Taskana 4752: cap on one connected MCP server's `instructions` in the system prompt (chars). */
+/** cap on one connected MCP server's `instructions` in the system prompt (chars). */
 export const MCP_INSTRUCTIONS_PER_SERVER_MAX_CHARS = 4_000;
 
-/** Taskana 4752: cap on the whole MCP instructions prompt section (chars). */
+/** cap on the whole MCP instructions prompt section (chars). */
 export const MCP_INSTRUCTIONS_TOTAL_MAX_CHARS = 12_000;
 
 // ---------------------------------------------------------------------------
@@ -659,7 +659,7 @@ export const MAX_AGENT_PROFILES = 32;
 export const AGENT_PROFILE_PROMPT_MAX_BYTES = 32_768;
 
 /**
- * Cap on the number of local plugins discovered. Taskana 4732 raised the
+ * Cap on the number of local plugins discovered. raised the
  * legacy 16 to 32 (design §3/§9.13): the managed store adds official +
  * third-party + local tiers on top of the legacy hand-dropped dirs.
  */
@@ -694,7 +694,7 @@ export const WORKFLOW_STEP_PROMPT_MAX_BYTES = 200_000;
 /**
  * Cap on the failure text a single failed workflow step carries OUT of the
  * engine on the channels that are not the model's context — the tool payload,
- * the workflow_step_end event and the persisted card (TASK.193). Same class and
+ * the workflow_step_end event and the persisted card. Same class and
  * size as MCP_STDERR_CAP_BYTES: enough diagnostics to act on, far below
  * SUBAGENT_OUTPUT_MAX_BYTES so the reason channel never competes with the run's
  * own rendered output. The card may therefore show MORE of a step's failure
@@ -709,7 +709,7 @@ export const WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES = 8_192;
  * three quarters by construction; per-step share is derived by subtracting the
  * real framing (workflow/step-failure.ts). Deliberately NOT tied to
  * MAX_CONCURRENT_SUBAGENTS — the number of failed steps has nothing to do with
- * the semaphore width (every launched step can fail). TASK.193; TASK.211 is the
+ * the semaphore width (every launched step can fail).; is the
  * generated>accepted trap this closes.
  */
 export const WORKFLOW_FAILURE_SUMMARY_MAX_BYTES = Math.floor(DEFAULT_TOOL_RESULT_BUDGET.maxModelBytes / 4);
@@ -869,20 +869,20 @@ export const TELEMETRY_DISPOSE_DEADLINE_MS = 2_000;
  *  stops early and `truncated: true` is reported rather than blocking on an
  *  unbounded telemetry dir.
  *
- *  TASK.187 gives the same number a second role in the incremental scan layer:
+ *  gives the same number a second role in the incremental scan layer:
  *  there it bounds the NEW bytes read per pass (files already covered by the
  *  partial cache are not opened at all, so a warm pass reads far less), and it
  *  doubles as the per-file ceiling. Inside `aggregateProfileStats` the meaning
  *  is unchanged — it is the default of the additive `byteBudget` option. */
 export const PROFILE_STATS_MAX_SCAN_BYTES = 64 * 1024 * 1024;
 
-/** TASK.187: cap on how many not-yet-cached sink files one incremental pass may
+/** cap on how many not-yet-cached sink files one incremental pass may
  *  open. The owner's directory holds ~60 000 files at ~1.1 KiB each and the cost
  *  is dominated by the open() count, not by bytes; this bounds a cold first pass
  *  and lets the rest be finished by later passes (the backlog). */
 export const PROFILE_STATS_MAX_NEW_READS_PER_PASS = 24_000;
 
-/** TASK.187: refuse to load a profile-stats cache file larger than this. The
+/** refuse to load a profile-stats cache file larger than this. The
  *  cache is idempotently rebuildable, so an oversized/garbage file is discarded
  *  rather than trusted. */
 export const PROFILE_STATS_CACHE_MAX_BYTES = 256 * 1024 * 1024;

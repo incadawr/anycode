@@ -61,7 +61,7 @@ export interface PreviewScreenshotSuccess {
   height: number;
   /**
    * Logical/CSS viewport size (DIP, not device pixels) at capture time, when
-   * the capture path could observe one (TASK.198 slice G) — mirrors
+   * the capture path could observe one (slice G) — mirrors
    * ImageAttachment.cssSize's own additive-optional contract. Absent when
    * the underlying page/window could not report a CSS size (unresponsive,
    * destroyed, panel bounds unset); callers must not treat its absence as an
@@ -91,7 +91,7 @@ export type PreviewResult<T> =
 export type PreviewTarget = { ref: string } | { selector: string };
 
 /**
- * Browser control (Taskana 4759). One discriminated request for every control
+ * Browser control. One discriminated request for every control
  * action so the port surface, the RPC client and test fakes stay small.
  */
 export type PreviewControlRequest =
@@ -146,7 +146,7 @@ export interface PreviewPort {
     opts: { signal: AbortSignal; toolCallId?: string },
   ): Promise<PreviewResult<PreviewScreenshotSuccess>>;
   /**
-   * Browser control (Taskana 4759). OPTIONAL: a port without it makes the
+   * Browser control. OPTIONAL: a port without it makes the
    * control tools answer "Browser control is unavailable in this session."
    * `allowRemote: true` only when the permission engine approved an escalated
    * call; the host re-checks it (same rule as `open`).

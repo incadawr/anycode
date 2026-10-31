@@ -1,5 +1,5 @@
 /**
- * A failed workflow step's reason, on its way out of the engine (TASK.193).
+ * A failed workflow step's reason, on its way out of the engine.
  *
  * The engine builds a truthful reason for every step that did not complete and
  * the tool boundary used to drop it, leaving the owner with nothing but

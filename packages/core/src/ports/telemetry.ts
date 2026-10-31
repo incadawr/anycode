@@ -15,13 +15,13 @@
  * `sub` are all names/enums/ids by type — the privacy theorem above still
  * holds, no free-text field was added.
  *
- * TASK.171 addition: `subagent_end.model` (the REQUESTED child model id,
+ * addition: `subagent_end.model` (the REQUESTED child model id,
  * closing the gap where a completed child's model attribution never reached
  * this whitelist at all) and `subagent_end.responseModel` (the provider's
  * own model CLAIM, a separate id-typed datum — never free text, and never
  * conflated with `model`). Owner's ruling: the request is authoritative for
  * "which model did the child run on"; the provider's claim is kept only as
- * distinct evidence for the open z.ai accounting investigation (TASK.174).
+ * distinct evidence for the open z.ai accounting investigation.
  *
  * S9 addendum: `session_start.enginePreset` — an id from a closed,
  * host-validated preset table (same shape as `engine`: a name, never free
@@ -49,7 +49,7 @@ export type TelemetryEventRecord =
       totalTokens?: number;
       /** Input tokens the provider served from its prompt cache — a SUBSET of
        *  `inputTokens`, never an addend. Absent = the provider did not report
-       *  it (not a 0% hit); 0 = an honest miss (TASK.111). */
+       *  it (not a 0% hit); 0 = an honest miss. */
       cachedInputTokens?: number;
     }
   | { t: "tool"; tool: string; status: ToolCallStatus; durationMs: number }
@@ -64,7 +64,7 @@ export type TelemetryEventRecord =
       status: "completed" | "max_turns" | "cancelled" | "error";
       turns: number;
       durationMs: number;
-      /** REQUESTED child model id — TASK.171, same value as `subagent_start.model`. */
+      /** REQUESTED child model id — same value as `subagent_start.model`. */
       model?: string;
       /** Provider's own model CLAIM — TASK.171/TASK.174, distinct from `model`. */
       responseModel?: string;
@@ -82,7 +82,7 @@ export type TelemetryEventRecord =
     }
   | { t: "workflow_end"; status: "completed" | "failed" | "cancelled"; completedSteps: number; totalSteps: number; durationMs: number }
   /**
-   * TASK.193 slice S4: a workflow step's terminal FACT — status/turns/
+   * slice S4: a workflow step's terminal FACT — status/turns/
    * duration, and whether the step's terminal was reached without the engine
    * ever calling subagents.run (`unlaunched`). No `stepId` and no `failure`:
    * this port carries no free-form text by construction (module doc above),
@@ -98,7 +98,7 @@ export type TelemetryEventRecord =
     }
   | { t: "stream_retry"; attempt: number; maxAttempts: number; delayMs: number }
   /**
-   * TASK.210: the degenerate-generation guard cut a turn. `channel` names
+   * the degenerate-generation guard cut a turn. `channel` names
    * which of the per-turn DegenerationDetector instances fired
    * (loop/degeneration-detector.ts); `period`/`repeats` are its verdict
    * verbatim and `turn` is the cut turn's number — plain numbers/enums, same
@@ -106,13 +106,13 @@ export type TelemetryEventRecord =
    */
   | { t: "degeneration"; channel: "text" | "reasoning"; period: number; repeats: number; turn: number }
   /**
-   * TASK.208: the turn-ceiling ladder refused a round. `reason` is the closed
+   * the turn-ceiling ladder refused a round. `reason` is the closed
    * CeilingRefusalReason enum (never free text), `turn`/`round` are plain
    * numbers — the telemetry face of the `ceiling_refused` AgentEvent.
    */
   | { t: "ceiling_refused"; reason: CeilingRefusalReason; turn: number; round: number }
   /**
-   * TASK.208: a granted ladder round, projected to numbers ONLY — `remaining`/
+   * a granted ladder round, projected to numbers ONLY — `remaining`/
    * `nextAction` (the model's free text) are deliberately NOT carried here.
    */
   | { t: "ceiling_grant"; round: number; granted: number; totalGranted: number }
@@ -120,7 +120,7 @@ export type TelemetryEventRecord =
   | { t: "checkpoint_created" }
   | { t: "checkpoint_failed" }
   /**
-   * Taskana 4702: the counter of consulted ask-zone decisions. Numbers, the
+   * the counter of consulted ask-zone decisions. Numbers, the
    * classifier's configured id and the closed decision only — never the
    * command, the classifier's reason or its score.
    */
@@ -146,7 +146,7 @@ export type TelemetryLifecycleRecord =
       /** Which runtime produced this session. Absent = core (the AgentLoop
        *  path) — correct by construction for every pre-existing file, since
        *  codex/claude engine boots wrote no records before this field
-       *  existed (TASK.159). */
+       *  existed. */
       engine?: "codex" | "claude";
       /** Present exactly when `engine` is present: the engine's own
        *  permission-preset id (codex: `ask|approve-for-me|full-access|

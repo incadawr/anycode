@@ -1,5 +1,5 @@
 /**
- * Tests for `resolveWorkspaceWriteFacts` (TASK.32 DV-3): the dispatch-site
+ * Tests for `resolveWorkspaceWriteFacts` (DV-3): the dispatch-site
  * helper that proves a Write/Edit target sits inside a workspace root by
  * resolving BOTH sides through symlinks. Real-fs cases use `mkdtemp` +
  * `NodeFileSystemAdapter`, mirroring node-git.test.ts's style; every mkdtemp
@@ -197,7 +197,7 @@ describe("resolveWorkspaceWriteFacts", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Fix cycle 1 (TASK.32 S1 adversarial review): B1 (errno-blind presence
+  // Fix cycle 1 (S1 adversarial review): B1 (errno-blind presence
   // probe) + M1 (lstat-less port fails open, contrary to the port contract).
 
   it("R12: port with realpath but without lstat over a dangling-symlink component => undefined (M1, port contract fail-closed)", async () => {

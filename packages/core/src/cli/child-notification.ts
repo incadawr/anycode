@@ -1,5 +1,5 @@
 /**
- * Detached-child terminal report formatting (TASK.145 срез 1, design §4bis/§7).
+ * Detached-child terminal report formatting (срез 1, design §4bis/§7).
  * Pure string helper — no I/O, no state — mirroring background-notice.ts's
  * role for background bash tasks, but for a `Agent tier:"session" detach:true`
  * child session instead: the desktop host (host/index.ts's
@@ -79,7 +79,7 @@ export interface ChildTaskNotificationInput {
    */
   fullReportPath?: string;
   /**
-   * Taskana 4820: present only for a `max_turns` terminal the caller wants
+   * present only for a `max_turns` terminal the caller wants
    * attributed — renders an explicit TURN LIMIT cause line at the head of the
    * summary so the parent reads "stopped at its budget" instead of a bare
    * "failed" with orphan text. Absent for every other status (and for a
@@ -127,7 +127,7 @@ function capSummary(text: string, maxChars: number, fullReportPath?: string): st
  * Maps a session-tier terminal status onto the notification's 3-way
  * vocabulary (spec §4bis's literal `completed|failed|cancelled`): `max_turns`
  * and `error` both collapse to "failed" — from the parent's point of view
- * both mean the same thing, "did not produce a finished report" (TASK.44's
+ * both mean the same thing, "did not produce a finished report" ('s
  * own "only completed is success" discipline, one level coarser here since
  * the notification has no room for a `max_turns`-specific remediation hint
  * the way the synchronous Agent tool's own error text does).
@@ -161,13 +161,13 @@ export function formatChildTaskNotification(input: ChildTaskNotificationInput): 
   const status = lengthCut && input.status === "completed" ? "failed" : input.status;
   const base = capSummary(input.summary, CHILD_NOTIFICATION_SUMMARY_MAX_CHARS, input.fullReportPath);
   const userCancelled = input.cancelledBy === "user" && status === "cancelled";
-  // Taskana 4820: the TURN LIMIT cause sits INNERMOST (first line of the
+  // the TURN LIMIT cause sits INNERMOST (first line of the
   // summary body, ahead of the length marker and the child's own text) so it
   // survives every later wrap and is the first thing a model skimming the
   // summary reads. Inside `summary`, it is capped along with everything else
   // rather than prepended past the cap — the cap exists to bound what the
   // parent pays attention to, and the cause line is short by construction.
-  // Taskana 4820 review F4: the count reads naturally at 1 ("1 turn", never
+  // review F4: the count reads naturally at 1 ("1 turn", never
   // "1 turns"). The number is a MODEL-ROUND count by construction — the
   // claude translator stamps loop_end.turns from the CLI's own num_turns
   // (F4's other half) and core's loop counts its own model turns — so it is
@@ -198,7 +198,7 @@ export function formatChildTaskNotification(input: ChildTaskNotificationInput): 
 }
 
 /**
- * TASK.145 срез 2: the honest "overflow" notice a host's pending-report queue
+ * срез 2: the honest "overflow" notice a host's pending-report queue
  * (apps/desktop/src/host/child-report-queue.ts) substitutes for a detached
  * child's real report once its bounded cap is reached — "тихо резать нельзя"
  * (spec §8's "занятый родитель" cut): a dropped report must still surface
@@ -218,7 +218,7 @@ export function formatChildReportCapNotice(droppedCount: number): string {
 }
 
 /**
- * TASK.148 slice 2: a detached child's STALL notice — delivered through the
+ * slice 2: a detached child's STALL notice — delivered through the
  * SAME channel as `formatChildTaskNotification` (the desktop host's
  * `ChildReportQueue`) but for a fundamentally different event: the child has
  * gone quiet past its silence threshold, not finished. Deliberately NOT a
@@ -299,7 +299,7 @@ export function formatChildStallNotice(input: ChildStallNoticeInput): string {
   );
 }
 
-/** Taskana 4821: a detached child is blocked on an approval nobody is present to answer. */
+/** a detached child is blocked on an approval nobody is present to answer. */
 export interface ChildApprovalNoticeInput {
   taskId: string;
   toolUseId: string;
@@ -336,7 +336,7 @@ function formatAskDuration(ms: number): string {
 }
 
 /**
- * Taskana 4821: parent-visible notice that a DETACHED child raised an approval
+ * parent-visible notice that a DETACHED child raised an approval
  * ask. Distinct root tag (`<task-approval-notice>`) from the terminal report
  * and stall notice. Tells the parent how to answer and what happens if nobody
  * does (the ask expires fail-closed and the child is told not to bypass it).
@@ -384,7 +384,7 @@ export function formatChildApprovalNotice(input: ChildApprovalNoticeInput): stri
 }
 
 /**
- * Taskana 4820: the APPROACHING turn-budget notice for a detached child —
+ * the APPROACHING turn-budget notice for a detached child —
  * delivered through the SAME ChildReportQueue channel as the stall notice
  * above, but for the mirror-image failure mode the 25.10 orchestration hit:
  * a review child worked actively for ~50 minutes, crossed its turn cap
@@ -456,7 +456,7 @@ export function formatChildTurnBudgetNotice(input: ChildTurnBudgetNoticeInput): 
 }
 
 /**
- * taskana 4181: the SUPERVISOR idle reminder — delivered through the SAME
+ * the SUPERVISOR idle reminder — delivered through the SAME
  * channel as the child notifications above (the desktop host's
  * `ChildReportQueue`) but for the opposite failure mode: not a child gone
  * quiet, but the SUPERVISOR itself. Its turn ended, there are ZERO live

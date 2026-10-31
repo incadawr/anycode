@@ -147,7 +147,7 @@ describe("pluginManifestSchema — fail-soft shape (missing/invalid required fie
 });
 
 // ---------------------------------------------------------------------------
-// Taskana 4732 S1-A — manifest v1 (design §2). Legacy suites above are the
+// S1-A — manifest v1 (design §2). Legacy suites above are the
 // byte-identical regression: their exact toEqual assertions still pass with
 // the v1 schema, proving an ecosystem manifest parses EXACTLY as today.
 
@@ -396,8 +396,8 @@ describe("pluginManifestSchema — services (Taskana 4750a)", () => {
   });
 });
 
-// Taskana 4751 part 0: `${secret:NAME}` in service env values.
-describe("service env secret references (Taskana 4751 part 0)", () => {
+// part 0: `${secret:NAME}` in service env values.
+describe("service env secret references (part 0)", () => {
   it("serviceSecretRefs returns the referenced names, sorted and unique", async () => {
     expect(
       serviceSecretRefs({

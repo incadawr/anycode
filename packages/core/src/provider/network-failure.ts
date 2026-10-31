@@ -1,6 +1,6 @@
 import { unwrapMiniMaxFailure } from "./minimax-failure.js";
 
-/** Shared measured undici tunnel/TLS shapes (desktop proxy-probe, TASK.134). */
+/** Shared measured undici tunnel/TLS shapes (desktop proxy-probe). */
 export const TUNNEL_STATUS_RE = /Proxy response \((\d{3})\)\s*!==\s*200/;
 export function isTlsCode(code: string | undefined, message: string): boolean {
   if (code !== undefined && (code.includes("CERT") || code.startsWith("ERR_TLS") || code.startsWith("ERR_SSL"))) return true;
@@ -30,7 +30,7 @@ function effectiveProxy(env: Record<string, string | undefined>, targetUrl: stri
 }
 
 /**
- * Taskana 4772 review F1: the proxy URL Node's env-proxy path would route
+ * review F1: the proxy URL Node's env-proxy path would route
  * `targetUrl` through, or undefined when the request goes direct. Shared by
  * the network-failure classifier (via `effectiveProxy` above) and the
  * network waiter's probe-target resolution, so the probe measures the SAME

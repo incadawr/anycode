@@ -290,7 +290,7 @@ describe("generateSessionTitle", () => {
   });
 });
 
-describe("generateSessionTitle mid-stream replay (Taskana 4705 review)", () => {
+describe("generateSessionTitle mid-stream replay (review)", () => {
   it("keeps only the replayed attempt's text when a stream_retry discards a partial reply", async () => {
     const port = new ScriptedModelPort([
       { type: "start" },
@@ -305,7 +305,7 @@ describe("generateSessionTitle mid-stream replay (Taskana 4705 review)", () => {
 });
 
 
-describe("agent envelope titles (Taskana 4880)", () => {
+describe("agent envelope titles", () => {
   it.each(["\\n", "\n"])("uses the payload after separator %j", async (separator) => {
     const source = `[AnyCode authenticated agent message {"sender":"supervisor"}]${separator}Fix the sidebar\nDetails`;
     expect(deriveSessionTitle(source)).toBe("Fix the sidebar");

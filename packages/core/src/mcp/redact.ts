@@ -1,5 +1,5 @@
 /**
- * Redaction for MCP diagnostics (Taskana 4752, part C). A resolved `${secret:}`
+ * Redaction for MCP diagnostics (part C). A resolved `${secret:}`
  * value — or, since the stderr diagnostic was widened, any configured
  * environment/header value, literal or `${env:}`-expanded — must never reach
  * `status.error`, a problem, or a log. Values shorter than 4 characters are not

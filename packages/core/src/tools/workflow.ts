@@ -77,7 +77,7 @@ export const workflowTool: ToolDefinition<WorkflowInput, WorkflowOutput> = {
     // call's id so the desktop card correlates them. The engine never throws —
     // an unknown name / structural failure is a failed outcome.
     //
-    // Presentation accumulation (TASK.191 slice S5, mirror of tools/agent.ts's
+    // Presentation accumulation (slice S5, mirror of tools/agent.ts's
     // own subagent-card accumulation): fed from the SAME mapped event ctx.emit
     // receives, not the raw WorkflowProgress, so the persisted activity entries
     // stay byte-identical to what the live renderer saw — same reasoning as the
@@ -106,7 +106,7 @@ export const workflowTool: ToolDefinition<WorkflowInput, WorkflowOutput> = {
     // unknown name / a pre-aborted signal fail before the engine's first
     // onProgress call — the card is never fabricated from nothing). A
     // fail-fast unknown-agentType pre-check DOES stream start/step_end/end
-    // now (TASK.193, workflow/engine.ts), each error terminal carrying
+    // now (workflow/engine.ts), each error terminal carrying
     // `unlaunched: true`, so its card is produced like any other run.
     const snapshot = finalizeWorkflowCard(acc, { status: outcome.status, durationMs: outcome.durationMs });
     const presentation: { presentation?: ToolResultPresentation } =
@@ -115,7 +115,7 @@ export const workflowTool: ToolDefinition<WorkflowInput, WorkflowOutput> = {
     // Project the outcome onto the tool payload. A SUCCESSFUL step's finalText
     // stays dropped (what the model sees of a step that worked is the
     // definition author's call — outputTemplate / the sink join). A FAILED
-    // step's reason is carried instead of discarded (TASK.193): nothing else
+    // step's reason is carried instead of discarded: nothing else
     // delivers it, and without it the owner debugs every failure by guessing.
     const output: WorkflowOutput = {
       status: outcome.status,
@@ -161,7 +161,7 @@ export const workflowTool: ToolDefinition<WorkflowInput, WorkflowOutput> = {
     const body = output?.output ?? "";
     if (!result.ok) {
       // The model sees the failure summary followed by any rendered output.
-      // TASK.221: a capped precheck output carries the same truncation marker
+      // a capped precheck output carries the same truncation marker
       // the completed path appends — truncation is reported, never silent.
       const summary = result.error ?? "Workflow: the run failed.";
       const marker = output?.truncated
@@ -190,7 +190,7 @@ function mapProgressToEvent(progress: WorkflowProgress, toolCallId: string): Too
         toolCallId,
         workflow: progress.workflow,
         totalSteps: progress.totalSteps,
-        // Copied EXPLICITLY, field by field (TASK.191 slice S3): same
+        // Copied EXPLICITLY, field by field (slice S3): same
         // discipline as step_progress's usage bridge below — a field added to
         // WorkflowStepGraphNode and not named here type-checks green and
         // arrives nowhere.
@@ -221,7 +221,7 @@ function mapProgressToEvent(progress: WorkflowProgress, toolCallId: string): Too
         turns: progress.turns,
         toolCalls: progress.toolCalls,
         lastTool: progress.lastTool,
-        // Copied EXPLICITLY (TASK.191 slice S2): this bridge names every field
+        // Copied EXPLICITLY (slice S2): this bridge names every field
         // it carries, so a field added to WorkflowProgress and not added here
         // type-checks green and arrives nowhere.
         ...(progress.usage !== undefined ? { usage: progress.usage } : {}),
@@ -242,7 +242,7 @@ function mapProgressToEvent(progress: WorkflowProgress, toolCallId: string): Too
         status: progress.status,
         turns: progress.turns,
         durationMs: progress.durationMs,
-        // Copied EXPLICITLY (TASK.193): same discipline as the usage bridge
+        // Copied EXPLICITLY: same discipline as the usage bridge
         // above — a field added to WorkflowProgress's step_end and not named
         // here type-checks green and arrives nowhere.
         ...(progress.usage !== undefined ? { usage: progress.usage } : {}),

@@ -1,7 +1,7 @@
 /**
- * Credential-free loopback proxy relay (TASK.135 / Taskana 4074 follow-up).
+ * Credential-free loopback proxy relay (follow-up).
  *
- * TASK.135's scrub DROPS a `user:pass@` proxy URL from every non-engine child,
+ * 's scrub DROPS a `user:pass@` proxy URL from every non-engine child,
  * which closes the `env`-exfil vector but breaks npm/git/curl behind an
  * authenticating corporate proxy: the child connects directly and loses the
  * network. This module restores connectivity WITHOUT restoring the credential:
@@ -22,13 +22,13 @@
  * https:// (TLS-to-proxy) upstream is the ONE thing this relay refuses —
  * supporting it needs a TLS client per hop (a connect+handshake state machine
  * node:http cannot express without a tls socket), which is not trivial, so
- * `resolveProxyRelay` returns `undefined` and the caller keeps TASK.135's plain
+ * `resolveProxyRelay` returns `undefined` and the caller keeps's plain
  * drop behaviour (log once, children go direct). Engine tabs (claude/codex)
- * received the upstream proxy URL themselves until Taskana 4685: their host
+ * received the upstream proxy URL themselves until: their host
  * builders now swap a credentialed family for the relay URL and main
  * de-credentialises engine carriers against main's own relay (this module).
  *
- * ── auth token (Taskana 4685, reworked) ──
+ * ── auth token (reworked) ──
  * The 127.0.0.1 bind + peer check keeps the LAN out, but loopback is shared
  * by EVERY local user of the machine, so any process of any local user could
  * dial the port and get an authenticating proxy. The cross-user boundary is
@@ -118,7 +118,7 @@ export interface UpstreamProxyEndpoint {
 /**
  * Parses a CREDENTIALED upstream proxy URL into the endpoint the relay dials.
  * `undefined` for everything the relay does not serve: a URL without userinfo
- * (nothing to protect — TASK.135 passes those through verbatim and no relay is
+ * (nothing to protect — passes those through verbatim and no relay is
  * started), an https:// upstream (TLS-to-proxy is not supported; the caller
  * keeps the drop behaviour), a missing port, or anything `URL` cannot parse.
  *
@@ -244,7 +244,7 @@ export interface ProxyRelay {
   readonly url: string;
   /** The loopback port the relay listens on. */
   readonly port: number;
-  /** Per-relay random auth token (Taskana 4685); the userinfo password of `url`. */
+  /** Per-relay random auth token; the userinfo password of `url`. */
   readonly token: string;
   /** Destroys every socket (client, upstream and tunnels) and closes the listener. Idempotent. */
   close(): void;
@@ -253,7 +253,7 @@ export interface ProxyRelay {
 // ── auth gate (pure; exported for unit tests) ──
 
 /**
- * Taskana 4685 rework: the `Proxy-Authorization` value a client MUST present
+ * rework: the `Proxy-Authorization` value a client MUST present
  * for this relay — `Basic base64(anycode:<token>)`. Computed once at bind
  * time so the per-request compare is a single constant-time buffer check.
  */
@@ -283,7 +283,7 @@ function presentedMatches(presented: string, expected: string): boolean {
 }
 
 /**
- * Taskana 4685 rework: the auth gate every request and CONNECT passes
+ * rework: the auth gate every request and CONNECT passes
  * through BEFORE any upstream contact. `absent` and `wrong` are both
  * rejected (407) — the relay's own children always present the token via
  * proxy-URL userinfo, so an unauthenticated request is exactly the
@@ -312,7 +312,7 @@ const HOP_BY_HOP = new Set([
 ]);
 
 /**
- * Taskana 4685: the retired client-token header. Never forwarded upstream —
+ * the retired client-token header. Never forwarded upstream —
  * a client (or a model driving it) must not be able to smuggle an
  * anycode-specific header to a third-party host through the relay.
  */
@@ -347,7 +347,7 @@ export function stripHopByHop(headers: http.IncomingHttpHeaders): http.OutgoingH
 
 /**
  * Builds the fully-wired relay server (request + connect + peer-check + socket
- * set) without listening. Mints the per-relay auth token (Taskana 4685): 24
+ * set) without listening. Mints the per-relay auth token: 24
  * random bytes, base64url — 32 unambiguous URL-path characters that survive
  * every child's env handling untouched.
  */
@@ -376,7 +376,7 @@ function buildRelayServer(endpoint: UpstreamProxyEndpoint): { server: http.Serve
       res.end("anycode proxy relay: absolute http:// request URI required\n");
       return;
     }
-    // Taskana 4685 rework: auth gate BEFORE any upstream contact. Absent and
+    // rework: auth gate BEFORE any upstream contact. Absent and
     // wrong `Proxy-Authorization` both answer 407 — children carry the token
     // as proxy-URL userinfo, which every proxy-aware client turns into this
     // header on plain HTTP and CONNECT alike.
@@ -418,7 +418,7 @@ function buildRelayServer(endpoint: UpstreamProxyEndpoint): { server: http.Serve
   };
 
   const connectHandler = (req: http.IncomingMessage, clientSocket: net.Socket, head: Buffer): void => {
-    // Taskana 4685 rework: auth gate BEFORE the upstream dial, same rule as
+    // rework: auth gate BEFORE the upstream dial, same rule as
     // plain HTTP. A wrong or absent token must never learn whether the
     // upstream is even up.
     if (checkRelayAuthorization(req.headers["proxy-authorization"] as string | undefined, expectedAuthorization) !== "valid") {
@@ -552,7 +552,7 @@ function buildRelayServer(endpoint: UpstreamProxyEndpoint): { server: http.Serve
  * The key a relay is cached under: the NORMALIZED credentialed upstream URL
  * — scheme, userinfo (as the URL parser canonicalises it), lowercased host,
  * port, with path/query/hash cleared (`http://u:p@Corp:8080` and
- * `http://u:p@corp:8080/` are ONE upstream with ONE relay). Taskana 4685
+ * `http://u:p@corp:8080/` are ONE upstream with ONE relay).
  * rework (blocker B2): one relay per upstream, never one per process — a
  * settings proxy profile and a shell proxy can be two DIFFERENT credentialed
  * upstreams at the same time, and every swap site must receive the relay of
@@ -585,9 +585,9 @@ export function relayRegistryKey(upstreamUrl: string): string | undefined {
  * started, closed by `closeProxyRelay()`.
  *
  *  - `undefined` when this upstream cannot be relayed: no userinfo (nothing
- *    to protect — TASK.135 passes those through verbatim), an https:///
+ *    to protect — passes those through verbatim), an https:///
  *    socks5:// upstream, a missing port, an unparseable URL, or a bind
- *    failure. Each keeps TASK.135's drop behaviour; for the cannot-serve
+ *    failure. Each keeps's drop behaviour; for the cannot-serve
  *    case a single console.warn says so once per upstream (the card's
  *    "log once and fall back" rule).
  *  - Idempotent per upstream: the first successful call caches its relay and
@@ -611,7 +611,7 @@ export async function resolveProxyRelay(
     return existing;
   }
   if (refusedUpstreams.has(key)) {
-    // Already refused in this process: keep TASK.135's drop behaviour
+    // Already refused in this process: keep's drop behaviour
     // silently — the single warn below already said why, once.
     return undefined;
   }
@@ -701,13 +701,13 @@ export function proxyRelayUrl(upstreamUrl?: string): string | undefined {
 }
 
 /**
- * Taskana 4685 rework (blocker B2): the per-value lookup hand to
+ * rework (blocker B2): the per-value lookup hand to
  * `buildChildEnv`/`sanitizeChildEnv` — resolves EACH credentialed value's
  * own relay from the already-started registry, so a swap never substitutes a
  * relay fronting a DIFFERENT upstream (distinct HTTP_PROXY vs HTTPS_PROXY
  * upstreams each keep their own path). Undefined for a value with no
  * started relay (fail-closed drop), and the whole lookup is undefined when
- * the registry is empty (nothing was prewarmed — byte-identical TASK.135
+ * the registry is empty (nothing was prewarmed — byte-identical
  * drop behaviour).
  */
 export function proxyRelayLookup(): RelayUrlLookup | undefined {
@@ -788,7 +788,7 @@ export function closeUnreferencedProxyRelays(referencedKeys: readonly string[]):
  * the family `sanitizeChildEnv` drops (ALL_PROXY, npm_config_proxy, … —
  * cross-review F4). Returns the FIRST credentialed value, or undefined when
  * every present member is credential-free. Detection reuses the exact
- * TASK.135 rule: a literal `@` means userinfo — EXCEPT the relay URL's own
+ * rule: a literal `@` means userinfo — EXCEPT the relay URL's own
  * `anycode:<token>@` shape (cross-review F5a): the host env of a NESTED
  * anycode process (a CLI/host spawned as a Bash child of this one) inherits
  * the parent's relay URL as its HTTPS_PROXY, and relaying THAT would chain a

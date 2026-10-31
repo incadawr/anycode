@@ -637,7 +637,7 @@ describe("executeToolCall — B(2) errorKind mapping & grace", () => {
     expect(outcome.status).toBe("cancelled");
   });
 
-  // TASK.44: max_turns errorKind (set by the Agent tool for a subagent that hit
+  // max_turns errorKind (set by the Agent tool for a subagent that hit
   // its turn budget) maps to a max_turns outcome — never success.
   it("maps a max_turns errorKind to a max_turns outcome (never success)", async () => {
     const tool = makeTool({
@@ -875,7 +875,7 @@ describe("executeToolCall — tasks plumbing (design slice-5.5-cut.md §2/R3)", 
   });
 });
 
-describe("executeToolCall — sessionSubagents plumbing (TASK.102 CUT-S2 §2.2/§0.2)", () => {
+describe("executeToolCall — sessionSubagents plumbing (CUT-S2 §2.2/§0.2)", () => {
   const sessionSubagentsPort: SessionSubagentPort = {
     run: async () => ({
       status: "completed",
@@ -997,7 +997,7 @@ describe("executeToolCall — media plumbing (design slice-6.2-cut.md §2/R3)", 
   });
 });
 
-describe("executeToolCall — images plumbing (TASK.198 plan §2, slice B1)", () => {
+describe("executeToolCall — images plumbing (plan §2, slice B1)", () => {
   const imagesPort: ImageLookupPort = { resolve: () => undefined };
 
   function captureTool(sink: { images?: ImageLookupPort }): AnyToolDefinition {
@@ -1179,7 +1179,7 @@ describe("executeToolCall — auto-checkpoint seam (design slice-4.7-cut.md §2.
 });
 
 // ---------------------------------------------------------------------------
-// TASK.93 — the model-visible result budget. The guarantee under test: no path
+// the model-visible result budget. The guarantee under test: no path
 // through the dispatcher hands the model an unbounded tool result.
 
 describe("executeToolCall — result budget", () => {
@@ -1375,9 +1375,9 @@ describe("executeToolCall — result budget", () => {
 });
 
 // ---------------------------------------------------------------------------
-// TASK.32 — honest Edit mode: dispatch-site workspace facts (CUT-S1 §7c).
+// honest Edit mode: dispatch-site workspace facts (CUT-S1 §7c).
 
-describe("executeToolCall — TASK.32 workspace facts", () => {
+describe("executeToolCall — workspace facts", () => {
   const adapter = new NodeFileSystemAdapter();
   const tmpRoots: string[] = [];
 
@@ -1643,9 +1643,9 @@ describe("executeToolCall — TASK.32 workspace facts", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Taskana 4294 — always-allow rules vs the workspace boundary.
+// always-allow rules vs the workspace boundary.
 
-describe("executeToolCall — Taskana 4294 always-allow vs workspace boundary", () => {
+describe("executeToolCall — always-allow vs workspace boundary", () => {
   const adapter = new NodeFileSystemAdapter();
   const tmpRoots: string[] = [];
 
@@ -1931,11 +1931,11 @@ describe("executeToolCall — Taskana 4294 always-allow vs workspace boundary", 
 });
 
 // ---------------------------------------------------------------------------
-// Taskana 4702 Stage 1: the ask-zone classifier seam. The classifier may only
+// Stage 1: the ask-zone classifier seam. The classifier may only
 // turn an ask into allow; it never runs on allow/deny, never overrides a hook,
 // and every failure leaves the broker in charge.
 
-describe("executeToolCall — ask-zone classifier (Taskana 4702)", () => {
+describe("executeToolCall — ask-zone classifier", () => {
   const bashTool = makeTool({
     metadata: { ...baseMetadata, name: "Bash" },
     inputSchema: z.object({ command: z.string() }),

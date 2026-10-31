@@ -1,4 +1,4 @@
-/** Vision fallback public surface (TASK.198 slice A). */
+/** Vision fallback public surface (slice A). */
 
 export { ask, ASK_TIMEOUT_MS, OVERVIEW_QUESTION } from "./recognizer.js";
 export type {

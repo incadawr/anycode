@@ -516,7 +516,7 @@ describe("runToolBatches", () => {
 });
 
 // ---------------------------------------------------------------------------
-// TASK.229: rolling bounded execution within safe runs, solo barriers, width
+// rolling bounded execution within safe runs, solo barriers, width
 // normalization. A real AbortController whose removeEventListener flips
 // `aborted` when the pool hands a slot over induces the handoff race.
 
@@ -533,7 +533,7 @@ function handoffAbortSignal(): AbortSignal {
   return signal;
 }
 
-describe("runToolBatches rolling admission (TASK.229)", () => {
+describe("runToolBatches rolling admission", () => {
   it("S1: cap 2 starts the next safe call as soon as one finishes, one result each", async () => {
     const gateA = deferred<ToolResult>();
     const gateB = deferred<ToolResult>();
@@ -886,7 +886,7 @@ describe("runToolBatches rolling admission (TASK.229)", () => {
   });
 });
 
-describe("concurrency width normalization (TASK.229)", () => {
+describe("concurrency width normalization", () => {
   const registry = makeRegistry([makeTool("Read")]);
   const fiveReads = Array.from({ length: 5 }, (_unused, i) => call("Read", `r${i}`));
 

@@ -1,5 +1,5 @@
 /**
- * semver-range tests (Taskana 4732 S1-A, design §2 engines.anycode): parse
+ * semver-range tests (S1-A, design §2 engines.anycode): parse
  * tolerance (prerelease ignored, malformed → undefined), the comparator
  * grammar (>= > <= < =, ^, ~, space AND, || OR), empty range = any, and the
  * fail-closed "garbage → no match" ruling.

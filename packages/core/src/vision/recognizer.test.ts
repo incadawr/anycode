@@ -1,5 +1,5 @@
 /**
- * `ask()` primitive tests (TASK.198 slice A, plan §1/§10-A). Fake ModelPorts in
+ * `ask()` primitive tests (slice A, plan §1/§10-A). Fake ModelPorts in
  * the same style as context/session-title.test.ts's ScriptedModelPort family:
  * ask() is a one-shot streamText call, so the same fakes (scripted/throwing/
  * hanging) exercise the same fail-quiet contract — except here failure surfaces
@@ -266,7 +266,7 @@ describe("ask", () => {
   });
 });
 
-describe("ask mid-stream replay (Taskana 4705 review)", () => {
+describe("ask mid-stream replay (review)", () => {
   it("answers with only the replayed attempt's text when a stream_retry discards a partial reply", async () => {
     const port = new ScriptedModelPort([
       { type: "start" },

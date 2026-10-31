@@ -51,7 +51,7 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     });
   });
 
-  it("finish -> usage carries a reported cache figure, including an honest 0, and omits an unreported one (TASK.111)", () => {
+  it("finish -> usage carries a reported cache figure, including an honest 0, and omits an unreported one", () => {
     const withCache = telemetryRecordFor({
       type: "finish",
       finishReason: "stop",
@@ -149,7 +149,7 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     expect(telemetryRecordFor(event)).toEqual({ t: "subagent_start", agentType: "sonnet" });
   });
 
-  it("subagent_start with route+fallbackReason (Taskana 4704 §3.10) copies both field-by-field", () => {
+  it("subagent_start with route+fallbackReason (§3.10) copies both field-by-field", () => {
     const event: AgentEvent = {
       type: "subagent_start",
       toolCallId: "call-r",
@@ -216,7 +216,7 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
   // refusal enum) is whitelisted onto subagent_end field-by-field — same
   // projection discipline as model/responseModel above; the ladder's own
   // free text (remaining/nextAction) never reaches this port.
-  it("subagent_end with ceiling (TASK.4055) — carried field-by-field", () => {
+  it("subagent_end with ceiling — carried field-by-field", () => {
     const event: AgentEvent = {
       type: "subagent_end",
       toolCallId: "call-3",
@@ -257,11 +257,11 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     expect("lastRefusal" in rec.ceiling).toBe(false);
   });
 
-  // TASK.171: closes the gap where a completed child's model attribution
+  // closes the gap where a completed child's model attribution
   // never reached telemetry at all — `model` (the REQUESTED id) and
   // `responseModel` (the provider's own claim) are now whitelisted onto
   // subagent_end, field-by-field, same as every other case in this file.
-  it("subagent_end with model+responseModel (toolCallId still dropped, TASK.171 gap closed)", () => {
+  it("subagent_end with model+responseModel (toolCallId still dropped, gap closed)", () => {
     const event: AgentEvent = {
       type: "subagent_end",
       toolCallId: "call-2",
@@ -354,7 +354,7 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     });
   });
 
-  it("workflow_step_end (toolCallId/stepId/failure/usage dropped, unlaunched copied when true, TASK.193 S4)", () => {
+  it("workflow_step_end (toolCallId/stepId/failure/usage dropped, unlaunched copied when true, S4)", () => {
     const event: AgentEvent = {
       type: "workflow_step_end",
       toolCallId: "call-4",
@@ -409,7 +409,7 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     });
   });
 
-  it("degeneration (channel/period/repeats/turn copied field-by-field, TASK.210)", () => {
+  it("degeneration (channel/period/repeats/turn copied field-by-field)", () => {
     const event: AgentEvent = {
       type: "degeneration",
       channel: "text",
@@ -426,7 +426,7 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     });
   });
 
-  it("ceiling_refused (reason/turn/round copied exactly, TASK.208)", () => {
+  it("ceiling_refused (reason/turn/round copied exactly)", () => {
     const event: AgentEvent = {
       type: "ceiling_refused",
       reason: "rounds_exhausted",
@@ -441,7 +441,7 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     });
   });
 
-  it("ceiling_grant (numeric projection only — remaining/nextAction dropped, TASK.208)", () => {
+  it("ceiling_grant (numeric projection only — remaining/nextAction dropped)", () => {
     const event: AgentEvent = {
       type: "ceiling_grant",
       round: 2,
@@ -462,7 +462,7 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     expect(JSON.stringify(rec)).not.toContain(SENTINEL);
   });
 
-  it("permission_auto_decided (Taskana 4702): classifier id, decision, latency and error PRESENCE only — reason/score/command never persisted", () => {
+  it("permission_auto_decided: classifier id, decision, latency and error PRESENCE only — reason/score/command never persisted", () => {
     const event: AgentEvent = {
       type: "permission_auto_decided",
       toolCallId: "call-1",
@@ -659,7 +659,7 @@ describe("buildTelemetryTap", () => {
     expect(records).toHaveLength(0);
   });
 
-  // TASK.208: the real writer boundary — a tap bound to a live JsonlTelemetrySink
+  // the real writer boundary — a tap bound to a live JsonlTelemetrySink
   // lands the refusal and its paired loop_end as adjacent parseable JSONL lines.
   it("writes a ceiling_refused + paired loop_end to a real JsonlTelemetrySink file", async () => {
     const tmpDir = await mkdtemp(join(tmpdir(), "anycode-telemetry-refusal-"));
@@ -797,7 +797,7 @@ describe("buildEngineTelemetryTap", () => {
     expect(sumOutput).not.toBe(70);
   });
 
-  it("cache pin: cachedInput is a fourth cumulative counter recorded as a delta, never above the input delta (TASK.111)", () => {
+  it("cache pin: cachedInput is a fourth cumulative counter recorded as a delta, never above the input delta", () => {
     const { port, records } = makeRecordingPort();
     const tap = buildEngineTelemetryTap(port, "session-codex");
     tap({ type: "engine_session_tokens", input: 100, output: 10, total: 110, cachedInput: 60 });

@@ -144,7 +144,7 @@ describe("imageCapableReadTool — capability gate (fail-closed, poison-proof)",
     expect(result.images).toBeUndefined();
   });
 
-  it("TASK.198 slice B2: passes when the model is blind but a vision recognizer is configured", async () => {
+  it("slice B2: passes when the model is blind but a vision recognizer is configured", async () => {
     const files = { "/work/shot.png": PNG_BYTES };
     const mediaBlindWithRecognizer: MediaCapabilityPort = {
       imageInputEnabled: () => false,
@@ -158,7 +158,7 @@ describe("imageCapableReadTool — capability gate (fail-closed, poison-proof)",
     expect(result.images).toHaveLength(1);
   });
 
-  it("TASK.198 slice B2: still refuses when blind and recognizerConfigured() is false", async () => {
+  it("slice B2: still refuses when blind and recognizerConfigured() is false", async () => {
     const files = { "/work/shot.png": PNG_BYTES };
     const mediaBlindNoRecognizer: MediaCapabilityPort = {
       imageInputEnabled: () => false,

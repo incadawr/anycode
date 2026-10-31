@@ -192,7 +192,7 @@ describe("workflow integration — discovery -> Workflow tool -> engine compose 
       });
 
       expect(ext.problems).toEqual([]);
-      // The bundled examples/workflows root (Taskana 4095) contributes the
+      // The bundled examples/workflows root contributes the
       // deep-research preset alongside this workspace's own definitions —
       // project root first, bundled last (claimed-set insertion order).
       expect(ext.workflows.map((wf) => wf.name)).toEqual(["demo-pipeline", "deep-research"]);
@@ -347,7 +347,7 @@ describe("workflow integration — orphan safety on the composed discovery -> Wo
         claimedMcpNames: new Set(),
       });
       expect(ext.problems).toEqual([]);
-      // Bundled deep-research preset (Taskana 4095) discovered after the
+      // Bundled deep-research preset discovered after the
       // workspace's own definition — same claimed-set order as above.
       expect(ext.workflows.map((wf) => wf.name)).toEqual(["sleeper-wf", "deep-research"]);
 

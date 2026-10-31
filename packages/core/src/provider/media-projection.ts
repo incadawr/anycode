@@ -1,5 +1,5 @@
 /**
- * Media-projection decorator (TASK.198 plan §3): strips image bytes from
+ * Media-projection decorator (plan §3): strips image bytes from
  * every ChatMessage before a request reaches the wire when the current
  * model can't see them, so a live model switch mid-session (sighted ->
  * blind) can never silently re-send images the new model would reject with

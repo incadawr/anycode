@@ -1,5 +1,5 @@
 /**
- * Taskana 4730 (4702 remainder): the ONE shared ask-zone classifier consultation
+ * (4702 remainder): the ONE shared ask-zone classifier consultation
  * — eligibility, input assembly, the fail-closed call and the
  * `permission_auto_decided` journal event. Extracted verbatim from the
  * dispatcher's tryAutoDecideAsk (dispatcher output stays byte-identical: the

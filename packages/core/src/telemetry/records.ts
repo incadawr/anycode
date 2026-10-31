@@ -24,7 +24,7 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         outputTokens: event.usage.outputTokens,
         totalTokens: event.usage.totalTokens,
         // Copied only when reported: an absent key reads "not reported",
-        // never a 0% cache hit (TASK.111).
+        // never a 0% cache hit.
         ...(event.usage.cachedInputTokens !== undefined ? { cachedInputTokens: event.usage.cachedInputTokens } : {}),
       };
     case "tool_result":
@@ -60,7 +60,7 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         source: event.source,
       };
     case "subagent_start":
-      // Taskana 4704 §3.10: `route` (the host's entryKey identity) and
+      // §3.10: `route` (the host's entryKey identity) and
       // `fallbackReason` (why a non-primary entry ran) copied field-by-field,
       // same whitelist discipline — absent for every non-routed spawn.
       return {
@@ -72,11 +72,11 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         ...(event.fallbackReason !== undefined ? { fallbackReason: event.fallbackReason } : {}),
       };
     case "subagent_end":
-      // TASK.171: closes the known gap where a completed child's model
+      // closes the known gap where a completed child's model
       // attribution never reached telemetry at all. `model` (the REQUESTED
       // id, owner's ruling: "модель никогда не ответит, главное какие
       // запросы мы шлем") and `responseModel` (the provider's own claim,
-      // kept as separate evidence for TASK.174) are added field-by-field,
+      // kept as separate evidence for) are added field-by-field,
       // same whitelist discipline as every other case here — this stays a
       // projection, never a spread of the raw event.
       //
@@ -112,7 +112,7 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         durationMs: event.durationMs,
       };
     case "workflow_step_end":
-      // TASK.193: the step's terminal FACT only — status/turns/duration and
+      // the step's terminal FACT only — status/turns/duration and
       // `unlaunched`. `failure` (text), `stepId` and `usage` are deliberately
       // NOT copied: this stays a whitelist projection, and a step's failure
       // reason is text (dropped per the module doc above; its durable home is
@@ -140,7 +140,7 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         turn: event.turn,
       };
     case "ceiling_refused":
-      // TASK.208: refusal FACT only — closed reason enum plus numbers. The
+      // refusal FACT only — closed reason enum plus numbers. The
       // paired `remaining`/`nextAction` text (on ceiling_grant) is never
       // carried on this port.
       return {
@@ -150,7 +150,7 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         round: event.round,
       };
     case "ceiling_grant":
-      // TASK.208: numeric projection only — `remaining`/`nextAction` are the
+      // numeric projection only — `remaining`/`nextAction` are the
       // model's free text and are deliberately dropped here.
       return {
         t: "ceiling_grant",
@@ -159,7 +159,7 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         totalGranted: event.totalGranted,
       };
     case "permission_auto_decided":
-      // Taskana 4702: the counter's facts only. `reason` is the classifier's own
+      // the counter's facts only. `reason` is the classifier's own
       // free text and `toolCallId`/`score` are not needed for the counter, so
       // they are dropped; `error` is presence-only, like `error` above.
       return {
@@ -195,7 +195,7 @@ export function buildTelemetryTap(
 }
 
 /**
- * Telemetry track (TASK.160): the tap an inline subagent's child AgentLoop
+ * Telemetry track: the tap an inline subagent's child AgentLoop
  * gets, so its usage/tool/turn_end records land in the PARENT's sink
  * (decision §2.2 option а — same file, marked by tier) with the child's
  * `agentType`/`model` stamped as the envelope's `sub`. Same whitelist as
@@ -227,7 +227,7 @@ function deltaSince(current: number, previous: number): number {
 }
 
 /**
- * Telemetry track (TASK.159 §2.3): the tap a codex/claude engine boot passes
+ * Telemetry track (§2.3): the tap a codex/claude engine boot passes
  * as its Session.eventTap. `engine_session_tokens` is NOT in
  * telemetryRecordFor's whitelist (it is CUMULATIVE — replace, not
  * accumulate, per events.ts ~:283-302) and is intercepted here BEFORE the
@@ -293,7 +293,7 @@ export function buildEngineTelemetryTap(
         outputDelta = deltaSince(output, prevOutput);
         prevOutput = output;
       }
-      // TASK.111: the cache-read counter is a fourth independent cumulative
+      // the cache-read counter is a fourth independent cumulative
       // counter, recorded only alongside an input delta it is a subset of —
       // clamped to it so a lone reset of one counter can never claim more
       // cached input than input.

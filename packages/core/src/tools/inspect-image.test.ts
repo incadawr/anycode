@@ -1,5 +1,5 @@
 /**
- * InspectImage tool tests (TASK.198 slice B2, plan §5). Fake ModelPorts follow
+ * InspectImage tool tests (slice B2, plan §5). Fake ModelPorts follow
  * vision/recognizer.test.ts's ScriptedModelPort family — ask() calls are
  * exercised through the tool's portFactory test seam, never mocked directly.
  */
@@ -268,7 +268,7 @@ describe("InspectImage — ask() failure", () => {
   });
 });
 
-describe("InspectImage — TASK.198 slice G (CSS viewport scale hint)", () => {
+describe("InspectImage — slice G (CSS viewport scale hint)", () => {
   it("forwards the attachment's cssSize into ask()'s scale as a Viewport CSS size prompt line", async () => {
     const port = new ScriptedModelPort(textScript("answer"));
     const tool = createInspectImageTool({ recognizer: { endpoint, portFactory: () => port } });

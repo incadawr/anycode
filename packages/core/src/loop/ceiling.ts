@@ -1,5 +1,5 @@
 /**
- * Turn-ceiling decision ladder (TASK.124 cut-1). The turn cap stops being a
+ * Turn-ceiling decision ladder (cut-1). The turn cap stops being a
  * wall and becomes a DECISION POINT: when a loop reaches it, one structured
  * model call decides whether the run may continue, and each granted extension
  * is strictly smaller than the last (N/2, N/4, N/8), capped at
@@ -54,15 +54,15 @@ export interface CeilingConfig {
   outcomeDeadlineAt?: number;
   /**
    * Evaluated when the ceiling would trip: `true` = a human is supervising
-   * this root session, so no ceiling applies at all (TASK.124, owner rule
+   * this root session, so no ceiling applies at all (owner rule
    * 2026-08-22). Absent for children, which always keep the ladder. A LIVE
    * predicate rather than a snapshot: the supervision signal (e.g. the
-   * desktop's TASK.138 unattended latch) can flip mid-session, so a value
+   * desktop's unattended latch) can flip mid-session, so a value
    * captured at construction time would go stale within minutes.
    */
   supervisedRoot?: () => boolean;
   /**
-   * TASK.240/4055: progress-scaled adaptive grants. Off => the TASK.124 decreasing ladder, byte-identical.
+   * TASK.240/4055: progress-scaled adaptive grants. Off => the decreasing ladder, byte-identical.
    */
   adaptive?: boolean;
 }
@@ -167,7 +167,7 @@ export function adaptiveGrantForRound(round: number, maxTurns: number): number {
 }
 
 /**
- * TASK.4721: the ceiling object for one loop, built from the two facts every
+ * the ceiling object for one loop, built from the two facts every
  * build site knows: whether adaptive mode is on and whether the loop is a
  * supervised root. The `adaptive` key is ABSENT when off, so the off path
  * stays byte-identical to the pre-4721 objects (`{}` / `{ supervisedRoot }`).
@@ -185,7 +185,7 @@ export function buildCeilingConfig(parts: {
 }
 
 /**
- * TASK.4055 follow-up: tools whose WORK is dispatching other agents. Both are
+ * follow-up: tools whose WORK is dispatching other agents. Both are
  * declared `readOnly: true` (tools/agent.ts, tools/workflow.ts) and that flag
  * STAYS as-is — the permission plane treats a dispatch as side-effect-free
  * for the parent workspace, and `readOnly` is load-bearing there. But a
@@ -200,7 +200,7 @@ export function buildCeilingConfig(parts: {
  */
 export const DISPATCH_TOOL_NAMES: readonly string[] = ["Agent", "Workflow"];
 
-/** TASK.4055 follow-up: true for the explicit dispatch allowlist above (name-exact). */
+/** follow-up: true for the explicit dispatch allowlist above (name-exact). */
 export function isDispatchToolCall(toolName: string): boolean {
   return DISPATCH_TOOL_NAMES.includes(toolName);
 }
@@ -307,7 +307,7 @@ export function acceptCeilingVerdict(params: {
   }
   if (round >= 2) {
     if (adaptive === true) {
-      // TASK.240: "Не считать любое успешное чтение файла прогрессом и не
+      // "Не считать любое успешное чтение файла прогрессом и не
       // требовать механического уменьшения количества пунктов плана" — the
       // round must contain at least one productive (non-read-only) success,
       // and an unchanged/grown remaining list is NOT by itself a refusal.

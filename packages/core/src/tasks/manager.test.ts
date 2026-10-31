@@ -273,7 +273,7 @@ describe("InProcessTaskManager", () => {
     expect(manager.kill(taskId)).toBe(false); // already terminal
   });
 
-  // Taskana 4097: the desktop panel's read must not steal the model's increment.
+  // the desktop panel's read must not steal the model's increment.
   it(
     "peekOutput returns the whole buffer without advancing the readOutput cursor",
     async () => {
@@ -296,7 +296,7 @@ describe("InProcessTaskManager", () => {
     expect(manager.readOutput("task-42")).toBeUndefined();
   });
 
-  // Taskana 4097: the host's idle "task exited" event — fired once, at the
+  // the host's idle "task exited" event — fired once, at the
   // moment the task leaves "running", without draining the notice queue.
   it(
     "onTaskSettled fires once per task at its terminal and survives unsubscribe; drainNotices still carries the notice",

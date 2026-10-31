@@ -47,7 +47,7 @@ export type ValidateAgentProfileResult =
 export function validateAgentProfileDraft(draft: SubagentProfileDraft): ValidateAgentProfileResult {
   const name = draft.name.trim();
 
-  // Reserved built-in — distinct typed refusal. Taskana 4704: only the
+  // Reserved built-in — distinct typed refusal. only the
   // hard-reserved names (general-purpose/explore) refuse up front; the role
   // personas (planner/executor/reviewer) are overridable and a same-named
   // profile parses, so the editor accepts them too (matching discovery).

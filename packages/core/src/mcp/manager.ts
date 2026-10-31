@@ -60,7 +60,7 @@ interface ServerRuntime {
   rawTools?: McpRawTool[];
   toolNames: string[];
   lastError?: string;
-  /** Trimmed, non-empty `instructions` from the initialize result (Taskana 4752 part B). Never on the wire. */
+  /** Trimmed, non-empty `instructions` from the initialize result (part B). Never on the wire. */
   instructions?: string;
 }
 

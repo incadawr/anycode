@@ -1,5 +1,5 @@
 /**
- * Taskana 4070: the shared classification-to-plaque mapping, born in the
+ * the shared classification-to-plaque mapping, born in the
  * desktop PermissionModal (7d633a64, hardened by 4ebfbe12) and moved VERBATIM
  * to core so the CLI terminal broker, the desktop modal and the Codex
  * commandExecution approvals render the SAME note. These pins hold the move to
@@ -52,7 +52,7 @@ describe("bash-risk-plaque — the three-way split", () => {
     expect(bashRiskPlaque("Bash", { command: "mytool build ." })).toBe(BASH_RISK_PLAQUE.unknownBinary);
   });
 
-  it("unknown shell expression → no plaque (the TASK.35 shell hint's case alone)", () => {
+  it("unknown shell expression → no plaque (the shell hint's case alone)", () => {
     expect(bashRiskPlaque("Bash", { command: "cat f | tee out" })).toBeNull();
   });
 });
@@ -96,7 +96,7 @@ describe("bash-risk-plaque — fail-closed input discipline", () => {
  * Cross-review D2: a `kind: "writeStdin"` ask (codex 0.161+) is input sent to
  * a command that is ALREADY running — the classifier never reasoned about
  * that interaction, and the Codex bridge deliberately refuses to de-risk it
- * (TASK.184's `!stdinWrite` gate: metadata stays fail-closed high). The
+ * ('s `!stdinWrite` gate: metadata stays fail-closed high). The
  * plaque must not assert a safety property ("provably read-only") the ask's
  * own metadata refuses to vouch for: no plaque, the reason line already says
  * what the ask is.

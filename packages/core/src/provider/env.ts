@@ -9,7 +9,7 @@ export const ENV_BASE_URL = "ANYCODE_BASE_URL";
 export const ENV_MODEL = "ANYCODE_MODEL";
 /**
  * Default model id for the built-in explore persona's inline children
- * (Taskana 4131): recon sweeps many files and needs little intelligence, so
+ * recon sweeps many files and needs little intelligence, so
  * they can run on a cheaper model. Absent/blank ⇒ explore inherits the
  * parent's port (byte-identical to pre-4131). NOT validated against any
  * catalog here — the runner's resolveChildModelPort owns id validation and
@@ -19,16 +19,16 @@ export const ENV_EXPLORE_MODEL = "ANYCODE_EXPLORE_MODEL";
 export const ENV_MAX_TURNS = "ANYCODE_MAX_TURNS";
 export const ENV_SUBAGENT_MAX_TURNS = "ANYCODE_SUBAGENT_MAX_TURNS";
 /**
- * Subagent stall-detector silence threshold (TASK.148 slice 1). Deliberately a
+ * Subagent stall-detector silence threshold (slice 1). Deliberately a
  * DIFFERENT name from ENV_STALL_TIMEOUT_MS below (ANYCODE_STALL_TIMEOUT_MS) —
  * that one is the per-attempt HTTP stream watchdog; this one bounds silence
  * across a whole subagent run.
  */
 export const ENV_SUBAGENT_STALL_MS = "ANYCODE_SUBAGENT_STALL_MS";
-/** Stale-plan reminder period in tool calls (Taskana 4665); 0 disables. */
+/** Stale-plan reminder period in tool calls; 0 disables. */
 export const ENV_TODO_REMINDER_EVERY = "ANYCODE_TODO_REMINDER_EVERY";
 /**
- * Supervisor idle-watchdog first-reminder threshold (taskana 4181). Distinct
+ * Supervisor idle-watchdog first-reminder threshold. Distinct
  * from BOTH stall vars: ANYCODE_STALL_TIMEOUT_MS is the per-attempt HTTP
  * stream watchdog, ANYCODE_SUBAGENT_STALL_MS bounds a RUNNING child's silence;
  * this one bounds how long an idle supervisor (turn ended, no live detached
@@ -39,11 +39,11 @@ export const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 export const ENV_REASONING_EFFORT = "ANYCODE_REASONING_EFFORT";
 export const ENV_EFFORT_LEVELS = "ANYCODE_EFFORT_LEVELS";
 export const ENV_CONTEXT_WINDOW = "ANYCODE_CONTEXT_WINDOW";
-/** Model binding for ANYCODE_CONTEXT_WINDOW (TASK.142): the pair is model-specific. */
+/** Model binding for ANYCODE_CONTEXT_WINDOW: the pair is model-specific. */
 export const ENV_CONTEXT_WINDOW_MODEL = "ANYCODE_CONTEXT_WINDOW_MODEL";
 export const ENV_MAX_RETRIES = "ANYCODE_MAX_RETRIES";
 /**
- * Transient-network retry wall-clock budget in ms (Taskana 4705). While a
+ * Transient-network retry wall-clock budget in ms. While a
  * pre-content failure is a transient NETWORK error and less than this much
  * time has passed since the step's first failure, retrying continues past
  * ANYCODE_MAX_RETRIES. 0 disables the extension.
@@ -51,7 +51,7 @@ export const ENV_MAX_RETRIES = "ANYCODE_MAX_RETRIES";
 export const ENV_NETWORK_RETRY_BUDGET_MS = "ANYCODE_NETWORK_RETRY_BUDGET_MS";
 /**
  * Maximum time in ms a pre-content transient network failure may spend waiting
- * for the network before the turn fails (Taskana 4772). Monotonic clock, so
+ * for the network before the turn fails. Monotonic clock, so
  * system sleep does not count. 0 disables the wait. Default: RetryPolicy.networkWaitMaxMs.
  */
 export const ENV_NETWORK_WAIT_MAX_MS = "ANYCODE_NETWORK_WAIT_MAX_MS";
@@ -65,7 +65,7 @@ export const ENV_IMAGE_INPUT = "ANYCODE_IMAGE_INPUT";
  * (`imageInput?: true` per model) instead of the fork env.
  */
 /**
- * Taskana 4088: the active connection's per-model image-input override as ONE
+ * the active connection's per-model image-input override as ONE
  * value `<on|off>:<modelId>` (value and binding travel in a single var so they
  * can never be half-inherited). The host applies it ONLY while the session's
  * current model equals the bound id, so a mid-session switch to another model
@@ -81,7 +81,7 @@ export const ENV_INCLUDE_USAGE = "ANYCODE_INCLUDE_USAGE";
  * controls. Absent/blank = no override.
  */
 export const ENV_PROMPT_CACHE_OPTIONS = "ANYCODE_PROMPT_CACHE_OPTIONS";
-/** TASK.4721: adaptive turn budget (boolean; mirror of `tools.adaptiveTurnBudget`). */
+/** adaptive turn budget (boolean; mirror of `tools.adaptiveTurnBudget`). */
 export const ENV_ADAPTIVE_TURN_BUDGET = "ANYCODE_ADAPTIVE_TURN_BUDGET";
 
 const PROVIDER_TRANSPORT_VALUES: readonly ProviderTransport[] = [
@@ -94,13 +94,13 @@ export const DEFAULT_BASE_URL = "https://api.anthropic.com";
 
 /**
  * `CoreEnvConfig` plus the model binding for the context-window override
- * (TASK.142). Declared here rather than in `types/config.ts` so the added field
+ * . Declared here rather than in `types/config.ts` so the added field
  * stays entirely inside `provider/**`.
  */
 export type ModelBoundCoreEnvConfig = CoreEnvConfig & { contextWindowModel?: string };
 
 /**
- * Parses ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE (Taskana 4088) — the drawer's
+ * Parses ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE — the drawer's
  * per-model override as ONE `<on|off>:<modelId>` value. Non-fatal: a bad
  * value parses to undefined, never throws.
  */
@@ -127,28 +127,28 @@ export function parseImageInputModelOverride(
  * Reads ANYCODE_API_KEY, ANYCODE_BASE_URL (default: native Anthropic),
  * ANYCODE_MODEL (required), and the optional integers ANYCODE_MAX_TURNS /
  * ANYCODE_MAX_OUTPUT_TOKENS / ANYCODE_CONTEXT_WINDOW / ANYCODE_MAX_RETRIES /
- * ANYCODE_NETWORK_RETRY_BUDGET_MS (Taskana 4705 — the transient-network retry
+ * ANYCODE_NETWORK_RETRY_BUDGET_MS (the transient-network retry
  * wall-clock budget that extends past ANYCODE_MAX_RETRIES) /
  * ANYCODE_TOOL_CONCURRENCY / ANYCODE_STALL_TIMEOUT_MS / ANYCODE_SUBAGENT_STALL_MS
- * (TASK.148 slice 1 — the subagent silence detector, distinct from the stream
- * watchdog) / ANYCODE_TODO_REMINDER_EVERY (Taskana 4665 — the stale-plan
- * reminder period in tool calls) / ANYCODE_SUPERVISOR_IDLE_MS (taskana 4181 — the supervisor idle
+ * (slice 1 — the subagent silence detector, distinct from the stream
+ * watchdog) / ANYCODE_TODO_REMINDER_EVERY (the stale-plan
+ * reminder period in tool calls) / ANYCODE_SUPERVISOR_IDLE_MS (the supervisor idle
  * watchdog, distinct from both; must be a POSITIVE integer, a nonpositive
  * value throws) plus ANYCODE_DB_PATH.
- * ANYCODE_CONTEXT_WINDOW_MODEL (TASK.142) is an optional nonblank model id that
+ * ANYCODE_CONTEXT_WINDOW_MODEL is an optional nonblank model id that
  * binds the ANYCODE_CONTEXT_WINDOW override to one model (the pair is emitted
  * together by the host/CLI); a blank/absent value leaves the override global.
- * ANYCODE_EXPLORE_MODEL (Taskana 4131) is an optional nonblank default model
+ * ANYCODE_EXPLORE_MODEL is an optional nonblank default model
  * id for the built-in explore persona's inline children; blank/absent ⇒
  * explore inherits the parent's model.
  * ANYCODE_REASONING_EFFORT is an optional off|low|medium|high|max selector
  * (per-model levels are gated downstream by the catalog; unsupported → off).
- * ANYCODE_PROVIDER_TRANSPORT selects the wire protocol (TASK.43 §0.4); an
+ * ANYCODE_PROVIDER_TRANSPORT selects the wire protocol (§0.4); an
  * invalid value throws (never a silent anthropic fallback). ANYCODE_API_KEY is
  * required when the resolved transport is undefined or `anthropic-messages`
  * (byte-compat: that path is fail-closed), and optional for the two OpenAI
  * transports (no-auth local endpoints). ANYCODE_INCLUDE_USAGE is an optional
- * boolean override of the `stream_options.include_usage` default (TASK.158);
+ * boolean override of the `stream_options.include_usage` default;
  * it is carried verbatim — the transport-conditional DEFAULT is applied by
  * `resolveIncludeUsage`, not here, so unset stays undefined.
  * Throws a descriptive error naming the offending variable.
@@ -271,7 +271,7 @@ export function readPromptCacheOptions(env: NodeJS.ProcessEnv): ImplicitPromptCa
 }
 
 /**
- * Parses ANYCODE_PROVIDER_TRANSPORT (TASK.43 §0.4/W4). Unlike
+ * Parses ANYCODE_PROVIDER_TRANSPORT (§0.4/W4). Unlike
  * ANYCODE_IMAGE_INPUT, an unrecognized value THROWS rather than warning and
  * falling back: a typo here must never silently route an OpenAI endpoint
  * through the anthropic-messages transport (the exact 400/404-class bug this
@@ -333,7 +333,7 @@ function readImageInputOverride(env: NodeJS.ProcessEnv): ImageInputOverride | un
 }
 
 /**
- * Parses ANYCODE_INCLUDE_USAGE (TASK.158) into an explicit boolean override.
+ * Parses ANYCODE_INCLUDE_USAGE into an explicit boolean override.
  * Both boolean vocabularies are accepted — `on|off` per the ANYCODE_IMAGE_INPUT
  * precedent, `1|0` per the integer-var habit — because the var is read by
  * humans editing shell profiles/export lines. Like `readImageInputOverride`
@@ -365,7 +365,7 @@ function readOptionalInteger(env: NodeJS.ProcessEnv, name: string): number | und
 }
 
 /**
- * taskana 4181 (P4): like readOptionalInteger but rejects non-POSITIVE values
+ * (P4): like readOptionalInteger but rejects non-POSITIVE values
  * too. For a reminder-spammer's delay a negative/zero integer is worse than a
  * typo: it would clamp to an immediate-fire loop. Only the supervisor idle
  * knob uses this; see readOptionalInteger for the pre-existing family.

@@ -1,5 +1,5 @@
 /**
- * Pure state-transition tests for the final-text accumulator (TASK.102
+ * Pure state-transition tests for the final-text accumulator (
  * CUT-S2 §2.6.3, slice S2b B4). Each test discriminates against a specific
  * plausible facade of runner.ts's `currentTurnText`/`finalText` semantics:
  * a reset that also clobbers `final`, a stream_retry treated as a no-op

@@ -106,7 +106,7 @@ describe("buildRgArgs", () => {
   });
 });
 
-describe("buildTgrepArgs (Taskana 4160)", () => {
+describe("buildTgrepArgs", () => {
   it("equals buildRgArgs with --no-max-filesize inserted right after --no-config (directory target with glob)", () => {
     const input = baseInput({ glob: "*.md" });
     const expected = buildRgArgs(input, "/repo/src", true);
@@ -133,7 +133,7 @@ describe("buildTgrepArgs (Taskana 4160)", () => {
   });
 });
 
-describe("shapeRgJsonOutput (extraction from searchWithRipgrep, Taskana 4160)", () => {
+describe("shapeRgJsonOutput (extraction from searchWithRipgrep)", () => {
   const ndjson = [
     matchEvent("/repo/a.ts", 1, "const needle = 1;"),
     contextEvent("/repo/a.ts", 2, "const other = 2;"),

@@ -1,5 +1,5 @@
 /**
- * TASK.4721: the base-budget learner is pure. These tests pin the training
+ * the base-budget learner is pure. These tests pin the training
  * filter (what counts as an accepted outcome), the p90/headroom formula, the
  * model-then-role pool fallback, and the fixed clamps.
  */
@@ -20,7 +20,7 @@ function samples(role: string, model: string | undefined, turns: number[]): Budg
   return turns.map((t) => ({ role, ...(model !== undefined ? { model } : {}), turns: t }));
 }
 
-describe("isAcceptedBudgetSample (TASK.4721 training filter)", () => {
+describe("isAcceptedBudgetSample (training filter)", () => {
   it("accepts a completed, untruncated child", () => {
     expect(isAcceptedBudgetSample({ status: "completed", turns: 7 })).toBe(true);
     expect(isAcceptedBudgetSample({ status: "completed", turns: 7, truncated: false })).toBe(true);
@@ -53,7 +53,7 @@ describe("p90", () => {
   });
 });
 
-describe("learnBaseBudget (TASK.4721 formula)", () => {
+describe("learnBaseBudget (formula)", () => {
   it("returns undefined below the minimum sample count", () => {
     const few = samples("general-purpose", "m1", Array.from({ length: LEARNING_MIN_SAMPLES - 1 }, () => 10));
     expect(learnBaseBudget(few, { role: "general-purpose", model: "m1" })).toBeUndefined();

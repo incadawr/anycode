@@ -1,5 +1,5 @@
 /**
- * Unit tests for the tgrep Grep tier (Taskana 4160 + follow-up: zero-match
+ * Unit tests for the tgrep Grep tier (+ follow-up: zero-match
  * re-check, cached/abortable probe, absolute-path resolution). Fully
  * hermetic: the exec port is a stub recording every runBinary call and
  * answering canned ExecResults — no tgrep binary, no daemon, no rg.
@@ -96,7 +96,7 @@ const ndjson = [
   matchEvent("/repo/sub/d.ts", 3, "needle again"),
 ].join("\n");
 
-describe("tgrepPathCandidates (absolute PATH resolution, Taskana 4160 follow-up)", () => {
+describe("tgrepPathCandidates (absolute PATH resolution, follow-up)", () => {
   it("POSIX: joins tgrep onto every PATH entry with ':' separator", () => {
     expect(tgrepPathCandidates({ PATH: "/usr/local/bin:/usr/bin" }, "darwin")).toEqual([
       "/usr/local/bin/tgrep",
@@ -123,7 +123,7 @@ describe("tgrepPathCandidates (absolute PATH resolution, Taskana 4160 follow-up)
   });
 });
 
-describe("resolveTgrepPath (Taskana 4160 follow-up: probe, cache, abort, refusal)", () => {
+describe("resolveTgrepPath (follow-up: probe, cache, abort, refusal)", () => {
   beforeEach(() => __resetTgrepPathCacheForTests());
   afterEach(() => __resetTgrepPathCacheForTests());
 
@@ -249,7 +249,7 @@ describe("resolveTgrepPath (Taskana 4160 follow-up: probe, cache, abort, refusal
   });
 });
 
-describe("searchWithTgrep (Taskana 4160)", () => {
+describe("searchWithTgrep", () => {
   it("exit 0 with rg-shaped NDJSON → shaped GrepOutput (content mode, path + line numbers, context included)", async () => {
     const { ctx, runBinary } = ctxWithRunBinary(() => completedResult(ndjson));
 
@@ -326,14 +326,14 @@ describe("searchWithTgrep (Taskana 4160)", () => {
   });
 });
 
-describe("searchWithTgrep — capped stdout is never a final answer (Taskana 4160 cross-review F1)", () => {
+describe("searchWithTgrep — capped stdout is never a final answer (cross-review F1)", () => {
   it("exit 0 but stdoutTruncated → undefined, even with non-empty NDJSON (a trimmed answer must not be returned)", async () => {
     const { ctx } = ctxWithRunBinary(() => ({ ...completedResult(ndjson), stdoutTruncated: true }));
     await expect(searchWithTgrep(baseInput({ output_mode: "count" }), ctx, "tgrep", "/repo", true)).resolves.toBeUndefined();
   });
 });
 
-describe("searchWithTgrep — repeated search timeouts stop the tier (Taskana 4160 cross-review F2)", () => {
+describe("searchWithTgrep — repeated search timeouts stop the tier (cross-review F2)", () => {
   beforeEach(() => __resetTgrepPathCacheForTests());
   afterEach(() => __resetTgrepPathCacheForTests());
 

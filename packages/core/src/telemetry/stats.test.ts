@@ -13,7 +13,7 @@
 import { describe, expect, it } from "vitest";
 import { aggregateProfileStats, cacheHitRate, type ProfileStatsFile } from "./stats.js";
 import { PROFILE_ACTIVITY_GAP_CAP_MS, PROFILE_STATS_MAX_SCAN_BYTES } from "../types/config.js";
-// TASK.187 S2 (task187-aggregator-semantics.md): the per-file partial +
+// S2 (task187-aggregator-semantics.md): the per-file partial +
 // merge path. Imported separately from the block above so that every line of
 // the pre-existing suite stays byte-identical (the slice's accept criterion).
 import {
@@ -23,7 +23,7 @@ import {
   sessionActiveMs,
   type ProfileFilePartial,
 } from "./stats.js";
-// TASK.187 S3: the cumulative form of that exact pass — cluster state, folded
+// S3: the cumulative form of that exact pass — cluster state, folded
 // participant by participant across scan passes.
 import { clustersActiveMs, mergeActivityClusters, type ActivityCluster } from "./stats.js";
 
@@ -34,7 +34,7 @@ function file(name: string, records: unknown[]): ProfileStatsFile {
 }
 
 
-/** No usage record in these fixtures reports a cache figure (TASK.111). */
+/** No usage record in these fixtures reports a cache figure. */
 const NO_CACHE = { reportedInputTokens: 0, cachedInputTokens: 0 };
 
 describe("aggregateProfileStats — full fixture (2 sessions x 3 days, every field pinned)", () => {
@@ -78,7 +78,7 @@ describe("aggregateProfileStats — full fixture (2 sessions x 3 days, every fie
       toolCalls: 4,
       subagentRuns: 2,
       truncated: false,
-      // TASK.158 slice 1 additions (§2.6) — no sub/engine anywhere in this
+      // slice 1 additions (§2.6) — no sub/engine anywhere in this
       // fixture, so every session is core and every usage record folds
       // through its own session's model (deferred join).
       days: {
@@ -379,7 +379,7 @@ describe("aggregateProfileStats — malformed record hardening (W5-FIX finding 2
     expect(stats.lifetimeTokens).toBe(0);
   });
 
-  it("TASK.210: a degeneration record is a VALID discriminant, not a phantom variant — a file carrying only one still counts as a session", () => {
+  it("a degeneration record is a VALID discriminant, not a phantom variant — a file carrying only one still counts as a session", () => {
     const f = file("s.jsonl", [
       { v: 1, ts: 0, session: "s", t: "degeneration", channel: "text", period: 296, repeats: 341, turn: 4 },
     ]);
@@ -390,7 +390,7 @@ describe("aggregateProfileStats — malformed record hardening (W5-FIX finding 2
     expect(stats.totalSessions).toBe(1);
   });
 
-  it("TASK.193 S4: a workflow_step_end record is a VALID discriminant — a file carrying only one still counts as a session", () => {
+  it("S4: a workflow_step_end record is a VALID discriminant — a file carrying only one still counts as a session", () => {
     const f = file("s.jsonl", [
       { v: 1, ts: 0, session: "s", t: "workflow_step_end", status: "error", turns: 0, durationMs: 0, unlaunched: true },
     ]);
@@ -398,7 +398,7 @@ describe("aggregateProfileStats — malformed record hardening (W5-FIX finding 2
     expect(stats.totalSessions).toBe(1);
   });
 
-  it("TASK.208: a ceiling_refused record is a VALID discriminant — a file carrying only one still counts as a session", () => {
+  it("a ceiling_refused record is a VALID discriminant — a file carrying only one still counts as a session", () => {
     const f = file("s.jsonl", [
       { v: 1, ts: 0, session: "s", t: "ceiling_refused", reason: "ladder_disabled", turn: 1, round: 1 },
     ]);
@@ -424,7 +424,7 @@ describe("aggregateProfileStats — default dayKey (LOCAL calendar date)", () =>
   });
 });
 
-// TASK.158 slice 1 (telemetry-track-plan.md §2.6/§S4): days/models/engineTokens.
+// slice 1 (telemetry-track-plan.md §2.6/§S4): days/models/engineTokens.
 // All fixtures below reuse the `file`/`utcDayKey` helpers from the top of this
 // file. Every new field is pinned, never spot-checked, per the plan's
 // "presence over green" review rule.
@@ -575,10 +575,10 @@ describe("aggregateProfileStats — sub tier: loop_end excluded from runs, tool 
   });
 });
 
-// TASK.203: a vision-probe sink file carries the SAME frozen record shapes
+// a vision-probe sink file carries the SAME frozen record shapes
 // (session_start + usage) — the aggregator must fold it in with no special
 // casing, attributing tokens to the probe's own model like any other session.
-describe("aggregateProfileStats — vision-probe sink files (TASK.203)", () => {
+describe("aggregateProfileStats — vision-probe sink files", () => {
   it("a vision-probe file (session_start + usage) aggregates: lifetimeTokens, sessions, model attribution", () => {
     const t0 = Date.UTC(2026, 0, 1, 10, 0, 0);
     const f = file("vision-probe-1700000000000.jsonl", [
@@ -598,7 +598,7 @@ describe("aggregateProfileStats — vision-probe sink files (TASK.203)", () => {
     expect(stats.lifetimeTokens).toBe(15);
     expect(stats.totalSessions).toBe(1);
     expect(stats.models).toEqual([{ model: "vision-model", tokens: 15, sessions: 1 }]);
-    // TASK.111 cache counters: the probe's usage reported a cache figure.
+    // cache counters: the probe's usage reported a cache figure.
     expect(stats.cache).toEqual({ reportedInputTokens: 10, cachedInputTokens: 4 });
   });
 
@@ -816,7 +816,7 @@ describe("aggregateProfileStats — days is a faithful projection of lifetimeTok
 });
 
 // ---------------------------------------------------------------------------
-// TASK.187 S2 — per-file partials + merge (spec:
+// S2 — per-file partials + merge (spec:
 // working-docs/build/task187-aggregator-semantics.md). Everything below this
 // banner is ADDITIVE: no line above it is modified, because the whole point of
 // the slice is that the legacy aggregator's behavior is unchanged, and a
@@ -1473,7 +1473,7 @@ const EQUIVALENCE_CASES: EquivalenceCase[] = [
   },
 ];
 
-describe("TASK.187 S2 — partial+merge equivalence harness (full files)", () => {
+describe("S2 — partial+merge equivalence harness (full files)", () => {
   for (const testCase of EQUIVALENCE_CASES) {
     it(`matches aggregateProfileStats: ${testCase.label}`, () => {
       const legacy = legacyStats(testCase.files, testCase.now, testCase.dayKey);
@@ -1489,7 +1489,7 @@ describe("TASK.187 S2 — partial+merge equivalence harness (full files)", () =>
   });
 });
 
-describe("TASK.187 S2 — merge is order-invariant", () => {
+describe("S2 — merge is order-invariant", () => {
   it("permuting the partials does not change the merged stats", () => {
     const files = EQUIVALENCE_CASES[0]!.files;
     const now = EQUIVALENCE_CASES[0]!.now;
@@ -1512,7 +1512,7 @@ describe("TASK.187 S2 — merge is order-invariant", () => {
   });
 });
 
-describe("TASK.187 S2 — dropping a file drops exactly that file's contribution", () => {
+describe("S2 — dropping a file drops exactly that file's contribution", () => {
   it("merge(partials minus f) equals aggregate(files minus f)", () => {
     const all = EQUIVALENCE_CASES.find((c) => c.label.startsWith("full models list"))!;
     const kept = all.files.filter((f) => f.name !== "b.jsonl");
@@ -1524,7 +1524,7 @@ describe("TASK.187 S2 — dropping a file drops exactly that file's contribution
   });
 });
 
-describe("TASK.187 S2 — a partial survives a JSON round trip", () => {
+describe("S2 — a partial survives a JSON round trip", () => {
   const roundTrip = (p: ProfileFilePartial): ProfileFilePartial => JSON.parse(JSON.stringify(p)) as ProfileFilePartial;
 
   it("is strictly equal to itself after JSON.parse(JSON.stringify(...)) — no Map/Set/undefined inside", () => {
@@ -1547,7 +1547,7 @@ describe("TASK.187 S2 — a partial survives a JSON round trip", () => {
   });
 });
 
-describe("TASK.187 S2 — cross-file session activity (blocker 1)", () => {
+describe("S2 — cross-file session activity (blocker 1)", () => {
   const t0 = Date.UTC(2026, 0, 1, 10, 0, 0);
   const seg = (name: string, tss: number[]) =>
     file(
@@ -1645,7 +1645,7 @@ describe("TASK.187 S2 — cross-file session activity (blocker 1)", () => {
   });
 });
 
-describe("TASK.187 S2 — totalSessions counts FILES, not sessions", () => {
+describe("S2 — totalSessions counts FILES, not sessions", () => {
   it("one session spread over two files still counts as two files and one model session", () => {
     const t0 = Date.UTC(2026, 0, 1, 10, 0, 0);
     const files = [
@@ -1671,7 +1671,7 @@ describe("TASK.187 S2 — totalSessions counts FILES, not sessions", () => {
   });
 });
 
-describe("TASK.187 S2 — first-seen engine survives integer-like session ids", () => {
+describe("S2 — first-seen engine survives integer-like session ids", () => {
   it("the partial's session array keeps insertion order through JSON, unlike an object", () => {
     // The hazard this pins: an object keyed by session id renumbers
     // integer-like keys on a JSON round trip, which would silently flip
@@ -1718,7 +1718,7 @@ describe("TASK.187 S2 — first-seen engine survives integer-like session ids", 
   });
 });
 
-describe("TASK.187 S2 — byteBudget option (uncapped oracle)", () => {
+describe("S2 — byteBudget option (uncapped oracle)", () => {
   it("byteBudget: Infinity reads past PROFILE_STATS_MAX_SCAN_BYTES; the default still truncates", () => {
     const oneMiB = 1024 * 1024;
     const FIXED_TS = 1_700_000_000_000;
@@ -1770,7 +1770,7 @@ describe("TASK.187 S2 — byteBudget option (uncapped oracle)", () => {
   });
 });
 
-describe("TASK.187 S2 — randomized cross-check against the legacy aggregator", () => {
+describe("S2 — randomized cross-check against the legacy aggregator", () => {
   /** Deterministic LCG: a failing run is reproducible from its printed seed. */
   function lcg(seed: number): () => number {
     let state = seed >>> 0;
@@ -1935,7 +1935,7 @@ describe("TASK.187 S2 — randomized cross-check against the legacy aggregator",
   });
 });
 
-describe("TASK.187 — prototype-named keys reach plain-object accumulators", () => {
+describe("— prototype-named keys reach plain-object accumulators", () => {
   const T = Date.UTC(2026, 4, 1, 9, 0, 0);
   const NOW = T + 60_000;
 
@@ -1979,7 +1979,7 @@ describe("TASK.187 — prototype-named keys reach plain-object accumulators", ()
   });
 });
 
-describe("TASK.187 S3 — activity clusters", () => {
+describe("S3 — activity clusters", () => {
   const CAP = PROFILE_ACTIVITY_GAP_CAP_MS;
 
   it("folds timestamps into canonical, disjoint, cap-split clusters", () => {
@@ -2036,7 +2036,7 @@ describe("TASK.187 S3 — activity clusters", () => {
   });
 });
 
-describe("prompt-cache counters (TASK.111)", () => {
+describe("prompt-cache counters", () => {
   const day1 = Date.UTC(2026, 0, 1, 10, 0, 0);
   const day2 = Date.UTC(2026, 0, 2, 10, 0, 0);
   const files: ProfileStatsFile[] = [

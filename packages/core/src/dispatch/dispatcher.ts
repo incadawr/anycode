@@ -67,7 +67,7 @@ import {
   type AskClassifier,
   type AskClassifierInput,
 } from "../permissions/ask-classifier.js";
-// Taskana 4730: the shared consultation (same event shape for engine bridges).
+// the shared consultation (same event shape for engine bridges).
 import { consultAskClassifier } from "../permissions/ask-classifier-consult.js";
 
 export interface DispatchContext {
@@ -86,7 +86,7 @@ export interface DispatchContext {
    */
   subagents?: SubagentPort;
   /**
-   * Session-tier subagent entry (TASK.102 CUT-S2 §2.2/§0.2), threaded into
+   * Session-tier subagent entry (CUT-S2 §2.2/§0.2), threaded into
    * every ToolContext right alongside `subagents` above. Optional: absent =>
    * the Agent tool's `tier:"session"` branch fails closed as "unavailable"
    * (a child loop's DispatchContext leaves it unset, the second of three
@@ -132,7 +132,7 @@ export interface DispatchContext {
    */
   media?: MediaCapabilityPort;
   /**
-   * Vision-fallback image registry (TASK.198 plan §2, slice B1), threaded
+   * Vision-fallback image registry (plan §2, slice B1), threaded
    * into every ToolContext. Optional: absent => InspectImage (slice B2)
    * fails closed as "unavailable" (a child loop's DispatchContext leaves it
    * unset, so a child never resolves a parent turn's image ref). The
@@ -166,22 +166,22 @@ export interface DispatchContext {
    */
   checkpoint?: TurnCheckpointControl;
   /**
-   * Artifact store + owning session for oversized tool results (TASK.94).
+   * Artifact store + owning session for oversized tool results.
    * Optional: absent => a tool declaring `strategy: "artifact"` is budgeted by
-   * plain truncation, byte-identical to TASK.93. Child loops DO inherit it
+   * plain truncation, byte-identical to. Child loops DO inherit it
    * (buildChildConfig copies it), so a subagent's oversized Bash output is
    * recoverable too; a child writes under the parent's session directory,
    * which is correct because tool-call ids are globally unique.
    */
   artifacts?: ArtifactContext;
   /**
-   * Taskana 4704 §3.3: true while the owning session tab runs in orchestrate
+   * §3.3: true while the owning session tab runs in orchestrate
    * mode. Threaded into every ToolContext (the Agent tool is the sole
    * consumer). Optional: absent => byte-identical pre-4704 behavior.
    */
   orchestrate?: boolean;
   /**
-   * Taskana 4702 Stage 1: the ask-zone classifier. Optional and default-off:
+   * Stage 1: the ask-zone classifier. Optional and default-off:
    * absent => the ask branch is byte-identical to the pre-4702 broker call.
    * It is consulted ONLY for an eligible Bash ask (isClassifiableAsk) and can
    * only turn that ask into allow; every other outcome keeps the broker.
@@ -297,11 +297,11 @@ export async function executeToolCall(
       // hook rewriting. Resolver failures are caught by the defensive net.
       let metadata = tool.resolveMetadata?.(input) ?? tool.metadata;
 
-      // TASK.32 (DV-2/DV-3) + Taskana 4294: dispatch-site workspace facts for
+      // (DV-2/DV-3) + dispatch-site workspace facts for
       // the Write/Edit containment proof AND the always-allow rule gate.
       // Computed here — via ports, before the request is built — because the
       // engine is sync and pure. Tool gate is WORKSPACE_CONFINED_WRITE_TOOLS
-      // (Write/Edit/MultiEdit): MultiEdit joined in Taskana 4294 so its rules
+      // (Write/Edit/MultiEdit): MultiEdit joined in so its rules
       // are workspace-confined too; the edit-mode containment WIDENING in
       // engine.ts stays gated to the literal Write/Edit pair. Fail-closed:
       // unprovable => the block is absent => the engine keeps today's ruling.
@@ -338,7 +338,7 @@ export async function executeToolCall(
       if (decision === "deny") {
         return outcome("denied", budgetExternalText(denyReason ?? `Permission denied for ${toolName}.`));
       }
-      // Taskana 4702: the ask-zone classifier may turn THIS ask into allow and
+      // the ask-zone classifier may turn THIS ask into allow and
       // skip the broker. Never consulted on allow/deny, on a hook-demanded ask,
       // or on an ineligible call; every failure inside leaves the broker in charge.
       const autoAllowed =
@@ -414,7 +414,7 @@ export async function executeToolCall(
         worktrees: ctx.worktrees,
         preview: ctx.preview,
         artifacts: ctx.artifacts,
-        // Taskana 4704 §3.3: present-only copy, same discipline as the ports.
+        // §3.3: present-only copy, same discipline as the ports.
         ...(ctx.orchestrate === true ? { orchestrate: true } : {}),
         emit,
       };
@@ -508,12 +508,12 @@ export async function executeToolCall(
 }
 
 /**
- * Taskana 4702: consults the ask-zone classifier for one ask. Returns true only
+ * consults the ask-zone classifier for one ask. Returns true only
  * for a valid `allow` verdict. Emits one `permission_auto_decided` journal event
  * per consulted ask (allow, ask-by-verdict or ask-by-error). Never throws: any
  * throw on this path is an ask, so the broker decides.
  *
- * Taskana 4730: the consultation itself lives in
+ * the consultation itself lives in
  * permissions/ask-classifier-consult.ts (shared with the engine-session broker
  * decorator); this wrapper keeps the dispatcher's exact call semantics.
  */
@@ -585,9 +585,9 @@ function resolveTimeoutMs(metadata: ToolMetadata, input: unknown): number {
  * Renders the result for the model and budgets it. The budget is applied HERE,
  * after every rendering branch — a tool's own formatResultForModel and the
  * error text are subject to it exactly like the default JSON rendering, because
- * an unbounded string is unbounded whoever produced it (TASK.93).
+ * an unbounded string is unbounded whoever produced it.
  *
- * Async since TASK.94: an over-budget result from a tool that opted into
+ * Async since: an over-budget result from a tool that opted into
  * `strategy: "artifact"` is written to disk before it is rendered. The spill is
  * the ONLY awaiting branch; every other path resolves without touching I/O, and
  * ToolCallOutcome is unchanged.
@@ -631,7 +631,7 @@ async function formatModelText(
  * Persists the full rendered text and returns the envelope that replaces it, or
  * null when the store refused (unsafe id, over the per-write cap, I/O failure).
  *
- * A null return means the caller truncates — exactly the TASK.93 outcome, and
+ * A null return means the caller truncates — exactly the outcome, and
  * exactly what the model would have received had the tool never opted in. There
  * is deliberately no error branch and no diagnostic in the model text: the
  * envelope must never claim a path that does not exist, and a failed spill is
@@ -760,8 +760,8 @@ function resolveResultBudget(metadata: ToolMetadata): {
     maxModelBytes: declared.maxModelBytes,
     previewDirection: declared.previewDirection ?? "head",
     // "truncate" is the default for the same reason the whole budget has one:
-    // a tool that declared nothing must land on the pre-TASK.94 behaviour, not
-    // on the newest one (TASK.94 DoD-3).
+    // a tool that declared nothing must land on the pre-behaviour, not
+    // on the newest one (DoD-3).
     strategy: declared.strategy ?? "truncate",
   };
 }

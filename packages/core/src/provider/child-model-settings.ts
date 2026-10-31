@@ -1,5 +1,5 @@
 /**
- * Child-model capability resolution (subagent-model track, TASK.162): a pure,
+ * Child-model capability resolution (subagent-model track): a pure,
  * nonthrowing composition of the same capability resolvers the mid-session
  * `/model` switch already uses (`host/index.ts`'s `switchModelImpl`,
  * `cli/main.ts`'s `model.set`), so a subagent spawned with a model override
@@ -14,7 +14,7 @@
  * shape: the env-override-or-DEFAULT output ceiling, no reasoning effort, and
  * the DEFAULT context window.
  *
- * Taskana 4118: an optional `liveCapabilitiesFor` dep gives children live
+ * an optional `liveCapabilitiesFor` dep gives children live
  * /v1/models capabilities for catalog-unknown model ids too, mirroring what
  * host boot and the mid-session switch already consult.
  */
@@ -50,7 +50,7 @@ export function buildChildModelSettingsResolver(deps: {
   effortLevelsFor?: (modelId: string) => readonly ReasoningEffort[] | undefined;
   onClamp?: (requested: number, clamped: number, modelId: string) => void;
   onStubFallback?: (modelId: string, applied: number) => void;
-  /** Taskana 4118: live /v1/models capabilities, consulted on a catalog miss. */
+  /** live /v1/models capabilities, consulted on a catalog miss. */
   liveCapabilitiesFor?: (modelId: string) => LiveModelCapabilities | undefined;
 }): (modelId: string, selectedTier: ReasoningEffort | undefined) => ChildModelSettings {
   const { catalogEntry, envMaxOutputTokens, envContextWindow, envContextWindowModel, onClamp, onStubFallback, liveCapabilitiesFor } = deps;

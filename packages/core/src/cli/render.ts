@@ -51,7 +51,7 @@ export interface TranscriptOptions {
   reasoning?: boolean;
   /**
    * `--print` is headless-by-contract: there is no REPL waiting for a next
-   * message, so the turn-limit stop line states the fact only (Taskana 4111
+   * message, so the turn-limit stop line states the fact only (
    * cross-review) instead of naming a "send a message" action that does not exist.
    */
   headless?: boolean;
@@ -175,7 +175,7 @@ function stripOneTrailingNewline(text: string): string {
   return text.endsWith("\n") ? text.slice(0, -1) : text;
 }
 
-/** The first line of a (possibly multi-line) failure text, for a one-line CLI status row (TASK.193). */
+/** The first line of a (possibly multi-line) failure text, for a one-line CLI status row. */
 function firstLine(text: string): string {
   const newline = text.indexOf("\n");
   return newline === -1 ? text : text.slice(0, newline);
@@ -478,7 +478,7 @@ export function renderEvent(
       break;
     }
     case "error": {
-      // event.retry (TASK.33 W7b) is additive-optional: absent for any error
+      // event.retry (W7b) is additive-optional: absent for any error
       // event a pre-W7b core emitted, so the base line stays byte-identical.
       // Only surfaced when at least one retry actually happened this turn — a
       // never-retried failure needs no "after N attempts" annotation.
@@ -486,7 +486,7 @@ export function renderEvent(
         event.retry && event.retry.attemptsMade > 0
           ? ` (after ${event.retry.attemptsMade} automatic retr${event.retry.attemptsMade === 1 ? "y" : "ies"})`
           : "";
-      // Render EXCLUSIVELY from the whitelist-derived `safe` descriptor (TASK.33
+      // Render EXCLUSIVELY from the whitelist-derived `safe` descriptor (
       // W7b-FIX #2) — never String(event.error), which can embed a raw response
       // body or auth header. Fail closed to a constant when `safe` is absent.
       const safe = event.safe;
@@ -505,7 +505,7 @@ export function renderEvent(
       }
       break;
     }
-    // One granted extension of the turn ceiling (TASK.124). Every grant is
+    // One granted extension of the turn ceiling. Every grant is
     // visible: the line names the round, what it bought, the running total and
     // what the model said still remains. TASK.240/4055: an adaptive-mode grant
     // renders its own line — the productive-tool count is the progress the
@@ -522,7 +522,7 @@ export function renderEvent(
         );
       }
       break;
-    // The degenerate-generation guard (TASK.210) cut a turn: the model's own
+    // The degenerate-generation guard cut a turn: the model's own
     // output was found looping. A dedicated line, not folded into the
     // turn_end "length" handling below, because it carries data turn_end
     // doesn't have — which channel looped, the measured period and how many
@@ -533,10 +533,10 @@ export function renderEvent(
       );
       break;
     case "loop_end":
-      // Since TASK.124 the turn cap is a decision point, not a setting to raise:
+      // Since the turn cap is a decision point, not a setting to raise:
       // the ladder already asked and either granted (a ceiling_grant line above)
       // or refused. Pointing at Settings/ANYCODE_MAX_TURNS would name an action
-      // that is no longer the one that happened. Taskana 4111: the line now
+      // that is no longer the one that happened. the line now
       // names the ONE action that works — a new message continues on the same
       // history with a fresh turn budget (the interactive REPL already accepts
       // the next message; `--print` is headless-by-contract and out of scope).
@@ -548,7 +548,7 @@ export function renderEvent(
       break;
     case "stream_retry": {
       // Past the announced total (a network-budget retry) the total is dropped.
-      // Taskana 4772: the delay is shown in seconds, one decimal (no float ms).
+      // the delay is shown in seconds, one decimal (no float ms).
       // Review F5: a retry after a recovered network wait fires at once — the
       // wait duration rides waitedMs, never as a pending "in N s" delay.
       if (event.waitedMs !== undefined) {
@@ -661,7 +661,7 @@ export function renderEvent(
             `${event.unlaunched === true ? ", not launched" : ""}): turns=${event.turns} durationMs=${event.durationMs}\n`,
         ),
       );
-      // TASK.193: a step's failure reason, one terse line — the kind labels
+      // a step's failure reason, one terse line — the kind labels
       // what the text IS (an error message vs. an unfinished partial), so a
       // reader never mistakes a cut-off partial for a finished report.
       if (event.failure !== undefined) {

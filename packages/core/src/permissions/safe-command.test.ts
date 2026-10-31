@@ -103,7 +103,7 @@ describe("classifyBashCommand — adversarial vectors (all MUST be unknown)", ()
     // rg/file were removed from READ_ONLY_BINARIES: their write/exec surface
     // (ripgrep --pre/--hostname-bin/-z run arbitrary programs; file -C writes
     // magic.mgc) cannot be exhausted by the flag screen, so both fall through to
-    // "unknown" as non-allowlisted binaries. tree was removed too (TASK.35 fix
+    // "unknown" as non-allowlisted binaries. tree was removed too (fix
     // wave 1, W1-BLOCKER-1): `-no FILE`/`-o<FILE>` cluster spellings evade the
     // verbatim net, so its `-o` write surface is not exhaustible either.
     expectAllUnknown([
@@ -115,7 +115,7 @@ describe("classifyBashCommand — adversarial vectors (all MUST be unknown)", ()
       "file -C", // writes magic.mgc into cwd (proven FS write)
       "file --compile", // long form of -C
       "file f", // plain file also demoted after removal
-      "tree -o out.txt", // tree removed (TASK.35 W1): unknown via allowlist miss
+      "tree -o out.txt", // tree removed (W1): unknown via allowlist miss
     ]);
   });
 
@@ -585,7 +585,7 @@ describe("classifyBashCommandLine — shellExpression flag", () => {
   });
 });
 
-describe("TASK.35 fix wave 1 — tree removal and divergence pins (V-series)", () => {
+describe("fix wave 1 — tree removal and divergence pins (V-series)", () => {
   it("V1: single-path tree invocations all ask after the W1 allowlist removal", () => {
     expectAllUnknown([
       "tree",
@@ -616,15 +616,15 @@ describe("TASK.35 fix wave 1 — tree removal and divergence pins (V-series)", (
     expect(READ_ONLY_BINARIES.has("sed")).toBe(false);
   });
 
-  it("V4: unbalanced-quote divergence CLOSED for the flag-screened path (TASK.136, was D-S2-4/RES-11)", () => {
-    // History: before TASK.136, the single-command path's write-flag screen
+  it("V4: unbalanced-quote divergence CLOSED for the flag-screened path (was D-S2-4/RES-11)", () => {
+    // History: before, the single-command path's write-flag screen
     // never looked at quote state at all — `tokenize()` is a plain whitespace
     // split — so `cat 'f` (a /bin/sh syntax error) fell through every check
     // and classified "read-only" there, while the line classifier already
     // refused it (splitter refusal, upstream of this file). That was pinned
     // narrowing-only: the single-command path could be laxer than the line
     // classifier, never stricter.
-    // TASK.136 made `classifyBashCommand` reuse `tokenizeSegment` (the
+    // made `classifyBashCommand` reuse `tokenizeSegment` (the
     // pipeline path's quote-aware splitter) for its write-flag screen; an
     // unterminated quote makes that splitter return `undefined`, which the
     // screen now treats as "cannot prove flag-free" and fails closed to
@@ -640,7 +640,7 @@ describe("TASK.35 fix wave 1 — tree removal and divergence pins (V-series)", (
   });
 });
 
-describe("TASK.35 fix wave 2 — RES-1 witness pins (GP-series)", () => {
+describe("fix wave 2 — RES-1 witness pins (GP-series)", () => {
   it("GP1: RES-1's former witness is refused by the `=` screen, NOT the flag net", () => {
     // `git diff "--output=victim"` asks TODAY, but the refusal is carried by
     // the step-1 quote-UNAWARE metacharacter screen (`=` is in
@@ -654,8 +654,8 @@ describe("TASK.35 fix wave 2 — RES-1 witness pins (GP-series)", () => {
     expect(classifyBashCommand('git diff "--zzzz=victim"')).toBe("unknown");
   });
 
-  it("GP2: RES-1 CLOSED — quote-hidden git write flags now classify unknown (TASK.136)", () => {
-    // Closed-hole acceptance pin (RESIDUALS-S2.md RES-1, closed by TASK.136).
+  it("GP2: RES-1 CLOSED — quote-hidden git write flags now classify unknown", () => {
+    // Closed-hole acceptance pin (RESIDUALS-S2.md RES-1, closed by).
     // History: on the pre-fix single-command path, `isWriteFlag` only ever
     // saw the raw whitespace-split token (`"--output"` starts with `"`, not
     // `-`; `--outp"ut"` normalization only strips a `=value` suffix), so
@@ -681,7 +681,7 @@ describe("TASK.35 fix wave 2 — RES-1 witness pins (GP-series)", () => {
   });
 });
 
-describe("TASK.136 — RES-1 fix, non-git single-command path (classifyBashCommand step 4b)", () => {
+describe("— RES-1 fix, non-git single-command path (classifyBashCommand step 4b)", () => {
   it("quote-hidden write flags on plain allowlisted binaries now ask", () => {
     // Same hole as GP2, on the non-git branch of the single-command path:
     // `isWriteFlag` on the naive whitespace token alone never recognized a

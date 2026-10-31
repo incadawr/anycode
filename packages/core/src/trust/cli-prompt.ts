@@ -1,5 +1,5 @@
 /**
- * CLI workspace-trust prompt (Taskana 4736, design 2.9). A plain readline
+ * CLI workspace-trust prompt (design 2.9). A plain readline
  * question on the CLI's own input/output streams, shown before any project
  * spawn declaration loads. Answers: `t` trust (persisted), `o` once (this
  * process only, never persisted), anything else — including EOF — is No

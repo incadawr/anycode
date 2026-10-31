@@ -1,4 +1,4 @@
-/** Stale-plan reminder (Taskana 4665): pure counter, wired by AgentLoop. */
+/** Stale-plan reminder: pure counter, wired by AgentLoop. */
 import type { TodoItem } from "../tools/todo-store.js";
 import type { ToolCallStatus } from "../types/tools.js";
 import { classifyBashCommandLine } from "../permissions/safe-command.js";

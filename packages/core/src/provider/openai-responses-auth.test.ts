@@ -1,5 +1,5 @@
 /**
- * Wire-level proof of MEDIUM#2 (TASK.43 W6): a no-auth `openai-responses`
+ * Wire-level proof of MEDIUM#2 (W6): a no-auth `openai-responses`
  * endpoint (`config.apiKey === undefined`) must send NO `Authorization` header
  * at all, matching the `openai-chat-completions` transport's behaviour
  * (`openai-compatible.ts` only adds the header when a key is configured).

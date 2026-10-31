@@ -6,7 +6,7 @@
  * and set the *Truncated flags on overflow. `run` and `runBinary` share the
  * same lifecycle tracking (timeout/abort/kill-sequence/output-capture); they
  * differ only in how the child is spawned (shell string vs argv, optional
- * stdin). The child env is sanitised (TASK.135): buildChildEnv drops proxy
+ * stdin). The child env is sanitised: buildChildEnv drops proxy
  * variables that carry credentials and the ANYCODE_*_PROXY_URL engine carriers
  * from every non-engine child, without ever touching process.env. When a
  * credential-free loopback relay is already up for this process (started by a
