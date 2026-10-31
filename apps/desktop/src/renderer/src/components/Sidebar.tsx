@@ -24,6 +24,7 @@ import { handleCreateTabResult, resolveConnectionMissingAction } from "./Session
 import { ConfirmDialog } from "./ConfirmDialog.js";
 import { highlight } from "./highlight.js";
 import { ArrowUp, Chevron, Collapse, Cube, Dot, Ellipsis, Folder, Gear, Plus, Search, Spinner, Trash, X } from "./icons.js";
+import { AGENT_PROJECT_SWITCH_LABEL } from "./project-agent-switch.js";
 
 /** Label fallback when a tab/session has no title (design §2.3). */
 const UNTITLED = "Untitled task";
@@ -549,7 +550,7 @@ export const PROJECT_MENU_ITEM_COUNT = 4;
 
 /** Taskana 4768: the fourth project-menu item, a checkable switch ("Allow agents to open tasks here"). Pure so the contract is testable without a DOM. */
 export function agentProjectMenuItem(enabled: boolean): { role: "menuitemcheckbox"; checked: boolean; label: string; next: boolean } {
-  return { role: "menuitemcheckbox", checked: enabled, label: "Allow agents to open tasks here", next: !enabled };
+  return { role: "menuitemcheckbox", checked: enabled, label: AGENT_PROJECT_SWITCH_LABEL, next: !enabled };
 }
 
 /**
