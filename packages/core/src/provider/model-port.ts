@@ -893,6 +893,8 @@ export class AiSdkModelPort implements ModelPort {
 
       try {
         const model = await this.buildAttemptModel(attemptIncludeUsage, onResponseActivity);
+        const requestStartedAt = performance.now();
+        let firstEventAt: number | undefined;
         const result = streamText({
           model,
           // System prompt goes out-of-band: ai@7 rejects system-role messages
@@ -909,8 +911,7 @@ export class AiSdkModelPort implements ModelPort {
           onError: () => {},
           abortSignal: attemptController.signal,
           // Raw chunks carry provenance for Anthropic and reasoning text for Responses.
-          ...(this.config.transport === "anthropic-messages" || this.config.transport === "openai-responses"
-            ? { includeRawChunks: true } : {}),
+          includeRawChunks: true,
           ...reasoningRequestOptions(request, this.config.providerName, this.config.transport, this.config.promptCache, this.config.model),
           temperature: request.temperature,
         });
@@ -940,6 +941,11 @@ export class AiSdkModelPort implements ModelPort {
             break;
           }
 
+          // The SDK emits `start` before the provider responds. `start-step`
+          // is emitted on the first provider chunk; other chunks cover ports
+          // that do not emit that marker. Capture even untranslated raw events.
+          if (firstEventAt === undefined && outcome.value.type !== "start") firstEventAt = performance.now();
+
           // Provenance capture runs before translation because `raw` parts
           // have no core-vocabulary counterpart and are dropped by
           // `translateStreamPart` (its default arm). Last write wins: across a
@@ -966,6 +972,11 @@ export class AiSdkModelPort implements ModelPort {
           });
           if (event === null) {
             continue;
+          }
+          // The first provider event can precede visible reasoning or text.
+          if (event.type === "finish" && event.finishReason !== "error" && firstEventAt !== undefined) {
+            const finishedAt = performance.now();
+            event = { ...event, timeToFirstEventMs: Math.max(0, firstEventAt - requestStartedAt), generationDurationMs: Math.max(0, finishedAt - firstEventAt) };
           }
           if (event.type === "error") event = { ...event, error: contextualizeNetworkFailure(event.error, this.config.baseUrl) };
           // Drop provider chunk-parse artifacts that are safe to ignore (a

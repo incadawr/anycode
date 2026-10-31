@@ -173,3 +173,21 @@ it("shows the sum of model prices and points an unpriced pinned custom connectio
   expect(showCustomPricingHint(target, { ...base, costUsd: .01 })).toBe(false);
   expect(showCustomPricingHint(contextWindowSettingsTarget(connections, "a", "active", "custom"), { ...base, unpricedSteps: 1 })).toBe(false);
 });
+
+it("shows session and current turn generation rates in the popover", () => {
+  const steps = [step({ outputTokens: 100, generationDurationMs: 2000 })];
+  const markup = renderToStaticMarkup(createElement(UsageCostBlock, {
+    ledger: formatUsageCostLedger(base, null), turnSummary: formatTurnStepSummary(steps), turnSteps: steps,
+    generationTokensPerSecond: 75, expanded: false, onToggle: () => {},
+  }));
+  expect(textOf(markup)).toContain("Generation speed: session 75 t/s · this turn 50 t/s");
+});
+
+it("does not invent a rate for historical or zero-duration steps", () => {
+  const steps = [step({ outputTokens: 100 }), step({ step: 2, outputTokens: 20, generationDurationMs: 0 })];
+  const markup = renderToStaticMarkup(createElement(UsageCostBlock, {
+    ledger: formatUsageCostLedger(base, null), turnSummary: formatTurnStepSummary(steps), turnSteps: steps,
+    expanded: false, onToggle: () => {},
+  }));
+  expect(textOf(markup)).not.toContain("Generation speed:");
+});

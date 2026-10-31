@@ -57,3 +57,47 @@ it("keeps saved cost accessible without inventing a context percentage", async (
     expect(container.querySelector(".ctx-popover-bar")).toBeNull();
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
+
+
+it("never attributes a previous measured turn to a new streaming or failed turn", async () => {
+  Object.defineProperty(window, "anycode", { configurable: true, value: { listSessions: async () => [] } });
+  const store = createDesktopStore();
+  vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+  const old = { turnId: "old", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0, outputTokens: 100, generationDurationMs: 1000 };
+  store.getState().applyHostMessage({ type: "host_ready", workspace: "/w", mode: "build", model: "m", sessionId: "s", contextUsage: { estimatedTokens: 25, budgetTokens: 100, source: "provider" } });
+  store.getState().applyHostMessage({ type: "usage_audit", steps: [old], totals: { input: 0, output: 100, total: 100, stepsReported: 1, stepsWithCache: 0, generationTokensPerSecond: 100 } });
+  store.getState().applyHostMessage({ type: "turn_started", turnId: "new", requestId: "r" });
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(Composer))));
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Context window usage"]')!.click());
+    expect(container.textContent).toContain("Generation speed: session 100 t/s · this turn —");
+    await act(async () => store.getState().applyHostMessage({ type: "agent_event", turnId: "new", event: { type: "loop_end", reason: "error", turns: 1 } }));
+    expect(container.textContent).toContain("Generation speed: session 100 t/s · this turn —");
+    await act(async () => store.getState().applyHostMessage({ type: "session_checkpoint", latestTurnId: "new" }));
+    expect(container.textContent).toContain("Generation speed: session 100 t/s · this turn —");
+  } finally { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); }
+});
+
+
+it("shows restored latest-turn steps and speed after a new host checkpoint", async () => {
+  Object.defineProperty(window, "anycode", { configurable: true, value: { listSessions: async () => [] } });
+  const store = createDesktopStore();
+  vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+  const saved = { turnId: "saved-turn", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0, outputTokens: 100, generationDurationMs: 2000 };
+  const totals = { input: 0, output: 100, total: 100, stepsReported: 1, stepsWithCache: 0, generationTokensPerSecond: 50 };
+  store.getState().applyHostMessage({ type: "host_ready", workspace: "/w", mode: "build", model: "m", sessionId: "s", contextUsage: { estimatedTokens: 25, budgetTokens: 100, source: "provider" } });
+  store.getState().applyHostMessage({ type: "session_checkpoint", latestTurnId: "saved-turn", usageAudit: { lastStep: saved, totalSteps: 1, totals } });
+  store.getState().applyHostMessage({ type: "usage_audit", steps: [saved], totals });
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(Composer))));
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Context window usage"]')!.click());
+    expect(container.textContent).toContain("This turn: 1 step");
+    expect(container.textContent).toContain("Generation speed: session 50 t/s · this turn 50 t/s");
+    await act(async () => container.querySelector<HTMLButtonElement>('.ctx-popover-steps-toggle')!.click());
+    expect(container.querySelector('[aria-label="This turn\'s steps"]')?.textContent).toContain("out 100");
+  } finally { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); }
+});
