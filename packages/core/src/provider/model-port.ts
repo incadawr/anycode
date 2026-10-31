@@ -849,7 +849,7 @@ export class AiSdkModelPort implements ModelPort {
    * When it matches the config's own value — the overwhelming majority of
    * attempts — the config is forwarded UNTOUCHED: spreading would both break
    * the object identity the no-resolver path guarantees and add an
-   * `includeUsage: undefined` key the pre-shape never carried.
+   * `includeUsage: undefined` key the shape never carried.
    */
   // The factory receives exactly one argument when the activity hook is absent.
   private async buildAttemptModel(includeUsage: boolean | undefined, onResponseActivity?: () => void, onKey?: (key: string | undefined) => void): Promise<LanguageModel> {

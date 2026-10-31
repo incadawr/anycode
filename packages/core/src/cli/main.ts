@@ -215,7 +215,7 @@ function basenameOf(path: string): string {
  * `resolveIncludeUsage` (called once after the transport ladder, where the
  * resolved transport lives) already produced the verdict the caller passes as
  * part of `includeUsageResolved`, and a `false` spreads nothing, keeping the
- * anthropic-messages path byte-identical to the pre-literals.
+ * anthropic-messages path byte-identical to the literals.
  * `options?.modelPort` short-circuits BEFORE this helper at both call sites,
  * exactly as before — an injected test port bypasses config construction.
  */

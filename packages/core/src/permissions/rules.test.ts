@@ -605,7 +605,7 @@ describe("— always-allow rules are confined to the session workspace", () => {
     expect(ruling.decision).toBe("ask");
   });
 
-  it("Bash stays out of scope: a blanket Bash rule still allows a sed -i touching the repo (residual documented in)", () => {
+  it("Bash stays out of scope: a blanket Bash rule still allows a sed -i touching the repo (residual documented)", () => {
     const engine = new RuleAwarePermissionEngine(new ModePermissionEngine(), labRules());
     const ruling = engine.check({
       toolName: "Bash",

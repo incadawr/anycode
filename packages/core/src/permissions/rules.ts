@@ -50,7 +50,7 @@
  * `.anycode/worktrees/<x>` worktree therefore cannot ride a blanket Edit rule
  * to edit the main checkout by absolute path. Bash is out of scope: its
  * command line is not path-analysable, so a blanket Bash rule remains a full
- * bypass by owner grant (residual documented in).
+ * bypass by owner grant (residual documented).
  */
 
 import picomatch from "picomatch";
@@ -73,7 +73,7 @@ const SUBJECT_FIELD: Record<string, string> = {
   Glob: "path",
   Grep: "path",
   WebFetch: "url",
-  // . Not a core tool: this is the name the desktop's Codex approval
+  // Not a core tool: this is the name the desktop's Codex approval
   // bridge stamps on a `commandExecution` approval, whose input carries the
   // same `command: string` a Bash call does. It is listed here because rules
   // are matched by the tool name the USER approved, never by a translated one

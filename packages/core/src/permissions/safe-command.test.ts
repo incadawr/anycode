@@ -655,7 +655,7 @@ describe("fix wave 2 — RES-1 witness pins (GP-series)", () => {
   });
 
   it("GP2: RES-1 CLOSED — quote-hidden git write flags now classify unknown", () => {
-    // Closed-hole acceptance pin (RESIDUALS-S2.md RES-1, closed by).
+    // Closed-hole acceptance pin (RESIDUALS-S2.md RES-1, closed).
     // History: on the pre-fix single-command path, `isWriteFlag` only ever
     // saw the raw whitespace-split token (`"--output"` starts with `"`, not
     // `-`; `--outp"ut"` normalization only strips a `=value` suffix), so

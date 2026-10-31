@@ -760,7 +760,7 @@ function resolveResultBudget(metadata: ToolMetadata): {
     maxModelBytes: declared.maxModelBytes,
     previewDirection: declared.previewDirection ?? "head",
     // "truncate" is the default for the same reason the whole budget has one:
-    // a tool that declared nothing must land on the pre-behaviour, not
+    // a tool that declared nothing must land on the behaviour, not
     // on the newest one (DoD-3).
     strategy: declared.strategy ?? "truncate",
   };

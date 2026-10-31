@@ -338,7 +338,7 @@ export function buildChildConfig(
   // lock #1: SPAWN_TOOLS = Agent + Workflow are dropped). Built once so its name
   // snapshot drives the child's tool-discipline section AND is the child registry.
   const registry = buildPersonaRegistry(effectivePersona, extras?.webSearchTool);
-  // §2.2, reaffirmed by: same precedence as the
+  // §2.2, reaffirmed: same precedence as the
   // model-override resolution in run() (request > persona default) — the
   // spawn identity stamped onto every telemetry record this child produces,
   // when the parent wired a tap factory. (owner's ruling — "модель
@@ -472,7 +472,7 @@ export function buildChildConfig(
     // grandchild's activity reaches telemetry only as this child's
     // subagent_start/subagent_end events, same as today). Absent factory
     // (telemetry disabled, or a caller — e.g. the workflow engine — that
-    // never wires one) => no eventTap, byte-identical to pre-.
+    // never wires one) => no eventTap, byte-identical.
     ...(parent.subagentEventTap !== undefined
       ? {
           eventTap: parent.subagentEventTap({

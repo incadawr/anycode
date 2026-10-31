@@ -127,7 +127,7 @@ function capSummary(text: string, maxChars: number, fullReportPath?: string): st
  * Maps a session-tier terminal status onto the notification's 3-way
  * vocabulary (spec §4bis's literal `completed|failed|cancelled`): `max_turns`
  * and `error` both collapse to "failed" — from the parent's point of view
- * both mean the same thing, "did not produce a finished report" ('s
+ * both mean the same thing, "did not produce a finished report" (
  * own "only completed is success" discipline, one level coarser here since
  * the notification has no room for a `max_turns`-specific remediation hint
  * the way the synchronous Agent tool's own error text does).

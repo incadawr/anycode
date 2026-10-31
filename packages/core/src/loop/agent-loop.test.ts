@@ -1425,7 +1425,7 @@ describe("AgentLoop.runTurn — ceiling decision ladder (cut-1)", () => {
     });
   });
 
-  it("{ enabled: false } restores the pre-wall — no decision call is ever attempted", async () => {
+  it("{ enabled: false } restores the wall — no decision call is ever attempted", async () => {
     const modelPort = new MockModelPort([toolTurnStep("c1"), toolTurnStep("c2")]);
     const loop = makeLoop({ modelPort, maxTurns: 1, registry, ceiling: { enabled: false } });
 

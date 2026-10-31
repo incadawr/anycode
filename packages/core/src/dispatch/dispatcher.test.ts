@@ -1650,7 +1650,7 @@ describe("executeToolCall — always-allow vs workspace boundary", () => {
   const tmpRoots: string[] = [];
 
   async function mkDir(): Promise<string> {
-    const dir = await fsp.mkdtemp(join(tmpdir(), "taskana4294-"));
+    const dir = await fsp.mkdtemp(join(tmpdir(), "anycode-dispatcher-"));
     const real = await fsp.realpath(dir);
     tmpRoots.push(real);
     return real;

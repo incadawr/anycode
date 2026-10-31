@@ -252,8 +252,7 @@ function usageTokens(rec: Record<string, unknown>): number {
 type ValidTelemetryRecord = Record<string, unknown> & { ts: number; t: string };
 
 /**
- * The SINGLE record-validity filter of this module (task187-aggregator-
- * semantics.md §0): JSON-parses one line, then applies the envelope gate
+ * The SINGLE record-validity filter of this module (§0): JSON-parses one line, then applies the envelope gate
  * (`v === 1`, finite `ts`) and the enumerate-the-good variant gate, returning
  * undefined for anything that fails. Every reader of a sink file goes through
  * here — the whole-directory aggregator, `aggregateFilePartial` and

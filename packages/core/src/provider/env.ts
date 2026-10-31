@@ -94,7 +94,7 @@ export const DEFAULT_BASE_URL = "https://api.anthropic.com";
 
 /**
  * `CoreEnvConfig` plus the model binding for the context-window override
- * . Declared here rather than in `types/config.ts` so the added field
+ * Declared here rather than in `types/config.ts` so the added field
  * stays entirely inside `provider/**`.
  */
 export type ModelBoundCoreEnvConfig = CoreEnvConfig & { contextWindowModel?: string };

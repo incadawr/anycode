@@ -289,7 +289,7 @@ export interface AgentLoopConfig {
    * step; the check sits beside the maxTurns check and exits the same way
    * (loop_end "max_turns" — budget exhausted). A turn already in flight when it
    * expires plays out to the end, so the history stays balanced. Unset => no
-   * deadline (parent loops are byte-identical to pre-behaviour). Set by
+   * deadline (parent loops are byte-identical to behaviour). Set by
    * the subagent runner from the wall-clock budget of one spawn; the value is
    * absolute rather than a duration because the anchor is SubagentPort.run
    * entry — a child that spent its budget parked in the concurrency semaphore
@@ -300,7 +300,7 @@ export interface AgentLoopConfig {
    * Turn-ceiling decision ladder (cut-1). Omitted => the defaults
    * apply: the ladder is ON, its window is CEILING_DECISION_TIMEOUT_MS and it
    * may hand out at most `maxTurns` extra turns in total, over at most
-   * MAX_CEILING_ROUNDS rounds. `{ enabled: false }` restores the pre-
+   * MAX_CEILING_ROUNDS rounds. `{ enabled: false }` restores the
    * wall. The subagent runner additionally passes the two child clamps
    * (maxTurnsCeiling, outcomeDeadlineAt).
    */
@@ -310,7 +310,7 @@ export interface AgentLoopConfig {
    * on each of the text/reasoning stream channels aborts the model request
    * and cuts the turn when it catches a tandem-repeat loop. Omitted => ON,
    * matching the ladder's own default-on posture. `{ enabled: false }`
-   * disables both channels and restores pre-behaviour byte-for-byte.
+   * disables both channels and restores behaviour byte-for-byte.
    * Exempt on a supervised root exactly like the ceiling
    * (`ceiling.supervisedRoot() === true`, checked live at the moment a
    * verdict fires) — a human watching the screen can just press Stop.
@@ -522,7 +522,7 @@ export interface AgentLoopConfig {
    * telemetry, so tool handlers cannot write arbitrary records — only the
    * wiring layer (cli/main.ts, desktop host) that built this closure can.
    * Attached by the CLI/host wiring only, same as eventTap; absent => a
-   * child loop gets no eventTap at all, byte-identical to pre-
+   * child loop gets no eventTap at all, byte-identical to
    * behaviour (its activity still reaches the parent's own tap as
    * subagent_start/subagent_end events, exactly as before).
    */

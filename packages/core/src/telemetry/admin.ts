@@ -15,7 +15,7 @@
 export { aggregateProfileStats } from "./stats.js";
 export type { ProfileStats, ProfileDayStats, ProfileStatsFile, AggregateProfileStatsOptions } from "./stats.js";
 /** S2: the per-file partial + merge path the incremental cache in main
- *  is built on (semantics: working-docs/build/task187-aggregator-semantics.md).
+ *  is built on.
  *  `collectSessionTimestamps` + `sessionActiveMs` are the exact second pass for
  *  a session whose per-file segments overlap. */
 export { aggregateFilePartial, mergeProfilePartials, collectSessionTimestamps, sessionActiveMs } from "./stats.js";

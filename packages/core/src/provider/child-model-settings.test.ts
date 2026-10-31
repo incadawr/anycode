@@ -15,7 +15,7 @@ import { buildChildModelSettingsResolver } from "./child-model-settings.js";
 // "glm-5.3-flash" here is a deliberately synthetic stand-in for "a known
 // model with no declared output ceiling" (1M context, low/high/max efforts) —
 // it no longer mirrors the real catalog row of the same id, which gained a
-// declared 131_072 ceiling in. "glm-5.3" mirrors the corrected row
+// declared 131_072 ceiling. "glm-5.3" mirrors the corrected row
 // (a declared ceiling, same effort family). The resolver under test is
 // exercised purely against these local models, never the real catalog, so
 // this drift is cosmetic — see capabilities.test.ts / catalog.test.ts for
