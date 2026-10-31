@@ -107,6 +107,7 @@ export interface PluginRowView {
     engineSupport: string[];
     promptOverlays: number;
     services: string[];
+    accountSources?: string[];
   };
   mcpServersHash?: string;
   mcpConsentGranted?: boolean;

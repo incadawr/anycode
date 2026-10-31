@@ -652,6 +652,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     if (caps.agents > 0) capabilityList.push("agents");
     if (caps.workflows > 0) capabilityList.push("workflows");
     capabilityList.push(...caps.mcp.map((name) => `mcp:${name}`));
+    capabilityList.push(...(caps.accountSources ?? []).map((id) => `accountSource:${id}`));
     if (caps.commands > 0) capabilityList.push("commands");
     if (caps.hooks) capabilityList.push("hooks");
     if (caps.docs) capabilityList.push("docs");
