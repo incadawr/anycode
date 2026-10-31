@@ -6,6 +6,7 @@
  * the renderer did not already receive from main.
  */
 import type { CommunicationHandleResult, CommunicationMutationReason, CommunicationStatus } from "../../../shared/communication-config.js";
+import { AGENT_PROJECT_SWITCH_LABEL } from "./project-agent-switch.js";
 
 export const SESSIONS_API_PANE_ID = "sessions-api" as const;
 export const SESSIONS_API_LABEL = "Sessions API";
@@ -40,12 +41,15 @@ export const SESSIONS_API_AGENT_PROJECT_TURN_OFF = "Turn off";
 export const SESSIONS_API_AGENT_PROJECTS_EMPTY = "No project allows agents to open tasks yet. Use the project ⋯ menu in the sidebar.";
 export const SESSIONS_API_AGENT_PROJECTS_HINT = "Off by default. Turn one on in the sidebar project ⋯ menu; trusted folders only.";
 /**
- * The step-1 hint (audit D9): says WHERE a session is switched on (the
- * session's own ⋯ environment menu) before the live count, so the pane
- * explains per-session sharing instead of only listing "Currently shared: 4".
+ * The step-1 hint: says WHERE a session is switched on (the session's own ⋯
+ * environment menu) before the live count, so the pane explains per-session
+ * sharing instead of only listing "Currently shared: 4". It also names the
+ * second, project-level switch — agents may open new tasks in a project only
+ * when that switch is on — using the sidebar menu's own label.
  */
 export const SESSIONS_API_SHARE_HINT =
-  "Open a session's ⋯ environment menu and turn on Sessions API; only sessions you switch on are shared. Currently shared: {count}.";
+  "Open a session's ⋯ environment menu and turn on Sessions API; only sessions you switch on are shared. Currently shared: {count}. " +
+  `Agents may open new tasks in a project only when that project's “${AGENT_PROJECT_SWITCH_LABEL}” switch is on (sidebar project ⋯ menu).`;
 
 export type SessionsApiTone = "ok" | "danger" | "muted";
 
