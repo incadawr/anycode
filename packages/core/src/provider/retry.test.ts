@@ -155,7 +155,7 @@ describe("retryDelayMs", () => {
     expect(retryDelayMs(0, new Error("boom"), policy)).toBe(500);
   });
 
-  it("matches DEFAULT_RETRY_POLICY shape (/4772: maxRetries 8, max 60000ms, 5-min network budget, 30-min network wait, 2 mid-stream replays)", () => {
+  it("matches DEFAULT_RETRY_POLICY shape (maxRetries 8, max 60000ms, 5-min network budget, 30-min network wait, 2 mid-stream replays)", () => {
     expect(DEFAULT_RETRY_POLICY).toEqual({
       maxRetries: 8,
       baseDelayMs: 1_000,

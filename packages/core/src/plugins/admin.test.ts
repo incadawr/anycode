@@ -337,7 +337,7 @@ describe("scanPluginsAdmin", () => {
   });
 });
 
-describe("scanPluginsAdmin — services (a)", () => {
+describe("scanPluginsAdmin — services", () => {
   const SERVICES = [
     { name: "relay", command: "node", args: ["./relay.js"], env: { LOG_LEVEL: "debug", RELAY_SECRET_LABEL: "super-secret-value-123" } },
   ];

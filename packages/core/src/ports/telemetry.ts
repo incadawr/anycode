@@ -10,7 +10,7 @@
  * consumed only by CLI/host wiring — CorePorts does NOT carry this port, so
  * tool handlers can never see or write to it.
  *
- * Telemetry track (/159/160) additions: `session_start.engine` /
+ * Telemetry track additions: `session_start.engine` /
  * `.parentSession`, `subagent_start.model` / `.engine`, and the envelope's
  * `sub` are all names/enums/ids by type — the privacy theorem above still
  * holds, no free-text field was added.
@@ -66,10 +66,10 @@ export type TelemetryEventRecord =
       durationMs: number;
       /** REQUESTED child model id — same value as `subagent_start.model`. */
       model?: string;
-      /** Provider's own model CLAIM — /, distinct from `model`. */
+      /** Provider's own model CLAIM — distinct from `model`. */
       responseModel?: string;
       /**
-       * /4055: the child's ceiling ladder summary — rounds/granted
+       * the child's ceiling ladder summary — rounds/granted
        * turns and, when the ladder ended on a refusal, its closed reason.
        * Numbers + the CeilingRefusalReason enum only (same footing as
        * `ceiling_refused` above): no free text crosses this port.
@@ -157,7 +157,7 @@ export type TelemetryLifecycleRecord =
        *  not be conflated in the type system. Precedent:
        *  `apps/desktop/src/host/session.ts`'s `SessionPersistence.touch`. */
       enginePreset?: string;
-      /** Set only when this boot is a session-tier child (/145):
+      /** Set only when this boot is a session-tier child
        *  the parent session's id, ties the child file back to its parent. */
       parentSession?: string;
     }

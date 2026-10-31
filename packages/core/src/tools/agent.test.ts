@@ -942,7 +942,7 @@ describe("agentTool — subagent_activity bridge (slice P7.18/F16b)", () => {
   });
 
   // -------------------------------------------------------------------------
-  // /4055: mapProgressToEvent's "end" case bridges the child's ceiling
+  // mapProgressToEvent's "end" case bridges the child's ceiling
   // ladder summary (numbers + the closed refusal enum) verbatim.
 
   it("bridges progress.ceiling onto subagent_end verbatim, and omits the key when the port carries none", async () => {

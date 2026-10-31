@@ -241,7 +241,7 @@ describe("loadTelemetryConfig — dir resolution", () => {
   });
 });
 
-describe("loadTelemetryConfig — / ANYCODE_TELEMETRY_DIR override", () => {
+describe("loadTelemetryConfig — ANYCODE_TELEMETRY_DIR override", () => {
   // the override REDIRECTS an already-enabled sink; it must never
   // enable telemetry on its own. This is the red->green pin for that defect —
   // on the pre-fix code this returned an ENABLED telemetry object even with

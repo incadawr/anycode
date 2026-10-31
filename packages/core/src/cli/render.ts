@@ -507,7 +507,7 @@ export function renderEvent(
     }
     // One granted extension of the turn ceiling. Every grant is
     // visible: the line names the round, what it bought, the running total and
-    // what the model said still remains. /4055: an adaptive-mode grant
+    // what the model said still remains. an adaptive-mode grant
     // renders its own line — the productive-tool count is the progress the
     // grant was actually priced on, so it belongs next to the total.
     case "ceiling_grant":

@@ -65,7 +65,7 @@ function isValidServiceCommand(command: string): boolean {
 }
 
 /**
- * One background service a plugin declares (a). A service is a
+ * One background service a plugin declares. A service is a
  * long-lived process AnyCode supervises after the plugin is enabled AND the
  * user consents to its exact definition (`servicesHash`). `env` values are
  * literal strings, except `${secret:NAME}` (part 0): main resolves
@@ -197,7 +197,7 @@ export const pluginManifestSchema = z.object({
   workflows: workflowsList,
   /** Server entries reusing the exact explicit-config shape; keys share the name alphabet. */
   mcpServers: z.record(z.string().regex(PLUGIN_NAME_RE, NAME_ERROR), mcpServerEntrySchema).optional(),
-  /** Background services (a): consent-gated, supervised by main. No default — legacy output stays identical. */
+  /** Background services consent-gated, supervised by main. No default — legacy output stays identical. */
   services: servicesList,
   // ── Stage 2/3 placeholders: PARSED (shape-known) but NOT contributed by s1 discovery. ──
   commands: z.array(z.string()).optional(),

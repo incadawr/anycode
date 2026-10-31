@@ -74,7 +74,7 @@ export interface PluginAdminRow {
   mcpConsentGranted?: boolean;
   /** MCP server names the plugin declares (pre-rename). */
   mcpServerNames: string[];
-  /** Background service names the plugin declares (a, sorted). */
+  /** Background service names the plugin declares (sorted). */
   serviceNames: string[];
   /** sha256 of the services definition (name/command/args/env KEYS); absent when no services. */
   servicesHash?: string;

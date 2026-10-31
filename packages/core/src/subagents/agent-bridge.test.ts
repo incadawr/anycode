@@ -767,7 +767,7 @@ describe("decodeAgentBridgeCallInput (срез S4)", () => {
   });
 });
 
-describe("runAgentBridgeCall — profile effort (/)", () => {
+describe("runAgentBridgeCall — profile effort", () => {
   const PLANNER: AgentBridgeCatalogEntry = { name: "glm-planner", description: "Plans", model: "glm-5.3", effort: "high", systemPrompt: "PLAN BODY" };
 
   function capture(): { port: SessionSubagentPort; seen: () => SessionSubagentRequest | undefined } {

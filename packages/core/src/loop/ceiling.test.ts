@@ -44,7 +44,7 @@ describe("grantForRound", () => {
     expect(grantForRound(1, 1)).toBe(1);
   });
 
-  it("floors round 3 at 5, not 1 (.md table: N/8 but never below 5)", () => {
+  it("floors round 3 at 5, not 1 (table: N/8 but never below 5)", () => {
     expect(grantForRound(3, 4)).toBe(5); // floor(4/8) = 0 -> floored up to 5
     expect(grantForRound(3, 10)).toBe(5); // floor(10/8) = 1 -> floored up to 5
     expect(grantForRound(3, 39)).toBe(5); // floor(39/8) = 4 -> still floored up to 5

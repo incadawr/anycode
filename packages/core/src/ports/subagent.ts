@@ -100,7 +100,7 @@ export interface SubagentOutcome {
    */
   declaredDoneAtCeiling?: boolean;
   /**
-   * /4055: the child's turn-ceiling summary, folded from its own
+   * the child's turn-ceiling summary, folded from its own
    * ceiling_grant/ceiling_refused events — `rounds` = granted rounds,
    * `grantedTurns` = their turn sum, `lastRefusal` = the reason of the
    * refusal that ended the ladder (if it ended on one). Numbers and the
@@ -209,7 +209,7 @@ export type SubagentProgress =
       // persona's one-shot run.
       engine?: "codex" | "claude";
       finalTurnFinishReason?: "length";
-      // /4055: the child's ceiling summary — same closed shape as
+      // the child's ceiling summary — same closed shape as
       // SubagentOutcome.ceiling; carried on `end` so live UI sees it too.
       ceiling?: {
         rounds: number;

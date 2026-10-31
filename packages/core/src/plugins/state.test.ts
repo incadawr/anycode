@@ -271,7 +271,7 @@ describe("serversHash / consent (design §4)", () => {
   });
 });
 
-describe("servicesHash / service consent (a)", () => {
+describe("servicesHash / service consent", () => {
   const svc = (over: Record<string, unknown> = {}) => ({
     name: "relay",
     command: "node",

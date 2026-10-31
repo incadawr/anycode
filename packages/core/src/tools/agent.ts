@@ -611,7 +611,7 @@ async function runSessionTier(
     // mistakes a caller's coincidentally-equal explicit model for a chain
     // hop — set exactly when every stamping spread below fired, i.e. the
     // caller passed neither provider nor model.
-    // /4735: the field set itself lives in the shared pure helper
+    // the field set itself lives in the shared pure helper
     // (subagents/role-route.ts) so the workflow engine's engine-role steps
     // stamp the same fields from the same code.
     ...(resumeChildSessionId === undefined

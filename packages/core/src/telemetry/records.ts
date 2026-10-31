@@ -80,7 +80,7 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
       // same whitelist discipline as every other case here — this stays a
       // projection, never a spread of the raw event.
       //
-      // /4055: `ceiling` (the child's ladder summary) is copied the
+      // `ceiling` (the child's ladder summary) is copied the
       // same field-by-field way — numbers and the closed refusal enum only,
       // never the ladder's `remaining`/`nextAction` text.
       return {

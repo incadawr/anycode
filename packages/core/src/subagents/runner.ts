@@ -1431,7 +1431,7 @@ export function createSubagentRunner(
         let loopReason: SubagentOutcome["status"] | undefined;
         let loopTurns: number | undefined;
         let ceilingDone = false;
-        // /4055: the child's own ceiling ladder, folded from its
+        // the child's own ceiling ladder, folded from its
         // ceiling_grant/ceiling_refused events into the outcome summary.
         let ceilingRounds = 0;
         let ceilingGrantedTurns = 0;
@@ -1573,7 +1573,7 @@ export function createSubagentRunner(
                 loopTurns = event.turns;
                 ceilingDone = event.declaredDoneAtCeiling === true;
                 break;
-              // /4055: fold the child's own ceiling ladder into the
+              // fold the child's own ceiling ladder into the
               // summary the outcome carries. Numbers and a closed enum only —
               // `remaining`/`nextAction` text never crosses this boundary.
               case "ceiling_grant":
@@ -1690,7 +1690,7 @@ export function createSubagentRunner(
         }
 
         const capped = capUtf8Bytes(finalText, SUBAGENT_OUTPUT_MAX_BYTES);
-        // /4055: the ceiling summary exists only when the child's
+        // the ceiling summary exists only when the child's
         // ladder actually produced a grant or ended on a refusal — a run that
         // never tripped the ceiling stays absent, not zero-filled.
         const ceiling =

@@ -91,7 +91,7 @@ describe("renderEvent — no-color byte invariant (design §0.1/§9-R5)", () => 
     expect(collect([{ type: "loop_end", reason: "completed", turns: 3 }])).not.toContain("send a message");
   });
 
-  // /4055: an adaptive grant renders its own line naming the
+  // an adaptive grant renders its own line naming the
   // productive-tool count; the ladder line (mode absent or "ladder") keeps its
   // exact shape.
   it("renders an adaptive ceiling grant with the productive-tool count", () => {

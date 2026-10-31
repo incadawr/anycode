@@ -189,7 +189,7 @@ export type CeilingRefusalReason =
   | "unreadable_verdict"
   | "verdict_rejected"
   /**
-   * /4055 (adaptive mode only): the verdict was structurally readable
+   * (adaptive mode only): the verdict was structurally readable
    * but the round just spent shows no QUALIFYING progress (zero successful
    * non-read-only tool calls) — the run is restating its plan without doing
    * work, so the budget is not "too small", the run has stalled. Distinct from
@@ -304,14 +304,14 @@ export type AgentEvent =
       remaining: string[];
       nextAction?: string;
       /**
-       * /4055: which grant path produced this round — the
+       * which grant path produced this round — the
        * decreasing ladder (default) or the progress-scaled adaptive mode
        * (CeilingConfig.adaptive). Additive-optional: absent on replays from
        * before the field existed, which reads as the legacy ladder path.
        */
       mode?: "ladder" | "adaptive";
       /**
-       * /4055: the per-round activity measures the gate ran on —
+       * the per-round activity measures the gate ran on —
        * `successfulToolCalls` counts every successful call, `productiveToolCalls`
        * only the non-read-only ones (a file read alone is not progress).
        * Numbers only, no model text. Additive-optional, same replay rule.
@@ -484,7 +484,7 @@ export type AgentEvent =
        */
       finalTurnFinishReason?: "length";
       /**
-       * /4055: the child's turn-ceiling summary, folded from its own
+       * the child's turn-ceiling summary, folded from its own
        * ceiling_grant/ceiling_refused events — `rounds` = granted rounds,
        * `grantedTurns` = their turn sum, `lastRefusal` = the reason of the
        * refusal that ended the ladder (if it ended on one). Numbers and the
