@@ -38,6 +38,7 @@ import {
 import { Vault, type SecretSetResult } from "./vault.js";
 import { createProxyChainFetch, type ProxyDispatchRequest } from "./provider-proxy-fetch.js";
 import { hostForkProxyChain } from "../shared/proxy.js";
+import { calculateUsageCost, resolveUsagePrice } from "../host/usage-cost.js";
 
 // Capture ipcMain.handle registrations so a test can drive the real
 // `registerProviderIpc` wiring without an Electron runtime. `mock`-prefixed so
@@ -1421,6 +1422,18 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     });
     return { deps, calls };
   }
+
+  it("removes a saved OpenRouter rate when the refreshed model has conditional pricing", async () => {
+    const id = "vendor/conditional";
+    await seedConnection({ id: "conditional", providerId: "custom", baseUrl: "https://openrouter.ai/api/v1", modelCapabilities: { [id]: { contextWindow: 1000, pricing: { input: 1, cachedInput: 1, output: 2 } } } });
+    const { deps } = makeCatalogDeps({ fetchModels: async () => fetchCustomProviderModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl: async () => new Response(JSON.stringify({ data: [{ id, context_length: 2000, pricing: { prompt: "0.1", completion: "0.2", overrides: [{ prompt: "0.3" }] } }] })) }) });
+    expect((await handleCustomProviderFetchModels(deps, { connectionId: "conditional" })).ok).toBe(true);
+    const connection = (await loadSettings(settingsPath)).settings.provider.connections[0]!;
+    expect(connection.modelCapabilities?.[id]).toEqual({ contextWindow: 2000 });
+    const selected = resolveUsagePrice(JSON.stringify({ models: { [id]: connection.modelCapabilities?.[id]?.pricing } }), id, undefined);
+    expect(selected).toBeUndefined();
+    expect(calculateUsageCost({ inputTokens: 1000000, cachedInputTokens: 0, outputTokens: 1000000 }, selected && !selected.subscription ? selected.price : undefined)).toBeUndefined();
+  });
 
   it("resolves entry baseUrl (+/v1), anthropic auth kind from the transport, and the connection vault key; persists the fetched ids", async () => {
     await seedConnection({ id: "conn-1", providerId: "kimi" });
