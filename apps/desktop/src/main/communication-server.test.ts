@@ -1917,20 +1917,28 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     // Advertised as a plain string: the allowed values are MODEL-dependent, so
     // a static enum here would be a lie for every native engine.
     expect(tool.inputSchema).toMatchObject({
-      properties: { effort: { type: "string" } },
+      properties: { effort: { type: "string" }, fast: { type: "boolean" } },
       additionalProperties: false,
     });
     expect((tool.inputSchema as unknown as { properties: Record<string, unknown> }).properties.effort).not.toHaveProperty("enum");
 
-    const created = value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, engine: "codex", model: "gpt-6.1-terra", effort: "xhigh" } }));
+    const created = value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, engine: "codex", model: "gpt-6.1-terra", effort: "xhigh", fast: false } }));
     expect(created.sessionId).toBe("effort-1");
     // Forwarded UNCHANGED — no trimming, no case folding, no enum check in main.
     expect(seen).toHaveLength(1);
-    expect(seen[0]).toMatchObject({ engine: "codex", model: "gpt-6.1-terra", effort: "xhigh" });
+    expect(seen[0]).toMatchObject({ engine: "codex", model: "gpt-6.1-terra", effort: "xhigh", fast: false });
 
     // Omitting it stays an omission (the engine's own default applies).
     value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }));
     expect(seen[1]).not.toHaveProperty("effort");
+  });
+
+  it("rejects a non-boolean fast argument before creating a session", async () => {
+    const creator = vi.fn(async () => ({ ok: true as const, sessionId: "s", tabId: "t" }));
+    const f = await createFixture({ creator });
+    const result = await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, engine: "codex", fast: "true" } });
+    expect(result.isError).toBe(true);
+    expect(creator).not.toHaveBeenCalled();
   });
 
   // ── create_session account (Sessions API) ───────────────────────────────

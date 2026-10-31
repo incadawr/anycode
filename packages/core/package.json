@@ -26,7 +26,8 @@
     "./telemetry-admin": "./src/telemetry/admin.ts",
     "./network-failure": "./src/provider/network-failure.ts",
     "./provider/quota": "./src/provider/quota.ts",
-    "./catalog": "./src/provider/catalog-data.ts"
+    "./catalog": "./src/provider/catalog-data.ts",
+    "./model-dictionary": "./src/provider/model-dictionary.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

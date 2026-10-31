@@ -1052,6 +1052,7 @@ export interface RetryOffer {
  * new model and is kept here.
  */
 export interface PendingEngineChange {
+  fast?: boolean;
   model?: string;
   activePresetId?: string;
   effort?: string;
@@ -5682,10 +5683,17 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                   if (!message.deferredEffort && appliedEffort !== undefined && message.effort === appliedEffort) delete nextPending.effort;
                   else nextPending.effort = message.effort;
                 }
+                if (message.fast !== undefined) {
+                  touched = true;
+                  if (message.fast === state.engine.fast) delete nextPending.fast;
+                  else nextPending.fast = message.fast;
+                } else if (message.model !== undefined) {
+                  delete nextPending.fast;
+                }
                 if (!touched) {
                   return {};
                 }
-                const hasPending = nextPending.model !== undefined || nextPending.activePresetId !== undefined || nextPending.effort !== undefined;
+                const hasPending = nextPending.model !== undefined || nextPending.activePresetId !== undefined || nextPending.effort !== undefined || nextPending.fast !== undefined;
                 return { pendingEngineChange: hasPending ? nextPending : null };
               }
               // "applied" or absent — actually active now. Clear whichever
@@ -5697,7 +5705,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               if (message.model !== undefined) delete nextPending.model;
               if (message.activePresetId !== undefined) delete nextPending.activePresetId;
               if (message.effort !== undefined) delete nextPending.effort;
-              const hasPending = nextPending.model !== undefined || nextPending.activePresetId !== undefined || nextPending.effort !== undefined;
+              if (message.fast !== undefined || message.model !== undefined) delete nextPending.fast;
+              const hasPending = nextPending.model !== undefined || nextPending.activePresetId !== undefined || nextPending.effort !== undefined || nextPending.fast !== undefined;
               const nextEngineModel = state.engine.model === undefined ? undefined : { ...state.engine.model };
               if (nextEngineModel !== undefined) {
                 if (message.model !== undefined) {
@@ -5710,10 +5719,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                   nextEngineModel.effort = message.effort;
                 }
               }
+              const nextEngine = { ...state.engine };
+              if (message.fast !== undefined) nextEngine.fast = message.fast;
+              else if (message.model !== undefined) delete nextEngine.fast;
               return {
                 ...(message.clearContextUsage ? { contextUsage: null } : {}),
                 engine: {
-                  ...state.engine,
+                  ...nextEngine,
                   ...(nextEngineModel !== undefined ? { model: nextEngineModel } : {}),
                   ...(message.activePresetId !== undefined && state.engine.permissions
                     ? { permissions: { ...state.engine.permissions, activePresetId: message.activePresetId } }

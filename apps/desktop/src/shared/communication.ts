@@ -67,6 +67,11 @@ export interface MissingWorkspaceSessionStatus {
 
 /** Internal main→host operation name (never a public MCP tool). */
 export const SET_SESSION_EFFORT_OPERATION = "set_session_effort";
+export const SET_SESSION_FAST_OPERATION = "set_session_fast";
+
+export type SetSessionFastOutcome =
+  | { ok: true }
+  | { ok: false; reason: "invalid_argument" | "not_ready"; detail?: string };
 
 /** Payload of `set_session_effort`. `effort` stays `unknown` until the shared validator classifies it. */
 export interface SetSessionEffortPayload {

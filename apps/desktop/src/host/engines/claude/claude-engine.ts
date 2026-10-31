@@ -811,6 +811,7 @@ export class ClaudeEngine implements SessionEngine {
    * resume-baseline problem does not apply here, cut §2.3 comment).
    */
   private cumulativeInputTokens = 0;
+  private cumulativeCachedInputTokens = 0;
   private cumulativeOutputTokens = 0;
   /**
    * Set by `onResult` ONLY when the just-finished turn's `result.usage`
@@ -821,7 +822,7 @@ export class ClaudeEngine implements SessionEngine {
    * `null` there means this turn emits no `engine_session_tokens` event at
    * all (fail-soft: an undercount, never an invented one, per TASK.159 §DoD).
    */
-  private lastTurnTokenUsage: { input: number; output: number } | null = null;
+  private lastTurnTokenUsage: { input: number; output: number; cached?: number } | null = null;
   /**
    * TASK.157: timestamp (ms) of the LAST STARTED mid-turn context refresh, or
    * `null` when none has started yet. `null` (not 0) is the sentinel so a
@@ -1475,11 +1476,13 @@ export class ClaudeEngine implements SessionEngine {
       if (turnTokens !== null) {
         this.cumulativeInputTokens += turnTokens.input;
         this.cumulativeOutputTokens += turnTokens.output;
+        this.cumulativeCachedInputTokens += turnTokens.cached ?? 0;
         yield {
           type: "engine_session_tokens",
           input: this.cumulativeInputTokens,
           output: this.cumulativeOutputTokens,
           total: this.cumulativeInputTokens + this.cumulativeOutputTokens,
+          ...(turnTokens.cached !== undefined ? { cachedInput: this.cumulativeCachedInputTokens } : {}),
         };
       }
     } catch (error) {
@@ -1977,7 +1980,7 @@ export class ClaudeEngine implements SessionEngine {
   }
 
   /** TASK.159: reads AND clears `lastTurnTokenUsage` — see resetTurnTokenUsage's doc comment for why this is a method, not an inline `this.lastTurnTokenUsage` read. */
-  private consumeLastTurnTokenUsage(): { input: number; output: number } | null {
+  private consumeLastTurnTokenUsage(): { input: number; output: number; cached?: number } | null {
     const value = this.lastTurnTokenUsage;
     this.lastTurnTokenUsage = null;
     return value;
@@ -1999,6 +2002,7 @@ export class ClaudeEngine implements SessionEngine {
     if (value !== null) {
       this.cumulativeInputTokens += value.input;
       this.cumulativeOutputTokens += value.output;
+      this.cumulativeCachedInputTokens += value.cached ?? 0;
     }
   }
 
@@ -2009,19 +2013,21 @@ export class ClaudeEngine implements SessionEngine {
     if (typeof result.total_cost_usd === "number" && Number.isFinite(result.total_cost_usd)) {
       this.totalCostUsd += result.total_cost_usd;
     }
-    // TASK.159: `result.usage` is untyped wire data (protocol.ts's own
-    // `Record<string, unknown>`), never guaranteed present — a tolerant read
-    // of exactly the two fields this session's lifetime-token accounting
-    // needs. Cached/creation token fields on this object are deliberately
-    // NOT read (TASK.111 stays out of scope, both engines and core equally).
+    // Claude reports uncached input, cache reads and cache writes separately.
     const usage = result.usage;
-    const inputTokens = usage !== undefined ? usage.input_tokens : undefined;
-    const outputTokens = usage !== undefined ? usage.output_tokens : undefined;
-    if (
-      typeof inputTokens === "number" && Number.isFinite(inputTokens) &&
-      typeof outputTokens === "number" && Number.isFinite(outputTokens)
-    ) {
-      this.lastTurnTokenUsage = { input: inputTokens, output: outputTokens };
+    const count = (value: unknown): number | undefined =>
+      typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+    const input = count(usage?.input_tokens);
+    const output = count(usage?.output_tokens);
+    const cached = count(usage?.cache_read_input_tokens);
+    const write = count(usage?.cache_creation_input_tokens);
+    if (input !== undefined && output !== undefined &&
+        (usage?.cache_read_input_tokens === undefined || cached !== undefined) &&
+        (usage?.cache_creation_input_tokens === undefined || write !== undefined)) {
+      const total = input + (cached ?? 0) + (write ?? 0);
+      if (Number.isSafeInteger(total)) {
+        this.lastTurnTokenUsage = { input: total, output, ...(cached !== undefined ? { cached } : {}) };
+      }
     }
   }
 

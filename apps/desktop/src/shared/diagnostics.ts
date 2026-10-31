@@ -55,6 +55,7 @@ export interface DiagnosticsSummary {
 }
 
 export type DiagnosticsFailureReason =
+  | "preview_required"
   | "invalid_request"
   | "build_failed"
   | "too_large"

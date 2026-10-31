@@ -199,6 +199,11 @@ export type ReasoningEffort = "off" | "low" | "medium" | "high" | "xhigh" | "max
  * the closed enum happens fail-closed at resolution, never at parse time.
  */
 export interface ModelCapabilitiesDto {
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  pricing?: TokenRates;
+  defaultEffort?: ReasoningEffort;
+  thinkingAlwaysOn?: boolean;
   reasoning?: boolean;
   effortLevels?: string[];
   /** 4088-on-4118 integration: live `architecture.input_modalities` image fact; `true` only. */
@@ -244,15 +249,17 @@ export type ConnectionPricing =
   | ({ mode: "rates" } & TokenRates);
 
 export interface ModelOverrides {
+  catalogMatchDisabled?: true;
   effortLevels?: ReasoningEffort[];
   pricing?: TokenRates;
   contextWindowTokens?: number;
   reasoningEffort?: ReasoningEffort;
   /** User declaration for a model missing from the catalog and live metadata. */
-  reasoningSupported?: true;
+  reasoningSupported?: boolean;
 }
 
 export interface ProviderConnection {
+  openRouterProviders?: string[];
   /** User choices keyed by exact model id; independent of fetched capabilities. */
   modelOverrides?: Record<string, ModelOverrides>;
   pricing?: ConnectionPricing;
@@ -1247,9 +1254,11 @@ export type SettingsPatch = Omit<DeepPartial<AnycodeSettings>, "provider">;
 // ── connection CRUD request payloads (companions to the connection-* channels) ──
 
 export interface ConnectionCreateRequest {
+  openRouterProviders?: string[];
+  catalogMatchDisabled?: true;
   effortLevels?: ReasoningEffort[];
   modelPricing?: Record<string, TokenRates>;
-  reasoningSupported?: true;
+  reasoningSupported?: boolean;
   pricing?: ConnectionPricing;
   providerId: string;
   label?: string;
@@ -1301,6 +1310,7 @@ export interface ConnectionCreateRequest {
 }
 
 export interface ConnectionUpdateRequest {
+  openRouterProviders?: string[];
   modelPricing?: Record<string, TokenRates | "">;
   pricing?: ConnectionPricing | "";
   id: string;
@@ -1341,8 +1351,9 @@ export interface ConnectionUpdateRequest {
   reasoningEffort?: ReasoningEffort | "";
   /** Target of a model override; does not change the connection's default model. */
   modelOverrideModel?: string;
+  catalogMatchDisabled?: true | "";
   effortLevels?: ReasoningEffort[] | "";
-  reasoningSupported?: true | "";
+  reasoningSupported?: boolean | "";
   /**
    * Opt-in prompt-cache policy (GitHub #15) with the same `""` clear sentinel
    * as `maxOutputTokens` below: absent = keep the current value, the enabled

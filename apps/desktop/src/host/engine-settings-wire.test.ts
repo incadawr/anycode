@@ -9,7 +9,7 @@
  * accepted, what is emitted, what is persisted, and what is refused.
  */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MessageChannel, type MessagePort as NodeMessagePort } from "node:worker_threads";
 import type { AgentEvent, PermissionMode } from "@anycode/core";
 import { SessionPermissionRules } from "@anycode/core";
@@ -104,6 +104,8 @@ class FakeEngine implements SessionEngine, EngineSettingsSeam {
     this.model = id;
     return this.markPending();
   }
+
+  selectFast(fast: boolean): EngineSettingsChange { return { ok: true, ...this.chosen(), fast }; }
 
   selectPreset(id: string): EngineSettingsChange {
     if (!this.presetTable.includes(id)) return { ok: false, reason: `Unknown Codex permission preset "${id}".` };
@@ -385,6 +387,44 @@ describe("TASK.39 — set_engine_preset / set_model routing", () => {
 
     expect(settings(ui.received)).toEqual([]);
     expect(ui.engine.snapshot()).toEqual({ model: "gpt-5.6-sol", activePresetId: "ask" });
+  });
+
+  it("rejects speed changes while busy", async () => {
+    const ui = fixture();
+    ui.send({ type: "ui_ready" });
+    ui.send({ type: "user_message", requestId: "r1", text: "go" });
+    await ui.settle();
+    ui.send({ type: "set_engine_fast", fast: true });
+    await ui.settle();
+    expect(ui.received).toContainEqual({ type: "mode_change_rejected", reason: "Cannot change speed during a turn" });
+    expect(ui.touches).not.toContainEqual({ codexFast: true });
+    ui.engine.finishTurn();
+  });
+
+  it("persists a speed reset returned by model selection", async () => {
+    const ui = fixture();
+    const select = ui.engine.selectModel.bind(ui.engine);
+    vi.spyOn(ui.engine, "selectModel").mockImplementation((id) => {
+      const result = select(id);
+      return result.ok ? { ...result, resetFast: true } : result;
+    });
+    ui.send({ type: "set_model", model: "gpt-5.4-mini" });
+    await ui.settle();
+    expect(ui.touches).toContainEqual({ codexFast: null });
+  });
+
+  it("queues speed behind the settings barrier", async () => {
+    const ui = fixture();
+    let release!: () => void;
+    const state = ui.session as unknown as { settingsBarrierActive: boolean; settingsBarrier: Promise<void> };
+    state.settingsBarrierActive = true;
+    state.settingsBarrier = new Promise<void>((resolve) => { release = resolve; });
+    ui.send({ type: "set_engine_fast", fast: true });
+    await ui.settle();
+    expect(ui.touches).not.toContainEqual({ codexFast: true });
+    release();
+    await ui.settle();
+    expect(ui.touches).toContainEqual({ codexFast: true });
   });
 
   it("refuses a preset change during a turn (between-turns discipline)", async () => {

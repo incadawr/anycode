@@ -1,3 +1,4 @@
+import { SET_SESSION_FAST_OPERATION } from "../shared/communication.js";
 import { startHostWithActivity } from "./activity-forwarding.js";
 import { contextSnapshotOptions } from "./context-snapshot.js";
 import { discoverLoginPath, mcpProblemStatuses, codexMcpStatus, claudeMcpStatuses, forwardProblemStatuses } from "./mcp-login-path.js";
@@ -1568,6 +1569,7 @@ async function bootCodexSession(
           selection: {
             model: existing.model,
             presetId: existing.mode,
+            ...(existing.codexFast !== undefined ? { fast: existing.codexFast } : {}),
             origin: "persisted",
           },
         });
@@ -3279,6 +3281,7 @@ async function boot(): Promise<void> {
     });
     const currentPricingRaw = () => pricingSnapshotWithKeyDefault(connectionModelSettings.hasReadConnection() ? JSON.stringify(connectionModelSettings.pricingSnapshot()) : process.env.ANYCODE_CONNECTION_PRICING, catalogEntry, envConfig.apiKey);
     let turnPricingRaw = currentPricingRaw();
+    const entryFor = (id: string) => connectionModelSettings.entryFor(id);
     const liveCapsFor = (id: string): LiveModelCapabilities | undefined => connectionModelSettings.capabilitiesFor(id);
     const effortLevelsFor = (id: string) => envConfig.effortLevels ?? connectionModelSettings.effortLevelsFor(id);
     const gitForWorkspace = (cwd: string, operationSignal?: AbortSignal) =>
@@ -3426,7 +3429,7 @@ async function boot(): Promise<void> {
       isChildSessionBoot(args, sessionMeta) ? clampSubagentMaxOutputTokens(resolved) : resolved;
     const bootMaxOutputTokens = clampChildOutput(resolveMaxOutputTokens(
       envConfig.model,
-      catalogEntry,
+      envConfig.maxOutputTokens === undefined ? entryFor(envConfig.model) : catalogEntry,
       envConfig.maxOutputTokens,
       (requested, clamped, modelId) =>
         console.warn(`[host] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}`),
@@ -3438,15 +3441,15 @@ async function boot(): Promise<void> {
     const bootSelectedEffort = connectionModelSettings.effortFor(envConfig.model);
     const priorEffort = process.env.ANYCODE_SWITCH_PRIOR_EFFORT;
     const switchFallback = (["off", "low", "medium", "high", "xhigh", "max"] as const).find((tier) => tier === priorEffort);
-    const bootCandidate = bootSelectedEffort ?? resolveSessionEffort(envConfig.model, catalogEntry, undefined, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model)) ?? switchFallback ?? "off";
+    const bootCandidate = bootSelectedEffort ?? resolveSessionEffort(envConfig.model, entryFor(envConfig.model), undefined, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model)) ?? switchFallback ?? "off";
     const normalizedBootEffort = isChildSession ? bootCandidate : connectionModelSettings.normalize(envConfig.model, bootCandidate);
     const bootAdjustment = !isChildSession && (bootSelectedEffort !== undefined || switchFallback !== undefined) && normalizedBootEffort !== bootCandidate
       ? { from: bootCandidate, to: normalizedBootEffort } : undefined;
-    const bootReasoningEffort = resolveSessionEffort(envConfig.model, catalogEntry, normalizedBootEffort, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model));
+    const bootReasoningEffort = resolveSessionEffort(envConfig.model, entryFor(envConfig.model), normalizedBootEffort, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model));
     // Preserve child selections even when the current model maps or suppresses them.
     selectedEffort = normalizedBootEffort;
     connectionModelSettings.remember(envConfig.model, selectedEffort);
-    const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model));
+    const bootEffortLevels = resolveEffortLevels(envConfig.model, entryFor(envConfig.model), liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model));
     // TASK.162 (F6): the same catalog + env overrides the three boot
     // resolutions above read, packaged once so an Agent-tool `model` override
     // re-resolves the child's ceiling/effort/window for ITS model instead of
@@ -3455,6 +3458,7 @@ async function boot(): Promise<void> {
     // the wiring closure at the withSubagents call below.
     const settingsForChild = buildChildModelSettingsResolver({
       catalogEntry,
+      catalogEntryFor: entryFor,
       envMaxOutputTokens: envConfig.maxOutputTokens,
       envContextWindow: envConfig.contextWindowTokens,
       envContextWindowModel: envConfig.contextWindowModel,
@@ -3874,7 +3878,7 @@ async function boot(): Promise<void> {
       imageInputEnabled: () =>
         resolveImageInput(
           currentModel,
-          catalogEntry,
+          entryFor(currentModel),
           envConfig.imageInput ?? (imageModelOverride?.model === currentModel ? imageModelOverride.override : undefined),
           imageModalityLookup,
         ),
@@ -4511,14 +4515,14 @@ async function boot(): Promise<void> {
         liveContextWindowAssumed = contextInfo.source === "assumed";
         config.maxOutputTokens = clampChildOutput(resolveMaxOutputTokens(
           id,
-          catalogEntry,
+          envConfig.maxOutputTokens === undefined ? entryFor(id) : catalogEntry,
           envConfig.maxOutputTokens,
           (requested, clamped, modelId) =>
             console.warn(`[host] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}`),
           (modelId, applied) =>
             console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
         ));
-        const resolvedEffort = resolveSessionEffort(id, catalogEntry, selectedTier, liveCapsFor(id), effortLevelsFor(id));
+        const resolvedEffort = resolveSessionEffort(id, entryFor(id), selectedTier, liveCapsFor(id), effortLevelsFor(id));
         config.reasoningEffort = resolvedEffort;
         liveContextWindow = contextWindow;
         // TASK.198 срез C (plan §9): a model switch can flip sighted<->blind,
@@ -4537,7 +4541,7 @@ async function boot(): Promise<void> {
         if (previous !== id) loop.invalidateProviderAnchor();
         loop.setTodoReminderEvery(envConfig.todoReminderEvery ?? catalogEntry?.models.find((m) => m.id === id)?.todoReminderEvery);
         config.context = { ...config.context, contextWindowTokens: contextWindow };
-        const availableEffortLevels = resolveEffortLevels(id, catalogEntry, liveCapsFor(id), effortLevelsFor(id));
+        const availableEffortLevels = resolveEffortLevels(id, entryFor(id), liveCapsFor(id), effortLevelsFor(id));
         if (persistence) {
           void persistence.touchSession(sessionId, { model: id }).catch((error) => {
             console.error(`[host] touchSession(model) failed: ${describeError(error)}`);
@@ -4559,7 +4563,7 @@ async function boot(): Promise<void> {
       loop,
       config,
       switchModelImpl,
-      resolveSelectedEffort: (effort) => resolveSessionEffort(currentModel, catalogEntry, effort, liveCapsFor(currentModel), effortLevelsFor(currentModel)),
+      resolveSelectedEffort: (effort) => resolveSessionEffort(currentModel, entryFor(currentModel), effort, liveCapsFor(currentModel), effortLevelsFor(currentModel)),
       onBeforeTurn: async () => {
         if (connectionModelSettings.refresh()) session?.refreshModelSettings();
         turnPricingRaw = currentPricingRaw();
@@ -4762,8 +4766,8 @@ async function boot(): Promise<void> {
       // `set_session_effort` validation can describe the SELECTED model (a
       // queued change included) exactly as core will resolve it.
       effortResolution: {
-        levels: (id) => resolveEffortLevels(id, catalogEntry, liveCapsFor(id), effortLevelsFor(id)),
-        effective: (id, tier) => resolveSessionEffort(id, catalogEntry, tier, liveCapsFor(id), effortLevelsFor(id)),
+        levels: (id) => resolveEffortLevels(id, entryFor(id), liveCapsFor(id), effortLevelsFor(id)),
+        effective: (id, tier) => resolveSessionEffort(id, entryFor(id), tier, liveCapsFor(id), effortLevelsFor(id)),
       },
       // Slice P7.15 (F14): the user-selected effort tier, threaded so Session can
       // re-resolve effort against the NEW model on a switch (mirror of the CLI's
@@ -5211,6 +5215,7 @@ process.parentPort.on("message", (event) => {
           // session-wide effort before a freshly created session is published.
           // Structured failures (invalid_effort / not_ready) are returned as
           // RESULTS so their code survives the IPC boundary intact.
+          case SET_SESSION_FAST_OPERATION: result = await session.communicationSetFast(communication.payload); break;
           case "set_session_effort": result = await session.communicationSetEffort(communication.payload); break;
           // Internal main→host (never a public MCP tool): applies + CONFIRMS the
           // model a freshly created session was asked to run, before it is

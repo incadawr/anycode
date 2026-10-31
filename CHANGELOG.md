@@ -7,6 +7,22 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Show and switch Codex Fast mode per session, including via the Sessions API.
+- Fetch model limits and prices from the OpenRouter catalog, use reported usage costs, and pin providers for a connection.
+- Show reasoning effort controls for models that advertise the reasoning effort parameter.
+- Recognize known models on custom and gateway endpoints, with per-model opt-out and catalog reference prices.
+
+### Changed
+
+- Require a model ID when creating a connection, including custom endpoints.
+
+### Fixed
+
+- Fix Claude session telemetry to include cached and cache-creation input tokens.
+- Diagnostics export now requires a new preview when the previous preview expires, so the saved bundle matches the reviewed data.
+
 ## [0.0.59] — 2026-10-31
 
 ### Fixed

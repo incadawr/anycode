@@ -94,7 +94,7 @@ function nativeStore() {
         supportsManualCompact: false,
       },
       // `effort` stays absent: the session has not reported an applied effort.
-      model: { current: "gpt-6.1-terra", available: [{ id: "gpt-6.1-terra", label: "Terra", efforts: EFFORTS }] },
+      model: { current: "gpt-6.1-terra", available: [{ id: "gpt-6.1-terra", label: "Terra", efforts: EFFORTS, supportsFast: true }] },
       permissions: { presets: [], activePresetId: "" },
     },
     pendingEngineChange: null,
@@ -109,6 +109,51 @@ afterEach(() => {
 });
 
 describe("Composer — native effort handoff", () => {
+  it("allows Fast when the current tier is unknown", async () => {
+    const store = nativeStore();
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab-1", store } }, createElement(Composer))));
+    try {
+      const speed = container.querySelector<HTMLButtonElement>('button[aria-label="Codex speed"]')!;
+      expect(speed.textContent).toBe("Speed");
+      await act(async () => speed.click());
+      expect(send).toHaveBeenCalledWith("tab-1", { type: "set_engine_fast", fast: true });
+    } finally { await act(async () => root.unmount()); }
+  });
+  it("shows the effective Fast tier in the model chip and switches the session", async () => {
+    const store = nativeStore();
+    store.setState({ engine: { ...store.getState().engine!, fast: true } });
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab-1", store } }, createElement(Composer))));
+    try {
+      expect(container.querySelector('button[aria-label="Engine model and effort"]')?.textContent).toContain("Fast");
+      const speed = container.querySelector<HTMLButtonElement>('button[aria-label="Codex speed"]')!;
+      expect(speed.title).toContain("consumes your usage limit faster");
+      await act(async () => speed.click());
+      expect(send).toHaveBeenCalledWith("tab-1", { type: "set_engine_fast", fast: false });
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it("hides Fast for a model without the tier", async () => {
+    const store = nativeStore();
+    const engine = store.getState().engine!;
+    store.setState({ engine: { ...engine, fast: true, model: { ...engine.model!, available: [{ id: "gpt-6.1-terra" }] } } });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab-1", store } }, createElement(Composer))));
+    try {
+      expect(container.querySelector('button[aria-label="Codex speed"]')).toBeNull();
+      expect(container.querySelector('button[aria-label="Engine model and effort"]')?.textContent).not.toContain("Fast");
+    } finally { await act(async () => root.unmount()); }
+  });
+
   it("offers the effort row and sends xhigh for a model whose current effort is unknown", async () => {
     const store = nativeStore();
     useTabsStore.setState({ availableEngines: ["codex"] });
