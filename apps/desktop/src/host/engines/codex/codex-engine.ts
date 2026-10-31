@@ -965,7 +965,7 @@ export class CodexEngine implements SessionEngine {
 
   /**
    * Re-runs the SAME resume-history projection `historyItems()` returns a
-   * frozen boot snapshot of, but on demand and against a FRESH `thread/read`
+   * frozen boot snapshot of, but on demand and against a FRESH `thread/read`.
    * Unlike `historyItems()`, this reflects every turn this
    * launch has actually run since boot — the sole authoritative source for a
    * child session's flush-time transcript: the host keeps no durable mirror

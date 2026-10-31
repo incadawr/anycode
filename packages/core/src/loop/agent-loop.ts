@@ -477,7 +477,7 @@ export interface AgentLoopConfig {
   orchestrate?: boolean;
   /**
    * Notifies the client of a mode change made by the exit arc (CLI:
-   * touchSession; desktop: since). Never fired by setMode() — a
+   * touchSession; desktop: since the exit arc was wired). Never fired by setMode() — a
    * user-initiated mid-turn mode change owns its own notification
    * via its caller (desktop: Session.onSetMode).
    */

@@ -924,7 +924,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
 
   // (cut §2(g)/§3.8/§8): the draft's native model catalog comes from
   // the same bounded "codex doctor" onboarding already uses
-  // (`window.anycode.codex.recheck()`). the refresh lifecycle is
+  // (`window.anycode.codex.recheck()`). The refresh lifecycle is
   // the shared production helper (`createCodexDraftCatalogRefresh`) — every
   // refresh CLEARS the store catalog before re-fetching (a submit racing a
   // refresh/account switch is refused on the empty catalog, never validated
