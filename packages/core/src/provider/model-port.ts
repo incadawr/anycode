@@ -43,6 +43,7 @@ import type { ImplicitPromptCache, ReasoningEffort } from "../types/config.js";
 import { blocksAutomaticReplay, classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
 import { ResponsesReasoningTextRecovery } from "./responses-reasoning-text.js";
 import { isMiMoModel } from "./mimo.js";
+import { isMiniMaxEffortModel, isMiniMaxModel } from "./minimax.js";
 import { createLanguageModel } from "./language-model.js";
 import type { ProviderQuotaUpdate } from "./quota.js";
 import type { NetworkWaiter } from "./network-waiter.js";
@@ -319,6 +320,48 @@ export function reasoningRequestOptions(
       ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
       providerOptions: { anthropic: { effort: glmEffort, thinking: { type: "enabled", budgetTokens: glmBudget } } },
     };
+  }
+
+  // MiniMax: the tier rides the effort ENUM (`output_config.effort`), and the
+  // request must carry NO thinking key at all.
+  //
+  // Facts (platform.minimax.io/docs/api-reference/text-anthropic-api, checked
+  // 2026-10-31): "output_config.effort — Fully Supported: Tunes thinking depth
+  // for MiniMax-M3.1-Flash. Accepts low, medium, high, xhigh, and max;
+  // defaults to max when omitted" and "MiniMax-M3.1-Flash always thinks and
+  // returns 400 if disabled is sent" — the endpoint's own error text is
+  // `thinking.type="disabled" (including reasoning.effort=none) is not
+  // allowed (2013)`. `thinking.budget_tokens` is not part of MiniMax's
+  // vocabulary, and omitting `thinking` leaves thinking ON.
+  //
+  // So the generic tail below is WRONG for MiniMax in two ways: it sends a
+  // thinking budget the endpoint ignores (so the tier never changes), and it
+  // sends no effort enum (so the endpoint applies its own default — `max` —
+  // whatever the user picked). This branch sends the enum and nothing else.
+  //
+  // The enum rides for EVERY tier, `low` included: the endpoint switches its
+  // reasoning depth on the enum, so a tier that is not sent is a tier that did
+  // nothing. The catalog row's own `effortLevels` is the declaration that
+  // validates the pick upstream (`resolveReasoningEffort` drops an undeclared
+  // level), so no separate `declaredEffortLevels` is needed here — that
+  // concept belongs to CUSTOM endpoints, which this branch never matches
+  // (a custom connection carries no `providerName`).
+  //
+  // `MiniMax-M3` is excluded: the docs scope the effort enum to
+  // MiniMax-M3.1-Flash, and M3's thinking is off by default (omitting
+  // `thinking` keeps it off) — so it gets neither an enum nor a thinking key.
+  if (isMiniMaxModel(providerName, modelId)) {
+    if (isMiniMaxEffortModel(providerName, modelId)) {
+      return {
+        ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
+        providerOptions: { anthropic: { effort } },
+      };
+    }
+    // MiniMax-M3: no effort vocabulary (the docs scope `output_config.effort`
+    // to M3.1-Flash) and thinking is OFF by default — omitting `thinking` keeps
+    // it off. So the request carries neither an enum nor a thinking key; the
+    // generic tail's thinking budget would be a field MiniMax does not speak.
+    return request.maxOutputTokens === undefined ? {} : { maxOutputTokens: request.maxOutputTokens };
   }
 
   // DeepSeek (TASK 4241): distinct low/high/max effort tiers, default high —

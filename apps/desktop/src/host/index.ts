@@ -4358,11 +4358,9 @@ async function boot(): Promise<void> {
             let step = 0;
             const pricingRaw = currentPricingRaw();
             return (usage) => {
-              const price = envConfig.baseUrl.replace(/\/$/, "") === catalogEntry?.baseUrl.replace(/\/$/, "")
-                ? catalogEntry.models.find((item) => item.id === model)?.pricing : undefined;
               // One clock reading inside the row builder: the tariff band and
               // `createdAt` can never disagree (see usage-recording.ts).
-              const row = subagentUsageRow(usage, { price, pricingRaw, model, now: Date.now }, {
+              const row = subagentUsageRow(usage, { catalogEntry, baseUrl: envConfig.baseUrl, pricingRaw, model, now: Date.now }, {
                 subagentId,
                 sessionId,
                 step: ++step,
@@ -4937,8 +4935,9 @@ async function boot(): Promise<void> {
           record: (r, finishedAt) => {
             // Only the exact catalog endpoint is eligible: a proxy or reseller
             // may charge a different price even when it exposes the same model.
-            const price = envConfig.baseUrl.replace(/\/$/, "") === catalogEntry?.baseUrl.replace(/\/$/, "")
-              ? catalogEntry.models.find((model) => model.id === r.model)?.pricing : undefined;
+            // On an endpoint that serves both a pay-as-you-go key and a
+            // subscription key, the catalog rate is withheld until the
+            // connection says which one it holds.
             // One instant inside the row builder: the tariff band and
             // `createdAt` can never disagree (see usage-recording.ts). For a
             // step staged at finish and flushed after tool dispatch, that
@@ -4946,7 +4945,7 @@ async function boot(): Promise<void> {
             // fall on the far side of a tariff boundary.
             const row = sessionUsageRow(
               r,
-              { price, pricingRaw: turnPricingRaw, model: r.model, ...(finishedAt !== undefined ? { finishedAt } : {}), now: Date.now },
+              { catalogEntry, baseUrl: envConfig.baseUrl, pricingRaw: turnPricingRaw, model: r.model, ...(finishedAt !== undefined ? { finishedAt } : {}), now: Date.now },
               sessionId,
             );
             // Serialized (chained off the tail, never parallel) so flush()

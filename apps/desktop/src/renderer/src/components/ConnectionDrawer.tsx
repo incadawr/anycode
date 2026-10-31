@@ -715,6 +715,15 @@ export const IMAGE_INPUT_HELP =
 export const PRICING_ONELINER =
   "Used by new or reopened sessions — a session that is already open keeps the rates it started with.";
 
+/**
+ * The pricing hint for an endpoint that serves BOTH a pay-as-you-go key and
+ * a subscription key (MiniMax): the same key works on the same address for
+ * either kind of plan, so only the user knows which one they hold. Until
+ * they say, the usage is priced as unknown rather than at the API rate.
+ */
+export const SHARED_BILLING_ONELINER =
+  "This endpoint takes both a pay-as-you-go key and a subscription key. Choose how you are billed — until then no price is applied.";
+
 /** How long the Save button row shows its "Saved" confirmation. */
 export const SAVED_NOTICE_MS = 4000;
 
@@ -1329,14 +1338,27 @@ export function ConnectionDrawerFields({
       : proxyRefInitialValue({ kind: "connection", connectionId: editConnection.id }, proxySnapshot.settings),
   );
   const [noAuth, setNoAuth] = useState(editConnection?.authOptional === true);
-  const [pricingMode, setPricingMode] = useState<"catalog" | "subscription" | "rates">(editConnection?.pricing?.mode ?? "catalog");
+  /**
+   * The pricing mode. `"unset"` is the previous default (nothing persisted) and
+   * `"catalog"` is the EXPLICIT "the provider's per-token rate applies"
+   * choice — two different things, and on an endpoint that serves both a
+   * pay-as-you-go key and a subscription key (MiniMax) they differ in the
+   * price: unset means "unknown", explicit means "the API rate".
+   */
+  const [pricingMode, setPricingMode] = useState<"unset" | "catalog" | "subscription" | "rates">(
+    editConnection?.pricing?.mode === "subscription" ? "subscription"
+      : editConnection?.pricing?.mode === "rates" ? "rates"
+      : editConnection?.pricing?.mode === "catalog" ? "catalog"
+      : "unset",
+  );
   const initialRates = editConnection?.pricing?.mode === "rates" ? editConnection.pricing : undefined;
   const [priceInput, setPriceInput] = useState(initialRates ? String(initialRates.input) : "");
   const [priceCached, setPriceCached] = useState(initialRates ? String(initialRates.cachedInput) : "");
   const [priceOutput, setPriceOutput] = useState(initialRates ? String(initialRates.output) : "");
   const [priceWrite, setPriceWrite] = useState(initialRates?.cacheWrite === undefined ? "" : String(initialRates.cacheWrite));
   const pricingPayload = () => {
-    if (pricingMode === "catalog") return "" as const;
+    if (pricingMode === "unset") return "" as const;
+    if (pricingMode === "catalog") return { mode: "catalog" as const };
     if (pricingMode === "subscription") return { mode: "subscription" as const };
     const raw = [priceInput, priceCached, priceOutput];
     const values = raw.map(Number);
@@ -1492,6 +1514,18 @@ export function ConnectionDrawerFields({
   const targetConnection = connections.find((c) => c.id === createdConnectionId) ?? editConnection;
   const effectiveProviderId = createdConnectionId !== null ? (targetConnection?.providerId ?? providerId) : providerId;
   const selectedEntry: CatalogSummaryEntry | undefined = selectProviderEntry(catalog, effectiveProviderId || undefined);
+  /**
+   * True when the selected provider's endpoint serves BOTH a pay-as-you-go
+   * key and a subscription key (MiniMax: its API key and its M Plan key are
+   * used on the SAME base URL).
+   *
+   * There the "Catalog or unknown" mode is NOT the API rate: with no
+   * explicit choice the usage is priced as unknown, because an API-rate
+   * estimate is simply the wrong number for a subscription user. The select
+   * says so, and the option reads as what it does.
+   */
+  const normalizeBillingUrl = (url: string) => url.trim().replace(/\/+$/, "").replace(/\/v1$/, "");
+  const sharedBillingEndpoint = selectedEntry?.sharedBillingEndpoint === true || catalog.some((entry) => entry.sharedBillingEndpoint === true && entry.billingBaseUrl !== undefined && normalizeBillingUrl(entry.billingBaseUrl) === normalizeBillingUrl(baseUrl || customBaseUrl));
   // The builtin `custom` sentinel (isCustom) is the "add a NEW custom endpoint"
   // option; a `custom:<id>` id is a saved record the connection points at.
   const isNewCustomEndpoint = selectedEntry?.isCustom === true;
@@ -2156,10 +2190,12 @@ export function ConnectionDrawerFields({
       {simplified && labelFieldVisible && labelField}
       <label className="settings-field">
         <span className="settings-field-label">Pricing</span>
-        <select className="settings-field-select" value={pricingMode} disabled={readOnly} onChange={(e) => setPricingMode(e.target.value as "catalog" | "subscription" | "rates")}>
-          <option value="catalog">Catalog or unknown</option><option value="subscription">By subscription</option><option value="rates">Custom rates</option>
+        <select className="settings-field-select" value={pricingMode} disabled={readOnly} onChange={(e) => setPricingMode(e.target.value as "unset" | "catalog" | "subscription" | "rates")}>
+          <option value="unset">{sharedBillingEndpoint ? "Unknown — choose how you are billed" : "Catalog or unknown"}</option>
+          {sharedBillingEndpoint && <option value="catalog">Catalog API rate</option>}
+          <option value="subscription">By subscription</option><option value="rates">Custom rates</option>
         </select>
-        <div className="settings-field-hint">{PRICING_ONELINER}</div>
+        <div className="settings-field-hint">{sharedBillingEndpoint ? SHARED_BILLING_ONELINER : PRICING_ONELINER}</div>
       </label>
       {pricingMode === "rates" && <div className="connection-drawer-rate-grid">
         {([["Input", priceInput, setPriceInput], ["Cached input", priceCached, setPriceCached], ["Output", priceOutput, setPriceOutput], ["Cache write (optional)", priceWrite, setPriceWrite]] as const).map(([label, value, set]) => <label className="settings-field" key={label}><span className="settings-field-label">{label} · USD / 1M tokens</span><input className="settings-field-input" type="number" min="0" step="any" value={value} disabled={readOnly} onChange={(e) => set(e.target.value)} /></label>)}

@@ -476,3 +476,23 @@ it("does not invent an effort for an untouched manual vocabulary", async () => {
   expect(displayedStartEffort(undefined, "high", ["low", "high"], undefined)).toBe("high");
   expect(displayedStartEffort("off", "high", ["low", "high"], undefined)).toBeUndefined();
 });
+
+it("shows the effective default for stale choices only when thinking is always on", async () => {
+  const { displayedStartEffort } = await import("./start-model-picker.js");
+  expect(displayedStartEffort(undefined, "off", ["low", "high"], "high", true)).toBe("high");
+  expect(displayedStartEffort(undefined, "max", ["low", "high"], "high", true)).toBe("high");
+  expect(displayedStartEffort(undefined, "off", ["low", "high"], "high")).toBeUndefined();
+});
+
+it("resolves custom connections by base URL for always-on effort", async () => {
+  const { effortCatalogProviderId, startModelEffortLevels, startModelDefaultEffort, displayedStartEffort } = await import("./start-model-picker.js");
+  const catalog: CatalogSummary = [{ id: "minimax", name: "MiniMax", authKind: "api_key", catalogBaseUrl: "https://api.minimax.io/anthropic", models: [{ id: "MiniMax-M3.1-Flash", reasoning: true, thinkingAlwaysOn: true, effortLevels: ["low", "high", "max"], defaultEffort: "max" }] }];
+  const conn = connection({ id: "c", providerId: "custom:mini", reasoningEffort: "off" });
+  const custom = [{ id: "custom:mini", name: "Mini", baseUrl: "https://api.minimax.io/anthropic/v1/", kind: "anthropic" as const, models: [] }];
+  const id = effortCatalogProviderId(conn, catalog, custom);
+  expect(id).toBe("minimax");
+  const levels = startModelEffortLevels(id, "MiniMax-M3.1-Flash", catalog, undefined, ["off", "low", "high"]);
+  const fallback = startModelDefaultEffort(id, "MiniMax-M3.1-Flash", catalog, undefined, ["off", "low", "high"]);
+  expect(levels).toEqual(["low", "high"]);
+  expect(displayedStartEffort(undefined, conn.reasoningEffort, levels, fallback, true)).toBe("high");
+});

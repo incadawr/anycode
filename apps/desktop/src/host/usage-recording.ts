@@ -22,9 +22,9 @@
  * test can drive the real recording path with a controlled clock.
  */
 
-import type { ProviderUsageRecord } from "@anycode/core";
+import type { CatalogProviderEntry, ProviderUsageRecord } from "@anycode/core";
 import type { ModelPricing } from "@anycode/core/catalog";
-import { calculateUsageCost, resolveUsagePrice } from "./usage-cost.js";
+import { calculateUsageCost, catalogRateFor, declaredPricingMode, resolveUsagePrice } from "./usage-cost.js";
 
 /** Provider-reported token counts of one finished step. */
 export interface UsageTokens {
@@ -41,7 +41,9 @@ export interface StepPricing {
    * when the endpoint is a proxy/reseller (which may charge differently) or the
    * model is unpriced.
    */
-  price: ModelPricing | undefined;
+  price?: ModelPricing | undefined;
+  catalogEntry?: CatalogProviderEntry | undefined;
+  baseUrl?: string | undefined;
   /** The connection's override envelope (`ANYCODE_CONNECTION_PRICING`). */
   pricingRaw: string | undefined;
   /** Absent when the provider reported no model id (e.g. an engine child). */
@@ -70,7 +72,8 @@ export function priceUsageStep(
   cost: { costUsd?: number; cacheSavingsUsd?: number; priceBasisId: string } | undefined;
 } {
   const createdAt = pricing.finishedAt ?? (pricing.now ?? Date.now)();
-  const override = resolveUsagePrice(pricing.pricingRaw, pricing.model ?? "", pricing.price);
+  const price = pricing.baseUrl === undefined ? pricing.price : catalogRateFor(pricing.catalogEntry, pricing.baseUrl, pricing.model, declaredPricingMode(pricing.pricingRaw));
+  const override = resolveUsagePrice(pricing.pricingRaw, pricing.model ?? "", price);
   const cost = override?.subscription
     ? { priceBasisId: "subscription" }
     : calculateUsageCost(usage, override?.price, createdAt);
