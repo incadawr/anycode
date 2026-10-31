@@ -754,7 +754,7 @@ describe("resolveBareSlashSubmit (GitHub #14)", () => {
   });
 });
 
-describe("unknownSlashCommandNotice" (audit C4 — a non-command slash draft is not a model turn)", () => {
+describe("unknownSlashCommandNotice (audit C4 — a non-command slash draft is not a model turn)", () => {
   const roots = new Set(["tmp", "etc", "Users", "usr", "private", "custom-root"]);
 
   it("answers a bare unknown command locally", () => {

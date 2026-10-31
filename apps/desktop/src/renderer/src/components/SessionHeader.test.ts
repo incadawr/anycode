@@ -189,7 +189,7 @@ describe("header toggles", () => {
     const source = readFileSync(new URL("./SessionHeader.tsx", import.meta.url), "utf8");
     const tasks = source.slice(source.indexOf('aria-label="Toggle background tasks"'), source.indexOf("</button>", source.indexOf('aria-label="Toggle background tasks"')));
     const terminal = source.slice(source.indexOf('aria-label="Toggle terminal"'), source.indexOf("</button>", source.indexOf('aria-label="Toggle terminal"')));
-    expect(tasks).toContain("<Stack />");
+    expect(tasks).toContain("<TaskList />");
     expect(tasks).not.toContain("<Terminal />");
     expect(terminal).toContain("<Terminal />");
   });
