@@ -118,3 +118,11 @@ describe("resolveIncludeUsage", () => {
     expect(resolveIncludeUsage("openai-responses", undefined)).toBe(false);
   });
 });
+
+it("pins OpenRouter providers and disables fallback", async () => {
+  const { openRouterRequestBody } = await import("./openai-compatible.js");
+  expect(openRouterRequestBody({ model: "vendor/model" }, '["Provider A","Provider B"]')).toEqual({
+    model: "vendor/model", usage: { include: true }, provider: { only: ["Provider A", "Provider B"], allow_fallbacks: false },
+  });
+  expect(openRouterRequestBody({}, undefined)).toEqual({ usage: { include: true } });
+});

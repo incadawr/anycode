@@ -295,3 +295,11 @@ it("maps child effort using declared levels ahead of catalog and live capabiliti
   expect(resolve("glm-5.3", "xhigh").reasoningEffort).toBe("xhigh");
   expect(resolve("custom", "xhigh").reasoningEffort).toBe("max");
 });
+
+it("uses a gateway dictionary entry for each child, while preserving an explicit output limit", async () => {
+  const { modelDictionaryEntry } = await import("./model-dictionary.js");
+  const base = { catalogEntry: undefined, catalogEntryFor: (id: string) => modelDictionaryEntry(id, undefined), envContextWindow: undefined };
+  const model = "vendor/glm-5.3-fp8";
+  expect(buildChildModelSettingsResolver({ ...base, envMaxOutputTokens: undefined })(model, "high")).toEqual({ maxOutputTokens: 131_072, reasoningEffort: "high", contextWindowTokens: 300_000 });
+  expect(buildChildModelSettingsResolver({ ...base, envMaxOutputTokens: 200_000 })(model, "high").maxOutputTokens).toBe(200_000);
+});

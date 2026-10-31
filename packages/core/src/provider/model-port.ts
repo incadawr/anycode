@@ -1114,6 +1114,7 @@ export class AiSdkModelPort implements ModelPort {
           let event = translateStreamPart(outcome.value, {
             transport: this.config.transport,
             stepRawUsage,
+            openRouter: new URL(this.config.baseUrl).hostname === "openrouter.ai",
           });
           if (event === null) {
             continue;

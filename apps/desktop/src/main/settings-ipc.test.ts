@@ -4961,6 +4961,17 @@ describe("per-model overrides (GitHub #26)", () => {
     expect(saved?.modelOverrides?.constructor).toEqual({ effortLevels: ["xhigh"] });
   });
 
+  it("persists and clears an explicit reasoning denial", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", reasoningSupported: false })).ok).toBe(true);
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.modelOverrides?.a?.reasoningSupported).toBe(false);
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", reasoningSupported: true })).ok).toBe(true);
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", reasoningSupported: false })).ok).toBe(true);
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.modelOverrides?.a?.reasoningSupported).toBe(false);
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", reasoningSupported: "" })).ok).toBe(true);
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.modelOverrides?.a?.reasoningSupported).toBeUndefined();
+  });
+
   it("drops only a malformed saved vocabulary while preserving the model's other settings", async () => {
     const deps = makeDeps({ catalogIds: CATALOG_IDS });
     await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", contextWindowTokens: 64000 });
@@ -5062,4 +5073,14 @@ it("persists and reloads an override for every accepted exact model id", async (
   const map = (await loadSettings(settingsPath)).settings.provider.connections[0]!.modelOverrides!;
   expect(Object.hasOwn(map, "__proto__")).toBe(true);
   expect(map["__proto__"]?.contextWindowTokens).toBe(128000);
+});
+
+it("persists and clears catalog matching per exact model", async () => {
+  const deps = makeDeps({ catalogIds: CATALOG_IDS });
+  expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", catalogMatchDisabled: true })).ok).toBe(true);
+  expect((await handleConnectionUpdate(deps, { id: "conn-1", modelOverrideModel: "b", catalogMatchDisabled: true })).ok).toBe(true);
+  expect((await handleConnectionUpdate(deps, { id: "conn-1", catalogMatchDisabled: "" })).ok).toBe(true);
+  const saved = (await loadSettings(settingsPath)).settings.provider.connections[0];
+  expect(saved?.modelOverrides?.a).toBeUndefined();
+  expect(saved?.modelOverrides?.b?.catalogMatchDisabled).toBe(true);
 });
