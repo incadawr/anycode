@@ -454,7 +454,7 @@ describe("ClaudeClient", () => {
     }
   });
 
-  it("initialize() with no argument still sends the pre-empty body byte-for-byte", async () => {
+  it("initialize() with no argument still sends the empty body byte-for-byte", async () => {
     const { client, stdinWrites, emit } = makeFramingClient();
     try {
       await client.start();
@@ -512,7 +512,7 @@ describe("buildClaudeSpawnArgs — GUI-surface system-prompt append", () => {
     expect(args[args.indexOf("--append-system-prompt") + 1]).toBe(CLAUDE_GUI_SURFACE_PROMPT);
   });
 
-  it("the static block still carries every previously-pinned flag alongside the new pair (argv enumeration, updated for)", () => {
+  it("the static block still carries every previously-pinned flag alongside the new pair (argv enumeration, updated)", () => {
     const args = buildClaudeSpawnArgs({ sessionId: "s-1" });
     expect(args).toEqual([
       "-p",
@@ -770,7 +770,7 @@ describe("buildClaudeChildEnv — engine proxy carrier", () => {
 
   // Byte-identity, asserted over the WHOLE child env rather than selected keys:
   // the guarantee is that an unconfigured engine proxy changes nothing at all.
-  it("without a carrier the child env is byte-identical to the pre-build", () => {
+  it("without a carrier the child env is byte-identical to the build", () => {
     const env = buildClaudeChildEnv(CONNECTION_SOURCE, undefined, "linux");
     expect(env).toEqual({
       HOME: "/home/test",

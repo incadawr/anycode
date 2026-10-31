@@ -508,7 +508,7 @@ export const START_MODEL_MENU_MARGIN_PX = 12;
 
 /**
  * A level's rendered height in px, from its row and divider counts
- * . Used only as the DEMAND side of the flip decision — the
+ * Used only as the DEMAND side of the flip decision — the
  * popover is never given this as a fixed height, so an estimate that is a
  * pixel or two off can at worst flip a popover that had exactly one row of
  * slack. Exported for unit testing.

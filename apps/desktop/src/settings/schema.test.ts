@@ -324,7 +324,7 @@ describe("settingsSchema (v2)", () => {
     ["a garbage effortLevels value", { m: { effortLevels: "high" } }],
     ["a non-object map", "nope"],
   ])(
-    "Taskana 4118: a corrupt modelCapabilities (%s) reads back as absent without corrupting the rest of the document",
+    "a corrupt modelCapabilities (%s) reads back as absent without corrupting the rest of the document",
     (_name, garbage) => {
       const settings = {
         ...cloneDefaults(),
@@ -1757,7 +1757,7 @@ describe("codex/claude proxyUrl — persisted schema stays LENIENT on purpose", 
     }
   });
 
-  // The pre-tolerance is unchanged: a wrong-shaped block still drops to
+  // The tolerance is unchanged: a wrong-shaped block still drops to
   // `undefined` without taking the document down with it.
   it("a wrong-shaped codex block still falls to undefined, document intact", () => {
     const parsed = parseSettings({ ...cloneDefaults(), codex: "legacy-value", claude: { proxyUrl: PROXY } });

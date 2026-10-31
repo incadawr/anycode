@@ -897,7 +897,7 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
     return () => {
       cancelled = true;
     };
-    // `attempt` is a deliberate re-fetch trigger ('s Allow retry) —
+ // `attempt` is a deliberate re-fetch trigger (Allow retry) —
     // its value is never read, only its change matters.
   }, [tabId, api, resolvedPath, shouldLoad, attempt]);
 

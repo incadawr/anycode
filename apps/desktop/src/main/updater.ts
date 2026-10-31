@@ -26,7 +26,7 @@
  *
  * defect 2 (darwin honest path): an ad-hoc-signed darwin build has no
  * Developer ID yet, so Squirrel.Mac would reject any downloaded update's
- * signature mismatch (real fix tracked by). Rather than let a user
+ * signature mismatch (real fix tracked). Rather than let a user
  * hit a silent "Update check failed" or a broken install, darwin's
  * `update-available` event is decorated with `manualOnly: true` (renderer
  * hides Download/Install and shows a link to GitHub Releases instead — see

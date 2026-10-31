@@ -601,7 +601,7 @@ export type HostToUiMessage =
        * than inside EngineCapabilitiesProjection (`engine.capabilities.
        * supportsImages` stays the engine-level verdict). Additive + optional:
        * absent (older host / no seam wired) means the renderer applies no
-       * model-level attachment gating — exactly the pre-behavior.
+       * model-level attachment gating — exactly the behavior.
        */
       imageInput?: boolean;
       /**

@@ -200,7 +200,7 @@ describe("AppServerClient", () => {
 
   it("starts on an ABOVE-CEILING version once it is risk-accepted — the 'use it anyway' button reaching the engine path", async () => {
     // `--bad-version` reports 1.0.0, which every range refuses; the acceptance
-    // is the only thing that can let this spawn happen. Pre-the host
+    // is the only thing that can let this spawn happen. The host
     // never saw `riskAcceptedVersions` at all and this could not pass.
     const client = makeClient(["--bad-version"], {
       sourceEnv: policyEnv([">=0.144.0 <0.152.0"], ["1.0.0"]),
@@ -778,7 +778,7 @@ describe("buildCodexChildEnv — engine proxy carrier", () => {
 
   // Byte-identity, asserted over the WHOLE child env rather than selected keys:
   // the guarantee is that an unconfigured engine proxy changes nothing at all.
-  it("without a carrier the child env is byte-identical to the pre-build", () => {
+  it("without a carrier the child env is byte-identical to the build", () => {
     const env = buildCodexChildEnv(CONNECTION_SOURCE, "linux");
     expect(env).toEqual({
       HOME: "/home/test",

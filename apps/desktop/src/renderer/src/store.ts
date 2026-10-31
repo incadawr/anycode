@@ -671,7 +671,7 @@ export type ToolCallBlock = Extract<TranscriptBlock, { kind: "tool_call" }>;
 
 /**
  * Index of the newest compaction card still running, or -1 when none is open
- * . Scanned from the END so a session that compacted more than once
+ * Scanned from the END so a session that compacted more than once
  * closes the card THIS `compaction_end` belongs to, and an earlier finished
  * card is never rewritten by a later outcome.
  */
@@ -705,8 +705,7 @@ export interface PermissionUiRequest {
  * timeline's `rewind_result` outcome (design slice-P7.26-R2-ratification.md §1).
  * W3-FIX adds `retry_blocked`: `dispatchTryAgain` (App.tsx) refuses an
  * armed offer whose images the live model verdict no longer accepts, leaving
- * the offer armed instead of consuming it (fable-task56-w3-codex-ruling.md
- * finding 2 §(c)).
+ * the offer armed instead of consuming it (finding 2 §(c)).
  */
 export type NoticeKind =
   | "turn_rejected"
@@ -1143,7 +1142,7 @@ export interface DesktopState {
    * W3: live image-input verdict for the CURRENT model, carried on
    * `host_ready`/`model_changed` (W2). `undefined` means the host omitted the
    * field (no seam wired, or a legacy host) — the renderer then applies NO
-   * model-level attachment gating, exactly today's pre-behavior.
+   * model-level attachment gating, exactly today's behavior.
    * Lives alongside `model`/`reasoningEffort` (NOT in `SessionSlice`) for the
    * same reason: `host_ready` sets it explicitly, `performReset` must not
    * clear it out from under an in-flight model pick.
@@ -4681,7 +4680,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // a user frame force-delivered INTO the
         // running turn at the loop's legal seam. Rendered as an ordinary
         // user_text bubble (delivered-into-the-turn is visually DISTINCT from
-        // the queue pill —'s surface requirement), and the oldest
+ // the queue pill — surface requirement), and the oldest
         // matching UI-owned pendingSteer is retired: this event is the
         // delivery confirmation the optimistic bubble was waiting for. Reaching this case means the turn guard above already
         // matched the running turnId.

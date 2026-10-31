@@ -1646,7 +1646,7 @@ describe("Session — vision fallback (срез C)", () => {
     }
   });
 
-  it("still rejects an image turn on a blind model with NO fallback configured — unchanged pre-behavior", async () => {
+  it("still rejects an image turn on a blind model with NO fallback configured — unchanged behavior", async () => {
     const h = createHarness({
       steps: [textStep("must not run")],
       imageInputEnabled: false,
@@ -2163,7 +2163,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
   }
 
   /**
-   * . `maybeRemember` used to be gated on `supportsCorePermissions`,
+   * `maybeRemember` used to be gated on `supportsCorePermissions`,
    * which is false for both foreign engines — so "Always allow" in a Codex or
    * Claude session wrote nothing anywhere. It is now gated only by reaching the
    * `permission_response` case at all (i.e. by `supportsInteractiveApprovals`),
@@ -2705,7 +2705,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
     expect(git.handled[0]?.requestId).toBe("r2");
   });
 
-  it("defaults gitUserMutations to true when shell is absent — byte-identical to the pre-unconditional-for-core routing", () => {
+  it("defaults gitUserMutations to true when shell is absent — byte-identical to the unconditional-for-core routing", () => {
     const git = new FakeGitBridge();
     const { port } = buildTestSession({ git }); // no shell option at all
     port.send({ type: "ui_ready" });
@@ -4160,7 +4160,7 @@ describe("Session — model switch (slice P7.15 · F14)", () => {
 
 // ── W2: model image-input verdict on the wire (hello + model_changed) ──
 //
-// Layer discrimination (design slice-task56-vision-cut.md §4.5): every assert
+// Layer discrimination (§4.5): every assert
 // below reads RAW wire messages off the harness port, so it goes RED against a
 // rollback of the HOST layer (the `imageInput` spread removed from Session's
 // host_ready / model_changed emits). No renderer code is involved, and the

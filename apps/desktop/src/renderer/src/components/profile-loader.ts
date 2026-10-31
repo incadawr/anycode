@@ -1,5 +1,5 @@
 /**
- * Profile pane load orchestration (S4, build/task187-plan.md §S4):
+ * Profile pane load orchestration (S4, §S4):
  * a pure reducer plus a non-React controller that owns every request the
  * pane can issue. It lives OUTSIDE ProfilePane.tsx on purpose — this
  * package's vitest runs `environment: "node"` with no jsdom and no

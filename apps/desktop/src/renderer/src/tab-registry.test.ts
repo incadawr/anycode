@@ -116,7 +116,7 @@ const HOST_READY = (workspace: string, sessionId: string): Extract<HostToUiMessa
 });
 
 /**
- * A non-core (Codex-shaped) `host_ready` —'s effort/images dispatch-
+ * A non-core (Codex-shaped) `host_ready` —effort/images dispatch-
  * gate fixtures need `engine.model.effort` (the boot model's resolved
  * effort, compared against a pending pick), `imageInput` (the boot model's
  * live vision verdict), and (срез D) `imageFallback` (a configured
@@ -1344,7 +1344,7 @@ describe("tab-registry — queueInitialPrompt images", () => {
   // already-ready shortcut, which reads the tab's LIVE store field
   // (`state.imageFallback`) rather than the host_ready message directly —
   // depends on store.ts carrying the `imageFallback` slot off `host_ready`
-  // (срез D's store.ts half, gated separately — see task198-state.md).
+  // (срез D's store.ts half, gated separately).
   it("срез D: already-ready shortcut honors a configured recognizer fallback off the tab's LIVE state too", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
@@ -1730,7 +1730,7 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     expect(findBlock(store.getState().transcript, "user_text")?.images).toEqual([attachment]);
   });
 
-  // T6 (fable-task56-w3-codex-ruling.md finding 1, PIN): the drainer does NOT
+  // T6 (finding 1, PIN): the drainer does NOT
   // pre-gate on `state.imageInput` — this is a spoken decision (cut §3 W3(e)
   // + smoke-plan §5.2), not an oversight. The single authoritative gate is
   // the HOST's reject (session.ts:1147), which the restore-to-head test above

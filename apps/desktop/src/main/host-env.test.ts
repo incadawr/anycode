@@ -1138,7 +1138,7 @@ describe("buildHostEnv — connection proxy", () => {
   });
 
   // Byte-identity guarantee #1: a shell that already exports a proxy sees the
-  // EXACT pre-env — the vars ride the {...bootEnv} spread and stay as
+  // EXACT env — the vars ride the {...bootEnv} spread and stay as
   // inert as they were, because NODE_USE_ENV_PROXY is never added unprompted.
   it("with no connection proxy, a shell-exported proxy is passed through untouched and NODE_USE_ENV_PROXY is NOT added", async () => {
     const env = await buildHostEnv({
@@ -2022,7 +2022,7 @@ describe("engineProxyCarriers — engine-level proxy", () => {
   });
 
   // Byte-identity of the fork overlay: with nothing configured the spread adds
-  // no key at all, so a fork's env is exactly its pre-self.
+  // no key at all.
   it("spreads into an env overlay without changing a byte when empty", () => {
     const overlay = {
       ANYCODE_ENGINE: "core",
@@ -2272,7 +2272,7 @@ describe("applyConnectionProxy — profile exemptions", () => {
     expect(env.NO_PROXY).toBe("localhost,127.0.0.1,[::1],::1");
   });
 
-  // 's law is untouched: a shell that named its own exemptions keeps
+ // law is untouched: a shell that named its own exemptions keeps
   // BOTH keys, and a profile's list never shadows them.
   it("leaves a shell-exported NO_PROXY completely untouched", () => {
     const env: NodeJS.ProcessEnv = { NO_PROXY: "corp.internal" };
@@ -2703,7 +2703,7 @@ describe("buildHostEnv — vision-fallback recognizer (E1)", () => {
     expect(env.ANYCODE_RECOGNIZER_MODEL).toBe("vision-model");
   });
 
-  // Pinned behavior (transport-ladder fix, task150-output-ceiling session): a
+  // Pinned behavior (transport-ladder fix): a
   // bare connection (providerId "") has NO catalog entry, so a MISSING
   // `transport` there resolves `resolveEffectiveTransport` to `"unset"` —
   // this is NOT a malformed input. The recognizer still resolves fully (a
@@ -2763,7 +2763,7 @@ describe("buildHostEnv — vision-fallback recognizer (E1)", () => {
     expect(second.ANYCODE_RECOGNIZER_MODEL).toBe("model-b");
   });
 
-  // ⚠ Хвост от E1 (task198-state.md): resolveRecognizerConfig read
+  // ⚠ Хвост от E1: resolveRecognizerConfig read
   // connection.baseUrl/a connection-scoped vault key directly and never
   // followed a `custom:<slug>` providerId to its CustomProviderRecord the
   // way buildHostEnv's own customId branch does above (line ~942) — a
@@ -2833,7 +2833,7 @@ describe("buildHostEnv — vision-fallback recognizer (E1)", () => {
     expect(reads.some((key) => key.startsWith("provider.connection."))).toBe(false);
   });
 
-  // Live-run regression (task150-output-ceiling session, follow-up):
+  // Live-run regression:
   // a CATALOG connection's own baseUrl/transport can be blank (`z-ai`/`kimi`
   // in real settings.json carry `baseUrl: ""` and no `transport` key at all —
   // the real endpoint lives in the CATALOG, mirrored today only for the

@@ -239,7 +239,7 @@ describe("main/index.ts — custom:* readiness-gate wiring (FX4)", () => {
     // is anthropic-messages, so the transport-level authOptional stays false
     // — only the connection's own declaration (projected through
     // activeProviderView into selectedTransportInfo/computeProviderReadiness)
-    // can waive the key. Pre-the module-level providerReady gate
+    // can waive the key. The module-level providerReady gate
     // stayed false and tab-create refused not_ready with the generic
     // "Configure a provider" copy.
     await writeFile(
@@ -369,7 +369,7 @@ describe("main/index.ts — custom:* readiness-gate wiring (FX4)", () => {
     await store.touchSession("s-t109", { connectionId: "conn-dead" });
     await store.close();
 
-    // TWO keyless-legal connections ('s authOptional rule): conn-live
+ // TWO keyless-legal connections (authOptional rule): conn-live
     // ACTIVE and healthy; conn-dead configured but classified quota-dead —
     // `rate_limited` is the classified signal (settings-ipc.ts), advisory only.
     await writeFile(

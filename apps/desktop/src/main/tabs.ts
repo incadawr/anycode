@@ -563,7 +563,7 @@ interface ResumableChild {
  * once `admitChildSpawn` finally runs) and `spawnKey`, which is ALREADY
  * reserved in `childSpawnKeys` from the moment this waiter is created — the
  * in-flight dedup check must see a still-queued request exactly as it sees a
- * running one ('s "Дедуп спавна сохраняется"). `parentTabId` is all
+ * running one ("Дедуп спавна сохраняется"). `parentTabId` is all
  * that is needed to re-resolve the live `TabHost` at wake time (never a
  * captured `TabHost` reference, which a respawn would make stale).
  */
@@ -2180,7 +2180,7 @@ export class TabHostManager {
       // the waiter once those reaps land would fork a child into a parent
       // that is already being torn down (see `drainingParents`). The
       // immediate, under-cap path is deliberately NOT gated on draining —
-      // that behaviour stays byte-identical to pre-.
+      // that behaviour stays byte-identical.
       if (this.childSpawnQueue.length >= CHILD_SPAWN_QUEUE_MAX || this.drainingParents.has(parentTab.tabId)) {
         reject(capBlock.reason, capBlock.message);
         return;

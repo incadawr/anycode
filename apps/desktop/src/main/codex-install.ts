@@ -701,7 +701,7 @@ export function createCodexInstallController(deps: CodexInstallControllerDeps): 
     // F4: the gate doctor is a main-spawned codex probe, so it runs
     // with the engine proxy like the onboarding recheck and `codex login` do.
     // No dep ⇒ no options object at all, so the call is byte-identical to its
-    // pre-form.
+    // form.
     const doctorEnv = deps.doctorSourceEnv?.();
     const report = await runDoctor(
       installed.binaryPath,

@@ -188,7 +188,7 @@ export type CreateTabRequest =
       engine?: "core" | "codex" | "claude";
       /**
        * The New Session start screen's Codex draft picks (W3 join, closing
-       * 's dangling wire: the draft picker existed, main's argv
+ * dangling wire: the draft picker existed, mainargv
        * forwarding existed, nothing connected them). Opaque ids only — main
        * (tab-ipc.ts) bounds their length, the host validates IDENTITY against
        * its own live model catalog / frozen preset table before either ever

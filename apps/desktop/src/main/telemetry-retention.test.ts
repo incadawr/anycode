@@ -1,6 +1,6 @@
 /**
  * Unit tests for the telemetry-directory retention module (
- * . Everything runs on the REAL NodeProfileFs over mkdtemp scratch
+ * Everything runs on the REAL NodeProfileFs over mkdtemp scratch
  * dirs — no real ~/.anycode is ever touched. Fixed `now` so age math never
  * depends on the wall clock.
  */

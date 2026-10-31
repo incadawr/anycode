@@ -438,7 +438,7 @@ describe("SLASH_COMMANDS registry invariants", () => {
     expect(compact.visible(ctx({ supportsManualCompact: true }))).toBe(true);
     // ...hidden for a codex-shaped ctx (no user-triggerable compaction pinned).
     expect(compact.visible(ctx({ supportsManualCompact: false }))).toBe(false);
-    // The enabled predicate is untouched by.
+    // The enabled predicate is untouched.
     expect(compact.enabled(ctx({ modelDisabled: true }))).toBe(false);
     expect(compact.enabled(ctx({ modelDisabled: false }))).toBe(true);
     // And the full filter path hides the row entirely when the capability is off.
@@ -592,7 +592,7 @@ describe("SLASH_COMMANDS capability gating — no dead actions (design §2(f))",
     expect(manualCompactOff).not.toContain("Compact");
   });
 
-  it("shows the full registry once every named capability is available (core-shaped ctx, the pre-default)", () => {
+  it("shows the full registry once every named capability is available (core-shaped ctx, the default)", () => {
     expect(filterSlashItems(SLASH_COMMANDS, [], "", ctx())).toHaveLength(SLASH_COMMANDS.length);
   });
 

@@ -27,7 +27,7 @@
  *
  * The fourth case does spawn but is equally not about the profile: when the boot
  * env owns the proxy family, the child goes out through the SHELL's proxy no
- * matter what the profile says ('s law, gated in main/host-env.ts). The
+ * matter what the profile says (law, gated in main/host-env.ts). The
  * result then carries `shellOverride: true` and `proxyUsed: false`, and the
  * detail says so in words.
  */

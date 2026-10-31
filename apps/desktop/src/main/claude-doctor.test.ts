@@ -186,7 +186,7 @@ describe("buildClaudeDoctorChildEnv — engine proxy carrier", () => {
   };
 
   // Byte-identity, asserted over the WHOLE child env rather than selected keys.
-  it("without a carrier the doctor child env is byte-identical to the pre-build", () => {
+  it("without a carrier the doctor child env is byte-identical to the build", () => {
     const env = buildClaudeDoctorChildEnv({ HOME: "/home/me", PATH: "/usr/bin" }, undefined, "linux");
     expect(env).toEqual({ HOME: "/home/me", PATH: AUGMENTED_PATH, ...HYGIENE });
   });

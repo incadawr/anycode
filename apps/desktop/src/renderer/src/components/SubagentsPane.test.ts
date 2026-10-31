@@ -537,7 +537,7 @@ describe("workspaceRootSegment", () => {
   });
 
   it("strips trailing forward slashes before taking the final segment", () => {
-    expect(workspaceRootSegment("/ws/task106-slice1/")).toBe("task106-slice1");
+    expect(workspaceRootSegment("/ws/slice1/")).toBe("slice1");
     expect(workspaceRootSegment("/ws/a//")).toBe("a");
   });
 

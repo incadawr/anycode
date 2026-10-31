@@ -246,7 +246,7 @@ function pick(ref: string | undefined, legacyUrl: string | undefined): { ref?: s
 /**
  * The FIRST scope in `chain` that says anything at all (§2). Below the
  * shell — which still wins the whole proxy family atomically, one rung above
- * every ladder here ('s law, gated in main/host-env.ts) — the first
+ * every ladder here (law, gated in main/host-env.ts) — the first
  * EXPLICIT rung wins, and its outcome is allowed to be "direct".
  *
  * A rung is explicit when the scope carries a `proxyRef` OR a legacy `proxyUrl`

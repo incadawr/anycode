@@ -71,7 +71,7 @@ const MAX_OUTPUT_TOKENS_MAX = 1_000_000;
 /**
  * Drops connection `maxOutputTokens` values outside `[1_024, 1_000_000]` on
  * load: each is read as ABSENT ("no explicit ceiling", the
- * pre-behaviour), restoring what a hand-edited `512` or `1e9` should
+ * behaviour), restoring what a hand-edited `512` or `1e9` should
  * have meant all along. The persisted schema deliberately stays lenient
  * (settings/schema.ts `.catch(undefined)` — ONE bad key must never fail the
  * whole document and reset every other section), which is why IPC strictness

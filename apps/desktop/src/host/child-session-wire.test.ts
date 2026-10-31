@@ -691,7 +691,7 @@ describe("one handshake, one session_history (CUT-S1 §9.2 / CUT-S2 §10.4, B5's
     // `ConversationHistory({ initial })`) — a resumed child's persisted rows
     // live in the loop's history, so `engine.historyItems()` and the Session
     // `bootHistory` option are the same items by construction. Without this
-    // seed,'s rebuild-on-ui_ready reads an engine whose history
+ // seed, rebuild-on-ui_ready reads an engine whose history
     // never grew (a production-impossible state) and the handshake snapshot
     // comes back empty.
     loop.history.replaceAll([...bootHistory]);

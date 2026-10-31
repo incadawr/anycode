@@ -300,7 +300,7 @@ function enginePresentation(engine: SessionEngine, settings?: EngineSettingsSeam
   if (engine.id === "core") return undefined;
   const capabilities = engine.capabilities;
   // The two additive blocks appear only when the engine actually has a
-  // catalog/preset table: an engine without one keeps the pre-projection
+  // catalog/preset table: an engine without one keeps the projection
   // byte-identical, and a renderer that sees no `model`/`permissions` hides the
   // pickers rather than guessing.
   const models = settings?.models() ?? [];
@@ -884,7 +884,7 @@ export interface SessionOptions {
    * dishonest; those engines keep engine_session_tokens semantics. Absent
    * (every legacy test, codex/claude boots) -> the write-behind recorder,
    * the session_checkpoint.usageAudit hydration field and the
-   * usage_audit_request reply are all inert, byte-identical to pre-.
+   * usage_audit_request reply are all inert, byte-identical.
    *
    * Append-only across rewinds (cross-review finding 2): the audit is a
    * SPEND LEDGER — the provider genuinely billed every audited step, so a
@@ -924,7 +924,7 @@ export interface SessionOptions {
    * Shell (AnyCode chrome) capability projection (design §2(f)):
    * independent of the active engine's own tool capabilities. Absent (core,
    * and any engine that hasn't wired one) defaults every shell feature to
-   * enabled -- byte-identical to the pre-behavior, where a
+   * enabled -- byte-identical to the behavior, where a
    * user-initiated `git_command` mutation was gated on
    * `engine.capabilities.supportsGitMutations` (always `true` for `CoreEngine`).
    * That flag now describes ONLY the agent's own tool-mutation capability;
@@ -1091,7 +1091,7 @@ export interface SessionOptions {
    * same discipline as `imageInputEnabled`. Absent (codex/claude engine
    * boots, and every pre-existing test) is the fail-closed default — no
    * fallback — so the turn-accept gate below stays byte-identical to
-   * pre-wherever this seam is not wired.
+   * wherever this seam is not wired.
    */
   imageFallbackAvailable?: () => boolean;
   /**
@@ -3116,7 +3116,7 @@ export class Session {
         // OWN tool-mutation capability and no longer gates the Review
         // panel's user-initiated mutations. Absent shell (core, or a future
         // engine that hasn't wired one) defaults to `true`, byte-identical
-        // to the pre-unconditional-for-core routing (CoreEngine's
+        // to the unconditional-for-core routing (CoreEngine's
         // supportsGitMutations was always `true`).
         // CUT-S2 §10.14.3 BLOCKER-2(b): a MUTATION admitted after the
         // handoff has begun would write to the ABANDONED workspace main is

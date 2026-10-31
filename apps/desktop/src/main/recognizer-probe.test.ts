@@ -349,7 +349,7 @@ describe("secret scrub — the resolved api key never rides a returned text", ()
   });
 });
 
-describe("the embedded probe image ('s two-square probe)", () => {
+describe("the embedded probe image (two-square probe)", () => {
   /**
    * The exact 8-byte PNG signature `sniffImageMediaType` (packages/core/src/
    * util/images.ts) checks — reproduced here rather than imported because

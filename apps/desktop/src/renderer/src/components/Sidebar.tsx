@@ -308,7 +308,7 @@ export const SIDEBAR_GROUP_ROW_LIMIT = 5;
  * Per-group render cut. The limit is on DRAWING, never on the query:
  * the full row list stays in memory and the filter still sees every row, so a
  * row cut from view is one keystroke away rather than unreachable (and, through
- * 's live-tab guard, undeletable).
+ * live-tab guard, undeletable).
  *
  * Two rules shape the cut:
  *  - open rows are never hidden — they are live work carrying status

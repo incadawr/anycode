@@ -282,7 +282,7 @@ function warning(message: string): AgentEvent {
 
 /**
  * Resolves the preset id a session boots with. An unknown id can only come from
- * a stale renderer or a pre-session row (whose `mode` column holds a
+ * a stale renderer or a session row (whose `mode` column holds a
  * CORE permission mode such as "build") — neither is a user-visible error, so
  * both quietly become the default posture. A DRAFT id the user actually chose is
  * different: if it does not exist, the user is told.
@@ -966,7 +966,7 @@ export class CodexEngine implements SessionEngine {
   /**
    * Re-runs the SAME resume-history projection `historyItems()` returns a
    * frozen boot snapshot of, but on demand and against a FRESH `thread/read`
-   * . Unlike `historyItems()`, this reflects every turn this
+   * Unlike `historyItems()`, this reflects every turn this
    * launch has actually run since boot — the sole authoritative source for a
    * child session's flush-time transcript: the host keeps no durable mirror
    * of a Codex conversation of its own (unlike Claude's shadow-transcript

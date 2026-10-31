@@ -1563,7 +1563,7 @@ async function bootCodexSession(
           externalSessionRef: existing.externalSessionRef,
           // Posture survives the relaunch through the PERSISTED row, never
           // through the server echo (L8 makes the echo un-mappable): the `mode`
-          // column carries the preset id verbatim (cut §2(k).4). A pre-
+          // column carries the preset id verbatim (cut §2(k).4). A
           // row holds a core mode there ("build") — the engine treats an
           // unrecognized id as the default preset, silently.
           selection: {
@@ -2242,7 +2242,7 @@ async function bootClaudeSession(
           externalSessionRef: existing.externalSessionRef,
           // Posture survives the resume through the PERSISTED preset id (same
           // no-server-echo-to-trust discipline codex uses, cut §2(k).4): an
-          // unrecognized id (a pre-era "build" mode row) silently
+          // unrecognized id (era "build" mode row) silently
           // becomes the default preset rather than failing the resume.
           selection: { model: existing.model, presetId: existing.mode, origin: "persisted" },
         });
@@ -4137,7 +4137,7 @@ async function boot(): Promise<void> {
         : {}),
       // spill oversized tool results to the artifact
       // store (mirror of cli/main.ts:1292) — `sessionMeta.id`, not the later
-      // `sessionId` const. Absent = truncation, the pre-behaviour.
+      // `sessionId` const. Absent = truncation, the behaviour.
       artifacts: { store: artifactStore, sessionId: sessionMeta.id },
       // planExitMode ("build") + onModeChange, produced together with
       // the ExitPlanMode registration above. Without this spread the tool's

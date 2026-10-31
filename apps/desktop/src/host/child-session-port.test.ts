@@ -292,7 +292,7 @@ describe("createChildSessionPort (CUT-S2 §2.6.1)", () => {
 
   // a max_turns terminal's report/notice text stays non-empty and
   // its status is relayed unchanged — the parent-side mirror of the child
-  // host's turn-limit rescue/notice. Wire logic is NOT changed by;
+  // host's turn-limit rescue/notice. Wire logic is NOT changed;
   // this pins the relay of the (possibly rescued or noticed) finalText.
   it("a max_turns terminal relays its (rescued/notice) finalText non-empty and the status unchanged", async () => {
     for (const text of ["RESCUE REPORT", "Agent: the child stopped at its turn limit without a final report; last activity: TodoRead."]) {
@@ -941,7 +941,7 @@ describe("createChildSessionPort (CUT-S2 §2.6.1)", () => {
       // a max_turns terminal's rescued report / turn-limit notice
       // must reach the parent via onDetachedTerminal non-empty and with the
       // status unchanged — detached delivery mirrors the attached relay
-      // pinned above; wire logic is NOT changed by.
+      // pinned above; wire logic is NOT changed.
       for (const text of ["RESCUE REPORT", "Agent: the child stopped at its turn limit without a final report; last activity: TodoRead."]) {
         const { port, sent, emit, detachedTerminals } = detachHarness();
         const pending = port.run(

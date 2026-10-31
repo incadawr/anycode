@@ -1112,7 +1112,7 @@ describe("parseChildSpawnRequest — maxTurns", () => {
     permissionMode: "build",
   };
 
-  it("a payload without maxTurns still parses unchanged (pre-shape)", () => {
+  it("a payload without maxTurns still parses unchanged", () => {
     expect(parseChildSpawnRequest(valid)).toEqual(valid);
   });
 

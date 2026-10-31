@@ -432,7 +432,7 @@ export interface ProviderConnection {
    * provider is unaffected, and pickers union these with the catalog entry's
    * static hints (static hints decorate matching ids with display
    * names/capabilities). Absent/empty = static hints alone, exactly the
-   * pre-behavior. Never a runtime-readiness or endpoint-resolution
+   * behavior. Never a runtime-readiness or endpoint-resolution
    * source. A `custom:<slug>` connection keeps its live curated list on the
    * custom record's own `models[]`; manual additions still land here.
    */
@@ -461,7 +461,7 @@ export interface ProviderSettingsV2 {
   /**
    * Custom OpenAI-compatible/Anthropic model-provider endpoints for AnyCode's
    * OWN engine (owner-decision #6, cut §9.2) — additive-optional, dedicated
-   * array independent of `connections` ('s connection graph). A
+ * array independent of `connections` (connection graph). A
    * malformed entry validates INDEPENDENTLY at the zod boundary (same
    * per-element `.catch` discipline as `codex.profiles`, cut §2.3).
    */
@@ -1477,7 +1477,7 @@ export function connectionById(settings: AnycodeSettings, connectionId: string):
  * by the renderer's pre-flight and main's `addModels` handler, so a model the
  * UI accepts can never be refused main-side and vice versa.
  *
- * Rules (frozen by):
+ * Rules (frozen):
  *  - must be a string;
  *  - C0/C1 control characters (U+0000–U+001F, U+007F–U+009F) in the ORIGINAL
  *    input are refused — a leading/trailing newline or tab must NOT be erased
