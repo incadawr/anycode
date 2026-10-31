@@ -832,6 +832,44 @@ describe("context snapshot restart", () => {
     } finally { first.close(); await db.close(); rmSync(dir, { recursive: true, force: true }); }
   });
 
+  it("restores the latest turn and its measured usage after reopening a session", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "usage-restart-"));
+    const path = join(dir, "db.sqlite");
+    const db = new SqlitePersistenceAdapter(path);
+    try {
+      await db.createSession({ id: "test-session", workspace: "/workspace", model: "scripted-model", mode: "build" });
+      await db.appendHistory("test-session", [{ ...userItem("u1", "hello"), turnId: "saved-turn", step: 0 }]);
+      await db.recordProviderUsage({ sessionId: "test-session", turnId: "saved-turn", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0, outputTokens: 100, generationDurationMs: 2000 });
+      await db.close();
+      const reopened = new SqlitePersistenceAdapter(path);
+      const bootHistory = await reopened.loadHistory("test-session");
+      const h = createHarness({ steps: [], bootHistory, usageAudit: { sink: { record: () => {} }, summary: { summary: async () => summarizeProviderUsage(await reopened.listProviderUsage("test-session")) } } });
+      try {
+        h.send({ type: "ui_ready" });
+        await h.waitUntil(() => h.received.some((m) => m.type === "session_checkpoint" && m.usageAudit !== undefined));
+        h.send({ type: "usage_audit_request" });
+        await h.waitUntil(() => h.received.some((m) => m.type === "usage_audit"));
+        const store = createDesktopStore();
+        for (const message of h.received) store.getState().applyHostMessage(message);
+        const state = store.getState();
+        expect(state.latestTurnId).toBe("saved-turn");
+        const steps = state.usageAudit.list?.filter((step) => step.turnId === state.latestTurnId);
+        expect(steps).toMatchObject([{ turnId: "saved-turn", outputTokens: 100, generationDurationMs: 2000 }]);
+        expect(state.usageAudit.totals?.generationTokensPerSecond).toBe(50);
+      } finally { h.close(); }
+      // A later failed turn can have history but no usage row. It must not
+      // inherit the preceding turn's rate after a fresh host is created.
+      await reopened.appendHistory("test-session", [{ ...userItem("u2", "failed", 2), turnId: "failed-turn", step: 0 }]);
+      const failed = createHarness({ steps: [], bootHistory: await reopened.loadHistory("test-session"), usageAudit: { sink: { record: () => {} }, summary: { summary: async () => summarizeProviderUsage(await reopened.listProviderUsage("test-session")) } } });
+      try {
+        failed.send({ type: "ui_ready" });
+        await failed.waitUntil(() => failed.received.some((m) => m.type === "session_checkpoint" && m.usageAudit !== undefined));
+        expect(failed.received.find((m) => m.type === "session_checkpoint" && m.usageAudit !== undefined)).toMatchObject({ latestTurnId: "failed-turn" });
+        expect((await reopened.listProviderUsage("test-session")).filter((step) => step.turnId === "failed-turn")).toEqual([]);
+      } finally { failed.close(); await reopened.close(); }
+    } finally { await db.close(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it("validates identities and readings and reconciles the current budget", () => {
     const value = { engine: "core", model: "m", estimatedTokens: 0, budgetTokens: 100, source: "provider" };
     expect(parseContextSnapshot(JSON.stringify(value), "core", "m", 200)).toEqual({ estimatedTokens: 0, budgetTokens: 200, source: "provider" });

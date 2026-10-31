@@ -89,7 +89,10 @@ it.each(["on", "off"] as const)("creates and reloads image input %s through the 
     await changeInput(container.querySelector('input[placeholder="Enter a model ID"]')!, "vision");
     const noAuth = [...container.querySelectorAll("input[type=checkbox]")].find(x => x.parentElement?.textContent?.includes("doesn't need")) as HTMLInputElement;
     await act(async () => noAuth.click());
-    const image = [...container.querySelectorAll("select")].find(x => [...x.options].some(o => o.value === "on") && [...x.options].some(o => o.value === "off"))!;
+    // By its own label: several Advanced selects (usage policy included) offer
+    // on/off options, so matching on the option set alone picks the wrong one.
+    const imageField = [...container.querySelectorAll("label.settings-field")].find(l => l.textContent?.includes("Image input"))!;
+    const image = imageField.querySelector("select")!;
     await act(async () => {image.value=setting; image.dispatchEvent(new Event("change", {bubbles:true}));});
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Create connection")!.click(); });
     await act(async () => { await vi.waitFor(() => expect(create).toHaveBeenCalledOnce()); await vi.waitFor(async () => expect((await loadSettings(path)).settings.provider.connections[0]?.models).toContain("vision")); });

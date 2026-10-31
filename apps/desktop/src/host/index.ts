@@ -285,9 +285,10 @@ import {
   type RoleRouteResolution,
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
-import { calculateUsageCost, resolveUsagePrice } from "./usage-cost.js";
+import { sessionUsageRow, subagentUsageRow } from "./usage-recording.js";
 import { summarizeWithChildren } from "./usage-summary.js";
-import { claudeNativeChildrenFromHistory, claudeUsageRecord } from "./claude-usage.js";
+import { claudeNativeChildrenFromHistory } from "./claude-usage.js";
+import { bindClaudeUsage, bindCodexUsage } from "./native-usage.js";
 import { closeProxyRelay, credentialedProxyValuesForRelay, resolveProxyRelay } from "@anycode/core/proxy-relay";
 import type {
   AgentBridgeCatalogEntry,
@@ -1749,7 +1750,7 @@ async function bootCodexSession(
   if (args.resume && connected.engine.historyItems().length > 0 && (await persistence!.listProviderUsage(connected.sessionMeta.id)).length === 0) {
     codexUsageAudit.sink.record({ turnId: "legacy-unpriced", step: 1, finishReason: "history", transportRetries: 0 });
   }
-  connected.engine.onUsage((usage) => codexUsageAudit.sink.record({ turnId: randomUUID(), step: 1, model: connected.engine.usageModel(), ...usage, finishReason: "unknown", transportRetries: 0 }));
+  bindCodexUsage(connected.engine, codexUsageAudit.sink, () => session);
   session = new Session({
     workspaceTrustRequired: workspaceTrustRequiredMessage,
     outbound,
@@ -2497,9 +2498,7 @@ async function bootClaudeSession(
   // Older native-child identities can be recovered from the shadow history,
   // but their individual costs remain unknown. Existing markers dedupe in SQLite.
   for (const record of claudeNativeChildrenFromHistory(bootHistory)) claudeUsageAudit.sink.record(record);
-  claudeEngine.onCostResult((result) => {
-    claudeUsageAudit.sink.record(claudeUsageRecord(result, randomUUID(), claudeEngine.resolvedModel() ?? connected.model));
-  });
+  bindClaudeUsage(claudeEngine, claudeUsageAudit.sink, () => session, connected.model);
   session = new Session({
     workspaceTrustRequired: workspaceTrustRequiredMessage,
     usageAudit: claudeUsageAudit,
@@ -2938,6 +2937,13 @@ async function boot(): Promise<void> {
           apiKey: envConfig.apiKey,
           model: m,
           ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
+          // The connection's declared effort vocabulary (ANYCODE_EFFORT_LEVELS):
+          // the model port sends `output_config.effort` to a custom
+          // Anthropic-compatible endpoint only when that vocabulary named BOTH
+          // xhigh and max; without it the endpoint gets distinct thinking
+          // budgets and no field it never advertised. Conditional, so an
+          // undeclared connection keeps today's request bytes.
+          ...(envConfig.effortLevels !== undefined ? { declaredEffortLevels: envConfig.effortLevels } : {}),
           ...(resolveApiKey !== undefined ? { resolveApiKey } : {}),
           ...(includeUsage ? { includeUsage: true } : {}),
           // GitHub #15: forward the parsed prompt-cache policy into EVERY port
@@ -4307,9 +4313,13 @@ async function boot(): Promise<void> {
             return (usage) => {
               const price = envConfig.baseUrl.replace(/\/$/, "") === catalogEntry?.baseUrl.replace(/\/$/, "")
                 ? catalogEntry.models.find((item) => item.id === model)?.pricing : undefined;
-              const override = resolveUsagePrice(pricingRaw, model ?? "", price);
-              const cost = override?.subscription ? { priceBasisId: "subscription" } : calculateUsageCost(usage, override?.price);
-              const row = { ...usage, ...cost, subagentId, sessionId, turnId: subagentId, step: ++step, createdAt: Date.now(), model, finishReason: "unknown", transportRetries: 0 };
+              // One clock reading inside the row builder: the tariff band and
+              // `createdAt` can never disagree (see usage-recording.ts).
+              const row = subagentUsageRow(usage, { price, pricingRaw, model, now: Date.now }, {
+                subagentId,
+                sessionId,
+                step: ++step,
+              });
               usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve()).then(() => persistence!.recordProviderUsage(row)).catch((e) => console.error("[host] usage audit write failed", e));
             };
           },
@@ -4877,18 +4887,25 @@ async function boot(): Promise<void> {
       // can never block or fail a turn.
       usageAudit: {
         sink: {
-          record: (r) => {
+          record: (r, finishedAt) => {
             // Only the exact catalog endpoint is eligible: a proxy or reseller
             // may charge a different price even when it exposes the same model.
             const price = envConfig.baseUrl.replace(/\/$/, "") === catalogEntry?.baseUrl.replace(/\/$/, "")
               ? catalogEntry.models.find((model) => model.id === r.model)?.pricing : undefined;
-            const override = resolveUsagePrice(turnPricingRaw, r.model ?? "", price);
-            const cost = override?.subscription ? { priceBasisId: "subscription" }
-              : calculateUsageCost(r, override?.price);
+            // One instant inside the row builder: the tariff band and
+            // `createdAt` can never disagree (see usage-recording.ts). For a
+            // step staged at finish and flushed after tool dispatch, that
+            // instant is the FINISH captured by the session — the flush can
+            // fall on the far side of a tariff boundary.
+            const row = sessionUsageRow(
+              r,
+              { price, pricingRaw: turnPricingRaw, model: r.model, ...(finishedAt !== undefined ? { finishedAt } : {}), now: Date.now },
+              sessionId,
+            );
             // Serialized (chained off the tail, never parallel) so flush()
             // below is an honest drain of every queued write IN ORDER.
             usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve())
-              .then(() => persistence!.recordProviderUsage({ ...r, ...cost, sessionId, createdAt: Date.now() }))
+              .then(() => persistence!.recordProviderUsage(row))
               .catch((e) => console.error(`[host] usage audit write failed: ${e instanceof Error ? e.message : String(e)}`));
           },
           // Cross-review finding 4: shutdown drain — a serialized tail exactly

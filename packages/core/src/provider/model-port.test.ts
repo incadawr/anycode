@@ -149,6 +149,28 @@ describe("reasoningRequestOptions", () => {
     expect(deepseek.providerOptions!.anthropic.effort).toBe("high");
     expect(deepseek.providerOptions!.anthropic.thinking).toBeUndefined();
   });
+
+  // GitHub #2 review, follow-up: xhigh vs max must stay distinguishable on a
+  // custom Anthropic-compatible endpoint, but `output_config.effort` may only
+  // be sent where the connection DECLARED the endpoint understands it. The
+  // budgets always differ; the enum is opt-in.
+  it("custom Anthropic endpoint: distinct budgets always, effort enum only when both tiers were declared", () => {
+    const undeclaredXhigh = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "xhigh" }, undefined);
+    const undeclaredMax = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "max" }, undefined);
+    expect(undeclaredXhigh.providerOptions!.anthropic).toEqual({ thinking: { type: "enabled", budgetTokens: 24_576 } });
+    expect(undeclaredMax.providerOptions!.anthropic).toEqual({ thinking: { type: "enabled", budgetTokens: 32_000 } });
+
+    const declaredXhigh = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "xhigh" }, undefined, undefined, undefined, undefined, ["xhigh", "max"]);
+    const declaredMax = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "max" }, undefined, undefined, undefined, undefined, ["xhigh", "max"]);
+    expect(declaredXhigh.providerOptions!.anthropic).toEqual({ thinking: { type: "enabled", budgetTokens: 24_576 }, effort: "xhigh" });
+    expect(declaredMax.providerOptions!.anthropic).toEqual({ thinking: { type: "enabled", budgetTokens: 32_000 }, effort: "max" });
+
+    // A declaration naming only ONE tier is not enough: the enum is only
+    // authorised when the endpoint claimed BOTH, which is the claim that it
+    // distinguishes them itself.
+    const oneTier = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "max" }, undefined, undefined, undefined, undefined, ["max"]);
+    expect(oneTier.providerOptions!.anthropic).toEqual({ thinking: { type: "enabled", budgetTokens: 32_000 } });
+  });
 });
 
 describe("reasoningRequestOptions — prompt cache options (GitHub #15)", () => {
@@ -304,6 +326,53 @@ afterEach(() => {
 });
 
 describe("AiSdkModelPort — happy path", () => {
+  // GitHub #2 review follow-up: the generation window opens on the first
+  // OUTPUT TOKEN, not on the first stream chunk. A `start-step` (or a raw
+  // `message_start`) can precede any token by seconds; counting that wait as
+  // generation understates t/s and hides the true time-to-first-token.
+  it("starts the generation window at the first output token, after a metadata chunk and a queue wait", async () => {
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    mockStreamText.mockImplementationOnce(() => ({ fullStream: (async function* () {
+      yield startPart; // SDK's synthetic start, before any provider data
+      now = 1100; yield { type: "start-step" }; // metadata: NOT a token
+      now = 5100; yield { type: "text-delta", id: "t", text: "answer" }; // first token
+      now = 6100; yield { ...finishPart, totalUsage: { inputTokens: 1, outputTokens: 1100, totalTokens: 1101 } };
+    })() }));
+    const finish = (await collect(new AiSdkModelPort(baseConfig()).streamText(baseRequest))).find((event) => event.type === "finish");
+    // request start 100 → first token 5100 → finish 6100.
+    expect(finish).toMatchObject({ timeToFirstEventMs: 5000, generationDurationMs: 1000 });
+  });
+
+  it("opens the window on a reasoning or tool block too, not only on text", async () => {
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    mockStreamText.mockImplementationOnce(() => ({ fullStream: (async function* () {
+      yield startPart;
+      now = 1100; yield { type: "start-step" };
+      now = 2100; yield { type: "reasoning-delta", id: "r", text: "thinking" }; // first token: reasoning
+      now = 4100; yield { type: "tool-input-start", id: "call-1", toolName: "read" };
+      now = 4600; yield { ...finishPart, totalUsage: { inputTokens: 1, outputTokens: 50, totalTokens: 51 } };
+    })() }));
+    const finish = (await collect(new AiSdkModelPort(baseConfig()).streamText(baseRequest))).find((event) => event.type === "finish");
+    expect(finish).toMatchObject({ timeToFirstEventMs: 2000, generationDurationMs: 2500 });
+  });
+
+  it("omits both timing fields when the step streamed no output token at all", async () => {
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    mockStreamText.mockImplementationOnce(() => ({ fullStream: (async function* () {
+      yield startPart;
+      now = 1100; yield { type: "start-step" }; // metadata only — billed output may still exist
+      now = 5100; yield finishPart;
+    })() }));
+    const finish = (await collect(new AiSdkModelPort(baseConfig()).streamText(baseRequest))).find((event) => event.type === "finish");
+    // Billed output with no observable token is no measurement: absent fields
+    // (the popover shows a dash) instead of a fabricated 4000 ms window.
+    expect(finish).not.toHaveProperty("timeToFirstEventMs");
+    expect(finish).not.toHaveProperty("generationDurationMs");
+  });
+
   it("yields translated events for a single successful attempt with no retries", async () => {
     mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), part(finishPart)]));
 
@@ -560,7 +629,7 @@ describe("AiSdkModelPort — ignorable provider stream artifacts (slice 3.7 R1)"
       { type: "start" },
       { type: "text_delta", id: "t1", text: "a" },
       { type: "text_delta", id: "t1", text: "b" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, timeToFirstEventMs: expect.any(Number), generationDurationMs: expect.any(Number) },
     ]);
     expect(events.some((e) => e.type === "error")).toBe(false);
     expect(warnSpy).toHaveBeenCalledTimes(1); // deduped by signature
@@ -1161,10 +1230,10 @@ describe("AiSdkModelPort — response-model provenance and identity readback", (
     expect(mockStreamText).toHaveBeenCalledWith(expect.objectContaining({ includeRawChunks: true }));
   });
 
-  it("does not ask for raw chunks on the openai-chat-completions transport", async () => {
+  it("asks for raw chat chunks so the first provider event is timed", async () => {
     mockStreamText.mockImplementationOnce(() => fakeResult([part(finishPart)]));
     await collect(new AiSdkModelPort({ ...baseConfig(), transport: "openai-chat-completions" }).streamText(baseRequest));
-    expect(mockStreamText.mock.calls[0]![0]).not.toHaveProperty("includeRawChunks");
+    expect(mockStreamText.mock.calls[0]![0]).toHaveProperty("includeRawChunks", true);
   });
   it("asks the SDK for raw chunks on the openai-responses transport (reasoning_text recovery, #27)", async () => {
     mockStreamText.mockImplementationOnce(() => fakeResult([part(finishPart)]));

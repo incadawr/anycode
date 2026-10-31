@@ -1,19 +1,28 @@
-import type { ModelPricing } from "@anycode/core/catalog";
+import { tariffAt, type ModelPricing } from "@anycode/core/catalog";
 
-/** Snapshot a cost only when the provider supplied enough information to price it. */
+/**
+ * Snapshot a cost only when the provider supplied enough information to price
+ * it. `timestampMs` is the step's own timestamp: a price that declares a
+ * time-of-day tariff is billed at the band that instant falls in, and an
+ * unknown/absent timestamp keeps the conservative peak ceiling.
+ */
 export function calculateUsageCost(
   usage: { inputTokens?: number; cachedInputTokens?: number; cacheWriteTokens?: number; outputTokens?: number },
   price: ModelPricing | undefined,
+  timestampMs?: number,
 ): { costUsd: number; cacheSavingsUsd: number; priceBasisId: string } | undefined {
   const { inputTokens: input, cachedInputTokens: cached, outputTokens: output } = usage;
   const write = usage.cacheWriteTokens ?? 0;
   if (price === undefined || input === undefined || cached === undefined || output === undefined ||
       ![input, cached, write, output, price.input, price.cachedInput, price.output].every((n) => Number.isFinite(n) && n >= 0) ||
       cached + write > input || (write > 0 && (price.cacheWrite === undefined || !Number.isFinite(price.cacheWrite) || price.cacheWrite < 0))) return undefined;
-  const costUsd = ((input - cached - write) * price.input + cached * price.cachedInput + write * (price.cacheWrite ?? 0) + output * price.output) / 1_000_000;
-  const cacheSavingsUsd = cached * (price.input - price.cachedInput) / 1_000_000;
+  const offPeak = price.tariff !== undefined && timestampMs !== undefined && Number.isFinite(timestampMs) &&
+    tariffAt(price.tariff, timestampMs) === "off-peak";
+  const rate = offPeak ? price.tariff!.offPeakMultiplier : 1;
+  const costUsd = ((input - cached - write) * price.input * rate + cached * price.cachedInput * rate + write * (price.cacheWrite ?? 0) * rate + output * price.output * rate) / 1_000_000;
+  const cacheSavingsUsd = cached * (price.input - price.cachedInput) * rate / 1_000_000;
   if (!Number.isFinite(costUsd) || !Number.isFinite(cacheSavingsUsd)) return undefined;
-  return { costUsd, cacheSavingsUsd, priceBasisId: price.basisId };
+  return { costUsd, cacheSavingsUsd, priceBasisId: offPeak ? `${price.basisId}+off-peak` : price.basisId };
 }
 
 /** Read the connection snapshot passed by main; malformed overrides stay unknown. */

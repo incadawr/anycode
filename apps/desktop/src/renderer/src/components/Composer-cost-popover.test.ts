@@ -11,12 +11,17 @@
  *   session: Price unknown") — sentence case inside a sentence everywhere,
  *   while the drawer's pricing OPTION stays a capitalised label.
  */
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { WireUsageAuditStep, WireUsageAuditTotals } from "../../../shared/protocol.js";
+import { SqlitePersistenceAdapter } from "@anycode/core";
+import { findCatalogEntry } from "@anycode/core/catalog";
+import { sessionUsageRow } from "../../../host/usage-recording.js";
+import { summarizeWithChildren } from "../../../host/usage-summary.js";
 import {
   UsageCostBlock,
   contextWindowSettingsTarget,
@@ -172,4 +177,79 @@ it("shows the sum of model prices and points an unpriced pinned custom connectio
   expect(showCustomPricingHint(target, { ...base, subagentUnpriced: 1 })).toBe(true);
   expect(showCustomPricingHint(target, { ...base, costUsd: .01 })).toBe(false);
   expect(showCustomPricingHint(contextWindowSettingsTarget(connections, "a", "active", "custom"), { ...base, unpricedSteps: 1 })).toBe(false);
+});
+
+it("shows session and current turn generation rates in the popover", () => {
+  const steps = [step({ outputTokens: 100, generationDurationMs: 2000 })];
+  const markup = renderToStaticMarkup(createElement(UsageCostBlock, {
+    ledger: formatUsageCostLedger(base, null), turnSummary: formatTurnStepSummary(steps), turnSteps: steps,
+    generationTokensPerSecond: 75, expanded: false, onToggle: () => {},
+  }));
+  expect(textOf(markup)).toContain("Generation speed: session 75 t/s · this turn 50 t/s");
+});
+
+it("does not invent a rate for historical or zero-duration steps", () => {
+  const steps = [step({ outputTokens: 100 }), step({ step: 2, outputTokens: 20, generationDurationMs: 0 })];
+  const markup = renderToStaticMarkup(createElement(UsageCostBlock, {
+    ledger: formatUsageCostLedger(base, null), turnSummary: formatTurnStepSummary(steps), turnSteps: steps,
+    expanded: false, onToggle: () => {},
+  }));
+  expect(textOf(markup)).not.toContain("Generation speed:");
+});
+
+describe("the popover prices DeepSeek by the step's time of day", () => {
+  it("shows the off-peak price at night and labels the estimate off-peak", async () => {
+    const pricing = findCatalogEntry("deepseek")!.models.find((model) => model.id === "deepseek-v4-pro")!.pricing!;
+    // Wednesday 2026-10-28 20:00 UTC — outside DeepSeek's peak windows.
+    const night = Date.UTC(2026, 9, 28, 20, 0);
+    const usage = { inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 1_000_000 };
+
+    // Drive the REAL host recording path (the row builder the session sink
+    // calls) with a controlled clock, persist it, close, reopen and read the
+    // summary the popover actually renders. Building the ledger straight from
+    // `calculateUsageCost` would still pass if the host stopped passing the
+    // timestamp, and night sessions would then persist peak prices.
+    const row = sessionUsageRow(
+      { turnId: "turn-night", step: 1, finishReason: "stop", transportRetries: 0, model: "deepseek-v4-pro", ...usage },
+      { price: pricing, pricingRaw: undefined, model: "deepseek-v4-pro", now: () => night },
+      "night-session",
+    );
+    expect(row.costUsd).toBeCloseTo(2.64); // half of the $5.28 peak ceiling
+    expect(row.priceBasisId).toBe("deepseek-v4-pro-deepseek-peak-2026-10-27+off-peak");
+
+    const dir = mkdtempSync(join(tmpdir(), "anycode-popover-night-"));
+    const dbPath = join(dir, "usage.db");
+    try {
+      const first = new SqlitePersistenceAdapter(dbPath);
+      try {
+        await first.createSession({ id: "night-session", workspace: "/w", model: "deepseek-v4-pro", mode: "build" });
+        await first.recordProviderUsage(row);
+      } finally {
+        await first.close();
+      }
+      const reopened = new SqlitePersistenceAdapter(dbPath);
+      try {
+        const summary = await summarizeWithChildren(reopened, "night-session");
+        const ledger = formatUsageCostLedger(summary.totals, null);
+        expect(ledger.total).toBe("Spent in this session: ≈ $2.6400");
+        // The footnote is a " · "-joined list: assert the band as a WHOLE part
+        // ("off-peak-rate estimates" contains the substring "peak-rate
+        // estimates", so a substring check would be blind here).
+        const parts = ledger.footnote?.split(" · ") ?? [];
+        expect(parts).toContain("off-peak-rate estimates");
+        expect(parts).not.toContain("peak-rate estimates");
+
+        const markup = renderToStaticMarkup(
+          createElement(UsageCostBlock, { ledger, turnSummary: null, turnSteps: [], expanded: false, onToggle: () => {} }),
+        );
+        const text = textOf(markup);
+        expect(text).toContain("Spent in this session: ≈ $2.6400");
+        expect(text).toContain("off-peak-rate estimates");
+      } finally {
+        await reopened.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

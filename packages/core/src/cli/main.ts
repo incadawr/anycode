@@ -235,6 +235,11 @@ export function buildCliEndpointConfig(args: {
     apiKey: envConfig.apiKey,
     model,
     ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
+    // The connection's declared effort vocabulary (ANYCODE_EFFORT_LEVELS):
+    // forwarded so the model port can tell a custom Anthropic-compatible
+    // endpoint that declared BOTH xhigh and max (⇒ it understands the effort
+    // enum) from one that declared nothing (⇒ budgets only, no unknown field).
+    ...(envConfig.effortLevels !== undefined ? { declaredEffortLevels: envConfig.effortLevels } : {}),
     ...(Object.keys(retryOverride).length > 0 ? { retry: retryOverride } : {}),
     ...(includeUsageResolved ? { includeUsage: true as const } : {}),
     // GitHub #15: conditionally forward the parsed prompt-cache policy so the
