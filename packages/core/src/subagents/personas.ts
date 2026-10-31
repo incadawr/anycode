@@ -17,6 +17,7 @@
 
 import type { AgentProfileEngine } from "./profiles.js";
 import type { ReasoningEffort } from "../types/config.js";
+import type { ProfilePermissionRules } from "../types/permissions.js";
 
 /**
  * Taskana 4704: the three orchestration role personas join the registry as
@@ -102,6 +103,17 @@ export interface PersonaDefinition {
   connection?: string;
   /** Md-profile `provider:` frontmatter — catalog provider id resolved by main's resolveProviderConnection. */
   provider?: string;
+  /**
+   * Md-profile `permissions.allow` / `permissions.deny` frontmatter — this
+   * profile's own permission overlay for its children, wrapped around the
+   * session's engine by buildChildConfig (ProfilePermissionEngine). Never wider
+   * than the session gate: `deny` refuses without a prompt, `allow` only
+   * resolves an existing `ask`, everything else is unchanged. In-process
+   * children only, exactly like the `tools:` list: a session-tier child is its
+   * own session with its own gate. Built-in personas leave this undefined —
+   * they inherit the parent's gate untouched.
+   */
+  permissions?: ProfilePermissionRules;
 }
 
 /**

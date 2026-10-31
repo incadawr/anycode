@@ -54,7 +54,13 @@
  */
 
 import picomatch from "picomatch";
-import type { PermissionEngine, PermissionRequest, PermissionRule, PermissionRuling } from "../types/permissions.js";
+import type {
+  PermissionEngine,
+  PermissionRequest,
+  PermissionRule,
+  PermissionRuling,
+  ProfilePermissionRules,
+} from "../types/permissions.js";
 import { WORKSPACE_CONFINED_WRITE_TOOLS, isProvablyInsideWorkspace } from "./workspace-policy.js";
 
 /** Per-tool field read as the pattern-matching subject; tools absent here have no subject. */
@@ -467,6 +473,65 @@ function ruleMatches(rule: PermissionRule, toolName: string, input: unknown): bo
   }
   const subjects = bashMatchSubjects(subject);
   return subjects !== undefined && subjects.every((segment) => isMatch(segment));
+}
+
+/**
+ * Applies an agent profile's `permissions.allow`/`permissions.deny` overlay
+ * (md-profile frontmatter) around the session's engine. The overlay can only
+ * NARROW what the session would otherwise do:
+ *
+ *  - `deny` — a matching rule refuses the call with no prompt, even when the
+ *    session's mode or a global always-allow rule would have run it. A base
+ *    `deny` is returned untouched so its more specific reason (plan mode,
+ *    fail-closed unknown mode) survives.
+ *  - `allow` — a matching rule resolves only a base `ask` to `allow`. A base
+ *    `allow` needs no help and is returned unchanged; a base `deny` is never
+ *    overridden (this is the same "a rule only downgrades an ask" law as
+ *    `RuleAwarePermissionEngine`, which is what keeps an overlay from being
+ *    wider than the session).
+ *  - everything else — the base ruling, verbatim.
+ *
+ * `allow` inherits `RuleAwarePermissionEngine`'s workspace confinement: for
+ * Write/Edit/MultiEdit a rule authorises the call only when the dispatcher's
+ * facts prove the target inside the session workspace, so a profile cannot
+ * hand its child an absolute-path write outside the workspace.
+ *
+ * Command-line tools (Bash/CodexExec) are matched per SEGMENT for both lists,
+ * exactly as a stored rule is: one entry vouches for a whole pipeline only
+ * when every segment matches it.
+ */
+export class ProfilePermissionEngine implements PermissionEngine {
+  constructor(
+    private readonly base: PermissionEngine,
+    private readonly rules: ProfilePermissionRules,
+  ) {}
+
+  check(request: PermissionRequest): PermissionRuling {
+    const ruling = this.base.check(request);
+    // A base "deny" is already the most restrictive answer and carries the
+    // better reason (plan mode, unknown-mode fail-closed): never re-label it.
+    if (ruling.decision === "deny") {
+      return ruling;
+    }
+    if (this.rules.deny.some((rule) => ruleMatches(rule, request.toolName, request.input))) {
+      return {
+        decision: "deny",
+        reason: `${request.toolName}: refused by the agent profile's permission rules`,
+      };
+    }
+    if (ruling.decision !== "ask") {
+      return ruling;
+    }
+    if (!this.rules.allow.some((rule) => ruleMatches(rule, request.toolName, request.input))) {
+      return ruling;
+    }
+    // Same workspace confinement as an always-allow rule: the profile may
+    // resolve a write ask only inside the session workspace.
+    if (WORKSPACE_CONFINED_WRITE_TOOLS.has(request.toolName) && !isProvablyInsideWorkspace(request.workspace)) {
+      return ruling;
+    }
+    return { decision: "allow", reason: `${request.toolName}: allowed by the agent profile's permission rules` };
+  }
 }
 
 /** In-memory store of always-allow rules; persistence is a client concern (see module doc above). */

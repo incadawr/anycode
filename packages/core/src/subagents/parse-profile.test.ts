@@ -427,3 +427,147 @@ describe("parseAgentProfileMd — connection/provider frontmatter (Taskana 4269)
     }
   });
 });
+
+describe("parseAgentProfileMd — permissions.allow / permissions.deny", () => {
+  it("parses both flat lists into tool rules", () => {
+    const res = parseAgentProfileMd(
+      md(
+        {
+          name: "md-verify",
+          description: "Verifies a build",
+          "permissions.allow": "[Bash(.anycode/bin/build.sh *), Bash(git status*), Read]",
+          "permissions.deny": "Bash(git push*)",
+        },
+        "Verify.",
+      ),
+      "f",
+    );
+    expect("ok" in res).toBe(true);
+    if (!("ok" in res)) return;
+    expect(res.ok.problems).toEqual([]);
+    expect(res.ok.permissions).toEqual({
+      allow: [
+        { toolName: "Bash", pattern: ".anycode/bin/build.sh *" },
+        { toolName: "Bash", pattern: "git status*" },
+        { toolName: "Read" },
+      ],
+      deny: [{ toolName: "Bash", pattern: "git push*" }],
+    });
+  });
+
+  it("keeps commas and quotes inside a pattern (they are not list separators)", () => {
+    const res = parseAgentProfileMd(
+      md({ description: "d", "permissions.allow": 'Bash(printf "a,b")' }, "b"),
+      "f",
+    );
+    expect("ok" in res && res.ok.permissions?.allow).toEqual([
+      { toolName: "Bash", pattern: 'printf "a,b"' },
+    ]);
+  });
+
+  it("stays absent when both lists are empty", () => {
+    const res = parseAgentProfileMd(
+      md({ description: "d", "permissions.allow": "[]", "permissions.deny": "" }, "b"),
+      "f",
+    );
+    expect("ok" in res && res.ok.permissions).toBeUndefined();
+  });
+
+  it("is fatal for a malformed entry (names the list and the entry)", () => {
+    const res = parseAgentProfileMd(md({ description: "d", "permissions.deny": "Bash(" }, "b"), "f");
+    expect(res).toEqual({
+      error: { kind: "bad_permissions", name: "f", which: "deny", entry: "Bash(" },
+    });
+  });
+
+  it("is fatal for an empty pattern and for an empty tool name", () => {
+    expect(parseAgentProfileMd(md({ description: "d", "permissions.allow": "Bash()" }, "b"), "f")).toEqual({
+      error: { kind: "bad_permissions", name: "f", which: "allow", entry: "Bash()" },
+    });
+    expect(parseAgentProfileMd(md({ description: "d", "permissions.allow": "(git status)" }, "b"), "f")).toEqual({
+      error: { kind: "bad_permissions", name: "f", which: "allow", entry: "(git status)" },
+    });
+  });
+
+  it("is fatal for parentheses inside a pattern (they could never match)", () => {
+    expect(
+      parseAgentProfileMd(md({ description: "d", "permissions.allow": "Bash(git (status)*)" }, "b"), "f"),
+    ).toEqual({ error: { kind: "bad_permissions", name: "f", which: "allow", entry: "Bash(git (status)*)" } });
+  });
+
+  it("refuses permissions combined with engine (an engine child cannot honor them)", () => {
+    const res = parseAgentProfileMd(
+      md({ description: "d", engine: "codex", "permissions.deny": "Bash(git push*)" }, "b"),
+      "f",
+    );
+    expect(res).toEqual({ error: { kind: "engine_permissions_conflict", name: "f", engine: "codex" } });
+  });
+
+  it("reports nothing for the two permission keys (they are known)", () => {
+    const res = parseAgentProfileMd(
+      md({ description: "d", "permissions.allow": "Read", "permissions.deny": "Bash(rm *)" }, "b"),
+      "f",
+    );
+    expect("ok" in res && res.ok.problems).toEqual([]);
+  });
+});
+
+describe("discoverAgentProfiles — permission overlay rides the persona", () => {
+  function fakeFs(files: Record<string, string>): FileSystemPort {
+    const full: Record<string, string> = {};
+    for (const [name, content] of Object.entries(files)) {
+      full[join("/agents", name)] = content;
+    }
+    const filesMap = new Map(Object.entries(full));
+    return {
+      async exists(path: string) {
+        return path === "/agents" || filesMap.has(path);
+      },
+      async readdir(path: string) {
+        if (path !== "/agents") throw new Error("ENOTDIR");
+        return [...filesMap.keys()].map((key) => key.slice("/agents/".length));
+      },
+      async stat(path: string): Promise<FileStat> {
+        if (!filesMap.has(path)) throw new Error("ENOENT");
+        return { size: filesMap.get(path)!.length, mtimeMs: 0, isFile: true, isDirectory: false };
+      },
+      async readFile(path: string) {
+        const content = filesMap.get(path);
+        if (content === undefined) throw new Error("ENOENT");
+        return content;
+      },
+      async writeFile() {
+        throw new Error("not implemented");
+      },
+      async mkdir() {
+        throw new Error("not implemented");
+      },
+    } as unknown as FileSystemPort;
+  }
+
+  it("copies allow/deny rules onto the discovered persona", async () => {
+    const fs = fakeFs({
+      "verify.md": md(
+        { name: "verify", description: "d", "permissions.allow": "Bash(git status*)", "permissions.deny": "Bash(git push*)" },
+        "body",
+      ),
+    });
+    const { profiles, problems } = await discoverAgentProfiles(fs, [{ dir: "/agents", source: "project" }]);
+    expect(problems).toEqual([]);
+    expect(profiles[0]?.permissions).toEqual({
+      allow: [{ toolName: "Bash", pattern: "git status*" }],
+      deny: [{ toolName: "Bash", pattern: "git push*" }],
+    });
+  });
+
+  it("drops an engine profile that carries permissions and reports why", async () => {
+    const fs = fakeFs({
+      "engine.md": md({ name: "engine", description: "d", engine: "codex", "permissions.deny": "Bash(rm *)" }, "body"),
+    });
+    const { profiles, problems } = await discoverAgentProfiles(fs, [{ dir: "/agents", source: "project" }]);
+    expect(profiles).toEqual([]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("permissions");
+    expect(problems[0]).toContain("engine");
+  });
+});
