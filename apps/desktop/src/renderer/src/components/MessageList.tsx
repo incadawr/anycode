@@ -73,7 +73,7 @@ export function isTailLive(block: TranscriptBlock | undefined): boolean {
  * The wall-clock field is prefixed "at" because a bare "00:02" read as a
  * second duration whose unit was anyone's guess; the duration itself uses
  * `formatElapsed`'s lowercase "2m 12s" register. The max_turns stop keeps
- * its own wording (a turn-limit decision point, TASK.124).
+ * its own wording (a turn-limit decision point).
  */
 export function formatLoopEndLine(
   block: Extract<TranscriptBlock, { kind: "loop_end" }>,
