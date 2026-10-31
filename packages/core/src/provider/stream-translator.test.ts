@@ -12,6 +12,13 @@ import { translateStreamPart } from "./stream-translator.js";
 type Part = TextStreamPart<ToolSet>;
 
 describe("translateStreamPart", () => {
+  it("keeps OpenRouter reported cost, including zero", () => {
+    const part = { type: "finish", finishReason: "stop", totalUsage: {} } as unknown as Part;
+    expect(translateStreamPart(part, { openRouter: true, stepRawUsage: { cost: 0 } })).toMatchObject({ usage: { costUsd: 0 } });
+    expect(translateStreamPart(part, { openRouter: true, stepRawUsage: { cost: -1 } })).not.toHaveProperty("usage.costUsd");
+    expect(translateStreamPart(part, { stepRawUsage: { cost: 1 } })).not.toHaveProperty("usage.costUsd");
+  });
+
   it("maps start", () => {
     expect(translateStreamPart({ type: "start" } as Part)).toEqual({ type: "start" });
   });
