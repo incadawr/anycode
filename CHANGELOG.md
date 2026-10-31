@@ -7,10 +7,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.56] — 2026-10-31
+
 ### Added
 
 - The context popover shows average model generation speed for the session and current turn.
-
 - You can turn streaming token-usage requests on or off for each Chat Completions connection in Advanced settings (GitHub #1).
 - Xiaomi MiMo pay-as-you-go API is available as a provider (mimo-v2.6-pro and mimo-v2.6-flash, with per-token cost tracking).
 - Agent profiles can carry their own permission rules (`permissions.allow` and `permissions.deny` in the profile's frontmatter) for their in-process children, applied on top of the session's rules and never wider than them: a denied command is refused without a prompt, an allowed one runs without a prompt, and everything else keeps the session's normal prompting (GitHub #8).
@@ -24,7 +25,6 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - The Environment menu's Sessions API, External approvals, handle and Full browser access rows now match the Workspace/Branch/Changes rows: an icon, a title with a readable second line, and the switch or field on the right. Hints are no longer cut off.
 - Settings → Sessions API now marks an allowed folder that is missing on disk ("Missing on disk") and explains that it grants nothing until the folder is back; the mark follows the disk while the pane stays open — it appears when a folder disappears and clears when it returns, without a restart or reopening Settings.
-
 - Turn-end footer reads "2 turns · 2m 12s · at 00:02" — the clock time is labelled, so it no longer looks like a second, unit-less duration.
 - Long tab titles — single words like paths and filenames as well as multi-word ones — wrap in the session header instead of being cut mid-word by the ellipsis, capped at two lines so any title length still fits the fixed header height.
 - The disabled "Remove project from list" sidebar menu item shows its reason ("Close this project's open tasks first.") as visible text instead of a hover-only tooltip.
@@ -35,7 +35,6 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Notifications no longer cover the message box while they matter most: the toast stack now sits above the composer, clear of Stop, Send and the context meter, at both narrow and wide window sizes.
 - Compacting a short conversation now says “Nothing to compact yet — the conversation is too short” once, in the transcript, instead of showing internal jargon twice (a toast on top of the message box and a red row).
 - Roles: the global profile selector always offers "Built-in roles", so you can return to the built-in defaults even with a saved profile active; saving from the built-ins now creates a fresh uniquely-named profile instead of overwriting a profile named "default", and deleting the active profile returns to the built-ins.
-- Turning Orchestrate on from the mode menu now asks for roles on the first run and the mode chip and session header say "Orchestrate", instead of the chip still reading the permission mode and the click looking like a no-op.
 - Turning Orchestrate on from the mode menu now asks for roles on the first run and the mode chip and session header say "Orchestrate", instead of the chip still reading the permission mode and the click looking like a no-op; skipping that role picker once is enough, so the next Send starts the task instead of asking again.
 - Development GUI smoke drivers launch the app with an isolated keychain and the sandbox/GPU switches, so they no longer hang when started from an automation host.
 - Flaky test waits under CI load: test waits for tab hosts, channel-echo, Telegram remote and the Claude engine-reap now use event-driven checks with load-tolerant deadlines instead of 1-second defaults and blind sleeps.
