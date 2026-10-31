@@ -10,16 +10,23 @@ import {
 import type { PreviewChangedPayload, PreviewPanelInfo } from "../../../shared/preview-panel.js";
 
 describe("sessionHeaderTitleClass (audit D12 — long titles cut mid-word)", () => {
-  it("lets a short title stay on one line (no wrap class)", () => {
-    expect(sessionHeaderTitleClass("Fix the bug")).toBe("session-header-title");
+  const WRAP = "session-header-title session-header-title-wrap";
+
+  it("wraps a multi-word title, so the reported mid-word cut (…outside.txt conta) cannot happen", () => {
+    // The one-line ellipsis cut the LAST visible word at a character boundary;
+    // a title with any number of words must wrap like the single-token case.
+    expect(sessionHeaderTitleClass("please read outside.txt and fix the header")).toBe(WRAP);
+    expect(sessionHeaderTitleClass("Fix the bug")).toBe(WRAP);
   });
 
-  it("lets a wrapped multi-word title break at word boundaries (no wrap class either)", () => {
-    expect(sessionHeaderTitleClass("please read outside.txt and fix the header")).toBe("session-header-title");
+  it("wraps a single unbroken token (path/filename), which ellipsis would cut mid-word", () => {
+    expect(sessionHeaderTitleClass("…outside.txt")).toBe(WRAP);
   });
 
-  it("force-wraps a single unbroken token (path/filename), which ellipsis would cut mid-word", () => {
-    expect(sessionHeaderTitleClass("…outside.txt")).toBe("session-header-title session-header-title-wrap");
+  it("never returns the bare ellipsis class for ANY title", () => {
+    for (const title of ["a", "two words", "an outside.txt file", "/Users/x/very/long/path"]) {
+      expect(sessionHeaderTitleClass(title)).toBe(WRAP);
+    }
   });
 });
 
@@ -46,9 +53,16 @@ describe("session-header title-wrap clamp (audit D12 regression: the header has 
     expect(rule).toMatch(/overflow-wrap:\s*anywhere/);
   });
 
-  it("the clamp never widens the multi-word path: short/multi-word titles keep the plain ellipsis class", () => {
-    expect(sessionHeaderTitleClass("/short/path.ts")).toBe("session-header-title session-header-title-wrap");
-    expect(sessionHeaderTitleClass("fix the header bug")).toBe("session-header-title");
+  it("the wrap rule cancels the base class's one-line ellipsis, which cut multi-word titles mid-word", () => {
+    // `.session-header-title` sets nowrap + ellipsis; if the wrap rule did not
+    // override both, a multi-word title would keep being cut at a character
+    // boundary instead of breaking between words.
+    const rule = cssRule(".session-header-title-wrap");
+    expect(rule).toMatch(/white-space:\s*normal/);
+    expect(rule).toMatch(/text-overflow:\s*clip/);
+    const base = cssRule(".session-header-title");
+    expect(base).toMatch(/white-space:\s*nowrap/);
+    expect(sessionHeaderTitleClass("fix the header bug")).toBe("session-header-title session-header-title-wrap");
   });
 });
 

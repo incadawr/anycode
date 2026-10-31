@@ -1479,11 +1479,11 @@ body {
   color: var(--text-1);
 }
 
-/* Audit D12: a title that is one unbroken token (path/filename) has no word
-   boundary, so ellipsis cut it mid-word; it wraps on its own lines instead
-   (overflow-wrap breaks the long token at the container edge). The clamp caps
-   it at sessionHeaderTitleLineLimit() lines so a path of any length still fits
-   the header's fixed height (2 × 1.25 × 13px ≈ 33px < the 40px compact cap),
+/* Audit D12: the one-line ellipsis cut titles at a character boundary
+   ("…outside.txt conta"), so every title wraps: between words, and inside a
+   word only when one token cannot fit (overflow-wrap). The clamp caps it at
+   sessionHeaderTitleLineLimit() lines so a title of any length still fits the
+   header's fixed height (2 × 1.25 × 13px ≈ 33px < the 40px compact cap),
    mirrored by SESSION_HEADER_TITLE_LINE_LIMIT in SessionHeader.tsx. */
 .session-header-title-wrap {
   display: -webkit-box;
