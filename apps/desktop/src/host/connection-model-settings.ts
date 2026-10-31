@@ -44,7 +44,12 @@ export function createConnectionModelSettings(deps: {
 
   function entryFor(model: string) {
     const override = modelOverrideFor(connection, model);
-    const entry = modelDictionaryEntry(model, deps.catalogEntry, override?.catalogMatchDisabled === true);
+    let entry = modelDictionaryEntry(model, deps.catalogEntry, override?.catalogMatchDisabled === true);
+    const live = connection?.modelCapabilities?.[model];
+    if (entry?.id === "openrouter" && live?.contextWindow) {
+      const previous = entry.models.find(row => row.id === model);
+      entry = { ...entry, models: [...entry.models.filter(row => row.id !== model), { ...previous, id: model, contextWindow: live.contextWindow, ...(live.maxOutputTokens ? { maxOutputTokens: live.maxOutputTokens } : {}) }] };
+    }
     // An explicit off declaration on a gateway is stronger than the original
     // vendor's always-on hint; the gateway may expose a different policy.
     if (entry !== deps.catalogEntry && entry && (override?.reasoningEffort === "off" || override?.effortLevels?.includes("off"))) {
@@ -95,7 +100,7 @@ export function createConnectionModelSettings(deps: {
   return {
     refresh,
     entryFor,
-    pricingSnapshot() { return hasReadConnection ? { fallback: connection?.pricing, models: Object.fromEntries(Object.entries(connection?.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => [id, value.pricing])) } : undefined; },
+    pricingSnapshot() { return hasReadConnection ? { fallback: connection?.pricing, models: { ...Object.fromEntries(Object.entries(connection?.modelCapabilities ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => [id, value.pricing])), ...Object.fromEntries(Object.entries(connection?.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => [id, value.pricing])) } } : undefined; },
     hasReadConnection() { return hasReadConnection; },
     capabilitiesFor,
     effortLevelsFor(model: string) { return modelOverrideFor(connection, model)?.effortLevels; },

@@ -303,6 +303,9 @@ const connectionSchema = z.object({
   // reads back as absent instead of resetting the whole document. Values are
   // re-validated (levels remapped through the closed enum) at consumption.
   modelCapabilities: z.record(z.string().max(256), z.object({
+    contextWindow: z.number().int().positive().optional(),
+    maxOutputTokens: z.number().int().positive().optional(),
+    pricing: z.object({ input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative() }).optional(),
     reasoning: z.boolean().optional(),
     effortLevels: z.array(z.string().max(64)).max(16).optional(),
     // 4088-on-4118 integration: the live image-modality fact rides the same

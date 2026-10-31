@@ -102,7 +102,7 @@ export type FetchModelsFailureReason =
   | "read_only";
 
 export type FetchModelsOutcome =
-  | { ok: true; models: { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true }[] }
+  | { ok: true; models: { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true; contextWindow?: number; maxOutputTokens?: number; pricing?: { input: number; cachedInput: number; output: number } }[] }
   | { ok: false; reason: FetchModelsFailureReason };
 
 /** Minimal fetch surface this module needs (injectable; defaults to global fetch — mirrors oauth.ts's `FetchLike`). */
@@ -224,7 +224,7 @@ export async function fetchCustomProviderModels(params: FetchModelsParams): Prom
   if (looksLikeErrorPayload(parsed)) {
     return { ok: false, reason: "error_payload" };
   }
-  const models = extractModelIds(parsed);
+  const models = extractModelIds(parsed, new URL(params.baseUrl).hostname === "openrouter.ai");
   if (models === undefined) {
     return { ok: false, reason: "invalid_response" };
   }
@@ -289,6 +289,9 @@ const liveCapsSchema = z.object({
     })
     .optional()
     .catch(undefined),
+  context_length: z.number().int().positive().optional().catch(undefined),
+  top_provider: z.object({ max_completion_tokens: z.number().int().positive().nullish() }).optional().catch(undefined),
+  pricing: z.object({ prompt: z.string(), completion: z.string(), input_cache_read: z.string().optional() }).optional().catch(undefined),
   architecture: z
     .object({
       input_modalities: z.array(z.string()).optional().catch(undefined),
@@ -329,7 +332,8 @@ const MODEL_CAPABILITY_ID_MAX = 256;
  */
 function extractModelIds(
   value: unknown,
-): { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true }[] | undefined {
+  openrouter = false,
+): { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true; contextWindow?: number; maxOutputTokens?: number; pricing?: { input: number; cachedInput: number; output: number } }[] | undefined {
   if (typeof value !== "object" || value === null || !("data" in value)) {
     return undefined;
   }
@@ -337,7 +341,7 @@ function extractModelIds(
   if (!Array.isArray(data)) {
     return undefined;
   }
-  const models: { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true }[] = [];
+  const models: { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true; contextWindow?: number; maxOutputTokens?: number; pricing?: { input: number; cachedInput: number; output: number } }[] = [];
   for (const item of data) {
     if (typeof item !== "object" || item === null) {
       continue;
@@ -364,12 +368,20 @@ function extractModelIds(
     // gate — a plain sighted model with no reasoning declaration still keeps
     // its imageInput fact.
     const imageInput = meta.data.architecture?.input_modalities?.includes("image") === true;
-    if ((!reasoning && !imageInput) || maybe.id.length > MODEL_CAPABILITY_ID_MAX) {
+    const contextWindow = openrouter ? meta.data.context_length : undefined;
+    const maxOutputTokens = openrouter ? meta.data.top_provider?.max_completion_tokens ?? undefined : undefined;
+    const rawPrice = openrouter ? meta.data.pricing : undefined;
+    const rates = rawPrice && [rawPrice.prompt, rawPrice.input_cache_read ?? rawPrice.prompt, rawPrice.completion].map(Number);
+    const pricing = rates && rates.every(n => Number.isFinite(n) && n >= 0) ? { input: rates[0]! * 1e6, cachedInput: rates[1]! * 1e6, output: rates[2]! * 1e6 } : undefined;
+    if ((!reasoning && !imageInput && !contextWindow && !maxOutputTokens && !pricing) || maybe.id.length > MODEL_CAPABILITY_ID_MAX) {
       models.push({ id: maybe.id });
       continue;
     }
     models.push({
       id: maybe.id,
+      ...(contextWindow ? { contextWindow } : {}),
+      ...(maxOutputTokens ? { maxOutputTokens } : {}),
+      ...(pricing ? { pricing } : {}),
       ...(reasoning ? { reasoning: true } : {}),
       ...(reasoning && declared !== undefined && declared.length > 0 ? { effortLevels: [...declared] } : supportsEffort ? { effortLevels: ["off", "low", "medium", "high", "xhigh"] } : {}),
       ...(imageInput ? { imageInput: true } : {}),
@@ -913,7 +925,7 @@ async function handleConnectionFetchModels(
     // stored one — a stale/shorter live answer must never blind a fact an
     // earlier fetch recorded (the TASK.197 asymmetry). The 4088 imageInput
     // fact now lives in this map instead of a separate imageInputModels list.
-    const caps: Record<string, { reasoning?: boolean; effortLevels?: string[]; imageInput?: true }> = {};
+    const caps: NonNullable<ProviderConnection["modelCapabilities"]> = {};
     for (const m of outcome.models) {
       // Cross-review F2 (defense-in-depth): `fetchModels` is injectable, so
       // this seam can see meta the extractor never produced — the same
@@ -925,8 +937,12 @@ async function handleConnectionFetchModels(
       const reasoning = m.reasoning === true ? true : prev?.reasoning;
       const effortLevels = m.effortLevels !== undefined ? m.effortLevels : prev?.effortLevels;
       const imageInput = m.imageInput === true ? (true as const) : prev?.imageInput;
-      if (reasoning !== undefined || effortLevels !== undefined || imageInput !== undefined) {
+      if (reasoning !== undefined || effortLevels !== undefined || imageInput !== undefined || m.contextWindow !== undefined || m.maxOutputTokens !== undefined || m.pricing !== undefined || prev !== undefined) {
         caps[m.id] = {
+          ...prev,
+          ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+          ...(m.maxOutputTokens !== undefined ? { maxOutputTokens: m.maxOutputTokens } : {}),
+          ...(m.pricing !== undefined ? { pricing: m.pricing } : {}),
           ...(reasoning !== undefined ? { reasoning } : {}),
           ...(effortLevels !== undefined ? { effortLevels } : {}),
           ...(imageInput !== undefined ? { imageInput } : {}),

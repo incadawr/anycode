@@ -199,6 +199,9 @@ export type ReasoningEffort = "off" | "low" | "medium" | "high" | "xhigh" | "max
  * the closed enum happens fail-closed at resolution, never at parse time.
  */
 export interface ModelCapabilitiesDto {
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  pricing?: TokenRates;
   defaultEffort?: ReasoningEffort;
   thinkingAlwaysOn?: boolean;
   reasoning?: boolean;
