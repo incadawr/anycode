@@ -172,7 +172,10 @@ for (const [resumed, initialModel] of [[false, "both"], [false, "onlyMax"], [tru
       let body = "";
       req.on("data", (chunk) => { body += chunk; });
       req.on("end", () => {
-        const input = JSON.parse(body); requests.push(input);
+        const input = JSON.parse(body);
+        // Title generation runs concurrently and has no turn effort. Keep it
+        // out of the turn request sequence regardless of scheduling order.
+        if (input.max_tokens !== 32) requests.push(input);
         const base = { id: "fixture", object: "chat.completion.chunk", created: 0, model: input.model };
         res.writeHead(200, { "content-type": "text/event-stream" });
         res.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "done" }, finish_reason: null }] })}\n\n`);
