@@ -77,6 +77,18 @@ export function startSendNeedsRolePicker(plan: StartOrchestratePlan, roles: unkn
 }
 
 /**
+ * Turning orchestrate ON from a mode menu asks for roles first, on both
+ * surfaces: the first run has no role routes, and a silent enable left the
+ * user with no way to choose who does the work (the owner-reported "clicking
+ * Orchestrate does nothing"). Turning it OFF never asks. The mode itself is
+ * applied immediately by the caller, so the request cannot be mistaken for a
+ * no-op while the dialog is up.
+ */
+export function orchestrateToggleNeedsRolePicker(next: boolean, roles: unknown): boolean {
+  return next && needsRolePicker(roles);
+}
+
+/**
  * The minimal slash hint: shown while the draft starts like the command but
  * has not yet become a complete `/orchestrate <task>` (core drafts only).
  */
