@@ -104,8 +104,7 @@ export function launchSmokeElectron(spawn, options = {}) {
     if (env.ANYCODE_EXPECTED_DESKTOP_ROOT !== desktopRoot || (cwd !== undefined && resolve(cwd) !== repoRoot)) throw new Error("Isolated launcher worktree mismatch");
     const childEnv = smokeElectronEnv(env, { remoteDebuggingPort });
     childEnv.PATH = `/usr/bin:/bin:/usr/sbin:/sbin:${dirname(process.execPath)}`;
-    childEnv.ELECTRON_CLI_ARGS = JSON.stringify(smokeElectronSwitches(electron));
-    return spawn(process.execPath, [join(desktopRoot, "node_modules/electron-vite/bin/electron-vite.js"), "dev"], { cwd: desktopRoot, env: childEnv, stdio, detached });
+    return spawn(process.execPath, [join(desktopRoot, "node_modules/electron-vite/bin/electron-vite.js"), "dev", "--", ...smokeElectronSwitches(electron)], { cwd: desktopRoot, env: childEnv, stdio, detached });
   }
   return spawn("pnpm", smokeElectronArgs(electron), {
     ...(cwd === undefined ? {} : { cwd }),
