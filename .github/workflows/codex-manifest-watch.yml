@@ -1,4 +1,4 @@
-# Codex manifest watch (,  remainder).
+# Codex manifest watch (remainder).
 #
 # The release-time gate (`pnpm check:codex-manifest`, release.md step 4) only
 # fires on a tag push. Between releases nothing re-checked the declared range
