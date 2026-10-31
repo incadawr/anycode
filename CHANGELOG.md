@@ -17,7 +17,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Settings → Sessions API now marks an allowed folder that is missing on disk ("Missing on disk") and explains that it grants nothing until the folder is back; the mark clears without a restart once the folder exists again.
 
 - Turn-end footer reads "2 turns · 2m 12s · at 00:02" — the clock time is labelled, so it no longer looks like a second, unit-less duration.
-- Long single-word tab titles (paths, filenames) wrap in the session header instead of being cut mid-word by the ellipsis, capped at two lines so any title length still fits the fixed header height.
+- Long tab titles — single words like paths and filenames as well as multi-word ones — wrap in the session header instead of being cut mid-word by the ellipsis, capped at two lines so any title length still fits the fixed header height.
 - The disabled "Remove project from list" sidebar menu item shows its reason ("Close this project's open tasks first.") as visible text instead of a hover-only tooltip.
 - Settings → Sessions API explains how sessions become shareable (the session's ⋯ environment menu) rather than only counting them, and the Advanced heading matches the pane's other section labels.
 - Settings → Sessions API also says that agents can open new tasks in a project only while that project's "Allow agents to open tasks here" switch (sidebar project ⋯ menu) is on.

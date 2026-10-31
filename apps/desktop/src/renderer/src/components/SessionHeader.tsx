@@ -111,15 +111,18 @@ export function worktreeExitControlState(
 }
 
 /**
- * Audit D12: a long single-token title (a path, a filename) had no word
- * boundary for `text-overflow: ellipsis` to cut at, so it was chopped
- * mid-word ("…outside.txt conta"). Such a title wraps to its own lines
- * instead; multi-word titles keep the one-line ellipsis (the wrap always
- * finds a word boundary there). Pure, exported for unit tests.
+ * Audit D12: long titles were cut mid-word ("…outside.txt conta"). A title
+ * with whitespace had a word boundary, but the one-line ellipsis still cut the
+ * LAST visible word at a character boundary — so EVERY title wraps now, any
+ * number of words: the text breaks between words and only inside a word when
+ * a single token cannot fit the line (`.session-header-title-wrap`'s
+ * `overflow-wrap: anywhere`). Pure, exported for unit tests.
  */
 export function sessionHeaderTitleClass(title: string): string {
-  const hasWordBoundary = /\s/.test(title.trim());
-  return hasWordBoundary ? "session-header-title" : "session-header-title session-header-title-wrap";
+  // The class no longer depends on the title: `title` stays in the signature so
+  // callers and tests keep reading intent from the call, not from a constant.
+  void title;
+  return "session-header-title session-header-title-wrap";
 }
 
 /**
