@@ -87,6 +87,7 @@ describe("dev Electron smoke launcher", () => {
       "model-overrides-ui-smoke",
       "renderer-reload-smoke-support",
       "dock-squash-smoke",
+      "model-pill-smoke",
     ];
     for (const name of drivers) {
       const source = readFileSync(
