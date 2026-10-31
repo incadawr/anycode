@@ -310,11 +310,18 @@ export function providerModelsFor(
   catalog: CatalogSummary | undefined,
   custom: readonly CustomProviderRecord[] | undefined,
   connectionModels?: readonly string[],
+  visibleModels?: readonly string[],
 ): readonly { id: string; name?: string }[] | undefined {
   const catalogHit = catalog?.find((entry) => entry.id === providerId)?.models;
   const customHit = custom?.find((entry) => entry.id === providerId);
   const baseHints: readonly { id: string; name?: string }[] | undefined =
     catalogHit ?? (customHit !== undefined ? customHit.models.map((id) => ({ id })) : undefined);
+  if (visibleModels !== undefined) {
+    return visibleModels.map((id) => {
+      const hint = baseHints?.find((item) => item.id === id);
+      return hint?.name !== undefined ? { id, name: hint.name } : { id };
+    });
+  }
   if (connectionModels !== undefined && connectionModels.length > 0) {
     const union = mergeModelIds(
       (baseHints ?? []).map((hint) => hint.id),
@@ -542,6 +549,7 @@ export function ModelPill() {
     snapshot?.catalog,
     snapshot?.settings.provider.custom,
     targetConnection?.models,
+    targetConnection?.visibleModels,
   );
 
   const [open, setOpen] = useState(false);

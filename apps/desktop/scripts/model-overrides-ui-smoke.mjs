@@ -6,17 +6,18 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer } from "node:net";
+import { connectIsolatedCdp } from "./isolated-cdp.mjs";
 import { createServer as createHttpServer } from "node:http";
 
 const profile = mkdtempSync(join(tmpdir(), "anycode-model-overrides-"));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const server = createServer();
-await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-const port = server.address().port;
-await new Promise((resolve) => server.close(resolve));
 const fixtureRequests = [];
 const fixture = createHttpServer((request, response) => {
+  if (request.method === "GET" && request.url === "/v1/models") {
+    response.writeHead(200, {"Content-Type":"application/json"});
+    response.end(JSON.stringify({data:["a", "b", "unknown", "glm-like-52", "glm-like-53"].map(id => ({id}))}));
+    return;
+  }
   let body = "";
   request.on("data", (chunk) => { body += chunk; });
   request.on("end", () => {
@@ -36,7 +37,7 @@ await new Promise((resolve) => fixture.listen(0, "127.0.0.1", resolve));
 const fixtureUrl = `http://127.0.0.1:${fixture.address().port}/v1`;
 const binary = join(profile, "unavailable-engine");
 writeFileSync(binary, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
-const env = buildSmokeEnv(process.env, profile, port, binary);
+const env = buildSmokeEnv(process.env, profile, 0, binary);
 writeFileSync(join(profile, "settings.json"), JSON.stringify({
   version:2, provider:{activeConnectionId:"conn-smoke", custom:[{id:"custom:smoke", name:"Smoke", baseUrl:fixtureUrl, kind:"openai-compatible", models:["unknown"]}], connections:[{
     id:"conn-smoke", providerId:"custom:smoke", label:"Model overrides smoke", model:"a", models:["a","b","unknown","glm-like-52","glm-like-53"],
@@ -45,9 +46,7 @@ writeFileSync(join(profile, "settings.json"), JSON.stringify({
   }]}, tools:{}, permissions:{alwaysAllow:[]}, ui:{theme:"dark"}, security:{allowWeakSecretStorage:false},
 }));
 const app = launchSmokeElectron(spawn, { env, detached: true });
-let ws;
-const pending = new Map();
-let nextId = 0;
+let ws, cdp;
 async function poll(fn, timeout = 30000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
@@ -57,14 +56,7 @@ async function poll(fn, timeout = 30000) {
   }
   throw new Error("Timed out waiting for GUI state");
 }
-function call(method, params) {
-  const id = ++nextId;
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`${method} timed out`)); }, 10000);
-    pending.set(id, { resolve, reject, timer });
-    ws.send(JSON.stringify({ id, method, params }));
-  });
-}
+const call = (method, params) => cdp.call(method, params);
 async function evaluate(expression) {
   const result = await call("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
   if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
@@ -75,19 +67,8 @@ async function click(text) {
   await sleep(250);
 }
 try {
-  const target = await poll(async () => {
-    try { return (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t => t.type === "page" && !t.url.startsWith("devtools://")); }
-    catch { return false; }
-  }, 60000);
-  ws = new WebSocket(target.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });
-  ws.onmessage = ({ data }) => {
-    const response = JSON.parse(data);
-    const item = pending.get(response.id);
-    if (!item) return;
-    pending.delete(response.id); clearTimeout(item.timer);
-    if (response.error) item.reject(new Error(JSON.stringify(response.error))); else item.resolve(response.result);
-  };
+  cdp = await connectIsolatedCdp({ profile, env, launcher: app, wait: poll });
+  ws = cdp.ws;
 
   await poll(() => evaluate("!!document.querySelector('.sidebar-settings')"));
   await click("Settings");
@@ -96,6 +77,21 @@ try {
   await evaluate("document.querySelector('.connection-tile button[aria-haspopup=menu]').click()");
   await click("Edit");
   await poll(() => evaluate("document.querySelector('.connection-drawer')?.open"));
+  async function capture(name) {
+    await sleep(250);
+    const png = await call("Page.captureScreenshot", {format:"png"});
+    writeFileSync(join(profile, name), Buffer.from(png.data, "base64"));
+  }
+  await capture("connection-dark.png");
+  await click("Fetch models");
+  await poll(() => evaluate("!!document.querySelector('.connection-drawer-model-popup')"));
+  await capture("connection-models-dark.png");
+  await evaluate("document.querySelector('[aria-label=\"Filter models\"]').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}))");
+  await poll(() => evaluate("!document.querySelector('.connection-drawer-model-popup')"));
+  assert(await evaluate("document.querySelector('.connection-drawer').open"), "Escape must close the popup, not the drawer");
+  await evaluate("document.documentElement.dataset.theme='light'");
+  await capture("connection-light.png");
+  await evaluate("document.documentElement.dataset.theme='dark'");
   const field = label => `(() => { const label = [...document.querySelectorAll('.connection-drawer label')].find(l => l.querySelector('.settings-field-label')?.textContent.trim().startsWith(${JSON.stringify(label)})); return label?.querySelector('input'); })()`;
   async function input(expression, value) {
     await evaluate(`(() => { const input = ${expression}; if (!input) throw new Error('Input missing'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(value)}); input.dispatchEvent(new Event('input', {bubbles:true})); })()`);
@@ -105,6 +101,19 @@ try {
     await evaluate(`(() => { const s = document.querySelector('select[aria-label=${JSON.stringify(label)}]'); s.value = ${JSON.stringify(value)}; s.dispatchEvent(new Event('change', {bubbles:true})); })()`);
     await sleep(100);
   }
+  async function pickModel(id) {
+    await click("Fetch models");
+    await poll(() => evaluate("!!document.querySelector('.connection-drawer-model-popup')"));
+    const exists = await evaluate(`!![...document.querySelectorAll('.connection-drawer-popup-row button')].find(b => b.getAttribute('aria-label') === ${JSON.stringify(`Set ${id} as default`)})`);
+    if (!exists) {
+      await input("document.querySelector('[aria-label=\"Manual model ID\"]')", id);
+      await click("Add");
+    }
+    await evaluate(`[...document.querySelectorAll('.connection-drawer-popup-row button')].find(b => b.getAttribute('aria-label') === ${JSON.stringify(`Set ${id} as default`)}).click()`);
+    await poll(() => evaluate("!document.querySelector('.connection-drawer-model-popup .connection-drawer-model-heading:last-child button').disabled"));
+    await evaluate("document.querySelector('.connection-drawer-model-popup .connection-drawer-model-heading:last-child button').click()");
+    await sleep(200);
+  }
   await evaluate("document.querySelector('.connection-drawer-advanced').open = true");
   await input(field("Context window"), "128000");
   await select("Reasoning support", "on");
@@ -113,14 +122,14 @@ try {
   await select("Reasoning effort", "high");
   await click("Save");
   await poll(() => JSON.parse(readFileSync(join(profile, "settings.json"), "utf8")).provider.connections[0].modelOverrides?.a?.contextWindowTokens === 128000);
-  await input("document.querySelector('input[list=connection-drawer-model-suggestions]')", "b");
+  await pickModel("b");
   assert.equal(await evaluate(`${field("Context window")}.value`), "");
   await input(field("Context window"), "64000");
   await select("Reasoning support", "on");
   await select("Reasoning effort", "low");
   await click("Save");
   await poll(() => JSON.parse(readFileSync(join(profile, "settings.json"), "utf8")).provider.connections[0].modelOverrides?.b?.contextWindowTokens === 64000);
-  await input("document.querySelector('input[list=connection-drawer-model-suggestions]')", "a");
+  await pickModel("a");
   assert.equal(await evaluate(`${field("Context window")}.value`), "128000");
   assert.equal(await evaluate("document.querySelector('select[aria-label=\"Reasoning effort\"]').value"), "high");
   await evaluate(`${field("Context window")}.scrollIntoView({block:"center"})`);
@@ -128,7 +137,7 @@ try {
   const png = await call("Page.captureScreenshot", {format:"png"});
   writeFileSync(join(profile, "model-a-settings.png"), Buffer.from(png.data, "base64"));
   await click("Save");
-  await click("Done");
+  await click("Cancel");
   await evaluate("document.querySelector('.settings-dialog').dispatchEvent(new Event('cancel', {cancelable:true}))");
   await call("Page.reload", {});
   await poll(() => evaluate("!!document.querySelector('.sidebar-settings')"));
@@ -138,9 +147,8 @@ try {
   assert(!Object.hasOwn(saved, "contextWindowModel"));
   const info = await poll(() => existsSync(join(profile, "automation.json")) && JSON.parse(readFileSync(join(profile, "automation.json"), "utf8")));
   async function api(path, method = "GET", body) {
-    const response = await fetch(`http://127.0.0.1:${info.port}${path}`, {method, headers:{Authorization:`Bearer ${info.token}`, "Content-Type":"application/json"}, ...(body === undefined ? {} : {body:JSON.stringify(body)})});
-    const result = await response.json();
-    assert(response.ok, JSON.stringify(result));
+    const {ok, result} = await cdp.automation(info, path, method, body);
+    assert(ok, JSON.stringify(result));
     return result;
   }
   const tab = await evaluate(`window.anycode.createTab({kind:'new', workspace:${JSON.stringify(profile)}})`);
@@ -276,11 +284,7 @@ try {
 } finally {
   if (ws?.readyState === WebSocket.OPEN) await call("Browser.close", {}).catch(() => {});
   ws?.close();
-  if (existsSync(join(profile, "automation.json"))) {
-    const info = JSON.parse(readFileSync(join(profile, "automation.json"), "utf8"));
-    try { process.kill(info.pid, "SIGTERM"); } catch {}
-  }
   await sleep(500);
-  try { process.kill(-app.pid, "SIGTERM"); } catch {}
+  if (app.exitCode === null && app.signalCode === null) try { process.kill(-app.pid, "SIGTERM"); } catch {}
   await new Promise((resolve) => fixture.close(resolve));
 }

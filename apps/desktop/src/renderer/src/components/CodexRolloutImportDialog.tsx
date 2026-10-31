@@ -278,6 +278,7 @@ export function importModelOptionsFor(
     snapshot.catalog,
     snapshot.settings.provider.custom,
     activeConnection(snapshot.settings)?.models,
+    activeConnection(snapshot.settings)?.visibleModels,
   );
 }
 

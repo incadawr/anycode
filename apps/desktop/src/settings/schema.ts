@@ -300,6 +300,7 @@ const connectionSchema = z.object({
   // advisory display data, same round-trip discipline as `lastHealth`.
   models: z.array(z.string()).optional(),
   modelsFetchedAt: z.string().optional(),
+  visibleModels: z.array(z.string()).optional().catch(undefined),
   // fail-soft like maxOutputTokens above — a hand-edited bad map
   // reads back as absent instead of resetting the whole document. Values are
   // re-validated (levels remapped through the closed enum) at consumption.

@@ -421,6 +421,7 @@ describe("settings-store: weak-storage consent flow (ruling §1/design §4)", ()
     expect(result).toEqual({ ok: true, snapshot: baseSnapshot({ secrets: [readyStatus] }) });
     expect(store.getState().pendingConsent).toBeNull();
     expect(store.getState().snapshot?.secrets[0]).toEqual(readyStatus);
+    expect(store.getState().secretConsentResolution).toEqual({key:"provider.apiKey", ok:true});
     // CUSTODY: after the full accept round-trip, the plaintext is gone from
     // every corner of the store's own state (pendingConsent cleared, and the
     // snapshot never carried it to begin with).
@@ -437,6 +438,7 @@ describe("settings-store: weak-storage consent flow (ruling §1/design §4)", ()
 
     expect(store.getState().pendingConsent).toBeNull();
     expect(setSecret).toHaveBeenCalledTimes(1);
+    expect(store.getState().secretConsentResolution).toEqual({key:"provider.apiKey", ok:false});
     expect(JSON.stringify(store.getState())).not.toContain("sk-super-secret");
   });
 
@@ -701,4 +703,37 @@ describe("settings-store: auto-updater (slice 2.6 §6)", () => {
     expect(result).toEqual({ ok: false, reason: "not_packaged" });
     expect(store.getState().notice).toBe(describeUpdateActionFailure("not_packaged"));
   });
+});
+
+it("serializes storage consent and ignores decline while the accepted write is in flight", async () => {
+  let finishConsent!: (value: SettingsMutationResult) => void;
+  const set = vi.fn(() => new Promise<SettingsMutationResult>(resolve => {finishConsent = resolve;}));
+  const setSecret = vi.fn().mockResolvedValueOnce({ok:false, reason:"weak_storage_needs_consent"}).mockResolvedValueOnce({ok:true, snapshot:baseSnapshot()});
+  const store = createSettingsStore(fakeBridge({set, setSecret}));
+  await store.getState().setSecret("provider.apiKey", "fixture-key");
+  const accepting = store.getState().acceptWeakStorageConsent();
+  expect(store.getState().consentSaving).toBe(true);
+  store.getState().declineWeakStorageConsent();
+  expect(store.getState().pendingConsent).not.toBeNull();
+  expect(store.getState().secretConsentResolution).toBeNull();
+  expect(await store.getState().acceptWeakStorageConsent()).toBeNull();
+  finishConsent({ok:true, snapshot:baseSnapshot()});
+  await accepting;
+  expect(set).toHaveBeenCalledOnce();
+  expect(setSecret).toHaveBeenCalledTimes(2);
+  expect(store.getState().consentSaving).toBe(false);
+  expect(store.getState().secretConsentResolution).toEqual({key:"provider.apiKey", ok:true});
+  expect(JSON.stringify(store.getState())).not.toContain("fixture-key");
+});
+
+it("clears the pending secret and reports a failed consent when the bridge rejects", async () => {
+  const setSecret = vi.fn().mockResolvedValueOnce({ok:false, reason:"weak_storage_needs_consent"});
+  const set = vi.fn().mockRejectedValue(new Error("fixture failure"));
+  const store = createSettingsStore(fakeBridge({set, setSecret}));
+  await store.getState().setSecret("provider.apiKey", "fixture-key");
+  expect(await store.getState().acceptWeakStorageConsent()).toBeNull();
+  expect(store.getState().pendingConsent).toBeNull();
+  expect(store.getState().consentSaving).toBe(false);
+  expect(store.getState().secretConsentResolution).toEqual({key:"provider.apiKey", ok:false});
+  expect(JSON.stringify(store.getState())).not.toContain("fixture-key");
 });

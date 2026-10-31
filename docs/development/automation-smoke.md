@@ -53,7 +53,7 @@ custom-provider-live-smoke, env-status-smoke, git-ui-smoke,
 keybindings-ui-smoke, lsp-hooks-ui-smoke, mcp-ui-smoke,
 model-pricing-ui-smoke, orchestrate-mode-smoke, orchestration-lab,
 orchestration-loop-live-smoke, preview-live-smoke, preview-panel-live-smoke,
-profile-ui-smoke, prompt-cache-ui-smoke, provider-connections-ui-smoke,
+profile-ui-smoke, prompt-cache-ui-smoke,
 provider-dogfood-w13-smoke, queue-smoke, reasoning-ui-smoke, retry-ui-smoke,
 rewind-ui-smoke, settings-ui-smoke, sidebar-rowcut-smoke, sidebar-ui-smoke,
 skills-ui-smoke, slash-menu-ui-smoke, start-screen-smoke,
@@ -64,6 +64,12 @@ workflow-map-smoke
 
 `sidebar-rowcut-smoke` starts `electron-vite` itself rather than `pnpm dev`;
 it needs the same switches, passed directly.
+
+For a fully isolated profile, the smoke environment also points the automation
+home overrides and telemetry directory into its temporary profile.
+`ANYCODE_ISOLATED_SMOKE=1`, combined with the dev automation gate and an
+absolute automation home, skips the login-shell PATH probe and the network
+manifest refresh. Packaged applications do not honor these overrides.
 
 ## Safe release boundary
 
@@ -256,3 +262,11 @@ node apps/desktop/scripts/approval-expiry-smoke.mjs
 This uses an isolated profile and a loopback provider fixture. It waits for the
 normal approval deadlines and captures the countdown, child handoff and expiry,
 recovery controls, and a denied card in the printed temporary directory.
+
+Isolated provider automation uses disposable credentials and a fixture-only storage adapter, not the operating system keychain. Startup rejects missing isolation prerequisites or profile paths that do not resolve to the disposable profile. The launcher records its worktree and profile identity for the driver to verify. Review these safeguards before running GUI automation.
+
+Custom provider records have one shared API key: all connections referencing the same record use that key, and replacing or clearing it affects every such connection. Catalog provider connection keys remain scoped to the individual connection.
+
+Isolated CDP drivers request an OS-assigned debugging port and attach through the browser endpoint recorded in the disposable profile. They verify that the listener belongs to the Electron process descended from their launcher and check the owner of each established CDP or automation HTTP socket before sending commands or credentials. This ownership check currently supports macOS; it fails closed elsewhere. The roles smoke uses a separate temporary workspace so the profile remains fresh.
+
+The provider-connections driver also verifies launcher identity and pins each automation request, including quit, to the verified process.

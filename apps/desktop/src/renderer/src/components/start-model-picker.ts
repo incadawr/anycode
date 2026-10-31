@@ -77,7 +77,7 @@ export function connectionOfferedModels(
   catalog: CatalogSummary | undefined,
   custom: readonly CustomProviderRecord[] | undefined,
 ): readonly { id: string; name?: string }[] | undefined {
-  const resolved = providerModelsFor(connection.providerId, catalog, custom, connection.models);
+  const resolved = providerModelsFor(connection.providerId, catalog, custom, connection.models, connection.visibleModels);
   if (resolved === undefined) {
     return undefined;
   }

@@ -1,3 +1,4 @@
+import { initializeIsolatedSmoke, isolatedSmokeStorage } from "./isolated-smoke.js";
 import { closeSessionForAgent } from "./communication-close-session.js";
 import { TAB_CLOSED_ENVELOPE_TYPE } from "../shared/envelopes.js";
 import { applyInputFromBlock, createCommunicationController, type CommunicationController } from "./communication-controller.js";
@@ -17,7 +18,7 @@ import { BROWSER_ACCESS_CHANGED_CHANNEL, BROWSER_ACCESS_HOST_MESSAGE_TYPE } from
 import { stdioAdapterForHost } from "./communication-adapter.js";
 import { createSelfCheckProfile, selfCheckEnvironment, runSelfCheck, selfCheckStorage, selfCheckBinaryFs, checkReloadProtection } from "./self-check.js";
 import { buildApplicationMenuTemplate, confirmReloadIfBusy, isReloadAccelerator } from "./application-menu.js";
-import { assertChildModel } from "../shared/child-model.js";
+import { assertChildModel, connectionChildModels } from "../shared/child-model.js";
 /**
 
  * thin process: no agent logic. It owns the window, workspace/env resolution,
@@ -488,6 +489,8 @@ function resolveCodexProfilesHome(env: NodeJS.ProcessEnv, isPackaged: boolean): 
  * can never disagree. `undefined` (production / gate-refused / var-absent)
  * leaves every consumer on its real `homedir()` default.
  */
+const isolatedSmoke = initializeIsolatedSmoke(app, process.env);
+if (isolatedSmoke && process.argv.includes("--self-check")) throw new Error("Incompatible automation modes");
 const selfCheckProfile = createSelfCheckProfile(process.argv);
 if (selfCheckProfile !== undefined) {
   const isolatedEnv = selfCheckEnvironment(process.env, selfCheckProfile);
@@ -505,7 +508,7 @@ const codexProfilesHome: string | undefined = selfCheckProfile ?? resolveCodexPr
 // (fail-closed for a packaged build) and off by default: a normal dev launch
 // with no automation env is byte-identical to before this slice.
 const devUserDataOverride = resolveUserDataOverride(process.env, app.isPackaged);
-if (devUserDataOverride !== null) {
+if (devUserDataOverride !== null && !isolatedSmoke) {
   // A mkdir failure here (e.g. an unwritable/invalid override path) must not
   // crash boot before a single window exists — catch, warn once, and fall
   // back to Electron's default userData profile (design codex finding
@@ -520,7 +523,7 @@ if (devUserDataOverride !== null) {
       error,
     );
   }
-} else if (isRefusedUserDataOverride(process.env, app.isPackaged)) {
+} else if (!isolatedSmoke && isRefusedUserDataOverride(process.env, app.isPackaged)) {
   console.warn("[main] ANYCODE_USER_DATA_DIR set but refused (packaged build, or a relative path)");
 }
 
@@ -992,7 +995,7 @@ const mcpSecretCache = new McpSecretForkCache({
     getMcpSecretValues: (names) => (vault === null ? Promise.resolve({}) : vault.getMcpSecretValues(names)),
   },
   fs: new NodeMcpConfigFs(),
-  home: () => homedir(),
+  home: () => selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged) ?? homedir(),
   logger: (line) => console.warn(line),
 });
 const getSecret = (key: Parameters<Vault["getSecretValue"]>[0]): Promise<string | undefined> =>
@@ -1700,10 +1703,7 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
   const connection = activeConnection(current);
   const custom = current.provider.custom?.find(entry => entry.id === connection?.providerId);
   const catalog = getBuiltinCatalog().providers.find(entry => entry.id === connection?.providerId);
-  env.ANYCODE_CHILD_MODELS = JSON.stringify([
-    ...(connection?.models ?? []), ...(custom?.models ?? []), ...(catalog?.models.map(model => model.id) ?? []),
-    ...(env.ANYCODE_MODEL ? [env.ANYCODE_MODEL] : []),
-  ]);
+  env.ANYCODE_CHILD_MODELS = JSON.stringify(connectionChildModels(connection, custom?.models ?? [], catalog?.models.map(model => model.id) ?? [], env.ANYCODE_MODEL));
   return env;
 }
 
@@ -2193,7 +2193,7 @@ void app.whenReady().then(async () => {
   settingsPathForQuitFlush = settingsPath;
   const loaded = await loadSettings(settingsPath, fileLogger);
   settings = loaded.settings;
-  vault = new Vault({ safeStorage: selfCheckProfile === undefined ? safeStorage : selfCheckStorage, secretsPath, logger: fileLogger });
+  vault = new Vault({ safeStorage: isolatedSmoke ? isolatedSmokeStorage : selfCheckProfile === undefined ? safeStorage : selfCheckStorage, secretsPath, logger: fileLogger });
   // Boot-time scrub of stale v1 provider secrets (W9 §2): W9′ keys every
   // credential by connection, so a leftover legacy `provider.apiKey` /
   // `provider.<id>.{apiKey,oauth}` would lie to readiness/status projections.
@@ -2540,7 +2540,7 @@ void app.whenReady().then(async () => {
     manager: () => manager,
     sessions: () => communicationSessions,
     realpathSync,
-    readTrustStore: () => readTrustStore(nodeTrustStoreFs, defaultTrustStorePath(homedir())),
+    readTrustStore: () => readTrustStore(nodeTrustStoreFs, defaultTrustStorePath(selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged) ?? homedir())),
     mcpSecretPrime: (key) => mcpSecretCache.prime(key),
     currentSettings,
     primeNewSessionPin,
@@ -2657,11 +2657,7 @@ void app.whenReady().then(async () => {
       const connection = connectionId === undefined ? activeConnection(current) : connectionById(current, connectionId);
       const custom = current.provider.custom?.find(entry => entry.id === connection?.providerId);
       const catalog = getBuiltinCatalog().providers.find(entry => entry.id === connection?.providerId);
-      assertChildModel(model, [
-        ...(connection?.models ?? []), ...(custom?.models ?? []), ...(catalog?.models.map(model => model.id) ?? []),
-        ...(connection?.model ? [connection.model] : []),
-        ...(connection?.id === current.provider.activeConnectionId && bootEnv.ANYCODE_MODEL ? [bootEnv.ANYCODE_MODEL] : []),
-      ]);
+      assertChildModel(model, connectionChildModels(connection, custom?.models ?? [], catalog?.models.map(item => item.id) ?? [], connection?.id === current.provider.activeConnectionId ? bootEnv.ANYCODE_MODEL : undefined));
     },
     resolveProviderConnection: (provider) =>
       settings === null ? undefined : resolveProviderConnection(settings, provider)?.id,
@@ -3135,7 +3131,7 @@ void app.whenReady().then(async () => {
   // through one queue inside the module.
   registerWorkspaceTrustIpc({
     fs: nodeTrustStoreFs,
-    home: homedir(),
+    home: selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged) ?? homedir(),
     tabs: {
       workspaceTrustPendingFor: (tabId) => manager?.workspaceTrustPendingFor(tabId) ?? "unknown_tab",
       clearWorkspaceTrustPending: (tabId) => {
@@ -3159,7 +3155,7 @@ void app.whenReady().then(async () => {
   // logged and ignored, and the read-side legacy fallback keeps old keys
   // working either way.
   queueStoreMutation(() =>
-    migrateTrustStoreKeys(nodeTrustStoreFs, defaultTrustStorePath(homedir()), realpathSync),
+    migrateTrustStoreKeys(nodeTrustStoreFs, defaultTrustStorePath(selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged) ?? homedir()), realpathSync),
   )
     .then(({ migrated }) => {
       if (migrated > 0) {
@@ -3231,6 +3227,7 @@ void app.whenReady().then(async () => {
     settingsPath,
     logger: fileLogger,
     connectionFetch: connectionProxyFetch,
+    preparedConnectionFetch: (route) => fetchForProxyChain([], route),
     // Connection-scoped fetch-models resolution (structural, same discipline
     // as settingsIpcDeps' catalog injection): only id/baseUrl/defaultTransport
     // ever cross this seam.
@@ -3289,10 +3286,10 @@ void app.whenReady().then(async () => {
   const codexManifestCacheFile = join(codexProfilesRoot(codexProfilesHome), "manifest.json");
   // self-check profiles get NO new automatic networking — not the
   // periodic schedule, not the refusal-path forced refresh.
-  const codexRefusalRefresh = selfCheckProfile === undefined ? createCodexManifestRefusalRefresh({ cacheFile: codexManifestCacheFile }) : null;
+  const codexRefusalRefresh = selfCheckProfile === undefined && !isolatedSmoke ? createCodexManifestRefusalRefresh({ cacheFile: codexManifestCacheFile }) : null;
   codexOnboarding = registerCodexIpc({
     bootEnv,
-    ...(selfCheckProfile !== undefined ? { fs: selfCheckBinaryFs } : {}),
+    ...(selfCheckProfile !== undefined || isolatedSmoke ? { fs: selfCheckBinaryFs } : {}),
     onDeviceCode: (progress) => sendToMainWindow(win, CODEX_LOGIN_PROGRESS_CHANNEL, progress),
     // the doctor and `codex login` are children main spawns itself, so
     // they get the engine proxy through the same carrier the tab children use.
@@ -3385,7 +3382,7 @@ void app.whenReady().then(async () => {
   // scope for this track (profile CRUD, quotas, install/manifest — CC-E).
   claudeOnboarding = registerClaudeIpc({
     bootEnv,
-    ...(selfCheckProfile !== undefined ? { fs: selfCheckBinaryFs } : {}),
+    ...(selfCheckProfile !== undefined || isolatedSmoke ? { fs: selfCheckBinaryFs } : {}),
     // mirror of the codex dep above. The claude doctor makes no network
     // call of its own, so this buys parity rather than function — but the doctor
     // env builder declares itself a mirror of the session child's builder, and
@@ -3462,7 +3459,7 @@ void app.whenReady().then(async () => {
     // be wrong — force. (Active profile only, same shape as onChanged above.)
     void codexOnboarding?.recheck(undefined, { force: true }).catch(() => {});
   };
-  if (selfCheckProfile === undefined) {
+  if (selfCheckProfile === undefined && !(resolveSubagentsHome(process.env, app.isPackaged) && process.env.ANYCODE_ISOLATED_SMOKE === "1")) {
     void refreshCodexManifest({ cacheFile: codexManifestCacheFile })
       .then((result) => {
         // BM4: only an ACTUAL policy change re-spawns the doctor — an
@@ -3758,7 +3755,7 @@ void app.whenReady().then(async () => {
   // installs cannot race them because install IPC is registered but the
   // renderer only reaches it after load.
   if (selfCheckProfile === undefined) {
-    const pluginsHome = homedir();
+    const pluginsHome = resolveSubagentsHome(process.env, app.isPackaged) ?? homedir();
     const pluginsFs = new NodePluginsFs();
     let localPluginsIpc: PluginsIpc | undefined;
     pluginsIpc = registerPluginsIpc({

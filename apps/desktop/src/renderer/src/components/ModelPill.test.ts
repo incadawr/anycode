@@ -170,6 +170,13 @@ describe("providerModelsFor (F2 review lane FXH: custom providers must reach the
     },
   ];
 
+  it("uses the explicit connection selection while retaining catalog names", () => {
+    expect(providerModelsFor("z-ai", catalog, custom, ["other"], ["glm-5.2", "manual"])).toEqual([
+      { id: "glm-5.2", name: "GLM-5.2" }, { id: "manual" },
+    ]);
+    expect(providerModelsFor("z-ai", catalog, custom, undefined, [])).toEqual([]);
+  });
+
   it("a builtin catalog hit returns its models byte-for-byte, same as today", () => {
     expect(providerModelsFor("z-ai", catalog, custom)).toEqual(catalog[0]!.models);
   });

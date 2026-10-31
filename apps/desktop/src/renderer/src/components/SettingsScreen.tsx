@@ -562,6 +562,8 @@ const FETCH_MODELS_ERROR_TEXT: Record<FetchModelsFailureReason, string> = {
   // a manually entered model id cannot be persisted because the
   // settings file is (or a newer-version file leaves it) read-only.
   read_only: "This settings file is read-only, so the model list can't be saved.",
+  system_proxy_unsupported: "Fetching models is unavailable with a system proxy because its route can change. Enter model IDs manually.",
+  stale_fetch: "The connection, key or proxy changed during fetching. Your model selections are kept; fetch again.",
 };
 
 /** User-facing text for a failed `/v1/models` fetch. */
@@ -1088,6 +1090,7 @@ export function paneHasScope(pane: SettingsPaneId | undefined): boolean {
 export function ProviderSettings({ store = useSettingsStore, addConnectionRequest = 0, onAddConnectionConsumed }: ProviderSettingsProps) {
   const snapshot = useStore(store, (s) => s.snapshot);
   const pendingConsent = useStore(store, (s) => s.pendingConsent);
+  const consentSaving = useStore(store, (s) => s.consentSaving);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<"add" | "edit">("add");
@@ -1328,6 +1331,7 @@ export function ProviderSettings({ store = useSettingsStore, addConnectionReques
       />
 
       <ConsentDialog
+        busy={consentSaving}
         open={pendingConsent !== null}
         onAccept={() => void store.getState().acceptWeakStorageConsent()}
         onDecline={() => store.getState().declineWeakStorageConsent()}

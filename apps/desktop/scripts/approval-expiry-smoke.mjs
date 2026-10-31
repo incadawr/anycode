@@ -6,15 +6,11 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer } from "node:net";
+import { connectIsolatedCdp } from "./isolated-cdp.mjs";
 import { createServer as createHttpServer } from "node:http";
 
 const profile = mkdtempSync(join(tmpdir(), "anycode-approval-expiry-"));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const server = createServer();
-await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-const port = server.address().port;
-await new Promise((resolve) => server.close(resolve));
 const fixture = createHttpServer((request, response) => {
   let body = "";
   request.on("data", (chunk) => { body += chunk; });
@@ -48,15 +44,13 @@ await new Promise((resolve) => fixture.listen(0, "127.0.0.1", resolve));
 const fixtureUrl = `http://127.0.0.1:${fixture.address().port}/v1`;
 const binary = join(profile, "unavailable-engine");
 writeFileSync(binary, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
-const env = buildSmokeEnv(process.env, profile, port, binary);
+const env = buildSmokeEnv(process.env, profile, 0, binary);
 writeFileSync(join(profile, "settings.json"), JSON.stringify({
   version: 2, provider: { activeConnectionId: "conn-smoke", custom: [{ id: "custom:smoke", name: "Smoke", baseUrl: fixtureUrl, kind: "openai-compatible", models: ["a"] }], connections: [{ id: "conn-smoke", providerId: "custom:smoke", label: "Approval smoke", model: "a", models: ["a"], transport: "openai-chat-completions", baseUrl: fixtureUrl, authOptional: true }] },
   tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "dark" }, security: { allowWeakSecretStorage: false },
 }));
 const app = launchSmokeElectron(spawn, { env, detached: true });
-let ws;
-const pending = new Map();
-let nextId = 0;
+let ws, cdp;
 async function poll(fn, timeout = 30000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
@@ -66,14 +60,7 @@ async function poll(fn, timeout = 30000) {
   }
   throw new Error("Timed out waiting for GUI state");
 }
-function call(method, params) {
-  const id = ++nextId;
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`${method} timed out`)); }, 10000);
-    pending.set(id, { resolve, reject, timer });
-    ws.send(JSON.stringify({ id, method, params }));
-  });
-}
+const call = (method, params) => cdp.call(method, params);
 async function evaluate(expression) {
   const result = await call("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
   if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
@@ -84,24 +71,13 @@ async function click(text) {
   await sleep(250);
 }
 try {
-  const target = await poll(async () => {
-    try { return (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find((t) => t.type === "page" && !t.url.startsWith("devtools://")); } catch { return false; }
-  }, 180000);
-  ws = new WebSocket(target.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });
-  ws.onmessage = ({ data }) => {
-    const response = JSON.parse(data);
-    const item = pending.get(response.id);
-    if (!item) return;
-    pending.delete(response.id); clearTimeout(item.timer);
-    if (response.error) item.reject(new Error(JSON.stringify(response.error))); else item.resolve(response.result);
-  };
+  cdp = await connectIsolatedCdp({ profile, env, launcher: app, wait: fn => poll(fn, 180000) });
+  ws = cdp.ws;
   await poll(() => evaluate("!!document.querySelector('.sidebar-settings')"));
   const info = await poll(() => existsSync(join(profile, "automation.json")) && JSON.parse(readFileSync(join(profile, "automation.json"), "utf8")));
   async function api(path, method = "GET", body) {
-    const response = await fetch(`http://127.0.0.1:${info.port}${path}`, { method, headers: { Authorization: `Bearer ${info.token}`, "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-    const result = await response.json();
-    assert(response.ok, JSON.stringify(result));
+    const {ok, result} = await cdp.automation(info, path, method, body);
+    assert(ok, JSON.stringify(result));
     return result;
   }
   async function capture(name) {
@@ -148,11 +124,7 @@ try {
 } finally {
   if (ws?.readyState === WebSocket.OPEN) await call("Browser.close", {}).catch(() => {});
   ws?.close();
-  if (existsSync(join(profile, "automation.json"))) {
-    const info = JSON.parse(readFileSync(join(profile, "automation.json"), "utf8"));
-    try { process.kill(info.pid, "SIGTERM"); } catch {}
-  }
   await sleep(500);
-  try { process.kill(-app.pid, "SIGTERM"); } catch {}
+  if (app.exitCode === null && app.signalCode === null) try { process.kill(-app.pid, "SIGTERM"); } catch {}
   await new Promise((resolve) => fixture.close(resolve));
 }
