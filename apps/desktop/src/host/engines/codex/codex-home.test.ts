@@ -31,7 +31,7 @@ afterAll(() => {
 describe("parseCodexProfileArgs", () => {
   it("reads all three profile flags in both `--flag value` and `--flag=value` forms", () => {
     expect(parseCodexProfileArgs(["--codex-profile", "personal"])).toEqual({ profileId: "personal" });
-    expect(parseCodexProfileArgs(["--codex-home=/x/codex-accounts/acc2"])).toEqual({ linkedHome: "/x/codex-accounts/acc2" });
+    expect(parseCodexProfileArgs(["--codex-home=/x/codex-accounts/account-b"])).toEqual({ linkedHome: "/x/codex-accounts/account-b" });
     expect(
       parseCodexProfileArgs(["--resume", "s1", "--codex-profile=main", "--codex-auth-link", "/x/.codex/auth.json"]),
     ).toEqual({ profileId: "main", authLink: "/x/.codex/auth.json" });
@@ -65,9 +65,9 @@ describe("resolveCodexProfile", () => {
   });
 
   it("a linkedHome is used verbatim (main already validated it) and never combined with authLink", () => {
-    expect(resolveCodexProfile({ linkedHome: "/Users/someone/.codex-accounts/acc2" }, home)).toEqual({
+    expect(resolveCodexProfile({ linkedHome: "/Users/someone/.codex-accounts/account-b" }, home)).toEqual({
       kind: "linked",
-      home: "/Users/someone/.codex-accounts/acc2",
+      home: "/Users/someone/.codex-accounts/account-b",
     });
     expect(() => resolveCodexProfile({ linkedHome: "/x", authLink: "/y/auth.json" }, home)).toThrow(/mutually exclusive/i);
   });

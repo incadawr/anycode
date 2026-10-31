@@ -3,7 +3,7 @@ import { describeCodexAccountLine } from "./codex-account-line.js";
 
 describe("describeCodexAccountLine (the session's Codex account line)", () => {
   it("names the account and marks the default", () => {
-    expect(describeCodexAccountLine({ ok: true, accountId: "acc2", label: "Personal", isDefault: true })).toBe(
+    expect(describeCodexAccountLine({ ok: true, accountId: "account-b", label: "Personal", isDefault: true })).toBe(
       "Codex account: Personal (default)",
     );
   });

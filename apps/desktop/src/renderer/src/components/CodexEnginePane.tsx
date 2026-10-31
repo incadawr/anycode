@@ -287,11 +287,11 @@ export function codexDefaultAccountAction(
  * must be offered separately.
  *
  * The System row collapses into a profile that mirrors the same signed-in
- * account (TASK.57 — no duplicate cards). That collapse must not hide the
- * DEFAULT: while `system` IS the default the row stays, so its "Default" pill
- * remains visible; and while a collapsed System row is hidden (the default is
- * a profile), the pane offers a "Use the System account" action instead, so
- * the ambient account is never unreachable.
+ * account, so the pane never shows two cards for one account. That collapse
+ * must not hide the DEFAULT: while `system` IS the default the row stays, so
+ * its "Default" pill remains visible; and while a collapsed System row is hidden
+ * (the default is a profile), the pane offers a "Use the System account" action
+ * instead, so the ambient account is never unreachable.
  */
 export function codexSystemRowVisibility(
   plan: CodexAccountRowPlan,

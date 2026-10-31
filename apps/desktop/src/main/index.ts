@@ -1933,8 +1933,8 @@ function codexSessionsDirForAccount(accountId: string): string | null {
  * resolution every pick-less Codex session — the start screen and the Sessions
  * API — goes through, so "no explicit pick" can no longer mean "the user's
  * ambient ~/.codex plan". A Codex subagent's tab inherits its parent tab's
- * resolved profile verbatim (main/tabs.ts), so a child follows the account its
- * tab was opened on rather than resolving anything of its own.
+ * resolved profile verbatim (main/tabs.ts); a parent with no profile of its own
+ * (core/claude) asks for THIS same default instead of resolving its own.
  */
 async function resolveCodexProfileForTab(profileId: string | undefined): Promise<ResolveCodexProfileResult> {
   const wanted = profileId ?? settings?.codex?.activeProfileId ?? SYSTEM_PROFILE_ID;
@@ -2693,6 +2693,11 @@ void app.whenReady().then(async () => {
     engineReady: (engine: EngineId, codexProfileId?: string) =>
       (engine === "claude" && (claudeOnboarding?.readyFor() ?? false)) ||
       (engine === "core" ? providerReady : engine === "codex" && (codexOnboarding?.readyFor(codexProfileId) ?? false)),
+    // A codex child whose parent tab carries no profile of its own (a core or
+    // claude tab) spends the DEFAULT account — the same resolution a pick-less
+    // tab goes through — instead of silently falling back to the ambient
+    // `~/.codex` plan.
+    resolveDefaultCodexProfile: () => resolveCodexProfileForTab(undefined),
     // Both validated binary paths ride EVERY host's env, regardless of which
     // engine this particular session runs on: a core/codex session's Agent
     // tool can spawn a Claude subagent (and a claude/core session a Codex
@@ -3001,6 +3006,19 @@ void app.whenReady().then(async () => {
         openResumeTab: async (sessionId) => {
           const created = await handleCreate(tabIpcDeps, { kind: "resume", sessionId });
           return created.ok ? { ok: true, tabId: created.tabId } : { ok: false, reason: created.reason };
+        },
+        // A thread already resumed by a live root tab on the target account is
+        // refused: a second continue would fork a second host on one rollout.
+        isThreadOpen: async (threadId, accountId) => {
+          for (const summary of manager?.listTabs() ?? []) {
+            if (summary.childOf !== undefined) continue;
+            const host = manager?.getTab(summary.tabId);
+            if (host?.engine !== "codex") continue;
+            if ((host.codexProfile?.id ?? SYSTEM_CODEX_ACCOUNT.id) !== accountId) continue;
+            const row = await store.getRootSession(summary.sessionId);
+            if (row?.externalSessionRef === threadId) return true;
+          }
+          return false;
         },
         randomUUID,
       },

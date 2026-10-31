@@ -9,17 +9,17 @@ import {
 const accounts: CodexAccountOption[] = [
   SYSTEM_CODEX_ACCOUNT,
   { id: "work", label: "Work" },
-  { id: "acc2", label: "Personal" },
+  { id: "account-b", label: "Personal" },
 ];
 
 describe("selectCodexAccount (create_session's account argument)", () => {
   it("matches a profile id, case-insensitively and trimmed", () => {
     expect(selectCodexAccount("work", accounts)).toEqual({ ok: true, id: "work" });
-    expect(selectCodexAccount("  ACC2 ", accounts)).toEqual({ ok: true, id: "acc2" });
+    expect(selectCodexAccount("  ACCOUNT-B ", accounts)).toEqual({ ok: true, id: "account-b" });
   });
 
   it("matches the label, which is what a caller actually knows", () => {
-    expect(selectCodexAccount("Personal", accounts)).toEqual({ ok: true, id: "acc2" });
+    expect(selectCodexAccount("Personal", accounts)).toEqual({ ok: true, id: "account-b" });
     expect(selectCodexAccount("  work ", accounts)).toEqual({ ok: true, id: "work" });
   });
 
@@ -31,7 +31,7 @@ describe("selectCodexAccount (create_session's account argument)", () => {
   it("refuses an unknown name and lists every candidate — no guess, no ambient fallback", () => {
     expect(selectCodexAccount("main", accounts)).toEqual({
       ok: false,
-      candidates: ["System (system)", "Work (work)", "Personal (acc2)"],
+      candidates: ["System (system)", "Work (work)", "Personal (account-b)"],
     });
   });
 

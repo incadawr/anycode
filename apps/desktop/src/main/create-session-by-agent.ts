@@ -125,6 +125,16 @@ export async function createSessionForAgent(
   if (trust.folders[key]?.decision !== "trusted") return { ok: false, reason: "not_trusted" };
   if (tabs.atCapacity()) return { ok: false, reason: "too_many" };
   const engine = request.engine ?? "core";
+  if (request.account !== undefined && engine !== "codex") {
+    // `account` names a Codex account; on any other engine there is nothing it
+    // could select, so the caller gets an honest refusal instead of a session
+    // that silently ignored half of its request.
+    return {
+      ok: false,
+      reason: "invalid_account",
+      detail: `\`account\` selects a Codex account and cannot be set for engine "${engine}"`,
+    };
+  }
   /**
    * Codex account (only for `engine: "codex"`). `account` is an OPAQUE
    * caller string — an id or a label — matched against main's own registry
