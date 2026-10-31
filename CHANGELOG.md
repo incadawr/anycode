@@ -7,9 +7,15 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.58] — 2026-10-31
+
 ### Added
 
-- MiniMax is available as a provider, for the international and the China region: the session gets MiniMax-M3.1-Flash and MiniMax-M3 with the right context window, the reasoning tiers; M3.1-Flash has a catalog API rate and M3 has no catalog price yet, and picking a thinking depth now actually takes effect instead of the endpoint reasoning at its own maximum.
+- MiniMax is a built-in provider for the international and the China region, with MiniMax-M3.1-Flash and MiniMax-M3 and their context windows. M3.1-Flash has a catalog API rate; M3 has no catalog price yet. Because pay-as-you-go and subscription keys use the same address, a MiniMax connection shows no cost until you choose API rates or a subscription.
+
+### Fixed
+
+- MiniMax-M3.1-Flash now receives only the chosen effort level, without a thinking budget, so low and high really reason less than max. Before, it reasoned at its maximum on every level, including through a custom connection to the MiniMax address.
 
 ## [0.0.57] — 2026-10-31
 
