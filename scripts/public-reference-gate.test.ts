@@ -45,7 +45,7 @@ const MARK = "tas" + "k";
  */
 const REF_SOURCE =
   "(?:" +
-  "working-docs/" + MARK + "s/[^\\s`\"\']+" +
+  ("working-docs/" + MARK + "s/").replace(/[a-z]/g, (c) => `[${c}${c.toUpperCase()}]`) + "[^\\s`\"\']+" +
   "|" +
   "[Tt][Aa][Ss][Kk][Aa][Nn][Aa](?:[ ._:#-]*\\d+[a-z]?)?" +
   "|[Tt]ask\\s+\\d+(?:\\.\\d+)+" +
@@ -273,9 +273,6 @@ const ALLOW: Entry[] = [
   { path: "packages/core/src/tools/todo-write.ts", value: " 1.5.", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
   { path: "packages/core/src/workflow/index.ts", value: " 3.4.3.", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
 
-  // skill metadata value inside a captured skill file
-  { path: "apps/desktop/src/main/skills-ipc.test.ts", value: "ana\\n---\\nnested", note: "captured skill-file body used as test input" },
-  { path: "packages/core/src/skills/harness-skill-import.test.ts", value: "ana\\n", note: "captured skill-file body used as test input" },
 ];
 
 /** The whole identifier around a match, so an exemption is never a prefix. */
@@ -367,6 +364,9 @@ describe("public tree carries no tracker card references", () => {
     const internalDir = "working-docs/" + MARK + "s/";
     expect(scanText("AGENTS.md", `details: ${internalDir}${MARK.toUpperCase()}.{id}.md`)).not.toEqual([]);
     expect(scanText(`${internalDir}template.md`, "clean body")).not.toEqual([]);
+    expect(scanText("docs/probe.md", `${internalDir.toUpperCase()}template.md`)).not.toEqual([]);
+    expect(scanText("docs/probe.md", `${internalDir.slice(0, 8).toUpperCase()}${internalDir.slice(8)}template.md`)).not.toEqual([]);
+    expect(scanText(`${internalDir.toUpperCase()}template.md`, "clean body")).not.toEqual([]);
     expect(scanText("docs/x.md", `see ${PRODUCT} for details`)).not.toEqual([]);
     expect(scanText("docs/x.md", `moved to ${card} yesterday`)).not.toEqual([]);
     expect(scanText("docs/x.md", `${PRODUCT}-cli did it`)).not.toEqual([]);
