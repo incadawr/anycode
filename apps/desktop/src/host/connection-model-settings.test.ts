@@ -292,6 +292,16 @@ it("prefers gateway endpoint capabilities to dictionary facts in the host", () =
   expect(resolveReasoningEffort(model, settings.entryFor(model), "high", settings.capabilitiesFor(model))).toBe("high");
 });
 
+it("uses the endpoint's always-on flag and default for a dictionary match", () => {
+  const model = "vendor/glm-5.3-fp8";
+  const live = { reasoning: true, thinkingAlwaysOn: true, defaultEffort: "high" as const, effortLevels: ["low", "high"] };
+  const settings = createConnectionModelSettings({ connection: { modelCapabilities: { [model]: live } }, readConnection: () => ({ modelCapabilities: { [model]: live } }), liveCapabilitiesFor: () => undefined });
+  const entry = settings.entryFor(model);
+  expect(entry?.models.find(row => row.id === model)).toMatchObject({ thinkingAlwaysOn: true, defaultEffort: "high" });
+  expect(resolveReasoningEffort(model, entry, undefined, settings.capabilitiesFor(model))).toBe("high");
+  expect(settings.switchEffort("other", model, "off")).toBe("high");
+});
+
 it("keeps live effort levels when manual off extends the vocabulary", () => {
   const model = "vendor/glm-5-fp8";
   const settings = createConnectionModelSettings({ connection: { reasoningEffort: "off" }, liveCapabilitiesFor: () => ({ reasoning: true, effortLevels: ["low", "high"] }) });
