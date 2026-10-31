@@ -46,7 +46,7 @@ export async function connectIsolatedCdp({ profile, env, launcher, wait, openSoc
   if (process.platform !== "darwin") throw new Error("Isolated CDP ownership verification is unavailable on this platform");
   const identity = await wait(() => { try { return JSON.parse(readFileSync(join(profile, "identity.json"), "utf8")); } catch (error) { if (error?.code === "ENOENT") return null; throw error; } });
   if (identity.nonce !== env.ANYCODE_SMOKE_IDENTITY || identity.desktopRoot !== realpathSync(env.ANYCODE_EXPECTED_DESKTOP_ROOT) || identity.userData !== realpathSync(join(profile, "user-data")) || identity.sessionData !== realpathSync(join(profile, "session-data"))) throw new Error("Automation identity mismatch");
-  const endpoint = await wait(() => { try { return readCdpEndpoint(readFileSync(join(profile, "user-data", "DevToolsActivePort"), "utf8")); } catch (error) { if (error?.code === "ENOENT") return null; throw error; } });
+  const endpoint = await wait(() => { try { return readCdpEndpoint(readFileSync(join(identity.sessionData, "DevToolsActivePort"), "utf8")); } catch (error) { if (error?.code === "ENOENT") return null; throw error; } });
   const listenerPids = run("/usr/sbin/lsof", ["-nP", `-iTCP:${endpoint.port}`, "-sTCP:LISTEN", "-t"], { encoding: "utf8", timeout:5000 });
   verifyCdpOwner({ listenerPids, browserPid: identity.pid, launcherPid: launcher.pid, parentOf: pid => Number(run("/bin/ps", ["-o", "ppid=", "-p", String(pid)], { encoding:"utf8", timeout:5000 }).trim()) });
   const ws = await openSocket({ port: endpoint.port, path: endpoint.browserPath, verifyPeer: localPort => {
