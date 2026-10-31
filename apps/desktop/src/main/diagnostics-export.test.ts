@@ -469,6 +469,7 @@ describe("diagnostics bundle (GitHub #18)", () => {
     expect(bundle.wire.entries).toEqual([]);
     expect(bundle.wire.byChannel).toEqual({});
     expect(bundle.notes).toContain("wire entries dropped to fit the size cap");
+    expect(bundle.notes).not.toContain("bundle could not be reduced below the size cap");
     expect(summary.bytes).toBeLessThan(2_100);
   });
 
