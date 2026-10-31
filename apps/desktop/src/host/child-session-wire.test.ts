@@ -614,7 +614,7 @@ describe("non-recursion locks #1/#2 (CUT-S2 §2.6.1/§2.6.2) — discriminating 
 
     const toolResult = events.find(isToolResult("call-w"))!;
     expect(toolResult.outcome.status).toBe("error");
-    expect(toolResult.outcome.result?.error).toBe("Agent: session-tier subagents are unavailable in this host.");
+    expect(toolResult.outcome.result?.error).toBe("Agent: session-tier subagents are unavailable in this host. See the using-subagents skill.");
   });
 
   it("CUT-S2 §10.9.2 divergent-boot: argv says root (lock #1 opens the FULL schema) but the durable meta says child (`parentSessionId` set) — the real imported `isChildSessionBoot` withholds sessionSubagents anyway, even with a WORKING port available to wire; the handler fails closed with the exact \"unavailable in this host\" string and the port is never called. Unexpressible by the old single-boolean `sessionTier` mirror, which had no `meta` input to diverge from `args` at all.", async () => {
@@ -634,7 +634,7 @@ describe("non-recursion locks #1/#2 (CUT-S2 §2.6.1/§2.6.2) — discriminating 
 
     const toolResult = events.find(isToolResult("call-div"))!;
     expect(toolResult.outcome.status).toBe("error");
-    expect(toolResult.outcome.result?.error).toBe("Agent: session-tier subagents are unavailable in this host.");
+    expect(toolResult.outcome.result?.error).toBe("Agent: session-tier subagents are unavailable in this host. See the using-subagents skill.");
     expect(run).not.toHaveBeenCalled();
   });
 

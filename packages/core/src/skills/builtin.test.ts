@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { FileSystemPort } from "../ports/file-system.js";
 import { createSkillPort, discoverSkills } from "./discovery.js";
+import { DEFAULT_TOOL_CONCURRENCY } from "../types/config.js";
 import {
   BUILTIN_SKILL_SOURCE,
   CREATING_SUBAGENTS_SKILL,
   SUBAGENT_BUILTIN_SKILLS,
+  USING_SUBAGENTS_SKILL,
   anycodeSetupBuiltinSkills,
   anycodeSetupSkill,
   CONTROL_BROWSER_SKILL,
@@ -117,12 +119,17 @@ describe("in-memory built-in skills", () => {
     expect(USING_GIT_WORKTREES_SKILL.body).toContain("successful call as a workspace transition");
   });
 
-  it("discovers and lazily loads the always-on creating-subagents skill", async () => {
+  it("discovers and lazily loads the always-on using-subagents and creating-subagents skills", async () => {
     const fs = fakeFs();
     const result = await discoverSkills(fs, [], { builtins: SUBAGENT_BUILTIN_SKILLS });
 
     expect(result.problems).toEqual([]);
     expect(result.metas).toEqual([
+      expect.objectContaining({
+        name: "using-subagents",
+        source: BUILTIN_SKILL_SOURCE,
+        path: builtinSkillPath("using-subagents"),
+      }),
       expect.objectContaining({
         name: "creating-subagents",
         source: BUILTIN_SKILL_SOURCE,
@@ -131,9 +138,48 @@ describe("in-memory built-in skills", () => {
     ]);
 
     const port = createSkillPort(fs, result.metas, { builtins: SUBAGENT_BUILTIN_SKILLS });
-    const loaded = await port.load("creating-subagents");
-    expect(loaded?.body).toContain(".anycode/agents/");
-    expect(loaded?.truncated).toBe(false);
+    const using = await port.load("using-subagents");
+    expect(using?.body).toContain("# Using subagents");
+    expect(using?.truncated).toBe(false);
+    const creating = await port.load("creating-subagents");
+    expect(creating?.body).toContain(".anycode/agents/");
+    expect(creating?.truncated).toBe(false);
+  });
+
+  it("using-subagents covers tiers, detach, models, the shared checkout, outcomes and the child prompt template", () => {
+    const body = USING_SUBAGENTS_SKILL.body;
+    expect(USING_SUBAGENTS_SKILL.name).toBe("using-subagents");
+    for (const word of [
+      "inline",
+      "session",
+      "detach",
+      "model",
+      "shared checkout",
+      "max_turns",
+      "INCOMPLETE",
+      "continue_session",
+      "Goal",
+      "Verification",
+      "Stop conditions",
+    ]) {
+      expect(body).toContain(word);
+    }
+    // Cross-links both ways with creating-subagents.
+    expect(body).toContain("creating-subagents");
+    expect(CREATING_SUBAGENTS_SKILL.body).toContain("using-subagents");
+  });
+
+  it("using-subagents states the REAL inline concurrency default (derived from DEFAULT_TOOL_CONCURRENCY), not a made-up cap", () => {
+    // The skill must carry the actual default width, and must not claim the
+    // old wrong "at most 2" hard cap.
+    expect(USING_SUBAGENTS_SKILL.body).toContain(`Typically ${DEFAULT_TOOL_CONCURRENCY} inline`);
+    expect(USING_SUBAGENTS_SKILL.body).not.toMatch(/at most 2 inline/i);
+  });
+
+  it("creating-subagents no longer claims engine profiles are a one-shot CLI invocation", () => {
+    expect(CREATING_SUBAGENTS_SKILL.body).not.toContain("one-shot");
+    expect(CREATING_SUBAGENTS_SKILL.body).toContain("child sessions");
+    expect(CREATING_SUBAGENTS_SKILL.body).toMatch(/default only/);
   });
 
   it("matches the frozen name and description verbatim (wave-2 cut §2.4)", () => {
