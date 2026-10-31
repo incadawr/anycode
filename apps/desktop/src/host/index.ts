@@ -5211,6 +5211,7 @@ process.parentPort.on("message", (event) => {
           // session-wide effort before a freshly created session is published.
           // Structured failures (invalid_effort / not_ready) are returned as
           // RESULTS so their code survives the IPC boundary intact.
+          case "set_session_fast": result = await session.communicationSetFast(communication.payload); break;
           case "set_session_effort": result = await session.communicationSetEffort(communication.payload); break;
           // Internal main→host (never a public MCP tool): applies + CONFIRMS the
           // model a freshly created session was asked to run, before it is

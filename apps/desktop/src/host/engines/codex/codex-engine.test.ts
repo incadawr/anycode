@@ -4148,3 +4148,31 @@ describe("Codex manual compaction", () => {
     server.threadReadResult = { thread: { id: THREAD, turns: [] } }; const retry = driveCompact(engine); await tick(40); server.startCompact(); finish(server); await retry.done; expect(retry.events.find(e => e.type === "compaction_end")).toMatchObject({ ok: true });
   });
 });
+
+
+describe("Codex service tier", () => {
+  it("keeps the server tier without inventing an override", async () => {
+    const server = new FakeAppServer();
+    server.threadEcho.serviceTier = "priority";
+    const { engine } = await createNativeCodexSession(server, "/work");
+    await runTurn(server, engine);
+    expect(server.turnStartParams().at(-1)).not.toHaveProperty("serviceTier");
+    expect(engine.snapshot().fast).toBe(true);
+  });
+
+  it("projects the effective tier and applies an explicit per-session override on the next turn", async () => {
+    const server = new FakeAppServer();
+    server.threadEcho.serviceTier = "priority";
+    const { engine } = await createNativeCodexSession(server, "/work");
+    expect(engine.snapshot().fast).toBe(true);
+    expect(engine.selectFast(false)).toMatchObject({ ok: true, fast: false });
+    expect(engine.snapshot().fast).toBe(true);
+    await runTurn(server, engine);
+    expect(server.turnStartParams().at(-1)?.serviceTier).toBe("default");
+    expect(engine.snapshot().fast).toBe(false);
+    engine.selectFast(true);
+    await runTurn(server, engine);
+    expect(server.turnStartParams().at(-1)?.serviceTier).toBe("fast");
+    expect(engine.snapshot().fast).toBe(true);
+  });
+});
