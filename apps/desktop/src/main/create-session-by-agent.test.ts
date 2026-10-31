@@ -1211,3 +1211,27 @@ describe("create_session — Codex account", () => {
     expect(r.forkEnvs).toHaveLength(0);
   });
 });
+
+
+describe("create_session speed", () => {
+  it("refuses speed on a different engine as an invalid argument", async () => {
+    const r = rig();
+    expect(await createSessionForAgent({ workspace: "/ws", engine: "core", fast: true }, r.deps())).toMatchObject({ ok: false, reason: "invalid_argument" });
+  });
+  it("preserves a host refusal for unsupported Fast", async () => {
+    const r = rig({ respond: (operation) => operation === "get_session_status" ? { result: { state: "idle" } } : operation === "set_session_fast" ? { result: { ok: false, reason: "invalid_argument", detail: "unsupported" } } : undefined });
+    expect(await createSessionForAgent({ workspace: "/ws", engine: "codex", fast: true }, r.deps())).toMatchObject({ ok: false, reason: "invalid_argument", detail: "unsupported" });
+  });
+  it("configures the override before publishing the session", async () => {
+    const sequence: string[] = [];
+    const r = rig({ sequence, respond: (operation, payload) => {
+      if (operation === "get_session_status") return { result: { state: "idle" } };
+      if (operation === "set_session_fast") { expect(payload).toBe(false); sequence.push("speed"); return { result: { ok: true } }; }
+      return undefined;
+    } });
+    const result = await createSessionForAgent({ workspace: "/ws", engine: "codex", fast: false }, r.deps());
+    expect(result.ok).toBe(true);
+    expect(r.operations).toEqual(["get_session_status", "set_session_fast"]);
+    expect(sequence.indexOf("speed")).toBeLessThan(sequence.indexOf("registered"));
+  });
+});

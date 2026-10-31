@@ -446,6 +446,7 @@ const MIGRATIONS: readonly Migration[] = [
     "ALTER TABLE provider_usage ADD COLUMN generation_duration_ms REAL",
     "ALTER TABLE provider_usage ADD COLUMN time_to_first_token_ms REAL",
   ] },
+  { version: 31, statements: ["ALTER TABLE sessions ADD COLUMN codex_fast INTEGER"] },
 ];
 
 /**
@@ -553,6 +554,7 @@ interface SessionRow {
   worktree_transition_json: string | null;
   connection_id: string | null;
   codex_profile_id: string | null;
+  codex_fast: number | null;
   parent_session_id: string | null;
   spawn_tool_call_id: string | null;
   next_image_ref: number;
@@ -634,6 +636,7 @@ function rowToSessionMeta(row: SessionRow): SessionMeta {
   const worktreeTransition = rowToWorktreeTransition(row);
   const projectRoot = typeof row.project_root === "string" ? row.project_root : row.workspace;
   return {
+    ...(row.codex_fast === 0 || row.codex_fast === 1 ? { codexFast: row.codex_fast === 1 } : {}),
     id: row.id,
     workspace: row.workspace,
     model: row.model,
@@ -1178,6 +1181,10 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     if (patch?.mode !== undefined) {
       sets.push("mode = ?");
       params.push(patch.mode);
+    }
+    if (patch?.codexFast !== undefined) {
+      sets.push("codex_fast = ?");
+      params.push(patch.codexFast === null ? null : patch.codexFast ? 1 : 0);
     }
     if (patch?.model !== undefined) {
       sets.push("model = ?");
