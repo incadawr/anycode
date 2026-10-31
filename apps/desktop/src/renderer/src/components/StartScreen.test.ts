@@ -438,6 +438,25 @@ describe("computeCodexProfileChipLabel (codex-profiles cut §3.3/W3-F)", () => {
   it("falls back to 'System' for a picked id no longer in the catalog — never claims an account createStartTabRequest would not actually submit", () => {
     expect(computeCodexProfileChipLabel("removed-profile", profiles)).toBe("System");
   });
+
+  // with no explicit pick the submission starts on the DEFAULT
+  // account, so the chip must name that account, not "System".
+  it("names the configured default (with a marker) when the draft has no pick", () => {
+    expect(computeCodexProfileChipLabel(undefined, profiles, "personal")).toBe("Personal (default)");
+  });
+
+  it("stays 'System' when the default IS system or is unset", () => {
+    expect(computeCodexProfileChipLabel(undefined, profiles, "system")).toBe("System");
+    expect(computeCodexProfileChipLabel(undefined, profiles, undefined)).toBe("System");
+  });
+
+  it("an explicit pick wins over the default and drops the marker", () => {
+    expect(computeCodexProfileChipLabel("work", profiles, "personal")).toBe("Work");
+  });
+
+  it("a default pointing at a profile that left the catalog degrades to 'System' (the true submitted account)", () => {
+    expect(computeCodexProfileChipLabel(undefined, profiles, "removed-profile")).toBe("System");
+  });
 });
 
 describe("isDraftCodexProfileIdStale (R3-2 facet i: removed-profile desync)", () => {

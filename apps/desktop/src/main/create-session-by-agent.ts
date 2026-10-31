@@ -16,6 +16,7 @@ import { normalizeHandle, type SessionAccessStore } from "./communication-sessio
 import type { NewSessionPin, ResumePinResult } from "./session-pin.js";
 import type { TabHostManager } from "./tabs.js";
 import { SET_SESSION_EFFORT_OPERATION, type SetSessionEffortOutcome } from "../shared/communication.js";
+import { selectCodexAccount, type CodexAccountOption } from "../shared/codex-account.js";
 import { resolveCoreConnectionForModel } from "../shared/core-model-connection.js";
 import type { AnycodeSettings } from "../shared/settings.js";
 
@@ -47,6 +48,20 @@ export interface CreateSessionByAgentDeps {
   ): Promise<NewSessionPin>;
   /** Resolves a pinned connection for the resume path (shared with priming). */
   resolveResumePin(meta: { connectionId?: string }): Promise<ResumePinResult>;
+  /**
+   * Resolves a Codex account for the new tab: an explicit profile id from
+   * `account`, or `undefined` for the DEFAULT account (Settings → Codex
+   * "Make default"). Same contract as tab-ipc's `resolveCodexProfile`; absent
+   * = legacy wiring, where only an explicit `account` is refused rather than a
+   * default silently being invented here.
+   */
+  resolveCodexProfile?(profileId: string | undefined): Promise<{ ok: true; codexProfile?: { id?: string; home?: string; authLink?: string } } | { ok: false }>;
+  /**
+   * Main's Codex account list (the `system` pseudo-account plus every persisted
+   * profile), for matching `account` by id OR label. Absent = `account` cannot
+   * be honoured and the request is refused, never matched against a guess.
+   */
+  listCodexAccounts?(): Promise<CodexAccountOption[]>;
   randomUUID(): string;
   agentOpenedSessions: Set<string>;
   agentSessionTitles: Map<string, string>;
@@ -110,6 +125,43 @@ export async function createSessionForAgent(
   if (trust.folders[key]?.decision !== "trusted") return { ok: false, reason: "not_trusted" };
   if (tabs.atCapacity()) return { ok: false, reason: "too_many" };
   const engine = request.engine ?? "core";
+  /**
+   * Codex account (only for `engine: "codex"`). `account` is an OPAQUE
+   * caller string — an id or a label — matched against main's own registry
+   * here, never trusted as an id. An unmatched or ambiguous value is
+   * `invalid_account` carrying the complete candidate list. With no
+   * `account`, the session starts on the DEFAULT account; before that
+   * existed, every API-created Codex tab silently ran on the owner's
+   * personal `~/.codex` plan.
+   */
+  let codexProfileId: string | undefined;
+  let codexProfile: { id?: string; home?: string; authLink?: string } | undefined;
+  if (engine === "codex") {
+    if (request.account !== undefined) {
+      if (deps.listCodexAccounts === undefined) return { ok: false, reason: "not_ready" };
+      const picked = selectCodexAccount(request.account, await deps.listCodexAccounts());
+      if (!picked.ok) {
+        return {
+          ok: false,
+          reason: "invalid_account",
+          detail: `no account named ${JSON.stringify(request.account)}; known accounts: ${picked.candidates.join(", ")}`,
+        };
+      }
+      codexProfileId = picked.id;
+    }
+    if (deps.resolveCodexProfile !== undefined) {
+      const resolved = await deps.resolveCodexProfile(codexProfileId);
+      if (!resolved.ok) {
+        return codexProfileId === undefined
+          ? { ok: false, reason: "not_ready" }
+          : { ok: false, reason: "invalid_account", detail: `the account ${JSON.stringify(codexProfileId)} is no longer available` };
+      }
+      codexProfile = resolved.codexProfile;
+    } else if (codexProfileId !== undefined) {
+      // An explicit account nobody can resolve must not degrade to the ambient home.
+      return { ok: false, reason: "not_ready" };
+    }
+  }
   try {
     await deps.mcpSecretPrime(key);
   } catch {
@@ -191,6 +243,7 @@ export async function createSessionForAgent(
       ...(engine !== "core" && request.model !== undefined ? { engineModel: request.model } : {}),
       ...(modelOverride !== undefined ? { modelOverride } : {}),
       ...(connectionId !== undefined ? { connectionId } : {}),
+      ...(codexProfile !== undefined ? { codexProfile } : {}),
       // GitHub #6: a deferred fork delivers its port from its own completion,
       // i.e. before this await resolves — the attribution must already be
       // registered for that first envelope to carry the agent badge + title.

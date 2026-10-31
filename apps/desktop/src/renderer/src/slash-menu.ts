@@ -252,6 +252,20 @@ export function openSettingsAddConnection(): void {
   window.dispatchEvent(new CustomEvent(SETTINGS_ADD_CONNECTION_EVENT));
 }
 
+/**
+ * Opens Settings on the Codex pane — where accounts are listed, one of them is
+ * marked Default, and "Make default" switches which account new sessions start
+ * on. This is the action behind the usage-limit banner's "Continue on another
+ * account": the banner names the next step (pick another account), it does not
+ * perform an account swap behind the owner's back. Same decoupled
+ * `"settings.open"` + pane-select pair `StartScreen`'s "Add account…" uses;
+ * `window` is referenced at call time only, so importing this stays DOM-free.
+ */
+export function openSettingsCodexAccounts(): void {
+  window.dispatchEvent(new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" }));
+  window.dispatchEvent(new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: "codex" }));
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Registry (cut §2 — order, names, descriptions, dispatch, gating: LAW)
 // ─────────────────────────────────────────────────────────────────────────

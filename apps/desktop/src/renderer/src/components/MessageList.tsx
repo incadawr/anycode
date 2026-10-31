@@ -595,6 +595,7 @@ export function MessageList({
   readOnly = false,
   rewind,
   todoReminderState,
+  onSwitchCodexAccount,
 }: {
   blocks: TranscriptBlock[];
   todoReminderState?: { count: number; threshold: number } | null;
@@ -625,6 +626,15 @@ export function MessageList({
     checkpoints: readonly WireCheckpointMeta[];
     onRewind(checkpointId: string): void;
   };
+  /**
+   * the Codex usage-limit escape hatch. Present only on a Codex
+   * session (the surface knows the engine); the `usage_limit` error block then
+   * offers "Continue on another account", which opens Settings → Codex where
+   * the accounts are listed, one is marked Default and "Make default" switches
+   * it. Absent -> no button, so a core/Claude quota error never suggests a
+   * Codex-only remedy.
+   */
+  onSwitchCodexAccount?: () => void;
 }) {
   // codex P7.3-F2 finding 2: the automation transcript-scroll probe
   // (automation.ts's transcriptScrollState/transcriptScrollTo) must be able to
@@ -1107,6 +1117,16 @@ export function MessageList({
                   <div className="message-text">
                     Provider quota is exhausted. Resets at {formatUsageLimitReset(block.notice.resetAt)} (local time).
                   </div>
+                  {onSwitchCodexAccount !== undefined && (
+                    <button
+                      type="button"
+                      className="usage-limit-switch-account"
+                      title="Open Settings → Codex: pick another account and mark it as the default for new sessions"
+                      onClick={onSwitchCodexAccount}
+                    >
+                      Continue on another account
+                    </button>
+                  )}
                 </div>
               );
             case "stream_retry":
