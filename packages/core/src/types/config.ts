@@ -381,7 +381,7 @@ export const SUPERVISOR_IDLE_FIRST_MS = 15 * 60_000;
 export const SUPERVISOR_IDLE_REPEAT_MS = 10 * 60_000;
 /**
  * After this many ignored reminders the text escalates to the OWNER variant
- * ; see SUPERVISOR_IDLE_FIRST_MS for the full contract.
+ * see SUPERVISOR_IDLE_FIRST_MS for the full contract.
  */
 export const SUPERVISOR_IDLE_ESCALATE_AFTER = 2;
 

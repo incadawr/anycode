@@ -198,7 +198,7 @@ export function hasMcpConsent(
 }
 
 // ---------------------------------------------------------------------------
-// Service consent (Taskana 4750a): the same consent discipline as MCP, keyed
+// Service consent the same consent discipline as MCP, keyed
 // by `servicesHash`. The hash covers name/command/args, the env KEY set and the
 // `${secret:NAME}` names the env values read — NOT the env values themselves,
 // which a user may edit without re-approving the definition.

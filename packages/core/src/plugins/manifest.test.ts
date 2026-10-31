@@ -326,7 +326,7 @@ describe("declaresOfficialOnly — official-only contributions (design §2/§4)"
   });
 });
 
-describe("pluginManifestSchema — services (Taskana 4750a)", () => {
+describe("pluginManifestSchema — services", () => {
   const base = { name: "bridge" };
 
   it("services absent keeps legacy output identical", () => {

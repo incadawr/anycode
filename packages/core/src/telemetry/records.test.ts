@@ -212,7 +212,7 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     });
   });
 
-  // TASK.240/4055: the child's ceiling ladder summary (numbers + the closed
+  // the child's ceiling ladder summary (numbers + the closed
   // refusal enum) is whitelisted onto subagent_end field-by-field — same
   // projection discipline as model/responseModel above; the ladder's own
   // free text (remaining/nextAction) never reaches this port.

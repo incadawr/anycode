@@ -115,7 +115,7 @@ function appendSystemContext(systemPrompt: string | undefined, systemContext: st
 }
 
 /**
- * TASK.240/4055 checkpoint signal: the stored item count a successful
+ * checkpoint signal: the stored item count a successful
  * TodoWrite reported (`{ todos, count }` — tools/todo-write.ts), or undefined
  * for any other outcome/shape. Read structurally (never `as`): only a numeric
  * `count` on an ok result counts, so a malformed or foreign payload is simply
@@ -668,14 +668,14 @@ export class AgentLoop {
   private ceilingPreviousRemaining: number | undefined;
   private ceilingSuccessfulToolCalls = 0;
   /**
-   * TASK.240/4055: successful NON-read-only tool calls since the last grant —
+   * successful NON-read-only tool calls since the last grant —
    * the adaptive mode's progress measure (a successful file read alone is not
    * progress). Same lifecycle as `ceilingSuccessfulToolCalls`: incremented on
    * the same append pass, reset at the same grant.
    */
   private ceilingProductiveToolCalls = 0;
   /**
-   * TASK.240/4055 checkpoint signal: the item count of the last successful
+   * checkpoint signal: the item count of the last successful
    * TodoWrite this session (TodoWrite is deliberately readOnly — session
    * state, not workspace — so the pure isProductiveToolCall check does not
    * cover it). A successful TodoWrite whose list SHRANK is progress even with
@@ -1644,7 +1644,7 @@ export class AgentLoop {
             );
             if (annotated.status === "success") {
               this.ceilingSuccessfulToolCalls += 1;
-              // TASK.240/4055: only non-read-only successes count as PRODUCTIVE
+              // only non-read-only successes count as PRODUCTIVE
               // progress, with one carve-out — a successful Agent/Workflow
               // DISPATCH counts too (follow-up: an orchestrator's
               // whole round can be nothing but dispatches). Unknown tools and
@@ -1652,7 +1652,7 @@ export class AgentLoop {
               if (isProductiveToolCall(call.name, this.config.registry)) {
                 this.ceilingProductiveToolCalls += 1;
               }
-              // TASK.240/4055 checkpoint: a successful TodoWrite whose list
+              // checkpoint: a successful TodoWrite whose list
               // shrank counts as productive progress for the ROUND gate below
               // (TodoWrite is readOnly by design, so the check above does not
               // cover it). Counting, not gating, happens here.
@@ -1730,7 +1730,7 @@ export class AgentLoop {
     turn: number,
   ): AsyncGenerator<AgentEvent, CeilingDecision, unknown> {
     const config = this.config.ceiling;
-    // TASK.240/4055: adaptive mode swaps the progress measure (productive, not
+    // adaptive mode swaps the progress measure (productive, not
     // any-success) and the grant math (progress-scaled, not decreasing); every
     // other gate, clamp and refusal path below is shared with the ladder.
     const adaptive = config?.adaptive === true;
@@ -1748,7 +1748,7 @@ export class AgentLoop {
     // requiring it would make the ladder unreachable for a run that spent its
     // whole budget on a single long-running dispatch (§1.5).
     //
-    // TASK.240/4055: the cheap gate KEEPS the any-success measure in adaptive
+    // the cheap gate KEEPS the any-success measure in adaptive
     // mode too — a read-only round is not a priori disqualifying, because the
     // decision it is about to buy can still honestly report done:true. The
     // PRODUCTIVE judgment happens at the verdict itself: a readable
@@ -1802,7 +1802,7 @@ export class AgentLoop {
           : {}),
       })
     ) {
-      // TASK.240/4055: in adaptive mode a readable verdict rejected SOLELY
+      // in adaptive mode a readable verdict rejected SOLELY
       // because the round produced no productive work is a STALL, not a bad
       // verdict — the budget was not too small, the run just was not doing
       // anything with it. Any other rejection (round 3's missing nextAction,
@@ -1828,7 +1828,7 @@ export class AgentLoop {
     const roundProductiveToolCalls = this.ceilingProductiveToolCalls;
     // "Successful tool call" is measured PER ROUND: the counter restarts with
     // the turns this grant just bought. The productive counter restarts with
-    // it (same round, same lifecycle — TASK.240/4055).
+    // it (same round, same lifecycle).
     this.ceilingSuccessfulToolCalls = 0;
     this.ceilingProductiveToolCalls = 0;
     yield {
@@ -1838,7 +1838,7 @@ export class AgentLoop {
       totalGranted: this.ceilingGrantedTurns,
       remaining: [...verdict.remaining],
       ...(verdict.nextAction !== undefined ? { nextAction: verdict.nextAction } : {}),
-      // TASK.240/4055: which grant path produced this round, plus the round's
+      // which grant path produced this round, plus the round's
       // own activity measures (successful vs productive). Additive-optional
       // fields — the wire envelope and legacy consumers ignore them.
       ...(adaptive ? { mode: "adaptive" as const } : { mode: "ladder" as const }),

@@ -14,7 +14,7 @@
  * deliberately no force-ON env value: the only way to enable telemetry is an
  * `enabled: true` telemetry section in one of the two config files above.
  *
- * TASK.121/TASK.165: `ANYCODE_TELEMETRY_DIR` (checked right after the
+ * `ANYCODE_TELEMETRY_DIR` (checked right after the
  * kill-switch, on the injected env) is a sink-dir REDIRECT, not a second way
  * to enable telemetry — it only ever changes WHERE an already-`enabled: true`
  * section writes (same effect as that section's own `dir` field, just
@@ -24,7 +24,7 @@
  * regardless of enablement (malformed input is always an issue, without
  * touching the filesystem).
  *
- * TASK.121/TASK.166: independently, a fail-closed test gate keyed off the
+ * independently, a fail-closed test gate keyed off the
  * AMBIENT `VITEST` env (not the injected `env` argument) stops a test process
  * from ever resolving telemetry against the real home directory: it skips the
  * home-scope source when workspace !== home, and — when an enabled section
@@ -100,7 +100,7 @@ function isAbsolutePath(path: string): boolean {
  *  `overrideDir` the validated `ANYCODE_TELEMETRY_DIR` value, if any — applies ONLY once
  *  `config.enabled` is already true (it redirects WHERE, never decides WHETHER) and, being itself an
  *  explicit directory, wins over both a file `dir` and the test gate below.
- *  `underTestGate` (TASK.121/166): when set and no `overrideDir` applies, a section without an explicit
+ *  `underTestGate` when set and no `overrideDir` applies, a section without an explicit
  *  `dir` no longer falls back to the real default `<home>/.anycode/telemetry` — it redirects to a stable
  *  temp dir instead (see testGateTempDir), so a test process never resolves the real default but the
  *  data isn't silently dropped either. */
@@ -205,7 +205,7 @@ export async function loadTelemetryConfig(
     return { telemetry: null, issues: [] };
   }
 
-  // TASK.121/TASK.165: dir override on the INJECTED env, validated right after
+  // dir override on the INJECTED env, validated right after
   // the kill-switch. NOT a second enable switch — a well-formed value is only
   // threaded through to resolveSection, which applies it as a directory
   // REDIRECT once (and only once) a file config's `enabled: true` already
@@ -255,7 +255,7 @@ export async function loadTelemetryConfig(
   const seenPaths = new Set<string>();
   // xfix D2: the user source must still load when the project
   // source is trust-skipped, so the underTestGate restriction (project-only
-  // under VITEST, TASK.121/166) yields only when BOTH sources are consulted;
+  // under VITEST) yields only when BOTH sources are consulted;
   // with the gate closed the user source is the only one left, and the test
   // gate's purpose (no ambient developer config leakage) still holds because
   // the fake fs in tests supplies exactly the paths named below.

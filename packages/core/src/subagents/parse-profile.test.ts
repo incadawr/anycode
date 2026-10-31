@@ -253,7 +253,7 @@ describe("discoverAgentProfiles byte-invariance (post-extraction regression)", (
   });
 });
 
-describe("parseAgentProfileMd — effort frontmatter and unknown keys (TASK.127/TASK.217)", () => {
+describe("parseAgentProfileMd — effort frontmatter and unknown keys", () => {
   it("maps a valid effort (case-insensitive) onto the profile", () => {
     const res = parseAgentProfileMd(md({ name: "planner", description: "d", effort: "High" }, "b"), "f");
     expect("ok" in res && res.ok.effort).toBe("high");
