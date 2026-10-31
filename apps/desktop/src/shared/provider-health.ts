@@ -1,5 +1,5 @@
 /**
- * Control-plane contract for the host<->main provider-health signal (TASK.45
+ * Control-plane contract for the host<->main provider-health signal (
  * W11). Mirrors the CREDENTIAL_REQUEST_TYPE precedent (shared/credentials.ts):
  * posted on `process.parentPort` by a CORE-engine host session after a model
  * stream event settles (`error` or `finish`); matched by `type` in

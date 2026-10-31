@@ -1,5 +1,5 @@
 /**
- * LSP config writer (Taskana 4743): read-modify-write patchers over the
+ * LSP config writer: read-modify-write patchers over the
  * `lspServers` ARRAY of `.anycode/config.json`, mirroring mcp/config-write.ts
  * exactly. They touch ONLY the `lspServers` array and preserve every other
  * top-level key and every unrelated array item — the file is SHARED with
@@ -12,7 +12,7 @@
  * path (`serializeConfigWrite`), so a concurrent MCP patch and an LSP patch
  * targeting the same config.json cannot lose an update.
  *
- * Shape discipline (Taskana 4743 brief §2.2): `lspServers` is an ARRAY, not a
+ * Shape discipline (brief §2.2): `lspServers` is an ARRAY, not a
  * keyed record. A MISSING key is simply created on upsert; a PRESENT key that
  * is not an array is refused (`invalid_shape`) — we never clobber a value we
  * do not understand, and we never "repair" it into an array either.

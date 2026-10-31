@@ -132,7 +132,7 @@ describe("authenticated session inbox", () => {
     } finally { h.close(); }
   });
 
-  // Taskana 4153 / TASK.216 wire regression pin: main's ChildRunSend delivery
+  // wire regression pin: main's ChildRunSend delivery
   // addresses the child with sender "parent-session:<id>" — that principal must
   // behave EXACTLY like the MCP supervisor principal above (queue while busy,
   // drain into a new turn on settle, agent_message envelope in the input).
@@ -298,7 +298,7 @@ describe("public result retrieval", () => {
   });
 });
 
-describe("Sessions API cancel_turn (Taskana 4763)", () => {
+describe("Sessions API cancel_turn", () => {
   it("T1 cancel_turn while a turn runs aborts it, rejects queued inbox messages, and the running message ends done/cancelled", async () => {
     const { h, engine, signals, finishes, make } = fixture();
     engine.runTurn = async function* (_input, options) {
@@ -360,7 +360,7 @@ describe("Sessions API cancel_turn (Taskana 4763)", () => {
   });
 });
 
-describe("Sessions API approvals (Taskana 4763)", () => {
+describe("Sessions API approvals", () => {
   const askOf = (toolName: string, input: unknown): PermissionRequest => ({
     toolName, input, mode: "build",
     metadata: { name: toolName, description: "", readOnly: false, destructive: false, riskLevel: "high", sideEffectScope: "workspace" } as unknown as PermissionRequest["metadata"],

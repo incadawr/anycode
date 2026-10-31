@@ -1,5 +1,5 @@
 /**
- * Unit tests for the `proxy-check` handler (TASK.141 §6, design review B-11).
+ * Unit tests for the `proxy-check` handler (§6, design review B-11).
  *
  * Every dependency is faked, so the whole decision tree runs with no Electron,
  * no vault, no network and no child process. The assertions that matter most are

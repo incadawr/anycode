@@ -5,7 +5,7 @@
  * per-server caps, result mapping (text-join / isError / non-text marker /
  * MCP_RESULT_MAX_BYTES cap), and the loose zod passthrough slot.
  *
- * TASK.198 slice B3 adds the `type:"image"` content-block path: validated
+ * slice B3 adds the `type:"image"` content-block path: validated
  * blocks become real `ToolResult.images` attachments instead of the generic
  * non-text placeholder. The pre-slice placeholder pin ("renders non-text
  * content as a placeholder marker") used an `image` block as its fixture;
@@ -69,7 +69,7 @@ const FROZEN_STDIO_METADATA: ToolMetadata = {
   sideEffectScope: "process",
   timeoutMs: MCP_CALL_TIMEOUT_MS,
   maxOutputBytes: MCP_RESULT_MAX_BYTES,
-  // TASK.93: the model budget is tighter than the inline cap above.
+  // the model budget is tighter than the inline cap above.
   resultBudget: { maxModelBytes: MCP_RESULT_MAX_MODEL_BYTES },
 };
 
@@ -156,7 +156,7 @@ describe("bridgeMcpTool — result mapping (handler never throws)", () => {
   });
 
   it("renders non-text, non-image content as a placeholder marker", async () => {
-    // TASK.198 slice B3: this pin used to use `type:"image"` as its fixture;
+    // slice B3: this pin used to use `type:"image"` as its fixture;
     // that block type now goes through acceptImageBlock instead of this
     // generic branch, so the fixture is repointed to "audio" (untouched by
     // the slice) to keep proving the placeholder survives for other types.
@@ -202,7 +202,7 @@ describe("bridgeMcpTool — result mapping (handler never throws)", () => {
   });
 });
 
-describe("bridgeMcpTool — image content (TASK.198 slice B3)", () => {
+describe("bridgeMcpTool — image content (slice B3)", () => {
   it("accepts a valid image block into `images`, replacing the old placeholder", async () => {
     const def = bridgeMcpTool({
       serverName: "srv",
@@ -325,7 +325,7 @@ describe("bridgeMcpTool — image content (TASK.198 slice B3)", () => {
   });
 });
 
-describe("bridgeMcpTool — image content across the SDK mapping (TASK.198 slice B3 integration)", () => {
+describe("bridgeMcpTool — image content across the SDK mapping (slice B3 integration)", () => {
   it("an MCP tool-result image survives on anthropic-messages and is stripped-with-a-note on the openai transports", async () => {
     const def = bridgeMcpTool({
       serverName: "srv",

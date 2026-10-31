@@ -17,7 +17,7 @@ import {
 } from "./catalog-data.js";
 import { MINIMAX_PROVIDER_NAMES } from "./minimax.js";
 
-describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
+describe("built-in catalog v1 (slice 2.5 §2.2 + W5)", () => {
   it("ships the ruling-U2 + W5 public set, all api_key auth (ruling U1)", () => {
     const catalog = getBuiltinCatalog();
     expect(catalog.schemaVersion).toBe("anycode.model-providers.v1");
@@ -133,7 +133,7 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
       defaultTransport: "anthropic-messages",
       supportedTransports: ["anthropic-messages"],
     });
-    // TASK.70 (Taskana 4089): both Kimi entries belong to one brand card.
+    // both Kimi entries belong to one brand card.
     expect(findCatalogEntry("moonshot")).toMatchObject({
       brand: "Kimi",
       modeLabel: "Platform API (moonshot.ai)",
@@ -277,7 +277,7 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
     expect(glm52).toMatchObject({ contextWindow: 1_000_000, maxOutputTokens: 131_072 });
   });
 
-  // TASK.163 (2026-08-28): docs.z.ai/guides/llm/glm-5.3 states "GLM-5.3 always
+  // (2026-08-28): docs.z.ai/guides/llm/glm-5.3 states "GLM-5.3 always
   // operates with reasoning enabled" and "Disabling reasoning is no longer
   // supported", with three documented effort levels "low", "high", and "max"
   // (default "max"). The pre-existing row's `["off", "high", "max"]` was stale
@@ -289,12 +289,12 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
     expect(glm53).toMatchObject({ contextWindow: 1_000_000, maxOutputTokens: 131_072 });
   });
 
-  // TASK.163 (2026-08-28): docs.z.ai/guides/vlm/glm-5.3-flash states "Text
+  // (2026-08-28): docs.z.ai/guides/vlm/glm-5.3-flash states "Text
   // parameters are consistent with GLM-5.3" (1M-token context window) and
   // "`thinking.type` only supports `enabled`; thinking cannot be disabled" —
   // same low/high/max family as glm-5.3, no `off`.
   //
-  // TASK.170 (2026-08-29): the page's spec card now states "Maximum Output
+  // (2026-08-29): the page's spec card now states "Maximum Output
   // Tokens: 128K" (re-verified via raw-HTML fetch, not just the summarized
   // fetch, to rule out a hallucinated/conflated number) — the 2026-08-28 "not
   // specified anywhere" claim this test used to pin no longer holds; the page
@@ -302,7 +302,7 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
   // subagent spawned on this model fell to DEFAULT_MAX_OUTPUT_TOKENS (32_768)
   // instead of the real 131_072 the parent glm-5.3 already declared.
   //
-  // TASK.197 (2026-08-30): `imageInput: true`. The row is the catalog's VLM
+  // (2026-08-30): `imageInput: true`. The row is the catalog's VLM
   // entry (docs.z.ai/guides/vlm/, spec card "Input Modality: Video / Image /
   // Text / File") and the owner runs it daily with images. Two earlier passes
   // withheld the flag pending an Anthropic-messages-endpoint proof that was
@@ -326,7 +326,7 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
   // The sibling LLM row stays text-only on purpose: glm-5.3 is documented
   // under guides/llm/, its own spec card claims no image modality, and nobody
   // has reported images working on it. A guess here would repeat exactly the
-  // mistake TASK.197 corrected, in the other direction.
+  // mistake corrected, in the other direction.
   it("leaves the non-flash glm-5.3 row without an image-input claim", () => {
     const glm53 = findCatalogEntry("z-ai")?.models.find((model) => model.id === "glm-5.3");
     expect(glm53?.imageInput).toBeUndefined();
@@ -336,8 +336,8 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
     expect(findCatalogEntry("nope")).toBeUndefined();
   });
 
-  // TASK 4241 (2026-10-10): rows refreshed from the supplied authoritative
-  // live GET /models facts. Taskana 4894 carries the documented "default
+  // (2026-10-10): rows refreshed from the supplied authoritative
+  // live GET /models facts. carries the documented "default
   // effort is high" as a real `defaultEffort` field, so a session with no
   // explicit pick shows and sends `high` rather than the vocabulary's `low`.
   it("declares the refreshed DeepSeek rows (live GET /models facts, 2026-10-10)", () => {
@@ -373,13 +373,13 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
     expect("imageInput" in (pro ?? {})).toBe(false);
   });
 
-  // Taskana 4894: GLM-5.3's docs.z.ai page states the default tier is "max"
-  // (see catalog-data.ts's TASK.163 note) — recorded as data, not a guess.
+  // GLM-5.3's docs.z.ai page states the default tier is "max"
+  // (see catalog-data.ts's note) — recorded as data, not a guess.
   it("records GLM-5.3's documented default effort and leaves undocumented rows alone", () => {
     const zai = findCatalogEntry("z-ai");
     expect(zai?.models.find((m) => m.id === "glm-5.3")?.defaultEffort).toBe("max");
     // No recorded provider default for these: their docs state levels, not a
-    // default, so no `defaultEffort` may be invented (Taskana 4894).
+    // default, so no `defaultEffort` may be invented.
     expect(zai?.models.find((m) => m.id === "glm-5.3-flash")?.defaultEffort).toBeUndefined();
     expect(zai?.models.find((m) => m.id === "glm-5.2")?.defaultEffort).toBeUndefined();
     for (const id of ["kimi-for-coding", "kimi-for-coding-highspeed", "k3", "k3-256k"]) {
@@ -479,7 +479,7 @@ describe("resolveEndpoint (slice 2.5 §2.2)", () => {
   });
 });
 
-describe("assertTransportContract (dev-time invariant, TASK.43 W5)", () => {
+describe("assertTransportContract (dev-time invariant, W5)", () => {
   it("passes when defaultTransport is included in supportedTransports", () => {
     const entry: CatalogProviderEntry = {
       id: "x",
@@ -540,7 +540,7 @@ describe("brand grouping", () => {
   });
 });
 
-describe("assertBrandContract (TASK.70 dev-time invariant)", () => {
+describe("assertBrandContract (dev-time invariant)", () => {
   it("passes for the built-in catalog", () => {
     expect(() => assertBrandContract(getBuiltinCatalog().providers)).not.toThrow();
   });

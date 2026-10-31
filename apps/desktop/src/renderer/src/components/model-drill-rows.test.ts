@@ -1,5 +1,5 @@
 /**
- * TASK.106 cut-2 §D4/§D3 — unit tests for the running session's drill-down
+ * cut-2 §D4/§D3 — unit tests for the running session's drill-down
  * decision layer (model-drill-rows.ts). Same discipline as
  * start-model-picker.test.ts: this package's vitest runs `environment:
  * "node"`, so only plain functions are exercised — `model-drill-menu.tsx`
@@ -43,7 +43,7 @@ const CONNECTIONS: ProviderConnection[] = [
   connection({ id: "c-kimi", providerId: "moonshot", reasoningEffort: "high" }),
 ];
 
-describe("buildSessionDrillRows (TASK.106 cut-2 §D4 — every connection, the TAB's pair)", () => {
+describe("buildSessionDrillRows (cut-2 §D4 — every connection, the TAB's pair)", () => {
   it("groups every connected connection, current one first, with the tab's model checkmarked", () => {
     const { groups } = buildSessionDrillRows({
       connections: CONNECTIONS,
@@ -98,9 +98,9 @@ describe("buildSessionDrillRows (TASK.106 cut-2 §D4 — every connection, the T
     expect(rows.some((row) => row.kind === "effort-open")).toBe(false);
   });
 
-  // Taskana 4118: a connection model unknown to the catalog but present in
+  // a connection model unknown to the catalog but present in
   // the connection's live modelCapabilities gets its effort row from live.
-  it("Taskana 4118: the effort row appears for a connection model unknown to the catalog but live-declared reasoning", () => {
+  it("the effort row appears for a connection model unknown to the catalog but live-declared reasoning", () => {
     const connections: ProviderConnection[] = [
       connection({
         id: "c-openrouter",
@@ -158,7 +158,7 @@ describe("buildSessionDrillRows (TASK.106 cut-2 §D4 — every connection, the T
   });
 });
 
-describe("pickSessionDrillRow (TASK.106 cut-2 §D3 — set_model vs rebind)", () => {
+describe("pickSessionDrillRow (cut-2 §D3 — set_model vs rebind)", () => {
   it("keeps a pick from the tab's OWN connection on the live set_model path", () => {
     expect(
       pickSessionDrillRow({
@@ -186,11 +186,11 @@ describe("pickSessionDrillRow (TASK.106 cut-2 §D3 — set_model vs rebind)", ()
     ).toEqual({ kind: "rebind", connectionId: "c-zai", modelId: "glm-5.2" });
   });
 
-  // TASK.109 (Taskana 4103): the near-duplicate of the "another connection"
-  // case above is deliberate — it names TASK.109's contract: the dead pin
+  // the near-duplicate of the "another connection"
+  // case above is deliberate — it names's contract: the dead pin
   // (conn-dead) stays configured and untouched; the pick targets the foreign
   // pair, and the decision hands main exactly that pair (never the old id).
-  it("TASK.109: a foreign pick carries the target pair and never the old connection", () => {
+  it("a foreign pick carries the target pair and never the old connection", () => {
     expect(
       pickSessionDrillRow({
         currentConnectionId: "conn-dead",
@@ -200,7 +200,7 @@ describe("pickSessionDrillRow (TASK.106 cut-2 §D3 — set_model vs rebind)", ()
   });
 });
 
-describe("resolveRebindEffort (TASK.106 cut-2 §D3 — carried, or reset EXPLICITLY)", () => {
+describe("resolveRebindEffort (cut-2 §D3 — carried, or reset EXPLICITLY)", () => {
   it("carries the current effort when the target model's vocabulary contains it", () => {
     expect(
       resolveRebindEffort({
@@ -262,9 +262,9 @@ describe("resolveRebindEffort (TASK.106 cut-2 §D3 — carried, or reset EXPLICI
     ).toEqual({ carried: undefined, resetTo: undefined, dropped: false });
   });
 
-  // ── Taskana 4118: an effort travels only inside the TARGET's live vocabulary ──
+  // ── an effort travels only inside the TARGET's live vocabulary ──
 
-  it("Taskana 4118: carries the effort when the TARGET's live vocabulary (catalog-unknown model) contains it", () => {
+  it("carries the effort when the TARGET's live vocabulary (catalog-unknown model) contains it", () => {
     expect(
       resolveRebindEffort({
         currentEffort: "high",
@@ -277,7 +277,7 @@ describe("resolveRebindEffort (TASK.106 cut-2 §D3 — carried, or reset EXPLICI
     ).toEqual({ carried: "high", resetTo: undefined, dropped: false });
   });
 
-  it("Taskana 4118: resets and reports the drop when the live vocabulary maps to levels that exclude the current one", () => {
+  it("resets and reports the drop when the live vocabulary maps to levels that exclude the current one", () => {
     expect(
       resolveRebindEffort({
         currentEffort: "low", // not in the mapped ["high","max"]
@@ -290,7 +290,7 @@ describe("resolveRebindEffort (TASK.106 cut-2 §D3 — carried, or reset EXPLICI
     ).toEqual({ carried: undefined, resetTo: "max", dropped: true });
   });
 
-  it("Taskana 4118: no vocabulary from live ⇒ neither carried nor reset (pre-4118 shape)", () => {
+  it("no vocabulary from live ⇒ neither carried nor reset (pre-4118 shape)", () => {
     expect(
       resolveRebindEffort({
         currentEffort: "high",
@@ -317,10 +317,10 @@ describe("isForeignPick / modelDrillEffortLabel", () => {
   });
 });
 
-// ── TASK.183: the composer's drill rows and the StartScreen groups offer the
+// ── the composer's drill rows and the StartScreen groups offer the
 // SAME per-connection union (manual additions + catalog hints) ──
 
-describe("buildSessionDrillRows vs buildStartModelGroups (TASK.183 consistency)", () => {
+describe("buildSessionDrillRows vs buildStartModelGroups (consistency)", () => {
   const MANUAL: ProviderConnection[] = [
     connection({ id: "c-manual", providerId: "z-ai", models: ["manual-composer"] }),
     connection({ id: "c-other", providerId: "z-ai", models: ["manual-other"] }),

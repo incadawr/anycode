@@ -1,5 +1,5 @@
 /**
- * Orchestrate-mode reminder (Taskana 4704 §3.4). A mirror of plan-reminder.ts:
+ * Orchestrate-mode reminder (§3.4). A mirror of plan-reminder.ts:
  * while a session tab is in orchestrate mode (which sets the permission mode to
  * plan and keeps the orchestrator's own tools read-only), every user prompt
  * carries this reminder instead of the plan-mode reminder — the model does not

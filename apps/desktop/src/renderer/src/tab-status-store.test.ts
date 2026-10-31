@@ -223,15 +223,15 @@ describe("tab-status-store — pure projections", () => {
     expect(deriveCoarse(deriveInput("idle", "ready", null)).needsApproval).toBe(false);
   });
 
-  it("16b. TASK.115 S1: deriveCoarse.needsApproval is true from a waiting CHILD alone, with the tab's own permission null", () => {
+  it("16b. S1: deriveCoarse.needsApproval is true from a waiting CHILD alone, with the tab's own permission null", () => {
     expect(deriveCoarse(deriveInput("running", "ready", null, new Set(["call-1"]))).needsApproval).toBe(true);
   });
 
-  it("16c. TASK.115 S1: deriveCoarse.needsApproval goes false once the last waiting child clears (empty Set, not just non-null check)", () => {
+  it("16c. S1: deriveCoarse.needsApproval goes false once the last waiting child clears (empty Set, not just non-null check)", () => {
     expect(deriveCoarse(deriveInput("idle", "ready", null, new Set())).needsApproval).toBe(false);
   });
 
-  it("16d. TASK.115 S1 regression: a tab with no children (deriveInput's default empty Set) keeps the pre-existing own-permission-only projection", () => {
+  it("16d. S1 regression: a tab with no children (deriveInput's default empty Set) keeps the pre-existing own-permission-only projection", () => {
     expect(deriveCoarse(deriveInput("idle", "ready", SOME_PERMISSION)).needsApproval).toBe(true);
     expect(deriveCoarse(deriveInput("idle", "ready", null)).needsApproval).toBe(false);
   });

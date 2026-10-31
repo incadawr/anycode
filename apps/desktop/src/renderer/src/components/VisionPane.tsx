@@ -1,5 +1,5 @@
 /**
- * TASK.198 срез E2a — the Vision settings panel: JSX + effects only. Every
+ * срез E2a — the Vision settings panel: JSX + effects only. Every
  * decision rule the panel needs already lives as a tested pure function in
  * `vision-pane-model.ts` (this project's vitest runs `environment: "node"`,
  * no jsdom — see that module's own file docstring for why a `.test.tsx`

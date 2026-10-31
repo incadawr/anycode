@@ -1,10 +1,10 @@
-# TASK.102 Child-Session Subagents — Track Plan
+# Child-Session Subagents — Track Plan
 
-> **For agentic workers:** этот план исполняется bg-оркестратором трека по
-> `working-docs/task102-track/BOOTSTRAP-PROMPT.md`, НЕ напрямую через
+> **For agentic workers:** этот план исполняется bg-оркестратором трека,
+> НЕ напрямую через
 > subagent-driven-development. **Owner-override гранулярности (08.08):**
 > код-уровневые каты по слайсам производят архитекторы трека (Fable +
-> GPT-5.6-sol high) в `working-docs/task102-track/CUT-S*.md` — этот план
+> GPT-5.6-sol high) этот план
 > фиксирует слайсы, роли, гейты и границы, не построчные степы.
 
 **Goal:** сабагент как дочерняя сессия-таб — зайти внутрь, стирить,
@@ -29,8 +29,8 @@ monorepo (`apps/desktop`, `packages/core`), smoke-channel
   `.test.tsx`, env node, jsdom нет).
 - Зону `packages/core/src/permissions/` (always-allow matching) НЕ трогать —
   скоуп-дисциплина: там строится permissions-кластер волны 2
-  (TASK.35/103/37/32). Конфликт → STATE.md, не чинить. База трека — `next`
-  (включает фикс TASK.104 `3ae9cc8`).
+  Конфликт → STATE.md, не чинить. База трека — `next`
+  (включает фикс `3ae9cc8`).
 - Инвариант TabHostManager «один таб — один utilityProcess» сохраняется.
 - Дефолты спеки §2 п.5 (каскадная отмена, ошибка в карточку, permission в
   поверхности ребёнка + бейдж, наследование режима) — решения владельца,
@@ -39,7 +39,7 @@ monorepo (`apps/desktop`, `packages/core`), smoke-channel
   превышение = ошибка тула, не очередь; рекурсия сессий-детей запрещена.
 - Нативные Task-дети Claude-родителя не трогаются; one-shot `engine:`-маршрут
   живёт до S4.
-- Git: коммиты в ворктри трека — да (`feat|fix(scope): TASK.102 …`, без
+- Git: коммиты в ворктри трека — да (`feat|fix(scope): …`, без
   Co-Authored-By); push/merge/destructive — НИКОГДА.
 - Env-барьер свежего ворктри: `pnpm install --frozen-lockfile`,
   `pnpm --filter @anycode/desktop rebuild electron`.
@@ -126,12 +126,12 @@ PNG-проверкой обеих раскладок и переключения
   `engine:`-профилей → спавн ребёнка-сессии на соответствующем движке через
   интерактивный рантайм с approval-бриджем вместо бесгейтового one-shot)
 - Test: engine-ребёнок получает permission-гейт; старые контракты профилей
-  (`engine`+`tools` refusал, TASK.97 R4) не ломаются
+  (`engine`+`tools` refusал, R4) не ломаются
 
 **Interfaces:**
 - Consumes: контракт спавна из S2.
 - **Развилка ката:** MCP-дверь для ЧУЖИХ движков-мастеров (спека §6,
-  поглощает TASK.97 R2) — в скоупе S4 только если Fable-кат признает
+  поглощает R2) — в скоупе S4 только если Fable-кат признает
   дешёвой; иначе явно зафиксировать в STATE.md как next-track остаток.
 
 **Steps:** дизайн-мемо Sol → Fable-кат `CUT-S4.md` → стройка (sonnet) →

@@ -1,5 +1,5 @@
 /**
- * TASK.237 LIVE upgrade leg (env-gated, ANYCODE_CODEX_LIVE_SMOKE=1): drives
+ * LIVE upgrade leg (env-gated, ANYCODE_CODEX_LIVE_SMOKE=1): drives
  * the PRODUCTION `runCodexManagedUpgrade` against the REAL npm registry in a
  * THROWAWAY home seeded with the incident's machine state — a managed
  * 0.144.3 tree (a shell stub at the installer's exact path: the upgrade

@@ -1,7 +1,7 @@
 /**
- * The ONE proxy control every scope gets (TASK.141 §3): a dropdown of named
- * profiles. It replaces the three separate `Proxy URL` text fields TASK.132 and
- * TASK.139 left behind (the connection drawer's, and one per engine pane) —
+ * The ONE proxy control every scope gets (§3): a dropdown of named
+ * profiles. It replaces the three separate `Proxy URL` text fields and
+ * left behind (the connection drawer's, and one per engine pane) —
  * a proxy is configured ONCE, in the Network pane, and a scope only points at
  * it.
  *
@@ -79,8 +79,8 @@ const ENGINE_DISPLAY_NAME: Record<"codex" | "claude", string> = {
 };
 
 /**
- * What each engine's proxy actually covers (TASK.139-F3, migrated verbatim
- * from the deleted EngineProxyField; TASK.143 lifted the codex carve-out).
+ * What each engine's proxy actually covers (migrated verbatim
+ * from the deleted EngineProxyField; lifted the codex carve-out).
  * Both engines' subagents now run under the engine proxy same as the
  * top-level session: a codex-engine child routes through
  * `runSessionTier`/`ctx.sessionSubagents` exactly like a claude one (the
@@ -235,7 +235,7 @@ export function connectionCreateProxyRefField(value: string): { proxyRef?: strin
 
 /**
  * Whether the "Saved." notice belongs on screen for the picker's current value
- * (TASK.139-F5, migrated verbatim from the deleted EngineProxyField). The
+ * (migrated verbatim from the deleted EngineProxyField). The
  * notice is tied to `lastSavedValue` — the exact string that was last confirmed
  * persisted, captured at submit time — rather than to a bare "a save succeeded"
  * flag. If the control no longer holds that value (changed since, or nothing
@@ -293,7 +293,7 @@ export function ProxyRefPicker({ scope, store = useSettingsStore, value, onChang
   async function handleSave(): Promise<void> {
     // Captured now, not read again after the `await`: the dropdown stays live
     // while the request is in flight, so the notice must attach to what was
-    // actually submitted (TASK.139-F5).
+    // actually submitted.
     const submitted = current;
     setSaving(true);
     setError(null);

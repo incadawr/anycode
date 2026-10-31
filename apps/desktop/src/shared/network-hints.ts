@@ -1,5 +1,5 @@
 /**
- * "Network may be back" hint contract (Taskana 4772): the parentPort message
+ * "Network may be back" hint contract: the parentPort message
  * type the main process posts to a host when the OS reports connectivity
  * (net `online`, power `resume`, screen `unlock`), and the Retry-now control
  * the renderer sends. ZERO imports by construction, like shared/browser-access.ts:

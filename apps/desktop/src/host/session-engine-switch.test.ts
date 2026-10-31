@@ -1,5 +1,5 @@
 /**
- * Taskana 4068 / TASK.98 (review 23.08 narrowing) — Session-level wire tests
+ * (review 23.08 narrowing) — Session-level wire tests
  * for the in-session engine swap: the host-side Session can replace its
  * SessionEngine BETWEEN turns via `engine_switch_request`, old engine disposed
  * only after the replacement is live, canonical transcript continuous, the
@@ -158,7 +158,7 @@ function seededHistory(): HistoryItem[] {
   return SEEDED.map((item) => ({ ...item, message: { ...item.message } }));
 }
 
-describe("Session — engine switch (Taskana 4068)", () => {
+describe("Session — engine switch", () => {
   it("success: swaps the engine, disposes the old one after, announces once, keeps the transcript continuous", async () => {
     const oldEngine = new SwitchableFakeEngine(seededHistory());
     const next = new NextFakeEngine();
@@ -480,7 +480,7 @@ describe("Session — engine switch (Taskana 4068)", () => {
     }
   });
 
-  // Taskana 4068 cross-review (finding 1): two legal switches with no turn in
+  // cross-review (finding 1): two legal switches with no turn in
   // between. The second switch must carry the PRE-SWITCH transcript forward,
   // not re-read the first switched-to engine's (empty-by-construction) history.
   it("double switch with no turn in between keeps the pre-switch transcript for the next engine", async () => {
@@ -520,7 +520,7 @@ describe("Session — engine switch (Taskana 4068)", () => {
     }
   });
 
-  // Taskana 4068 cross-review (finding 3): a renderer reload after a switch
+  // cross-review (finding 3): a renderer reload after a switch
   // must not replay the pre-switch turns' stream events on top of the
   // switch-time transcript snapshot (which already carries them).
   it("reload after a switch does not replay pre-switch turns on top of the snapshot", async () => {

@@ -515,10 +515,10 @@ describe("LspManager (fixture integration)", () => {
   );
 
   // -------------------------------------------------------------------------
-  // Taskana 4711: restartCrashed — the Environment menu's Restart action.
+  // restartCrashed — the Environment menu's Restart action.
   // -------------------------------------------------------------------------
 
-  describe("restartCrashed (Taskana 4711)", () => {
+  describe("restartCrashed", () => {
     const managers: LspManager[] = [];
 
     afterEach(async () => {
@@ -673,7 +673,7 @@ describe("LspManager (fixture integration)", () => {
     }
 
     it(
-      "a late exit of the superseded child does not crash the respawned server (Taskana 4711 cross-review F2)",
+      "a late exit of the superseded child does not crash the respawned server (cross-review F2)",
       async () => {
         const { exec, children } = recordingExec();
         const manager = makeRestartManager([tsSpec("ts")], exec);
@@ -699,7 +699,7 @@ describe("LspManager (fixture integration)", () => {
     );
 
     it(
-      "a trailing malformed frame from the superseded child does not crash the respawned server (Taskana 4711 cross-review F2)",
+      "a trailing malformed frame from the superseded child does not crash the respawned server (cross-review F2)",
       async () => {
         const { exec, children } = recordingExec();
         const manager = makeRestartManager([tsSpec("ts")], exec);

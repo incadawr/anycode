@@ -1,5 +1,5 @@
 /**
- * Loop-level proof of TASK.33 W7b: terminal-retry metadata (attemptsMade/
+ * Loop-level proof of W7b: terminal-retry metadata (attemptsMade/
  * maxAttempts/retryable/hadModelOutput/code) riding the {type:"error"} event
  * AgentLoop emits, driven by a REAL loopback AiSdkModelPort — zero `ai` mocks.
  *
@@ -87,7 +87,7 @@ function findErrorEvent(events: AgentEvent[]): Extract<AgentEvent, { type: "erro
   return events.find((e): e is Extract<AgentEvent, { type: "error" }> => e.type === "error");
 }
 
-describe("AgentLoop terminal retry metadata over a real AiSdkModelPort (TASK.33 W7b)", () => {
+describe("AgentLoop terminal retry metadata over a real AiSdkModelPort (W7b)", () => {
   let server: Server | undefined;
 
   afterEach(async () => {
@@ -112,7 +112,7 @@ describe("AgentLoop terminal retry metadata over a real AiSdkModelPort (TASK.33 
       baseUrl,
       apiKey: "test-key",
       model: "claude-x",
-      // Taskana 4705: default policy now carries a 5-min network budget which
+      // default policy now carries a 5-min network budget which
       // an RST rides; pinned off so this stays a pure count-exhaustion pin.
       retry: { maxRetries: 3, baseDelayMs: 1, maxDelayMs: 1, stallTimeoutMs: 0, networkRetryBudgetMs: 0 },
     };
@@ -232,7 +232,7 @@ describe("AgentLoop terminal retry metadata over a real AiSdkModelPort (TASK.33 
     expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "cancelled" });
   });
 
-  // ── Taskana 4705: bounded mid-stream whole-step replay + quota refusal ──
+  // ── bounded mid-stream whole-step replay + quota refusal ──
 
   /** Serializes SSE chunks the way the stream-error-recovery harness does. */
   function serializeSse(chunks: ReadonlyArray<Record<string, unknown>>): string {
@@ -289,7 +289,7 @@ describe("AgentLoop terminal retry metadata over a real AiSdkModelPort (TASK.33 
     }
   });
 
-  it("quota 429 (z.ai code 1308) exhausts immediately: no retries, terminal quota error (Taskana 4705)", async () => {
+  it("quota 429 (z.ai code 1308) exhausts immediately: no retries, terminal quota error", async () => {
     server = createServer((req, res) => {
       req.resume();
       req.on("end", () => {

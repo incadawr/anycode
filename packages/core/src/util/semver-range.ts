@@ -1,6 +1,6 @@
 /**
  * Tiny semver parser + range grammar for plugin `engines.anycode` compat
- * (Taskana 4732 S1-A, design §2). DELIBERATELY NOT a semver dependency —
+ * (S1-A, design §2). DELIBERATELY NOT a semver dependency —
  * plugins need exactly three pieces of npm-semver behaviour, and keeping them
  * in-house honors the no-new-npm-deps rule of the brief:
  *

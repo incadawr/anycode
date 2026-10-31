@@ -1,5 +1,5 @@
 /**
- * TASK.218 (supervisor correction 4): the split panel's CONTINUATION
+ * (supervisor correction 4): the split panel's CONTINUATION
  * projection, tested through the real seam — `projectChildSplitRows` fed by
  * the REAL relation store (driven the way `registerPort` drives it:
  * `registerChild` per delivered child port) and a real master transcript.
@@ -55,7 +55,7 @@ function deps(relations: ReadonlyMap<string, ChildRelation>, transcript: readonl
   return { parentSessionId: PARENT, relations, transcript, liveChildStores: new Map() };
 }
 
-describe("projectChildSplitRows — continuation follows the existing row (TASK.218)", () => {
+describe("projectChildSplitRows — continuation follows the existing row", () => {
   it("registration-time latest-ID selection: a continuation's port registration makes the ONE row follow it — no second Open, running status, cumulative counters", () => {
     const relationStore = createChildRelationStore();
     // The real registration path registerPort performs for each delivered child port.
@@ -124,7 +124,7 @@ describe("projectChildSplitRows — continuation follows the existing row (TASK.
   });
 });
 
-describe("Open-path fold through the real automation seam (TASK.218)", () => {
+describe("Open-path fold through the real automation seam", () => {
   it("childOpen on a continuation spawn folds onto the existing row — no duplicate logical child rows", () => {
     const relationStore = createChildRelationStore();
     relationStore.getState().registerChild(PARENT, "tc-1", "tab-c1", "child-9");

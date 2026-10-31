@@ -1,5 +1,5 @@
 /**
- * Taskana 4758: IPC for the Settings scope dropdown's workspace list. The
+ * IPC for the Settings scope dropdown's workspace list. The
  * payload is an empty strict object; the result is an allow-listed projection
  * of the registry entries (id, name, displayPath, exists, tabIds). No
  * renderer-supplied path exists anywhere on this channel.

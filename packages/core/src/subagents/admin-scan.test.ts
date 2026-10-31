@@ -192,7 +192,7 @@ describe("scanAgentProfilesAdmin", () => {
     expect(result.problems.some((p) => p.includes('engine "gemini"'))).toBe(true);
   });
 
-  it("refuses a profile combining engine: with explicit tools: (TASK.97 R4) — never listed, problem names both", async () => {
+  it("refuses a profile combining engine: with explicit tools: (R4) — never listed, problem names both", async () => {
     const ws = await tmp();
     const home = await tmp();
     const wsRoot = join(ws, ".anycode/agents");
@@ -537,7 +537,7 @@ describe("discoverAgentProfiles via the shared builder (worktree inheritance)", 
   });
 });
 
-describe("worktree paths containing spaces (TASK.214 fix 1)", () => {
+describe("worktree paths containing spaces (fix 1)", () => {
   it("resolver accepts git metadata lines with internal spaces", async () => {
     const parent = await tmp();
     const spaced = join(parent, "my repo dir");
@@ -576,7 +576,7 @@ describe("worktree paths containing spaces (TASK.214 fix 1)", () => {
   });
 });
 
-describe("main === home keeps the project tier (TASK.214 fix 2)", () => {
+describe("main === home keeps the project tier (fix 2)", () => {
   it("yields main profiles as project, deduping the later user root", async () => {
     const parent = await tmp();
     const { main, wt } = await makeWorktree(parent);
@@ -609,12 +609,12 @@ describe("main === home keeps the project tier (TASK.214 fix 2)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Taskana 4269: the admin scan mirrors discovery's switch for the four new
+// the admin scan mirrors discovery's switch for the four new
 // connection/provider error kinds (same fatal-on-invalid + claim semantics), and
 // deliberately does NOT extend the row with routing fields — routing is
 // spawn-time data, not pane metadata.
 
-describe("scanAgentProfilesAdmin — profile connection/provider problems (Taskana 4269)", () => {
+describe("scanAgentProfilesAdmin — profile connection/provider problems", () => {
   it("surfaces each new fatal kind as an admin problem and never lists the profile", async () => {
     const ws = await tmp();
     const home = await tmp();

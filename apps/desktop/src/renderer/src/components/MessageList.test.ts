@@ -29,7 +29,7 @@ import type { CodexContinueController } from "../codex-continue.js";
 import { createDesktopStore, type ErrorRetryMeta, type RetryOffer, type ToolCallBlock, type TranscriptBlock } from "../store.js";
 import { agentMessageText, type AgentEnvelope } from "../../../shared/communication.js";
 
-describe("agent deliveries in the minimap (Taskana 4891)", () => {
+describe("agent deliveries in the minimap", () => {
   it("renders restored agent deliveries in history order with labeled ticks and jump anchors", () => {
     const store = createDesktopStore();
     const first: AgentEnvelope = { messageId: "first", sender: "supervisor", recipientSessionId: "s", payload: "First task", kind: "agent_message", mode: "next_turn", createdAt: "2026-10-04" };
@@ -165,7 +165,7 @@ describe("agent-message grouping (GitHub #19)", () => {
   });
 });
 
-describe("Continue button DOM class (Taskana 4111 cross-review — must not share the Try-again probe's class)", () => {
+describe("Continue button DOM class (cross-review — must not share the Try-again probe's class)", () => {
   it("a Continue offer renders a button that is NOT counted by the Try-again probe selector", () => {
     const blocks = [{ kind: "loop_end", id: "loop_end:t1", reason: "max_turns", turns: 3 }] as unknown as TranscriptBlock[];
     const html = renderToStaticMarkup(
@@ -203,7 +203,7 @@ describe("shouldShowTranscriptEmpty (R11)", () => {
   });
 });
 
-describe("shouldShowTranscriptEmpty on a read-only surface (Taskana 4058)", () => {
+describe("shouldShowTranscriptEmpty on a read-only surface", () => {
   it("(a) an empty idle read-only child feed suppresses the onboarding gate", () => {
     expect(shouldShowTranscriptEmpty(0, false, false, true)).toBe(false);
   });
@@ -220,7 +220,7 @@ describe("shouldShowTranscriptEmpty on a read-only surface (Taskana 4058)", () =
   });
 });
 
-describe("shouldShowTranscriptEmpty on a replay surface (TASK.188 S14, §11 N1)", () => {
+describe("shouldShowTranscriptEmpty on a replay surface (S14, §11 N1)", () => {
   it("(a) the opening frame of a film is BLANK — zero blocks under a replay draw nothing", () => {
     expect(shouldShowTranscriptEmpty(0, false, true)).toBe(false);
   });
@@ -323,7 +323,7 @@ describe("needsSnap (F17 sticky-follow, codex P7.3-F finding 4 dedup helper)", (
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// TASK.31 — Stack consecutive terminal tool-call cards (ANY mix of tool
+// Stack consecutive terminal tool-call cards (ANY mix of tool
 // names — a single-tool run is the special case). Pure-logic tests for the
 // grouping projection and its helpers (no DOM, no jsdom — same posture as the
 // isAtBottom/needsSnap tests above).
@@ -346,7 +346,7 @@ function mkToolCall(overrides: Partial<ToolCallBlock> = {}): ToolCallBlock {
   };
 }
 
-describe("isTerminalStatus (TASK.31)", () => {
+describe("isTerminalStatus", () => {
   it("returns true for every settled outcome", () => {
     for (const status of ["success", "error", "invalid_input", "denied", "timed_out", "cancelled"] as const) {
       expect(isTerminalStatus(status)).toBe(true);
@@ -359,7 +359,7 @@ describe("isTerminalStatus (TASK.31)", () => {
   });
 });
 
-describe("aggregateStackStatus (TASK.31)", () => {
+describe("aggregateStackStatus", () => {
   it("is success iff every member is success", () => {
     expect(aggregateStackStatus([mkToolCall({ status: "success" }), mkToolCall({ status: "success" })])).toBe(
       "success",
@@ -372,7 +372,7 @@ describe("aggregateStackStatus (TASK.31)", () => {
   });
 });
 
-describe("stackBadgeText (TASK.31)", () => {
+describe("stackBadgeText", () => {
   it("reports Success when no member failed", () => {
     expect(stackBadgeText([mkToolCall({ status: "success" }), mkToolCall({ status: "success" })])).toBe("Success");
   });
@@ -392,7 +392,7 @@ describe("stackBadgeText (TASK.31)", () => {
   });
 });
 
-describe("stackLabel (TASK.31)", () => {
+describe("stackLabel", () => {
   it("pluralizes for a stack (≥2)", () => {
     expect(stackLabel(2)).toBe("2 calls");
     expect(stackLabel(3)).toBe("3 calls");
@@ -404,7 +404,7 @@ describe("stackLabel (TASK.31)", () => {
   });
 });
 
-describe("stackHeaderLabel (TASK.31 — never masquerade as one tool name)", () => {
+describe("stackHeaderLabel (never masquerade as one tool name)", () => {
   it("returns the single tool name for a one-type run", () => {
     expect(stackHeaderLabel([mkToolCall({ toolName: "Bash" }), mkToolCall({ toolName: "Bash" })])).toBe("Bash");
   });
@@ -445,7 +445,7 @@ describe("stackHeaderLabel (TASK.31 — never masquerade as one tool name)", () 
   });
 });
 
-describe("stackStatusClass (TASK.31)", () => {
+describe("stackStatusClass", () => {
   it("maps an all-success stack to the success tint", () => {
     expect(stackStatusClass([mkToolCall({ status: "success" }), mkToolCall({ status: "success" })])).toBe(
       "tool-call-status-success",
@@ -462,7 +462,7 @@ describe("stackStatusClass (TASK.31)", () => {
   });
 });
 
-describe("groupTranscriptBlocks (TASK.31 — any adjacent terminal tool calls stack)", () => {
+describe("groupTranscriptBlocks (any adjacent terminal tool calls stack)", () => {
   it("returns an empty array for no blocks", () => {
     expect(groupTranscriptBlocks([])).toEqual([]);
   });
@@ -576,7 +576,7 @@ function retryMeta(overrides: Partial<ErrorRetryMeta> = {}): ErrorRetryMeta {
   return { attemptsMade: 3, maxAttempts: 3, retryable: true, hadModelOutput: false, code: "connect_timeout", ...overrides };
 }
 
-describe("formatErrorRetrySuffix (TASK.33 W8 — mirrors cli/render.ts wording)", () => {
+describe("formatErrorRetrySuffix (W8 — mirrors cli/render.ts wording)", () => {
   it("is empty when the event carries no retry metadata (pre-W7b byte parity)", () => {
     expect(formatErrorRetrySuffix(undefined)).toBe("");
   });
@@ -598,19 +598,19 @@ describe("formatErrorRetrySuffix (TASK.33 W8 — mirrors cli/render.ts wording)"
 
 });
 
-describe("formatStreamRetryLine (TASK.33 W8 — mirrors cli/render.ts's '[retry N/M in X s: reason]')", () => {
-  it("formats attempt/limit/delay/reason, with the delay in seconds (Taskana 4772)", () => {
+describe("formatStreamRetryLine (W8 — mirrors cli/render.ts's '[retry N/M in X s: reason]')", () => {
+  it("formats attempt/limit/delay/reason, with the delay in seconds", () => {
     expect(formatStreamRetryLine(1, 3, 500, "connect refused")).toBe("Retry 1 in 0.5 s: connect refused");
     expect(formatStreamRetryLine(2, 3, 1000, "ECONNRESET")).toBe("Retry 2 in 1.0 s: ECONNRESET");
   });
 
-  it("shows a raw float delay as one decimal of seconds, never ms noise (Taskana 4772)", () => {
+  it("shows a raw float delay as one decimal of seconds, never ms noise", () => {
     expect(formatStreamRetryLine(1, 8, 791.1655902966864, "connect timeout")).toBe(
       "Retry 1 in 0.8 s: connect timeout",
     );
   });
 
-  it("drops the total once the network budget runs past maxRetries (Taskana 4705 review: no 9/8)", () => {
+  it("drops the total once the network budget runs past maxRetries (review: no 9/8)", () => {
     expect(formatStreamRetryLine(8, 8, 500, "network")).toBe("Retry 8 in 0.5 s: network");
     expect(formatStreamRetryLine(9, 8, 500, "network")).toBe("Retry 9 in 0.5 s: network");
   });
@@ -655,7 +655,7 @@ describe("formatLoopEndLine (loop-end footer wording)", () => {
   });
 });
 
-describe("showTryAgainButton (TASK.33 W8 button-visibility truth-table)", () => {
+describe("showTryAgainButton (W8 button-visibility truth-table)", () => {
   const offer: RetryOffer = { loopEndBlockId: "loop_end:turn-1", text: "hello", images: [] };
 
   it("hidden when there is no armed offer at all (nonretryable / mid-stream — the store never arms `retry`)", () => {
@@ -670,14 +670,14 @@ describe("showTryAgainButton (TASK.33 W8 button-visibility truth-table)", () => 
     expect(showTryAgainButton(offer, "loop_end:turn-0", "ready")).toBe(false);
   });
 
-  it("hidden while the connection is not ready (TASK.33 W8-FIX #1) — a click would silently drop the resend since setHostExited preserves the armed offer", () => {
+  it("hidden while the connection is not ready (W8-FIX #1) — a click would silently drop the resend since setHostExited preserves the armed offer", () => {
     expect(showTryAgainButton(offer, "loop_end:turn-1", "host_exited")).toBe(false);
     expect(showTryAgainButton(offer, "loop_end:turn-1", "awaiting_port")).toBe(false);
     expect(showTryAgainButton(offer, "loop_end:turn-1", "awaiting_host_ready")).toBe(false);
   });
 });
 
-describe("showContinueButton (Taskana 4111 — one-shot Continue on the max_turns loop_end row)", () => {
+describe("showContinueButton (one-shot Continue on the max_turns loop_end row)", () => {
   const offer = { loopEndBlockId: "loop_end:turn-1" };
 
   it("shown when armed + matching block + ready connection + empty prompt queue", () => {
@@ -704,7 +704,7 @@ describe("showContinueButton (Taskana 4111 — one-shot Continue on the max_turn
   });
 });
 
-describe("showStandaloneRetry (TASK.33 FIX-A — fallback row visibility when the anchor is lost to respawn)", () => {
+describe("showStandaloneRetry (FIX-A — fallback row visibility when the anchor is lost to respawn)", () => {
   const offer: RetryOffer = { loopEndBlockId: "loop_end:turn-1", text: "hello", images: [] };
   const anchorBlock: TranscriptBlock = { kind: "loop_end", id: "loop_end:turn-1", reason: "retryable", turns: 1 };
   // Hydration-shaped transcript (store.ts's projectHistoryToBlocks): ids are
@@ -740,7 +740,7 @@ describe("showStandaloneRetry (TASK.33 FIX-A — fallback row visibility when th
   });
 });
 
-describe("compactionRowText (TASK.227)", () => {
+describe("compactionRowText", () => {
   const card = (patch: Partial<Extract<TranscriptBlock, { kind: "compaction" }>>) =>
     ({ kind: "compaction", id: "compaction:0", status: "running", ...patch }) as Extract<
       TranscriptBlock,
@@ -795,7 +795,7 @@ describe("compactionRowText (TASK.227)", () => {
   });
 });
 
-describe("topmostVisibleUserIndex (TASK.48 minimap scroll-spy core, 4086 follow-up)", () => {
+describe("topmostVisibleUserIndex (minimap scroll-spy core, 4086 follow-up)", () => {
   const spy = (tops: readonly number[], top: number, height: number): number | null =>
     topmostVisibleUserIndex(tops.length, (i) => tops[i]!, top, height);
 

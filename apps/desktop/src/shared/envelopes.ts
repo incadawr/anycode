@@ -50,7 +50,7 @@ export interface PortEnvelope {
   /** The host could not start because its workspace no longer exists. */
   missingWorkspace?: boolean;
   /**
-   * The provider connection this tab is pinned to (TASK.45 W10-FIX F2), so the
+   * The provider connection this tab is pinned to (W10-FIX F2), so the
    * renderer's ModelPill can target the PINNED connection's catalog + write-target
    * instead of the current active one. Additive control-plane metadata — this is
    * NOT the session-stream (shared/protocol.ts stays byte-untouched); absent for
@@ -61,7 +61,7 @@ export interface PortEnvelope {
   connectionId?: string;
   providerId?: string;
   /**
-   * Present ONLY for a child-session tab's port delivery (TASK.102 CUT-S2
+   * Present ONLY for a child-session tab's port delivery (CUT-S2
    * §2.5, stamped by `deliverTabPort` in S2b). Its presence is what lets
    * `tab-registry.registerPort` (S2c) classify this port as a CHILD and skip
    * the ordinary root-tab registration path (no `tabsStore.addTab`, no
@@ -70,7 +70,7 @@ export interface PortEnvelope {
    * contract). Absent on every root-tab envelope, unchanged from today.
    */
   child?: { parentTabId: string; parentSessionId: string; spawnToolCallId: string; childSessionId: string };
-  /** Taskana 4768: present (true) only for a root tab a Sessions API agent opened; drives the "agent" marker. */
+  /** present (true) only for a root tab a Sessions API agent opened; drives the "agent" marker. */
   openedByAgent?: true;
   /** Accepted create_session handle, pinned against automatic title changes. */
   agentTitle?: string;

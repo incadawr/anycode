@@ -84,7 +84,7 @@ export class ScriptedModelPort implements ModelPort {
 }
 
 /**
- * TASK.117 acceptance defect 1 fixture port: a ScriptedModelPort whose FIRST
+ * acceptance defect 1 fixture port: a ScriptedModelPort whose FIRST
  * step parks after a chosen event index until the test releases a deferred —
  * the model is mid-response (start + text_start + N deltas emitted,
  * text_end/finish NOT yet) for exactly as long as the test holds the gate.
@@ -189,7 +189,7 @@ export class MemFs implements FileSystemPort {
   }
 }
 
-/** MemFs with identity realpath + lstat so the dispatcher can mint workspace facts (Taskana 4294). */
+/** MemFs with identity realpath + lstat so the dispatcher can mint workspace facts. */
 export class RealpathMemFs extends MemFs {
   constructor(private readonly dirs: readonly string[] = ["/", "/workspace"]) {
     super();
@@ -269,7 +269,7 @@ export function nodeWirePort(port: NodeMessagePort): WirePort {
 export interface HarnessOptions {
   steps: ModelStreamEvent[][];
   /**
-   * TASK.117 acceptance defect 1 fixture: replaces the built-in
+   * acceptance defect 1 fixture: replaces the built-in
    * ScriptedModelPort with a GatedModelPort that parks the FIRST step after
    * `gatedParkAfterIndex` events until `gated.release()` — the unfinished
    * mid-response window a reconnect must survive. Returns the port so the
@@ -284,7 +284,7 @@ export interface HarnessOptions {
   snapshotFs?: FileSystemPort;
   brokerTimeoutMs?: number;
   /**
-   * TASK.117 product-defect fix: forwarded to SessionOptions.reconnectGraceMs
+   * product-defect fix: forwarded to SessionOptions.reconnectGraceMs
    * (the close→denyAll grace window's test seam). Omitted -> Session's
    * production default; ONLY tests inject a value to pin the grace-expiry
    * path without real-time waits.
@@ -293,7 +293,7 @@ export interface HarnessOptions {
   /** Boot history snapshot for transcript hydration (design §3.3); empty by default. */
   bootHistory?: readonly HistoryItem[];
   /**
-   * Dev/automation-ONLY override for `SESSION_HISTORY_MAX_ITEMS` (TASK.188
+   * Dev/automation-ONLY override for `SESSION_HISTORY_MAX_ITEMS` (
    * S4), forwarded straight to `Session` — the harness never resolves it from
    * the environment itself. Defaults to `SESSION_HISTORY_MAX_ITEMS` when absent.
    */
@@ -368,24 +368,24 @@ export interface HarnessOptions {
   };
   /**
    * Multimodal send-path capability gate; defaults to enabled for legacy tests.
-   * TASK.56 W2: a function form mirrors the host's live closure over the
+   * W2: a function form mirrors the host's live closure over the
    * current model (re-read per emit); `null` omits the Session seam entirely
    * (legacy-host shape — no `imageInput` on the wire) while the loop's media
    * port stays default-enabled.
    */
   imageInputEnabled?: boolean | (() => boolean) | null;
   /**
-   * TASK.198 срез C: live verdict for the vision fallback, mirroring
+   * срез C: live verdict for the vision fallback, mirroring
    * `imageInputEnabled`'s own boolean/function/omitted shapes. Omitted ->
    * `SessionOptions.imageFallbackAvailable` is absent (byte-identical to
-   * pre-TASK.198 for every existing test — the turn-accept gate falls back
+   * for every existing test — the turn-accept gate falls back
    * to `imageInputEnabled` alone).
    */
   imageFallbackAvailable?: boolean | (() => boolean);
-  /** Taskana 4127: `SessionOptions.contextWindowAssumed` seam; omitted -> absent (no hint on the wire). */
+  /** `SessionOptions.contextWindowAssumed` seam; omitted -> absent (no hint on the wire). */
   contextWindowAssumed?: boolean | (() => boolean);
   /**
-   * TASK.198 срез C: the host-owned commit callback a test can inspect
+   * срез C: the host-owned commit callback a test can inspect
    * (e.g. `vi.fn()`) to assert what Session's deferred-apply mechanics
    * actually invoked and when. Omitted -> `SessionOptions.
    * applyRecognizerConfig` is absent (every existing test unaffected).
@@ -408,7 +408,7 @@ export interface HarnessOptions {
    */
   checkpoints?: AgentLoopConfig["checkpoints"];
   /**
-   * Taskana 4104: threaded into AgentLoopConfig.artifacts exactly as host boot
+   * threaded into AgentLoopConfig.artifacts exactly as host boot
    * does. Omitted -> config has no `artifacts` (spill degrades to truncation,
    * byte-identical for every existing test).
    */
@@ -422,7 +422,7 @@ export interface HarnessOptions {
    * without real git. Omitted -> Session seam absent (checkpoints fail-closed).
    */
   checkpointsSeam?: SessionOptions["checkpoints"];
-  /** Taskana 4083 / TASK.34: the Session-level usage-audit seam, threaded DIRECTLY into Session. Omitted -> seam absent (audit inert, byte-identical). */
+  /** the Session-level usage-audit seam, threaded DIRECTLY into Session. Omitted -> seam absent (audit inert, byte-identical). */
   usageAudit?: SessionOptions["usageAudit"];
   initialContextUsage?: SessionOptions["initialContextUsage"];
   saveContextUsage?: SessionOptions["saveContextUsage"];
@@ -451,7 +451,7 @@ export interface HarnessOptions {
     effortExplicit?: boolean,
   ) => { model: string; previousModel?: string; contextUsage?: {estimatedTokens:number; budgetTokens:number; source:"provider" | "estimate"}; selectedReasoningEffort?: ReasoningEffort; reasoningEffort: ReasoningEffort; availableEffortLevels?: ReasoningEffort[] };
   /**
-   * TASK.117 phase-1 (test-only, causal fault injection): a FileSystemPort
+   * phase-1 (test-only, causal fault injection): a FileSystemPort
    * wrapper whose Read is hooked. The hook receives the tool's REAL
    * AbortSignal (dispatcher handlerCtx.abortSignal, linked to the turn's
    * controller) — a test can park one call on a gate and later release it,
@@ -463,9 +463,9 @@ export interface HarnessOptions {
   fsHook?: (readFile: (path: string) => Promise<string>, path: string, signal: AbortSignal | undefined) => Promise<string>;
   /** Replaces the built-in CoreEngine for neutral Session seam tests. */
   engine?: SessionEngine;
-  /** Taskana 4704 §3.7: host callback on orchestrate transitions; omitted -> absent seam. */
+  /** §3.7: host callback on orchestrate transitions; omitted -> absent seam. */
   onOrchestrateChanged?: SessionOptions["onOrchestrateChanged"];
-  /** Taskana 4704 §3.6: turn-start orchestrator-route health check; omitted -> absent seam. */
+  /** §3.6: turn-start orchestrator-route health check; omitted -> absent seam. */
   orchestratorRouteCheck?: SessionOptions["orchestratorRouteCheck"];
   /**
    * 6.DP-2: overrides the config `cwd` (default "/workspace"). Needed ONLY by
@@ -484,21 +484,21 @@ export interface HarnessOptions {
   continuationMode?: "model" | "none";
   onContinuationReady?: () => Promise<void>;
   onContinuationComplete?: () => Promise<void>;
-  /** TASK.45 W11: surfaced directly to Session; omitted -> no-op (every pre-existing test unaffected). */
+  /** W11: surfaced directly to Session; omitted -> no-op (every pre-existing test unaffected). */
   reportProviderHealth?: SessionOptions["reportProviderHealth"];
-  /** Taskana 4090: surfaced directly to Session; omitted -> no-op. */
+  /** surfaced directly to Session; omitted -> no-op. */
   reportProviderQuota?: SessionOptions["reportProviderQuota"];
   /**
-   * TASK.27: opts this harness into the plan-exit contract EXACTLY as host boot
+   * opts this harness into the plan-exit contract EXACTLY as host boot
    * does — through the one `wirePlanExit` call, which both registers
    * `ExitPlanMode` into the registry and produces the `planExitMode`/
    * `onModeChange` pair spread into AgentLoopConfig. Omitted by default ->
-   * registry and config byte-identical to pre-TASK.27 (every pre-existing test
+   * registry and config byte-identical to their previous state (every pre-existing test
    * unaffected, and the tool stays invisible to the model).
    */
   planExit?: boolean;
   /**
-   * TASK.145 срез 2: the host's pending-detached-child-report queue seam,
+   * срез 2: the host's pending-detached-child-report queue seam,
    * threaded DIRECTLY to Session (mirror of the checkpointsSeam/
    * reportProviderHealth precedent above). Omitted -> `ui_ready`'s
    * `resendAll()` call and `child_report_ack`'s `ack()` call are both no-ops
@@ -506,14 +506,14 @@ export interface HarnessOptions {
    */
   pendingChildReports?: SessionOptions["pendingChildReports"];
   /**
-   * taskana 4181: the supervisor idle-watchdog seam, threaded DIRECTLY to
+   * the supervisor idle-watchdog seam, threaded DIRECTLY to
    * Session (mirror of the pendingChildReports precedent above). Omitted ->
    * both Session note-calls are no-ops (every pre-existing test unaffected,
    * byte-identical turns).
    */
   supervisorIdle?: SessionOptions["supervisorIdle"];
   /**
-   * R1 (Taskana 4704 cross-review): opts the harness into the host's
+   * R1 (cross-review): opts the harness into the host's
    * late-binding spawn-mode cell wiring — the option itself is the host's
    * own onOrchestrateChanged copy (config.orchestrate + cell re-bind),
    * composed with any test-provided callback. Read the cell through
@@ -522,7 +522,7 @@ export interface HarnessOptions {
    */
   wireSpawnModeCell?: boolean;
   /**
-   * Taskana 4068: the engine-switch factory seam, threaded VERBATIM into
+   * the engine-switch factory seam, threaded VERBATIM into
    * Session (the `engine` passthrough precedent directly above). Omitted ->
    * engine_switch_request is refused ("engine switch is not available in
    * this host"), byte-identical to a host boot without the production
@@ -530,7 +530,7 @@ export interface HarnessOptions {
    */
   switchEngineFactory?: SessionOptions["switchEngineFactory"];
   /**
-   * Taskana 4707: a SkillPort + skills prompt-section text threaded into
+   * a SkillPort + skills prompt-section text threaded into
    * AgentLoopConfig EXACTLY as host boot does (`config.skills` from
    * createSkillPort, `systemPromptComponents` carrying the skills section).
    * Omitted -> no `skills` key and no components (the Skill tool stays
@@ -555,13 +555,13 @@ export interface Harness {
   /** Titles written through the STRICT ack path (`commitTitle`). */
   commits: string[];
   /**
-   * TASK.117 acceptance defect 1 fixture: the GatedModelPort constructed for
+   * acceptance defect 1 fixture: the GatedModelPort constructed for
    * this harness (undefined unless `options.gated` was set). `release()`
    * un-parks the parked first step so the turn can finish.
    */
   gated: GatedModelPort | undefined;
   /**
-   * TASK.117 continuation fixture seam (test-only): installs a REAL host-side
+   * continuation fixture seam (test-only): installs a REAL host-side
    * pending-prompt record through the Session's own production helpers —
    * `pendingPrompt` (the exact slot shape `acceptUserMessage` captures at
    * admission: owner = minted outer turnId + requestId pair) and the REAL
@@ -574,20 +574,20 @@ export interface Harness {
    * and every later ui_ready re-pushes the occupied slot as a payload-bearing
    * pending_prompt over the real wire. Called AFTER a handshake the seed's
    * own REAL push is delivered on the wire immediately (the port is
-   * attached) — the TASK.117 continuation fixture uses this window so a real
+   * attached) — the continuation fixture uses this window so a real
    * store can render the stale state BEFORE any continuation entry runs.
    * No-op on foreign engines or when a turn is live (mirrors the production
    * capture gates).
    */
   seedPendingPrompt(requestId: string, text: string): void;
   /**
-   * TASK.117 continuation fixture seam (test-only): read-only SNAPSHOT of
+   * continuation fixture seam (test-only): read-only SNAPSHOT of
    * the REAL host pending slot (`Session.pendingPrompt`) — the exact record
    * the production admission path captured. Copy only; cannot mutate.
    */
   pendingPromptSlot(): { turnId: string; requestId: string; text: string } | null;
   /**
-   * TASK.117 deferred-continuation seam (test-only): arms the DURABLE
+   * deferred-continuation seam (test-only): arms the DURABLE
    * continuation claim AFTER construction — the state a host boot derives
    * from the persisted terminal marker and passes as `continuationPending`.
    * Because the Session was built WITHOUT the claim, the FIRST ui_ready
@@ -599,7 +599,7 @@ export interface Harness {
    */
   armContinuation(): void;
   /**
-   * Taskana 4704 part A (A1): the Session's childSpawnMode() — the mode child
+   * part A (A1): the Session's childSpawnMode() — the mode child
    * sessions run under (pre-orchestrate mode with plan coerced to build while
    * orchestrate is on; the live engine mode otherwise).
    */
@@ -666,7 +666,7 @@ export function createHarness(options: HarnessOptions): Harness {
     registry.register(bashOutputTool);
     registry.register(bashKillTool);
   }
-  // Mirror host boot EXACTLY (TASK.27): ONE call both registers ExitPlanMode
+  // Mirror host boot EXACTLY: ONE call both registers ExitPlanMode
   // and yields the loop control, so the harness can never reproduce the unsafe
   // half-wiring. `session` below is captured lazily — onModeChange only ever
   // fires from inside a running turn, long after construction.
@@ -717,13 +717,13 @@ export function createHarness(options: HarnessOptions): Harness {
           compactionBoundary: () => options.compactionRecords?.sequence() ?? 0,
         }
       : {}),
-    // Mirror host boot (Taskana 4104): artifacts store + sessionId spread into
+    // Mirror host boot: artifacts store + sessionId spread into
     // config.artifacts; absent -> spill degrades to truncation (byte-identical).
     ...(options.artifacts ? { artifacts: options.artifacts } : {}),
-    // Mirror host boot (TASK.27): planExitMode + onModeChange, or nothing at
+    // Mirror host boot: planExitMode + onModeChange, or nothing at
     // all -> ctx.planMode is never built and ExitPlanMode fails closed.
     ...(planExit ?? {}),
-    // Mirror host boot (Taskana 4707): the skills port + prompt section, or
+    // Mirror host boot: the skills port + prompt section, or
     // nothing at all -> the Skill tool stays fail-closed "unavailable".
     ...(options.skills
       ? {
@@ -741,12 +741,12 @@ export function createHarness(options: HarnessOptions): Harness {
       : {}),
   };
   const loop = new AgentLoop(config);
-  // TASK.117: mirror the REAL host boot seam (host/index.ts's
+  // mirror the REAL host boot seam (host/index.ts's
   // `ConversationHistory({ initial })`) — a resumed session's persisted rows
   // seed the loop's history, so `engine.historyItems()` and the Session's
   // `bootHistory` option are THE SAME items by construction. The harness
   // used to leave the loop empty and hand `bootHistory` to Session alone,
-  // which TASK.117's rebuild-on-ui_ready exposed as an impossible state (a
+  // which the rebuild-on-ui_ready exposed as an impossible state (a
   // fresh snapshot read from an engine whose history never grew). Seeding
   // here keeps every existing boot-history test meaningful with ZERO
   // per-test edits — the same invariant production maintains.
@@ -777,7 +777,7 @@ export function createHarness(options: HarnessOptions): Harness {
         }
       : {}),
   };
-  // R1 (Taskana 4704 re-review #3): the harness builds the SAME spawn-mode cell
+  // R1 (re-review #3): the harness builds the SAME spawn-mode cell
   // host/index.ts builds (spawn-mode-cell.ts) — no copy — so a test asserting
   // through it pins the production derivation, not a re-implementation.
   const sessionRef: { current: Session | null } = { current: null };
@@ -979,7 +979,7 @@ export function createHarness(options: HarnessOptions): Harness {
 // ── stream-event builders (keep scripted steps terse and readable) ──────────
 
 /**
- * TASK.117 phase-1 (test-only): wraps a FileSystemPort so Read's file fetch
+ * phase-1 (test-only): wraps a FileSystemPort so Read's file fetch
  * funnels through the injected hook (with the tool call's real AbortSignal).
  * Every other method forwards verbatim.
  */

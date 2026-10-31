@@ -1,5 +1,5 @@
 /**
- * Checkpoint/rewind pure model (Taskana 4742). The survivors of the removed
+ * Checkpoint/rewind pure model. The survivors of the removed
  * TimelinePanel dock panel (`TimelinePanel.tsx`, slice P7.26/R2) plus the new
  * turn→checkpoint matching the left-edge tick rail needs. Pure by design —
  * no React, no store, no DOM — same posture as TranscriptMinimap's own
@@ -66,7 +66,7 @@ export function deriveTurnLabel(userInput: string): string {
 }
 
 /**
- * Map transcript user turns to their auto-captured checkpoints (Taskana
+ * Map transcript user turns to their auto-captured checkpoints (
  * 4742 §2.3). A checkpoint carries no turn/message id — only the label core
  * derived from the turn's prompt (`deriveTurnLabel` above) and `createdAt`.
  * The rail's "Rewind to before this message" action is offered ONLY for a
@@ -125,7 +125,7 @@ export function matchCheckpointsToTurns(
 }
 
 /**
- * Gate for the popover's "Rewind to before this message" action (Taskana
+ * Gate for the popover's "Rewind to before this message" action (
  * 4742 §2.4): shown only when the tab supports rewind (the owner already
  * resolved `engine?.capabilities.supportsRewind ?? true` — an absent
  * `rewind` prop means no), the turn has a MATCHED checkpoint, and the list

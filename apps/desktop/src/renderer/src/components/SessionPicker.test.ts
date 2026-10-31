@@ -55,7 +55,7 @@ describe("describeCreateTabFailure", () => {
       expect(codexCopy.toLowerCase()).toContain("codex");
     });
 
-    // Taskana 4227: main carries the doctor's exact verdict into not_ready.
+    // main carries the doctor's exact verdict into not_ready.
     it("codex signed_out keeps the sign-in copy", () => {
       const result: CreateTabResult = { ok: false, reason: "not_ready", notReadyReason: "codex_signed_out" };
       expect(describeCreateTabFailure(result, "codex")).toBe(
@@ -133,7 +133,7 @@ describe("describeCreateTabFailure", () => {
   });
 });
 
-describe("describeCreateTabFailure — existing copy guards (Taskana 4103)", () => {
+describe("describeCreateTabFailure — existing copy guards", () => {
   it("credential_missing keeps its existing copy", () => {
     const result: CreateTabResult = { ok: false, reason: "not_ready", notReadyReason: "credential_missing" };
     expect(describeCreateTabFailure(result, "core")).toContain("Add an API key");
@@ -150,7 +150,7 @@ describe("describeCreateTabFailure — existing copy guards (Taskana 4103)", () 
   });
 });
 
-describe("resolveConnectionMissingAction (TASK.45 W10-FIX F1 re-pin affordance)", () => {
+describe("resolveConnectionMissingAction (W10-FIX F1 re-pin affordance)", () => {
   it("arms a re-pin action for connection_missing when a current connection exists", () => {
     const result: CreateTabResult = { ok: false, reason: "connection_missing", connectionId: "conn-dead" };
     expect(resolveConnectionMissingAction(result, "sess-1", "conn-active")).toEqual({
@@ -221,14 +221,14 @@ describe("handleCreateTabResult", () => {
     expect(notice).toBe(describeCreateTabFailure(result));
   });
 
-  it("max_tabs with openTabs/maxTabs carries the N-of-M copy (TASK.119)", () => {
+  it("max_tabs with openTabs/maxTabs carries the N-of-M copy", () => {
     const result: CreateTabResult = { ok: false, reason: "max_tabs", openTabs: 20, maxTabs: 20 };
     const text = describeCreateTabFailure(result);
     expect(text).toContain("20 of 20 tabs");
     expect(text).toContain("Close a tab");
   });
 
-  it("bare max_tabs keeps the historical byte-identical text (TASK.119)", () => {
+  it("bare max_tabs keeps the historical byte-identical text", () => {
     const result: CreateTabResult = { ok: false, reason: "max_tabs" };
     expect(describeCreateTabFailure(result)).toBe(
       "Cannot open another tab — the maximum number of tabs is already open.",

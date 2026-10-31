@@ -6,7 +6,7 @@ export {
   withSubagents,
 } from "./runner.js";
 export type { SubagentRunnerOptions } from "./runner.js";
-// TASK.196: shared turn-limit wrap-up notices, re-exported for the desktop
+// shared turn-limit wrap-up notices, re-exported for the desktop
 // host (session.ts / index.ts) via the root barrel.
 export {
   SUBAGENT_WRAPUP_DEGRADED_PREFIX,
@@ -22,7 +22,7 @@ export {
   listPersonaNames,
 } from "./personas.js";
 export type { PersonaDefinition, PersonaName, RolePersonaName } from "./personas.js";
-// Taskana 4704: the role-route chain types shared between the host resolver
+// the role-route chain types shared between the host resolver
 // and core's chain walkers (runner inline walk + Agent session-tier stamping).
 export { buildRoleRouteRequestFields, isRoleRouteName } from "./role-route.js";
 export type {
@@ -33,7 +33,7 @@ export type {
   RoleRouteSkip,
 } from "./role-route.js";
 export { discoverAgentProfiles } from "./profiles.js";
-// TASK.4721: the learned base-budget formula + the accepted-run filter, shared
+// the learned base-budget formula + the accepted-run filter, shared
 // by the desktop host's turn-budget history store.
 export {
   LEARNED_BUDGET_MAX,
@@ -60,25 +60,25 @@ export {
 export type { FinalTextAccumulator } from "./final-text.js";
 // Re-exported so the renderer's S1 parity test (subagent-card.test.ts) can
 // value-import the real cap alongside the five SUBAGENT_CARD_* constants
-// (TASK.102 slice S1 review finding #1): summarize-tool.ts is not a types/
+// (slice S1 review finding #1): summarize-tool.ts is not a types/
 // file, so it rides the root barrel via this module's existing wildcard
 // export (index.ts: `export * from "./subagents/index.js"`) rather than
 // types/index.ts's curated config.js re-export list.
 export { SUBAGENT_ACTIVITY_SUMMARY_MAX_CHARS } from "./summarize-tool.js";
 // Re-exported so the desktop host's child-mode Session (apps/desktop/src/
-// host/session.ts, TASK.102 CUT-S2 §2.6.3/§10.7) can build its activity-feed
+// host/session.ts, CUT-S2 §2.6.3/§10.7) can build its activity-feed
 // summaries with the EXACT SAME sanitizer the in-process inline runner uses
 // (runner.ts:524) — the host imports only @anycode/core's root, never a
 // subpath, so this additive reexport is the only way it can reach a
 // summarize-tool.ts function (§10.7 п.7 explicitly authorizes this).
 export { summarizeChildToolCall } from "./summarize-tool.js";
-// TASK.148 slice 1: the shared stall detector, re-exported so the desktop
+// slice 1: the shared stall detector, re-exported so the desktop
 // session-tier host (host/child-session-port.ts) can drive one against its
 // own ChildRunEvent stream — the host never imports a core subpath, only the
 // root barrel, same discipline as summarizeChildToolCall above.
 export { SubagentStallClock } from "./stall-clock.js";
 export type { SubagentStallReport, SubagentStallClockOptions } from "./stall-clock.js";
-// TASK.226 срез S1: the MCP agent-bridge's shared logic (request builder,
+// срез S1: the MCP agent-bridge's shared logic (request builder,
 // catalog->tool-declaration projection, outcome->text projection) — re-
 // exported so the desktop host's claude-engine glue (срез S3+) reaches it
 // through the root barrel like every other core surface, never a subpath.

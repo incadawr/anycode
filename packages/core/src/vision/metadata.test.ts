@@ -1,5 +1,5 @@
 /**
- * Image metadata parser tests (TASK.198 slice A, plan §2/§10-A). Pins: pixel
+ * Image metadata parser tests (slice A, plan §2/§10-A). Pins: pixel
  * dimensions recovered from fixture headers for all four sniffable formats,
  * garbage bytes resolving to undefined rather than throwing, format detection
  * routed through the existing `sniffImageMediaType` (util/images.ts) instead of

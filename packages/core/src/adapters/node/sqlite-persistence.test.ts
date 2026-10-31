@@ -232,7 +232,7 @@ describe("SqlitePersistenceAdapter", () => {
       });
     });
 
-    it("round-trips a pinned connectionId through create/get/list (TASK.45 W10)", async () => {
+    it("round-trips a pinned connectionId through create/get/list (W10)", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       const created = await adapter.createSession({
         id: "s-conn",
@@ -288,7 +288,7 @@ describe("SqlitePersistenceAdapter", () => {
       expect((await adapter.getRootSession("s-touch-profile"))?.codexProfileId).toBe("personal");
     });
 
-    it("round-trips parentSessionId/spawnToolCallId through create/get (TASK.102 S2a A1)", async () => {
+    it("round-trips parentSessionId/spawnToolCallId through create/get (S2a A1)", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.createSession({ id: "parent-1", workspace: "/repo", model: "m", mode: "build" });
       const created = await adapter.createSession({
@@ -367,7 +367,7 @@ describe("SqlitePersistenceAdapter", () => {
       ).resolves.toBeTruthy();
     });
 
-    it("rejects a one-sided (parentSessionId, spawnToolCallId) pair in EITHER direction — CHECK constraint (TASK.102 S2 review MAJOR, opus+Luna)", async () => {
+    it("rejects a one-sided (parentSessionId, spawnToolCallId) pair in EITHER direction — CHECK constraint (S2 review MAJOR, opus+Luna)", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.createSession({ id: "parent-1", workspace: "/repo", model: "m", mode: "build" });
 
@@ -729,7 +729,7 @@ describe("SqlitePersistenceAdapter", () => {
       );
       INSERT INTO sessions VALUES ('legacy-v5', '/repo', 'm', 'build', 1, 2, NULL, NULL, NULL);
     `);
-    // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+    // v1 always created history_items; the v17 backfill reads it, so a
     // fixture claiming v1 is applied has to carry the table too.
     old.exec(
       `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
@@ -783,7 +783,7 @@ describe("SqlitePersistenceAdapter", () => {
     migrated.close();
   });
 
-  it("migrates a pre-connectionId (v9) database to v10 adding connection_id and is idempotent across opens (TASK.45 W10)", async () => {
+  it("migrates a pre-connectionId (v9) database to v10 adding connection_id and is idempotent across opens (W10)", async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-v9-conn-"));
     const dbPath = join(tmpDir, "anycode.sqlite");
     const old = new DatabaseSync(dbPath);
@@ -803,7 +803,7 @@ describe("SqlitePersistenceAdapter", () => {
       INSERT INTO sessions (id, workspace, model, mode, created_at, updated_at, project_root)
         VALUES ('legacy-v9', '/repo', 'm', 'build', 1, 2, '/repo');
     `);
-    // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+    // v1 always created history_items; the v17 backfill reads it, so a
     // fixture claiming v1 is applied has to carry the table too.
     old.exec(
       `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
@@ -856,7 +856,7 @@ describe("SqlitePersistenceAdapter", () => {
       INSERT INTO sessions (id, workspace, model, mode, created_at, updated_at, project_root)
         VALUES ('legacy-v10', '/repo', 'm', 'build', 1, 2, '/repo');
     `);
-    // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+    // v1 always created history_items; the v17 backfill reads it, so a
     // fixture claiming v1 is applied has to carry the table too.
     old.exec(
       `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
@@ -888,7 +888,7 @@ describe("SqlitePersistenceAdapter", () => {
     migrated.close();
   });
 
-  // TASK.102, found by the owner's live run on a real development database.
+  // found by the owner's live run on a real development database.
   // A migration version is a claim on a namespace shared by every branch that
   // ever opened this database, and the runner skips anything <= the recorded
   // MAX. A database carrying a HIGHER max than our own migration therefore
@@ -925,7 +925,7 @@ describe("SqlitePersistenceAdapter", () => {
       INSERT INTO sessions (id, workspace, model, mode, created_at, updated_at, project_root)
         VALUES ('root-foreign', '/repo', 'm', 'build', 1, 2, '/repo');
     `);
-    // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+    // v1 always created history_items; the v17 backfill reads it, so a
     // fixture claiming v1 is applied has to carry the table too.
     old.exec(
       `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
@@ -960,7 +960,7 @@ describe("SqlitePersistenceAdapter", () => {
     migrated.close();
   });
 
-  it("migrates a pre-child-session (v12) database to v16 adding parent_session_id/spawn_tool_call_id and is idempotent across opens (TASK.102 S2a A1, REAL adapter not a mock)", async () => {
+  it("migrates a pre-child-session (v12) database to v16 adding parent_session_id/spawn_tool_call_id and is idempotent across opens (S2a A1, REAL adapter not a mock)", async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-v12-child-"));
     const dbPath = join(tmpDir, "anycode.sqlite");
     const old = new DatabaseSync(dbPath);
@@ -986,7 +986,7 @@ describe("SqlitePersistenceAdapter", () => {
       INSERT INTO sessions (id, workspace, model, mode, created_at, updated_at, project_root)
         VALUES ('legacy-v12', '/repo', 'm', 'build', 1, 2, '/repo');
     `);
-    // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+    // v1 always created history_items; the v17 backfill reads it, so a
     // fixture claiming v1 is applied has to carry the table too.
     old.exec(
       `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
@@ -1080,7 +1080,7 @@ describe("SqlitePersistenceAdapter", () => {
     insert.run("exact", target, transition("anycode-wt/legacy"));
     insert.run("foreign", target, transition("user/precious"));
     insert.run("mismatch", target, transition("anycode-wt/other", "/repo/.anycode/worktrees/other"));
-    // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+    // v1 always created history_items; the v17 backfill reads it, so a
     // fixture claiming v1 is applied has to carry the table too.
     old.exec(
       `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
@@ -1107,7 +1107,7 @@ describe("SqlitePersistenceAdapter", () => {
       );
       INSERT INTO sessions VALUES ('legacy', '/w', 'm', 'build', 1, 1, NULL);
     `);
-    // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+    // v1 always created history_items; the v17 backfill reads it, so a
     // fixture claiming v1 is applied has to carry the table too.
     old.exec(
       `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
@@ -1189,7 +1189,7 @@ describe("SqlitePersistenceAdapter", () => {
 
   it(
     "advances updated_at to the newest appended item, so row order and the age label stop " +
-      "reading a metadata-only column (TASK.125)",
+      "reading a metadata-only column",
     async () => {
       tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-activity-"));
       const dbPath = join(tmpDir, "anycode.sqlite");
@@ -1222,7 +1222,7 @@ describe("SqlitePersistenceAdapter", () => {
     },
   );
 
-  it("never walks updated_at backwards — an item older than the row's stamp leaves it alone (TASK.125)", async () => {
+  it("never walks updated_at backwards — an item older than the row's stamp leaves it alone", async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-activity-back-"));
     const dbPath = join(tmpDir, "anycode.sqlite");
     const adapter = new SqlitePersistenceAdapter(dbPath);
@@ -1237,7 +1237,7 @@ describe("SqlitePersistenceAdapter", () => {
     await adapter.close();
   });
 
-  it("migrates a v16 database to v17, backfilling updated_at from history and leaving a historyless row alone (TASK.125)", async () => {
+  it("migrates a v16 database to v17, backfilling updated_at from history and leaving a historyless row alone", async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-v16-activity-"));
     const dbPath = join(tmpDir, "anycode.sqlite");
     const old = new DatabaseSync(dbPath);
@@ -1291,7 +1291,7 @@ describe("SqlitePersistenceAdapter", () => {
 
   it(
     "round-trips a ToolResultPart.presentation (subagent card) exactly through " +
-      "appendHistory/loadHistory AND replaceHistory/loadHistory (TASK.102 slice S1 W3, " +
+      "appendHistory/loadHistory AND replaceHistory/loadHistory (slice S1 W3, " +
       "CUT-S1 §3 W3 item 5 — the REAL adapter, not a mock sink)",
     async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
@@ -1516,7 +1516,7 @@ describe("SqlitePersistenceAdapter", () => {
     await expect(adapter.close()).resolves.toBeUndefined();
   });
 
-  describe("root-only vs maintenance visibility (TASK.102 S2a A2, contract suite)", () => {
+  describe("root-only vs maintenance visibility (S2a A2, contract suite)", () => {
     beforeEach(() => {
       vi.useFakeTimers();
       vi.setSystemTime(1_000);
@@ -1596,7 +1596,7 @@ describe("SqlitePersistenceAdapter", () => {
       expect(childRow).toMatchObject({ parentSessionId: "root-1", spawnToolCallId: "call-1" });
     });
 
-    it("listSessionsForMaintenance accepts an optional limit — a cheap startup probe does not have to pull every row to force migrate() (TASK.102 S2 review MINOR, opus)", async () => {
+    it("listSessionsForMaintenance accepts an optional limit — a cheap startup probe does not have to pull every row to force migrate(S2 review MINOR, opus)", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.createSession({ id: "root-1", workspace: "/w1", model: "m", mode: "build" });
       vi.setSystemTime(2_000);
@@ -1616,13 +1616,13 @@ describe("SqlitePersistenceAdapter", () => {
       expect((await adapter.listSessionsForMaintenance({ limit: 1 })).length).toBe(1);
     });
 
-    // TASK.142: the janitor's window is only a safety bound if the STORE selects
+    // the janitor's window is only a safety bound if the STORE selects
     // the N most recent rows — a mock that slices an already-ordered array cannot
     // prove that. Insert in an order that CONTRADICTS recency (newest first,
     // oldest last) so an insertion-order/rowid implementation picks the wrong
     // rows, and include the oldest row on an unreachable removable-volume path
     // (the TCC-prompt source the window must exclude).
-    it("listSessionsForMaintenance({limit}) selects the N most recent by updated_at DESC regardless of insertion order, leaving the oldest unreachable-path row out (TASK.142)", async () => {
+    it("listSessionsForMaintenance({limit}) selects the N most recent by updated_at DESC regardless of insertion order, leaving the oldest unreachable-path row out", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       const STALE = "/Volumes/External/repo";
       vi.setSystemTime(5_000);
@@ -1720,7 +1720,7 @@ describe("SqlitePersistenceAdapter", () => {
         parentSessionId: "fresh-clean",
         spawnToolCallId: "call-x",
       });
-      // TASK.142 review: an OLD CHILD claimant — the janitor's claim map must see
+      // review: an OLD CHILD claimant — the janitor's claim map must see
       // it even though the recency window never iterates it, or a live child's
       // worktree could be reaped. Age and child-ness must not matter here.
       await adapter.createSession({
@@ -1775,7 +1775,7 @@ describe("SqlitePersistenceAdapter", () => {
     });
   });
 
-  describe("child sessions — authorized access + cascade delete (TASK.102 S2a A3)", () => {
+  describe("child sessions — authorized access + cascade delete (S2a A3)", () => {
     it("getChildSession returns the child ONLY for the exact (parentSessionId, spawnToolCallId) pair", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.createSession({ id: "parent-a", workspace: "/repo", model: "m", mode: "build" });
@@ -1900,7 +1900,7 @@ describe("SqlitePersistenceAdapter", () => {
       expect(await adapter.listCheckpoints("root-2")).toHaveLength(1);
     });
 
-    it("deleteSessionTree never wipes a SURVIVING sibling's shadow history when a deleted session's externalSessionRef collides with the sibling's own ref in the OTHER engine's table (TASK.102 S2 review BLOCKER, Luna)", async () => {
+    it("deleteSessionTree never wipes a SURVIVING sibling's shadow history when a deleted session's externalSessionRef collides with the sibling's own ref in the OTHER engine's table (S2 review BLOCKER, Luna)", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       // Two unrelated roots that happen to carry the SAME literal
       // externalSessionRef string, one on each engine — collision is
@@ -1961,7 +1961,7 @@ describe("SqlitePersistenceAdapter", () => {
       expect(await adapter.listCheckpoints("grandchild-1")).toEqual([]);
     });
 
-    it("deleteSessionTree terminates when parent_session_id forms a cycle (a row referencing itself) — no CHECK forbids this today, and a recursive UNION ALL CTE would spin the same id forever instead of erroring (TASK.102 S2 review MAJOR, opus)", async () => {
+    it("deleteSessionTree terminates when parent_session_id forms a cycle (a row referencing itself) — no CHECK forbids this today, and a recursive UNION ALL CTE would spin the same id forever instead of erroring (S2 review MAJOR, opus)", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       // Nothing in the schema or createSession rejects a row naming itself as
       // its own parent — the collision is legal by construction today, so the
@@ -2529,7 +2529,7 @@ describe("SqlitePersistenceAdapter", () => {
         `CREATE TABLE sessions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, model TEXT NOT NULL, mode TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, title TEXT, engine_id TEXT, external_session_ref TEXT)`,
       );
       seed.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (1, 0), (2, 0), (3, 0)").run();
-      // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+      // v1 always created history_items; the v17 backfill reads it, so a
       // fixture claiming v1 is applied has to carry the table too.
       seed.exec(
         `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
@@ -2561,7 +2561,7 @@ describe("SqlitePersistenceAdapter", () => {
         created_at INTEGER NOT NULL, PRIMARY KEY (thread_id, item_id)
       )`);
       seed.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (1, 0), (2, 0), (3, 0), (4, 0)").run();
-      // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+      // v1 always created history_items; the v17 backfill reads it, so a
       // fixture claiming v1 is applied has to carry the table too.
       seed.exec(
         `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
@@ -2604,7 +2604,7 @@ describe("SqlitePersistenceAdapter", () => {
         )
         .run("thread-1", 0, 3, "exec-old", "echo old", 0);
       seed.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (1, 0), (2, 0), (3, 0), (4, 0)").run();
-      // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+      // v1 always created history_items; the v17 backfill reads it, so a
       // fixture claiming v1 is applied has to carry the table too.
       seed.exec(
         `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
@@ -2643,7 +2643,7 @@ describe("SqlitePersistenceAdapter", () => {
       // name. v5's FIRST statement (the DELETE) still runs, inside the SAME
       // migration transaction, before the poisoned ALTER throws.
       seed.exec(`ALTER TABLE codex_thread_items ADD COLUMN seq_in_turn INTEGER`);
-      // v1 always created history_items; the v17 backfill (TASK.125) reads it, so a
+      // v1 always created history_items; the v17 backfill reads it, so a
       // fixture claiming v1 is applied has to carry the table too.
       seed.exec(
         `CREATE TABLE IF NOT EXISTS history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id))`,
@@ -2730,7 +2730,7 @@ describe("SqlitePersistenceAdapter", () => {
   });
 });
 
-describe("SqlitePersistenceAdapter — reserveImageRef (TASK.198 plan §2, slice B1)", () => {
+describe("SqlitePersistenceAdapter — reserveImageRef (plan §2, slice B1)", () => {
   it("hands out 1, 2, 3, ... in order for one session and surfaces nextImageRef only once reserved", async () => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
     await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
@@ -2824,7 +2824,7 @@ describe("SqlitePersistenceAdapter — reserveImageRef (TASK.198 plan §2, slice
  * blocks only the worker's own thread) for `holdMs`, then commits. Simulates
  * a second concurrently-forked child's writer racing this adapter's
  * `open()`/`createSession` against the same on-disk file — the exact
- * collision the S2d live smoke caught (TASK.102 CUT-S2 §10.15.2).
+ * collision the S2d live smoke caught (CUT-S2 §10.15.2).
  */
 const BUSY_LOCK_WORKER_SRC = `
   const { parentPort, workerData } = require("node:worker_threads");
@@ -2838,7 +2838,7 @@ const BUSY_LOCK_WORKER_SRC = `
   parentPort.postMessage("done");
 `;
 
-describe("SqlitePersistenceAdapter — concurrent writers (TASK.102 CUT-S2 §10.15.2)", () => {
+describe("SqlitePersistenceAdapter — concurrent writers (CUT-S2 §10.15.2)", () => {
   let tmpDir: string;
 
   afterEach(async () => {
@@ -3121,10 +3121,10 @@ describe("WriteBehindHistorySink", () => {
 });
 
 /**
- * TASK.114: session hard-delete cascade. All tests run on :memory: databases
+ * session hard-delete cascade. All tests run on :memory: databases
  * only — the owner's live DB (~/.anycode/anycode.sqlite) is never opened.
  */
-describe("SqlitePersistenceAdapter — session delete (TASK.114)", () => {
+describe("SqlitePersistenceAdapter — session delete", () => {
   let deleteTmpDir: string | undefined;
 
   beforeEach(() => {
@@ -3210,7 +3210,7 @@ describe("SqlitePersistenceAdapter — session delete (TASK.114)", () => {
       checkpoints: 1,
       // Engine-scoped: the codex-seeded victim's claude count is 0 and vice
       // versa — deleteSessionTree scopes each shadow delete to the deleted
-      // row's own engine (TASK.102 S2 review BLOCKER, Luna).
+      // row's own engine (S2 review BLOCKER, Luna).
       claudeTranscriptItems: 0,
       codexThreadItems: 1,
       providerUsage: 0,
@@ -3270,7 +3270,7 @@ describe("SqlitePersistenceAdapter — session delete (TASK.114)", () => {
     expect((await adapter.listSessionsOlderThan("/other", now + 1000)).map((s) => s.id)).toEqual(["other"]);
   });
 
-  describe("with TASK.102 child sessions (native parent_session_id columns)", () => {
+  describe("with child sessions (native parent_session_id columns)", () => {
     it("deleting a parent cascades to children AND grandchildren", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.createSession({ id: "root", workspace: "/w", model: "m", mode: "build" });
@@ -3345,7 +3345,7 @@ describe("SqlitePersistenceAdapter — session delete (TASK.114)", () => {
     });
   });
 
-  describe("TASK.125 — one activity rule shared by listRootSessions and listSessionsOlderThan", () => {
+  describe("— one activity rule shared by listRootSessions and listSessionsOlderThan", () => {
     const dayMs = 24 * 60 * 60 * 1000;
     const backdate = (adapter: SqlitePersistenceAdapter, id: string, ms: number): void => {
       (adapter as unknown as { db: DatabaseSync }).db!
@@ -3429,11 +3429,11 @@ describe("SqlitePersistenceAdapter — session delete (TASK.114)", () => {
 });
 
 /**
- * Taskana 4083 / TASK.34: the provider_usage audit (migration v19). One row
+ * the provider_usage audit (migration v19). One row
  * per completed core model step, append-only, idempotent per
  * (session, turn, step). All tests run on :memory: or tmp-dir databases only.
  */
-describe("SqlitePersistenceAdapter — provider_usage audit (Taskana 4083 / TASK.34)", () => {
+describe("SqlitePersistenceAdapter — provider_usage audit", () => {
   function makeUsage(overrides: Partial<Parameters<SqlitePersistenceAdapter["recordProviderUsage"]>[0]> = {}) {
     return {
       sessionId: "s1",
@@ -3578,7 +3578,7 @@ describe("SqlitePersistenceAdapter — provider_usage audit (Taskana 4083 / TASK
   });
 });
 
-describe("pending child reports durability (Taskana 4123)", () => {
+describe("pending child reports durability", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);

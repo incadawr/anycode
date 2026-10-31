@@ -1,5 +1,5 @@
 /**
- * Workspace trust IPC channel names (Taskana 4736), value-only with ZERO
+ * Workspace trust IPC channel names, value-only with ZERO
  * imports: the sandboxed preload imports these, and a preload that pulls in
  * any package (zod) fails to load, leaving the renderer without `window.anycode`.
  */

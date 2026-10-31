@@ -1,5 +1,5 @@
 /**
- * Sessions API (Taskana 4747) control-plane contract: the channels and the
+ * Sessions API control-plane contract: the channels and the
  * value-only types shared by main (main/communication-ipc.ts) and the renderer
  * (SettingsScreen → Sessions API pane). Renderer-safe by construction: no type
  * here carries the bearer token, the discovery-file path, or any filesystem path
@@ -17,10 +17,10 @@ export const COMMUNICATION_COPY_CONFIG_CHANNEL = "anycode:communication-copy-con
 export const COMMUNICATION_SET_DEFAULT_ACCESS_CHANNEL = "anycode:communication-set-default-access";
 export const COMMUNICATION_SET_SESSION_ACCESS_CHANNEL = "anycode:communication-set-session-access";
 export const COMMUNICATION_SET_SESSION_HANDLE_CHANNEL = "anycode:communication-set-session-handle";
-/** Taskana 4763: the per-session External approvals switch. Writable ONLY from this channel (the renderer's trusted UI). */
+/** the per-session External approvals switch. Writable ONLY from this channel (the renderer's trusted UI). */
 export const COMMUNICATION_SET_SESSION_APPROVALS_CHANNEL = "anycode:communication-set-session-approvals";
 /**
- * Taskana 4768: the per-project "Allow agents to open tasks here" switch. The
+ * the per-project "Allow agents to open tasks here" switch. The
  * sidebar sends its workspace identity (like deleteSessionsOlder); main
  * canonicalises. Settings lists main-owned exact keys and can only turn them Off.
  */
@@ -60,9 +60,9 @@ export interface CommunicationView {
   port: number | null;
   defaultSessionAccess: "off" | "on";
   status: CommunicationStatus;
-  /** `approvals` is the per-session External approvals switch (Taskana 4763); always false while `enabled` is false. */
+  /** `approvals` is the per-session External approvals switch; always false while `enabled` is false. */
   tabs: Array<{ tabId: string; enabled: boolean; approvals: boolean; handle?: string }>;
-  /** Taskana 4768: projects where agents may open tasks. `key` is the exact stored canonical key (a lookup key for Off, never a new path). */
+  /** projects where agents may open tasks. `key` is the exact stored canonical key (a lookup key for Off, never a new path). */
   agentProjects: Array<{ key: string; name: string; displayPath: string }>;
 }
 

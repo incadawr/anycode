@@ -35,7 +35,7 @@ function deps(over: Partial<CommunicationControllerDeps> & { log?: string[]; ser
   return { d, server, log, errors };
 }
 
-describe("communication controller (Taskana 4747) — settings-driven live server", () => {
+describe("communication controller — settings-driven live server", () => {
   it("stays off and never starts when the Sessions API is disabled", async () => {
     const { d, server } = deps();
     const c = createCommunicationController(d);
@@ -201,7 +201,7 @@ describe("missing allowed folder warning wiring", () => {
   });
 });
 
-describe("External approvals wiring (Taskana 4763)", () => {
+describe("External approvals wiring", () => {
   it("T28 isExternalApprovalEnabled reaches startServer in the settings path; the legacy env path passes none", async () => {
     const live = deps({ isExternalApprovalEnabled: (id: string) => id === "a" });
     const controller = createCommunicationController(live.d);
@@ -221,7 +221,7 @@ describe("External approvals wiring (Taskana 4763)", () => {
 
 
 
-describe("close_session hook wiring (Taskana 4880)", () => {
+describe("close_session hook wiring", () => {
   it("passes the main gate only in settings mode", async () => {
     const closeSessionByAgent = vi.fn(async () => ({ ok: true as const }));
     const agentOpenedSessions = new Set(["agent"]);

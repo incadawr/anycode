@@ -1,5 +1,5 @@
 /**
- * Tests for the managed plugin store (Taskana 4732 S1-B, design §5 +
+ * Tests for the managed plugin store (S1-B, design §5 +
  * executor addendum): install, atomic swap (crash between rename and state
  * write keeps the OLD pointer), rollback+pin, tombstone, GC, capability
  * growth blocks auto-update, app-version reselect, state.json hardening
@@ -642,7 +642,7 @@ describe("legacy MCP grandfathering", () => {
   });
 });
 
-// ── Taskana 4732 xfix: store hardening (H3, M2, M3, L2, L7, grandfathering) ──
+// ── xfix: store hardening (H3, M2, M3, L2, L7, grandfathering) ──
 
 const ENTRY = { source: { kind: "official" }, trust: "official", active: "1.0.0", enabled: true, pinned: false, capabilities: [] };
 

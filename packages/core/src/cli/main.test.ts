@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-// Hoisted BEFORE the ./main.js import below: the Taskana 4850 owner-home leak
+// Hoisted BEFORE the ./main.js import below: the owner-home leak
 // pin needs os.homedir() stubbed at the moment main.ts binds it, so a module
 // factory is the only seam that stubs in time (vi.spyOn on a non-configurable
 // ESM namespace throws).
@@ -452,7 +452,7 @@ describe("CLI render of workflow coarse-progress events (design slice-3.4-cut.md
     );
   });
 
-  it("renders a failed step's reason line, and marks an unlaunched terminal in the end line (TASK.193)", () => {
+  it("renders a failed step's reason line, and marks an unlaunched terminal in the end line", () => {
     const events: AgentEvent[] = [
       { type: "workflow_start", toolCallId: "call-2", workflow: "risky", totalSteps: 1, steps: [] },
       {
@@ -701,7 +701,7 @@ describe("CLI extensions wiring (design slice-3.3-cut.md §6/slice-3.4-cut.md §
       expect(exitCode).toBe(0);
 
       const text = getText();
-      // Taskana 4095: the bundled examples/workflows root contributes the
+      // the bundled examples/workflows root contributes the
       // deep-research preset in every dev checkout, so the extensions banner
       // DOES print ("Workflows: 1") and /workflows lists exactly the bundled
       // preset — the empty-world claim now holds for skills and agent
@@ -770,7 +770,7 @@ describe("CLI extensions wiring (design slice-3.3-cut.md §6/slice-3.4-cut.md §
         isGitRepo: await new NodeFileSystemAdapter().exists(`${cwd}/.git`),
       };
       // buildSystemPrompt({toolNames, env}) + "" (memory) + "" (skills) +
-      // the bundled deep-research workflows section (Taskana 4095: the
+      // the bundled deep-research workflows section (the
       // examples/workflows root exists in every dev checkout) ===
       // buildSystemPrompt({toolNames, env}) + that section, byte-for-byte —
       // proving the concatenation point never mutates a boot beyond what
@@ -1082,7 +1082,7 @@ function setupTitleTestDirs(): { workspace: string; dbPath: string; home: string
 }
 
 /**
- * Fresh empty home dir registered for this suite's afterEach cleanup (Taskana
+ * Fresh empty home dir registered for this suite's afterEach cleanup (
  * 4850): runCli()'s config discovery reads user-scope `<home>/.anycode/…`
  * (config.json#lspServers, skills inventory, …) when no `home` option is
  * passed, so a suite drive without one inherits the OWNER's real ~/.anycode —
@@ -1102,7 +1102,7 @@ function setupIsolatedHome(): string {
  * (and any fire-and-forget persist a scripted "a"/`/allow` answer triggers,
  * design slice-P7.5-cut.md §3.2) off the owner's real `~/.anycode/settings.json`
  * — sibling to dbPath's own tmpdir, so it needs no separate cleanup entry.
- * The `home` argument (Taskana 4850) is only read by the CALLER to pass
+ * The `home` argument is only read by the CALLER to pass
  * `home:` into runCli(); the env object itself carries no home override.
  */
 function makeTitleTestEnv(dbPath: string, home?: string): NodeJS.ProcessEnv {
@@ -1116,7 +1116,7 @@ function makeTitleTestEnv(dbPath: string, home?: string): NodeJS.ProcessEnv {
 }
 
 /**
- * Explicitly trusted fixture (Taskana 4736): the project's own `lspServers`
+ * Explicitly trusted fixture: the project's own `lspServers`
  * only load for a trusted workspace. `ANYCODE_TRUST_WORKSPACE=1` trusts this
  * process only, so no trust store is written.
  */
@@ -1363,7 +1363,7 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
     expect(sessions[0]!.id).toBe(firstId);
   });
 
-  it("a fresher CHILD session row never hijacks --continue — workspace resume is wired root-only (TASK.102 S2a A2)", async () => {
+  it("a fresher CHILD session row never hijacks --continue — workspace resume is wired root-only (S2a A2)", async () => {
     const { workspace, dbPath, home } = setupTitleTestDirs();
     await seedSession(dbPath, workspace, "Fix the flaky test");
     const { id: rootId } = await readSessionTitle(dbPath, workspace);
@@ -1962,7 +1962,7 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
     expect(await runPromise).toBe(0);
     const text = getText();
     expect(text).toContain("[model] glm-4.6");
-    // TASK.113: the refreshed Z.AI catalog line, fresh-first.
+    // the refreshed Z.AI catalog line, fresh-first.
     expect(text).toContain(
       "[model] provider: Z.AI (GLM) — models: glm-5.3, glm-5.3-flash, glm-5.3-flashx, glm-5.2, glm-5.1, glm-5, glm-4.7, glm-4.6 (switch: /model <id>)",
     );
@@ -2208,7 +2208,7 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
     expect(text).not.toContain("[subagent call-1] start");
   });
 
-  it("scenario 9c: ANYCODE_EXPLORE_MODEL + a factory spawns an explore child on the factory port (Taskana 4131)", async () => {
+  it("scenario 9c: ANYCODE_EXPLORE_MODEL + a factory spawns an explore child on the factory port", async () => {
     const parentPort = new SequencedModelPort([
       [
         { type: "start" } as ModelStreamEvent,
@@ -2256,7 +2256,7 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
     expect(text).not.toContain("is not supported in this host");
   });
 
-  it("scenario 9d: ANYCODE_EXPLORE_MODEL but NO factory fails with the honest error text (Taskana 4131)", async () => {
+  it("scenario 9d: ANYCODE_EXPLORE_MODEL but NO factory fails with the honest error text", async () => {
     const parentPort = new SequencedModelPort([
       [
         { type: "start" } as ModelStreamEvent,
@@ -2506,7 +2506,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
     expect(findContextEventIndex(text, 276_000)).toBe(-1);
   });
 
-  it("scenario 4: a non-catalog model resolves the ASSUMED 8192 window at boot (TASK.142) — loopConfig.context carries it and /context reflects the degraded budget (8192/2048/1884) instead of the DEFAULT 200000", async () => {
+  it("scenario 4: a non-catalog model resolves the ASSUMED 8192 window at boot — loopConfig.context carries it and /context reflects the degraded budget (8192/2048/1884) instead of the DEFAULT 200000", async () => {
     const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
@@ -2528,7 +2528,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
 
     expect(await runPromise).toBe(0);
     const text = getText();
-    // TASK.142 changed this: an unknown model no longer omits loopConfig.context
+    // The fallback change means an unknown model no longer omits loopConfig.context
     // and no longer boots at DEFAULT_CONTEXT_WINDOW_TOKENS. It resolves the
     // explicit assumed fallback (8192), and the degraded-window budget engages:
     // effectiveWindow = max(8192 - min(24000, 8192), ceil(8192*0.25)) = 2048,
@@ -2539,7 +2539,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
     expect(text).not.toContain("/176000 tokens");
   });
 
-  it("scenario 5: an A-bound override (TASK.142) governs A at boot but NOT an UNKNOWN model B after /model — B re-resolves the assumed 8192", async () => {
+  it("scenario 5: an A-bound override governs A at boot but NOT an UNKNOWN model B after /model — B re-resolves the assumed 8192", async () => {
     const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
@@ -2624,7 +2624,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
     expect(findContextEventIndex(text, 276_000)).toBe(-1);
   });
 
-  it("scenario 7: /model A -> B -> A re-resolves each model's own window — switching back to A reuses the boot pair (TASK.142)", async () => {
+  it("scenario 7: /model A -> B -> A re-resolves each model's own window — switching back to A reuses the boot pair", async () => {
     const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
@@ -2676,11 +2676,11 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// TASK.142 production wiring: the CLI builds the child resolver from the SAME
+// production wiring: the CLI builds the child resolver from the SAME
 // catalog + env pair the boot/switch path uses. Pinned against the REAL source
 // (a hand-copied recipe stays green if main.ts stops passing the binding).
 // ─────────────────────────────────────────────────────────────────────────
-describe("per-model context window production wiring (TASK.142)", () => {
+describe("per-model context window production wiring", () => {
   const zAiEntry = matchCatalogEntryByBaseUrl(getBuiltinCatalog(), "https://api.z.ai/api/anthropic");
 
   function matchBracket(source: string, openIndex: number, open: string, close: string): string {
@@ -3487,7 +3487,7 @@ describe("CLI background tasks e2e (design slice-5.5-cut.md §6#5): notices inje
     await vi.waitFor(
       () => {
         input.write("/tasks\n");
-        // Matched against task-1's OWN /tasks table row, never the unrelated
+        // Matched against's OWN /tasks table row, never the unrelated
         // "[loop_end: completed, ...]" line every normal turn already prints.
         if (!/task-1\s+(completed|failed)/.test(getText())) {
           throw new Error("background task has not finished yet");
@@ -3836,7 +3836,7 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#6c/L8): no
     expect(readFileSync(f, "utf8")).toBe("const x = 1; // DIAG: should be invisible\n");
   }, 15000);
 
-  // Taskana 4850: the 6#6c guarantee above only holds because this suite's
+  // the 6#6c guarantee above only holds because this suite's
   // runCli() drives pass an isolated `home` — without one, runCli falls back to
   // os.homedir() and the OWNER's user-scope ~/.anycode/config.json#lspServers
   // falls into the spec load (loadLspServerSpecs reads <home>/.anycode/
@@ -3844,7 +3844,7 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#6c/L8): no
   // test never configured. This pin simulates exactly such an owner home via a
   // stubbed homedir() and asserts the drive's explicit `home` keeps it OUT —
   // red the moment a future drive drops its isolation.
-  it("an owner homedir() carrying lspServers never leaks into a drive with an isolated home (Taskana 4850)", async () => {
+  it("an owner homedir() carrying lspServers never leaks into a drive with an isolated home", async () => {
     const { workspace, dbPath, home } = setupTitleTestDirs();
     const ownerHome = setupIsolatedHome();
     mkdirSync(join(ownerHome, ".anycode"), { recursive: true });
@@ -3891,7 +3891,7 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#6c/L8): no
     }
   }, 15000);
 
-  it("Taskana 4846: with lspServers configured, the system prompt carries the one-line LSP notice (.ts); without it, none", async () => {
+  it("with lspServers configured, the system prompt carries the one-line LSP notice (.ts); without it, none", async () => {
     // Isolated `home` for BOTH halves: user-level `<home>/.anycode/config.json`
     // lspServers would otherwise merge into the boot specs (project wins per
     // name, user entries survive), so the owner's real home config could leak
@@ -4074,7 +4074,7 @@ describe("CLI image-input e2e (design slice-6.2-cut.md §6#8a): /image stage dra
     expect(turn1.images![0]!.mediaType).toBe("image/png");
     expect(turn1.images![0]!.data).toBe(TINY_PNG_BASE64);
     expect(turn1.images![0]!.sourcePath).toBe(pngPath);
-    // TASK.198 plan §2/B1: this CLI wires AgentLoopConfig.recognizer's
+    // plan §2/B1: this CLI wires AgentLoopConfig.recognizer's
     // reserveRef unconditionally over its own SqlitePersistenceAdapter, so
     // every attached image gets a real, persisted #N — proven end-to-end
     // here, not just against the mocked closure in loop/agent-loop.test.ts.
@@ -4721,7 +4721,7 @@ describe("CLI telemetry e2e (design slice-6.6-cut.md §2-C1/L4): default byte-lo
 });
 
 // ---------------------------------------------------------------------------
-// TASK.121: pnpm test must never resolve telemetry against a real home dir.
+// pnpm test must never resolve telemetry against a real home dir.
 // The leak path was: a workspace with no project telemetry config falls
 // through to the HOME-scope `.anycode/config.json` (production default:
 // os.homedir() — the owner's real home); if that file has telemetry enabled
@@ -4742,7 +4742,7 @@ function findJsonlFilesRecursive(dir: string): string[] {
   return found;
 }
 
-describe("CLI telemetry e2e (TASK.121): the home-fallback seam never resolves under a test runner", () => {
+describe("CLI telemetry e2e: the home-fallback seam never resolves under a test runner", () => {
   it("a workspace with no project telemetry config, whose HOME has telemetry enabled without a dir, writes zero .jsonl files under home", async () => {
     const { workspace, dbPath, home } = setupTitleTestDirs();
     const tmpHome = mkdtempSync(join(tmpdir(), "anycode-cli-telemetry-home-"));
@@ -4765,7 +4765,7 @@ describe("CLI telemetry e2e (TASK.121): the home-fallback seam never resolves un
       output,
       modelPort,
       cwd: workspace,
-      home: tmpHome, // this test's own HOME-side telemetry fixture (TASK.121)
+      home: tmpHome, // this test's own HOME-side telemetry fixture
     });
 
     input.write("/quit\n");
@@ -4777,10 +4777,10 @@ describe("CLI telemetry e2e (TASK.121): the home-fallback seam never resolves un
 });
 
 // ---------------------------------------------------------------------------
-// TASK.158: the ONE endpoint-literal builder both production port constructions
+// the ONE endpoint-literal builder both production port constructions
 // (baseModelPort + /model hot-swap factory) funnel through. Pins that the CLI
 // actually forwards a resolved includeUsage instead of dropping it.
-describe("buildCliEndpointConfig (TASK.158 endpoint-builder)", () => {
+describe("buildCliEndpointConfig (endpoint-builder)", () => {
   const retryOverride = { maxRetries: 2 };
   /** Minimal CoreEnvConfig carrying only the fields the builder reads. */
   function envConfig(baseUrl: string, includeUsage?: boolean): Parameters<typeof buildCliEndpointConfig>[0]["envConfig"] {
@@ -4918,11 +4918,11 @@ describe("buildCliEndpointConfig (TASK.158 endpoint-builder)", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// TASK.159: the catalog clamp at boot is not silent — an override above the
+// the catalog clamp at boot is not silent — an override above the
 // catalog ceiling prints one `[warn]` line naming the model, both numbers and
 // the catalog as the reason (same channel as the other boot warns).
 // ─────────────────────────────────────────────────────────────────────────
-describe("CLI boot clamp warning (TASK.159 onClamp wiring)", () => {
+describe("CLI boot clamp warning (onClamp wiring)", () => {
   it("an ANYCODE_MAX_OUTPUT_TOKENS above the catalog ceiling prints one [warn] clamp line at boot", async () => {
     const { workspace, dbPath, home } = setupTitleTestDirs();
     const output = new PassThrough();
@@ -4954,13 +4954,13 @@ describe("CLI boot clamp warning (TASK.159 onClamp wiring)", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// TASK.170: the DEFAULT_MAX_OUTPUT_TOKENS stub at boot is not silent either —
+// the DEFAULT_MAX_OUTPUT_TOKENS stub at boot is not silent either —
 // a model on a provider whose catalog carries no per-model hints at all
 // (OpenRouter's `models: []`, by construction) prints one `[warn]` line
 // naming the model, the number applied, and the reason (same diagnostics
-// channel as the TASK.159 clamp warning above).
+// channel as the clamp warning above).
 // ─────────────────────────────────────────────────────────────────────────
-describe("CLI boot stub-fallback warning (TASK.170 onStubFallback wiring)", () => {
+describe("CLI boot stub-fallback warning (onStubFallback wiring)", () => {
   it("a model on a models:[] catalog provider prints one [warn] stub line at boot", async () => {
     const { workspace, dbPath, home } = setupTitleTestDirs();
     const output = new PassThrough();
@@ -5017,7 +5017,7 @@ describe("CLI boot stub-fallback warning (TASK.170 onStubFallback wiring)", () =
 });
 
 // ---------------------------------------------------------------------------
-// TASK.162 slice B1 — the CLI half of the adjudicated tier seam (§0b item 2).
+// slice B1 — the CLI half of the adjudicated tier seam (§0b item 2).
 //
 // The child's capability settings must be re-resolved against the live
 // USER-SELECTED reasoning tier, never against the parent's model-EFFECTIVE
@@ -5041,7 +5041,7 @@ class RecordingTextModelPort implements ModelPort {
   }
 }
 
-describe("CLI child-model settings seam (TASK.162 §0b: live SELECTED tier, not parent-effective effort)", () => {
+describe("CLI child-model settings seam (§0b: live SELECTED tier, not parent-effective effort)", () => {
   it("/reasoning high -> /model <non-reasoning> -> reasoning-capable child override: the child gets high", async () => {
     // Parent script AFTER the switch: one Agent call with a model override,
     // then the wrap-up turn.
@@ -5123,13 +5123,13 @@ describe("CLI child-model settings seam (TASK.162 §0b: live SELECTED tier, not 
     // parent and was re-resolved against the CHILD's model.
     expect(childPort!.requests[0]!.reasoningEffort).toBe("high");
     // F6 in the same request: the child re-resolves maxOutputTokens against
-    // its OWN model (glm-5.3-flash's declared 131_072, TASK.170) — not the
+    // its OWN model (glm-5.3-flash's declared 131_072) — not the
     // parent's already-resolved 32_768 (glm-4.7's row). Before the F6 fix
     // (child-model-settings.ts) this would have been the parent's 32_768,
     // copied verbatim; the two ceilings are deliberately different catalog
     // values here so equality below can only pass by genuinely re-resolving
     // against the child's model, not by coincidence.
-    // Taskana 4150: the child's resolved 131_072 is then capped at
+    // the child's resolved 131_072 is then capped at
     // SUBAGENT_MAX_OUTPUT_TOKENS (what its 100 KB result can carry), which
     // happens to equal the parent's 32_768 — so this line no longer tells the
     // two apart; the effort assertion above still does, and runner.test.ts
@@ -5139,14 +5139,14 @@ describe("CLI child-model settings seam (TASK.162 §0b: live SELECTED tier, not 
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// Taskana 4074 cross-review F5: runCli's early-return paths must not leak
+// cross-review F5: runCli's early-return paths must not leak
 // the (live) loopback relay listener. `await resolveProxyRelay(env)` happens
 // at boot, but closeProxyRelay() was only called on the interactive-REPL
 // exit — the print-mode return and future early exits resolved runCli with
 // the listener still open, keeping the event loop (and an embedder that
 // awaits runCli and keeps running, which tests do) alive indefinitely.
 // ─────────────────────────────────────────────────────────────────────────
-describe("CLI proxy-relay lifecycle (Taskana 4074 cross-review F5)", () => {
+describe("CLI proxy-relay lifecycle (cross-review F5)", () => {
   afterEach(() => {
     closeProxyRelay();
   });
@@ -5199,7 +5199,7 @@ describe("CLI proxy-relay lifecycle (Taskana 4074 cross-review F5)", () => {
     expect(proxyRelayUrl()).toBeUndefined();
   });
 
-  it("Taskana 4685 rework: the boot scan starts the relay for the FIRST credentialed env value", async () => {
+  it("rework: the boot scan starts the relay for the FIRST credentialed env value", async () => {
     // The relay URL handed to children carries the token as userinfo and
     // never the upstream password; a second boot for a DIFFERENT upstream
     // would be a second relay (registry semantics — see proxy-relay.test.ts).
@@ -5223,7 +5223,7 @@ describe("CLI proxy-relay lifecycle (Taskana 4074 cross-review F5)", () => {
   });
 });
 
-describe("--tui flag (Taskana 4082)", () => {
+describe("--tui flag", () => {
   it("1. --tui with interactive:true boots the Ink composer, and a submitted line reaches the loop", async () => {
     const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();

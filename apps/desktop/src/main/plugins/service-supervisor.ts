@@ -1,5 +1,5 @@
 /**
- * Plugin background-service supervisor (Taskana 4750a, main process).
+ * Plugin background-service supervisor (main process).
  *
  * A plugin may declare long-lived `services` in its manifest. This module owns
  * their lifecycle: it starts an ELIGIBLE service (enabled, consented to its
@@ -82,7 +82,7 @@ export interface ServiceCandidate {
   /** Workspace trust for project-tier plugins (non-project tiers ignore it). */
   trusted: boolean;
   /**
-   * Taskana 4751 part 0: values of the `${secret:NAME}` references in `service.env`,
+   * part 0: values of the `${secret:NAME}` references in `service.env`,
    * resolved by the candidate source. Goes only into the child env; never logged or viewed.
    */
   secretValues?: Readonly<Record<string, string>>;

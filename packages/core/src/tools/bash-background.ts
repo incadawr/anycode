@@ -39,7 +39,7 @@ export const backgroundCapableBashTool: ToolDefinition<
   // actually registers as "Bash", so an artifact spill on its sync delegation
   // path must render the SAME envelope the sync tool renders, structurally
   // rather than by a copy that can drift. A background start returns a tiny
-  // {taskId} payload that never reaches the spill branch (TASK.94).
+  // {taskId} payload that never reaches the spill branch.
   formatPersistedModelContent: formatPersistedBashOutput,
   inputSchema: backgroundBashInputSchema,
   handler: async (input, ctx) => {

@@ -1,5 +1,5 @@
 /**
- * "Full browser access" IPC (Taskana 4759 owner amendment): the ONLY write path
+ * "Full browser access" IPC (owner amendment): the ONLY write path
  * for the per-session switch. Exported pure handlers over a deps bag (testable
  * without ipcMain), zod `.strict()` on every payload.
  *

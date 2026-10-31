@@ -1,5 +1,5 @@
 /**
- * Pure rules for the Telegram remote-control bridge (Taskana 4751). No I/O and
+ * Pure rules for the Telegram remote-control bridge. No I/O and
  * no imports beyond Node built-ins, so each rule is unit-tested in isolation.
  * service.mjs wires these to Telegram and to the AnyCode Sessions API.
  */
@@ -236,7 +236,7 @@ export const HELP_TEXT = [
 export const API_OFF_TEXT = "AnyCode Sessions API is off. Enable it in Settings -> Sessions API.";
 export const UNREACHABLE_TEXT = "AnyCode is not reachable right now.";
 
-// ── approvals (Taskana 4763) ──
+// ── approvals ──
 
 /** Approval tokens kept in state.json (oldest dropped) and their lifetime. */
 export const APPROVAL_TOKEN_MAX = 50;

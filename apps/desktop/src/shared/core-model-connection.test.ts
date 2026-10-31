@@ -1,5 +1,5 @@
 /**
- * Taskana 4888: unit tests for the `create_session {engine:"core", model}`
+ * unit tests for the `create_session {engine:"core", model}`
  * connection resolver — the pure policy that replaced the silent fallback to
  * the active connection. Discriminates every selector form (id, label,
  * `<providerId>/<model>`, bare model id) plus BOTH refusal shapes and the
@@ -24,7 +24,7 @@ function settingsWith(activeConnectionId: string | undefined, connections: Provi
 const deepseek = connectionFixture({ id: "deepseek", connectionId: "conn-deepseek", model: "deepseek-flash" });
 const zai = connectionFixture({ id: "zai", connectionId: "conn-zai", model: "glm-5" });
 
-describe("resolveCoreConnectionForModel (Taskana 4888)", () => {
+describe("resolveCoreConnectionForModel", () => {
   it("selects a connection by its exact id, with no model override", () => {
     const settings = settingsWith("conn-deepseek", [deepseek, zai]);
 

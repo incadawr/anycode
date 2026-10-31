@@ -1,5 +1,5 @@
 /**
- * End-to-end artifact spill (TASK.94). Where dispatcher.test.ts mocks the
+ * End-to-end artifact spill. Where dispatcher.test.ts mocks the
  * handler, these tests wire the REAL dispatch pipeline against the REAL Bash
  * and Read tools, a REAL NodeArtifactStore on a temp dir and a REAL
  * NodeFileSystemAdapter — so the DoD guarantees are checked at the seam they
@@ -111,7 +111,7 @@ function pathFromEnvelope(text: string): string | null {
 
 // ---- tests -----------------------------------------------------------------
 
-describe("executeToolCall — artifact spill (TASK.94)", () => {
+describe("executeToolCall — artifact spill", () => {
   let artifactsRoot: string;
   let workspace: string;
 
@@ -286,7 +286,7 @@ describe("executeToolCall — artifact spill (TASK.94)", () => {
     expect(outcome.modelText.startsWith("<persisted-output>")).toBe(false);
   });
 
-  // Fallback: absent store => truncate, byte-identical to TASK.93.
+  // Fallback: absent store => truncate.
   it("falls back to truncation when no artifact store is threaded", async () => {
     const registry = new ToolRegistry();
     registry.register(bashTool);
@@ -445,7 +445,7 @@ describe("executeToolCall — artifact spill (TASK.94)", () => {
     expect(path.startsWith(artifactsRoot)).toBe(true);
   });
 
-  it("does not spill when the rendered output fits the model budget (byte-identical to TASK.93)", async () => {
+  it("does not spill when the rendered output fits the model budget (byte-identical)", async () => {
     // Bash JSON of a short stdout fits well under BASH_RESULT_MAX_MODEL_BYTES.
     const stdout = "hello\n";
     const outcome = await executeToolCall(bashCtx(stdout), {

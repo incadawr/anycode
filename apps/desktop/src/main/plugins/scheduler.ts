@@ -1,5 +1,5 @@
 /**
- * Plugin update scheduler (Taskana 4732 S1-B, design §5): the ONE periodic
+ * Plugin update scheduler (S1-B, design §5): the ONE periodic
  * background network task of the plugins subsystem. Fresh boot → jittered
  * 0–2 min startup delay, then a check every ~24h ± 30 min (re-rolled every
  * cycle, updater.ts's recursive-setTimeout pattern). Manual checks through

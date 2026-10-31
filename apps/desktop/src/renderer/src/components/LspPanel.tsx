@@ -33,7 +33,7 @@ export function formatLspExtensions(extensions: readonly string[]): string {
   return extensions.length > 0 ? extensions.join(", ") : "-";
 }
 
-// ── "Not installed" vs "Not started" (Taskana 4845) ──
+// ── "Not installed" vs "Not started" ──
 //
 // A lazy `not_started` server whose binary is missing looks broken in the
 // panel ("enabled but never starts"). The Settings pane's existence-only
@@ -199,7 +199,7 @@ export function LspPanel() {
   // right-side drawer is up.
   useOverlayFlag(open);
 
-  // Taskana 4845: existence-only binary detection for the "Not installed"
+  // existence-only binary detection for the "Not installed"
   // display state. Fetched while the drawer is open and on Refresh; a missing
   // bridge (tests/partial preload) or a failed invoke degrades to an empty
   // lookup — every row then keeps its live state (the pre-4845 behavior).

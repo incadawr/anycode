@@ -1,5 +1,5 @@
 /**
- * TASK.133 / Taskana 4117 — pure unit tests for the per-connection proxy
+ * pure unit tests for the per-connection proxy
  * dispatcher (`provider-proxy-fetch.ts`). Everything Electron-shaped is
  * injected: a scriptable fake `requestFactory` (records every dispatch, and
  * each fake request can be driven — emit `response`, stream `data` chunks,

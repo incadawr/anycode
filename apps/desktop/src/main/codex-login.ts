@@ -1,5 +1,5 @@
 /**
- * Native Codex login flow (TASK.41 п.3): `account/login/start` -> open the
+ * Native Codex login flow (п.3): `account/login/start` -> open the
  * returned `authUrl` in the system browser -> wait (bounded, cancellable) for
  * the `account/login/completed` server notification -> close. Reuses
  * `CodexRpcClient` from main/codex-doctor.ts verbatim — one spawn/teardown
@@ -42,7 +42,7 @@ import { CODEX_DOCTOR_RPC_TIMEOUT_MS, CODEX_LOGIN_RPC_TIMEOUT_MS } from "../shar
 export const CODEX_LOGIN_TIMEOUT_MS = 5 * 60_000;
 
 /**
- * Taskana 4884: every failing branch used to collapse into a bare
+ * every failing branch used to collapse into a bare
  * `reason: "failed"`, so the next failure could not say WHAT broke — the UI
  * could only ever show "Sign-in failed. Try again." The failed outcome now also
  * carries a short `detail` (never a credential, never a token; see
@@ -83,7 +83,7 @@ export interface RunCodexLoginOptions {
    */
   rpcTimeoutMs?: number;
   /**
-   * Taskana 4884: bound on `account/login/start` alone. That one is a real
+   * bound on `account/login/start` alone. That one is a real
    * NETWORK round trip (the server mints the device code / auth URL), so the
    * doctor's `CODEX_DOCTOR_RPC_TIMEOUT_MS` is the wrong distribution to size it
    * against: observed real mints ran 0.4s…4.0s, i.e. a 3s bound rejected a
@@ -97,7 +97,7 @@ export interface RunCodexLoginOptions {
   /** DI seam for the spawn-time trust gate; production re-reads the real filesystem (`checkCodexBinaryPathTrust`). */
   trust?: (binaryPath: string) => string | null;
   /**
-   * The profile this login signs INTO (TASK.50 п.2): its home OVERWRITES any
+   * The profile this login signs INTO (п.2): its home OVERWRITES any
    * ambient CODEX_HOME in the child env, so `codex` writes the credential
    * into the profile's own tree — never into `~/.codex`. Absent or system:
    * env inheritance, byte-for-byte the pre-profiles behavior. An authLink
@@ -109,7 +109,7 @@ export interface RunCodexLoginOptions {
   /** DI seam for the pre-spawn home guard; production re-asserts the real filesystem (`assertCodexProfileHome`). */
   profileGuard?: (profile: ResolvedCodexProfile) => CodexProfileGuardResult;
   /**
-   * Taskana 4685: MAIN's own credential-free relay URL — a credentialed proxy
+   * MAIN's own credential-free relay URL — a credentialed proxy
    * in the source env is swapped for it in the login child's env (fail-closed
    * drop when absent). The OAuth round trip is a real network flight, so the
    * relay keeps it working behind an authenticating proxy WITHOUT the
@@ -177,7 +177,7 @@ export async function runCodexLogin(binaryPath: string, options: RunCodexLoginOp
     } else {
       // The server's own `error` string (contract: string|null) is the only
       // explanation a failed sign-in ever gets — surface it instead of the old
-      // bare "failed" (Taskana 4884). Absent ⇒ say so, so the reader can tell a
+      // bare "failed". Absent ⇒ say so, so the reader can tell a
       // silent refusal from an unexplained one.
       const serverError = typeof params?.error === "string" && params.error.trim() !== "" ? loginDetail(params.error) : undefined;
       resolveCompletion?.({
@@ -272,7 +272,7 @@ export async function runCodexLogin(binaryPath: string, options: RunCodexLoginOp
     }
     return outcome;
   } catch (error) {
-    // Taskana 4884: the RPC/transport message is the ONLY useful breadcrumb the
+    // the RPC/transport message is the ONLY useful breadcrumb the
     // old silent catch threw away (a timed-out network mint, a spawn failure, a
     // server-side rejection). It is our own client's/error's text — never
     // credential material — and it is what tells the user WHAT broke.

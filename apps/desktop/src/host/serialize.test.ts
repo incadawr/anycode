@@ -78,7 +78,7 @@ describe("sanitizeAgentEvent", () => {
     expect(sanitizeAgentEvent(event)).not.toHaveProperty("notice");
   });
 
-  it("forwards TASK.33 W7b retry metadata onto the wire error event unchanged", () => {
+  it("forwards W7b retry metadata onto the wire error event unchanged", () => {
     const event: AgentEvent = {
       type: "error",
       error: new Error("Cannot connect to API: Connect Timeout Error"),

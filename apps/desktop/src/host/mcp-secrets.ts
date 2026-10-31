@@ -1,5 +1,5 @@
 /**
- * Host side of the MCP secret hand-off (Taskana 4752, part C). The host forks with
+ * Host side of the MCP secret hand-off (part C). The host forks with
  * no vault access: main puts `{NAME: value}` for the workspace's referenced
  * secrets in `ANYCODE_MCP_SECRETS`. The host reads that once (boot.ts's MCP load),
  * deletes it, and builds a resolver. The resolver's closure is the only holder of

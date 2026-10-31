@@ -1,5 +1,5 @@
 /**
- * Taskana 4265: workspace-patch auto-accept policy for the Codex approval
+ * workspace-patch auto-accept policy for the Codex approval
  * bridge. A codex child clamped to preset `ask` still asks for EVERY
  * `apply_patch`, even a patch that lands inside its own workspace — a Claude
  * child in edit/auto/yolo gets `workspace` (acceptEdits) and a core child in
@@ -19,9 +19,9 @@ import { isWithinWorkspace, resolveWorkspaceWriteFacts, type FileSystemPort } fr
 import type { PermissionRuleMatcher } from "../../permission-broker.js";
 
 /**
- * Presets whose sandbox is workspace-write; only these can auto-accept a contained patch (Taskana 4265).
+ * Presets whose sandbox is workspace-write; only these can auto-accept a contained patch.
  * Integration (release-rc): 4078's `child-ask` preset joins the
- * set — it is the same workspace-write sandbox (TASK.179 / Taskana 4078), so a
+ * set — it is the same workspace-write sandbox, so a
  * Codex child running under it qualifies for 4265's contained-patch auto-accept.
  */
 export const WORKSPACE_WRITE_PRESETS: ReadonlySet<string> = new Set(["ask", "approve-for-me", "child-ask"]);
@@ -44,7 +44,7 @@ export interface CodexPatchAutoApprovalContext extends CodexPatchAutoApprovalPol
 const CHANGE_KEYS = new Set(["path", "kind", "diff"]);
 
 /**
- * Cross-review M1 (Taskana 4265): the pinned contract's `PatchChangeKind`
+ * Cross-review M1: the pinned contract's `PatchChangeKind`
  * variants are exactly `add`, `update`, and `delete`. The parity rule this
  * module mirrors covers file EDITS only — core's edit-mode containment widens
  * just Write/Edit (`WORKSPACE_WRITE_TOOLS`) and Claude's `workspace` tier is
@@ -63,7 +63,7 @@ function isAutoAcceptableChangeKind(kind: unknown): boolean {
   const record = kind as Record<string, unknown>;
   const type = record.type;
   if (typeof type !== "string" || !AUTO_ACCEPTABLE_CHANGE_KINDS.has(type)) return false;
-  // Taskana 4265 review: an update carrying `move_path` is a RENAME — it removes
+  // review: an update carrying `move_path` is a RENAME — it removes
   // the source path, i.e. the same silent-delete M1 excludes. Neither core's
   // Write/Edit nor Claude's acceptEdits can rename silently, so it asks; any
   // other non-null kind field is likewise outside the arbitrated shape.
@@ -103,7 +103,7 @@ export async function isPathProvablyInsideWorkspace(fs: FileSystemPort, workspac
 }
 
 /**
- * Taskana 4265: true iff a file-change approval may be accepted without asking, under the
+ * true iff a file-change approval may be accepted without asking, under the
  * SAME rules a core child gets: the patch lands provably inside the session workspace,
  * every change is an add/update (cross-review M1: a delete asks — the parity rule covers
  * file edits only, exactly core's Write/Edit-only containment and Claude's acceptEdits),

@@ -394,7 +394,7 @@ describe("routing reaches the handler layer", () => {
     expect(body.tabs).toEqual([{ tabId: "t1", workspace: "/a", sessionId: "s1", state: "running", pid: 4242 }]);
   });
 
-  it("GET /state projects manager.listChildRuns() as childRuns (TASK.102 S2d D1), [] when the manager lacks it", async () => {
+  it("GET /state projects manager.listChildRuns() as childRuns (S2d D1), [] when the manager lacks it", async () => {
     const childRuns = [
       // GitHub #17 slice F: forkedAt rides the same projection.
       { requestId: "r1", parentSessionId: "sess-p", childTabId: "tab-c", childSessionId: "sess-c", state: "running" as const, pid: 777, forkedAt: 1_700_001 },
@@ -413,7 +413,7 @@ describe("routing reaches the handler layer", () => {
   });
 });
 
-describe("GET /child-runs (TASK.102 S2d D1, dev-only durable maintenance list)", () => {
+describe("GET /child-runs (S2d D1, dev-only durable maintenance list)", () => {
   it("401s without a token", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/child-runs"));
@@ -447,7 +447,7 @@ describe("GET /child-runs (TASK.102 S2d D1, dev-only durable maintenance list)",
   });
 });
 
-describe("POST /sessions/:id/delete-tree (TASK.102 S2d D3, CUT-S2 §4.2 п.12 dev-only cascade delete)", () => {
+describe("POST /sessions/:id/delete-tree (S2d D3, CUT-S2 §4.2 п.12 dev-only cascade delete)", () => {
   it("calls deleteSessionTree with the path id and returns its result", async () => {
     const deleteSessionTree = vi.fn(async () => ({ deletedSessionIds: ["root-1", "child-1"], externalSessionRefs: [] }));
     const h = await boot({ persistence: { listSessionsForMaintenance: vi.fn(async () => []), deleteSessionTree } });
@@ -465,7 +465,7 @@ describe("POST /sessions/:id/delete-tree (TASK.102 S2d D3, CUT-S2 §4.2 п.12 de
   });
 });
 
-describe("POST /tabs/:tabId/child/open (TASK.102 S2d D1, CUT-S2 §4.2 п.5 'Open-клик')", () => {
+describe("POST /tabs/:tabId/child/open (S2d D1, CUT-S2 §4.2 п.5 'Open-клик')", () => {
   it("401s without a token", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/tabs/tab-a/child/open"), {
@@ -513,7 +513,7 @@ describe("POST /tabs/:tabId/child/open (TASK.102 S2d D1, CUT-S2 §4.2 п.5 'Open
   });
 });
 
-describe("POST /tabs/:tabId/child/close (TASK.188 S8.3)", () => {
+describe("POST /tabs/:tabId/child/close (S8.3)", () => {
   it("401s without a token", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/tabs/tab-a/child/close"), {
@@ -561,7 +561,7 @@ describe("POST /tabs/:tabId/child/close (TASK.188 S8.3)", () => {
   });
 });
 
-describe("POST /tabs/:tabId/child/split (TASK.188 S9.4)", () => {
+describe("POST /tabs/:tabId/child/split (S9.4)", () => {
   it("401s without a token", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/tabs/tab-a/child/split"), {
@@ -609,7 +609,7 @@ describe("POST /tabs/:tabId/child/split (TASK.188 S9.4)", () => {
   });
 });
 
-describe("GET /tabs/:tabId/child/layout (TASK.102 S3c, CUT-S3 §6.2 read-only probe)", () => {
+describe("GET /tabs/:tabId/child/layout (S3c, CUT-S3 §6.2 read-only probe)", () => {
   it("401s without a token", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/tabs/tab-a/child/layout"));
@@ -1156,7 +1156,7 @@ describe("agent-card expand route (design/slice-P7.18-cut.md §4 W4)", () => {
   });
 });
 
-describe("try-again-button route (TASK.33 W8-FIX #2)", () => {
+describe("try-again-button route (W8-FIX #2)", () => {
   it("401s GET /tabs/:tabId/try-again-button/:blockId without a token", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/tabs/tab-a/try-again-button/loop_end%3At1"));
@@ -1186,7 +1186,7 @@ describe("try-again-button route (TASK.33 W8-FIX #2)", () => {
   });
 });
 
-describe("try-again-button click route (TASK.33 W8-FIX #2)", () => {
+describe("try-again-button click route (W8-FIX #2)", () => {
   it("401s POST /tabs/:tabId/try-again-button/:blockId/click without a token", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/tabs/tab-a/try-again-button/loop_end%3At1/click"), { method: "POST" });
@@ -1218,7 +1218,7 @@ describe("try-again-button click route (TASK.33 W8-FIX #2)", () => {
   });
 });
 
-describe("workflow-steps route (TASK.191 slice S4)", () => {
+describe("workflow-steps route (slice S4)", () => {
   it("401s GET /tabs/:tabId/agent-card/:toolCallId/workflow-steps without a token", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-steps"));
@@ -1271,7 +1271,7 @@ describe("workflow-steps route (TASK.191 slice S4)", () => {
   });
 });
 
-describe("workflow-step click route (TASK.191 slice S4)", () => {
+describe("workflow-step click route (slice S4)", () => {
   it("401s POST /tabs/:tabId/agent-card/:toolCallId/workflow-steps/:stepId/click without a token", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-steps/step-1/click"), {
@@ -1329,7 +1329,7 @@ describe("workflow-step click route (TASK.191 slice S4)", () => {
   });
 });
 
-describe("workflow-map route (Taskana 4161)", () => {
+describe("workflow-map route", () => {
   it("401s GET /tabs/:tabId/agent-card/:toolCallId/workflow-map without a token", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-map"));
@@ -1381,7 +1381,7 @@ describe("workflow-map route (Taskana 4161)", () => {
   });
 });
 
-describe("workflow-ticks route (Taskana 4161)", () => {
+describe("workflow-ticks route", () => {
   it("401s GET /tabs/:tabId/agent-card/:toolCallId/workflow-ticks without a token", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-ticks"));
@@ -1416,7 +1416,7 @@ describe("workflow-ticks route (Taskana 4161)", () => {
   });
 });
 
-describe("workflow-map toggle route (Taskana 4161)", () => {
+describe("workflow-map toggle route", () => {
   it("401s POST /tabs/:tabId/agent-card/:toolCallId/workflow-map/toggle without a token", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-map/toggle"), { method: "POST" });
@@ -1481,7 +1481,7 @@ describe("workflow-map toggle route (Taskana 4161)", () => {
   });
 });
 
-describe("agent-card collapse route (Taskana 4161)", () => {
+describe("agent-card collapse route", () => {
   it("401s POST /tabs/:tabId/agent-card/:toolCallId/collapse without a token", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/collapse"), { method: "POST" });
@@ -1527,7 +1527,7 @@ describe("agent-card collapse route (Taskana 4161)", () => {
   });
 });
 
-describe("host-kill route (TASK.33 FIX-A)", () => {
+describe("host-kill route (FIX-A)", () => {
   it("401s POST /tabs/:tabId/host/kill without a token", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/tabs/tab-a/host/kill"), { method: "POST" });
@@ -1744,7 +1744,7 @@ describe("start-screen routes (design/slice-P7.12-cut.md §5 W2)", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("POST /start-screen/engine with an engine id -> startScreenSetEngine([engineId]) (codex-fixes TASK.42, cut §3.7)", async () => {
+  it("POST /start-screen/engine with an engine id -> startScreenSetEngine([engineId]) (codex-fixes, cut §3.7)", async () => {
     const { window, calls } = fakeWindowCapture({ ok: true });
     const h = await boot({ getWindow: () => window });
     const res = await fetch(url(h, "/start-screen/engine"), {
@@ -1819,7 +1819,7 @@ describe("start-screen routes (design/slice-P7.12-cut.md §5 W2)", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("GET /start-screen/model-menu -> startScreenModelMenuState (TASK.106 cut-1)", async () => {
+  it("GET /start-screen/model-menu -> startScreenModelMenuState (cut-1)", async () => {
     const facadeResult = {
       ok: true,
       open: true,
@@ -1834,7 +1834,7 @@ describe("start-screen routes (design/slice-P7.12-cut.md §5 W2)", () => {
     expect(calls[0]).toContain("[]");
   });
 
-  it("POST /start-screen/model-menu with {open:true} -> startScreenToggleModelMenu([true]) (TASK.106 cut-1)", async () => {
+  it("POST /start-screen/model-menu with {open:true} -> startScreenToggleModelMenu([true] cut-1)", async () => {
     const { window, calls } = fakeWindowCapture({ ok: true });
     const h = await boot({ getWindow: () => window });
     const res = await fetch(url(h, "/start-screen/model-menu"), {
@@ -1847,7 +1847,7 @@ describe("start-screen routes (design/slice-P7.12-cut.md §5 W2)", () => {
     expect(calls[0]).toContain("[true]");
   });
 
-  it("POST /start-screen/model-menu with a non-boolean open -> 400, facade never invoked (TASK.106 cut-1)", async () => {
+  it("POST /start-screen/model-menu with a non-boolean open -> 400, facade never invoked (cut-1)", async () => {
     const { window, calls } = fakeWindowCapture();
     const h = await boot({ getWindow: () => window });
     const res = await fetch(url(h, "/start-screen/model-menu"), {
@@ -1859,7 +1859,7 @@ describe("start-screen routes (design/slice-P7.12-cut.md §5 W2)", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("POST /start-screen/model-menu/select -> startScreenSelectModelRow([connectionId, modelId]) (TASK.106 cut-1)", async () => {
+  it("POST /start-screen/model-menu/select -> startScreenSelectModelRow([connectionId, modelId] cut-1)", async () => {
     const { window, calls } = fakeWindowCapture({ ok: true });
     const h = await boot({ getWindow: () => window });
     const res = await fetch(url(h, "/start-screen/model-menu/select"), {
@@ -1872,7 +1872,7 @@ describe("start-screen routes (design/slice-P7.12-cut.md §5 W2)", () => {
     expect(calls[0]).toContain('["conn-second","m2"]');
   });
 
-  it("POST /start-screen/model-menu/select with a missing modelId -> 400, facade never invoked (TASK.106 cut-1)", async () => {
+  it("POST /start-screen/model-menu/select with a missing modelId -> 400, facade never invoked (cut-1)", async () => {
     const { window, calls } = fakeWindowCapture();
     const h = await boot({ getWindow: () => window });
     const res = await fetch(url(h, "/start-screen/model-menu/select"), {
@@ -2024,7 +2024,7 @@ describe("prompt-queue routes (design/slice-P7.14-cut.md §5 W3)", () => {
   });
 });
 
-describe("POST /tabs/:tabId/prompt — image attachments (TASK.198 live-smoke facade)", () => {
+describe("POST /tabs/:tabId/prompt — image attachments (live-smoke facade)", () => {
   const PNG_HEADER = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
 
   it("without images -> unchanged {text} forward (byte-parity with pre-image behavior)", async () => {
@@ -2426,13 +2426,13 @@ describe("model-pill routes (design/slice-P7.15-cut.md §2.6 W4)", () => {
     expect(calls[0]).toContain('["tab a"]');
   });
 
-  it("401s GET /tabs/:tabId/composer-queue without a token (Taskana 4087 / TASK.55)", async () => {
+  it("401s GET /tabs/:tabId/composer-queue without a token", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/tabs/tab-a/composer-queue"));
     expect(res.status).toBe(401);
   });
 
-  it("GET /tabs/:tabId/composer-queue -> composerQueueState (Taskana 4087 / TASK.55)", async () => {
+  it("GET /tabs/:tabId/composer-queue -> composerQueueState", async () => {
     const facadeResult = {
       ok: true,
       running: true,
@@ -2454,7 +2454,7 @@ describe("model-pill routes (design/slice-P7.15-cut.md §2.6 W4)", () => {
     expect(calls[0]).toContain('["tab-a"]');
   });
 
-  it("GET /tabs/:tabId/composer-queue decodes a URL-encoded tabId (Taskana 4087 / TASK.55)", async () => {
+  it("GET /tabs/:tabId/composer-queue decodes a URL-encoded tabId", async () => {
     const { window, calls } = fakeWindowCapture({
       ok: true,
       running: false,
@@ -2640,7 +2640,7 @@ describe("settings routes (design/slice-P7.16-cut.md §5 W4)", () => {
     expect(res.status).toBe(401);
   });
 
-  it("GET /focus -> focusState (TASK.45 W12-smoke)", async () => {
+  it("GET /focus -> focusState (W12-smoke)", async () => {
     const facadeResult = { present: true, tagName: "select", role: null, ariaLabel: null, className: "settings-field-select", disabled: false };
     const { window, calls } = fakeWindowCapture(facadeResult);
     const h = await boot({ getWindow: () => window });
@@ -2847,7 +2847,7 @@ describe("MCP pane routes (design/slice-P7.19-cut.md §4 W4)", () => {
     }
   });
 
-  it("GET /settings/scope -> scopeState (dedicated read-only route, Taskana 4758)", async () => {
+  it("GET /settings/scope -> scopeState (dedicated read-only route)", async () => {
     const facadeResult = { selection: "ws_0123456789abcdef", label: "app", count: "Skills 18" };
     const { window, calls } = fakeWindowCapture(facadeResult);
     const h = await boot({ getWindow: () => window });
@@ -3188,7 +3188,7 @@ describe("Skills pane routes (design/slice-P7.20-cut.md §5 W4)", () => {
   });
 });
 
-describe("Provider connections pane routes (TASK.45 W12)", () => {
+describe("Provider connections pane routes (W12)", () => {
   const PROVIDER_POST_ROUTES: ReadonlyArray<{ path: string; body: unknown }> = [
     { path: "/settings/provider/add", body: {} },
     { path: "/settings/provider/tile", body: { connectionId: "conn-1" } },
@@ -3598,7 +3598,7 @@ describe("Subagents pane routes (design/slice-P7.21-cut.md §4 W4)", () => {
   });
 });
 
-describe("Profile pane routes (design/slice-P7.22-cut.md §4 W4, period/models/refresh added TASK.172)", () => {
+describe("Profile pane routes (design/slice-P7.22-cut.md §4 W4, period/models/refresh added)", () => {
   const PROFILE_POST_ROUTES: ReadonlyArray<{ path: string; body: unknown }> = [
     { path: "/settings/profile/telemetry", body: {} },
     { path: "/settings/profile/period", body: { period: "7d" } },
@@ -3740,7 +3740,7 @@ describe("Profile pane routes (design/slice-P7.22-cut.md §4 W4, period/models/r
       expect(calls[0]).toContain("[]");
     });
 
-    it("POST /settings/profile/rebuild -> profileRebuild() (TASK.187 S5)", async () => {
+    it("POST /settings/profile/rebuild -> profileRebuild(S5)", async () => {
       const facadeResult = { ok: true };
       const { window, calls } = fakeWindowCapture(facadeResult);
       const h = await boot({ getWindow: () => window });
@@ -3753,7 +3753,7 @@ describe("Profile pane routes (design/slice-P7.22-cut.md §4 W4, period/models/r
   });
 });
 
-describe("Vision pane routes (TASK.198 срез E2c)", () => {
+describe("Vision pane routes (срез E2c)", () => {
   const VISION_POST_ROUTES: ReadonlyArray<{ path: string; body: unknown }> = [
     { path: "/settings/vision/connection", body: { connectionId: "conn-1" } },
     { path: "/settings/vision/model", body: { modelId: "glm-5.3-flash" } },
@@ -3915,7 +3915,7 @@ describe("Vision pane routes (TASK.198 срез E2c)", () => {
   });
 });
 
-describe("Settings geometry probe route (TASK.187 S5, defect 1)", () => {
+describe("Settings geometry probe route (S5, defect 1)", () => {
   it("401s GET /settings/layout without a token", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/settings/layout"));
@@ -3949,7 +3949,7 @@ describe("Codex pane / profile chip / rollout-import routes (W4-F0, findings S1-
     { path: "/settings/codex/install", body: {} },
     { path: "/settings/codex/recheck", body: {} },
     { path: "/settings/codex/manifest-refresh", body: {} },
-    // TASK.103 (CUT-S4.md §3.8): joined into the SAME generic 401 sweep as
+    // (CUT-S4.md §3.8): joined into the SAME generic 401 sweep as
     // every other route above, not a separate ad hoc check.
     { path: "/settings/codex/trust", body: {} },
     { path: "/settings/binary-trust-dialog", body: { accept: true } },
@@ -3970,7 +3970,7 @@ describe("Codex pane / profile chip / rollout-import routes (W4-F0, findings S1-
     }
   });
 
-  // TASK.103 (CUT-S4.md §3.8): the two NEW GET routes — a separate append,
+  // (CUT-S4.md §3.8): the two NEW GET routes — a separate append,
   // deliberately not folded into the pre-existing "three GET routes" test
   // above (D-S4-12 discipline: every existing test stays byte-identical).
   it("401s the two binary-trust GET routes without a token", async () => {
@@ -4170,7 +4170,7 @@ describe("Codex pane / profile chip / rollout-import routes (W4-F0, findings S1-
       expect(calls[0]).toContain('"codexPaneRefreshManifest"');
     });
 
-    // TASK.103 (CUT-S4.md §3.8/D-S4-7).
+    // (CUT-S4.md §3.8/D-S4-7).
     it("POST /settings/codex/trust -> codexPaneTrustOpen()", async () => {
       const { window, calls } = fakeWindowCapture({ ok: true });
       const h = await boot({ getWindow: () => window });
@@ -4334,7 +4334,7 @@ function fakePreviewHost(overrides: Partial<PreviewHostHandle> = {}): PreviewHos
       ok: true as const,
       value: { previewId: "pv-1", url: "file:///tmp/a.html", mediaType: "image/png" as const, data: "UE5H", width: 10, height: 10 },
     })),
-    // panel-track CUT.md §2.2 (TASK.96 96-P1): panel-container additions to
+    // panel-track CUT.md §2.2 (96-P1): panel-container additions to
     // PreviewHostHandle — this automation-probe fake never drives the panel
     // container, so plain no-op/empty defaults suffice.
     setPanelState: vi.fn(),
@@ -4344,7 +4344,7 @@ function fakePreviewHost(overrides: Partial<PreviewHostHandle> = {}): PreviewHos
     listForPanel: vi.fn((tabId: string) => ({ tabId, previews: [], visiblePanelPreviewId: null })),
     setContainer: vi.fn(async () => ({ ok: false as const, error: "transfer lands in 96-P3" })),
     getMdDocRef: vi.fn(() => undefined),
-    // TASK.99 M2: type-level fake addition only — this suite exercises the
+    // M2: type-level fake addition only — this suite exercises the
     // automation server, not md-doc navigate (covered by
     // preview-host.test.ts's own "commitMdNavigate" suite).
     commitMdNavigate: vi.fn(() => undefined),
@@ -4516,7 +4516,7 @@ describe("preview probes/driver routes (night-track wave-1 cut §2.8, 96-E)", ()
   });
 });
 
-describe("sidebar row-cut routes (TASK.125)", () => {
+describe("sidebar row-cut routes", () => {
   it("401s the probe and both drivers without a token", async () => {
     const h = await boot();
     expect((await fetch(url(h, "/sidebar/groups"))).status).toBe(401);
@@ -4590,7 +4590,7 @@ describe("sidebar row-cut routes (TASK.125)", () => {
   });
 });
 
-describe("replay routes (TASK.188 §3.2/§5 S5, for scenario smoke)", () => {
+describe("replay routes (§3.2/§5 S5, for scenario smoke)", () => {
   it("401s GET /tabs/:tabId/replay without a token", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/tabs/tab-a/replay"));

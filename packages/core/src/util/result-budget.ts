@@ -1,5 +1,5 @@
 /**
- * Model-visible result budget (TASK.93). Every tool result crosses exactly one
+ * Model-visible result budget. Every tool result crosses exactly one
  * of these before it reaches the model, so a tool that declares nothing still
  * cannot put an unbounded payload into the request.
  *
@@ -85,7 +85,7 @@ export function applyResultBudget(
 }
 
 /**
- * Preview of `text` for the artifact envelope (TASK.94): at most `maxBytes`
+ * Preview of `text` for the artifact envelope: at most `maxBytes`
  * UTF-8 bytes taken from the requested end, snapped to a line boundary.
  *
  * Two cuts, in this order. The byte cut comes from applyResultBudget's own

@@ -1,5 +1,5 @@
 /**
- * Pure view-model for the Language servers pane (Taskana 4743): request
+ * Pure view-model for the Language servers pane: request
  * builders, arg parsing, extension parsing, form validation, catalog row
  * state (found / enabled-per-scope / badge), the "both claim .py" overlap
  * hint, and notice selection by `projectTrusted`. Every function here is

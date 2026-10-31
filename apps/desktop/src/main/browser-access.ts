@@ -1,5 +1,5 @@
 /**
- * Main-owned per-session "Full browser access" switch (Taskana 4759 owner
+ * Main-owned per-session "Full browser access" switch (owner
  * amendment). Modelled on the Sessions API switch (communication-sessions.ts):
  * state is keyed by the durable sessionId (survives restart and resume), stored
  * in a 0600 `browser-access.json` beside the user data, and written only by main.

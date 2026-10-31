@@ -54,7 +54,7 @@ export interface SettingsBridge {
   setSecret(key: SecretKey, value: string): Promise<SettingsMutationResult>;
   clearSecret(key: SecretKey): Promise<SettingsMutationResult>;
   addRule(rule: PermissionRuleAddRequest): Promise<SettingsMutationResult>;
-  // TASK.103: revoke ONE trusted-binary consent by path (idempotent — an
+  // revoke ONE trusted-binary consent by path (idempotent — an
   // unknown path is a no-op `{ok:true}`, D-S4-7). Grant itself is NOT part
   // of this bridge: it lives on `codex.trustBinary`/`claude.trustBinary`
   // (per-engine, cut §3.8/D-S4-8), since a grant always starts from a
@@ -65,20 +65,20 @@ export interface SettingsBridge {
   // typed refusal reason) out.
   oauthStart(providerId: string, connectionId?: string): Promise<OAuthStartResult>;
   oauthCancel(providerId: string): Promise<void>;
-  // TASK.45 W10: main-authoritative connection metadata update (ModelPill's
+  // W10: main-authoritative connection metadata update (ModelPill's
   // model/effort write). Never carries a secret; resolves with a fresh snapshot.
   connectionUpdate(req: ConnectionUpdateRequest): Promise<SettingsMutationResult>;
-  // TASK.45 W12: the connections grid/drawer's remaining CRUD surface — create/
+  // W12: the connections grid/drawer's remaining CRUD surface — create/
   // set-active/delete/check. Never carries a secret; resolves with a fresh snapshot.
   connectionCreate(req: ConnectionCreateRequest): Promise<SettingsMutationResult>;
   connectionSetActive(req: ConnectionSetActiveRequest): Promise<SettingsMutationResult>;
   connectionDelete(req: ConnectionDeleteRequest): Promise<SettingsMutationResult>;
   connectionCheck(req: ConnectionCheckRequest): Promise<SettingsMutationResult>;
-  // TASK.45 W11-FIX (W13 live-dogfood finding): push fired after a real
+  // W11-FIX (W13 live-dogfood finding): push fired after a real
   // request outcome updates a connection's advisory health — no payload,
   // same shape as `UpdatesBridge.onUpdateStatus` below.
   onProviderHealthChanged(callback: () => void): () => void;
-  // Taskana 4090: push fired after main's throttled `lastQuota` write lands
+  // push fired after main's throttled `lastQuota` write lands
   // (connection-quota.ts) — same payload-less shape as health above. The
   // listener reloads the snapshot, which is what makes a snapshot refresh
   // RE-SHOW the quota line from the persisted document.
@@ -95,7 +95,7 @@ export interface UpdatesBridge {
   check(): Promise<UpdateActionResult>;
   download(): Promise<UpdateActionResult>;
   install(): Promise<UpdateActionResult>;
-  /** TASK.47 defect 2: darwin honest-manual-path action — opens GitHub Releases in the system browser. */
+  /** defect 2: darwin honest-manual-path action — opens GitHub Releases in the system browser. */
   openReleasesPage(): Promise<UpdateActionResult>;
   onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
 }
@@ -132,7 +132,7 @@ export interface SettingsAppState {
   /** Removes one rule from `permissions.alwaysAllow` by sending the array minus that rule (arrays replace wholesale, design §3). */
   removeRule(rule: AlwaysAllowRule): Promise<SettingsMutationResult>;
   /**
-   * TASK.103: revoke one trusted-binary consent by path, via the dedicated
+   * revoke one trusted-binary consent by path, via the dedicated
    * channel (never a `setPatch({security:{trustedBinaries:...}}))` — that
    * generic path refuses the field outright, D-S4-5). Mirrors every other
    * mutation action's discipline: refreshes the snapshot on success, sets a
@@ -150,7 +150,7 @@ export interface SettingsAppState {
    * the loopback+PKCE flow) and always clears it before returning, regardless
    * of outcome. Success refreshes the snapshot (the provider's SecretStatus now
    * reads `set: true`); every refusal reason sets a human-readable `notice`.
-   * `connectionId` (TASK.45 W12-FIX §1, additive) scopes the sign-in to one
+   * `connectionId` (W12-FIX §1, additive) scopes the sign-in to one
    * connection — omitted preserves the legacy provider-scoped behavior.
    */
   oauthStart(providerId: string, connectionId?: string): Promise<OAuthStartResult>;
@@ -162,13 +162,13 @@ export interface SettingsAppState {
    */
   oauthCancel(providerId: string): Promise<void>;
   /**
-   * TASK.45 W10: updates a connection's metadata (model/effort) main-authoritatively
+   * W10: updates a connection's metadata (model/effort) main-authoritatively
    * by id — ModelPill's write path off the v1-patch shim. Refreshes the snapshot on
    * success; a refusal sets a `notice`. Never carries a secret.
    */
   connectionUpdate(req: ConnectionUpdateRequest): Promise<SettingsMutationResult>;
   /**
-   * TASK.45 W12: the remaining connection CRUD actions the grid/drawer drives —
+   * W12: the remaining connection CRUD actions the grid/drawer drives —
    * create (drawer add-flow), set-active (a tile click), delete (tile menu, with
    * `connection_in_use` surfaced via `notice`), check (tile menu's explicit
    * "Check" — never a hidden billable request). Same discipline as
@@ -180,7 +180,7 @@ export interface SettingsAppState {
   connectionDelete(req: ConnectionDeleteRequest): Promise<SettingsMutationResult>;
   connectionCheck(req: ConnectionCheckRequest): Promise<SettingsMutationResult>;
   /**
-   * TASK.45 W11-FIX (W13 live-dogfood finding): wires main's provider-health
+   * W11-FIX (W13 live-dogfood finding): wires main's provider-health
    * push into a fresh `load()` — no payload to merge, since the push only
    * signals "a connection's advisory health changed on disk", the same
    * "re-fetch on notify" shape as `onEnginesChanged`. Same one-time,
@@ -189,7 +189,7 @@ export interface SettingsAppState {
    */
   subscribeProviderHealth(): () => void;
   /**
-   * Taskana 4090: same "re-fetch on notify" shape as
+   * same "re-fetch on notify" shape as
    * `subscribeProviderHealth` above, wired to main's post-`lastQuota`-write
    * push. This is what closes the loop the Opus review found: a settings
    * snapshot refresh now carries the persisted quota line, so the renderer's
@@ -208,7 +208,7 @@ export interface SettingsAppState {
   downloadUpdate(): Promise<UpdateActionResult>;
   /** Quits and installs the downloaded update; refused (`invalid_state`) unless `updateStatus.kind === "downloaded"`. */
   installUpdate(): Promise<UpdateActionResult>;
-  /** TASK.47 defect 2: opens GitHub Releases (darwin honest-manual-path action, or a manual fallback on any platform). */
+  /** defect 2: opens GitHub Releases (darwin honest-manual-path action, or a manual fallback on any platform). */
   openReleasesUpdate(): Promise<UpdateActionResult>;
 }
 
@@ -327,7 +327,7 @@ export function createSettingsStore(bridge?: SettingsBridge, updatesBridge?: Upd
     return updatesBridge ?? realUpdatesBridge();
   }
 
-  // Renderer store snapshot race guard (TASK.45 block-45 F1): `load()` is
+  // Renderer store snapshot race guard (block-45 F1): `load()` is
   // unsequenced against every mutating action, so a health-push-triggered
   // `load()` started before a mutation can resolve AFTER it (its own slow
   // secret-presence probing lands late) and clobber fresh state with a stale

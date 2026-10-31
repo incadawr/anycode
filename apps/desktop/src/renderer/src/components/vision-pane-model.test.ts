@@ -1,5 +1,5 @@
 /**
- * TASK.198 срез E2a — pure-logic tests for the Vision panel's decision layer
+ * срез E2a — pure-logic tests for the Vision panel's decision layer
  * (vision-pane-model.ts). Same `.test.ts`-only, no-jsdom discipline as every
  * other Settings pane in this directory (vitest.config.ts runs `environment:
  * "node"`; see ProfilePane.test.ts's own docstring) — every rule the panel
@@ -47,7 +47,7 @@ function settings(over: {
 }
 
 /**
- * TASK.198: `imageInput` is not yet a real field of `CatalogSummaryEntry.
+ * `imageInput` is not yet a real field of `CatalogSummaryEntry.
  * models` — see vision-pane-model.ts's own doc comment — so this fixture
  * type widens the wire type's model shape with the field a closed gap would
  * add, and CATALOG below is built through it instead of a bare object literal

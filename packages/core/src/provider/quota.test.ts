@@ -1,5 +1,5 @@
 /**
- * Tests for providerQuotaFromHeaders (Taskana 4090 / TASK.71, §3 test 1).
+ * Tests for providerQuotaFromHeaders (§3 test 1).
  * Pure function: fixture header bags built the same way quota-fetch.ts
  * builds them over a real `Headers` instance.
  */
@@ -244,7 +244,7 @@ describe("providerQuotaFromHeaders", () => {
     ).toBeNull();
   });
 
-  // Taskana 4090 cross-review A1: `primarySource` names the PRIMARY window's
+  // cross-review A1: `primarySource` names the PRIMARY window's
   // own header, not `sources[0]` (which is the first family in FAMILIES order).
   it("names the primary window's own header, even when another family's header is listed first", () => {
     const update = providerQuotaFromHeaders(
@@ -261,7 +261,7 @@ describe("providerQuotaFromHeaders", () => {
     expect(update?.primarySource).toBe("x-ratelimit-tokens-limit");
   });
 
-  // Taskana 4090 cross-review A2: when two raw names canonicalize to the same
+  // cross-review A2: when two raw names canonicalize to the same
   // key, the reported name and value must not depend on the bag's iteration order.
   it("resolves a duplicated canonical family the same way whatever order the bag lists its names", () => {
     const entries: Record<string, string> = {

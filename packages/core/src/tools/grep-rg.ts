@@ -79,7 +79,7 @@ export function buildRgArgs(input: GrepInput, target: string, isDirectory: boole
 }
 
 /**
- * tgrep argv for one Grep call (Taskana 4160). `--no-index` is NOT passed:
+ * tgrep argv for one Grep call. `--no-index` is NOT passed:
  * the card's contract is "server when available, local on-disk index, else
  * tgrep scans" — every tier answers the full corpus, so an absent daemon
  * degrades speed, not results. `--no-max-filesize` lifts tgrep's 64 MiB
@@ -175,7 +175,7 @@ function buildCountOutput(events: RgEvent[], limit: number): GrepOutput {
  * Shared result-shaping for rg-shaped `--json` NDJSON output (used by both
  * the rg backend and the tgrep backend, whose `--json` is documented
  * ripgrep-shaped): parses match/context events and builds the mode-specific
- * `GrepOutput`. Extracted verbatim from `searchWithRipgrep` (Taskana 4160)
+ * `GrepOutput`. Extracted verbatim from `searchWithRipgrep`
  * — zero behaviour change for the rg path.
  */
 export function shapeRgJsonOutput(input: GrepInput, stdout: string): GrepOutput {

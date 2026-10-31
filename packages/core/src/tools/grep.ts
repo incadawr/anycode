@@ -5,7 +5,7 @@ import { grepInputSchema, type GrepInput, type GrepMatch, type GrepOutput } from
 import { resolveRgPath, searchWithRipgrep } from "./grep-rg.js";
 import { resolveTgrepPath, searchWithTgrep } from "./grep-tgrep.js";
 
-/** Floor for the rg re-check budget when the tgrep tier used most of the tool timeout (Taskana 4160 cross-review F3). */
+/** Floor for the rg re-check budget when the tgrep tier used most of the tool timeout (cross-review F3). */
 const RG_RECHECK_MIN_BUDGET_MS = 1_000;
 
 const IGNORED_DIR_NAMES = new Set([".git", "node_modules", "dist"]);
@@ -112,7 +112,7 @@ function searchMultiline(content: string, pattern: string, caseInsensitive: bool
 }
 
 /**
- * Grep backend selector (Taskana 4160): "rg" (default) or "tgrep" (the
+ * Grep backend selector: "rg" (default) or "tgrep" (the
  * microsoft/tgrep trigram index, probed from PATH). The tgrep tier only
  * engages on this explicit opt-in — never an auto-pick, never "enable if a
  * daemon is found" (owner decision 09.09).
@@ -133,7 +133,7 @@ export function selectGrepBackend(env: NodeJS.ProcessEnv, settingsBackend?: stri
 }
 
 /**
- * Attempts the tgrep backend (Taskana 4160); same never-throw contract as
+ * Attempts the tgrep backend; same never-throw contract as
  * `tryRipgrep`: `undefined` => next tier (rg, then JS). Resolution
  * (`ANYCODE_TGREP_BIN` override, else one absolute candidate per PATH entry)
  * and every failure mode (spawn error, timeout, cancellation, exit 2 =
@@ -177,7 +177,7 @@ async function tryRipgrep(
 }
 
 /**
- * Optional tgrep tier first (Taskana 4160): when
+ * Optional tgrep tier first: when
  * `ANYCODE_GREP_BACKEND=tgrep` / `settings.tools.grepBackend: "tgrep"`
  * selects the trigram backend (tools/grep-tgrep.ts) AND a usable tgrep
  * binary resolves from PATH, it serves the request from the warm/on-disk
@@ -203,7 +203,7 @@ export const grepTool: ToolDefinition<GrepInput, GrepOutput> = {
   metadata: {
     name: "Grep",
     description:
-      // Taskana 4160: deliberately unchanged — the backend is an operator
+      // deliberately unchanged — the backend is an operator
       // setting, invisible to the model, and the default-off tool schema must
       // stay byte-identical (prompt cache, provider tool snapshots).
       "Search file contents with a regular expression. Returns matching lines, file paths, or per-file counts.",
@@ -229,7 +229,7 @@ export const grepTool: ToolDefinition<GrepInput, GrepOutput> = {
     const tgrepSelected = selectGrepBackend(process.env) === "tgrep";
     const startedAt = Date.now();
     const tgrepOutput = tgrepSelected ? await tryTgrep(input, ctx, root, rootStat.isDirectory) : undefined;
-    // Zero-match re-check (Taskana 4160 follow-up): a trigram index answers
+    // Zero-match re-check (follow-up): a trigram index answers
     // from what it has indexed — a file the agent just wrote may not be in a
     // stale index yet, so tgrep's "no matches" can be wrong where a fresh
     // rg scan matches. Re-run every zero-match tgrep answer through the rg
@@ -239,7 +239,7 @@ export const grepTool: ToolDefinition<GrepInput, GrepOutput> = {
     // zero-match tgrep answer is never returned directly.
     if (tgrepOutput && tgrepOutput.totalMatches > 0) return { ok: true, output: tgrepOutput };
 
-    // Budget (Taskana 4160 cross-review F3): when the tgrep tier ran, the rg
+    // Budget (cross-review F3): when the tgrep tier ran, the rg
     // re-check gets only what is left of the tool timeout the dispatcher
     // enforces (plus its grace), so tgrep + rg cannot together outlive it.
     const rgTimeoutMs = tgrepSelected

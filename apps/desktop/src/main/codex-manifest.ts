@@ -1,5 +1,5 @@
 /**
- * Codex version-support POLICY (codex-profiles cut §7.1, TASK.53): which
+ * Codex version-support POLICY (codex-profiles cut §7.1): which
  * versions AnyCode calls "supported", sourced from the git-hosted
  * `codex-support.json` manifest (raw URL, OG-3: public repo) with the
  * compiled-in `BUNDLED_CODEX_MANIFEST` as the fail-closed fallback.
@@ -45,7 +45,7 @@ export const CODEX_MANIFEST_FETCH_TIMEOUT_MS = 10_000;
 
 // ── semver + range evaluation ──
 //
-// TASK.206: the comparator grammar, the range evaluator and the verdict itself
+// the comparator grammar, the range evaluator and the verdict itself
 // moved to shared/codex-version-policy.ts so the HOST — which is the process
 // that actually decides whether a Codex child starts, and may never import
 // from main/** — judges by the SAME code as this file's Settings/Doctor/
@@ -120,7 +120,7 @@ export type { CodexVersionVerdict };
 
 /**
  * The manifest-shaped policy flattened to the shape a verdict — and the host
- * carrier — actually consume (TASK.206). One projection, used by
+ * carrier — actually consume. One projection, used by
  * `codexVersionVerdict` below and by main/index.ts's `engineEnv` overlay, so
  * the screen and the host can never be judging different range sets.
  */
@@ -218,7 +218,7 @@ function readManifestCache(cacheFile: string): ManifestCacheFile | null {
   }
 }
 
-/** Races a promise against a hard wall-clock deadline — an injected fetch that IGNORES the abort signal must still fail closed (Taskana 4230). */
+/** Races a promise against a hard wall-clock deadline — an injected fetch that IGNORES the abort signal must still fail closed. */
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -272,7 +272,7 @@ export async function refreshCodexManifest(options: CodexManifestRefreshOptions)
           }
           if (response.status !== 200) return fallback();
           const body = await response.text();
-          // Taskana 4230 (supervisor #2): a fetch/body that ignored the abort
+          // (supervisor #2): a fetch/body that ignored the abort
           // and settled after the deadline must never persist a late manifest.
           if (controller.signal.aborted) return fallback();
           if (Buffer.byteLength(body, "utf8") > CODEX_MANIFEST_MAX_BYTES) return fallback();
@@ -307,9 +307,9 @@ export function dropCodexManifestCache(cacheFile: string): void {
   rmSync(cacheFile, { force: true });
 }
 
-// ── Taskana 4230: periodic schedule + refresh-before-refuse ──
+// ── periodic schedule + refresh-before-refuse ──
 
-/** Refresh-before-refuse rate limit (Taskana 4230): an unsupported version must not hammer GitHub per doctor pass. */
+/** Refresh-before-refuse rate limit: an unsupported version must not hammer GitHub per doctor pass. */
 export const CODEX_MANIFEST_FORCED_REFRESH_MIN_INTERVAL_MS = 10 * 60_000;
 
 export interface CodexManifestScheduleTimer {
@@ -325,7 +325,7 @@ const NODE_SCHEDULE_TIMER: CodexManifestScheduleTimer = {
 export interface CodexManifestRefreshScheduleHandle { stop(): void }
 
 /**
- * Periodic advisory refresh (Taskana 4230): re-runs the NON-forced refresh on
+ * Periodic advisory refresh: re-runs the NON-forced refresh on
  * the cache-TTL interval. Applies the manifest to the ACTIVE policy exactly
  * ONCE and hands the caller the BM4 `changed` flag — the caller triggers a
  * doctor recheck iff changed. Timer is unref'd and stoppable; injectable
@@ -353,7 +353,7 @@ export function startCodexManifestRefreshSchedule(options: {
 }
 
 /**
- * Rate-limited forced refresh for the refresh-before-refuse seam (Taskana
+ * Rate-limited forced refresh for the refresh-before-refuse seam (
  * 4230): coalesced when concurrent, at most one attempt per
  * CODEX_MANIFEST_FORCED_REFRESH_MIN_INTERVAL_MS, bounded end-to-end by the
  * whole-operation timeout above. Resolves true only when a NETWORK manifest

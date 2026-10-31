@@ -101,7 +101,7 @@ describe("loadEnvConfig", () => {
     expect(config.maxTurns).toBe(5);
   });
 
-  it("ANYCODE_SUPERVISOR_IDLE_MS (taskana 4181): valid integer passes through; non-integer and nonpositive both throw naming the knob", () => {
+  it("ANYCODE_SUPERVISOR_IDLE_MS: valid integer passes through; non-integer and nonpositive both throw naming the knob", () => {
     const base = { [ENV_API_KEY]: "key-123", [ENV_MODEL]: "claude-x" } as const;
     expect(loadEnvConfig(envWith({ ...base, [ENV_SUPERVISOR_IDLE_MS]: "600000" })).supervisorIdleMs).toBe(600_000);
     expect(() => loadEnvConfig(envWith({ ...base, [ENV_SUPERVISOR_IDLE_MS]: "soon" }))).toThrow(
@@ -160,7 +160,7 @@ describe("loadEnvConfig", () => {
     expect(config.stallTimeoutMs).toBe(0);
   });
 
-  it("parses ANYCODE_TODO_REMINDER_EVERY (Taskana 4665)", () => {
+  it("parses ANYCODE_TODO_REMINDER_EVERY", () => {
     const config = loadEnvConfig(
       envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m", [ENV_TODO_REMINDER_EVERY]: "7" }),
     );
@@ -214,7 +214,7 @@ describe("loadEnvConfig", () => {
     expect(config.dbPath).toBe("/tmp/anycode-test.sqlite");
   });
 
-  it("ANYCODE_NETWORK_RETRY_BUDGET_MS (Taskana 4705): valid integer passes through; absent → undefined; non-integer throws naming the knob", () => {
+  it("ANYCODE_NETWORK_RETRY_BUDGET_MS: valid integer passes through; absent → undefined; non-integer throws naming the knob", () => {
     const base = { [ENV_API_KEY]: "key-123", [ENV_MODEL]: "claude-x" } as const;
     expect(loadEnvConfig(envWith({ ...base, [ENV_NETWORK_RETRY_BUDGET_MS]: "90000" })).networkRetryBudgetMs).toBe(
       90_000,
@@ -225,7 +225,7 @@ describe("loadEnvConfig", () => {
     );
   });
 
-  it("ANYCODE_NETWORK_WAIT_MAX_MS (Taskana 4772): valid integer passes through; absent → undefined; non-integer throws naming the knob", () => {
+  it("ANYCODE_NETWORK_WAIT_MAX_MS: valid integer passes through; absent → undefined; non-integer throws naming the knob", () => {
     const base = { [ENV_API_KEY]: "key-123", [ENV_MODEL]: "claude-x" } as const;
     expect(loadEnvConfig(envWith({ ...base, [ENV_NETWORK_WAIT_MAX_MS]: "600000" })).networkWaitMaxMs).toBe(600_000);
     expect(loadEnvConfig(envWith({ ...base })).networkWaitMaxMs).toBeUndefined();
@@ -234,7 +234,7 @@ describe("loadEnvConfig", () => {
     );
   });
 
-  it("parses ANYCODE_CONTEXT_WINDOW_MODEL as an optional string, trimmed (TASK.142)", () => {
+  it("parses ANYCODE_CONTEXT_WINDOW_MODEL as an optional string, trimmed", () => {
     const config = loadEnvConfig(
       envWith({
         [ENV_API_KEY]: "key-123",
@@ -267,7 +267,7 @@ describe("loadEnvConfig", () => {
     expect(config.imageInput).toBeUndefined();
   });
 
-  it("parses ANYCODE_EXPLORE_MODEL as an optional string, trimmed (Taskana 4131)", () => {
+  it("parses ANYCODE_EXPLORE_MODEL as an optional string, trimmed", () => {
     const config = loadEnvConfig(
       envWith({
         [ENV_API_KEY]: "key-123",
@@ -278,7 +278,7 @@ describe("loadEnvConfig", () => {
     expect(config.exploreModel).toBe("glm-5.3-flash");
   });
 
-  it("leaves exploreModel undefined when ANYCODE_EXPLORE_MODEL is absent or blank (Taskana 4131)", () => {
+  it("leaves exploreModel undefined when ANYCODE_EXPLORE_MODEL is absent or blank", () => {
     expect(
       loadEnvConfig(envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m" })).exploreModel,
     ).toBeUndefined();
@@ -333,7 +333,7 @@ describe("loadEnvConfig", () => {
     }
   });
 
-  describe("ANYCODE_ADAPTIVE_TURN_BUDGET (TASK.4721)", () => {
+  describe("ANYCODE_ADAPTIVE_TURN_BUDGET", () => {
     it("leaves adaptiveTurnBudget undefined when unset (default OFF)", () => {
       const config = loadEnvConfig(envWith({ [ENV_API_KEY]: "key-123", [ENV_MODEL]: "claude-x" }));
       expect(config.adaptiveTurnBudget).toBeUndefined();
@@ -355,7 +355,7 @@ describe("loadEnvConfig", () => {
     });
   });
 
-  describe("ANYCODE_INCLUDE_USAGE (TASK.158)", () => {
+  describe("ANYCODE_INCLUDE_USAGE", () => {
     it("leaves includeUsage undefined when unset", () => {
       const config = loadEnvConfig(envWith({ [ENV_API_KEY]: "key-123", [ENV_MODEL]: "claude-x" }));
       expect(config.includeUsage).toBeUndefined();

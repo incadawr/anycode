@@ -203,10 +203,10 @@ describe("formatSubagentCounters — settled (final set)", () => {
   });
 });
 
-// TASK.240/4055 + follow-up: the ceiling budget line — grants/rounds in the
+// + follow-up: the ceiling budget line — grants/rounds in the
 // text, the refusal as SHORT HUMAN TEXT with the RAW enum kept in the title
 // attribute (the card previously rendered "stopped: stalled" verbatim).
-describe("formatSubagentBudgetLine — ceiling summary (TASK.4055)", () => {
+describe("formatSubagentBudgetLine — ceiling summary", () => {
   const base: Omit<SubagentSubStatus, "final"> = {
     agentType: "explore",
     description: "d",
@@ -292,7 +292,7 @@ describe("formatSubagentBudgetLine — ceiling summary (TASK.4055)", () => {
   });
 });
 
-describe("formatSubagentCounters — engine-aware (TASK.97 R5, wave2-cut §1.4)", () => {
+describe("formatSubagentCounters — engine-aware (R5, wave2-cut §1.4)", () => {
   it("running, engine null (in-process): byte-identical to the pre-R5 format — no prefix, turn segment present", () => {
     const subagent: SubagentSubStatus = {
       agentType: "explore",
@@ -342,7 +342,7 @@ describe("formatSubagentCounters — engine-aware (TASK.97 R5, wave2-cut §1.4)"
     expect(formatSubagentCounters(subagent)).not.toContain("turn");
   });
 
-  it("running, engine codex with NO measurements: bare 'codex' — no invented 0 tool calls / 0 turns (TASK.95)", () => {
+  it("running, engine codex with NO measurements: bare 'codex' — no invented 0 tool calls / 0 turns", () => {
     const subagent: SubagentSubStatus = {
       agentType: "codex subagent",
       description: "d",
@@ -376,7 +376,7 @@ describe("formatSubagentCounters — engine-aware (TASK.97 R5, wave2-cut §1.4)"
     expect(formatSubagentCounters(subagent)).toBe("codex · 2 tool calls · Read");
   });
 
-  it("settled, engine codex with unknown duration (-1): no time fragment and no fake turns/counts (TASK.95)", () => {
+  it("settled, engine codex with unknown duration (-1): no time fragment and no fake turns/counts", () => {
     const subagent: SubagentSubStatus = {
       agentType: "codex subagent",
       description: "d",
@@ -501,7 +501,7 @@ describe("inheritedParentModelFor — what an inherited child's card may show", 
   });
 });
 
-describe("subagentResponseModelNote (TASK.161 slice C1)", () => {
+describe("subagentResponseModelNote (slice C1)", () => {
   it("no responseModel at all => null (absence must render as absence, never a fallback)", () => {
     expect(subagentResponseModelNote({ model: "glm-5.3", final: {} })).toBeNull();
     expect(subagentResponseModelNote({ model: "glm-5.3", final: null })).toBeNull();
@@ -528,7 +528,7 @@ describe("subagentResponseModelNote (TASK.161 slice C1)", () => {
     });
   });
 
-  it("TASK.4057: a live claim (no final yet) renders the same note, with mismatch against the requested model", () => {
+  it("a live claim (no final yet) renders the same note, with mismatch against the requested model", () => {
     expect(subagentResponseModelNote({ model: "opus", responseModel: "glm-5.3", final: null })).toEqual({
       text: "provider reported: glm-5.3",
       mismatch: true,
@@ -539,13 +539,13 @@ describe("subagentResponseModelNote (TASK.161 slice C1)", () => {
     });
   });
 
-  it("TASK.4057: the settled final claim overrides a live one", () => {
+  it("the settled final claim overrides a live one", () => {
     expect(
       subagentResponseModelNote({ model: "opus", responseModel: "live-model", final: { responseModel: "glm-5.3" } }),
     ).toEqual({ text: "provider reported: glm-5.3", mismatch: true });
   });
 
-  it("TASK.4057: neither a live nor a final claim => null", () => {
+  it("neither a live nor a final claim => null", () => {
     expect(subagentResponseModelNote({ model: "opus", final: null })).toBeNull();
   });
 });
@@ -710,7 +710,7 @@ describe("formatWorkflowCounters — running (final: null)", () => {
     toolCalls: 0,
     lastTool: null,
     usage: null,
-    // Defaults to the "actually running" phase (TASK.191 slice S3) so every
+    // Defaults to the "actually running" phase (slice S3) so every
     // pre-existing fixture in this file — built only from `final`/turns/etc.
     // overrides — keeps exercising the same running ticker it always did;
     // the new pending/queued describe blocks below override these two.
@@ -768,7 +768,7 @@ describe("formatWorkflowCounters — running (final: null)", () => {
     expect(formatWorkflowCounters(workflow)).toBe("step 0/2");
   });
 
-  // TASK.191 slice S3: `steps` is now PREFILLED with all totalSteps entries
+  // slice S3: `steps` is now PREFILLED with all totalSteps entries
   // the instant workflow_start lands, most of them not-yet-started. The
   // count MUST read the `started` flag, not `steps.length` — the naive
   // `steps.length` count would read "step 5/5" (every seeded step) at second
@@ -795,7 +795,7 @@ describe("formatWorkflowCounters — running (final: null)", () => {
   });
 
   // A QUEUED step (started, not yet running — parked behind the shared
-  // subagent semaphore, TASK.191 §B7) also has `final === null`. The
+  // subagent semaphore, §B7) also has `final === null`. The
   // in-flight lookup must require `running`, not just `final === null`, or a
   // merely-queued step would print its own (meaningless, all-zero) ticker as
   // if it were the step actually executing.
@@ -847,7 +847,7 @@ const mkStep = (overrides: Partial<WorkflowStepStatus> = {}): WorkflowStepStatus
   lastTool: null,
   usage: null,
   // Same "actually running" default rationale as the describe-local `step`
-  // factory above (TASK.191 slice S3) — see its comment.
+  // factory above (slice S3) — see its comment.
   started: true,
   running: true,
   final: null,
@@ -916,7 +916,7 @@ describe("workflowRunLabel", () => {
     expect(workflowRunLabel(workflow)).toBe("step 0/2");
   });
 
-  // TASK.191 slice S3: workflowRunLabel computes its own `started` count
+  // slice S3: workflowRunLabel computes its own `started` count
   // while running (it does NOT delegate to formatWorkflowCounters until
   // final !== null) — this is the SAME defect surface as
   // formatWorkflowCounters's own pin above, in a second place.
@@ -992,13 +992,13 @@ describe("workflowStepMeta", () => {
     expect(meta).not.toContain("·");
   });
 
-  it("unlaunched: '<label> · not launched', NOT a fabricated '0.0s' for a step that never ran for any span of time (TASK.193)", () => {
+  it("unlaunched: '<label> · not launched', NOT a fabricated '0.0s' for a step that never ran for any span of time", () => {
     expect(workflowStepMeta(mkStep({ final: { status: "error", durationMs: 0, unlaunched: true } }))).toBe(
       "Error · not launched",
     );
   });
 
-  // TASK.193 §10 finding 1: `started` and `final.unlaunched` are both
+  // §10 finding 1: `started` and `final.unlaunched` are both
   // legally true at once (a synthetic pre-check throw fires `step_start`
   // and then settles without ever calling `subagents.run`). This pins that
   // `started` cannot flip the rendering either way once `final !== null` —
@@ -1037,7 +1037,7 @@ describe("workflowStepAria", () => {
   });
 });
 
-describe("workflowStepFailure (TASK.193)", () => {
+describe("workflowStepFailure", () => {
   it("returns null for a step with no final at all", () => {
     expect(workflowStepFailure(mkStep({ final: null }))).toBeNull();
   });
@@ -1054,7 +1054,7 @@ describe("workflowStepFailure (TASK.193)", () => {
   });
 });
 
-describe("workflowStepFailureLabel (TASK.193)", () => {
+describe("workflowStepFailureLabel", () => {
   it("labels each of the three kinds, none of them the Agent tool's own verbatim wording", () => {
     expect(workflowStepFailureLabel("error")).toBe("Error");
     expect(workflowStepFailureLabel("max_turns")).toBe("Max turns reached — incomplete subagent result");
@@ -1062,7 +1062,7 @@ describe("workflowStepFailureLabel (TASK.193)", () => {
   });
 });
 
-// TASK.191 slice S3: workflow_start now prefills every step of the run, so
+// slice S3: workflow_start now prefills every step of the run, so
 // "not started" is a real per-step phase (workflowStepKind) rather than the
 // old lump pendingStepsLabel summary line that function replaced.
 describe("workflowStepKind", () => {
@@ -1085,7 +1085,7 @@ describe("workflowStepKind", () => {
   });
 });
 
-describe("workflowStepMeta — not started / queued (TASK.191 slice S3)", () => {
+describe("workflowStepMeta — not started / queued (slice S3)", () => {
   it("not started: bare word, no ticker", () => {
     expect(workflowStepMeta(mkStep({ started: false, running: false }))).toBe("Not started");
   });
@@ -1095,7 +1095,7 @@ describe("workflowStepMeta — not started / queued (TASK.191 slice S3)", () => 
   });
 });
 
-describe("workflowStepAria — not started / queued (TASK.191 slice S3)", () => {
+describe("workflowStepAria — not started / queued (slice S3)", () => {
   it("not started: id · agentType · Not started (meta already leads with the label, no duplication)", () => {
     expect(workflowStepAria(mkStep({ started: false, running: false }))).toBe("build · explore · Not started");
   });
@@ -1105,7 +1105,7 @@ describe("workflowStepAria — not started / queued (TASK.191 slice S3)", () => 
   });
 });
 
-describe("orderStepsByDependency (TASK.191 slice S3)", () => {
+describe("orderStepsByDependency (slice S3)", () => {
   it("leaves an already-topological array untouched", () => {
     const a = mkStep({ stepId: "A", dependsOn: [] });
     const b = mkStep({ stepId: "B", dependsOn: ["A"] });
@@ -1152,7 +1152,7 @@ describe("orderStepsByDependency (TASK.191 slice S3)", () => {
   });
 });
 
-describe("layoutWorkflowMap (TASK.191 slice S6 — the run map)", () => {
+describe("layoutWorkflowMap (slice S6 — the run map)", () => {
   it("puts a step with no dependencies in the FIRST column and its dependent in the second", () => {
     const a = mkStep({ stepId: "A", dependsOn: [] });
     const b = mkStep({ stepId: "B", dependsOn: ["A"] });
@@ -1476,7 +1476,7 @@ function mkSubagent(overrides: Partial<SubagentSubStatus> = {}): SubagentSubStat
   };
 }
 
-describe("workflowActivityRows (TASK.191 slice S1)", () => {
+describe("workflowActivityRows (slice S1)", () => {
   const lane = (
     activity: { stepId: string; toolName: string; summary: string }[],
     activityDropped = 0,
@@ -1517,7 +1517,7 @@ describe("workflowActivityRows (TASK.191 slice S1)", () => {
     expect(workflowActivityRows(lane([]))).toEqual([]);
   });
 
-  describe("selectedStepId filter (TASK.191 slice S4)", () => {
+  describe("selectedStepId filter (slice S4)", () => {
     it("keeps only the selected step's rows", () => {
       const rows = workflowActivityRows(
         lane([
@@ -1578,7 +1578,7 @@ describe("workflowActivityRows (TASK.191 slice S1)", () => {
   });
 });
 
-describe("toggleWorkflowStepSelection (TASK.191 slice S4)", () => {
+describe("toggleWorkflowStepSelection (slice S4)", () => {
   it("selects an unselected step", () => {
     expect(toggleWorkflowStepSelection(null, "fetch")).toBe("fetch");
   });
@@ -1764,7 +1764,7 @@ describe("AgentCardBody (SSR component render)", () => {
     expect(html).not.toContain('class="tool-call-result"');
   });
 
-  // TASK.161 slice C1: the provider-reported model pill mounts in the
+  // slice C1: the provider-reported model pill mounts in the
   // expanded meta row, next to the requested-model pill, and gets the
   // mismatch styling only when the provider's claim differs from what was
   // requested. Copy must say "provider reported", never "served".
@@ -1806,11 +1806,11 @@ describe("AgentCardBody (SSR component render)", () => {
     expect(html).not.toContain("provider reported");
   });
 
-  // TASK.44: max_turns is an incomplete outcome. The external card status is
+  // max_turns is an incomplete outcome. The external card status is
   // "max_turns" (the dispatcher maps errorKind:"max_turns"), the internal
   // subagent.final.status is "max_turns", and the RESULT slot carries the limit
   // notice + partial — all three agree, no green "Success" badge.
-  it("max_turns status shows the limit notice + partial in the RESULT slot (TASK.44)", () => {
+  it("max_turns status shows the limit notice + partial in the RESULT slot", () => {
     const block = mkAgentBlock({
       status: "max_turns",
       modelText:
@@ -1865,7 +1865,7 @@ describe("AgentCardBody (SSR component render)", () => {
     expect(html).not.toContain("tool-call-agent-result");
   });
 
-  // TASK.148 live-presentation slice: a live stall report renders a quiet
+  // live-presentation slice: a live stall report renders a quiet
   // "stalled · silent 4m" note naming what the child last did when the
   // detector supplied it — and fabricates nothing when it didn't.
   it("a live stall with lastActivity renders 'stalled · silent 4m' plus the supplied lastActivity", () => {
@@ -1957,7 +1957,7 @@ describe("ToolCallCard (SSR component render) — generic non-Agent path stays u
     expect(html).not.toContain("tool-call-agent-result");
   });
 
-  // TASK.148 live-presentation slice: the collapsed row carries the same
+  // live-presentation slice: the collapsed row carries the same
   // quiet stall note as the expanded body (an Agent card defaults to
   // collapsed in every status — the note must be visible without expanding).
   it("a collapsed running Agent card with a live stall shows the stall note in the row", () => {
@@ -1985,12 +1985,12 @@ describe("ToolCallCard (SSR component render) — generic non-Agent path stays u
 });
 
 // ---------------------------------------------------------------------------
-// TASK.44 — honest external badge. A max_turns Agent tool_call must show the
+// honest external badge. A max_turns Agent tool_call must show the
 // "Max turns reached" badge (not "Success") and the warning status class, so
 // the external badge, the internal substatus, and the model-visible text all
 // agree in one terminal state.
 
-describe("ToolCallCard (SSR) — max_turns external badge (TASK.44)", () => {
+describe("ToolCallCard (SSR) — max_turns external badge", () => {
   it("renders the 'Max turns reached' badge and warning status class — never 'Success'", () => {
     const block = mkAgentBlock({
       status: "max_turns",
@@ -2007,22 +2007,22 @@ describe("ToolCallCard (SSR) — max_turns external badge (TASK.44)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// TASK.120 — the session-child badge as an ACTION. While a session-tier child
+// the session-child badge as an ACTION. While a session-tier child
 // is blocked on a permission ask, the "Waiting for permission" chip becomes a
 // real <button> firing the same onOpen the Open button uses (both mounts), so
 // the master can jump straight to the ask. isClickableChildBadge is the seam:
 // kind + handler presence decide button-vs-span; the pure tests pin its truth
 // table, the SSR renders pin the markup consequences — same jsdom-free
-// rationale as the TASK.44 block above.
+// rationale as the block above.
 
-describe("isClickableChildBadge (TASK.120) — pure truth table", () => {
+describe("isClickableChildBadge — pure truth table", () => {
   const open = () => {};
 
   it("ONLY waiting_permission + a real onOpen handler is actionable", () => {
     expect(isClickableChildBadge("waiting_permission", open)).toBe(true);
   });
 
-  it("waiting_permission WITHOUT onOpen stays a static chip (pre-TASK.120 render, byte-identical)", () => {
+  it("waiting_permission WITHOUT onOpen stays a static chip (pre-render, byte-identical)", () => {
     expect(isClickableChildBadge("waiting_permission", undefined)).toBe(false);
   });
 
@@ -2034,7 +2034,7 @@ describe("isClickableChildBadge (TASK.120) — pure truth table", () => {
   });
 });
 
-describe("AgentCardBody (SSR) — expanded child-row badge (TASK.120)", () => {
+describe("AgentCardBody (SSR) — expanded child-row badge", () => {
   it("waiting_permission + onOpen renders a <button> with the -action modifier, not a span", () => {
     const block = mkAgentBlock({ status: "running", subagent: mkSubagent({ waiting: true }) });
     const html = renderAgentBody(block, false, { badge: "waiting_permission", onOpen: () => {} });
@@ -2056,7 +2056,7 @@ describe("AgentCardBody (SSR) — expanded child-row badge (TASK.120)", () => {
   });
 });
 
-describe("ToolCallCard (SSR) — header-row badge (TASK.120)", () => {
+describe("ToolCallCard (SSR) — header-row badge", () => {
   // The header row is rendered via the exported ToolCallHeaderRow (same
   // rationale as AgentCardBody): the badge's childAction comes from
   // useChildSessionAction, which reads the tabs + child-relation zustand
@@ -2128,7 +2128,7 @@ describe("ToolCallCard (SSR) — header-row badge (TASK.120)", () => {
     }
   });
 
-  it("a waiting badge without onOpen stays a static span inside the toggle (pre-TASK.120 markup)", () => {
+  it("a waiting badge without onOpen stays a static span inside the toggle", () => {
     const block = mkAgentBlock({ status: "running", subagent: mkSubagent({ waiting: true }) });
     const html = renderToStaticMarkup(
       createElement(ToolCallHeaderRow, {
@@ -2311,7 +2311,7 @@ describe("identity display — session-tier child does not inherit", () => {
   });
 });
 
-describe("previewablePathOf (TASK.112)", () => {
+describe("previewablePathOf", () => {
   it("returns the file_path of a document Read/Write/Edit touched", () => {
     for (const tool of ["Read", "Write", "Edit"]) {
       expect(previewablePathOf(tool, { file_path: "/repo/plan.md" })).toBe("/repo/plan.md");
@@ -2345,8 +2345,8 @@ describe("previewablePathOf (TASK.112)", () => {
   });
 });
 
-describe("ToolCallCard (SSR) — open-in-preview control (TASK.112)", () => {
-  // Same plain-prop rationale as the TASK.120 badge above: the action is
+describe("ToolCallCard (SSR) — open-in-preview control", () => {
+  // Same plain-prop rationale as the badge above: the action is
   // resolved by ToolCallCard from TabContext + the preload bridge, neither of
   // which a static render can see, so the row takes it as a prop.
   const docBlock: ToolCallBlock = {
@@ -2411,7 +2411,7 @@ describe("ToolCallCard (SSR) — open-in-preview control (TASK.112)", () => {
   });
 });
 
-describe("workflow token spend (TASK.191 slice S2)", () => {
+describe("workflow token spend (slice S2)", () => {
   const wf = (steps: WorkflowStepStatus[]): WorkflowSubStatus => ({
     workflow: "release-flow",
     activity: [],
@@ -2476,12 +2476,12 @@ describe("workflow token spend (TASK.191 slice S2)", () => {
   });
 });
 
-// TASK.191 slice S3: a full component-level render, not just the pure
+// slice S3: a full component-level render, not just the pure
 // selectors above. Proves the CARD ITSELF calls orderStepsByDependency
 // (rather than mapping `workflow.steps` in raw array order) and that the
 // pending/queued phases get the right class + glyph in real markup, not just
 // in the exported formatters' return values.
-describe("workflow step ordering & phases (render, TASK.191 slice S3)", () => {
+describe("workflow step ordering & phases (render, slice S3)", () => {
   /** Pulls each `<li class="workflow-step substatus-KIND">...</li>` row, in
    *  DOCUMENT order, as {kind, stepId, hasSvg, hasSpinClass}. Scoped to
    *  `workflow-step` specifically so the activity feed's own `<li>` rows
@@ -2542,7 +2542,7 @@ describe("workflow step ordering & phases (render, TASK.191 slice S3)", () => {
   });
 });
 
-// TASK.191 slice S4 (owner ask: "а кликнуть в них нельзя будет? глянуть
+// slice S4 (owner ask: "а кликнуть в них нельзя будет? глянуть
 // лог?"). `WorkflowStepsBody` is exported specifically so the "step
 // selected" markup can be rendered honestly under SSR: `renderToStaticMarkup`
 // can't simulate a click (no event system, and a real `WorkflowStatus` mount
@@ -2554,7 +2554,7 @@ describe("workflow step ordering & phases (render, TASK.191 slice S3)", () => {
 // `WorkflowStatus`'s onClick wires to it. That combination is what's covered;
 // simulating an actual DOM click on `WorkflowStatus` itself would need jsdom,
 // which this package's vitest config does not have (file header note).
-describe("workflow step buttons (render, TASK.191 slice S4)", () => {
+describe("workflow step buttons (render, slice S4)", () => {
   /** Pulls each step row's `<button class="workflow-step-button
    *  substatus-<kind>" ...>` kind + aria-pressed + aria-label, in document
    *  order — same fixed-attribute-order convention `parseStepRows` above
@@ -2642,13 +2642,13 @@ describe("workflow step buttons (render, TASK.191 slice S4)", () => {
   });
 });
 
-// Taskana 4161: the automation surface of the run map — the `data-step-id`
+// the automation surface of the run map — the `data-step-id`
 // hook on each node `<g>` and the `data-from`/`data-to` pair on each edge
 // `<path>` are what `realWorkflowMapDom` reads; these SSR pins hold the
 // markup half of that contract (the accessor half lives in automation.test).
 // No visual change rides here — the hooks tag the real nodes, they do not
 // mirror state (same discipline as `data-tool-call-id`).
-describe("workflow map DOM hooks (render, Taskana 4161)", () => {
+describe("workflow map DOM hooks (render)", () => {
   // Same fetch→build fixture as the S4 describe above: a two-step run with
   // one edge between them — the smallest graph that is worth offering a map
   // for (`mapWorthOffering = steps.length > 1`).
@@ -2712,10 +2712,10 @@ describe("workflow map DOM hooks (render, Taskana 4161)", () => {
   });
 });
 
-// TASK.193: the selected step's own failure record, revealed by the SAME
+// the selected step's own failure record, revealed by the SAME
 // click that already drives the activity-feed filter above — no second
 // selection mechanism, just a second thing gated on `selectedStepId`.
-describe("workflow step failure block (render, TASK.193)", () => {
+describe("workflow step failure block (render)", () => {
   const failedStep = mkStep({
     stepId: "probe",
     final: { status: "error", durationMs: 0, failure: { kind: "error", text: "boom <b>", truncated: false } },
@@ -2810,14 +2810,14 @@ describe("workflow step failure block (render, TASK.193)", () => {
   });
 });
 
-// TASK.191 slice S7 — the plan's collapsed state (`task191/PLAN.md:184`):
+// slice S7 — the plan's collapsed state:
 // "Свёрнутое состояние — полоса засечек по числу шагов, карточка не растёт
 // против сегодняшней". The three pins below are the ones that had to be
 // proven red by mutation before this suite was allowed to pass: one tick per
 // step in dependency order with the right kind; no strip at all while the
 // card is expanded; and the state class riding on the SAME node as the
 // painted element.
-describe("collapsed tick strip (TASK.191 slice S7)", () => {
+describe("collapsed tick strip (slice S7)", () => {
   const mkRun = (steps: WorkflowStepStatus[], overrides: Partial<WorkflowSubStatus> = {}): WorkflowSubStatus => ({
     workflow: "release-flow",
     totalSteps: steps.length,
@@ -2952,7 +2952,7 @@ describe("detached / engine-tab Agent cards (orchestration lab F3/F4)", () => {
   });
 });
 
-describe("Queued status display (TASK.229)", () => {
+describe("Queued status display", () => {
   /** A freshly seeded `subagent_start` record (turns/toolCalls still 0) — the
    *  exact shape store.patchSubagentStart writes. */
   const seeded = (): SubagentSubStatus =>

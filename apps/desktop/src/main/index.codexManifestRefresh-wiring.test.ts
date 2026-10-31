@@ -1,5 +1,5 @@
 /**
- * Production-wiring test for Taskana 4230 (part 1): proves that main/index.ts
+ * Production-wiring test for manifest refresh: proves that main/index.ts
  * boots the PERIODIC manifest-refresh schedule and the refresh-before-refusal
  * helper on the profiles-root cache file, that a CHANGED periodic tick
  * re-triggers the doctor recheck, and that a self-check boot gets NONE of the
@@ -53,7 +53,7 @@ class FakeHostProcess {
 
 class FakeBrowserWindow {
   // `isDestroyed` on both the window and its webContents models a LIVE window
-  // (sendToMainWindow asks before touching `.webContents` — TASK.199).
+  // (sendToMainWindow asks before touching `.webContents`).
   webContents = {
     on: vi.fn(),
     send: vi.fn((channel: string) => {
@@ -262,7 +262,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
-describe("main/index.ts — periodic manifest refresh + refresh-before-refusal wiring (Taskana 4230)", () => {
+describe("main/index.ts — periodic manifest refresh + refresh-before-refusal wiring", () => {
   it("boots the periodic schedule and the refusal refresh on the profiles-root cache file", async () => {
     await bootIndex();
 

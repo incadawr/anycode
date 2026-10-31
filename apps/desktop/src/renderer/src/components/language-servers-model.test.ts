@@ -1,5 +1,5 @@
 /**
- * Pure-model tests for the Language servers pane (Taskana 4743): splitArgs
+ * Pure-model tests for the Language servers pane: splitArgs
  * quote handling, extension parsing, form validation messages, request
  * builders (path custody: tabId + presetId/name/entry ONLY), catalog row
  * view-model (found badge, enabled-scope labels, "both claim .py" overlap),

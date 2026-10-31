@@ -212,7 +212,7 @@ describe("Session — session_history hydration", () => {
     }
   });
 
-  it("TASK.188 S4: historyMaxItems above the boot length keeps everything, untruncated", async () => {
+  it("S4: historyMaxItems above the boot length keeps everything, untruncated", async () => {
     const bootHistory: HistoryItem[] = [];
     for (let i = 0; i < 600; i++) {
       bootHistory.push(userItem(`u${i}`, `msg ${i}`, i));
@@ -230,7 +230,7 @@ describe("Session — session_history hydration", () => {
     }
   });
 
-  it("TASK.188 S4: historyMaxItems below the default cap truncates to that override", async () => {
+  it("S4: historyMaxItems below the default cap truncates to that override", async () => {
     const bootHistory: HistoryItem[] = [];
     for (let i = 0; i < 600; i++) {
       bootHistory.push(userItem(`u${i}`, `msg ${i}`, i));
@@ -654,7 +654,7 @@ describe("resolveBootSession", () => {
     }
   });
 
-  it("pins the fork's connectionId onto a newly created session (TASK.45 W10)", async () => {
+  it("pins the fork's connectionId onto a newly created session (W10)", async () => {
     const persistence = new SqlitePersistenceAdapter(":memory:");
     try {
       const result = await resolveBootSession(persistence, {
@@ -670,7 +670,7 @@ describe("resolveBootSession", () => {
     }
   });
 
-  it("does not overwrite an existing session's pinned connectionId on resume (TASK.45 W10)", async () => {
+  it("does not overwrite an existing session's pinned connectionId on resume (W10)", async () => {
     const persistence = new SqlitePersistenceAdapter(":memory:");
     try {
       await persistence.createSession({ id: "s1", workspace: "/ws", model: "m1", mode: "build", connectionId: "conn-original" });

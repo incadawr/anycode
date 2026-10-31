@@ -165,7 +165,7 @@ export interface SubagentsIpcDeps {
   /** `os.homedir()` in production; dev/automation-overridable at the main/index.ts wiring site (mirrors ANYCODE_SKILLS_IMPORT_HOME). */
   home(): string;
   pluginDiscoveryOptions?: (home: string, workspace: string) => Omit<import("@anycode/core/subagents-admin").ScanAgentProfilesAdminOptions, "workspace" | "home">;
-  /** Scope reference resolver (Taskana 4758): a tab id (legacy) or a workspace id `ws_<16 hex>`, resolved main-side — never a renderer-supplied path. */
+  /** Scope reference resolver: a tab id (legacy) or a workspace id `ws_<16 hex>`, resolved main-side — never a renderer-supplied path. */
   workspaceForTab(tabId: string): string | undefined;
   fs: SubagentsFs;
   /** Reveals a path in the OS file manager — injected so this module stays Electron-free in tests (production wiring: `shell.showItemInFolder`). */

@@ -1,5 +1,5 @@
 /**
- * Taskana 4068 / TASK.98 (review 23.08 narrowing): host-side engine swap seam.
+ * (review 23.08 narrowing): host-side engine swap seam.
  *
  * The review froze N×N transcript transportation ("a track, not a task"), so
  * the ONLY "history transfer" this cut ships is a string-bundle first prompt:
@@ -63,7 +63,7 @@ function renderImportItem(item: HistoryItem): string {
     return `# user ${content}`;
   }
   if (role === "assistant" && Array.isArray(content)) {
-    // tool_call parts are skipped — the workspace on disk is the authority (TASK.98 frame).
+    // tool_call parts are skipped — the workspace on disk is the authority (frame).
     const text = content
       .filter((part): part is { type: "text"; text: string } => {
         const candidate = part as { type?: unknown; text?: unknown } | null;

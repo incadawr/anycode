@@ -1,5 +1,5 @@
 /**
- * Pure-logic tests for the PluginsPane + PluginInstallSheet wiring (Taskana
+ * Pure-logic tests for the PluginsPane + PluginInstallSheet wiring (
  * 4732 S1-C). Same no-jsdom rationale as McpServersPane.test.ts: this
  * package's vitest config runs `environment: "node"`, so hook-bearing
  * components can't mount — instead the pane's hook-FREE presentational
@@ -362,7 +362,7 @@ describe("describeSourceForSheet", () => {
   });
 });
 
-// ── Taskana 4750a: background services in the pane ──
+// ── background services in the pane ──
 
 function findElements(root: unknown, predicate: (el: AnyElement) => boolean): AnyElement[] {
   const found: AnyElement[] = [];
@@ -395,7 +395,7 @@ function serviceRow(overrides: Partial<PluginRowView> = {}): PluginRowView {
   });
 }
 
-describe("PluginsPaneBody — background services (Taskana 4750a)", () => {
+describe("PluginsPaneBody — background services", () => {
   it("needs approval shows Approve services and the chip", () => {
     const snap = snapshot({ plugins: [serviceRow({ servicesConsentGranted: false })] });
     const html = call(() => PluginsPaneBody(bodyPropsFor(snap)));

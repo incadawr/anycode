@@ -1,5 +1,5 @@
 /**
- * Unit tests for the MCP secrets view-model (Taskana 4752, part C). Pure, no DOM.
+ * Unit tests for the MCP secrets view-model (part C). Pure, no DOM.
  */
 import { describe, expect, it } from "vitest";
 import {

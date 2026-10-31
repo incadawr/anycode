@@ -1,5 +1,5 @@
 /**
- * Adapter smoke (Taskana 4750a): a real `process.execPath -e` child that exits
+ * Adapter smoke a real `process.execPath -e` child that exits
  * on its own — stdout and stderr arrive as text and the exit code is reported.
  * No long-lived process is started here.
  */

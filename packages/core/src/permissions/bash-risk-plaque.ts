@@ -1,5 +1,5 @@
 /**
- * Taskana 4070 (TASK.105 §2): the per-command risk plaque for a Bash-shaped
+ * (§2): the per-command risk plaque for a Bash-shaped
  * permission ask, derived from the SAME lexical classifier that powers
  * auto-allow (`classifyBashCommandLine`). Presentation only — the allow
  * decision never reads this.
@@ -12,7 +12,7 @@
  *
  * Input discipline (mirrors the modal's `bashUnknownShellHint` exactly):
  * fail-closed — a non-command tool or a missing/non-string `command` gets
- * nothing. The plaque and the TASK.35 «unknown shell expression» hint never
+ * nothing. The plaque and the «unknown shell expression» hint never
  * co-occur: a shell expression that is not provably read-only is the hint's
  * case alone.
  *
@@ -34,7 +34,7 @@
 
 import { classifyBashCommandLine } from "./safe-command.js";
 
-/** Taskana 4070 (TASK.105 §2): per-command risk note for a Bash ask, derived
+/** (§2): per-command risk note for a Bash ask, derived
  * from the SAME lexical classifier that powers auto-allow (presentation only;
  * the allow decision never reads this). `writeCapable` is NOT in this object —
  * its text names the concrete binary, so it is built by
@@ -49,12 +49,12 @@ export const BASH_RISK_PLAQUE = {
 export type BashRiskPlaque = (typeof BASH_RISK_PLAQUE)[keyof typeof BASH_RISK_PLAQUE];
 
 /** The write-capable plaque names the binary, so it is a function, not a
- * const slot (Taskana 4070). Exported for the copy-pinning test. */
+ * const slot. Exported for the copy-pinning test. */
 export function bashWriteCapablePlaque(binary: string): string {
   return `This command runs ${binary}, which can write or execute — the classifier cannot prove it read-only. Allow only if you intended this exact command.`;
 }
 
-/** Binaries the plaque names in the write-capable note (Taskana 4070).
+/** Binaries the plaque names in the write-capable note.
  * Presentation-only superset of core's deny-lists: not consulted by any engine. */
 export const WRITE_CAPABLE_BINARIES: ReadonlySet<string> = new Set([
   "rm", "rmdir", "mv", "cp", "ln", "mkdir", "touch", "tee", "truncate", "shred",
@@ -70,7 +70,7 @@ export const WRITE_CAPABLE_BINARIES: ReadonlySet<string> = new Set([
   "ruby", "php", "docker", "kubectl", "tar", "unzip", "osascript", "open",
 ]);
 
-/** Presentation facts about a Bash-shaped ask's command line (Taskana 4070). */
+/** Presentation facts about a Bash-shaped ask's command line. */
 export interface BashRiskFacts {
   /** Command-line tool with a string command; otherwise false. */
   applies: boolean;
@@ -79,7 +79,7 @@ export interface BashRiskFacts {
   binary: string | null;
 }
 
-/** Command-line tools whose ask subject is a shell command line (Taskana
+/** Command-line tools whose ask subject is a shell command line (
  * 4070). Mirrors `isCommandLineTool` in rules.ts and the desktop's
  * permission-pattern.ts: `CodexExec` is the Codex approval bridge's name for a
  * `commandExecution` approval, and its input carries the same `command`
@@ -88,7 +88,7 @@ export function isPlaqueCommandLineTool(toolName: string): boolean {
   return toolName === "Bash" || toolName === "CodexExec";
 }
 
-/** Taskana 4070 (TASK.105 §2): the per-command risk plaque for a Bash-shaped
+/** (§2): the per-command risk plaque for a Bash-shaped
  * ask. Pure function of (toolName, input) — see the module doc for the exact
  * split and the fail-closed discipline. */
 export function bashRiskFacts(toolName: string, input: unknown): BashRiskFacts {
@@ -98,7 +98,7 @@ export function bashRiskFacts(toolName: string, input: unknown): BashRiskFacts {
   if (typeof command !== "string") return { applies: false, plaque: null, binary: null };
   // Cross-review D2: a `kind: "writeStdin"` ask is input sent to a command
   // that is ALREADY running, not a new run of it — the classifier never
-  // reasoned about that interaction, and the Codex bridge's own TASK.184
+  // reasoned about that interaction, and the Codex bridge's own
   // `!stdinWrite` gate refuses to de-risk it (metadata stays fail-closed
   // high). The plaque must not contradict that in the same dialog by
   // asserting the command line is provably read-only: no plaque, the
@@ -139,7 +139,7 @@ export function bashRiskFacts(toolName: string, input: unknown): BashRiskFacts {
   };
 }
 
-/** The plaque string for an ask (Taskana 4070); null for everything the
+/** The plaque string for an ask; null for everything the
  * plaque does not apply to. Thin wrapper so callers never depend on the facts
  * struct. */
 export function bashRiskPlaque(toolName: string, input: unknown): string | null {

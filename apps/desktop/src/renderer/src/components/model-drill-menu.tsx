@@ -1,8 +1,8 @@
 /**
- * TASK.106 cut-2 §D4 (DoD 6) — the drill-down model popover, as ONE component
+ * cut-2 §D4 (DoD 6) — the drill-down model popover, as ONE component
  * both pickers render.
  *
- * The form is TASK.131's (owner decision 17.08): a root level with three
+ * The form is's (owner decision 17.08): a root level with three
  * popular picks, one row per connection GROUP and — for a model that declares
  * an effort vocabulary — an effort row; a group opens as a level of its own;
  * effort opens as a level of its own. This file is the MARKUP of that form,
@@ -38,7 +38,7 @@ export interface ModelDrillMenuProps {
   /** What an empty level says instead of showing a blank box. */
   emptyText: string;
   /**
-   * Taskana 4895: a plain-language line above the rows — the running session's
+   * a plain-language line above the rows — the running session's
    * chip passes "applies from the next turn" while a turn is in flight, so a
    * pick that is accepted right away cannot read as already in effect. Absent
    * on the start screen (nothing is running there) and between turns.
@@ -50,7 +50,7 @@ export interface ModelDrillMenuProps {
   onActivateRow(row: ModelDrillRow): void;
   onBack(): void;
   /**
-   * Taskana 4237: the action behind the empty-root level's "Add connection"
+   * the action behind the empty-root level's "Add connection"
    * button. Rendered ONLY when the root level has no rows at all (the
    * no-connected-provider state) — never alongside populated rows, and never
    * on an empty non-root level (a group with no models is not a place to add
@@ -94,7 +94,7 @@ export function ModelDrillMenu(props: ModelDrillMenuProps): ReactElement {
           onClick={() => props.onActivateRow(row)}
         >
           <span className="start-model-row-name">{row.label}</span>
-          {/* TASK.131 D2: the baseUrl host, shown only when two connections' auto-labels collide. */}
+          {/* D2: the baseUrl host, shown only when two connections' auto-labels collide. */}
           {row.subtitle !== undefined && <span className="start-model-row-sub">{row.subtitle}</span>}
           <span className="start-model-row-value">{row.count}</span>
           <Chevron className="start-model-row-chevron" />
@@ -166,7 +166,7 @@ export function ModelDrillMenu(props: ModelDrillMenuProps): ReactElement {
           {backLabel ?? "Models"}
         </button>
       )}
-      {/* Taskana 4895: the running-turn timing note (see the prop's doc). A
+      {/* the running-turn timing note (see the prop's doc). A
           plain line, not a row — it is not focusable and never enters the
           roving index. */}
       {props.note !== undefined && <div className="start-model-note">{props.note}</div>}
@@ -174,7 +174,7 @@ export function ModelDrillMenu(props: ModelDrillMenuProps): ReactElement {
           connection always keeps a group, even an empty one). An empty box
           would read as a broken popover. */}
       {rows.length === 0 && <div className="start-model-empty">{emptyText}</div>}
-      {/* Taskana 4237: the empty root level's escape hatch — a real, enabled
+      {/* the empty root level's escape hatch — a real, enabled
           action (existing row styling, Tab-reachable like any button) that
           opens Settings on the Add-connection drawer. Only on an empty ROOT:
           an empty group is no place to add a connection, and populated levels

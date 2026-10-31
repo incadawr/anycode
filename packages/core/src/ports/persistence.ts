@@ -65,7 +65,7 @@ export interface SessionMeta {
   /** Opaque native-session reference owned by an external engine; never credentials/config JSON. */
   externalSessionRef?: string;
   /**
-   * Provider connection pinned to this session at creation (TASK.45 W10):
+   * Provider connection pinned to this session at creation (W10):
    * resume resolves the credential/model/baseUrl of THIS connection, not the
    * currently-active one. Absent is a legacy session that predates connection
    * pinning — resume falls back to the current default (documented behaviour).
@@ -82,21 +82,21 @@ export interface SessionMeta {
   codexProfileId?: string;
   codexFast?: boolean;
   /**
-   * Present ONLY on a child session (TASK.102 S2a §2.4): the parent session
+   * Present ONLY on a child session (S2a §2.4): the parent session
    * that spawned it via `Agent(tier:"session")`. Root sessions never have
    * this field. Paired with `spawnToolCallId`; set once at creation, never
    * patched.
    */
   parentSessionId?: string;
   /**
-   * The parent's Agent tool-call id that spawned this child session (TASK.102
+   * The parent's Agent tool-call id that spawned this child session (
    * S2a §2.4). Present iff `parentSessionId` is present; the pair is unique
    * per parent (a parent can never spawn two children off the same tool
    * call).
    */
   spawnToolCallId?: string;
   /**
-   * Vision-fallback image registry counter (TASK.198 plan §2): the NEXT
+   * Vision-fallback image registry counter (plan §2): the NEXT
    * number reserveImageRef will hand out for this session. Surfaced only
    * once at least one ref has actually been reserved (value > 1) — every
    * untouched/legacy session decodes to the column's `DEFAULT 1` and omits
@@ -134,7 +134,7 @@ export type SessionMetaPatch = Partial<
 };
 
 /**
- * Result of a hard session delete (TASK.114). `deleted` are the root ids that
+ * Result of a hard session delete. `deleted` are the root ids that
  * were actually removed this call; `removedIds` is every row that left
  * `sessions` (roots plus cascaded children); `counts` are the per-table rows
  * the cascade deleted. Unknown ids are a no-op (absent from `deleted`).
@@ -147,7 +147,7 @@ export interface SessionDeleteSummary {
     checkpoints: number;
     claudeTranscriptItems: number;
     codexThreadItems: number;
-    /** Taskana 4083 / TASK.34: provider_usage rows (migration v19) the cascade removed. */
+    /** provider_usage rows (migration v19) the cascade removed. */
     providerUsage: number;
   };
 }
@@ -155,7 +155,7 @@ export interface SessionDeleteSummary {
 export interface PersistencePort {
   createSession(meta: Omit<SessionMeta, "createdAt" | "updatedAt">): Promise<SessionMeta>;
   /**
-   * UX-facing selection (TASK.102 S2a §2.4): ONLY root sessions
+   * UX-facing selection (S2a §2.4): ONLY root sessions
    * (`parentSessionId` absent). This is the SOLE list any picker, history
    * view, or `/sessions` command may read — a child session is structurally
    * unreachable through it, filtered in SQL before any LIMIT is applied (a
@@ -170,17 +170,17 @@ export interface PersistencePort {
    * `limit` is additive-only opt-in: omitting it (every existing caller)
    * keeps the "sees everyone" contract exactly as before; a caller that only
    * needs proof the schema is open — not the rows themselves — may cap the
-   * read instead of paying for a full table scan (TASK.102 S2 review MINOR).
+   * read instead of paying for a full table scan (S2 review MINOR).
    */
   listSessionsForMaintenance(opts?: { limit?: number }): Promise<SessionMeta[]>;
-  /** Metadata-only claim scan (TASK.142): every session row bearing a worktree
+  /** Metadata-only claim scan: every session row bearing a worktree
    * claim (worktree / cleanup / transition), unbounded by recency; feeds the
    * janitor's in-memory claim map. No filesystem access implied. */
   listWorktreeClaims(): Promise<SessionMeta[]>;
   /** Internal point read by id, no root/child filtering — host boot resolves by an id main already trusts (root or child). */
   getSessionById(id: string): Promise<SessionMeta | null>;
   /**
-   * Authorized child access (TASK.102 S2a §2.4): null unless a row exists
+   * Authorized child access (S2a §2.4): null unless a row exists
    * whose OWN `(parentSessionId, spawnToolCallId)` matches BOTH arguments —
    * the query itself is the authorization check, not a bare id lookup a
    * caller could fool with a stolen spawnToolCallId under the wrong parent.
@@ -200,7 +200,7 @@ export interface PersistencePort {
   touchSession(id: string, patch?: SessionMetaPatch): Promise<void>;
   /**
    * Atomically reserves and returns the session's next vision-fallback image
-   * ref (TASK.198 plan §2), incrementing the persisted counter in the SAME
+   * ref (plan §2), incrementing the persisted counter in the SAME
    * step — never through touchSession's patch mechanism (a partial UPDATE
    * with last-write-wins semantics could replay a stale value after a
    * crash and hand out a number twice). Numbering starts at 1 and is
@@ -216,7 +216,7 @@ export interface PersistencePort {
   replaceHistory(sessionId: string, items: readonly HistoryItem[]): Promise<void>;
   loadHistory(sessionId: string): Promise<HistoryItem[]>;
   /**
-   * TASK.114: hard-delete one session and its cascade (TASK.102 children via
+   * hard-delete one session and its cascade (children via
    * `parentSessionId` chains, history, checkpoints, and the shadow mirrors
    * keyed by `externalSessionRef`) in ONE transaction — a thin summary-adding
    * wrapper over `deleteSessionTree`'s engine. The active-session gate lives
@@ -225,14 +225,14 @@ export interface PersistencePort {
    */
   deleteSession(rootId: string): Promise<SessionDeleteSummary>;
   /**
-   * TASK.114 bulk-delete candidates: this project's ROOT sessions whose
+   * bulk-delete candidates: this project's ROOT sessions whose
    * `updatedAt` is older than `cutoffMs`. The `workspace` argument is the
    * project-identity key (`projectRoot ?? workspace`, the sidebar's grouping
    * key). Child sessions (`parentSessionId` set) are excluded — they leave
    * with their root's cascade, never on their own.
    */
   listSessionsOlderThan(workspace: string, cutoffMs: number): Promise<SessionMeta[]>;
-  /** TASK.114: deleteSession for each id in ONE transaction; summaries are aggregated. */
+  /** deleteSession for each id in ONE transaction; summaries are aggregated. */
   deleteSessions(ids: readonly string[]): Promise<SessionDeleteSummary>;
   close(): Promise<void>;
 }

@@ -1,5 +1,5 @@
 /**
- * Component-level tests for LanguageServersPane (Taskana 4743). This
+ * Component-level tests for LanguageServersPane. This
  * package's vitest config runs `environment: "node"` with no jsdom/
  * @testing-library (same rationale as SettingsScreen.test.ts / McpServersPane
  * .test.ts), so the pane's BEHAVIOR is pinned through its exported pure
@@ -51,7 +51,7 @@ function minimalStatus(overrides: Partial<LspConfigStatus> = {}): LspConfigStatu
   };
 }
 
-describe("LanguageServersPane registration (Taskana 4743)", () => {
+describe("LanguageServersPane registration", () => {
   it("sits in the rail right after MCP with the label 'Language servers'", () => {
     const ids = SETTINGS_PANES.map((pane) => pane.id);
     expect(ids.indexOf("language-servers")).toBe(ids.indexOf("mcp") + 1);

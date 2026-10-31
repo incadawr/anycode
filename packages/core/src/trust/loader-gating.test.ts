@@ -1,5 +1,5 @@
 /**
- * Trust gate on the project-level loaders (Taskana 4736, design 2.5/2.6).
+ * Trust gate on the project-level loaders (design 2.5/2.6).
  * `projectTrusted === false` skips ONLY the project sources (project config,
  * compat .mcp.json, project-tier plugin MCP) with one problem line; user-level
  * config still loads; an absent option keeps today's behaviour.
@@ -208,7 +208,7 @@ describe("discoverExtensions passes the trust flag through", () => {
   });
 });
 
-// Taskana 4736 xfix D2: the project webSearch/telemetry/repoMap sections are
+// xfix D2: the project webSearch/telemetry/repoMap sections are
 // project-controlled, side-effect-carrying config (a webSearch endpoint gets
 // every query POSTed to it; a telemetry dir writes session content to a
 // project-chosen path) — same trust question as mcp/hooks/lsp, so the SAME

@@ -1,5 +1,5 @@
 /**
- * Unit tests for the rollout import IPC handler logic (cut §8.8, TASK.52
+ * Unit tests for the rollout import IPC handler logic (cut §8.8,
  * lane D), exercised as the exported handle* functions off a REAL node fs in
  * scratch tmpdirs (no Electron ipcMain) plus an in-memory fake PersistencePort
  * — mirrors profile-ipc.test.ts's own convention for this codebase.
@@ -221,7 +221,7 @@ describe("handleCodexRolloutImport", () => {
     expect(persistence.sessions.size).toBe(0);
   });
 
-  // ── title derivation (TASK.57: an imported session otherwise lands with no title at all) ──
+  // ── title derivation (an imported session otherwise lands with no title at all) ──
 
   it("derives a title from the imported conversation's first user message", async () => {
     const sessionsDir = await tmp();

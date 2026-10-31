@@ -33,7 +33,7 @@ export interface ReadOutput {
   totalLines: number;
   truncated: boolean;
   /**
-   * Set when the token cap cut the view short (TASK.93 §4): tells the model how
+   * Set when the token cap cut the view short (§4): tells the model how
    * much it got and the exact offset/limit that continues from there.
    */
   notice?: string;
@@ -290,7 +290,7 @@ export interface WebFetchOutput {
  * against the persona registry so slice 3.3 can add md-profiles without
  * touching this frozen schema (design §3.4). Absent => "general-purpose".
  *
- * `tier`/`provider`/`detach` (TASK.102 CUT-S2 §2.1; `detach` added TASK.145
+ * `tier`/`provider`/`detach` (CUT-S2 §2.1; `detach` added
  * срез 1) are the FULL declaration — only used when
  * `createAgentTool({sessionTier:true})` builds the root desktop host's tool
  * (tools/agent.ts). `model` stays valid for BOTH tiers (CUT-S2 §1 p.2: the
@@ -329,7 +329,7 @@ export const agentInputSchema = z.object({
       "Exact model id to run the subagent on (defaults to the parent's model); if this host cannot honor it the call fails with an explanation",
     ),
   /**
-   * TASK.145 срез 1: session-tier-only, mirrors the `provider` field's
+   * срез 1: session-tier-only, mirrors the `provider` field's
    * "invalid for inline tier" discipline exactly (handler-level check,
    * agent.ts). GitHub #17 slice C: a session-tier call is now
    * background BY DEFAULT (an omitted detach means true); false opts into a
@@ -356,7 +356,7 @@ export const agentInputSchema = z.object({
         "history and receives `prompt` as its next message. Invalid for inline tier; cannot be combined with provider.",
     ),
   /**
-   * Taskana 4153 / TASK.216 wire: session-tier-only, the RUNNING twin of
+   * wire: session-tier-only, the RUNNING twin of
    * `continue_session` (finished-only). Physically absent from the restricted
    * schema below by construction (a child session's registry never sees this
    * field), same non-recursion lock discipline as `provider`/`detach`.
@@ -411,7 +411,7 @@ export interface AgentOutput {
   toolCalls: number;
   durationMs: number;
   /**
-   * TASK.210: the FinishReason of the child's last turn_end, carried onto the
+   * the FinishReason of the child's last turn_end, carried onto the
    * model-visible payload so formatResultForModel can prefix a "length" cutoff
    * (the provider's own output ceiling, not this cap) — see agent.ts markers
    * (а)/(б). Absent has the same meaning as on SubagentOutcome: no turn ever
@@ -420,7 +420,7 @@ export interface AgentOutput {
   finalTurnFinishReason?: FinishReason;
   /**
    * The child session's own id, present ONLY on session-tier outcomes the
-   * host actually identified (TASK.218): the model-facing discoverability
+   * host actually identified: the model-facing discoverability
    * seam — formatResultForModel appends the "[Child session id: …]" note
    * from this field (falling back to the presentation card's session
    * target). Inline outcomes never carry one.
@@ -472,7 +472,7 @@ export type WorkflowInput = z.output<typeof workflowInputSchema>;
  * is still dropped — what the model sees of a step that worked is the
  * definition author's call (outputTemplate / the sink join), never a payload
  * duplicate. A FAILED step's reason is not output, it is diagnostics nobody
- * else delivers, so it rides here as `failure` (TASK.193).
+ * else delivers, so it rides here as `failure`.
  */
 export interface WorkflowOutput {
   status: "completed" | "failed" | "cancelled";
@@ -487,7 +487,7 @@ export interface WorkflowOutput {
     durationMs: number;
     /** Why this step did not complete; absent on completed/skipped/cancelled steps. */
     failure?: StepFailure;
-    /** Present only when the step never reached a child (TASK.193): its zeros are structural. */
+    /** Present only when the step never reached a child: its zeros are structural. */
     unlaunched?: true;
   }>;
   durationMs: number;

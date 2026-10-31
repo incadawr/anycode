@@ -150,22 +150,22 @@ describe("buildSystemPrompt", () => {
     expect(IDENTITY_PROMPT).toBe(SECTION_IDENTITY);
   });
 
-  it("TASK.198 slice B2: omits the vision-fallback section when the flag is absent", () => {
+  it("slice B2: omits the vision-fallback section when the flag is absent", () => {
     const prompt = buildSystemPrompt({ toolNames: ["Read"], env: ENV });
     expect(prompt).not.toContain("InspectImage");
   });
 
-  it("TASK.198 slice B2: omits the vision-fallback section when the flag is explicitly false", () => {
+  it("slice B2: omits the vision-fallback section when the flag is explicitly false", () => {
     const prompt = buildSystemPrompt({ toolNames: ["Read"], env: ENV, visionFallbackEnabled: false });
     expect(prompt).not.toContain("InspectImage");
   });
 
-  it("TASK.198 slice B2: adds a vision-fallback section naming InspectImage when the flag is true", () => {
+  it("slice B2: adds a vision-fallback section naming InspectImage when the flag is true", () => {
     const prompt = buildSystemPrompt({ toolNames: ["Read"], env: ENV, visionFallbackEnabled: true });
     expect(prompt).toContain("InspectImage");
   });
 
-  it("TASK.198 slice B2: the vision-fallback section sits after tool-discipline and before env", () => {
+  it("slice B2: the vision-fallback section sits after tool-discipline and before env", () => {
     const prompt = buildSystemPrompt({ toolNames: ["Read"], env: ENV, visionFallbackEnabled: true });
     const iTools = prompt.indexOf(SECTION_TOOL_DISCIPLINE_TEMPLATE);
     const iVision = prompt.indexOf("InspectImage");
@@ -175,14 +175,14 @@ describe("buildSystemPrompt", () => {
     expect(iVision).toBeLessThan(iEnv);
   });
 
-  it("Taskana 4846: omits the LSP-diagnostics section when lspCoveredExtensions is absent or empty", () => {
+  it("omits the LSP-diagnostics section when lspCoveredExtensions is absent or empty", () => {
     const absent = buildSystemPrompt({ toolNames: ["Read"], env: ENV });
     const empty = buildSystemPrompt({ toolNames: ["Read"], env: ENV, lspCoveredExtensions: [] });
     expect(absent).not.toContain("Language-server diagnostics");
     expect(empty).not.toContain("Language-server diagnostics");
   });
 
-  it("Taskana 4846: adds the one-line LSP notice naming the covered extensions and Edit/Write when non-empty", () => {
+  it("adds the one-line LSP notice naming the covered extensions and Edit/Write when non-empty", () => {
     const prompt = buildSystemPrompt({
       toolNames: ["Read"],
       env: ENV,
@@ -195,14 +195,14 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("finish the change first");
   });
 
-  it("Taskana 4846: dedupes and sorts covered extensions, so spec order does not affect output", () => {
+  it("dedupes and sorts covered extensions, so spec order does not affect output", () => {
     const a = buildSystemPrompt({ lspCoveredExtensions: [".py", ".ts", ".py"] });
     const b = buildSystemPrompt({ lspCoveredExtensions: [".ts", ".py"] });
     expect(a).toBe(b);
     expect(a).toContain(".py, .ts");
   });
 
-  it("Taskana 4846: the LSP notice sits after tool-discipline and before env", () => {
+  it("the LSP notice sits after tool-discipline and before env", () => {
     const prompt = buildSystemPrompt({
       toolNames: ["Read"],
       env: ENV,
@@ -219,7 +219,7 @@ describe("buildSystemPrompt", () => {
     expect(iLsp).toBeLessThan(iEnv);
   });
 
-  it("TASK.198 slice B2: the reviewed full-prompt snapshot is unchanged when visionFallbackEnabled is not passed", () => {
+  it("slice B2: the reviewed full-prompt snapshot is unchanged when visionFallbackEnabled is not passed", () => {
     // Same fixture as the snapshot test above, called without the new option —
     // a new optional field must never change any existing caller's output.
     expect(buildSystemPrompt({ toolNames: SNAPSHOT_TOOLS, env: ENV })).toMatchInlineSnapshot(`

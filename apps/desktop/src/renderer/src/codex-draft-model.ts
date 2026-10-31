@@ -1,5 +1,5 @@
 /**
- * TASK.241 / card 4053: the shared Codex draft-model decision module.
+ * card 4053: the shared Codex draft-model decision module.
  * Extracted here (not in StartScreen.tsx or start-session.ts) so both can
  * import it without a component↔submit cycle, and so the catalog-refresh
  * lifecycle has one production implementation tests can drive directly.
@@ -12,7 +12,7 @@ export type CodexDraftModelDecision =
   | { kind: "refuse"; message: string };
 
 /**
- * TASK.241: one decision for display AND submit — the chip and the wire
+ * one decision for display AND submit — the chip and the wire
  * can never disagree. An explicit member id is sent verbatim; no pick +
  * ready catalog sends the SAME first entry the chip displays; a stale id
  * or an unavailable catalog REFUSES (visible), never substitutes.
@@ -57,7 +57,7 @@ export interface CodexRecheckSnapshot {
 }
 
 /**
- * TASK.241: the production codex draft-catalog refresh lifecycle. Every
+ * the production codex draft-catalog refresh lifecycle. Every
  * `refresh()` (initial mount, every `engines-changed` push / account switch)
  * CLEARS the catalog BEFORE re-fetching, so a submit racing a refresh is
  * refused on the empty catalog rather than validated against the previous
@@ -74,7 +74,7 @@ export function createCodexDraftCatalogRefresh(deps: CodexDraftCatalogRefreshDep
     if (disposed) {
       return;
     }
-    // TASK.241: invalidate the previous list FIRST — a submit racing this
+    // invalidate the previous list FIRST — a submit racing this
     // refresh (or an account switch) is refused on the empty catalog
     // instead of being validated against the previous account's ids.
     deps.setModels([]);

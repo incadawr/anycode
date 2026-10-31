@@ -1,5 +1,5 @@
 /**
- * Taskana 4237 — the shared model popover's empty-root "Add connection"
+ * the shared model popover's empty-root "Add connection"
  * affordance. Same jsdom-free discipline as ConfirmDialog.test.ts: the
  * component is presentational (no hooks), so `renderToStaticMarkup` renders its
  * HTML under this package's plain "node" vitest environment, and calling it
@@ -86,7 +86,7 @@ function findButton(node: ReactNode, needle: string): ReactElement<ButtonProps> 
   return recurseInto === undefined ? undefined : findButton(recurseInto as ReactNode, needle);
 }
 
-describe("ModelDrillMenu — empty-root 'Add connection' (Taskana 4237)", () => {
+describe("ModelDrillMenu — empty-root 'Add connection'", () => {
   it("renders the empty text AND an enabled 'Add connection' menuitem button on an empty root", () => {
     const html = renderToStaticMarkup(createElement(ModelDrillMenu, baseProps()));
     expect(html).toContain("No connected providers yet.");
@@ -120,7 +120,7 @@ describe("ModelDrillMenu — empty-root 'Add connection' (Taskana 4237)", () => 
   });
 });
 
-describe("ModelDrillMenu — empty-root action focus + keyboard (Taskana 4237)", () => {
+describe("ModelDrillMenu — empty-root action focus + keyboard", () => {
   it("joins the owner's roving-focus registry, so opening and ArrowDown/ArrowUp land on the level's only action", () => {
     // Both hosts seed the menu on index 0 (an empty row list makes their
     // `findIndex` fall back to 0) and their focus effect is

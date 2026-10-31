@@ -1,5 +1,5 @@
 /**
- * Pure-logic tests for the Network pane (TASK.141 lane C). `.test.ts` (never
+ * Pure-logic tests for the Network pane (lane C). `.test.ts` (never
  * `.test.tsx`) — this package's vitest runs `environment: "node"` with no jsdom
  * and collects `.test.ts` only.
  */
@@ -31,7 +31,7 @@ function profile(over: Partial<ProxyProfile> = {}): ProxyProfile {
   return { id: "proxy-1", name: "Corporate", mode: "manual", url: "http://proxy.example.com:3128", ...over };
 }
 
-describe("proxyProfileSummary (TASK.141: the list row's one line)", () => {
+describe("proxyProfileSummary (the list row's one line)", () => {
   it("names the mode for a system profile rather than showing a blank address", () => {
     expect(proxyProfileSummary(profile({ mode: "system", url: undefined }))).toBe("System proxy");
   });
@@ -54,7 +54,7 @@ describe("proxyProfileSummary (TASK.141: the list row's one line)", () => {
   });
 });
 
-describe("proxyProfileConsumers (TASK.141 §7: who references this profile)", () => {
+describe("proxyProfileConsumers (§7: who references this profile)", () => {
   it("finds nobody in an untouched document", () => {
     expect(proxyProfileConsumers(settings({}), "proxy-1")).toEqual([]);
   });
@@ -99,7 +99,7 @@ describe("proxyProfileConsumers (TASK.141 §7: who references this profile)", ()
   });
 });
 
-describe("profileConsumersText (TASK.141 §7: a refusal that NAMES the blockers)", () => {
+describe("profileConsumersText (§7: a refusal that NAMES the blockers)", () => {
   // The whole point of refusing rather than cascading: silently detaching the
   // references would re-route scopes the user is not looking at, and the worst
   // outcome of that is traffic leaving the corporate proxy. A refusal the user

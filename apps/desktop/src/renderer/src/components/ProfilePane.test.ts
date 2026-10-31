@@ -288,7 +288,7 @@ describe("heatmapMonthLabels", () => {
   });
 });
 
-// ── period filter (TASK.158 slice 2, telemetry-track-plan.md §3 S7) ──
+// ── period filter (slice 2, telemetry-track-plan.md §3 S7) ──
 
 describe("PROFILE_PERIODS labels", () => {
   it("pins the sliding-window vocabulary exactly — '7 days'/'30 days', never 'Week'/'Month' (158's own DoD: a calendar word would misdescribe a sliding window and read as a lie on the 1st)", () => {
@@ -441,7 +441,7 @@ describe("coverageNotice", () => {
     );
   });
 
-  // TASK.187 S4 (plan D-2 + catch-up): a backlog is a TEMPORARY cut the pane
+  // S4 (plan D-2 + catch-up): a backlog is a TEMPORARY cut the pane
   // eats into by itself, a zero backlog with a truncated view is a PERMANENT
   // one behind an oversized file. The copy must never ask for a gesture that
   // is already happening automatically, nor promise self-advance once the
@@ -481,7 +481,7 @@ describe("coverageNotice", () => {
   });
 });
 
-// ── truncated note (TASK.187 S4 — first pin in this string's life: pre-187
+// ── truncated note (S4 — first pin in this string's life: pre-187
 //    it was a bare JSX literal, `ProfilePane.tsx:584`) ──
 
 describe("truncatedNoteText", () => {
@@ -506,7 +506,7 @@ describe("truncatedNoteText", () => {
   });
 });
 
-// ── collapsed-coverage banner (TASK.187 S4, live-smoke blank) ──
+// ── collapsed-coverage banner (S4, live-smoke blank) ──
 
 describe("coverageCollapseNoteText", () => {
   it("every reading says the numbers are stale AND why the scan brought nothing", () => {
@@ -544,7 +544,7 @@ describe("coverageCollapseNoteText", () => {
   });
 });
 
-// ── the pane root's data attributes (TASK.187 S4 review round) ──
+// ── the pane root's data attributes (S4 review round) ──
 //
 // Phase and catch-up already travel as attributes; the backlog counter did
 // not, so the automation probe had to parse "N files left" out of HUMAN
@@ -603,7 +603,7 @@ describe("profilePaneDataAttributes", () => {
   });
 });
 
-// ── toolbar in-flight line (TASK.187 S4 catch-up) ──
+// ── toolbar in-flight line (S4 catch-up) ──
 
 describe("profileBusyNoteText", () => {
   const idle = initialProfileLoadState();
@@ -633,7 +633,7 @@ describe("profileBusyNoteText", () => {
   });
 });
 
-// ── provisional activity signal (TASK.187 S4, plan blocker 2в v3) ──
+// ── provisional activity signal (S4, plan blocker 2в v3) ──
 
 describe("isActivityRefining / PROFILE_REFINING_NOTE", () => {
   it("flags exactly the views whose exact activity pass has not converged", () => {

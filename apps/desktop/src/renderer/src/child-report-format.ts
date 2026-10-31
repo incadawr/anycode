@@ -1,5 +1,5 @@
 /**
- * TASK.145 срез 2 (spec §4 point 3): renders a system-origin `user_text`
+ * срез 2 (spec §4 point 3): renders a system-origin `user_text`
  * transcript block ("фоновый сабагент <тип> завершился: completed/failed")
  * without importing @anycode/core's `child-notification.ts` formatter as a
  * runtime value — renderer PRODUCTION code imports core type-only, never as

@@ -1,5 +1,5 @@
 /**
- * Taskana 4730 (4702 remainder), implementation B tests: the model-backed
+ * (4702 remainder), implementation B tests: the model-backed
  * ask-zone classifier. A fake ModelPort pins the whole contract:
  *   - a valid allow/ask JSON reply is honoured;
  *   - `deny`, unknown decisions, prose, empty, TWO JSON objects, oversize

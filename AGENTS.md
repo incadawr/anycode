@@ -22,16 +22,13 @@ A lightweight task tracker lives in `working-docs/`:
 |------|-----------|
 | `working-docs/TASKS.md` | Open tasks. One line per task: **ID · title · creation date · 5–10-word description**. |
 | `working-docs/TASKS.DONE.md` | Completed tasks: rows moved from `TASKS.md` with a completion date. |
-| `working-docs/tasks/TASK.{id}.md` | Full task description: context, symptom, root cause, work to do, and Definition of Done. |
 | `working-docs/BACKLOG.md` | Unstructured notes and ideas that are not tasks yet. |
 
 ### Workflow
 
-1. **Create a task:** take the next unused numeric `id`, create `working-docs/tasks/TASK.{id}.md` with the full detail, and add one row to `TASKS.md`.
-2. **Complete a task:** move its row from `TASKS.md` to `TASKS.DONE.md` with the completion date and change `Status: open` to `done` in its `TASK.{id}.md`.
-3. Put **notes that are not tasks** in `BACKLOG.md`; turn them into a `TASK.{id}` once they are ready.
-
-> The initial tasks, created on 2026-07-05, are TASK.1 and TASK.2: two independent defects from one incident (`glm-5.2`, project `/tmp/test-1`).
+1. **Create a task:** take the next unused numeric `id`, record the full detail in the local task tracker, and add one row to `TASKS.md`.
+2. **Complete a task:** move its row from `TASKS.md` to `TASKS.DONE.md` with the completion date and change `Status: open` to `done` in its detail record.
+3. Put **notes that are not tasks** in `BACKLOG.md`; turn them into a task once they are ready.
 
 ## Track orchestration
 

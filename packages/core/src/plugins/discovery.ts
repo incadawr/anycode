@@ -1,5 +1,5 @@
 /**
- * Plugin discovery (Taskana 4732 S1-A, design §2–§4; originally slice-3.3-cut
+ * Plugin discovery (S1-A, design §2–§4; originally slice-3.3-cut
  * §3.6). Discovers plugins from tiered sources, applies the v1 rules (compat
  * gating, reserved builtin names, official-only contributions, MCP consent),
  * and contributes skill/agent/workflow roots + MCP specs — fail-soft
@@ -107,7 +107,7 @@ export interface DiscoverPluginsOptions extends ProjectTrustOptions, McpResolveO
   /** Server names already claimed by explicit config; plugins never override them. */
   claimedMcpNames: Set<string>;
   /**
-   * Taskana 4732 (design §7 host wiring): absolute path of the managed state
+   * (design §7 host wiring): absolute path of the managed state
    * file. Optional — absent keeps the pure legacy scan (no managed store),
    * so current callers compile and behave unchanged.
    */
@@ -141,7 +141,7 @@ export interface PluginDiscoveryResult {
   mcpServerSpecs: McpServerSpec[];
   /**
    * Per-accepted-plugin metadata (name → tier + manifest version + root) for
-   * admin surfaces (Taskana 4732 S1-A): the Skills/Subagents panes badge
+   * admin surfaces (S1-A): the Skills/Subagents panes badge
    * plugin rows with tier + version. Informational only — boot wiring
    * ignores it.
    */
@@ -622,7 +622,7 @@ export async function discoverPlugins(
       ...resolveContentRoots(plugin, pluginWorkflowsDirs(plugin.manifest), "workflows", problems),
     );
 
-    // Project-tier plugin MCP is covered by workspace trust (Taskana 4736):
+    // Project-tier plugin MCP is covered by workspace trust:
     // untrusted => never spawns. When the host supplied a trust decision, a
     // trusted project needs no separate per-plugin consent (one prompt, not two).
     if (gated && plugin.tier === "project") {

@@ -1,6 +1,6 @@
 /**
  * Codex version-support POLICY evaluation — the pure core lifted out of
- * main/codex-manifest.ts (TASK.206) so that BOTH judges run the same code:
+ * main/codex-manifest.ts so that BOTH judges run the same code:
  *
  *  - main's Settings card / Doctor verdict / installer gate, which read the
  *    git-hosted `codex-support.json` manifest and the user's explicit
@@ -224,7 +224,7 @@ export function judgeCodexVersion(version: string, policy: CodexSupportPolicy): 
   return { allowed: false, risk: false, supportedRange };
 }
 
-// ── the main -> host carrier (TASK.206) ──
+// ── the main -> host carrier ──
 
 /**
  * Env name the ACTIVE policy rides into every host fork under, stamped by

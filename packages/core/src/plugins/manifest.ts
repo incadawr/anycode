@@ -1,5 +1,5 @@
 /**
- * Plugin manifest schema v1 (Taskana 4732, design §2). A plugin is a
+ * Plugin manifest schema v1 (design §2). A plugin is a
  * directory carrying `<dir>/.anycode-plugin/plugin.json`.
  *
  * v1 is ADDITIVE over the legacy (pre-4732) shape: every field the legacy
@@ -65,10 +65,10 @@ function isValidServiceCommand(command: string): boolean {
 }
 
 /**
- * One background service a plugin declares (Taskana 4750a). A service is a
+ * One background service a plugin declares. A service is a
  * long-lived process AnyCode supervises after the plugin is enabled AND the
  * user consents to its exact definition (`servicesHash`). `env` values are
- * literal strings, except `${secret:NAME}` (Taskana 4751 part 0): main resolves
+ * literal strings, except `${secret:NAME}` (part 0): main resolves
  * it from the vault at spawn time. The manifest itself never holds a value.
  */
 export const pluginServiceSchema = z.object({
@@ -91,7 +91,7 @@ export const pluginServiceSchema = z.object({
 export type PluginServiceSpec = z.output<typeof pluginServiceSchema>;
 
 /**
- * Taskana 4751 part 0: a `${secret:NAME}` reference inside a service env VALUE.
+ * part 0: a `${secret:NAME}` reference inside a service env VALUE.
  * Same name shape as MCP secrets (4752). `${env:X}` and any other text are NOT
  * references and stay literal.
  */
@@ -197,7 +197,7 @@ export const pluginManifestSchema = z.object({
   workflows: workflowsList,
   /** Server entries reusing the exact explicit-config shape; keys share the name alphabet. */
   mcpServers: z.record(z.string().regex(PLUGIN_NAME_RE, NAME_ERROR), mcpServerEntrySchema).optional(),
-  /** Background services (Taskana 4750a): consent-gated, supervised by main. No default — legacy output stays identical. */
+  /** Background services consent-gated, supervised by main. No default — legacy output stays identical. */
   services: servicesList,
   // ── Stage 2/3 placeholders: PARSED (shape-known) but NOT contributed by s1 discovery. ──
   commands: z.array(z.string()).optional(),

@@ -1,5 +1,5 @@
 /**
- * Pure-logic tests for CodexRolloutImportDialog's exported helpers (TASK.52,
+ * Pure-logic tests for CodexRolloutImportDialog's exported helpers (
  * codex-profiles cut §8.8). Same `.test.ts`-only, no-jsdom rationale as every
  * other component test in this directory (CodexEnginePane.test.ts's own
  * header): this package's vitest config runs `environment: "node"`, so the
@@ -116,7 +116,7 @@ describe("truncateRolloutPreview", () => {
   });
 });
 
-// ── deriveRolloutRowLabel (TASK.57: the list row's PRIMARY, human-readable name) ──
+// ── deriveRolloutRowLabel (the list row's PRIMARY, human-readable name) ──
 
 describe("deriveRolloutRowLabel", () => {
   const mtimeMs = Date.parse("2026-07-14T09:05:00.000Z");
@@ -272,7 +272,7 @@ describe("resolveDefaultImportModel", () => {
   });
 });
 
-// ── importModelOptionsFor (TASK.183: the ACTIVE connection's manual ids reach
+// ── importModelOptionsFor (the ACTIVE connection's manual ids reach
 // the Import picker) ──
 
 describe("importModelOptionsFor", () => {
@@ -520,7 +520,7 @@ describe("performImportAndOpen", () => {
     expect(outcome.ok && outcome.openMessage).toBe("Cannot open another tab — the maximum number of tabs is already open.");
   });
 
-  // ── onOpened (TASK.57 "open means open": fires the Settings-dialog close callback ONLY on a full success) ──
+  // ── onOpened ("open means open": fires the Settings-dialog close callback ONLY on a full success) ──
 
   it("fires onOpened exactly once when the import AND the resume both succeed", async () => {
     const rolloutImport = vi.fn(

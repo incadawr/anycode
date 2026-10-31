@@ -66,7 +66,7 @@ export type {
 } from "./hooks.js";
 export {
   AGENT_PROFILE_PROMPT_MAX_BYTES,
-  // Taskana 4104: desktop main's boot sweep imports it from @anycode/core (curated-list precedent: SUBAGENT_ACTIVITY_MAX_EVENTS).
+  // desktop main's boot sweep imports it from @anycode/core (curated-list precedent: SUBAGENT_ACTIVITY_MAX_EVENTS).
   ARTIFACT_MAX_AGE_MS,
   BASH_MAX_TIMEOUT_MS,
   COMPACT_BUFFER_TOKENS,
@@ -78,7 +78,7 @@ export {
   DEFAULT_MAX_OUTPUT_TOKENS,
   DEFAULT_MAX_TURNS,
   DEFAULT_OUTPUT_RESERVE_TOKENS,
-  // Taskana 4764 review F5: the desktop engine browser bridge clamps its
+  // review F5: the desktop engine browser bridge clamps its
   // tool results with the SAME default the dispatcher falls back to (the
   // bridge bypasses the dispatcher). Curated-list precedent: SUBAGENT_ACTIVITY_MAX_EVENTS.
   DEFAULT_TOOL_RESULT_BUDGET,
@@ -114,7 +114,7 @@ export {
   SKILL_DESCRIPTION_MAX_CHARS,
   SKILL_NAME_MAX_CHARS,
   SKILLS_PROMPT_SECTION_MAX_CHARS,
-  // TASK.102 CUT-S2 §10.7 п.7: additive addition to this curated list so the
+  // CUT-S2 §10.7 п.7: additive addition to this curated list so the
   // desktop host's child-mode Session (host/session.ts) can cap its activity
   // feed at the SAME count the in-process inline runner enforces
   // (runner.ts:519), imported from @anycode/core's root — the host never
@@ -133,7 +133,7 @@ export {
   SUBAGENT_OUTPUT_MAX_BYTES,
   clampSubagentMaxOutputTokens,
   SUBAGENT_STALL_TIMEOUT_MS,
-  // taskana 4181: same additive reason as SUBAGENT_STALL_TIMEOUT_MS above —
+  // same additive reason as SUBAGENT_STALL_TIMEOUT_MS above —
   // the desktop host's SupervisorIdleWatchdog (host/supervisor-idle-watchdog.ts)
   // imports its default thresholds/markers from @anycode/core's root; the host
   // never imports a core subpath.
@@ -145,7 +145,7 @@ export {
   SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS,
   MAX_WORKFLOWS,
   MAX_WORKFLOW_STEPS,
-  // TASK.191 slice S5: same additive reason as the SUBAGENT_CARD_* entries
+  // slice S5: same additive reason as the SUBAGENT_CARD_* entries
   // above — the desktop renderer's workflow-card decode/project module
   // re-declares these two caps locally (a value import of core would pull the
   // whole module graph into the browser bundle) and pins the local copies
@@ -158,7 +158,7 @@ export {
   WEBFETCH_MAX_BYTES,
   WEBFETCH_TIMEOUT_MS,
   WORKFLOW_OUTPUT_MAX_BYTES,
-  // TASK.193: same additive reason as the WORKFLOW_CARD_* entries above — the
+  // same additive reason as the WORKFLOW_CARD_* entries above — the
   // desktop renderer's workflow-card decode module re-declares this cap locally
   // (a value import of core would pull the whole module graph into the browser
   // bundle) and pins the local copy against this export in its own node test.

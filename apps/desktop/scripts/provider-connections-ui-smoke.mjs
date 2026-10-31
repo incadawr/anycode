@@ -1,5 +1,5 @@
 /**
- * Live GUI smoke for TASK.45 W12 (design/track-43-45-33-47-49-cut.md §"W12 —
+ * Live GUI smoke for W12 (design/track-43-45-33-47-49-cut.md §"W12 —
  * UI: сетка плашек connection'ов + drawer + Welcome"): drives a REAL Electron
  * dev instance end-to-end over the automation HTTP channel (`main/automation/*`,
  * see `automation/README.md`'s "Provider connections pane probe/driver"
@@ -52,7 +52,7 @@
  * came from nothing but `POST /settings/provider/drawer/set` +
  * `connection-create`/`connection-update` IPC, a successful connect-refused
  * failure against it is unambiguous proof the host fork resolved baseUrl+key
- * from the connection-CRUD path — TASK.45 W12's "снятие шва" (removal of
+ * from the connection-CRUD path — W12's "снятие шва" (removal of
  * `applyLegacyProviderPatch`/the legacy secret-write translation/the
  * `providerSecretKey` alias, commit e03d0c2) has no other path left to fall
  * back to. Steps 5 and 8 additionally read `secrets.json` straight off disk
@@ -364,7 +364,7 @@ function readJsonDisk(step, path, label) {
   }
 }
 
-/** Every key in secrets.json's `entries` MUST be connection-scoped (`provider.connection.<id>.apiKey|oauth`) — TASK.45 W12's "снятие шва" removed every legacy-shaped key (`provider.apiKey`, `provider.<providerId>.apiKey/oauth`). Values are opaque `{cipher,value}` ciphertext — never read/logged. */
+/** Every key in secrets.json's `entries` MUST be connection-scoped (`provider.connection.<id>.apiKey|oauth`) — W12's "снятие шва" removed every legacy-shaped key (`provider.apiKey`, `provider.<providerId>.apiKey/oauth`). Values are opaque `{cipher,value}` ciphertext — never read/logged. */
 function assertOnlyConnectionScopedSecretKeys(step, secretsPath, expectedCount) {
   const disk = readJsonDisk(step, secretsPath, "secrets.json");
   const keys = Object.keys(disk?.entries ?? {});
@@ -762,7 +762,7 @@ async function step9EditConnectionBNoOp(ctx) {
  * This step therefore exercises the REAL end-to-end delete flow instead: a
  * disposable throwaway connection is created, deleted, and both its metadata
  * (settings.json) and its vault entry (secrets.json) are asserted gone —
- * "safe delete order" (TASK.45: "сначала очистить connection secrets, затем
+ * "safe delete order" ("сначала очистить connection secrets, затем
  * metadata") — while connections A and B (created in earlier steps) are
  * asserted completely unaffected.
  */

@@ -46,7 +46,7 @@ export function describeCreateTabFailure(
         return "Set up and sign in to Claude Code in Settings → Claude before opening a task.";
       }
       if (engine === "codex") {
-        // Taskana 4227: main carries the doctor's exact verdict for the
+        // main carries the doctor's exact verdict for the
         // requested/resumed profile; absent reason (no dependency wired /
         // legacy) keeps the historical sign-in copy.
         switch (result.notReadyReason) {
@@ -86,7 +86,7 @@ export function describeCreateTabFailure(
       // user typed is still theirs to retry once the folder is back.
       return `The folder${result.workspace ? ` ${result.workspace}` : ""} no longer exists. Restore or pick another folder, then send again.`;
     case "connection_missing":
-      // TASK.45 W10-FIX F1: the pinned provider connection was deleted. Resume must
+      // W10-FIX F1: the pinned provider connection was deleted. Resume must
       // NOT silently switch this session to the current default — the Sidebar turns
       // this into an actionable notice: an explicit "Resume on the current
       // connection" button (which re-pins the session) when one is configured, else
@@ -101,7 +101,7 @@ export function describeCreateTabFailure(
 }
 
 /**
- * The re-pin action a resume failure should arm on the notice toast (TASK.45
+ * The re-pin action a resume failure should arm on the notice toast (
  * W10-FIX F1), or null when none applies. An actionable re-pin is offered ONLY
  * for `connection_missing` AND only when a current connection exists to re-pin
  * onto — every other outcome (success, a different failure, or no connection
@@ -148,7 +148,7 @@ export interface CreateTabCallbacks {
  * (S1b-1) so a `not_ready` refusal on a Codex draft/session gets the
  * codex-specific copy. `start-session.ts`'s `submitStartDraft` passes
  * `draft.engine`; the sidebar resume path passes the persisted session's
- * `engineId` (TASK.64). Call sites without an engine in scope (e.g. the
+ * `engineId`. Call sites without an engine in scope (e.g. the
  * command-palette resume) omit it and keep the historical copy.
  */
 export function handleCreateTabResult(

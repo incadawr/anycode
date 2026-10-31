@@ -39,14 +39,14 @@ export const TAB_CLOSE_CHANNEL = "anycode:tab-close";
 
 /**
  * invoke channel: re-bind a RUNNING tab to another provider connection
- * (TASK.106 cut-2 §D1/§D6). Not a close and not a create — the tab row, its
+ * (cut-2 §D1/§D6). Not a close and not a create — the tab row, its
  * session id, and its terminal panel all survive; only the host process is
  * replaced by a resume host booted on the target connection's fork env.
  */
 export const TAB_REBIND_CHANNEL = "anycode:tab-rebind";
 
 /**
- * Re-bind request (TASK.106 cut-2 §D6): the renderer knows `tabId` from the
+ * Re-bind request (cut-2 §D6): the renderer knows `tabId` from the
  * tabs-store, `connectionId` is an opaque id from main's live connection
  * registry — never a credential. Main validates BOTH against its own state
  * (the tab must be a running root core tab; the connection must exist) before
@@ -80,7 +80,7 @@ export interface TabRebindRequest {
 }
 
 /**
- * Result of a re-bind request (TASK.106 cut-2 §D6), fail-closed in every
+ * Result of a re-bind request (cut-2 §D6), fail-closed in every
  * refusal — a refused re-bind leaves the tab running on its ORIGINAL
  * connection, never on an unprimed or wrong one:
  *  - `unknown_tab`: no such tab, or a child session's id (a child is not
@@ -120,13 +120,13 @@ export type TabRebindResult =
         | "model_write_failed";
     };
 
-/** Request: optional { limit?: number } — absent = full list (TASK.125). */
+/** Request: optional { limit?: number } — absent = full list. */
 export const SESSIONS_LIST_CHANNEL = "anycode:sessions-list";
 
-/** invoke channel: hard-delete one session and its cascade (TASK.114). */
+/** invoke channel: hard-delete one session and its cascade. */
 export const SESSION_DELETE_CHANNEL = "anycode:session-delete";
 
-/** invoke channel: bulk-delete a project's sessions older than N days (TASK.114); `dryRun` counts without deleting. */
+/** invoke channel: bulk-delete a project's sessions older than N days; `dryRun` counts without deleting. */
 export const SESSIONS_DELETE_OLDER_CHANNEL = "anycode:sessions-delete-older";
 
 /** Aggregate of a session delete call (mirrors core's SessionDeleteSummary, value-only re-declaration). */
@@ -140,7 +140,7 @@ export interface SessionDeleteSummaryWire {
     checkpoints: number;
     claudeTranscriptItems: number;
     codexThreadItems: number;
-    /** Taskana 4083 / TASK.34: provider_usage rows (core migration v19) the cascade removed. */
+    /** provider_usage rows (core migration v19) the cascade removed. */
     providerUsage: number;
   };
 }
@@ -150,7 +150,7 @@ export type DeleteSessionResult =
   | { ok: true; summary: SessionDeleteSummaryWire }
   | { ok: false; reason: "active" | "not_found" };
 
-/** Result of a bulk delete-older request (TASK.114); with `dryRun: true` nothing was deleted — `summary.deleted` is the candidate count source. */
+/** Result of a bulk delete-older request; with `dryRun: true` nothing was deleted — `summary.deleted` is the candidate count source. */
 export type DeleteSessionsOlderResult =
   | { ok: true; summary: SessionDeleteSummaryWire }
   | { ok: false; reason: "unknown_workspace" };
@@ -188,7 +188,7 @@ export type CreateTabRequest =
       engine?: "core" | "codex" | "claude";
       /**
        * The New Session start screen's Codex draft picks (W3 join, closing
-       * TASK.39's dangling wire: the draft picker existed, main's argv
+       * dangling wire: the draft picker existed, main's argv
        * forwarding existed, nothing connected them). Opaque ids only — main
        * (tab-ipc.ts) bounds their length, the host validates IDENTITY against
        * its own live model catalog / frozen preset table before either ever
@@ -213,7 +213,7 @@ export type CreateTabRequest =
       codexProfileId?: string;
       /**
        * The New Session start screen's cross-connection model picker pick
-       * (TASK.106 cut-1 stage A): an opaque provider-connection id from
+       * (cut-1 stage A): an opaque provider-connection id from
        * main's live connection registry — never a credential. Absent ⇒ the
        * host's own default applies (`activeConnectionId()`, today's
        * behavior). Only read on the session-CREATING spawn (main/tabs.ts),
@@ -227,7 +227,7 @@ export type CreateTabRequest =
       kind: "resume";
       sessionId: string;
       /**
-       * Re-pin target for a session whose stored connection was deleted (TASK.45
+       * Re-pin target for a session whose stored connection was deleted (
        * W10-FIX F1). Additive-optional: present ONLY when the user explicitly picks
        * a replacement from the `connection_missing` notice (never an automatic
        * switch). Ignored when the stored pin is still alive; a deleted pin + this
@@ -262,14 +262,14 @@ export type CreateTabResult =
         // start screen can keep the user's draft and say which folder is gone.
         | "folder_not_found"
         // The session was pinned to a provider connection that has since been
-        // deleted (TASK.45 W10). Resume must NOT silently fall back to the current
+        // deleted (W10). Resume must NOT silently fall back to the current
         // default — the renderer offers a replacement instead. `connectionId` is
         // the missing pin, for the actionable notice.
         | "connection_missing";
       focusTabId?: string; // already_open -> renderer focuses this tab
       worktreePath?: string; // actionable recovery detail for worktree_unavailable
       workspace?: string; // folder_not_found -> the path whose directory is gone
-      openTabs?: number;  // max_tabs -> live root-tab count at refusal (TASK.119)
+      openTabs?: number;  // max_tabs -> live root-tab count at refusal
       maxTabs?: number;   // max_tabs -> the effective ceiling at refusal
       connectionId?: string; // connection_missing -> the deleted pin
       notReadyReason?:
@@ -325,7 +325,7 @@ export interface SessionSummary {
   /**
    * The engine the session was created under (projected from persistence
    * SessionMeta.engineId; opaque host identity, absent = a historical core
-   * session). TASK.64: the Sidebar forwards this to `handleCreateTabResult` so a
+   * session). the Sidebar forwards this to `handleCreateTabResult` so a
    * `not_ready` resume failure on a Codex session reads the sign-in-specific copy
    * ("Sign in to Codex…") instead of the irrelevant "Configure a provider…"
    * core copy. Display-only — main is the authoritative spawn gate.

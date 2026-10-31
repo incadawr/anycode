@@ -43,7 +43,7 @@ describe("ConversationHistory", () => {
     expect(sink.appended).toEqual([[item]]);
   });
 
-  it("append(message, {origin:\"system\"}) stamps the item's origin (TASK.145 срез 2) — absent by default for every ordinary call", () => {
+  it("append(message, {origin:\"system\"}) stamps the item's origin (срез 2) — absent by default for every ordinary call", () => {
     const history = new ConversationHistory();
 
     const injected = history.append({ role: "user", content: "background report" }, { origin: "system" });
@@ -166,7 +166,7 @@ describe("estimateMessageTokens (design §2-C3/R13/L4)", () => {
   });
 
   it(
-    "presentation contributes NOTHING to the token estimate (TASK.102 slice S1 W3, " +
+    "presentation contributes NOTHING to the token estimate (slice S1 W3, " +
       "CUT-S1 §3 W3 item 6 — outside the model's token budget)",
     () => {
       const withoutPresentation: ChatMessage = {

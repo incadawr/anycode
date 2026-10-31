@@ -1,5 +1,5 @@
 /**
- * Trusted-binaries Settings subsection (TASK.103, CUT-S4.md §3.7/D-S4-7): a
+ * Trusted-binaries Settings subsection (CUT-S4.md §3.7/D-S4-7): a
  * SIBLING section under the Permissions pane, directly below
  * `<PermissionsEditor/>` — never merged into it. A consent is not a
  * permission rule: separate copy, separate channel (settings-store's
@@ -48,7 +48,7 @@ export function TrustedBinariesSection({ store = useSettingsStore }: TrustedBina
 
   return (
     // `trusted-binaries-section` is a DEDICATED automation-query hook
-    // (TASK.103, realTrustedBinariesSectionDom): `.settings-mcp-list`/
+    // (realTrustedBinariesSectionDom): `.settings-mcp-list`/
     // `.settings-mcp-row`/`.settings-mcp-name` below are REUSED verbatim
     // from the Codex profile-row convention (byte-parity styling), but this
     // section's own rows must be queryable independent of any other pane's

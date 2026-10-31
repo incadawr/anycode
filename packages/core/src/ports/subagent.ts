@@ -21,7 +21,7 @@ export interface SubagentRequest {
   prompt: string;
   /**
    * EXTRA tool names this request opts the child into beyond the persona's own
-   * list (Taskana 4095 follow-up). The only meaningful member today is
+   * list (follow-up). The only meaningful member today is
    * "WebSearch" — factory-built at boot only when a search backend is
    * configured — because WebSearch is NOT a general-purpose default: a child
    * gets it only when its persona/profile `tools:` list or the workflow step
@@ -34,7 +34,7 @@ export interface SubagentRequest {
   /**
    * Requested turn budget; wins over the host default, capped at
    * SUBAGENT_MAX_TURNS_CEILING. Turns are what ends a long child run;
-   * SUBAGENT_LOOP_DEADLINE_MS only catches a hung one (TASK.148).
+   * SUBAGENT_LOOP_DEADLINE_MS only catches a hung one.
    */
   maxTurns?: number;
   /**
@@ -71,7 +71,7 @@ export interface SubagentOutcome {
   toolCalls: number;
   durationMs: number;
   /**
-   * TASK.191 slice S2: the child's own token spend over the whole run, summed
+   * slice S2: the child's own token spend over the whole run, summed
    * from the per-model-call `finish` events its loop already emits. OPTIONAL
    * on purpose — "not reported" is a distinct answer from zero: the
    * session-tier and engine children never surface a `finish` at all, and
@@ -81,7 +81,7 @@ export interface SubagentOutcome {
    */
   usage?: TokenUsage;
   /**
-   * TASK.210: the FinishReason of the last turn_end this run actually saw —
+   * the FinishReason of the last turn_end this run actually saw —
    * captured alongside `finalText` at the SAME turn_end, so the two always
    * describe the same turn (including a max_turns cutoff whose final attempt
    * never reached turn_end: both stay pinned to the last completed turn's
@@ -100,7 +100,7 @@ export interface SubagentOutcome {
    */
   declaredDoneAtCeiling?: boolean;
   /**
-   * TASK.240/4055: the child's turn-ceiling summary, folded from its own
+   * the child's turn-ceiling summary, folded from its own
    * ceiling_grant/ceiling_refused events — `rounds` = granted rounds,
    * `grantedTurns` = their turn sum, `lastRefusal` = the reason of the
    * refusal that ended the ladder (if it ended on one). Numbers and the
@@ -116,7 +116,7 @@ export interface SubagentOutcome {
     lastRefusal?: CeilingRefusalReason;
   };
   /**
-   * R2 (Taskana 4704 cross-review): the redacted SAFE error descriptor of an
+   * R2 (cross-review): the redacted SAFE error descriptor of an
    * `error` outcome — session.ts's finalizeChildTerminal carries it as the
    * first line of `finalText` (the free model text follows). Set ONLY on
    * error outcomes produced by a session host that separates the two; the
@@ -131,13 +131,13 @@ export interface SubagentOutcome {
  * Coarse progress events bridged into the parent stream as subagent_*
  * AgentEvents (design §3.3).
  *
- * TASK.171 (owner's ruling, verbatim: "модель никогда не ответит, главное
+ * (owner's ruling, verbatim: "модель никогда не ответит, главное
  * какие запросы мы шлем и что в них фигурирует") fixes the vocabulary for
  * "which model did the child run on" across `start` and `end` alike:
  *   - `model` is the REQUESTED id — the request override, else the persona's
  *     own `model:`, i.e. what we actually put in the request. This is the
  *     single authoritative answer, everywhere the question is asked. It is
- *     NOT read back off the constructed child port (TASK.161 tried that on
+ *     NOT read back off the constructed child port (tried that on
  *     `start`; reversed here) — a port's own identity is still our own
  *     construction, not independent evidence of execution. Absent means the
  *     child inherited the parent's port.
@@ -146,7 +146,7 @@ export interface SubagentOutcome {
  *     after its last model call (the wrap-up rescue included). It answers a
  *     different question — what the provider reported, not what we asked
  *     for — and is kept specifically because it is the only instrument for
- *     the open z.ai accounting investigation (TASK.174); it is never merged
+ *     the open z.ai accounting investigation; it is never merged
  *     into, and never overrides, `model`. Absent for engine children (an
  *     engine run exposes no core provider claim), for a child that inherited
  *     the parent's shared port (a shared port's last claim is not attributable
@@ -166,12 +166,12 @@ export type SubagentProgress =
   // was resumed — can still show what that child actually ran on instead of
   // the parent's CURRENT model. A host without a parent model id omits it.
   | { kind: "start"; agentType: string; description: string; model?: string; parentModel?: string; engine?: "codex" | "claude"; route?: string; fallbackReason?: string }
-  // `usage` (TASK.191 slice S2) is CUMULATIVE from the start of the run, not a
+  // `usage` (slice S2) is CUMULATIVE from the start of the run, not a
   // per-turn delta: the receiver REPLACES rather than adds, so a dropped or
   // duplicated progress event cannot corrupt the total. Same discipline as
   // `turns`/`toolCalls` above. Absent while the run has yet to complete a turn,
   // and absent for tiers that report no spend at all.
-  // `responseModel` (TASK.4057) is the provider's own model CLAIM read off the
+  // `responseModel` is the provider's own model CLAIM read off the
   // child's dedicated port as soon as its first response frame arrives — live-only
   // so the card can show "provider reported" before the run ends. Absent until a
   // claim exists, and absent for engine/inherited-port children. The `end` variant
@@ -185,7 +185,7 @@ export type SubagentProgress =
   // progress events this run withheld past SUBAGENT_ACTIVITY_MAX_EVENTS.
   // Absent when the run never crossed the cap; feeds the persisted card's
   // honest dropped-activity count. `model`/`responseModel`: see the type's
-  // own doc comment above — both travel on `end` (TASK.171), not only on
+  // own doc comment above — both travel on `end` not only on
   // `start`, so one record is self-describing.
   | {
       kind: "end";
@@ -209,7 +209,7 @@ export type SubagentProgress =
       // persona's one-shot run.
       engine?: "codex" | "claude";
       finalTurnFinishReason?: "length";
-      // TASK.240/4055: the child's ceiling summary — same closed shape as
+      // the child's ceiling summary — same closed shape as
       // SubagentOutcome.ceiling; carried on `end` so live UI sees it too.
       ceiling?: {
         rounds: number;
@@ -217,7 +217,7 @@ export type SubagentProgress =
         lastRefusal?: CeilingRefusalReason;
       };
     }
-  // Permission-broker gate crossing (TASK.102 CUT-S2 §2.2/§0.8): ONLY the
+  // Permission-broker gate crossing (CUT-S2 §2.2/§0.8): ONLY the
   // session-tier port (SessionSubagentPort) ever produces this — a child
   // SESSION has its own IpcPermissionBroker whose ask/settle can suspend the
   // whole run, which the parent's card should reflect as a "waiting for
@@ -226,7 +226,7 @@ export type SubagentProgress =
   // is no separate wait to surface).
   | { kind: "attention"; waiting: boolean }
   /**
-   * Stall report (TASK.148 slice 1) — see the matching `subagent_stalled`
+   * Stall report (slice 1) — see the matching `subagent_stalled`
    * AgentEvent (types/events.ts) for the full contract: reports only, never
    * kills, fires at most once per unbroken silent stretch, and
    * `waitingForApproval` is always false here since SubagentStallClock never
@@ -256,9 +256,9 @@ export interface SubagentRunOptions {
 }
 
 /**
- * Return shape of `SubagentPort.engineProfile` (TASK.102 CUT-S4 §2.1).
+ * Return shape of `SubagentPort.engineProfile` (CUT-S4 §2.1).
  *
- * `model` (model plumbing fix, TASK.102 follow-up) carries the profile's own
+ * `model` (model plumbing fix, follow-up) carries the profile's own
  * `model:` frontmatter (PersonaDefinition.model) through to tools/agent.ts's
  * session-tier request as a DEFAULT, never an override: an explicit
  * `Agent(model: …)` argument still wins, mirroring the precedence the
@@ -271,7 +271,7 @@ export type EngineProfileInfo = {
   systemPrompt: string;
   model?: string;
   /**
-   * TASK.180: the profile's own turn budget frontmatter (PersonaDefinition.
+   * the profile's own turn budget frontmatter (PersonaDefinition.
    * turnBudget), relayed when defined so the session-tier request can carry
    * it (SessionSubagentRequest.maxTurns). Omitted when absent — same
    * discipline as `model`.
@@ -297,7 +297,7 @@ export interface SubagentPort {
   /**
    * Resolves an md-profile agent type that declares `engine:` frontmatter.
    * null for built-ins and non-engine profiles. Optional: a fake/legacy port
-   * without it simply has no engine profiles to offer (TASK.102 CUT-S4 §2.1 —
+   * without it simply has no engine profiles to offer (CUT-S4 §2.1 —
    * `tools/agent.ts` routes such a type to a child session BEFORE the tier
    * branch instead of the deprecated one-shot path in `subagents/runner.ts`).
    */
@@ -307,7 +307,7 @@ export interface SubagentPort {
   /** Resolves an md-profile's `connection:`/`provider:` frontmatter; null for built-ins, engine profiles, and unrouted profiles. */
   profileRouting?(agentType: string): { provider?: string; connection?: string } | null;
   /**
-   * Taskana 4730: the owning AgentLoop registers its human-derived
+   * the owning AgentLoop registers its human-derived
    * user-context thunk (for the ask-zone classifier) here right after
    * construction, so inline children spawned through this port classify
    * against the HUMAN's recent turns — never the child's own model-authored
@@ -317,7 +317,7 @@ export interface SubagentPort {
    */
   registerHumanUserContext?(thunk: () => string[]): void;
   /**
-   * Taskana 4704 §3.6: resolves the HOST-side role route chain for a ROLE
+   * §3.6: resolves the HOST-side role route chain for a ROLE
    * persona (planner/executor/reviewer/explore) from settings `roles` + the
    * process-local health cache. Returns `null` for everything else (no roles
    * configured, or a non-role agent_type) — built-in defaults then apply.

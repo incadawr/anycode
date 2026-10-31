@@ -1,5 +1,5 @@
 /**
- * TASK.182 / Taskana 4136 — Claude engine MCP tests: boot notices drain into
+ * Claude engine MCP tests: boot notices drain into
  * the first turn, and `system/init.mcp_servers[]` is parsed defensively from
  * both `{name,status,source}` objects and bare strings.
  */
@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@anycode/core";
 import { parseClaudeInitMcpServerNames, parseClaudeInitMcpServerStatuses, mcpServerFailureNotices } from "./claude-engine.js";
 
-describe("parseClaudeInitMcpServerNames (TASK.182)", () => {
+describe("parseClaudeInitMcpServerNames", () => {
   it("parses {name,status,source} objects", () => {
     expect(
       parseClaudeInitMcpServerNames([
@@ -42,7 +42,7 @@ describe("parseClaudeInitMcpServerNames (TASK.182)", () => {
 });
 
 /** The engine's notices plumbing is pinned through the exported helper only; the connect-path notice merge is covered by the boot helper + wire tests. */
-describe("boot notices shape (TASK.182)", () => {
+describe("boot notices shape", () => {
   it("bootNotices entries are plain engine_notice warnings carrying no values", () => {
     const notices: AgentEvent[] = [{ type: "engine_notice", level: "warning", message: "MCP server \"x\" … skipped." }];
     for (const notice of notices) {
@@ -54,7 +54,7 @@ describe("boot notices shape (TASK.182)", () => {
 });
 
 /** Defect-3 seam end-to-end at the engine layer: the listener payload feeds the host reconciliation. */
-describe("first-init payload feeds host reconciliation (TASK.182)", () => {
+describe("first-init payload feeds host reconciliation", () => {
   it("mcpServerNames carries the CLI-reported names the host compares against forwarded + bridge expectations", async () => {
     // The engine contract: whatever the CLI reports (objects or strings) is
     // surfaced verbatim as names. The host adds "anycode" to the expectation
@@ -67,7 +67,7 @@ describe("first-init payload feeds host reconciliation (TASK.182)", () => {
   });
 });
 
-describe("parseClaudeInitMcpServerStatuses (Taskana 4238)", () => {
+describe("parseClaudeInitMcpServerStatuses", () => {
   it("keeps the status off {name,status} objects", () => {
     expect(
       parseClaudeInitMcpServerStatuses([
@@ -108,7 +108,7 @@ describe("parseClaudeInitMcpServerStatuses (Taskana 4238)", () => {
   });
 });
 
-describe("mcpServerFailureNotices (Taskana 4238)", () => {
+describe("mcpServerFailureNotices", () => {
   it("anycode failed gives the exact anycode message", () => {
     const [notice] = mcpServerFailureNotices([{ name: "anycode", status: "failed" }]);
     expect(notice).toBeDefined();

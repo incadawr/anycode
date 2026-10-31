@@ -1,5 +1,5 @@
 /**
- * "Full browser access" IPC and notifier (Taskana 4759): brief tests 45(b), 46, 47.
+ * "Full browser access" IPC and notifier: brief tests 45(b), 46, 47.
  * Pure handlers over a fake deps bag (no ipcMain), like communication-ipc.test.ts.
  */
 import { describe, expect, it, vi } from "vitest";
@@ -37,7 +37,7 @@ function rig(options: { trust?: Record<string, unknown>; onChanged?: (tabId: str
   return { deps, on, trust };
 }
 
-describe("browser access IPC (Taskana 4759) — test 45(b): only the main window may call it", () => {
+describe("browser access IPC — test 45(b): only the main window may call it", () => {
   it("refuses a preview webContents, an undefined sender, and does not mutate", () => {
     const { deps, on } = rig();
     expect(handleBrowserAccessSet(deps, { tabId: "tab-1", enabled: true }, PREVIEW)).toEqual({ ok: false, reason: "not_main_window" });
@@ -47,7 +47,7 @@ describe("browser access IPC (Taskana 4759) — test 45(b): only the main window
   });
 });
 
-describe("browser access IPC (Taskana 4759) — test 46", () => {
+describe("browser access IPC — test 46", () => {
   it("refuses extra keys, an empty or oversized tabId, and a non-boolean enabled", () => {
     const { deps, on } = rig();
     expect(handleBrowserAccessSet(deps, { tabId: "tab-1", enabled: true, extra: 1 }, MAIN)).toEqual({ ok: false, reason: "invalid" });
@@ -101,7 +101,7 @@ describe("browser access IPC (Taskana 4759) — test 46", () => {
   });
 });
 
-describe("browser access IPC (Taskana 4759) — test 47: untrusted folders are always OFF", () => {
+describe("browser access IPC — test 47: untrusted folders are always OFF", () => {
   it("a pending or unknown trust decision shows OFF with reason trust, even when stored ON", () => {
     const { deps, on } = rig({ trust: { "tab-1": { workspace: "/ws", hash: "a".repeat(64) } } });
     on.add("sess-1");

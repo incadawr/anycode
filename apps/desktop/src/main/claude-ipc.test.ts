@@ -170,7 +170,7 @@ describe("createClaudeOnboardingController — pickBinary", () => {
   });
 });
 
-// SLICE-CC-LOGIN (TASK.66, cut §7 W2 DoD tests).
+// SLICE-CC-LOGIN (cut §7 W2 DoD tests).
 describe("createClaudeOnboardingController — loginStart/loginCancel", () => {
   it("unsupported when no binary is discovered — never calls runLogin", async () => {
     const runLogin = vi.fn();
@@ -372,9 +372,9 @@ describe("isClaudeSnapshotChangeMaterial", () => {
   });
 });
 
-// TASK.103 — condensed claude mirror of codex-ipc.test.ts's BD3+BD4 (the two
+// condensed claude mirror of codex-ipc.test.ts's BD3+BD4 (the two
 // onboarding controllers are deliberate duplicates — each carries its own pin).
-describe("createClaudeOnboardingController — consent threading (TASK.103) — BD5", () => {
+describe("createClaudeOnboardingController — consent threading — BD5", () => {
   const FILE_SIZE = 4096;
   const FILE_MTIME = 1_700_000_000_000;
 
@@ -537,7 +537,7 @@ describe("createClaudeOnboardingController — consent threading (TASK.103) — 
   });
 });
 
-describe("doctor source env — engine-proxy carrier custody (TASK.139)", () => {
+describe("doctor source env — engine-proxy carrier custody", () => {
   const ENGINE_PROXY = "https://claude-proxy.example.com:8443";
   /** What a shell that happens to export the carrier name would inject. */
   const AMBIENT_PROXY = "http://ambient-carrier.invalid:9999";

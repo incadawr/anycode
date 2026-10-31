@@ -21,7 +21,7 @@ import {
   PROXY_REF_LEGACY,
 } from "../shared/proxy.js";
 import type { ProxyPasswordProbe } from "./proxy-scopes.js";
-// Taskana 4090 follow-up 2: the production quota persister — used to seed a
+// follow-up 2: the production quota persister — used to seed a
 // REAL on-disk `lastQuota` in the re-point tests below.
 import { recordConnectionQuota, resetConnectionQuotaThrottles } from "./connection-quota.js";
 import { buildHostEnv, ENV_CONTEXT_WINDOW, ENV_CONTEXT_WINDOW_MODEL, ENV_PROVIDER_TRANSPORT, isKnownSecretKey } from "./host-env.js";
@@ -214,7 +214,7 @@ class FakeVault implements VaultLike {
       return {
         key,
         set,
-        // TASK.141: a proxy-profile password has no env materialisation at all,
+        // a proxy-profile password has no env materialisation at all,
         // so `ANYCODE_API_KEY` can never override one — the real Vault's own
         // `sourceFor` makes the same distinction (main/vault.ts), and a fake
         // that flattened it would teach this suite a false fact.
@@ -514,17 +514,17 @@ describe("handleGet — snapshot projection", () => {
     expect(snap.appVersion).toBeUndefined();
   });
 
-  it("TASK.49: populates appVersion from deps.getAppVersion() when supplied", async () => {
+  it("populates appVersion from deps.getAppVersion() when supplied", async () => {
     const snap = await handleGet(makeDeps({ getAppVersion: () => "1.2.3" }));
     expect(snap.appVersion).toBe("1.2.3");
   });
 
-  it("TASK.49: omits appVersion entirely (not even undefined-valued) when deps.getAppVersion is absent", async () => {
+  it("omits appVersion entirely (not even undefined-valued) when deps.getAppVersion is absent", async () => {
     const snap = await handleGet(makeDeps());
     expect("appVersion" in snap).toBe(false);
   });
 
-  it("TASK.49: a mutation's fresh snapshot also carries appVersion — main never imports electron here, only the injected deps.getAppVersion", async () => {
+  it("a mutation's fresh snapshot also carries appVersion — main never imports electron here, only the injected deps.getAppVersion", async () => {
     const res = await handleSet(makeDeps({ getAppVersion: () => "9.9.9" }), { ui: { theme: "dark" } });
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -540,7 +540,7 @@ describe("handleGet — snapshot projection", () => {
   });
 });
 
-describe("handleSetSecret — connection-scoped write only (TASK.45 W12: legacy write-translation retired)", () => {
+describe("handleSetSecret — connection-scoped write only (W12: legacy write-translation retired)", () => {
   it("writes the value under the connection's OWN key when the connection exists", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
     const onMutation = vi.fn();
@@ -599,11 +599,11 @@ describe("handleSetSecret — connection-scoped write only (TASK.45 W12: legacy 
     expect(res).toEqual({ ok: false, reason: "invalid" });
   });
 
-  // TASK.202: the recognizer's force-push hook must fire between the vault
+  // the recognizer's force-push hook must fire between the vault
   // write and the mutation broadcast — same ordering discipline the proxy
   // password cache refresh already pins (see the H-01 "refreshes the plaintext
   // cache BEFORE the mutation event" test).
-  it("TASK.202: fires onSecretWritten with the written key and fresh settings BEFORE onMutation", async () => {
+  it("fires onSecretWritten with the written key and fresh settings BEFORE onMutation", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
     const order: string[] = [];
     const res = await handleSetSecret(
@@ -621,7 +621,7 @@ describe("handleSetSecret — connection-scoped write only (TASK.45 W12: legacy 
     expect(order).toEqual(["secret:provider.connection.conn-1.apiKey", "mutation"]);
   });
 
-  it("TASK.202: a refused write (weak consent) fires neither hook", async () => {
+  it("a refused write (weak consent) fires neither hook", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
     vault.setResult = { ok: false, reason: "weak_storage_needs_consent" };
     const onSecretWritten = vi.fn();
@@ -691,7 +691,7 @@ describe("handleSet — merge + read-only", () => {
   });
 });
 
-describe("handleSet — sessionLimits (TASK.119/TASK.147-с2)", () => {
+describe("handleSet — sessionLimits", () => {
   it("persists a valid section and it survives a REAL reload", async () => {
     const res = await handleSet(makeDeps(), {
       sessionLimits: { maxTabs: 12, childSessionsPerParentMax: 2, childSessionsGlobalMax: 10 },
@@ -747,7 +747,7 @@ describe("handleSet — sessionLimits (TASK.119/TASK.147-с2)", () => {
   });
 });
 
-describe("handleSwapCodexBinaryPath — compare-and-set under the settings lock (TASK.237)", () => {
+describe("handleSwapCodexBinaryPath — compare-and-set under the settings lock", () => {
   const OLD = "/home/u/.anycode/codex/bin/0.144.3/vendor/aarch64-apple-darwin/bin/codex";
   const NEW = "/home/u/.anycode/codex/bin/0.160.0/vendor/aarch64-apple-darwin/bin/codex";
 
@@ -904,7 +904,7 @@ describe("projectCatalogSummary — value-only projection", () => {
     // Only public catalog endpoint URLs are projected.
   });
 
-  it("TASK.131: projects each model's own reasoning/effortLevels, and only when declared", () => {
+  it("projects each model's own reasoning/effortLevels, and only when declared", () => {
     const summary = projectCatalogSummary([
       {
         id: "z-ai",
@@ -927,7 +927,7 @@ describe("projectCatalogSummary — value-only projection", () => {
     ]);
   });
 
-  it("Taskana 4894: projects each model's defaultEffort only when declared, leaving legacy fixtures byte-identical", () => {
+  it("projects each model's defaultEffort only when declared, leaving legacy fixtures byte-identical", () => {
     const summary = projectCatalogSummary([
       {
         id: "deepseek",
@@ -949,7 +949,7 @@ describe("projectCatalogSummary — value-only projection", () => {
     ]);
   });
 
-  it("TASK.159: projects each model's maxOutputTokens only when declared, leaving legacy fixtures byte-identical", () => {
+  it("projects each model's maxOutputTokens only when declared, leaving legacy fixtures byte-identical", () => {
     const summary = projectCatalogSummary([
       {
         id: "z-ai",
@@ -972,7 +972,7 @@ describe("projectCatalogSummary — value-only projection", () => {
     ]);
   });
 
-  it("TASK.198: projects each model's imageInput only when the catalog MARKS it, so a blind model stays byte-identical", () => {
+  it("projects each model's imageInput only when the catalog MARKS it, so a blind model stays byte-identical", () => {
     const summary = projectCatalogSummary([
       {
         id: "z-ai",
@@ -996,7 +996,7 @@ describe("projectCatalogSummary — value-only projection", () => {
     ]);
   });
 
-  it("projects defaultTransport/supportedTransports/authOptional only when the source entry declares them (TASK.43 W5)", () => {
+  it("projects defaultTransport/supportedTransports/authOptional only when the source entry declares them (W5)", () => {
     const summary = projectCatalogSummary([
       {
         id: "openai",
@@ -1045,7 +1045,7 @@ describe("projectCatalogSummary — value-only projection", () => {
     ]);
   });
 
-  it("projects isCustom ONLY for the literal custom sentinel, never for a non-custom needsBaseUrl template like vLLM (TASK.43 W5-FIX #2/#5)", () => {
+  it("projects isCustom ONLY for the literal custom sentinel, never for a non-custom needsBaseUrl template like vLLM (W5-FIX #2/#5)", () => {
     const summary = projectCatalogSummary([
       { id: "vllm", name: "vLLM", auth: { kind: "api_key" }, baseUrl: "", models: [], isCustom: false },
       { id: "custom", name: "Custom endpoint", auth: { kind: "api_key" }, baseUrl: "", models: [], isCustom: true },
@@ -1109,7 +1109,7 @@ describe("projectCatalogSummary — value-only projection", () => {
   });
 });
 
-describe("snapshot — auth-policy + unsupported-transport readiness (TASK.43 W5, cut Risk #3)", () => {
+describe("snapshot — auth-policy + unsupported-transport readiness (W5, cut Risk #3)", () => {
   const VLLM_ID = "vllm";
   const TRANSPORT_CATALOG_IDS = ["vllm", "custom"];
 
@@ -1147,7 +1147,7 @@ describe("snapshot — auth-policy + unsupported-transport readiness (TASK.43 W5
     expect(snap.providerReady).toBe(false);
   });
 
-  it("blocks readiness when the ANYCODE_PROVIDER_TRANSPORT env rung forces an unsupported transport (TASK.43 W5-FIX #1)", async () => {
+  it("blocks readiness when the ANYCODE_PROVIDER_TRANSPORT env rung forces an unsupported transport (W5-FIX #1)", async () => {
     // vLLM supports only chat-completions; settings.transport is UNSET, so the
     // guard's only signal is the env override. Pre-W5-FIX the guard ignored the
     // env rung entirely, saw the (supported) catalog default, and wrongly
@@ -1198,7 +1198,7 @@ describe("snapshot — auth-policy + unsupported-transport readiness (TASK.43 W5
     expect(snap.providerReady).toBe(false);
   });
 
-  it("custom sentinel with authOptional:true is ready with no key (TASK.152) — the keyless-sentinel default rung resolves openai-chat-completions", async () => {
+  it("custom sentinel with authOptional:true is ready with no key — the keyless-sentinel default rung resolves openai-chat-completions", async () => {
     // The connection's OWN "no API key" declaration waives auth, and the
     // catalog branch mirrors buildHostEnv's keyless-sentinel default rung:
     // no explicit transport ⇒ resolvedTransport is openai-chat-completions
@@ -1216,7 +1216,7 @@ describe("snapshot — auth-policy + unsupported-transport readiness (TASK.43 W5
     expect(snap.providerReady).toBe(true);
   });
 
-  it("custom sentinel with authOptional:true but an EXPLICIT anthropic transport is NOT ready (TASK.152 review fix)", async () => {
+  it("custom sentinel with authOptional:true but an EXPLICIT anthropic transport is NOT ready (review fix)", async () => {
     // Honest refusal: the user declared keylessness AND pinned the transport
     // to anthropic-messages — core's loadEnvConfig demands a key on that
     // transport, so the gate must not say "ready" for a fork core would
@@ -1235,7 +1235,7 @@ describe("snapshot — auth-policy + unsupported-transport readiness (TASK.43 W5
     expect(snap.providerReady).toBe(false);
   });
 
-  it("an env-forced OpenAI transport on a keyless custom endpoint waives auth ⇒ ready (TASK.43 W5-FIX #1)", async () => {
+  it("an env-forced OpenAI transport on a keyless custom endpoint waives auth ⇒ ready (W5-FIX #1)", async () => {
     // settings.transport UNSET; the env rung forces an OpenAI-family transport.
     // Pre-W5-FIX the auth waiver read only settings.transport (unset ⇒ treated
     // as anthropic-messages), demanded a key, and reported NOT ready — blind to
@@ -1361,7 +1361,7 @@ describe("snapshot — custom:* RECORD readiness gate (FX4, Fable iter-7: the au
   });
 });
 
-describe("handleSet — provider refine-reject (TASK.45 W12: the connection graph is CRUD-only)", () => {
+describe("handleSet — provider refine-reject (W12: the connection graph is CRUD-only)", () => {
   it("rejects ANY provider key sent through the generic settings-set path", async () => {
     const res = await handleSet(makeDeps({ catalogIds: CATALOG_IDS }), { provider: { id: "z-ai" } });
     expect(res).toEqual({ ok: false, reason: "invalid" });
@@ -1380,7 +1380,7 @@ describe("handleSet — provider refine-reject (TASK.45 W12: the connection grap
   });
 });
 
-describe("handleSet — recognizer refine-reject (TASK.198: settings.recognizer is written ONLY by recognizer-set)", () => {
+describe("handleSet — recognizer refine-reject (settings.recognizer is written ONLY by recognizer-set)", () => {
   it("rejects a `recognizer` key sent through the generic settings-set path, writing nothing", async () => {
     const res = await handleSet(makeDeps(), { recognizer: { connectionId: "conn-1", modelId: "glm-vision" } });
     expect(res).toEqual({ ok: false, reason: "invalid" });
@@ -1399,7 +1399,7 @@ describe("handleSet — recognizer refine-reject (TASK.198: settings.recognizer 
   });
 });
 
-describe("handleSet — communication (Taskana 4747: settings.communication is written ONLY by the communication-* channels)", () => {
+describe("handleSet — communication (settings.communication is written ONLY by the communication-* channels)", () => {
   it("refuses a `communication` key sent through the generic settings-set path, writing nothing", async () => {
     const res = await handleSet(makeDeps(), { communication: { enabled: true, workspaces: [], defaultSessionAccess: "on" } });
     expect(res).toEqual({ ok: false, reason: "invalid" });
@@ -1414,7 +1414,7 @@ describe("handleSet — communication (Taskana 4747: settings.communication is w
   });
 });
 
-describe("handleRecognizerSet (TASK.198): the only writer that can also DELETE settings.recognizer", () => {
+describe("handleRecognizerSet: the only writer that can also DELETE settings.recognizer", () => {
   it("sets settings.recognizer for a connectionId that exists in the live graph", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
     const res = await handleRecognizerSet(makeDeps(), { recognizer: { connectionId: "conn-1", modelId: "glm-vision" } });
@@ -1483,7 +1483,7 @@ describe("handleRecognizerSet (TASK.198): the only writer that can also DELETE s
   });
 });
 
-describe("handleSetSecret/handleClearSecret — catalog-scoped legacy keys are refused too (TASK.45 W12)", () => {
+describe("handleSetSecret/handleClearSecret — catalog-scoped legacy keys are refused too (W12)", () => {
   it("rejects a per-provider apiKey key even for a valid catalog id — connection-scoped only", async () => {
     const res = await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), {
       key: "provider.z-ai.apiKey",
@@ -1516,11 +1516,11 @@ describe("snapshot — catalog projection + oauth readiness (slice 2.5)", () => 
     expect(snap.catalog).toEqual(catalog);
   });
 
-  // TASK.159: the renderer cannot import core (shared/settings.ts rule), so
+  // the renderer cannot import core (shared/settings.ts rule), so
   // core's DEFAULT_MAX_OUTPUT_TOKENS crosses the wire as this snapshot field.
   // Reverting the pin (either direction — hand-hardcoding 32_768 here or
   // dropping the projection) turns this red.
-  it("TASK.159: carries defaultMaxOutputTokens = core's DEFAULT_MAX_OUTPUT_TOKENS (32_768)", async () => {
+  it("carries defaultMaxOutputTokens = core's DEFAULT_MAX_OUTPUT_TOKENS (32_768)", async () => {
     const snap = await buildSettingsSnapshot(makeDeps());
     expect(snap.defaultMaxOutputTokens).toBe(32_768);
   });
@@ -1565,7 +1565,7 @@ describe("handleOAuthStart / handleOAuthCancel", () => {
     const res = await handleOAuthStart(oauthDeps({ onMutation }), { providerId: "acme" });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      // No alias projection (TASK.45 W12): the status lives under the connection's
+      // No alias projection (W12): the status lives under the connection's
       // OWN key — the engine minted+persisted conn-1 for this flow's first run.
       const oauthStatus = res.snapshot.secrets.find((s) => s.key === "provider.connection.conn-1.oauth");
       expect(oauthStatus?.set).toBe(true);
@@ -1610,7 +1610,7 @@ describe("handleOAuthStart / handleOAuthCancel", () => {
   });
 });
 
-// ── TASK.45 W12-FIX §1: OAuth start is connection-scoped (codex W12 review #1) ──
+// ── W12-FIX §1: OAuth start is connection-scoped (codex W12 review #1) ──
 
 describe("handleOAuthStart — connection-scoped (`connectionId` present, W12-FIX §1)", () => {
   function oauthDeps(over: Partial<SettingsIpcDeps> = {}): SettingsIpcDeps {
@@ -1690,7 +1690,7 @@ describe("handleOAuthStart — connection-scoped (`connectionId` present, W12-FI
   });
 });
 
-// ── TASK.45 W12: connection-CRUD write path, custody, alias-free, refine-reject ──
+// ── W12: connection-CRUD write path, custody, alias-free, refine-reject ──
 
 describe("connection CRUD write-path end-to-end (W12, DoD item 4 replacement — no legacy key anywhere)", () => {
   it("create connection → secret-set by connection id → snapshot: active, secret ONLY under the connection key, ready", async () => {
@@ -1770,7 +1770,7 @@ describe("connection authOptional — the drawer's 'no API key' declaration (dog
   });
 });
 
-// ── TASK.45 W12-FIX2 §1: connection-create returns the authoritative minted id ──
+// ── W12-FIX2 §1: connection-create returns the authoritative minted id ──
 
 describe("handleConnectionCreate — createdConnectionId (W12-FIX2 §1, codex W12-FIX review #1)", () => {
   // §1.1 — hits ONLY the handler layer: the id is already in the handler's hand
@@ -1969,7 +1969,7 @@ describe("connection CRUD — custody + lifecycle (DoD item 5)", () => {
   });
 });
 
-// ── TASK.45 W12-FIX §2: auto-promote a successor when the ACTIVE connection is deleted (codex W12 review #2) ──
+// ── W12-FIX §2: auto-promote a successor when the ACTIVE connection is deleted (codex W12 review #2) ──
 
 describe("handleConnectionDelete — auto-promotes a successor when the ACTIVE connection is deleted (W12-FIX §2)", () => {
   // §2.1 — the core fix: reverting `remaining[0]?.id` back to `undefined`
@@ -2181,7 +2181,7 @@ describe("handleConnectionDelete — tombstone commit point is the durable save,
   });
 });
 
-// ── TASK.45 W11: connection health classification + advisory persist ──
+// ── W11: connection health classification + advisory persist ──
 
 describe("mapProviderFailureCodeToHealthStatus — classification table (401 ≠ 429 ≠ timeout ≠ bad-model)", () => {
   it("maps auth (401) to auth_invalid", () => {
@@ -2217,7 +2217,7 @@ describe("mapProviderFailureCodeToHealthStatus — classification table (401 ≠
   });
 });
 
-describe("sanitizeProviderFailureCode — untrusted host->main boundary (TASK.45 W11-FIX H1)", () => {
+describe("sanitizeProviderFailureCode — untrusted host->main boundary (W11-FIX H1)", () => {
   it.each(["auth", "forbidden", "rate_limited", "quota", "connect_timeout", "network", "server", "unknown"])(
     "passes the legitimate code %s through unchanged",
     (code) => {
@@ -2440,8 +2440,8 @@ describe("handleConnectionUpdate — resets health on a significant ENDPOINT fie
   });
 });
 
-describe("connection proxyUrl CRUD (TASK.132) — strict at the IPC boundary, only-truthy on disk", () => {
-  // Taskana 4685 rework: the IPC boundary refuses CREDENTIALED urls outright
+describe("connection proxyUrl CRUD — strict at the IPC boundary, only-truthy on disk", () => {
+  // rework: the IPC boundary refuses CREDENTIALED urls outright
   // (a proxy password's home is a registry profile + vault, never the 0644
   // settings.json), so the CRUD happy path uses a credential-less url; the
   // refusal has its own test below.
@@ -2461,7 +2461,7 @@ describe("connection proxyUrl CRUD (TASK.132) — strict at the IPC boundary, on
 
   // Strictness lives HERE, not in the persisted schema (settings/schema.ts is
   // deliberately lenient so one bad value cannot corrupt the document).
-  // Taskana 4685 rework small fix: a credentialed proxyUrl is REFUSED at the
+  // rework small fix: a credentialed proxyUrl is REFUSED at the
   // trust boundary on create AND update — the legacy migration
   // (`proxyRef: "legacy"`/boot scan) is the only path that moves a password
   // from a url into the vault.
@@ -2564,14 +2564,14 @@ describe("connection proxyUrl CRUD (TASK.132) — strict at the IPC boundary, on
   });
 });
 
-// Taskana 4090 follow-up 2: a re-point invalidates the provider-reported
+// follow-up 2: a re-point invalidates the provider-reported
 // quota line exactly the way it invalidates `lastHealth` (the same
 // `endpointChanged` set in handleConnectionUpdate). The fixture seeds a REAL
 // persisted `lastQuota` through the production persister
 // (main/connection-quota.ts's `recordConnectionQuota`, same scratch-path
 // discipline as connection-quota.test.ts) — never a hand-written JSON blob —
 // so what the update handler must preserve/clear is the on-disk truth.
-describe("handleConnectionUpdate — re-point clears lastQuota (Taskana 4090 follow-up)", () => {
+describe("handleConnectionUpdate — re-point clears lastQuota (follow-up)", () => {
   /** Persists one quota observation for `conn-1` via the production writer (fresh throttle state per call). */
   async function seedLastQuota(usedPercent: number): Promise<void> {
     resetConnectionQuotaThrottles();
@@ -2650,7 +2650,7 @@ describe("handleConnectionUpdate — re-point clears lastQuota (Taskana 4090 fol
     resetConnectionQuotaThrottles();
   });
 
-  // Taskana 4090 cross-review A3: "Remove key" is the third variant of key
+  // cross-review A3: "Remove key" is the third variant of key
   // replacement (removal), so it drops the superseded key's quota line too.
   it("clearing the connection's key clears lastQuota (the line belongs to the removed key)", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m" }); // conn-1
@@ -2706,7 +2706,7 @@ describe("handleConnectionUpdate — re-point clears lastQuota (Taskana 4090 fol
   });
 });
 
-describe("connection maxOutputTokens CRUD (TASK.150) — bounded at the IPC boundary, only-truthy on disk", () => {
+describe("connection maxOutputTokens CRUD — bounded at the IPC boundary, only-truthy on disk", () => {
   it("create persists a valid maxOutputTokens", async () => {
     const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
       providerId: "z-ai",
@@ -3139,9 +3139,9 @@ describe("connection contextWindowTokens CRUD — bounded model override at the 
   });
 });
 
-// ── Taskana 4088 (TASK.69): per-model imageInputOverride CRUD at the IPC boundary ──
+// ── per-model imageInputOverride CRUD at the IPC boundary ──
 
-describe("connection imageInputOverride CRUD (Taskana 4088) — value+binding pair, server-derived, \"\" clears both", () => {
+describe("connection imageInputOverride CRUD — value+binding pair, server-derived, \"\" clears both", () => {
   it('create with "on" + model persists the pair with the server-derived binding', async () => {
     const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
       providerId: "z-ai",
@@ -3166,7 +3166,7 @@ describe("connection imageInputOverride CRUD (Taskana 4088) — value+binding pa
     expect(loaded.settings.provider.connections[0]?.imageInputModel).toBe("glm-5.2");
   });
 
-  it('create with "on" and a BLANK model is rejected invalid and persists nothing (TASK.142 rule verbatim)', async () => {
+  it('create with "on" and a BLANK model is rejected invalid and persists nothing (rule verbatim)', async () => {
     const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
       providerId: "z-ai",
       model: "  ",
@@ -3303,7 +3303,7 @@ describe("handleConnectionUpdate — a baseUrl change drops the live-fetched mod
     expect(loaded.settings.provider.connections[0]?.baseUrl).toBe("http://localhost:9000/v1");
     expect(loaded.settings.provider.connections[0]?.models).toBeUndefined();
     expect(loaded.settings.provider.connections[0]?.modelsFetchedAt).toBeUndefined();
-    // Taskana 4118: the live capability map belongs to the origin that
+    // the live capability map belongs to the origin that
     // declared it — it is cleared with the ids, not left to linger.
     expect(loaded.settings.provider.connections[0]?.modelCapabilities).toBeUndefined();
   });
@@ -3327,14 +3327,14 @@ describe("handleConnectionUpdate — a baseUrl change drops the live-fetched mod
     const loaded = await loadSettings(settingsPath);
     expect(loaded.settings.provider.connections[0]?.models).toEqual(["live-a", "live-b"]);
     expect(loaded.settings.provider.connections[0]?.modelsFetchedAt).toBe("2026-07-18T00:00:00.000Z");
-    // Taskana 4118: a label-only / same-baseUrl edit preserves the map too.
+    // a label-only / same-baseUrl edit preserves the map too.
     expect(loaded.settings.provider.connections[0]?.modelCapabilities).toEqual({
       "live-a": { reasoning: true, effortLevels: ["low", "high"] },
     });
   });
 });
 
-// ── TASK.45 W12-FIX §3: `""`-sentinel clears transport back to catalog default (codex W12 review #3) ──
+// ── W12-FIX §3: `""`-sentinel clears transport back to catalog default (codex W12 review #3) ──
 
 describe('handleConnectionUpdate — ""-sentinel clears transport (W12-FIX §3)', () => {
   // §3.1 — the handler layer: reverting either the zod union (`""` refused
@@ -3384,7 +3384,7 @@ describe('handleConnectionUpdate — ""-sentinel clears transport (W12-FIX §3)'
   });
 });
 
-describe("handleConnectionCheck — probe (TASK.45 W11)", () => {
+describe("handleConnectionCheck — probe (W11)", () => {
   it("with NO probe wired (default), behaves byte-identically to the W9 scaffold: no network call, health untouched", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
     const deps = makeDeps({ catalogIds: CATALOG_IDS });
@@ -3483,7 +3483,7 @@ describe("handleOAuthStart routes to the ACTIVE connection of a provider bucket,
 // ── W9′-FIX #2: settings mutation lock (§2.3) ──
 
 describe("W9′-FIX #2 — settings mutation lock (§2.3)", () => {
-  it("serializes concurrent connection-update ‖ secret-set on the same connection — neither write is lost (TASK.45 W12 shape)", async () => {
+  it("serializes concurrent connection-update ‖ secret-set on the same connection — neither write is lost (W12 shape)", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
     const deps = makeDeps({ catalogIds: CATALOG_IDS });
     ipcGate.arm();
@@ -3497,7 +3497,7 @@ describe("W9′-FIX #2 — settings mutation lock (§2.3)", () => {
 
     // Under the lock the second load is STRICTLY after the first save (no shared
     // base). Unlocked it is [load, load, save, save] -> a lost update. The
-    // trailing "save" is handleSetSecret's OWN write (TASK.45 W11): it persists
+    // trailing "save" is handleSetSecret's OWN write (W11): it persists
     // the `lastHealth: unchecked` reset onto the connection right after the vault
     // write, inside the SAME lock critical section — ordering is unaffected.
     expect(ipcGate.log).toEqual(["load", "save", "load", "save"]);
@@ -3655,7 +3655,7 @@ describe("FX3-L1 G-C — connection CRUD preserves provider.custom[], both IPC m
   });
 });
 
-// W9′-FIX #3 ("refusal rollback") retired with the write-seam (TASK.45 W12):
+// W9′-FIX #3 ("refusal rollback") retired with the write-seam (W12):
 // a secret-set can no longer mint a connection at all (connection-create is a
 // separate, prior step), so there is nothing left to roll back — the
 // not-yet-created-connection state W9′-FIX #4 below tests (`not_found`) is
@@ -3750,13 +3750,13 @@ describe("W9′-FIX #5 — validated merge (§5.3)", () => {
   });
 });
 
-// ── TASK.45 W12 gate: the legacy write-seam is FULLY retired, not just unused ──
+// ── W12 gate: the legacy write-seam is FULLY retired, not just unused ──
 // (metadata-shim + secret-write-translation + alias-projection, cut §4.4/§8 —
 // "снимаются одним пунктом"). A mechanical grep, not just behavioral tests, so
 // a future edit can't quietly resurrect a dead symbol name without this
 // failing — the retired names must never reappear in EITHER file's source text.
 
-describe("legacy write-seam retirement — mechanical source-text gate (TASK.45 W12)", () => {
+describe("legacy write-seam retirement — mechanical source-text gate (W12)", () => {
   const RETIRED_SYMBOLS = [
     "applyLegacyProviderPatch",
     "LegacyProviderPatch",
@@ -3790,7 +3790,7 @@ describe("legacy write-seam retirement — mechanical source-text gate (TASK.45 
   });
 });
 
-// TASK.103 — binary-trust grant/revoke custody (D-S4-5).
+// binary-trust grant/revoke custody (D-S4-5).
 const TRUST_STAT_DEFAULTS = { isFile: true, mode: 0o755, uid: 501, gid: 20, size: 4096, mtimeMs: 1_700_000_000_000 };
 
 /** A statBinaryForTrust seam that always resolves to `resolvedPath` with the given (or default) raw stat tuple. */
@@ -3811,7 +3811,7 @@ const READ_ONLY_SETTINGS_JSON = JSON.stringify({
   security: { allowWeakSecretStorage: false },
 });
 
-describe("handleBinaryTrustGrant — happy path + upsert (TASK.103, D-S4-5)", () => {
+describe("handleBinaryTrustGrant — happy path + upsert (D-S4-5)", () => {
   it("BS4 persists the seam's RAW fingerprint tuple (never a caller-supplied one) and returns ok:true with a snapshot carrying it", async () => {
     const res = await handleBinaryTrustGrant(
       makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex"), now: () => "2026-08-15T00:00:00.000Z", uid: 501 }),
@@ -3848,7 +3848,7 @@ describe("handleBinaryTrustGrant — happy path + upsert (TASK.103, D-S4-5)", ()
   });
 });
 
-describe("handleBinaryTrustGrant — refusals (TASK.103)", () => {
+describe("handleBinaryTrustGrant — refusals", () => {
   it("BS5 refuses a relative path; settings.json is never created", async () => {
     const res = await handleBinaryTrustGrant(makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex"), uid: 501 }), {
       path: "relative/codex",
@@ -3900,7 +3900,7 @@ describe("handleBinaryTrustGrant — refusals (TASK.103)", () => {
   });
 });
 
-describe("handleBinaryTrustRevoke — surgical + idempotent (TASK.103)", () => {
+describe("handleBinaryTrustRevoke — surgical + idempotent", () => {
   // `uid: 501` is not decoration: the fake stat reports owner 501
   // (TRUST_STAT_DEFAULTS), and without an explicit dep the grant judges
   // ownership against the REAL `process.getuid()`. That passes on a macOS dev
@@ -3939,7 +3939,7 @@ describe("handleBinaryTrustRevoke — surgical + idempotent (TASK.103)", () => {
   });
 });
 
-describe("handleSet — binary-trust custody (TASK.103, D-S4-5)", () => {
+describe("handleSet — binary-trust custody (D-S4-5)", () => {
   it("BS7 refuses a patch carrying security.trustedBinaries; the file is untouched (consent smuggling via generic merge)", async () => {
     const res = await handleSet(makeDeps(), {
       security: {
@@ -3961,7 +3961,7 @@ describe("handleSet — binary-trust custody (TASK.103, D-S4-5)", () => {
   });
 });
 
-describe("handleBinaryTrustGrant — grant custody v2 (TASK.103 fix wave, D-S4-13 layer 2 + D-S4-14)", () => {
+describe("handleBinaryTrustGrant — grant custody v2 (fix wave, D-S4-13 layer 2 + D-S4-14)", () => {
   it("BS9 (a) refuses a third-party-owned file (seam uid 777, deps uid 501) — canonical, executable, still refused; settings file untouched", async () => {
     const res = await handleBinaryTrustGrant(
       makeDeps({ statBinaryForTrust: fakeStatBinaryForTrust("/opt/codex", { uid: 777 }), uid: 501 }),
@@ -3999,9 +3999,9 @@ describe("handleBinaryTrustGrant — grant custody v2 (TASK.103 fix wave, D-S4-1
   });
 });
 
-// ── TASK.141: the named proxy registry ──
+// ── the named proxy registry ──
 
-describe("proxy registry handlers (TASK.141)", () => {
+describe("proxy registry handlers", () => {
   const CORP = { id: "proxy-corp", name: "Corp", mode: "manual" as const, url: "http://proxy.corp:3128" };
   const PROXY_PASSWORD = "pr0xy-p@ss";
 
@@ -4379,7 +4379,7 @@ describe("proxy registry handlers (TASK.141)", () => {
     });
   });
 
-  describe("connection CRUD carries the ref (TASK.141)", () => {
+  describe("connection CRUD carries the ref", () => {
     const CATALOG = ["z-ai"];
 
     it("create persists a validated ref and refuses a dangling one", async () => {
@@ -4558,13 +4558,13 @@ describe("proxy registry handlers (TASK.141)", () => {
   });
 });
 
-// ── design-review regressions (TASK.141 lane A, gpt-5.6-sol xhigh) ──
+// ── design-review regressions (lane A, gpt-5.6-sol xhigh) ──
 //
 // One describe per finding id, each pinning the exact failure scenario the
 // review described rather than the fix's shape — a rewrite that keeps the
 // property must stay green, a rewrite that loses it must not.
 
-describe("TASK.141 design-review regressions", () => {
+describe("design-review regressions", () => {
   const CORP = { id: "proxy-corp", name: "Corp", mode: "manual" as const, url: "http://proxy.corp:3128" };
   const CATALOG = ["z-ai"];
 
@@ -4926,9 +4926,9 @@ describe("TASK.141 design-review regressions", () => {
   });
 });
 
-// Taskana 4759 (test 52): the default "Full browser access" switch rides the generic
+// (test 52): the default "Full browser access" switch rides the generic
 // settings-set patch; it persists, deep-merges, and an invalid value is refused.
-describe("settings-set — browser.fullAccessDefault (Taskana 4759)", () => {
+describe("settings-set — browser.fullAccessDefault", () => {
   it("writes browser.fullAccessDefault and leaves sibling sections untouched", async () => {
     const res = await handleSet(makeDeps(), { browser: { fullAccessDefault: "on" } });
     expect(res.ok).toBe(true);

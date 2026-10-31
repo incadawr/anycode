@@ -35,7 +35,7 @@ function otherBlock(id: string): TranscriptBlock {
   return { kind: "user_text", id, text: "hi" };
 }
 
-/** Minimal non-TodoWrite tool_call fixture (Taskana 4665 staleness counting). */
+/** Minimal non-TodoWrite tool_call fixture (staleness counting). */
 function bashBlock(id: string, status: string = "success"): TranscriptBlock {
   return {
     kind: "tool_call",
@@ -123,7 +123,7 @@ describe("selectCurrentTodos", () => {
 
 });
 
-describe("isPlanPossiblyStale / staleHint (Taskana 4665)", () => {
+describe("isPlanPossiblyStale / staleHint", () => {
   function transcriptWith(callsAfter: number, input = TWO_ITEMS): TranscriptBlock[] {
     return [todoBlock("t1", "success", input), ...Array.from({ length: callsAfter }, (_, i) => bashBlock(`b${i}`))];
   }

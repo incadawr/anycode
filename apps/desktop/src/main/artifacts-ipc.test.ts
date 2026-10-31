@@ -1,12 +1,12 @@
 /**
- * Unit tests for the chat-artifact IPC handlers (TASK.72), exercised as the
+ * Unit tests for the chat-artifact IPC handlers, exercised as the
  * exported handle* functions off a REAL node fs in scratch tmpdirs (no
  * Electron ipcMain). The load-bearing suites are the security gates:
  * containment (allowed roots = tab workspace / `<home>/.anycode` / tmpdir /
- * darwin-only literal `/tmp`, TASK.77-B), the open allowlist (non-image
+ * darwin-only literal `/tmp`), the open allowlist (non-image
  * extensions can never reach `openPath`), the inline byte cap, SVG refused
  * for inline read (active format), and per-tab per-path consent grants
- * (TASK.77-A) that widen WHERE a refused path may be read/opened without
+ * that widen WHERE a refused path may be read/opened without
  * ever widening WHAT the extension gates allow.
  */
 
@@ -139,7 +139,7 @@ describe("allowedArtifactRoots", () => {
     ]);
   });
 
-  // TASK.77-B: darwin ONLY appends the literal "/tmp" (owner decision 31.07 —
+  // darwin ONLY appends the literal "/tmp" (owner decision 31.07 —
   // os.tmpdir() on macOS is a per-app /var/folders/... path, not /tmp, and
   // agents routinely write to the literal path). Explicit `platform` arg per
   // recon C §2 — never stub os.platform().
@@ -232,7 +232,7 @@ describe("resolveContainedPath", () => {
   });
 });
 
-describe("TASK.149 tail-match base", () => {
+describe("tail-match base", () => {
   it("root hit is unchanged and does not consult the tail index", async () => {
     const { deps, workspace, tailIndex } = await makeRig();
     await seed(join(workspace, "plan.md"));
@@ -360,14 +360,14 @@ describe("TASK.149 tail-match base", () => {
     expect(roots).toBe(1);
   });
 
-  it("TASK.149 through handleArtifactPreviewable: a unique tail links only after stat confirms a regular file", async () => {
+  it("through handleArtifactPreviewable: a unique tail links only after stat confirms a regular file", async () => {
     const { deps, workspace } = await makeRig();
     const target = join(workspace, "working-docs/brief-next-stage.md");
     await seed(target);
     expect(await handleArtifactPreviewable(deps, { tabId: TAB_ID, paths: ["brief-next-stage.md"] })).toEqual({ paths: ["brief-next-stage.md"] });
   });
 
-  it("TASK.149 through handleArtifactPreviewable: an outside-allowed-roots symlink tail is refused", async () => {
+  it("through handleArtifactPreviewable: an outside-allowed-roots symlink tail is refused", async () => {
     const { deps, workspace, home } = await makeRig();
     await seed(join(home, "secret.md"));
     await mkdir(join(workspace, "docs"), { recursive: true });
@@ -419,10 +419,10 @@ describe("handleArtifactReadImage", () => {
     expect(await handleArtifactReadImage(deps, { tabId: TAB_ID, path: join(workspace, "huge.png") })).toEqual({ ok: false, reason: "too_large" });
   });
 
-  // TASK.77-A DoD: consent widens WHERE a preview may read from, per-path,
+  // DoD: consent widens WHERE a preview may read from, per-path,
   // per-tab; a default rig (no Allow ever called) reproduces the pre-77-A
   // behavior exactly (the suite above already proves that with zero changes).
-  describe("TASK.77-A consent", () => {
+  describe("consent", () => {
     it("without any Allow call, outside-roots is refused exactly as before (default unchanged)", async () => {
       const { deps, home, consent } = await makeRig();
       await seed(join(home, "outside.png"), "png");
@@ -560,7 +560,7 @@ describe("handleArtifactOpen", () => {
     expect(reveal).toHaveBeenCalledTimes(1);
   });
 
-  // TASK.77-A DoD: an Allow grant skips the OS confirmation modal for the
+  // DoD: an Allow grant skips the OS confirmation modal for the
   // SAME consented path ONLY — every other outside-root path (and a fresh
   // rig with no grant at all) keeps the unchanged modal behavior proven above.
   it("skips confirmOpen ONLY for a consented path — a different outside path still prompts", async () => {
@@ -627,7 +627,7 @@ describe("handleArtifactPreview", () => {
     expect(openPreview).toHaveBeenCalledTimes(2);
   });
 
-  it("opens an in-root .markdown file — the extension TASK.112 added to the gate", async () => {
+  it("opens an in-root .markdown file — the extension added to the gate", async () => {
     const { deps, workspace, openPreview } = await makeRig();
     await seed(join(workspace, "notes.markdown"), "# hi");
     const result = await handleArtifactPreview(deps, { tabId: TAB_ID, path: join(workspace, "notes.markdown") });
@@ -647,7 +647,7 @@ describe("handleArtifactPreview", () => {
     expect(openPreview).not.toHaveBeenCalled();
   });
 
-  it("refuses an out-of-root .markdown — TASK.112 widened WHAT is previewable, never WHERE", async () => {
+  it("refuses an out-of-root .markdown — widened WHAT is previewable, never WHERE", async () => {
     const { deps, home, openPreview } = await makeRig();
     await seed(join(home, "outside.markdown"), "# hi");
     const result = await handleArtifactPreview(deps, { tabId: TAB_ID, path: join(home, "outside.markdown") });
@@ -678,7 +678,7 @@ describe("handleArtifactPreview", () => {
   });
 });
 
-// TASK.112 slice 2: the yes/no existence-and-containment oracle behind the
+// slice 2: the yes/no existence-and-containment oracle behind the
 // renderer's plain-text path scan (markdown/path-spans.ts). It never opens a
 // window (unlike handleArtifactPreview above) — a stat is the whole
 // filesystem interaction — and it echoes back the CALLER'S OWN input strings

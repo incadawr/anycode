@@ -1,5 +1,5 @@
 /**
- * Project spawn-config collection (Taskana 4736, design 2.1/2.2). Enumerates
+ * Project spawn-config collection (design 2.1/2.2). Enumerates
  * exactly the project-level declarations that can START a process from a
  * cloned repository, and hashes them canonically:
  *   - enabled `mcpServers` of `<ws>/.anycode/config.json` and `<ws>/.mcp.json`
@@ -7,7 +7,7 @@
  *   - every `lspServers` entry of `<ws>/.anycode/config.json`
  *   - the enabled `mcpServers` of each project-tier plugin manifest
  *     (`<ws>/.anycode/plugins/<dir>/.anycode-plugin/plugin.json`)
- *   - Claude Code's own project settings (Taskana 4736 xfix D1): hook commands
+ *   - Claude Code's own project settings (xfix D1): hook commands
  *     and MCP server entries of `<ws>/.claude/settings.json` and
  *     `<ws>/.claude/settings.local.json`, plus `enabledMcpjsonServers` entries.
  *     The Claude engine is spawned with cwd = workspace, so these files can
@@ -214,7 +214,7 @@ async function projectPluginItems(fs: FileSystemPort, workspace: string): Promis
 }
 
 /**
- * Claude Code's own project settings (Taskana 4736 xfix D1). Claude Code
+ * Claude Code's own project settings (xfix D1). Claude Code
  * registers hooks and MCP servers from `.claude/settings.json` /
  * `.claude/settings.local.json` in its cwd — the workspace we spawn the engine
  * in. Shapes follow Claude Code's documented settings format:
@@ -305,7 +305,7 @@ export async function collectProjectSpawnConfig(
   }
   collected.push(...(await projectPluginItems(fs, workspace)));
 
-  // Taskana 4736 xfix D1: Claude Code's own project settings are project
+  // xfix D1: Claude Code's own project settings are project
   // files that can start processes (the engine spawns with cwd = workspace).
   const claudeSettings = await readJsonIfPresent(fs, claudeSettingsPath(workspace));
   if (claudeSettings !== undefined) {

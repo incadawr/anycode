@@ -1,5 +1,5 @@
 /**
- * Host-side network waiting (Taskana 4772). One desktop-wide waiter is handed
+ * Host-side network waiting. One desktop-wide waiter is handed
  * to every model port this host builds (host/index.ts). It answers probes with
  * the core TCP reachability check and is woken by two sources: the main process
  * forwards OS connectivity hints (`anycode:network-hint`), and the renderer's

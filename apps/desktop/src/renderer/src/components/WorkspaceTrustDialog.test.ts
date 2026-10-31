@@ -1,5 +1,5 @@
 /**
- * Pure-logic tests for WorkspaceTrustDialog (Taskana 4736). Same no-jsdom
+ * Pure-logic tests for WorkspaceTrustDialog. Same no-jsdom
  * rationale as the other component tests: the copy and the decision payload
  * are pure, the native <dialog> is not rendered here.
  */

@@ -139,7 +139,7 @@ vi.mock("electron", () => ({
     handle: (channel: string, listener: IpcHandler): void => {
       ipcHandlers.set(channel, listener);
     },
-    // panel-track CUT.md D9 (TASK.96 96-P1): registerPreviewPanelIpc's
+    // panel-track CUT.md D9 (96-P1): registerPreviewPanelIpc's
     // SET_BOUNDS channel is the first main-process user of `ipcMain.on`
     // (one-way, no reply) — this file's real-index.ts boot reaches it too,
     // so the mock needs a harmless no-op capture, not just `.handle`.
@@ -232,14 +232,14 @@ afterEach(async () => {
 });
 
 describe("main/index.ts — custom:* readiness-gate wiring (FX4)", () => {
-  it("TASK.152: a bare custom sentinel connection with authOptional + model (no key) is spawnable — the gate honours the connection's own declaration", async () => {
+  it("a bare custom sentinel connection with authOptional + model (no key) is spawnable — the gate honours the connection's own declaration", async () => {
     // The live incident shape verbatim: providerId "custom" (the bare catalog
     // sentinel, NOT a custom:<slug> record), model set, authOptional true, no
     // baseUrl, no key anywhere. The custom catalog entry's default transport
     // is anthropic-messages, so the transport-level authOptional stays false
     // — only the connection's own declaration (projected through
     // activeProviderView into selectedTransportInfo/computeProviderReadiness)
-    // can waive the key. Pre-TASK.152 the module-level providerReady gate
+    // can waive the key. The module-level providerReady gate
     // stayed false and tab-create refused not_ready with the generic
     // "Configure a provider" copy.
     await writeFile(
@@ -347,13 +347,13 @@ describe("main/index.ts — custom:* readiness-gate wiring (FX4)", () => {
     }
   });
 
-  it("TASK.109: resume of a session pinned to a live-but-dead connection opens the tab — the rebind escape stays reachable", async () => {
-    // The card's frame (Taskana 4103): a session pinned to a connection whose
+  it("resume of a session pinned to a live-but-dead connection opens the tab — the rebind escape stays reachable", async () => {
+    // The card's frame: a session pinned to a connection whose
     // KEY/QUOTA is dead while the connection itself is still configured.
     // `resolveResumePin` (main/index.ts) only checks EXISTENCE, and the resume
     // gate answers from the ACTIVE connection's readiness — so this resume
     // must NOT be refused (`connection_missing`/`not_ready`): the tab opens
-    // and the model-chip rebind (TASK.106 cut 2) is the escape. The code-side
+    // and the model-chip rebind (cut 2) is the escape. The code-side
     // half of the card's demanded live smoke; the full ~90k-token replay
     // against real connections remains an owner action.
     const dbPath = join(dir, "anycode.sqlite");
@@ -369,7 +369,7 @@ describe("main/index.ts — custom:* readiness-gate wiring (FX4)", () => {
     await store.touchSession("s-t109", { connectionId: "conn-dead" });
     await store.close();
 
-    // TWO keyless-legal connections (TASK.152's authOptional rule): conn-live
+ // TWO keyless-legal connections (authOptional rule): conn-live
     // ACTIVE and healthy; conn-dead configured but classified quota-dead —
     // `rate_limited` is the classified signal (settings-ipc.ts), advisory only.
     await writeFile(

@@ -14,12 +14,12 @@
 
 export { aggregateProfileStats } from "./stats.js";
 export type { ProfileStats, ProfileDayStats, ProfileStatsFile, AggregateProfileStatsOptions } from "./stats.js";
-/** TASK.187 S2: the per-file partial + merge path the incremental cache in main
- *  is built on (semantics: working-docs/build/task187-aggregator-semantics.md).
+/** S2: the per-file partial + merge path the incremental cache in main
+ *  is built on.
  *  `collectSessionTimestamps` + `sessionActiveMs` are the exact second pass for
  *  a session whose per-file segments overlap. */
 export { aggregateFilePartial, mergeProfilePartials, collectSessionTimestamps, sessionActiveMs } from "./stats.js";
-/** TASK.187 S3: the cumulative form of the exact second pass. Cluster state is
+/** S3: the cumulative form of the exact second pass. Cluster state is
  *  what the incremental cache carries between passes, so a session with more
  *  participant files than one pass can open still converges. */
 export { mergeActivityClusters, clustersActiveMs } from "./stats.js";

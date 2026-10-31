@@ -1,5 +1,5 @@
 /**
- * Host-side role-route resolution (Taskana 4704 §3.6): pure chain-picking
+ * Host-side role-route resolution (§3.6): pure chain-picking
  * logic plus the process-local health cache. The health cache is HOST state
  * (never persisted — Q3: a restart re-probes naturally), and this module is
  * deliberately free of I/O: `now` is injected everywhere, so tests drive the
@@ -22,7 +22,7 @@ export const ROLE_COOLDOWN_BASE_MS = 5 * 60_000;
 export const ROLE_COOLDOWN_MAX_MS = 60 * 60_000;
 
 /**
- * R3 (Taskana 4704 re-review #3): the child-report queue id of the honest
+ * R3 (re-review #3): the child-report queue id of the honest
  * follow-up a failed respawn produces. Namespaced off the FAILED child's
  * spawnToolCallId, which the short "retrying" notice already claimed — the
  * renderer dedupes child_report by originId, so reusing that id would drop
@@ -118,7 +118,7 @@ export type InfraFailureKind =
   | "none";
 
 /**
- * R2 (Taskana 4704 cross-review): the text a terminal's classification runs
+ * R2 (cross-review): the text a terminal's classification runs
  * over — the SAFE ERROR DESCRIPTOR ONLY (session.ts's onTerminal carries it
  * as `errorDescriptor`, the first line of an error finalText), never the
  * child's free model text. A child whose final prose discusses "forbidden"
@@ -210,7 +210,7 @@ export class RoleHealthCache {
 }
 
 /**
- * Taskana 4704 §3.6 / re-review #3 (N2, N3): the host's role-route resolution
+ * §3.6 / re-review #3 (N2, N3): the host's role-route resolution
  * as a PURE function of its inputs — the settings role config, the set of
  * role names a hand-authored md profile claims, the health snapshot and the
  * clock. Returns null when no settings route applies (no config, or an md
@@ -257,7 +257,7 @@ export function toCoreEntry(e: SettingsRoleRouteEntry): RoleRouteEntry {
   };
 }
 
-// ── detached-terminal respawn decisions (Taskana 4704 §3.6, fallback point 2) ──
+// ── detached-terminal respawn decisions (§3.6, fallback point 2) ──
 
 /** The per-spawn facts the respawn decision needs (mirrors index.ts's record). */
 export interface RoutedSpawnFacts {

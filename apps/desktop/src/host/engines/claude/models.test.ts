@@ -108,7 +108,7 @@ describe("ClaudeModelCatalog — built from the live initialize models[], never 
   });
 });
 
-describe("CLAUDE_EFFORT_LEVELS / isClaudeEffortLevel (TASK.75) — the fixed pre-spawn vocabulary", () => {
+describe("CLAUDE_EFFORT_LEVELS / isClaudeEffortLevel — the fixed pre-spawn vocabulary", () => {
   it("the claude engine declares reasoning-effort support, and the selector helper exposes exactly the 5 CLI levels", () => {
     expect(CLAUDE_ENGINE_CAPABILITIES.supportsReasoningEffort).toBe(true);
     expect(CLAUDE_EFFORT_LEVELS).toEqual(["low", "medium", "high", "xhigh", "max"]);
@@ -126,7 +126,7 @@ describe("CLAUDE_EFFORT_LEVELS / isClaudeEffortLevel (TASK.75) — the fixed pre
   });
 });
 
-describe("ClaudeModelCatalog.resolveEffort — TASK.75 per-model memory normalization", () => {
+describe("ClaudeModelCatalog.resolveEffort — per-model memory normalization", () => {
   const catalog = ClaudeModelCatalog.fromInitialize(liveModels());
 
   it("keeps a preferred effort the model still supports", () => {

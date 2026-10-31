@@ -1,5 +1,5 @@
 /**
- * Pure reducer tests for the persisted subagent card snapshot (TASK.102 slice
+ * Pure reducer tests for the persisted subagent card snapshot (slice
  * S1 W1, CUT-S1 §3 W1). Hermetic: feeds SubagentCardEvent values directly into
  * the three pure functions, no ports/loop involved.
  */
@@ -227,7 +227,7 @@ describe("reduceSubagentCardEvent — subagent_end", () => {
     expect(bare.end && "toolCalls" in bare.end).toBe(false);
   });
 
-  // TASK.219: the terminal's own model/engine outrank the start event's
+  // the terminal's own model/engine outrank the start event's
   // pre-boot accepted label for the card's identity; absent terminal fields
   // retain the start values (legacy/inline); a duplicate end keeps the FIRST
   // terminal attribution.
@@ -279,7 +279,7 @@ describe("reduceSubagentCardEvent — subagent_end", () => {
   });
 });
 
-describe("reduceSubagentCardEvent — subagent_attention (TASK.102 CUT-S2 §2.2/§0.8)", () => {
+describe("reduceSubagentCardEvent — subagent_attention (CUT-S2 §2.2/§0.8)", () => {
   const fallback = { status: "error" as const, durationMs: 42 };
 
   it("is a no-op for the persisted snapshot — attention is transient live-only state, not part of the terminal record (CUT-S1 §2.1)", () => {
@@ -314,7 +314,7 @@ describe("reduceSubagentCardEvent — subagent_attention (TASK.102 CUT-S2 §2.2/
   });
 });
 
-describe("reduceSubagentCardEvent — subagent_stalled (TASK.148 slice 1)", () => {
+describe("reduceSubagentCardEvent — subagent_stalled (slice 1)", () => {
   const fallback = { status: "error" as const, durationMs: 42 };
 
   function stalled(): Extract<SubagentCardEvent, { type: "subagent_stalled" }> {

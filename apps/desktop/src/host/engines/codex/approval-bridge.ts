@@ -1,6 +1,6 @@
 /**
  * Bridge between the app-server's two approval requests and the interactive
- * permission broker (TASK.38 §3-§5, cut §2(c)).
+ * permission broker (§3-§5, cut §2(c)).
  *
  * Decision mapping — all three literals are live-evidenced (cut §1a):
  *   allow                       -> {"decision":"accept"}
@@ -15,11 +15,11 @@
  * reason to close the transport. Only a request we cannot answer at all
  * (unknown method / missing identity / broker failure) gets a JSON-RPC error,
  * and even that is scoped to the one request: a protocol rejection is not a
- * terminal transport failure (TASK.38 §4).
+ * terminal transport failure (§4).
  *
  * Fail-closed still holds: every path that is not an explicit user allow ends
  * as a denial, and nothing is auto-approved except a file change that
- * `shouldAutoAcceptPatch` (patch-auto-approval.ts, Taskana 4265) proves inside
+ * `shouldAutoAcceptPatch` (patch-auto-approval.ts) proves inside
  * the workspace under a policy that already allows workspace writes — add/update
  * changes only, a delete still asks (cross-review M1); without
  * `patchAutoApproval` the bridge never auto-approves.
@@ -56,7 +56,7 @@ export interface CodexApprovalBridgeOptions {
   broker: EngineBridgeBroker;
   activeTurn(): ActiveCodexTurn | null;
   /**
-   * Taskana 4294 (cross-review F1): the session's workspace root (the host
+   * (cross-review F1): the session's workspace root (the host
    * boot's `workspace` — the cwd the codex thread was started with). When
    * set, a `CodexApplyPatch` approval carries `workspace` facts proving
    * whether the change set is confined, so IpcPermissionBroker's rule seam
@@ -68,7 +68,7 @@ export interface CodexApprovalBridgeOptions {
    */
   workspace?: string;
   /**
-   * Taskana 4265: when supplied, a file-change approval whose every target is
+   * when supplied, a file-change approval whose every target is
    * realpath-provably inside the session workspace — under a policy that
    * already allows workspace writes — is accepted without asking. Absent =
    * the bridge asks for every patch (the pre-4265 behaviour).
@@ -95,7 +95,7 @@ const EXEC_METADATA: ToolMetadata = {
 };
 
 /**
- * TASK.184: EXEC_METADATA, de-risked by the shared Bash classifier. A string
+ * EXEC_METADATA, de-risked by the shared Bash classifier. A string
  * command that is NOT a stdin write and classifies read-only with NO shell
  * expression (`;`, `&&`, pipes, substitutions, unmatched quotes, ...) is
  * presented as readOnly/low. Everything else — missing command, stdin write,
@@ -140,7 +140,7 @@ function optionalString(value: unknown): string | null {
 }
 
 /**
- * Taskana 4070: Codex MAY send the command as an argv ARRAY (rather than the
+ * Codex MAY send the command as an argv ARRAY (rather than the
  * string observed live in 0.144–0.161). The array is rendered as a POSIX-quoted
  * command line — every element that is not plainly safe is single-quoted — and
  * that rendering is what the dialog shows and what the shared classifier reads.
@@ -195,7 +195,7 @@ function decode(request: JsonRpcServerRequest, items: TurnItemIndex | undefined)
   if (request.method === OBSERVED_COMMAND_APPROVAL_METHOD) {
     const fromItem = commandOf(indexed);
     // Live command approvals carry `command`/`cwd` but NO `reason` (L9); an
-    // absent optional field must never turn into a denial. Taskana 4070: the
+    // absent optional field must never turn into a denial. the
     // command may arrive as an argv array — joined for display/classification
     // only (see optionalCommand).
     const command = optionalCommand(params.command, fromItem.command);
@@ -279,7 +279,7 @@ export class CodexApprovalBridge {
   }
 
   /**
-   * Taskana 4294 (cross-review F1): mints dispatcher-equivalent workspace
+   * (cross-review F1): mints dispatcher-equivalent workspace
    * facts for a codex fileChange approval when — and only when — EVERY changed
    * path resolves PROVABLY inside the session workspace. The facts carry the
    * first change's path as the representative resolved target (the modal shows
@@ -296,10 +296,10 @@ export class CodexApprovalBridge {
   ): Promise<PermissionRequest> {
     if (this.options.workspace === undefined) return request;
     if (request.toolName !== "CodexApplyPatch") return request;
-    // Taskana 4294 review: a grantRoot request asks for a write root beyond the
+    // review: a grantRoot request asks for a write root beyond the
     // change set itself — never provable from the paths, so no facts.
     if ((request.input as Record<string, unknown> | null)?.grantRoot != null) return request;
-    // Taskana 4294 review: enumerate targets from the RAW indexed item, not the
+    // review: enumerate targets from the RAW indexed item, not the
     // display projection — `paths` drops `kind.move_path`, so an update that
     // MOVES an inside file to an outside destination would otherwise be proved
     // "inside" and ride a bare rule.
@@ -363,7 +363,7 @@ export class CodexApprovalBridge {
     this.pending = true;
     this.cancelling = false;
     try {
-      // Taskana 4294 (cross-review F1): facts are minted ONLY for the shape
+      // (cross-review F1): facts are minted ONLY for the shape
       // that needs them (workspace wired + CodexApplyPatch + indexed paths);
       // every other approval keeps the original fully-synchronous path into
       // the broker, preserving emit ordering for existing consumers.
@@ -385,7 +385,7 @@ export class CodexApprovalBridge {
 }
 
 /**
- * Taskana 4294 (cross-review F1): true only for the approval shapes that
+ * (cross-review F1): true only for the approval shapes that
  * need workspace facts — the codex fileChange approval with a wired
  * workspace root and an indexed `paths[]` to prove. Command approvals
  * (CodexExec) and degraded shapes take the original synchronous path into

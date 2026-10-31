@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * TASK.237 live smoke: the managed-Codex upgrade path on a REAL machine
+ * live smoke: the managed-Codex upgrade path on a REAL machine
  * state, without the GUI. Mirrors the env-gated live-smoke convention
  * (ANYCODE_CODEX_LIVE_SMOKE=1; explicit SKIP lines otherwise — never a
  * silent green pass).

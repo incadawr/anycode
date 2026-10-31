@@ -149,7 +149,7 @@ function fakeEngine(turnEvents: AgentEvent[][], resolved: { model: string | null
       supportsImages: false,
       supportsTasks: false,
       supportsFileSnapshots: false,
-      // TASK.92 cross-review F1: the fake mirrors a ROOT engine spawn (slash
+      // cross-review F1: the fake mirrors a ROOT engine spawn (slash
       // passthrough on) — the composition the wrapper actually ships in. The
       // pre-fix value (false) hid the wrapper/capability gap this block pins.
       supportsManualCompact: true,
@@ -264,7 +264,7 @@ describe("ClaudeShadowTranscriptEngine (cut §1.5 D1/D2)", () => {
     expect(userIds).toEqual(["user:0", "user:1"]);
   });
 
-  // ── TASK.92 cross-review F1: the wrapper must not swallow compactNow ──────
+  // ── cross-review F1: the wrapper must not swallow compactNow ──────
   //
   // The real product path composes `ClaudeShadowTranscriptEngine` OVER a
   // `ClaudeEngine` (host/index.ts) and hands THAT to Session, whose
@@ -276,7 +276,7 @@ describe("ClaudeShadowTranscriptEngine (cut §1.5 D1/D2)", () => {
   // request. These tests pin the delegation through a STRUCTURAL host
   // interface (`ClaudeShadowTranscriptHost`) — never `instanceof` — so the
   // wrapper stays a decorator over anything engine-shaped.
-  describe("compactNow delegation (TASK.92 cross-review F1)", () => {
+  describe("compactNow delegation (cross-review F1)", () => {
     it("a wrapper over a compact-capable host EXPOSES compactNow — Session's engine gate sees the method through the composition", async () => {
       const engine = fakeEngine([], { model: null, permissionMode: null }) as SessionEngine & { compactNow?: unknown };
       engine.compactNow = async function* (options: { signal: AbortSignal }): AsyncIterable<AgentEvent> {

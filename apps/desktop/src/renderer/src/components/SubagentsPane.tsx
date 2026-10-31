@@ -481,13 +481,13 @@ export function formatEffectiveToolsLine(tools: readonly string[]): string {
 // ── component ──
 
 export interface SubagentsPaneProps {
-  /** Scope reference (Taskana 4758): a tab id or a workspace id `ws_…`, resolved main-side; omit for the pre-tab case (user-scope only). */
+  /** Scope reference: a tab id or a workspace id `ws_…`, resolved main-side; omit for the pre-tab case (user-scope only). */
   tabId?: string;
   /** Display-only folder label of the selected scope (path custody stays id-only); used for badge labels and tooltips; never sent anywhere. */
   workspace?: string;
   /** Injectable for tests / isolation; defaults to `window.anycode.subagents` (same DI ethic as SkillsBridge/McpConfigBridge). */
   bridge?: SubagentsBridge;
-  /** Taskana 4758: reports the pane's count for the scope chip (null while loading). */
+  /** reports the pane's count for the scope chip (null while loading). */
   onCountChange?: (count: number | null) => void;
 }
 
@@ -545,7 +545,7 @@ export function SubagentsPane({ tabId, workspace, bridge = window.anycode.subage
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridge, tabId]);
 
-  // Taskana 4758: the scope chip's count (null while the snapshot loads).
+  // the scope chip's count (null while the snapshot loads).
   const rowCount = snapshot ? snapshot.rows.length : null;
   useEffect(() => {
     onCountChange?.(rowCount);
@@ -622,7 +622,7 @@ export function SubagentsPane({ tabId, workspace, bridge = window.anycode.subage
 
   function openCreate(): void {
     const blank = blankSubagentEditorFields();
-    // Taskana 4706: the create scope follows the pane's resolved write target
+    // the create scope follows the pane's resolved write target
     // (the header scope bar) instead of a hardcoded "user" — a tabId present
     // means Project mode, absent means Global. The editor's own scope radio is
     // gone; this seeded value rides into `buildCreateRequest` unchanged.
@@ -904,7 +904,7 @@ export function SubagentsPane({ tabId, workspace, bridge = window.anycode.subage
                     onClick={() => {
                       // Same pane-select seam the slash-menu commands use:
                       // open Settings and land on the Plugins pane, where the
-                      // plugin's tier, version, and actions live (Taskana 4732 S1-C).
+                      // plugin's tier, version, and actions live (S1-C).
                       window.dispatchEvent(new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" }));
                       window.dispatchEvent(new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: "plugins" }));
                     }}
@@ -1103,7 +1103,7 @@ function SubagentEditorDialog({
           </span>
         </label>
 
-        {/* Taskana 4706: the create-mode scope radio is gone — the write
+        {/* the create-mode scope radio is gone — the write
             target is the pane's header scope bar (ScopeSwitcher), restated
             here as a hint so the dialog itself names where the profile will
             land; `scope` still rides into `buildCreateRequest` unchanged. */}

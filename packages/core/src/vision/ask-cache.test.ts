@@ -1,8 +1,8 @@
 /**
- * Ask-cache tests (TASK.198 slice A, plan §7/§10-A): bounded in-memory LRU
+ * Ask-cache tests (slice A, plan §7/§10-A): bounded in-memory LRU
  * keyed on (recognizer identity, image bytes, question, transcript). The two
  * properties the plan calls out as load-bearing: a transcript change and a
- * recognizer-identity change (a live config swap, TASK.198 plan §1.3) each
+ * recognizer-identity change (a live config swap, plan §1.3) each
  * produce a DIFFERENT key even when image+question are held constant — a key
  * that ignored either would silently serve a stale-model or wrong-thread
  * answer back to the caller.

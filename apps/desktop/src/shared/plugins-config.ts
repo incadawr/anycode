@@ -1,5 +1,5 @@
 /**
- * Plugins control-plane channel names + wire view types (Taskana 4732 S1-B,
+ * Plugins control-plane channel names + wire view types (S1-B,
  * design §7). VALUE-ONLY, zero imports — the S1-C renderer pane compiles
  * against exactly these names; main/plugins-ipc.ts registers them; preload
  * bridges them. Any rename here is a three-file contract change by design.
@@ -22,13 +22,13 @@ export const PLUGINS_SET_PINNED_CHANNEL = "anycode:plugins-set-pinned";
 export const PLUGINS_SET_ENABLED_CHANNEL = "anycode:plugins-set-enabled";
 export const PLUGINS_REMOVE_CHANNEL = "anycode:plugins-remove";
 export const PLUGINS_APPROVE_MCP_CHANNEL = "anycode:plugins-approve-mcp";
-/** Taskana 4750a: grant consent for the plugin's CURRENT services definition (name-only payload). */
+/** grant consent for the plugin's CURRENT services definition (name-only payload). */
 export const PLUGINS_APPROVE_SERVICES_CHANNEL = "anycode:plugins-approve-services";
-/** Taskana 4750a: supervised service states (no argv, env, or paths). */
+/** supervised service states (no argv, env, or paths). */
 export const PLUGINS_SERVICES_CHANNEL = "anycode:plugins-services";
-/** Taskana 4750a: bounded plain-text log of one service ({plugin,name}). */
+/** bounded plain-text log of one service ({plugin,name}). */
 export const PLUGINS_SERVICE_LOGS_CHANNEL = "anycode:plugins-service-logs";
-/** Taskana 4750a: manual restart of one service ({plugin,name}); clears backoff and crash loop. */
+/** manual restart of one service ({plugin,name}); clears backoff and crash loop. */
 export const PLUGINS_SERVICE_RESTART_CHANNEL = "anycode:plugins-service-restart";
 export const PLUGINS_REVEAL_CHANNEL = "anycode:plugins-reveal";
 export const PLUGINS_SET_AUTO_UPDATE_CHANNEL = "anycode:plugins-set-auto-update";
@@ -111,7 +111,7 @@ export interface PluginRowView {
   mcpServersHash?: string;
   mcpConsentGranted?: boolean;
   mcpServerNames: string[];
-  /** Background services the plugin declares (Taskana 4750a). env KEY names only, never values. */
+  /** Background services the plugin declares. env KEY names only, never values. */
   serviceNames: string[];
   servicesHash?: string;
   servicesConsentGranted?: boolean;
@@ -172,7 +172,7 @@ export interface PluginInstallPreview {
   capabilities: string[];
   /** One row per MCP server: red rows on the sheet (command + args). */
   mcpServers: { name: string; command: string; args: string[] }[];
-  /** Taskana 4750a: red rows for each background service (command + args + env KEY names). */
+  /** red rows for each background service (command + args + env KEY names). */
   services?: { name: string; command: string; args: string[]; envKeys: string[]; secretNames?: string[] }[];
   hasHooks: boolean;
   engines?: string;
@@ -222,7 +222,7 @@ export type PluginsCheckUpdatesResult = PluginsSnapshot;
 /** Reveal has no catalog effect on success — ok/refusal only (S1-C spelling). */
 export type PluginsRevealResult = PluginsMutationResult;
 
-// ── Taskana 4750a: plugin background services (supervised by main) ──
+// ── plugin background services (supervised by main) ──
 
 /** Supervisor state of one service, as the pane shows it. */
 export type PluginServiceStateView =

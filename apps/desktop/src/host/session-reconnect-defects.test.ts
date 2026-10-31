@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { AppServerClient } from "./engines/codex/app-server-client.js";
 import { createNativeCodexSession } from "./engines/codex/codex-engine.js";
 /**
- * TASK.117 supervisor correction (2026-10-04) — the two acceptance defects a
+ * supervisor correction (2026-10-04) — the two acceptance defects a
  * reconnect after replay-ring overflow (>REPLAY_BUFFER_CAP) still had:
  *
  *  1. A RUNNING tool card regressed to "proposed": the assistant item with
@@ -60,7 +60,7 @@ function renderedTextStep(text: string): ModelStreamEvent[] {
   ];
 }
 
-describe("TASK.117 supervisor correction — reconnect defects after ring overflow", () => {
+describe("supervisor correction — reconnect defects after ring overflow", () => {
   it(
     "defect 1: a RUNNING tool (start emitted, result pending) stays RUNNING on a fresh store after >CAP evicted its tool_execution_start",
     { timeout: 60_000 },

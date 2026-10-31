@@ -79,7 +79,7 @@ describe("resolveDocRelative", () => {
 });
 
 describe("isLocalMdHref", () => {
-  it("accepts `.markdown` alongside `.md`, fragment and query stripped first (TASK.112)", () => {
+  it("accepts `.markdown` alongside `.md`, fragment and query stripped first", () => {
     expect(isLocalMdHref("other.markdown")).toBe(true);
     expect(isLocalMdHref("./sub/other.markdown")).toBe(true);
     expect(isLocalMdHref("/abs/other.markdown#heading")).toBe(true);

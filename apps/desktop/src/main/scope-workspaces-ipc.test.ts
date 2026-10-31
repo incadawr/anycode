@@ -1,5 +1,5 @@
 /**
- * Taskana 4758: the scope workspace list handler accepts only an empty strict
+ * the scope workspace list handler accepts only an empty strict
  * payload and returns an allow-listed projection (no raw path field).
  */
 import { describe, expect, it } from "vitest";
@@ -16,7 +16,7 @@ const entry = {
 
 const deps = { registry: { list: async () => [entry] } };
 
-describe("handleScopeWorkspacesList (Taskana 4758)", () => {
+describe("handleScopeWorkspacesList", () => {
   it("accepts an empty object and undefined payloads", async () => {
     expect((await handleScopeWorkspacesList(deps, {})).ok).toBe(true);
     expect((await handleScopeWorkspacesList(deps, undefined)).ok).toBe(true);

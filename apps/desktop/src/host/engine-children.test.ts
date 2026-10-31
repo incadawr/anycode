@@ -81,7 +81,7 @@ describe("createEngineChildRunner: argv construction", () => {
     await outcomePromise;
   });
 
-  // Taskana 4736 xfix D1: an untrusted workspace must not let Claude Code read
+  // xfix D1: an untrusted workspace must not let Claude Code read
   // its own project settings (.claude/settings.json hooks). The default
   // (trusted / no flag) stays `project,local`; `projectTrusted: false`
   // narrows the one-shot child to `user`.
@@ -408,7 +408,7 @@ describe("createEngineChildRunner: Codex JSONL parsing", () => {
     expect(outcome.finalText).toContain("fatal startup error");
   });
 
-  it("TASK.97 R5: a multi-turn codex run settles with turns === 0 (not reported) while turn.started progress pings still fire", async () => {
+  it("R5: a multi-turn codex run settles with turns === 0 (not reported) while turn.started progress pings still fire", async () => {
     const { spawn, child } = fakeSpawner();
     const onProgress = vi.fn();
     const runner = createEngineChildRunner({ cwd: "/work/session", env: { ...baseDeps(), [ENV_CODEX_BIN]: "/opt/bin/codex" }, spawn });

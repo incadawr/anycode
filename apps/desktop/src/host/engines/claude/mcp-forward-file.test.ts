@@ -1,5 +1,5 @@
 /**
- * TASK.182 / Taskana 4136 — private MCP forward file tests: exact 0600,
+ * private MCP forward file tests: exact 0600,
  * absolute path, content, exclusive collision retry WITHOUT truncation,
  * idempotent cleanup, sweep (alive/dead/EPERM/foreign), and injected
  * failure paths (partial write AFTER creation with secret bytes on disk,

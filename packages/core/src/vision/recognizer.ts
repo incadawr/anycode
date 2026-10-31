@@ -1,5 +1,5 @@
 /**
- * The vision fallback's one-shot `ask()` primitive (TASK.198 plan §1). Lets a
+ * The vision fallback's one-shot `ask()` primitive (plan §1). Lets a
  * model with no native image input "see" an attachment through a second,
  * separately-configured recognizer endpoint: one non-streamed model call per
  * question, same one-shot shape as context/session-title.ts's
@@ -181,7 +181,7 @@ export async function ask(opts: AskOptions): Promise<AskResult> {
       if (event.type === "text_delta") {
         text += event.text;
       } else if (event.type === "stream_retry") {
-        // Taskana 4705 review: a mid-stream replay discards the partial attempt.
+        // review: a mid-stream replay discards the partial attempt.
         text = "";
       } else if (event.type === "finish") {
         usage = event.usage;

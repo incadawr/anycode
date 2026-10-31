@@ -1,5 +1,5 @@
 /**
- * MCP server `instructions` as a system-prompt section (Taskana 4752, part B).
+ * MCP server `instructions` as a system-prompt section (part B).
  *
  * A connected server may send `instructions` in its `initialize` result: usage
  * advice for its own tools. This module turns the connected servers' texts into

@@ -1,5 +1,5 @@
 /**
- * ArchMap tool (TASK.233 slice S1): a read-only TS/JS import-graph scanner.
+ * ArchMap tool (slice S1): a read-only TS/JS import-graph scanner.
  * Topology, not policy — the graph is derived from the imports that actually
  * exist in the source, with no level assignment and no Dependency Rule
  * verdict (later slices). The model gets a compact summary; the full JSON
@@ -9,7 +9,7 @@
  * aliases, tsconfig `paths`) are counted as EXTERNAL. Barrel/aliased imports
  * therefore never appear as edges; that is a documented S1 trade-off.
  *
- * OPT-IN (Taskana 4162): ArchMap is NOT in the default registry until the
+ * OPT-IN: ArchMap is NOT in the default registry until the
  * architecture-map GUI panel exists — its schema would tax every session's
  * prompt on every turn and invalidate the prompt cache once. Boot wirings
  * register it only when the opt-in flag says so (`loadArchMapEnabled` below).
@@ -89,7 +89,7 @@ const EXCLUDED_DIR_SEGMENTS = new Set(["test-harness", "__fixtures__", "__mocks_
 const UNRESOLVED_CAP = 50;
 
 // ---------------------------------------------------------------------------
-// Opt-in flag (Taskana 4162): ANYCODE_ARCHMAP=1/true/on or true, else
+// Opt-in flag: ANYCODE_ARCHMAP=1/true/on or true, else
 // `tools.archMap: true` in ~/.anycode/settings.json. The default is OFF, and
 // the env var wins over the setting (the `loadRepoMapConfig` / `fillFromSettings`
 // convention: env > settings > fail-closed default).

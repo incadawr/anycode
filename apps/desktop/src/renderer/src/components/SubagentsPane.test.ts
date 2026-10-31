@@ -230,16 +230,16 @@ describe("buildCreateRequest / buildPreviewRequest", () => {
     expect(Object.keys(preview)).toEqual(["draft"]);
   });
 
-  // Taskana 4706: the editor's create-mode scope radio is gone — the pane
+  // the editor's create-mode scope radio is gone — the pane
   // seeds the editor scope from the resolved scope-bar mode. The builder
   // contract is unchanged; both write targets pinned.
 
-  it("Taskana 4706 Global mode: no tabId + 'user' — the profile lands in personal subagents", () => {
+  it("Global mode: no tabId + 'user' — the profile lands in personal subagents", () => {
     const draft: SubagentProfileDraft = { name: "new-one", description: "d", body: "b" };
     expect(buildCreateRequest(undefined, "user", draft)).toEqual({ tabId: undefined, scope: "user", draft });
   });
 
-  it("Taskana 4706 Project mode: tabId + 'project' — the profile lands in the chosen tab's workspace", () => {
+  it("Project mode: tabId + 'project' — the profile lands in the chosen tab's workspace", () => {
     const draft: SubagentProfileDraft = { name: "new-one", description: "d", body: "b" };
     expect(buildCreateRequest("t1", "project", draft)).toEqual({ tabId: "t1", scope: "project", draft });
   });
@@ -529,7 +529,7 @@ describe("resolveSubagentModelOptions", () => {
   });
 });
 
-// ── TASK.128: workspace-root badge/label helpers (display-only; paths never leave the renderer) ──
+// ── workspace-root badge/label helpers (display-only; paths never leave the renderer) ──
 
 describe("workspaceRootSegment", () => {
   it("returns the final forward-slash-separated segment", () => {
@@ -537,7 +537,7 @@ describe("workspaceRootSegment", () => {
   });
 
   it("strips trailing forward slashes before taking the final segment", () => {
-    expect(workspaceRootSegment("/ws/task106-slice1/")).toBe("task106-slice1");
+    expect(workspaceRootSegment("/ws/slice1/")).toBe("slice1");
     expect(workspaceRootSegment("/ws/a//")).toBe("a");
   });
 
@@ -584,9 +584,9 @@ describe("workspaceEmptyNote", () => {
   });
 });
 
-// ── TASK.183: the subagent model list is the PARENT connection's union ──
+// ── the subagent model list is the PARENT connection's union ──
 
-describe("resolveSubagentModelOptions with the parent connection's own model ids (TASK.183)", () => {
+describe("resolveSubagentModelOptions with the parent connection's own model ids", () => {
   const catalog: CatalogSummary = [
     { id: "z-ai", name: "Z.ai", authKind: "api_key", models: [{ id: "glm-5.3", name: "GLM-5.3" }] },
   ];
@@ -632,9 +632,9 @@ describe("resolveSubagentModelOptions with the parent connection's own model ids
   });
 });
 
-// ── Taskana 4732 S1-C: the plugin group's "Manage in Plugins" link ──
+// ── S1-C: the plugin group's "Manage in Plugins" link ──
 
-describe("plugin group cross-link (Taskana 4732 S1-C, design 4732 §6)", () => {
+describe("plugin group cross-link (S1-C, design 4732 §6)", () => {
   it("the plugin-group header carries a Manage-in-Plugins link wired to the settings.open + plugins-pane seam", () => {
     const source = readFileSync(new URL("./SubagentsPane.tsx", import.meta.url), "utf8");
     expect(source).toContain("Manage in Plugins");

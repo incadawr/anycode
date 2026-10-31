@@ -1,5 +1,5 @@
 /**
- * Live smoke for TASK.145 (background/detached child sessions) — drives a REAL
+ * Live smoke for background/detached child sessions — drives a REAL
  * Electron dev instance end-to-end over the automation HTTP channel and proves
  * the four things the unit gate structurally cannot, because every one of them
  * is a statement about a REAL turn boundary, a REAL second OS process, and the
@@ -27,7 +27,7 @@
  * `child-session-race-smoke.mjs` uses), including `step1LaunchApp`, whose
  * settings v2 seed is the only one that round-trips the current schema.
  * Teardown/result-json are local so this script never overwrites another
- * slice's standing evidence — it writes `evidence/task145/detach-result.json`.
+ * slice's standing evidence — it writes `evidence/detach-smoke/detach-result.json`.
  *
  * Probes run independently, not fail-fast: A/B share one dispatch, C and D
  * each own their own, and all four share one app launch purely to amortize
@@ -57,7 +57,7 @@ import {
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(scriptDir, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
-const EVIDENCE_DIR = join(repoRoot, "working-docs", "evidence", "task145");
+const EVIDENCE_DIR = join(repoRoot, "working-docs", "evidence", "detach-smoke");
 
 const APP_EXIT_GRACE_MS = 15_000;
 const SIGTERM_GRACE_MS = 3_000;
@@ -511,12 +511,12 @@ async function runTeardown(ctx, failedProbes) {
   for (const dir of [ctx.tmpWorkspace, ctx.profile]) {
     if (typeof dir === "string" && existsSync(dir)) {
       if (FLAGS.keep) {
-        console.log(`[task145-detach-smoke] --keep set, preserved: ${dir}`);
+        console.log(`[detach-smoke] --keep set, preserved: ${dir}`);
       } else {
         try {
           rmSync(dir, { recursive: true, force: true });
         } catch (err) {
-          console.warn(`[task145-detach-smoke] failed to remove ${dir}: ${err?.message ?? err}`);
+          console.warn(`[detach-smoke] failed to remove ${dir}: ${err?.message ?? err}`);
         }
       }
     }
@@ -525,7 +525,7 @@ async function runTeardown(ctx, failedProbes) {
   const results = ctx.results ?? [];
   const passCount = results.filter((r) => r.status === "PASS").length;
   const verdict = failedProbes.length === 0 ? "ALL GREEN (or documented SKIP)" : `FAILED: ${failedProbes.join(", ")}`;
-  console.log(`\n[task145-detach-smoke] ${passCount}/${results.length} probes PASS — ${verdict}`);
+  console.log(`\n[detach-smoke] ${passCount}/${results.length} probes PASS — ${verdict}`);
   for (const r of results) {
     console.log(`  [probe ${r.name}] ${r.status} ${r.detail ?? ""}`.trimEnd());
   }
@@ -536,7 +536,7 @@ async function runTeardown(ctx, failedProbes) {
     writeFileSync(resultPath, JSON.stringify({ verdict, results, at: new Date().toISOString() }, null, 2));
     console.log(`           result json: ${resultPath}`);
   } catch (err) {
-    console.warn(`[task145-detach-smoke] failed to write detach-result.json: ${err?.message ?? err}`);
+    console.warn(`[detach-smoke] failed to write detach-result.json: ${err?.message ?? err}`);
   }
 }
 
@@ -547,9 +547,9 @@ function installSignalTeardown(ctx) {
       return;
     }
     handling = true;
-    console.error(`\n[task145-detach-smoke] received ${signal} — tearing down…`);
+    console.error(`\n[detach-smoke] received ${signal} — tearing down…`);
     teardown(ctx, [`signal:${signal}`])
-      .catch((err) => console.error(`[task145-detach-smoke] teardown after ${signal} failed: ${err?.stack ?? err}`))
+      .catch((err) => console.error(`[detach-smoke] teardown after ${signal} failed: ${err?.stack ?? err}`))
       .finally(() => process.exit(1));
   };
   process.on("SIGINT", onSignal);
@@ -601,7 +601,7 @@ async function run() {
       }
     }
   } catch (err) {
-    console.error(`[task145-detach-smoke] unexpected error: ${err?.stack ?? err}`);
+    console.error(`[detach-smoke] unexpected error: ${err?.stack ?? err}`);
     failedProbes.push("launch");
   }
 
@@ -610,6 +610,6 @@ async function run() {
 }
 
 run().catch((err) => {
-  console.error(`[task145-detach-smoke] fatal: ${err?.stack ?? err}`);
+  console.error(`[detach-smoke] fatal: ${err?.stack ?? err}`);
   process.exit(1);
 });

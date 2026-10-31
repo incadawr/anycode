@@ -1,5 +1,5 @@
 /**
- * End-to-end proof of the openai-chat-completions transport (TASK.43 §0.8/§10.2
+ * End-to-end proof of the openai-chat-completions transport (§0.8/§10.2
  * p2) through the REAL `@ai-sdk/openai-compatible` + `ai` stack (mirrors
  * sse-fixture.integration.test.ts's harness): a local `node:http` server on
  * 127.0.0.1:<ephemeral> captures the outgoing request and replies with a
@@ -8,7 +8,7 @@
  * named-event SSE).
  *
  * This is the regression fixture for the two live LiteLLM-gateway failures
- * that motivate the whole transport (TASK.43 §1): HTTP 400 on
+ * that motivate the whole transport (§1): HTTP 400 on
  * `tool_choice.type` because the Anthropic-shaped `{type:"auto"}` object was
  * forwarded as-is to a Responses-backed group, and HTTP 404 because an
  * Anthropic body was posted at an endpoint with no `/v1/messages` route. Both
@@ -55,7 +55,7 @@ const READ_TOOL: ToolDeclaration = {
   inputJsonSchema: { type: "object", properties: { file_path: { type: "string" } }, required: ["file_path"] },
 };
 
-describe("AiSdkModelPort over a real @ai-sdk/openai-compatible SSE stream (TASK.43 W2)", () => {
+describe("AiSdkModelPort over a real @ai-sdk/openai-compatible SSE stream (W2)", () => {
   let server: Server;
   let baseUrl: string;
   let captured: CapturedRequest | undefined;
@@ -174,7 +174,7 @@ describe("AiSdkModelPort over a real @ai-sdk/openai-compatible SSE stream (TASK.
     expect(events.at(-1)?.type).toBe("finish");
   });
 
-  it("serializes tool_choice as a bare STRING when tools are offered (the LiteLLM 400 regression, TASK.43 §1 fact #1)", async () => {
+  it("serializes tool_choice as a bare STRING when tools are offered (the LiteLLM 400 regression, §1 fact #1)", async () => {
     responseChunks = [
       { choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 5, completion_tokens: 0, total_tokens: 5 } },
     ];
@@ -240,7 +240,7 @@ describe("AiSdkModelPort over a real @ai-sdk/openai-compatible SSE stream (TASK.
     const request: ModelRequest = { messages: [{ role: "user", content: "hi" }], tools: [] };
 
     // The exact composition production performs at the transport-resolution
-    // point (TASK.158): no explicit setting (undefined env), openai-chat-
+    // point: no explicit setting (undefined env), openai-chat-
     // completions transport → the resolver's default-on verdict feeds the port.
     const events = await collect(
       portFor({ includeUsage: resolveIncludeUsage("openai-chat-completions", undefined) }).streamText(request),

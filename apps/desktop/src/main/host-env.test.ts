@@ -77,7 +77,7 @@ import { connectionFixture, providerV2, providerV2Multi, type SingletonFixture }
 
 /**
  * A v2 settings object whose `provider` block is built from a legacy-singleton
- * description (TASK.45 fixture): `settings({ provider: { id, model, ... } })`
+ * description (fixture): `settings({ provider: { id, model, ... } })`
  * yields ONE active connection so `activeProviderView` reads it back as the
  * former singleton. Every other section can be overridden via `over`.
  */
@@ -160,7 +160,7 @@ describe("buildHostEnv — I2 priority (env > vault > settings)", () => {
     expect(env.ANYCODE_MAX_TURNS).toBe("100");
   });
 
-  it("projects tools.networkWaitMaxMs into ANYCODE_NETWORK_WAIT_MAX_MS (Taskana 4772; env > settings)", async () => {
+  it("projects tools.networkWaitMaxMs into ANYCODE_NETWORK_WAIT_MAX_MS; env > settings)", async () => {
     const fromSettings = await buildHostEnv({
       bootEnv: {},
       settings: settings({ tools: { networkWaitMaxMs: 600000 } }),
@@ -179,7 +179,7 @@ describe("buildHostEnv — I2 priority (env > vault > settings)", () => {
     expect(unset.ANYCODE_NETWORK_WAIT_MAX_MS).toBeUndefined();
   });
 
-  it("projects tools.maxRetries / tools.networkRetryBudgetMs into ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS (Taskana 4705; env > settings)", async () => {
+  it("projects tools.maxRetries / tools.networkRetryBudgetMs into ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS; env > settings)", async () => {
     // settings fill when the boot env is blank
     const fromSettings = await buildHostEnv({
       bootEnv: {},
@@ -208,7 +208,7 @@ describe("buildHostEnv — I2 priority (env > vault > settings)", () => {
     expect(unset.ANYCODE_NETWORK_RETRY_BUDGET_MS).toBeUndefined();
   });
 
-  it("projects permissions.classifier into ANYCODE_PERMISSION_CLASSIFIER as JSON (Taskana 4702; absent = unset)", async () => {
+  it("projects permissions.classifier into ANYCODE_PERMISSION_CLASSIFIER as JSON; absent = unset)", async () => {
     const record = { enabled: true, kind: "command" as const, command: "/opt/da --json", timeoutMs: 3000 };
     const fromSettings = await buildHostEnv({
       bootEnv: {},
@@ -234,7 +234,7 @@ describe("buildHostEnv — I2 priority (env > vault > settings)", () => {
     expect(unset.ANYCODE_PERMISSION_CLASSIFIER).toBeUndefined();
   });
 
-  it("projects a kind:model classifier record verbatim (Taskana 4730; both optional fields absent = session default)", async () => {
+  it("projects a kind:model classifier record verbatim; both optional fields absent = session default)", async () => {
     const record = { enabled: true, kind: "model" as const, connectionId: "conn-2", model: "glm-4.7-flash", timeoutMs: 8000 };
     const fromSettings = await buildHostEnv({
       bootEnv: {},
@@ -252,7 +252,7 @@ describe("buildHostEnv — I2 priority (env > vault > settings)", () => {
     expect(JSON.parse(fromBare.ANYCODE_PERMISSION_CLASSIFIER ?? "null")).toEqual(bare);
   });
 
-  it("projects tools.grepBackend into ANYCODE_GREP_BACKEND (Taskana 4160; env > settings)", async () => {
+  it("projects tools.grepBackend into ANYCODE_GREP_BACKEND; env > settings)", async () => {
     // settings fill when the boot env is blank
     const fromSettings = await buildHostEnv({
       bootEnv: {},
@@ -278,7 +278,7 @@ describe("buildHostEnv — I2 priority (env > vault > settings)", () => {
     expect(unset[ENV_GREP_BACKEND]).toBeUndefined();
   });
 
-  it("projects tools.adaptiveTurnBudget into ANYCODE_ADAPTIVE_TURN_BUDGET (TASK.4721; env > settings)", async () => {
+  it("projects tools.adaptiveTurnBudget into ANYCODE_ADAPTIVE_TURN_BUDGET; env > settings)", async () => {
     const on = await buildHostEnv({
       bootEnv: {},
       settings: settings({ tools: { adaptiveTurnBudget: true } }),
@@ -393,7 +393,7 @@ describe("buildHostEnv — catalog selection path (slice 2.5)", () => {
   });
 });
 
-describe("buildHostEnv — active-connection model/effort (TASK.45 v2, F14 §2.4)", () => {
+describe("buildHostEnv — active-connection model/effort (v2, F14 §2.4)", () => {
   // W9′: the v1 `defaults[pid]` fold is gone — the active connection carries
   // model/reasoningEffort directly, and buildHostEnv reads them via
   // `activeProviderView`. These prove the ladder OUTPUT is unchanged.
@@ -465,7 +465,7 @@ describe("buildHostEnv — active-connection model/effort (TASK.45 v2, F14 §2.4
   });
 });
 
-describe("buildHostEnv — ANYCODE_MAX_OUTPUT_TOKENS (TASK.150)", () => {
+describe("buildHostEnv — ANYCODE_MAX_OUTPUT_TOKENS", () => {
   it("emits the active connection's explicit output-token ceiling", async () => {
     const conn = { ...connectionFixture({ id: "z-ai", model: "m" }), maxOutputTokens: 65536 };
     const env = await buildHostEnv({
@@ -664,7 +664,7 @@ describe("buildHostEnv — ANYCODE_INCLUDE_USAGE (GitHub #1: per-connection usag
   });
 });
 
-describe("buildHostEnv — ANYCODE_CONTEXT_WINDOW + ANYCODE_CONTEXT_WINDOW_MODEL (TASK.142: one model's override per connection)", () => {
+describe("buildHostEnv — ANYCODE_CONTEXT_WINDOW + ANYCODE_CONTEXT_WINDOW_MODEL (one model's override per connection)", () => {
   /** A connection whose saved window is bound to `boundModel`. */
   function boundConn(connModel: string, boundModel: string, tokens: number | undefined = 8192) {
     const conn = { ...connectionFixture({ id: "z-ai", model: connModel }) };
@@ -797,7 +797,7 @@ describe("buildHostEnv — ANYCODE_CONTEXT_WINDOW + ANYCODE_CONTEXT_WINDOW_MODEL
 
   // The whole point of the pair: it survives the env channel and produces the
   // degraded budget the contract computes, instead of a 24x-overstuffed prompt.
-  it("the emitted pair round-trips through loadEnvConfig into the 8192/2048 applied budget (TASK.142 chain)", async () => {
+  it("the emitted pair round-trips through loadEnvConfig into the 8192/2048 applied budget (chain)", async () => {
     const conn = boundConn("on-prem-8b", "on-prem-8b", 8192);
     const env = await buildHostEnv({
       bootEnv: { ANYCODE_API_KEY: "sk-test" },
@@ -821,13 +821,13 @@ describe("buildHostEnv — ANYCODE_CONTEXT_WINDOW + ANYCODE_CONTEXT_WINDOW_MODEL
   });
 });
 
-// ── Taskana 4088 (TASK.69): the live image-modality list on the fork env ──
+// ── the live image-modality list on the fork env ──
 // 4088-on-4118 integration: ANYCODE_IMAGE_INPUT_MODELS is GONE — the live
 // image-modality facts ride 4118's modelCapabilities map (read by the host
 // from the connection record). Only the per-model override still travels
 // through the fork env.
 
-describe("buildHostEnv — image-input transport (Taskana 4088 on 4118's caps map)", () => {
+describe("buildHostEnv — image-input transport (on 4118's caps map)", () => {
   it("NEVER emits ANYCODE_IMAGE_INPUT_MODELS, even for a connection with live image facts", async () => {
     const conn = {
       ...connectionFixture({ id: "z-ai", model: "glm-5.3v" }),
@@ -859,7 +859,7 @@ describe("buildHostEnv — image-input transport (Taskana 4088 on 4118's caps ma
   });
 });
 
-describe("buildHostEnv — ANYCODE_PROVIDER_TRANSPORT (TASK.43 W5)", () => {
+describe("buildHostEnv — ANYCODE_PROVIDER_TRANSPORT (W5)", () => {
   it("fills the transport from settings.provider.transport on the legacy/custom path", async () => {
     const env = await buildHostEnv({
       bootEnv: {},
@@ -914,7 +914,7 @@ describe("buildHostEnv — ANYCODE_PROVIDER_TRANSPORT (TASK.43 W5)", () => {
   });
 });
 
-describe("buildHostEnv — ANYCODE_PROVIDER_TRANSPORT emission rule (TASK.43 W5-FIX, cut Risk #3)", () => {
+describe("buildHostEnv — ANYCODE_PROVIDER_TRANSPORT emission rule (W5-FIX, cut Risk #3)", () => {
   // The REAL production seam: main wires `resolveSelection = () =>
   // resolveProviderSelection(...)` and feeds it to buildHostEnv. This exercises
   // that seam end-to-end so the fork-env byte-parity fix is proven where it lives.
@@ -1101,7 +1101,7 @@ describe("buildHostEnv — custom-provider route (F-G-B, cut §9.2)", () => {
   });
 });
 
-describe("buildHostEnv — connection proxy (TASK.132)", () => {
+describe("buildHostEnv — connection proxy", () => {
   /** Carries `user:pass@` userinfo on purpose — the authenticated-proxy case the field exists for. */
   const PROXY = "http://user:pass@proxy.example.com:3128";
   const SHELL_PROXY = "http://shell-proxy.internal:8080";
@@ -1138,7 +1138,7 @@ describe("buildHostEnv — connection proxy (TASK.132)", () => {
   });
 
   // Byte-identity guarantee #1: a shell that already exports a proxy sees the
-  // EXACT pre-TASK.132 env — the vars ride the {...bootEnv} spread and stay as
+  // EXACT env — the vars ride the {...bootEnv} spread and stay as
   // inert as they were, because NODE_USE_ENV_PROXY is never added unprompted.
   it("with no connection proxy, a shell-exported proxy is passed through untouched and NODE_USE_ENV_PROXY is NOT added", async () => {
     const env = await buildHostEnv({
@@ -1176,7 +1176,7 @@ describe("buildHostEnv — connection proxy (TASK.132)", () => {
   // `NO_PROXY` rewrites the shell's exemption list, and `NODE_USE_ENV_PROXY=1`
   // switches the host's own fetch onto the shell's proxy — neither was asked
   // for. The named cost is that the host's fetch goes direct here, exactly as it
-  // did before TASK.132; a shell wanting otherwise exports NODE_USE_ENV_PROXY
+  // did before; a shell wanting otherwise exports NODE_USE_ENV_PROXY
   // itself.
   it("B-01: a shell-set HTTPS_PROXY makes settings emit NOTHING — not even the exemption or the flag", async () => {
     const env = await buildHostEnv({
@@ -1307,7 +1307,7 @@ describe("buildHostEnv — connection proxy (TASK.132)", () => {
   });
 });
 
-describe("applyConnectionProxy (TASK.132) — the exported env mutator", () => {
+describe("applyConnectionProxy — the exported env mutator", () => {
   it("is a no-op for an absent or blank materialised proxy", () => {
     const env: NodeJS.ProcessEnv = { PATH: "/usr/bin" };
     applyConnectionProxy(env, {}, undefined);
@@ -1375,7 +1375,7 @@ describe("custom-provider readiness-gate exports (FX4) — RED against the expor
   });
 });
 
-describe("resolveEffectiveTransport — the ONE transport ladder authority (TASK.43 W5-FIX)", () => {
+describe("resolveEffectiveTransport — the ONE transport ladder authority (W5-FIX)", () => {
   it("nonblank env wins over settings and default (source env)", () => {
     expect(
       resolveEffectiveTransport({
@@ -1433,16 +1433,16 @@ describe("envOverrides", () => {
     expect(envOverrides({ ANYCODE_REASONING_EFFORT: "high" })).toEqual([ENV_REASONING_EFFORT]);
   });
 
-  it("includes ANYCODE_MAX_OUTPUT_TOKENS (TASK.150 ladder addition)", () => {
+  it("includes ANYCODE_MAX_OUTPUT_TOKENS (ladder addition)", () => {
     expect(envOverrides({ ANYCODE_MAX_OUTPUT_TOKENS: "65536" })).toEqual([ENV_MAX_OUTPUT_TOKENS]);
   });
 
-  it("includes ANYCODE_INCLUDE_USAGE (TASK.158 ladder addition)", () => {
+  it("includes ANYCODE_INCLUDE_USAGE (ladder addition)", () => {
     expect(envOverrides({ ANYCODE_INCLUDE_USAGE: "off" })).toEqual([ENV_INCLUDE_USAGE]);
   });
 });
 
-describe("shouldSkipConnectionHealthBinding (TASK.45 W11 env-override rule)", () => {
+describe("shouldSkipConnectionHealthBinding (W11 env-override rule)", () => {
   it("skips binding when ANYCODE_API_KEY is a non-blank boot-snapshot override", () => {
     expect(shouldSkipConnectionHealthBinding({ ANYCODE_API_KEY: "sk-env-override" })).toBe(true);
   });
@@ -1528,7 +1528,7 @@ describe("computeProviderReady — readiness matrix (§6)", () => {
   });
 });
 
-describe("computeProviderReady — auth-policy + unsupported-transport (TASK.43 W5, cut Risk #3)", () => {
+describe("computeProviderReady — auth-policy + unsupported-transport (W5, cut Risk #3)", () => {
   it("authOptional=true is ready with a model and NO key at all (vLLM/no-auth custom)", async () => {
     const ready = await computeProviderReady({
       bootEnv: {},
@@ -1592,7 +1592,7 @@ describe("computeProviderReady — auth-policy + unsupported-transport (TASK.43 
   });
 });
 
-describe("computeProviderReady — connection-level authOptional, transport-gated (TASK.152 review fix)", () => {
+describe("computeProviderReady — connection-level authOptional, transport-gated (review fix)", () => {
   it("sentinel custom + authOptional + model + OpenAI-family resolvedTransport is ready without a key", async () => {
     // The live incident shape AFTER the fix: providerId "custom", model,
     // authOptional true, no key — and the transport the host will actually
@@ -1658,7 +1658,7 @@ describe("computeProviderReady — connection-level authOptional, transport-gate
   });
 });
 
-describe("buildHostEnv — keyless bare custom sentinel (TASK.152: readiness AND fork env must agree)", () => {
+describe("buildHostEnv — keyless bare custom sentinel (readiness AND fork env must agree)", () => {
   // loadEnvConfig is imported from the core package HERE (tests may depend on
   // core; host-env.ts itself must not) so the proof is against the REAL boot
   // rule the spawned host runs, not a re-derivation of it.
@@ -1686,7 +1686,7 @@ describe("buildHostEnv — keyless bare custom sentinel (TASK.152: readiness AND
     expect(() => loadEnvConfig(env)).not.toThrow();
   });
 
-  it("byte-compat sibling: WITHOUT authOptional nothing is emitted (byte-identical to pre-TASK.152) and loadEnvConfig refuses", async () => {
+  it("byte-compat sibling: WITHOUT authOptional nothing is emitted (byte-identical to pre) and loadEnvConfig refuses", async () => {
     const env = await buildHostEnv({
       bootEnv: {},
       settings: settings({ provider: { id: "custom", model: "m" } }),
@@ -1828,7 +1828,7 @@ describe("secretEnvFor (slice 2.5 §4, replaces SECRET_KEY_ENV)", () => {
   });
 });
 
-describe("secretEnvFor / isKnownSecretKey — MCP secret keys (Taskana 4752, part C)", () => {
+describe("secretEnvFor / isKnownSecretKey — MCP secret keys (part C)", () => {
   it("refuses an mcp.secret key: an MCP secret has no provider-env materialisation", () => {
     expect(() => secretEnvFor("mcp.secret.GITHUB_TOKEN")).toThrow(/MCP secret key/);
   });
@@ -1863,7 +1863,7 @@ describe("isKnownSecretKey (slice 2.5 §4, generalises SECRET_KEYS)", () => {
   });
 });
 
-describe("customProviderIds (owner-decision #6, cut §9.2, TASK.54)", () => {
+describe("customProviderIds (owner-decision #6, cut §9.2)", () => {
   it("returns every id in settings.provider.custom", () => {
     const withCustom: AnycodeSettings = {
       ...settings(),
@@ -1882,7 +1882,7 @@ describe("customProviderIds (owner-decision #6, cut §9.2, TASK.54)", () => {
     expect(customProviderIds(settings())).toEqual([]);
   });
 
-  // RED-PROOF: this is exactly the seam TASK.54 flags at main/index.ts — a
+  // RED-PROOF: this is exactly the seam flags at main/index.ts — a
   // custom provider's vault key is only recognized once its id is unioned
   // into `catalogIds`. Reverting to `catalogProviderIds()` alone (no union)
   // reproduces this red case.
@@ -1903,7 +1903,7 @@ describe("customProviderIds (owner-decision #6, cut §9.2, TASK.54)", () => {
   });
 });
 
-describe("engineProxyCarriers — engine-level proxy (TASK.139)", () => {
+describe("engineProxyCarriers — engine-level proxy", () => {
   /** Carries `user:pass@` userinfo on purpose — the authenticated-proxy case the field exists for. */
   const CODEX_PROXY = "http://user:pass@codex-proxy.example.com:3128";
   const CLAUDE_PROXY = "https://claude-proxy.example.com:8443";
@@ -1925,7 +1925,7 @@ describe("engineProxyCarriers — engine-level proxy (TASK.139)", () => {
   });
 
   it("emits only the codex carrier when only codex is configured", () => {
-    // Taskana 4685: CODEX_PROXY carries `user:pass@` and these deps pass no
+    // CODEX_PROXY carries `user:pass@` and these deps pass no
     // `relayUrl`, so the carrier is de-credentialised fail-closed to `direct`
     // (never hand the credential across the engine-child boundary).
     const result = engineProxyCarriers(settings({ codex: { proxyUrl: CODEX_PROXY } }), {});
@@ -1938,7 +1938,7 @@ describe("engineProxyCarriers — engine-level proxy (TASK.139)", () => {
   });
 
   it("emits both carriers, each with its own engine's value", () => {
-    // Taskana 4685: codex's url is credentialed and there is no `relayUrl` in
+    // codex's url is credentialed and there is no `relayUrl` in
     // these deps → `direct`; claude's is credential-less → verbatim.
     const result = engineProxyCarriers(
       settings({ codex: { proxyUrl: CODEX_PROXY }, claude: { proxyUrl: CLAUDE_PROXY } }),
@@ -1954,7 +1954,7 @@ describe("engineProxyCarriers — engine-level proxy (TASK.139)", () => {
   // the child builder cannot make that call, since by the time it runs a
   // shell-exported NO_PROXY and a connection-derived one look identical.
   it("B-02: withholds the exemption licence when the shell owns NO_PROXY", () => {
-    // Taskana 4685: credentialed url + no relayUrl in these deps → `direct`
+    // credentialed url + no relayUrl in these deps → `direct`
     // (the licence question is moot once the carrier is de-credentialised).
     const result = engineProxyCarriers(settings({ codex: { proxyUrl: CODEX_PROXY } }), { NO_PROXY: "corp.internal" });
     expect(result).toEqual({
@@ -2022,7 +2022,7 @@ describe("engineProxyCarriers — engine-level proxy (TASK.139)", () => {
   });
 
   // Byte-identity of the fork overlay: with nothing configured the spread adds
-  // no key at all, so a fork's env is exactly its pre-TASK.139 self.
+  // no key at all.
   it("spreads into an env overlay without changing a byte when empty", () => {
     const overlay = {
       ANYCODE_ENGINE: "core",
@@ -2036,7 +2036,7 @@ describe("engineProxyCarriers — engine-level proxy (TASK.139)", () => {
   });
 });
 
-describe("ambient engine-proxy carriers never reach a fork (TASK.139 F1)", () => {
+describe("ambient engine-proxy carriers never reach a fork (F1)", () => {
   const CODEX_PROXY = "http://user:pass@codex-proxy.example.com:3128";
   const AMBIENT_PROXY = "http://ambient-carrier.invalid:9999";
   const SHELL_PROXY = "http://shell-proxy.internal:8080";
@@ -2104,7 +2104,7 @@ describe("ambient engine-proxy carriers never reach a fork (TASK.139 F1)", () =>
   // And with an engine proxy configured, main's value is the one that lands —
   // the ambient one is gone rather than merely losing a spread order fight.
   it("main's configured carrier replaces an ambient one of the same name", async () => {
-    // Taskana 4685: CODEX_PROXY is credentialed and these deps carry no
+    // CODEX_PROXY is credentialed and these deps carry no
     // `relayUrl`, so the carrier is the fail-closed `direct` sentinel — still
     // main's value, still replacing the ambient one.
     const bootEnv = { PATH: "/usr/bin", ANYCODE_CODEX_PROXY_URL: AMBIENT_PROXY };
@@ -2118,7 +2118,7 @@ describe("ambient engine-proxy carriers never reach a fork (TASK.139 F1)", () =>
   });
 });
 
-// ── TASK.141: the named proxy registry ──
+// ── the named proxy registry ──
 
 describe("materializeProxyRung — a rung turned into what an env needs", () => {
   const MANUAL: ProxyProfile = { id: "proxy-corp", name: "Corp", mode: "manual", url: "http://proxy.corp:3128" };
@@ -2245,7 +2245,7 @@ describe("materializeProxyRung — a rung turned into what an env needs", () => 
     expect(materializeProxyRung({ source: { kind: "app" }, ref: PROXY_REF_DIRECT })).toBeUndefined();
   });
 
-  it("materialises a legacy string verbatim — byte-for-byte its TASK.132 semantics", () => {
+  it("materialises a legacy string verbatim — byte-for-byte its semantics", () => {
     const legacy = settings({ provider: { id: "z-ai", model: "m", proxyUrl: "http://user:pass@legacy:8080" } });
     expect(resolveProxyFor(legacy, hostForkProxyChain("conn-z-ai"))).toEqual({
       url: "http://user:pass@legacy:8080",
@@ -2253,7 +2253,7 @@ describe("materializeProxyRung — a rung turned into what an env needs", () => 
   });
 });
 
-describe("applyConnectionProxy — profile exemptions (TASK.141)", () => {
+describe("applyConnectionProxy — profile exemptions", () => {
   const PROXY = { url: "http://proxy.corp:3128" };
 
   // Grabli: the list is APPENDED. A profile list that REPLACED the loopback
@@ -2272,7 +2272,7 @@ describe("applyConnectionProxy — profile exemptions (TASK.141)", () => {
     expect(env.NO_PROXY).toBe("localhost,127.0.0.1,[::1],::1");
   });
 
-  // TASK.132's law is untouched: a shell that named its own exemptions keeps
+ // law is untouched: a shell that named its own exemptions keeps
   // BOTH keys, and a profile's list never shadows them.
   it("leaves a shell-exported NO_PROXY completely untouched", () => {
     const env: NodeJS.ProcessEnv = { NO_PROXY: "corp.internal" };
@@ -2360,7 +2360,7 @@ describe("engineProxyCarrierValue — the engine rung, with and without the app 
   });
 });
 
-describe("TASK.141 byte-identity — a registry-free document changes not one byte", () => {
+describe("byte-identity — a registry-free document changes not one byte", () => {
   /** Every env var this slice could conceivably touch; byte-identity is asserted over exactly this set. */
   const PROXY_SURFACE = [
     "HTTPS_PROXY",
@@ -2464,7 +2464,7 @@ describe("TASK.141 byte-identity — a registry-free document changes not one by
   });
 });
 
-describe("proxy-profile vault key (TASK.141 §5)", () => {
+describe("proxy-profile vault key (§5)", () => {
   // The whole custody point of keying by the immutable id: `isKnownSecretKey`
   // recognising the key is ALSO what surfaces it in `Vault.statuses`, which is
   // the only way the renderer ever learns `passwordSet` — the value itself never
@@ -2495,7 +2495,7 @@ describe("proxy-profile vault key (TASK.141 §5)", () => {
   });
 });
 
-// ── design-review regressions (TASK.141 lane A, gpt-5.6-sol xhigh) ──
+// ── design-review regressions (lane A, gpt-5.6-sol xhigh) ──
 
 describe("B-10 — the async fork path awaits a FRESH resolve for its own target", () => {
   const SYSTEM: ProxyProfile = { id: "proxy-sys", name: "System", mode: "system" };
@@ -2622,7 +2622,7 @@ describe("B-03 — every explicit-direct outcome emits the sentinel", () => {
   });
 });
 
-describe("buildHostEnv — vision-fallback recognizer (TASK.198 E1)", () => {
+describe("buildHostEnv — vision-fallback recognizer (E1)", () => {
   const visionConnection = connectionFixture({
     id: "openai",
     connectionId: "conn-vision",
@@ -2703,7 +2703,7 @@ describe("buildHostEnv — vision-fallback recognizer (TASK.198 E1)", () => {
     expect(env.ANYCODE_RECOGNIZER_MODEL).toBe("vision-model");
   });
 
-  // Pinned behavior (transport-ladder fix, task150-output-ceiling session): a
+  // Pinned behavior (transport-ladder fix): a
   // bare connection (providerId "") has NO catalog entry, so a MISSING
   // `transport` there resolves `resolveEffectiveTransport` to `"unset"` —
   // this is NOT a malformed input. The recognizer still resolves fully (a
@@ -2763,7 +2763,7 @@ describe("buildHostEnv — vision-fallback recognizer (TASK.198 E1)", () => {
     expect(second.ANYCODE_RECOGNIZER_MODEL).toBe("model-b");
   });
 
-  // ⚠ Хвост от E1 (task198-state.md): resolveRecognizerConfig read
+  // ⚠ Хвост от E1: resolveRecognizerConfig read
   // connection.baseUrl/a connection-scoped vault key directly and never
   // followed a `custom:<slug>` providerId to its CustomProviderRecord the
   // way buildHostEnv's own customId branch does above (line ~942) — a
@@ -2833,7 +2833,7 @@ describe("buildHostEnv — vision-fallback recognizer (TASK.198 E1)", () => {
     expect(reads.some((key) => key.startsWith("provider.connection."))).toBe(false);
   });
 
-  // Live-run regression (task150-output-ceiling session, TASK.198 follow-up):
+  // Live-run regression:
   // a CATALOG connection's own baseUrl/transport can be blank (`z-ai`/`kimi`
   // in real settings.json carry `baseUrl: ""` and no `transport` key at all —
   // the real endpoint lives in the CATALOG, mirrored today only for the
@@ -3020,11 +3020,11 @@ describe("buildHostEnv — vision-fallback recognizer (TASK.198 E1)", () => {
   });
 });
 
-// ── Taskana 4685 rework: main de-credentialises engine carriers against the
+// ── rework: main de-credentialises engine carriers against the
 // per-upstream relay registry (blocker B2: the relay of THAT value, never a
 // relay fronting a different upstream) ──
 
-describe("relayCredentialedCarrier (Taskana 4685 rework)", () => {
+describe("relayCredentialedCarrier (rework)", () => {
   const RELAY_A = "http://anycode:tok-a@127.0.0.1:47557";
   const RELAY_B = "http://anycode:tok-b@127.0.0.1:47558";
   /** The registry lookup shape `ProxyMaterializationDeps.relayFor` takes. */
@@ -3073,7 +3073,7 @@ describe("relayCredentialedCarrier (Taskana 4685 rework)", () => {
   });
 });
 
-describe("engineProxyOutcome threads relayFor end-to-end (Taskana 4685 rework)", () => {
+describe("engineProxyOutcome threads relayFor end-to-end (rework)", () => {
   /** The relay URL the fake registry hands to the profile's materialised upstream. */
   const RELAY = "http://anycode:tok-a@127.0.0.1:47557";
   /** A manual profile whose password comes from the materialisation cache. */
@@ -3137,7 +3137,7 @@ describe("engineProxyOutcome threads relayFor end-to-end (Taskana 4685 rework)",
 });
 
 
-describe("ENV_APP_VERSION (Taskana 4732 S1-B, design §7 host wiring)", () => {
+describe("ENV_APP_VERSION (S1-B, design §7 host wiring)", () => {
   it("parseAppVersionEnv maps empty/whitespace/undefined to undefined", () => {
     expect(parseAppVersionEnv(undefined)).toBeUndefined();
     expect(parseAppVersionEnv("")).toBeUndefined();

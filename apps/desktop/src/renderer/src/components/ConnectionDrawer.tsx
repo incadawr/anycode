@@ -1,7 +1,7 @@
 /**
- * ConnectionDrawer (TASK.45 W12, cut §"Add/Edit flow"): the compact add/edit
+ * ConnectionDrawer (W12, cut §"Add/Edit flow"): the compact add/edit
  * surface for ONE provider connection — template → label → model → transport
- * (restricted to `supportedTransports`, TASK.43) → base URL (capability-gated)
+ * (restricted to `supportedTransports`) → base URL (capability-gated)
  * → credential (API key or OAuth). Split into `ConnectionDrawerFields` (the
  * actual form — no dialog chrome) and `ConnectionDrawer` (a native `<dialog>`
  * wrapper around it, same controlled showModal/close + focus-capture/restore
@@ -73,7 +73,7 @@ import { X } from "./icons.js";
 import { startModelEffortLevels } from "./start-model-picker.js";
 
 /**
- * The connection `connection-create` just minted (TASK.45 W12-FIX2 §1):
+ * The connection `connection-create` just minted (W12-FIX2 §1):
  * main is the authority — `result.createdConnectionId` on a successful
  * result IS the id, never a diff of the snapshot against a stale `before`
  * prop (that heuristic picked the WRONG connection whenever two unseen ids
@@ -102,7 +102,7 @@ export function resolveCustomKeyOutcome(result: CustomProviderMutationResult): {
     : { refused: true, detail: describeCustomProviderMutationError(result.reason), clearInput: false };
 }
 
-// ── TASK.183: durable manually entered connection models ──
+// ── durable manually entered connection models ──
 
 /**
  * Pre-flight of a raw Model-field value before any create/update/secret/list
@@ -330,7 +330,7 @@ export async function updateConnectionAndPersistModel<U>(
 
 /**
  * The id of the custom-provider record a `customProvider.create` just minted
- * (TASK.58): the single id present in the returned full `providers` list that
+ * the single id present in the returned full `providers` list that
  * was NOT already among the records the drawer knew about (`before`). Fail-
  * closed (`undefined`) unless EXACTLY one is new — the create result carries no
  * authoritative created-id field of its own, so this is the diff, and a
@@ -349,7 +349,7 @@ export function resolveCreatedCustomProviderId(
 
 /**
  * The connection-scoped oauth sign-in args the drawer's credential section
- * dispatches (TASK.45 W12-FIX §1): a sign-in from this drawer always targets
+ * dispatches (W12-FIX §1): a sign-in from this drawer always targets
  * the connection currently being edited/created, never a provider-wide
  * bucket guess. `undefined` when there is no selected catalog entry or no
  * connection has been minted yet (the credential section only ever renders
@@ -368,7 +368,7 @@ export function resolveDrawerOAuthStartArgs(
 }
 
 /*
- * TASK.141: `proxyUrlSaveBlocked` / `PROXY_URL_ERROR` /
+ * `proxyUrlSaveBlocked` / `PROXY_URL_ERROR` /
  * `connectionCreateProxyField` are GONE, and with them the whole class of
  * mistake they existed to diagnose. A proxy URL is no longer typed at a scope
  * — the drawer picks a named profile out of the registry (`ProxyRefPicker`),
@@ -493,15 +493,15 @@ export function buildDrawerSavePayload(
 }
 
 /**
- * The connection-update payload the unified `save` sends (TASK.45 W12-FIX §3;
- * TASK.58 folded the former separate `saveMetadata` into `save`):
+ * The connection-update payload the unified `save` sends (W12-FIX §3;
+ * folded the former separate `saveMetadata` into `save`):
  * `transport` is sent UNCONDITIONALLY (never omitted) — the local state
  * already speaks the channel's `ProviderTransportId | ""` sentinel, so
  * omitting it on `""` would leave an existing explicit choice untouched
  * instead of clearing it back to catalog default, the exact asymmetry this
  * fix closes. `createConnection`'s payload is NOT this shape — at create time
  * an omitted transport already means "use the default", so it keeps the old
- * conditional-spread form. `maxOutputTokens` (TASK.150) follows the exact same
+ * conditional-spread form. `maxOutputTokens` follows the exact same
  * unconditional-send discipline as `transport`/`proxyRef`: the local state
  * already speaks the channel's `number | ""` clear sentinel (validated by
  * `maxOutputTokensField` before this is called), so omitting it on `""` would
@@ -534,8 +534,8 @@ export function buildConnectionUpdatePayload(params: {
     model: params.model.trim(),
     transport: params.transport,
     baseUrl: params.showBaseUrl ? params.baseUrl.trim() : "",
-    // Sent unconditionally, same rationale as `transport` (TASK.141, inherited
-    // from TASK.132's `proxyUrl`): choosing "Use application proxy" must CLEAR
+    // Sent unconditionally, same rationale as `transport` (inherited
+    // from the earlier `proxyUrl`): choosing "Use application proxy" must CLEAR
     // the persisted ref, and `""` is the channel's clear sentinel — omitting it
     // would leave the old choice in force. The legacy `proxyUrl` key is
     // deliberately NOT sent here: absent means "keep", which is what lets an
@@ -545,7 +545,7 @@ export function buildConnectionUpdatePayload(params: {
     // Sent unconditionally, same rationale as `transport`: `false` must CLEAR
     // a previously-persisted flag, not leave it untouched.
     authOptional: params.authOptional,
-    // Sent unconditionally (TASK.150), same rationale as `transport`/`proxyRef`:
+    // Sent unconditionally, same rationale as `transport`/`proxyRef`:
     // clearing the field back to blank must CLEAR the persisted cap, not leave
     // an old explicit value in force.
     maxOutputTokens: params.maxOutputTokens,
@@ -553,7 +553,7 @@ export function buildConnectionUpdatePayload(params: {
     ...(params.reasoningEffort !== undefined ? { reasoningEffort: params.reasoningEffort } : {}),
     ...(params.reasoningSupported !== undefined ? { reasoningSupported: params.reasoningSupported } : {}),
     ...(params.effortLevels !== undefined ? { effortLevels: params.effortLevels } : {}),
-    // Sent unconditionally (Taskana 4088), same rationale: "auto" must CLEAR
+    // Sent unconditionally, same rationale: "auto" must CLEAR
     // the saved override pair (`""` is main's clear sentinel), while "on"/"off"
     // persist it. The model binding is derived SERVER-SIDE, exactly like the
     // context-window pair.
@@ -575,7 +575,7 @@ export function buildConnectionUpdatePayload(params: {
 
 
 /**
- * Validates the "Max output tokens" field's raw string (TASK.150): main
+ * Validates the "Max output tokens" field's raw string: main
  * (`settings-ipc.ts`) accepts an integer in [1024, 1000000] or refuses with
  * `reason: "invalid"`, so the drawer validates client-side first to give a
  * specific, actionable error instead of a bare refusal toast. Blank (or
@@ -607,7 +607,7 @@ const MAX_OUTPUT_TOKENS_ERROR =
 
 /**
  * The click-to-fill presets offered under the "Max output tokens" field
- * (TASK.150 slice 3). Blank is a real entry rather than the absence of one:
+ * (slice 3). Blank is a real entry rather than the absence of one:
  * an empty field sends no cap at all and keeps tracking
  * `DEFAULT_MAX_OUTPUT_TOKENS`, whereas pinning today's identical number
  * freezes the connection if that default ever moves again.
@@ -761,12 +761,12 @@ export function advancedHasValues(v: {
   );
 }
 
-/** Local literal (TASK.159), same convention as host-env.ts's `ENV_MAX_OUTPUT_TOKENS` — renderer modules don't import main, let alone core. */
+/** Local literal, same convention as host-env.ts's `ENV_MAX_OUTPUT_TOKENS` — renderer modules don't import main, let alone core. */
 const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 
 /**
  * Hint under the "Max output tokens" field while ANYCODE_MAX_OUTPUT_TOKENS is
- * live (TASK.159): the env rung always beats what this field saves
+ * live: the env rung always beats what this field saves
  * (`fillFromSettings` never overwrites a boot-provided slot), so an edited cap
  * would silently do nothing — say so instead of letting the field pretend to
  * work. `null` (no hint) when the variable isn't overriding. Exported for
@@ -781,7 +781,7 @@ export function maxOutputTokensEnvHint(envOverrides: readonly string[]): string 
 
 /**
  * The number a BLANK "Max output tokens" field resolves to for the selected
- * model (TASK.159), naming what the old "(provider default)" placeholder left
+ * model, naming what the old "(provider default)" placeholder left
  * blind: a catalog model with a declared ceiling answers `catalog: N`,
  * anything without one answers the snapshot-projected core default
  * (`provider default: N`) — EXCEPT claude-* ids, which core deliberately sends
@@ -813,7 +813,7 @@ export function maxOutputTokensEffectiveHint(
 }
 
 /**
- * Validates the "Context window (tokens)" field's raw string (TASK.142): the
+ * Validates the "Context window (tokens)" field's raw string: the
  * same client-side pre-flight as `maxOutputTokensField` above, because main
  * (`settings-ipc.ts`) accepts an integer in [1024, 1000000] or refuses the whole
  * update with a bare `reason: "invalid"`. Blank is the channel's clear sentinel
@@ -831,12 +831,12 @@ const CONTEXT_WINDOW_ERROR =
 const CONTEXT_WINDOW_ERROR_MODEL =
   "Enter a model before setting a context window — the window is saved for one model.";
 
-/** Local literal (TASK.142), same convention as host-env.ts's `ENV_CONTEXT_WINDOW` — renderer modules don't import main, let alone core. */
+/** Local literal, same convention as host-env.ts's `ENV_CONTEXT_WINDOW` — renderer modules don't import main, let alone core. */
 const ENV_CONTEXT_WINDOW = "ANYCODE_CONTEXT_WINDOW";
 
 /**
  * Hint under the "Context window (tokens)" field while ANYCODE_CONTEXT_WINDOW is
- * live (TASK.142): the env rung always beats what this field saves, so an edited
+ * live: the env rung always beats what this field saves, so an edited
  * window would silently do nothing — say so instead of letting the field pretend
  * to work. `null` (no hint) when the variable isn't overriding. Exported for
  * direct testing (no jsdom in this package's vitest config, see file docstring).
@@ -849,7 +849,7 @@ export function contextWindowTokensEnvHint(envOverrides: readonly string[]): str
 
 /**
  * The number a BLANK "Context window (tokens)" field resolves to for the
- * selected model (TASK.142): a catalog model answers `catalog: N` where N is
+ * selected model: a catalog model answers `catalog: N` where N is
  * `min(contextWindow, usableContextWindow ?? contextWindow)`; a model the
  * catalog does not know answers the ASSUMED fallback
  * (snapshot-projected `unknownModelContextWindowTokens`). Named `assumed` on
@@ -879,7 +879,7 @@ export function contextWindowEffectiveHint(
 }
 
 /**
- * TASK.142: the raw window value the drawer starts with for a saved connection.
+ * the raw window value the drawer starts with for a saved connection.
  * Prefill only the selected model's map entry (or its legacy pair). A saved
  * window for another model must never appear to belong to this one. Exported for direct
  * testing (no jsdom in this package's vitest config, see file docstring).
@@ -895,7 +895,7 @@ export function contextWindowInitialRaw(connection: {
 }
 
 /**
- * TASK.142: the "Context window (tokens)" field's full state. `model` is the
+ * the "Context window (tokens)" field's full state. `model` is the
  * NORMALIZED model id the raw value belongs to, including while blank — the
  * reset decision compares against THIS, never against the original
  * saved binding, so a whitespace-only Model edit ("B" -> " B ") is not a change
@@ -935,7 +935,7 @@ export function contextWindowInitialField(
 }
 
 /**
- * TASK.142: the field state after a user route CHANGES the model. `nextModel` is
+ * the field state after a user route CHANGES the model. `nextModel` is
  * the model the route will actually save (the catalog-prefilled id on the
  * simplified create input, the raw input elsewhere); `saved` contains the
  * persisted windows looked up when navigating to another model. Semantics:
@@ -967,7 +967,7 @@ export function contextWindowAfterModelInput(
 }
 
 /**
- * TASK.142: the field state after the user edits the WINDOW text itself. The
+ * the field state after the user edits the WINDOW text itself. The
  * value is owned by whichever model is current at that moment — including an
  * EMPTY raw, which keeps the same owner so a later no-op Model edit preserves
  * the clear. This is the only path that binds a freshly typed window, and it is
@@ -983,15 +983,15 @@ export function contextWindowAfterRawInput(
   return { raw, model: currentModel.trim() };
 }
 
-// ── Taskana 4088 (TASK.69): the per-model image-input select ──
+// ── the per-model image-input select ──
 
 /** The drawer's three-state select value: catalog/live resolve, force on, force off. */
 export type ImageInputSelection = "auto" | "on" | "off";
 
 /**
- * Taskana 4088: the wire value for a selection. "auto" maps to main's `""`
+ * the wire value for a selection. "auto" maps to main's `""`
  * clear sentinel (deletes the saved override pair), "on"/"off" persist it —
- * the TASK.150 maxOutputTokens discipline verbatim. Exported for direct
+ * the maxOutputTokens discipline verbatim. Exported for direct
  * testing (no jsdom).
  */
 export function imageInputToPayload(selection: ImageInputSelection): "on" | "off" | "" {
@@ -999,7 +999,7 @@ export function imageInputToPayload(selection: ImageInputSelection): "on" | "off
 }
 
 /**
- * Taskana 4088 (cross-review): an explicit on/off override is bound to the
+ * (cross-review): an explicit on/off override is bound to the
  * model the save will SEND, and main refuses a non-empty override with a blank
  * effective model with a bare `reason: "invalid"` — the generic save failure.
  * Shared by create and update so both name the field. Returns the specific
@@ -1012,7 +1012,7 @@ export function imageInputModelPreflightError(selection: ImageInputSelection, mo
 }
 
 /**
- * Taskana 4088: the select value the drawer starts with for a saved
+ * the select value the drawer starts with for a saved
  * connection — the `contextWindowInitialRaw` rule: the saved override is
  * prefilled ONLY when it binds to the model now shown; a pair saved for
  * another model (or no pair) reads as "auto". Exported for direct testing.
@@ -1029,13 +1029,13 @@ export function imageInputInitialValue(connection: {
     : "auto";
 }
 
-/** Local literal (Taskana 4088), same convention as `ENV_CONTEXT_WINDOW` above — renderer modules don't import main, let alone core. */
+/** Local literal, same convention as `ENV_CONTEXT_WINDOW` above — renderer modules don't import main, let alone core. */
 // 4088-on-4118: ANYCODE_IMAGE_INPUT_MODELS is GONE; only the per-model
 // override still rides the fork env.
 const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE";
 
 /**
- * Taskana 4088: hint under the "Image input" select when the launching shell
+ * hint under the "Image input" select when the launching shell
  * set ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE (in main's PROVIDER_ENV_KEYS): a
  * shell value wins over the saved one, because buildHostEnv never overwrites
  * it. `null` when absent. Exported for direct testing (no jsdom).
@@ -1048,7 +1048,7 @@ export function imageInputEnvHint(envOverrides: readonly string[]): string | nul
 }
 
 /**
- * Taskana 4088: one line naming what "Auto" resolves to for the shown model:
+ * one line naming what "Auto" resolves to for the shown model:
  * the catalog's `imageInput: true` mark, or the connection's live-fetched
  * modality set (the `/v1/models` fetch's `architecture.input_modalities`).
  * An explicit on/off override suppresses the hint (the select already shows
@@ -1078,7 +1078,7 @@ export function imageInputEffectiveHint(
 
 /**
  * The Model field's offered list (datalist + click-to-fill chips): a stable
- * UNION (TASK.183) of this session's fetched ids, the ids persisted on the
+ * UNION of this session's fetched ids, the ids persisted on the
  * connection (manual additions + earlier fetches), then the catalog/curated
  * static hints not already present — decorated with the catalog entry's static
  * display names where known. Fetched first, persisted second, hints last;
@@ -1104,7 +1104,7 @@ export function liveModelSuggestions(
 
 /**
  * Model value after a catalog connection's model list becomes available with
- * the field still blank (TASK.108-A, owner 08.08): the curated list's FIRST
+ * the field still blank (owner 08.08): the curated list's FIRST
  * entry is the default. A connection persisted with an empty model looks
  * configured in the drawer yet fails `computeProviderReady`'s model gate at
  * tab-open time, with a toast that blames the API key. An explicit value is
@@ -1124,7 +1124,7 @@ export function createModelMissing(model: string, suggestions: readonly { id: st
 }
 
 /**
- * Whether Save must refuse a catalog connection's empty model (TASK.108-A):
+ * Whether Save must refuse a catalog connection's empty model:
  * the readiness gate requires a model on the active connection, so an empty
  * save manufactures the false "Configure a provider (API key + model)" toast
  * later. Only a catalog connection with a known model list is held to this —
@@ -1185,7 +1185,7 @@ export function providerSelectDisplayValue(effectiveProviderId: string, template
 }
 
 /**
- * TASK.70 (Taskana 4089): template options grouped one-brand-one-card. A
+ * template options grouped one-brand-one-card. A
  * brand-grouped entry renders as an <optgroup> labelled with the brand whose
  * options are the member modes (`modeLabel`); single-mode entries render as
  * plain options exactly as before, byte-identical for catalogs without brands.
@@ -1275,7 +1275,7 @@ export interface ConnectionDrawerFieldsProps {
   /** Where to steer initial focus (a11y) — "credential" for the tile menu's "Replace key"/"Sign in". */
   initialFocus?: "label" | "credential" | "context";
   store?: SettingsStoreApi;
-  /** Injectable custom-provider bridge (TASK.58); defaults to the real `window.anycode.customProvider`. */
+  /** Injectable custom-provider bridge; defaults to the real `window.anycode.customProvider`. */
   customProvider?: CustomProviderBridge;
   /** Rendered after the form (ConnectionDrawer supplies a "Done" button; WelcomeScreen's embed omits it — App's own readiness gate unmounts Welcome once the first connection is ready). */
   footer?: ReactNode;
@@ -1310,7 +1310,7 @@ export function ConnectionDrawerFields({
   const contextWindowTokensInputRef = useRef<HTMLInputElement>(null);
   const secretInputRef = useRef<HTMLInputElement>(null);
   const oauthPendingProviderId = useStore(store, (s) => s.oauthPendingProviderId);
-  // TASK.141: the settings document behind the proxy picker's seed. Read here
+  // the settings document behind the proxy picker's seed. Read here
   // (not inside the picker) because the drawer runs the picker CONTROLLED — the
   // ref rides the drawer's own create/update payloads instead of being written
   // by a channel of its own.
@@ -1322,7 +1322,7 @@ export function ConnectionDrawerFields({
   const [createdConnectionId, setCreatedConnectionId] = useState<string | null>(editConnection?.id ?? null);
   const [providerId, setProviderId] = useState<string>(editConnection?.providerId ?? "");
   const [label, setLabel] = useState(editConnection?.label ?? "");
-  // TASK.108-A: an existing catalog connection persisted with a blank model
+  // an existing catalog connection persisted with a blank model
   // (the live trap — readiness fails on it with a key-blaming toast) opens
   // with the curated default prefilled, so the very next Save heals it.
   const [model, setModel] = useState(() => {
@@ -1335,7 +1335,7 @@ export function ConnectionDrawerFields({
   });
   const [baseUrl, setBaseUrl] = useState(editConnection?.baseUrl ?? "");
   const [transport, setTransport] = useState<ProviderTransportId | "">(editConnection?.transport ?? "");
-  // TASK.141: the connection's rung is a REFERENCE now, seeded through the same
+  // the connection's rung is a REFERENCE now, seeded through the same
   // pure helper every other scope's picker uses (a dangling id reads as "No
   // proxy", a legacy `proxyUrl` string reads as the synthetic Legacy entry).
   const [proxyRef, setProxyRef] = useState(() =>
@@ -1392,7 +1392,7 @@ export function ConnectionDrawerFields({
     }
     return Object.fromEntries(entries);
   };
-  // TASK.150: stored as a string (it backs a plain `<input type="number">`) so
+  // stored as a string (it backs a plain `<input type="number">`) so
   // an in-progress edit (e.g. a momentarily-empty field) never gets coerced
   // through `Number()` before the user is done typing; `maxOutputTokensField`
   // does the actual parse/validate at save time.
@@ -1400,14 +1400,14 @@ export function ConnectionDrawerFields({
   const [maxOutputTokens, setMaxOutputTokens] = useState(
     editConnection?.maxOutputTokens === undefined ? "" : String(editConnection.maxOutputTokens),
   );
-  // TASK.142: per-model context window, stored as {raw, model} for the same
+  // per-model context window, stored as {raw, model} for the same
   // reason as `maxOutputTokens` below. Prefilled ONLY when the saved window is
   // bound to the connection's own model — a window saved for a DIFFERENT model
   // must not appear here. Every model-changing route goes through `changeModel`.
   const [contextWindow, setContextWindow] = useState<ContextWindowField>(() =>
     contextWindowInitialField(editConnection),
   );
-  // Taskana 4088: the per-model image-input select ("auto" | "on" | "off").
+  // the per-model image-input select ("auto" | "on" | "off").
   // Prefilled ONLY when the saved override binds to the connection's own model
   // (the contextWindowInitialRaw rule); "auto" clears the pair on save.
   const [reasoningSupported, setReasoningSupported] = useState(() =>
@@ -1571,7 +1571,7 @@ export function ConnectionDrawerFields({
   // `models` — the synthesized catalog entry mirrors it and re-derives after
   // each customProvider mutation reloads the snapshot.
   const curatedModelIds = selectedEntry?.models.map((m) => m.id) ?? [];
-  // What the Model field suggests (datalist + chips): the UNION (TASK.183) of
+  // What the Model field suggests (datalist + chips): the UNION of
   // this session's fetched ids, the ids persisted on the connection (manual
   // additions + earlier fetches), then the static catalog hints. A custom
   // record's session-only fetch result is NOT offered on its own: its checkbox
@@ -1594,7 +1594,7 @@ export function ConnectionDrawerFields({
   const setupMissingKey = simplified && showKeyInCreate && !noAuth &&
     selectedEntry?.authOptional !== true && secretValue.trim() === "";
   const keyFieldDisabled = readOnly || (isNewCustomEndpoint && noAuth);
-  // TASK.159 hints for the Max-output-tokens field (pure logic above): whether
+  // hints for the Max-output-tokens field (pure logic above): whether
   // the env rung currently silences this field, and what number a blank field
   // actually resolves to. Both read only state already in hand — the drawer's
   // own proxySnapshot and the projected catalog/snapshot.
@@ -1605,11 +1605,11 @@ export function ConnectionDrawerFields({
     proxySnapshot?.defaultMaxOutputTokens,
     maxOutputTokens,
   );
-  // TASK.142 hints for the Context-window field: same shape as the ceiling hints
+  // hints for the Context-window field: same shape as the ceiling hints
   // above — whether the env rung silences the field, and what window a blank
   // field resolves to (catalog min, else the assumed unknown-model fallback).
   const cwEnvHint = proxySnapshot === null ? null : contextWindowTokensEnvHint(proxySnapshot.envOverrides);
-  // TASK.142: the model id this form will actually SAVE. The simplified create
+  // the model id this form will actually SAVE. The simplified create
   // input saves the catalog-prefilled id (`modelAfterCatalogPrefill`); every
   // other route saves the raw text. Used both for the field's owner and for the
   // create-time "a window needs a model to bind to" gate, so the two never
@@ -1624,7 +1624,7 @@ export function ConnectionDrawerFields({
     proxySnapshot,
     contextWindow.raw,
   );
-  // Taskana 4088 hints for the Image-input select: what Auto resolves to for
+  // hints for the Image-input select: what Auto resolves to for
   // the model this form will save (catalog mark, else the connection's live
   // image-modality list), and whether the live feed rides the env right now.
   let imageInputHint = imageInputEffectiveHint(
@@ -1654,7 +1654,7 @@ export function ConnectionDrawerFields({
   const usageEnvHintText = proxySnapshot === null ? null : usageEnvHint(proxySnapshot.envOverrides);
 
   /**
-   * TASK.142: the ONE model-changing route. `next` is what goes into the Model
+   * the ONE model-changing route. `next` is what goes into the Model
    * input, `effective` is the id that will be saved, `saved` is the persisted
    * pair (for re-prefill when the user navigates back to the bound model). Every
    * user route — the simplified create input, the main Model input and the model
@@ -1693,7 +1693,7 @@ export function ConnectionDrawerFields({
 
   /** ADD: mint a NEW custom-provider record (key or keyless), then a connection pointing at it. */
   async function createNewCustomEndpoint(): Promise<void> {
-    // TASK.183: validate the raw model BEFORE the record, connection, secret or
+    // validate the raw model BEFORE the record, connection, secret or
     // list call — a nonblank malformed id makes no writes at all.
     const preflight = preflightModelId(model);
     if (preflight.kind === "invalid") {
@@ -1723,7 +1723,7 @@ export function ConnectionDrawerFields({
       kind: customKind,
       apiKey: secretValue,
       noAuth,
-      // TASK.183: manual ids now live on the CONNECTION's own `models[]`, never
+      // manual ids now live on the CONNECTION's own `models[]`, never
       // on the shared custom record — the record's curated set stays separate.
       selectedModels: [],
     });
@@ -1758,7 +1758,7 @@ export function ConnectionDrawerFields({
           ...(createModel !== undefined ? { model: createModel } : {}),
           ...(label.trim() ? { label: label.trim() } : {}),
           ...(transport ? { transport } : {}),
-          // TASK.132/TASK.141: the proxy control is rendered in this pre-create
+          // the proxy control is rendered in this pre-create
           // state too, so its value has to travel on THIS create as well —
           // omitting it here silently dropped the choice for every new custom
           // endpoint.
@@ -1810,7 +1810,7 @@ export function ConnectionDrawerFields({
     if (providerId === "") {
       return;
     }
-    // TASK.150: a BLANK cap already means "provider default" at create time
+    // a BLANK cap already means "provider default" at create time
     // (same asymmetry as `baseUrl`/`transport` just above), so it is simply
     // left out of the payload. A MALFORMED one is refused here rather than
     // dropped: `min`/`max` on a number input only constrain the spinner, not
@@ -1826,10 +1826,10 @@ export function ConnectionDrawerFields({
       setError(MAX_OUTPUT_TOKENS_ERROR);
       return;
     }
-    // TASK.142: the same pre-flight for the context window. A BLANK field means
+    // the same pre-flight for the context window. A BLANK field means
     // "catalog/assumed window" and is simply left out; a MALFORMED one is
     // refused rather than dropped. A numeric window additionally needs the model
-    // this create will actually SEND to bind to (TASK.183: EVERY create path now
+    // this create will actually SEND to bind to (EVERY create path now
     // sends the catalog-prefilled/entered id, not only the simplified one) —
     // main derives the binding from it and refuses the whole create otherwise,
     // so say which field to fix instead of letting main reject it opaquely.
@@ -1840,7 +1840,7 @@ export function ConnectionDrawerFields({
       setError(CONTEXT_WINDOW_ERROR);
       return;
     }
-    // TASK.183: ONE effective model for the create payload, the context-window
+    // ONE effective model for the create payload, the context-window
     // binding and the model-list append. A nonblank malformed id makes no
     // create, secret or list call; a blank keeps the pre-existing implicit
     // rules (no model sent).
@@ -1854,7 +1854,7 @@ export function ConnectionDrawerFields({
       setError(CONTEXT_WINDOW_ERROR_MODEL);
       return;
     }
-    // Taskana 4088: an explicit on/off override needs the model this create
+    // an explicit on/off override needs the model this create
     // will actually SEND (main derives the binding and refuses otherwise) —
     // same specific-message pre-flight as the context window above.
     const imageInputError = imageInputModelPreflightError(imageInput, createModel);
@@ -1887,7 +1887,7 @@ export function ConnectionDrawerFields({
           ...(reasoningSupported !== undefined ? { reasoningSupported } : {}),
           ...(effortLevels.length ? { effortLevels } : {}),
           ...(modelEffort !== "" ? { reasoningEffort: modelEffort } : {}),
-          // Taskana 4088: create keeps the conditional-spread form (create's
+          // create keeps the conditional-spread form (create's
           // schema has no "" sentinel — omission already means "auto"); only an
           // explicit choice travels, and the binding is server-derived.
           ...(imageInput !== "auto" ? { imageInputOverride: imageInput } : {}),
@@ -1908,13 +1908,13 @@ export function ConnectionDrawerFields({
       }
       setCreatedConnectionId(outcome.createdConnectionId);
       onConnectionCreated?.(outcome.createdConnectionId);
-      // TASK.108-A: the just-revealed Model field opens on the catalog default
+      // the just-revealed Model field opens on the catalog default
       // instead of blank, so the follow-up Save can't persist the empty-model
       // trap.
       if (!isCustomRecordProviderId(providerId)) {
         setModel((m) => modelAfterCatalogPrefill(m, selectedEntry?.models ?? []));
       }
-      // TASK.183: surface a partial failure (connection exists, list does not)
+      // surface a partial failure (connection exists, list does not)
       // WITHOUT losing a concurrent key error — compose one message.
       let message = outcome.partial
         ? (outcome.error ?? "Connection created, but its model list couldn't be saved — retry with Save.")
@@ -1958,7 +1958,7 @@ export function ConnectionDrawerFields({
     if (readOnly || createdConnectionId === null) {
       return;
     }
-    // TASK.183: a nonblank malformed model is refused before the metadata
+    // a nonblank malformed model is refused before the metadata
     // update, the secret write or any list call (a valid, unknown id passes —
     // catalog membership is never validation).
     const preflight = preflightModelId(model);
@@ -1967,14 +1967,14 @@ export function ConnectionDrawerFields({
       return;
     }
     const selectedModelId = preflight.kind === "id" ? preflight.id : null;
-    // TASK.108-A: refuse to persist the empty-model trap on a catalog
+    // refuse to persist the empty-model trap on a catalog
     // connection — an empty model fails readiness later with a toast that
     // blames the API key.
     if (modelSaveBlocked(model, !isCustomRecordConnection && !isNewCustomEndpoint, modelSuggestions)) {
       setError("Pick a model before saving — without one this connection can't open a tab.");
       return;
     }
-    // TASK.150: refuse to send a malformed cap — main's own [1024, 1000000]
+    // refuse to send a malformed cap — main's own [1024, 1000000]
     // bound refuses the whole update with a bare `reason: "invalid"`, so this
     // gives the specific, actionable message instead (same pattern as the
     // `modelSaveBlocked` guard just above).
@@ -1988,7 +1988,7 @@ export function ConnectionDrawerFields({
       setError(MAX_OUTPUT_TOKENS_ERROR);
       return;
     }
-    // TASK.142: same pre-flight for the context window; a numeric one also needs
+    // same pre-flight for the context window; a numeric one also needs
     // a nonblank model to bind to, since main derives the binding server-side
     // from the model this update sends.
     const cw = contextWindowTokensField(contextWindow.raw);
@@ -2002,7 +2002,7 @@ export function ConnectionDrawerFields({
       setError(CONTEXT_WINDOW_ERROR_MODEL);
       return;
     }
-    // Taskana 4088 (cross-review): the same blank-model refusal on UPDATE — the
+    // (cross-review): the same blank-model refusal on UPDATE — the
     // sent model is `selectedModelId ?? model`, and main would otherwise reject
     // the whole save with the generic "couldn't be saved" message.
     const imageInputError = imageInputModelPreflightError(imageInput, selectedModelId ?? model);
@@ -2014,7 +2014,7 @@ export function ConnectionDrawerFields({
     setError(null);
     setSavedNotice(false);
     try {
-      // TASK.183: metadata first (the selected model rides it), THEN append the
+      // metadata first (the selected model rides it), THEN append the
       // same normalized model to this connection's list. A failed metadata
       // update never appends.
       const outcome = await updateConnectionAndPersistModel(
@@ -2085,7 +2085,7 @@ export function ConnectionDrawerFields({
     setClearing(true);
     setError(null);
     try {
-      // Taskana 4875 (GitHub #10): a custom:<id> connection's shared vault key
+      // (GitHub #10): a custom:<id> connection's shared vault key
       // is only clearable through custom-provider-update's keyed→keyless
       // transition (main drops the vault entry AND resets health/quota). The
       // generic secret-clear channel refuses non-connection keys `invalid` —
@@ -2152,7 +2152,7 @@ export function ConnectionDrawerFields({
           }
         }
       } else {
-        // TASK.108-A: a fetch landing on a still-blank field picks the default
+        // a fetch landing on a still-blank field picks the default
         // from the MERGED offered list (fetched first, then any already-saved
         // ids), so a saved manual model is never lost from the prefill.
         const merged = mergeModelIds(outcome.models.map((m) => m.id), targetConnection?.models ?? []).map((id) => ({ id }));
@@ -2325,7 +2325,7 @@ export function ConnectionDrawerFields({
         </>
       )}
 
-      {/* TASK.150 / TASK.159: one segmented control. Default writes "" (the
+      {/* one segmented control. Default writes "" (the
           provider default), the presets write the same values the chips did,
           Custom reveals the number input. `step={1}` on the input on purpose:
           every whole number in [min, max] is accepted, and a coarser step would
@@ -2364,7 +2364,7 @@ export function ConnectionDrawerFields({
           />
         )}
         <div className="settings-field-hint">{MAX_OUTPUT_ONELINER}</div>
-        {/* TASK.159: shown only while ANYCODE_MAX_OUTPUT_TOKENS overrides the rung — editing this field then does nothing. */}
+        {/* shown only while ANYCODE_MAX_OUTPUT_TOKENS overrides the rung — editing this field then does nothing. */}
         {motEnvHint !== null && (
           <div className="settings-field-hint" role="note">
             {motEnvHint}
@@ -2372,7 +2372,7 @@ export function ConnectionDrawerFields({
         )}
       </div>
 
-      {/* TASK.142: per-model context window. Same field shape as "Max output
+      {/* per-model context window. Same field shape as "Max output
           tokens" above (whole number in [1024, 1000000], blank = catalog/
           assumed window); a Model edit loads that model's own saved window. */}
       <label className="settings-field">
@@ -2399,7 +2399,7 @@ export function ConnectionDrawerFields({
         />
       </label>
       <div className="settings-field-hint">{CONTEXT_WINDOW_ONELINER}</div>
-      {/* TASK.142: shown only while ANYCODE_CONTEXT_WINDOW overrides the rung — editing this field then does nothing. */}
+      {/* shown only while ANYCODE_CONTEXT_WINDOW overrides the rung — editing this field then does nothing. */}
       {cwEnvHint !== null && (
         <div className="settings-field-hint" role="note">
           {cwEnvHint}
@@ -2440,7 +2440,7 @@ export function ConnectionDrawerFields({
         </select>
       </label>
 
-      {/* Taskana 4088 (TASK.69): per-model image input. Three states: Auto
+      {/* per-model image input. Three states: Auto
           (catalog mark, then the connection's live-fetched modality set —
           whichever vouches first), On/Off (a per-model override pair saved
           like the context-window pair above, binding derived server-side).
@@ -2465,14 +2465,14 @@ export function ConnectionDrawerFields({
         </select>
       </label>
       <div className="settings-field-hint">{IMAGE_INPUT_ONELINER}</div>
-      {/* Taskana 4088: shown while the live-modality feed rides the env. */}
+      {/* shown while the live-modality feed rides the env. */}
       {imageInputFeedHint !== null && (
         <div className="settings-field-hint" role="note">
           {imageInputFeedHint}
         </div>
       )}
 
-      {/* TASK.141: one instance of the same picker the engine panes and the
+      {/* one instance of the same picker the engine panes and the
           Network pane render — CONTROLLED here, because a connection's ref
           rides this drawer's own create/update payload rather than a channel of
           its own. That is what removes the two-phase "create the connection,
@@ -2497,7 +2497,7 @@ export function ConnectionDrawerFields({
           disabled={readOnly || templateLocked}
           onChange={(e) => {
             setProviderId(e.target.value);
-            // TASK.142: switching provider clears the model, so the per-model
+            // switching provider clears the model, so the per-model
             // window must go with it. Forced: the new model is empty, and an
             // already-empty owner must not make this look like a no-op.
             changeModel("", "", undefined, true);
@@ -2506,7 +2506,7 @@ export function ConnectionDrawerFields({
           <option value="" disabled>
             Choose a provider…
           </option>
-          {/* TASK.70 (Taskana 4089): one brand = one card — brand-grouped entries
+          {/* one brand = one card — brand-grouped entries
               render as a single <optgroup> (the brand card) whose options are the
               member modes; brandless entries render exactly as before. The option
               value is still the entry id, so selection/prefill is unchanged. */}
@@ -2588,7 +2588,7 @@ export function ConnectionDrawerFields({
             value={modelAfterCatalogPrefill(model, selectedEntry.models)} disabled={readOnly}
             placeholder="Enter a model ID"
             onChange={(e) =>
-              // TASK.142: the pre-create Model input saves the catalog-prefilled
+              // the pre-create Model input saves the catalog-prefilled
               // id, so the per-model window is owned by THAT id — route through
               // the shared change so A's number cannot ride onto B.
               changeModel(
@@ -2603,7 +2603,7 @@ export function ConnectionDrawerFields({
         </label>
       )}
 
-      {/* TASK.183: a brand-new custom endpoint gets the same pre-create free-text
+      {/* a brand-new custom endpoint gets the same pre-create free-text
           Model field even when the catalog carries no entry to synthesize
           suggestions from (raw value, no datalist). No duplicate field when
           `selectedEntry` exists — the block above already covers that case. */}
@@ -2614,7 +2614,7 @@ export function ConnectionDrawerFields({
             value={model} disabled={readOnly}
             placeholder="Enter a model ID"
             onChange={(e) =>
-              // TASK.142: same shared route — the entered id IS the effective id
+              // same shared route — the entered id IS the effective id
               // here, so the per-model window reset stays owned by it.
               changeModel(e.target.value, e.target.value, undefined)
             } />
@@ -2696,7 +2696,7 @@ export function ConnectionDrawerFields({
               disabled={readOnly}
               placeholder="e.g. claude-sonnet-5"
               onChange={(e) =>
-                // TASK.142: the shared model-change route. A whitespace-only
+                // the shared model-change route. A whitespace-only
                 // edit (same normalized id) keeps the field; a real change
                 // clears it, or re-prefills when the user returns to the saved
                 // model.
@@ -2889,7 +2889,7 @@ export interface ConnectionDrawerProps {
   initialFocus?: "label" | "credential" | "context";
   onClose(): void;
   store?: SettingsStoreApi;
-  /** Injectable custom-provider bridge (TASK.58); forwarded to the fields. */
+  /** Injectable custom-provider bridge; forwarded to the fields. */
   customProvider?: CustomProviderBridge;
 }
 
@@ -2948,7 +2948,7 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
       className="connection-drawer"
       aria-label={connectionDrawerTitle(fieldsProps.mode, createdId !== null)}
       onCancel={(event) => {
-        // TASK.58 item 4: act only on THIS drawer's own Escape — the shared
+        // item 4: act only on THIS drawer's own Escape — the shared
         // guard also stops this cancel (which React propagates up the tree)
         // from reaching the parent SettingsDialog's onCancel.
         if (!isOwnDialogCancel(event)) {

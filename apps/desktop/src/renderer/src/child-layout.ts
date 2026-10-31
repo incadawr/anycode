@@ -1,6 +1,6 @@
 /**
  * Renderer-side layout logic for a root tab's master<->child surface
- * switching (TASK.102 CUT-S2 §2.5, slice S2c C1) — extended by CUT-S3 §2
+ * switching (CUT-S2 §2.5, slice S2c C1) — extended by CUT-S3 §2
  * (slice S3a) with a THIRD `ChildLayoutView` variant, `split`: the master
  * stays visible alongside a stack of up to `CHILD_SPLIT_MAX_ROWS` open
  * children (layouts C/D — CUT-S3 §0.1 rules these are ONE layout, not two:
@@ -137,7 +137,7 @@ export function openChild(
   if (view.kind !== "split") {
     return { kind: "child", spawnToolCallId };
   }
-  // TASK.218: same-logical-child fold — when the id being opened is a
+  // same-logical-child fold — when the id being opened is a
   // continuation of a child that already has a row (a new spawn id, same
   // childSessionId), retarget that row's id IN PLACE (position preserved)
   // and expand it, instead of appending a second row for one child. Open
@@ -400,7 +400,7 @@ export function detachedOutcomeFromParent(
   return null;
 }
 
-// ── continuation (same logical child) helpers — TASK.218 ──
+// ── continuation (same logical child) helpers — ──
 
 /**
  * The transcript-order Agent `tool_call` block ids that all belong to the
@@ -530,7 +530,7 @@ export interface ChildLayoutState {
   views: ReadonlyMap<string, ChildLayoutView>;
   /** The given root tab's current view; `MASTER_VIEW` for a tab this store has never heard from — every tab's implicit starting state, so `open`/`close` never need a seeding call first. */
   view(rootTabId: string): ChildLayoutView;
-  /** Applies the pure `openChild` reducer for one root tab (the Open button, ToolCallCard.tsx C3). The optional predicate is `openChild`'s same-logical-child fold (TASK.218). */
+  /** Applies the pure `openChild` reducer for one root tab (the Open button, ToolCallCard.tsx C3). The optional predicate is `openChild`'s same-logical-child fold. */
   open(rootTabId: string, spawnToolCallId: string, isSameChild?: (existingId: string) => boolean): void;
   /** Applies the pure `closeChild` reducer for one root tab (the breadcrumb's master segment, App.tsx C3, or the split stack head's "×"). */
   close(rootTabId: string): void;

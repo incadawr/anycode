@@ -23,7 +23,7 @@
  * env-prefixed invocation (`OUT=x node …`, `NODE_OPTIONS=… node …`) does NOT
  * match — it re-asks, and the human sees the full prefix before deciding.
  *
- * **TASK.104 (compound commands):** `commandBinary` used to hand back the
+ * ** (compound commands):** `commandBinary` used to hand back the
  * first surviving token of a whole COMMAND LINE, so the modal offered
  * `export *` — a near-all-Bash rule wearing a narrow-looking face — for
  * `export PATH=…; cd apps/desktop && pnpm exec vitest run … | tail -20`. A
@@ -140,7 +140,7 @@ function isInertAssignment(token: string): boolean {
 /**
  * Index of the first token that is neither a provably-inert env-assignment,
  * nor a single leading bare `env`, nor a single leading `export` introducing
- * such an assignment (TASK.104). Shared walk used by both `commandBinary`
+ * such an assignment. Shared walk used by both `commandBinary`
  * and `sanitizeBashPattern` (design §4.2: "commandBinary/sanitizeBashPattern
  * share the token walk"). Returns `tokens.length` when every token was
  * consumed (the command is nothing but assignments, e.g. `FOO=1`) — callers
@@ -173,7 +173,7 @@ function firstSurvivingIndex(tokens: readonly string[]): number {
       }
     }
     if (!exportSkipped && token === "export") {
-      // `export FOO=1 …` is an assignment by meaning (TASK.104): skipped only
+      // `export FOO=1 …` is an assignment by meaning: skipped only
       // when the very next token is a provably-inert assignment, so `export`
       // with a flag, a bare name, or an expanding value (`export PATH="$PATH:/x"`)
       // stays the binary — fail closed, same shape as the `env` rule above.
@@ -192,7 +192,7 @@ function firstSurvivingIndex(tokens: readonly string[]): number {
 /**
  * True when a command carries a shell operator that makes it COMPOUND —
  * `;`, `&&`, `||`, `|`, a control `&`, or a newline — outside quotes and
- * unescaped (TASK.104). Deliberately blunt: even `git fetch && git status`,
+ * unescaped. Deliberately blunt: even `git fetch && git status`,
  * whose segments do share one binary, counts as compound, because a suggested
  * `git *` would be a rule the user never actually reviewed as such. Quoted or
  * backslash-escaped operators are literal text (`echo "a;b"` is one command),
@@ -258,7 +258,7 @@ function hasTopLevelOperator(command: string): boolean {
  * matching `/^[A-Za-z_][A-Za-z0-9_]*=/` (assignment), one leading bare `env`,
  * and one leading `export` whose value is inert. Returns `undefined` when the
  * command tokenizes to nothing.
- * **No suggestion for a compound command (TASK.104):** a command line holding
+ * **No suggestion for a compound command:** a command line holding
  * a top-level `;`/`&&`/`||`/`|`/`&`/newline is several commands, which no
  * single binary describes — returning `undefined` means the modal offers no
  * pre-filled pattern at all rather than one scoped to the first binary while
@@ -332,7 +332,7 @@ const GLOB_META_RE = /[*?[\]{!()]/;
  * the matcher cannot use (or, worse, omit one and hand the user a bare
  * allow-every-command rule instead).
  *
- * `CodexExec` (TASK.144) is the desktop Codex approval bridge's name for a
+ * `CodexExec` is the desktop Codex approval bridge's name for a
  * `commandExecution` approval; its input carries the same `command: string`.
  * `CodexApplyPatch` is deliberately NOT here: its input carries a `paths[]`
  * array and no single subject, so it keeps the bare tool-level rule that

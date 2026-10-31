@@ -342,7 +342,7 @@ describe("ArchMap scanner + tool", () => {
   });
 });
 
-describe("ArchMap opt-in flag (Taskana 4162)", () => {
+describe("ArchMap opt-in flag", () => {
   let tmpDir: string;
 
   afterEach(async () => {

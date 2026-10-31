@@ -1,6 +1,6 @@
 /**
  * Control-plane contract for the vision-fallback recognizer's live config push
- * (TASK.198 E1, plan §1.2/§6/§7): main recomputes the resolved recognizer
+ * (E1, plan §1.2/§6/§7): main recomputes the resolved recognizer
  * endpoint on every settings/provider mutation and pushes a fresh value to
  * every live root core tab's host over the SAME parentPort channel credentials
  * already ride (shared/credentials.ts's CREDENTIAL_RESPONSE_TYPE precedent) —
@@ -66,7 +66,7 @@ export interface RecognizerConfigChanged {
 // ── fingerprint (finding #7 — a resolved secret must never ride an unrelated
 // mutation's wire) ──
 //
-// TASK.202: the fingerprint now mirrors the custom-record baseUrl the resolver
+// the fingerprint now mirrors the custom-record baseUrl the resolver
 // (main/host-env.ts `resolveRecognizerConfig`) follows for a `custom:<slug>`
 // connection — editing a CustomProviderRecord's address moves the fingerprint,
 // so the live push can no longer be swallowed by a stale comparison. The
@@ -79,7 +79,7 @@ export interface RecognizerConfigChanged {
  * The identity a live push compares against the last one sent (plan §1.2/§7):
  * `connectionId`+`modelId` are the user's OWN `settings.recognizer` selection;
  * `baseUrl`+`transport` are the address the selection CURRENTLY resolves to
- * (TASK.202): for a `custom:<slug>` connection that is the backing
+ * for a `custom:<slug>` connection that is the backing
  * CustomProviderRecord's baseUrl (the resolver's own route — the connection's
  * own baseUrl is deliberately left out, it is always blank there); for every
  * other connection it is the connection's own baseUrl (the resolver may
@@ -104,7 +104,7 @@ const CUSTOM_PROVIDER_PREFIX = "custom:";
 /**
  * The address the resolver would follow for this connection — the record's
  * baseUrl for a custom:* connection, else the connection's own. Byte-mirrors
- * the route `resolveRecognizerConfig` takes (TASK.202); prefix check +
+ * the route `resolveRecognizerConfig` takes; prefix check +
  * `(settings.provider.custom ?? []).find(...)` only, no catalog fold.
  */
 export function recognizerResolvedBaseUrl(
@@ -119,7 +119,7 @@ export function recognizerResolvedBaseUrl(
 
 /**
  * `provider.connection.<id>.apiKey` — byte-mirror of host-env.ts's
- * `connectionSecretKey(id, "api_key")` (TASK.202; host-env keeps its own copy
+ * `connectionSecretKey(id, "api_key")`; host-env keeps its own copy
  * rather than importing this value-only module's, the convention its own header
  * documents).
  */
@@ -129,7 +129,7 @@ export function recognizerConnectionSecretKey(connectionId: string): SecretKey {
 
 /**
  * `provider.<custom-id>.apiKey` for a custom:* id, else undefined — byte-mirror
- * of host-env.ts's `customProviderSecretKey` (TASK.202). Silent, not throwing,
+ * of host-env.ts's `customProviderSecretKey`. Silent, not throwing,
  * here: a non-custom providerId is an expected input on this read-only path
  * (host-env's throwing belt exists for its vault-calling routes, not this
  * pure arithmetic).
@@ -177,7 +177,7 @@ export function recognizerFingerprintsEqual(
 
 /**
  * True when a vault write to `key` changes the credential the recognizer
- * selection resolves (TASK.202): for a `custom:<slug>` connection that is the
+ * selection resolves: for a `custom:<slug>` connection that is the
  * backing record's key (the connection-scoped key is NOT its credential — a
  * write there changes nothing the selection reads); for every other
  * connection it is the connection's own api_key. Pure settings+key
@@ -195,7 +195,7 @@ export function recognizerSecretTargetKey(settings: AnycodeSettings, key: Secret
   return recognizerConnectionSecretKey(connection.id) === key;
 }
 
-// ── the Vision panel's "Probe" button (TASK.198 E2) ──
+// ── the Vision panel's "Probe" button (E2) ──
 
 /** Renderer -> main invoke channel for the recognizer probe. */
 export const RECOGNIZER_PROBE_CHANNEL = "anycode:recognizer-probe";
@@ -238,7 +238,7 @@ export type RecognizerProbeFailureReason =
  */
 export type RecognizerProbeResult = { ok: true; text: string } | { ok: false; reason: RecognizerProbeFailureReason; message: string };
 
-// ── the Vision panel's "off" switch (TASK.198) ──
+// ── the Vision panel's "off" switch ──
 
 /**
  * Renderer -> main invoke channel that sets or clears `settings.recognizer`.

@@ -1,5 +1,5 @@
 /**
- * TASK.112: the single document-extension gate every previewable-path
+ * the single document-extension gate every previewable-path
  * decision now shares. Before this module the same list was hand-copied in
  * six places and `.markdown` was in none of them — these tests pin both the
  * list and the extension math that reads it.
@@ -43,7 +43,7 @@ describe("extensionOfPath", () => {
 });
 
 describe("isMarkdownPath", () => {
-  it("accepts `.markdown` alongside `.md` — the gap TASK.112 closes", () => {
+  it("accepts `.markdown` alongside `.md` — the gap closes", () => {
     expect(isMarkdownPath("notes.md")).toBe(true);
     expect(isMarkdownPath("notes.markdown")).toBe(true);
   });

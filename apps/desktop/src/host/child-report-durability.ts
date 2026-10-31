@@ -2,7 +2,7 @@ import type { ChildReportQueue, ChildReportQueueSnapshot } from "./child-report-
 import type { PendingChildReportsOptions } from "./session.js";
 
 /**
- * Taskana 4123 (TASK.145 residual): wires the host's pending detached-child
+ * (residual): wires the host's pending detached-child
  * report queue to the parent session's row. Restores first (silently — a
  * corrupt snapshot logs and is discarded, never throws), then persists the
  * queue's snapshot on every change, null when it empties. Fire-and-forget
@@ -32,7 +32,7 @@ export async function attachChildReportDurability(options: {
 }
 
 /**
- * Taskana 4123 follow-up: the engine-boot twin of `attachChildReportDurability`
+ * follow-up: the engine-boot twin of `attachChildReportDurability`
  * — wires the SAME `pending_child_reports_json` column (migration v20, no new
  * migration) behind a codex/claude root session. Both engine boots were the
  * last writers still keeping detached-child reports in memory only: their
@@ -61,7 +61,7 @@ export async function attachChildReportDurability(options: {
  * A CHILD-mode engine boot passes nothing (callers gate on `args.child`) — a
  * child never spawns detached children of its own, so its column stays null.
  *
- * Durability boundary (Taskana 4123 cross-review F2, stated honestly): this
+ * Durability boundary (cross-review F2, stated honestly): this
  * attach survives and recovers from every restart where the process exits
  * AFTER a mutation's save settled (main's graceful shutdown, a later crash).
  * It does NOT cover a SIGKILL-class kill (OOM, reap deadline, power loss)

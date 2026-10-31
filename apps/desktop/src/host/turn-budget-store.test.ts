@@ -1,5 +1,5 @@
 /**
- * TASK.4721: the desktop's turn-budget history store. Hosts are separate
+ * the desktop's turn-budget history store. Hosts are separate
  * processes, so the file is a JSONL append log: these tests pin the tolerant
  * reader, the per-role window, the size cap rewrite, and the port wiring
  * (learned = formula over the file, record = append) with a real tmp dir.
@@ -133,7 +133,7 @@ describe("createSubagentBudgetPort", () => {
   });
 });
 
-describe("session-tier budget wiring (TASK.4721)", () => {
+describe("session-tier budget wiring", () => {
   /** A learned port with a fixed value and a record spy (session tier has no store file here). */
   function fakePort(learned: number | undefined) {
     const records: Array<{ role: string; model?: string; turns: number }> = [];

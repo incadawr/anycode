@@ -1,5 +1,5 @@
 /**
- * Wire-byte proof of GLM (Z.AI) reasoning-effort mapping (W1#6, TASK.43 W6):
+ * Wire-byte proof of GLM (Z.AI) reasoning-effort mapping (W1#6, W6):
  * the existing coverage in model-port.test.ts (lines ~44-67, ~595-608) only
  * asserts the PURE `reasoningRequestOptions` options object — it never drives
  * a real request through `AiSdkModelPort` and inspects what actually lands on
@@ -161,7 +161,7 @@ describe("GLM (Z.AI) reasoning-effort mapping over the real @ai-sdk/anthropic wi
     expect(captured!.body["effort"]).toBeUndefined();
   });
 
-  // TASK.163 (2026-08-28): docs.z.ai/guides/llm/glm-5.3 documents `low` as a
+  // (2026-08-28): docs.z.ai/guides/llm/glm-5.3 documents `low` as a
   // real reasoning tier, distinct from `high`/`max`. Before this slice the
   // mapping silently collapsed `low` into `high` on the wire; this pins that
   // it now reaches output_config.effort as 'low' verbatim, reusing the same

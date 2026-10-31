@@ -1,5 +1,5 @@
 /**
- * Live GUI smoke for the sidebar row cut (TASK.125): drives a REAL Electron dev
+ * Live GUI smoke for the sidebar row cut: drives a REAL Electron dev
  * instance over the automation HTTP channel and checks the three rules the cut
  * is built on — the cut itself + its toggle, open rows never hidden, and an
  * active filter lifting the cut.

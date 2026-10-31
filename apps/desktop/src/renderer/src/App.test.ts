@@ -125,7 +125,7 @@ describe("shouldSuppressEscForDraft (slice P7.12 §4.6)", () => {
   });
 });
 
-describe("computeGitPanelOpen (design TASK.40 §2(f)) — shell-owned, not engine.capabilities.supportsGitMutations", () => {
+describe("computeGitPanelOpen (design §2(f)) — shell-owned, not engine.capabilities.supportsGitMutations", () => {
   it("stays closed when the user never opened it, regardless of shell capability", () => {
     expect(computeGitPanelOpen(false, true)).toBe(false);
     expect(computeGitPanelOpen(false, false)).toBe(false);
@@ -140,12 +140,12 @@ describe("computeGitPanelOpen (design TASK.40 §2(f)) — shell-owned, not engin
     expect(computeGitPanelOpen(true, false)).toBe(false);
   });
 
-  it("defaults to open when requested and shell is undefined — byte-identical to core's pre-TASK.40 behavior (no engine gating at all)", () => {
+  it("defaults to open when requested and shell is undefined — byte-identical to core's behavior (no engine gating at all)", () => {
     expect(computeGitPanelOpen(true, undefined)).toBe(true);
   });
 });
 
-describe("computeSessionContentColumns (Taskana 4703) — conversation floor + the ONE dock column", () => {
+describe("computeSessionContentColumns — conversation floor + the ONE dock column", () => {
   it("dock closed (or drawer mode): a single flexible column with a real floor, no handle", () => {
     expect(computeSessionContentColumns(false, 640)).toBe("minmax(min(420px,100%), 1fr)");
   });
@@ -160,7 +160,7 @@ describe("computeSessionContentColumns (Taskana 4703) — conversation floor + t
   });
 });
 
-describe("dispatchTryAgain (TASK.33 W8 one-shot Try-again — normal send/queue/busy path)", () => {
+describe("dispatchTryAgain (W8 one-shot Try-again — normal send/queue/busy path)", () => {
   // An offer only ever arms while connected (the loop_end reducer that sets
   // `retry` runs on a live `host_ready`-derived turn) — `connection: "ready"`
   // is the realistic precondition every case here starts from.
@@ -191,7 +191,7 @@ describe("dispatchTryAgain (TASK.33 W8 one-shot Try-again — normal send/queue/
     expect(store.getState().retry).toBeNull();
   });
 
-  it("carries the offer's images through onto the wire message AND onto the appended user_text block (Taskana 4091: raw text, no badge)", () => {
+  it("carries the offer's images through onto the wire message AND onto the appended user_text block (raw text, no badge)", () => {
     const store = createDesktopStore();
     const image = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
     armRetry(store, { loopEndBlockId: "loop_end:t1", text: "hello", images: [image] });
@@ -258,7 +258,7 @@ describe("dispatchTryAgain (TASK.33 W8 one-shot Try-again — normal send/queue/
   });
 });
 
-describe("dispatchContinue (Taskana 4111 — one-shot Continue on a max_turns stop)", () => {
+describe("dispatchContinue (one-shot Continue on a max_turns stop)", () => {
   /** Arms the offer through the real production path: a max_turns loop_end on an idle-queue turn. */
   function armContinueViaRealPath(store: ReturnType<typeof createDesktopStore>): void {
     store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
@@ -302,7 +302,7 @@ describe("dispatchContinue (Taskana 4111 — one-shot Continue on a max_turns st
     expect(store.getState().continueOffer).toEqual({ loopEndBlockId: "loop_end:t1" });
   });
 
-  it("Taskana 4111 cross-review: a click that races a busy turn is enqueued (like Try-again), never direct-sent into a turn_rejected busy", () => {
+  it("cross-review: a click that races a busy turn is enqueued (like Try-again), never direct-sent into a turn_rejected busy", () => {
     const store = createDesktopStore();
     armContinueViaRealPath(store);
     store.setState({ turn: { ...store.getState().turn, status: "running" } });
@@ -317,14 +317,14 @@ describe("dispatchContinue (Taskana 4111 — one-shot Continue on a max_turns st
   });
 });
 
-// TASK.56 W3-FIX (fable-task56-w3-codex-ruling.md finding 2): `dispatchTryAgain`
+// W3-FIX (finding 2): `dispatchTryAgain`
 // was the one W3-gated send site the cut missed — a click on an armed
 // image-bearing offer, after the live model verdict swings to non-vision,
 // used to consume the offer and lose the images with no restore path (the
 // direct-send branch has no `queueInFlight` to key a `turn_rejected` restore
 // off). §(d)'s tests T1-T5 close that gap; T6 (tab-registry.test.ts) PINs
 // finding 1's NOT-A-BUG ruling (the drainer keeps sending, by design).
-describe("dispatchTryAgain — TASK.56 W3-FIX entry gate against the live model image verdict (fable-task56-w3-codex-ruling.md finding 2 §(c))", () => {
+describe("dispatchTryAgain — W3-FIX entry gate against the live model image verdict (finding 2 §(c))", () => {
   const IMAGE = { name: "shot.png", sizeBytes: 42, attachment: { mediaType: "image/png" as const, data: "AA==" } };
 
   /**
@@ -429,7 +429,7 @@ describe("dispatchTryAgain — TASK.56 W3-FIX entry gate against the live model 
     expect(store.getState().retry).toBeNull();
   });
 
-  it("T8 — TASK.198 срез D: a configured recognizer fallback unblocks the retry gate for a blind model, same as the composer's own predicates", () => {
+  it("T8 — срез D: a configured recognizer fallback unblocks the retry gate for a blind model, same as the composer's own predicates", () => {
     const store = createDesktopStore();
     armRetryViaRealPath(store, "look at this", [IMAGE]);
     store.getState().applyHostMessage({
@@ -450,7 +450,7 @@ describe("dispatchTryAgain — TASK.56 W3-FIX entry gate against the live model 
   });
 });
 
-describe("emptyPaneSidebarAffordance (TASK.129)", () => {
+describe("emptyPaneSidebarAffordance", () => {
   it("an open sidebar needs no affordance", () => {
     expect(emptyPaneSidebarAffordance(false, "⌘B")).toEqual({
       showExpand: false,
@@ -471,9 +471,9 @@ describe("emptyPaneSidebarAffordance (TASK.129)", () => {
   });
 });
 
-// TASK.126: the close-with-running-turn confirm copy — the exact text the old
+// the close-with-running-turn confirm copy — the exact text the old
 // blocking window.confirm quoted, now carried by the shared ConfirmDialog.
-describe("CLOSE_TAB_CONFIRM (TASK.126)", () => {
+describe("CLOSE_TAB_CONFIRM", () => {
   it("carries the exact title, body and Close tab verb", () => {
     expect(CLOSE_TAB_CONFIRM.title).toBe("Close tab");
     expect(CLOSE_TAB_CONFIRM.body).toBe("This tab has a turn in progress. Close it anyway?");

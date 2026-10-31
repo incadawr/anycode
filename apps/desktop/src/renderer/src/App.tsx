@@ -96,7 +96,7 @@ import "./settings.css";
 /** localStorage key for the renderer-only sidebar collapse flag (design §2.1). */
 const SIDEBAR_COLLAPSED_KEY = "anycode.sidebar.collapsed";
 
-// Taskana 4703: the retired per-panel width keys (`anycode.review.width`,
+// the retired per-panel width keys (`anycode.review.width`,
 // `anycode.preview.width`, `anycode.childSplit.width`) are superseded by the
 // ONE dock width (dock-layout.ts's DOCK_WIDTH_STORAGE_KEY). The legacy keys
 // stay in users' storage, never read again — except the one-time
@@ -154,7 +154,7 @@ export function selectMainPaneView(draftActive: boolean, hasActiveTab: boolean):
 }
 
 /**
- * TASK.129: the empty main pane's way back to a collapsed sidebar. With no
+ * the empty main pane's way back to a collapsed sidebar. With no
  * tab open there is no session header — and so no expand button — and the app
  * has no native menu, so a collapsed sidebar would be unrecoverable by mouse.
  * The pane then shows its own expand button and names the CURRENT binding
@@ -182,12 +182,12 @@ export function shouldSuppressEscForDraft(draftActive: boolean): boolean {
 }
 
 /**
- * Whether the Review (Git) panel should actually render (design TASK.40
+ * Whether the Review (Git) panel should actually render (design
  * §2(f)): gated on the SHELL's own read-only Git capability, NOT the active
  * engine's tool-mutation capability — the Review panel is AnyCode chrome,
  * independent of which agent is running. `undefined` (core, or a
  * not-yet-wired engine) defaults to `true`, byte-identical to core's
- * pre-TASK.40 behavior (the panel was previously gated on
+ * previous behavior (the panel was previously gated on
  * `engine?.capabilities.supportsGitMutations ?? true`, which likewise always
  * fell back to `true` for a null-engine core session). Exported for unit
  * testing.
@@ -197,7 +197,7 @@ export function computeGitPanelOpen(panelOpen: boolean, shellGitReadOnly: boolea
 }
 
 /**
- * Grid-column composer for `.session-content-split-open` (Taskana 4703,
+ * Grid-column composer for `.session-content-split-open` (
  * docs/development/dock.md): the conversation column is ALWAYS
  * `minmax(min(420px,100%), 1fr)` — a real floor (the old `minmax(0,1fr)`
  * collapsed to ~0 under stacked fixed columns, the root cause of the
@@ -215,7 +215,7 @@ export function computeSessionContentColumns(dockOpen: boolean, dockWidth: numbe
 }
 
 /**
- * TASK.56 W3-FIX text for a retry blocked by the live model image verdict —
+ * W3-FIX text for a retry blocked by the live model image verdict —
  * same semantics as Composer's `MODEL_IMAGE_SEND_BLOCKED_TEXT`, adapted to
  * the retry offer's own recovery path (switch model or send fresh, since an
  * armed offer's images can't be individually removed the way a draft's can).
@@ -223,11 +223,11 @@ export function computeSessionContentColumns(dockOpen: boolean, dockWidth: numbe
 export const RETRY_BLOCKED_IMAGES_TEXT =
   "This model does not accept image attachments — the retry still has images attached. Switch back to a vision-capable model to send it, or send a new message without attachments.";
 
-/** `dispatchTryAgain`'s outcome (TASK.56 W3-FIX): distinguishes a blocked retry from every other exit so automation's `tryAgain` facade can report it truthfully instead of a blanket `{ok:true}`. */
+/** `dispatchTryAgain`'s outcome (W3-FIX): distinguishes a blocked retry from every other exit so automation's `tryAgain` facade can report it truthfully instead of a blanket `{ok:true}`. */
 export type TryAgainOutcome = "sent" | "queued" | "blocked_images" | "not_ready" | "no_offer";
 
 /**
- * TASK.33 W8 Try-again dispatch: consumes the one-shot offer (`consumeRetry`
+ * W8 Try-again dispatch: consumes the one-shot offer (`consumeRetry`
  * — a no-op on a stale/double click once already consumed) and re-sends its
  * text+images through the EXACT SAME enqueue-vs-direct-send decision as
  * Composer.handleSend (`shouldEnqueue`), so busy/queue/cancel/permission/
@@ -237,20 +237,20 @@ export type TryAgainOutcome = "sent" | "queued" | "blocked_images" | "not_ready"
  * Exported for unit testing against a real `createDesktopStore()` instance
  * (no jsdom in this package — see App.test.ts's header).
  *
- * TASK.33 W8-FIX #1: `setHostExited` deliberately preserves an armed `retry`
+ * W8-FIX #1: `setHostExited` deliberately preserves an armed `retry`
  * (store.ts) so the offer survives a host restart, but that also means the
  * button can still be showing (or a stale click can still land) while
  * `connection !== "ready"` — with no active port, a direct `sendToHost` would
  * be silently dropped. Bail out BEFORE consuming the offer so a click made
  * while disconnected leaves it armed for when the connection comes back,
  * matching every other send site's readiness gate (automation.ts's
- * `sendPrompt`, SessionHeader.tsx, ModelPill.tsx). TASK.33 FIX-A: the offer
+ * `sendPrompt`, SessionHeader.tsx, ModelPill.tsx). FIX-A: the offer
  * surviving in `store.ts` only makes the state layer "survive a host
  * restart" — the standalone fallback Try-again row (`MessageList.tsx`'s
  * `showStandaloneRetry`) is what makes that true at the UI level too, once
  * `host_ready`'s hydration has dropped the anchored button's `loop_end` block.
  *
- * TASK.56 W3-FIX (fable-task56-w3-codex-ruling.md finding 2 §(c)): an entry
+ * W3-FIX (finding 2 §(c)): an entry
  * gate runs BEFORE `consumeRetry`, ahead of the enqueue-vs-direct-send
  * branch, so it covers both. `dispatchTryAgain` was the one W3-gated send
  * site the cut missed (Composer blocks upfront, the drainer is a deliberate
@@ -273,7 +273,7 @@ export function dispatchTryAgain(
   if (pending === null) {
     return "no_offer";
   }
-  // TASK.198 срез D: a configured recognizer fallback (`imageFallback`,
+  // срез D: a configured recognizer fallback (`imageFallback`,
   // mirrored off the same host_ready/model_changed wire as `imageInput`)
   // unblocks this gate too — same pair semantics as the composer's own
   // `isImageAttachBlockedByModel`/`isSendBlockedByModelImages` predicates.
@@ -302,13 +302,13 @@ export function dispatchTryAgain(
 }
 
 /**
- * Taskana 4111: fixed continuation text — the click is the one action; the
+ * fixed continuation text — the click is the one action; the
  * model sees it as an ordinary user message.
  */
 export const CONTINUE_AFTER_CEILING_TEXT = "Continue from the turn limit — resume with the same history.";
 
 /**
- * Taskana 4111 (TASK.124 remainder 1): the max_turns stop's one-action
+ * (remainder 1): the max_turns stop's one-action
  * continue — the Try-again seam, minus the replay payload: the click sends
  * ONE fixed user message, which restarts the turn budget over the intact
  * history. No images on this path, but the same enqueue-vs-direct-send
@@ -343,7 +343,7 @@ export interface SessionSurfaceProps {
 }
 
 /**
- * TASK.102 CUT-S2 §2.5 Produces: the one session surface — transcript,
+ * CUT-S2 §2.5 Produces: the one session surface — transcript,
  * composer, and permission-modal binding — resolved ENTIRELY off
  * `<TabContext>` (no store prop at all), so wrapping it in a DIFFERENT tab's
  * `TabContext.Provider` makes it render THAT tab's live conversation with
@@ -368,15 +368,15 @@ export function SessionSurface({ tabId, onToast, suppressPermissionModal = false
   // banner drops the connection lines instead of reporting a reconnect.
   const workspaceMissing = useTabStore((state) => state.workspaceMissing);
   const workspace = useTabStore((state) => state.workspace);
-  // Taskana 4736 xfix D4: a child surface never shows the workspace-trust
+  // xfix D4: a child surface never shows the workspace-trust
   // dialog — the child shares the parent's workspace and booted with the
   // parent's current decision (the host's childSurface boot option already
   // suppressed the pending report), so any dialog here would be unsatisfiable.
   const childSurface = useTabStore((state) => state.childSurface);
-  // TASK.33 W8: the armed one-shot Try-again offer (null when nothing to
+  // W8: the armed one-shot Try-again offer (null when nothing to
   // offer) — MessageList shows the button only on the loop_end block it names.
   const retry = useTabStore((state) => state.retry);
-  // Taskana 4111: the one-shot Continue offer armed by a max_turns loop_end;
+  // the one-shot Continue offer armed by a max_turns loop_end;
   // suppressed while the prompt queue holds anything (Resume is the continue then).
   const continueOffer = useTabStore((s) => s.continueOffer);
   const promptQueueLength = useTabStore((s) => s.promptQueue.length);
@@ -384,11 +384,11 @@ export function SessionSurface({ tabId, onToast, suppressPermissionModal = false
   const sendToHost = useTabSend();
   const handleTryAgain = useCallback(() => dispatchTryAgain(tabStoreApi, sendToHost), [tabStoreApi, sendToHost]);
   const handleContinue = useCallback(() => dispatchContinue(tabStoreApi, sendToHost), [tabStoreApi, sendToHost]);
-  // Taskana 4772: a turn parked on a transient network failure. Stop is the
+  // a turn parked on a transient network failure. Stop is the
   // composer's own cancel (the turn is still `running`); Retry now asks the host to probe at once.
   const waitingForNetwork = useTabStore((state) => state.waitingForNetwork);
   const handleRetryNow = useCallback(() => sendToHost({ type: "network_retry_now" }), [sendToHost]);
-  // Taskana 4742 §2.5: rewind plumbing for the tick rail's popover action.
+  // §2.5: rewind plumbing for the tick rail's popover action.
   // `supportsRewind` gates the prop (absent -> no Rewind buttons at all,
   // same expression the old TimelinePanel mount used); `onRewind` sends the
   // SAME rewind_request the removed dock panel sent (buildRewindRequest,
@@ -409,7 +409,7 @@ export function SessionSurface({ tabId, onToast, suppressPermissionModal = false
     [sendToHost],
   );
   const rewindProp = supportsRewind ? { checkpoints, onRewind: handleRewind } : undefined;
-  // Taskana 4742 §2.5: checkpoint-list refresh — the store's `checkpoints`
+  // §2.5: checkpoint-list refresh — the store's `checkpoints`
   // field is filled ONLY on demand (host replies to checkpoint_list_request),
   // so the rail asks (a) once when it first appears (>=2 user turns), (b)
   // every time the turn goes running -> idle (the finished turn's checkpoint
@@ -426,7 +426,7 @@ export function SessionSurface({ tabId, onToast, suppressPermissionModal = false
     sendToHost({ type: "checkpoint_list_request" });
   }, [railVisible, supportsRewind, turnStatus, lastRewindResult, sendToHost]);
 
-  // TASK.188 S12: this mount IS the replay's definition of "the root is in
+  // S12: this mount IS the replay's definition of "the root is in
   // frame". Every way the root transcript can leave the screen — another tab
   // active, the start screen over the pane, layout B rendering the child pane
   // instead of the master, and any future replacement of the main pane —
@@ -480,7 +480,7 @@ export function SessionSurface({ tabId, onToast, suppressPermissionModal = false
       {!suppressPermissionModal && <ConnectedPermissionModal />}
       {/* R8: store notice slot → App toast queue (render-less bridge). */}
       <TabNoticeCapture tabId={tabId} onNotice={(notice) => onToast(notice.kind, notice.text)} />
-      {/* Taskana 4736: this folder's project declarations wait for the user's
+      {/* this folder's project declarations wait for the user's
           decision. xfix D4: never on a child surface (see childSurface above). */}
       {!childSurface && <WorkspaceTrustPrompt tabId={tabId} />}
     </>
@@ -502,17 +502,17 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
   const engine = useTabStore((state) => state.engine);
   const shell = useTabStore((state) => state.shell);
   const gitPanelOpenRequested = useTabStore((state) => state.git.panelOpen);
-  // Design TASK.40 §2(f): shell-owned, not engine.capabilities.supportsGitMutations
+  // Design §2(f): shell-owned, not engine.capabilities.supportsGitMutations
   // (that flag now describes only the agent's OWN tool-mutation capability).
   const gitPanelOpen = computeGitPanelOpen(gitPanelOpenRequested, shell?.gitReadOnly);
   const supportsCorePanels = engine === null;
-  // TASK.91: the background-tasks drawer mounts for the native engine only —
+  // the background-tasks drawer mounts for the native engine only —
   // `engine` is null before host_ready (core default), and claude/codex keep
   // supportsTasks:false.
   const supportsTasks = engine?.capabilities.supportsTasks ?? true;
   const tabTitle = useTabsStore((state) => state.tabs.find((t) => t.tabId === tabId)?.title);
 
-  // TASK.102 CUT-S2 §2.5 (slice S2c C3): which surface this root tab's pane
+  // CUT-S2 §2.5 (slice S2c C3): which surface this root tab's pane
   // shows right now — its own master transcript, one child full-pane (layout
   // B), or the master alongside a stack of children (CUT-S3 §0.1 split,
   // layouts C/D — see child-layout.ts's module doc).
@@ -521,11 +521,11 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
   // CUT-S3 §3.1: `childSplitOpen` names the split layout; the resize handle
   // + `ChildSplitPane` mount off it below, alongside git/preview (`splitOpen`).
   const childSplitOpen = childView.kind === "split";
-  // TASK.218 (supervisor correction 3): the relations subscription moved
+  // (supervisor correction 3): the relations subscription moved
   // BEFORE every child-id resolution below — the effective-id projection
   // needs it, and each render must read it once, up front.
   const relations = childRelationStore((state) => state.relations);
-  // TASK.218: the same LOGICAL child (one childSessionId) may be registered
+  // the same LOGICAL child (one childSessionId) may be registered
   // under several spawn ids (one per continue_session call). Every surface
   // below resolves through the EFFECTIVE id — the LATEST spawn id registered
   // for that childSessionId (spawnToolCallIdForChild: Map insertion order,
@@ -565,7 +565,7 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
   // F11: every split row's (and layout B's) live child store, so each row
   // counts its own child's progress — not only the expanded one. A row whose
   // child host is gone keeps the last card it showed (`lastLiveChildCard`).
-  // Keys are EFFECTIVE ids (TASK.218): a continuation's live store feeds the
+  // Keys are EFFECTIVE ids: a continuation's live store feeds the
   // row whose original id went stale.
   const liveChildIds: readonly string[] =
     childView.kind === "split"
@@ -599,7 +599,7 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
       })
       .join("|"),
   );
-  // TASK.102 CUT-S2 §10.8.1 point 3: a NON-live child (relation.live===false,
+  // CUT-S2 §10.8.1 point 3: a NON-live child (relation.live===false,
   // OR no relation at all — the restart-Open case) is no longer a transient
   // error state to self-heal out of. C4's read-only branch (`ChildHistoryPane`
   // below, or CUT-S3's `ChildHistoryContent` in the split stack) is its
@@ -622,7 +622,7 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
     reviewRootRef.current = node;
     setReviewRootEl(node);
   }, []);
-  // Taskana 4738: this conversation tab takes ownership of the dock store's
+  // this conversation tab takes ownership of the dock store's
   // tab set BEFORE paint. The store is a singleton across conversation tabs;
   // without this, the first render of a switched tab reads the PREVIOUS
   // tab's leftover tabs (its own derivation effects run only after that
@@ -637,10 +637,10 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
     useDockStore.getState().adopt(tabId);
   }, [tabId]);
 
-  // Taskana 4703: the ONE dock width + window-width tracking. `available` is
+  // the ONE dock width + window-width tracking. `available` is
   // the .session-content width (reviewRootRef measure), kept live by a
   // ResizeObserver so a sidebar collapse/expand (no window resize) re-clamps.
-  // Taskana 4738: `tabs`/`activeTabId`/`splitTabId` render ONLY through the
+  // `tabs`/`activeTabId`/`splitTabId` render ONLY through the
   // owner-gated `selectDockView` — a non-owner (the frame before adopt, or a
   // foreign store state) reads the frozen EMPTY_DOCK_VIEW, never another
   // conversation tab's items. Width/hidden are global, not owner-scoped.
@@ -710,7 +710,7 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
     usePreviewStore.getState().setPanelInsetPx(splitOpen ? effectiveDockWidth + DOCK_HANDLE_PX : 0);
   }, [splitOpen, effectiveDockWidth]);
 
-  // Taskana 4703: the ONE dock resize path (mirror of the retired
+  // the ONE dock resize path (mirror of the retired
   // beginPreviewResize, now clamped live against the measured root width —
   // the boot-time clamp is the `effectiveDockWidth` computation above).
   // GitHub #31 reviews: the drag tracks the INITIATING pointerId end to end
@@ -781,7 +781,7 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
     }
   }, [canSplitNow]);
 
-  // ── Taskana 4703 tab-derivation effects: mirror each source surface into
+  // ── tab-derivation effects: mirror each source surface into
   // the dock's tab set. Each effect is [tabId]-scoped so a background tab's
   // preview pushes never touch the dock (only the ACTIVE tab's
   // ActiveTabBody runs them). ──
@@ -891,7 +891,7 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
     }
   }
 
-  // TASK.102 CUT-S2 §2.5 (C3) / §10.8.1 (C4): layout B's child branch — a
+  // CUT-S2 §2.5 (C3) / §10.8.1 (C4): layout B's child branch — a
   // breadcrumb bar in place of SessionHeader, above either the LIVE
   // SessionSurface re-scoped to the child's own TabContext (ChildSessionPane,
   // relation still live) or C4's read-only completed transcript
@@ -970,7 +970,7 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
             onPointerDown={beginDockResize}
           />
         )}
-        {/* Taskana 4703: ONE dock column replaces the git/preview/subagents
+        {/* ONE dock column replaces the git/preview/subagents
             stack. The mount gate is tabs+visible; drawer mode still mounts
             (absolute overlay) but leaves the grid untouched above. */}
         {dockOpen && (
@@ -989,7 +989,7 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
 
       {supportsCorePanels && <LspPanel />}
       {supportsCorePanels && <HooksPanel />}
-      {/* Taskana 4742: the Timeline dock panel is gone — rewind moved into the
+      {/* the Timeline dock panel is gone — rewind moved into the
           tick rail's popover (SessionSurface's MessageList `rewind` prop). */}
       {/* keyed: the panel's local selected-row state must not leak into another tab */}
       {supportsTasks && <BackgroundTasksPanel key={tabId} />}
@@ -1009,7 +1009,7 @@ interface ChildSessionPaneProps {
 }
 
 /**
- * TASK.102 CUT-S2 §2.5 (C3): layout B's child view — a breadcrumb bar
+ * CUT-S2 §2.5 (C3): layout B's child view — a breadcrumb bar
  * (replacing SessionHeader) above the SAME SessionSurface the master pane
  * uses, re-scoped to the child tab's own `<TabContext.Provider>` so its
  * composer sends land on the child's connection. Permission requests are
@@ -1106,7 +1106,7 @@ interface ChildHistoryPaneProps {
 const CHILD_HISTORY_LOADING = { kind: "loading" as const };
 
 /**
- * TASK.102 CUT-S2 §10.8.1 (slice S2c C4): layout B's READ-ONLY child view —
+ * CUT-S2 §10.8.1 (slice S2c C4): layout B's READ-ONLY child view —
  * the home for a child this tab's relation-store does NOT show as live
  * (never seen live in this renderer process at all — the restart-Open case —
  * or seen live and since exited). Fetches the completed transcript over
@@ -1289,7 +1289,7 @@ export function App() {
     [settingsSnapshot],
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
-  // TASK.126: pending close-tab confirm (tabId of the tab awaiting the user's
+  // pending close-tab confirm (tabId of the tab awaiting the user's
   // verdict) — replaces the blocking window.confirm in handleCloseTab.
   const [closeTabConfirm, setCloseTabConfirm] = useState<string | null>(null);
   const welcomeEngineRef = useRef<"core" | "codex" | "claude">("core");
@@ -1467,7 +1467,7 @@ export function App() {
         if (!currentTabId) {
           return;
         }
-        // TASK.146: Esc mirrors the composer's Stop button, which is shown
+        // Esc mirrors the composer's Stop button, which is shown
         // for the whole busy window — a running turn OR a manual compaction
         // (isSessionBusy). Its title literally reads "Stop (Esc)", so the two
         // must agree; `cancel_turn` aborts either one host-side.
@@ -1541,7 +1541,7 @@ export function App() {
           runFocusModeMenu();
           break;
         case "dock.toggle":
-          // Taskana 4703: hide/show the dock (the ⌘\ hint rides ACTION_CATALOG).
+          // hide/show the dock (the ⌘\ hint rides ACTION_CATALOG).
           useDockStore.getState().toggleHidden();
           break;
         case "turn.interrupt":
@@ -1595,7 +1595,7 @@ export function App() {
     closeTabNow(tabId);
   }
 
-  /** The committed close (TASK.126): the ConfirmDialog's Confirm path. */
+  /** The committed close: the ConfirmDialog's Confirm path. */
   function closeTabNow(tabId: string): void {
     window.anycode
       .closeTab(tabId)
@@ -1715,7 +1715,7 @@ export function App() {
     if (!currentTabId) {
       return;
     }
-    // TASK.146: same busy window as the Esc branch above — this runner IS the
+    // same busy window as the Esc branch above — this runner IS the
     // bound-key/palette path to the identical gesture.
     if (!isSessionBusy(tabRegistry.getStore(currentTabId)?.getState().turn.status ?? "idle")) {
       return;
@@ -1806,7 +1806,7 @@ export function App() {
       id: "turn.interrupt",
       label: "Interrupt turn",
       hint: hintFor("turn.interrupt"),
-      // TASK.146: mirrors `runInterrupt`'s own gate (this row calls it); a
+      // mirrors `runInterrupt`'s own gate (this row calls it); a
       // narrower predicate here would gray out a row whose action still works.
       enabled: isSessionBusy(activeStore?.getState().turn.status ?? "idle"),
       run: () => runInterrupt(),
@@ -1867,7 +1867,7 @@ export function App() {
 
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
-      {/* TASK.126: close-with-running-turn confirm (replaces window.confirm). */}
+      {/* close-with-running-turn confirm (replaces window.confirm). */}
       <ConfirmDialog
         request={closeTabConfirm === null ? null : CLOSE_TAB_CONFIRM}
         onCancel={() => setCloseTabConfirm(null)}

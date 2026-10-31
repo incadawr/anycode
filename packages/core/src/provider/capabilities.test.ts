@@ -77,9 +77,9 @@ describe("resolveImageInput (slice 6.2 §2-B4, fail-closed)", () => {
   });
 });
 
-// ── Taskana 4088 (TASK.69): the live-modality rung between override and catalog ──
+// ── the live-modality rung between override and catalog ──
 
-describe("resolveImageInput — liveModality rung (Taskana 4088: additive-only)", () => {
+describe("resolveImageInput — liveModality rung (additive-only)", () => {
   const live = (set: readonly string[]) => (id: string) => set.includes(id);
 
   it("a live true PROMOTES a catalog-false (unmarked) model", () => {
@@ -91,7 +91,7 @@ describe("resolveImageInput — liveModality rung (Taskana 4088: additive-only)"
     expect(resolveImageInput("on-prem-8b", undefined, undefined, live(["on-prem-8b"]))).toBe(true);
   });
 
-  it("a live FALSE never cancels a catalog-true model (TASK.197 asymmetry: stale/absent live data must not blind)", () => {
+  it("a live FALSE never cancels a catalog-true model (asymmetry: stale/absent live data must not blind)", () => {
     expect(resolveImageInput("claude-vision", VISION_ENTRY, undefined, live([]))).toBe(true);
     expect(resolveImageInput("claude-vision", VISION_ENTRY, undefined, (id) => false)).toBe(true);
   });
@@ -133,14 +133,14 @@ describe("output and reasoning capability resolution", () => {
     { id: "glm-basic", contextWindow: 128_000, maxOutputTokens: 16_384 },
   ] };
 
-  // TASK.159: an above-catalog override now CLAMPS (see the dedicated describe
+  // an above-catalog override now CLAMPS (see the dedicated describe
   // below); this pin keeps the pre-existing arms that must not move — a legal
   // below-catalog override, the bare catalog hint, the non-Claude DEFAULT
   // fallback, and Claude's undefined native ceiling.
   it("resolves override ≤ catalog > fallback while leaving Claude native", () => {
     expect(resolveMaxOutputTokens("glm-5.2", entry, 1234)).toBe(1234);
     expect(resolveMaxOutputTokens("glm-5.2", entry, undefined)).toBe(32_768);
-    // TASK.150: an on-prem / non-catalog model id lands on the DEFAULT, and 8_192
+    // an on-prem / non-catalog model id lands on the DEFAULT, and 8_192
     // was low enough that a reasoning model spent the whole budget thinking and
     // finished at `length` before emitting a visible character. Pinned against
     // the two references measured 2026-08-23 (ZCode 32_000, Claude Code 32_000).
@@ -165,9 +165,9 @@ describe("output and reasoning capability resolution", () => {
   });
 });
 
-// ── TASK.159 slice A: a hand-typed override no longer outruns the catalog — ──
+// ── slice A: a hand-typed override no longer outruns the catalog — ──
 
-describe("resolveMaxOutputTokens override × catalog clamp (TASK.159)", () => {
+describe("resolveMaxOutputTokens override × catalog clamp", () => {
   const entry: CatalogProviderEntry = { id: "z-ai", name: "Z.AI", baseUrl: "https://api.z.ai/api/anthropic", defaultTransport: "anthropic-messages", supportedTransports: ["anthropic-messages"], auth: { kind: "api_key" }, models: [
     { id: "glm-5.2", contextWindow: 200_000, maxOutputTokens: 32_768, reasoning: true, effortLevels: ["off", "high", "max"] },
     { id: "claude-test", contextWindow: 200_000, reasoning: true },
@@ -201,7 +201,7 @@ describe("resolveMaxOutputTokens override × catalog clamp (TASK.159)", () => {
     expect(resolveMaxOutputTokens("claude-test", entry, 65_536)).toBe(65_536);
   });
 
-  it("no entry / no model match -> override passes through (TASK.151 not regressed)", () => {
+  it("no entry / no model match -> override passes through (not regressed)", () => {
     expect(resolveMaxOutputTokens("glm-5.2", undefined, 999_999)).toBe(999_999);
     expect(resolveMaxOutputTokens("on-prem-model", entry, 999_999)).toBe(999_999);
   });
@@ -228,7 +228,7 @@ const Z_AI_ENTRY: CatalogProviderEntry = {
   ],
 };
 
-describe("resolveContextWindowInfo provenance (Taskana 4127)", () => {
+describe("resolveContextWindowInfo provenance", () => {
   it("a catalog model reports source catalog", () => {
     expect(resolveContextWindowInfo("glm-test-narrow", Z_AI_ENTRY, undefined)).toEqual({ tokens: 128_000, source: "catalog" });
   });
@@ -275,12 +275,12 @@ describe("resolveContextWindow (slice 6.4 §2-B1, mirror of resolveImageInput)",
     }
   });
 
-  it("without override, an unknown model id resolves the ASSUMED 8192 fallback (TASK.142)", () => {
+  it("without override, an unknown model id resolves the ASSUMED 8192 fallback", () => {
     expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, undefined)).toBe(8_192);
     expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, undefined)).toBe(UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS);
   });
 
-  it("without override, a missing entry resolves the ASSUMED 8192 fallback (TASK.142)", () => {
+  it("without override, a missing entry resolves the ASSUMED 8192 fallback", () => {
     expect(resolveContextWindow("glm-test-narrow", undefined, undefined)).toBe(8_192);
   });
 
@@ -302,7 +302,7 @@ describe("resolveContextWindow (slice 6.4 §2-B1, mirror of resolveImageInput)",
     expect(resolveContextWindow("claude-opus-5-5", Z_AI_ENTRY, undefined)).toBe(8_192);
   });
 
-  it("a bound override applies to ITS model only; a mismatched binding falls through to the catalog, not the override (TASK.142)", () => {
+  it("a bound override applies to ITS model only; a mismatched binding falls through to the catalog, not the override", () => {
     // A-bound override on A: the override wins over the catalog.
     expect(resolveContextWindow("glm-test-narrow", Z_AI_ENTRY, 50_000, "glm-test-narrow")).toBe(50_000);
     // A-bound override on B: ignored; B resolves through the catalog.
@@ -325,7 +325,7 @@ describe("resolveContextWindow (slice 6.4 §2-B1, mirror of resolveImageInput)",
     expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, undefined, "ghost-model")).toBe(8_192);
   });
 
-  it("the 8192 assumed fallback produces the degraded-window budget the contract computes (TASK.142)", () => {
+  it("the 8192 assumed fallback produces the degraded-window budget the contract computes", () => {
     const applied = resolveContextWindow("on-prem-8b", undefined, undefined);
     expect(applied).toBe(8_192);
     expect(effectiveWindowTokens(resolveContextBudgetConfig({ contextWindowTokens: applied }))).toBe(2_048);
@@ -333,16 +333,16 @@ describe("resolveContextWindow (slice 6.4 §2-B1, mirror of resolveImageInput)",
   });
 });
 
-// ── TASK.170: a child spawned on a catalog-known non-claude model must resolve ──
+// ── a child spawned on a catalog-known non-claude model must resolve ──
 // ── ITS OWN declared ceiling, never the DEFAULT_MAX_OUTPUT_TOKENS stub. ──
 
-describe("resolveMaxOutputTokens catalog completeness (TASK.170, real catalog)", () => {
+describe("resolveMaxOutputTokens catalog completeness (real catalog)", () => {
   it("glm-5.3-flash resolves its own declared ceiling, not the DEFAULT stub", () => {
     const zAiEntry = findCatalogEntry("z-ai");
     expect(zAiEntry).toBeDefined();
     // Parent: glm-5.3 explicitly declares 131_072 in the catalog.
     expect(resolveMaxOutputTokens("glm-5.3", zAiEntry, undefined)).toBe(131_072);
-    // Child: before TASK.170, glm-5.3-flash had no maxOutputTokens row, so a
+    // Child: before, glm-5.3-flash had no maxOutputTokens row, so a
     // subagent spawned on the flash model silently fell to
     // DEFAULT_MAX_OUTPUT_TOKENS (32_768) here — a ~4x drop from the parent's
     // 131_072 for no reason other than a missing catalog row. It must now
@@ -352,11 +352,11 @@ describe("resolveMaxOutputTokens catalog completeness (TASK.170, real catalog)",
   });
 });
 
-// ── TASK.170: the DEFAULT_MAX_OUTPUT_TOKENS stub must no longer be silent — ──
+// ── the DEFAULT_MAX_OUTPUT_TOKENS stub must no longer be silent — ──
 // ── an optional onStubFallback callback fires exactly when the catalog truly ──
-// ── knows nothing (mirrors onClamp's shape/contract, TASK.159). ──
+// ── knows nothing (mirrors onClamp's shape/contract). ──
 
-describe("resolveMaxOutputTokens stub-fallback notice (TASK.170)", () => {
+describe("resolveMaxOutputTokens stub-fallback notice", () => {
   const entry: CatalogProviderEntry = {
     id: "z-ai",
     name: "Z.AI",
@@ -402,9 +402,9 @@ describe("resolveMaxOutputTokens stub-fallback notice (TASK.170)", () => {
   });
 });
 
-// ── Taskana 4118: live capabilities supplement the catalog (never override) ──
+// ── live capabilities supplement the catalog (never override) ──
 
-describe("Taskana 4118 — live capabilities supplement the catalog", () => {
+describe("— live capabilities supplement the catalog", () => {
   const entry: CatalogProviderEntry = { id: "z-ai", name: "Z.AI", baseUrl: "https://api.z.ai/api/anthropic", defaultTransport: "anthropic-messages", supportedTransports: ["anthropic-messages"], auth: { kind: "api_key" }, models: [
     { id: "glm-5.2", contextWindow: 200_000, reasoning: true, effortLevels: ["off", "high", "max"] },
     { id: "glm-basic", contextWindow: 128_000 },
@@ -473,10 +473,10 @@ describe("Taskana 4118 — live capabilities supplement the catalog", () => {
   });
 });
 
-// ── Taskana 4894: a model's recorded provider default effort is the tier a ──
+// ── a model's recorded provider default effort is the tier a ──
 // ── session with no explicit choice both SHOWS and SENDS ──
 
-describe("resolveReasoningEffort × per-model default effort (Taskana 4894)", () => {
+describe("resolveReasoningEffort × per-model default effort", () => {
   const entry: CatalogProviderEntry = { id: "deepseek", name: "DeepSeek", baseUrl: "https://api.deepseek.com/anthropic", defaultTransport: "anthropic-messages", supportedTransports: ["anthropic-messages"], auth: { kind: "api_key" }, models: [
     { id: "deepseek-flash", contextWindow: 1_048_576, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high" },
     { id: "k3", contextWindow: 262_144, reasoning: true, effortLevels: ["low", "high", "max"] },

@@ -1,5 +1,5 @@
 /**
- * Language-server catalog (Taskana 4743): the fixed list of well-known LSP
+ * Language-server catalog: the fixed list of well-known LSP
  * servers the Settings → Language servers pane offers for one-click enable.
  * Each entry carries the exact `lspServers` shape core's
  * `lspServerEntrySchema` accepts (`{name, command, args, extensions}` — the
@@ -16,7 +16,7 @@
  * before any entry is written (main/lsp-config-ipc.ts re-parses with
  * `lspServerEntrySchema`).
  *
- * SECURITY POSTURE (Taskana 4743 brief §0): the app NEVER installs anything
+ * SECURITY POSTURE (brief §0): the app NEVER installs anything
  * and NEVER executes a found binary. `installHint` is a plain string the pane
  * renders as text and offers to copy — nothing anywhere spawns it. Detection
  * is existence-only (see main/lsp-detect.ts).
@@ -43,7 +43,7 @@ export interface LspCatalogEntry {
 }
 
 /**
- * The catalog (Taskana 4743 brief §2.1). Commands/args are each server's
+ * The catalog (brief §2.1). Commands/args are each server's
  * documented stdio invocation. `pyright` AND `basedpyright` are both listed;
  * both claim `.py` — the pane surfaces the overlap ("both claim .py") rather
  * than hiding either.

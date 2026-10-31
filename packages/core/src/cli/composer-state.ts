@@ -1,7 +1,7 @@
 import { slashCompletions, type SlashCompletion } from "./completions.js";
 
 /**
- * Input-model events for the TUI composer (Taskana 4082).
+ * Input-model events for the TUI composer.
  * Pure data — no terminal or React concepts here.
  *
  * Cursor semantics (slice rework, defect 4): the composer keeps a text cursor

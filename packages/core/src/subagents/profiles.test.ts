@@ -485,12 +485,12 @@ describe("profile `engine:` frontmatter", () => {
 });
 
 // ---------------------------------------------------------------------------
-// `engine:` + explicit `tools:` conflict (TASK.97 R4, wave2-cut.md §1.3/§2.3):
+// `engine:` + explicit `tools:` conflict (R4, wave2-cut.md §1.3/§2.3):
 // refused at the single parseAgentProfileMd oracle, so discovery sees it as
 // just another fatal-parse case — same claim semantics as bad_model/bad_engine
 // (a higher-precedence conflicted file still shadows a lower same-named one).
 
-describe("discoverAgentProfiles — engine + tools conflict (TASK.97 R4)", () => {
+describe("discoverAgentProfiles — engine + tools conflict (R4)", () => {
   it("refuses a profile combining engine: and explicit tools:, naming both in the problem text", async () => {
     const fs = new FakeFs({
       [WS]: {
@@ -542,12 +542,12 @@ describe("discoverAgentProfiles — engine + tools conflict (TASK.97 R4)", () =>
 });
 
 // ---------------------------------------------------------------------------
-// `maxTurns:` frontmatter (TASK.74 §2.3): the per-run turn budget as a property
+// `maxTurns:` frontmatter (§2.3): the per-run turn budget as a property
 // of the role. Same fatal-on-invalid and claim-set semantics as bad_model /
 // bad_engine — a profile whose declared budget is silently replaced is worse
 // than one that is loudly refused.
 
-describe("discoverAgentProfiles — maxTurns frontmatter (TASK.74 §2.3)", () => {
+describe("discoverAgentProfiles — maxTurns frontmatter (§2.3)", () => {
   it("attaches the budget to the persona and refuses an out-of-range one (profile not registered)", async () => {
     const good = md({ name: "good", description: "d", maxTurns: "12" }, "BODY");
     const overCeiling = String(SUBAGENT_MAX_TURNS_CEILING + 1);
@@ -587,12 +587,12 @@ describe("discoverAgentProfiles — maxTurns frontmatter (TASK.74 §2.3)", () =>
 });
 
 // ---------------------------------------------------------------------------
-// `connection:`/`provider:` frontmatter (Taskana 4269): the profile's own
+// `connection:`/`provider:` frontmatter: the profile's own
 // connection selection flows through the single parseAgentProfileMd oracle into
 // PersonaDefinition. Same fatal-on-invalid and claim-set semantics as
 // bad_model/bad_engine.
 
-describe("discoverAgentProfiles — profile connection/provider routing (Taskana 4269)", () => {
+describe("discoverAgentProfiles — profile connection/provider routing", () => {
   it("maps connection:/provider: onto the PersonaDefinition; a bad value is a problem and the profile is not registered", async () => {
     const fs = new FakeFs({
       [WS]: {
@@ -664,12 +664,12 @@ describe("discoverAgentProfiles — profile connection/provider routing (Taskana
 });
 
 // ---------------------------------------------------------------------------
-// Taskana 4704 §2.1: the three role personas became OVERRIDABLE built-ins. A
+// §2.1: the three role personas became OVERRIDABLE built-ins. A
 // same-named md-profile now PARSES and is registered (it wins at resolution);
 // general-purpose/explore remain reserved. Engine+connection inside a role
 // profile stays fatal (unchanged claim-set semantics).
 
-describe("parseAgentProfileMd — role persona names (Taskana 4704)", () => {
+describe("parseAgentProfileMd — role persona names", () => {
   it("planner/executor/reviewer profiles parse and register (previously reserved_name)", async () => {
     for (const name of ["planner", "executor", "reviewer"]) {
       const res = parseAgentProfileMd(md({ name, description: `${name} override` }, "BODY"), "f");

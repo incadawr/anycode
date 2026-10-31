@@ -1,5 +1,5 @@
 /**
- * Plugins pane (Settings → Plugins; design 4732 §6, Taskana 4732 S1-C,
+ * Plugins pane (Settings → Plugins; design 4732 §6, S1-C,
  * reconciled to the S1-B wire contract).
  *
  * DATA: the pane fetches a `PluginsSnapshot` via `window.anycode.plugins`
@@ -80,9 +80,9 @@ export interface PluginsBridge {
   setEnabled(name: string, value: boolean): Promise<PluginsMutationResult>;
   remove(name: string): Promise<PluginsMutationResult>;
   approveMcp(name: string): Promise<PluginsMutationResult>;
-  /** Taskana 4750a: consent for the plugin's current services definition. */
+  /** consent for the plugin's current services definition. */
   approveServices?(name: string): Promise<PluginsMutationResult>;
-  /** Taskana 4750a: supervised service states (polled while the pane is open). */
+  /** supervised service states (polled while the pane is open). */
   services?(): Promise<PluginServiceView[]>;
   serviceLogs?(plugin: string, name: string): Promise<string[]>;
   serviceRestart?(plugin: string, name: string): Promise<PluginsMutationResult>;
@@ -114,7 +114,7 @@ export function isPluginsServiceUnavailable(state: PluginsLoadState, snapshot: P
 export interface PluginsPaneProps {
   /** Injectable for tests / isolation; defaults to `window.anycode.plugins`. */
   bridge?: PluginsBridge;
-  /** Taskana 4750a: the Sessions-API state for the services hint; defaults to `communication.get()`. */
+  /** the Sessions-API state for the services hint; defaults to `communication.get()`. */
   sessionsApiStateOf?: () => Promise<SessionsApiState>;
 }
 
@@ -136,7 +136,7 @@ export function PluginsPane({
   // another window); our own mutations refetch immediately, so the banner
   // is informational — "applies to newly started tasks" — and self-dismisses.
   const [changedNotice, setChangedNotice] = useState<string | null>(null);
-  // Taskana 4750a: service read model (polled), the Sessions-API state for the hint,
+  // service read model (polled), the Sessions-API state for the hint,
   // and the one open log (plain text, key = plugin/name).
   const [services, setServices] = useState<PluginServiceView[]>([]);
   const [sessionsState, setSessionsState] = useState<SessionsApiState>("off");
@@ -245,7 +245,7 @@ export function PluginsPane({
   const rows = snapshot ? filterPluginRows(snapshot.plugins, searchQuery) : [];
   const emptyKind = pluginsEmptyKind(snapshot?.plugins.length ?? 0, rows.length, searchQuery);
   const indexHeader = snapshot ? pluginIndexStatusText(snapshot.index.status) : null;
-  // Taskana 4732 xfix M5: the default is FALSE everywhere (schema, main,
+  // xfix M5: the default is FALSE everywhere (schema, main,
   // scheduler, docs) — the old `?? true` rendered the toggle ON while the
   // scheduler's gate evaluated false: nothing ever auto-updated.
   const autoUpdate = snapshot?.settings.autoUpdateOfficial ?? false;
@@ -351,7 +351,7 @@ export function PluginsPane({
     }
     try {
       // CUSTODY: the wire carries the token + the ORIGINAL source only —
-      // never a path or hash; `allowMcp` is the consent checkbox (Taskana
+      // never a path or hash; `allowMcp` is the consent checkbox (
       // 4732 xfix H1(b): main records the grant for the previewed command
       // lines when true; unchecked = servers stay off until Approve MCP).
       const result = await bridge.installCommit(token, pendingSource, allowMcp, allowServices);
@@ -525,7 +525,7 @@ export interface PluginsPaneBodyProps {
   onPin: (row: PluginRowView) => void;
   onRemove: (row: PluginRowView) => void;
   onApproveMcp: (row: PluginRowView) => void;
-  /** Taskana 4750a: services consent (name-only request). */
+  /** services consent (name-only request). */
   onApproveServices: (row: PluginRowView) => void;
   services: readonly PluginServiceView[];
   sessionsState: SessionsApiState;

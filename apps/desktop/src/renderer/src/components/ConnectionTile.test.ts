@@ -1,5 +1,5 @@
 /**
- * Pure-logic tests for ConnectionTile's exported helpers (TASK.45 W12).
+ * Pure-logic tests for ConnectionTile's exported helpers (W12).
  * Deliberately `.test.ts` (not `.test.tsx`) — same rationale as
  * SettingsScreen.test.ts: this package's vitest config runs in
  * `environment: "node"` with no jsdom, so a real DOM-rendering test isn't
@@ -31,7 +31,7 @@ function status(over: Partial<SecretStatus> = {}): SecretStatus {
   return { key: "provider.connection.conn-1.apiKey", set: true, source: "vault", tier: "os_encrypted", ...over };
 }
 
-/** Deterministic clock anchors (TASK.140) — replaces the old placeholder `at: "t"` fixtures. */
+/** Deterministic clock anchors — replaces the old placeholder `at: "t"` fixtures. */
 const NOW = Date.parse("2026-10-10T12:00:00.000Z");
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -115,9 +115,9 @@ describe("connectionHealthStatus (task §3: needs_credential OVERRIDES any stale
     expect(connectionHealthStatus(conn(), undefined)).toBe("needs_credential");
   });
 
-  // TASK.140: the credential override wins even over a FRESH observation, and
+  // the credential override wins even over a FRESH observation, and
   // the keyless regression still holds under an explicit now.
-  it("TASK.140 regress: fresh ready + undecryptable credential still needs_credential under explicit now", () => {
+  it("regress: fresh ready + undecryptable credential still needs_credential under explicit now", () => {
     expect(
       connectionHealthStatus(
         conn({ lastHealth: observed("ready", MIN) }),
@@ -129,7 +129,7 @@ describe("connectionHealthStatus (task §3: needs_credential OVERRIDES any stale
   });
 });
 
-describe("observeLastHealth (TASK.140: observation age, TTL freshness, compact ages)", () => {
+describe("observeLastHealth (observation age, TTL freshness, compact ages)", () => {
   it("absent observation: unchecked, not observed, no age, empty compact age", () => {
     const obs = observeLastHealth(undefined, NOW);
     expect(obs.status).toBe("unchecked");
@@ -221,7 +221,7 @@ describe("observeLastHealth (TASK.140: observation age, TTL freshness, compact a
   });
 });
 
-describe("tileStatusPresentation (TASK.140: the exact text/title/tone the tile's status element renders)", () => {
+describe("tileStatusPresentation (the exact text/title/tone the tile's status element renders)", () => {
   it("checking wins: 'Checking…', no title", () => {
     const fresh = observeLastHealth(observed("ready", MIN), NOW);
     expect(tileStatusPresentation("ready", fresh, true)).toEqual({
@@ -374,10 +374,10 @@ describe("connectionDisplayName (task's own example: \"OpenAI\", \"OpenAI 2\", �
   });
 });
 
-// TASK.70 (Taskana 4089): one brand = one card — the tile header label. This
+// one brand = one card — the tile header label. This
 // package's vitest runs node-only (no jsdom, see the file docstring), so the
 // label is proven through the pure helper the header span renders.
-describe("connectionTileProviderLabel (TASK.70: one brand = one card)", () => {
+describe("connectionTileProviderLabel (one brand = one card)", () => {
   it("a brand-grouped connection shows the brand plus its mode, not the long parenthesised name", () => {
     expect(
       connectionTileProviderLabel({
@@ -411,9 +411,9 @@ describe("connectionTileProviderLabel (TASK.70: one brand = one card)", () => {
     expect(connectionTileProviderLabel(undefined)).toBe("Custom");
   });
 });
-// Taskana 4090 (TASK.71): the provider-reported quota line — pure helper, so
+// the provider-reported quota line — pure helper, so
 // tests cover the real selection (same discipline as tileStatusPresentation).
-describe("connectionQuotaLine (Taskana 4090: the provider-reported quota line)", () => {
+describe("connectionQuotaLine (the provider-reported quota line)", () => {
   const NOW = Date.parse("2026-10-24T12:00:00.000Z");
 
   it("renders the full window+reset line", () => {

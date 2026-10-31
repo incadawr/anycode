@@ -71,7 +71,7 @@ async function loadSource(
 /**
  * Loads the project/user repoMap section wholesale. Environment values win before filesystem access.
  *
- * Taskana 4736 xfix D2: `opts.projectTrusted === false` skips the PROJECT
+ * xfix D2: `opts.projectTrusted === false` skips the PROJECT
  * source only (the section steers how much of the repo's own files ride the
  * prompt — project-controlled configuration, same trust question as the other
  * project sections): the user section still loads, and one issue line reports

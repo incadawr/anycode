@@ -1,5 +1,5 @@
 /**
- * Taskana 4730 (4702 remainder): a broker DECORATOR that extends ask-zone
+ * (4702 remainder): a broker DECORATOR that extends ask-zone
  * classifier coverage to ENGINE-SESSION approval bridges (Codex/Claude). The
  * two bridges (engines/codex/approval-bridge.ts, engines/claude/approval-
  * bridge.ts) call `this.options.broker.requestPermission(request)` — this
@@ -14,7 +14,7 @@
  *     engine already settled);
  *   - 4730 xfix D1: a CodexExec ask with a string `command` and NOT
  *     `kind:"writeStdin"` is normalized to the Bash-shaped classifier input
- *     (the same CodexExec→Bash shape the broker's TASK.184 rule matching
+ *     (the same CodexExec→Bash shape the broker's rule matching
  *     already uses) — engine approvals get the classifier coverage the card
  *     promised. A `writeStdin` ask (input to an ALREADY-RUNNING command) is
  *     never classifiable (D6): the classifier must not reason about stdin
@@ -24,7 +24,7 @@
  *     decorator is built before the Session exists), nothing is consulted —
  *     an empty human context would make the classifier's "consistent with
  *     what the human asked" check vacuous. Fail-closed: delegate (ask);
- *   - 4730 xfix D8: the unattended latch (TASK.138) is checked BEFORE any
+ *   - 4730 xfix D8: the unattended latch is checked BEFORE any
  *     consultation — an unattended run's asks are denied fast by the wrapped
  *     broker, and burning a model call (up to the full timeout) before that
  *     deny would change nothing but the latency;
@@ -77,11 +77,11 @@ export interface ClassifyingBrokerOptions {
 export const CLASSIFYING_BROKER_MODEL_TIMEOUT_MS = 8000;
 
 /**
- * Taskana 4730 xfix D1: normalize a command-tool ask to the Bash-shaped
+ * xfix D1: normalize a command-tool ask to the Bash-shaped
  * request core's shared eligibility gate and classifier input understand.
  * A CodexExec ask (the Codex approval bridge's stamp for a `commandExecution`
  * approval) carries the same `command: string` a Bash call does — rules.ts's
- * TASK.184 treatment. `kind: "writeStdin"` (input to a command that is
+ * treatment. `kind: "writeStdin"` (input to a command that is
  * ALREADY running) never normalizes (D6), and neither does an ask without a
  * non-empty string `command` — both delegate untouched.
  */

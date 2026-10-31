@@ -1,5 +1,5 @@
 /**
- * Plugin install dialog (Taskana 4732 S1-C, design 4732 §4/§6; reconciled to
+ * Plugin install dialog (S1-C, design 4732 §4/§6; reconciled to
  * the S1-B wire contract): the two-phase install flow's renderer half.
  * Phase 1 (`source`/`url`) picks a source — file/folder carry NO path (main
  * opens its own picker; path custody), URL is typed here, git is stage-2
@@ -110,7 +110,7 @@ export interface InstallDialogBodyProps {
   stage: InstallDialogStage;
   urlValue: string;
   allowMcp: boolean;
-  /** Taskana 4750a: the background-services consent checkbox. */
+  /** the background-services consent checkbox. */
   allowServices: boolean;
   onUrlValueChange: (value: string) => void;
   onAllowMcpChange: (checked: boolean) => void;

@@ -57,7 +57,7 @@ export interface CliArgs {
   noCheckpoints: boolean;
   /** --image <path> / --image=<path>, repeatable (design slice-6.2-cut.md §2-D1): attaches to the next prompt (print: this run's one-shot prompt; interactive: pre-staged until the first submitted line drains it, or staged/listed/cleared via /image). Default []. */
   images: string[];
-  /** --tui (Taskana 4082, slice 1): opt in to the Ink composer UI in interactive mode. Silently ignored without a TTY or with --print — the gate lives in main.ts. Default false. */
+  /** --tui (slice 1): opt in to the Ink composer UI in interactive mode. Silently ignored without a TTY or with --print — the gate lives in main.ts. Default false. */
   tui: boolean;
 }
 
@@ -196,7 +196,7 @@ function parseArgv(argv: string[]): ParsedArgv {
       continue;
     }
     if (arg === "--tui") {
-      // Flat boolean, mirrors --no-checkpoints/--yolo (Taskana 4082 slice 1).
+      // Flat boolean, mirrors --no-checkpoints/--yolo (slice 1).
       // No value, no `=` form; the interactive-only gate lives in main.ts.
       tui = true;
       continue;

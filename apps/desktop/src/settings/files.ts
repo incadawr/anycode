@@ -30,7 +30,7 @@ function migrateConnectionOverrides(settings: AnycodeSettings): AnycodeSettings 
 
 /**
  * Repairs the `activeConnectionId` <-> non-empty `connections` invariant on
- * load (TASK.45 W12-FIX2 §2, codex W12-FIX review #2): `settingsSchema` only
+ * load (W12-FIX2 §2, codex W12-FIX review #2): `settingsSchema` only
  * validates FORM (both fields are independently optional/required-array), so
  * a non-empty `connections` with a missing/dangling `activeConnectionId`, or
  * an empty `connections` with a leftover `activeConnectionId`, both parse as
@@ -61,7 +61,7 @@ export function normalizeActiveConnection(settings: AnycodeSettings): AnycodeSet
   return activeExists ? settings : { ...settings, provider: { ...settings.provider, activeConnectionId: first.id } };
 }
 
-// Read-time bounds for connection.maxOutputTokens (TASK.159 slice D) — the same
+// Read-time bounds for connection.maxOutputTokens (slice D) — the same
 // window the IPC boundary enforces on writes (main/settings-ipc.ts
 // MAX_OUTPUT_TOKENS_MIN/MAX). Kept as literals here: settings/ must not depend
 // on main/, and the two must move together anyway.
@@ -70,8 +70,8 @@ const MAX_OUTPUT_TOKENS_MAX = 1_000_000;
 
 /**
  * Drops connection `maxOutputTokens` values outside `[1_024, 1_000_000]` on
- * load (TASK.159): each is read as ABSENT ("no explicit ceiling", the
- * pre-TASK.150 behaviour), restoring what a hand-edited `512` or `1e9` should
+ * load: each is read as ABSENT ("no explicit ceiling", the
+ * behaviour), restoring what a hand-edited `512` or `1e9` should
  * have meant all along. The persisted schema deliberately stays lenient
  * (settings/schema.ts `.catch(undefined)` — ONE bad key must never fail the
  * whole document and reset every other section), which is why IPC strictness
@@ -293,10 +293,10 @@ export async function loadSettings(path: string, logger?: FileIoLogger): Promise
     const corruptBackupPath = await quarantine(path);
     return { settings: result.settings, readOnly: false, ...(corruptBackupPath ? { corruptBackupPath } : {}) };
   }
-  // TASK.45 W12-FIX2 §2: repair the active<->non-empty invariant on BOTH
+  // W12-FIX2 §2: repair the active<->non-empty invariant on BOTH
   // success arms (ok and read_only) in memory — a newer-version file must
   // read out healed too, without this binary ever writing it back.
-  // TASK.159: out-of-bounds connection.maxOutputTokens is stripped the same
+  // out-of-bounds connection.maxOutputTokens is stripped the same
   // way (in memory only) on both arms.
   return { settings: migrateConnectionOverrides(dropOutOfBoundsMaxOutputTokens(normalizeActiveConnection(result.settings))), readOnly: result.readOnly };
 }
@@ -355,7 +355,7 @@ export async function saveSecrets(path: string, file: SecretsFileV1): Promise<vo
   await atomicWrite(path, `${JSON.stringify(file, null, 2)}\n`, SECRETS_FILE_MODE);
 }
 
-// ── trusted-binary consents (TASK.103) ──
+// ── trusted-binary consents ──
 
 /** Per-element tolerant parse against the schema's own element validator (mirrors schema.ts's private `parseElementsTolerantly`, scoped here to avoid touching schema.ts's export surface). A malformed element is dropped alone. */
 function parseTrustedBinariesTolerantly(raw: unknown): TrustedBinaryConsent[] {
@@ -370,7 +370,7 @@ function parseTrustedBinariesTolerantly(raw: unknown): TrustedBinaryConsent[] {
 
 /**
  * Synchronous, fail-soft read of settings.security.trustedBinaries for the
- * spawn-time trust gates (TASK.103). Both processes call it per gate check —
+ * spawn-time trust gates. Both processes call it per gate check —
  * main via the injected ipc deps, the host from its binaryTrust closures
  * (host reads settings.json fail-soft by standing custody; main is the sole
  * writer). Validates PER ELEMENT with the schema's own element validator;

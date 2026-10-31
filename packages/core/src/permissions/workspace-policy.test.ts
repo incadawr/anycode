@@ -54,7 +54,7 @@ describe("isWithinWorkspace", () => {
   });
 });
 
-describe("isProvablyInsideWorkspace (Taskana 4294)", () => {
+describe("isProvablyInsideWorkspace", () => {
   it("returns false for absent facts (unprovable => fail-closed)", () => {
     expect(isProvablyInsideWorkspace(undefined)).toBe(false);
   });
