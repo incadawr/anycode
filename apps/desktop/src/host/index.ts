@@ -287,7 +287,8 @@ import {
 import { getBuiltinCatalog } from "@anycode/core/catalog";
 import { calculateUsageCost, resolveUsagePrice } from "./usage-cost.js";
 import { summarizeWithChildren } from "./usage-summary.js";
-import { claudeNativeChildrenFromHistory, claudeUsageRecord } from "./claude-usage.js";
+import { claudeNativeChildrenFromHistory } from "./claude-usage.js";
+import { bindClaudeUsage, bindCodexUsage } from "./native-usage.js";
 import { closeProxyRelay, credentialedProxyValuesForRelay, resolveProxyRelay } from "@anycode/core/proxy-relay";
 import type {
   AgentBridgeCatalogEntry,
@@ -1749,7 +1750,7 @@ async function bootCodexSession(
   if (args.resume && connected.engine.historyItems().length > 0 && (await persistence!.listProviderUsage(connected.sessionMeta.id)).length === 0) {
     codexUsageAudit.sink.record({ turnId: "legacy-unpriced", step: 1, finishReason: "history", transportRetries: 0 });
   }
-  connected.engine.onUsage((usage) => codexUsageAudit.sink.record({ turnId: randomUUID(), step: 1, model: connected.engine.usageModel(), ...usage, finishReason: "unknown", transportRetries: 0 }));
+  bindCodexUsage(connected.engine, codexUsageAudit.sink, () => session);
   session = new Session({
     workspaceTrustRequired: workspaceTrustRequiredMessage,
     outbound,
@@ -2497,9 +2498,7 @@ async function bootClaudeSession(
   // Older native-child identities can be recovered from the shadow history,
   // but their individual costs remain unknown. Existing markers dedupe in SQLite.
   for (const record of claudeNativeChildrenFromHistory(bootHistory)) claudeUsageAudit.sink.record(record);
-  claudeEngine.onCostResult((result) => {
-    claudeUsageAudit.sink.record(claudeUsageRecord(result, randomUUID(), claudeEngine.resolvedModel() ?? connected.model));
-  });
+  bindClaudeUsage(claudeEngine, claudeUsageAudit.sink, () => session, connected.model);
   session = new Session({
     workspaceTrustRequired: workspaceTrustRequiredMessage,
     usageAudit: claudeUsageAudit,

@@ -1060,7 +1060,7 @@ export class ClaudeEngine implements SessionEngine {
     const translator = new ClaudeTurnTranslator({
       turn,
       onInit: (init) => this.onSystemInit(init),
-      onResult: (result) => this.onResult(result),
+      onResult: (result) => this.onResult(result, true),
       ...(this.takePresentation !== undefined ? { takePresentation: this.takePresentation } : {}),
     });
     this.interruptSent = false;
@@ -1969,10 +1969,10 @@ export class ClaudeEngine implements SessionEngine {
     }
   }
 
-  private costObserver?: (result: ClaudeResultMessage) => void;
-  onCostResult(observer: (result: ClaudeResultMessage) => void): void { this.costObserver = observer; }
-  private onResult(result: ClaudeResultMessage): void {
-    this.costObserver?.(result);
+  private costObserver?: (result: ClaudeResultMessage, belongsToTurn: boolean) => void;
+  onCostResult(observer: (result: ClaudeResultMessage, belongsToTurn: boolean) => void): void { this.costObserver = observer; }
+  private onResult(result: ClaudeResultMessage, belongsToTurn = false): void {
+    this.costObserver?.(result, belongsToTurn);
     if (typeof result.total_cost_usd === "number" && Number.isFinite(result.total_cost_usd)) {
       this.totalCostUsd += result.total_cost_usd;
     }

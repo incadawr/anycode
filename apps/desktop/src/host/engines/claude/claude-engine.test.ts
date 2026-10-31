@@ -20,6 +20,9 @@ import { describe, expect, it, vi } from "vitest";
 import { SqlitePersistenceAdapter } from "@anycode/core";
 import type { AgentEvent, ToolResultPresentation } from "@anycode/core";
 import { claudeUsageRecord } from "../../claude-usage.js";
+import { bindClaudeUsage } from "../../native-usage.js";
+import { createHarness } from "../../test-harness.js";
+import { summarizeProviderUsage } from "../../session.js";
 import {
   CLAUDE_ENGINE_CAPABILITIES,
   CLAUDE_PRESET_IDS,
@@ -1192,6 +1195,28 @@ describe("ClaudeEngine — presentation surface", () => {
     await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
     expect(observed).toHaveBeenCalledTimes(1);
     expect(observed.mock.calls[0]![0].total_cost_usd).toBeGreaterThan(0);
+  });
+
+  it("records captured native usage under the host turn identity", async () => {
+    const db = new SqlitePersistenceAdapter(":memory:");
+    await db.createSession({ id: "native", workspace: "/work", model: "m", mode: "build" });
+    const engine = engineWith(new FakeTransport({ frames: streamFrames("w0-02-control-writeprobe.jsonl"), contextUsage: { totalTokens: 1, maxTokens: 2 } }));
+    const pending: Promise<void>[] = [];
+    const audit = { sink: { record: (row: Omit<Parameters<SqlitePersistenceAdapter["recordProviderUsage"]>[0], "sessionId" | "createdAt">) => { pending.push(db.recordProviderUsage({ ...row, sessionId: "native", createdAt: Date.now() })); } }, summary: { summary: async () => { await Promise.all(pending); return summarizeProviderUsage(await db.listProviderUsage("native")); } } };
+    const h = createHarness({ steps: [], engine, usageAudit: audit });
+    bindClaudeUsage(engine, audit.sink, () => h.session, "m");
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor((m) => m.type === "host_ready");
+      h.send({ type: "user_message", requestId: "r", text: "hi" });
+      await h.waitUntil(() => h.received.some((m) => m.type === "agent_event" && m.event.type === "loop_end"));
+      await Promise.all(pending);
+      const started = h.received.find((m) => m.type === "turn_started");
+      expect(started?.type).toBe("turn_started");
+      const rows = await db.listProviderUsage("native");
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ turnId: started!.turnId, step: 1, costUsd: expect.any(Number) });
+    } finally { h.close(); await db.close(); }
   });
 
   it("records a captured native result as a durable cost snapshot", async () => {
