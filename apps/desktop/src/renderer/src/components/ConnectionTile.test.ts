@@ -14,6 +14,7 @@ import {
   connectionQuotaLine,
   connectionSecretKey,
   connectionTileProviderLabel,
+  connectionTileSelectHint,
   describeConnectionHealth,
   HEALTH_LABEL,
   HEALTH_TONE,
@@ -457,5 +458,12 @@ describe("connectionQuotaLine (Taskana 4090: the provider-reported quota line)",
     expect(
       connectionQuotaLine({ usedPercent: 33, observedAt: "2026-10-24T12:00:00.000Z", source: "x-ratelimit-requests-remaining" }, NOW),
     ).toBe("requests · 67% left");
+  });
+});
+
+describe("connectionTileSelectHint", () => {
+  it("says what clicking the tile will do instead of changing the default silently", () => {
+    expect(connectionTileSelectHint(false)).toBe("Make this the default connection for new sessions");
+    expect(connectionTileSelectHint(true)).toBe("This is the default connection for new sessions");
   });
 });

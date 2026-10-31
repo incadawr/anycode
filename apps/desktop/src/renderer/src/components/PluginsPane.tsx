@@ -47,7 +47,7 @@ import {
   type PluginsEmptyKind,
   pluginsRefusalMessage,
   pluginCapabilitiesText,
-  pluginIndexCheckedText,
+  pluginIndexHeaderText,
   pluginIndexStatusText,
   pluginRowActions,
   pluginSourceText,
@@ -401,7 +401,7 @@ export function PluginsPane({
         </button>
         {snapshot && indexHeader && (
           <span className={`plugins-index-status plugins-index-${indexHeader.tone}`} data-plugins-index={snapshot.index.status}>
-            {indexHeader.text} · {pluginIndexCheckedText(snapshot.index.checkedAt)}
+            {pluginIndexHeaderText(snapshot.index.status, snapshot.index.checkedAt)}
           </span>
         )}
         <label className="plugins-auto-update">

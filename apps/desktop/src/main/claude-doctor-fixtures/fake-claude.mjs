@@ -27,6 +27,16 @@ if (args[0] === "--version") {
     process.stdout.write("not-a-version\n");
     process.exit(0);
   } else if (flag("--nonzero-exit")) {
+    process.stderr.write("Error: Cannot find module '@anthropic-ai/claude-code/cli.js'\n");
+    process.exit(1);
+  } else if (flag("--leaky-stderr")) {
+    // A broken wrapper echoing its environment: nothing here may reach the
+    // report verbatim. The quoted JSON and the e-mail are the shapes a
+    // value-pattern mask alone misses.
+    process.stderr.write(
+      "ANTHROPIC_API_KEY=sk-ant-api03-sentinel0secret0value Authorization: Bearer sentinel-bearer-token-value " +
+        '{"accessToken":"sentinel-json-token-value","email":"sentinel-leak@example.com"}\n',
+    );
     process.exit(1);
   } else {
     process.stdout.write("2.1.212 (Claude Code)\n");

@@ -45,7 +45,7 @@ import type {
 } from "../../../shared/settings.js";
 import { applyModelReasoningOverride, contextWindowTokensField, modelOverrideFor } from "../../../shared/model-overrides.js";
 import { mergeModelIds, normalizeModelId } from "../../../shared/settings.js";
-import type { CustomProviderMutationResult, CustomProviderUpdateRequest, FetchModelsOutcome } from "../anycode-window.js";
+import type { CustomProviderMutationReason, CustomProviderMutationResult, CustomProviderUpdateRequest, FetchModelsOutcome } from "../anycode-window.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 import { connectionSecretKey, customProviderSecretKey, isCustomRecordProviderId } from "./ConnectionTile.js";
 import { PROXY_REF_INHERIT, ProxyRefPicker, connectionCreateProxyRefField, proxyRefInitialValue } from "./ProxyRefPicker.js";
@@ -59,9 +59,11 @@ import {
   describeFetchModelsError,
   describeSecretStatus,
   isOwnDialogCancel,
+  mergeCurationModelIds,
   secretFieldReducer,
   selectProviderEntry,
   shouldShowBaseUrlField,
+  showConnectionLabelField,
   toggleSelectedModel,
   transportOptions,
   type CustomProviderBridge,
@@ -175,6 +177,44 @@ export async function appendModelToConnection(
   modelId: string,
 ): Promise<ModelAppendOutcome> {
   return appendModelsToConnection(bridge, reload, connectionId, [modelId]);
+}
+
+/** The one bridge call the curated-model path needs on top of the store. */
+export interface CuratedModelsBridge {
+  update(req: CustomProviderUpdateRequest): Promise<CustomProviderMutationResult>;
+}
+
+/**
+ * Persists the models a custom endpoint OFFERS (the checkbox list) on the
+ * record's own `models[]`, then refreshes the snapshot. This is the selector's
+ * authority for a `custom:<id>` provider: `providerModelsFor` falls back to the
+ * record's list, so an unticked id must not also sit on the connection's own
+ * `models[]` (that list is unioned in and would resurrect it). Fetched ids are
+ * therefore saved HERE, not appended to the connection — ticking and unticking
+ * are the same write, and a failed/thrown write is reported rather than
+ * swallowed. Exported for direct testing.
+ */
+export async function persistCuratedModels(
+  bridge: CuratedModelsBridge,
+  reload: () => Promise<void>,
+  providerId: string,
+  modelIds: readonly string[],
+): Promise<{ ok: true } | { ok: false; reason: CustomProviderMutationReason | "threw" }> {
+  let result: CustomProviderMutationResult;
+  try {
+    result = await bridge.update({ id: providerId, models: [...modelIds] });
+  } catch {
+    return { ok: false, reason: "threw" };
+  }
+  if (!result.ok) {
+    return { ok: false, reason: result.reason };
+  }
+  try {
+    await reload();
+  } catch {
+    // The list IS persisted; a refresh failure must not read as a save failure.
+  }
+  return { ok: true };
 }
 
 export interface CreateModelBridge<C> extends ModelAppendBridge {
@@ -1197,6 +1237,13 @@ export interface ConnectionDrawerFieldsProps {
   footer?: ReactNode;
   /** First-run form: keep connection tuning behind a disclosure. */
   simplified?: boolean;
+  /**
+   * Fired with the id of a connection this form CREATED (both create flows).
+   * The dialog chrome needs it to stop calling a saved connection "Add
+   * connection"; nothing else may infer it (a connection appearing in the list
+   * is not proof this form made it).
+   */
+  onConnectionCreated?(connectionId: string): void;
 }
 
 /** The provider connection add/edit form body — no dialog chrome (see file docstring). Exported for both `ConnectionDrawer` and WelcomeScreen's first-run embed. */
@@ -1212,6 +1259,7 @@ export function ConnectionDrawerFields({
   customProvider,
   footer,
   simplified = false,
+  onConnectionCreated,
 }: ConnectionDrawerFieldsProps) {
   const labelInputRef = useRef<HTMLInputElement>(null);
   const maxOutputTokensInputRef = useRef<HTMLInputElement>(null);
@@ -1430,8 +1478,15 @@ export function ConnectionDrawerFields({
   const curatedModelIds = selectedEntry?.models.map((m) => m.id) ?? [];
   // What the Model field suggests (datalist + chips): the UNION (TASK.183) of
   // this session's fetched ids, the ids persisted on the connection (manual
-  // additions + earlier fetches), then the static catalog hints.
-  const modelSuggestions = liveModelSuggestions(fetchedModels, targetConnection?.models, selectedEntry?.models ?? []);
+  // additions + earlier fetches), then the static catalog hints. A custom
+  // record's session-only fetch result is NOT offered on its own: its checkbox
+  // list is the selector's authority, so an unticked id must not reappear here
+  // before it is saved.
+  const modelSuggestions = liveModelSuggestions(
+    isCustomRecordConnection ? null : fetchedModels,
+    targetConnection?.models,
+    selectedEntry?.models ?? [],
+  );
   // Show the API-key field IN the create form (item 3): a NEW custom endpoint
   // (the record's own key) or a keyed catalog provider (the connection key).
   // A saved custom record already owns its key; an oauth provider signs in.
@@ -1620,6 +1675,7 @@ export function ConnectionDrawerFields({
       }
       setProviderId(newId);
       setCreatedConnectionId(outcome.createdConnectionId);
+      onConnectionCreated?.(outcome.createdConnectionId);
       if (outcome.partial) {
         setError(outcome.error ?? "Custom endpoint and connection created, but the model list couldn't be saved — retry with Save.");
       }
@@ -1733,6 +1789,7 @@ export function ConnectionDrawerFields({
         return;
       }
       setCreatedConnectionId(outcome.createdConnectionId);
+      onConnectionCreated?.(outcome.createdConnectionId);
       // TASK.108-A: the just-revealed Model field opens on the catalog default
       // instead of blank, so the follow-up Save can't persist the empty-model
       // trap.
@@ -1922,12 +1979,12 @@ export function ConnectionDrawerFields({
   /**
    * Models fetch: the guarded /v1/models GET — `{id}` for a saved custom
    * record, `{connectionId}` for a catalog connection (main resolves
-   * baseUrl/key/kind itself either way; keyless supported). TASK.183: a custom
-   * record's fetched ids are ALSO appended to its connection's own `models[]`
-   * through the general `{connectionId, addModels}` branch, so a fetch becomes
-   * durable and can never replace manual ids; a catalog connection's fetch is
-   * already merged onto the connection by main. Either way the snapshot reload
-   * makes the composer pickers see the union.
+   * baseUrl/key/kind itself either way; keyless supported). A custom record's
+   * fetched ids are merged into its OWN curated `models[]` (persisted through
+   * `persistCuratedModels`), which is what its selector reads; they are NOT
+   * appended to the connection, because that list is unioned into the selector
+   * and would keep an unticked model on offer. A catalog connection's fetch is
+   * already merged onto the connection by main.
    */
   async function doFetchModels(): Promise<void> {
     if (createdConnectionId === null) {
@@ -1945,23 +2002,22 @@ export function ConnectionDrawerFields({
       }
       setFetchedModels(outcome.models);
       if (isCustomRecordConnection) {
-        // TASK.183: persist the fetched ids on the connection (fetched-first
-        // union), keeping any manual additions made before the fetch.
-        // A fetched id the manual-entry validator refuses (inner whitespace,
-        // controls) is skipped here: main rejects an addModels request
-        // all-or-nothing, so one odd vendor id must not block the rest.
+        // Every fetched id starts ticked; the checkbox list is the selector, so
+        // it is saved where the checkboxes read from. A fetched id the
+        // manual-entry validator refuses (inner whitespace, controls) is
+        // skipped: one odd vendor id must not block the rest.
         const fetchedIds = outcome.models
           .map((m) => normalizeModelId(m.id))
           .filter((id): id is string => id !== null);
         if (fetchedIds.length > 0) {
-          const append = await appendModelsToConnection(
-            modelPersistenceBridge(),
+          const saved = await persistCuratedModels(
+            resolvedCustomProvider(),
             reloadSnapshot,
-            createdConnectionId,
-            fetchedIds,
+            effectiveProviderId,
+            mergeCurationModelIds(fetchedIds, curatedModelIds, model),
           );
-          if (!append.ok) {
-            setError("Fetched models, but the connection's model list couldn't be saved — retry Fetch or Save.");
+          if (!saved.ok) {
+            setError("Fetched models, but the list to show in the selector couldn't be saved — retry Fetch.");
           }
         }
       } else {
@@ -1977,7 +2033,7 @@ export function ConnectionDrawerFields({
     }
   }
 
-  /** Toggle a fetched model in the record's curated `models[]` (persisted via customProvider.update, like the old form). */
+  /** Toggle a model in the record's curated `models[]` — the selector's source of truth. */
   async function toggleModel(id: string): Promise<void> {
     if (!isCustomRecordConnection) {
       return;
@@ -1986,12 +2042,12 @@ export function ConnectionDrawerFields({
     setCurating(true);
     setError(null);
     try {
-      const result = await resolvedCustomProvider().update({ id: effectiveProviderId, models: next });
+      const result = await persistCuratedModels(resolvedCustomProvider(), reloadSnapshot, effectiveProviderId, next);
       if (!result.ok) {
-        setError(describeCustomProviderMutationError(result.reason));
-        return;
+        setError(result.reason === "threw"
+          ? "Couldn't update the model list — retry."
+          : describeCustomProviderMutationError(result.reason));
       }
-      await reloadSnapshot();
     } finally {
       setCurating(false);
     }
@@ -2009,8 +2065,12 @@ export function ConnectionDrawerFields({
         placeholder="e.g. Work, Personal"
         onChange={(e) => setLabel(e.target.value)}
       />
+      <span className="settings-field-hint">A name for this saved connection only — the provider keeps its own name.</span>
     </label>
   );
+  // On the new-custom-endpoint form the provider Name already identifies the
+  // row; a second "Label" field next to it reads as the same question twice.
+  const labelFieldVisible = showConnectionLabelField(simplified, isNewCustomEndpoint, createdConnectionId !== null);
 
   const maxOutputInputShown = maxOutputSegmentSelection(maxOutputTokens, maxOutputCustom) === "custom";
 
@@ -2023,7 +2083,7 @@ export function ConnectionDrawerFields({
       onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
     >
       <summary>{simplified ? "Advanced settings (optional)" : "Advanced"}</summary>
-      {simplified && labelField}
+      {simplified && labelFieldVisible && labelField}
       <label className="settings-field">
         <span className="settings-field-label">Pricing</span>
         <select className="settings-field-select" value={pricingMode} disabled={readOnly} onChange={(e) => setPricingMode(e.target.value as "catalog" | "subscription" | "rates")}>
@@ -2312,7 +2372,7 @@ export function ConnectionDrawerFields({
       {isNewCustomEndpoint && createdConnectionId === null && (
         <div className="connection-drawer-custom-fields">
           <label className="settings-field">
-            <span className="settings-field-label">Name</span>
+            <span className="settings-field-label">Provider name</span>
             <input
               className="settings-field-input"
               type="text"
@@ -2321,6 +2381,7 @@ export function ConnectionDrawerFields({
               placeholder="e.g. LM Studio"
               onChange={(e) => setCustomName(e.target.value)}
             />
+            <span className="settings-field-hint">Shown in the provider list on this machine.</span>
           </label>
           <label className="settings-field">
             <span className="settings-field-label">Base URL</span>
@@ -2350,7 +2411,7 @@ export function ConnectionDrawerFields({
       )}
 
       {/* Label: top of the dialog; in the first-run flow it stays inside Advanced. */}
-      {!simplified && labelField}
+      {!simplified && labelFieldVisible && labelField}
 
       {showBaseUrl && (
         <label className="settings-field">
@@ -2542,19 +2603,25 @@ export function ConnectionDrawerFields({
                 )}
               </div>
               {isCustomRecordConnection && fetchedModels !== null && (
-                <fieldset className="settings-field">
+                <fieldset className="settings-field connection-drawer-model-curation">
                   <legend className="settings-field-label">Models to show in the selector</legend>
-                  {fetchedModels.map((m) => (
-                    <label key={m.id} className="settings-field-row">
-                      <input
-                        type="checkbox"
-                        checked={curatedModelIds.includes(m.id)}
-                        disabled={readOnly || curating}
-                        onChange={() => void toggleModel(m.id)}
-                      />
-                      {m.id}
-                    </label>
-                  ))}
+                  <span className="settings-field-hint">Tick the models this connection offers. The current model is always listed and stays ticked.</span>
+                  {mergeCurationModelIds(fetchedModels.map((m) => m.id), curatedModelIds, model).map((id) => {
+                    const isCurrent = id === model.trim();
+                    return (
+                      <label key={id} className="settings-field-checkbox connection-drawer-model-curation-row">
+                        <input
+                          type="checkbox"
+                          checked={isCurrent || curatedModelIds.includes(id)}
+                          disabled={readOnly || curating || isCurrent}
+                          title={isCurrent ? "The connection's current model is always listed" : undefined}
+                          onChange={() => void toggleModel(id)}
+                        />
+                        {id}
+                        {isCurrent && <span className="settings-field-hint">current</span>}
+                      </label>
+                    );
+                  })}
                 </fieldset>
               )}
             </div>
@@ -2667,9 +2734,22 @@ export interface ConnectionDrawerProps {
   customProvider?: CustomProviderBridge;
 }
 
+/**
+ * Header text for the drawer. A create flow that SUCCEEDS is editing from
+ * that moment on (the form switches to the created connection); leaving the
+ * title at "Add connection" reads as if nothing was saved.
+ */
+export function connectionDrawerTitle(mode: "add" | "edit", created: boolean): "Add connection" | "Edit connection" {
+  return mode === "edit" || created ? "Edit connection" : "Add connection";
+}
+
 /** Native-`<dialog>` wrapper around `ConnectionDrawerFields` for the Settings grid's Add/Edit action. */
 export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDrawerProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  // The create path lives inside `fieldsProps`; the one fact the header needs
+  // is the id it reported, never a change in list length (a connection written
+  // elsewhere must not turn an unsaved Add form into "Edit connection").
+  const [createdId, setCreatedId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) {
@@ -2681,6 +2761,10 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
         previouslyFocused.focus();
       }
     };
+  }, [open]);
+
+  useEffect(() => {
+    if (open) setCreatedId(null);
   }, [open]);
 
   useEffect(() => {
@@ -2703,7 +2787,7 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
     <dialog
       ref={dialogRef}
       className="connection-drawer"
-      aria-label={fieldsProps.mode === "add" ? "Add connection" : "Edit connection"}
+      aria-label={connectionDrawerTitle(fieldsProps.mode, createdId !== null)}
       onCancel={(event) => {
         // TASK.58 item 4: act only on THIS drawer's own Escape — the shared
         // guard also stops this cancel (which React propagates up the tree)
@@ -2716,7 +2800,7 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
       }}
     >
       <div className="connection-drawer-header">
-        <span className="connection-drawer-title">{fieldsProps.mode === "add" ? "Add connection" : "Edit connection"}</span>
+        <span className="connection-drawer-title">{connectionDrawerTitle(fieldsProps.mode, createdId !== null)}</span>
         <button type="button" className="connection-drawer-close" aria-label="Close" onClick={onClose}>
           <X aria-hidden="true" />
         </button>
@@ -2727,6 +2811,7 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
       <ConnectionDrawerFields
         key={fieldsProps.editConnection?.id ?? "add"}
         {...fieldsProps}
+        onConnectionCreated={(connectionId) => setCreatedId(connectionId)}
         footer={
           <div className="connection-drawer-footer">
             <button type="button" className="settings-button settings-button-primary" onClick={onClose}>

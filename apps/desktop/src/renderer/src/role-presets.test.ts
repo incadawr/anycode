@@ -6,11 +6,16 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  activePresetId,
   autoSelectPreset,
   deriveRolePresets,
   presetApplicable,
+  presetMatchesRoles,
+  presetUnavailableReason,
   ROLE_PRESET_ROLES,
+  sameRoleRoutes,
 } from "./role-presets.js";
+import { fromDraft, toDraft } from "./role-editor-model.js";
 
 const ACTIVE = "conn-active";
 
@@ -94,5 +99,72 @@ describe("autoSelectPreset", () => {
 
   it("neither engine -> P3 (never null)", () => {
     expect(autoSelectPreset({ claudeReady: false, codexReady: false }, ACTIVE).id).toBe("this-connection");
+  });
+});
+
+describe("activePresetId — the highlighted chip follows the shown values", () => {
+  const presets = deriveRolePresets({ claudeReady: true, codexReady: true }, ACTIVE);
+
+  it("matches a preset chain regardless of key order", () => {
+    const p1 = presets[0]!;
+    const reordered = {
+      explore: { primary: { connection: ACTIVE } },
+      reviewer: { primary: { engine: "claude" as const } },
+      executor: { fallbacks: [{ connection: ACTIVE }], primary: { engine: "codex" as const } },
+      planner: { primary: { engine: "claude" as const } },
+      orchestrator: { primary: { engine: "claude" as const } },
+    };
+    expect(presetMatchesRoles(p1, reordered)).toBe(true);
+    expect(activePresetId(presets, reordered)).toBe("claude-leads-codex-builds");
+  });
+
+  it("highlights nothing for a persisted engine chain when no engine is ready (the Claude/Codex chain under a 'Current connection' chip)", () => {
+    const unready = deriveRolePresets({ claudeReady: false, codexReady: false }, ACTIVE);
+    const readiness = { claudeReady: false, codexReady: false };
+    // Persisted defaults an older profile can carry: Claude leads, Codex builds.
+    const persisted = presets[0]!.roles;
+    expect(activePresetId(unready, persisted, readiness)).toBeNull();
+    // With both engines ready the SAME chain is honestly P1 — and never P3.
+    expect(activePresetId(presets, persisted, { claudeReady: true, codexReady: true })).toBe("claude-leads-codex-builds");
+    expect(activePresetId(unready, unready[2]!.roles, readiness)).toBe("this-connection");
+  });
+
+  it("highlights nothing once the user edits one route", () => {
+    const edited = { ...presets[2]!.roles, orchestrator: { primary: { connection: "other" } } };
+    expect(activePresetId(presets, edited)).toBeNull();
+  });
+});
+
+describe("sameRoleRoutes / blank routes", () => {
+  it("treats a blank connection id and an absent one as the same route", () => {
+    const presets = deriveRolePresets({ claudeReady: false, codexReady: false }, "");
+    // The editor round-trips through fromDraft, which drops empty strings: with
+    // no active connection the seeded chain must still read as "Current
+    // connection", not as a chain no preset describes.
+    const roundTripped = fromDraft(toDraft(presets[2]!.roles)).roles;
+    expect(presetMatchesRoles(presets[2]!, roundTripped)).toBe(true);
+    expect(activePresetId(presets, roundTripped, { claudeReady: false, codexReady: false })).toBe("this-connection");
+  });
+
+  it("does not treat an empty route as a different preset's non-empty route", () => {
+    const presets = deriveRolePresets({ claudeReady: true, codexReady: true }, ACTIVE);
+    expect(presetMatchesRoles(presets[2]!, presets[0]!.roles)).toBe(false);
+    expect(sameRoleRoutes(presets[2]!.roles, { ...presets[2]!.roles, orchestrator: { primary: {} } })).toBe(false);
+  });
+});
+
+describe("presetUnavailableReason — disabled presets explain themselves in words", () => {
+  it("names every missing engine", () => {
+    const presets = deriveRolePresets({ claudeReady: false, codexReady: false }, ACTIVE);
+    expect(presetUnavailableReason(presets[0]!, { claudeReady: false, codexReady: false }))
+      .toBe("Requires Claude and Codex to be set up and signed in.");
+    expect(presetUnavailableReason(presets[1]!, { claudeReady: false, codexReady: true }))
+      .toBe("Requires Claude to be set up and signed in.");
+  });
+
+  it("returns null for an applicable preset, P3 included", () => {
+    const presets = deriveRolePresets({ claudeReady: true, codexReady: false }, ACTIVE);
+    expect(presetUnavailableReason(presets[1]!, { claudeReady: true, codexReady: false })).toBeNull();
+    expect(presetUnavailableReason(presets[2]!, { claudeReady: false, codexReady: false })).toBeNull();
   });
 });

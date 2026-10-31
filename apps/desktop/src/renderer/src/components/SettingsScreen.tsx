@@ -126,7 +126,7 @@ import type { ScopeWorkspaceEntry, ScopeWorkspacesListResult } from "../../../sh
 import { ProfilePane } from "./ProfilePane.js";
 import { VisionPane } from "./VisionPane.js";
 import { KeyboardShortcutsPane } from "./KeyboardShortcutsPane.js";
-import { BrandMark, Check, Chevron, Cube, FileIcon, Gear, Globe, ImageIcon, Info, Keyboard, Person, Plus, Robot, Search, ServerStack, Sliders, Terminal, X } from "./icons.js";
+import { BrandMark, Check, Chevron, Code, Cube, FileIcon, Gear, Globe, ImageIcon, Info, Keyboard, Package, Person, Plug, Plus, Robot, Route, Search, ServerStack, Sliders, Sparkle, Terminal, X } from "./icons.js";
 import { nextRovingIndex } from "./ModeMenu.js";
 import { SETTINGS_ADD_CONNECTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
 import { readTurnNotifyEnabled, TURN_NOTIFY_KEY } from "../notifications.js";
@@ -179,7 +179,7 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; section: Settin
   { id: "about", section: "general", label: "About", description: "App identity, updates, and acknowledgements.", icon: BrandMark },
   { id: "provider", section: "models", label: "Provider", description: "Choose a provider, model, and credentials.", icon: Gear },
   { id: "codex", section: "models", label: "Codex", description: "Discover, verify, and sign in to the Codex agent engine.", icon: Cube },
-  { id: "claude", section: "models", label: "Claude", description: "Discover and verify the Claude Code agent engine.", icon: Cube },
+  { id: "claude", section: "models", label: "Claude", description: "Discover and verify the Claude Code agent engine.", icon: Sparkle },
   {
     id: "vision", section: "models",
     label: "Vision",
@@ -207,7 +207,7 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; section: Settin
     label: "Roles",
     description:
       "Which engine or connection each orchestration role runs on, with ordered fallbacks. The optional Max parallel children limit applies to every role. Changes apply to new spawns.",
-    icon: Robot,
+    icon: Route,
   },
   { id: "mcp", section: "integrations", label: "MCP", description: "Manage MCP servers for this project and your user profile.", icon: ServerStack },
   {
@@ -216,13 +216,13 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; section: Settin
     id: "language-servers", section: "integrations",
     label: "Language servers",
     description: "Language servers for completions, diagnostics, and go-to-definition.",
-    icon: ServerStack,
+    icon: Code,
   },
   {
     id: "plugins", section: "integrations",
     label: "Plugins",
     description: "Install, update, and manage plugins — skills, agents, workflows, and MCP servers shipped as packages.",
-    icon: Cube,
+    icon: Package,
   },
   {
     // Taskana 4747: the Sessions API (local MCP for external agents) — right after
@@ -230,7 +230,7 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; section: Settin
     id: "sessions-api", section: "integrations",
     label: SESSIONS_API_LABEL,
     description: SESSIONS_API_DESCRIPTION,
-    icon: Globe,
+    icon: Plug,
   },
   {
     id: "network", section: "system",
@@ -332,7 +332,8 @@ const TIER_LABEL: Record<SecretStatus["tier"], string> = {
   os_encrypted: "OS keychain",
   obfuscated: "obfuscated (weak)",
   plaintext: "plain text (weak)",
-  unavailable: "unavailable",
+  // "stored · unavailable" left the user guessing WHAT was unavailable.
+  unavailable: "OS keychain unavailable",
 };
 
 const SOURCE_LABEL: Record<SecretSource, string> = {
@@ -571,6 +572,31 @@ export function describeFetchModelsError(reason: FetchModelsFailureReason): stri
 /** Toggles `id` in a checkbox-list selection, preserving the existing order. */
 export function toggleSelectedModel(selected: readonly string[], id: string): string[] {
   return selected.includes(id) ? selected.filter((m) => m !== id) : [...selected, id];
+}
+
+/**
+ * "Label (optional)" is a second name for the same new custom provider in the
+ * first-run flow — hide it there until the connection exists (then it names
+ * the saved connection). Full-form and catalog flows keep it.
+ */
+export function showConnectionLabelField(simplified: boolean, isNewCustomEndpoint: boolean, created: boolean): boolean {
+  return !(simplified && isNewCustomEndpoint && !created);
+}
+
+/**
+ * Rows of the "Models to show in the selector" list. The list is the union of
+ * what the endpoint returned, what is already curated, and the connection's
+ * CURRENT model — the last one is the whole point: a saved model the endpoint
+ * no longer returns still has to appear, ticked, instead of an all-empty list.
+ */
+export function mergeCurationModelIds(
+  fetched: readonly string[],
+  curated: readonly string[],
+  current: string,
+): string[] {
+  const ids = [...curated, ...fetched];
+  if (current.trim() !== "") ids.push(current.trim());
+  return [...new Set(ids)];
 }
 
 /**
@@ -1277,6 +1303,9 @@ export function ProviderSettings({ store = useSettingsStore, addConnectionReques
         {connections.length === 0 && (
           <p className="connection-grid-empty">No connections yet — add one to start a session.</p>
         )}
+        {connections.length > 0 && (
+          <p className="connection-grid-hint">Click a connection to make it the default for new sessions.</p>
+        )}
       </section>
 
       <CustomProvidersSection
@@ -1930,14 +1959,16 @@ export function SettingsScreen({
                   <input className="settings-field-input" type="text" inputMode="numeric" value={subagentMaxTurns}
                     disabled={readOnly} placeholder="40" onChange={(e) => setSubagentMaxTurns(e.target.value)} />
                 </label>
-                <label className="settings-field">
-                  <span className="settings-field-label">Adaptive turn budget</span>
-                  <input type="checkbox" checked={adaptiveTurnBudget === true} disabled={readOnly}
-                    onChange={(e) => setAdaptiveTurnBudget(e.target.checked)} />
+                <div className="settings-field">
+                  <label className="settings-field-checkbox">
+                    <input type="checkbox" checked={adaptiveTurnBudget === true} disabled={readOnly}
+                      onChange={(e) => setAdaptiveTurnBudget(e.target.checked)} />
+                    <span>Adaptive turn budget</span>
+                  </label>
                   <span className="settings-field-hint">
                     Grants extra turns while work makes real progress and learns the subagent budget from accepted tasks. Explicit limits above still win.
                   </span>
-                </label>
+                </div>
                 <label className="settings-field">
                   <span className="settings-field-label">Maximum open tabs</span>
                   <input className="settings-field-input" type="text" inputMode="numeric" value={sessionMaxTabs}

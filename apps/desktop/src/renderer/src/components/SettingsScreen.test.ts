@@ -16,6 +16,7 @@
  * is built from `SecretStatus` alone (structurally incapable of leaking a
  * plaintext value).
  */
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Fragment } from "react";
 import type { McpServerStatus, TelemetryStatus } from "@anycode/core";
@@ -59,6 +60,8 @@ import {
   shouldShowAppVersion,
   shouldShowUpdateBanner,
   showsManualUpdateLink,
+  mergeCurationModelIds,
+  showConnectionLabelField,
   toggleSelectedModel,
   transportOptions,
   updateStatusText,
@@ -613,6 +616,14 @@ describe("SETTINGS_PANES nav rail (slice P7.16 W2: Permissions split out of Tool
       expect(pane.description.length).toBeGreaterThan(0);
       expect(typeof pane.icon).toBe("function");
     }
+  });
+
+  it("no two rail rows share one glyph — a reused icon reads as the same destination", () => {
+    const byIcon = new Map<unknown, string[]>();
+    for (const pane of SETTINGS_PANES) {
+      byIcon.set(pane.icon, [...(byIcon.get(pane.icon) ?? []), pane.id]);
+    }
+    expect([...byIcon.values()].filter((ids) => ids.length > 1)).toEqual([]);
   });
 });
 
@@ -1467,5 +1478,50 @@ describe("scope dropdown panes (Taskana 4758)", () => {
     expect(paneHasScope("permissions")).toBe(false);
     expect(paneHasScope("sessions-api")).toBe(false);
     expect(paneHasScope(undefined)).toBe(false);
+  });
+});
+
+describe("Tools pane layout", () => {
+  // A bare checkbox in a column stretched itself across the field and read as
+  // a centred box with no label beside it.
+  it("Adaptive turn budget is a labelled checkbox row, not a lone checkbox under a label", () => {
+    const source = readFileSync(new URL("./SettingsScreen.tsx", import.meta.url), "utf8");
+    expect(source).toContain('<label className="settings-field-checkbox">');
+    expect(source).toMatch(/<input type="checkbox" checked=\{adaptiveTurnBudget === true\}/);
+    expect(source).not.toContain('<span className="settings-field-label">Adaptive turn budget</span>');
+  });
+});
+
+describe("mergeCurationModelIds — the checkbox list ticks the current model", () => {
+  it("keeps curated ids, fetched ids, and the current model exactly once", () => {
+    expect(mergeCurationModelIds(["a", "b"], ["b", "c"], "c")).toEqual(["b", "c", "a"]);
+  });
+
+  it("lists a saved current model the endpoint no longer returns (nothing ticked before)", () => {
+    expect(mergeCurationModelIds(["a"], [], "legacy-model")).toEqual(["a", "legacy-model"]);
+  });
+
+  it("ignores a blank current model", () => {
+    expect(mergeCurationModelIds(["a"], [], "   ")).toEqual(["a"]);
+  });
+});
+
+describe("showConnectionLabelField", () => {
+  it("hides the duplicate Label next to a new custom endpoint's Provider name", () => {
+    expect(showConnectionLabelField(true, true, false)).toBe(false);
+  });
+
+  it("keeps Label for catalog connections, the full form, and an already-created custom endpoint", () => {
+    expect(showConnectionLabelField(true, false, false)).toBe(true);
+    expect(showConnectionLabelField(false, true, false)).toBe(true);
+    expect(showConnectionLabelField(true, true, true)).toBe(true);
+  });
+});
+
+describe("describeSecretStatus — amber says what is amber", () => {
+  it("names the keychain when the stored key cannot be OS-protected", () => {
+    const status = describeSecretStatus({ key: "provider.connection.conn-1.apiKey", set: true, source: "vault", tier: "unavailable" });
+    expect(status.text).toBe("stored · OS keychain unavailable");
+    expect(status.tone).toBe("warn");
   });
 });
