@@ -256,7 +256,9 @@ enabled only while the endpoint is listening.
 The copied config runs the bundled stdio adapter with the discovery file as its
 argument. The adapter reads the token from that file itself, so the copied
 config holds no token. The adapter is copied to the AnyCode user-data directory,
-so the config keeps working after an app update. The client needs **Node 22+**.
+so the config keeps working after an app update; that copy is refreshed on every
+app start, so an update never leaves an outdated adapter behind. The client
+needs **Node 22+**.
 
 ## Token and discovery file
 
@@ -266,10 +268,11 @@ so the config keeps working after an app update. The client needs **Node 22+**.
   directory. It holds the URL, the token and the folder list, with mode `0600`.
   Keep it private.
 - **Regenerate token** writes a new token to the discovery file. A running
-  stdio adapter reloads the discovery file and retries once after a refused
-  connection or HTTP 401, including after a restart or token regeneration.
-  Other network failures are reported without an automatic retry because the
-  request may already have been processed.
+  stdio adapter re-reads the discovery file before every call, so a restarted
+  app (new port and new token) is reached without reconnecting the client and a
+  regenerated token is used on the first attempt. Network failures are reported
+  without an automatic retry because the request may already have been
+  processed; a later call picks up the new endpoint.
 
 ## Environment override
 

@@ -13,12 +13,41 @@ async function loadDiscovery() {
   if (typeof discovery.token !== 'string' || discovery.token.length < 32) throw new Error('Invalid discovery token');
   return { discovery, endpoint };
 }
-let { discovery, endpoint } = await loadDiscovery();
+// Loaded per message, never cached: AnyCode rewrites the discovery file on every
+// start (new port, new token) and removes it while it is down. Reading it only at
+// startup would either pin the adapter to a retired endpoint or make it exit when
+// the client starts it during a restart.
+let discovery;
+let endpoint;
 async function post(request) {
   return fetch(endpoint, {
     method: 'POST', headers: { Authorization: `Bearer ${discovery.token}`, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-11-25' },
     body: JSON.stringify(request), signal: AbortSignal.timeout(30000),
   });
+}
+/**
+ * Sends one message to the endpoint the discovery file names right now. A cached
+ * endpoint keeps calls pointed at a retired port, and the reset of a stale
+ * keep-alive socket cannot be retried safely (the request may have been delivered).
+ */
+async function exchange(request) {
+  ({ discovery, endpoint } = await loadDiscovery());
+  let response;
+  try {
+    response = await post(request);
+  } catch (error) {
+    // A refused connection cannot have delivered the request: the host may have
+    // restarted and written a new discovery file just after it was read.
+    if (error?.cause?.code !== 'ECONNREFUSED') throw error;
+    ({ discovery, endpoint } = await loadDiscovery());
+    response = await post(request);
+  }
+  if (response.status === 401) {
+    // The token can be regenerated between the read above and this request.
+    ({ discovery, endpoint } = await loadDiscovery());
+    response = await post(request);
+  }
+  return response;
 }
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 for await (const line of lines) {
@@ -26,22 +55,7 @@ for await (const line of lines) {
   let request;
   try {
     request = JSON.parse(line);
-    let response;
-    let retried = false;
-    try {
-      response = await post(request);
-    } catch (error) {
-      // A refused connection cannot have delivered the request. Other failures
-      // (including timeouts and resets) may occur after the server acted.
-      if (error?.cause?.code !== 'ECONNREFUSED') throw error;
-      retried = true;
-      ({ discovery, endpoint } = await loadDiscovery());
-      response = await post(request);
-    }
-    if (!retried && response.status === 401) {
-      ({ discovery, endpoint } = await loadDiscovery());
-      response = await post(request);
-    }
+    const response = await exchange(request);
     if (!response.ok) throw new Error(`AnyCode endpoint returned HTTP ${response.status}`);
     const body = await response.text();
     if (body) process.stdout.write(`${JSON.stringify(JSON.parse(body))}\n`);
