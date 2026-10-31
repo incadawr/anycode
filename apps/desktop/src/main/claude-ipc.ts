@@ -1,6 +1,6 @@
 /**
  * Claude engine onboarding control plane (SLICE-CC A3 + SLICE-CC-LOGIN
- * , cut §1.2/§4, minimal subset of main/codex-ipc.ts): the invoke-API
+ * cut §1.2/§4, minimal subset of main/codex-ipc.ts): the invoke-API
  * behind the Settings Claude card — recheck (discovery ladder + bounded
  * doctor), an explicit file-picker override, and the native subscription
  * login flow (start/cancel). Wires main/claude-binary.ts (discovery),
@@ -43,7 +43,7 @@ import { runClaudeLogin, type ClaudeLoginOutcome, type RunClaudeLoginOptions } f
 
 export const CLAUDE_RECHECK_CHANNEL = "anycode:claude-recheck";
 export const CLAUDE_PICK_BINARY_CHANNEL = "anycode:claude-pick-binary";
-// SLICE-CC-LOGIN (, cut §4): the native login channels — same
+// SLICE-CC-LOGIN (cut §4): the native login channels — same
 // duplicated-literal convention as the two channels above.
 export const CLAUDE_LOGIN_START_CHANNEL = "anycode:claude-login-start";
 export const CLAUDE_LOGIN_CANCEL_CHANNEL = "anycode:claude-login-cancel";
@@ -70,7 +70,7 @@ export type ClaudePickBinaryResult =
   | { ok: true; snapshot: ClaudeOnboardingSnapshot }
   | { ok: false; reason: "cancelled" | "invalid" };
 
-// SLICE-CC-LOGIN (, cut §4): mirrors main/codex-ipc.ts's own
+// SLICE-CC-LOGIN (cut §4): mirrors main/codex-ipc.ts's own
 // `CodexLoginStartResult` — same reason set, `main/claude-login.ts`'s own
 // `ClaudeLoginOutcome` plus the busy-gate's `"busy"` refusal.
 export type ClaudeLoginStartResult =
@@ -97,14 +97,14 @@ export interface ClaudeIpcDeps {
    */
   engineProxyUrl?: () => string | undefined;
   /**
-   * : MAIN's own credential-free relay URL, read fresh per call.
+   * MAIN's own credential-free relay URL, read fresh per call.
    * The doctor child-env builder swaps a credentialed proxy family for it
    * (fail-closed drop when absent/undefined).
    */
   relayUrl?: () => string | undefined;
   /** Reads the currently-persisted `settings.claude.binaryPath`, fresh, every call (main is the sole writer; this module never caches it). */
   readBinaryPathSetting: () => Promise<string | undefined>;
-  /** : reads the currently-persisted `settings.security.trustedBinaries`, fresh, every call — mirror of `readBinaryPathSetting`'s dep shape. Absent ⇒ `[]` (today's wall byte-for-byte, fail-closed by default direction). */
+  /** reads the currently-persisted `settings.security.trustedBinaries`, fresh, every call — mirror of `readBinaryPathSetting`'s dep shape. Absent ⇒ `[]` (today's wall byte-for-byte, fail-closed by default direction). */
   readTrustedBinaries?: () => readonly TrustedBinaryConsent[];
   /** Persists a `settings.claude` patch (best-effort: a `read_only` refusal must not block the LIVE snapshot this session already computed from reaching the caller). NEVER carries account material — only status/version/at (custody). */
   writeClaudeSettings: (patch: {
@@ -279,7 +279,7 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
 
   /**
    * Runs the doctor against ONE explicit path+source, persists, notifies,
-   * and returns the fresh snapshot. `discoveryTrustRefusal` (,
+   * and returns the fresh snapshot. `discoveryTrustRefusal` (
    * D-S4-6): when the caller's discovery ladder resolved NOTHING
    * (`binaryPath === null`) because its highest-priority candidate was
    * refused by the trust gate — not because nothing was found — this
@@ -378,7 +378,7 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
       // `~/.claude` — the same one the doctor above diagnoses.
       openPath: deps.openPath,
       signal: controller.signal,
-      // : claude-login.ts itself is untouched — its own default
+      // claude-login.ts itself is untouched — its own default
       // trust closure carries no consents, so a consent-aware closure is
       // passed explicitly through its existing `trust` seam instead (mirror
       // of codex-ipc.ts's loginStart).

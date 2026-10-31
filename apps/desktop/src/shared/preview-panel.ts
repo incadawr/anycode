@@ -1,6 +1,6 @@
 /**
  * Preview-panel contract between main and renderer (working-docs/panel-track/
- * CUT.md §2.1,  stages 2+3: right-side preview panel). Same value-only
+ * CUT.md §2.1, stages 2+3: right-side preview panel). Same value-only
  * shape as shared/window.ts / shared/tabs.ts: channel-name constants + wire
  * types only, ZERO runtime imports, so it is safe to import from preload
  * (sandboxed CJS), the renderer web bundle, AND main alike without dragging
@@ -66,7 +66,7 @@ export interface PreviewPanelInfo {
   sourcePath?: string;
   status: "loading" | "ready" | "failed" | "crashed";
   container: PreviewContainerKind;
-  /** M1 ( native md preview): which record kind this is — additive, old asserts (pre-dating this field) stay valid. */
+  /** M1 (native md preview): which record kind this is — additive, old asserts (pre-dating this field) stay valid. */
   viewKind?: "web" | "dom-md";
   /** M1: dom-md refetch key (absent for "web") — bumps on navigate (M2); the renderer re-invokes MD_PREVIEW_READ when it changes. */
   docVersion?: number;

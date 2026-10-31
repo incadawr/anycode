@@ -1,6 +1,6 @@
 /**
- * Quota-fetch wiring tests for the openai-responses factory ( /
- * , §3 test 3). The SDK factory's options are spied via vi.mock for
+ * Quota-fetch wiring tests for the openai-responses factory (
+ * §3 test 3). The SDK factory's options are spied via vi.mock for
  * the dormancy pins; the COMPOSITION case (quota wrapper OUTER over the
  * Authorization-stripping fetch) is asserted against a real node:http
  * loopback server — the wrapper must both observe quota headers AND still

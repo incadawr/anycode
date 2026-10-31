@@ -1,6 +1,6 @@
 export const SESSION_LIMIT_RANGES = {
-  maxTabs: { min: 4, max: 40, default: 20 },            //  (8 -> 20)
-  childSessionsPerParentMax: { min: 1, max: 8, default: 3 },  //  slice 2
+  maxTabs: { min: 4, max: 40, default: 20 },            // (8 -> 20)
+  childSessionsPerParentMax: { min: 1, max: 8, default: 3 },  // slice 2
   childSessionsGlobalMax: { min: 1, max: 24, default: 8 },
 } as const;
 

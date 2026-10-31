@@ -41,7 +41,7 @@ const MODELS = [{ value: "model-a", resolvedModel: "model-a", displayName: "A" }
  * object, so callers can exercise the sign-in predicate against the exact
  * shapes the live CLI returns (default mirrors a plain OAuth session).
  *
- *  срез S4 (probes.md P0): when the outbound `initialize` body
+ * срез S4 (probes.md P0): when the outbound `initialize` body
  * carries a non-empty `sdkMcpServers`, this fake reproduces the ONE ordering
  * fact P0 measured against the REAL CLI — the CLI drives its OWN mcp
  * handshake (wrapped as a `mcp_message` control_request FROM the CLI TO the
@@ -238,7 +238,7 @@ describe("resumeClaudeEngine vs startClaudeEngine (cut §1.5 D2)", () => {
 });
 
 /**
- *  — the initial `--effort` spawn flag. Unlike model/permissionMode
+ * the initial `--effort` spawn flag. Unlike model/permissionMode
  * (suppressed on resume, see the hazard (б) describe block below), effort
  * rides EVERY spawn: `system/init` carries no effort field at all, so there
  * is no surviving native truth a resend could clobber.
@@ -503,7 +503,7 @@ describe("connect: sign-in detection from the initialize response", () => {
 });
 
 /**
- *  срез S4 — the MCP bridge's own ordering requirement (probes.md
+ * срез S4 — the MCP bridge's own ordering requirement (probes.md
  * P0's correction #1): `ClaudeMcpBridge` must be routed through
  * `ClaudeApprovalBridge` BEFORE `client.initialize()` is ever sent, because
  * the CLI drives its OWN mcp handshake (`mcp_message` control_requests) FROM
@@ -515,7 +515,7 @@ describe("connect: sign-in detection from the initialize response", () => {
  * cannot see, and this test can: it inspects what the fake CLI's OWN nested
  * request received, not what the finished engine looks like afterward.
  */
-describe(" срез S4 — the MCP bridge is wired BEFORE initialize is sent (probes.md P0)", () => {
+describe("срез S4 — the MCP bridge is wired BEFORE initialize is sent (probes.md P0)", () => {
   /** A minimal stand-in satisfying exactly what ClaudeApprovalBridge.route reads off `options.bridge` — never a real MCP round trip (that is mcp-bridge.test.ts's job). */
   function fakeBridge(): { bridge: ClaudeMcpBridge; routedCount: () => number } {
     let routed = 0;
@@ -548,7 +548,7 @@ describe(" срез S4 — the MCP bridge is wired BEFORE initialize is sent (pr
     }
   });
 
-  it("no mcpBridge option at all: initialize carries no sdkMcpServers, and the CLI never even attempts the nested handshake (switch, byte-identical to pre-)", async () => {
+  it("no mcpBridge option at all: initialize carries no sdkMcpServers, and the CLI never even attempts the nested handshake (switch, byte-identical to pre)", async () => {
     const { spawnImpl, nestedMcpResponse, capturedSdkMcpServers } = fakeSpawn();
     const connected = await startClaudeEngine(baseOptions(spawnImpl));
     try {
@@ -559,7 +559,7 @@ describe(" срез S4 — the MCP bridge is wired BEFORE initialize is sent (pr
     }
   });
 
-  it(": a REAL bridge's notification ack rides the full wire envelope written by ClaudeClient — response is an object, never absent", async () => {
+  it("a REAL bridge's notification ack rides the full wire envelope written by ClaudeClient — response is an object, never absent", async () => {
     // Unlike fakeBridge() above, this drives the real `ClaudeMcpBridge` +
     // `ClaudeClient` pair end to end: the fake CLI's nested
     // `notifications/initialized` (the exact message whose empty-body answer
@@ -584,7 +584,7 @@ describe(" срез S4 — the MCP bridge is wired BEFORE initialize is sent (pr
   });
 });
 
-// : the PUBLIC wrappers (startClaudeEngine/resumeClaudeEngine) must
+// the PUBLIC wrappers (startClaudeEngine/resumeClaudeEngine) must
 // not drop the child's turn budget — options.maxTurns has to reach the actual
 // ClaudeClient spawn argv as --max-turns <n> on BOTH the fresh and the resume
 // path (claude-engine.ts spreads ...options into ClaudeClient).
@@ -626,14 +626,14 @@ describe("startClaudeEngine/resumeClaudeEngine — maxTurns forwarding", () => {
 });
 
 /**
- *  cross-review M2, wiring level: the delegation sentence
+ * cross-review M2, wiring level: the delegation sentence
  * (`mcp__anycode__agent`) may appear on the spawn argv ONLY in a session
  * whose bridge is announced. `connectClaudeEngine` enforces the pairing even
  * against a confused caller (agentBridgePrompt without mcpBridge → plain
  * always-on block), and both a bridge-less boot and the pairing failure are
  * byte-identical to the pre-4056 argv.
  */
-describe("agentBridgePrompt rides the argv only when the bridge is announced ( M2)", () => {
+describe("agentBridgePrompt rides the argv only when the bridge is announced (M2)", () => {
   const promptAt = (args: string[] | undefined): string | undefined => {
     const list = args ?? [];
     const at = list.indexOf("--append-system-prompt");
@@ -686,11 +686,11 @@ describe("agentBridgePrompt rides the argv only when the bridge is announced ( M
 });
 
 
-//  C8/C9/C10/C12/C14: end to end through the REAL
+// C8/C9/C10/C12/C14: end to end through the REAL
 // ClaudeMcpBridge + REAL createEngineBrowserBridge — the door's browser
 // tools/call drives the same approval and preview contract as a live tab;
 // a recording fake broker stands in for the UI side of IpcPermissionBroker.
-describe(" — browser tools through the engine door (C8/C9/C10/C12/C14)", () => {
+describe("— browser tools through the engine door (C8/C9/C10/C12/C14)", () => {
   /** A fake IpcPermissionBroker: records asks, settle-on-demand. */
   function fakeBroker() {
     const requests: Array<{ toolName: string; toolCallId: string; input: unknown }> = [];

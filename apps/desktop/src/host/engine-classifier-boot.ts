@@ -1,5 +1,5 @@
 /**
- * : the ENGINE-SESSION (Codex/Claude) half of ask-zone classifier
+ * the ENGINE-SESSION (Codex/Claude) half of ask-zone classifier
  * coverage. The two engine boots (bootCodexSession / bootClaudeSession in
  * host/index.ts) have no core provider stack, so the model kind cannot build a
  * ModelPort there — only the `command` kind is active for engine sessions, and
@@ -9,7 +9,7 @@
  * The userContext source is the Session's human-turn ring
  * (Session.recentHumanUserTurns), threaded as a late-bound thunk so the broker
  * can be decorated BEFORE the Session exists (the bridges capture the broker at
- * construction, before the first MCP handshake —  ordering).
+ * construction, before the first MCP handshake — ordering).
  */
 
 import type { AgentEvent, AskClassifier } from "@anycode/core";

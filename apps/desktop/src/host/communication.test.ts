@@ -132,7 +132,7 @@ describe("authenticated session inbox", () => {
     } finally { h.close(); }
   });
 
-  //  /  wire regression pin: main's ChildRunSend delivery
+  // wire regression pin: main's ChildRunSend delivery
   // addresses the child with sender "parent-session:<id>" — that principal must
   // behave EXACTLY like the MCP supervisor principal above (queue while busy,
   // drain into a new turn on settle, agent_message envelope in the input).

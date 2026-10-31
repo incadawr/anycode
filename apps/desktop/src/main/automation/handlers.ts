@@ -18,7 +18,7 @@
  * The main-plane commands that are deliberately NOT facade calls are the
  * new-tab open (`manager.createTab` + `deliverTabPort`, the sanctioned
  * dialog bypass, §1), `quit` (`app.quit()`), and the dev-only `killHost`
- * ( FIX-A: `manager.killHost`, a smoke lever with no renderer
+ * (FIX-A: `manager.killHost`, a smoke lever with no renderer
  * counterpart — killing a host child is main-process territory, not
  * something the page's facade could do); everything else is a thin wrapper
  * over the frozen facade contract (§3.2).
@@ -52,7 +52,7 @@ export interface AutomationWindow {
   isDestroyed(): boolean;
   webContents: AutomationWebContents;
   /**
-   *  (`POST /window/size`): the dock-smoke's drawer/column legs
+   * (`POST /window/size`): the dock-smoke's drawer/column legs
    * need to drive the REAL window size. OPTIONAL so every existing fixture
    * (and a window type without it) stays structurally valid — an absent
    * member makes `windowSetSize` answer `{ok:false, reason:"unsupported"}`
@@ -69,7 +69,7 @@ export interface AppLike {
 }
 
 /**
- * `GET /state`'s child-run projection ( CUT-S2 §3 S2d, the D1
+ * `GET /state`'s child-run projection (CUT-S2 §3 S2d, the D1
  * bullet: "requestId/parentSessionId/childTabId/childSessionId/state/pid"
  * verbatim).
  * A straight field-for-field read of `TabHostManager`'s private
@@ -104,7 +104,7 @@ export interface ManagerLike {
   listTabs(): ReadonlyArray<TabSummary>;
   killHost(tabId: string): { ok: true } | { ok: false; reason: "unknown_tab" };
   /**
-   *  S2d D1: projects the live child-run ledger for `/state`
+   * S2d D1: projects the live child-run ledger for `/state`
    * (`getState`/`getStateForTab` below). OPTIONAL — unlike every other
    * member of this interface — because `TabHostManager` does not implement
    * it as of this slice; a manager fixture (real or fake) without it
@@ -140,7 +140,7 @@ export interface HandlerDeps {
   /** Wait poll interval (design §4.3: 150ms); injectable so tests run instantly. */
   pollMs?: number;
   /**
-   * The active provider connection id ( W10), same source
+   * The active provider connection id (W10), same source
    * `registerTabIpc`'s `handleCreate` pins a real "new" tab from
    * (`main/index.ts`'s `() => settings?.provider.activeConnectionId`).
    * Undefined = no default configured (a fresh install, or an env-override
@@ -163,7 +163,7 @@ export interface HandlerDeps {
    */
   previewHost?: PreviewHostHandle;
   /**
-   *  M5 (CUT.md M5 scope item 3): the SAME `MdDocDeps` bag
+   * M5 (CUT.md M5 scope item 3): the SAME `MdDocDeps` bag
    * `main/index.ts` binds `registerMdDocIpc` with — `previewNavigateMdDoc`
    * below calls `navigateMdDoc` (md-doc.ts) directly over it, driving the
    * identical main-side resolve+read+replace chain the renderer's MdLink
@@ -174,7 +174,7 @@ export interface HandlerDeps {
    */
   mdDocDeps?: MdDocDeps;
   /**
-   *  S2d D1 (CUT-S2 §2.4/§4.1 additive `/child-runs`): the SAME
+   * S2d D1 (CUT-S2 §2.4/§4.1 additive `/child-runs`): the SAME
    * `PersistencePort` `main/index.ts` opens at boot (`persistence`,
    * `SqlitePersistenceAdapter`) — `listChildRunsMaintenance` below calls
    * `listSessionsForMaintenance()` directly over it (main-plane, no
@@ -188,7 +188,7 @@ export interface HandlerDeps {
    * `{ok:false, error:"persistence unavailable", errorKind:"unavailable"}`
    * the preview routes' own absent-dep branch uses, never throws.
    *
-   *  S2d D3 (CUT-S2 §4.2 п.12 / §6's own "UI удаления сессий — вне
+   * S2d D3 (CUT-S2 §4.2 п.12 / §6's own "UI удаления сессий — вне
    * S2... automation зовёт его напрямую для теста" contract): widened
    * (`| "deleteSessionTree"`) so `deleteSessionTreeMaintenance` below can
    * call the SAME adapter's cascade delete directly — no production
@@ -360,7 +360,7 @@ export function health(deps: HandlerDeps): { ok: true; pid: number; version: str
 
 /**
  * `GET /state`: renderer-plane snapshot + main-plane tab list side by side
- * (design §4.1), plus ( S2d D1) the main-side child-run ledger
+ * (design §4.1), plus (S2d D1) the main-side child-run ledger
  * projection — `deps.manager.listChildRuns` is optional (see `ManagerLike`'s
  * own doc), so an absent implementation degrades this to `[]` rather than
  * throwing.
@@ -376,7 +376,7 @@ export async function getState(
 /**
  * `GET /state/:tabId`: same, narrowed to one tab on both planes. `childRuns`
  * stays UN-narrowed (the projection's own fields have no `tabId` to filter
- * on — see `ChildRunSummary`'s doc). : a facade snapshot carrying
+ * on — see `ChildRunSummary`'s doc). a facade snapshot carrying
  * `childStates` narrows them too — a ROOT tabId also returns its children
  * (matched by `child.parentTabId`), a CHILD tabId returns just itself in
  * `childStates`; a pre-4265 facade snapshot (no `childStates`) is passed
@@ -412,7 +412,7 @@ export async function getStateForTab(
 const PERSISTENCE_UNAVAILABLE = { ok: false, error: "persistence unavailable", errorKind: "unavailable" } as const;
 
 /**
- * `GET /child-runs` ( S2d D1, CUT-S2 §2.4/§4.1 additive): every
+ * `GET /child-runs` (S2d D1, CUT-S2 §2.4/§4.1 additive): every
  * DURABLE child-session row in SQLite, dev-only maintenance surface —
  * `listSessionsForMaintenance` (the one `PersistencePort` method that sees
  * every row, root and child alike, `packages/core/src/ports/persistence.ts`'s
@@ -438,7 +438,7 @@ export async function listChildRunsMaintenance(
 }
 
 /**
- * `POST /sessions/:id/delete-tree` ( S2d D3, CUT-S2 §4.2 п.12): a
+ * `POST /sessions/:id/delete-tree` (S2d D3, CUT-S2 §4.2 п.12): a
  * dev-only direct call into `PersistencePort.deleteSessionTree` — the SAME
  * cascade delete `sqlite-persistence.test.ts` covers with a full unit
  * matrix (every dependent table, sibling isolation, transactional
@@ -534,7 +534,7 @@ export async function previewOpen(
 }
 
 /**
- * `POST /tabs/:tabId/previews/:previewId/container {target}` ( M3,
+ * `POST /tabs/:tabId/previews/:previewId/container {target}` (M3,
  * CUT.md M3 scope item 7): a model-free driver for D14 transfer, needed by
  * M5's smoke DoD ("open in window -> back") and used by THIS slice's own
  * live round-trip verification — forwards verbatim to
@@ -554,7 +554,7 @@ export async function previewSetContainer(
 }
 
 /**
- * `POST /tabs/:tabId/previews/:previewId/navigate {href}` ( M5,
+ * `POST /tabs/:tabId/previews/:previewId/navigate {href}` (M5,
  * CUT.md M5 scope item 3): a model-free driver for `MD_PREVIEW_NAVIGATE`,
  * needed by the M5 smoke DoD's md->md link-replace leg — forwards verbatim
  * to `navigateMdDoc` (md-doc.ts) over `deps.mdDocDeps`, the EXACT SAME
@@ -584,7 +584,7 @@ export interface PromptImageInput {
 }
 
 /**
- *  live-smoke facade extension: `imagePaths`, when present, are
+ * live-smoke facade extension: `imagePaths`, when present, are
  * absolute on-disk paths (design note above the route in server.ts) — the
  * HTTP body carries paths rather than base64 so a large fixture never
  * inflates the request. Main is the ONLY side with filesystem access, so this
@@ -622,7 +622,7 @@ export async function sendPrompt(
   return deps.callFacade("sendPrompt", [tabId, text, images]);
 }
 
-/**  W8: thin wrapper over the facade's `tryAgain` — clicks the real Try-again driver (App.tsx's `dispatchTryAgain`), no guard logic of its own. */
+/** W8: thin wrapper over the facade's `tryAgain` — clicks the real Try-again driver (App.tsx's `dispatchTryAgain`), no guard logic of its own. */
 export function tryAgain(deps: HandlerDeps, tabId: string): Promise<unknown> {
   return deps.callFacade("tryAgain", [tabId]);
 }
@@ -644,7 +644,7 @@ export function setMode(deps: HandlerDeps, tabId: string, mode: string): Promise
 }
 
 /**
- * `POST /tabs/:tabId/orchestrate` ( §3.7 part B): thin forward to
+ * `POST /tabs/:tabId/orchestrate` (§3.7 part B): thin forward to
  * the facade's `setOrchestrate` — one wire message (`set_orchestrate`), the
  * exact send ModeMenu's Orchestrate row click makes.
  */
@@ -653,7 +653,7 @@ export function setOrchestrate(deps: HandlerDeps, tabId: string, enabled: boolea
 }
 
 /**
- * `POST /tabs/:tabId/mode-menu` ( §3.7 part B): thin forward to
+ * `POST /tabs/:tabId/mode-menu` (§3.7 part B): thin forward to
  * the facade's read-only `modeMenuState` probe (rendered rows + checked
  * state), same GET-like/no-mutation discipline as `childLayoutState`.
  */
@@ -661,32 +661,32 @@ export function modeMenuState(deps: HandlerDeps, tabId: string): Promise<unknown
   return deps.callFacade("modeMenuState", [tabId]);
 }
 
-/** `POST /tabs/:tabId/mode-menu/click-chip` ( §3.7 part B): real chip click. */
+/** `POST /tabs/:tabId/mode-menu/click-chip` (§3.7 part B): real chip click. */
 export function modeMenuClickChip(deps: HandlerDeps, tabId: string): Promise<unknown> {
   return deps.callFacade("modeMenuClickChip", [tabId]);
 }
 
-/** `POST /tabs/:tabId/mode-menu/click-row` ( §3.7 part B): real named-row click. */
+/** `POST /tabs/:tabId/mode-menu/click-row` (§3.7 part B): real named-row click. */
 export function modeMenuClickRow(deps: HandlerDeps, tabId: string, name: string): Promise<unknown> {
   return deps.callFacade("modeMenuClickRow", [tabId, name]);
 }
 
-/** `POST /tabs/:tabId/role-picker/state` ( §3.9 part B): read-only dialog probe. */
+/** `POST /tabs/:tabId/role-picker/state` (§3.9 part B): read-only dialog probe. */
 export function rolePickerState(deps: HandlerDeps, tabId: string): Promise<unknown> {
   return deps.callFacade("rolePickerState", [tabId]);
 }
 
-/** `POST /tabs/:tabId/role-picker/preset` ( §3.9 part B): real preset chip click. */
+/** `POST /tabs/:tabId/role-picker/preset` (§3.9 part B): real preset chip click. */
 export function rolePickerClickPreset(deps: HandlerDeps, tabId: string, presetId: string): Promise<unknown> {
   return deps.callFacade("rolePickerClickPreset", [tabId, presetId]);
 }
 
-/** `POST /tabs/:tabId/role-picker/save` ( §3.9 part B): real Save click. */
+/** `POST /tabs/:tabId/role-picker/save` (§3.9 part B): real Save click. */
 export function rolePickerClickSave(deps: HandlerDeps, tabId: string): Promise<unknown> {
   return deps.callFacade("rolePickerClickSave", [tabId]);
 }
 
-/** `POST /tabs/:tabId/role-picker/skip` ( §3.9 part B): real Skip click. */
+/** `POST /tabs/:tabId/role-picker/skip` (§3.9 part B): real Skip click. */
 export function rolePickerClickSkip(deps: HandlerDeps, tabId: string): Promise<unknown> {
   return deps.callFacade("rolePickerClickSkip", [tabId]);
 }
@@ -700,7 +700,7 @@ export function selectTab(deps: HandlerDeps, tabId: string): Promise<unknown> {
 }
 
 /**
- * `POST /tabs/:tabId/child/open` ( S2d D1, CUT-S2 §4.2 п.5
+ * `POST /tabs/:tabId/child/open` (S2d D1, CUT-S2 §4.2 п.5
  * "Open-клик"): thin forward to the facade's `childOpen`, same shape as
  * `selectTab` above. `tabId` here is the ROOT tab whose pane switches;
  * `spawnToolCallId` names which of its children. The child's own composer
@@ -714,7 +714,7 @@ export function childOpen(deps: HandlerDeps, tabId: string, spawnToolCallId: str
 }
 
 /**
- * `GET /tabs/:tabId/child/layout` ( S3c, CUT-S3 §6.2): thin forward
+ * `GET /tabs/:tabId/child/layout` (S3c, CUT-S3 §6.2): thin forward
  * to the facade's read-only `childLayoutState` probe, same shape as
  * `childOpen` above but GET/no-body — the same discipline as the todo-panel/
  * model-pill/ctx-popover GET probes: this layer only forwards method + args,
@@ -727,7 +727,7 @@ export function childLayoutState(deps: HandlerDeps, tabId: string): Promise<unkn
 }
 
 /**
- * `POST /tabs/:tabId/child/close` ( S8.3): thin forward to the
+ * `POST /tabs/:tabId/child/close` (S8.3): thin forward to the
  * facade's `childCloseClick`, same shape as `childOpen` above minus the body.
  * The facade closes the pane with a REAL click on the control the operator
  * uses (CUT-S3 §6.1: every layout TRANSITION is a real click), so this is the
@@ -739,7 +739,7 @@ export function childCloseClick(deps: HandlerDeps, tabId: string): Promise<unkno
 }
 
 /**
- * `POST /tabs/:tabId/child/split` ( S9.4): thin forward to the
+ * `POST /tabs/:tabId/child/split` (S9.4): thin forward to the
  * facade's `childSplitClick`, the entry-side twin of `child/close` above and
  * the same real-click posture. It is what makes the split branch of the
  * replay's end-of-child rule machine-reachable: only in split is the root
@@ -751,7 +751,7 @@ export function childSplitClick(deps: HandlerDeps, tabId: string): Promise<unkno
 }
 
 /**
- * Wire shape of the facade's `target` parameter ( §3.2): the current
+ * Wire shape of the facade's `target` parameter (§3.2): the current
  * root, or a named child by its `spawnToolCallId`. Declared locally rather
  * than imported from `replay.ts` — this HTTP layer calls the facade by
  * string name only (`FacadeCaller`, §F8), so it stays decoupled from that
@@ -761,11 +761,11 @@ export function childSplitClick(deps: HandlerDeps, tabId: string): Promise<unkno
 export type ReplayTargetWire = "root" | { child: string };
 
 /**
- * `POST /tabs/:tabId/replay/arm` ( §3.2/§5 S5): thin forward to the
+ * `POST /tabs/:tabId/replay/arm` (§3.2/§5 S5): thin forward to the
  * facade's `replayArm(tabId?)` — arming names which root tab's history to
  * replay.
  *
- *  S8.1: every `/replay/*` forward below now passes the URL's
+ * S8.1: every `/replay/*` forward below now passes the URL's
  * `tabId` as the facade call's FIRST argument. Until S8 they dropped it and
  * the facade acted on "whatever is armed", so a stale id in the URL was
  * silently honoured — `POST /tabs/<dead-uuid>/replay/disarm` answered `ok`
@@ -777,13 +777,13 @@ export function replayArm(deps: HandlerDeps, tabId: string): Promise<unknown> {
   return deps.callFacade("replayArm", [tabId]);
 }
 
-/** `POST /tabs/:tabId/replay/disarm` ( §3.2/§5 S5, S8.1): forwards `[tabId]` to the facade's `replayDisarm(tabId)`. */
+/** `POST /tabs/:tabId/replay/disarm` (§3.2/§5 S5, S8.1): forwards `[tabId]` to the facade's `replayDisarm(tabId)`. */
 export function replayDisarm(deps: HandlerDeps, tabId: string): Promise<unknown> {
   return deps.callFacade("replayDisarm", [tabId]);
 }
 
 /**
- * `POST /tabs/:tabId/replay/play` ( §3.2/§5 S5, S8.1): thin forward
+ * `POST /tabs/:tabId/replay/play` (§3.2/§5 S5, S8.1): thin forward
  * to the facade's `replayPlay(tabId, target?)`. `target` is omitted entirely
  * (not forwarded) when absent, so the facade falls back to its own
  * current-focus default rather than receiving an explicit `null` (same
@@ -793,18 +793,18 @@ export function replayPlay(deps: HandlerDeps, tabId: string, target?: ReplayTarg
   return deps.callFacade("replayPlay", target !== undefined ? [tabId, target] : [tabId]);
 }
 
-/** `POST /tabs/:tabId/replay/pause` ( §3.2/§5 S5, S8.1): same shape as `replayPlay` above. */
+/** `POST /tabs/:tabId/replay/pause` (§3.2/§5 S5, S8.1): same shape as `replayPlay` above. */
 export function replayPause(deps: HandlerDeps, tabId: string, target?: ReplayTargetWire): Promise<unknown> {
   return deps.callFacade("replayPause", target !== undefined ? [tabId, target] : [tabId]);
 }
 
-/** `POST /tabs/:tabId/replay/toggle` ( §3.2/§5 S5, S8.1): same shape as `replayPlay` above. */
+/** `POST /tabs/:tabId/replay/toggle` (§3.2/§5 S5, S8.1): same shape as `replayPlay` above. */
 export function replayToggle(deps: HandlerDeps, tabId: string, target?: ReplayTargetWire): Promise<unknown> {
   return deps.callFacade("replayToggle", target !== undefined ? [tabId, target] : [tabId]);
 }
 
 /**
- * `POST /tabs/:tabId/replay/step` ( §3.2/§5 S5, S8.1): thin forward
+ * `POST /tabs/:tabId/replay/step` (§3.2/§5 S5, S8.1): thin forward
  * to the facade's `replayStep(tabId, n?, target?)`. Trailing omitted args are
  * dropped (not sent as `null`) so the facade's own defaults apply; a present
  * `target` with an absent `n` still forwards `n` as `undefined` in that slot
@@ -816,7 +816,7 @@ export function replayStep(deps: HandlerDeps, tabId: string, n?: number, target?
 }
 
 /**
- * `POST /tabs/:tabId/replay/seek` ( §3.2/§5 S5, S8.1): thin forward
+ * `POST /tabs/:tabId/replay/seek` (§3.2/§5 S5, S8.1): thin forward
  * to the facade's `replaySeek(tabId, index, target?)`. `index` is always
  * forwarded (server.ts's zod requires it), `target` only when given.
  */
@@ -825,7 +825,7 @@ export function replaySeek(deps: HandlerDeps, tabId: string, index: number, targ
 }
 
 /**
- * `POST /tabs/:tabId/replay/params` ( §3.2/§5 S5, S8.1): thin forward
+ * `POST /tabs/:tabId/replay/params` (§3.2/§5 S5, S8.1): thin forward
  * to the facade's `replaySetParams(tabId, partial)`. The body is passed
  * through as-is (server.ts validates only its shape, `mergeReplayParams` on
  * the facade side validates values).
@@ -835,7 +835,7 @@ export function replaySetParams(deps: HandlerDeps, tabId: string, patch: Record<
 }
 
 /**
- * `GET /tabs/:tabId/replay` ( §3.2/§5 S5): read-only forward to the
+ * `GET /tabs/:tabId/replay` (§3.2/§5 S5): read-only forward to the
  * facade's zero-arg `replayState()`. The probe is deliberately GLOBAL — there
  * is one pult, and its own answer names the armed tab (`armed.rootTabId`), so
  * a caller compares rather than addresses. `tabId` therefore stays in the URL
@@ -850,7 +850,7 @@ export function replayState(deps: HandlerDeps, tabId: string): Promise<unknown> 
  * `POST /tabs {kind:"new"}` (design §4.2): the sanctioned dialog bypass (§1) —
  * the same `manager.createTab` + `deliverTabPort` the tab-ipc "new" handler
  * runs AFTER `dialog.showOpenDialog`, with the workspace supplied directly.
- *  W10 (W13 live-dogfood finding): a real "new" tab pins to the active
+ * W10 (W13 live-dogfood finding): a real "new" tab pins to the active
  * connection at creation (`tab-ipc.ts`'s `handleCreate`) — this bypass must
  * mirror that pin, or every automation-created tab silently spawns unpinned
  * regardless of which connection is active, and the whole session-pinning
@@ -880,7 +880,7 @@ export function createTabNew(
 
 /**
  * `POST /tabs {kind:"resume"}` (design §4.2): full picker path through the
- * facade/bridge. `replacementConnectionId` ( W10-FIX F1, W13
+ * facade/bridge. `replacementConnectionId` (W10-FIX F1, W13
  * live-dogfood finding) forwards the caller's explicit re-pin target to the
  * SAME `resumeSession` facade method — omitted entirely when undefined so a
  * caller that never supplies it exercises the byte-identical bare-resume path
@@ -895,7 +895,7 @@ export function closeTab(deps: HandlerDeps, tabId: string): Promise<unknown> {
 }
 
 /**
- * `POST /tabs/:tabId/host/kill` ( FIX-A): forces the tab's live host
+ * `POST /tabs/:tabId/host/kill` (FIX-A): forces the tab's live host
  * child to exit so the existing crash-respawn machinery (`tabs.ts`) runs for
  * real — the sole way a cross-respawn smoke can prove the retry UI survives
  * an actual respawn instead of asserting store state alone. Main-plane only,
@@ -1006,7 +1006,7 @@ export function startScreenSetModel(deps: HandlerDeps, model: string | null): Pr
   return deps.callFacade("startScreenSetModel", [model]);
 }
 
-// --- Engine selection (codex-fixes , cut §3.7/§5.6 B5-auto): thin
+// --- Engine selection (codex-fixes, cut §3.7/§5.6 B5-auto): thin
 // wrapper over the frozen facade contract, same discipline as the probes
 // above — the facade owns every guard (no_draft / invalid_engine), this
 // layer only forwards the arg. Read-back rides the EXISTING GET
@@ -1021,7 +1021,7 @@ export function startScreenToggleProjectMenu(deps: HandlerDeps, open: boolean): 
   return deps.callFacade("startScreenToggleProjectMenu", [open]);
 }
 
-// --- Model-menu grouped picker ( cut-1): thin wrappers over the
+// --- Model-menu grouped picker (cut-1): thin wrappers over the
 // frozen facade contract, same discipline as startScreenToggleProjectMenu
 // above — the facade owns every guard (no_draft / did_not_open / not_present
 // / did_not_close), this layer only forwards method + args. ---
@@ -1112,7 +1112,7 @@ export function agentCardExpand(deps: HandlerDeps, tabId: string, toolCallId: st
   return deps.callFacade("agentCardExpand", [tabId, toolCallId]);
 }
 
-// --- Try-again button probe/driver ( W8-FIX #2): same thin-wrapper
+// --- Try-again button probe/driver (W8-FIX #2): same thin-wrapper
 // discipline as the agent-card probe/driver above — the facade owns every
 // guard, this layer only forwards method + args. ---
 
@@ -1124,7 +1124,7 @@ export function tryAgainButtonClick(deps: HandlerDeps, tabId: string, blockId: s
   return deps.callFacade("tryAgainButtonClick", [tabId, blockId]);
 }
 
-// --- Workflow-step checklist probe/driver ( slice S4): same
+// --- Workflow-step checklist probe/driver (slice S4): same
 // thin-wrapper discipline as the agent-card / try-again-button probe/driver
 // pairs above — the facade owns every guard, this layer only forwards
 // method + args. ---
@@ -1215,7 +1215,7 @@ export function settingsPermissionRemove(deps: HandlerDeps, toolName: string, pa
   return deps.callFacade("settingsPermissionRemove", [{ toolName, pattern }]);
 }
 
-// --- Provider connections grid/drawer probe/driver ( W12): thin
+// --- Provider connections grid/drawer probe/driver (W12): thin
 // wrappers over the frozen facade contract, same discipline as the settings
 // probe/driver above — the facade owns every guard (grid_not_mounted /
 // connection_not_found / drawer_not_open / submit_disabled / did_not_settle /
@@ -1272,7 +1272,7 @@ export function settingsProviderDrawerClose(deps: HandlerDeps): Promise<unknown>
   return deps.callFacade("settingsProviderDrawerClose", []);
 }
 
-// --- Generic focus probe ( W12-smoke): thin wrapper, same discipline
+// --- Generic focus probe (W12-smoke): thin wrapper, same discipline
 // as every other probe above — no pane owns this, it reads
 // `document.activeElement` directly (see FocusState's doc comment in
 // renderer/src/automation.ts). ---
@@ -1309,7 +1309,7 @@ export function codexPaneTrustOpen(deps: HandlerDeps): Promise<unknown> {
   return deps.callFacade("codexPaneTrustOpen", []);
 }
 
-// --- Binary-trust consent dialog probe/driver (, CUT-S4.md §3.8):
+// --- Binary-trust consent dialog probe/driver (CUT-S4.md §3.8):
 // thin wrappers, same discipline as the Codex pane probe/drivers above —
 // the facade owns every guard (dialog_not_open / button_not_present), this
 // layer only forwards method + args. ---
@@ -1322,7 +1322,7 @@ export function binaryTrustDialogResolve(deps: HandlerDeps, accept: boolean): Pr
   return deps.callFacade("binaryTrustDialogResolve", [accept]);
 }
 
-// --- Trusted-binaries Settings-section probe/driver (, D-S4-7):
+// --- Trusted-binaries Settings-section probe/driver (D-S4-7):
 // thin wrappers, same discipline as above — the facade owns every guard
 // (pane_not_mounted / button_not_present), this layer only forwards method +
 // args. ---
@@ -1394,7 +1394,7 @@ export function mcpPaneState(deps: HandlerDeps): Promise<unknown> {
   return deps.callFacade("mcpPaneState", []);
 }
 
-/** : `GET /settings/scope` -> the Settings scope dropdown's read-only state (selection, label, count). */
+/** `GET /settings/scope` -> the Settings scope dropdown's read-only state (selection, label, count). */
 export function scopeState(deps: HandlerDeps): Promise<unknown> {
   return deps.callFacade("scopeState", []);
 }
@@ -1496,7 +1496,7 @@ export function profileToggleTelemetry(deps: HandlerDeps): Promise<unknown> {
   return deps.callFacade("profileToggleTelemetry", []);
 }
 
-// : period control + full models list + Refresh became drivable —
+// period control + full models list + Refresh became drivable —
 // same thin-wrapper discipline as every route above (the facade owns every
 // guard: pane_not_mounted / control_not_present / invalid_period /
 // did_not_switch / expander_not_present / did_not_toggle /
@@ -1514,7 +1514,7 @@ export function profileRefresh(deps: HandlerDeps): Promise<unknown> {
   return deps.callFacade("profileRefresh", []);
 }
 
-//  S5: the footer's two-step cache-rebuild gesture, and the settings
+// S5: the footer's two-step cache-rebuild gesture, and the settings
 // geometry probe defect 1 needed but no route ever had. Same thin-wrapper
 // discipline (the facade owns every guard: pane_not_mounted /
 // rebuild_not_present / busy / did_not_arm / did_not_start / did_not_settle).
@@ -1550,7 +1550,7 @@ export function dockTabSplit(deps: HandlerDeps, id: string): Promise<unknown> {
   return deps.callFacade("dockTabSplit", [id]);
 }
 
-/** `POST /window/size {width,height}`: resizes the real window (dock mode legs). */
+/** `POST /window/size {width,height}` resizes the real window (dock mode legs). */
 export function windowSetSize(deps: HandlerDeps, width: number, height: number): { ok: true } | { ok: false; reason: string } {
   const win = deps.getWindow();
   if (win === null || win.isDestroyed()) {
@@ -1563,7 +1563,7 @@ export function windowSetSize(deps: HandlerDeps, width: number, height: number):
   return { ok: true };
 }
 
-// --- Vision pane probe/driver ( срез E2c): thin wrappers over the
+// --- Vision pane probe/driver (срез E2c): thin wrappers over the
 // frozen facade contract, same discipline as the Profile pane probe/driver
 // above — the facade owns every guard (pane_not_mounted / option_not_present /
 // field_not_present / save_not_present / save_disabled / probe_not_present /
@@ -1676,7 +1676,7 @@ export function hooksPanelToggle(deps: HandlerDeps, tabId: string): Promise<unkn
 }
 
 // --- Checkpoint timeline / rewind probe+driver (design
-// slice-P7.26-R2-ratification.md §1 W3;  rework — the DOM panel
+// slice-P7.26-R2-ratification.md §1 W3; rework — the DOM panel
 // is gone, the facade requests the fresh list itself): thin wrappers over
 // the frozen facade contract, same discipline as the LSP/Hooks panel probes
 // above — the facade owns every guard (tab_not_active, checkpoint
@@ -1789,7 +1789,7 @@ export async function waitFor(
   const start = now();
 
   for (;;) {
-    // : a child tab's state lives in `childStates`, never in
+    // a child tab's state lives in `childStates`, never in
     // `states` — `/wait` accepts a child tabId too, so both are consulted.
     const snapshot = (await deps.callFacade("snapshot", [])) as {
       states: Record<string, WaitTabState>;

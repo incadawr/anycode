@@ -1,5 +1,5 @@
 /**
- * Production-wiring regression test ( CUT-S2 §10.9.3 F4, review
+ * Production-wiring regression test (CUT-S2 §10.9.3 F4, review
  * findings from commit `ddc2705`): proves that `main/index.ts` — not just the
  * pure policy function it delegates to — really SUPPLIES
  * `TabHostManagerDeps.resolveProviderConnection` when it constructs the
@@ -159,7 +159,7 @@ vi.mock("electron", () => ({
     handle: (channel: string, listener: IpcHandler): void => {
       ipcHandlers.set(channel, listener);
     },
-    // panel-track CUT.md D9 ( 96-P1): registerPreviewPanelIpc's
+    // panel-track CUT.md D9 (96-P1): registerPreviewPanelIpc's
     // SET_BOUNDS channel is the first main-process user of `ipcMain.on`
     // (one-way, no reply) — this file's real-index.ts boot reaches it too,
     // so the mock needs a harmless no-op capture, not just `.handle`.

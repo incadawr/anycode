@@ -1,5 +1,5 @@
 /**
- *  — stateful wiring tests for the transcript tick rail
+ * stateful wiring tests for the transcript tick rail
  * (TranscriptMinimap): hover -> popover -> rewind confirm -> onRewind, the
  * popover close-delay timer, and the jump click. The repo's
  * SettingsScreen.test.ts/BackgroundTasksPanel.test.ts pattern (node

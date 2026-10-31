@@ -1,5 +1,5 @@
 /**
- * Native Claude subscription login (SLICE-CC-LOGIN, , cut §1/§4):
+ * Native Claude subscription login (SLICE-CC-LOGIN, cut §1/§4):
  * writes a tiny, custody-clean `.command` script into `os.tmpdir()` and hands
  * it to `openPath` (main injects `shell.openPath`, tests inject a spy) — the
  * REAL terminal that opens is not our child, we never spawn anything here.

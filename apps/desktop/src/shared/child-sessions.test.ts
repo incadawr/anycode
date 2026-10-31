@@ -114,7 +114,7 @@ describe("parseChildSpawnRequest", () => {
     expect(parseChildSpawnRequest(withOptional)).toEqual(withOptional);
   });
 
-  //  CUT-S4 §3.1: `engine` is absent = core (byte-compatible with
+  // CUT-S4 §3.1: `engine` is absent = core (byte-compatible with
   // every S2 producer); present = the child boots that engine instead of an
   // in-process core loop.
   describe("engine (CUT-S4 §3.1)", () => {
@@ -173,11 +173,11 @@ describe("parseChildSpawnRequest", () => {
     expect(parseChildSpawnRequest({ ...valid, provider: 7 })).toBeNull();
   });
 
-  // Review finding 1 ( S2a review): a provider mints `part.
+  // Review finding 1 (S2a review): a provider mints `part.
   // toolCallId` verbatim on OpenAI-compatible connects (stream-translator.ts)
   // and this validator was the only gate before `spawnToolCallId` becomes a
   // literal argv value in host/boot.ts's `--child-spawn-call <id>`
-  // (parseHostArgs reads `argv[i+1]` positionally,  CUT-S2 §2.6.2).
+  // (parseHostArgs reads `argv[i+1]` positionally, CUT-S2 §2.6.2).
   // A model-chosen id of `"--child-mode"` previously passed `isNonEmptyString`
   // unchanged and would have desynchronized the whole arg list.
   describe("id-shaped field hardening (review finding 1)", () => {
@@ -270,7 +270,7 @@ describe("parseChildSpawnRequest", () => {
     });
   });
 
-  // : `connectionId` is the exact id a profile's `connection:`
+  // `connectionId` is the exact id a profile's `connection:`
   // frontmatter selects. Wire shape mirrors `provider`; the two are mutually
   // exclusive (two ways to name the same connection).
   describe("connectionId routing", () => {
@@ -506,7 +506,7 @@ describe("parseChildRunEvent", () => {
     expect(parseChildRunEvent(msg)).toBeNull();
   });
 
-  it("accepts a sent event ( ack, additive union member)", () => {
+  it("accepts a sent event (ack, additive union member)", () => {
     const msg = { type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "sent" };
     expect(parseChildRunEvent(msg)).toEqual(msg);
   });
@@ -628,7 +628,7 @@ describe("parseChildRunEvent", () => {
     expect(parseChildRunEvent(msg)).toBeNull();
   });
 
-  //  CUT-S2 §10.7 п.4: additive amendment to this otherwise-frozen
+  // CUT-S2 §10.7 п.4: additive amendment to this otherwise-frozen
   // terminal variant — `activitySuppressed` mirrors `ChildTerminal`'s own
   // field through to the parent-host wire.
   describe("terminal event activitySuppressed (CUT-S2 §10.7 п.4, additive)", () => {
@@ -820,7 +820,7 @@ describe("parseChildTerminal", () => {
     expect(parseChildTerminal(withSuppressed)).toEqual(withSuppressed);
   });
 
-  it("round-trips declaredDoneAtCeiling:true on ChildTerminal and ChildRunEvent terminal; rejects non-true values; absent stays absent (TASK 4149)", () => {
+  it("round-trips declaredDoneAtCeiling:true on ChildTerminal and ChildRunEvent terminal; rejects non-true values; absent stays absent", () => {
     const withFlag = { ...valid, status: "max_turns" as const, declaredDoneAtCeiling: true };
     expect(parseChildTerminal(withFlag)).toEqual(withFlag);
     expect(parseChildTerminal({ ...withFlag, declaredDoneAtCeiling: false })).toBeNull();
@@ -845,7 +845,7 @@ describe("parseChildTerminal", () => {
     expect("declaredDoneAtCeiling" in (parseChildRunEvent(plain) ?? {})).toBe(false);
   });
 
-  it("round-trips a ceiling summary on ChildTerminal and ChildRunEvent terminal; rejects malformed ones (/4055)", () => {
+  it("round-trips a ceiling summary on ChildTerminal and ChildRunEvent terminal; rejects malformed ones", () => {
     const ceiling = { rounds: 2, grantedTurns: 6, lastRefusal: "stalled" as const };
     const withCeiling = { ...valid, status: "max_turns" as const, ceiling };
     expect(parseChildTerminal(withCeiling)).toEqual(withCeiling);
@@ -874,7 +874,7 @@ describe("parseChildTerminal", () => {
     expect(parseChildRunEvent({ ...event, ceiling: "x" })).toBeNull();
   });
 
-  // : additive model/responseModel on terminal payloads — legacy
+  // additive model/responseModel on terminal payloads — legacy
   // payloads without them parse unchanged (keys stay absent); invalid types,
   // empty strings, and over-cap values are rejected with the same
   // nonempty-capped model validator (CHILD_MODEL_MAX_CHARS).
@@ -947,12 +947,12 @@ describe("parseChildTerminal", () => {
     expect(parseChildTerminal(withoutDuration)).toBeNull();
   });
 
-  it("strips unknown additive keys instead of rejecting, returning only known fields (TASK 4239)", () => {
+  it("strips unknown additive keys instead of rejecting, returning only known fields", () => {
     expect(parseChildTerminal({ ...valid, futureAdditive: { nested: true } })).toEqual(valid);
     expect(parseChildTerminal({ ...valid, childSessionId: "sess-1" })).toEqual(valid);
   });
 
-  it("still fails closed on a malformed known field even when additive keys are present (TASK 4239)", () => {
+  it("still fails closed on a malformed known field even when additive keys are present", () => {
     expect(parseChildTerminal({ ...valid, turns: "many" })).toBeNull();
     expect(parseChildTerminal({ ...valid, futureAdditive: 1, status: "done" })).toBeNull();
   });
@@ -995,7 +995,7 @@ describe("PERMISSION_MODE_VALUES parity with @anycode/core's PERMISSION_MODES (r
   });
 });
 
-//  cross-review F3: the desktop wire mirror of core's
+// cross-review F3: the desktop wire mirror of core's
 // CeilingRefusalReason is a hand-copied whitelist. A value added to core and
 // missed here would make every terminal carrying it fail closed to null (the
 // child's report is discarded). The exhaustive Record below fails to COMPILE
@@ -1011,7 +1011,7 @@ const CORE_CEILING_REFUSAL_REASONS: Record<CeilingRefusalReason, true> = {
   stalled: true,
 };
 
-describe("ChildCeilingRefusalReason parity with core's CeilingRefusalReason ( F3)", () => {
+describe("ChildCeilingRefusalReason parity with core's CeilingRefusalReason (F3)", () => {
   it.each(Object.keys(CORE_CEILING_REFUSAL_REASONS) as CeilingRefusalReason[])("parses core reason %s on a terminal", (reason) => {
     const terminal = {
       type: CHILD_TERMINAL_TYPE,
@@ -1028,7 +1028,7 @@ describe("ChildCeilingRefusalReason parity with core's CeilingRefusalReason ( F3
 });
 
 // ---------------------------------------------------------------------------
-// isValidChildId ( CUT-S2 §10.5, additive export): lets the parent
+// isValidChildId (CUT-S2 §10.5, additive export): lets the parent
 // host's RPC client pre-flight validate a spawnToolCallId BEFORE putting it
 // on the wire. It must accept/reject the exact same shapes
 // parseChildSpawnRequest's own spawnToolCallId gate does — a disagreement
@@ -1099,7 +1099,7 @@ describe("isValidChildId", () => {
   });
 });
 
-// : maxTurns — the creating spawn's turn budget. Absent stays valid;
+// maxTurns — the creating spawn's turn budget. Absent stays valid;
 // a defined value must be a safe integer within 1..CHILD_MAX_TURNS_CEILING.
 describe("parseChildSpawnRequest — maxTurns", () => {
   const valid = {
@@ -1112,7 +1112,7 @@ describe("parseChildSpawnRequest — maxTurns", () => {
     permissionMode: "build",
   };
 
-  it("a payload without maxTurns still parses unchanged (pre- shape)", () => {
+  it("a payload without maxTurns still parses unchanged", () => {
     expect(parseChildSpawnRequest(valid)).toEqual(valid);
   });
 
@@ -1137,10 +1137,10 @@ describe("parseChildSpawnRequest — maxTurns", () => {
   });
 });
 
-//  review F1: the accepted event's additive optional maxTurns —
+// review F1: the accepted event's additive optional maxTurns —
 // the child host's EFFECTIVE turn cap, carried so the parent-side budget
 // latch can warn against the cap the child will actually stop at.
-describe("parseChildRunEvent — accepted maxTurns ( F1)", () => {
+describe("parseChildRunEvent — accepted maxTurns (F1)", () => {
   const base = {
     type: CHILD_RUN_EVENT_TYPE,
     requestId: "req-acc",

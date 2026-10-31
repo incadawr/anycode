@@ -35,9 +35,9 @@ export interface CommunicationControllerDeps {
   isSessionExposed(sessionId: string): boolean;
   /** Session handle for `list_sessions` (main-owned). */
   handleOf?(sessionId: string): string | undefined;
-  /** : per-session External approvals switch (main-owned). Absent = no approvals anywhere. The env-file mode never gets it. */
+  /** per-session External approvals switch (main-owned). Absent = no approvals anywhere. The env-file mode never gets it. */
   isExternalApprovalEnabled?(sessionId: string): boolean;
-  /** : opens a tab for `create_session`. Absent = create_session always refuses. Settings mode only; the env-file mode never gets it. */
+  /** opens a tab for `create_session`. Absent = create_session always refuses. Settings mode only; the env-file mode never gets it. */
   createSessionByAgent?(request: CreateSessionRequest): Promise<CreateSessionOutcome>;
   agentOpenedSessions?: Set<string>;
   closeSessionByAgent?(sessionId: string): Promise<CloseSessionOutcome>;

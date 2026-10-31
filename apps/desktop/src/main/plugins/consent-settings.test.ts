@@ -1,5 +1,5 @@
 /**
- *  xfix H1(c): the consent writers against a REAL settings.json in
+ * xfix H1(c): the consent writers against a REAL settings.json in
  * a temp dir. The user-facing writer must land every write (the old main
  * closure silently dropped every grant after the first); the grandfathering
  * writer keeps its keep-the-winner guard.
@@ -54,7 +54,7 @@ describe("grandfatherPluginsMcpConsent (one-shot migration)", () => {
   });
 });
 
-describe("upsertPluginServiceConsent (a, read-modify-write under the lock)", () => {
+describe("upsertPluginServiceConsent (read-modify-write under the lock)", () => {
   const sgrant = (plugin: string, hash: string) => ({ plugin, servicesHash: hash, grantedAt: "2026-10-25T00:00:00.000Z" });
 
   it("writes the first service grant without touching mcpConsent", async () => {

@@ -13,7 +13,7 @@ export interface SlashCompletion {
 /**
  * Slash-command autocomplete candidates for a composer query.
  *
- * Rules (, slice 1):
+ * Rules (slice 1):
  * - Only slash queries qualify: `query` must start with `/`. Anything else
  *   (including the empty string and bare words like `help`) returns `[]` —
  *   autocomplete is opt-in for slash commands only.

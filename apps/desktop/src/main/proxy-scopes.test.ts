@@ -297,7 +297,7 @@ describe("importLegacyProxy — one profile per proxy, not per scope", () => {
     expect("network" in draft).toBe(false);
   });
 
-  // B-06: the registry's custody rule is stricter than 's legacy
+  // B-06: the registry's custody rule is stricter than's legacy
   // predicate. A legacy string carrying a path (a PAC url in the proxy field,
   // most likely) keeps working AS a legacy string, but converting it would have
   // to silently rewrite the endpoint — so the conversion is refused instead.
@@ -330,7 +330,7 @@ describe("uniqueProxyProfileName", () => {
   });
 });
 
-// ── : boot-time migration of credentialed legacy proxyUrl strings ──
+// ── boot-time migration of credentialed legacy proxyUrl strings ──
 
 describe("migrateLegacyProxyUrls", () => {
   /**
@@ -406,7 +406,7 @@ describe("migrateLegacyProxyUrls", () => {
     expect(vault.writes.map((w) => w.value).sort()).toEqual(["cp", "lp"]);
   });
 
-  it("a scope that already carries a ref keeps it: the outranked credentialed string is stripped, never imported over the ref ( review)", async () => {
+  it("a scope that already carries a ref keeps it: the outranked credentialed string is stripped, never imported over the ref (review)", async () => {
     const vault = recordingVault();
     const doc = withConnections([connectionFixture("conn-1", { proxyRef: "chosen", proxyUrl: "http://old:pw@stale:3128" })]);
     const result = await migrateLegacyProxyUrls(doc, { ...importDeps(ids("proxy-new")), ...vault.deps });

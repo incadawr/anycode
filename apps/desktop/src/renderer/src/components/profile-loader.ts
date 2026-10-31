@@ -1,5 +1,5 @@
 /**
- * Profile pane load orchestration ( S4, build/task187-plan.md §S4):
+ * Profile pane load orchestration (S4, §S4):
  * a pure reducer plus a non-React controller that owns every request the
  * pane can issue. It lives OUTSIDE ProfilePane.tsx on purpose — this
  * package's vitest runs `environment: "node"` with no jsdom and no
@@ -39,7 +39,7 @@ import type {
 /**
  * Every request the pane can issue. `mount-cached` is the instant cache read
  * fired alongside `mount-fresh`; `set-telemetry` is here (rather than doing
- * its own `setResult` at the click site, as it did before ) because
+ * its own `setResult` at the click site, as it did before) because
  * its response IS a fresh `ProfileStatsView` and therefore races mount and
  * Refresh for the same state; `rebuild` is the footer's cache-rebuild action.
  */
@@ -157,7 +157,7 @@ function settleCached(state: ProfileLoadState, gen: number, result: ProfileStats
  * success replaces the view and clears any standing error, refusal keeps the
  * view exactly as it was and records the error beside it.
  *
- * PROGRESS GUARD ( S4 catch-up): a success also records the backlog
+ * PROGRESS GUARD (S4 catch-up): a success also records the backlog
  * it reported and compares it with the previous fresh one. A backlog that
  * did not SHRINK means the next pass would read the same files again — the
  * standing case being an oversized file that permanently cuts the reachable
@@ -353,7 +353,7 @@ export function profileSkippedNewestNoteText(view: ProfileStatsView): string | n
 }
 
 /**
- * Whether the controller should issue another pass BY ITSELF ( S4
+ * Whether the controller should issue another pass BY ITSELF (S4
  * catch-up). The owner's requirement is that the numbers fill in on their
  * own — a cold cache needs three passes on a 60k-file directory, and a note
  * telling the user to press Refresh twice is not "they pull themselves in".
@@ -432,7 +432,7 @@ export function profileUpdateErrorText(error: ProfileLoadError, hasView: boolean
  * The whole IPC surface this pane drives, as ONE injectable object. Every
  * bridge call in the pane goes through here (`ProfilePane.tsx`'s
  * `toProfileLoaderBridge` is the only adapter), so reconciling with the real
- * preload once  S3 lands is a single-file edit.
+ * preload once S3 lands is a single-file edit.
  */
 export interface ProfileLoaderBridge {
   getStats(): Promise<ProfileStatsResult>;
@@ -460,7 +460,7 @@ export interface ProfileLoader {
  * A rejected bridge promise is normalised into `{ok:false, reason:"io_error"}`
  * rather than left to float: an unhandled rejection would strand `inFlight`
  * forever, i.e. a permanently spinning Refresh button — the exact failure
- * mode  defect 2 is about.
+ * mode defect 2 is about.
  */
 export function createProfileLoader(
   bridge: ProfileLoaderBridge,

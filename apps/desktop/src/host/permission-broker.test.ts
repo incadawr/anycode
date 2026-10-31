@@ -167,13 +167,13 @@ describe("IpcPermissionBroker matrix", () => {
 });
 
 /**
- *  slice 1: the "an ask is currently pending" live reader the INLINE
+ * slice 1: the "an ask is currently pending" live reader the INLINE
  * subagent stall clock polls (an inline child shares the parent's own broker
  * instance and has no push event for permission wait, unlike a session-tier
  * child). Widens the core PermissionBroker port with an optional
  * `isAwaitingApproval` property; this is its one concrete implementation.
  */
-describe("IpcPermissionBroker.isAwaitingApproval ( slice 1)", () => {
+describe("IpcPermissionBroker.isAwaitingApproval (slice 1)", () => {
   it("is false with nothing pending, true while an ask is parked (shown or queued), and false again once every ask settles", async () => {
     const { broker, emitted } = makeBroker();
     expect(broker.isAwaitingApproval).toBe(false);
@@ -342,7 +342,7 @@ describe("IpcPermissionBroker.pendingToolName (slice 2.2.3, design §5)", () => 
 });
 
 /**
- * : an ExitPlanMode ask is a human reading a whole implementation plan,
+ * an ExitPlanMode ask is a human reading a whole implementation plan,
  * not a one-glance "allow this command?" — the generic 120 s deadline would
  * fail-closed-deny a plan the user is still reading, and the model would be
  * told the plan was rejected. The plan ask therefore gets its own, longer
@@ -388,7 +388,7 @@ describe("plan-approval ask deadline", () => {
 });
 
 /**
- * : an unanswered ask means nobody is at the screen, and every later ask
+ * an unanswered ask means nobody is at the screen, and every later ask
  * in that session is denied outright instead of burning its own full deadline.
  * The live failure this prevents: four serial asks × 120 s of dead wall clock,
  * plus a subagent losing its entire time budget to asks no one could answer.
@@ -490,7 +490,7 @@ describe("unattended latch", () => {
 });
 
 /**
- *  cross-review finding 1: the latch's owner-recovery contract.
+ * cross-review finding 1: the latch's owner-recovery contract.
  * The scenario that made 4078's posture safe was "a build-mode codex child
  * now asks through the broker, the owner opens the child's tab and answers".
  * That contract has TWO halves, and only the first was wired:
@@ -498,9 +498,9 @@ describe("unattended latch", () => {
  *  1. before expiry — the owner clicks: `handleResponse` disarms (proven
  *     above, "a permission answer disarms the latch").
  *  2. AFTER expiry (the detached-child case): the ask expired unseen in the
- *     hidden child tab (a detached run has no live card; ), the latch
+ *     hidden child tab (a detached run has no live card), the latch
  *     armed, and the owner then opens the tab and answers the EXPIRED ask.
- *     The click still routes through `handleResponse` — 's own law is
+ *     The click still routes through `handleResponse` — the latch's rule is
  *     "a click is proof of a human — even for an unknown/already-settled
  *     requestId, since the click happened either way" — so the latch MUST
  *     disarm there too, and asking must resume.
@@ -511,7 +511,7 @@ describe("unattended latch", () => {
  * the latch once would keep fast-denying its whole run even while its owner
  * is actively reading the tab.
  */
-describe("unattended latch — owner recovery after expiry ( finding 1)", () => {
+describe("unattended latch — owner recovery after expiry (finding 1)", () => {
   it("a click on the EXPIRED ask disarms the latch and asking resumes", async () => {
     vi.useFakeTimers();
     const { broker, emitted } = makeBroker(120_000);
@@ -553,10 +553,10 @@ describe("unattended latch — owner recovery after expiry ( finding 1)", () => 
 });
 
 /**
- * : the always-allow seam the two ENGINE boots pass and the core boot
+ * the always-allow seam the two ENGINE boots pass and the core boot
  * deliberately does not (see PermissionRuleMatcher's header). These assert both
  * halves: a matching rule is answered without ever reaching the UI, and a
- * broker constructed without the seam is byte-identical to every pre-
+ * broker constructed without the seam is byte-identical to every
  * one — which is what makes the core path's hook-can-still-ask invariant safe.
  */
 describe("IpcPermissionBroker always-allow rules", () => {
@@ -577,7 +577,7 @@ describe("IpcPermissionBroker always-allow rules", () => {
   }
 
   it("answers a matching ask with allow, without a permission_request and without parking it", async () => {
-    // : the shared `request` fixture is a Write WITHOUT workspace
+    // the shared `request` fixture is a Write WITHOUT workspace
     // facts, which the rule seam now correctly refuses to auto-allow — so this
     // suite's own Write asks carry facts proving an inside-workspace target
     // (the shape every real Write approval now arrives with via the dispatcher
@@ -595,8 +595,8 @@ describe("IpcPermissionBroker always-allow rules", () => {
     expect(broker.pendingCount).toBe(0);
     // The store is consulted with the ask's own toolName and raw input FIRST,
     // so a rule literally stored against the ask's own toolName always wins
-    // untranslated. ( later added ONE scoped exception: an unmatched
-    // CodexExec command approval retries as Bash/{command} — see the 
+    // untranslated. (later added ONE scoped exception: an unmatched
+    // CodexExec command approval retries as Bash/{command} — see the
     // suite below. This Write-tool case remains untranslated.)
     expect(seen).toEqual([{ toolName: "Write", input: inside.input }]);
   });
@@ -652,7 +652,7 @@ describe("IpcPermissionBroker always-allow rules", () => {
 });
 
 /**
- * Where 's latch and 's rule seam meet — a case neither branch
+ * Where the latch and the rule seam meet — a case neither branch
  * could see alone, since each shipped without the other. The rule wins: it is a
  * standing human answer given in advance, so the "nobody is at the screen"
  * premise the latch reasons from simply does not apply to it. The opposite
@@ -724,8 +724,8 @@ describe("always-allow rules vs the unattended latch", () => {
 });
 
 /**
- * : scoped broker-only translation.  deliberately forbade any
- * Bash/CodexExec translation;  carves out exactly one exception — a
+ * scoped broker-only translation. The rule seam deliberately forbade any
+ * Bash/CodexExec translation; this change carves out exactly one exception — a
  * CodexExec request that missed every rule under its own name and carries a
  * string `command` (and is not a stdin write) is retried against the matcher
  * as ("Bash", {command}). Core matching semantics, upstream hooks, and the
@@ -814,9 +814,9 @@ describe("IpcPermissionBroker CodexExec->Bash rule translation", () => {
 });
 
 /**
- *  (cross-review F1): the ENGINE-boot rule seam must honour the
+ * (cross-review F1): the ENGINE-boot rule seam must honour the
  * same workspace confinement the core boot enforces. A persisted
- * `{toolName:"Write"}` rule (global settings.json,  seeding) may not
+ * `{toolName:"Write"}` rule (global settings.json, seeding) may not
  * silently allow a Write whose target cannot be PROVEN inside the session
  * workspace — on a claude/codex boot the broker is the only gate, so an
  * unconfined matcher here reproduces the 4294 incident verbatim (child

@@ -1,5 +1,5 @@
 /**
- * Node fs adapter for the plugins subsystem ( S1-B): implements
+ * Node fs adapter for the plugins subsystem (S1-B): implements
  * the intersection of core's `FileSystemPort` (what scanPluginsAdmin/
  * discoverPlugins read) and main/plugins/store.ts's `PluginStoreFs` (what
  * the store writes) over `node:fs/promises` — the NodeSkillsFs precedent.

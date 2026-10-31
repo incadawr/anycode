@@ -1,5 +1,5 @@
 /**
- *  — newest-end SKIP semantics of the incremental cache scan,
+ * newest-end SKIP semantics of the incremental cache scan,
  * driven through the REAL ProfileStatsCacheStore over an injected in-memory
  * ProfileFs (coherent snapshots, real size/mtime fingerprints, settable
  * failReadFor / failStatFor, counted directory reads).

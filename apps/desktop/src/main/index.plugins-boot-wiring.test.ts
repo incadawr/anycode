@@ -1,5 +1,5 @@
 /**
- * Production-wiring test for  S1-B: proves main/index.ts boots
+ * Production-wiring test for S1-B: proves main/index.ts boots
  * the plugins control plane in the design §5 order — staging wipe, store
  * GC, legacy MCP grandfathering (one-shot into settings.json
  * `plugins.mcpConsent`), IPC registration, and the ~24h scheduler armed
@@ -176,7 +176,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
-describe("main/index.ts —  S1-B plugins boot wiring", () => {
+describe("main/index.ts — S1-B plugins boot wiring", () => {
   it("wipes staging residue and GCs orphaned store dirs at boot", async () => {
     const pluginsDir = join(fakeHomeRef.current, ".anycode", "plugins");
     // Crash residue in staging + an orphaned store dir (no state entry).

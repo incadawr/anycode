@@ -42,13 +42,13 @@ export interface EstablishHostWorkspaceTrustOptions {
   home: string;
   env: NodeJS.ProcessEnv;
   /**
-   * : injected realpath for key canonicalisation (symlink and
+   * injected realpath for key canonicalisation (symlink and
    * target share one trust record). Production callers pass `node:fs`'s
    * realpathSync; absent = legacy resolve-only behaviour.
    */
   realpathSync?: (path: string) => string;
   /**
-   *  xfix D4: true for a CHILD tab's boot (args.child present).
+   * xfix D4: true for a CHILD tab's boot (args.child present).
    * A child shares its parent's workspace, so the parent's trust record (and
    * its once-approval, which main stamps into the child's fork env the same
    * way) already answers the question; a child surface has no satisfiable
@@ -87,7 +87,7 @@ function toHostTrust(workspace: string, trust: WorkspaceTrustResult, childSurfac
   if (trust.state !== "unknown" && trust.state !== "changed") {
     return { projectTrusted: trust.projectTrusted };
   }
-  //  xfix D4: a child surface cannot answer the question — the
+  // xfix D4: a child surface cannot answer the question — the
   // parent's record/once-approval (same workspace, same fork env stamp)
   // decides, and no unsatisfiable dialog is reported for the child to show.
   if (childSurface) {

@@ -1,5 +1,5 @@
 /**
- * Subagent stall detector ( slice 1). Measures SILENCE — time since the
+ * Subagent stall detector (slice 1). Measures SILENCE — time since the
  * child last showed a sign of life — never total wall-clock work time; reports
  * once past the threshold and keeps running, never kills, never aborts, never
  * ends the loop. Shared by both subagent tiers: the inline runner

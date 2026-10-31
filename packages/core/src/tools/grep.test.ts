@@ -580,7 +580,7 @@ describe("grepTool — tgrep backend selection", () => {
   });
 });
 
-describe("grepTool — tgrep capped stdout falls through the ladder ( cross-review F1)", () => {
+describe("grepTool — tgrep capped stdout falls through the ladder (cross-review F1)", () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -643,7 +643,7 @@ describe("grepTool — tgrep capped stdout falls through the ladder ( cross-revi
   });
 });
 
-describe("grepTool — tgrep + rg re-check stay inside the tool budget ( cross-review F3)", () => {
+describe("grepTool — tgrep + rg re-check stay inside the tool budget (cross-review F3)", () => {
   let tmpDir: string;
 
   beforeEach(() => {

@@ -264,7 +264,7 @@ describe("Vault.statuses — multi-key (slice 2.5)", () => {
     expect(status?.set).toBe(true);
   });
 
-  // : the proxy-profile password is the one vault key with NO env
+  // the proxy-profile password is the one vault key with NO env
   // materialisation — it is composed into a proxy URL in main and rides the
   // HTTP(S)_PROXY family, never a SECRET_ENV_KEY. Surfacing it here at all is
   // what lets the profile editor learn `passwordSet` (the value never comes
@@ -349,7 +349,7 @@ describe("Vault.probeSecret — unset vs. undecryptable (B-08)", () => {
   });
 });
 
-describe("Vault OAuth token blob (slice 2.5 §3.3 + : keyed by CONNECTION id)", () => {
+describe("Vault OAuth token blob (slice 2.5 §3.3 + keyed by CONNECTION id)", () => {
   it("round-trips a token blob as one encrypted value under the connection oauth key", async () => {
     const v = makeVault(new FakeSafeStorage({ available: true }), "darwin");
     const blob = { accessToken: "at-1", refreshToken: "rt-1", expiresAt: 1234 };
@@ -463,9 +463,9 @@ it("does not touch the OS keychain to display an empty first-run profile", async
   expect((await vault.statuses({}))[0]?.tier).toBe("os_encrypted");
 });
 
-//  part C: MCP secrets live in the same encrypted store under
+// part C: MCP secrets live in the same encrypted store under
 // `mcp.secret.<NAME>`; listing is name-only, reading decrypts only what is asked.
-describe("Vault — MCP secrets (, C-18)", () => {
+describe("Vault — MCP secrets (C-18)", () => {
   it("C-18: listMcpSecretNames returns sorted names of mcp.secret entries and never decrypts", async () => {
     const decryptSpy = vi.fn((b: Buffer) => b.toString("utf8").slice("enc:".length));
     const ss: SafeStorageLike = {

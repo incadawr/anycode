@@ -1,5 +1,5 @@
 /**
- * : pure-model tests for the Settings scope dropdown. The renderer
+ * pure-model tests for the Settings scope dropdown. The renderer
  * package runs vitest in node, so behaviour is pinned through these helpers.
  */
 import { describe, expect, it } from "vitest";

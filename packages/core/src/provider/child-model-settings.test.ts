@@ -15,7 +15,7 @@ import { buildChildModelSettingsResolver } from "./child-model-settings.js";
 // "glm-5.3-flash" here is a deliberately synthetic stand-in for "a known
 // model with no declared output ceiling" (1M context, low/high/max efforts) —
 // it no longer mirrors the real catalog row of the same id, which gained a
-// declared 131_072 ceiling in . "glm-5.3" mirrors the corrected row
+// declared 131_072 ceiling. "glm-5.3" mirrors the corrected row
 // (a declared ceiling, same effort family). The resolver under test is
 // exercised purely against these local models, never the real catalog, so
 // this drift is cosmetic — see capabilities.test.ts / catalog.test.ts for
@@ -154,7 +154,7 @@ describe("buildChildModelSettingsResolver", () => {
     expect(global("glm-5.3", "high").contextWindowTokens).toBe(999_999);
   });
 
-  // : the child's window follows ITS model, not the parent's bound pair.
+  // the child's window follows ITS model, not the parent's bound pair.
 
   it("a bound override beats the catalog for the model it names, and is ignored for a different model", () => {
     const resolve = buildChildModelSettingsResolver({
@@ -178,7 +178,7 @@ describe("buildChildModelSettingsResolver", () => {
     expect(resolve("glm-5.3-flash", "high").contextWindowTokens).toBe(1_000_000);
   });
 
-  // : onStubFallback names the child spawned on a model the catalog
+  // onStubFallback names the child spawned on a model the catalog
   // declares no ceiling for — the case a bare onClamp wiring cannot surface,
   // since there is no ceiling to clamp an override against.
 
@@ -231,9 +231,9 @@ describe("buildChildModelSettingsResolver", () => {
     expect(stubs).toEqual([]);
   });
 
-  // ── : children get live caps for catalog-unknown models too ──
+  // ── children get live caps for catalog-unknown models too ──
 
-  it(": catalog-unknown model + liveCapabilitiesFor keeps a tier inside the live vocabulary", () => {
+  it("catalog-unknown model + liveCapabilitiesFor keeps a tier inside the live vocabulary", () => {
     const resolve = buildChildModelSettingsResolver({
       catalogEntry: Z_AI_ENTRY,
       envMaxOutputTokens: undefined,
@@ -249,7 +249,7 @@ describe("buildChildModelSettingsResolver", () => {
     expect(resolve("openrouter/unlisted-model", "high").reasoningEffort).toBeUndefined();
   });
 
-  it(": without the dep the resolver is unchanged (regression)", () => {
+  it("without the dep the resolver is unchanged (regression)", () => {
     const resolve = buildChildModelSettingsResolver({
       catalogEntry: Z_AI_ENTRY,
       envMaxOutputTokens: undefined,

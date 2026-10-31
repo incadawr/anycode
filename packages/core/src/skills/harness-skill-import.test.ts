@@ -50,7 +50,7 @@ describe("scanHarnessSkills", () => {
     await seed(join(home, ".zcode/skills/flatz/SKILL.md"), '---\nname: "flatz"\ndescription: "flat zcode"\n---\nbody z\n');
     await seed(
       join(home, ".codex/skills/nested/SKILL.md"),
-      "---\nname: nested\ndescription: codex nested\nmetadata:\n  owner: tracker\n  tags:\n    - a\n---\nnested body\n",
+      "---\nname: nested\ndescription: codex nested\nmetadata:\n  owner: example\n  tags:\n    - a\n---\nnested body\n",
     );
 
     const candidates = await scanHarnessSkills(fs, home, ws);
@@ -92,7 +92,7 @@ describe("applySkillImport", () => {
     const body = "nested body\nwith two lines\n";
     await seed(
       join(home, ".codex/skills/nested/SKILL.md"),
-      `---\nname: nested\ndescription: codex nested\nmetadata:\n  owner: tracker\n  tags:\n    - a\n---\n${body}`,
+      `---\nname: nested\ndescription: codex nested\nmetadata:\n  owner: example\n  tags:\n    - a\n---\n${body}`,
     );
 
     const candidates = await scanHarnessSkills(fs, home, ws);

@@ -114,7 +114,7 @@ describe("toSdkMessages with images (slice 6.2 §2-B1)", () => {
   });
 });
 
-describe("toSdkMessages tool-result image strip on the openai-chat-completions transport ( §5.1)", () => {
+describe("toSdkMessages tool-result image strip on the openai-chat-completions transport (§5.1)", () => {
   const toolResultWithImage: ChatMessage = {
     role: "tool",
     content: [
@@ -163,7 +163,7 @@ describe("toSdkMessages tool-result image strip on the openai-chat-completions t
   });
 });
 
-describe("toSdkMessages presentation invisibility ( slice S1 W3, CUT-S1 §3 W3 item 3)", () => {
+describe("toSdkMessages presentation invisibility (slice S1 W3, CUT-S1 §3 W3 item 3)", () => {
   const toolResultWithPresentation: ChatMessage = {
     role: "tool",
     content: [

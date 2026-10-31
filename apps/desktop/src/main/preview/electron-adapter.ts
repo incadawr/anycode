@@ -1,6 +1,6 @@
 /**
  * Production Electron adapter for PreviewHost (night-track wave-1 cut §2.5,
- *  96-A): the ONLY file in this slice that touches real Electron
+ * 96-A): the ONLY file in this slice that touches real Electron
  * primitives. `preview-host.ts` never imports "electron" — every test there
  * runs against the fakes in its own test file. This module's job is narrow:
  * construct a `BrowserWindow` with the frozen security webPreferences and
@@ -25,7 +25,7 @@
  * BEFORE they ever reach preview-host.ts (F3) — the size bound this module
  * enforces is defense-in-depth on top of preview-host.ts's own re-slice.
  *
- * panel-track CUT.md §1 D3 ( 96-P1): `wrapWebContents` takes a raw
+ * panel-track CUT.md §1 D3 (96-P1): `wrapWebContents` takes a raw
  * `Electron.WebContents` + a `registerCleanup` hook instead of owning a
  * `BrowserWindow` directly, so the SAME adapter mapping (it only ever touches
  * `webContents`, never the owning window) is shared by this file's window
@@ -49,7 +49,7 @@ import {
   type PreviewWindowLike,
 } from "./preview-host.js";
 
-/** Exported: md-window-adapter.ts ( M3) reuses the SAME default preview-window sizing for the md-preview window (CUT.md M3 scope: "match electron-adapter.ts's preview-window conventions"). */
+/** Exported: md-window-adapter.ts (M3) reuses the SAME default preview-window sizing for the md-preview window (CUT.md M3 scope: "match electron-adapter.ts's preview-window conventions"). */
 export const DEFAULT_WIDTH = 1100;
 export const DEFAULT_HEIGHT = 800;
 /** CDP protocol version for `webContents.debugger.attach` (pageerror capture). */
@@ -82,7 +82,7 @@ export function isElectronInternalWarning(message: string, level?: string): bool
   return message.startsWith(ELECTRON_INTERNAL_WARNING_PREFIX);
 }
 
-/** Exported: md-window-adapter.ts ( M3) reuses this for the md-preview window's own `capturePage()` — same `PreviewCapturedImage` wrapping, zero duplication. */
+/** Exported: md-window-adapter.ts (M3) reuses this for the md-preview window's own `capturePage()` — same `PreviewCapturedImage` wrapping, zero duplication. */
 export function wrapCapturedImage(image: NativeImage): PreviewCapturedImage {
   return {
     toPNG: () => image.toPNG(),
@@ -91,7 +91,7 @@ export function wrapCapturedImage(image: NativeImage): PreviewCapturedImage {
   };
 }
 
-/** : a CDP command that never answers must not hang a tool past its own timeout. */
+/** a CDP command that never answers must not hang a tool past its own timeout. */
 export const CDP_SEND_TIMEOUT_MS = 10_000;
 
 function withCdpTimeout<T>(promise: Promise<T>): Promise<T> {
@@ -124,7 +124,7 @@ function withCdpTimeout<T>(promise: Promise<T>): Promise<T> {
  */
 export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => void) => void): PreviewWebContentsLike {
   let consoleListener: (level: PreviewConsoleEntry["level"], message: string) => void = () => {};
-  // : ONE debugger message handler fans CDP events out to the
+  // ONE debugger message handler fans CDP events out to the
   // browser-control driver; the pageerror logic above stays first and unchanged.
   const cdpListeners: Array<(method: string, params: unknown) => void> = [];
   let attached = false;
@@ -213,7 +213,7 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
 
   return {
     loadURL: (url) => wc.loadURL(url),
-    //  stage 4 (live-reload): reverts the page to its current
+    // stage 4 (live-reload): reverts the page to its current
     // URL's on-disk bytes — the subsequent did-finish-load settles the
     // record "ready" exactly like an ordinary load (preview-host.ts's
     // scheduleLiveReload owns the debounce + status guards).
@@ -284,7 +284,7 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
       index: wc.navigationHistory.getActiveIndex(),
     }),
     restoreNavigationHistory: (state) => wc.navigationHistory.restore({ entries: state.entries, index: state.index }),
-    // : CDP access for the browser-control driver (main/preview/browser-control.ts).
+    // CDP access for the browser-control driver (main/preview/browser-control.ts).
     cdp: {
       send: (method, params) => {
         if (!attachDebugger()) {
@@ -310,7 +310,7 @@ export function createElectronPreviewWindow(opts: CreateWindowOpts): PreviewWind
   const win = new BrowserWindow({
     width: DEFAULT_WIDTH,
     height: DEFAULT_HEIGHT,
-    //  stage 4 ( «Этап 4»: always-on-top для
+    // stage 4 («Этап 4»: always-on-top для
     // превью-окон): a preview window is a passive artifact viewer the user
     // wants beside the app — 'floating' keeps it above the main window
     // without fighting the OS focus (macOS floating level; Windows/Linux
@@ -328,7 +328,7 @@ export function createElectronPreviewWindow(opts: CreateWindowOpts): PreviewWind
     },
   });
 
-  // : the window shows the page title (or host), never the app name,
+  // the window shows the page title (or host), never the app name,
   // and offers "Return to AnyCode" (menu bar on Windows/Linux, right-click menu and
   // Cmd/Ctrl+Shift+D everywhere) which re-docks the preview into the pane.
   const wc = win.webContents;

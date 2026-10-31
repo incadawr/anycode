@@ -1,5 +1,5 @@
 /**
- *  / : private on-disk transport for the Claude
+ * private on-disk transport for the Claude
  * `--mcp-config` document. The document carries resolved env values
  * (including explicitly requested inheritEnv) and resolved header values —
  * the authorized 0600 private file IS the transport for those values, so:
@@ -63,7 +63,7 @@ export const POSIX_PATH_OPS: McpForwardPathOps = pathPosix;
 export const WIN32_PATH_OPS: McpForwardPathOps = pathWin32;
 
 /**
- *  fix: the PRODUCTION default is the native platform's own path
+ * fix: the PRODUCTION default is the native platform's own path
  * semantics (node:path already dispatches to win32 on Windows and posix
  * everywhere else), so a native Windows tmpDir (`C:\Users\...`) is accepted
  * by `materializeMcpForwardFile` when called WITHOUT injected path ops —
@@ -110,7 +110,7 @@ export function materializeMcpForwardFile(
   json: string,
   opts: { tmpDir: string; pid: number; paths?: McpForwardPathOps; io?: McpForwardFileIo },
 ): MaterializedMcpForwardFile {
-  //  fix: default to NATIVE platform semantics, not POSIX — on
+  // fix: default to NATIVE platform semantics, not POSIX — on
   // Windows the native tmpDir is a drive path and must be accepted as-is.
   const paths = opts.paths ?? NATIVE_PATH_OPS;
   const io = opts.io ?? NATIVE_IO;

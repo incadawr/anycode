@@ -194,7 +194,7 @@ export function derivePendingForGitCommand(command: GitCommand): GitPendingReque
 }
 
 /**
- * : `TranscriptBlock` with user_text images stripped of their
+ * `TranscriptBlock` with user_text images stripped of their
  * base64 payload (`data`) and provenance extras (`ref`, `cssSize`) — media
  * type + optional sourcePath only, the same shape `promptQueue`/`retryOffer`
  * already expose. Every other block kind passes through unchanged.
@@ -210,7 +210,7 @@ export interface TabStateSnapshot {
   model: string | null;
   mode: PermissionMode | null;
   /**
-   *  §3.7 (part B): the tab-level orchestrate flag (the store's
+   * §3.7 (part B): the tab-level orchestrate flag (the store's
    * copy, kept from the host's `orchestrate_changed` acks). Additive field —
    * the smoke asserts it flips after the ack, same read-only discipline as
    * `mode`.
@@ -249,7 +249,7 @@ export interface TabStateSnapshot {
   promptQueue: readonly { id: string; text: string; imageCount: number }[];
   queuePaused: boolean;
   /**
-   * Codex-fixes  (cut §3.7, additive-optional; frozen in C0b, WIRED in
+   * Codex-fixes (cut §3.7, additive-optional; frozen in C0b, WIRED in
    * B5-auto). Present only for a non-core engine session (mirrors
    * `host_ready.engine`'s "absent = legacy core" projection discipline, cut
    * §2(f)) — an existing core-session snapshot is byte-untouched until
@@ -257,7 +257,7 @@ export interface TabStateSnapshot {
    */
   engine?: { id: EngineId; model?: string; activePresetId?: string };
   /**
-   *  W8 armed Try-again offer projection: mirrors the store's `retry`
+   * W8 armed Try-again offer projection: mirrors the store's `retry`
    * field, null when nothing is offered. Same attachment-stripping discipline
    * as `promptQueue` above (`imageCount`, not the base64 payloads) — `text`
    * is kept as-is since it's just the user's own prompt, already visible
@@ -285,7 +285,7 @@ export function snapshotTranscript(blocks: readonly TranscriptBlock[]): Snapshot
 }
 
 /**
- * : a live child tab's state (never in tabsStore) plus its
+ * a live child tab's state (never in tabsStore) plus its
  * relation to the parent. A child session's store exists only in the tab
  * registry (tab-registry.ts's child registration path deliberately skips
  * `addTab`), so the facade snapshot carries children separately — `states`
@@ -301,7 +301,7 @@ export interface SnapshotJson {
   activeTabId: string | null;
   states: Record<string, TabStateSnapshot>;
   /**
-   * : keyed by childTabId; `states` stays root-only (smokes
+   * keyed by childTabId; `states` stays root-only (smokes
    * assert that). Each entry is the child tab's own state projection plus the
    * `child` relation meta (parent/spawn/child session ids), so a supervisor
    * can discover a codex child's pending approval and answer it precisely
@@ -382,7 +382,7 @@ export interface TodoPanelState {
   completedRow: string | null;
   items: Array<{ glyph: "done" | "active" | "pending"; content: string }>;
   /**
-   *  live acceptance (optional, read-only): whether the panel is
+   * live acceptance (optional, read-only): whether the panel is
    * currently showing the "may be stale" badge, plus the badge's hint text
    * ("Plan not updated for N mutating tool calls — …") parsed out of it.
    * Absent (undefined) only if an older build is under test.
@@ -422,7 +422,7 @@ export interface StartScreenState {
   recentCount: number;
   projectMenuOpen: boolean;
   /**
-   * Codex-fixes  (cut §3.7, additive-optional; frozen in C0b, WIRED in
+   * Codex-fixes (cut §3.7, additive-optional; frozen in C0b, WIRED in
    * B5-auto). The draft's current engine pick + the catalog of engines the
    * start screen offers. Optional so this block's freeze adds no behavior:
    * `startScreenState()`'s existing implementation is unaffected until B5-auto
@@ -433,7 +433,7 @@ export interface StartScreenState {
 }
 
 /**
- * `startScreenModelMenuState`'s ok-shape ( cut-1): a DOM read of the
+ * `startScreenModelMenuState`'s ok-shape (cut-1): a DOM read of the
  * New Session model popover's grouped rows, same "no mirrored state"
  * discipline as `StartScreenState` above — `open: false` with `groups: []`
  * is a normal reading (the popover isn't rendered), not an error. `groups`
@@ -443,7 +443,7 @@ export interface StartScreenState {
 export interface StartScreenModelMenuState {
   ok: true;
   open: boolean;
-  /** : which level of the drill-down is on screen (`root` / `group` / `effort`); `null` while the popover is closed. */
+  /** which level of the drill-down is on screen (`root` / `group` / `effort`); `null` while the popover is closed. */
   level: string | null;
   groups: Array<{
     connectionId: string;
@@ -486,7 +486,7 @@ export interface TodoPanelDom {
     items: Array<{ glyph: "done" | "active" | "pending"; content: string }>;
   } | null;
   /**
-   *  live acceptance (optional so existing fakes keep working):
+   * live acceptance (optional so existing fakes keep working):
    * the stale badge's presence + hint text off the same scoped card.
    */
   staleBadge?(tabId: string): { stale: boolean; hint: string | null };
@@ -512,14 +512,14 @@ export interface StartScreenDom {
   projectMenuOpen(): boolean;
   /** A real `.click()` on the project control's chip button; toggles the popover via `StartScreen.tsx`'s own `onClick`. */
   clickProjectChip(): void;
-  /** Whether the model popover (`.start-model-menu`) is currently in the DOM ( cut-1). */
+  /** Whether the model popover (`.start-model-menu`) is currently in the DOM (cut-1). */
   modelMenuOpen(): boolean;
   /** A real `.click()` on the model control's chip button; toggles the popover via `StartScreen.tsx`'s own `onClick`. */
   clickModelChip(): void;
   /** Which level of the drill-down the popover is showing — the `data-level` attribute `StartScreen.tsx` stamps on the popover. `null` when it is closed. */
   modelMenuLevel(): string | null;
   /**
-   * The rendered popover's groups ( cut-1;  drill-down form),
+   * The rendered popover's groups (cut-1; drill-down form),
    * read straight off the DOM in the SAME order `StartScreen.tsx` renders
    * them — one entry per `.start-model-group` row of the ROOT level.
    *
@@ -543,7 +543,7 @@ export interface StartScreenDom {
     items: Array<{ id: string; name: string; current: boolean }>;
   }>;
   /**
-   *  drill-down form: a real `.click()` on the root level's group row
+   * drill-down form: a real `.click()` on the root level's group row
    * for this connection — opens that connection's models as a level. `false`
    * if no such row is rendered (wrong level, or an unknown connection).
    */
@@ -655,7 +655,7 @@ export interface ModelPillDom {
   /** A real `.click()` on the Nth `.model-pill-item` in whichever sub-page is currently rendered (a no-op if out of range). */
   clickItemAt(index: number): void;
   /**
-   *  drill-down surface (optional — every member below is additive so
+   * drill-down surface (optional — every member below is additive so
    * the pre-drill fakes and legacy call sites stay valid): the popover now
    * renders the SHARED drill-down (`ModelDrillMenu`, `.start-model-menu`)
    * instead of the pill's own root/model/effort pages, so the driver reads
@@ -792,7 +792,7 @@ export interface AgentCardDom {
   clickToggle(tabId: string, toolCallId: string): boolean;
 }
 
-/** `tryAgainButtonState`'s ok-shape ( W8-FIX #2): a DOM-level truth for whether the rendered Try-again button really exists on a given `loop_end` block, so a live smoke can assert on it directly instead of trusting `retryOffer` store state alone (which proves the offer is armed, not that the button actually painted). */
+/** `tryAgainButtonState`'s ok-shape (W8-FIX #2): a DOM-level truth for whether the rendered Try-again button really exists on a given `loop_end` block, so a live smoke can assert on it directly instead of trusting `retryOffer` store state alone (which proves the offer is armed, not that the button actually painted). */
 export interface TryAgainButtonState {
   ok: true;
   count: number;
@@ -800,7 +800,7 @@ export interface TryAgainButtonState {
   enabled: boolean;
 }
 
-/** `workflowStepsState`'s ok-shape ( slice S4): same "ok:true folded into the DOM reading" shape as `AgentCardState`/`TryAgainButtonState`. `failure` is the rendered `.workflow-step-failure` block's own label/text, or `null` when no step is selected, the selected step has no failure record, or the card isn't rendered at all. */
+/** `workflowStepsState`'s ok-shape (slice S4): same "ok:true folded into the DOM reading" shape as `AgentCardState`/`TryAgainButtonState`. `failure` is the rendered `.workflow-step-failure` block's own label/text, or `null` when no step is selected, the selected step has no failure record, or the card isn't rendered at all. */
 export interface WorkflowStepsState {
   ok: true;
   rows: WorkflowStepRowView[];
@@ -808,7 +808,7 @@ export interface WorkflowStepsState {
   failure: { kind: string; text: string } | null;
 }
 
-/** Parsed read of one `loop_end` block's `.retry-try-again-button` children ( W8-FIX #2) — `count` rides through uncollapsed (rather than the facade reducing it to a boolean) so the caller itself can assert "exactly one", since more than one would itself be the defect this probe exists to catch. */
+/** Parsed read of one `loop_end` block's `.retry-try-again-button` children (W8-FIX #2) — `count` rides through uncollapsed (rather than the facade reducing it to a boolean) so the caller itself can assert "exactly one", since more than one would itself be the defect this probe exists to catch. */
 export interface TryAgainButtonDomState {
   count: number;
   visible: boolean;
@@ -830,7 +830,7 @@ export interface TryAgainButtonDom {
 }
 
 /**
- * DOM accessor DI for `childCloseClick` ( S8.3), same
+ * DOM accessor DI for `childCloseClick` (S8.3), same
  * injectable-for-tests discipline as `TryAgainButtonDom`/`WorkflowStepsDom`
  * above. Click-only: the layout itself is already readable through
  * `childLayoutState`, so this seam exists purely to press the button.
@@ -849,7 +849,7 @@ export interface ChildCloseDom {
 }
 
 /**
- * DOM accessor DI for `childSplitClick` ( S9.4), the entry-side twin
+ * DOM accessor DI for `childSplitClick` (S9.4), the entry-side twin
  * of `ChildCloseDom` above. A SEPARATE parameter rather than a second method
  * on `ChildCloseDom` on purpose: adding a required method there would make
  * every existing `ChildCloseDom` fake in the tests structurally invalid, and
@@ -867,14 +867,14 @@ export interface ChildSplitDom {
   click(): boolean;
 }
 
-/** One row of `WorkflowStepsBody`'s checklist ( slice S4): the button's own `.workflow-step-id` text plus whether it currently carries the click-driven selection (`aria-pressed`, `ToolCallCard.tsx`'s own `selected` prop). Rendered order rides through as-is (`orderStepsByDependency`'s topological order, read straight off the DOM — never re-derived), so a live smoke can assert on it directly. `meta` ( §10 finding 2) is the same button's `.workflow-step-meta` text — `workflowStepMeta`'s rendered output (e.g. "Error · not launched") — read so a live smoke can prove that meta machine-readably instead of only by screenshot. */
+/** One row of `WorkflowStepsBody`'s checklist (slice S4): the button's own `.workflow-step-id` text plus whether it currently carries the click-driven selection (`aria-pressed`, `ToolCallCard.tsx`'s own `selected` prop). Rendered order rides through as-is (`orderStepsByDependency`'s topological order, read straight off the DOM — never re-derived), so a live smoke can assert on it directly. `meta` (§10 finding 2) is the same button's `.workflow-step-meta` text — `workflowStepMeta`'s rendered output (e.g. "Error · not launched") — read so a live smoke can prove that meta machine-readably instead of only by screenshot. */
 export interface WorkflowStepRowView {
   stepId: string;
   selected: boolean;
   meta: string;
 }
 
-/** Parsed read of one workflow card's checklist + activity lane ( slice S4). `activityRows` is whatever `WorkflowActivityFeed` currently renders — already filtered down to the selected step's rows when one is selected, since that filtering is `workflowActivityRows`' pure client-side slice of `WorkflowSubStatus.activity`, not a separate store fetch. `failure` reads the rendered `.workflow-step-failure-label`/`-text` pair off the DOM (ToolCallCard.tsx's own markup) — `kind` here is the human LABEL text ("Error", not the wire's "error"), since a DOM probe can only see what actually painted. */
+/** Parsed read of one workflow card's checklist + activity lane (slice S4). `activityRows` is whatever `WorkflowActivityFeed` currently renders — already filtered down to the selected step's rows when one is selected, since that filtering is `workflowActivityRows`' pure client-side slice of `WorkflowSubStatus.activity`, not a separate store fetch. `failure` reads the rendered `.workflow-step-failure-label`/`-text` pair off the DOM (ToolCallCard.tsx's own markup) — `kind` here is the human LABEL text ("Error", not the wire's "error"), since a DOM probe can only see what actually painted. */
 export interface WorkflowStepsDomState {
   rows: WorkflowStepRowView[];
   activityRows: string[];
@@ -941,7 +941,7 @@ export interface WorkflowTicksState {
 }
 
 /**
- * DOM accessor DI for `workflowMapState`/`workflowMapToggle`,
+ * DOM accessor DI for `workflowMapState`/`workflowMapToggle`
  * same injectable-for-tests discipline as `WorkflowStepsDom`. `state` returns
  * `null` when the card isn't in the DOM yet — the facade turns that into the
  * valid-empty reading (a COLLAPSED card honestly reads this way too: the map
@@ -1372,11 +1372,11 @@ export interface SubagentsPaneDom {
  * rendered yet) reads as `mounted:true` with every other field at its empty
  * default, exactly like an unmounted pane.
  *
- *  S5 REPLACES THE OLD "just poll past it" ADVICE THAT STOOD HERE.
+ * S5 REPLACES THE OLD "just poll past it" ADVICE THAT STOOD HERE.
  * The pre-187 text told a caller that the "Loading profile…" line was a
  * moment to wait out, and its own polling loop was the only thing that could
  * tell "still loading" from "genuinely empty". That advice is what let a
- * sixteen-second first paint ( defect 2) look like normal operation
+ * sixteen-second first paint (defect 2) look like normal operation
  * to every tool in this file. The pane now stamps `data-profile-phase` on its
  * root, and this probe reads it as `phase` below: `skeleton` IS "still
  * loading", `ready` with empty values IS "genuinely empty", and no polling
@@ -1400,7 +1400,7 @@ export interface SubagentsPaneDom {
  * respectively (`computeProfileBranch`'s own DOM markers, byte-parity with
  * the branch a real render picked).
  *
- *  addendum (the period filter + full models list this probe
+ * addendum (the period filter + full models list this probe
  * originally shipped without, design/slice-P7.22-cut.md's own §S7 follow-on):
  * `period`/`periods` cover `PeriodControl`; `coverageNotice`/`models`/
  * `modelsTotalCount`/`modelsExpanded` cover the honesty note and the full,
@@ -1417,7 +1417,7 @@ export interface ProfilePaneTileState {
   value: string;
 }
 export interface ProfilePaneInsightsState {
-  /** "Tokens in period" row, compact-formatted (e.g. "1.1bn") — the value the period switch's own DoD is anchored on: distinct from `tokens` anywhere else in this file, this one is re-sliced by the currently selected period, never the lifetime total the tiles row carries. */
+  /** "Tokens in period" row, compact-formatted (e.g. "1.1bn") — the value the period switch's own DoD is anchored: distinct from `tokens` anywhere else in this file, this one is re-sliced by the currently selected period, never the lifetime total the tiles row carries. */
   tokensInPeriod: string;
   totalSessions: number;
   totalRuns: number;
@@ -1425,7 +1425,7 @@ export interface ProfilePaneInsightsState {
   subagentRuns: number;
   mostUsedModel: string;
 }
-/** One `.profile-top-row` under the Tools column: name + parsed "N calls" count ( — the pre-existing `topTools` below is name-only). */
+/** One `.profile-top-row` under the Tools column: name + parsed "N calls" count (the pre-existing `topTools` below is name-only). */
 export interface ProfilePaneToolState {
   name: string;
   count: number;
@@ -1440,7 +1440,7 @@ export interface ProfilePaneState {
   mounted: boolean;
   tiles: ProfilePaneTileState[];
   insights: ProfilePaneInsightsState;
-  /** Name-only reading, kept byte-untouched since before  — see `tools` below for the counted version. */
+  /** Name-only reading, kept byte-untouched since before — see `tools` below for the counted version. */
   topTools: string[];
   tools: ProfilePaneToolState[];
   heatmapNonEmptyCells: number;
@@ -1462,7 +1462,7 @@ export interface ProfilePaneState {
   /** Total row count backing the "Show all (N)" expander, independent of how many rows are currently rendered — equals `models.length` whenever the expander itself isn't rendered (<= `PROFILE_MODELS_COLLAPSED_ROWS` rows total, nothing to collapse). */
   modelsTotalCount: number;
   modelsExpanded: boolean;
-  /** `data-profile-phase` off the pane root ( S5) — `"unknown"` when the pane isn't mounted or carries no such attribute (a build predating the S4 wire contract). */
+  /** `data-profile-phase` off the pane root (S5) — `"unknown"` when the pane isn't mounted or carries no such attribute (a build predating the S4 wire contract). */
   phase: ProfilePaneRenderPhase;
   /** Whether the pane root carries `data-profile-catchup` — an automatic backlog pass is running underneath a `ready` phase (the numbers on screen are real, more history is still arriving). */
   catchingUp: boolean;
@@ -1498,7 +1498,7 @@ export interface ProfilePaneState {
 /** `data-profile-phase`'s four values (imported straight from `profile-loader.ts` — the producer of the attribute, so the vocabulary cannot drift), plus the reading for "no such attribute in the DOM at all". */
 export type ProfilePaneRenderPhase = ProfilePhase | "unknown";
 
-/** The empty-defaults reading (design §4 W4) — same "valid empty defaults, not an error" posture as `blankSubagentsEditorState`. `periods` is the one field that stays the real static catalog even unmounted ( — see the interface doc above). */
+/** The empty-defaults reading (design §4 W4) — same "valid empty defaults, not an error" posture as `blankSubagentsEditorState`. `periods` is the one field that stays the real static catalog even unmounted (see the interface doc above). */
 function blankProfilePaneState(): ProfilePaneState {
   return {
     mounted: false,
@@ -1538,14 +1538,14 @@ function blankProfilePaneState(): ProfilePaneState {
  * returned identical data, e.g. no new telemetry recorded since the last
  * read), not a failure.
  *
- *  S5 — WHY THE CLICK ALONE IS NO LONGER PROOF. Before S4 the Refresh
+ * S5 — WHY THE CLICK ALONE IS NO LONGER PROOF. Before S4 the Refresh
  * button was always enabled, so a `.click()` that returned `true` had
  * necessarily delivered. S4 holds the button (`disabled={busy}`) for the
  * length of every pass, INCLUDING the automatic catch-up chain that runs
  * while the phase still reads `ready` — and a disabled button swallows a
  * `.click()` without a trace. A route that reported `ok:true` off the click
  * would therefore certify a gesture that never happened, the same false-`ok`
- * class as 's `HTTP 200`. So this route now refuses `busy` on a held
+ * class as the `HTTP 200` response. So this route now refuses `busy` on a held
  * button, requires the busy window to actually OPEN after the click
  * (`did_not_start`), and waits for it to close again including the catch-up
  * flag (`did_not_settle`) — a wait that stops at `refreshing → ready` while
@@ -1561,7 +1561,7 @@ export interface SettingsLayoutRect {
 }
 
 /**
- * `settingsLayoutState()`'s shape ( S5, build/task187-plan.md §S5) —
+ * `settingsLayoutState()`'s shape (S5, §S5) —
  * the probe defect 1 never had. The scrollbar's position was invisible to
  * every existing route because no route measured geometry at all: the bug
  * (`max-width` and `overflow-y` on the SAME element, so the scroll port is
@@ -1576,7 +1576,7 @@ export interface SettingsLayoutRect {
  * (`content`) keeps the 46rem cap. `header` is read alongside because
  * `.settings-content-header` carries its own `max-width: 46rem` OUTSIDE the
  * scroll port: the pane title is pinned above the scroll port by decision
- *, so the probe asserts that its column stays aligned with the
+ * so the probe asserts that its column stays aligned with the
  * content column instead of drifting apart from it.
  *
  * Every field reads `null` while the Settings dialog is closed — a valid
@@ -1605,7 +1605,7 @@ export interface SettingsLayoutState {
  * `dockLayoutState()`'s shape: a live DOM-measured reading of
  * the right-side dock — the squash defect's core numbers (conversation
  * width, dock width/mode) have no store counterpart, exactly the
- * settings-geometry probe's rationale ( S5). `conversationWidth` is
+ * settings-geometry probe's rationale (S5). `conversationWidth` is
  * `.session-conversation`'s rendered width; `tabs[].id/kind/title/active`
  * mirror the dock store's tab set (read through the store — the strip DOM
  * and the store are one render apart, and the smoke needs the committed
@@ -1683,7 +1683,7 @@ function realDockDom(): DockDom {
   };
 }
 
-/** DOM accessor DI for the settings-geometry probe ( S5), same injectable-for-tests discipline as `ProfilePaneDom` — the real one is the only implementation that touches `getBoundingClientRect`. */
+/** DOM accessor DI for the settings-geometry probe (S5), same injectable-for-tests discipline as `ProfilePaneDom` — the real one is the only implementation that touches `getBoundingClientRect`. */
 export interface SettingsLayoutDom {
   activePane(): string | null;
   windowInnerWidth(): number;
@@ -1737,9 +1737,9 @@ export interface ProfilePaneDom {
   clickModelsExpand(): boolean;
   /** Every `.profile-top-row` under the tools `<ul>` (the FIRST `.profile-top-list`, same scoping `topToolNames()` uses), name + parsed "N calls" count, in rendered (count-desc) order. */
   toolRows(): { name: string; count: number }[];
-  /** A real `.click()` on the toolbar's `.profile-refresh-button`; `false` if the pane isn't mounted (the button renders unconditionally once mounted, in every branch — `ProfilePane`'s own toolbar sits ABOVE the loading/hero/banner/normal split). NOTE ( S5): a `true` here means the click was DELIVERED to the element, never that the element acted on it — a `disabled` button swallows it silently, which is why `refreshButton()` below exists and every caller reads it first. */
+  /** A real `.click()` on the toolbar's `.profile-refresh-button`; `false` if the pane isn't mounted (the button renders unconditionally once mounted, in every branch — `ProfilePane`'s own toolbar sits ABOVE the loading/hero/banner/normal split). NOTE (S5): a `true` here means the click was DELIVERED to the element, never that the element acted on it — a `disabled` button swallows it silently, which is why `refreshButton()` below exists and every caller reads it first. */
   clickRefresh(): boolean;
-  /** `data-profile-phase` off the `.profile-pane` root, or `null` when the pane isn't mounted / the attribute is absent ( S4 wire contract). */
+  /** `data-profile-phase` off the `.profile-pane` root, or `null` when the pane isn't mounted / the attribute is absent (S4 wire contract). */
   phase(): string | null;
   /** Whether the pane root carries `data-profile-catchup` (present only while an automatic backlog pass runs). */
   catchingUp(): boolean;
@@ -1788,7 +1788,7 @@ export interface VisionPaneConnectionOption {
 }
 
 /**
- * Real DOM state of the Vision settings panel ( срез E2c) — a DOM
+ * Real DOM state of the Vision settings panel (срез E2c) — a DOM
  * probe, same "no mirrored state" discipline as the Profile pane probe above:
  * an unmounted pane (Settings closed, or a different pane selected) reads as
  * the empty defaults, not an error.
@@ -1820,7 +1820,7 @@ export interface VisionPaneState {
 }
 
 /**
- * DOM accessor DI for the Vision pane probe/driver ( срез E2c), same
+ * DOM accessor DI for the Vision pane probe/driver (срез E2c), same
  * injectable-for-tests discipline as `ProfilePaneDom` — the real one is the
  * only implementation that touches `document`.
  */
@@ -1955,7 +1955,7 @@ export interface SlashMenuState {
 }
 
 /**
- *  §3.7 (part B): read-only projection of the ModeMenu popover.
+ * §3.7 (part B): read-only projection of the ModeMenu popover.
  * `open:false` (with `rows:[]`) is a normal reading — the chip is closed.
  * `rows` reads the RENDERED `.mode-menu-item` nodes in DOM order; each row's
  * `checked` mirrors its `aria-checked` (the five modes are `menuitemradio`,
@@ -1974,7 +1974,7 @@ export interface ModeMenuState {
   rows: ModeMenuRowState[];
 }
 
-/**  §3.9 (part B): read-only RolePickerDialog projection. */
+/** §3.9 (part B): read-only RolePickerDialog projection. */
 export interface RolePickerState {
   ok: true;
   mounted: boolean;
@@ -1983,7 +1983,7 @@ export interface RolePickerState {
 }
 
 /**
- * DOM accessor DI for the RolePickerDialog probe/drivers ( §3.9
+ * DOM accessor DI for the RolePickerDialog probe/drivers (§3.9
  * part B), same discipline as `ModeMenuDom`.
  */
 export interface RolePickerDom {
@@ -2031,7 +2031,7 @@ function realRolePickerDom(): RolePickerDom {
 }
 
 /**
- * DOM accessor DI for the ModeMenu probe/drivers ( §3.7 part B),
+ * DOM accessor DI for the ModeMenu probe/drivers (§3.7 part B),
  * same injectable-for-tests discipline as `ComposerSlashDom` — the node-env
  * vitest passes a fake and never touches `document`. The click drivers run
  * REAL `.click()` calls on the rendered nodes so the popover's open/close and
@@ -2149,7 +2149,7 @@ export interface LspPanelState {
  * injectable-for-tests discipline as `TodoPanelDom`. `panel()` returns `null`
  * when `<aside class="lsp-panel">` isn't in the DOM at all (closed) — the
  * facade turns that into the valid-empty `LspPanelState` reading, never an
- * error. Since  removed the header toggle button, `toggle()`
+ * error. Since the header toggle button was removed, `toggle()`
  * drives the Environment menu's `lsp-details` action: when the panel is open
  * it clicks the panel's own close button, otherwise it opens the Environment
  * dropdown (`.environment-trigger`) and clicks its Details action — the exact
@@ -2183,7 +2183,7 @@ export interface HooksPanelState {
  * DOM accessor DI for the Hooks-panel probe/driver (design §3 W3), same
  * injectable-for-tests discipline as `LspPanelDom`. `panel()` returns `null`
  * when `<aside class="hooks-panel">` isn't in the DOM at all (closed).
- * Since  removed the header toggle button, `toggle()` drives the
+ * Since the header toggle button was removed, `toggle()` drives the
  * Environment menu's `hooks-details` action (close via the panel's own
  * `aria-label="Close hooks"` button, open via `.environment-trigger` +
  * Details) — same shape as the LSP driver above.
@@ -2195,7 +2195,7 @@ export interface HooksPanelDom {
 
 /**
  * `checkpointPanelState`'s ok-shape (design slice-P7.26-R2-ratification.md §1
- * W3;  rework): a live STORE read of the tab's `checkpoints`
+ * W3; rework): a live STORE read of the tab's `checkpoints`
  * slice — same "no mirrored state" discipline as
  * `LspPanelState`/`HooksPanelState`. The TimelinePanel DOM panel is gone
  * (4742: rewind moved into the transcript tick rail's popover), so this
@@ -2310,7 +2310,7 @@ export interface ProviderConnectionRowView {
 }
 
 /**
- * The live DOM read backing `ProviderDrawerView` below ( W12): `stage`
+ * The live DOM read backing `ProviderDrawerView` below (W12): `stage`
  * mirrors `ConnectionDrawerFields`' own `createdConnectionId === null` split
  * (design §"Add/Edit flow" sequencing) — `"template"` before a connection
  * exists yet, `"credential"` once metadata is minted and the credential
@@ -2329,9 +2329,9 @@ export interface ProviderDrawerDomState {
   transportOptions: string[];
   baseUrlVisible: boolean;
   baseUrl: string;
-  /**  "Max output tokens" — the raw field text, `""` when left at the provider default. */
+  /** "Max output tokens" — the raw field text, `""` when left at the provider default. */
   maxOutputTokens: string;
-  /**  slice 3 — the click-to-fill preset chips under that field, in render order, each with whether it currently reads as active. Exactly one is active at a time ("Custom" when the field holds a value no chip spells). */
+  /** slice 3 — the click-to-fill preset chips under that field, in render order, each with whether it currently reads as active. Exactly one is active at a time ("Custom" when the field holds a value no chip spells). */
   maxOutputTokensPresets: { label: string; selected: boolean }[];
   authKind: "api_key" | "oauth";
   /** Whether the credential input currently holds a non-empty typed value — never the value itself (custody: a plaintext-in-progress credential never crosses this dev-only channel either). */
@@ -2346,7 +2346,7 @@ export interface ProviderDrawerDomState {
 
 /**
  * DOM accessor DI for the provider connections grid + drawer probe/driver
- * ( W12), same injectable-for-tests discipline as `SettingsDom`.
+ * (W12), same injectable-for-tests discipline as `SettingsDom`.
  * `rows()`/`drawer()` return the empty/`null` reading when their respective
  * root (`.connection-grid` / `.connection-drawer-body`) isn't in the DOM —
  * the facade turns that into the valid "not mounted"/"closed" state, never an
@@ -2373,12 +2373,12 @@ export interface ProviderPaneDom {
   setDrawerTransport(value: string): boolean;
   setDrawerBaseUrl(value: string): boolean;
   setDrawerMaxOutputTokens(value: string): boolean;
-  /**  slice 3: clicks a "Max output tokens" preset chip BY LABEL ("Default"/"8192"/"16384"/"32768"/"Custom") — the chip's own click path, not a typed value, so a driver can prove the chip writes what it says. `false` when no chip carries that label. */
+  /** slice 3: clicks a "Max output tokens" preset chip BY LABEL ("Default"/"8192"/"16384"/"32768"/"Custom") — the chip's own click path, not a typed value, so a driver can prove the chip writes what it says. `false` when no chip carries that label. */
   clickDrawerMaxOutputPreset(label: string): boolean;
   setDrawerApiKey(value: string): boolean;
-  /** Clicks the drawer's own top-level action button — "Create connection"/"Save" pre-creation, the single unified "Save" post-creation ( folded "Save changes"+"Save key" into one). */
+  /** Clicks the drawer's own top-level action button — "Create connection"/"Save" pre-creation, the single unified "Save" post-creation (folded "Save changes"+"Save key" into one). */
   clickDrawerPrimary(): boolean;
-  /** : clicks the unified post-creation "Save" (metadata + a typed key together) — the old separate "Save key" no longer exists; for a keyed catalog provider the key is now folded into "Create" or this "Save". Returns `false` pre-creation. */
+  /** clicks the unified post-creation "Save" (metadata + a typed key together) — the old separate "Save key" no longer exists; for a keyed catalog provider the key is now folded into "Create" or this "Save". Returns `false` pre-creation. */
   clickDrawerSaveKey(): boolean;
   /** Clicks the credential section's danger action (API key "Clear key" OR OAuth "Sign out"). */
   clickDrawerClearKey(): boolean;
@@ -2390,7 +2390,7 @@ export interface ProviderPaneDom {
 export type ProviderMenuAction = "edit" | "replace_key" | "check" | "delete";
 
 /**
- * `settingsProviderPaneState`'s drawer reading ( W12): `open: false`
+ * `settingsProviderPaneState`'s drawer reading (W12): `open: false`
  * (every other field `null`/empty/`false`) is the closed reading; `open:
  * true` mirrors `ProviderDrawerDomState` verbatim (see that interface's own
  * doc comment for field semantics) — this is deliberately the SAME shape
@@ -2421,7 +2421,7 @@ export interface ProviderDrawerView {
 }
 
 /**
- * `settingsProviderPaneState`'s ok-shape ( W12): unlike every tab-
+ * `settingsProviderPaneState`'s ok-shape (W12): unlike every tab-
  * scoped probe above, the provider pane is NOT tab-scoped (Settings/Welcome
  * are shell-level), so there is no `tab_not_active` structural refusal here —
  * `mounted: false` (grid not rendered) and `drawer.open: false` (drawer not
@@ -2436,7 +2436,7 @@ export interface ProviderPaneState {
 }
 
 /**
- * `focusState()`'s shape ( W12-smoke): a generic, dev-only read of
+ * `focusState()`'s shape (W12-smoke): a generic, dev-only read of
  * `document.activeElement` — no pane owns this (unlike every probe above), so
  * it carries no "mounted"/"not applicable" refusal, only `present: false` when
  * focus sits on `<body>` or nothing focusable exists yet. Exists because no
@@ -2519,7 +2519,7 @@ export interface CodexPaneState {
   rows: CodexPaneRowState[];
   notices: string[];
   /**
-   *  (D-S4-6): present iff the binary/manifest block's doctor report
+   * (D-S4-6): present iff the binary/manifest block's doctor report
    * carries a structured `trustRefusal` — absent (not present-with-null)
    * otherwise. `binaryPath`/`reason` are read off the "Trust this
    * binary…" button's OWN `data-trust-binary-path`/`data-trust-reason`
@@ -2553,7 +2553,7 @@ export interface CodexPaneDom {
   /** A real `.click()` on the accounts block's "Import a Codex session…" button; `false` when absent. */
   clickImportSession(): boolean;
   /**
-   *  (D-S4-6): the "Trust this binary…" button's structured facts
+   * (D-S4-6): the "Trust this binary…" button's structured facts
    * off its `data-trust-binary-path`/`data-trust-reason` attributes, or
    * `null` when the button isn't rendered (no trust refusal).
    */
@@ -2561,7 +2561,7 @@ export interface CodexPaneDom {
 }
 
 /**
- * `binaryTrustDialogState()`'s shape (, CUT-S4.md §3.8): a live DOM
+ * `binaryTrustDialogState()`'s shape (CUT-S4.md §3.8): a live DOM
  * read of `BinaryTrustDialog.tsx`'s own `<dialog>`. `open: false` (dialog not
  * mounted) reads every other field at its empty default, same "valid
  * reading, not an error" posture as `CodexPaneState.mounted`. `binaryPath`/
@@ -2574,7 +2574,7 @@ export interface BinaryTrustDialogState {
   binaryPath?: string;
   reason?: string;
   visible: boolean;
-  /**  fix wave (D-S4-17): read off the dialog's own `data-trust-stale-consent` attribute when open. */
+  /** fix wave (D-S4-17): read off the dialog's own `data-trust-stale-consent` attribute when open. */
   staleConsent?: boolean;
 }
 
@@ -2590,7 +2590,7 @@ export interface BinaryTrustDialogDom {
 }
 
 /**
- * `trustedBinariesState()`'s row shape (, D-S4-7): `path` off the
+ * `trustedBinariesState()`'s row shape (D-S4-7): `path` off the
  * row's own `data-trusted-binary-path` attribute (never parsed out of the
  * rendered `<code>` text); `visible` is the `offsetParent !== null`
  * convention (`TryAgainButtonDom`/`CodexPaneDom.trust` precedent).
@@ -2601,7 +2601,7 @@ export interface TrustedBinariesState {
 
 /**
  * DOM accessor DI for the Trusted-binaries Settings-section probe/driver
- *, same injectable-for-tests discipline as `CodexPaneDom`.
+ * same injectable-for-tests discipline as `CodexPaneDom`.
  * `mounted()` reads the section's OWN `.trusted-binaries-section` root, not
  * merely `#settings-pane-permissions` presence — the pane can be open on a
  * DIFFERENT pane while this section is unmounted.
@@ -2787,7 +2787,7 @@ export interface CodexImportDialogDom {
   clickImport(): boolean;
 }
 
-/** One sidebar project group as the DOM shows it ( probe). */
+/** One sidebar project group as the DOM shows it (probe). */
 export interface SidebarGroupDomFacts {
   /** Full workspace path — the heading's `title=`, which is the group's identity. */
   workspace: string;
@@ -2822,7 +2822,7 @@ export interface AnycodeBridge {
 }
 
 /**
- *  / : one live reading of the composer's queue affordances
+ * one live reading of the composer's queue affordances
  * for a running turn — the facts the owner repro needed, addressable from a
  * smoke without a hand-driven app. `queueLength`/`paused`/`draining` come
  * straight off the live store (no mirror); `inputEnabled`/`placeholder`/`draft`
@@ -2843,7 +2843,7 @@ export interface ComposerQueueState {
 }
 
 /**
- * : the Settings scope dropdown's read-only probe (`scopeState()`),
+ * the Settings scope dropdown's read-only probe (`scopeState()`),
  * read off the trigger's `data-scope-value` (the selected id or "user") and the
  * count chip. Dedicated probe: `settingsState()` stays byte-untouched.
  */
@@ -2873,14 +2873,14 @@ function realScopeDom(): ScopeDom {
 export interface AutomationFacade {
   snapshot(transcriptTail?: number): SnapshotJson;
   /**
-   *  live-smoke facade extension: `images`, when present, are already
+   * live-smoke facade extension: `images`, when present, are already
    * read + base64-encoded by handlers.ts (main has no way to sniff/size them
    * against Composer's own rules — that validation is renderer-only, see
    * `createAutomationFacade`'s implementation). Reasons beyond the pre-image
    * set (`unknown_tab`/`not_ready`/`busy`): `image_too_many` (over
    * `COMPOSER_IMAGE_MAX_PER_MESSAGE`), `image_unsupported_type` (the sniffed
    * bytes aren't one of the four supported formats), `image_too_large` (over
-   * `COMPOSER_IMAGE_MAX_BYTES`), and `images_unsupported` ( W3-FIX's
+   * `COMPOSER_IMAGE_MAX_BYTES`), and `images_unsupported` (W3-FIX's
    * existing `isSendBlockedByModelImages` gate — a blind model with no
    * configured recognizer fallback, same reason `tryAgain` already reports).
    */
@@ -2890,13 +2890,13 @@ export interface AutomationFacade {
     text: string,
     images?: readonly { data: string; sourcePath: string }[],
   ): { ok: true; requestId: string } | FacadeErr;
-  //  W8: the same click driver as `agentCardExpand` above — no facade
+  // W8: the same click driver as `agentCardExpand` above — no facade
   // guard of its own beyond "does an offer exist" (`retry === null` is a
   // no-op click), everything else is the REAL `dispatchTryAgain` (App.tsx)
   // the button's own onClick calls, so a live smoke exercises the exact
   // send/queue/busy decision the product makes, not a re-derived guess of it.
   tryAgain(tabId: string): FacadeResult;
-  //  W8-FIX #2: a DOM-level probe/driver pair for the Try-again
+  // W8-FIX #2: a DOM-level probe/driver pair for the Try-again
   // button, distinct from `tryAgain` above — `tryAgain` calls
   // `dispatchTryAgain` directly (a facade shortcut that bypasses the
   // rendered button's own onClick wiring entirely), while
@@ -2905,7 +2905,7 @@ export interface AutomationFacade {
   // wiring, not just the dispatch function in isolation.
   tryAgainButtonState(tabId: string, blockId: string): TryAgainButtonState | FacadeErr;
   tryAgainButtonClick(tabId: string, blockId: string): FacadeResult;
-  //  slice S4: a DOM-level probe/driver pair for the workflow
+  // slice S4: a DOM-level probe/driver pair for the workflow
   // checklist's click-to-filter row, same "real click on the actual button"
   // posture as tryAgainButtonClick above — `WorkflowStepsBody`'s
   // `onSelectStep` is local component `useState` (`ToolCallCard`'s own
@@ -2913,7 +2913,7 @@ export interface AutomationFacade {
   // call directly the way `tryAgain` calls `dispatchTryAgain`.
   workflowStepsState(tabId: string, toolCallId: string): WorkflowStepsState | FacadeErr;
   workflowStepClick(tabId: string, toolCallId: string, stepId: string): Promise<FacadeResult>;
-  // : probe/driver pairs for the Workflow run map, the collapsed
+  // probe/driver pairs for the Workflow run map, the collapsed
   // tick strip, and the card disclosure's missing half. `workflowMapToggle`
   // is an idempotent BINARY (target `open`, no click when already there) — a
   // re-run smoke must not collapse a map it wanted open, the same posture as
@@ -2927,7 +2927,7 @@ export interface AutomationFacade {
   respondPermission(tabId: string, behavior: "allow" | "deny", requestId?: string): FacadeResult;
   setMode(tabId: string, mode: string): FacadeResult;
   /**
-   *  §3.7 (part B): the Orchestrate row's driver — sends
+   * §3.7 (part B): the Orchestrate row's driver — sends
    * `set_orchestrate` (the exact wire message ModeMenu's row click sends via
    * Composer's handleToggleOrchestrate). The smoke asserts the UI row itself
    * through `modeMenuState` below and drives the toggle through the SAME
@@ -2936,7 +2936,7 @@ export interface AutomationFacade {
    */
   setOrchestrate(tabId: string, enabled: boolean): FacadeResult;
   /**
-   *  §3.7 (part B): read-only probe of the mode menu popover —
+   * §3.7 (part B): read-only probe of the mode menu popover —
    * `open`, the rendered row names (five modes + the Orchestrate row when
    * the tab wires it), and which row is checked. Same read-only posture as
    * `slashMenuState`: the smoke's transitions are real DOM clicks; this only
@@ -2944,7 +2944,7 @@ export interface AutomationFacade {
    */
   modeMenuState(tabId: string): ModeMenuState | FacadeErr;
   /**
-   *  §3.7 (part B): real DOM click drivers for the popover —
+   * §3.7 (part B): real DOM click drivers for the popover —
    * `modeMenuClickChip` opens/closes, `modeMenuClickRow` clicks the rendered
    * row with the given name (e.g. "Orchestrate"). Real `.click()` so React's
    * own handlers run, exactly like `agentCardDom.clickToggle`.
@@ -2952,7 +2952,7 @@ export interface AutomationFacade {
   modeMenuClickChip(tabId: string): FacadeResult;
   modeMenuClickRow(tabId: string, name: string): FacadeResult;
   /**
-   *  §3.9 (part B): read-only probe of the RolePickerDialog (is
+   * §3.9 (part B): read-only probe of the RolePickerDialog (is
    * the first-run modal up, which preset chip is selected) + real DOM click
    * drivers for a preset chip and the Save/Skip buttons. The dialog is
    * tab-scoped UI mounted by the active tab's Composer, so same
@@ -2965,7 +2965,7 @@ export interface AutomationFacade {
   stop(tabId: string): FacadeResult;
   selectTab(tabId: string): FacadeResult;
   /**
-   *  S2d D1 (CUT-S2 §2.5/§4.2 п.5, "Open-клик"): switches `rootTabId`'s
+   * S2d D1 (CUT-S2 §2.5/§4.2 п.5, "Open-клик"): switches `rootTabId`'s
    * pane onto its `spawnToolCallId` child, the SAME unconditional call
    * ToolCallCard.tsx's Open button makes (`childLayoutStore.open` —
    * child-layout.ts). Composer/permission addressing for the opened child
@@ -2979,7 +2979,7 @@ export interface AutomationFacade {
    */
   childOpen(rootTabId: string, spawnToolCallId: string): FacadeResult;
   /**
-   *  S3c (CUT-S3 §6.2, read-only PROBE — not a driver): thin-forward
+   * S3c (CUT-S3 §6.2, read-only PROBE — not a driver): thin-forward
    * read of `childLayoutStore.view(rootTabId)`. Deliberately the ONLY
    * facade surface S3 adds for layout state — `enterSplit`/`exitSplit`/
    * `expandRow` get NO facade drivers (CUT-S3 §6.1/§9 п.8): a driver would
@@ -3020,7 +3020,7 @@ export interface AutomationFacade {
   // own actions, ToggleProjectMenu drives the real chip click. ──
   startScreenSetModel(model: string | null): FacadeResult;
   startScreenSetMode(mode: string): FacadeResult;
-  // Codex-fixes  (cut §3.7, additive; frozen in C0b, IMPLEMENTED in
+  // Codex-fixes (cut §3.7, additive; frozen in C0b, IMPLEMENTED in
   // B5-auto): renderer-plane engine pick for a not-yet-created start-screen
   // draft, same thin no-second-path discipline as startScreenSetModel above.
   // Optional so this freeze adds zero behavior — createAutomationFacade()'s
@@ -3028,7 +3028,7 @@ export interface AutomationFacade {
   // method until B5-auto wires the real draft action + main-side HTTP route.
   startScreenSetEngine?(engineId: string): Promise<FacadeResult>;
   startScreenToggleProjectMenu(open: boolean): Promise<FacadeResult>;
-  // ── model-menu grouped picker ( cut-1): mirrors the project-menu
+  // ── model-menu grouped picker (cut-1): mirrors the project-menu
   // driver's discipline one for one — a DOM probe for the rendered groups,
   // and a real-click driver for open/close and per-row select. ──
   startScreenModelMenuState(): StartScreenModelMenuState;
@@ -3122,7 +3122,7 @@ export interface AutomationFacade {
   // empty defaults, not an error. `profileToggleTelemetry` always flips the
   // CURRENT effective state (mirrors `ProfilePane.tsx`'s own
   // `nextTelemetryToggleValue` — there is no separate "set to X" request
-  // shape, same unary posture as a real click on the switch).  adds
+  // shape, same unary posture as a real click on the switch). adds
   // three more unary/near-unary actions on the SAME pane, same discipline:
   // `profileSelectPeriod` drives a real click on the target `.profile-
   // period-button` (found by DOM position, matching `PROFILE_PERIODS`'
@@ -3133,7 +3133,7 @@ export interface AutomationFacade {
   // reports whether the rendered numbers actually changed (`changed`) — a
   // genuinely fast re-fetch that returns identical data is a normal, honest
   // `changed:false`, not a failure (see `ProfilePaneRefreshResult`'s own doc
-  // comment).  S5 rebuilds `profileRefresh` on the S4 wire contract
+  // comment). S5 rebuilds `profileRefresh` on the S4 wire contract
   // (`data-profile-phase` / `data-profile-catchup` / the held button) so it
   // can no longer certify a click a disabled button swallowed, extends
   // `profilePaneState` with the same observables plus BOTH work-left
@@ -3149,7 +3149,7 @@ export interface AutomationFacade {
   profileToggleModelsExpanded(): Promise<FacadeResult>;
   profileRefresh(): Promise<ProfilePaneRefreshResult>;
   profileRebuild(): Promise<FacadeResult>;
-  // ── Vision pane probe/driver ( срез E2c) — a DEDICATED probe, every
+  // ── Vision pane probe/driver (срез E2c) — a DEDICATED probe, every
   // probe above stays byte-untouched. `visionSelectConnection`/`visionSetModel`
   // drive the pane's own local draft fields (a real `<select>` pick / a real
   // keystroke into the model `<input>` — a local `useState`, no IPC round
@@ -3169,7 +3169,7 @@ export interface AutomationFacade {
   visionSave(): Promise<FacadeResult>;
   visionProbe(): Promise<FacadeResult>;
   visionTurnOff(): Promise<FacadeResult>;
-  // ── Settings geometry probe ( S5, plan §S5) — a DEDICATED probe
+  // ── Settings geometry probe (S5, plan §S5) — a DEDICATED probe
   // over the layout itself, not over any one pane: `.settings-pane` is the
   // scroll port of ALL fourteen panes, so defect 1 ("the scrollbar sits at
   // the 46rem column edge, not the window edge") is one measurement that
@@ -3233,7 +3233,7 @@ export interface AutomationFacade {
   hooksPanelState(tabId: string): HooksPanelState | FacadeErr;
   hooksPanelToggle(tabId: string): FacadeResult;
   // ── Checkpoint timeline / rewind probes+driver (design
-  // slice-P7.26-R2-ratification.md §1 W3;  rework) —
+  // slice-P7.26-R2-ratification.md §1 W3; rework) —
   // `checkpointPanelState` requests a fresh checkpoint list over the tab's
   // real send port (see its doc comment above: the checkpoint list is
   // on-demand-only, nothing to read until asked; the old TimelinePanel DOM
@@ -3248,7 +3248,7 @@ export interface AutomationFacade {
     tabId: string,
     args: { checkpointId?: string; index?: number; scope: RewindScopeWire },
   ): Promise<CheckpointRewindResult | FacadeErr>;
-  // ── Provider connections pane probe/driver ( W12) — a DEDICATED
+  // ── Provider connections pane probe/driver (W12) — a DEDICATED
   // probe, every prior probe above stays byte-untouched. `settingsProviderPaneState`
   // reads the mounted grid (`ProviderSettings`) AND the drawer
   // (`ConnectionDrawerFields`, mounted either inside the Settings dialog's
@@ -3286,7 +3286,7 @@ export interface AutomationFacade {
   settingsProviderDrawerSaveKey(): Promise<FacadeResult>;
   settingsProviderDrawerClearKey(): Promise<FacadeResult>;
   settingsProviderDrawerClose(): Promise<FacadeResult>;
-  // ── generic focus probe ( W12-smoke): see FocusState's doc comment
+  // ── generic focus probe (W12-smoke): see FocusState's doc comment
   // above — no pane owns this, it reads `document.activeElement` directly. ──
   focusState(): FocusState;
   // ── Codex pane probe/driver (W4-F0, findings S1-1 probe (a)) — a DEDICATED
@@ -3304,12 +3304,12 @@ export interface AutomationFacade {
   codexPaneInstall(): FacadeResult;
   codexPaneRecheckAll(): FacadeResult;
   codexPaneRefreshManifest(): FacadeResult;
-  //  (D-S4-6/D-S4-8): opens the binary-trust consent dialog via a
+  // (D-S4-6/D-S4-8): opens the binary-trust consent dialog via a
   // REAL click on the pane's own "Trust this binary…" button — the SAME
   // `codexPaneRecheckAll` mechanism (a plain labeled action-row button,
   // `clickAction`), not a new DOM method.
   codexPaneTrustOpen(): FacadeResult;
-  // ── Binary-trust consent dialog probe/driver (, CUT-S4.md §3.8) —
+  // ── Binary-trust consent dialog probe/driver (CUT-S4.md §3.8) —
   // `binaryTrustDialogState` reads the REAL `<dialog>` BinaryTrustDialog.tsx
   // mounts (disambiguated from ConsentDialog.tsx's own `.consent-dialog` by
   // `data-binary-trust-dialog`); `binaryTrustDialogResolve` fires a real
@@ -3319,7 +3319,7 @@ export interface AutomationFacade {
   // default, same "valid reading, not an error" posture as `codexPaneState`. ──
   binaryTrustDialogState(): BinaryTrustDialogState;
   binaryTrustDialogResolve(accept: boolean): FacadeResult;
-  // ── Trusted-binaries Settings-section probe/driver (, D-S4-7) —
+  // ── Trusted-binaries Settings-section probe/driver (D-S4-7) —
   // `trustedBinariesState` reads the Permissions pane's section (caller must
   // have opened `/settings/pane` = permissions first, same precondition
   // every other pane-scoped probe here carries; not-open ⇒ `rows: []`, a
@@ -3358,7 +3358,7 @@ export interface AutomationFacade {
   codexImportSelectRollout(index: number): Promise<FacadeResult>;
   codexImportSetModel(model: string): Promise<FacadeResult>;
   codexImportApply(): Promise<FacadeResult>;
-  // ── Replay pult ( S2, plan §3.2) — the debug-only playback of an
+  // ── Replay pult (S2, plan §3.2) — the debug-only playback of an
   // ALREADY RECORDED session. Flat `replay*` methods, never a nested
   // `facade.replay.*` object: main's HTTP side addresses the facade by METHOD
   // NAME (`main/automation/handlers.ts`'s `FacadeCaller`), so a nested object
@@ -3406,7 +3406,7 @@ export interface AutomationFacade {
   replaySetParams(tabId: string, patch: unknown): FacadeResult;
   replayState(): ReplayStateJson;
   /**
-   * Closes the child pane the root tab currently shows ( S8.3), by a
+   * Closes the child pane the root tab currently shows (S8.3), by a
    * REAL `.click()` on the control an operator would use — layout B's master
    * breadcrumb, or the split pane's own close button — never by poking
    * `childLayoutStore` directly. That is the CUT-S3 §6.1/§9 п.8 ruling quoted
@@ -3479,7 +3479,7 @@ function realTranscriptDom(): TranscriptDom {
 }
 
 /**
- *  live acceptance: the scoped `.todo-panel-card` node for a tab
+ * live acceptance: the scoped `.todo-panel-card` node for a tab
  * (same scoping guard `realTodoPanelDom.panel` used inline), so the stale-badge
  * read and the panel read share one resolution path.
  */
@@ -3520,7 +3520,7 @@ function realTodoPanelDom(): TodoPanelDom {
       });
       return { header, panelCollapsed, completedRow, items };
     },
-    //  live acceptance: the badge node's presence + hint (title attr).
+    // live acceptance: the badge node's presence + hint (title attr).
     staleBadge(tabId: string) {
       const node = cardDom(tabId)?.querySelector<HTMLElement>(".todo-panel-stale") ?? null;
       return { stale: node !== null, hint: node?.getAttribute("title") ?? null };
@@ -3548,7 +3548,7 @@ function realStartScreenDom(): StartScreenDom {
     },
     modelMenuLevel: () => document.querySelector(".start-model-menu")?.getAttribute("data-level") ?? null,
     modelMenuGroups: () => {
-      //  drill-down: the ROOT level renders the group rows (plus the
+      // drill-down: the ROOT level renders the group rows (plus the
       // popular picks and the effort row); a group's models are a level of
       // their own. The probe reports every group row it can see, with the
       // rows currently on screen for it — which is nothing while the root is
@@ -3600,7 +3600,7 @@ function realStartScreenDom(): StartScreenDom {
       return true;
     },
     clickModelItem: (connectionId, modelId) => {
-      //  drill-down: a model row only exists in the DOM while its
+      // drill-down: a model row only exists in the DOM while its
       // group's level is open — or on the root, when the model happens to be
       // one of the popular picks. Try the direct hit first; on a miss, open
       // that connection's level and retry once — the same two real clicks a
@@ -3717,7 +3717,7 @@ export function realModelPillDom(): ModelPillDom {
       if (stamped !== null) {
         return stamped;
       }
-      //  drill-down: when the popover renders the SHARED menu, the
+      // drill-down: when the popover renders the SHARED menu, the
       // level comes off its `data-level` attribute — group/effort mapped to
       // the public model/effort shape. Legacy fallback below keeps the
       // pre-drill popover pages working (and any popover without a menu).
@@ -3761,7 +3761,7 @@ export function realModelPillDom(): ModelPillDom {
       const items = pop?.querySelectorAll<HTMLButtonElement>(".model-pill-item");
       items?.[index]?.click();
     },
-    //  drill-down surface: the real popover renders the SHARED
+    // drill-down surface: the real popover renders the SHARED
     // `ModelDrillMenu` inside `.model-pill-popover`, so every query below is
     // scoped to that popover and matches raw `data-*` attribute values —
     // never an interpolated selector (a `"` in an id would break out).
@@ -3925,7 +3925,7 @@ function realAgentCardDom(): AgentCardDom {
 }
 
 /**
- * The real Try-again-button DOM accessor ( W8-FIX #2): same laziness
+ * The real Try-again-button DOM accessor (W8-FIX #2): same laziness
  * discipline as `realAgentCardDom` (safe to evaluate as a default parameter
  * outside a browser; tests always pass an explicit `tryAgainButtonDom` and
  * never reach this). Scoped to the SAME `data-tab-id`-tagged `.message-list`
@@ -3971,7 +3971,7 @@ function realTryAgainButtonDom(): TryAgainButtonDom {
 }
 
 /**
- * The real child-close DOM accessor ( S8.3): same lazy-query
+ * The real child-close DOM accessor (S8.3): same lazy-query
  * discipline as every `real*Dom` above — nothing global is touched until
  * `click` runs. Unscoped by tabId on purpose: only the ACTIVE tab is mounted
  * (tab-context.tsx), and `childCloseClick` checks that the caller's tab IS
@@ -3994,7 +3994,7 @@ function realChildCloseDom(): ChildCloseDom {
 }
 
 /**
- * The real Split-entry DOM accessor ( S9.4): same lazy-query,
+ * The real Split-entry DOM accessor (S9.4): same lazy-query,
  * document-wide-because-only-the-active-tab-is-mounted discipline as
  * `realChildCloseDom` above.
  */
@@ -4012,7 +4012,7 @@ function realChildSplitDom(): ChildSplitDom {
 }
 
 /**
- * The real Workflow-steps DOM accessor ( slice S4): same laziness/
+ * The real Workflow-steps DOM accessor (slice S4): same laziness/
  * scoping discipline as `realAgentCardDom` above — the card itself is
  * located by `.tool-call-card[data-tool-call-id]` inside the active tab's
  * `.message-list[data-tab-id]`. Step rows are matched by their own rendered
@@ -4522,7 +4522,7 @@ function setNativeTextAreaValue(textarea: HTMLTextAreaElement, value: string): v
 
 /**
  * Sets a value on a React-controlled `<select>` the way a real option-pick
- * would ( W12): unlike `<input>`/`<textarea>`, React does not patch
+ * would (W12): unlike `<input>`/`<textarea>`, React does not patch
  * `HTMLSelectElement.prototype.value` with its own tracked setter (a select's
  * value is derived from its `<option>` children, not a single text property
  * React needs to "un-stick"), so a plain `select.value = x` assignment is
@@ -4959,7 +4959,7 @@ function realProfilePaneDom(): ProfilePaneDom {
 }
 
 /**
- * The real Vision-pane DOM accessor ( срез E2c): queries live at call
+ * The real Vision-pane DOM accessor (срез E2c): queries live at call
  * time, same laziness discipline as `realProfilePaneDom`. `.vision-pane` only
  * ever mounts while Settings is open with the "vision" pane selected
  * (`SettingsScreen.tsx`'s own guard), so `mounted()` is an unambiguous
@@ -5094,7 +5094,7 @@ function realVisionPaneDom(): VisionPaneDom {
 }
 
 /**
- * The real settings-geometry accessor ( S5): queries live at call
+ * The real settings-geometry accessor (S5): queries live at call
  * time, same laziness discipline as `realProfilePaneDom` (safe to evaluate as
  * a default parameter outside a browser; tests always pass an explicit
  * `settingsLayoutDom` and never reach this).
@@ -5385,7 +5385,7 @@ export function realLspPanelDom(): LspPanelDom {
       return { counts, servers };
     },
     toggle() {
-      // : the header button is gone — toggle via the Environment
+      // the header button is gone — toggle via the Environment
       // menu's Details action. If the panel is open, close it directly;
       // otherwise open the menu (React flushes discrete clicks synchronously)
       // and click its lsp-details action.
@@ -5394,7 +5394,7 @@ export function realLspPanelDom(): LspPanelDom {
         el.querySelector<HTMLButtonElement>(".lsp-panel-close")?.click();
         return;
       }
-      //  cross-review F1: React 19 commits a click-driven update in
+      // cross-review F1: React 19 commits a click-driven update in
       // a microtask, AFTER .click() returns. flushSync commits the menu now so
       // its Details action exists for the query below (without it the click
       // was silently lost).
@@ -5434,7 +5434,7 @@ export function realHooksPanelDom(): HooksPanelDom {
       return { configError, groups };
     },
     toggle() {
-      // : the header button is gone — toggle via the Environment
+      // the header button is gone — toggle via the Environment
       // menu's Details action (same shape as the LSP driver above; the close
       // button lives at HooksPanel.tsx's `aria-label="Close hooks"`).
       const el = aside();
@@ -5442,7 +5442,7 @@ export function realHooksPanelDom(): HooksPanelDom {
         el.querySelector<HTMLButtonElement>('button[aria-label="Close hooks"]')?.click();
         return;
       }
-      //  cross-review F1: React 19 commits a click-driven update in
+      // cross-review F1: React 19 commits a click-driven update in
       // a microtask, AFTER .click() returns. flushSync commits the menu now so
       // its Details action exists for the query below (without it the click
       // was silently lost).
@@ -5470,7 +5470,7 @@ function realTranscriptBlockDom(): TranscriptBlockDom {
 }
 
 /**
- * The real provider-connections grid + drawer DOM accessor ( W12),
+ * The real provider-connections grid + drawer DOM accessor (W12),
  * same laziness/document-query posture as `realSettingsDom` above.
  * `fieldControl` walks to the `label.settings-field` whose own
  * `.settings-field-label` text matches exactly, then returns the input/select
@@ -5631,7 +5631,7 @@ function realProviderPaneDom(): ProviderPaneDom {
       const authKind: "api_key" | "oauth" = sec?.querySelector(".settings-oauth-block") ? "oauth" : "api_key";
       const credentialStatusEl = sec?.querySelector<HTMLElement>('[class*="settings-secret-status"]') ?? null;
       const primary = primaryTopButton(body);
-      // : the old separate credential "Save key" is gone — the unified
+      // the old separate credential "Save key" is gone — the unified
       // post-creation "Save" now carries the key; report ITS enabled state
       // here so the `/save-key` route's readiness gate stays truthful.
       const saveKeyBtn = unifiedSaveButton(body);
@@ -5737,7 +5737,7 @@ function realProviderPaneDom(): ProviderPaneDom {
     },
     setDrawerApiKey(value: string): boolean {
       const body = drawerBody();
-      // : the key field is the pre-creation create-key OR the
+      // the key field is the pre-creation create-key OR the
       // post-creation credential-section password — `credentialInput` finds
       // whichever is currently mounted.
       const input = body && credentialInput(body);
@@ -5757,7 +5757,7 @@ function realProviderPaneDom(): ProviderPaneDom {
       return true;
     },
     clickDrawerSaveKey(): boolean {
-      // : post-creation the unified "Save" persists the typed key (the
+      // post-creation the unified "Save" persists the typed key (the
       // old separate credential "Save key" is gone); for oauth it is the
       // credential section's "Sign in" primary instead.
       const body = drawerBody();
@@ -5966,7 +5966,7 @@ async function nativeModelPillPick(
 }
 
 /**
- * The pill's drill-down surface (`ModelPillDom`'s optional  members),
+ * The pill's drill-down surface (`ModelPillDom`'s optional members),
  * narrowed to the shape `modelPillDrillPick` actually drives. A DI without
  * these members never reaches this helper — `modelPillPick` only takes the
  * drill path when `drillMenuVisible?.()` reports the shared menu rendered,
@@ -5991,7 +5991,7 @@ type DrillModelPillDom = ModelPillDom &
 
 /**
  * Drives a model/effort pick over the SHARED drill-down menu the pill's
- * popover now renders ( cut-2 §D4): a root level (popular picks +
+ * popover now renders (cut-2 §D4): a root level (popular picks +
  * one row per connection group + the effort row), a per-connection group
  * level, and an effort level — all keyed by the `data-level`/
  * `data-connection-id`/`data-model-id`/`data-effort` attributes the shared
@@ -6169,9 +6169,9 @@ const PROFILE_PANE_COMMIT_DEADLINE_MS = 500;
 
 /**
  * Deadline for the SETTLE poll of `profileRefresh`/`profileRebuild`
- * ( S5) — a genuine ceiling, not an expected duration. Three things
+ * (S5) — a genuine ceiling, not an expected duration. Three things
  * stack up behind one gesture: a full uncached pass over the owner's own
- * telemetry directory measured 16.2 s to `JSON.parse` alone ( defect
+ * telemetry directory measured 16.2 s to `JSON.parse` alone (defect
  * 3, 60 767 files), a rebuild deliberately re-reads every one of them, and
  * both routes wait out the automatic catch-up chain rather than returning at
  * the first `ready`. The short commit deadline above stays in force for the
@@ -6182,7 +6182,7 @@ const PROFILE_PANE_COMMIT_DEADLINE_MS = 500;
 const PROFILE_PANE_SETTLE_DEADLINE_MS = PROFILE_PANE_SETTLE_DEADLINE_MS_SHARED;
 
 /**
- * Whether the Profile pane currently has ANY pass outstanding ( S5).
+ * Whether the Profile pane currently has ANY pass outstanding (S5).
  * Three independent DOM readings, deliberately OR-ed rather than trusting one:
  * the Refresh button's own `disabled` (`busy = inFlight !== null`), the
  * `data-profile-catchup` flag (an automatic pass that keeps the phase at
@@ -6249,9 +6249,9 @@ async function profilePaneStarted(dom: ProfilePaneDom, aftermathBefore: string):
  * the attribute is absent (no view on screen: the `skeleton` phase, or a
  * refusal with nothing to show).
  *
- * WHY AN ATTRIBUTE AND NOT THE COPY ( S5 final pass). This probe used
+ * WHY AN ATTRIBUTE AND NOT THE COPY (S5 final pass). This probe used
  * to parse "N files left" out of the honesty notes. That copy was rewritten
- * three times inside  alone, and a fourth rewording would have turned
+ * three times inside alone, and a fourth rewording would have turned
  * the reading into a silent `0` — a probe reporting "nothing left" over a
  * backlog of sixty thousand files, with every unit test still green because
  * the tests fed the fake the same sentence the parser expected.
@@ -6329,14 +6329,14 @@ async function waitForProfilePaneSettled(dom: ProfilePaneDom, deadlineMs: number
   }
 }
 
-/** Deadline for `visionSelectConnection`/`visionSetModel`'s commit polls and `visionTurnOff`'s arm step ( срез E2c) — local React `useState` (`connectionId`/`modelId`/`confirmingOff`), no IPC round-trip at all, same rationale as `MODEL_PILL_COMMIT_DEADLINE_MS`. */
+/** Deadline for `visionSelectConnection`/`visionSetModel`'s commit polls and `visionTurnOff`'s arm step (срез E2c) — local React `useState` (`connectionId`/`modelId`/`confirmingOff`), no IPC round-trip at all, same rationale as `MODEL_PILL_COMMIT_DEADLINE_MS`. */
 const VISION_PANE_COMMIT_DEADLINE_MS = 500;
 
-/** Deadline for `visionSave`/`visionTurnOff`'s confirm-step settle polls ( срез E2c) — same rationale as `PROFILE_PANE_APPLY_DEADLINE_MS`: both round-trip the real `recognizerSet` channel, an atomic settings.json write over IPC. */
+/** Deadline for `visionSave`/`visionTurnOff`'s confirm-step settle polls (срез E2c) — same rationale as `PROFILE_PANE_APPLY_DEADLINE_MS`: both round-trip the real `recognizerSet` channel, an atomic settings.json write over IPC. */
 const VISION_PANE_APPLY_DEADLINE_MS = 10_000;
 
 /**
- * Deadline for `visionProbe`'s settle poll ( срез E2c) — a genuine
+ * Deadline for `visionProbe`'s settle poll (срез E2c) — a genuine
  * ceiling, not an expected duration, sized against `recognizer-probe.ts`'s OWN
  * worst case rather than reused from an existing constant: the probe spawns a
  * child whose own abort budget is `RECOGNIZER_PROBE_TIMEOUT_MS` (60 000 ms),
@@ -6358,7 +6358,7 @@ const SHORTCUTS_PANE_COMMIT_DEADLINE_MS = 500;
 /** Deadline for `shortcutsRemoveBinding`/`shortcutsReset`'s post-click settle polls (design §4 W4) — same rationale as `SKILLS_PANE_APPLY_DEADLINE_MS`: a real `setPatch` settings.json write round-tripped over IPC. */
 const SHORTCUTS_PANE_APPLY_DEADLINE_MS = 10_000;
 
-/** Deadline for `checkpointPanelState`'s post-request settle poll (design slice-P7.26-R2-ratification.md §1 W3;  rework) — same rationale as `MCP_PANE_SCAN_DEADLINE_MS`: a real host round-trip (`checkpoint_list_request` -> store array replacement -> `checkpoint_list` reply), not a synchronous commit. */
+/** Deadline for `checkpointPanelState`'s post-request settle poll (design slice-P7.26-R2-ratification.md §1 W3; rework) — same rationale as `MCP_PANE_SCAN_DEADLINE_MS`: a real host round-trip (`checkpoint_list_request` -> store array replacement -> `checkpoint_list` reply), not a synchronous commit. */
 const CHECKPOINT_PANEL_LOAD_DEADLINE_MS = 3_000;
 
 /** Deadline for `checkpointRewind`'s post-send settle poll (design §1 W3) — longer than the other host-round-trip deadlines above: a rewind writes a mandatory safety checkpoint (shadow-git commit) AND restores files across a two-tree diff before the host ever replies. */
@@ -6367,7 +6367,7 @@ const REWIND_SETTLE_DEADLINE_MS = 15_000;
 /** Deadline for `startScreenToggleProjectMenu`'s post-click settle poll (design/slice-F5-1b-cut.md §2-D4) — local React `useState`, no IPC round-trip, same rationale as `MODEL_PILL_COMMIT_DEADLINE_MS`. */
 const START_SCREEN_COMMIT_DEADLINE_MS = 500;
 
-/** Deadline for the provider connections grid/drawer's post-click settle polls ( W12) — generous enough for a real connection-CRUD/secret-vault IPC round-trip (main writes settings.json / the OS keychain), same rationale as `MCP_PANE_COMMIT_DEADLINE_MS`. */
+/** Deadline for the provider connections grid/drawer's post-click settle polls (W12) — generous enough for a real connection-CRUD/secret-vault IPC round-trip (main writes settings.json / the OS keychain), same rationale as `MCP_PANE_COMMIT_DEADLINE_MS`. */
 const PROVIDER_PANE_COMMIT_DEADLINE_MS = 2_000;
 
 /** Deadline for `codexProfileChipOpen`/`Pick`'s post-click commit polls (W4-F0 probe (b)) — local React `useState`, no IPC round-trip, same rationale as `MODEL_PILL_COMMIT_DEADLINE_MS`. */
@@ -6382,7 +6382,7 @@ const CODEX_IMPORT_LIST_DEADLINE_MS = 10_000;
 /** Deadline for `codexImportApply`'s post-click settle poll (W4-F0 probe (c)) — a real import (≤32 MiB rollout parse + session persist) plus the resume-path tab open, same rationale as `MCP_PANE_APPLY_DEADLINE_MS`. */
 const CODEX_IMPORT_APPLY_DEADLINE_MS = 10_000;
 
-/** Deadline for `workflowStepClick`'s post-click settle poll ( slice S4) — same 500ms budget as `AGENT_CARD_COMMIT_DEADLINE_MS`: a local `useState` toggle (`selectedStepId`) with no async work of its own. */
+/** Deadline for `workflowStepClick`'s post-click settle poll (slice S4) — same 500ms budget as `AGENT_CARD_COMMIT_DEADLINE_MS`: a local `useState` toggle (`selectedStepId`) with no async work of its own. */
 const WORKFLOW_STEP_CLICK_COMMIT_DEADLINE_MS = 500;
 
 /** Deadline for `workflowMapToggle`'s post-click settle poll — same 500ms budget as `WORKFLOW_STEP_CLICK_COMMIT_DEADLINE_MS`: a local `useState` toggle (`WorkflowStepsBody`'s own `mapOpen`) with no async work of its own. */
@@ -6573,7 +6573,7 @@ function realCodexPaneDom(): CodexPaneDom {
 }
 
 /**
- * The real binary-trust dialog DOM accessor (, CUT-S4.md §3.8):
+ * The real binary-trust dialog DOM accessor (CUT-S4.md §3.8):
  * queries live at call time, same laziness discipline as `realCodexPaneDom`.
  * Disambiguated from ConsentDialog.tsx's own `.consent-dialog` node by the
  * `data-binary-trust-dialog` attribute BinaryTrustDialog.tsx stamps — never
@@ -6629,7 +6629,7 @@ function realBinaryTrustDialogDom(): BinaryTrustDialogDom {
 }
 
 /**
- * The real Trusted-binaries Settings-section DOM accessor (,
+ * The real Trusted-binaries Settings-section DOM accessor (
  * D-S4-7): queries live at call time, same laziness discipline as
  * `realCodexPaneDom`. Scoped to the Permissions pane's own container
  * (`#settings-pane-permissions`, the SettingsScreen.tsx convention every
@@ -6965,7 +6965,7 @@ export function createAutomationFacade(
   codexPaneDom: CodexPaneDom = realCodexPaneDom(),
   codexProfileChipDom: CodexProfileChipDom = realCodexProfileChipDom(),
   codexImportDom: CodexImportDialogDom = realCodexImportDialogDom(),
-  // : appended at the END of this long positional-parameter list on
+  // appended at the END of this long positional-parameter list on
   // purpose — every existing test call site in automation.test.ts supplies
   // these DI params POSITIONALLY, so inserting new ones anywhere upstream
   // (even right beside their nearest thematic neighbor, `codexPaneDom`)
@@ -6979,47 +6979,47 @@ export function createAutomationFacade(
   // positional call; `childLayoutStore` has no positional call site and so
   // follows them at 29 rather than displacing them.
   childLayoutStore: ChildLayoutStoreApi = defaultChildLayoutStore,
-  // : appended at the END for the reason spelled out at positions
+  // appended at the END for the reason spelled out at positions
   // 27-28 above — every existing positional call site would shift otherwise.
   sidebarDom: SidebarDom = realSidebarDom(),
-  //  S5: appended at the END for the same reason.
+  // S5: appended at the END for the same reason.
   settingsLayoutDom: SettingsLayoutDom = realSettingsLayoutDom(),
-  // : appended at the END for the same reason (every existing
+  // appended at the END for the same reason (every existing
   // positional call site would shift otherwise).
   dockDom: DockDom = realDockDom(),
-  //  slice S4: appended at the END for the same reason.
+  // slice S4: appended at the END for the same reason.
   workflowStepsDom: WorkflowStepsDom = realWorkflowStepsDom(),
-  //  срез E2c: appended at the END for the same reason as every DI
+  // срез E2c: appended at the END for the same reason as every DI
   // param above it — every existing positional call site would shift
   // otherwise.
   visionPaneDom: VisionPaneDom = realVisionPaneDom(),
-  //  S2: appended at the END for the same reason as every DI param
+  // S2: appended at the END for the same reason as every DI param
   // above it — every existing positional call site would shift otherwise.
   // `replayTimer` stays optional rather than defaulted here so that passing
   // `undefined` lands on `createReplayClock`'s own real-`setTimeout` default.
   replayStore: ReplayStoreApi = defaultReplayStore,
   replayTimer?: ReplayTimer,
-  //  S8.3: appended at the END for the same reason as every DI param
+  // S8.3: appended at the END for the same reason as every DI param
   // above it — every existing positional call site would shift otherwise.
   childCloseDom: ChildCloseDom = realChildCloseDom(),
-  //  S9.4: appended at the END for the same reason as every DI param
+  // S9.4: appended at the END for the same reason as every DI param
   // above it — every existing positional call site would shift otherwise.
   childSplitDom: ChildSplitDom = realChildSplitDom(),
-  // : appended at the END for the same reason as every DI param
+  // appended at the END for the same reason as every DI param
   // above it — every existing positional call site would shift otherwise.
   workflowMapDom: WorkflowMapDom = realWorkflowMapDom(),
   workflowTicksDom: WorkflowTicksDom = realWorkflowTicksDom(),
-  //  §3.7 (part B): appended at the END for the same reason.
+  // §3.7 (part B): appended at the END for the same reason.
   modeMenuDom: ModeMenuDom = realModeMenuDom(),
-  //  §3.9 (part B): appended at the END for the same reason.
+  // §3.9 (part B): appended at the END for the same reason.
   rolePickerDom: RolePickerDom = realRolePickerDom(),
-  // : appended at the END (positional DI call sites, see above).
+  // appended at the END (positional DI call sites, see above).
   scopeDom: ScopeDom = realScopeDom(),
 ): AutomationFacade {
   /**
    * The pill's provider catalog, computed the EXACT way ModelPill.tsx itself
    * does post-FXH (S5-1 fix, W4-findings-S5.md): the tab's PINNED connection
-   * wins over the active one (`resolvePillTarget`,  W10-FIX F2), and a
+   * wins over the active one (`resolvePillTarget`, W10-FIX F2), and a
    * `custom:*` provider with no builtin catalog entry falls back to its own
    * curated `models[]` (`providerModelsFor`, FXH F2). The pre-FXH expression
    * this replaces (`catalog.find(activeId)?.models`) ignored both axes, so the
@@ -7036,7 +7036,7 @@ export function createAutomationFacade(
     return providerModelsFor(providerId, settingsSnapshot?.catalog, settingsSnapshot?.settings.provider.custom);
   }
 
-  // ── Replay ( S2) ────────────────────────────────────────────────
+  // ── Replay (S2) ────────────────────────────────────────────────
   //
   // The frame clock drives every target the store reports playing — the root,
   // and any child `ChildHistoryContent` offers (slice S3). It is created once
@@ -7347,11 +7347,11 @@ export function createAutomationFacade(
     snapshot(transcriptTail?: number): SnapshotJson {
       const { tabs, activeTabId, hiddenWorkspaces } = tabsStore.getState();
       const states: Record<string, TabStateSnapshot> = {};
-      // : the one per-tab projection both loops share — a child
+      // the one per-tab projection both loops share — a child
       // tab's store lives only in the registry, so `childStates` reuses the
       // exact same field set on its own state.
       const project = (state: ReturnType<DesktopStoreApi["getState"]>): TabStateSnapshot => {
-        // : live user_text blocks may carry `images` (base64) —
+        // live user_text blocks may carry `images` (base64) —
         // strip them to {mediaType, sourcePath?} so the snapshot stays
         // base64-free (same discipline as promptQueue/retryOffer).
         const transcript = snapshotTranscript(
@@ -7362,7 +7362,7 @@ export function createAutomationFacade(
           workspace: state.workspace,
           model: state.model,
           mode: state.mode,
-          //  §3.7 (part B): the tab-level orchestrate flag — the
+          // §3.7 (part B): the tab-level orchestrate flag — the
           // smoke asserts it flips after the host's orchestrate_changed ack.
           orchestrateActive: state.orchestrateActive,
           turn: state.turn,
@@ -7381,7 +7381,7 @@ export function createAutomationFacade(
             state.retry !== null
               ? { loopEndBlockId: state.retry.loopEndBlockId, text: state.retry.text, imageCount: state.retry.images.length }
               : null,
-          // Codex-fixes  (cut §3.7): mirrors host_ready.engine's own
+          // Codex-fixes (cut §3.7): mirrors host_ready.engine's own
           // "absent = legacy core" discipline (cut §2(f)) — `state.engine` is
           // null for every core session, so this key is `undefined` (omitted
           // from the JSON the executeJavaScript bridge returns) and the
@@ -7402,7 +7402,7 @@ export function createAutomationFacade(
         }
         states[tab.tabId] = project(store.getState());
       }
-      // : children were never in tabsStore (the child
+      // children were never in tabsStore (the child
       // registration path skips addTab by design), so they are enumerated
       // through the registry's own child seam instead.
       const childStates: Record<string, ChildTabStateSnapshot> = {};
@@ -7444,7 +7444,7 @@ export function createAutomationFacade(
       if (state.turn.status !== "idle") {
         return { ok: false, reason: "busy" };
       }
-      //  live-smoke facade extension: `images` arrive as base64 +
+      // live-smoke facade extension: `images` arrive as base64 +
       // sourcePath ONLY — handlers.ts (main) has no way to sniff/size them
       // (that's Composer's job, and Composer is a renderer-only module), so
       // this is where a live drag-drop's OWN validation runs: the real
@@ -7473,10 +7473,10 @@ export function createAutomationFacade(
             attachment: { mediaType, data: image.data, sourcePath: image.sourcePath },
           });
         }
-        // Same  W3-FIX gate `tryAgain` already reports as
+        // Same W3-FIX gate `tryAgain` already reports as
         // `images_unsupported` below, and `dispatchInitialPrompt`
         // (tab-registry.ts) applies on a tab's first turn — a blind model
-        // with no configured recognizer fallback ( срез D) refuses
+        // with no configured recognizer fallback (срез D) refuses
         // the WHOLE send rather than silently stripping the images, so a
         // live smoke asserting on this reason can never be lied to by a
         // facade shortcut.
@@ -7489,7 +7489,7 @@ export function createAutomationFacade(
       // MVP) — appendUserText is the transcript write, same as the real
       // button.
       state.appendUserText(requestId, text, queuedImages.length > 0 ? queuedImages.map((image) => image.attachment) : undefined);
-      //  W8: byte-parity with Composer.handleSend's direct-send
+      // W8: byte-parity with Composer.handleSend's direct-send
       // branch — records what actually went on the wire so a live smoke
       // driving turns through this facade can still exercise the Try-again
       // offer (arming requires `lastSentMessage`).
@@ -7524,7 +7524,7 @@ export function createAutomationFacade(
       // (App.tsx), through the SAME `registry.sendToTab` every other facade
       // driver uses — no second path.
       const outcome = dispatchTryAgain(store, (msg) => registry.sendToTab(tabId, msg));
-      //  W3-FIX: dispatchTryAgain's entry gate can refuse an
+      // W3-FIX: dispatchTryAgain's entry gate can refuse an
       // image-bearing offer the live model verdict no longer accepts,
       // leaving it armed rather than sending — report that truthfully
       // instead of a blanket {ok:true} (same facade-honesty precedent as
@@ -7537,7 +7537,7 @@ export function createAutomationFacade(
     },
 
     tryAgainButtonState(tabId: string, blockId: string): TryAgainButtonState | FacadeErr {
-      // Same two structural refusals as agentCardState ( W8-FIX #2):
+      // Same two structural refusals as agentCardState (W8-FIX #2):
       // the button only ever lives inside the active tab's mounted transcript.
       if (tabsStore.getState().activeTabId !== tabId) {
         return { ok: false, reason: "tab_not_active" };
@@ -7563,7 +7563,7 @@ export function createAutomationFacade(
       if (!registry.getStore(tabId)) {
         return { ok: false, reason: "unknown_tab" };
       }
-      // A real click on the button's own DOM node ( W8-FIX #2) — not
+      // A real click on the button's own DOM node (W8-FIX #2) — not
       // a call into `dispatchTryAgain` directly, unlike `tryAgain` above.
       // React's onClick fires synchronously off a native `.click()` (same as
       // every other click-driver in this file), and the handler it wires to
@@ -7573,10 +7573,9 @@ export function createAutomationFacade(
       // {ok:true} here is a DELIVERY claim, not an outcome claim (this class
       // of DOM click-driver's contract throughout the file, distinct from the
       // facade shortcuts above): a delivered click can still be refused by
-      // `dispatchTryAgain`'s  W3-FIX entry gate (`blocked_images`) — that
+      // `dispatchTryAgain`'s W3-FIX entry gate (`blocked_images`) — that
       // outcome is read off the state plane (`retryOffer`/`notice`/
-      // `tryAgainButtonState`), not this return (fable-task56-w3fix-codex-ruling.md
-      // finding 1).
+      // `tryAgainButtonState`), not this return (finding 1).
       const clicked = tryAgainButtonDom.click(tabId, blockId);
       return clicked ? { ok: true } : { ok: false, reason: "not_present" };
     },
@@ -7708,7 +7707,8 @@ export function createAutomationFacade(
     },
 
     async agentCardCollapse(tabId: string, toolCallId: string): Promise<FacadeResult> {
-      // `agentCardExpand` inverted, same two structural refusals: expand stays ensure-expanded (its contract is pinned by
+      // `agentCardExpand` inverted, same two structural refusals (
+      // 4161): expand stays ensure-expanded (its contract is pinned by
       // README rows and existing tests), so collapse arrives as a twin
       // instead of a body-driven toggle on expand.
       if (tabsStore.getState().activeTabId !== tabId) {
@@ -7779,7 +7779,7 @@ export function createAutomationFacade(
     },
 
     /**
-     *  §3.7 (part B): the Orchestrate toggle's wire send — the
+     * §3.7 (part B): the Orchestrate toggle's wire send — the
      * exact message Composer.handleToggleOrchestrate sends for the ModeMenu
      * row's click, with the same ready-only guard (the host applies
      * set_orchestrate between turns and acks with orchestrate_changed, which
@@ -7799,7 +7799,7 @@ export function createAutomationFacade(
     },
 
     /**
-     *  §3.7 (part B): read-only ModeMenu popover projection.
+     * §3.7 (part B): read-only ModeMenu popover projection.
      * Reads the rendered DOM only (through the `modeMenuDom` DI accessor) —
      * never re-derives the row list — so it cannot disagree with what is on
      * screen.
@@ -7819,7 +7819,7 @@ export function createAutomationFacade(
       return { ok: true, open: true, chipLabel: modeMenuDom.chip()?.textContent?.trim() ?? "", rows: modeMenuDom.rows() };
     },
 
-    /**  §3.7 (part B): real click on the mode chip (popover open/close). */
+    /** §3.7 (part B): real click on the mode chip (popover open/close). */
     modeMenuClickChip(tabId: string): FacadeResult {
       if (tabsStore.getState().activeTabId !== tabId) {
         return { ok: false, reason: "tab_not_active" };
@@ -7830,7 +7830,7 @@ export function createAutomationFacade(
       return modeMenuDom.clickChip() ? { ok: true } : { ok: false, reason: "not_present" };
     },
 
-    /**  §3.7 (part B): real click on the named rendered row. */
+    /** §3.7 (part B): real click on the named rendered row. */
     modeMenuClickRow(tabId: string, name: string): FacadeResult {
       if (tabsStore.getState().activeTabId !== tabId) {
         return { ok: false, reason: "tab_not_active" };
@@ -7841,7 +7841,7 @@ export function createAutomationFacade(
       return modeMenuDom.clickRow(name) ? { ok: true } : { ok: false, reason: "row_not_found" };
     },
 
-    /**  §3.9 (part B): RolePickerDialog read-only probe. */
+    /** §3.9 (part B): RolePickerDialog read-only probe. */
     rolePickerState(tabId: string): RolePickerState | FacadeErr {
       if (tabsStore.getState().activeTabId !== tabId) {
         return { ok: false, reason: "tab_not_active" };
@@ -7856,7 +7856,7 @@ export function createAutomationFacade(
       return { ok: true, mounted: true, selectedPreset: rolePickerDom.selectedPreset(), saveDisabled: rolePickerDom.saveDisabled() };
     },
 
-    /**  §3.9 (part B): real click on a preset chip. */
+    /** §3.9 (part B): real click on a preset chip. */
     rolePickerClickPreset(tabId: string, presetId: string): FacadeResult {
       if (tabsStore.getState().activeTabId !== tabId) {
         return { ok: false, reason: "tab_not_active" };
@@ -7867,7 +7867,7 @@ export function createAutomationFacade(
       return rolePickerDom.clickPreset(presetId) ? { ok: true } : { ok: false, reason: "not_present" };
     },
 
-    /**  §3.9 (part B): real click on Save. */
+    /** §3.9 (part B): real click on Save. */
     rolePickerClickSave(tabId: string): FacadeResult {
       if (tabsStore.getState().activeTabId !== tabId) {
         return { ok: false, reason: "tab_not_active" };
@@ -7878,7 +7878,7 @@ export function createAutomationFacade(
       return rolePickerDom.clickSave() ? { ok: true } : { ok: false, reason: "not_present" };
     },
 
-    /**  §3.9 (part B): real click on Skip. */
+    /** §3.9 (part B): real click on Skip. */
     rolePickerClickSkip(tabId: string): FacadeResult {
       if (tabsStore.getState().activeTabId !== tabId) {
         return { ok: false, reason: "tab_not_active" };
@@ -7921,7 +7921,7 @@ export function createAutomationFacade(
       if (!tabsStore.getState().tabs.some((tab) => tab.tabId === rootTabId)) {
         return { ok: false, reason: "unknown_tab" };
       }
-      // : resolve this spawn's childSessionId through the real
+      // resolve this spawn's childSessionId through the real
       // relation store and pass the same-child predicate, so opening a
       // continuation of a child already on the split stack folds onto that
       // row instead of appending a second one — the same Open-path fold
@@ -8201,7 +8201,7 @@ export function createAutomationFacade(
         // TodoWrite yet, or the last one's `todos` array is empty.
         return { ok: true, visible: false, header: null, panelCollapsed: false, completedRow: null, items: [], stale: false, staleHint: null };
       }
-      //  live acceptance: the stale badge's presence + hint text,
+      // live acceptance: the stale badge's presence + hint text,
       // through the same DI accessor as the panel read (no direct DOM here).
       const badgeInfo = todoPanelDom.staleBadge?.(tabId) ?? { stale: false, hint: null };
       return { ok: true, visible: true, ...panel, stale: badgeInfo.stale, staleHint: badgeInfo.hint };
@@ -8223,7 +8223,7 @@ export function createAutomationFacade(
         sendEnabled: workspace !== null && prompt.trim().length > 0,
         recentCount: startScreenDom.recentCount(),
         projectMenuOpen: startScreenDom.projectMenuOpen(),
-        // Codex-fixes  (cut §3.7): `engine` mirrors the draft-state
+        // Codex-fixes (cut §3.7): `engine` mirrors the draft-state
         // discipline of `workspace`/`prompt`/`model` above — undefined until a
         // draft exists, then the draft's own pick (defaulted to "core" by
         // tabsStore.openDraft). `availableEngines` is the compiled-in catalog
@@ -8270,7 +8270,7 @@ export function createAutomationFacade(
       return { ok: true };
     },
 
-    // Codex-fixes  (cut §3.7, IMPLEMENTED here): same no_draft guard
+    // Codex-fixes (cut §3.7, IMPLEMENTED here): same no_draft guard
     // and write-through-the-store discipline as startScreenSetModel above —
     // drives the EXISTING setDraftEngine action (tabs-store.ts), no second
     // path. `async` to match the frozen `Promise<FacadeResult>` signature;
@@ -8517,7 +8517,7 @@ export function createAutomationFacade(
         effortItems: [...(state.availableEffortLevels ?? [])],
         currentModel: model,
         currentEffort: state.reasoningEffort,
-        // : same engine-dependent predicate the pill itself now
+        // same engine-dependent predicate the pill itself now
         // renders with — core stays pickable mid-turn, a foreign engine keeps
         // its between-turns gate (`state.engine === null` IS core).
         modelPickDisabled: computeModelPickDisabled(state.turn.status, state.queueInFlight, state.connection === "ready", state.engine === null),
@@ -8570,7 +8570,7 @@ export function createAutomationFacade(
       if (state.engine?.model !== undefined && modelPillDom.native !== undefined) {
         return nativeModelPillPick(modelPillDom.native, state.engine.model, state.pendingEngineChange?.model, pick);
       }
-      // ──  drill-down path ─────────────────────────────────────────
+      // ── drill-down path ─────────────────────────────────────────
       // When the popover renders the SHARED drill-down (`ModelDrillMenu`,
       // `.start-model-menu`), the pill's own root/model/effort pages are
       // gone — the driver reads and clicks THAT markup instead. Selection is
@@ -9370,7 +9370,7 @@ export function createAutomationFacade(
         return Number.isFinite(n) ? n : 0;
       };
       const sw = profilePaneDom.telemetrySwitch();
-      // : which `.profile-period-button` reads `active` maps back to
+      // which `.profile-period-button` reads `active` maps back to
       // a `ProfilePeriod` purely by DOM POSITION — `PeriodControl` renders
       // `PROFILE_PERIODS.map(...)` in that exact order and stamps no
       // `data-period` attribute, so position `i` always corresponds to
@@ -9388,7 +9388,7 @@ export function createAutomationFacade(
       // itself is already the full list.
       const collapsedTotal = expandText?.match(/\((\d+)\)/)?.[1];
       const modelsTotalCount = !modelsExpanded && collapsedTotal !== undefined ? Number(collapsedTotal) : modelRows.length;
-      //  S5. The phase attribute is the S4 wire contract; a build that
+      // S5. The phase attribute is the S4 wire contract; a build that
       // predates it reads `unknown` rather than being coerced into one of the
       // four real values. The two work-left counters come off the same
       // contract (`profilePaneDataAttributes`), so they are readable in every
@@ -9479,7 +9479,7 @@ export function createAutomationFacade(
         // §S7 item 4) — a valid refusal, not an internal error.
         return { ok: false, reason: "control_not_present" };
       }
-      // A real click on the target button ('s own "no reinvented
+ // A real click on the target button ("no reinvented
       // vocabulary" boundary) — `PeriodControl`'s local `setPeriod` is a pure
       // client-side re-render, no IPC round trip, same posture as
       // `modelsExpanded` below.
@@ -9512,7 +9512,7 @@ export function createAutomationFacade(
         return { ok: false, reason: "pane_not_mounted" };
       }
       // A real getStats() IPC round trip (design's own doc: "a genuine
-      // main-process read, not cosmetic"). Since  S4 the pane HAS a
+      // main-process read, not cosmetic"). Since S4 the pane HAS a
       // DOM signal for "request in flight" — the held button, the phase
       // attribute and the catch-up flag — and this route is built entirely
       // out of it, because the click alone stopped being evidence the moment
@@ -10131,7 +10131,7 @@ export function createAutomationFacade(
       if (!store) {
         return { ok: false, reason: "unknown_tab" };
       }
-      // : the TimelinePanel DOM panel is gone — request a fresh
+      // the TimelinePanel DOM panel is gone — request a fresh
       // list directly (the SAME checkpoint_list_request the rail's refresh
       // effect sends, over the tab's real send port) and wait for the
       // store's `checkpoints` array to be REPLACED. The store replaces the
@@ -10190,7 +10190,8 @@ export function createAutomationFacade(
       // fires a rewind_result (design §1: "a non-silent refusal"), and two
       // concurrent rewinds must not satisfy each other's wait.
       const requestId = crypto.randomUUID();
-      // The SAME wire message the tick rail's rewind confirm sends (; formerly TimelinePanel.confirmRewind) — built inline rather
+      // The SAME wire message the tick rail's rewind confirm sends (
+      // 4742; formerly TimelinePanel.confirmRewind) — built inline rather
       // than via buildRewindRequest since that hardcodes v1's `scope:
       // "both"`, while this driver must exercise every scope.
       const message: UiToHostMessage = { type: "rewind_request", requestId, checkpointId, scope: args.scope };
@@ -10843,7 +10844,7 @@ export function createAutomationFacade(
       return !codexImportDom.open() ? { ok: true } : { ok: false, reason: "import_refused" };
     },
 
-    // ── Replay pult ( S2) ─────────────────────────────────────────
+    // ── Replay pult (S2) ─────────────────────────────────────────
 
     replayArm(tabId?: string): FacadeResult {
       const rootTabId = tabId ?? tabsStore.getState().activeTabId;

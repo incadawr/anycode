@@ -1,5 +1,5 @@
 /**
- * Pure classifier for marked's `html` token `raw` string ( owner
+ * Pure classifier for marked's `html` token `raw` string (owner
  * smoke-test fix #2). `renderer: plain web target, zero Node`
  * (electron.vite.config.ts) — no regex feature needs Node, so this module
  * works unmodified in the browser bundle AND under vitest's plain-node test

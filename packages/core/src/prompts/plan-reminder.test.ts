@@ -1,5 +1,5 @@
 /**
- * : the plan-mode reminder is consumed by BOTH clients now (the CLI REPL
+ * the plan-mode reminder is consumed by BOTH clients now (the CLI REPL
  * and the desktop host's Session), so it lives in prompts/ rather than cli/ and
  * is reachable from the package barrel. These tests pin the two facts a second
  * consumer depends on: the tag shape (the transcript sanitizers on both sides
@@ -35,7 +35,7 @@ describe("withPlanModeReminder", () => {
   });
 });
 
-describe("core barrel reachability ( desktop consumption)", () => {
+describe("core barrel reachability (desktop consumption)", () => {
   it("exports withPlanModeReminder", () => {
     expect(barrel.withPlanModeReminder).toBe(withPlanModeReminder);
   });

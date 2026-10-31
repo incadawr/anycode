@@ -1,5 +1,5 @@
 /**
- *  cross-review F1: the real LSP/Hooks panel drivers open the
+ * cross-review F1: the real LSP/Hooks panel drivers open the
  * panel through the Environment menu. React 19 commits a click-driven state
  * update in a microtask (after `.click()` returns), so the menu's Details
  * action only exists once React has committed. This test simulates that
@@ -77,7 +77,7 @@ function installFakeEnvironmentMenu(): {
   return { lspClicks: () => lspClicks, hooksClicks: () => hooksClicks };
 }
 
-describe("Environment-menu panel drivers ( cross-review F1)", () => {
+describe("Environment-menu panel drivers (cross-review F1)", () => {
   beforeEach(() => {
     commit.run = (): void => {};
   });

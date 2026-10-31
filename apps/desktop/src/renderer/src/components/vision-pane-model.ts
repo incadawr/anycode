@@ -1,5 +1,5 @@
 /**
- *  срез E2a — pure decision logic for the Vision settings panel: which
+ * срез E2a — pure decision logic for the Vision settings panel: which
  * connection may act as the fallback recognizer, what its proxy path actually
  * is, which models to suggest, and whether the fallback currently reads as
  * "on". Same discipline as start-model-picker.ts/ProxyRefPicker.ts: this
@@ -262,7 +262,7 @@ export interface VisionModelHint {
  * `providerModelsFor`, which REPLACES the catalog list wholesale the moment a
  * live list is non-empty (`if (connectionModels !== undefined &&
  * connectionModels.length > 0) { return connectionModels.map(...) }`) — the
- * live /131 defect where a working model vanishes from a picker
+ * live defect where a working model vanishes from a picker
  * because the live fetch did not happen to include it. Here, a catalog model
  * already known to support vision NEVER disappears just because the
  * connection's live list is non-empty and does not happen to repeat it.

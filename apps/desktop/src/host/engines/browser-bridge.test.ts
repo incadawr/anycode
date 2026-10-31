@@ -1,5 +1,5 @@
 /**
- *  B3..B20: the shared engine browser bridge. Fake PreviewPort
+ * B3..B20: the shared engine browser bridge. Fake PreviewPort
  * (records requests, scriptable results), fake broker (scripted decisions),
  * fake fullAccess flag. No main/, no real preview, no network.
  */

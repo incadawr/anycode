@@ -1,6 +1,6 @@
 /**
  * Image metadata: pixel-dimension parsing and the model-visible stub text for
- * a blind-model image fallback ( plan §2/§0a). Format detection
+ * a blind-model image fallback (plan §2/§0a). Format detection
  * deliberately reuses `sniffImageMediaType` (util/images.ts) instead of
  * re-implementing magic-byte matching — one format detector for the whole
  * codebase.

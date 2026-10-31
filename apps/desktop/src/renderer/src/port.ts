@@ -97,13 +97,13 @@ export interface HostPortMeta {
   missingWorkspace?: boolean;
   hostFailure?: PortEnvelope["hostFailure"];
   /**
-   *  W10-FIX F2: the tab's pinned provider connection (additive control
+   * W10-FIX F2: the tab's pinned provider connection (additive control
    * plane). Absent for an unpinned/legacy tab — the ModelPill then falls back to
    * the active connection's catalog + write-target.
    */
   pinnedConnection?: { connectionId: string; providerId: string };
   /**
-   *  CUT-S2 §2.5: present only for a child-session tab's port
+   * CUT-S2 §2.5: present only for a child-session tab's port
    * delivery — carried straight through from the envelope's own `child`
    * field (`shared/envelopes.ts`'s `PortEnvelope`, frozen by S2a/S2b's
    * `deliverTabPort`) to the classification point, `tab-registry.ts`'s
@@ -113,14 +113,14 @@ export interface HostPortMeta {
    * Absent for every ordinary root-tab envelope, unchanged from today.
    */
   child?: PortEnvelope["child"];
-  /** : a Sessions API agent opened this root tab (envelope `openedByAgent === true`). */
+  /** a Sessions API agent opened this root tab (envelope `openedByAgent === true`). */
   openedByAgent?: true;
   agentTitle?: string;
 }
 
 /**
  * Validates the raw `child` field lifted off an incoming port envelope
- * ( CUT-S2 §2.5) before it is trusted: every sub-field must be a
+ * (CUT-S2 §2.5) before it is trusted: every sub-field must be a
  * string, or the whole thing is dropped rather than forwarded partially
  * typed (the envelope crosses `window.postMessage`, so its shape is
  * `unknown` at this boundary, same discipline as `tabId`/`workspace`
@@ -185,13 +185,13 @@ export function onHostPort(cb: (port: MessagePort, meta: HostPortMeta) => void):
       };
       const tabId = typeof envelope.tabId === "string" ? envelope.tabId : "";
       const wsFromEnvelope = typeof envelope.workspace === "string" ? envelope.workspace : "";
-      //  W10-FIX F2: both pin fields present -> the tab is pinned; either
+      // W10-FIX F2: both pin fields present -> the tab is pinned; either
       // absent -> unpinned (fall back to active in the ModelPill).
       const pinnedConnection =
         typeof envelope.connectionId === "string" && typeof envelope.providerId === "string"
           ? { connectionId: envelope.connectionId, providerId: envelope.providerId }
           : undefined;
-      //  CUT-S2 §2.5: forwarded through to the classification point
+      // CUT-S2 §2.5: forwarded through to the classification point
       // untouched — this module does not decide root vs. child, it only
       // validates shape (see `parseChildEnvelopeField`).
       const child = parseChildEnvelopeField(envelope.child);
@@ -275,10 +275,10 @@ export interface ConnectionRegistry {
    * race a closeTab that beat it to the punch) — the caller drops it with a
    * warn instead of resurrecting a closed tab.
    *
-   *  W10-FIX F2: `pinnedConnection` (additive) records the tab's pinned
+   * W10-FIX F2: `pinnedConnection` (additive) records the tab's pinned
    * provider connection on its per-tab store so the ModelPill targets it.
    *
-   *  CUT-S2 §2.5: `child` (additive) is the envelope's own `child`
+   * CUT-S2 §2.5: `child` (additive) is the envelope's own `child`
    * field, forwarded untouched — the registry (not this module) decides
    * what it means (`classifyPortEnvelope`, skip-hide contract).
    */

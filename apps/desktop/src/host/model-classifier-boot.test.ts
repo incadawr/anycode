@@ -1,5 +1,5 @@
 /**
- *  xfix D4: the model-kind classifier's connection pinning must be
+ * xfix D4: the model-kind classifier's connection pinning must be
  * HONEST. An explicit `connectionId` the fork cannot resolve turns the
  * classifier OFF with a user-visible notice — never a silent fallback to the
  * session's own connection (the pre-fix behavior billed the WRONG connection),
@@ -27,7 +27,7 @@ function makePortSource(models: readonly string[]): ModelClassifierPortSource & 
   };
 }
 
-describe("resolveModelClassifierBoot ( xfix D4)", () => {
+describe("resolveModelClassifierBoot (xfix D4)", () => {
   it("no connectionId, no model: the session's own switchable port, session's model", () => {
     const source = makePortSource(["m-main"]);
     const boot = resolveModelClassifierBoot(

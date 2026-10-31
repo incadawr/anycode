@@ -1,5 +1,5 @@
 /**
- * McpSecretForkCache (, part C): main-side preparation of the
+ * McpSecretForkCache (part C): main-side preparation of the
  * ANYCODE_MCP_SECRETS fork value. In-memory fakes only: no real vault, no real
  * config files. Covers the referenced-only rule (C-19) and the no-leak rule.
  */
@@ -36,7 +36,7 @@ const PROJECT = `${WS}/.anycode/config.json`;
 const USER = `${HOME}/.anycode/config.json`;
 const COMPAT = `${WS}/.mcp.json`;
 
-describe("McpSecretForkCache — referenced-only hand-off (, C-19)", () => {
+describe("McpSecretForkCache — referenced-only hand-off (C-19)", () => {
   it("C-19: with secrets A and B in the vault but only A referenced, the fork value is {A} only", async () => {
     const vault = fakeVault({ A: "value-of-a", B: "value-of-b" });
     const cache = new McpSecretForkCache({
@@ -101,7 +101,7 @@ describe("McpSecretForkCache — referenced-only hand-off (, C-19)", () => {
   });
 });
 
-describe("McpSecretForkCache — refresh and no-leak (, C-19/C-23)", () => {
+describe("McpSecretForkCache — refresh and no-leak (C-19/C-23)", () => {
   it("refreshAll re-primes every workspace seen so far (a secret change reaches the next spawn)", async () => {
     let values: Record<string, string> = { A: "old" };
     const vault = {

@@ -9,7 +9,7 @@ import {
   parseMcpSecretKey,
 } from "./mcp-secrets.js";
 
-describe("MCP secret store names (, part C)", () => {
+describe("MCP secret store names (part C)", () => {
   it("uses the literal fork-env and IPC channel names", () => {
     expect(ENV_MCP_SECRETS).toBe("ANYCODE_MCP_SECRETS");
     expect(MCP_SECRETS_LIST_CHANNEL).toBe("anycode:mcp-secrets-list");

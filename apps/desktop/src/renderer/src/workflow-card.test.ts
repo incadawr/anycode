@@ -197,7 +197,7 @@ describe("decodeWorkflowCardSnapshot — malformed payloads never throw and deco
     ["final.durationMs is negative", { ...VALID_SNAPSHOT, final: { status: "failed", durationMs: -1 } }],
     ["final.durationMs is a float", { ...VALID_SNAPSHOT, final: { status: "failed", durationMs: 1.5 } }],
     ["final.durationMs is NaN", { ...VALID_SNAPSHOT, final: { status: "failed", durationMs: Number.NaN } }],
-    // : a malformed failure/unlaunched field fails the WHOLE decode
+    // a malformed failure/unlaunched field fails the WHOLE decode
     // (same fail-soft posture as every field above), never a silently
     // dropped field.
     [

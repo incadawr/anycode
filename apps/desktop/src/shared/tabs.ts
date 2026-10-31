@@ -39,14 +39,14 @@ export const TAB_CLOSE_CHANNEL = "anycode:tab-close";
 
 /**
  * invoke channel: re-bind a RUNNING tab to another provider connection
- * ( cut-2 §D1/§D6). Not a close and not a create — the tab row, its
+ * (cut-2 §D1/§D6). Not a close and not a create — the tab row, its
  * session id, and its terminal panel all survive; only the host process is
  * replaced by a resume host booted on the target connection's fork env.
  */
 export const TAB_REBIND_CHANNEL = "anycode:tab-rebind";
 
 /**
- * Re-bind request ( cut-2 §D6): the renderer knows `tabId` from the
+ * Re-bind request (cut-2 §D6): the renderer knows `tabId` from the
  * tabs-store, `connectionId` is an opaque id from main's live connection
  * registry — never a credential. Main validates BOTH against its own state
  * (the tab must be a running root core tab; the connection must exist) before
@@ -80,7 +80,7 @@ export interface TabRebindRequest {
 }
 
 /**
- * Result of a re-bind request ( cut-2 §D6), fail-closed in every
+ * Result of a re-bind request (cut-2 §D6), fail-closed in every
  * refusal — a refused re-bind leaves the tab running on its ORIGINAL
  * connection, never on an unprimed or wrong one:
  *  - `unknown_tab`: no such tab, or a child session's id (a child is not
@@ -140,7 +140,7 @@ export interface SessionDeleteSummaryWire {
     checkpoints: number;
     claudeTranscriptItems: number;
     codexThreadItems: number;
-    /**  / : provider_usage rows (core migration v19) the cascade removed. */
+    /** provider_usage rows (core migration v19) the cascade removed. */
     providerUsage: number;
   };
 }
@@ -188,7 +188,7 @@ export type CreateTabRequest =
       engine?: "core" | "codex" | "claude";
       /**
        * The New Session start screen's Codex draft picks (W3 join, closing
-       * 's dangling wire: the draft picker existed, main's argv
+       * dangling wire: the draft picker existed, main's argv
        * forwarding existed, nothing connected them). Opaque ids only — main
        * (tab-ipc.ts) bounds their length, the host validates IDENTITY against
        * its own live model catalog / frozen preset table before either ever
@@ -213,7 +213,7 @@ export type CreateTabRequest =
       codexProfileId?: string;
       /**
        * The New Session start screen's cross-connection model picker pick
-       * ( cut-1 stage A): an opaque provider-connection id from
+       * (cut-1 stage A): an opaque provider-connection id from
        * main's live connection registry — never a credential. Absent ⇒ the
        * host's own default applies (`activeConnectionId()`, today's
        * behavior). Only read on the session-CREATING spawn (main/tabs.ts),
@@ -262,7 +262,7 @@ export type CreateTabResult =
         // start screen can keep the user's draft and say which folder is gone.
         | "folder_not_found"
         // The session was pinned to a provider connection that has since been
-        // deleted ( W10). Resume must NOT silently fall back to the current
+        // deleted (W10). Resume must NOT silently fall back to the current
         // default — the renderer offers a replacement instead. `connectionId` is
         // the missing pin, for the actionable notice.
         | "connection_missing";
@@ -325,7 +325,7 @@ export interface SessionSummary {
   /**
    * The engine the session was created under (projected from persistence
    * SessionMeta.engineId; opaque host identity, absent = a historical core
-   * session). : the Sidebar forwards this to `handleCreateTabResult` so a
+   * session). the Sidebar forwards this to `handleCreateTabResult` so a
    * `not_ready` resume failure on a Codex session reads the sign-in-specific copy
    * ("Sign in to Codex…") instead of the irrelevant "Configure a provider…"
    * core copy. Display-only — main is the authoritative spawn gate.

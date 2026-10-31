@@ -516,7 +516,7 @@ describe("runToolBatches", () => {
 });
 
 // ---------------------------------------------------------------------------
-// : rolling bounded execution within safe runs, solo barriers, width
+// rolling bounded execution within safe runs, solo barriers, width
 // normalization. A real AbortController whose removeEventListener flips
 // `aborted` when the pool hands a slot over induces the handoff race.
 

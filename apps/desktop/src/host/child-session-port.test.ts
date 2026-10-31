@@ -90,7 +90,7 @@ function terminalEvent(requestId: string, overrides: Partial<Extract<ChildRunEve
   };
 }
 
-describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
+describe("createChildSessionPort (CUT-S2 §2.6.1)", () => {
   it("correlates concurrent run()s by requestId: replies arriving in REVERSED order still resolve the matching promise, and an unrelated requestId is ignored", async () => {
     const { port, sent, emit } = harness();
     const p1 = port.run(
@@ -180,7 +180,7 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
     });
   });
 
-  //  CUT-S4 §3.1: `req.engine` rides the wire verbatim into the
+  // CUT-S4 §3.1: `req.engine` rides the wire verbatim into the
   // ChildSpawnRequest AND into the "start" progress event on `accepted` —
   // the client never re-derives it, only forwards whatever the engine-profile
   // route (core, S4a) put on `SessionSubagentRequest.engine`.
@@ -290,9 +290,9 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
     });
   });
 
-  // : a max_turns terminal's report/notice text stays non-empty and
+  // a max_turns terminal's report/notice text stays non-empty and
   // its status is relayed unchanged — the parent-side mirror of the child
-  // host's turn-limit rescue/notice. Wire logic is NOT changed by ;
+  // host's turn-limit rescue/notice. Wire logic is NOT changed;
   // this pins the relay of the (possibly rescued or noticed) finalText.
   it("a max_turns terminal relays its (rescued/notice) finalText non-empty and the status unchanged", async () => {
     for (const text of ["RESCUE REPORT", "Agent: the child stopped at its turn limit without a final report; last activity: TodoRead."]) {
@@ -325,7 +325,7 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
     }
   });
 
-  //  CUT-S2 §10.7 п.6c (B2-micro): a terminal event's `activitySuppressed`
+  // CUT-S2 §10.7 п.6c (B2-micro): a terminal event's `activitySuppressed`
   // is passed through onto the "end" progress report — mirrors the inline
   // runner's own `kind:"end"` SubagentProgress (runner.ts:573).
   describe("terminal activitySuppressed passthrough (CUT-S2 §10.7 п.6c)", () => {
@@ -347,10 +347,10 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
       await pending;
     });
 
-    //  cross-review F1: the session tier's kind:"end" progress is
+    // cross-review F1: the session tier's kind:"end" progress is
     // the ONLY source of subagent_end (tools/agent.ts), so the ceiling summary
     // must ride it or the UI budget line and telemetry never fire.
-    it("a terminal event carrying a ceiling summary puts it on the end-progress report ( F1)", async () => {
+    it("a terminal event carrying a ceiling summary puts it on the end-progress report (F1)", async () => {
       const { port, sent, emit } = harness();
       const onProgress = vi.fn();
       const pending = port.run(
@@ -419,7 +419,7 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
     });
   });
 
-  // : end uses the terminal's own child-fact model fields and the
+  // end uses the terminal's own child-fact model fields and the
   // REQUEST's engine — never req.model nor the accepted event's model.
   describe("terminal model/responseModel/engine passthrough", () => {
     it("terminal model+responseModel with an engine request: end carries all three, ignoring req/accepted models", async () => {
@@ -487,7 +487,7 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
     });
   });
 
-  it("terminal declaredDoneAtCeiling reaches the attached outcome (and is absent otherwise) (TASK 4149)", async () => {
+  it("terminal declaredDoneAtCeiling reaches the attached outcome (and is absent otherwise)", async () => {
     for (const flag of [true, false]) {
       const { port, sent, emit } = harness();
       const pending = port.run(
@@ -798,11 +798,11 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
   });
 
   // ---------------------------------------------------------------------------
-  //  срез 1: `req.detach` breaks sync-join on purpose — the run()
+  // срез 1: `req.detach` breaks sync-join on purpose — the run()
   // promise settles at "accepted" (admit), not "terminal". See the file
-  // header's  addendum for the full contract this suite pins.
+  // header's addendum for the full contract this suite pins.
 
-  describe("detach ( срез 1)", () => {
+  describe("detach (срез 1)", () => {
     function detachHarness(getPermissionMode: () => PermissionMode = () => "build") {
       const sent: SentMessage[] = [];
       let listener: ((event: ChildRunEvent) => void) | undefined;
@@ -859,12 +859,12 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
       // background — the ONLY text the model ever sees for this call.
       expect(outcome.finalText).toContain("child-detach-1");
       expect(outcome.finalText.toLowerCase()).toContain("background");
-      // : the admit text also tells the model how to follow up on
+      // the admit text also tells the model how to follow up on
       // this same child later.
       expect(outcome.finalText).toContain("continue_session");
     });
 
-    it(": full detached lifecycle — onDetachedTerminal's childSessionId is the child's, and the delivered child_report composite carries the hint", async () => {
+    it("full detached lifecycle — onDetachedTerminal's childSessionId is the child's, and the delivered child_report composite carries the hint", async () => {
       const { port, sent, emit, detachedTerminals } = detachHarness();
       const pending = port.run(
         { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-detach-r", detach: true },
@@ -937,11 +937,11 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
       expect(onProgress).not.toHaveBeenCalled();
     });
 
-    it("detached terminal declaredDoneAtCeiling reaches onDetachedTerminal's outcome (TASK 4149)", async () => {
-      // : a max_turns terminal's rescued report / turn-limit notice
+    it("detached terminal declaredDoneAtCeiling reaches onDetachedTerminal's outcome", async () => {
+      // a max_turns terminal's rescued report / turn-limit notice
       // must reach the parent via onDetachedTerminal non-empty and with the
       // status unchanged — detached delivery mirrors the attached relay
-      // pinned above; wire logic is NOT changed by .
+      // pinned above; wire logic is NOT changed.
       for (const text of ["RESCUE REPORT", "Agent: the child stopped at its turn limit without a final report; last activity: TodoRead."]) {
         const { port, sent, emit, detachedTerminals } = detachHarness();
         const pending = port.run(
@@ -971,7 +971,7 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
       }
     });
 
-    it("detached terminal declaredDoneAtCeiling reaches onDetachedTerminal's outcome (TASK 4149)", async () => {
+    it("detached terminal declaredDoneAtCeiling reaches onDetachedTerminal's outcome", async () => {
       const { port, sent, emit, detachedTerminals } = detachHarness();
       const pending = port.run(
         { agentType: "explore", description: "d", prompt: "p", spawnToolCallId: "spawn-detach-ceiling", detach: true },
@@ -1100,7 +1100,7 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
       }
     });
 
-    it(" срез 3: an abort on opts.signal AFTER admit sends NO ChildRunCancel — Stop cancels the parent's TURN, not a child it already detached into the background", async () => {
+    it("срез 3: an abort on opts.signal AFTER admit sends NO ChildRunCancel — Stop cancels the parent's TURN, not a child it already detached into the background", async () => {
       const { port, sent, emit, detachedTerminals } = detachHarness();
       const controller = new AbortController();
       const pending = port.run(
@@ -1126,7 +1126,7 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
       expect(detachedTerminals[0]!.outcome.status).toBe("completed");
     });
 
-    it(" срез 3: a SYNC (non-detached) run is UNCHANGED — an abort still sends exactly one ChildRunCancel (cascade preserved for the sync tier)", async () => {
+    it("срез 3: a SYNC (non-detached) run is UNCHANGED — an abort still sends exactly one ChildRunCancel (cascade preserved for the sync tier)", async () => {
       const { port, sent } = detachHarness();
       const controller = new AbortController();
       const pending = port.run(
@@ -1141,7 +1141,7 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
       expect(cancels(sent)[0]!.requestId).toBe(requestId);
     });
 
-    it(" срез 3: cancelBackgroundChild sends a ChildRunCancel for a live detached child by childSessionId, and its eventual 'cancelled' terminal still reaches onDetachedTerminal", async () => {
+    it("срез 3: cancelBackgroundChild sends a ChildRunCancel for a live detached child by childSessionId, and its eventual 'cancelled' terminal still reaches onDetachedTerminal", async () => {
       const { port, sent, emit, detachedTerminals } = detachHarness();
       const pending = port.run(
         { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-detach-explicit-cancel", detach: true },
@@ -1164,7 +1164,7 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
       expect(detachedTerminals[0]!.outcome.status).toBe("cancelled");
     });
 
-    it(" user-stop: a cancelBackgroundChild (the UI stop path) marks the terminal outcome cancelledBy=user", async () => {
+    it("user-stop: a cancelBackgroundChild (the UI stop path) marks the terminal outcome cancelledBy=user", async () => {
       const { port, sent, emit, detachedTerminals } = detachHarness();
       const pending = port.run(
         { agentType: "explore", description: "d", prompt: "p", spawnToolCallId: "spawn-user-stop", detach: true },
@@ -1181,7 +1181,7 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
       expect(detachedTerminals[0]!.outcome.cancelledBy).toBe("user");
     });
 
-    it(" user-stop: a shutdown sweep (cancelAllBackgroundChildren) is NOT attributed to the user", async () => {
+    it("user-stop: a shutdown sweep (cancelAllBackgroundChildren) is NOT attributed to the user", async () => {
       const { port, sent, emit, detachedTerminals } = detachHarness();
       const pending = port.run(
         { agentType: "explore", description: "d", prompt: "p", spawnToolCallId: "spawn-shutdown-cause", detach: true },
@@ -1197,13 +1197,13 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
       expect(detachedTerminals[0]!.outcome.cancelledBy).toBeUndefined();
     });
 
-    it(" срез 3: cancelBackgroundChild on an unknown/already-finished childSessionId returns false and sends nothing", () => {
+    it("срез 3: cancelBackgroundChild on an unknown/already-finished childSessionId returns false and sends nothing", () => {
       const { port, sent } = detachHarness();
       expect(port.cancelBackgroundChild("no-such-child")).toBe(false);
       expect(sent).toHaveLength(0);
     });
 
-    it(" срез 3: listBackgroundChildren reflects admit (added) and terminal (removed), carrying agentType/description/childSessionId/startedAt", async () => {
+    it("срез 3: listBackgroundChildren reflects admit (added) and terminal (removed), carrying agentType/description/childSessionId/startedAt", async () => {
       const { port, sent, emit } = detachHarness();
       expect(port.listBackgroundChildren()).toEqual([]);
 
@@ -1224,7 +1224,7 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
       expect(port.listBackgroundChildren()).toEqual([]);
     });
 
-    it(" срез 3: cancelAllBackgroundChildren cancels every live detached child (and only those)", async () => {
+    it("срез 3: cancelAllBackgroundChildren cancels every live detached child (and only those)", async () => {
       const { port, sent, emit } = detachHarness();
       const pendingA = port.run(
         { agentType: "general-purpose", description: "a", prompt: "p", spawnToolCallId: "spawn-all-a", detach: true },
@@ -1244,7 +1244,7 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
       expect(cancels(sent).map((c) => c.requestId).sort()).toEqual([reqA, reqB].sort());
     });
 
-    it(" срез 3: onBackgroundChildrenChanged fires on admit and on terminal, and the returned unsubscribe stops further notifications", async () => {
+    it("срез 3: onBackgroundChildrenChanged fires on admit and on terminal, and the returned unsubscribe stops further notifications", async () => {
       const { port, sent, emit } = detachHarness();
       const listener = vi.fn();
       const unsubscribe = port.onBackgroundChildrenChanged(listener);
@@ -1373,7 +1373,7 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
 });
 
 /**
- * Stall clock wiring — session tier ( slice 1). This client owns the
+ * Stall clock wiring — session tier (slice 1). This client owns the
  * PARENT side of the wire, so it is where the shared SubagentStallClock is
  * driven for a session-tier child: silence is measured against the cadence of
  * `progress`/`activity` ChildRunEvents already arriving from main (no new
@@ -1383,7 +1383,7 @@ describe("createChildSessionPort ( CUT-S2 §2.6.1)", () => {
  * FULL fake timers (Date + setTimeout), same rationale as runner.test.ts's
  * mirror suite: the detector needs a firing timer, not a Date-boundary check.
  */
-describe("stall clock wiring — session tier ( slice 1)", () => {
+describe("stall clock wiring — session tier (slice 1)", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -1529,7 +1529,7 @@ describe("stall clock wiring — session tier ( slice 1)", () => {
     await pending;
   });
 
-  it("a detached run STILL constructs and drives a stall clock ( slice 2 reverses slice 1's scope boundary — delivery now goes through onDetachedStall, see the dedicated describe block below); onProgress is still never called for it, and a host that wires no onDetachedStall at all sees a harmless no-op, never a throw", async () => {
+  it("a detached run STILL constructs and drives a stall clock (slice 2 reverses slice 1's scope boundary — delivery now goes through onDetachedStall, see the dedicated describe block below); onProgress is still never called for it, and a host that wires no onDetachedStall at all sees a harmless no-op, never a throw", async () => {
     vi.useFakeTimers();
     const { port, sent, emit } = stallHarness(); // no onDetachedStall wired
     const onProgress = vi.fn();
@@ -1570,7 +1570,7 @@ describe("stall clock wiring — session tier ( slice 1)", () => {
 });
 
 /**
- * Detached stall notice delivery ( slice 2). Slice 1 deliberately
+ * Detached stall notice delivery (slice 2). Slice 1 deliberately
  * left `req.detach === true` without a stall clock at all — the ONE case
  * where a stall report matters most (the parent is not blocked waiting on
  * the child, so it can actually read and act on a notice) had no clock. This
@@ -1583,7 +1583,7 @@ describe("stall clock wiring — session tier ( slice 1)", () => {
  * request), plus the child's `childSessionId` once known (captured at
  * "accepted", exactly like the background-children registry does).
  */
-describe("detached stall notice delivery ( slice 2)", () => {
+describe("detached stall notice delivery (slice 2)", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -1755,7 +1755,7 @@ describe("detached stall notice delivery ( slice 2)", () => {
 });
 
 /**
- * : approaching-turn-budget notice for a detached child. The
+ * approaching-turn-budget notice for a detached child. The
  * 25.10 orchestration incident: a review child worked ~50 minutes, crossed
  * its turn cap, and the parent learned of it only via a bare terminal — no
  * advance warning, no named cause. This seam fires ONCE per detached run, a
@@ -2035,7 +2035,7 @@ describe("detached approaching-turn-budget notice", () => {
   });
 });
 
-// : the profile turn budget rides the wire as ChildSpawnRequest
+// the profile turn budget rides the wire as ChildSpawnRequest
 // .maxTurns — only for a fresh spawn, validated pre-flight.
 describe("createChildSessionPort — maxTurns", () => {
   it("sends a defined budget on the spawn request verbatim", async () => {
@@ -2099,7 +2099,7 @@ describe("createChildSessionPort — maxTurns", () => {
 });
 
 // ---------------------------------------------------------------------------
-// : `connectionId` — a profile's exact `connection:` id — rides the
+// `connectionId` — a profile's exact `connection:` id — rides the
 // posted ChildSpawnRequest, mirroring `provider`'s shape cap. Carrying BOTH is
 // refused with a PROMPT error (never a hang to the start deadline; nothing is
 // posted).
@@ -2201,7 +2201,7 @@ describe("createChildSessionPort — profile connectionId routing", () => {
   });
 });
 
-describe("send / sendToChild ( /  wire)", () => {
+describe("send / sendToChild (wire)", () => {
   /** The ChildRunSend op this port put on the wire (the only op kind besides spawn/cancel). */
   function sends(sent: SentMessage[]): ChildRunSend[] {
     return sent.filter((m): m is ChildRunSend => m.type === CHILD_RUN_SEND_TYPE);
@@ -2424,11 +2424,11 @@ describe("createChildSessionPort × core agentTool handler — the interface sea
 });
 
 // ---------------------------------------------------------------------------
-//  §2.8/§3.6: the parallel-children cap — an honest refusal at
+// §2.8/§3.6: the parallel-children cap — an honest refusal at
 // the detach ADMIT (never a queue). Only detach requests consume slots;
 // sync-join spawns are untouched; `undefined` cap = unlimited (pre-4704).
 
-describe("child-session-port — maxDetachedChildren cap ( §2.8)", () => {
+describe("child-session-port — maxDetachedChildren cap (§2.8)", () => {
   const { spawns } = { spawns: (sent: SentMessage[]) => sent.filter((m): m is Extract<SentMessage, { type: typeof CHILD_SPAWN_REQUEST_TYPE }> => m.type === CHILD_SPAWN_REQUEST_TYPE) };
 
   function capHarness(cap: () => number | undefined) {
@@ -2539,7 +2539,7 @@ describe("child-session-port — maxDetachedChildren cap ( §2.8)", () => {
     expect(admitted.status).toBe("completed");
   });
 
-  //  cross-review F6: N detached run() calls made in the SAME
+  // cross-review F6: N detached run() calls made in the SAME
   // assistant turn (before any child session accepted) all passed the old
   // registry-only check — the cap must count ADMITTED children, i.e. the
   // accepted registry PLUS the admits still between spawn request and

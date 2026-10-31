@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import { checkMapMidRun, checkMapTerminal, checkTicksMidRun, formatVerdictTable, KNOWN_STEP_KINDS, TERMINAL_STEP_KINDS } from "../../scripts/workflow-map-smoke-assertions.mjs";
 
 /**
- * Unit coverage for `workflow-map-smoke.mjs`'s assertion helpers — the shapes mirror the workflowMapState/workflowTicksState facade
+ * Unit coverage for `workflow-map-smoke.mjs`'s assertion helpers (
+ * 4161) — the shapes mirror the workflowMapState/workflowTicksState facade
  * ok-shapes exactly (`renderer/src/automation.ts`, pinned by
  * automation.test.ts), so this test pins the LIVE smoke's own judgement
  * logic: which readings are green, which are red, and which words each

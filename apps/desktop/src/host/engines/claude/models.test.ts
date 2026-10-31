@@ -126,7 +126,7 @@ describe("CLAUDE_EFFORT_LEVELS / isClaudeEffortLevel — the fixed pre-spawn voc
   });
 });
 
-describe("ClaudeModelCatalog.resolveEffort —  per-model memory normalization", () => {
+describe("ClaudeModelCatalog.resolveEffort — per-model memory normalization", () => {
   const catalog = ClaudeModelCatalog.fromInitialize(liveModels());
 
   it("keeps a preferred effort the model still supports", () => {

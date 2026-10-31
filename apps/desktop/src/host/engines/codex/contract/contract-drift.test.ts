@@ -88,7 +88,7 @@ describe("contract-drift layer 1 (always-on)", () => {
     // code still refused, and the codex-support manifest would have promised
     // users a version the transport rejected on sight.
     //
-    //  (owner decision, 2026-08-29): the floor is gone, so there is
+    // (owner decision, 2026-08-29): the floor is gone, so there is
     // only one boundary left to prove — the ceiling. An arbitrarily old
     // version is accepted by version number alone (it may still fail later,
     // on the wire, for reasons unrelated to this check).
@@ -156,7 +156,7 @@ describe("contract-drift layer 1 (always-on)", () => {
   });
 
   it("the pinned windowsSandbox family matches protocol.ts constants", () => {
-    //  / : Windows sandbox is a SEPARATE protocol family
+    // Windows sandbox is a SEPARATE protocol family
     // (not sandbox policy fields). readiness is probe-only; setupStart is
     // deliberately NOT pinned (never sent). The refs are v2/-scoped because
     // the 0.144.3 schema declares the whole family under definitions.v2.
@@ -169,7 +169,7 @@ describe("contract-drift layer 1 (always-on)", () => {
     });
   });
 
-  it("the committed 0.144.3 reference schema re-extracts to exactly the pinned contract (offline layer-2 stand-in, )", () => {
+  it("the committed 0.144.3 reference schema re-extracts to exactly the pinned contract (offline layer-2 stand-in)", () => {
     // Layer 2 needs a live binary; this offline stand-in holds the SAME
     // invariant — extractor(schema) === pin — against the committed 0.144.3
     // reference schema the pin was regenerated from, so a hand-edit of

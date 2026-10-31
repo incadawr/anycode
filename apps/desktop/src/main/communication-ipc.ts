@@ -67,7 +67,7 @@ export interface CommunicationIpcDeps {
   logger: { warn(message: string): void; error(message: string): void };
   controller: CommunicationControllerLike;
   sessions: SessionAccessStore;
-  /** : per-session External approvals switch. Only this module writes it. */
+  /** per-session External approvals switch. Only this module writes it. */
   approvals: SessionAccessStore;
   /** Live tab list (root and child). Only tabId and sessionId are read here. */
   tabs(): ReadonlyArray<{ tabId: string; sessionId: string }>;
@@ -78,7 +78,7 @@ export interface CommunicationIpcDeps {
   /** Stable userData copy of the stdio adapter, or null when this build does not carry it. */
   stdioScriptPath(): string | null;
   realpath(path: string): Promise<string>;
-  /** : per-project agent-open switch. Only this module writes it (and main's create_session hook reads it). */
+  /** per-project agent-open switch. Only this module writes it (and main's create_session hook reads it). */
   agentProjects: AgentProjectsStore;
   /** Synchronous realpath used only to canonicalise the sidebar's workspace identity. */
   realpathSync(path: string): string;
@@ -303,7 +303,7 @@ export async function handleSetSessionAccess(deps: CommunicationIpcDeps, raw: un
 }
 
 /**
- * : the per-session External approvals switch. It can be turned ON
+ * the per-session External approvals switch. It can be turned ON
  * only while the session is shared (access ON), and it is never set by any
  * Sessions API tool, host message or plugin: this handler is its only writer.
  */

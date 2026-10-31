@@ -30,7 +30,7 @@ if (!container) {
   throw new Error("#root element not found");
 }
 
-//  M3 (CUT.md GAP 1): the md-preview WINDOW loads this SAME entry
+// M3 (CUT.md GAP 1): the md-preview WINDOW loads this SAME entry
 // under `?view=md-preview&tabId=...&previewId=...` (main/index.ts's
 // `loadMdPreviewWindow`) — branched BEFORE mounting `<App/>` so that window
 // never pulls in the whole chat shell (Sidebar, connection manager, etc.).

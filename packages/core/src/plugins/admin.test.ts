@@ -1,5 +1,5 @@
 /**
- * plugins/admin tests ( S1-A, design §7/§8): the Plugins-pane
+ * plugins/admin tests (S1-A, design §7/§8): the Plugins-pane
  * scan enumerates every plugin with tier/status/capabilities/consent —
  * managed entries with bookkeeping, project + legacy dir plugins, corrupt
  * state fail-soft, and deterministic tier-then-name ordering.
@@ -337,7 +337,7 @@ describe("scanPluginsAdmin", () => {
   });
 });
 
-describe("scanPluginsAdmin — services (a)", () => {
+describe("scanPluginsAdmin — services", () => {
   const SERVICES = [
     { name: "relay", command: "node", args: ["./relay.js"], env: { LOG_LEVEL: "debug", RELAY_SECRET_LABEL: "super-secret-value-123" } },
   ];

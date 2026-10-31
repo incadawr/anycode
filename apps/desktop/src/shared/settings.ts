@@ -20,7 +20,7 @@
  * SettingsSnapshot whose `secrets` are `SecretStatus` (set/source/tier only).
  */
 
-// : the ONLY import in this module, and a TYPE one — `verbatimModuleSyntax`
+// the ONLY import in this module, and a TYPE one — `verbatimModuleSyntax`
 // erases the statement outright, so the zero-runtime-import rule above is intact
 // and no bundle grows by a byte. The single VALUE edge between the two modules
 // runs the other way (shared/proxy.ts imports `isProxyUrl` from here), so there
@@ -55,9 +55,9 @@ export const SECRET_CLEAR_CHANNEL = "anycode:secret-clear";
 /** invoke channel: dedup-append an always-allow rule ({toolName, pattern?}). */
 export const PERMISSION_RULE_ADD_CHANNEL = "anycode:permission-rule-add";
 
-/** invoke channel: grant per-path binary-trust consent ({path});  — main computes the fingerprint, the request never carries one. */
+/** invoke channel: grant per-path binary-trust consent ({path}); — main computes the fingerprint, the request never carries one. */
 export const BINARY_TRUST_GRANT_CHANNEL = "anycode:binary-trust-grant";
-/** invoke channel: revoke a per-path binary-trust consent ({path});  — idempotent. */
+/** invoke channel: revoke a per-path binary-trust consent ({path}); — idempotent. */
 export const BINARY_TRUST_REVOKE_CHANNEL = "anycode:binary-trust-revoke";
 
 // ── OAuth invoke channels (slice 2.5 §4.1; wired to main's OAuth engine in 2.5.2) ──
@@ -75,7 +75,7 @@ export const OAUTH_START_CHANNEL = "anycode:oauth-start";
 /** invoke channel: abort an in-flight OAuth flow for a provider ({providerId}). */
 export const OAUTH_CANCEL_CHANNEL = "anycode:oauth-cancel";
 
-// ── connection CRUD invoke channels ( W9; main-authoritative, additive —
+// ── connection CRUD invoke channels (W9; main-authoritative, additive —
 // the generic settings-set path can NEVER carry a wholesale `connections[]`,
 // which refine-rejects) ──
 
@@ -103,7 +103,7 @@ export interface AlwaysAllowRule {
 }
 
 /**
- *  Stage 1 / : the ask-zone classifier record (default
+ * Stage 1 / the ask-zone classifier record (default
  * off). Absent = off. Discriminated on `kind`:
  *   - `command` (Stage 1): an external program receiving each ask-zone Bash
  *     command line on stdin;
@@ -159,7 +159,7 @@ export interface KeybindingOverride {
 }
 
 /**
- *  §3.5: one hop of a role's model route. Exactly ONE of
+ * §3.5: one hop of a role's model route. Exactly ONE of
  * `engine` / `connection` / `provider` may be set (the settings schema
  * enforces the XOR per element; a bad element drops alone). Absent routing
  * keys means "this entry only names a model on the session's connection".
@@ -181,7 +181,7 @@ export interface RoleConfig {
 }
 
 /**
- * Wire protocol a provider selection speaks (, mirrors core's
+ * Wire protocol a provider selection speaks (mirrors core's
  * `ProviderTransport`). Redeclared here — not imported from `@anycode/core` —
  * so this value-only module keeps its zero-import rule (same precedent as
  * `SecretKey`).
@@ -193,7 +193,7 @@ export type ReasoningEffort = "off" | "low" | "medium" | "high" | "xhigh" | "max
 
 /**
  * Live per-model capability facts a connection's `/v1/models` fetch declared
- * (; mirrors core's `LiveModelCapabilities` as a value-only local
+ * (mirrors core's `LiveModelCapabilities` as a value-only local
  * shape — same zero-import rule as `ReasoningEffort` above). `effortLevels`
  * carries the RAW foreign strings as the endpoint spelled them; mapping into
  * the closed enum happens fail-closed at resolution, never at parse time.
@@ -211,7 +211,7 @@ export interface ModelCapabilitiesDto {
 }
 
 /**
- * Advisory connection health ( §3). NOT a runtime-readiness source — it
+ * Advisory connection health (§3). NOT a runtime-readiness source — it
  * is a last-known classification of the last real request/probe. W9 only owns
  * the SHAPE (it lives in the persisted connection); W11 classifies + writes it.
  */
@@ -226,7 +226,7 @@ export type ProviderHealthStatus =
   | "misconfigured";
 
 /**
- * One user-created provider connection ( §«Техническая модель»): an
+ * One user-created provider connection (§«Техническая модель»): an
  * instance of a catalog `providerId` with its own label, default
  * model/transport/baseUrl/effort and its OWN vault credential
  * (`provider.connection.<id>.{apiKey,oauth}`). `id` is a stable opaque id minted
@@ -270,7 +270,7 @@ export interface ProviderConnection {
   transport?: ProviderTransportId;
   baseUrl?: string;
   /**
-   * HTTP(S) proxy this connection's traffic is routed through (, owner
+   * HTTP(S) proxy this connection's traffic is routed through (owner
    * 17.08). Main emits it into the host fork's env as the HTTP(S)_PROXY family
    * plus `NODE_USE_ENV_PROXY=1` (main/host-env.ts `applyConnectionProxy`), so
    * node's global fetch inside the host AND the engine children — which already
@@ -280,7 +280,7 @@ export interface ProviderConnection {
    * CUSTODY: stored VERBATIM and may carry `user:pass@` userinfo (authenticated
    * proxies are the dominant real-world case), so the credential lives in plain
    * text in the 0644 settings.json and is visible in the env of every child
-   * process the host spawns. It NO LONGER rides the renderer snapshot: 
+   * process the host spawns. It NO LONGER rides the renderer snapshot:
    * (design review H-02) projects every snapshot through `maskLegacyProxyUrls`,
    * so what crosses to the renderer is `user:***@host:port` while main keeps the
    * real string for the spawn. The remaining exposure is the
@@ -291,7 +291,7 @@ export interface ProviderConnection {
    *
    * Read that last part literally: Bash tool children inherit the host's whole
    * `process.env` (core's node-execution adapter), so a model that runs `env`
-   * can read this proxy's password into its own transcript.  closed
+   * can read this proxy's password into its own transcript. closed
    * that half: the child-env builder (`@anycode/core/child-env`, wired into
    * node-execution.ts and the terminal) DROPS any proxy variable whose value
    * carries credentials, so agent shells/terminal/LSP children connect
@@ -368,9 +368,9 @@ export interface ProviderConnection {
   contextWindowTokens?: number;
   contextWindowModel?: string;
   /**
-   * Per-model image-input override for this connection ( /
-   * ), paired with `imageInputModel` — the model id it binds to (the
-   *  pair discipline verbatim). SCOPE is connection+model, NEVER
+   * Per-model image-input override for this connection (
+   * paired with `imageInputModel` — the model id it binds to (the
+   * pair discipline verbatim). SCOPE is connection+model, NEVER
    * global: the override governs ONLY the bound model, so enabling image
    * input for a sighted vLLM model does not un-gate a blind sibling the next
    * time the user switches — the exact hazard the single global
@@ -391,7 +391,7 @@ export interface ProviderConnection {
    * User declaration that this endpoint authenticates nothing (dogfood 16.07:
    * local servers — LM Studio/ollama/llama.cpp). UI-level truth for the
    * drawer's "no API key" checkbox and the tile's health derivation (a keyless
-   * connection must not nag "Needs credential"). Since  it is also a
+   * connection must not nag "Needs credential"). Since it is also a
    * runtime-readiness input — but runtime keylessness remains TRANSPORT-
    * GOVERNED exactly like core's own rule: `loadEnvConfig` accepts a missing
    * key only on the OpenAI-family transports, so the flag waives the key in
@@ -405,11 +405,11 @@ export interface ProviderConnection {
    * ladder construction.
    */
   authOptional?: boolean;
-  /** Advisory last-known health ( §3); W11 writes it, never a runtime-readiness source. */
+  /** Advisory last-known health (§3); W11 writes it, never a runtime-readiness source. */
   lastHealth?: { status: ProviderHealthStatus; at: string; safeCode?: string };
   /**
    * Provider-reported subscription quota observed from response headers
-   * ( / ): the last update the wrapped transport fetch
+   * the last update the wrapped transport fetch
    * offered for THIS connection. Connection-scoped by construction — the
    * quota belongs to the connect (its key + endpoint), not to the global
    * provider; a sibling connection on the same provider has its own line.
@@ -432,7 +432,7 @@ export interface ProviderConnection {
    * provider is unaffected, and pickers union these with the catalog entry's
    * static hints (static hints decorate matching ids with display
    * names/capabilities). Absent/empty = static hints alone, exactly the
-   * pre- behavior. Never a runtime-readiness or endpoint-resolution
+   * behavior. Never a runtime-readiness or endpoint-resolution
    * source. A `custom:<slug>` connection keeps its live curated list on the
    * custom record's own `models[]`; manual additions still land here.
    */
@@ -440,7 +440,7 @@ export interface ProviderConnection {
   /** ISO timestamp of the last successful connection-scoped model-list fetch. */
   modelsFetchedAt?: string;
   /**
-   * : live per-model capabilities a connection-scoped /v1/models
+   * live per-model capabilities a connection-scoped /v1/models
    * fetch declared (OpenRouter-style `supported_parameters`/`reasoning`), keyed
    * by model id. Advisory capability data, same round-trip discipline as
    * `models`; consumed fail-closed — unknown effort levels never reach the wire.
@@ -450,7 +450,7 @@ export interface ProviderConnection {
 }
 
 /**
- * settings.json v2 `provider`: the replacing shape — the v1 singleton
+ * settings.json v2 `provider` the replacing shape — the v1 singleton
  * fields (`id/model/baseUrl/transport/defaults`) NO LONGER EXIST here; the user
  * configures one or more named connections instead. `activeConnectionId` is the
  * default for NEW core sessions only (session-pinning is W10).
@@ -461,7 +461,7 @@ export interface ProviderSettingsV2 {
   /**
    * Custom OpenAI-compatible/Anthropic model-provider endpoints for AnyCode's
    * OWN engine (owner-decision #6, cut §9.2) — additive-optional, dedicated
-   * array independent of `connections` ('s connection graph). A
+   * array independent of `connections` (connection graph). A
    * malformed entry validates INDEPENDENTLY at the zod boundary (same
    * per-element `.catch` discipline as `codex.profiles`, cut §2.3).
    */
@@ -483,7 +483,7 @@ export interface ActiveProviderView {
   transport?: ProviderTransportId;
   /**
    * The active connection's LEGACY HTTP(S) proxy string, projected
-   * for display. No longer the fork env's source:  resolves the fork's
+   * for display. No longer the fork env's source: resolves the fork's
    * network path through the proxy LADDER (`resolveProxyLadder` over the active
    * connection's rung, then the app's), because a connection can now express
    * "inherit", "direct" or "profile X" — none of which a single string can
@@ -507,7 +507,7 @@ export interface ActiveProviderView {
    * the host from the connection record; no fork-env emission).
    */
   /**
-   * : the active connection's per-model image-input override and
+   * the active connection's per-model image-input override and
    * its binding, projected for display/diagnostics (the override itself
    * reaches the host through the connection's persisted pair on the settings
    * read, exactly like the context-window pair). Only a COMPLETE pair
@@ -523,14 +523,14 @@ export interface ActiveProviderView {
 export interface AnycodeSettings {
   version: 2;
   /**
-   * Provider connections (, settings v2 — replacing shape). The active
+   * Provider connections (settings v2 — replacing shape). The active
    * connection is the default for new core sessions; pre-W12 read-sites project
    * it through `activeProviderView`.
    */
   provider: ProviderSettingsV2;
   /**
    * Mirrors of the ANYCODE_TOOL_CONCURRENCY / ANYCODE_STALL_TIMEOUT_MS env
-   * (env > settings). `subagentStallTimeoutMs` ( slice 1) mirrors
+   * (env > settings). `subagentStallTimeoutMs` (slice 1) mirrors
    * ANYCODE_SUBAGENT_STALL_MS — the subagent silence-detector threshold, NOT
    * `stallTimeoutMs` above (the per-attempt stream watchdog).
    */
@@ -541,20 +541,20 @@ export interface AnycodeSettings {
     subagentMaxTurns?: number;
     subagentStallTimeoutMs?: number;
     /**
-     * : adaptive turn budget — progress-scaled ceiling grants and a
+     * adaptive turn budget — progress-scaled ceiling grants and a
      * base subagent budget learned from accepted-task history. Mirror of
      * ANYCODE_ADAPTIVE_TURN_BUDGET (env > settings). Absent = OFF.
      */
     adaptiveTurnBudget?: boolean;
     /**
      * Mirror of ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS
-     * (env > settings) —  provider retry knobs: retry count and
+     * (env > settings) — provider retry knobs: retry count and
      * the transient-network wall-clock budget that extends past it.
      */
     maxRetries?: number;
     networkRetryBudgetMs?: number;
     /**
-     * : mirror of ANYCODE_NETWORK_WAIT_MAX_MS (env > settings) — the
+     * mirror of ANYCODE_NETWORK_WAIT_MAX_MS (env > settings) — the
      * monotonic bound on waiting for the network before a turn fails. Absent =
      * the core default (30 min); 0 disables waiting.
      */
@@ -599,7 +599,7 @@ export interface AnycodeSettings {
    */
   keybindings?: { overrides: KeybindingOverride[] };
   /**
-   * Codex engine onboarding metadata (, cut §3.5, additive-optional;
+   * Codex engine onboarding metadata (cut §3.5, additive-optional;
    * version NOT bumped — same forward-compat reasoning as `provider.defaults`/
    * `keybindings` above: an existing settings.json with no `codex` field
    * round-trips byte-identically). `binaryPath` is the validated absolute path
@@ -653,9 +653,9 @@ export interface AnycodeSettings {
      * two carrier names this field rides (`ANYCODE_CODEX_PROXY_URL` /
      * `ANYCODE_CLAUDE_PROXY_URL`) plus any credentialed proxy value are
      * stripped from NON-engine children by `@anycode/core/child-env`
-     * — engine children are the deliberate exception and keep the
+     * engine children are the deliberate exception and keep the
      * full URL. Non-engine children instead receive the credential-free
-     * loopback relay URL ( follow-up), so they stay online behind
+     * loopback relay URL (follow-up), so they stay online behind
      * the authenticating proxy without ever seeing the password.
      *
      * Only a non-empty value is persisted (only-truthy-on-disk).
@@ -702,7 +702,7 @@ export interface AnycodeSettings {
      * connection.proxyUrl > none`), same carrier mechanism
      * (`ANYCODE_CLAUDE_PROXY_URL`), same custody (plain text in the 0644 file,
      * userinfo allowed, inherited by every child the CLI starts — engine
-     * children only, per 's `@anycode/core/child-env` scrub). Read
+     * children only, per's `@anycode/core/child-env` scrub). Read
      * that field's doc for the reasoning; it is not repeated.
      *
      * One asymmetry worth naming: the claude LOGIN flow opens a real
@@ -717,7 +717,7 @@ export interface AnycodeSettings {
     proxyRef?: string;
   };
   /**
-   * Named proxy profiles + the APP-level reference (, редакция 2;
+   * Named proxy profiles + the APP-level reference (редакция 2;
    * additive-optional, `version` NOT bumped — a settings.json with no `network`
    * key round-trips byte-identically and every child env stays byte-for-byte
    * what it was before this slice).
@@ -734,7 +734,7 @@ export interface AnycodeSettings {
     proxyRef?: string;
   };
   /**
-   * Browser-preview settings (night-track wave-1 cut §1(e)/§2.7, 
+   * Browser-preview settings (night-track wave-1 cut §1(e)/§2.7,
    * 96-E; additive-optional, version NOT bumped — same forward-compat
    * reasoning as `claude`/`codex`/`keybindings` above: an existing
    * settings.json with no `preview` field round-trips byte-identically).
@@ -746,7 +746,7 @@ export interface AnycodeSettings {
    * `displayMode()` dep (96-P1) reads `settings.preview?.displayMode ??
    * "panel"`, same absent-default posture as `autoOpen`.
    *
-   * `liveReload` (, stage 4): absent means ON — main's
+   * `liveReload` (stage 4): absent means ON — main's
    * `liveReloadEnabled()` reads `settings.preview?.liveReload ?? true`; a
    * file-backed preview reloads when its artifact changes on disk.
    */
@@ -756,7 +756,7 @@ export interface AnycodeSettings {
     liveReload?: boolean;
   };
   /**
-   * Vision-fallback recognizer selection ( E1): which ALREADY-
+   * Vision-fallback recognizer selection (E1): which ALREADY-
    * CONFIGURED connection + model answers `InspectImage` calls when the main
    * session's own model cannot see images (`resolveImageInput` is `false`).
    * Additive-optional, version NOT bumped — same forward-compat reasoning as
@@ -779,7 +779,7 @@ export interface AnycodeSettings {
     modelId: string;
   };
   /**
-   *  §3.5: orchestration roles (additive-optional, version NOT
+   * §3.5: orchestration roles (additive-optional, version NOT
    * bumped — same forward-compat reasoning as `preview`/`recognizer` above:
    * an existing settings.json with no `roles` key round-trips byte-identically
    * and means "built-in defaults"). Each role carries an ordered route chain:
@@ -812,7 +812,7 @@ export interface AnycodeSettings {
     projects: Array<{ projectRoot: string; profileId: string }>;
   };
   /**
-   * Live session-capacity limits ( /  slice 2; additive-optional,
+   * Live session-capacity limits (slice 2; additive-optional,
    * version NOT bumped). Absent = built-in defaults (20 / 3 / 8). Survives load via
    * the settings schema's top-level passthrough; main's settings-set validates the
    * section strictly before persisting, and readers clamp defensively (shared/session-limits.ts).
@@ -823,7 +823,7 @@ export interface AnycodeSettings {
     childSessionsGlobalMax?: number;
   };
   /**
-   * Plugins control-plane settings ( S1-B, design §7;
+   * Plugins control-plane settings (S1-B, design §7;
    * additive-optional, version NOT bumped — an existing settings.json with
    * no `plugins` key round-trips byte-identically and every reader applies
    * its own absent-default).
@@ -840,11 +840,11 @@ export interface AnycodeSettings {
     autoUpdateOfficial?: boolean;
     officialIndexUrl?: string;
     mcpConsent?: { plugin: string; serversHash: string; grantedAt: string }[];
-    /** a: per-plugin service grants keyed by servicesHash; absent = none granted (fail closed). */
+    /** per-plugin service grants keyed by servicesHash; absent = none granted (fail closed). */
     serviceConsent?: { plugin: string; servicesHash: string; grantedAt: string }[];
   };
   /**
-   * Sessions API (; additive-optional, version NOT bumped). Owned
+   * Sessions API; additive-optional, version NOT bumped). Owned
    * by Settings → Sessions API and written ONLY through the dedicated
    * `anycode:communication-*` channels, never via generic settings-set.
    * `enabled`: the local MCP runs. `workspaces`: optional outer folder
@@ -859,7 +859,7 @@ export interface AnycodeSettings {
     defaultSessionAccess: "off" | "on";
   };
   /**
-   *  (additive-optional, version NOT bumped). `fullAccessDefault`: the
+   * (additive-optional, version NOT bumped). `fullAccessDefault`: the
    * "Full browser access" switch a NEW root session starts with (absent = "off").
    * Child sessions never read it; the per-session switch lives in browser-access.json.
    */
@@ -921,7 +921,7 @@ export interface CustomProviderRecord {
   /** ISO timestamp of the last successful model-list fetch. */
   modelsFetchedAt?: string;
   /**
-   * User declaration that this endpoint authenticates nothing (: local
+   * User declaration that this endpoint authenticates nothing (local
    * servers — LM Studio/ollama/llama.cpp). Only `true` is persisted (additive,
    * same only-truthy-on-disk discipline as `ProviderConnection.authOptional`);
    * a keyed record omits it. Governs whether create/update may skip the vault
@@ -948,7 +948,7 @@ export type SecretKey =
   | "provider.apiKey"
   | `provider.${string}.apiKey`
   | `provider.${string}.oauth`
-  // ── connection-scoped keys ( settings v2) ──
+  // ── connection-scoped keys (settings v2) ──
   //   `provider.connection.<connectionId>.apiKey` — a connection's API key
   //   `provider.connection.<connectionId>.oauth`  — a connection's OAuth token blob
   // (structurally a subset of `provider.${string}.{apiKey,oauth}`, declared
@@ -956,7 +956,7 @@ export type SecretKey =
   // main boundary via `isKnownSecretKey`).
   | `provider.connection.${string}.apiKey`
   | `provider.connection.${string}.oauth`
-  // ── proxy-profile password ( §5) ──
+  // ── proxy-profile password (§5) ──
   //   `proxy.profile.<profileId>.password` — the authenticated-proxy password of
   // ONE registry profile. Keyed by the profile's immutable `id` (which carries
   // no dots, so it is a `[^.]+` segment exactly like a connectionId), which is
@@ -967,15 +967,15 @@ export type SecretKey =
   // of the 0644 settings.json (and out of backups and dotfile syncs). It does
   // NOT take it out of every env — the composed `http://user:pass@host:port`
   // still rides `HTTPS_PROXY` into every ENGINE child, where the CLI needs it.
-  //  closed the non-engine half: `@anycode/core/child-env` drops any
+  // closed the non-engine half: `@anycode/core/child-env` drops any
   // proxy value carrying credentials (and the `ANYCODE_*_PROXY_URL` carriers)
   // from Bash/terminal/LSP children, so a model running `env` there reads no
-  // proxy password, whichever tier stored it. The  follow-up
+  // proxy password, whichever tier stored it. The follow-up
   // replaced the plain drop with the credential-free loopback relay: those
   // children now receive `http://127.0.0.1:<port>` instead, which keeps
   // npm/git/curl working behind the authenticating proxy.
   | `proxy.profile.${string}.password`
-  // ── MCP secret ( part C): `mcp.secret.<NAME>` backs `${secret:NAME}`
+  // ── MCP secret (part C): `mcp.secret.<NAME>` backs `${secret:NAME}`
   // in an MCP server's env/headers. Not a provider credential: it never
   // materialises into a provider env (secretEnvFor refuses it) and never appears
   // in the provider status list (isKnownSecretKey is false for it). See shared/mcp-secrets.ts.
@@ -1011,18 +1011,18 @@ export interface CatalogSummaryEntry {
   id: string;
   name: string;
   /**
-   * : the brand this entry belongs to when several
+   * the brand this entry belongs to when several
    * catalog entries are the SAME vendor sold via different endpoints (Kimi:
    * kimi.com subscription vs the moonshot platform API). Projected only when
    * the catalog declares it (conditional spread), optional/additive so legacy
    * fixtures stay byte-identical — same rule as `imageInput` above.
    */
   brand?: string;
-  /** : short selector label naming THIS entry's mode inside its brand card; projected only when declared (see `brand`). */
+  /** short selector label naming THIS entry's mode inside its brand card; projected only when declared (see `brand`). */
   modeLabel?: string;
   authKind: CatalogAuthKind;
   /**
-   * : `reasoning`/`effortLevels` join the projection so a picker with
+   * `reasoning`/`effortLevels` join the projection so a picker with
    * no live host — the New Session draft — can tell which models even HAVE a
    * reasoning-effort vocabulary and which levels each one accepts. They are
    * the same two catalog facts core's own `resolveEffortLevels` reads, and
@@ -1031,12 +1031,12 @@ export interface CatalogSummaryEntry {
    * older main, or a model the catalog says nothing about, projects neither
    * and the renderer then offers no effort level at all.
    *
-   * : a model's `maxOutputTokens` joins the same way — projected only
+   * a model's `maxOutputTokens` joins the same way — projected only
    * when the catalog declares it (conditional spread), optional/additive so
    * legacy fixtures stay byte-identical. The drawer uses it to NAME the
    * effective ceiling for an otherwise-blank field instead of guessing.
    *
-   * : `imageInput` joins by the same conditional-spread rule. Core has
+   * `imageInput` joins by the same conditional-spread rule. Core has
    * carried the flag per model since phase 6.2 (`provider/catalog.ts`), but the
    * projection dropped it, so the renderer could not tell a vision-capable
    * model from a blind one at all — the Vision pane's model suggestions would
@@ -1049,7 +1049,7 @@ export interface CatalogSummaryEntry {
     reasoning?: boolean;
     effortLevels?: string[];
     /**
-     * : the provider's own default effort tier for this model
+     * the provider's own default effort tier for this model
      * (`CatalogModel.defaultEffort`) — present only where the catalog records
      * one. The New Session picker uses it as the level to SHOW when the user
      * has made no pick and the connection persists none, instead of the
@@ -1061,7 +1061,7 @@ export interface CatalogSummaryEntry {
     thinkingAlwaysOn?: boolean;
     maxOutputTokens?: number;
     /**
-     * : the two catalog window facts the drawer names in its
+     * the two catalog window facts the drawer names in its
      * "Context window (tokens)" hint — the model's full `contextWindow` and its
      * `usableContextWindow` (when declared). Projected only when the catalog
      * declares them (conditional spread), optional/additive so legacy fixtures
@@ -1086,18 +1086,18 @@ export interface CatalogSummaryEntry {
   sharedBillingEndpoint?: boolean;
   billingBaseUrl?: string;
   /**
-   * True ONLY for the literal `custom` sentinel entry ( W5-FIX). Distinct
+   * True ONLY for the literal `custom` sentinel entry (W5-FIX). Distinct
    * from `needsBaseUrl`: a non-custom template (vLLM) also needs a base URL but
    * keeps its own per-provider vault key, whereas the custom sentinel shares the
    * bare legacy key. The renderer keys credential-slot + no-selection-fallback
    * choices off this, never off `needsBaseUrl`.
    */
   isCustom?: boolean;
-  /** Transport this endpoint uses when neither env nor settings pick one ( W5). */
+  /** Transport this endpoint uses when neither env nor settings pick one (W5). */
   defaultTransport?: ProviderTransportId;
-  /** Every transport this endpoint is known to speak; a UI may only offer these ( W5). */
+  /** Every transport this endpoint is known to speak; a UI may only offer these (W5). */
   supportedTransports?: ProviderTransportId[];
-  /** True when this endpoint works without a credential (e.g. a local vLLM server) — readiness never blocks on a missing key ( W5). */
+  /** True when this endpoint works without a credential (e.g. a local vLLM server) — readiness never blocks on a missing key (W5). */
   authOptional?: boolean;
 }
 
@@ -1107,7 +1107,7 @@ export type CatalogSummary = CatalogSummaryEntry[];
 /** Everything the renderer needs to render Settings/Welcome without a second round-trip. */
 export interface SettingsSnapshot {
   /**
-   * The settings document, PROJECTED for the renderer (, design review
+   * The settings document, PROJECTED for the renderer (design review
    * H-02): every legacy proxy string's userinfo is masked
    * (`maskLegacyProxyUrls`), because a password must never cross this boundary
    * and a plain snapshot used to carry `user:pass@` in full. Byte-identical to
@@ -1130,7 +1130,7 @@ export interface SettingsSnapshot {
    */
   catalog?: CatalogSummary;
   /**
-   * : core's `DEFAULT_MAX_OUTPUT_TOKENS`, pinned main-side
+   * core's `DEFAULT_MAX_OUTPUT_TOKENS`, pinned main-side
    * (settings-ipc.ts) and projected here — the renderer cannot import core
    * (this file's own rule, slice 2.5 §4.1), so the fallback a BLANK
    * "Max output tokens" field resolves to must cross the wire like this
@@ -1139,7 +1139,7 @@ export interface SettingsSnapshot {
    */
   defaultMaxOutputTokens?: number;
   /**
-   * : core's `DEFAULT_CONTEXT_WINDOW_TOKENS` and
+   * core's `DEFAULT_CONTEXT_WINDOW_TOKENS` and
    * `UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS`, pinned main-side (settings-ipc.ts)
    * and projected here for the same reason as `defaultMaxOutputTokens` above —
    * the renderer cannot import core. The drawer names a blank/unknown field's
@@ -1172,7 +1172,7 @@ export type SettingsMutationReason =
   | "weak_storage_needs_consent"
   | "not_found"
   // A connection-delete blocked because the connection is pinned to a live
-  // session ( W10 delete-guard). The renderer explains it is in use.
+  // session (W10 delete-guard). The renderer explains it is in use.
   | "connection_in_use";
 
 /**
@@ -1185,7 +1185,7 @@ export type SettingsMutationResult =
       ok: true;
       snapshot: SettingsSnapshot;
       /**
-       * The connection id `connection-create` just minted ( W12-FIX2
+       * The connection id `connection-create` just minted (W12-FIX2
        * §1) — additive/optional. Populated ONLY by the connection-create
        * channel; every other mutating channel never sets it. Lets a caller
        * target the connection it just created authoritatively instead of
@@ -1207,7 +1207,7 @@ export type SettingsMutationResult =
 export interface OAuthStartRequest {
   providerId: string;
   /**
-   * Scopes the sign-in to ONE connection ( W12-FIX §1) — additive,
+   * Scopes the sign-in to ONE connection (W12-FIX §1) — additive,
    * companion to `providerId`. Present: the flow persists the token to
    * EXACTLY this connection (not-found or a different provider bucket both
    * refuse `failed`, zero side effects). Absent: the pre-existing
@@ -1298,7 +1298,7 @@ export interface ConnectionCreateRequest {
    */
   contextWindowTokens?: number;
   /**
-   * Per-model image-input override (; see
+   * Per-model image-input override; see
    * `ProviderConnection.imageInputOverride`). Omitted = Auto. The model binding
    * is NOT carried here — main derives it server-side from the effective model.
    */
@@ -1317,7 +1317,7 @@ export interface ConnectionUpdateRequest {
   label?: string;
   model?: string;
   /**
-   * `""` is a sentinel ( W12-FIX §3, same convention as `baseUrl`/
+   * `""` is a sentinel (W12-FIX §3, same convention as `baseUrl`/
    * `model` on this channel): absent = keep the current value, an enum value
    * = set it, `""` = clear an explicit choice back to catalog default. `""`
    * is NEVER itself persisted — the handler normalizes it to `undefined`
@@ -1383,7 +1383,7 @@ export interface ConnectionUpdateRequest {
    */
   contextWindowTokens?: number | "";
   /**
-   * Per-model image-input override ( / ) with the same `""`
+   * Per-model image-input override with the same `""`
    * clear sentinel as `contextWindowTokens` above: absent = keep the current
    * pair, "on"/"off" = set the override AND the binding (main derives the
    * binding from the effective model, never the renderer), `""` = clear BOTH
@@ -1432,7 +1432,7 @@ export interface PermissionRuleAddRequest {
  * source of truth for both processes; value-only (the lanes consume it, never
  * edit it). 2.5 extends this list with provider credentials.
  *
- *  срез C durable ( precedent): `ANYCODE_RECOGNIZER_API_KEY`
+ * срез C durable (precedent): `ANYCODE_RECOGNIZER_API_KEY`
  * is a second, independently-resolved credential (main/host-env.ts's
  * `resolveRecognizerConfig`/`applyRecognizerEnv`) that rides a host fork's
  * env exactly like `ANYCODE_API_KEY` does — without an entry here it would
@@ -1465,7 +1465,7 @@ export function activeConnection(settings: AnycodeSettings): ProviderConnection 
 
 /**
  * The connection with a given id, or `undefined` when it does not exist (e.g. a
- * session pinned to a since-deleted connection,  W10). Pure/value-only so
+ * session pinned to a since-deleted connection, W10). Pure/value-only so
  * both main (runtime resolution + resume matrix) and the renderer can use it.
  */
 export function connectionById(settings: AnycodeSettings, connectionId: string): ProviderConnection | undefined {
@@ -1477,7 +1477,7 @@ export function connectionById(settings: AnycodeSettings, connectionId: string):
  * by the renderer's pre-flight and main's `addModels` handler, so a model the
  * UI accepts can never be refused main-side and vice versa.
  *
- * Rules (frozen by ):
+ * Rules (frozen):
  *  - must be a string;
  *  - C0/C1 control characters (U+0000–U+001F, U+007F–U+009F) in the ORIGINAL
  *    input are refused — a leading/trailing newline or tab must NOT be erased
@@ -1573,7 +1573,7 @@ export function isProxyUrl(value: string): boolean {
 }
 
 /**
- * Legacy-shaped projection of the active connection ( W9 §4.1): every
+ * Legacy-shaped projection of the active connection (W9 §4.1): every
  * pre-W12 read-site consumes this in place of the removed v1
  * `settings.provider.{id,model,baseUrl,transport,reasoningEffort}` singleton, so
  * its behaviour is preserved by construction (the active connection stands in
@@ -1613,7 +1613,7 @@ export function activeProviderView(settings: AnycodeSettings): ActiveProviderVie
 
 /**
  * Resolves an EXPLICIT `Agent(tier:"session", provider:<providerId>)` spawn
- * request's catalog provider id to a live connection ( CUT-S2 §10.9.3
+ * request's catalog provider id to a live connection (CUT-S2 §10.9.3
  * F4). `main/tabs.ts`'s `resolveProviderConnection` dep needs this pure policy
  * so `main/index.ts`'s composition root can wire it without duplicating the
  * rule inline. Policy (frozen by the cut): `providerId === ""` (the

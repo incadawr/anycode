@@ -18,7 +18,7 @@ import { isAbsolute } from "node:path";
 import { z } from "zod";
 import type { AnycodeSettings, SettingsPatch } from "../shared/settings.js";
 
-/** The settings schema version this binary writes and understands (: bumped to v2 — provider connections). */
+/** The settings schema version this binary writes and understands (bumped to v2 — provider connections). */
 export const CURRENT_SETTINGS_VERSION = 2 as const;
 
 /** Canonical empty settings — every field present, secrets absent (they are a separate file). */
@@ -42,7 +42,7 @@ const alwaysAllowRuleSchema = z.object({
 });
 
 /**
- *  Stage 1 / : the ask-zone classifier record — a
+ * Stage 1 / the ask-zone classifier record — a
  * discriminated union on `kind`. Optional and default-off; an invalid record
  * is dropped by the caller's `.catch(undefined)` (classifier off) and never
  * disturbs the sibling permission rules. `kind:"command"` is the Stage 1
@@ -69,7 +69,7 @@ export const permissionClassifierSchema = z.discriminatedUnion("kind", [
   permissionClassifierModelSchema,
 ]);
 
-/** One trusted-binary consent (, DV-6). Validated PER ELEMENT — a malformed record is dropped alone (= that consent inert, fail-closed) without disturbing siblings. */
+/** One trusted-binary consent (DV-6). Validated PER ELEMENT — a malformed record is dropped alone (= that consent inert, fail-closed) without disturbing siblings. */
 export const trustedBinaryConsentSchema = z.object({
   path: z.string().min(1),
   fingerprint: z.object({
@@ -99,12 +99,13 @@ export const keybindingsSchema = z.object({
 });
 
 /**
- * The `preview` settings section (night-track wave-1 cut §2.7, 
+ * The `preview` settings section (night-track wave-1 cut §2.7,
  * 96-E; extended 96-P0, panel-track CUT.md §2.3). `autoOpen` absent =
  * enabled (owner default ON) — main's `autoOpenEnabled()` applies that
  * default, never this schema. `displayMode` absent = "panel" (task
  * decision) — main's `displayMode()` dep (96-P1) applies that default the
- * same way, never this schema. `liveReload` absent = enabled — main's `liveReloadEnabled()` applies that default; the key MUST be
+ * same way, never this schema. `liveReload` absent = enabled (
+ * 4100) — main's `liveReloadEnabled()` applies that default; the key MUST be
  * declared here, or zod's default strip drops a persisted `false`.
  */
 export const previewSchema = z
@@ -116,7 +117,7 @@ export const previewSchema = z
   .optional();
 
 /**
- * The `recognizer` settings section ( E1) — the vision-fallback
+ * The `recognizer` settings section (E1) — the vision-fallback
  * recognizer's selected connection + model. Additive-optional, version NOT
  * bumped — same forward-compat reasoning as `preview`/`codex`/`claude` above:
  * absent means the fallback is disabled (today's `turn_rejected` behaviour on
@@ -167,7 +168,7 @@ export const communicationSettingsSchema = z
   .catch(undefined);
 
 /**
- * The `browser` settings section ( owner amendment) — the initial
+ * The `browser` settings section (owner amendment) — the initial
  * "Full browser access" switch for NEW root sessions. Additive-optional, version
  * NOT bumped. Fail closed: an unknown value or a corrupt block reads as "off";
  * a child session never reads this default (it inherits its parent's switch).
@@ -206,7 +207,7 @@ const promptCacheSchema = z
   .strict();
 
 /**
- * One `ProviderConnection` ( settings v2). `id`/`providerId` are required;
+ * One `ProviderConnection` (settings v2). `id`/`providerId` are required;
  * every default is optional (a connection may exist with only a credential, or
  * only a remembered model). `lastHealth` is the advisory cache (W11 writes it).
  */
@@ -256,7 +257,7 @@ const connectionSchema = z.object({
   // `proxyUrl` above is lenient: `connections` is a plain `z.array` with no
   // per-element tolerance, so a hand-edited `"lots"` here would fail the whole
   // document and reset every other section to defaults. A rejected value reads
-  // back as "no explicit ceiling", which is the pre- behaviour.
+  // back as "no explicit ceiling", which is the behaviour.
   // Strictness lives at the IPC boundary (main/settings-ipc.ts).
   openRouterProviders: z.array(z.string().trim().min(1).max(128)).max(20).optional().catch(undefined),
   maxOutputTokens: z.number().int().positive().optional().catch(undefined),
@@ -280,8 +281,8 @@ const connectionSchema = z.object({
   }).catch({});
     return Object.fromEntries(Object.entries(raw).map(([id, value]) => [id, entrySchema.parse(value)]));
   }).optional(),
-  // : per-model image-input override bound to ONE model id
-  // (the  contextWindowTokens/contextWindowModel pair discipline). The
+  // per-model image-input override bound to ONE model id
+  // (the contextWindowTokens/contextWindowModel pair discipline). The
   // binding is derived SERVER-SIDE from the effective model; the renderer never
   // supplies it. `.catch(undefined)` fail-soft, same reason as maxOutputTokens.
   imageInputOverride: z.enum(["on", "off"]).optional().catch(undefined),
@@ -299,7 +300,7 @@ const connectionSchema = z.object({
   // advisory display data, same round-trip discipline as `lastHealth`.
   models: z.array(z.string()).optional(),
   modelsFetchedAt: z.string().optional(),
-  // : fail-soft like maxOutputTokens above — a hand-edited bad map
+  // fail-soft like maxOutputTokens above — a hand-edited bad map
   // reads back as absent instead of resetting the whole document. Values are
   // re-validated (levels remapped through the closed enum) at consumption.
   modelCapabilities: z.record(z.string().max(256), z.object({
@@ -329,7 +330,7 @@ const connectionSchema = z.object({
       safeCode: z.string().optional(),
     })
     .optional(),
-  // Provider-reported quota cache ( / ) — same
+  // Provider-reported quota cache — same
   // optional/round-trip discipline as `lastHealth` above, plus the
   // whole-object `.catch(undefined)` fail-soft (the `recognizer`/`network`
   // precedent, NOT `lastHealth`'s bare `.optional()`): `lastQuota` is written
@@ -411,7 +412,7 @@ function parseElementsTolerantly<T>(schema: z.ZodType<T>, raw: unknown): T[] {
   return out;
 }
 
-// ── roles ( §3.5) ──
+// ── roles (§3.5) ──
 
 /**
  * One role-route hop. The engine XOR connection/provider rule is enforced by
@@ -492,7 +493,7 @@ export const roleProfilesWriteSchema = z.object({
   projects: z.array(z.object({ projectRoot: z.string().refine(isAbsolute), profileId: z.string().min(1) }).strict()),
 }).strict().refine((value) => new Set(value.profiles.map((p) => p.id)).size === value.profiles.length && new Set(value.projects.map((p) => p.projectRoot)).size === value.projects.length);
 
-//  S1-B (design §4/§7): per-plugin MCP-server consent entries.
+// S1-B (design §4/§7): per-plugin MCP-server consent entries.
 // Keyed by the manifest's serversHash so ANY server/arg change invalidates
 // the grant (host discovery enforces; this schema only validates the shape).
 const mcpConsentEntrySchema = z.object({
@@ -501,7 +502,7 @@ const mcpConsentEntrySchema = z.object({
   grantedAt: z.string(),
 });
 
-// a: per-plugin service consent, keyed by servicesHash. Absent =
+// per-plugin service consent, keyed by servicesHash. Absent =
 // nobody consented (fail closed; services are new, so no grandfathering).
 const serviceConsentEntrySchema = z
   .object({
@@ -614,7 +615,7 @@ const customProviderSchema = z.object({
   kind: customProviderKindSchema,
   models: z.array(z.string()),
   modelsFetchedAt: z.string().optional(),
-  // : only-truthy-on-disk keyless declaration (see CustomProviderRecord).
+  // only-truthy-on-disk keyless declaration (see CustomProviderRecord).
   authOptional: z.boolean().optional(),
 });
 
@@ -623,7 +624,7 @@ const customProvidersArraySchema = z.preprocess(
   z.array(customProviderSchema),
 );
 
-// ── named proxy profiles ( §1) ──
+// ── named proxy profiles (§1) ──
 
 /**
  * One `ProxyProfile`. `mode` is the only strict field — it drives a branch in
@@ -698,7 +699,7 @@ function salvageEngineProxyFields(raw: unknown): { proxyUrl?: string; proxyRef?:
 export const settingsSchema: z.ZodType<AnycodeSettings> = z
   .object({
     version: z.literal(2),
-    // Provider connections ( settings v2 — replacing shape). The v1
+    // Provider connections (settings v2 — replacing shape). The v1
     // singleton fields no longer exist here; `settingsMigrations[1]` resets the
     // provider block to empty on a v1 file (no v1-data carry-over — pre-beta,
     // there is no installed base of v1 credentials). `connections` is a required
@@ -717,24 +718,24 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
       concurrency: z.number().optional(),
       stallTimeoutMs: z.number().optional(),
       maxTurns: z.number().optional(),
-      // : provider retry knobs, mirrors of
+      // provider retry knobs, mirrors of
       // ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS (env > settings).
       maxRetries: z.number().optional(),
       networkRetryBudgetMs: z.number().optional(),
-      // : mirror of ANYCODE_NETWORK_WAIT_MAX_MS (env > settings).
+      // mirror of ANYCODE_NETWORK_WAIT_MAX_MS (env > settings).
       networkWaitMaxMs: z.number().optional(),
       subagentMaxTurns: z.number().optional(),
-      //  slice 1: subagent stall-detector silence threshold override
+      // slice 1: subagent stall-detector silence threshold override
       // (ANYCODE_SUBAGENT_STALL_MS). Distinct from `stallTimeoutMs` above.
       subagentStallTimeoutMs: z.number().optional(),
-      // : Grep backend selector, mirror of ANYCODE_GREP_BACKEND
+      // Grep backend selector, mirror of ANYCODE_GREP_BACKEND
       // (env > settings, default "rg"). Enum, never "auto".
       grepBackend: z.enum(["rg", "tgrep"]).optional(),
-      // : ArchMap opt-in mirror of ANYCODE_ARCHMAP (env > this
+      // ArchMap opt-in mirror of ANYCODE_ARCHMAP (env > this
       // field at boot). `.catch(undefined)` keeps the whole-document fail-soft
       // contract: a hand-edited truthy string degrades to "not enabled" alone.
       archMap: z.boolean().optional().catch(undefined),
-      // : adaptive turn budget, mirror of ANYCODE_ADAPTIVE_TURN_BUDGET
+      // adaptive turn budget, mirror of ANYCODE_ADAPTIVE_TURN_BUDGET
       // (env > settings). Absent = OFF; `.catch(undefined)` as for archMap.
       adaptiveTurnBudget: z.boolean().optional().catch(undefined),
     }),
@@ -747,7 +748,7 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     }),
     security: z.object({
       allowWeakSecretStorage: z.boolean(),
-      // : per-element tolerance (the codexProfilesArraySchema
+      // per-element tolerance (the codexProfilesArraySchema
       // precedent above) — NO outer `.catch`, security is functional, not
       // advisory; a corrupt sibling section must not silently vanish here.
       trustedBinaries: z
@@ -763,7 +764,7 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
         overrides: z.array(keybindingOverrideSchema),
       })
       .optional(),
-    // Codex onboarding metadata (, cut §3.5, additive-optional; version
+    // Codex onboarding metadata (cut §3.5, additive-optional; version
     // NOT bumped, same forward-compat reasoning as `keybindings`/`provider.id`
     // above). Declared explicitly (not left to .passthrough()) so it validates
     // and survives a read-modify-write cycle; absent on old files, parses to
@@ -810,7 +811,7 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
             z.array(z.string()),
           )
           .optional(),
-        // Engine-level HTTP(S) proxy — LEGACY as of , which replaced the
+        // Engine-level HTTP(S) proxy — LEGACY, which replaced the
         // field with `proxyRef` into the profile registry. Kept readable (and
         // lenient `z.string()`, for the same reason as `connections[].proxyUrl`
         // above: schema.ts is not where strictness lives) so an existing value
@@ -826,7 +827,7 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
         // emitted", which is fail-soft, and per-field tolerance here would cost
         // more than it buys for a block the app rewrites on every doctor run.
         //
-        //  (design review B-07) RETIRES that trade for the two proxy
+        // (design review B-07) RETIRES that trade for the two proxy
         // fields, and only for them: losing the block does NOT mean "no proxy",
         // it means "inherit the connection/app rung", so a corrupt `lastCheck`
         // sibling could turn an explicit `"direct"` into someone else's proxy.
@@ -843,7 +844,7 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     // whole document (same reasoning as `codex`'s own outer catch). No
     // per-element array validation needed yet (CC-A has no `profiles` array).
     //
-    //  retired the "this block is ADVISORY cache, not a functional
+    // retired the "this block is ADVISORY cache, not a functional
     // setting" half of that reasoning: `proxyUrl` below IS functional, and the
     // outer catch drops it together with the cache. Accepted for the same reason
     // as on `codex` — the failure direction is "no proxy emitted".
@@ -867,7 +868,7 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
       .optional()
       // Same functional-field salvage as `codex` above (design review B-07).
       .catch((ctx) => salvageEngineProxyFields(ctx.value)),
-    // Named proxy profiles + the app-level reference (, additive-optional;
+    // Named proxy profiles + the app-level reference (additive-optional;
     // version NOT bumped, same forward-compat reasoning as `codex`/`claude`
     // above — a settings.json with no `network` key round-trips byte-identically).
     // Declared explicitly (not left to `.passthrough()`) so it validates and
@@ -878,7 +879,7 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     // and drop the user through `parseSettings`'s corrupt→defaults path, wiping
     // every other section. The failure direction is fail-soft in the required
     // sense — no registry and no app ref means every ladder falls through to
-    // "no proxy", exactly where a pre- settings.json already sits. The
+    // "no proxy", exactly where a settings.json already sits. The
     // registry's own per-element tolerance (above) means it takes a
     // wrong-SHAPED `network` value, not one bad profile, to reach this catch.
     network: z
@@ -892,33 +893,33 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
       })
       .optional()
       .catch(undefined),
-    // Browser-preview settings (night-track wave-1 cut §2.7,  96-E,
+    // Browser-preview settings (night-track wave-1 cut §2.7, 96-E,
     // additive-optional; version NOT bumped, same forward-compat reasoning as
     // `claude`/`codex`/`keybindings` above). Declared explicitly (not left to
     // `.passthrough()`) so it validates and survives a read-modify-write
     // cycle; absent on old files, parses to undefined.
     preview: previewSchema,
-    // Vision-fallback recognizer selection ( E1, additive-optional;
+    // Vision-fallback recognizer selection (E1, additive-optional;
     // version NOT bumped, same forward-compat reasoning as `preview` above).
     // Declared explicitly (not left to `.passthrough()`) so it validates and
     // survives a read-modify-write cycle.
     recognizer: recognizerSchema,
-    // Orchestration roles ( §3.5, additive-optional; version NOT
+    // Orchestration roles (§3.5, additive-optional; version NOT
     // bumped, same forward-compat reasoning as `recognizer` above). Absent
     // means "built-in defaults"; the whole-object catch degrades a corrupt
     // value alone.
     roles: rolesSchema,
     roleProfiles: roleProfilesSchema.optional().catch(undefined),
-    // Plugins control-plane ( S1-B, design §7; additive-optional,
+    // Plugins control-plane (S1-B, design §7; additive-optional,
     // version NOT bumped). Declared explicitly (not left to `.passthrough()`)
     // so it validates and survives a read-modify-write cycle. The whole-object
     // `.catch(undefined)` keeps the fail-soft document contract: a corrupt
     // `plugins` value degrades alone, every sibling section survives.
     plugins: pluginsSettingsSchema,
-    // Sessions API (, additive-optional; version NOT bumped). Declared
+    // Sessions API (additive-optional; version NOT bumped). Declared
     // explicitly so it validates and survives a read-modify-write cycle.
     communication: communicationSettingsSchema,
-    //  (additive-optional; version NOT bumped): the default "Full browser access" switch.
+    // (additive-optional; version NOT bumped): the default "Full browser access" switch.
     browser: browserSettingsSchema,
   })
   .passthrough() as unknown as z.ZodType<AnycodeSettings>;
@@ -927,7 +928,7 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
 export type SettingsMigration = (input: Record<string, unknown>) => Record<string, unknown>;
 
 /**
- * v1 -> v2 (, owner-decision 2026-07-15): RESET, not carry-over. A v1
+ * v1 -> v2 (owner-decision 2026-07-15): RESET, not carry-over. A v1
  * `provider.{id,model,baseUrl,transport,defaults}` block is replaced by an empty
  * v2 `provider: {connections: []}` — the user re-adds a connection. AnyCode is
  * pre-beta (`0.0.x`) with no installed base of v1 credentials, so there is

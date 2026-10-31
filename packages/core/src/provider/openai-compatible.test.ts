@@ -1,5 +1,5 @@
 /**
- * Unit tests for the openai-chat-completions factory ( §0.3/§0.5/§10.2
+ * Unit tests for the openai-chat-completions factory (§0.3/§0.5/§10.2
  * p1). Construction is side-effect free (no network until streamText), so
  * these assert the LanguageModel's static shape — model id, base URL
  * normalization delegation, and that apiKey/headers/includeUsage are truly
@@ -16,7 +16,7 @@ import {
   resolveIncludeUsage,
 } from "./openai-compatible.js";
 
-// : SDK factory options recorded while DELEGATING to
+// SDK factory options recorded while DELEGATING to
 // the real implementation (no behaviour change for existing tests) — for the
 // dormancy pin (no `fetch` key when no observer; a function when set).
 const mockCreateOpenAICompatible = vi.fn();

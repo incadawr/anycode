@@ -223,7 +223,7 @@ export function consentCoversBinary(
 }
 
 /**
- * The classified consent verdict ( fix wave, D-S4-13/17). `null` =
+ * The classified consent verdict (fix wave, D-S4-13/17). `null` =
  * base policy passes or a consent covers the file. A refusal carries:
  * - `consentable`: false for STRUCTURAL refusals (not a file, not
  *   executable, an ancestor that is not a directory) AND for the

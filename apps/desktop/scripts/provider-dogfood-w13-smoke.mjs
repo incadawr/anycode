@@ -1,5 +1,5 @@
 /**
- * Live dogfood smoke for  W13 (design/track-43-45-33-47-49-cut.md
+ * Live dogfood smoke for W13 (design/track-43-45-33-47-49-cut.md
  * §"W13 — live dogfood 45"): drives a REAL Electron dev instance end-to-end
  * over the automation HTTP channel against LOCAL mock HTTP servers standing
  * in for a real provider — never a real z.ai/Anthropic credential. The whole

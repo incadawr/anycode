@@ -76,7 +76,7 @@ class FakeSubagentPort implements SubagentPort {
   private inflight = 0;
   readonly calls: string[] = [];
   readonly prompts = new Map<string, string>();
-  /**  follow-up: the `tools` array each step's request carried (absent = no extras). */
+  /** follow-up: the `tools` array each step's request carried (absent = no extras). */
   readonly requestTools = new Map<string, readonly string[] | undefined>();
 
   constructor(
@@ -441,14 +441,14 @@ describe("fail-fast", () => {
     expect(port.calls).not.toContain("D");
   });
 
-  it("a degenerate step (finalTurnFinishReason==='degenerate') is NOT a satisfied dependency, even though SubagentOutcome.status stays 'completed' ( codex review finding)", async () => {
+  it("a degenerate step (finalTurnFinishReason==='degenerate') is NOT a satisfied dependency, even though SubagentOutcome.status stays 'completed' (codex review finding)", async () => {
     const port = new FakeSubagentPort(["general-purpose"], async (id, req, opts) => {
       opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
       if (id === "B") {
         // The loop's own sentinel/loop_end reports "completed" — this
         // outcome shape is exactly what a real degenerate-cutoff subagent
         // run returns (outcomeToResult's own comment on the accepted
-        // internal/external status mismatch,  plan §8).
+        // internal/external status mismatch, plan §8).
         return completedOutcome("...ends inside a degenerate loop", { finalTurnFinishReason: "degenerate" });
       }
       return completedOutcome(`out:${id}`);
@@ -471,7 +471,7 @@ describe("fail-fast", () => {
     expect(port.calls).not.toContain("C");
   });
 
-  //  slice S3: before this, a never-launched step's "skipped" fact
+  // slice S3: before this, a never-launched step's "skipped" fact
   // lived ONLY in the returned WorkflowRunOutcome.steps array — a client fed
   // exclusively by onProgress (the desktop card) got no wire event for it at
   // all and the node stayed "not started" forever, even after the run's own
@@ -506,7 +506,7 @@ describe("fail-fast", () => {
     expect(runEnd).toBeGreaterThan(cEnd);
   });
 
-  // : the deep-research preset runs every step as
+  // the deep-research preset runs every step as
   // agentType "general-purpose", and a site without a configured WebSearch
   // backend threads no webSearchTool into the runner. That must NOT reject
   // the run: "general-purpose" is a built-in persona regardless of tool
@@ -529,13 +529,13 @@ describe("fail-fast", () => {
     expect(outcomeOf(outcome.steps, "a").status).toBe("completed");
   });
 
-  //  follow-up: WebSearch is NOT a general-purpose default
+  // follow-up: WebSearch is NOT a general-purpose default
   // anymore, so a workflow step opts its child in through the step's own
   // `tools:` entry. The engine forwards it verbatim on the SubagentRequest —
   // the RUNNER resolves it against what boot provides (a site without a
   // backend keeps the silent skip), so the engine test pins only the
   // forwarding, both directions:
-  it("a step's declared tools ride the SubagentRequest; a step without them carries no extras ( follow-up)", async () => {
+  it("a step's declared tools ride the SubagentRequest; a step without them carries no extras (follow-up)", async () => {
     const port = new FakeSubagentPort(["general-purpose"], (id, req, opts) =>
       emitAndComplete(opts, req, `out:${id}`),
     );
@@ -706,7 +706,7 @@ describe("fail-fast validation", () => {
     expect(outcomeOf(outcome.steps, "A").status).toBe("skipped");
   });
 
-  //  (supersedes the  slice S3 "documented silence" pin this
+  // (supersedes the slice S3 "documented silence" pin this
   // replaces): a caller fed exclusively by onProgress (the desktop card) used
   // to get NOTHING for this outcome — no workflow_start, no reason, the run
   // simply vanished. The pre-check now streams the same start/step_end/end
@@ -850,7 +850,7 @@ describe("cancellation", () => {
     expect(port.calls).toEqual([]);
   });
 
-  //  slice S3 consequence, NOT a regression of this slice: the
+  // slice S3 consequence, NOT a regression of this slice: the
   // `if (signal?.aborted)` early return also sits BEFORE the start-progress
   // emission — same documented silence as the unknown-agentType fail-fast
   // above, same reason (nothing has streamed yet).
@@ -928,7 +928,7 @@ describe("progress events", () => {
     );
 
     expect(outcome.status).toBe("completed");
-    //  slice S3: the start event now carries the run's step graph so
+    // slice S3: the start event now carries the run's step graph so
     // a client can hold/order all N steps before the first step_start lands
     // — a client that ignored `steps` entirely would still pass every OTHER
     // assertion in this file, which is exactly why this needs its own exact
@@ -954,7 +954,7 @@ describe("progress events", () => {
     expect(events.some((e) => e.kind === "step_progress")).toBe(true);
   });
 
-  //  slice S1. Before this slice the child's `tool` progress had no
+  // slice S1. Before this slice the child's `tool` progress had no
   // branch in the engine at all: counters travelled, the tool names were
   // dropped on the floor, and a workflow run named not one thing it did.
   it("forwards each step's child tool activity as step_activity, stamped with that step's id", async () => {
@@ -988,7 +988,7 @@ describe("progress events", () => {
     expect(activity.filter((e) => e.toolName === "Bash").map((e) => e.summary)).toEqual(["", ""]);
   });
 
-  it("stamps each step's token spend onto step_progress and step_end ( slice S2)", async () => {
+  it("stamps each step's token spend onto step_progress and step_end (slice S2)", async () => {
     const port = new FakeSubagentPort(["general-purpose"], async (id, req, opts) => {
       opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
       opts.onProgress?.({
@@ -1072,7 +1072,7 @@ describe("progress events", () => {
     );
 
     expect(outcome.status).toBe("completed");
-    // step_running ( slice S3) rides the same child "start" progress
+    // step_running (slice S3) rides the same child "start" progress
     // as attention/stalled just above — it fires between step_start and
     // step_end, not instead of either.
     expect(events.map((e) => e.kind)).toEqual(["start", "step_start", "step_running", "step_end", "end"]);
@@ -1144,7 +1144,7 @@ describe("integration with the real subagent runner", () => {
 
     await delay(40);
     expect(started).toBe(2); // the 3rd step is parked behind the shared semaphore
-    //  slice S3 (§B7): step_start fires for ALL THREE steps up front —
+    // slice S3 (§B7): step_start fires for ALL THREE steps up front —
     // launchStep's onProgress({kind:"step_start"}) runs BEFORE subagents.run,
     // which is where the semaphore wait actually happens. So step_start alone
     // is exactly the wire-indistinguishable signal the plan's rejected
@@ -1294,7 +1294,7 @@ describe("orphan safety (real NodeExecutionAdapter)", () => {
 });
 
 // ===========================================================================
-//  slice S1: what finalText IS, stamped where the distinction still
+// slice S1: what finalText IS, stamped where the distinction still
 // exists. `status` alone cannot say it — three different producers all land on
 // "error" (a timeout message, a degenerate loop's partial, the child's own
 // error text), and two of them never launched a child at all.
@@ -1441,12 +1441,12 @@ describe("failure kind + unlaunched stamps", () => {
 });
 
 // ===========================================================================
-//  slice S2: the SAME failure/unlaunched stamps, but on the WIRE
+// slice S2: the SAME failure/unlaunched stamps, but on the WIRE
 // event (step_end) rather than the returned WorkflowRunOutcome — this is what
 // tools/workflow.ts's mapProgressToEvent bridges onward, so a field the
 // outcome carries but the event drops would arrive nowhere downstream.
 
-describe("step_end progress event carries failure + unlaunched ( slice S2)", () => {
+describe("step_end progress event carries failure + unlaunched (slice S2)", () => {
   it("carries failure on the step_end event for a child's own error, and nothing on the step around it", async () => {
     const port = new FakeSubagentPort(["general-purpose"], async (id, req, opts) => {
       opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
@@ -1545,7 +1545,7 @@ describe("step_end progress event carries failure + unlaunched ( slice S2)", () 
 });
 
 // ---------------------------------------------------------------------------
-// : engine-profile steps route through the session tier.
+// engine-profile steps route through the session tier.
 
 /** Typed fake SessionSubagentPort: records requests, runs injected behavior. */
 class FakeSessionSubagentPort implements SessionSubagentPort {
@@ -1566,7 +1566,8 @@ class FakeSessionSubagentPort implements SessionSubagentPort {
     return this.behavior(req, opts);
   }
 
-  // SessionSubagentPort.send is REQUIRED (cross-review Finding 1, ); workflow engine steps only ever spawn, never send — a loud
+  // SessionSubagentPort.send is REQUIRED (cross-review Finding 1,
+  // 4153); workflow engine steps only ever spawn, never send — a loud
   // refusal if send were reached unexpectedly.
   async send(): Promise<SessionSubagentSendResult> {
     return { ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" };
@@ -1862,7 +1863,7 @@ describe("workflow engine session tier (engine-profile steps)", () => {
   }, 5_000);
 });
 
-// : an engine-role step honours the role chain the Agent tool
+// an engine-role step honours the role chain the Agent tool
 // honours. A healthy primary or a null route keeps the profile
 // request; a cooling primary runs the healthy fallback (no profile, route
 // stamped, role body kept); an exhausted chain runs on the parent's model. The
@@ -1885,7 +1886,7 @@ class RoutedSubagentPort extends FakeSubagentPort {
   }
 }
 
-describe("workflow engine role-route (engine-profile steps, )", () => {
+describe("workflow engine role-route (engine-profile steps)", () => {
   const ROLE_BODY = "ROLE BODY";
   const PLANNER_PROFILES = new Map<string, EngineProfileInfo>([
     ["planner", { engine: "claude", systemPrompt: ROLE_BODY, model: "profile-model" }],

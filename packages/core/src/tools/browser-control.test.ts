@@ -184,7 +184,7 @@ describe("browser control tools (Phase A)", () => {
     expect(tools.snapshot.formatResultForModel!({ ok: false, error: "nope" })).toBe("nope");
   });
 
-  // Test 6 (, Phase B)
+  // Test 6 (Phase B)
   it("BrowserEval always needs approval (every input), passes allowRemote once approved, and asks even on loopback", async () => {
     for (const input of [{ expression: "1+1" }, { preview_id: "p1", expression: "document.title" }]) {
       expect(tools.eval.resolveMetadata!(input).needsApproval).toBe(true);

@@ -485,12 +485,12 @@ describe("profile `engine:` frontmatter", () => {
 });
 
 // ---------------------------------------------------------------------------
-// `engine:` + explicit `tools:` conflict ( R4, wave2-cut.md §1.3/§2.3):
+// `engine:` + explicit `tools:` conflict (R4, wave2-cut.md §1.3/§2.3):
 // refused at the single parseAgentProfileMd oracle, so discovery sees it as
 // just another fatal-parse case — same claim semantics as bad_model/bad_engine
 // (a higher-precedence conflicted file still shadows a lower same-named one).
 
-describe("discoverAgentProfiles — engine + tools conflict ( R4)", () => {
+describe("discoverAgentProfiles — engine + tools conflict (R4)", () => {
   it("refuses a profile combining engine: and explicit tools:, naming both in the problem text", async () => {
     const fs = new FakeFs({
       [WS]: {
@@ -542,12 +542,12 @@ describe("discoverAgentProfiles — engine + tools conflict ( R4)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// `maxTurns:` frontmatter ( §2.3): the per-run turn budget as a property
+// `maxTurns:` frontmatter (§2.3): the per-run turn budget as a property
 // of the role. Same fatal-on-invalid and claim-set semantics as bad_model /
 // bad_engine — a profile whose declared budget is silently replaced is worse
 // than one that is loudly refused.
 
-describe("discoverAgentProfiles — maxTurns frontmatter ( §2.3)", () => {
+describe("discoverAgentProfiles — maxTurns frontmatter (§2.3)", () => {
   it("attaches the budget to the persona and refuses an out-of-range one (profile not registered)", async () => {
     const good = md({ name: "good", description: "d", maxTurns: "12" }, "BODY");
     const overCeiling = String(SUBAGENT_MAX_TURNS_CEILING + 1);
@@ -664,7 +664,7 @@ describe("discoverAgentProfiles — profile connection/provider routing", () => 
 });
 
 // ---------------------------------------------------------------------------
-//  §2.1: the three role personas became OVERRIDABLE built-ins. A
+// §2.1: the three role personas became OVERRIDABLE built-ins. A
 // same-named md-profile now PARSES and is registered (it wins at resolution);
 // general-purpose/explore remain reserved. Engine+connection inside a role
 // profile stays fatal (unchanged claim-set semantics).

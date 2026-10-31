@@ -1,5 +1,5 @@
 /**
- * Detached-child notification formatting tests ( срез 1). Covers the
+ * Detached-child notification formatting tests (срез 1). Covers the
  * verbatim anti-spoofing header, XML escaping, summary truncation, and the
  * 4-way -> 3-way status mapping — the hermetic e2e (a detached run actually
  * producing and delivering one of these) lives in child-session-port.test.ts
@@ -79,7 +79,7 @@ describe("formatChildTaskNotification (spec §4bis/§7)", () => {
     expect(text).toContain("</task-notification>");
   });
 
-  it(": the follow-up hint rides AFTER the block — agent-id inside, continue_session prose outside", () => {
+  it("the follow-up hint rides AFTER the block — agent-id inside, continue_session prose outside", () => {
     const text = formatChildTaskNotification(input({ agentId: "child-9" }));
     expect(text).toContain("<agent-id>child-9</agent-id>");
     expect(text).toMatch(/pass its agent-id as continue_session/);
@@ -105,7 +105,7 @@ describe("formatChildTaskNotification (spec §4bis/§7)", () => {
     const text = formatChildTaskNotification(input({ summary: "one short paragraph" }));
     expect(text.split("\n").filter((line) => line.trim().length > 0)).toHaveLength(
       // 3 header lines + 9 task-notification lines (open/7 fields incl. close... see below)
-      // + 1  follow-up hint line after the block
+      // + 1 follow-up hint line after the block
       3 + 9 + 1,
     );
   });
@@ -232,7 +232,7 @@ describe("formatChildTaskNotification: turn-limit cause", () => {
     expect(text).toContain("[truncated — the full report");
   });
 
-  //  review F4: the count must read naturally at 1 ("1 turn",
+  // review F4: the count must read naturally at 1 ("1 turn",
   // never "1 turns"), and the number is only printed when it IS a model-round
   // count (turnLimitTurns >= 1) — a non-count sentinel never reaches here.
   it("singularises: 1 turn, not 1 turns (F4)", () => {
@@ -253,11 +253,11 @@ describe("mapChildRunStatusToNotification (spec §4bis: 4-way -> 3-way)", () => 
     expect(mapChildRunStatusToNotification("cancelled")).toBe("cancelled");
   });
 
-  it("max_turns -> failed (: not a success, no room here for a max_turns-specific remediation hint)", () => {
+  it("max_turns -> failed (not a success, no room here for a max_turns-specific remediation hint)", () => {
     expect(mapChildRunStatusToNotification("max_turns")).toBe("failed");
   });
 
-  it("max_turns with declaredDoneAtCeiling -> completed (TASK 4149); the flag never rescues error/cancelled", () => {
+  it("max_turns with declaredDoneAtCeiling -> completed; the flag never rescues error/cancelled", () => {
     expect(mapChildRunStatusToNotification("max_turns", true)).toBe("completed");
     expect(mapChildRunStatusToNotification("max_turns", false)).toBe("failed");
     expect(mapChildRunStatusToNotification("error", true)).toBe("failed");
@@ -287,7 +287,7 @@ describe("formatChildReportCapNotice (spec §8 срез 2: 'тихо резат�
   });
 });
 
-describe("formatChildStallNotice ( slice 2)", () => {
+describe("formatChildStallNotice (slice 2)", () => {
   function stallInput(overrides?: Partial<ChildStallNoticeInput>): ChildStallNoticeInput {
     return {
       taskId: "call-1",

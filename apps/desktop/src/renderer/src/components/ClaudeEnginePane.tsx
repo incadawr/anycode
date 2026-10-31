@@ -2,7 +2,7 @@
  * Claude onboarding Settings pane (SLICE-CC A4, cut §1.2 mirror of
  * CodexEnginePane.tsx, deliberately much smaller): status of the bounded
  * claude-doctor probe, the discovered binary path, the SLICE-CC-LOGIN
- * (, cut §3) native "Use my Claude subscription" flow, and — while
+ * (cut §3) native "Use my Claude subscription" flow, and — while
  * `signed_out` — the manual terminal onboarding text as a fallback.
  *
  * CUSTODY: `ClaudeDoctorReport` never carries an account/email/subscription
@@ -44,7 +44,7 @@ export type ClaudePickBinaryResult =
   | { ok: true; snapshot: ClaudeOnboardingSnapshot }
   | { ok: false; reason: "cancelled" | "invalid" };
 
-// SLICE-CC-LOGIN (, cut §4): duplicated from main/claude-ipc.ts's own
+// SLICE-CC-LOGIN (cut §4): duplicated from main/claude-ipc.ts's own
 // `ClaudeLoginStartResult` (same "shared/** froze read-only" reasoning as
 // every shape above).
 export type ClaudeLoginStartResult =
@@ -121,7 +121,7 @@ export function pickClaudeBinaryFailureMessage(reason: "cancelled" | "invalid"):
 /** The exact terminal command the onboarding text prescribes — ambient by default (owner pivot): no `CLAUDE_CONFIG_DIR`, so it signs into the SAME `~/.claude` the doctor diagnoses. */
 export const CLAUDE_PROFILE_LOGIN_COMMAND = "claude auth login";
 
-// SLICE-CC-LOGIN (, cut §3): the "Use my Claude subscription" flow.
+// SLICE-CC-LOGIN (cut §3): the "Use my Claude subscription" flow.
 
 /** Cut §3's exact in-progress copy — a real terminal window opened, not ours to poll manually. */
 export const CLAUDE_LOGIN_IN_PROGRESS_COPY = "A Terminal window has opened — complete sign-in there (your browser will open). Waiting…";
@@ -140,12 +140,12 @@ export function signInButtonDisabled(checking: boolean, busy: boolean, signingIn
   return checking || busy || signingIn;
 }
 
-//  (owner directive 2026-07-19): an honest, non-blocking informational
+// (owner directive 2026-07-19): an honest, non-blocking informational
 // note — this is Claude Code's own OAuth login and quota, spawned as-is, not
 // a separate AnyCode account or a separate usage pool, and using a
 // subscription through a third-party UI sits in a gray area of Anthropic's
 // terms even though no enforcement precedent against as-is CLI wrappers is
-// known (see .md's verdict for the source citations).
+// known (verdict for the source citations).
 export const CLAUDE_SUBSCRIPTION_RISK_NOTE =
   "AnyCode spawns the official Claude Code CLI as-is and signs in with your own Claude Code login — we never read or store your tokens. " +
   "This usage shares the same subscription quota as claude.ai and the terminal, not a separate pool. " +
@@ -244,7 +244,7 @@ export interface ClaudeBridge {
   loginCancel(): Promise<void>;
   /** Doctor-spawn-loop fix: pushes a fresh snapshot after every recheck/pick/login step. */
   onSnapshotChanged(callback: (snapshot: ClaudeOnboardingSnapshot) => void): () => void;
-  /**  (D-S4-8): grants a per-path binary-trust consent. `path` ONLY — the fingerprint is computed entirely main-side. */
+  /** (D-S4-8): grants a per-path binary-trust consent. `path` ONLY — the fingerprint is computed entirely main-side. */
   trustBinary(path: string): Promise<SettingsMutationResult>;
 }
 
@@ -260,7 +260,7 @@ export function ClaudeEnginePane({ bridge = window.anycode.claude, onboarding = 
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
-  //  (D-S4-8): the binary-trust consent dialog's open state.
+  // (D-S4-8): the binary-trust consent dialog's open state.
   const [trustDialogOpen, setTrustDialogOpen] = useState(false);
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -300,7 +300,7 @@ export function ClaudeEnginePane({ bridge = window.anycode.claude, onboarding = 
   }
 
   /**
-   *  (D-S4-8, §4 step 4): the claude mirror of CodexEnginePane's
+   * (D-S4-8, §4 step 4): the claude mirror of CodexEnginePane's
    * `acceptTrust` — on `ok` fires the pane's existing `recheck()` (no
    * profileId argument here; this pane has no profile registry) so the
    * card resolves through the same push/apply path every other action uses.
@@ -335,7 +335,7 @@ export function ClaudeEnginePane({ bridge = window.anycode.claude, onboarding = 
   }
 
   const status = describeClaudeReportStatus(checking ? undefined : snapshot?.report);
-  //  (D-S4-6): the consent card source — the structured field only.
+  // (D-S4-6): the consent card source — the structured field only.
   const trustRefusal = binaryTrustRefusalOf(snapshot?.report);
 
   if (onboarding) return <section className="settings-section" aria-label="Connect Claude Code">

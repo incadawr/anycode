@@ -1,5 +1,5 @@
 /**
- *  /  — main's OWN provider network requests, proxied.
+ * main's OWN provider network requests, proxied.
  *
  * Main makes three connection-scoped HTTP calls on the user's behalf
  * (`provider-ipc.ts` /v1/models, `oauth.ts` code exchange, `token-broker.ts`
@@ -661,7 +661,7 @@ export function createProxyChainFetch(deps: ProxyChainFetchDeps) {
       try {
         route = await resolveProxyRoute(current, chain, deps.materializationFor(url), url);
       } catch (err) {
-        //  defect 3: a raw materialization-boundary rejection could
+        // defect 3: a raw materialization-boundary rejection could
         // quote the authenticated proxy URL — sanitize to the fetch-shaped
         // boundary error (fixed message + fixed credential-free cause).
         throw sanitizedBoundaryError(err);
@@ -690,7 +690,7 @@ export function createProxyChainFetch(deps: ProxyChainFetchDeps) {
         // The async IIFE places the ACTUAL setProxyFor invocation inside the
         // sanitization boundary: a synchronous throw while CALLING
         // deps.setProxyFor rejects this promise just like an async rejection
-        // ( defect 3) — neither can escape with raw proxy detail.
+        // (defect 3) — neither can escape with raw proxy detail.
         configured = (async () => {
           try {
             await deps.setProxyFor(partition, split.rules);

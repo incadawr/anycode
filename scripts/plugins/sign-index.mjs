@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- *  S1-B (design §3/§4): signs an `index.json` for the official
+ * S1-B (design §3/§4): signs an `index.json` for the official
  * plugin channel — `node scripts/plugins/sign-index.mjs <index.json> <private.pem> [keyId]`.
  *
  * Signs the EXACT index.json bytes (the client verifies over precisely

@@ -1,5 +1,5 @@
 /**
- *  review: the host's builtin-skill composition, and the wiring
+ * review: the host's builtin-skill composition, and the wiring
  * that keeps host/index.ts calling it. Removing either fails a test here.
  */
 import { readFileSync } from "node:fs";

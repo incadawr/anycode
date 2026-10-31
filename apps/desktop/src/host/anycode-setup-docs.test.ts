@@ -1,5 +1,5 @@
 /**
- *  review: the anycode-setup docs resolver order. Pure: the probe
+ * review: the anycode-setup docs resolver order. Pure: the probe
  * stands in for the filesystem, so each rung is exercised without a real tree.
  */
 import { describe, expect, it } from "vitest";

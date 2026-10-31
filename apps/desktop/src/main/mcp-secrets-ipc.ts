@@ -1,5 +1,5 @@
 /**
- * MCP secrets control-plane IPC (, part C). Three channels, all
+ * MCP secrets control-plane IPC (part C). Three channels, all
  * write-only: `list` returns names; `set` takes `{name, value}` and returns names;
  * `delete` takes `{name}` and returns names. NO channel ever returns a value.
  *

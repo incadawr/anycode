@@ -1,5 +1,5 @@
 /**
- * Codex version-support POLICY (codex-profiles cut §7.1, ): which
+ * Codex version-support POLICY (codex-profiles cut §7.1): which
  * versions AnyCode calls "supported", sourced from the git-hosted
  * `codex-support.json` manifest (raw URL, OG-3: public repo) with the
  * compiled-in `BUNDLED_CODEX_MANIFEST` as the fail-closed fallback.
@@ -45,7 +45,7 @@ export const CODEX_MANIFEST_FETCH_TIMEOUT_MS = 10_000;
 
 // ── semver + range evaluation ──
 //
-// : the comparator grammar, the range evaluator and the verdict itself
+// the comparator grammar, the range evaluator and the verdict itself
 // moved to shared/codex-version-policy.ts so the HOST — which is the process
 // that actually decides whether a Codex child starts, and may never import
 // from main/** — judges by the SAME code as this file's Settings/Doctor/
@@ -272,7 +272,7 @@ export async function refreshCodexManifest(options: CodexManifestRefreshOptions)
           }
           if (response.status !== 200) return fallback();
           const body = await response.text();
-          //  (supervisor #2): a fetch/body that ignored the abort
+          // (supervisor #2): a fetch/body that ignored the abort
           // and settled after the deadline must never persist a late manifest.
           if (controller.signal.aborted) return fallback();
           if (Buffer.byteLength(body, "utf8") > CODEX_MANIFEST_MAX_BYTES) return fallback();
@@ -307,7 +307,7 @@ export function dropCodexManifestCache(cacheFile: string): void {
   rmSync(cacheFile, { force: true });
 }
 
-// ── : periodic schedule + refresh-before-refuse ──
+// ── periodic schedule + refresh-before-refuse ──
 
 /** Refresh-before-refuse rate limit: an unsupported version must not hammer GitHub per doctor pass. */
 export const CODEX_MANIFEST_FORCED_REFRESH_MIN_INTERVAL_MS = 10 * 60_000;
@@ -353,7 +353,8 @@ export function startCodexManifestRefreshSchedule(options: {
 }
 
 /**
- * Rate-limited forced refresh for the refresh-before-refuse seam: coalesced when concurrent, at most one attempt per
+ * Rate-limited forced refresh for the refresh-before-refuse seam (
+ * 4230): coalesced when concurrent, at most one attempt per
  * CODEX_MANIFEST_FORCED_REFRESH_MIN_INTERVAL_MS, bounded end-to-end by the
  * whole-operation timeout above. Resolves true only when a NETWORK manifest
  * actually changed the active policy; every other outcome (non-200, timeout,

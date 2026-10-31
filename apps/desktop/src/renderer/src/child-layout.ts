@@ -1,6 +1,6 @@
 /**
  * Renderer-side layout logic for a root tab's master<->child surface
- * switching ( CUT-S2 §2.5, slice S2c C1) — extended by CUT-S3 §2
+ * switching (CUT-S2 §2.5, slice S2c C1) — extended by CUT-S3 §2
  * (slice S3a) with a THIRD `ChildLayoutView` variant, `split`: the master
  * stays visible alongside a stack of up to `CHILD_SPLIT_MAX_ROWS` open
  * children (layouts C/D — CUT-S3 §0.1 rules these are ONE layout, not two:
@@ -137,7 +137,7 @@ export function openChild(
   if (view.kind !== "split") {
     return { kind: "child", spawnToolCallId };
   }
-  // : same-logical-child fold — when the id being opened is a
+  // same-logical-child fold — when the id being opened is a
   // continuation of a child that already has a row (a new spawn id, same
   // childSessionId), retarget that row's id IN PLACE (position preserved)
   // and expand it, instead of appending a second row for one child. Open
@@ -400,7 +400,7 @@ export function detachedOutcomeFromParent(
   return null;
 }
 
-// ── continuation (same logical child) helpers —  ──
+// ── continuation (same logical child) helpers — ──
 
 /**
  * The transcript-order Agent `tool_call` block ids that all belong to the

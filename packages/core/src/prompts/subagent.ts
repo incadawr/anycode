@@ -29,7 +29,7 @@ export interface SubagentPromptOptions {
 
 /**
  * The wrap-up instruction sent as a synthetic user message on the ONE tool-free
- * model call a budget-exhausted child gets ( §4). It exists to convert
+ * model call a budget-exhausted child gets (§4). It exists to convert
  * the text the parent would otherwise receive — the preamble of the cut-off
  * turn, i.e. what the child was ABOUT to do — into the findings it already has.
  * Lives here rather than as a literal in the runner so all subagent-facing copy
@@ -46,7 +46,7 @@ export const SUBAGENT_WRAPUP_PROMPT = [
 ].join(" ");
 
 /**
- * : what the parent sees when a turn-limited child's wrap-up rescue
+ * what the parent sees when a turn-limited child's wrap-up rescue
  * could not produce any report text (the model call failed or returned only
  * whitespace AND there was no raw last-turn partial worth keeping).
  */
@@ -54,7 +54,7 @@ export const SUBAGENT_WRAPUP_FAILED_NOTICE =
   "Agent: the child hit its turn limit and no wrap-up report could be produced (the wrap-up model call failed or returned no text). No final report is available; consult the child's activity feed.";
 
 /**
- * : prefixes a surviving raw last-turn partial when the wrap-up
+ * prefixes a surviving raw last-turn partial when the wrap-up
  * rescue failed but the child had produced non-whitespace text — so the
  * parent knows the fragment is raw output, not a final report.
  */
@@ -62,7 +62,7 @@ export const SUBAGENT_WRAPUP_DEGRADED_PREFIX =
   "[wrap-up failed — the text below is the child's raw last-turn output, not a final report]";
 
 /**
- * : the notice a CLI-engine child (codex/claude — no core loop, no
+ * the notice a CLI-engine child (codex/claude — no core loop, no
  * ModelPort, hence no wrap-up rescue) ends with when it stops at its turn
  * limit with no final report. CLI engines expose no in-process model call we
  * could run the tool-free wrap-up against, so their empty max_turns terminal

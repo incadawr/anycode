@@ -1,5 +1,5 @@
 /**
- * In-memory cache for `ask()` results ( plan §7). Lives for the
+ * In-memory cache for `ask()` results (plan §7). Lives for the
  * host-forked process only — never persisted: a retry/resend of the exact same
  * question shouldn't pay for a second model call, but a disk cache would be a
  * new invalidation surface with no proven need. The key folds in the

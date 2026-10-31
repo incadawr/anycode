@@ -1,5 +1,5 @@
 /**
- *  — tests for the checkpoint/rewind pure model (the survivors
+ * tests for the checkpoint/rewind pure model (the survivors
  * of the removed TimelinePanel + the new turn→checkpoint matching). Same
  * jsdom-free discipline as TranscriptMinimap.test.ts: pure units only.
  *
@@ -89,7 +89,7 @@ describe("buildRewindRequest (moved verbatim from TimelinePanel)", () => {
   });
 });
 
-describe("matchCheckpointsToTurns ( §2.3)", () => {
+describe("matchCheckpointsToTurns (§2.3)", () => {
   it("returns an empty array for no turns", () => {
     expect(matchCheckpointsToTurns([], [checkpoint()])).toEqual([]);
   });

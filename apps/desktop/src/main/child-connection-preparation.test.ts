@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createChildConnectionPreparer } from "./child-connection-preparation.js";
 
 /**
- *  §3 item 11/12: the ACTUAL preparation composition extracted from
+ * §3 item 11/12: the ACTUAL preparation composition extracted from
  * main/index.ts. These tests pin the ordering that the protocol depends on:
  * the pin reservation is synchronous and PRECEDES the awaited env build, a
  * missing id never reserves, and every failure path releases exactly once.

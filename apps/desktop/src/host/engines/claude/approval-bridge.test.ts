@@ -242,7 +242,7 @@ describe("ClaudeApprovalBridge — posture and scope rules", () => {
   });
 });
 
-describe("ClaudeApprovalBridge —  S3: AnyCode's own MCP door", () => {
+describe("ClaudeApprovalBridge — S3: AnyCode's own MCP door", () => {
   it("can_use_tool for mcp__anycode__* is auto-allowed, never asks the broker, and never engages the pending latch", async () => {
     const { broker, requests } = brokerStub({ behavior: "allow" });
     const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask", bridge: {} as ClaudeMcpBridge });
@@ -339,14 +339,14 @@ describe("ClaudeApprovalBridge —  S3: AnyCode's own MCP door", () => {
 });
 
 /**
- * : the Claude bridge stamps classifier-proven read-only Bash
- * commands readOnly/low, mirroring the Codex bridge's  rule — a
+ * the Claude bridge stamps classifier-proven read-only Bash
+ * commands readOnly/low, mirroring the Codex bridge's rule — a
  * SINGLE plain command (no shell expression: no `;`, `&&`, pipes,
  * substitutions, unmatched quotes). Everything else keeps the fail-closed
  * high default. Presentation only: the decision still goes through the
  * broker (the stub below captures what the modal would be shown).
  */
-describe("ClaudeApprovalBridge —  command-aware risk stamping", () => {
+describe("ClaudeApprovalBridge — command-aware risk stamping", () => {
   it("a classifier-proven read-only single command is presented readOnly/low", async () => {
     const { broker, requests } = brokerStub({ behavior: "deny", reason: "x" });
     const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask" });
@@ -375,7 +375,7 @@ describe("ClaudeApprovalBridge —  command-aware risk stamping", () => {
     expect(requests[0]!.metadata.readOnly).toBe(false);
   });
 
-  it("a read-only PIPELINE stays high — any shell expression keeps the fail-closed default (mirrors )", async () => {
+  it("a read-only PIPELINE stays high — any shell expression keeps the fail-closed default (mirrors)", async () => {
     // `ls | wc -l` classifies read-only but IS a shell expression; the Codex
     // bridge's documented rule (and this mirror) de-risks only plain single
     // commands. Pinned so the widening can never happen by accident.
@@ -486,7 +486,7 @@ describe("ClaudeApprovalBridge — a CLI-side cancellation settles the handler, 
     const cancel = new AbortController();
 
     const handled = bridge.handle(inbound(request, "can_use_tool", cancel.signal), responder);
-    // toPermissionRequest is async ( fact minting), so the ask
+    // toPermissionRequest is async (fact minting), so the ask
     // parks after a microtask boundary — flush a couple of them.
     await Promise.resolve();
     await Promise.resolve();
@@ -518,7 +518,7 @@ describe("ClaudeApprovalBridge — a CLI-side cancellation settles the handler, 
     // A second, unrelated approval on the same live session.
     const second = responderSpy();
     const secondHandled = bridge.handle(inbound(request), second.responder);
-    // toPermissionRequest is async ( fact minting does real fs
+    // toPermissionRequest is async (fact minting does real fs
     // I/O) — the W0 probe fixture writes to /tmp, which resolves, so a short
     // settle wait suffices before the ask count is asserted.
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -550,9 +550,9 @@ describe("ClaudeApprovalBridge — a CLI-side cancellation settles the handler, 
 });
 
 /**
- *  (cross-review F1) — the claude-engine half. `supportsCorePermissions`
+ * (cross-review F1) — the claude-engine half. `supportsCorePermissions`
  * is false for the claude boot, so the ONLY gates between a persisted always-allow
- * rule ( global-settings seeding) and the CLI's Write/Edit are (a) the
+ * rule (global-settings seeding) and the CLI's Write/Edit are (a) the
  * approval bridge minting workspace facts and (b) IpcPermissionBroker's
  * confinement check. The 4294 incident, replayed on this engine: a child session
  * rooted at a `.anycode/worktrees/<x>` worktree asks to Write an absolute path
@@ -562,7 +562,7 @@ describe("ClaudeApprovalBridge — a CLI-side cancellation settles the handler, 
  * Facts are minted over the REAL filesystem (realpath/lstat semantics — the
  * same resolver the dispatcher uses), so these tests build real tmp dirs.
  */
-describe("ClaudeApprovalBridge —  workspace facts on write tools", () => {
+describe("ClaudeApprovalBridge — workspace facts on write tools", () => {
   let root: string;
   let mainCheckout: string;
 
@@ -752,14 +752,14 @@ describe("ClaudeApprovalBridge —  workspace facts on write tools", () => {
 });
 
 /**
- *  (cross-review F2): the persistence path. A human approves (with
+ * (cross-review F2): the persistence path. A human approves (with
  * "Always allow") a child's one deliberate out-of-workspace write after the
  * modal — Session.maybeRemember persists `{toolName:"Write"}` into the store
  * the engine boots seed from GLOBAL settings.json. This must not arm a
  * silent-allow for any LATER out-of-workspace write in ANY engine session:
  * the remembered rule is honoured only with proof, exactly like a seeded one.
  */
-describe("ClaudeApprovalBridge —  F2: a remembered rule does not unconfine later asks", () => {
+describe("ClaudeApprovalBridge — F2: a remembered rule does not unconfine later asks", () => {
   it("remember-armed store (post-modal allow) still refuses the next out-of-workspace Write; approves an inside one", async () => {
     // The store Session.maybeRemember appended to mid-session (the same
     // instance an engine boot hands its broker).
@@ -837,10 +837,10 @@ describe("ClaudeApprovalBridge —  F2: a remembered rule does not unconfine lat
 });
 
 
-//  C5: the name-only can_use_tool gate for the door's browser
+// C5: the name-only can_use_tool gate for the door's browser
 // tools is auto-allowed; the real input-aware gate runs in the door's
 // callTool (browser-bridge.ts) through the same broker.
-describe("ClaudeApprovalBridge —  browser tool auto-allow", () => {
+describe("ClaudeApprovalBridge — browser tool auto-allow", () => {
   const BROWSER_NAMES = new Set([
     "mcp__anycode__browser_navigate",
     "mcp__anycode__browser_screenshot",

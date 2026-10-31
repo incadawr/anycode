@@ -69,7 +69,7 @@ describe("parseWorkflowDefinition — valid definitions", () => {
     expect(result.definition?.steps[1]).toMatchObject({ dependsOn: ["a"], maxTurns: 3 });
   });
 
-  //  follow-up: a step's `tools:` extras (today: WebSearch) are
+  // follow-up: a step's `tools:` extras (today: WebSearch) are
   // shape-checked (non-empty strings) and carried through verbatim — the
   // RUNNER resolves them against what boot provides, so an unresolvable name
   // is a silent skip in the child registry, never a parse failure.
@@ -345,7 +345,7 @@ describe("parseWorkflowDefinition — caps", () => {
     expect(result.definition).toBeUndefined();
   });
 
-  it("accepts a trusted step budget of 20 — above the retired 8-turn ceiling ( §2.5)", () => {
+  it("accepts a trusted step budget of 20 — above the retired 8-turn ceiling (§2.5)", () => {
     const raw = minimalRaw({
       steps: [{ id: "a", agentType: "general-purpose", promptTemplate: "x", maxTurns: 20 }],
     });

@@ -114,29 +114,29 @@ describe("shouldEnqueue (F15 — enqueue-vs-direct decision uses the truly-idle 
     expect(shouldEnqueue("idle", IN_FLIGHT)).toBe(true);
   });
 
-  it(": enqueues while a manual compaction holds the session (the host would busy-reject a direct send)", () => {
+  it("enqueues while a manual compaction holds the session (the host would busy-reject a direct send)", () => {
     expect(shouldEnqueue("compacting", null)).toBe(true);
     expect(shouldEnqueue("compacting", IN_FLIGHT)).toBe(true);
   });
 
-  it(" CUT-S2 §10.15.1: a child surface ALWAYS direct-sends (false), even while running or in-flight — its renderer queue has no drainer, so parking there would strand the message forever", () => {
+  it("CUT-S2 §10.15.1: a child surface ALWAYS direct-sends (false), even while running or in-flight — its renderer queue has no drainer, so parking there would strand the message forever", () => {
     expect(shouldEnqueue("running", null, true)).toBe(false);
     expect(shouldEnqueue("idle", IN_FLIGHT, true)).toBe(false);
   });
 
-  it(" DoD regression: submit while running routes to ENQUEUE, submit while truly idle routes to DIRECT SEND", () => {
+  it("DoD regression: submit while running routes to ENQUEUE, submit while truly idle routes to DIRECT SEND", () => {
     expect(shouldEnqueue("running", null)).toBe(true); // running ⇒ enqueue
     expect(shouldEnqueue("idle", null)).toBe(false); // idle ⇒ direct send
   });
 
-  //  branch-table pin for handleSend's steer path:
+  // branch-table pin for handleSend's steer path:
   // the NEW steer branch sits BEFORE this predicate and takes the message
   // only when ALL of: not a child surface, turn not idle, no images, and
   // `steering.supported === true` (verified end-to-end in session/store
   // tests). shouldEnqueue itself is UNCHANGED — these cases pin that a
   // running-but-UNsupported session still falls through to the queue (the
   // honest fallback: claude, image-bearing sends, legacy hosts).
-  it(": running + steering-unsupported keeps the queue fallback (shouldEnqueue unchanged by the steer branch)", () => {
+  it("running + steering-unsupported keeps the queue fallback (shouldEnqueue unchanged by the steer branch)", () => {
     // The steer branch never engages when steerSupported is false, so the
     // decision reduces to the pre-4110 predicate verbatim:
     expect(shouldEnqueue("running", null)).toBe(true);
@@ -306,7 +306,7 @@ describe("ctxPopoverAnchorFromRect (P7.17 W3-FIX P2-b — resize re-clamp fix)",
   });
 });
 
-describe("quotaWindowLabel (, cut §6.2 — label derived from windowDurationMins, never hardcoded)", () => {
+describe("quotaWindowLabel (cut §6.2 — label derived from windowDurationMins, never hardcoded)", () => {
   it("uses the cut's exact table for the five confirmed durations", () => {
     expect(quotaWindowLabel(60, null)).toBe("1h");
     expect(quotaWindowLabel(300, null)).toBe("5h");
@@ -332,7 +332,7 @@ describe("quotaWindowLabel (, cut §6.2 — label derived from windowDurationMin
   });
 });
 
-describe("formatQuotaWindowLine (, cut §6.2)", () => {
+describe("formatQuotaWindowLine (cut §6.2)", () => {
   it("formats <label> · <percent left>% left · resets in <relative>", () => {
     // resetsAt is epoch SECONDS on the wire (amendment §A3.1); now=0 here and
     // resetsAt=432000s (5 days) exercises the single ×1000 conversion point.
@@ -393,7 +393,7 @@ describe("buildQuotaPopoverView (cut §6.2 — hidden block, never 0%)", () => {
   });
 });
 
-describe("isImageAttachBlockedByModel ( W3 — model-level attach gate, layered on the engine-level supportsImages;  срез D — a configured recognizer fallback unblocks a blind model)", () => {
+describe("isImageAttachBlockedByModel (W3 — model-level attach gate, layered on the engine-level supportsImages; срез D — a configured recognizer fallback unblocks a blind model)", () => {
   it("blocks on an explicit false verdict when no recognizer fallback is configured", () => {
     expect(isImageAttachBlockedByModel(false, undefined)).toBe(true);
   });
@@ -403,21 +403,21 @@ describe("isImageAttachBlockedByModel ( W3 — model-level attach gate, layered 
     expect(isImageAttachBlockedByModel(undefined, undefined)).toBe(false);
   });
 
-  it(": a configured recognizer fallback unblocks a blind model", () => {
+  it("a configured recognizer fallback unblocks a blind model", () => {
     expect(isImageAttachBlockedByModel(false, true)).toBe(false);
   });
 
-  it(": an explicit non-true fallback (false) does NOT unblock a blind model", () => {
+  it("an explicit non-true fallback (false) does NOT unblock a blind model", () => {
     expect(isImageAttachBlockedByModel(false, false)).toBe(true);
   });
 
-  it(": a vision-capable model is never blocked regardless of fallback state", () => {
+  it("a vision-capable model is never blocked regardless of fallback state", () => {
     expect(isImageAttachBlockedByModel(true, true)).toBe(false);
     expect(isImageAttachBlockedByModel(true, false)).toBe(false);
   });
 });
 
-describe("isSendBlockedByModelImages ( W3(c) — attached images on a vision -> non-vision switch block send, never vanish;  срез D — recognizer fallback pair)", () => {
+describe("isSendBlockedByModelImages (W3(c) — attached images on a vision -> non-vision switch block send, never vanish; срез D — recognizer fallback pair)", () => {
   it("blocks send only when the model rejects images AND the draft actually has some attached AND no fallback is configured", () => {
     expect(isSendBlockedByModelImages(false, undefined, 1)).toBe(true);
     expect(isSendBlockedByModelImages(false, undefined, 3)).toBe(true);
@@ -432,11 +432,11 @@ describe("isSendBlockedByModelImages ( W3(c) — attached images on a vision -> 
     expect(isSendBlockedByModelImages(undefined, undefined, 2)).toBe(false);
   });
 
-  it(": a configured recognizer fallback unblocks send for a blind model with attachments", () => {
+  it("a configured recognizer fallback unblocks send for a blind model with attachments", () => {
     expect(isSendBlockedByModelImages(false, true, 3)).toBe(false);
   });
 
-  it(": fallback unblocking still respects the zero-attachment short-circuit", () => {
+  it("fallback unblocking still respects the zero-attachment short-circuit", () => {
     expect(isSendBlockedByModelImages(false, true, 0)).toBe(false);
   });
 });
@@ -467,7 +467,7 @@ describe("assumed context window hint", () => {
   });
 });
 
-describe("formatUsageAuditStepRow ( / )", () => {
+describe("formatUsageAuditStepRow", () => {
   it("omits cached/retry parts when undefined/0", () => {
     const base = { turnId: "t1", createdAt: 1, finishReason: "stop" };
     expect(formatUsageAuditStepRow({ ...base, step: 1, inputTokens: 10, outputTokens: 4, transportRetries: 0 })).toBe(

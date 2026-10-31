@@ -20,7 +20,7 @@ interface FakeEntry {
   mode?: number;
   uid?: number;
   gid?: number;
-  /**  fingerprint fields — optional so every pre-existing fixture keeps typechecking untouched. */
+  /** fingerprint fields — optional so every pre-existing fixture keeps typechecking untouched. */
   size?: number;
   mtimeMs?: number;
 }
@@ -217,7 +217,7 @@ describe("defaultClaudeProfileDir", () => {
   });
 });
 
-//  — condensed mirror of codex-binary.test.ts's BG1+BG3 (the two
+// condensed mirror of codex-binary.test.ts's BG1+BG3 (the two
 // implementations are deliberate duplicates — each carries its own pin).
 describe("consent-aware trust threading — BG4", () => {
   const FILE_SIZE = 4096;

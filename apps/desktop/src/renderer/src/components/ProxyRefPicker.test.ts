@@ -6,7 +6,7 @@
  * This file is ALSO where the deleted `EngineProxyField.test.ts`'s invariants
  * live on. They are migrated by name, not by accident: initial value per scope,
  * the empty/clear sentinel, the two engines' hints differing, the Claude/Codex
- * subagent asymmetry (-F3), the saved-notice binding (-F5), and
+ * subagent asymmetry the saved-notice binding and
  * `proxy` surviving in both engine panes' search index. Each carries its
  * original task tag so the provenance is greppable.
  */
@@ -62,7 +62,7 @@ function settings(over: {
   } as AnycodeSettings;
 }
 
-describe("proxyRefOptions ( §3)", () => {
+describe("proxyRefOptions (§3)", () => {
   it('every non-app scope leads with "Use application proxy" — the ladder made literal', () => {
     for (const scope of [CODEX, CLAUDE, { kind: "connection", connectionId: "c1" } as const]) {
       const options = proxyRefOptions(scope, settings({}));
@@ -127,10 +127,10 @@ describe("proxyRefOptions ( §3)", () => {
 
 /**
  * MIGRATED from EngineProxyField.test.ts's `engineProxyInitialValue` block
- *: the control opens on the value THIS scope persisted, and reads
+ * the control opens on the value THIS scope persisted, and reads
  * only its own field.
  */
-describe("proxyRefInitialValue (; migrates 's initial-value-per-scope invariant)", () => {
+describe("proxyRefInitialValue; migrates's initial-value-per-scope invariant)", () => {
   it("inherit when the engine has no settings block at all", () => {
     expect(proxyRefInitialValue(CODEX, settings({}))).toBe(PROXY_REF_INHERIT);
     expect(proxyRefInitialValue(CLAUDE, settings({}))).toBe(PROXY_REF_INHERIT);
@@ -198,10 +198,10 @@ describe("proxyRefInitialValue (; migrates 's initial-value-per-scope invariant)
 
 /**
  * MIGRATED from EngineProxyField.test.ts's `engineProxySavePayload` block
- *: the empty selection is a CLEAR sentinel, never an omission — an
+ * the empty selection is a CLEAR sentinel, never an omission — an
  * emptied control has to be able to erase what was saved before.
  */
-describe("proxyRefSetPayload (; migrates 's clear-sentinel invariant)", () => {
+describe("proxyRefSetPayload; migrates's clear-sentinel invariant)", () => {
   it('"Use application proxy" sends ref:null — the clear', () => {
     expect(proxyRefSetPayload(CODEX, PROXY_REF_INHERIT)).toEqual({ scope: CODEX, ref: null });
   });
@@ -225,7 +225,7 @@ describe("proxyRefSetPayload (; migrates 's clear-sentinel invariant)", () => {
   });
 });
 
-describe("connectionCreateProxyRefField (: one fragment for both create paths)", () => {
+describe("connectionCreateProxyRefField (one fragment for both create paths)", () => {
   it("sends the picked ref", () => {
     expect(connectionCreateProxyRefField("proxy-1")).toEqual({ proxyRef: "proxy-1" });
     expect(connectionCreateProxyRefField("direct")).toEqual({ proxyRef: "direct" });
@@ -245,7 +245,7 @@ describe("connectionCreateProxyRefField (: one fragment for both create paths)",
   });
 });
 
-describe("PROXY_SCOPE_COPY / proxyScopeLabel ( §3: a new scope declares one entry)", () => {
+describe("PROXY_SCOPE_COPY / proxyScopeLabel (§3: a new scope declares one entry)", () => {
   it("only the app scope lacks an inherit entry", () => {
     expect(PROXY_SCOPE_COPY.app.inherit).toBe(false);
     expect(PROXY_SCOPE_COPY.connection.inherit).toBe(true);
@@ -264,7 +264,7 @@ describe("PROXY_SCOPE_COPY / proxyScopeLabel ( §3: a new scope declares one ent
  * F3 included: the two engines' hints differ, and they differ ONLY in the
  * subagent-coverage clause.
  */
-describe("proxyScopeHint (; migrates 's per-engine hint invariants)", () => {
+describe("proxyScopeHint; migrates's per-engine hint invariants)", () => {
   it("differs between the two engines", () => {
     expect(proxyScopeHint(CODEX)).not.toBe(proxyScopeHint(CLAUDE));
   });
@@ -274,12 +274,12 @@ describe("proxyScopeHint (; migrates 's per-engine hint invariants)", () => {
     expect(proxyScopeHint(CLAUDE)).toContain("Claude Code CLI");
   });
 
-  // : a codex-engine child now runs for real (routes through
+  // a codex-engine child now runs for real (routes through
   // runSessionTier/ctx.sessionSubagents exactly like a claude one, and its
   // flush reads a live thread/read via CodexEngine.readTranscript() instead
   // of a frozen boot snapshot) — real Codex "subagent" traffic now exists to
   // route through this proxy, so the hint must claim it, same as Claude's.
-  it("claims the Codex proxy covers subagents ( — codex subagents now run)", () => {
+  it("claims the Codex proxy covers subagents (codex subagents now run)", () => {
     expect(proxyScopeHint(CODEX)).toContain("subagents");
   });
 
@@ -289,7 +289,7 @@ describe("proxyScopeHint (; migrates 's per-engine hint invariants)", () => {
     expect(proxyScopeHint(CLAUDE)).toContain("subagents");
   });
 
-  it("pins the codex hint's wording exactly ( — now matches Claude's subagent coverage)", () => {
+  it("pins the codex hint's wording exactly (now matches Claude's subagent coverage)", () => {
     expect(proxyScopeHint(CODEX)).toBe(
       "Requests from the Codex CLI — sessions and subagents — go through the proxy profile selected here. " +
         "It overrides the connection-level proxy for Codex; a proxy exported by your shell overrides both.",
@@ -320,13 +320,13 @@ describe("proxyScopeHint (; migrates 's per-engine hint invariants)", () => {
 });
 
 /**
- * MIGRATED from EngineProxyField.test.ts (-F5): the "Saved." notice
+ * MIGRATED from EngineProxyField.test.ts the "Saved." notice
  * must belong to the exact value that was persisted, not to a bare "a save
  * succeeded at some point" flag — otherwise a save of value A that resolves
  * after the control has moved on to B renders a notice next to B, which was
  * never sent.
  */
-describe("proxySavedNoticeVisible (; migrates -F5's notice binding)", () => {
+describe("proxySavedNoticeVisible migrates notice binding", () => {
   it("is hidden when nothing has ever saved successfully", () => {
     expect(proxySavedNoticeVisible(null, PROXY_REF_INHERIT)).toBe(false);
     expect(proxySavedNoticeVisible(null, "proxy-1")).toBe(false);
@@ -346,7 +346,7 @@ describe("proxySavedNoticeVisible (; migrates -F5's notice binding)", () => {
   });
 });
 
-describe("SETTINGS_SEARCH_INDEX (: the registry and both engine pickers must be findable)", () => {
+describe("SETTINGS_SEARCH_INDEX (the registry and both engine pickers must be findable)", () => {
   // MIGRATED from EngineProxyField.test.ts: the engine panes still
   // carry a proxy control, so they must still answer to "proxy".
   it('"proxy" is still a keyword for both the codex and claude panes', () => {

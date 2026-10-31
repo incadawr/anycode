@@ -11,7 +11,7 @@ import { resolveProfileRoles, rolesPatch } from "../../../shared/role-profiles.j
  * `shouldEnqueue`/`handleSend` below) instead of dispatching directly; only
  * the connection gate (`ready`) disables the textarea;
  * the mode switcher is blocked only while the connection isn't `ready`
- * (: set_mode is valid mid-turn and applies to the next permission
+ * (set_mode is valid mid-turn and applies to the next permission
  * decision).
  *
  * UI-5 layout: an elevated card holding a borderless auto-growing textarea, a
@@ -55,7 +55,7 @@ import { ArrowUp, ImageIcon, Stop, X } from "./icons.js";
 // `overflow:hidden` (see ModelPill.tsx's import comment) — the ctx-popover
 // below inherits the identical clipping hazard from the same footer ancestor.
 // `formatAge` (compact relative-time, "3m"/"22h"/"4d") is reused verbatim
-// for the quota popover's "resets in <relative>" line (, cut §6.2) —
+// for the quota popover's "resets in <relative>" line (cut §6.2) —
 // same reuse discipline as `clampMenuLeft` above, no second relative-time
 // formatter invented for the same job.
 import { clampMenuLeft, formatAge } from "./Sidebar.js";
@@ -85,7 +85,7 @@ import { slashPathRootNames } from "../slash-path-roots.js";
  * direct-send into: the host would busy-reject it and the prompt would be lost.
  * Enqueue in that window instead.
  *
- *  CUT-S2 §10.15.1: a child surface ALWAYS takes the direct path
+ * CUT-S2 §10.15.1: a child surface ALWAYS takes the direct path
  * (returns false), regardless of turn/in-flight state — its renderer prompt
  * queue has no drainer subscribed (§1.1: the renderer prompt-queue is never
  * used for a child surface), so anything parked there would sit forever. The
@@ -116,14 +116,14 @@ export function hasSendableDraft(text: string, imageCount: number): boolean {
 }
 
 /**
- *  W3: the current model's live image-input verdict (store's
+ * W3: the current model's live image-input verdict (store's
  * `imageInput`, off hello/model_changed) reads `false` ONLY when the host
  * has explicitly resolved the CURRENT model as not accepting images.
  * `undefined` (no seam/legacy host) and `true` both mean "not blocked" —
  * the engine-level `supportsImages` gate (button visibility) is untouched by
  * this, this is model-level and rides ON TOP of it.
  *
- *  срез D: a configured recognizer fallback (`imageFallback === true`,
+ * срез D: a configured recognizer fallback (`imageFallback === true`,
  * off the same hello/model_changed wire) unblocks a blind model — the host
  * now honestly accepts attachments for it (session.ts's `imagesAccepted()`),
  * so the composer's own gate must stop lying about it. Any value other than
@@ -140,7 +140,7 @@ export function isImageAttachBlockedByModel(imageInput: boolean | undefined, ima
  * moment the model swings vision -> non-vision mid-session (cut §3/W3(c)):
  * the user must switch back or remove them, never lose them silently.
  *
- *  срез D: same recognizer-fallback carve-out as
+ * срез D: same recognizer-fallback carve-out as
  * `isImageAttachBlockedByModel` — a configured fallback unblocks send too.
  * Exported for unit testing.
  */
@@ -205,7 +205,7 @@ interface DraftImage {
   attachment: ImageAttachment;
 }
 
-/** Exported for the start-screen composer (StartScreen.tsx,  parity) — the same accept-list, no second copy of the format list. */
+/** Exported for the start-screen composer (StartScreen.tsx, parity) — the same accept-list, no second copy of the format list. */
 export const IMAGE_ACCEPT = "image/png,image/jpeg,image/gif,image/webp";
 
 function startsWithBytes(bytes: Uint8Array, prefix: readonly number[]): boolean {
@@ -243,7 +243,7 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/** Exported for the start-screen composer (StartScreen.tsx,  parity) — the same pill size formatting, no second copy. */
+/** Exported for the start-screen composer (StartScreen.tsx, parity) — the same pill size formatting, no second copy. */
 export function formatImageSize(bytes: number): string {
   return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
@@ -309,7 +309,7 @@ export interface ComposerImageRead {
  * attachment: sniffs the real format (never trusts the browser-reported
  * MIME), downsizes an oversized file once, and re-validates the resize
  * output before accepting it. Exported so the start-screen composer
- * (StartScreen.tsx,  parity) shares this EXACT validation path — no
+ * (StartScreen.tsx, parity) shares this EXACT validation path — no
  * second image decoder for the same job.
  */
 export async function readComposerImageFile(
@@ -456,7 +456,7 @@ export function ctxPopoverHeadline(usage: ContextUsage | null, percent: number |
   return `${formatCtxTokenCount(usage.estimatedTokens)}/${formatCtxTokenCount(usage.budgetTokens)} (${percent}%)`;
 }
 
-/** : shown when the active model's context window is the assumed 8K fallback. */
+/** shown when the active model's context window is the assumed 8K fallback. */
 export const CTX_WINDOW_ASSUMED_HINT = "Context window unknown \u2014 assumed 8K total.";
 
 /** Uses the meter's actual denominator, including any overridden output reserve. */
@@ -777,7 +777,7 @@ export function formatTurnStepSummary(steps: readonly WireUsageAuditStep[]): str
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Codex subscription-quota lines (, cut §6): additive to the ctx
+// Codex subscription-quota lines (cut §6): additive to the ctx
 // popover, shown alongside — never instead of — the session-tokens lines
 // above. `CodexRateLimitsWire` (core) already carries the sparse-merged
 // snapshot as-is (host-side merge, `shared/codex-quota.ts`); this module only
@@ -1007,7 +1007,7 @@ function CtxPopover({
   contextUsage: ContextUsage | null;
   contextBreakdown: WireContextBreakdown | null;
   sessionTokens: SessionTokens | null;
-  /**  / : the durable audit slice (see DesktopState.usageAudit). */
+  /** the durable audit slice (see DesktopState.usageAudit). */
   usageAudit: {
     lastStep: WireUsageAuditStep | null;
     totals: WireUsageAuditTotals | null;
@@ -1020,7 +1020,7 @@ function CtxPopover({
   tint: string;
   /** codex-profiles cut §5.2: Codex has no per-category breakdown — the popover shows an honest message instead of a skeleton (see `ctxPopoverBodyState`'s "unsupported" branch). */
   supportsContextBreakdown: boolean;
-  /** : the window is the assumed unknown-model fallback — show the hint. */
+  /** the window is the assumed unknown-model fallback — show the hint. */
   contextWindowAssumed: boolean;
   /** "Codex account: <label> (default)" for a Codex session; null hides the line (core/Claude, or unknown). */
   codexAccountLine: string | null;
@@ -1076,7 +1076,7 @@ function CtxPopover({
   // the request entirely when the engine has no breakdown at all
   // (codex-profiles cut §5.2) — asking would only ever get dropped, and the
   // popover still needs its anchor to show the session-tokens/quota lines.
-  //  / : the SAME transition also fires the twin
+  // the SAME transition also fires the twin
   // `usage_audit_request` — UNCONDITIONALLY, because the audit is a core
   // feature independent of supportsContextBreakdown; a foreign host that
   // never answers leaves the list null (lazy-load skeleton posture).
@@ -1323,7 +1323,7 @@ export function Composer() {
     const tab = state.tabs.find((item) => item.tabId === slashTabId);
     return tab?.projectRoot ?? tab?.workspace;
   });
-  //  §3.8 (part B): first-run /orchestrate state — the task text
+  // §3.8 (part B): first-run /orchestrate state — the task text
   // parked while the RolePickerDialog is up, and the dialog's visibility.
   // Local to Composer: the pending text belongs to THIS tab's composer draft
   // lifecycle, not the store. `pendingOrchestrateTask === null` means "no
@@ -1372,7 +1372,7 @@ export function Composer() {
   const mode = useTabStore((state) => state.mode);
   const model = useTabStore((state) => state.model);
   const imageInput = useTabStore((state) => state.imageInput);
-  //  срез D: mirrors `imageInput` off the same wire messages — a
+  // срез D: mirrors `imageInput` off the same wire messages — a
   // configured recognizer fallback re-opens the gates below without waiting
   // for the model itself to report vision support.
   const imageFallback = useTabStore((state) => state.imageFallback);
@@ -1419,11 +1419,11 @@ export function Composer() {
   const codexAccountLine = describeCodexAccountLine(codexTabAccount);
   const pendingEngineChange = useTabStore((state) => state.pendingEngineChange);
   const shell = useTabStore((state) => state.shell);
-  // : the engine's live steering verdict — true means
+  // the engine's live steering verdict — true means
   // a send while running becomes a mid-turn steer instead of a queued prompt.
   const steerSupported = useTabStore((s) => s.steering?.supported === true);
   const isNewSession = useTabStore((state) => state.transcript.length === 0);
-  //  §3.7 (part B): tab-scoped orchestrate flag (part A keeps it
+  // §3.7 (part B): tab-scoped orchestrate flag (part A keeps it
   // from `orchestrate_changed` acks). Read here for the ModeMenu row and the
   // `/orchestrate` submit path below.
   const orchestrateActive = useTabStore((state) => state.orchestrateActive);
@@ -1433,7 +1433,7 @@ export function Composer() {
   const supportsCorePermissions = engine?.capabilities.supportsCorePermissions ?? true;
   const supportsModelSelection = engine?.capabilities.supportsModelSelection ?? true;
   const supportsImages = engine?.capabilities.supportsImages ?? true;
-  //  W3: MODEL-level gate, layered on top of the engine-level one
+  // W3: MODEL-level gate, layered on top of the engine-level one
   // above — `supportsImages` hides the attach UI entirely for an engine that
   // never does images; `imageInput` disables it (with an explanation) for a
   // model on an engine that DOES, when this particular model doesn't.
@@ -1441,19 +1441,19 @@ export function Composer() {
   const attachmentsBlockedByModel = isSendBlockedByModelImages(imageInput, imageFallback, attachedImages.length);
   const supportsContextUsage = engine?.capabilities.supportsContextUsage ?? true;
   const supportsContextBreakdown = engine?.capabilities.supportsContextBreakdown ?? true;
-  // Shell (AnyCode chrome) capabilities (design  §2(f)): independent
+  // Shell (AnyCode chrome) capabilities (design §2(f)): independent
   // of the engine above — null (core, or an engine that omitted it) defaults
   // to every shell feature enabled, mirroring the engine fallbacks.
   const shellGitReadOnly = shell?.gitReadOnly ?? true;
   const shellTerminal = shell?.terminal ?? true;
   // AnyCode's own `$skill` convention is consumed by the AgentLoop's system
   // prompt / skill port (core-loop-only) — Codex has no native skills wiring
-  // (design  §2(f)/residual: Codex-native skills via app-server are
+  // (design §2(f)/residual: Codex-native skills via app-server are
   // NOT built, so the AnyCode skill list is honestly hidden rather than
   // shown as a dead insert-and-hope-it-does-something row).
   const skillsSupported = engine === null;
 
-  // : "the composer is in busy mode", not "a model turn is streaming".
+  // "the composer is in busy mode", not "a model turn is streaming".
   // A manual compaction is a busy phase of the session too — the Stop button
   // (its `cancel_turn` aborts the compaction host-side), the "Queue a
   // message…" placeholder and the queue-on-Enter hint all apply verbatim,
@@ -1496,7 +1496,7 @@ export function Composer() {
       : [];
   const slashOpen = slashQuery !== null && !slashDismissed && slashItems.length > 0;
 
-  // Skills fetch (cut §3, gated by skillsSupported per  §2(f)): once
+  // Skills fetch (cut §3, gated by skillsSupported per §2(f)): once
   // per closed→open transition, cached in state for the open's lifetime
   // (deps `[slashOpen, slashTabId, skillsSupported]` — the effect only
   // re-runs when openness or engine identity flips, not on every filter
@@ -1554,7 +1554,7 @@ export function Composer() {
   }
 
   /**
-   *  §3.8 (part B): `/orchestrate <task>` submit flow. If the tab
+   * §3.8 (part B): `/orchestrate <task>` submit flow. If the tab
    * is already orchestrate, the task submits immediately as a normal user
    * message. Otherwise, when NO roles are configured (settings.roles absent),
    * the first-run RolePickerDialog opens with the task stashed; Save writes
@@ -1625,7 +1625,7 @@ export function Composer() {
    * text replacement already happened uniformly for every intent kind in
    * `selectSlashItem` below (the token-removal and the skill-text-insert are
    * the SAME operation: replace the slash token with `intent.text` or `""`).
-   * `postStripText` ( §3.8) carries the draft AFTER the token
+   * `postStripText` (§3.8) carries the draft AFTER the token
    * strip for the one intent that consumes it: `/orchestrate <task>`'s task
    * text is "whatever the slash-token removal left behind".
    */
@@ -1663,7 +1663,7 @@ export function Composer() {
         window.dispatchEvent(new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: intent.pane }));
         break;
       case "orchestrate_submit":
-        //  §3.8: the task text is what remains of the draft after
+        // §3.8: the task text is what remains of the draft after
         // selectSlashItem stripped the `/orchestrate` token.
         beginOrchestrateSubmit(postStripText);
         break;
@@ -1761,7 +1761,7 @@ export function Composer() {
     if (imageFiles.length === 0 || !ready || !supportsImages) {
       return;
     }
-    //  W3(b): a paste/drop while the CURRENT model rejects images is a
+    // W3(b): a paste/drop while the CURRENT model rejects images is a
     // visible notice, never a silent no-op — the engine-level early-return
     // above stays silent (unsupported by this engine at all is unchanged,
     // pre-existing behavior); this one is new and model-specific.
@@ -1819,7 +1819,7 @@ export function Composer() {
       attachment: image.attachment,
     }));
     if (childSurface && turn.status !== "idle") {
-      //  (child surface): the host's steer queue accepts this
+      // (child surface): the host's steer queue accepts this
       // user_message immediately, so send it on the wire as usual — but the
       // transcript write is DEFERRED to the matching turn_started (delivery
       // position), recorded as a pending steer instead of an optimistic
@@ -1836,7 +1836,7 @@ export function Composer() {
         ...(images.length > 0 ? { images: images.map((image) => image.attachment) } : {}),
       });
     } else if (!childSurface && turn.status !== "idle" && images.length === 0 && steerSupported) {
-      // : a supported running CORE session takes the
+      // a supported running CORE session takes the
       // message as a mid-turn steer (optimistic pendingSteer bubble; the
       // user_injected event confirms delivery into the turn; the queue is the
       // honest fallback everywhere else). Images while running keep the queue
@@ -1865,11 +1865,11 @@ export function Composer() {
       // above. Goes through
 
       // owns all transcript writes, and appendBlock flushes pending deltas
-      // first so ordering stays consistent. : the raw
+      // first so ordering stays consistent. the raw
       // text + attachments ride onto the block; the image count badge is no
       // longer appended to the live echo (thumbnails render instead).
       tabStore.getState().appendUserText(requestId, outgoing, images.length > 0 ? images.map((image) => image.attachment) : undefined);
-      //  W8: snapshot what actually went on the wire so a later
+      // W8: snapshot what actually went on the wire so a later
       // terminal retryable failure can offer to replay this same content.
       tabStore.getState().recordSentMessage(outgoing, images);
       sendToHost({
@@ -1897,7 +1897,7 @@ export function Composer() {
   }
 
   /**
-   *  §3.7 (part B): the Orchestrate row's commit —
+   * §3.7 (part B): the Orchestrate row's commit —
    * `set_orchestrate`, NOT set_mode (§2.2: orchestrate is a tab-level flag;
    * the host moves the session to plan itself). Same ready-only guard as
    * handleModeChange (the host silently drops a busy toggle — the
@@ -1921,7 +1921,7 @@ export function Composer() {
     sendToHost({ type: "set_orchestrate", enabled: next });
   }
 
-  //  (cut §3.3): the engine picks reuse the SAME between-turns
+  // (cut §3.3): the engine picks reuse the SAME between-turns
   // guard as ModelPill/ModeMenu (engineControlDisabled mirrors
   // modelPickDisabled) — the host's own busy-check is the real backstop,
   // this only keeps the UI from offering a pick it knows would be dropped.
@@ -2206,8 +2206,8 @@ export function Composer() {
               connection isn't `ready`, so the chip is disabled in that window;
               the neutral "plan" fallback is a cosmetic default for the greyed,
               non-interactive chip and never reflects an actionable state.
-              Design  §2(f)/item 5: the engine badge lives ONLY in
-              SessionHeader now — no duplicate here.  (cut §2(d)):
+              Design §2(f)/item 5: the engine badge lives ONLY in
+              SessionHeader now — no duplicate here. (cut §2(d)):
               Codex's own permission-preset menu is a SEPARATE,
               presentation-driven control — core's ModeMenu/permission
               vocabulary is never used for it (`supportsCorePermissions`
@@ -2252,7 +2252,7 @@ export function Composer() {
               </button>
             </>
           )}
-          {/*  item 4: Codex's model catalog comes from the engine
+          {/* item 4: Codex's model catalog comes from the engine
               projection (doctor/app-server), never AnyCode's provider
               catalog — ModelPill (settings-store-backed) is core-only. */}
           {supportsModelSelection &&
@@ -2263,7 +2263,7 @@ export function Composer() {
             ))}
         </div>
         {/* Always in the DOM as the textarea's aria-describedby target
-            (R17 a11y) — visually hidden by default (: never a footer
+            (R17 a11y) — visually hidden by default (never a footer
             row); a wide composer shows it inline (app.css container query),
             and the same text rides the textarea/send hover titles. */}
         <span

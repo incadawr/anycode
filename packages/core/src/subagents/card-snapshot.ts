@@ -1,5 +1,5 @@
 /**
- * Pure reducer for the persisted subagent card snapshot ( slice S1
+ * Pure reducer for the persisted subagent card snapshot (slice S1
  * W1, CUT-S1 §3 W1). Three immutable, I/O-free functions turn the coarse
  * subagent_* AgentEvent stream (already bridged by tools/agent.ts) into the
  * `SubagentCardSnapshotV1` that rides the paired tool_result's `presentation`
@@ -149,7 +149,7 @@ export function reduceSubagentCardEvent(
       if (!acc.started || acc.end !== null) {
         return acc;
       }
-      // : the terminal's own model/engine are the child's ACTUAL
+      // the terminal's own model/engine are the child's ACTUAL
       // facts and outrank the start event's pre-boot accepted label for the
       // card's identity (they may legitimately differ, e.g. accepted
       // "default" vs booted "booted-model"). Per-field: absent terminal
@@ -183,11 +183,11 @@ export function reduceSubagentCardEvent(
     case "subagent_attention": {
       // No-op for the PERSISTED snapshot: attention is transient live-only
       // state (a permission-broker wait on a session-tier child), not part of
-      // the terminal record ( CUT-S2 §2.2/§0.8, CUT-S1 §2.1).
+      // the terminal record (CUT-S2 §2.2/§0.8, CUT-S1 §2.1).
       return acc;
     }
     case "subagent_stalled": {
-      // No-op for the PERSISTED snapshot ( slice 1): a stall report is
+      // No-op for the PERSISTED snapshot (slice 1): a stall report is
       // transient live-only state, exactly like subagent_attention above — a
       // finished card's terminal record never carries "was silent for a
       // while, then kept going" as part of the result.
@@ -207,7 +207,7 @@ export function reduceSubagentCardEvent(
  * when no `subagent_end` was ever seen (the caller settled from its own known
  * outcome, e.g. a throw in the runner that skipped the end-progress callback).
  *
- * `target` ( CUT-S2 §2.1, ADDITIVE third parameter): optional,
+ * `target` (CUT-S2 §2.1, ADDITIVE third parameter): optional,
  * defaults to `{kind:"inline"}` — every S1 call site (inline tier) omits it
  * and keeps producing exactly what it always did. The session tier
  * (tools/agent.ts, S2b) passes the three ids the host's accepted-relay +

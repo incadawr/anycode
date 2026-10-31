@@ -1,5 +1,5 @@
 /**
- * : unit tests for the Settings scope workspace registry, run off
+ * unit tests for the Settings scope workspace registry, run off
  * a fake deps bag (no disk, no persistence). The fake filesystem is a set of
  * existing directories plus a symlink map; realpath throws for missing paths
  * so canonicalWorkspaceKey takes its documented fallback.

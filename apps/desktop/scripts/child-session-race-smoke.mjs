@@ -1,5 +1,5 @@
 /**
- * Live smoke for  CUT-S2 §4.2 пп.9,10,11 (S2d D3) — the track's race
+ * Live smoke for CUT-S2 §4.2 пп.9,10,11 (S2d D3) — the track's race
  * probes. Drives a REAL Electron dev instance end-to-end over the automation
  * HTTP channel and proves four things a synchronous fake-fork unit test
  * cannot (`tabs.test.ts`'s admission-atomicity/drain matrix uses a FAKE
@@ -92,7 +92,7 @@
  * other live smoke in this repo uses.
  *
  * Each probe prints `[probe X] PASS/FAIL/SKIP <detail>`. Evidence (PNGs for
- * B/C + a JSON result dump) lands in `working-docs/task102-track/evidence/S2/`.
+ * B/C + a JSON result dump) lands in `working-docs/child-session-smoke/evidence/S2/`.
  */
 
 import { execFileSync } from "node:child_process";
@@ -125,7 +125,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
 
-const EVIDENCE_DIR = join(repoRoot, "working-docs", "task102-track", "evidence", "S2");
+const EVIDENCE_DIR = join(repoRoot, "working-docs", "child-session-smoke", "evidence", "S2");
 const APP_EXIT_GRACE_MS = 15_000;
 const SIGTERM_GRACE_MS = 750;
 

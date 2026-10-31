@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildDualAuthHeaders, createAnthropicLanguageModel, normalizeAnthropicBaseUrl } from "./anthropic.js";
 import type { EndpointConfig } from "./endpoint.js";
 
-// : the SDK factory's options are recorded while still
+// the SDK factory's options are recorded while still
 // DELEGATING to the real implementation (no behaviour change for any existing
 // test) so the exact options object can be pinned — without the quota
 // observer NO `fetch` key at all (dormancy), with it `fetch` is a function.

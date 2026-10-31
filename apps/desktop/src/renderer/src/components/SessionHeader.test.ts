@@ -106,7 +106,7 @@ function preview(overrides: Partial<PreviewPanelInfo> = {}): PreviewPanelInfo {
   };
 }
 
-describe("computePreviewMenuVisible (D15,  96-P3)", () => {
+describe("computePreviewMenuVisible (D15, 96-P3)", () => {
   it("is false with no previews", () => {
     expect(computePreviewMenuVisible([])).toBe(false);
   });
@@ -126,7 +126,7 @@ describe("computePreviewMenuVisible (D15,  96-P3)", () => {
   });
 });
 
-describe("derivePreviewMenuItems (D15,  96-P3)", () => {
+describe("derivePreviewMenuItems (D15, 96-P3)", () => {
   it("maps an empty payload to an empty item list", () => {
     const payload: PreviewChangedPayload = { tabId: "tab-a", previews: [], visiblePanelPreviewId: null };
     expect(derivePreviewMenuItems(payload)).toEqual([]);

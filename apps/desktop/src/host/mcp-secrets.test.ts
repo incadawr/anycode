@@ -1,11 +1,11 @@
 /**
- * parseMcpSecretsEnv (, part C): the host-side resolver built from the
+ * parseMcpSecretsEnv (part C): the host-side resolver built from the
  * ANYCODE_MCP_SECRETS value main handed over. Pure; no env, no fs.
  */
 import { describe, expect, it } from "vitest";
 import { parseMcpSecretsEnv } from "./mcp-secrets.js";
 
-describe("parseMcpSecretsEnv (, part C)", () => {
+describe("parseMcpSecretsEnv (part C)", () => {
   it("resolves the names present in a well-formed object", () => {
     const resolve = parseMcpSecretsEnv('{"GH_TOKEN":"ghp_value_1","OTHER":"o-value"}');
     expect(resolve("GH_TOKEN")).toBe("ghp_value_1");
@@ -59,7 +59,7 @@ describe("parseMcpSecretsEnv (, part C)", () => {
 
 import { takeMcpSecretsEnv } from "./mcp-secrets.js";
 
-describe("takeMcpSecretsEnv — read once, delete before any child (, C-20)", () => {
+describe("takeMcpSecretsEnv — read once, delete before any child (C-20)", () => {
   it("C-20: returns a resolver for the value and removes ANYCODE_MCP_SECRETS from the env in the same step", () => {
     const env: NodeJS.ProcessEnv = { ANYCODE_MCP_SECRETS: '{"GH":"ghp_taken_value"}', PATH: "/bin" };
     const resolve = takeMcpSecretsEnv(env);

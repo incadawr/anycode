@@ -145,7 +145,7 @@ describe("CLAUDE_PROFILE_LOGIN_COMMAND", () => {
   });
 });
 
-// SLICE-CC-LOGIN (, cut §7 W3 DoD tests).
+// SLICE-CC-LOGIN (cut §7 W3 DoD tests).
 
 describe("canShowSignInButton", () => {
   it("true ONLY for signed_out — every other status (and undefined) is false", () => {
@@ -158,7 +158,7 @@ describe("canShowSignInButton", () => {
   });
 });
 
-//  (owner directive 2026-07-19): honest, non-blocking "possible risks" note.
+// (owner directive 2026-07-19): honest, non-blocking "possible risks" note.
 
 describe("CLAUDE_SUBSCRIPTION_RISK_NOTE", () => {
   it("covers all three verified facts: official CLI as-is with no token custody, shared quota pool, and the gray-zone enforcement risk", () => {
@@ -295,7 +295,7 @@ describe("cancelClaudeSignIn", () => {
   });
 });
 
-//  (CUT-S4.md §12 step 8, row 38): the claude mirror of
+// (CUT-S4.md §12 step 8, row 38): the claude mirror of
 // CodexEnginePane.test.ts's binary-trust wiring pin — confirms a real
 // ClaudeOnboardingSnapshot's `.report` satisfies the shared dialog helper's
 // input structurally, and that describeClaudeReportStatus needs ZERO change

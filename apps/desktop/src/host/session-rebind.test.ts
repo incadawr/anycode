@@ -1,5 +1,5 @@
 /**
- *  product defect regression — the REAL port.close → bindPort(new) →
+ * product defect regression — the REAL port.close → bindPort(new) →
  * ui_ready seam (2026-10-04 live failure: S2 reload at 1.3s destroyed the
  * parked Write ask).
  *
@@ -107,7 +107,7 @@ async function reloadRenderer(h: Harness): Promise<ReboundPort> {
   return b;
 }
 
-describe(" — renderer reload keeps the SAME parked ask (real port close → rebind → ui_ready)", () => {
+describe("— renderer reload keeps the SAME parked ask (real port close → rebind → ui_ready)", () => {
   it(
     "reload keeps the parked requestId; allow settles it (origin ui), the Write executes, the turn completes, no resurrection",
     { timeout: 60_000 },

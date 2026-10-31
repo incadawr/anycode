@@ -20,7 +20,7 @@ describe("tcpTargetOf", () => {
   });
 });
 
-//  review F1: the probe must measure the hop model traffic
+// review F1: the probe must measure the hop model traffic
 // actually takes. With Node's env-proxy path enabled and a scheme proxy
 // configured (the desktop's applyConnectionProxy writes exactly this env),
 // undici routes every request through the proxy — so the probe connects to
@@ -146,7 +146,7 @@ describe("tcpReachable", () => {
     expect(waiter.monotonicNow()).toBeGreaterThanOrEqual(a);
   });
 
-  //  review F1: on a proxied connection the probe must go through
+  // review F1: on a proxied connection the probe must go through
   // the proxy — otherwise a firewalled origin with a healthy proxy answers
   // "online" while every model request is offline.
   it("tcpReachable connects to the configured proxy, not the origin (NODE_USE_ENV_PROXY=1)", async () => {

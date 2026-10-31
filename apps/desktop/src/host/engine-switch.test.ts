@@ -1,5 +1,5 @@
 /**
- *  /  (review 23.08 narrowing): unit tests for the pure
+ * (review 23.08 narrowing): unit tests for the pure
  * engine-switch seam. No I/O, no live CLIs — these pin the EXACT strings a
  * switched-to engine receives as its first prompt, and the planning rules
  * that decide which canonical items survive into that prompt.

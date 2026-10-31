@@ -83,7 +83,7 @@ export const browserScreenshotTool: ToolDefinition<BrowserScreenshotInput, Previ
     if (!ctx.preview) {
       return { ok: false, error: "Browser preview is unavailable in this session." };
     }
-    //  plan §3 widens this: a blind model with a configured vision
+    // plan §3 widens this: a blind model with a configured vision
     // recognizer captures exactly like a sighted one — agent-loop.ts's
     // tool-result annotation (slice B1) appends the model-visible stub
     // afterward.

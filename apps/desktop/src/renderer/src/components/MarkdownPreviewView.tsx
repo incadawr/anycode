@@ -1,5 +1,5 @@
 /**
- * Native DOM markdown preview view ( CUT.md CONTRACTS — M1 shipped
+ * Native DOM markdown preview view (CUT.md CONTRACTS — M1 shipped
  * READ/panel chrome, M2 adds md->md link navigation + doc-relative images,
  * M3 adds the window container) — a THIN, logic-free shell: every stateful
  * decision (phase/mode transitions, failure copy, docVersion reconciliation,
@@ -86,7 +86,7 @@ export function MarkdownPreviewView({ tabId, previewId, container, sourcePath, d
   const [state, dispatch] = useReducer(mdViewReducer, initialMdViewState);
 
   useEffect(() => {
-    //  M2: a NAVIGATE_OK (dispatched directly from `onOpenMdLink`
+    // M2: a NAVIGATE_OK (dispatched directly from `onOpenMdLink`
     // below, outside this effect) already updated `state.doc` with the
     // fresh doc BEFORE main's `pushChanged` republishes the SAME bumped
     // `docVersion` through this prop moments later — re-running the fetch
@@ -132,7 +132,7 @@ export function MarkdownPreviewView({ tabId, previewId, container, sourcePath, d
     });
   }
 
-  //  M2: a local `.md` link click inside the rendered doc REPLACES
+  // M2: a local `.md` link click inside the rendered doc REPLACES
   // this preview's content via MD_PREVIEW_NAVIGATE (CUT.md CONTRACTS —
   // "replace semantics, no history stack", the SAME `previewId`). A refusal
   // surfaces on the SAME inline error banner a failed read/reload already

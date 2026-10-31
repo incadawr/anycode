@@ -1,5 +1,5 @@
 /**
- * Transcript tick rail ( /  + 4742): a bare vertical
+ * Transcript tick rail (+ 4742): a bare vertical
  * strip of short horizontal ticks at the LEFT edge of the conversation, one
  * per user turn, marking the turn structure of a long session like Codex's
  * message rail. Hover/focus opens a popover with the user's query (plain
@@ -124,7 +124,7 @@ export interface UserTurnsSelector {
 }
 
 /**
- * : the raw user-turn texts in mark order (the SAME turn split
+ * the raw user-turn texts in mark order (the SAME turn split
  * `selectUserTurns` uses — ordinary system reports excluded) for
  * `matchCheckpointsToTurns`, which derives each turn's checkpoint label
  * from its full prompt text (checkpoint-model.ts mirrors core's
@@ -213,7 +213,7 @@ export function createUserTurnsSelector(): UserTurnsSelector {
 }
 
 /**
- * The rail earns its gutter from the second user turn on (: a
+ * The rail earns its gutter from the second user turn on (a
  * single-question session is still "the conversation so far" — the first
  * jump target is the top of the feed, so no rail is drawn and no gutter is
  * reserved).
@@ -223,7 +223,7 @@ export function shouldShowMinimap(turnCount: number): boolean {
 }
 
 /**
- * : number of eligible user turns (same rule as
+ * number of eligible user turns (same rule as
  * `selectUserTurns` — ordinary system reports excluded). A cheap
  * counting variant for owners that only need the rail's visibility gate /
  * refresh trigger, without building mark objects.
@@ -245,7 +245,7 @@ export function activeMarkIndex(marks: UserTurnMark[], topmostVisibleUserIndex: 
 }
 
 /**
- * Tick length class ( §2.2): the ACTIVE tick renders longer and
+ * Tick length class (§2.2): the ACTIVE tick renders longer and
  * brighter than its neighbors — `"active"` vs `"normal"` class suffix for
  * the CSS width/color pair. Pure so the rail's visual contract is pinnable
  * without a DOM.
@@ -255,7 +255,7 @@ export function tickLengthFor(index: number, activeIndex: number | null): "activ
 }
 
 /**
- * Popover open-state reducer ( §2.2) — pure, testable without a
+ * Popover open-state reducer (§2.2) — pure, testable without a
  * DOM. The popover must stay open while the pointer moves from the tick into
  * the popover itself (the Rewind button lives there), so "open" is
  * "hovered tick OR pointer inside popover OR focus within the rail/popover"
@@ -364,7 +364,7 @@ export function TranscriptMinimap({
   activeIndex: number | null;
   onJump: (blockId: string) => void;
   /**
-   *  §2.5: optional rewind plumbing. Absent (child panes,
+   * §2.5: optional rewind plumbing. Absent (child panes,
    * existing tests, engines without supportsRewind) -> no Rewind buttons at
    * all, popover stays a pure tooltip.
    */

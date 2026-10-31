@@ -12,7 +12,7 @@ import { CollabAgentCardIndex } from "./collab-agent-index.js";
 /** One sub-tool-call a single native item projects to — a `fileChange` with N files projects to N of these. */
 type ToolProjection = { toolCallId: string; toolName: string; input: unknown };
 
-/** : the ONE honest, non-inferred persona label for a Codex collab child. Never refined from model/path. */
+/** the ONE honest, non-inferred persona label for a Codex collab child. Never refined from model/path. */
 const CODEX_SUBAGENT_PERSONA = "codex subagent";
 /** The outer Agent tool card's renderer tool name. */
 const AGENT_TOOL_NAME = "Agent";
@@ -28,7 +28,7 @@ const SUBAGENT_ACTIVITY_TYPE = "subAgentActivity";
  * Known conversation/plan/review/context bookkeeping surfaces and bridge-owned
  * dynamic tool calls: none of these may become a generic tool card. Centralized
  * so dedicated collab/activity handling can never be mistaken for generic
- * recovery ( §3).
+ * recovery (§3).
  */
 const EXCLUDED_ITEM_TYPES = new Set<string>([
   "userMessage",
@@ -87,7 +87,7 @@ function genericInput(item: Record<string, unknown>, order?: readonly string[]):
  * cancellation markers map away from success. A missing or unfamiliar
  * free-form status is NEVER turned into a fabricated error — it stays a
  * "receipt of item/completed" success with the raw value carried visibly
- * ( §4).
+ * (§4).
  */
 function genericStatusFor(itemStatus: unknown): ToolCallStatus {
   if (itemStatus === "failed" || itemStatus === "error") return "error";
@@ -211,7 +211,7 @@ function isToolFamily(itemType: unknown): boolean {
 /**
  * `commandExecution` -> one projection; `fileChange` -> one projection PER changed file (multi-file, cut §2(i)).
  * camelCase types are the pinned-contract shapes; snake_case aliases are an
- * explicit  compatibility requirement, not shapes claimed observed in
+ * explicit compatibility requirement, not shapes claimed observed in
  * pinned fixtures.
  */
 function projectTools(item: Record<string, unknown>): ToolProjection[] {
@@ -265,7 +265,7 @@ function projectTools(item: Record<string, unknown>): ToolProjection[] {
       input: typeof item.query === "string" ? { query: item.query } : {},
     }];
   }
-  //  dedicated generic cards for the non-family types with a KNOWN
+  // dedicated generic cards for the non-family types with a KNOWN
   // display field set. Only ACTUAL fields are read; a raw base64 image field
   // is never inlined. Their status (imageGeneration's is free-form) rides the
   // generic outcome path, displayed rather than guessed.
@@ -281,7 +281,7 @@ function projectTools(item: Record<string, unknown>): ToolProjection[] {
   // subAgentActivity have DEDICATED handlers in TurnTranslator and must never
   // fall through to generic recovery.
   if (typeof item.type !== "string" || EXCLUDED_ITEM_TYPES.has(item.type)) return [];
-  //  PLAN RULE: any OTHER non-excluded string type is a future/unknown
+  // PLAN RULE: any OTHER non-excluded string type is a future/unknown
   // family. It surfaces as an honest generic card rather than vanishing — an
   // unknown execution must never be silently dropped. Logged for diagnostics.
   // eslint-disable-next-line no-console
@@ -358,14 +358,14 @@ export class TurnTranslator {
   /** One native item can own several sub-tool-calls (multi-file fileChange) — tracked to close them all together. */
   private readonly itemToolCallIds = new Map<string, string[]>();
   /**
-   * : sub toolCallIds that have already produced a real tool_result
+   * sub toolCallIds that have already produced a real tool_result
    * (paired OR completed-only recovered). Distinct from startedItemIds so a
    * repeated completion or a late `item/started` after completion never
    * creates an extra tool lifecycle or count.
    */
   private readonly completedToolCallIds = new Set<string>();
   /**
-   * : native item ids that have already produced a real tool_result
+   * native item ids that have already produced a real tool_result
    * (paired OR completed-only recovered). ITEM-level, not projection-level:
    * a redelivered completion can carry a different payload shape than the
    * first (e.g. populated start `fc:0`, sparse redelivery projecting bare
@@ -378,7 +378,7 @@ export class TurnTranslator {
   /** Accumulated `item/commandExecution/outputDelta` text per itemId (cut §2(i) live command-output deltas). */
   private readonly commandOutputBuffers = new Map<string, string>();
   /**
-   *  collab correlation. Production passes the ENGINE-owned instance;
+   * collab correlation. Production passes the ENGINE-owned instance;
    * absent (direct unit tests) the translator-local fallback keeps each
    * translator's behavior isolated.
    */
@@ -452,7 +452,7 @@ export class TurnTranslator {
     // started must create zero new blocks (see startedItemIds' own comment).
     if (this.startedItemIds.has(item.id)) return [];
     this.startedItemIds.add(item.id);
-    //  + : a late item/started for an item id that already
+    // + a late item/started for an item id that already
     // completed (paired or completed-only recovered) must never resurrect a
     // lifecycle — extended to collab/activity, which live outside isToolFamily.
     if (isDedupedFamily(item.type) && this.completedItemIds.has(item.id)) return [];
@@ -569,7 +569,7 @@ export class TurnTranslator {
     if (item.type === "agentMessage" && this.openText.delete(item.id)) {
       return [{ type: "text_end", id: item.id }];
     }
-    //  +  ITEM-level dedup: a repeated completion — even with a
+    // + ITEM-level dedup: a repeated completion — even with a
     // different payload shape (sparse vs populated fileChange changes) — must
     // never recover a second lifecycle under different projection ids.
     // Extended to collab/activity, which live outside isToolFamily.
@@ -643,7 +643,7 @@ export class TurnTranslator {
   }
 
   private toolOutcome(toolCallId: string, projection: ToolProjection, item: Record<string, unknown>): ToolCallOutcome {
-    // : status-less webSearch/web_search completions are successes;
+    // status-less webSearch/web_search completions are successes;
     // every other status keeps the explicit completion/error/denial/
     // cancellation mapping below. Counting depends on completion EVENTS, so
     // failed/declined/interrupted/unfamiliar statuses still produce exactly
@@ -696,7 +696,7 @@ export class TurnTranslator {
     };
   }
 
-  // ──  collab (Agent) + sub-agent activity ───────────────────────────
+  // ── collab (Agent) + sub-agent activity ───────────────────────────
 
   private onCollabStarted(item: Record<string, unknown>): AgentEvent[] {
     if (item.tool === "spawnAgent") return this.onSpawnStarted(item);

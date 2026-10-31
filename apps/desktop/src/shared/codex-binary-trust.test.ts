@@ -152,7 +152,7 @@ describe("checkCodexBinaryTrust — directory chain", () => {
   });
 });
 
-//  — a consent record is authored main-side from a live stat (D-S4-5);
+// a consent record is authored main-side from a live stat (D-S4-5);
 // here it is a literal fixture, no fs involved. `FINGERPRINT_SIZE`/`_MTIME`
 // stand in for the raw stat values a real grant would capture.
 const FINGERPRINT_SIZE = 4096;

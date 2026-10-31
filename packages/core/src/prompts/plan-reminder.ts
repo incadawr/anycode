@@ -10,7 +10,7 @@
  * (context/session-title.ts, the renderer's transcript-sanitize.ts) strip the
  * paired tag, so it never leaks into a title or the visible transcript.
  *
- * : this used to live in cli/, which became a lie once the desktop host
+ * this used to live in cli/, which became a lie once the desktop host
  * started appending the same reminder — a second copy of the rule text is the
  * one outcome that must never happen, so the module moved to prompts/ (neutral,
  * client-agnostic) and is re-exported from the package barrel.

@@ -1,5 +1,5 @@
 /**
- * Binary-trust consent dialog (, CUT-S4.md §3.6/§3.8/§8/D-S4-8): the
+ * Binary-trust consent dialog (CUT-S4.md §3.6/§3.8/§8/D-S4-8): the
  * per-path off-switch for the codex/claude binary-trust wall. Shown from
  * either engine pane's status card once its doctor report carries a
  * structured `trustRefusal` — never inferred from string-matching `error`.
@@ -22,7 +22,7 @@ export interface BinaryTrustDialogProps {
   open: boolean;
   binaryPath: string;
   reason: string;
-  /**  fix wave (D-S4-17): true iff this refusal is a DRIFTED consent (the file changed since it was granted) — names the risk at the exact re-consent moment. */
+  /** fix wave (D-S4-17): true iff this refusal is a DRIFTED consent (the file changed since it was granted) — names the risk at the exact re-consent moment. */
   staleConsent: boolean;
   /** "Trust this binary" — the caller invokes the grant bridge and then its recheck. */
   onAccept(): void;
@@ -55,12 +55,12 @@ export interface BinaryTrustGrantCopy {
   pinLine: string;
   acceptLabel: string;
   declineLabel: string;
-  /**  fix wave (D-S4-17): the drift warning, non-null iff staleConsent — §6 string, verbatim. */
+  /** fix wave (D-S4-17): the drift warning, non-null iff staleConsent — §6 string, verbatim. */
   changedLine: string | null;
 }
 
 /**
- * Dialog copy (CUT-S4.md §8,  fix wave §6) as data, so the node-env
+ * Dialog copy (CUT-S4.md §8, fix wave §6) as data, so the node-env
  * tests pin the exact strings the live-DoD smoke greps for — never
  * re-derived or paraphrased at the render call site.
  */
@@ -126,7 +126,7 @@ export function BinaryTrustDialog({ open, binaryPath, reason, staleConsent, onAc
       ref={dialogRef}
       className="consent-dialog"
       aria-label={copy.title}
-      // : `data-binary-trust-dialog` disambiguates this dialog from
+      // `data-binary-trust-dialog` disambiguates this dialog from
       // ConsentDialog.tsx's (weak-storage) OWN `.consent-dialog` node — the
       // automation facade (`realBinaryTrustDialogDom`) queries on this
       // attribute, never on class name alone. `data-trust-binary-path`/

@@ -1,5 +1,5 @@
 /**
- *  R1 (re-review #3): the child spawn-mode cell the host's port and
+ * R1 (re-review #3): the child spawn-mode cell the host's port and
  * the test harness share. Pure: a fake Session stands in for the real one.
  */
 import { describe, expect, it } from "vitest";

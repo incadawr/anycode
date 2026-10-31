@@ -35,7 +35,7 @@ function otherBlock(id: string): TranscriptBlock {
   return { kind: "user_text", id, text: "hi" };
 }
 
-/** Minimal non-TodoWrite tool_call fixture ( staleness counting). */
+/** Minimal non-TodoWrite tool_call fixture (staleness counting). */
 function bashBlock(id: string, status: string = "success"): TranscriptBlock {
   return {
     kind: "tool_call",

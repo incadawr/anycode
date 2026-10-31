@@ -290,7 +290,7 @@ describe("generateSessionTitle", () => {
   });
 });
 
-describe("generateSessionTitle mid-stream replay ( review)", () => {
+describe("generateSessionTitle mid-stream replay (review)", () => {
   it("keeps only the replayed attempt's text when a stream_retry discards a partial reply", async () => {
     const port = new ScriptedModelPort([
       { type: "start" },

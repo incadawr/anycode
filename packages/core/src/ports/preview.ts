@@ -61,7 +61,7 @@ export interface PreviewScreenshotSuccess {
   height: number;
   /**
    * Logical/CSS viewport size (DIP, not device pixels) at capture time, when
-   * the capture path could observe one ( slice G) — mirrors
+   * the capture path could observe one (slice G) — mirrors
    * ImageAttachment.cssSize's own additive-optional contract. Absent when
    * the underlying page/window could not report a CSS size (unresponsive,
    * destroyed, panel bounds unset); callers must not treat its absence as an

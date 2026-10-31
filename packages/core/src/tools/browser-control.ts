@@ -219,7 +219,7 @@ export function createBrowserControlTools(options: BrowserControlToolsOptions = 
     true,
   );
 
-  /**  Phase B: BrowserEval always asks, unless the session's full-access switch is on. */
+  /** Phase B: BrowserEval always asks, unless the session's full-access switch is on. */
   const evalBase: ToolMetadata = {
     ...baseMetadata(
       "BrowserEval",

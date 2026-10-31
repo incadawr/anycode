@@ -1,5 +1,5 @@
 /**
- * child-sessions.ts tests ( CUT-S2 §2.5, slice S2c C1): the
+ * child-sessions.ts tests (CUT-S2 §2.5, slice S2c C1): the
  * envelope classifier and the child relation-store, in isolation from
  * tab-registry.ts (C2) and the JSX layer (C3).
  */
@@ -183,7 +183,7 @@ describe("child relation-store", () => {
   });
 });
 
-describe("hasOpenableChild ( CUT-S2 §2.5/§10.8.1: ToolCallCard's Open button/badge gate)", () => {
+describe("hasOpenableChild (CUT-S2 §2.5/§10.8.1: ToolCallCard's Open button/badge gate)", () => {
   it("false when no relation has ever been recorded and the card was never hydrated as a session child — the inline-subagent default", () => {
     expect(hasOpenableChild(undefined, false)).toBe(false);
   });

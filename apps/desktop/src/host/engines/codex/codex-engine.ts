@@ -2,7 +2,7 @@
  * The small, native Codex session runtime. It intentionally does not compose
  * AnyCode's AgentLoop or any of its tools: the app-server owns those policies.
  *
- * Turn lifecycle (, cut §2(b)) — the two invariants that make Stop safe:
+ * Turn lifecycle (cut §2(b)) — the two invariants that make Stop safe:
  *
  *  1. ONE abort-promise is raced into EVERY await of the turn, so an abort that
  *     lands while `notifications().next()` is parked is observed immediately.
@@ -67,7 +67,7 @@ const SHADOW_OUTPUT_HEAD_CAP = 8192;
 export const CODEX_NOT_SIGNED_IN = "Codex is not signed in — run `codex login` in a terminal, then start a new Codex session.";
 
 /**
- *  /  (probe-only): the two Windows-sandbox readiness
+ * (probe-only): the two Windows-sandbox readiness
  * boot-notice messages (named so tests assert the exact text).
  */
 export const WINDOWS_SANDBOX_NOT_CONFIGURED_MESSAGE = "Codex Windows sandbox is not configured; commands may run unsandboxed.";
@@ -96,7 +96,7 @@ export const CODEX_ENGINE_CAPABILITIES: EngineCapabilities = {
   supportsContextBreakdown: false,
   supportsInteractiveApprovals: false,
   costAccounting: false,
-  // : a Codex session now selects among the app-server's OWN models
+  // a Codex session now selects among the app-server's OWN models
   // (`model/list`), validated host-side against that catalog. This flag means
   // "this engine can switch model", NOT "AnyCode's provider catalog applies" —
   // the provider catalog is never consulted for a Codex session.
@@ -133,7 +133,7 @@ export interface CodexEngineTimeouts {
   interruptMs: number;
   postInterruptSettleMs: number;
   /**
-   * : bound on the engine's PRE-TERMINAL join of cancelled bridged
+   * bound on the engine's PRE-TERMINAL join of cancelled bridged
    * children (Stop path only). After the native turn/completed arrives, the
    * engine waits up to this long for each cancelled `anycode_agent` call to
    * emit its REAL terminal event (status + child-session target + subagent
@@ -228,14 +228,14 @@ export interface CodexSessionSelection {
   effort?: string;
   fast?: boolean;
   /**
-   * : exclude /tmp and $TMPDIR from the workspaceWrite writable
+   * exclude /tmp and $TMPDIR from the workspaceWrite writable
    * roots (codex children). The 4682 rework pairs this with `childTempDir`:
    * the exclusion is only non-breaking because every tmp consumer inside the
    * child is simultaneously redirected to the private dir.
    */
   excludeTmpRoots?: boolean;
   /**
-   *  rework: the codex child's PRIVATE temp dir
+   * rework: the codex child's PRIVATE temp dir
    * (`~/.anycode/tmp/<childSessionId>`, created 0700 by the boot site, also
    * exported as TMPDIR/TMPPREFIX/TMP/TEMP in the app-server spawn env).
    * Rides the selection exactly like `excludeTmpRoots` and is appended to the
@@ -268,9 +268,9 @@ interface CodexEngineSettings {
   effortsByModel: Map<string, string>;
   fast?: boolean;
   speedOverride?: boolean;
-  /** : exclude /tmp and $TMPDIR from the workspaceWrite sandbox writable roots. */
+  /** exclude /tmp and $TMPDIR from the workspaceWrite sandbox writable roots. */
   excludeTmpRoots?: boolean;
-  /**  rework: the child's private temp dir, appended to the workspaceWrite writable roots. */
+  /** rework: the child's private temp dir, appended to the workspaceWrite writable roots. */
   childTempDir?: string;
   /** Boot-time warnings (unusable draft model, posture drift) — flushed into the first turn's event stream. */
   notices: AgentEvent[];
@@ -282,7 +282,7 @@ function warning(message: string): AgentEvent {
 
 /**
  * Resolves the preset id a session boots with. An unknown id can only come from
- * a stale renderer or a pre- session row (whose `mode` column holds a
+ * a stale renderer or a session row (whose `mode` column holds a
  * CORE permission mode such as "build") — neither is a user-visible error, so
  * both quietly become the default posture. A DRAFT id the user actually chose is
  * different: if it does not exist, the user is told.
@@ -414,7 +414,7 @@ export interface CodexEngineCreateOptions extends Omit<AppServerClientOptions, "
   bootstrap: EngineBootstrap;
   workspace: string;
   broker: EngineBridgeBroker;
-  /** : policy for accepting a provably in-workspace file change without asking; absent = always ask. */
+  /** policy for accepting a provably in-workspace file change without asking; absent = always ask. */
   patchAutoApproval?: CodexPatchAutoApprovalPolicy;
   timeouts?: Partial<CodexEngineTimeouts>;
   /** Draft (new session) or persisted (resume) model/preset choice; validated host-side, never trusted. */
@@ -422,14 +422,14 @@ export interface CodexEngineCreateOptions extends Omit<AppServerClientOptions, "
   /** Host-owned shadow command log (cut §2(e)); absent only in tests that do not exercise resume-history. */
   shadowLog?: CodexShadowLogPort;
   /**
-   * : one-shot boot notices (e.g. the codex child's "profile
+   * one-shot boot notices (e.g. the codex child's "profile
    * maxTurns is not enforced" warning) seeded into the native session's
    * notices queue — drained exactly once on the first `runTurn`, like every
    * other boot notice. Never a Codex protocol field.
    */
   bootNotices?: AgentEvent[];
   /**
-   * : MCP servers forwarded to the app-server on thread/start /
+   * MCP servers forwarded to the app-server on thread/start /
    * thread/resume via `config.mcp_servers` (built by codex/mcp-thread-config.ts
    * from core-resolved specs). Native Codex still merges ambient per-name
    * entries from its profile config.toml — OUR supplied map wins collisions;
@@ -552,13 +552,13 @@ export async function initializeAndVerifyAccount(
   if ((account.account === null || account.account === undefined) && requiresOpenaiAuth !== false) {
     throw new Error(CODEX_NOT_SIGNED_IN);
   }
-  //  /  (probe-only): on Windows, ask the app-server
+  // (probe-only): on Windows, ask the app-server
   // whether its SEPARATE Windows-sandbox protocol family is usable. Never
   // fatal and never sends setupStart: a probe that errors or times out (old
   // binary without the method) degrades to `undefined`, and a
   // notConfigured/updateRequired answer is RETURNED (not thrown) so the
   // caller surfaces it as a boot notice. Refusing the boot is an owner
-  // decision that waits for the live Windows measurement ( step 2).
+  // decision that waits for the live Windows measurement (step 2).
   // Other platforms skip the probe entirely (no extra RPC).
   if (platform !== "win32") return undefined;
   const readiness = await client
@@ -569,7 +569,7 @@ export async function initializeAndVerifyAccount(
 }
 
 /**
- *  /  (probe-only): Windows sandbox readiness. Never
+ * (probe-only): Windows sandbox readiness. Never
  * fatal, never sent setupStart — an error/timeout degrades to a notice, and
  * non-win32 callers skip the probe entirely. macOS/Linux behavior unchanged.
  * An UNANSWERED probe (`undefined` — old binary without the method) also
@@ -594,7 +594,7 @@ export function windowsSandboxNotice(
  * exists, and the model catalog is read before the FIRST id ever reaches the
  * wire — a draft model that no longer exists is caught here, not by a burned
  * turn (L7). The `thread/start` response is what confirms the initial values
- * ( DoD-2): the model reported back by the server is the one the session
+ * (DoD-2): the model reported back by the server is the one the session
  * runs and persists, whatever was asked for.
  */
 export async function createNativeCodexSession(
@@ -613,12 +613,12 @@ export async function createNativeCodexSession(
   const readiness = await initializeAndVerifyAccount(client, bounds.bootRpcMs, agentBridge !== undefined, process.platform);
   const catalog = await CodexModelCatalog.load(client);
   const notices: AgentEvent[] = [...(bootNotices ?? [])];
-  //  /  (probe-only): a non-ready Windows sandbox rides
+  // (probe-only): a non-ready Windows sandbox rides
   // the existing boot-notices drain (settings.notices, flushed on the first
   // runTurn) — null on every non-win32 boot, so nothing changes elsewhere.
   const sandboxNotice = windowsSandboxNotice(process.platform, readiness);
   if (sandboxNotice !== null) notices.push(sandboxNotice);
-  // : controlled forwarding notices drain independently of the map.
+  // controlled forwarding notices drain independently of the map.
   if (mcpForward?.notices !== undefined) notices.push(...mcpForward.notices);
   const preset = resolvePreset(selection, notices);
   const model = resolveModel(catalog, selection, notices);
@@ -670,11 +670,11 @@ export async function resumeNativeCodexSession(
   const readiness = await initializeAndVerifyAccount(client, bounds.bootRpcMs, agentBridge !== undefined, process.platform);
   const catalog = await CodexModelCatalog.load(client);
   const notices: AgentEvent[] = [...(bootNotices ?? [])];
-  //  /  (probe-only): same drain as thread/start — null
+  // (probe-only): same drain as thread/start — null
   // on every non-win32 boot.
   const sandboxNotice = windowsSandboxNotice(process.platform, readiness);
   if (sandboxNotice !== null) notices.push(sandboxNotice);
-  // : same controlled-notices drain as thread/start — independent of
+  // same controlled-notices drain as thread/start — independent of
   // whether any server survived serialization.
   if (mcpForward?.notices !== undefined) notices.push(...mcpForward.notices);
   const preset = resolvePreset(selection, notices);
@@ -702,7 +702,7 @@ export async function resumeNativeCodexSession(
     // dynamicTools lives in the experimental API (initialize capabilities),
     // which agentBridge !== undefined already negotiated above.
     ...(agentBridge ? { dynamicTools: agentBridge.declarations() } : {}),
-    // : the fresh app-server of THIS boot has no memory of a previous
+    // the fresh app-server of THIS boot has no memory of a previous
     // forward — config.mcp_servers must ride the resume too, or a resumed
     // session silently loses every forwarded MCP server (cross-process resume
     // respawns servers; probe xp-a/xp-b evidence).
@@ -739,7 +739,7 @@ export async function resumeNativeCodexSession(
   const baseTurnOrdinal = threadRead.thread.turns?.length ?? 0;
   // A model that vanished from the catalog between sessions must not silently
   // ride the next turn/start override: fall back to the thread's own model and
-  // say so (recoverable,  DoD-2), rather than burning the user's turn.
+  // say so (recoverable, DoD-2), rather than burning the user's turn.
   const stored = resolveModel(catalog, selection, notices);
   const model = stored ?? native.model;
   const settings = buildSettings(workspace, catalog, preset, resumed, model, notices, selection?.effort, selection?.excludeTmpRoots, selection?.childTempDir, selection?.fast);
@@ -764,7 +764,7 @@ export async function startCodexEngine(options: CodexEngineCreateOptions): Promi
   const approvals = new CodexApprovalBridge({
     broker: options.broker,
     activeTurn: () => engine?.activeTurnDetails ?? null,
-    //  (cross-review F1): the thread's cwd is the boot workspace,
+    // (cross-review F1): the thread's cwd is the boot workspace,
     // so fileChange approvals mint containment facts against that root.
     workspace: options.workspace,
     ...(options.patchAutoApproval !== undefined
@@ -796,7 +796,7 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
   const approvals = new CodexApprovalBridge({
     broker: options.broker,
     activeTurn: () => engine?.activeTurnDetails ?? null,
-    //  (cross-review F1): the thread's cwd is the boot workspace,
+    // (cross-review F1): the thread's cwd is the boot workspace,
     // so fileChange approvals mint containment facts against that root.
     workspace: options.workspace,
     ...(options.patchAutoApproval !== undefined
@@ -866,7 +866,7 @@ export class CodexEngine implements SessionEngine {
   /** Item index of the turn currently being started/run; written by the transport tap. */
   private activeItems: TurnItemIndex | null = null;
   /**
-   * : ONE session-lifetime collab correlation index per engine — a
+   * ONE session-lifetime collab correlation index per engine — a
    * spawn card opened in an earlier turn must still be patchable by a child
    * observation delivered in a later parent turn. Deliberately an instance
    * field (never per-runTurn) and cleared only on disposal.
@@ -944,7 +944,7 @@ export class CodexEngine implements SessionEngine {
     // is display-only: Session capability gates prevent it becoming a core
     // permission policy or a mutable Codex setting. Codex posture lives in its
     // OWN preset vocabulary (presets.ts) and never touches core's permission
-    // engine or its always-allow rules ( §5).
+    // engine or its always-allow rules (§5).
     return "build";
   }
 
@@ -965,8 +965,8 @@ export class CodexEngine implements SessionEngine {
 
   /**
    * Re-runs the SAME resume-history projection `historyItems()` returns a
-   * frozen boot snapshot of, but on demand and against a FRESH `thread/read`
-   *. Unlike `historyItems()`, this reflects every turn this
+   * frozen boot snapshot of, but on demand and against a FRESH `thread/read`.
+   * Unlike `historyItems()`, this reflects every turn this
    * launch has actually run since boot — the sole authoritative source for a
    * child session's flush-time transcript: the host keeps no durable mirror
    * of a Codex conversation of its own (unlike Claude's shadow-transcript
@@ -1275,10 +1275,10 @@ export class CodexEngine implements SessionEngine {
     this.interruptSent = false;
     let abortObserved = false;
     let settle: SettleDeadline | null = null;
-    /** : the ONE bounded bridge join this turn has spent (see finally). */
+    /** the ONE bounded bridge join this turn has spent (see finally). */
     let bridgeJoinDone = false;
     /**
-     * : the native turn's terminal batch (…/turn_end/loop_end),
+     * the native turn's terminal batch (…/turn_end/loop_end),
      * intercepted by `deliver` and RELEASED FROM THE FINALLY — after the
      * cancelled bridged children's real outcomes were joined and flushed.
      * Scoped per-turn here (not inside the translator block) precisely so
@@ -1294,7 +1294,7 @@ export class CodexEngine implements SessionEngine {
       void this.sendInterruptOnce();
     };
     /**
-     *  pre-terminal settle: after the native turn has reached its
+     * pre-terminal settle: after the native turn has reached its
      * terminal state under Stop, bounded-join the cancelled bridged children
      * and flush whatever they emitted through the still-live owner BEFORE the
      * translator emits turn_end/loop_end. Immediate Stop is untouched — this
@@ -1393,7 +1393,7 @@ export class CodexEngine implements SessionEngine {
         // sparse push merges onto everything already known (cut §6.3), not
         // onto a fresh per-turn blank.
         ...(this.quota !== undefined ? { quota: this.quota } : {}),
-        // : the SESSION-lifetime collab correlation index rides every
+        // the SESSION-lifetime collab correlation index rides every
         // per-turn translator (same rationale as the quota tracker above) so
         // later child observations patch the original spawn card.
         collab: this.collabIndex,
@@ -1535,7 +1535,7 @@ export class CodexEngine implements SessionEngine {
         this.consumeNotification();
         yield* deliver(raced.value.value);
       }
-      // : under Stop the native terminal batch is HELD (deliver
+      // under Stop the native terminal batch is HELD (deliver
       // intercepted it) and released from the finally, after the cancelled
       // children's real outcomes have been joined and flushed.
     } catch (error) {
@@ -1543,16 +1543,16 @@ export class CodexEngine implements SessionEngine {
       this.terminalError = terminalError;
       this.approvals?.denyAll("Codex app-server failed", "turn_cancelled");
       // A turn that timed out or lost its transport releases the child: a
-      // bounded RPC must never leave a live app-server behind ( §6).
+      // bounded RPC must never leave a live app-server behind (§6).
       void this.client.close().catch(() => {});
-      // : the terminal batch is HELD and released from the finally —
+      // the terminal batch is HELD and released from the finally —
       // after the one bounded pre-terminal join/drain — so no bridge card
       // event can land after loop_end on the error path either.
       const errorBatch: AgentEvent[] = [{ type: "error", error: terminalError }];
       errorBatch.push(...this.terminalEvents(turn, terminalError, false));
       heldTerminal = errorBatch;
     } finally {
-      // : the finally is the ONE bounded pre-terminal join/drain —
+      // the finally is the ONE bounded pre-terminal join/drain —
       // the only place guaranteed to run for every exit path (native
       // turn/completed, transport close under Stop, error). Under Stop,
       // bounded-join the cancelled bridged children FIRST (idempotently —
@@ -1758,7 +1758,7 @@ export class CodexEngine implements SessionEngine {
 
   dispose(_reason: "session-close" | "host-shutdown"): Promise<void> {
     this.agentBridge?.cancel();
-    // : drop the session-lifetime collab correlation. This never
+    // drop the session-lifetime collab correlation. This never
     // manufactures a child completion — it only forgets the mapping.
     this.collabIndex.clear();
     this.disposed = true;

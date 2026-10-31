@@ -33,7 +33,7 @@ export interface ReadOutput {
   totalLines: number;
   truncated: boolean;
   /**
-   * Set when the token cap cut the view short ( §4): tells the model how
+   * Set when the token cap cut the view short (§4): tells the model how
    * much it got and the exact offset/limit that continues from there.
    */
   notice?: string;
@@ -290,7 +290,7 @@ export interface WebFetchOutput {
  * against the persona registry so slice 3.3 can add md-profiles without
  * touching this frozen schema (design §3.4). Absent => "general-purpose".
  *
- * `tier`/`provider`/`detach` ( CUT-S2 §2.1; `detach` added 
+ * `tier`/`provider`/`detach` (CUT-S2 §2.1; `detach` added
  * срез 1) are the FULL declaration — only used when
  * `createAgentTool({sessionTier:true})` builds the root desktop host's tool
  * (tools/agent.ts). `model` stays valid for BOTH tiers (CUT-S2 §1 p.2: the
@@ -329,7 +329,7 @@ export const agentInputSchema = z.object({
       "Exact model id to run the subagent on (defaults to the parent's model); if this host cannot honor it the call fails with an explanation",
     ),
   /**
-   *  срез 1: session-tier-only, mirrors the `provider` field's
+   * срез 1: session-tier-only, mirrors the `provider` field's
    * "invalid for inline tier" discipline exactly (handler-level check,
    * agent.ts). GitHub #17 slice C: a session-tier call is now
    * background BY DEFAULT (an omitted detach means true); false opts into a
@@ -356,7 +356,7 @@ export const agentInputSchema = z.object({
         "history and receives `prompt` as its next message. Invalid for inline tier; cannot be combined with provider.",
     ),
   /**
-   *  /  wire: session-tier-only, the RUNNING twin of
+   * wire: session-tier-only, the RUNNING twin of
    * `continue_session` (finished-only). Physically absent from the restricted
    * schema below by construction (a child session's registry never sees this
    * field), same non-recursion lock discipline as `provider`/`detach`.
@@ -411,7 +411,7 @@ export interface AgentOutput {
   toolCalls: number;
   durationMs: number;
   /**
-   * : the FinishReason of the child's last turn_end, carried onto the
+   * the FinishReason of the child's last turn_end, carried onto the
    * model-visible payload so formatResultForModel can prefix a "length" cutoff
    * (the provider's own output ceiling, not this cap) — see agent.ts markers
    * (а)/(б). Absent has the same meaning as on SubagentOutcome: no turn ever

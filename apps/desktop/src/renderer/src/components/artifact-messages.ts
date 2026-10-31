@@ -7,7 +7,7 @@
  * be unavailable while the file is perfectly openable, and an action can be
  * refused while the preview above it renders fine.
  *
- * -A also puts the blocked-chip's pure state machine here
+ * also puts the blocked-chip's pure state machine here
  * (`artifactChipState`): ALL testable chip logic lives in this file so
  * Markdown.tsx stays a thin renderer of whatever it returns (the vitest
  * project only collects `*.test.ts`, never `*.test.tsx` — see this package's
@@ -20,7 +20,7 @@ export function artifactFailureMessage(reason: string): string {
     case "not_found":
       return "File not found (deleted or never created)";
     case "outside_allowed_roots":
-      // -A frozen copy: this exact string is also the blocked-chip's
+      // frozen copy: this exact string is also the blocked-chip's
       // row text (paired with the "Allow preview" button in Markdown.tsx).
       return "Preview blocked — outside allowed roots";
     case "not_previewable":
@@ -60,7 +60,7 @@ export function artifactActionFailureMessage(reason: string): string {
 }
 
 /**
- * -A: the Allow click's own outcome could not be applied. There is no
+ * the Allow click's own outcome could not be applied. There is no
  * `outside_allowed_roots` case here (see `ArtifactAllowResult` — an outside
  * path is exactly what Allow exists to unlock, so main never refuses it for
  * that reason); only a vanished file or an unknown tab can fail.
@@ -85,7 +85,7 @@ export type ConsentAttemptStatus = "idle" | "pending" | "failed";
 export interface ArtifactChipState {
   /** Offer the "Allow preview" button — true only for the ONE failure Allow actually fixes (outside the allowed roots). */
   showAllow: boolean;
-  /** Open is offered in every status ( cut §1(c): the buttons are live today, never guaranteed-fail dead ends — a caller ANDs this with its own extension-openable gate). */
+  /** Open is offered in every status (cut §1(c): the buttons are live today, never guaranteed-fail dead ends — a caller ANDs this with its own extension-openable gate). */
   showOpen: boolean;
   /** Reveal is offered in every status — it is unconfined by design (containment/consent is a preview/open concern only). */
   showReveal: boolean;
@@ -102,7 +102,7 @@ export interface ArtifactChipState {
 }
 
 /**
- * Pure chip-state machine for the inline artifact preview (-A). Given
+ * Pure chip-state machine for the inline artifact preview. Given
  * the CURRENT preview attempt (status + refusal reason, if any) and whatever
  * an "Allow preview" click is doing, decides the blocked-row's copy and
  * whether it offers Allow. Open/Reveal are unconditionally offered — they

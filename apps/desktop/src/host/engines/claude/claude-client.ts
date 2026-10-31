@@ -86,7 +86,7 @@ export interface ClaudeSpawnArgsOptions {
   sessionId?: string;
   resume?: string;
   /**
-   * : turn budget for a session child — mapped to the CLI's native
+   * turn budget for a session child — mapped to the CLI's native
    * `--max-turns <n>` flag. Omitted entirely when undefined (the CLI's own
    * default). VERIFIED against the installed 2.1.296 binary (read-only
    * evidence, no API turn): the option is yargs-registered as
@@ -110,19 +110,19 @@ export interface ClaudeSpawnArgsOptions {
    */
   maxTurns?: number;
   /**
-   * : absolute path of the private 0600 `--mcp-config` document
+   * absolute path of the private 0600 `--mcp-config` document
    * materialized by the host boot (mcp-forward-boot.ts). Omitted entirely
-   * when undefined — the argv is byte-identical to the pre- spawn.
+   * when undefined — the argv is byte-identical to the spawn.
    */
   mcpConfigPath?: string;
   /**
-   * : when true the engine spawn omits `--disable-slash-commands` so
+   * when true the engine spawn omits `--disable-slash-commands` so
    * host-built `/compact` user frames are interpreted. NEVER set for subagent
    * children (engine-children.ts builds its own argv).
    */
   enableSlashPassthrough?: boolean;
   /**
-   *  cross-review M2: `CLAUDE_AGENT_BRIDGE_PROMPT`, supplied
+   * cross-review M2: `CLAUDE_AGENT_BRIDGE_PROMPT`, supplied
    * ONLY on a boot whose agent bridge is announced (a non-empty profile
    * catalog, non-child boot — the same switch that supplies `mcpBridge`).
    * When present it is appended to `--append-system-prompt`'s value as a
@@ -132,7 +132,7 @@ export interface ClaudeSpawnArgsOptions {
    */
   agentBridgePrompt?: string;
   /**
-   *  xfix D1: when `false`, the spawn's `--setting-sources`
+   * xfix D1: when `false`, the spawn's `--setting-sources`
    * narrows from `project,local` to `user`, so Claude Code's OWN project
    * settings (`.claude/settings.json` / `.claude/settings.local.json` hooks
    * and MCP servers — both files live in the untrusted workspace this process
@@ -145,7 +145,7 @@ export interface ClaudeSpawnArgsOptions {
 }
 
 /**
- * : the append-system-prompt seam. The stock `claude` system prompt
+ * the append-system-prompt seam. The stock `claude` system prompt
  * describes its own output as rendered in a terminal — false under AnyCode,
  * where stdout is captured by the Electron host and rendered as markdown in
  * the desktop chat panel. This corrects the surface claim (and the ownership
@@ -154,7 +154,7 @@ export interface ClaudeSpawnArgsOptions {
  * no native truth exists for it (`system/init` never reports it back), so
  * there is nothing for a resend to clobber — same rationale as `effort` below.
  *
- *  cross-review M2: the delegation sentence ("To delegate to an
+ * cross-review M2: the delegation sentence ("To delegate to an
  * AnyCode agent profile, call the mcp__anycode__agent tool…") is deliberately
  * NOT here. The bridge behind that tool is announced per-boot — only when the
  * host's profile catalog is non-empty (`ClaudeEngineCreateOptions.mcpBridge`'s
@@ -168,7 +168,7 @@ export const CLAUDE_GUI_SURFACE_PROMPT =
   "IMPORTANT SURFACE CORRECTION: this session runs inside AnyCode, a desktop GUI application — not a terminal. Anything above that describes output as rendered in a terminal does not apply here: your replies render as markdown in AnyCode's chat panel; ANSI escape codes, terminal colors, cursor control, and TTY affordances do not work. The user cannot see the raw stdout/stderr of your tool calls — never refer them to \"the output above\"; restate important results in your reply. Ownership boundary: the subagent registry behind the Task tool, the skills catalog, and slash commands are Claude Code CLI features, not AnyCode features; their contents support no conclusions about AnyCode's own code, configuration, or agent profiles. The Task tool's own registry is not AnyCode's.";
 
 /**
- *  cross-review M2: the catalog-conditional half of the append —
+ * cross-review M2: the catalog-conditional half of the append —
  * appended (as a second paragraph) ONLY on a boot whose agent bridge is
  * announced (`host/index.ts` supplies it exactly when `mcpBridge` exists,
  * i.e. the profile catalog is non-empty and this is not a child boot). Kept
@@ -184,22 +184,22 @@ export const CLAUDE_AGENT_BRIDGE_PROMPT =
  * `-p` silently auto-denies every tool permission — probe #2) and
  * `--disable-slash-commands` (without it the CLI's own built-in slash-command
  * and skill catalog leaks into `system/init`/`initialize.commands[]` — probe
- * #6; : the flag is now CONDITIONAL — engine session spawns pass
+ * #6; the flag is now CONDITIONAL — engine session spawns pass
  * `enableSlashPassthrough` so host-built allowlisted `/compact` user frames
  * are interpreted, with the UI-side closed allowlist as the compensating
  * control, while doctor/login/subagent-children keep it for isolation).
- * : when the host materialized a private forward document, an
+ * when the host materialized a private forward document, an
  * optional `--mcp-config <path>` pair rides IMMEDIATELY BEFORE
  * `--strict-mcp-config`, so only our configured servers (plus the in-band
  * anycode bridge, announced via `sdkMcpServers`) apply; absent, the argv is
- * unchanged (the pre- finding "strict-mcp-config alone yields
+ * unchanged (the finding "strict-mcp-config alone yields
  * `mcp_servers: []`" now carries our document instead of nothing).
  * `--append-system-prompt
  * <CLAUDE_GUI_SURFACE_PROMPT>` is mandatory-always-on for the same
  * reason as `effort`: no native truth exists for it, so it rides EVERY spawn,
  * unconditionally, including `--resume` — there is nothing a resumed native
  * session could have of its own to protect from being overwritten.
- *  cross-review M2: `options.agentBridgePrompt` (the
+ * cross-review M2: `options.agentBridgePrompt` (the
  * catalog-conditional delegation sentence) is appended as a second paragraph
  * of the SAME single flag value — never a second flag — and only when the
  * caller supplied it, which is exactly when the bridge is announced.
@@ -218,7 +218,7 @@ export function buildClaudeSpawnArgs(options: ClaudeSpawnArgsOptions): string[] 
     "stdio",
     ...(options.enableSlashPassthrough === true ? [] : ["--disable-slash-commands"]),
     "--setting-sources",
-    //  xfix D1: an untrusted workspace's .claude/settings.json
+    // xfix D1: an untrusted workspace's .claude/settings.json
     // hooks must never reach the CLI's own settings loader. `project` and
     // `local` are both workspace files, so the untrusted spawn admits `user`
     // only (value verified against the pinned 2.1.296 binary — see
@@ -266,7 +266,7 @@ export function buildClaudeChildEnv(source: NodeJS.ProcessEnv, profileDir: strin
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy",
     "all_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
     "REQUESTS_CA_BUNDLE",
-    //  part A: the session-identity pair, when main/host stamped it.
+    // part A: the session-identity pair, when main/host stamped it.
     ...SESSION_TOOL_ENV_KEYS,
   ];
   const env: NodeJS.ProcessEnv = {};
@@ -274,7 +274,7 @@ export function buildClaudeChildEnv(source: NodeJS.ProcessEnv, profileDir: strin
     const value = source[key];
     if (value !== undefined) env[key] = value;
   }
-  //  rework: a credentialed proxy never reaches the engine CLI —
+  // rework: a credentialed proxy never reaches the engine CLI —
   // each value is swapped for the relay of THAT value (blocker B2: the host
   // fork can hold several credentialed upstreams at once, and a relay
   // fronting a different one would silently re-route the child). Fail-closed
@@ -290,11 +290,11 @@ export function buildClaudeChildEnv(source: NodeJS.ProcessEnv, profileDir: strin
   }
   // ALL_PROXY/all_proxy ride the same passthrough list; the relay only fronts
   // the HTTP(S)_PROXY upstream, so a credentialed one is dropped — the DoD is
-  // "no upstream password in an engine tab's env" ( review).
+  // "no upstream password in an engine tab's env" (review).
   for (const name of ["ALL_PROXY", "all_proxy"] as const) {
     if (proxyValueCarriesCredential(env[name] ?? "")) delete env[name];
   }
-  // : `settings.claude.proxyUrl`, carried in from main under a private
+  // `settings.claude.proxyUrl`, carried in from main under a private
   // name and turned into the real proxy family here. It OVERWRITES whatever the
   // passthrough list just copied in — that value can only be the connection's
   // proxy, since main withholds the carrier entirely when the shell owns the
@@ -461,9 +461,9 @@ export interface ClaudeClientOptions {
   mcpConfigPath?: string;
   /** See `ClaudeSpawnArgsOptions.enableSlashPassthrough` — engine sessions only, never subagent children. */
   enableSlashPassthrough?: boolean;
-  /** See `ClaudeSpawnArgsOptions.agentBridgePrompt` ( M2) — rides the spawn argv only when the bridge is announced. */
+  /** See `ClaudeSpawnArgsOptions.agentBridgePrompt` (M2) — rides the spawn argv only when the bridge is announced. */
   agentBridgePrompt?: string;
-  /** See `ClaudeSpawnArgsOptions.projectTrusted` ( xfix D1) — narrows --setting-sources on the untrusted spawn. */
+  /** See `ClaudeSpawnArgsOptions.projectTrusted` (xfix D1) — narrows --setting-sources on the untrusted spawn. */
   projectTrusted?: boolean;
   binaryArgs?: readonly string[];
   bootstrap?: EngineBootstrap;
@@ -575,7 +575,7 @@ export class ClaudeClient {
   private stdoutPaused = false;
   private sawFirstSystemInit = false;
   /**
-   * : the private --mcp-config file this client owns from
+   * the private --mcp-config file this client owns from
    * construction. Undefined when no forwarding happened. Cleaned on every
    * terminal path (close before a child exists, start/preflight/spawn
    * failure, unexpected child close/error, ordinary close) — idempotent, and
@@ -652,7 +652,7 @@ export class ClaudeClient {
         ...(this.options.mcpConfigPath !== undefined ? { mcpConfigPath: this.options.mcpConfigPath } : {}),
         enableSlashPassthrough: this.options.enableSlashPassthrough === true,
         ...(this.options.agentBridgePrompt !== undefined ? { agentBridgePrompt: this.options.agentBridgePrompt } : {}),
-        //  xfix D1: narrow --setting-sources when the host's
+        // xfix D1: narrow --setting-sources when the host's
         // workspace trust gate is closed. Spread conditionally so an absent
         // option keeps the historical argv byte-for-byte.
         ...(this.options.projectTrusted !== undefined ? { projectTrusted: this.options.projectTrusted } : {}),
@@ -664,7 +664,7 @@ export class ClaudeClient {
       await this.awaitSpawn(child);
       this.reportOwnedProcess(child);
     } catch (error) {
-      // : a failed start still owned the file — release it (and any
+      // a failed start still owned the file — release it (and any
       // child a late failure adopted) before propagating. The guard keeps
       // connect's own failure path from double-terminating a child that was
       // never adopted; close() itself is idempotent.
@@ -677,7 +677,7 @@ export class ClaudeClient {
     }
   }
 
-  /** : removes the owned --mcp-config file exactly once. */
+  /** removes the owned --mcp-config file exactly once. */
   private cleanupOwnedMcpConfig(): void {
     if (this.mcpConfigCleaned || this.ownedMcpConfigPath === undefined) return;
     this.mcpConfigCleaned = true;
@@ -695,10 +695,10 @@ export class ClaudeClient {
    * after the first user message (probe #1) — handshake-only runs contain
    * zero `system` frames at all.
    *
-   * `extra` ( S3, probes.md P0) merges in caller-supplied fields —
+   * `extra` (S3, probes.md P0) merges in caller-supplied fields —
    * `{sdkMcpServers:["anycode"]}` from `ClaudeMcpBridge.announceOn`, in
    * production — WITHOUT this method knowing anything about MCP itself; an
-   * omitted `extra` reproduces the pre- empty body byte-for-byte.
+   * omitted `extra` reproduces the empty body byte-for-byte.
    * The CLI drives its own MCP handshake as `mcp_message` control_requests
    * INSIDE this call, before it answers ours (P0 correction #1) — nothing
    * here waits for or depends on that; the door just has to already be
@@ -765,7 +765,7 @@ export class ClaudeClient {
    */
   close(): Promise<void> {
     if (this.child === null) {
-      // : a close before any child existed still owned the file.
+      // a close before any child existed still owned the file.
       this.cleanupOwnedMcpConfig();
       return Promise.resolve();
     }
@@ -775,7 +775,7 @@ export class ClaudeClient {
 
   private async teardown(child: ChildProcess): Promise<void> {
     this.closing = true;
-    // : the file dies with the child, whichever teardown stage runs.
+    // the file dies with the child, whichever teardown stage runs.
     this.cleanupOwnedMcpConfig();
     // `close` is emitted exactly ONCE, and a listener registered after it has
     // already fired never receives it. A child that died before close() was
@@ -1163,7 +1163,7 @@ export class ClaudeClient {
   private failTerminal(error: Error): void {
     if (this.terminalError) return;
     this.terminalError = error;
-    // : every terminal path (unexpected child close/error, stream
+    // every terminal path (unexpected child close/error, stream
     // failure, protocol failure) releases the owned file immediately — the
     // private document must never outlive the process that reads it.
     this.cleanupOwnedMcpConfig();

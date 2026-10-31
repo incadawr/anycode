@@ -30,7 +30,7 @@ function migrateConnectionOverrides(settings: AnycodeSettings): AnycodeSettings 
 
 /**
  * Repairs the `activeConnectionId` <-> non-empty `connections` invariant on
- * load ( W12-FIX2 §2, codex W12-FIX review #2): `settingsSchema` only
+ * load (W12-FIX2 §2, codex W12-FIX review #2): `settingsSchema` only
  * validates FORM (both fields are independently optional/required-array), so
  * a non-empty `connections` with a missing/dangling `activeConnectionId`, or
  * an empty `connections` with a leftover `activeConnectionId`, both parse as
@@ -61,7 +61,7 @@ export function normalizeActiveConnection(settings: AnycodeSettings): AnycodeSet
   return activeExists ? settings : { ...settings, provider: { ...settings.provider, activeConnectionId: first.id } };
 }
 
-// Read-time bounds for connection.maxOutputTokens ( slice D) — the same
+// Read-time bounds for connection.maxOutputTokens (slice D) — the same
 // window the IPC boundary enforces on writes (main/settings-ipc.ts
 // MAX_OUTPUT_TOKENS_MIN/MAX). Kept as literals here: settings/ must not depend
 // on main/, and the two must move together anyway.
@@ -71,7 +71,7 @@ const MAX_OUTPUT_TOKENS_MAX = 1_000_000;
 /**
  * Drops connection `maxOutputTokens` values outside `[1_024, 1_000_000]` on
  * load: each is read as ABSENT ("no explicit ceiling", the
- * pre- behaviour), restoring what a hand-edited `512` or `1e9` should
+ * behaviour), restoring what a hand-edited `512` or `1e9` should
  * have meant all along. The persisted schema deliberately stays lenient
  * (settings/schema.ts `.catch(undefined)` — ONE bad key must never fail the
  * whole document and reset every other section), which is why IPC strictness
@@ -293,10 +293,10 @@ export async function loadSettings(path: string, logger?: FileIoLogger): Promise
     const corruptBackupPath = await quarantine(path);
     return { settings: result.settings, readOnly: false, ...(corruptBackupPath ? { corruptBackupPath } : {}) };
   }
-  //  W12-FIX2 §2: repair the active<->non-empty invariant on BOTH
+  // W12-FIX2 §2: repair the active<->non-empty invariant on BOTH
   // success arms (ok and read_only) in memory — a newer-version file must
   // read out healed too, without this binary ever writing it back.
-  // : out-of-bounds connection.maxOutputTokens is stripped the same
+  // out-of-bounds connection.maxOutputTokens is stripped the same
   // way (in memory only) on both arms.
   return { settings: migrateConnectionOverrides(dropOutOfBoundsMaxOutputTokens(normalizeActiveConnection(result.settings))), readOnly: result.readOnly };
 }

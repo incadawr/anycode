@@ -1,5 +1,5 @@
 /**
- *  /  + 4742 — tests for the transcript tick rail (the
+ * + 4742 — tests for the transcript tick rail (the
  * evolved TranscriptMinimap). Same jsdom-free discipline as
  * ToolCallStack.test.ts: pure-logic units for the projection
  * (`selectUserTurns`/`summarizeTurn`/`excerpt`, the memoized

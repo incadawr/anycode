@@ -1,6 +1,6 @@
 /**
  * Pure view-model for the Settings → Sessions API pane and the per-tab switch
- *. Labels, the status chip, button enablement, port parsing and
+ * Labels, the status chip, button enablement, port parsing and
  * the mutation-refusal wording live here so they are unit-testable without a DOM.
  * Everything rendered is PLAIN TEXT; nothing here carries a token or a path that
  * the renderer did not already receive from main.
@@ -138,7 +138,7 @@ export function sessionSwitchDisabledReason(envControlled: boolean, hasTab: bool
   return null;
 }
 
-/** : per-session External approvals switch (shown only while the session is shared). */
+/** per-session External approvals switch (shown only while the session is shared). */
 export const SESSION_APPROVALS_ARIA_LABEL = "Allow approving this session's tool requests from outside";
 export const SESSION_APPROVALS_NOTE = "Whoever holds the Sessions API token can allow or deny this session's tool requests.";
 

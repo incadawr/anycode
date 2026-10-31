@@ -21,7 +21,7 @@ export function formatUsageLimitReset(resetAt: number): string {
 
 function storage(): Storage | null {
   try {
-    //  boundary fix: resolve through the `window` property OF
+    // boundary fix: resolve through the `window` property OF
     // globalThis with a structural cast, instead of the bare `window`
     // identifier — this module is imported (type-only) by store.ts, which
     // host-side integration tests (session-reconnect.test.ts) import under

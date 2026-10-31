@@ -15,13 +15,13 @@
  * regardless of a session rule.
  *
  * Command-line subjects are matched PER COMMAND, not per command line
- *: the command is split on the shell's separators and the pattern
+ * the command is split on the shell's separators and the pattern
  * must match every segment — see `splitBashSegments` for the rationale and the
  * fail-closed cases. `Bash` and the desktop Codex bridge's
  * `CodexExec` share that treatment because they share the subject SHAPE; every
  * path/URL tool keeps raw whole-string matching.
  *
- *  — scoped project-runner rules. A pattern starting with the prefix
+ * scoped project-runner rules. A pattern starting with the prefix
  * `scoped-runner:` is a member of a separate family, never a glob (see
  * `SCOPED_PATTERN_PREFIX`). A member is parsed strictly (parse-or-die): a
  * malformed member matches NOTHING — it never falls back to picomatch, so a
@@ -40,7 +40,7 @@
  * `trim()`'s wider Unicode set (NBSP, U+2028, …) is deliberately not applied,
  * because Bash treats those as ordinary characters — see `scopedTrimShell`.
  *
- *  — always-allow rules are CONFINED to the session workspace for
+ * always-allow rules are CONFINED to the session workspace for
  * the file-write tools (WORKSPACE_CONFINED_WRITE_TOOLS: Write/Edit/MultiEdit).
  * A matching rule (bare or patterned) may downgrade an "ask" to "allow" only
  * when the dispatcher-minted workspace facts (`request.workspace`, realpath-
@@ -50,7 +50,7 @@
  * `.anycode/worktrees/<x>` worktree therefore cannot ride a blanket Edit rule
  * to edit the main checkout by absolute path. Bash is out of scope: its
  * command line is not path-analysable, so a blanket Bash rule remains a full
- * bypass by owner grant (residual documented in ).
+ * bypass by owner grant (residual documented).
  */
 
 import picomatch from "picomatch";
@@ -73,7 +73,7 @@ const SUBJECT_FIELD: Record<string, string> = {
   Glob: "path",
   Grep: "path",
   WebFetch: "url",
-  // . Not a core tool: this is the name the desktop's Codex approval
+  // Not a core tool: this is the name the desktop's Codex approval
   // bridge stamps on a `commandExecution` approval, whose input carries the
   // same `command: string` a Bash call does. It is listed here because rules
   // are matched by the tool name the USER approved, never by a translated one
@@ -159,8 +159,7 @@ function extractSubject(toolName: string, input: unknown): string | undefined {
 const PAREN_RE = /[()]/;
 
 /**
- * Splits a Bash command into the individual commands a shell would run
- * (; exported and separator-kind-aware as of ). Returns
+ * Splits a Bash command into the individual commands a shell would run. Returns
  * `undefined` when the command must be treated as unsegmentable — the caller
  * then refuses the match (fail closed).
  *
@@ -187,7 +186,7 @@ const PAREN_RE = /[()]/;
  * - an unterminated quote: the command is malformed for our purposes and its
  *   segmentation is undecidable.
  *
- * **:** now exported for `safe-command.ts`'s pipeline classifier (the
+ * **** now exported for `safe-command.ts`'s pipeline classifier (the
  * ONE splitter, invariant 2). The return shape grows a `separators` array
  * recording each separator's exact kind (`||`≠`|`, `&&`≠`&` — the walk always
  * distinguished them, only the old return type erased it). Blank segments are
@@ -320,7 +319,7 @@ export function splitBashSegments(command: string): BashSegments | undefined {
 
 /**
  * The list of strings a Bash rule's pattern must match — ALL of them, not the
- * raw command as a whole (, see `splitBashSegments`). Blank segments
+ * raw command as a whole (see `splitBashSegments`). Blank segments
  * (a trailing `;`, `a || b ||`) carry no command and are dropped; when nothing
  * but blanks remains the raw subject is used, so a degenerate command still
  * has to face the pattern instead of vacuously satisfying "every segment".
@@ -334,7 +333,7 @@ function bashMatchSubjects(command: string): string[] | undefined {
   return commands.length > 0 ? commands : [command];
 }
 
-// ── : scoped project-runner rules (cd <workspace> && <runner> <verb>) ──
+// ── scoped project-runner rules (cd <workspace> && <runner> <verb>) ──
 
 /** Family prefix: a pattern starting with this is a scoped rule, parsed strictly or never matches. */
 export const SCOPED_PATTERN_PREFIX = "scoped-runner:";
@@ -572,7 +571,7 @@ export class RuleAwarePermissionEngine implements PermissionEngine {
     if (!this.rules.matches(request.toolName, request.input)) {
       return ruling;
     }
-    // : an always-allow rule (bare or patterned) never authorises a
+    // an always-allow rule (bare or patterned) never authorises a
     // file write the dispatcher could not PROVE lands inside the session
     // workspace (realpath-resolved facts, request.workspace). Outside or
     // unprovable => the ask stands: interactive -> modal, unattended -> deny.

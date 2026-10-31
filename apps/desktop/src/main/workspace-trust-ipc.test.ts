@@ -183,7 +183,7 @@ describe("handleWorkspaceTrustDecide", () => {
   });
 });
 
-// : Settings → Permissions lists remembered trusted/denied folders
+// Settings → Permissions lists remembered trusted/denied folders
 // and forgets exactly one record. The renderer is untrusted (S1): list sends
 // NO payload, forget sends only a `key` it previously received from main's
 // list. Main treats the key as an opaque lookup handle (S3): it re-reads the
@@ -403,7 +403,7 @@ describe("handleWorkspaceTrustForget", () => {
 // S6: decide and forget both mutate the store file with a read-modify-write;
 // main serialises them through one promise queue so neither can lose the
 // other's update.
-describe("workspace trust store write serialisation (, S6)", () => {
+describe("workspace trust store write serialisation (S6)", () => {
   it("concurrent decide + forget both land (no lost update)", async () => {
     const fs = makeFs();
     await writeTrustDecision(fs, STORE, WS, "trusted", "h1", "t0");
@@ -452,7 +452,7 @@ describe("workspace trust store write serialisation (, S6)", () => {
   });
 });
 
-//  decision 3: decide canonicalises pending.workspace with
+// decision 3: decide canonicalises pending.workspace with
 // realpath BEFORE writing and BEFORE keying the once-approval, so a symlinked
 // workspace and its target share one record; workspaceTrustOnceFor finds a
 // once-approval via either name (it is SYNC — no fs await inside).

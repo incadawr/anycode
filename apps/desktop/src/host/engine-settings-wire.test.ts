@@ -1,5 +1,5 @@
 /**
- *  — the Session wire for an engine with NATIVE model/permission controls.
+ * the Session wire for an engine with NATIVE model/permission controls.
  *
  * Session is built directly here (not through createHarness): the harness is
  * hard-wired to a core AgentLoop engine, and what is under test is precisely the
@@ -163,7 +163,7 @@ function fixture(): Fixture {
 }
 
 /**
- *  cross-review finding 2: a CHILD-mode engine session (a codex
+ * cross-review finding 2: a CHILD-mode engine session (a codex
  * child tab's own host) must be posture-frozen — `set_engine_preset` is the
  * one wire a renderer can widen a running child with (one click in the child
  * tab's picker turns a `child-ask` boot into `full-access`), so the route is
@@ -234,7 +234,7 @@ afterEach(() => {
   for (const value of open.splice(0)) value.close();
 });
 
-describe(" — host_ready presentation", () => {
+describe("— host_ready presentation", () => {
   it("carries the native model catalog and preset table (no AnyCode provider catalog involved)", async () => {
     const ui = fixture();
     ui.send({ type: "ui_ready" });
@@ -311,7 +311,7 @@ describe(" — host_ready presentation", () => {
   });
 });
 
-describe(" — set_engine_preset / set_model routing", () => {
+describe("— set_engine_preset / set_model routing", () => {
   it("acks an accepted preset as pending, persists it, and applies it on the next turn", async () => {
     const ui = fixture();
     ui.send({ type: "ui_ready" });
@@ -379,7 +379,7 @@ describe(" — set_engine_preset / set_model routing", () => {
   it("cannot be sent a raw sandbox / policy / config payload — zod drops it before route()", async () => {
     const ui = fixture();
     ui.send({ type: "ui_ready" });
-    // Exactly the shapes  DoD-4 forbids.
+    // Exactly the shapes DoD-4 forbids.
     ui.send({ type: "set_engine_preset", presetId: "ask", sandbox: "danger-full-access" } as unknown as UiToHostMessage);
     ui.send({ type: "set_engine_preset", config: { approvalPolicy: "never" } } as unknown as UiToHostMessage);
     ui.send({ type: "set_engine_preset", presetId: { type: "workspaceWrite" } } as unknown as UiToHostMessage);
@@ -448,14 +448,14 @@ describe(" — set_engine_preset / set_model routing", () => {
     await ui.settle();
   });
 
-  //  cross-review finding 2 (reproduction first): a codex CHILD
+  // cross-review finding 2 (reproduction first): a codex CHILD
   // boots posture-frozen (child-permission-map's `child-ask`/`read-only`/
   // `ask`), but the child tab renders the same SessionSurface, so its picker
   // could legitimately drive this route — one click replaces a broker-mediated
   // `child-ask` boot with `full-access` (no sandbox, no approvals) on a
   // session nobody deliberately chose a posture for. Children never respawn
   // and have no between-turns owner standing; the route must refuse.
-  it("refuses set_engine_preset on a CHILD session entirely — a child is posture-frozen ( finding 2)", async () => {
+  it("refuses set_engine_preset on a CHILD session entirely — a child is posture-frozen (finding 2)", async () => {
     const ui = fixtureWith({ child: true });
     ui.send({ type: "ui_ready" });
     await ui.settle();

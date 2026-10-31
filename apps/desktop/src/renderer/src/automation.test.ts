@@ -133,7 +133,7 @@ const HOST_READY = (workspace: string, sessionId: string): HostToUiMessage => ({
 });
 
 /**
- * : a NON-core (`codex`) handshake. The engine projection is what
+ * a NON-core (`codex`) handshake. The engine projection is what
  * keeps the pill's between-turns gate — the core engine (no `engine` block,
  * see `HOST_READY` above) now accepts a mid-turn model/effort pick instead.
  */
@@ -241,7 +241,7 @@ describe("automation facade — snapshot", () => {
       workspace: state.workspace,
       model: state.model,
       mode: state.mode,
-      //  §3.7 (part B): the tab-level orchestrate flag.
+      // §3.7 (part B): the tab-level orchestrate flag.
       orchestrateActive: state.orchestrateActive,
       turn: state.turn,
       transcript: state.transcript,
@@ -264,7 +264,7 @@ describe("automation facade — snapshot", () => {
     expect(facade.snapshot().states[tabId]?.engine).toBeUndefined();
   });
 
-  it("projects engine metadata (id/model/activePresetId) for a non-core session (codex-fixes , cut §3.7)", () => {
+  it("projects engine metadata (id/model/activePresetId) for a non-core session (codex-fixes, cut §3.7)", () => {
     const { tabsStore, registry, port, tabId } = setupReadyTab();
     const facade = createAutomationFacade(registry, tabsStore, stubBridge());
 
@@ -315,7 +315,7 @@ describe("automation facade — snapshot", () => {
     expect(facade.snapshot().states[tabId]?.envStatus).toEqual(status);
   });
 
-  it("projects a live retry offer as {loopEndBlockId, text, imageCount} — same attachment-stripping discipline as promptQueue ( W8)", () => {
+  it("projects a live retry offer as {loopEndBlockId, text, imageCount} — same attachment-stripping discipline as promptQueue (W8)", () => {
     const { tabsStore, registry, tabId } = setupReadyTab();
     const facade = createAutomationFacade(registry, tabsStore, stubBridge());
     const image = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
@@ -434,7 +434,7 @@ describe("automation facade — sendPrompt", () => {
   });
 });
 
-describe("automation facade — sendPrompt with images ( live-smoke facade)", () => {
+describe("automation facade — sendPrompt with images (live-smoke facade)", () => {
   const PNG_HEADER = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
   const PNG_BASE64 = PNG_HEADER.toString("base64");
 
@@ -460,7 +460,7 @@ describe("automation facade — sendPrompt with images ( live-smoke facade)", ()
       expect(uiToHostMessageSchema.safeParse(message).success).toBe(true);
     }
 
-    // : the transcript echo carries the attachments on
+    // the transcript echo carries the attachments on
     // the block (thumbnails render) — raw text, no "[1 image attached]" badge.
     const transcript = registry.getStore(tabId)!.getState().transcript;
     expect(transcript).toEqual([
@@ -489,7 +489,7 @@ describe("automation facade — sendPrompt with images ( live-smoke facade)", ()
     expect(port.sent.filter((m) => (m as { type: string }).type !== "ui_ready")).toHaveLength(0);
   });
 
-  it("a blind model WITH a configured recognizer fallback -> unblocked, images still go out ( срез D carve-out)", () => {
+  it("a blind model WITH a configured recognizer fallback -> unblocked, images still go out (срез D carve-out)", () => {
     const { registry, tabsStore, port, tabId } = setupReadyTab();
     const facade = createAutomationFacade(registry, tabsStore, stubBridge());
     port.emit({ type: "model_changed", model: "glm-5.2", reasoningEffort: "off", imageInput: false, imageFallback: true });
@@ -547,7 +547,7 @@ describe("automation facade — sendPrompt with images ( live-smoke facade)", ()
     expect(port.sent.filter((m) => (m as { type: string }).type !== "ui_ready")).toHaveLength(0);
   });
 
-  // : live user_text blocks now carry `images` (base64),
+  // live user_text blocks now carry `images` (base64),
   // but the snapshot invariant — base64 payloads NEVER enter a snapshot — must
   // hold: media type + sourcePath only, nothing else.
   it("snapshot after an image-bearing sendPrompt stays base64-free: images strip to {mediaType, sourcePath}", () => {
@@ -567,7 +567,7 @@ describe("automation facade — sendPrompt with images ( live-smoke facade)", ()
   });
 });
 
-describe("snapshotTranscript ( — snapshot stays base64-free)", () => {
+describe("snapshotTranscript (snapshot stays base64-free)", () => {
   it("strips data/ref/cssSize from user_text images, keeps sourcePath when present and omits it when absent", () => {
     const withPath: TranscriptBlock = {
       kind: "user_text",
@@ -671,7 +671,7 @@ describe("automation facade — respondPermission", () => {
 });
 
 /**
- * : a child tab's store lives ONLY in the tab registry (never in
+ * a child tab's store lives ONLY in the tab registry (never in
  * tabsStore), so the facade snapshot carries children as `childStates` —
  * per-child state plus the parent relation — while `states` stays root-only.
  */
@@ -758,7 +758,7 @@ describe("automation facade — setMode", () => {
     expect(port.sent).toEqual([{ type: "ui_ready" }]);
   });
 
-  it("MA1: sends set_mode while a turn is running ( — busy no longer refuses), valid against uiToHostMessageSchema", () => {
+  it("MA1: sends set_mode while a turn is running (busy no longer refuses), valid against uiToHostMessageSchema", () => {
     const { registry, tabsStore, port, tabId } = setupReadyTab();
     port.emit({ type: "turn_started", requestId: "r0", turnId: "t0" });
     const facade = createAutomationFacade(registry, tabsStore, stubBridge());
@@ -798,7 +798,7 @@ describe("automation facade — setMode", () => {
 });
 
 /**
- *  §3.7 (part B): the Orchestrate row's facade pair.
+ * §3.7 (part B): the Orchestrate row's facade pair.
  * `setOrchestrate` sends exactly one wire message — `set_orchestrate` — with
  * the same ready-only guard as setMode (the host applies it between turns);
  * `modeMenuState` is a read-only DOM probe (closed chip -> open:false, no
@@ -899,7 +899,7 @@ describe("automation facade — stop / selectTab", () => {
   });
 });
 
-describe("automation facade — childOpen ( S2d D1, CUT-S2 §4.2 п.5 'Open-клик')", () => {
+describe("automation facade — childOpen (S2d D1, CUT-S2 §4.2 п.5 'Open-клик')", () => {
   it("switches the root tab's pane onto the given child — the SAME call ToolCallCard.tsx's Open button makes", () => {
     childLayoutStore.getState().reset();
     const tabsStore = createTabsStore();
@@ -941,7 +941,7 @@ describe("automation facade — childOpen ( S2d D1, CUT-S2 §4.2 п.5 'Open-кл
   });
 });
 
-describe("automation facade — childCloseClick ( S8.3, CUT-S3 §6.1 'every layout transition is a real click')", () => {
+describe("automation facade — childCloseClick (S8.3, CUT-S3 §6.1 'every layout transition is a real click')", () => {
   /**
    * Two tabs (so `not_active` is reachable), an ISOLATED child-layout store
    * and a fake click seam at the very end of the positional DI list.
@@ -1048,7 +1048,7 @@ describe("automation facade — childCloseClick ( S8.3, CUT-S3 §6.1 'every layo
   });
 });
 
-describe("automation facade — childSplitClick ( S9.4, the entry-side twin of childCloseClick)", () => {
+describe("automation facade — childSplitClick (S9.4, the entry-side twin of childCloseClick)", () => {
   /**
    * Same shape as `buildCloseFacade` above, one slot further along the
    * positional DI list. `ChildSplitDom` is its OWN parameter rather than a
@@ -1158,7 +1158,7 @@ describe("automation facade — childSplitClick ( S9.4, the entry-side twin of c
   });
 });
 
-describe("automation facade — tryAgain (design  W8)", () => {
+describe("automation facade — tryAgain (design W8)", () => {
   it("unknown tab -> {ok:false, reason:'unknown_tab'}", () => {
     const tabsStore = createTabsStore();
     const registry = createTabRegistry(tabsStore);
@@ -1235,7 +1235,7 @@ describe("automation facade — tryAgain (design  W8)", () => {
     expect(port.sent.filter((m) => (m as { type: string }).type !== "ui_ready")).toHaveLength(1);
   });
 
-  // T5 (fable-task56-w3-codex-ruling.md finding 2 §(d)): facade-layer PIN — a
+  // T5 (finding 2 §(d)): facade-layer PIN — a
   // rollback of the reason mapping below would have this test assert on a
   // lying {ok:true} (dispatchTryAgain still refuses to send, but the facade
   // wouldn't say so), the exact "lying facade could mask a real regression"
@@ -2063,7 +2063,7 @@ describe("automation facade — startScreenState (design/slice-P7.12-cut.md §5 
       sendEnabled: false,
       recentCount: 0,
       projectMenuOpen: false,
-      // Codex-fixes  (cut §3.7, B5-auto): `engine` is undefined until a
+      // Codex-fixes (cut §3.7, B5-auto): `engine` is undefined until a
       // draft exists (mirrors workspace/prompt/model's draft-scoped reads);
       // `availableEngines` is the compiled-in catalog regardless of draft state.
       engine: undefined,
@@ -2091,7 +2091,7 @@ describe("automation facade — startScreenState (design/slice-P7.12-cut.md §5 
       sendEnabled: false, // §3-D3: no workspace yet -> still disabled
       recentCount: 3,
       projectMenuOpen: true,
-      // Codex-fixes  (cut §3.7, B5-auto): openDraft() defaults the
+      // Codex-fixes (cut §3.7, B5-auto): openDraft() defaults the
       // draft's engine to "core" (tabs-store.ts) — the catalog is unchanged.
       engine: "core",
       // SLICE-CC A1: the compiled-in catalog now also includes "claude".
@@ -2209,7 +2209,7 @@ describe("automation facade — startScreenSetModel (design/slice-F5-1b-cut.md �
   });
 });
 
-describe("automation facade — startScreenSetEngine (codex-fixes , cut §3.7)", () => {
+describe("automation facade — startScreenSetEngine (codex-fixes, cut §3.7)", () => {
   it("refuses with no_draft when no draft is open, and touches nothing", async () => {
     const { tabsStore, registry } = setupReadyTab();
     const facade = createAutomationFacade(registry, tabsStore, stubBridge());
@@ -2322,7 +2322,7 @@ describe("automation facade — startScreenToggleProjectMenu (design/slice-F5-1b
   });
 });
 
-describe("automation facade — startScreenModelMenuState / startScreenToggleModelMenu / startScreenSelectModelRow ( cut-1)", () => {
+describe("automation facade — startScreenModelMenuState / startScreenToggleModelMenu / startScreenSelectModelRow (cut-1)", () => {
   it("reads open:false and an empty group list when the popover isn't rendered", () => {
     const { tabsStore, registry } = setupReadyTab();
     const facade = createAutomationFacade(registry, tabsStore, stubBridge(), undefined, undefined, fakeStartScreenDom());
@@ -2650,7 +2650,7 @@ describe("automation facade — prompt queue (design/slice-P7.14-cut.md §5 W3)"
   });
 });
 
-describe("automation facade — composerQueueState ( / )", () => {
+describe("automation facade — composerQueueState", () => {
   /**
    * A FAKE textarea's placeholder: the probe only relays the node's attribute,
    * so this pins pass-through, not Composer's running/idle copy (that needs
@@ -2717,7 +2717,7 @@ describe("automation facade — composerQueueState ( / )", () => {
     });
   });
 
-  it(" DoD pin: a running turn arms the enqueue route while the input STAYS enabled (submit would queue, not be lost)", () => {
+  it("DoD pin: a running turn arms the enqueue route while the input STAYS enabled (submit would queue, not be lost)", () => {
     const { facade, tabId, port } = buildQueueFacade();
     port.emit({ type: "turn_started", requestId: "r0", turnId: "t0" });
 
@@ -2853,7 +2853,7 @@ describe("automation facade — composerQueueState ( / )", () => {
     expect(facade.composerQueueState(tabId)).toMatchObject({ inputEnabled: false, draft: "typed", placeholder: "Message the agent…" });
   });
 
-  it(" §10.15.1 pin: a child surface ALWAYS direct-sends — enqueue is never armed there", () => {
+  it("§10.15.1 pin: a child surface ALWAYS direct-sends — enqueue is never armed there", () => {
     const { facade, tabId, port, registry } = buildQueueFacade();
     port.emit({ type: "turn_started", requestId: "r0", turnId: "t0" });
     registry.getStore(tabId)!.setState({ childSurface: true });
@@ -4707,7 +4707,7 @@ describe("automation facade — Skills pane probe/driver (design/slice-P7.20-cut
   });
 });
 
-describe("automation facade — MCP pane add-server driver (/4061 item 4)", () => {
+describe("automation facade — MCP pane add-server driver (item 4)", () => {
   const noTranscriptDom6: TranscriptDom = { container: () => null, jumpButtonVisible: () => false };
   const noTodoPanelDom6: TodoPanelDom = { panel: () => null };
   const noStartScreenDom6: StartScreenDom = {
@@ -5824,7 +5824,7 @@ describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-
   });
 });
 
-describe("automation facade — Profile pane probe/driver (design/slice-P7.22-cut.md §4 W4, period/models/refresh added )", () => {
+describe("automation facade — Profile pane probe/driver (design/slice-P7.22-cut.md §4 W4, period/models/refresh added)", () => {
   /**
    * Builds a facade wired ONLY for the Profile pane methods. Every other DI
    * slot is left `undefined` (relying on `createAutomationFacade`'s own
@@ -5832,7 +5832,7 @@ describe("automation facade — Profile pane probe/driver (design/slice-P7.22-cu
    * blocks above use — safe because every `real*Dom` factory in this file is
    * lazy (it only ever touches `document` inside a returned closure, never at
    * construction time, per `realProfilePaneDom`'s own doc comment), same
-   * posture `buildTrustFacade` (, further below) relies on for every
+   * posture `buildTrustFacade` (further below) relies on for every
    * slot it isn't exercising.
    */
   function buildFacade(dom: ProfilePaneDom) {
@@ -5903,7 +5903,7 @@ describe("automation facade — Profile pane probe/driver (design/slice-P7.22-cu
       clickModelsExpandCommits: boolean;
       coverageNoticeText: string | null;
       clickRefreshResult: boolean;
-      // ──  S5 additions ──
+      // ── S5 additions ──
       /** Initial `data-profile-phase`; `null` models a build that stamps no such attribute at all. */
       phase: string | null;
       /** `false` models the button missing from the DOM entirely (`refreshButton()` reads `null`). */
@@ -5942,7 +5942,7 @@ describe("automation facade — Profile pane probe/driver (design/slice-P7.22-cu
     const periodLabels = overrides.periodLabels ?? ALL_PERIOD_LABELS;
     let modelsExpanded = overrides.modelsExpanded ?? false;
     const modelsTotal = overrides.modelsTotal ?? null;
-    //  S5: a REAL busy lifecycle, not a frozen reading. The pane the
+    // S5: a REAL busy lifecycle, not a frozen reading. The pane the
     // facade now drives holds its Refresh button for the length of every pass
     // and keeps `data-profile-phase` at `ready` while an automatic catch-up
     // pass runs, so a fake that reports a permanently idle pane could not
@@ -6320,7 +6320,7 @@ describe("automation facade — Profile pane probe/driver (design/slice-P7.22-cu
     });
   });
 
-  describe("profilePaneState —  S5 observables", () => {
+  describe("profilePaneState — S5 observables", () => {
     it("reads the four real phases straight off `data-profile-phase`", () => {
       for (const phase of ["skeleton", "cached-updating", "refreshing", "ready"] as const) {
         expect(buildFacade(fakeProfilePaneDom({ mounted: true, phase })).profilePaneState().phase).toBe(phase);
@@ -6344,7 +6344,7 @@ describe("automation facade — Profile pane probe/driver (design/slice-P7.22-cu
         pendingExactAttr: "4",
         // Deliberately contradictory human copy: the counters must come from
         // the attributes, so a reworded note (this one was rewritten three
-        // times inside ) cannot move the probe's reading.
+        // times inside) cannot move the probe's reading.
         truncatedNoteText: "Still aggregating — 7 files left, filling in automatically.",
       });
       expect(buildFacade(dom).profilePaneState()).toMatchObject({ backlogRemaining: 1873, pendingExactSessions: 4 });
@@ -6450,9 +6450,9 @@ describe("automation facade — Profile pane probe/driver (design/slice-P7.22-cu
       expect(dom.clickRefresh).toHaveBeenCalled();
     });
 
-    // ──  S5: the false-`ok` class the S4 rework opened ──
+    // ── S5: the false-`ok` class the S4 rework opened ──
 
-    it("refuses `busy` WITHOUT clicking when the Refresh button is held — a disabled button swallows the click, so a delivered click is not evidence ( S5 /  false-ok class)", async () => {
+    it("refuses `busy` WITHOUT clicking when the Refresh button is held — a disabled button swallows the click, so a delivered click is not evidence (S5 / false-ok class)", async () => {
       const dom = fakeProfilePaneDom({ mounted: true, busy: true });
       const facade = buildFacade(dom);
       await expect(facade.profileRefresh()).resolves.toEqual({ ok: false, reason: "busy" });
@@ -6491,7 +6491,7 @@ describe("automation facade — Profile pane probe/driver (design/slice-P7.22-cu
     });
 
     it("does not call a pass that finished between two polls `did_not_start` — a refusal that left its error banner behind DID run", async () => {
-      // Measured live ( final pass): a rebuild whose cache-file
+      // Measured live (final pass): a rebuild whose cache-file
       // delete fails with EACCES refuses inside main before any directory
       // work, so the whole request opens and closes inside one commit and the
       // busy window is never sampled. The pass still happened, and the pane
@@ -6572,7 +6572,7 @@ describe("automation facade — Profile pane probe/driver (design/slice-P7.22-cu
     });
   });
 
-  describe("profileRebuild ( S5 — the footer's two-step cache-rebuild gesture)", () => {
+  describe("profileRebuild (S5 — the footer's two-step cache-rebuild gesture)", () => {
     it("refuses when the pane isn't mounted", async () => {
       const dom = fakeProfilePaneDom({ mounted: false });
       const facade = buildFacade(dom);
@@ -6681,7 +6681,7 @@ async function atDeadline<T>(run: () => Promise<T>, deadlineMs: number): Promise
   }
 }
 
-describe("automation facade — Vision pane probe/driver ( срез E2c)", () => {
+describe("automation facade — Vision pane probe/driver (срез E2c)", () => {
   /** Builds a facade wired ONLY for the Vision pane methods — every other DI slot keeps its own lazy real default, same posture as the Profile block's `buildFacade`. */
   function buildFacade(dom: VisionPaneDom) {
     const tabsStore: TabsStoreApi = createTabsStore();
@@ -7173,7 +7173,7 @@ describe("automation facade — Vision pane probe/driver ( срез E2c)", () =>
   });
 });
 
-describe("automation facade — settings geometry probe ( S5, defect 1)", () => {
+describe("automation facade — settings geometry probe (S5, defect 1)", () => {
   /** Wires ONLY the geometry slot; positions 4-30 keep their own lazy real defaults, same posture as the Profile block's `buildFacade`. */
   function buildFacade(settingsLayoutDom: SettingsLayoutDom) {
     const tabsStore: TabsStoreApi = createTabsStore();
@@ -7242,7 +7242,7 @@ describe("automation facade — settings geometry probe ( S5, defect 1)", () => 
 
   it("reports the defect as a number: with `max-width` still on the scroll port, the gap is the dead space to its right", () => {
     // The pre-fix shape — `.settings-pane` itself capped at 46rem, no inner
-    // wrapper at all — is exactly what  defect 1 describes.
+    // wrapper at all — is exactly what defect 1 describes.
     const state = buildFacade(
       fixedLayoutDom({
         paneRect: () => ({ left: 220, right: 956, width: 736, scrollHeight: 2400, clientHeight: 820 }),
@@ -7464,7 +7464,7 @@ describe("automation facade — checkpoint timeline / rewind probes+driver (desi
       await expect(facade.checkpointPanelState(tabId)).resolves.toEqual({ ok: false, reason: "tab_not_active" });
     });
 
-    it("sends checkpoint_list_request over the tab's port and returns the store's list once it lands (: no DOM panel anymore)", async () => {
+    it("sends checkpoint_list_request over the tab's port and returns the store's list once it lands (no DOM panel anymore)", async () => {
       const { registry, tabsStore, tabId, port } = setupReadyTab();
       tabsStore.getState().setActiveTab(tabId);
       // The host's checkpoint_list reply replaces the store's array. The fake
@@ -7716,7 +7716,7 @@ describe("automation facade — checkpoint timeline / rewind probes+driver (desi
   });
 });
 
-describe("automation facade — tryAgainButtonState/tryAgainButtonClick ( W8-FIX #2)", () => {
+describe("automation facade — tryAgainButtonState/tryAgainButtonClick (W8-FIX #2)", () => {
   /** Builds a facade wired ONLY for the try-again-button methods — every other DOM/store slot keeps its own real default (never exercised by these tests). */
   function buildFacade(registry: TabRegistry, tabsStore: TabsStoreApi, tryAgainButtonDom?: TryAgainButtonDom) {
     return createAutomationFacade(
@@ -7855,10 +7855,10 @@ describe("automation facade — tryAgainButtonState/tryAgainButtonClick ( W8-FIX
       expect(facade.tryAgainButtonClick(tabId, "loop_end:t1")).toEqual({ ok: false, reason: "not_present" });
     });
 
-    // PIN (fable-task56-w3fix-codex-ruling.md finding 1 §(b)): a click DELIVERED
+    // PIN (finding 1 §(b)): a click DELIVERED
     // to the real button (tryAgainButtonDom.click returns true, same as
     // "fires a REAL click..." above) can still be refused by dispatchTryAgain's
-    // entry gate ( W3-FIX) — the facade still reports {ok:true} because
+    // entry gate (W3-FIX) — the facade still reports {ok:true} because
     // the click itself was delivered; the refusal shows up in the STORE
     // (retryOffer stays armed, a retry_blocked notice is raised), not in this
     // return value. Kill-proof: this {ok:true} assert would flip red against a
@@ -7905,7 +7905,7 @@ describe("automation facade — tryAgainButtonState/tryAgainButtonClick ( W8-FIX
   });
 });
 
-describe("automation facade — workflowStepsState/workflowStepClick ( slice S4)", () => {
+describe("automation facade — workflowStepsState/workflowStepClick (slice S4)", () => {
   /** Builds a facade wired ONLY for the workflow-steps methods — every other DOM/store slot keeps its own real default (never exercised by these tests). */
   function buildFacade(registry: TabRegistry, tabsStore: TabsStoreApi, workflowStepsDom?: WorkflowStepsDom) {
     return createAutomationFacade(
@@ -7996,7 +7996,7 @@ describe("automation facade — workflowStepsState/workflowStepClick ( slice S4)
           { stepId: "step-2", selected: true, meta: "Error · not launched" },
         ],
         activityRows: ["step-2: wrote file.ts"],
-        // : the selected step's rendered failure block, verbatim.
+        // the selected step's rendered failure block, verbatim.
         failure: { kind: "Error", text: "boom" },
       };
       const workflowStepsDom: WorkflowStepsDom = { state: () => domState, click: vi.fn(() => false) };
@@ -8021,7 +8021,7 @@ describe("automation facade — workflowStepsState/workflowStepClick ( slice S4)
       expect(facade.workflowStepsState(tabId, "call-1")).toEqual({ ok: true, rows: [], activityRows: [], failure: null });
     });
 
-    //  §10 finding 2: without `meta` on the row, a live smoke could
+    // §10 finding 2: without `meta` on the row, a live smoke could
     // only tell "0.0s" apart from "not launched" by screenshot. This pins
     // the rendered `.workflow-step-meta` text riding through the probe
     // machine-readably instead.
@@ -8591,7 +8591,7 @@ describe("automation facade — workflowMapState/workflowMapToggle/workflowTicks
   });
 });
 
-describe("automation facade — provider connections grid/drawer probe/driver ( W12)", () => {
+describe("automation facade — provider connections grid/drawer probe/driver (W12)", () => {
   /** Builds a facade wired ONLY for the provider-pane methods — registry/tabsStore are a fresh empty pair (the pane is shell-level, not tab-scoped, so neither is ever touched) and every other DOM slot keeps its own real (never-exercised) default. */
   function buildFacade(settingsStore: SettingsStoreApi, providerPaneDom: ProviderPaneDom) {
     const tabsStore: TabsStoreApi = createTabsStore();
@@ -9179,7 +9179,7 @@ describe("automation facade — modelPillState catalog parity (W4-F0, findings S
 
   it("resolves a PINNED tab's catalog from the pin's provider, not the active one — resolvePillTarget parity with ModelPill.tsx", () => {
     // Second S5-1 axis: a pinned tab's popover renders the PIN's provider
-    // catalog ( W10-FIX F2); the pre-fix probe always computed from
+    // catalog (W10-FIX F2); the pre-fix probe always computed from
     // the ACTIVE provider, so it could lie optimistically too. RED against
     // reverting the pillCatalogModels fix.
     const snapshot: SettingsSnapshot = {
@@ -9261,7 +9261,7 @@ describe("automation facade — codexPaneState / drivers (W4-F0, findings S1-1 p
       binary: CodexPaneBinaryState;
       rows: CodexPaneRowState[];
       notices: string[];
-      //  (BU5): the "Trust this binary…" button's structured facts,
+      // (BU5): the "Trust this binary…" button's structured facts,
       // or null (no button rendered) — mirrors realCodexPaneDom's `trust()`.
       // BU10 (D-S4-17 fix wave): staleConsent gains a THIRD structured fact.
       trust: { binaryPath: string; reason: string; buttonVisible: boolean; staleConsent: boolean } | null;
@@ -9379,7 +9379,7 @@ describe("automation facade — codexPaneState / drivers (W4-F0, findings S1-1 p
     expect(busyDom.clickAction).not.toHaveBeenCalled();
   });
 
-  //  (CUT-S4.md §6c BU5): codexPaneState().trust — present iff the
+  // (CUT-S4.md §6c BU5): codexPaneState().trust — present iff the
   // DOM accessor's OWN trust() read returns a value (structured facts, never
   // a re-derivation off `binary`/`rows`); absent when the button isn't
   // rendered. must-fail-naive.
@@ -9393,7 +9393,7 @@ describe("automation facade — codexPaneState / drivers (W4-F0, findings S1-1 p
     expect(withoutTrust.codexPaneState().trust).toBeUndefined();
   });
 
-  //  fix wave (D-S4-17, BU10): staleConsent rides codexPaneState().trust
+  // fix wave (D-S4-17, BU10): staleConsent rides codexPaneState().trust
   // as a THIRD structured fact — read off the DOM accessor's own trust() read,
   // never re-derived. must-fail-naive.
   it("BU10 codexPaneState().trust.staleConsent mirrors the DOM accessor's trust() read", () => {
@@ -9408,7 +9408,7 @@ describe("automation facade — codexPaneState / drivers (W4-F0, findings S1-1 p
     expect(fresh.codexPaneState().trust?.staleConsent).toBe(false);
   });
 
-  //  (BU5, D-S4-8): codexPaneTrustOpen — the SAME
+  // (BU5, D-S4-8): codexPaneTrustOpen — the SAME
   // codexPaneRecheckAll/codexPaneInstall mechanism (a real click on the
   // pane's OWN "Trust this binary…" action-row button via `clickAction`),
   // not a re-implementation.
@@ -9425,10 +9425,10 @@ describe("automation facade — codexPaneState / drivers (W4-F0, findings S1-1 p
   });
 });
 
-describe("automation facade — binaryTrustDialogState / Resolve, trustedBinariesState / Revoke (, CUT-S4.md §6c BU6-BU7)", () => {
+describe("automation facade — binaryTrustDialogState / Resolve, trustedBinariesState / Revoke (CUT-S4.md §6c BU6-BU7)", () => {
   /**
    * `createAutomationFacade`'s positional-parameter list is 28 long
-   * (registry .. trustedBinariesSectionDom, 's two additions
+   * (registry .. trustedBinariesSectionDom, with two additions
    * appended at the END — see the factory's own comment on why). Every
    * describe block in this file builds its OWN thin wrapper rather than
    * sharing one, same convention as `buildFacade` above and every other
@@ -9503,7 +9503,7 @@ describe("automation facade — binaryTrustDialogState / Resolve, trustedBinarie
     expect(open.binaryTrustDialogState()).toEqual({ open: true, visible: true, binaryPath: "/opt/codex", reason: "world-writable", staleConsent: false });
   });
 
-  //  fix wave (D-S4-17, BU10): staleConsent rides binaryTrustDialogState()
+  // fix wave (D-S4-17, BU10): staleConsent rides binaryTrustDialogState()
   // as read off the dialog's own DOM accessor. must-fail-naive.
   it("BU10 binaryTrustDialogState().staleConsent mirrors the DOM accessor's state() read", () => {
     const stale = buildTrustFacade({
@@ -10405,10 +10405,10 @@ describe("automation facade — sidebar row-cut probe/driver", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-//  S2 — the replay pult on the facade
+// S2 — the replay pult on the facade
 // ─────────────────────────────────────────────────────────────────────────
 
-describe("automation facade — replay* ( S2)", () => {
+describe("automation facade — replay* (S2)", () => {
   /** A recorded session as the host replays it back on attach: user text, assistant text, a tool call + its result, a closing line. */
   function recordedHistory(): WireHistoryItem[] {
     return [
@@ -11609,7 +11609,7 @@ describe("automation facade — replay* ( S2)", () => {
   });
 });
 
-// ──  drill-down: modelPillPick over the shared `.start-model-menu` ──
+// ── drill-down: modelPillPick over the shared `.start-model-menu` ──
 //
 // Two complementary layers, per plan §3:
 // 1. INJECTABLE — a fake `ModelPillDom` carrying the optional drill members,
@@ -11865,7 +11865,7 @@ describe("automation facade — native engine effort", () => {
   });
 });
 
-describe("automation facade — modelPillPick drill-down menu ( shared picker)", () => {
+describe("automation facade — modelPillPick drill-down menu (shared picker)", () => {
   const noTranscriptDomD: TranscriptDom = { container: () => null, jumpButtonVisible: () => false };
   const noTodoPanelDomD: TodoPanelDom = { panel: () => null };
   const noStartScreenDomD: StartScreenDom = {
@@ -13123,7 +13123,7 @@ function fakeDockDom(): DockDom {
   };
 }
 
-describe("automation facade — dockTabSplit honest refusal ( cross-review D6)", () => {
+describe("automation facade — dockTabSplit honest refusal (cross-review D6)", () => {
   function buildDockFacade(dockDom: DockDom) {
     const tabsStore = createTabsStore();
     const registry = createTabRegistry(tabsStore);

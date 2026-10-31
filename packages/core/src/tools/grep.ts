@@ -5,7 +5,7 @@ import { grepInputSchema, type GrepInput, type GrepMatch, type GrepOutput } from
 import { resolveRgPath, searchWithRipgrep } from "./grep-rg.js";
 import { resolveTgrepPath, searchWithTgrep } from "./grep-tgrep.js";
 
-/** Floor for the rg re-check budget when the tgrep tier used most of the tool timeout ( cross-review F3). */
+/** Floor for the rg re-check budget when the tgrep tier used most of the tool timeout (cross-review F3). */
 const RG_RECHECK_MIN_BUDGET_MS = 1_000;
 
 const IGNORED_DIR_NAMES = new Set([".git", "node_modules", "dist"]);
@@ -203,7 +203,7 @@ export const grepTool: ToolDefinition<GrepInput, GrepOutput> = {
   metadata: {
     name: "Grep",
     description:
-      // : deliberately unchanged — the backend is an operator
+      // deliberately unchanged — the backend is an operator
       // setting, invisible to the model, and the default-off tool schema must
       // stay byte-identical (prompt cache, provider tool snapshots).
       "Search file contents with a regular expression. Returns matching lines, file paths, or per-file counts.",
@@ -229,7 +229,7 @@ export const grepTool: ToolDefinition<GrepInput, GrepOutput> = {
     const tgrepSelected = selectGrepBackend(process.env) === "tgrep";
     const startedAt = Date.now();
     const tgrepOutput = tgrepSelected ? await tryTgrep(input, ctx, root, rootStat.isDirectory) : undefined;
-    // Zero-match re-check ( follow-up): a trigram index answers
+    // Zero-match re-check (follow-up): a trigram index answers
     // from what it has indexed — a file the agent just wrote may not be in a
     // stale index yet, so tgrep's "no matches" can be wrong where a fresh
     // rg scan matches. Re-run every zero-match tgrep answer through the rg
@@ -239,7 +239,7 @@ export const grepTool: ToolDefinition<GrepInput, GrepOutput> = {
     // zero-match tgrep answer is never returned directly.
     if (tgrepOutput && tgrepOutput.totalMatches > 0) return { ok: true, output: tgrepOutput };
 
-    // Budget ( cross-review F3): when the tgrep tier ran, the rg
+    // Budget (cross-review F3): when the tgrep tier ran, the rg
     // re-check gets only what is left of the tool timeout the dispatcher
     // enforces (plus its grace), so tgrep + rg cannot together outlive it.
     const rgTimeoutMs = tgrepSelected

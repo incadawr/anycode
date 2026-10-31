@@ -1,5 +1,5 @@
 /**
- *  (4702 remainder), implementation B: a plain model completion as
+ * (4702 remainder), implementation B: a plain model completion as
  * the ask-zone classifier. ONE completion via the injected core ModelPort —
  * the same one-shot shape as context/session-title.ts and context/manager.ts
  * (`ModelRequest{tools:[]}` -> streamText -> collect `text_delta`) — with a

@@ -114,7 +114,7 @@ describe("settings-store: load", () => {
   });
 });
 
-describe("settings-store: snapshot epoch guard ( block-45 F1 — unsequenced load() vs. mutation race)", () => {
+describe("settings-store: snapshot epoch guard (block-45 F1 — unsequenced load() vs. mutation race)", () => {
   it("clobber: a load() that started before a mutation, but resolves after it, does not overwrite the mutation's fresh snapshot", async () => {
     const held = deferred<SettingsSnapshot>();
     const fresh = baseSnapshot({ settings: { ...baseSettings(), ui: { theme: "dark" } } });
@@ -235,7 +235,7 @@ describe("settings-store: plain mutations", () => {
     expect(store.getState().snapshot).toEqual(withRule);
   });
 
-  //  (BU4): revokeBinaryTrust — the mirror of every other mutation
+  // (BU4): revokeBinaryTrust — the mirror of every other mutation
   // action's discipline (calls the dedicated bridge method with the raw
   // path, commits the fresh snapshot on ok:true, sets the failure notice on
   // ok:false — never a wholesale settings-set, D-S4-5's custody).
@@ -262,7 +262,7 @@ describe("settings-store: plain mutations", () => {
   });
 });
 
-describe("settings-store: connection CRUD ( W12)", () => {
+describe("settings-store: connection CRUD (W12)", () => {
   it("connectionCreate applies the fresh snapshot on success", async () => {
     const withConn = baseSnapshot({
       settings: { ...baseSettings(), provider: { activeConnectionId: "conn-1", connections: [{ id: "conn-1", providerId: "z-ai" }] } },
@@ -349,7 +349,7 @@ describe("settings-store: connection CRUD ( W12)", () => {
   });
 });
 
-describe("settings-store: provider-health push ( W11-FIX, W13 live-dogfood finding)", () => {
+describe("settings-store: provider-health push (W11-FIX, W13 live-dogfood finding)", () => {
   it("subscribeProviderHealth wires the bridge's push into a fresh load() and returns its unsubscribe", async () => {
     let captured: (() => void) | undefined;
     const unsubscribe = vi.fn();
@@ -616,7 +616,7 @@ describe("describeUpdateActionFailure", () => {
     expect(new Set(texts).size).toBe(reasons.length);
   });
 
-  it(" defect 2: manual_only names GitHub Releases as the alternative", () => {
+  it("defect 2: manual_only names GitHub Releases as the alternative", () => {
     expect(describeUpdateActionFailure("manual_only")).toMatch(/GitHub Releases/);
   });
 });
@@ -681,7 +681,7 @@ describe("settings-store: auto-updater (slice 2.6 §6)", () => {
     expect(store.getState().notice).toBeNull();
   });
 
-  it("openReleasesUpdate ( defect 2) forwards to the bridge and leaves no notice on success", async () => {
+  it("openReleasesUpdate (defect 2) forwards to the bridge and leaves no notice on success", async () => {
     const openReleasesPage = vi.fn().mockResolvedValue({ ok: true } satisfies UpdateActionResult);
     const store = createSettingsStore(fakeBridge(), fakeUpdatesBridge({ openReleasesPage }));
 

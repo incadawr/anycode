@@ -1,5 +1,5 @@
 /**
- * MCP secret store, value-only (, part C). Zero imports: shared by the
+ * MCP secret store, value-only (part C). Zero imports: shared by the
  * main process (vault, IPC), the host (the fork env reader), and the renderer.
  *
  * A `${secret:NAME}` reference in an MCP server's `env`/`headers` resolves to the

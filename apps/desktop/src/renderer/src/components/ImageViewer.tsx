@@ -18,7 +18,7 @@ export function nextIndex(current: number, delta: 1 | -1, count: number): number
 }
 
 /**
- *  follow-up — pure Esc routing for the viewer's native "cancel"
+ * follow-up — pure Esc routing for the viewer's native "cancel"
  * (Esc) event. The dialog's `onCancel` prevents the browser's own close so
  * the caller's state (not the DOM) stays the single source of truth for
  * visibility (same intent-not-DOM discipline as ConfirmDialog/PermissionModal).
@@ -35,7 +35,7 @@ export function runViewerCancel(
 }
 
 /**
- *  follow-up — pure backdrop predicate: true only when the
+ * follow-up — pure backdrop predicate: true only when the
  * click's target IS the dialog element itself (the ::backdrop area a modal
  * dialog paints around its box), never for clicks that bubbled up from
  * dialog children. Same shape as ConfirmDialog's isBackdropClick.
@@ -45,7 +45,7 @@ export function isViewerBackdropClick(dialog: unknown, target: unknown): boolean
 }
 
 /**
- *  follow-up — pure key routing for the viewer's in-dialog
+ * follow-up — pure key routing for the viewer's in-dialog
  * keydown: ArrowLeft/ArrowRight step the wrap-around index (nextIndex),
  * everything else is left untouched (Esc arrives as the native "cancel"
  * event, not here). Returns the next index, or null when nothing changed.
@@ -67,7 +67,7 @@ export function viewerKeyIndex(
 }
 
 /**
- *  follow-up: the internal full-size image viewer as a REAL modal
+ * follow-up: the internal full-size image viewer as a REAL modal
  * dialog. A plain div overlay let Tab reach elements behind it and app
  * shortcuts (e.g. Cmd+W) still fired; a native `<dialog>` opened with
  * `showModal()` (the exact pattern of every other modal in this app —

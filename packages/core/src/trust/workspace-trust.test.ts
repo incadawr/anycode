@@ -187,7 +187,7 @@ describe("collectProjectSpawnConfig", () => {
     expect(result.hash).toBe("");
   });
 
-  //  xfix D1: the Claude engine spawns with cwd = workspace, so
+  // xfix D1: the Claude engine spawns with cwd = workspace, so
   // Claude Code's OWN project settings are project files that can start
   // processes (hooks commands, MCP servers). A folder that ships ONLY
   // `.claude/settings.json` must therefore resolve `unknown`, never `none`.
@@ -405,7 +405,7 @@ describe("resolveWorkspaceTrust", () => {
   });
 });
 
-// : symlinked workspaces and their targets must share ONE trust
+// symlinked workspaces and their targets must share ONE trust
 // key. The canonical key is realpath(resolve(workspace)) when realpath is
 // injected and succeeds; resolve(workspace) otherwise (S7: fallback never
 // weakens trust — a looser/parent key is never used).
@@ -548,7 +548,7 @@ describe("resolveWorkspaceTrust with realpathSync", () => {
   });
 });
 
-describe("forgetTrustDecision (, S5/S8)", () => {
+describe("forgetTrustDecision (S5/S8)", () => {
   it("removes only the named key, keeps other records and version", async () => {
     const fs = makeFs({});
     await writeTrustDecision(fs, STORE, "/proj/a", "trusted", "h1", "2026-10-25T00:00:00.000Z");
@@ -611,7 +611,7 @@ describe("forgetTrustDecision (, S5/S8)", () => {
   });
 });
 
-describe("migrateTrustStoreKeys (, decision 4)", () => {
+describe("migrateTrustStoreKeys (decision 4)", () => {
   it("moves a legacy symlink key to the real key", async () => {
     const fs = makeFs({});
     const realpathSync = (p: string) => (p === "/work/link" ? "/work/real" : p);

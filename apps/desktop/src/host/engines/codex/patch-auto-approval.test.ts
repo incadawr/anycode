@@ -1,5 +1,5 @@
 /**
- * : the workspace-patch auto-accept policy, over the REAL
+ * the workspace-patch auto-accept policy, over the REAL
  * filesystem — containment is proven by realpath, so every escape attempt
  * (sibling dir, `..`, relative path, symlink, move-out) is exercised against
  * a real tmp tree, not a mocked port.
@@ -177,7 +177,7 @@ describe("shouldAutoAcceptPatch — containment over the real fs", () => {
   });
 
   it("accepts under the child-ask preset (4078-on-4265: same workspace-write sandbox)", async () => {
-    // The child preset's sandbox IS workspace-write ( / ),
+    // The child preset's sandbox IS workspace-write,
     // so a contained patch qualifies exactly like `ask`/`approve-for-me`.
     await expect(
       shouldAutoAcceptPatch(ctx({ activePresetId: () => "child-ask" }), item([{ path: join(WS, "a.ts"), kind: { type: "update" }, diff: "+a" }]), null),

@@ -587,7 +587,7 @@ describe("TerminalPermissionBroker with a real readline prompter", () => {
 });
 
 /**
- * : the CLI ask block carries the SAME one-line per-command risk
+ * the CLI ask block carries the SAME one-line per-command risk
  * plaque the desktop modal shows. The raw command stays in the header, always
  * visible; the plaque line sits between header and the y/n/a hint; a shell
  * expression shows no plaque at all (its honest story is already the

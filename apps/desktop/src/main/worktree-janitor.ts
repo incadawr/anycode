@@ -40,7 +40,7 @@ export async function runWorktreeJanitor(options: WorktreeJanitorOptions): Promi
     ? WORKTREE_JANITOR_SESSION_LIMIT
     : Math.min(Number.MAX_SAFE_INTEGER, Math.max(1, Math.floor(requestedLimit)));
   const sessions = await options.persistence.listSessionsForMaintenance({ limit });
-  // Claim protection is NOT bounded by the cleanup window ( review):
+  // Claim protection is NOT bounded by the cleanup window (review):
   // an idle-but-live child outside the recent window still owns its worktree.
   // Claims come from a metadata-only query; those rows are never iterated,
   // so no filesystem probe can reach them.

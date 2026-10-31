@@ -55,13 +55,13 @@ export class ToolRegistry {
 
 export interface CreateDefaultToolRegistryOptions {
   /**
-   * Forwarded verbatim to createAgentTool ( CUT-S2 §2.1). Absent —
+   * Forwarded verbatim to createAgentTool (CUT-S2 §2.1). Absent —
    * every existing call site (CLI, subagent runner, host test-harness) stays
    * byte-compatible with the restricted, inline-only Agent declaration.
    */
   agent?: CreateAgentToolOptions;
   /**
-   * Register ArchMap ( slice S1), the read-only TS/JS import-graph
+   * Register ArchMap (slice S1), the read-only TS/JS import-graph
    * scanner. OPT-IN: absent/false keeps it out of the registry,
    * so the default tool list and the system prompt's tool-discipline section
    * stay byte-identical to the pre-ArchMap baseline (e89e3d76) — its schema

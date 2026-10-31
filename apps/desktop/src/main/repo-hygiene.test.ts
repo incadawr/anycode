@@ -48,7 +48,7 @@ describe("repo hygiene — owner home path", () => {
   });
 });
 
-// : captured rollout fixtures must not carry real infrastructure
+// captured rollout fixtures must not carry real infrastructure
 // IPs. Every IPv4-looking token — bare or as a CIDR base — is limited to
 // RFC 5737 documentation ranges, 10.0.0.0/8 and 127.0.0.0/8 (no CIDR
 // exemption: a real host written as "a.b.c.d/32" must still fail).

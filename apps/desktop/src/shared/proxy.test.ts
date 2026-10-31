@@ -71,7 +71,7 @@ describe("resolveProxyLadder — which rung wins", () => {
   });
 
   // The legacy field keeps working with no user action and no migration on read:
-  // it is an unnamed implicit manual rung, byte-for-byte its  semantics.
+  // it is an unnamed implicit manual rung, byte-for-byte its semantics.
   it("reads a legacy proxyUrl string as an implicit rung", () => {
     const current = withConnection({ id: "conn-1", providerId: "", proxyUrl: "http://legacy:8080" });
     expect(resolveProxyLadder(current, CHAIN)).toEqual({
@@ -114,7 +114,7 @@ describe("resolveProxyLadder — which rung wins", () => {
   });
 
   // The deliberate exception to the rule above: a MALFORMED legacy string is not
-  // a rung at all, preserving 's fail-soft reading of that field. The
+  // a rung at all, preserving's fail-soft reading of that field. The
   // two rules cannot collide on a pre-slice document — nothing existed below a
   // legacy string there to fall through to.
   it("does not treat a malformed legacy string as a rung", () => {
@@ -315,7 +315,7 @@ describe("proxyPathFingerprint — what a health reading was measured through", 
   });
 });
 
-// ── design-review regressions ( lane A, gpt-5.6-sol xhigh) ──
+// ── design-review regressions (lane A, gpt-5.6-sol xhigh) ──
 
 describe("B-06 — isProxyProfileUrl is a PROXY ENDPOINT rule, not a url rule", () => {
   // A proxy is dialled as host:port. Anything after the authority is either a

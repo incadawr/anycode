@@ -1,6 +1,6 @@
 /**
  * Host-owned bridge between the live Codex `item/*` stream and the additive
- * `codex_thread_items` SQLite table (cut §2(e), ). `record()` is
+ * `codex_thread_items` SQLite table (cut §2(e)). `record()` is
  * fire-and-forget — mirrors `WriteBehindHistorySink`'s posture: a shadow-log
  * write must never block or fail a live turn, so a failure is logged and
  * swallowed, never thrown into `runTurn()`.

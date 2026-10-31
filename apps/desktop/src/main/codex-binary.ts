@@ -109,7 +109,7 @@ function ancestorDirectories(resolvedFile: string, originalPath: string): string
   return ordered;
 }
 
-/** The path-gate outcome ( fix wave, D-S4-14/18). `null` = pass.
+/** The path-gate outcome (fix wave, D-S4-14/18). `null` = pass.
  *  `missing` = the realpath/stat threw — the file is GONE; NEVER an offerable
  *  refusal (D-S4-18). `refused` carries the shared classification plus the
  *  REALPATH the gate judged — the only path a `trustRefusal` may ever name. */
@@ -199,7 +199,7 @@ export function resolveCodexBinary(
   return { path };
 }
 
-// ── discovery ladder (, cut §2(g)) ──
+// ── discovery ladder (cut §2(g)) ──
 //
 // Onboarding without a mandatory env var: `ANYCODE_CODEX_BIN` (wins) ->
 // settings.codex.binaryPath (validated) -> a PATH scan -> common per-platform
@@ -210,7 +210,7 @@ export function resolveCodexBinary(
 // `path.join`, NEVER by shell interpolation (no `which`/`where`, no `shell:
 // true` spawn anywhere in this file or its main/codex-doctor.ts consumer).
 
-/** `picker` is not produced by `discoverCodexBinary` (it never opens a dialog) — main/codex-ipc.ts stamps it on the explicit file-picker rung, the ladder's final step. `installed` = a version downloaded by main/codex-install.ts into `~/.anycode/codex/bin/`, the last automatic rung. */
+/** `picker` is not produced by `discoverCodexBinary` (it never opens a dialog) — main/codex-ipc.ts stamps it on the explicit file-picker rung, the ladder's final step. `installed` = a version downloaded by main/codex-install.ts into `~/.anycode/codex/bin/` the last automatic rung. */
 export type CodexBinarySource = "env" | "settings" | "path" | "common" | "installed" | "picker" | "none";
 
 export interface CodexBinaryDiscovery {
@@ -225,7 +225,7 @@ export interface CodexBinaryDiscovery {
   /** Present iff the ladder was terminated by an EXPLICIT-rung (env/settings) trust refusal whose refusal is NON-consentable (D-S4-13) — the consentable stop already speaks through `trustRefusal`/`trustRefusalSource` above (D-S4-22). */
   trustRefused?: true;
   /**
-   * : every OTHER ladder candidate that resolved to an
+   * every OTHER ladder candidate that resolved to an
    * absolute, existing, executable file while the winning rung was chosen /
    * the ladder failed — what the error card offers as "use this instead"
    * buttons. Discovery deliberately still never EXECUTES a binary here
@@ -362,13 +362,13 @@ export function discoverCodexBinary(inputs: CodexDiscoveryInputs): CodexBinaryDi
   let lastReason: string | undefined;
   // The FIRST trust refusal encountered while walking the ladder wins — it
   // names the binary the user most likely installed/means, not whichever
-  // low-priority rung happened to be walked last (, BM8). Post-
+  // low-priority rung happened to be walked last (BM8). Post-
   // D-S4-22 this capture only ever fires for an AMBIENT rung's refusal: an
   // explicit (env/settings) refusal stops the ladder below, before ever
   // reaching this capture.
   let firstTrustRefusal: { binaryPath: string; reason: string; staleConsent: boolean } | undefined;
   let firstTrustRefusalSource: CodexBinarySource | undefined;
-  // : alternate-candidate collection. The walk keeps
+  // alternate-candidate collection. The walk keeps
   // the ladder's exact first-match semantics — `winner`/`hardStop` freeze the
   // return the pre-collection ladder would have made at the moment it would
   // have made it — but keeps walking to collect every OTHER resolvable

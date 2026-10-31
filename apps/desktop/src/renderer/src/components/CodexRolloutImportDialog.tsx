@@ -1,5 +1,5 @@
 /**
- * "Import a Codex session" dialog (, codex-profiles cut §8.8, lane
+ * "Import a Codex session" dialog (codex-profiles cut §8.8, lane
  * W3-H): Settings → Codex → pick a profile → pick one of its rollout files →
  * see an honest loss report → pick a model for the brand-new session → Import
  * & open. Main's half (`main/codex-rollout-ipc.ts`, lane D) already does the
@@ -120,7 +120,7 @@ export function truncateRolloutPreview(text: string | undefined): string | undef
 }
 
 /**
- * The list row's PRIMARY, human-readable label ( — owner: "в списке
+ * The list row's PRIMARY, human-readable label (owner: "в списке
  * импортируемых сессий нужно показывать название сессии"): the first line of
  * the rollout's own first user message, trimmed and capped — the exact
  * "first line, 80 chars" convention `deriveSessionTitle` (`@anycode/core`)
@@ -350,7 +350,7 @@ export type PerformImportOutcome = { ok: true; openMessage: string | null } | { 
  * unit testing (the red-proof surface for "sends the picked model" / "opens
  * exactly the returned sessionId, never a blank new tab").
  *
- * `onOpened` ( — "open means open") fires exactly once, ONLY when the
+ * `onOpened` ("open means open") fires exactly once, ONLY when the
  * whole chain lands the user on the new tab (import succeeded AND the resume
  * carried no failure notice) — never on a refused import, and never on an
  * import that persisted fine but whose tab failed to open (that case still

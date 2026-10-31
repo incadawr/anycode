@@ -59,7 +59,7 @@ describe("readTool", () => {
     expect(result.error).toBeTruthy();
   });
 
-  //  §4: a whole-file Read is the sharpest unbounded path into the
+  // §4: a whole-file Read is the sharpest unbounded path into the
   // request, so the tool caps itself in tokens before the dispatcher ever
   // budgets bytes.
   describe("token cap", () => {

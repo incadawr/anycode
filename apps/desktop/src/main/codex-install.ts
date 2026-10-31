@@ -1,5 +1,5 @@
 /**
- * Codex binary installer (codex-profiles cut §7.2/§7.3, amended §A4, ):
+ * Codex binary installer (codex-profiles cut §7.2/§7.3, amended §A4):
  * downloads the platform artifact of `@openai/codex` DIRECTLY from the npm
  * registry — npm itself is never executed (no lifecycle scripts, no shell) —
  * verifies the registry's own `dist.integrity` sha512 BEFORE a single byte is
@@ -634,7 +634,7 @@ export interface CodexInstallControllerDeps {
   /** Fired after a successful install / risk acceptance so main pushes ENGINES_CHANGED and rechecks. */
   onChanged?: () => void;
   /**
-   * The SOURCE env the post-install gate doctor spawns with ( §2 case
+   * The SOURCE env the post-install gate doctor spawns with (§2 case
    * (e)): main wires this to the same `codexDoctorSourceEnv` the onboarding
    * doctor and `codex login` read through, so all three probes see the identical
    * `settings.codex.proxyUrl`. Called fresh per install — the proxy may have
@@ -645,7 +645,7 @@ export interface CodexInstallControllerDeps {
    * existing test deps object relies on).
    */
   doctorSourceEnv?: () => NodeJS.ProcessEnv;
-  /** : MAIN's own relay URL, threaded to the gate doctor (fail-closed drop when absent). */
+  /** MAIN's own relay URL, threaded to the gate doctor (fail-closed drop when absent). */
   relayUrl?: () => string | undefined;
   /** DI seams; production = the real trust gate + doctor. */
   trust?: (binaryPath: string) => string | null;
@@ -698,10 +698,10 @@ export function createCodexInstallController(deps: CodexInstallControllerDeps): 
     };
     const untrusted = trust(installed.binaryPath);
     if (untrusted !== null) return refuse(untrusted);
-    //  F4: the gate doctor is a main-spawned codex probe, so it runs
+    // F4: the gate doctor is a main-spawned codex probe, so it runs
     // with the engine proxy like the onboarding recheck and `codex login` do.
     // No dep ⇒ no options object at all, so the call is byte-identical to its
-    // pre- form.
+    // form.
     const doctorEnv = deps.doctorSourceEnv?.();
     const report = await runDoctor(
       installed.binaryPath,

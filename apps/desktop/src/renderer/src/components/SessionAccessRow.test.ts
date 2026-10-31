@@ -52,7 +52,7 @@ describe("SessionAccessRow", () => {
   });
 });
 
-describe("SessionAccessRow handle field (b)", () => {
+describe("SessionAccessRow handle field", () => {
   it("handle input hidden when switch off", () => {
     const html = renderToStaticMarkup(createElement(SessionAccessRow, { bridge: neverBridge }));
     expect(html).not.toContain('data-environment-action="sessions-api-handle"');

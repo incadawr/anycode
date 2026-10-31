@@ -1,5 +1,5 @@
 /**
- *  — end-to-end proof over the real wire that the desktop GUI can leave
+ * end-to-end proof over the real wire that the desktop GUI can leave
  * plan mode the way the CLI already can.
  *
  * These run the REAL core graph (AgentLoop + dispatcher + ModePermissionEngine +

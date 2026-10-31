@@ -11,7 +11,7 @@ beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "anycode-sessions-")
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 const store = () => createSessionAccessStore({ file, defaultOn: () => defaultOn });
 
-describe("per-session Sessions API switch ( owner amendment)", () => {
+describe("per-session Sessions API switch (owner amendment)", () => {
   it("an unknown session is not exposed (fail closed)", () => {
     expect(store().isExposed("never-seen")).toBe(false);
   });
@@ -131,7 +131,7 @@ describe("per-session Sessions API switch ( owner amendment)", () => {
   });
 });
 
-describe("session handles (b)", () => {
+describe("session handles", () => {
   const handlesFile = () => join(dir, "communication-handles.json");
   const handleStore = (withFile = true) => createSessionAccessStore({ file, defaultOn: () => false, ...(withFile ? { handlesFile: handlesFile() } : {}) });
   const alwaysLive = () => true;

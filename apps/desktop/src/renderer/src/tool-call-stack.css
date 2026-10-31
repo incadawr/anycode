@@ -1,6 +1,6 @@
 /**
  * Collapsible stack of consecutive terminal tool-call cards
- * (, design §5). New classes only — app.css is WIP-locked (same
+ * (design §5). New classes only — app.css is WIP-locked (same
  * discipline as tool-cards.css / chrome-select.css / transcript-follow.css).
  * Tokens only, both themes free. Residual: fold into app.css post-codex.
  *

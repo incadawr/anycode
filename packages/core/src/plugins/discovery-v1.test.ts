@@ -1,5 +1,5 @@
 /**
- * Plugin discovery —  S1-A additions (design §2–§4/§8): managed
+ * Plugin discovery — S1-A additions (design §2–§4/§8): managed
  * store from state.json (active version only, previous ignored), tier
  * precedence (project > official > third-party > local > legacy-user),
  * user-global disabled set, engines.anycode compat gating, reserved builtin

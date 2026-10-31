@@ -1,5 +1,5 @@
 /**
- *  §3.9 (part B) — the first-run role picker dialog. Modal
+ * §3.9 (part B) — the first-run role picker dialog. Modal
  * listing the five roles; per role a primary row (engine select
  * claude/codex/«connection <id>» populated from the settings snapshot's
  * connections; route-specific model select with custom input; effort

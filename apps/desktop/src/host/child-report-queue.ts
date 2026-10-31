@@ -66,7 +66,7 @@ export class ChildReportQueue {
   private readonly pending: Array<{ id: string; text: string; childTerminal?: ChildReportTerminalMeta }> = [];
   /** Reports dropped since the current cap-notice entry (if any) was created; reset when that notice is acked. */
   private droppedSinceNotice = 0;
-  /** : durability listeners — fire at the END of every mutation path (add/upsert/ack/upsertCapNotice). */
+  /** durability listeners — fire at the END of every mutation path (add/upsert/ack/upsertCapNotice). */
   private readonly changeListeners = new Set<() => void>();
 
   constructor(private readonly outbound: ChildReportOutbound) {}
@@ -100,7 +100,7 @@ export class ChildReportQueue {
   /**
    * Enqueues or refreshes a report identified by `id`, coalescing repeat
    * calls for the SAME id into the ONE pending slot they already occupy
-   * instead of growing the queue ( slice 2: a detached child's stall
+   * instead of growing the queue (slice 2: a detached child's stall
    * clock can re-arm and report again many times over one long run — see
    * `stall-clock.ts`'s own re-arm contract — and every stall notice for one
    * child shares a single stable id, so a long flapping run consumes at most
@@ -178,7 +178,7 @@ export class ChildReportQueue {
   }
 
   /**
-   * : deep-copies the queue's whole state for persistence. The
+   * deep-copies the queue's whole state for persistence. The
    * cap notice rides as its sentinel-id row (`CAP_NOTICE_ID`) — no special
    * casing; `droppedSinceNotice` travels alongside so a recovered notice
    * keeps counting honestly. Mutating the returned snapshot can never affect
@@ -196,7 +196,7 @@ export class ChildReportQueue {
   }
 
   /**
-   * : replaces the queue's state from a persisted snapshot
+   * replaces the queue's state from a persisted snapshot
    * (called once, at boot, BEFORE the Session's first `ui_ready` — whose
    * `resendAll` then delivers the recovered reports exactly like
    * live-queued ones). Sends NOTHING here: delivery stays the Session's
@@ -237,7 +237,7 @@ export class ChildReportQueue {
   }
 
   /**
-   * : subscribes a durability listener fired at the END of every
+   * subscribes a durability listener fired at the END of every
    * mutation path (`add` admit AND overflow, `upsert` existing-id AND
    * fall-through-to-add, `ack`, `upsertCapNotice`) — unconditionally per
    * method call, so a no-op ack re-persisting an identical snapshot is

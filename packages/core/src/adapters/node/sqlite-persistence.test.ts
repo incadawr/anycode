@@ -232,7 +232,7 @@ describe("SqlitePersistenceAdapter", () => {
       });
     });
 
-    it("round-trips a pinned connectionId through create/get/list ( W10)", async () => {
+    it("round-trips a pinned connectionId through create/get/list (W10)", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       const created = await adapter.createSession({
         id: "s-conn",
@@ -288,7 +288,7 @@ describe("SqlitePersistenceAdapter", () => {
       expect((await adapter.getRootSession("s-touch-profile"))?.codexProfileId).toBe("personal");
     });
 
-    it("round-trips parentSessionId/spawnToolCallId through create/get ( S2a A1)", async () => {
+    it("round-trips parentSessionId/spawnToolCallId through create/get (S2a A1)", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.createSession({ id: "parent-1", workspace: "/repo", model: "m", mode: "build" });
       const created = await adapter.createSession({
@@ -367,7 +367,7 @@ describe("SqlitePersistenceAdapter", () => {
       ).resolves.toBeTruthy();
     });
 
-    it("rejects a one-sided (parentSessionId, spawnToolCallId) pair in EITHER direction — CHECK constraint ( S2 review MAJOR, opus+Luna)", async () => {
+    it("rejects a one-sided (parentSessionId, spawnToolCallId) pair in EITHER direction — CHECK constraint (S2 review MAJOR, opus+Luna)", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.createSession({ id: "parent-1", workspace: "/repo", model: "m", mode: "build" });
 
@@ -783,7 +783,7 @@ describe("SqlitePersistenceAdapter", () => {
     migrated.close();
   });
 
-  it("migrates a pre-connectionId (v9) database to v10 adding connection_id and is idempotent across opens ( W10)", async () => {
+  it("migrates a pre-connectionId (v9) database to v10 adding connection_id and is idempotent across opens (W10)", async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-v9-conn-"));
     const dbPath = join(tmpDir, "anycode.sqlite");
     const old = new DatabaseSync(dbPath);
@@ -888,7 +888,7 @@ describe("SqlitePersistenceAdapter", () => {
     migrated.close();
   });
 
-  // , found by the owner's live run on a real development database.
+  // found by the owner's live run on a real development database.
   // A migration version is a claim on a namespace shared by every branch that
   // ever opened this database, and the runner skips anything <= the recorded
   // MAX. A database carrying a HIGHER max than our own migration therefore
@@ -960,7 +960,7 @@ describe("SqlitePersistenceAdapter", () => {
     migrated.close();
   });
 
-  it("migrates a pre-child-session (v12) database to v16 adding parent_session_id/spawn_tool_call_id and is idempotent across opens ( S2a A1, REAL adapter not a mock)", async () => {
+  it("migrates a pre-child-session (v12) database to v16 adding parent_session_id/spawn_tool_call_id and is idempotent across opens (S2a A1, REAL adapter not a mock)", async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-v12-child-"));
     const dbPath = join(tmpDir, "anycode.sqlite");
     const old = new DatabaseSync(dbPath);
@@ -1291,7 +1291,7 @@ describe("SqlitePersistenceAdapter", () => {
 
   it(
     "round-trips a ToolResultPart.presentation (subagent card) exactly through " +
-      "appendHistory/loadHistory AND replaceHistory/loadHistory ( slice S1 W3, " +
+      "appendHistory/loadHistory AND replaceHistory/loadHistory (slice S1 W3, " +
       "CUT-S1 §3 W3 item 5 — the REAL adapter, not a mock sink)",
     async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
@@ -1516,7 +1516,7 @@ describe("SqlitePersistenceAdapter", () => {
     await expect(adapter.close()).resolves.toBeUndefined();
   });
 
-  describe("root-only vs maintenance visibility ( S2a A2, contract suite)", () => {
+  describe("root-only vs maintenance visibility (S2a A2, contract suite)", () => {
     beforeEach(() => {
       vi.useFakeTimers();
       vi.setSystemTime(1_000);
@@ -1596,7 +1596,7 @@ describe("SqlitePersistenceAdapter", () => {
       expect(childRow).toMatchObject({ parentSessionId: "root-1", spawnToolCallId: "call-1" });
     });
 
-    it("listSessionsForMaintenance accepts an optional limit — a cheap startup probe does not have to pull every row to force migrate() ( S2 review MINOR, opus)", async () => {
+    it("listSessionsForMaintenance accepts an optional limit — a cheap startup probe does not have to pull every row to force migrate(S2 review MINOR, opus)", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.createSession({ id: "root-1", workspace: "/w1", model: "m", mode: "build" });
       vi.setSystemTime(2_000);
@@ -1616,7 +1616,7 @@ describe("SqlitePersistenceAdapter", () => {
       expect((await adapter.listSessionsForMaintenance({ limit: 1 })).length).toBe(1);
     });
 
-    // : the janitor's window is only a safety bound if the STORE selects
+    // the janitor's window is only a safety bound if the STORE selects
     // the N most recent rows — a mock that slices an already-ordered array cannot
     // prove that. Insert in an order that CONTRADICTS recency (newest first,
     // oldest last) so an insertion-order/rowid implementation picks the wrong
@@ -1720,7 +1720,7 @@ describe("SqlitePersistenceAdapter", () => {
         parentSessionId: "fresh-clean",
         spawnToolCallId: "call-x",
       });
-      //  review: an OLD CHILD claimant — the janitor's claim map must see
+      // review: an OLD CHILD claimant — the janitor's claim map must see
       // it even though the recency window never iterates it, or a live child's
       // worktree could be reaped. Age and child-ness must not matter here.
       await adapter.createSession({
@@ -1775,7 +1775,7 @@ describe("SqlitePersistenceAdapter", () => {
     });
   });
 
-  describe("child sessions — authorized access + cascade delete ( S2a A3)", () => {
+  describe("child sessions — authorized access + cascade delete (S2a A3)", () => {
     it("getChildSession returns the child ONLY for the exact (parentSessionId, spawnToolCallId) pair", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.createSession({ id: "parent-a", workspace: "/repo", model: "m", mode: "build" });
@@ -1900,7 +1900,7 @@ describe("SqlitePersistenceAdapter", () => {
       expect(await adapter.listCheckpoints("root-2")).toHaveLength(1);
     });
 
-    it("deleteSessionTree never wipes a SURVIVING sibling's shadow history when a deleted session's externalSessionRef collides with the sibling's own ref in the OTHER engine's table ( S2 review BLOCKER, Luna)", async () => {
+    it("deleteSessionTree never wipes a SURVIVING sibling's shadow history when a deleted session's externalSessionRef collides with the sibling's own ref in the OTHER engine's table (S2 review BLOCKER, Luna)", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       // Two unrelated roots that happen to carry the SAME literal
       // externalSessionRef string, one on each engine — collision is
@@ -1961,7 +1961,7 @@ describe("SqlitePersistenceAdapter", () => {
       expect(await adapter.listCheckpoints("grandchild-1")).toEqual([]);
     });
 
-    it("deleteSessionTree terminates when parent_session_id forms a cycle (a row referencing itself) — no CHECK forbids this today, and a recursive UNION ALL CTE would spin the same id forever instead of erroring ( S2 review MAJOR, opus)", async () => {
+    it("deleteSessionTree terminates when parent_session_id forms a cycle (a row referencing itself) — no CHECK forbids this today, and a recursive UNION ALL CTE would spin the same id forever instead of erroring (S2 review MAJOR, opus)", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       // Nothing in the schema or createSession rejects a row naming itself as
       // its own parent — the collision is legal by construction today, so the
@@ -2730,7 +2730,7 @@ describe("SqlitePersistenceAdapter", () => {
   });
 });
 
-describe("SqlitePersistenceAdapter — reserveImageRef ( plan §2, slice B1)", () => {
+describe("SqlitePersistenceAdapter — reserveImageRef (plan §2, slice B1)", () => {
   it("hands out 1, 2, 3, ... in order for one session and surfaces nextImageRef only once reserved", async () => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
     await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
@@ -2824,7 +2824,7 @@ describe("SqlitePersistenceAdapter — reserveImageRef ( plan §2, slice B1)", (
  * blocks only the worker's own thread) for `holdMs`, then commits. Simulates
  * a second concurrently-forked child's writer racing this adapter's
  * `open()`/`createSession` against the same on-disk file — the exact
- * collision the S2d live smoke caught ( CUT-S2 §10.15.2).
+ * collision the S2d live smoke caught (CUT-S2 §10.15.2).
  */
 const BUSY_LOCK_WORKER_SRC = `
   const { parentPort, workerData } = require("node:worker_threads");
@@ -2838,7 +2838,7 @@ const BUSY_LOCK_WORKER_SRC = `
   parentPort.postMessage("done");
 `;
 
-describe("SqlitePersistenceAdapter — concurrent writers ( CUT-S2 §10.15.2)", () => {
+describe("SqlitePersistenceAdapter — concurrent writers (CUT-S2 §10.15.2)", () => {
   let tmpDir: string;
 
   afterEach(async () => {
@@ -3121,7 +3121,7 @@ describe("WriteBehindHistorySink", () => {
 });
 
 /**
- * : session hard-delete cascade. All tests run on :memory: databases
+ * session hard-delete cascade. All tests run on :memory: databases
  * only — the owner's live DB (~/.anycode/anycode.sqlite) is never opened.
  */
 describe("SqlitePersistenceAdapter — session delete", () => {
@@ -3210,7 +3210,7 @@ describe("SqlitePersistenceAdapter — session delete", () => {
       checkpoints: 1,
       // Engine-scoped: the codex-seeded victim's claude count is 0 and vice
       // versa — deleteSessionTree scopes each shadow delete to the deleted
-      // row's own engine ( S2 review BLOCKER, Luna).
+      // row's own engine (S2 review BLOCKER, Luna).
       claudeTranscriptItems: 0,
       codexThreadItems: 1,
       providerUsage: 0,
@@ -3270,7 +3270,7 @@ describe("SqlitePersistenceAdapter — session delete", () => {
     expect((await adapter.listSessionsOlderThan("/other", now + 1000)).map((s) => s.id)).toEqual(["other"]);
   });
 
-  describe("with  child sessions (native parent_session_id columns)", () => {
+  describe("with child sessions (native parent_session_id columns)", () => {
     it("deleting a parent cascades to children AND grandchildren", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.createSession({ id: "root", workspace: "/w", model: "m", mode: "build" });
@@ -3345,7 +3345,7 @@ describe("SqlitePersistenceAdapter — session delete", () => {
     });
   });
 
-  describe(" — one activity rule shared by listRootSessions and listSessionsOlderThan", () => {
+  describe("— one activity rule shared by listRootSessions and listSessionsOlderThan", () => {
     const dayMs = 24 * 60 * 60 * 1000;
     const backdate = (adapter: SqlitePersistenceAdapter, id: string, ms: number): void => {
       (adapter as unknown as { db: DatabaseSync }).db!
@@ -3429,11 +3429,11 @@ describe("SqlitePersistenceAdapter — session delete", () => {
 });
 
 /**
- *  / : the provider_usage audit (migration v19). One row
+ * the provider_usage audit (migration v19). One row
  * per completed core model step, append-only, idempotent per
  * (session, turn, step). All tests run on :memory: or tmp-dir databases only.
  */
-describe("SqlitePersistenceAdapter — provider_usage audit ( / )", () => {
+describe("SqlitePersistenceAdapter — provider_usage audit", () => {
   function makeUsage(overrides: Partial<Parameters<SqlitePersistenceAdapter["recordProviderUsage"]>[0]> = {}) {
     return {
       sessionId: "s1",
