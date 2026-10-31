@@ -12,6 +12,13 @@ import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  DEFAULT_FACADE_TIMEOUT_MS,
+  PROFILE_FACADE_TIMEOUT_MS,
+  PROFILE_PANE_SETTLE_DEADLINE_MS,
+  VISION_PROBE_FACADE_TIMEOUT_MS,
+  VISION_PANE_PROBE_DEADLINE_MS,
+} from "../../shared/automation-deadlines.js";
+import {
   buildFacadeExpr,
   childOpen,
   childLayoutState,
@@ -250,6 +257,75 @@ describe("makeFacadeCaller — envelope unwrapping", () => {
     expect(expr).toContain('window.__anycodeAutomation');
     expect(expr).toContain('"respondPermission"');
     expect(expr).toContain('["tab-a","allow"]');
+  });
+
+  // The live hang: a facade call whose promise never settles (renderer stuck,
+  // page busy) parked the HTTP request forever. Every facade call must answer
+  // within a bounded deadline — as FacadeTimeoutError -> HTTP 504, not silence.
+  it("rejects with FacadeTimeoutError when the facade call never settles (deadline)", async () => {
+    const win = fakeWindow(() => new Promise(() => {}));
+    const caller = makeFacadeCaller(() => win, 20);
+    const started = Date.now();
+    await expect(caller("modelPillPick", ["tab-a", { kind: "open" }])).rejects.toMatchObject({
+      name: "FacadeTimeoutError",
+      detail: expect.stringContaining("modelPillPick"),
+    });
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("resolves normally when the facade answers within the deadline", async () => {
+    const win = fakeWindow(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      return { __facade: "ok", value: { ok: true } };
+    });
+    const caller = makeFacadeCaller(() => win, 1_000);
+    await expect(caller("modelPillPick", ["tab-a", { kind: "open" }])).resolves.toEqual({ ok: true });
+  });
+
+  // Per-route deadlines: the methods whose renderer-side settle ceiling is
+  // ABOVE the 30s default (`profileRefresh`/`profileRebuild` wait out a real
+  // telemetry-directory rescan, up to 60s; `visionProbe` waits out a real
+  // recognizer round trip, up to 65s) must keep their longer facade deadline
+  // even when a short override is injected — the relation "facade deadline >
+  // renderer ceiling" is a correctness invariant. Without the per-method map
+  // these routes would 504 mid-flight on their legitimate slow path while the
+  // renderer kept working.
+  it("long-ceiling methods keep their per-method deadline above the injected override", async () => {
+    for (const method of ["profileRefresh", "profileRebuild", "visionProbe"] as const) {
+      let settle: ((v: unknown) => void) | undefined;
+      const win = fakeWindow(
+        () =>
+          new Promise((resolve) => {
+            settle = resolve;
+          }),
+      );
+      const caller = makeFacadeCaller(() => win, 20);
+      let timedOut = false;
+      // 20ms injected override elapses with the facade still pending: a route
+      // that wrongly used the override would reject right here.
+      const pending = caller(method, []).then(
+        () => true,
+        () => {
+          timedOut = true;
+          return false;
+        },
+      );
+      await new Promise((r) => setTimeout(r, 60));
+      expect(timedOut).toBe(false);
+      settle?.({ __facade: "ok", value: { ok: true } });
+      await expect(pending).resolves.toBe(true);
+    }
+  });
+
+  // And the inverse relation, pinned: each per-method facade deadline must
+  // stay ABOVE its renderer-side settle ceiling (shared constants). If a
+  // future edit raises a renderer ceiling without the facade budget, this
+  // fails before a live route starts 504-ing its own happy path.
+  it("per-method facade deadlines sit above their renderer-side settle ceilings", async () => {
+    expect(PROFILE_FACADE_TIMEOUT_MS).toBeGreaterThan(PROFILE_PANE_SETTLE_DEADLINE_MS);
+    expect(VISION_PROBE_FACADE_TIMEOUT_MS).toBeGreaterThan(VISION_PANE_PROBE_DEADLINE_MS);
+    expect(DEFAULT_FACADE_TIMEOUT_MS).toBeLessThanOrEqual(PROFILE_FACADE_TIMEOUT_MS);
+    expect(DEFAULT_FACADE_TIMEOUT_MS).toBeLessThanOrEqual(VISION_PROBE_FACADE_TIMEOUT_MS);
   });
 });
 
