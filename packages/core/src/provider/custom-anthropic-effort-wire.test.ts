@@ -325,7 +325,7 @@ describe("custom Anthropic-compatible endpoint distinguishes xhigh vs max on the
     expect(rejected[0]!.output_config).toMatchObject({ effort: "max" });
   });
 
-  it("catalog Kimi/MiMo-class providers keep their exact pre-fix bytes for max: high's budget, no effort field", async () => {
+  it("catalog Kimi-class providers keep their exact pre-fix bytes for max: high's budget, no effort field", async () => {
     stubFetch();
     const { port, requestFor } = catalogKimiPort();
 

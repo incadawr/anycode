@@ -364,6 +364,46 @@ export function reasoningRequestOptions(
     return request.maxOutputTokens === undefined ? {} : { maxOutputTokens: request.maxOutputTokens };
   }
 
+  // Xiaomi MiMo: same shape as MiniMax — the tier rides the effort ENUM
+  // (`output_config.effort`) and the request carries NO thinking key.
+  //
+  // Facts: MiMo's documentation (mimo.mi.com, accessed 2026-10-31) documents
+  // only `thinking.type` (enabled by default) — no budget field, no documented
+  // effort vocabulary. The wire behaviour was MEASURED against the direct API
+  // (mimo-v2.6-pro, hard no-tool prompt, 2 reps per cell, all answers correct):
+  //   thinking omitted                     31.3k out / 482 s
+  //   output_config.effort "low",  no budget  28.7k out / 420 s
+  //   output_config.effort "high", no budget  48.0k out / 700 s
+  //   old app bytes (enabled + budget)     low 22.6k ≈ high 20.1k
+  // So `thinking.budget_tokens` is IGNORED (low and high produced the same
+  // amount of reasoning), while the effort enum IS honoured (high ≈ 1.7x low).
+  // The generic tail below therefore made every level identical AND sent a
+  // field the endpoint does not speak.
+  //
+  // Levels: only `low` and `high` are measured, and no effort vocabulary is
+  // documented, so only those two values are ever emitted. A level between
+  // them (`medium`) or above them (`xhigh`, `max`) collapses onto `high` —
+  // the same "no documented equivalent ⇒ high" precedent as the GLM branch —
+  // rather than inventing enum values the endpoint may reject and claiming a
+  // depth nobody measured. Any such pick still reasons at least as deeply as
+  // the pick intends; it never silently loses the tier the way the old bytes
+  // did (the endpoint ignored the budget and used its own default).
+  //
+  // No thinking budget ⇒ no max_tokens arithmetic: the SDK adds the budget to
+  // max_tokens only when one exists, so `maxOutputTokens` (the catalog's
+  // 131_072, the provider's own ceiling) passes through unchanged and the
+  // generic tail's MiMo subtraction is gone with the budget.
+  //
+  // "No level selected" is untouched: it keeps `thinking: {type:"disabled"}`
+  // (see the branch above), the knob the picker labels "No thinking".
+  if (isMiMoModel(providerName, modelId)) {
+    const mimoEffort = effort === "low" ? "low" : "high";
+    return {
+      ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
+      providerOptions: { anthropic: { effort: mimoEffort } },
+    };
+  }
+
   // DeepSeek (TASK 4241): distinct low/high/max effort tiers, default high —
   // SUPPLIED FACT from the live GET /models listing (2026-10-10). Mechanism is
   // LOCAL SDK EVIDENCE: @ai-sdk/anthropic@4.0.7 serializes
@@ -389,7 +429,7 @@ export function reasoningRequestOptions(
   // card's scope. The gate is `providerName === undefined`: the wiring layer
   // sets it from the catalog entry's name only for catalog providers, so
   // catalog anthropic-transport providers WITHOUT a dedicated branch above
-  // (Kimi, Xiaomi MiMo, …) keep their exact pre-fix request bytes for every
+  // (Kimi, …) keep their exact pre-fix request bytes for every
   // effort — including max (same high budget, no effort field) — rather than
   // suddenly receiving an `output_config.effort` key and a larger budget a
   // strict proxy could reject. Custom connections always get DISTINCT budgets
@@ -430,11 +470,7 @@ export function reasoningRequestOptions(
         : REASONING_BUDGET_TOKENS[effort as "low" | "medium" | "high"];
   const wireEffort =
     customAnthropicEndpoint && declaredEffortLevels?.includes(effort) === true ? effort : undefined;
-  let maxOutputTokens = Math.max(request.maxOutputTokens ?? 0, budgetTokens + 1_024);
-  // The SDK adds the thinking budget to max_tokens on the wire.
-  if (isMiMoModel(providerName, modelId)) {
-    maxOutputTokens = Math.min(maxOutputTokens, 131_072 - budgetTokens);
-  }
+  const maxOutputTokens = Math.max(request.maxOutputTokens ?? 0, budgetTokens + 1_024);
   return {
     maxOutputTokens,
     providerOptions: {

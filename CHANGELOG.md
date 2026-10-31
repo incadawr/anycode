@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Xiaomi MiMo models now receive only the chosen effort level, without a thinking budget, so low really reasons less than high. Before, every level sent a budget MiMo ignores, and the model reasoned the same amount whichever level you picked. Measured MiMo levels are low and high; medium, xhigh and max send high, and a session with no level still sends thinking disabled.
+
 ## [0.0.58] — 2026-10-31
 
 ### Added
