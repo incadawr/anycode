@@ -3295,3 +3295,42 @@ it("passes a declared fallback-route effort to the session", async () => {
   const source = await (await import("node:fs/promises")).readFile(new URL("./index.ts", import.meta.url), "utf8");
   expect(source).toContain('model: switchModel, ...(effort !== undefined ? { effort } : {})');
 });
+
+// ── GitHub #18: the ring answer comes BEFORE the session-ready guard ─────
+//
+// A host whose boot FAILED is exactly the one whose wire log explains why, but
+// `if (!session) throw new Error("Session not ready")` sits in the same
+// branch. index.ts is not importable in a test (module-scope
+// process.parentPort — file header), so this pins the ORDER in the real
+// source, the idiom the suite already uses: moving the ring answer back below
+// the guard puts the throw before it and these assertions fail.
+describe("host diagnostics-ring answer ordering (GitHub #18)", () => {
+  async function communicationBranch(): Promise<string> {
+    const source = await (await import("node:fs/promises")).readFile(new URL("./index.ts", import.meta.url), "utf8");
+    const anchor = 'if (communication?.type === "communication_request") {';
+    const start = source.indexOf(anchor);
+    expect(start, `${anchor} not found — the host's request branch moved`).toBeGreaterThan(-1);
+    const end = source.indexOf('if (data && data.type === CREDENTIAL_RESPONSE_TYPE)', start);
+    expect(end, "the request branch's end anchor moved").toBeGreaterThan(start);
+    return source.slice(start, end);
+  }
+
+  it("answers get_diagnostics_ring before the session-ready guard", async () => {
+    const branch = await communicationBranch();
+    const ring = branch.indexOf('communication.operation === "get_diagnostics_ring"');
+    const guard = branch.indexOf('if (!session) throw new Error("Session not ready")');
+    expect(ring).toBeGreaterThan(-1);
+    expect(guard).toBeGreaterThan(-1);
+    expect(ring).toBeLessThan(guard);
+  });
+
+  it("returns the fork's own bounded snapshot, not a session fact", async () => {
+    const branch = await communicationBranch();
+    const ringAt = branch.indexOf('communication.operation === "get_diagnostics_ring"');
+    const reply = branch.slice(ringAt, branch.indexOf("return;", ringAt));
+    expect(reply).toContain("type: \"communication_response\"");
+    expect(reply).toContain("requestId: communication.requestId");
+    expect(reply).toContain("hostDiagnosticsRing.snapshot(");
+    expect(reply).not.toContain("session.");
+  });
+});

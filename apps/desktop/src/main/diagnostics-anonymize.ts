@@ -73,16 +73,19 @@ const URL_RE = /\b(https?|wss?|ftp):\/\/[^\s"'`<>\\]+/gi;
  * a user (or a container) keeps their data somewhere else. A slash that
  * STARTS a token is a path; a slash inside a token (`anthropic/claude-x`) is
  * not touched. `//` is left alone because the URL rule has already replaced
- * every scheme+host by the time these run.
+ * every scheme+host by the time these run. `:` belongs to the boundary set on
+ * purpose: `cwd:/data/x`, `open:../x` and `label:/srv/y` are at least as common
+ * in logs as their whitespace-separated forms, and a path is a path whether or
+ * not a space precedes it.
  */
 const PATH_PATTERNS: RegExp[] = [
   /~\/[^\s"'`<>|]*/g,
   /\/(?:Users|home|root|tmp|private|var|opt|mnt|srv|Volumes|Applications|Library|etc|usr|bin|sbin|lib)\b\/?[^\s"'`<>|]*/g,
   /\b[A-Za-z]:[\\/][^\s"'`<>|]*/g,
   // Any other absolute POSIX path: `/` at the start of a token.
-  /(?<=^|[\s"'`=([{,;])\/(?!\/)[^\s"'`<>|,;)\]]{2,}/g,
+  /(?<=^|[\s"'`=([{,;:])\/(?!\/)[^\s"'`<>|,;)\]]{2,}/g,
   // Explicitly relative paths: `./x`, `../x`.
-  /(?<=^|[\s"'`=([{,;])(?:\.\.?\/)[^\s"'`<>|,;)\]]+/g,
+  /(?<=^|[\s"'`=([{,;:])(?:\.\.?\/)[^\s"'`<>|,;)\]]+/g,
 ];
 
 const IPV4_RE = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;

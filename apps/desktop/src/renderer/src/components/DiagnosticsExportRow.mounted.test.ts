@@ -68,4 +68,29 @@ describe("diagnostics export row (GitHub #18)", () => {
     await act(async () => button("diagnostics-preview")!.click());
     expect(container.textContent).toContain("The bundle could not be built.");
   });
+
+  it("leaves the row usable when the preview bridge REJECTS (no handler registered)", async () => {
+    const preview = vi.fn(async () => {
+      throw new Error("Error invoking remote method 'anycode:diagnostics-preview'");
+    });
+    await mount("sess_root_0001", { preview, save: vi.fn() });
+
+    await act(async () => button("diagnostics-preview")!.click());
+    expect(container.textContent).toContain("The bundle could not be built.");
+    // Not stuck in "previewing": the row's button is enabled again.
+    expect(button("diagnostics-preview")!.disabled).toBe(false);
+  });
+
+  it("reports a rejected save instead of waiting forever", async () => {
+    const preview = vi.fn(async () => ({ ok: true, summary: SUMMARY, preview: "{}" }));
+    const save = vi.fn(async () => {
+      throw new Error("Error invoking remote method 'anycode:diagnostics-save'");
+    });
+    await mount("sess_root_0001", { preview, save });
+
+    await act(async () => button("diagnostics-preview")!.click());
+    await act(async () => button("diagnostics-save")!.click());
+    expect(container.textContent).toContain("The bundle could not be written.");
+    expect(container.textContent).not.toContain("Waiting for the save dialog");
+  });
 });

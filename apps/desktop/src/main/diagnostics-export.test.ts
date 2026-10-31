@@ -48,14 +48,19 @@ interface FakeFs {
   /** Files read WHOLE (the only reads whose content can reach the bundle). */
   fullReads: string[];
   headReads: string[];
+  /** Files read from the END — tracked apart from `fullReads` on purpose, so a
+   *  whole-file read of an oversized file cannot pass for a tail read. */
+  tailReads: string[];
 }
 
 function makeFs(files: Record<string, FakeFile>): FakeFs {
   const fullReads: string[] = [];
   const headReads: string[] = [];
+  const tailReads: string[] = [];
   return {
     fullReads,
     headReads,
+    tailReads,
     fs: {
       readdir: async (dir) => {
         if (!dir.endsWith("/telemetry")) return [];
@@ -88,7 +93,7 @@ function makeFs(files: Record<string, FakeFile>): FakeFs {
       readFileTailNoFollow: async (path, maxBytes) => {
         const file = files[path];
         if (file === undefined) throw new Error("ENOENT");
-        fullReads.push(path);
+        tailReads.push(path);
         return file.content.slice(-maxBytes);
       },
       writeFile: async () => {},
@@ -177,6 +182,61 @@ describe("diagnostics bundle (GitHub #18)", () => {
       "turn_end",
     ]);
     expect(summary.bytes).toBe(Buffer.byteLength(json, "utf8"));
+  });
+
+  it("finds a child of an OLD root even when hundreds of unrelated sessions are newer", async () => {
+    // The child file is created during the root's life, so it sits FAR down a
+    // newest-first listing whose window is bounded by count. Every child of a
+    // session older than that window must still be found, or the bundle
+    // silently claims a root-only tree.
+    const lines: Record<string, FakeFile> = {
+      [`${DIR}/${ROOT}.jsonl`]: {
+        mtimeMs: 1_000,
+        content: telemetryLine({ v: 1, ts: 1_000, session: ROOT, t: "session_start", model: "m" }) +
+          record(ROOT, { t: "turn_end", turn: 1 }),
+      },
+      [`${DIR}/${CHILD}.jsonl`]: {
+        mtimeMs: 1_100,
+        content: sessionStart(CHILD, ROOT) + record(CHILD, { t: "turn_end", turn: 1 }),
+      },
+    };
+    for (let index = 0; index < 260; index += 1) {
+      const other = `sess_newer_${index}`;
+      lines[`${DIR}/${other}.jsonl`] = {
+        mtimeMs: 2_000 + index,
+        content: sessionStart(other) + record(other, { t: "turn_end", turn: 1 }),
+      };
+    }
+
+    const { bundle, fake } = await build(lines);
+    const anon = createDiagnosticsAnonymizer({ salt: SALT });
+    const ids = bundle.telemetry.sessions.map((session) => session.id);
+    expect(ids).toContain(anon.id(ROOT));
+    expect(ids).toContain(anon.id(CHILD));
+    expect(fake.fullReads).toContain(`${DIR}/${CHILD}.jsonl`);
+    // Unrelated sessions are never read whole — only their heads.
+    expect(fake.fullReads).toHaveLength(2);
+    expect(bundle.notes).toEqual([]);
+  });
+
+  it("says the tree may be short when the discovery cap stops the pass", async () => {
+    const lines: Record<string, FakeFile> = {
+      [`${DIR}/${ROOT}.jsonl`]: {
+        mtimeMs: 1,
+        content: telemetryLine({ v: 1, ts: 1, session: ROOT, t: "session_start", model: "m" }),
+      },
+      [`${DIR}/${CHILD}.jsonl`]: { mtimeMs: 2, content: sessionStart(CHILD, ROOT) },
+    };
+    for (let index = 0; index < 10; index += 1) {
+      const other = `sess_peer_${index}`;
+      lines[`${DIR}/${other}.jsonl`] = { mtimeMs: 3 + index, content: sessionStart(other) };
+    }
+
+    // The root is read first, then one more head; the child sits further down.
+    const { bundle, summary } = await build(lines, { maxEdgeFiles: 2 });
+    expect(bundle.notes).toContain("session-tree discovery stopped at the file cap; some session-tree files may be missing");
+    expect(bundle.telemetry.truncated).toBe(true);
+    expect(summary.truncated).toBe(true);
   });
 
   it("exports ONLY the requested session tree, and never reads an unrelated session", async () => {
@@ -295,8 +355,9 @@ describe("diagnostics bundle (GitHub #18)", () => {
     expect(childSession).toBeDefined();
     expect(childSession?.truncated).toBe(true);
     expect(bundle.telemetry.notIncluded).toEqual([]);
-    // Tail read, not a whole-file read of a >1 MB file.
-    expect(fake.fullReads).toContain(`${DIR}/${CHILD}.jsonl`);
+    // Tail read ONLY: a >1 MB file is never read whole.
+    expect(fake.tailReads).toContain(`${DIR}/${CHILD}.jsonl`);
+    expect(fake.fullReads).not.toContain(`${DIR}/${CHILD}.jsonl`);
     expect(fake.headReads).toContain(`${DIR}/${CHILD}.jsonl`);
   });
 
@@ -381,6 +442,34 @@ describe("diagnostics bundle (GitHub #18)", () => {
     expect(rootSession?.records.length ?? 0).toBeGreaterThan(0);
     expect(childSession === undefined || childSession.records.length === 0).toBe(true);
     expect(bundle.notes).toContain("telemetry records dropped to fit the size cap");
+  });
+
+  it("drops the last wire entry instead of re-keeping it forever when only tool shapes are left", async () => {
+    // 60 distinct tool SHAPES survive after every telemetry record is trimmed,
+    // and the wire log holds exactly one entry. Halving a one-entry list
+    // without shrinking it would spin here forever instead of moving on to the
+    // tool-shape stage.
+    const letters = (index: number): string => {
+      let out = "";
+      let rest = index;
+      do {
+        out = String.fromCharCode(97 + (rest % 26)) + out;
+        rest = Math.floor(rest / 26);
+      } while (rest > 0);
+      return out;
+    };
+    const lines: string[] = [sessionStart(ROOT)];
+    for (let index = 0; index < 60; index += 1) {
+      lines.push(record(ROOT, { t: "tool", tool: `tool_${letters(index)}`, status: "ok", durationMs: index }));
+    }
+    const { bundle, summary } = await build(
+      { [`${DIR}/${ROOT}.jsonl`]: { content: lines.join("") } },
+      { rings: [{ at: 1, scope: "main", channel: "in:only_entry" }], maxBytes: 2_100 },
+    );
+    expect(bundle.wire.entries).toEqual([]);
+    expect(bundle.wire.byChannel).toEqual({});
+    expect(bundle.notes).toContain("wire entries dropped to fit the size cap");
+    expect(summary.bytes).toBeLessThan(2_100);
   });
 
   it("keeps wire.byChannel consistent with the entries it actually kept", async () => {

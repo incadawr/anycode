@@ -22,6 +22,9 @@ const FORBIDDEN = {
   oddRootPath: "/data/models/qwen-private.json",
   relativePath: "./profiles/work-private.json",
   parentRelativePath: "../elsewhere/private-secrets.json",
+  // Path shapes whose only separator from the preceding word is a colon.
+  colonAttachedPath: "/data/colon-root/private-model.json",
+  colonRelativePath: "../colon-root/private-notes.json",
   windowsPath: "C:\\Users\\carol\\AppData\\Roaming\\anycode\\config.json",
   host: "build-agent-7.internal.corp",
   url: "https://api.secret-provider.example.com/v1/chat?token=abc",
@@ -50,6 +53,8 @@ describe("diagnostics anonymiser (GitHub #18)", () => {
       `stored at ${FORBIDDEN.userPath} and ${FORBIDDEN.windowsPath}`,
       `also ${FORBIDDEN.homePath} and ${FORBIDDEN.tempPath}`,
       `odd root ${FORBIDDEN.oddRootPath} and ${FORBIDDEN.relativePath} and ${FORBIDDEN.parentRelativePath}`,
+      // A path is a path even when a colon, not a space, precedes it.
+      `cwd:${FORBIDDEN.colonAttachedPath} open:${FORBIDDEN.colonRelativePath}`,
       `call ${FORBIDDEN.url} via ${FORBIDDEN.host} / ${FORBIDDEN.localhost} / ${FORBIDDEN.ip}`,
       `mail ${FORBIDDEN.email}, session ${FORBIDDEN.sessionId}, uuid ${FORBIDDEN.uuid}`,
       `hex ${FORBIDDEN.longHex}`,
@@ -59,6 +64,10 @@ describe("diagnostics anonymiser (GitHub #18)", () => {
 
     const scrubbed = anon.text(text);
     assertNothingForbidden(scrubbed);
+    // Colon-attached paths lose the WHOLE path, not just the part an
+    // independent host/file rule happens to catch.
+    expect(scrubbed).not.toContain("/data/colon-root");
+    expect(scrubbed).not.toContain("../colon-root");
     expect(scrubbed).toContain("<secret>");
     expect(scrubbed).toContain("<path>");
     expect(scrubbed).toContain("<host>");

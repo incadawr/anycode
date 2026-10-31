@@ -13,7 +13,11 @@
 import { useContext, useState } from "react";
 import { TabContext } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
-import type { DiagnosticsSummary } from "../../../shared/diagnostics.js";
+import type {
+  DiagnosticsPreviewResult,
+  DiagnosticsSaveResult,
+  DiagnosticsSummary,
+} from "../../../shared/diagnostics.js";
 
 export type DiagnosticsExportPhase =
   | { step: "idle" }
@@ -86,7 +90,16 @@ export function DiagnosticsExportRow({ sessionId }: { sessionId: string | null }
       return;
     }
     setPhase({ step: "previewing" });
-    const result = await bridge.preview({ sessionId });
+    // `invoke` REJECTS when no handler is registered (preload/main reload, a
+    // mismatch in dev). Without this catch the row would sit in "previewing"
+    // with its only button disabled until the menu happened to remount.
+    let result: DiagnosticsPreviewResult;
+    try {
+      result = await bridge.preview({ sessionId });
+    } catch {
+      setPhase({ step: "error", reason: "build_failed" });
+      return;
+    }
     if (!result.ok) {
       setPhase({ step: "error", reason: result.reason });
       return;
@@ -97,7 +110,13 @@ export function DiagnosticsExportRow({ sessionId }: { sessionId: string | null }
   const save = async (preview: { preview: string; summary: DiagnosticsSummary }): Promise<void> => {
     if (bridge === undefined || sessionId === null) return;
     setPhase({ step: "saving", ...preview });
-    const result = await bridge.save({ sessionId });
+    let result: DiagnosticsSaveResult;
+    try {
+      result = await bridge.save({ sessionId });
+    } catch {
+      setPhase({ step: "error", reason: "write_failed" });
+      return;
+    }
     if (!result.ok) {
       setPhase({ step: "error", reason: result.reason });
       return;
