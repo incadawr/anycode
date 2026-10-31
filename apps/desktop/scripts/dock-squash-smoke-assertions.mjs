@@ -7,15 +7,15 @@
  * documented refusal case.
  *
  * The shapes below mirror the facade contract exactly:
- *  - `POST /dock/tabs/:id/split` → `{ok:true}` | `{ok:false, reason:"tab_not_present"|"split_refused"}` (renderer automation facade, cross-review D6);
+ *  - `POST /dock/tabs/:id/split` → `{ok:true}` | `{ok:false, reason:"tab_not_present"|"split_refused"}` (renderer automation facade);
  *  - `GET /dock/state` → `{mode, width, conversationWidth, tabs:[{id,kind,title,active}], split}` (dockLayoutState).
  *
- * Split-click policy (review 4839 follow-up): once the deterministic-primary
- * preconditions HELD, a split_refused is retried (browser-tab click →
- * precondition wait → split click, bounded attempts) and only a refusal that
- * persists through every attempt with preconditions held is a FAIL — an
- * always-refusing facade must never read ALL GREEN. A refusal is PASS-expected
- * only when a precondition genuinely failed (the premise never held).
+ * Split-click policy: once the deterministic-primary preconditions HELD, a
+ * split_refused is retried (browser-tab click → precondition wait → split
+ * click, bounded attempts) and only a refusal that persists through every
+ * attempt with preconditions held is a FAIL — an always-refusing facade must
+ * never read ALL GREEN. A refusal is PASS-expected only when a precondition
+ * genuinely failed (the premise never held).
  *
  * Zero npm deps; plain node >=22 ESM.
  */
