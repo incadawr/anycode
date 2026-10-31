@@ -345,7 +345,7 @@ async function step1LaunchApp(ctx) {
   ctx.apiKey = secretsEnv.ANYCODE_API_KEY;
   ctx.model = secretsEnv.ANYCODE_MODEL && secretsEnv.ANYCODE_MODEL.length > 0 ? secretsEnv.ANYCODE_MODEL : "glm-5.2";
 
-  const profile = mkdtempSync(join(tmpdir(), "anycode-task106-model-picker-profile-"));
+  const profile = mkdtempSync(join(tmpdir(), "anycode-model-picker-profile-"));
   ctx.profile = profile;
   ctx.profileUserDataDir = join(profile, "user-data");
   ctx.profileDbPath = join(profile, "db.sqlite");
@@ -503,8 +503,8 @@ async function step4ConfirmTwoConnections(ctx) {
 
 async function step5OpenDraftAndModelMenu(ctx) {
   const step = 5;
-  ctx.workspace = mkdtempSync(join(tmpdir(), "anycode-task106-model-picker-ws-"));
-  writeFileSync(join(ctx.workspace, "seed.txt"), "hello from task106 model-picker smoke\n");
+  ctx.workspace = mkdtempSync(join(tmpdir(), "anycode-model-picker-ws-"));
+  writeFileSync(join(ctx.workspace, "seed.txt"), "hello from model-picker smoke\n");
 
   await apiAction(ctx, step, "/start-screen/open", { workspace: ctx.workspace });
   const draft = await getStartScreenState(ctx, step);
@@ -727,7 +727,7 @@ async function run() {
     pickedModelName: null,
     secondGroup: null,
     teardownPromise: null,
-    screenshotDir: mkdtempSync(join(tmpdir(), "anycode-task106-model-picker-evidence-")),
+    screenshotDir: mkdtempSync(join(tmpdir(), "anycode-model-picker-evidence-")),
   };
   installSignalTeardown(ctx);
 

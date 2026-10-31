@@ -27,7 +27,7 @@
  * `child-session-race-smoke.mjs` uses), including `step1LaunchApp`, whose
  * settings v2 seed is the only one that round-trips the current schema.
  * Teardown/result-json are local so this script never overwrites another
- * slice's standing evidence — it writes `evidence/task145/detach-result.json`.
+ * slice's standing evidence — it writes `evidence/detach-smoke/detach-result.json`.
  *
  * Probes run independently, not fail-fast: A/B share one dispatch, C and D
  * each own their own, and all four share one app launch purely to amortize
@@ -57,7 +57,7 @@ import {
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(scriptDir, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
-const EVIDENCE_DIR = join(repoRoot, "working-docs", "evidence", "task145");
+const EVIDENCE_DIR = join(repoRoot, "working-docs", "evidence", "detach-smoke");
 
 const APP_EXIT_GRACE_MS = 15_000;
 const SIGTERM_GRACE_MS = 3_000;

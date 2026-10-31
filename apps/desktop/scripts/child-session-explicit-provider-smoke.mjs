@@ -62,7 +62,7 @@
  * with the required `tier`/`provider` params at all — that is a live-model
  * limitation, not a product failure, and is reported as such, distinctly
  * from a real FAIL. Evidence (a screenshot + a JSON result dump) is written
- * to `working-docs/task102-track/evidence/S2/`.
+ * to `working-docs/child-session-smoke/evidence/S2/`.
  */
 
 import { execFileSync, spawn } from "node:child_process";
@@ -77,7 +77,7 @@ const repoRoot = resolve(desktopRoot, "..", "..");
 
 const DISCOVERY_PATH = join(homedir(), ".anycode", "automation.json");
 const SMOKE_SECRETS_PATH = join(repoRoot, ".smoke-secrets", "glm.env");
-const EVIDENCE_DIR = join(repoRoot, "working-docs", "task102-track", "evidence", "S2");
+const EVIDENCE_DIR = join(repoRoot, "working-docs", "child-session-smoke", "evidence", "S2");
 const TOTAL_STEPS = 4;
 const LAUNCH_TIMEOUT_MS = 120_000;
 const APP_EXIT_GRACE_MS = 15_000;
