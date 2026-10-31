@@ -42,6 +42,29 @@ The switches reach the app through electron-vite's literal `--` forwarding
 switches do not enable automation — the dev-only automation server is still
 gated separately.
 
+The migration is incremental. These drivers still build their own launch and
+need the same change (alphabetical, one per follow-up):
+
+```text
+child-session-explicit-provider-smoke, codex-ctx-quota-live-smoke,
+codex-import-live-smoke, codex-install-live-smoke, codex-live-smoke,
+codex-profiles-ui-smoke, compact-submit-ui-smoke, ctx-popover-smoke,
+custom-provider-live-smoke, env-status-smoke, git-ui-smoke,
+keybindings-ui-smoke, lsp-hooks-ui-smoke, mcp-ui-smoke, model-pill-smoke,
+model-pricing-ui-smoke, orchestrate-mode-smoke, orchestration-lab,
+orchestration-loop-live-smoke, preview-live-smoke, preview-panel-live-smoke,
+profile-ui-smoke, prompt-cache-ui-smoke, provider-connections-ui-smoke,
+provider-dogfood-w13-smoke, queue-smoke, reasoning-ui-smoke, retry-ui-smoke,
+rewind-ui-smoke, settings-ui-smoke, sidebar-rowcut-smoke, sidebar-ui-smoke,
+skills-ui-smoke, slash-menu-ui-smoke, start-screen-smoke,
+subagent-card-smoke, subagents-ui-smoke, task106-model-picker-smoke,
+todo-panel-smoke, todo-subagent-smoke, transcript-follow-smoke,
+workflow-map-smoke
+```
+
+`sidebar-rowcut-smoke` starts `electron-vite` itself rather than `pnpm dev`;
+it needs the same switches, passed directly.
+
 ## Safe release boundary
 
 Automation is for development only.
