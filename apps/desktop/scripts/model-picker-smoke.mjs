@@ -18,7 +18,7 @@
  * the Settings dialog's Add tile) — both proven live sequences, not
  * reinvented here.
  *
- * Usage:   node apps/desktop/scripts/task106-model-picker-smoke.mjs [--keep] [--port <n>]
+ * Usage:   node apps/desktop/scripts/model-picker-smoke.mjs [--keep] [--port <n>]
  *
  *   --keep       Do not delete the temp workspace/profile on exit (debugging).
  *   --port <n>   Forwarded as ANYCODE_AUTOMATION_PORT to the spawned dev process.
@@ -65,7 +65,7 @@ function parseArgs(argv) {
       i += 1;
       flags.port = argv[i];
     } else {
-      console.warn(`[task106-model-picker-smoke] ignoring unrecognized argument: ${arg}`);
+      console.warn(`[model-picker-smoke] ignoring unrecognized argument: ${arg}`);
     }
   }
   return flags;
@@ -314,7 +314,7 @@ async function saveScreenshot(ctx, name) {
   try {
     const resp = await api(ctx, "GET", "/screenshot");
     if (resp.status !== 200 || typeof resp.body?.png !== "string") {
-      console.warn(`[task106-model-picker-smoke] screenshot "${name}" unavailable (HTTP ${resp.status})`);
+      console.warn(`[model-picker-smoke] screenshot "${name}" unavailable (HTTP ${resp.status})`);
       return null;
     }
     mkdirSync(ctx.screenshotDir, { recursive: true });
@@ -323,7 +323,7 @@ async function saveScreenshot(ctx, name) {
     console.log(`           screenshot: ${filePath}`);
     return filePath;
   } catch (err) {
-    console.warn(`[task106-model-picker-smoke] screenshot "${name}" failed: ${err?.message ?? err}`);
+    console.warn(`[model-picker-smoke] screenshot "${name}" failed: ${err?.message ?? err}`);
     return null;
   }
 }
@@ -655,11 +655,11 @@ async function runTeardown(ctx, failedStep) {
   if (ctx.child) {
     const exited = await waitForExit(ctx.child, APP_EXIT_GRACE_MS);
     if (!exited) {
-      console.warn(`[task106-model-picker-smoke] app did not exit within ${APP_EXIT_GRACE_MS}ms of /quit — escalating SIGTERM`);
+      console.warn(`[model-picker-smoke] app did not exit within ${APP_EXIT_GRACE_MS}ms of /quit — escalating SIGTERM`);
       killTree(ctx.child.pid, "SIGTERM");
       await sleep(SIGTERM_GRACE_MS);
       if (isPidAlive(ctx.child.pid)) {
-        console.warn(`[task106-model-picker-smoke] app still alive ${SIGTERM_GRACE_MS}ms after SIGTERM — escalating SIGKILL`);
+        console.warn(`[model-picker-smoke] app still alive ${SIGTERM_GRACE_MS}ms after SIGTERM — escalating SIGKILL`);
         killTree(ctx.child.pid, "SIGKILL");
       }
     }
@@ -673,18 +673,18 @@ async function runTeardown(ctx, failedStep) {
       continue;
     }
     if (FLAGS.keep) {
-      console.log(`[task106-model-picker-smoke] --keep set, ${label} preserved at: ${dir}`);
+      console.log(`[model-picker-smoke] --keep set, ${label} preserved at: ${dir}`);
     } else {
       try {
         rmSync(dir, { recursive: true, force: true });
       } catch (err) {
-        console.warn(`[task106-model-picker-smoke] failed to remove ${label} at ${dir}: ${err?.message ?? err}`);
+        console.warn(`[model-picker-smoke] failed to remove ${label} at ${dir}: ${err?.message ?? err}`);
       }
     }
   }
 
   const verdict = failedStep === null ? "ALL GREEN" : `STOPPED at step ${failedStep}`;
-  console.log(`\n[task106-model-picker-smoke] ${passCount}/${TOTAL_STEPS} steps passed — ${verdict}`);
+  console.log(`\n[model-picker-smoke] ${passCount}/${TOTAL_STEPS} steps passed — ${verdict}`);
 }
 
 // ── orchestration ──
@@ -696,9 +696,9 @@ function installSignalTeardown(ctx) {
       return;
     }
     handling = true;
-    console.error(`\n[task106-model-picker-smoke] received ${signal} — tearing down…`);
+    console.error(`\n[model-picker-smoke] received ${signal} — tearing down…`);
     teardown(ctx, `signal:${signal}`)
-      .catch((err) => console.error(`[task106-model-picker-smoke] teardown after ${signal} failed: ${err?.stack ?? err}`))
+      .catch((err) => console.error(`[model-picker-smoke] teardown after ${signal} failed: ${err?.stack ?? err}`))
       .finally(() => process.exit(1));
   };
   process.on("SIGINT", onSignal);
@@ -745,7 +745,7 @@ async function run() {
   } catch (err) {
     failedStep = err instanceof SmokeFailure ? err.step : "unknown";
     if (!(err instanceof SmokeFailure)) {
-      console.error(`[task106-model-picker-smoke] unexpected error: ${err?.stack ?? err}`);
+      console.error(`[model-picker-smoke] unexpected error: ${err?.stack ?? err}`);
     }
   }
 
@@ -754,6 +754,6 @@ async function run() {
 }
 
 run().catch((err) => {
-  console.error(`[task106-model-picker-smoke] fatal: ${err?.stack ?? err}`);
+  console.error(`[model-picker-smoke] fatal: ${err?.stack ?? err}`);
   process.exit(1);
 });

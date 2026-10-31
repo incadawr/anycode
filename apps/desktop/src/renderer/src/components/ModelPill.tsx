@@ -283,7 +283,7 @@ export function pillDisplayLabel(
 
 /**
  * Resolves the model list a provider offers its pickers (F2, codex-profiles
- * cut lane FXH review; union semantics from). Base hints come from a
+ * cut lane FXH review). Base hints come from a
  * builtin catalog hit; failing that, the `custom:<slug>` record's own curated
  * `models[]` (cut §9.2 — the user-picked subset a custom endpoint's fetch
  * surfaced); anything else (unknown id, or `providerId` itself `undefined` —

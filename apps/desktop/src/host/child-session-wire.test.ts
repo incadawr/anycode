@@ -570,8 +570,8 @@ describe("non-recursion locks #1/#2 (CUT-S2 §2.6.1/§2.6.2) — discriminating 
     return {
       port: {
         run,
-        // SessionSubagentPort.send is REQUIRED (cross-review Finding 1,
-        // ); these lock tests only exercise run() — a loud
+        // SessionSubagentPort.send is REQUIRED
+        // these lock tests only exercise run() — a loud
         // refusal if send were ever reached unexpectedly.
         send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       },

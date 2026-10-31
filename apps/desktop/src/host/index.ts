@@ -4342,7 +4342,7 @@ async function boot(): Promise<void> {
     // `runEngineChild` (engine-children.ts) is NO LONGER wired here (
     // CUT-S4 §0.3): an `engine:` md-profile persona now routes to the
     // session-child path (tools/agent.ts, S4a) instead of a one-shot Claude
-    // Code / Codex CLI run — and, as of, a WORKFLOW step with an
+    // Code / Codex CLI run — and a WORKFLOW step with an
     // engine profile routes through that same session port via
     // withWorkflows(config.sessionSubagents), not the old refusal.
     // `engine-children.ts` itself stays byte-untouched and importable

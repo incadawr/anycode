@@ -1,5 +1,5 @@
 /**
- * The host's own half of: which policy a preflight judges against,
+ * The host's own half: which policy a preflight judges against,
  * resolved from the fork env main composed. Three properties, one test each:
  * the delivered policy is honoured, a risk acceptance overrides the ceiling,
  * and NO policy falls back to the compiled wire pin rather than to "allow".

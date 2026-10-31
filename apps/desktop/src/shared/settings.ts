@@ -193,7 +193,7 @@ export type ReasoningEffort = "off" | "low" | "medium" | "high" | "xhigh" | "max
 
 /**
  * Live per-model capability facts a connection's `/v1/models` fetch declared
- * (; mirrors core's `LiveModelCapabilities` as a value-only local
+ * (mirrors core's `LiveModelCapabilities` as a value-only local
  * shape — same zero-import rule as `ReasoningEffort` above). `effortLevels`
  * carries the RAW foreign strings as the endpoint spelled them; mapping into
  * the closed enum happens fail-closed at resolution, never at parse time.

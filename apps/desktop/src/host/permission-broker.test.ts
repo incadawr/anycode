@@ -498,7 +498,7 @@ describe("unattended latch", () => {
  *  1. before expiry — the owner clicks: `handleResponse` disarms (proven
  *     above, "a permission answer disarms the latch").
  *  2. AFTER expiry (the detached-child case): the ask expired unseen in the
- *     hidden child tab (a detached run has no live card;), the latch
+ *     hidden child tab (a detached run has no live card), the latch
  *     armed, and the owner then opens the tab and answers the EXPIRED ask.
  *     The click still routes through `handleResponse` —'s own law is
  *     "a click is proof of a human — even for an unknown/already-settled

@@ -64,7 +64,7 @@ describe("canRememberPermission", () => {
   });
 
   it("an engine with a live approval bridge may remember despite supportsCorePermissions:false", () => {
-    // The whole point of: codex/claude both report
+    // The whole point: codex/claude both report
     // supportsCorePermissions:false, and hiding the checkbox on that flag left
     // those sessions with no in-app way to stop being asked. Their rule store is
     // now read by IpcPermissionBroker itself, so a remembered rule is honoured.
