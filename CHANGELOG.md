@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.60] — 2026-10-31
+
 ### Added
 
 - Show and switch Codex Fast mode per session, including via the Sessions API.
