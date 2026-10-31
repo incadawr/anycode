@@ -193,6 +193,11 @@ export interface DiagnosticsBundle {
   version: 1;
   generatedAt: string;
   app: DiagnosticsAppInfo;
+  /**
+   * `redactions` counts the replacements that are STILL IN THIS ARCHIVE: a
+   * record or wire entry the size cap drops stops contributing, so the number
+   * never describes scrubbing of data the file does not contain.
+   */
   anonymization: { applied: true; saltIncluded: false; redactions: number };
   telemetry: {
     /** Salted id of the requested tree root. */
@@ -246,6 +251,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function byteLength(text: string): number {
   return Buffer.byteLength(text, "utf8");
+}
+
+/**
+ * Replacements attributed to each CARRIED object (one telemetry record, one
+ * wire entry) — keyed by identity, never serialised into the bundle.
+ *
+ * The anonymiser's own counter is a running total over everything the builder
+ * ever scrubbed, which includes records the size-cap trimmer later drops. The
+ * bundle must not claim to have scrubbed data it does not carry, so the
+ * reported number is summed from this ledger AFTER fitting: an entry only
+ * counts while the object it describes is still in the archive.
+ */
+type RedactionLedger = WeakMap<object, number>;
+
+/** Sums the ledger over exactly what the bundle still holds. */
+function archivedRedactions(ledger: RedactionLedger, bundle: DiagnosticsBundle): number {
+  let total = 0;
+  for (const session of bundle.telemetry.sessions) {
+    for (const record of session.records) total += ledger.get(record) ?? 0;
+  }
+  for (const entry of bundle.wire.entries) total += ledger.get(entry) ?? 0;
+  return total;
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -454,6 +481,7 @@ interface TelemetryReadResult {
 async function readTelemetry(
   deps: DiagnosticsExportDeps,
   anon: ReturnType<typeof createDiagnosticsAnonymizer>,
+  ledger: RedactionLedger,
 ): Promise<TelemetryReadResult> {
   const listed = await listTelemetryFiles(deps.fs, deps.telemetryDir);
   const sessionIds = new Map<string, string>();
@@ -571,11 +599,15 @@ async function readTelemetry(
         else malformedLines += 1;
         continue;
       }
+      // The record is charged with the replacements IT caused, so the ledger
+      // stays correct once the size cap starts dropping records.
+      const before = anon.redactionCount();
       const projected = projectTelemetryRecord(parsed, { anon, sessionId: sessionIdFor });
       if (projected.kind !== "record") {
         droppedRecords += 1;
         continue;
       }
+      ledger.set(projected.record, anon.redactionCount() - before);
       group.records.push(projected.record);
     }
   }
@@ -650,20 +682,28 @@ function countByChannel(entries: readonly DiagnosticsRingEntry[]): Record<string
 function buildWire(
   rings: readonly DiagnosticsRingEntry[],
   hostRings: unknown,
-  redact: (value: string) => string,
+  anon: ReturnType<typeof createDiagnosticsAnonymizer>,
+  ledger: RedactionLedger,
 ): DiagnosticsBundle["wire"] {
   const merged = [
     ...parseDiagnosticsRingEntries([...rings], "main", DIAGNOSTICS_WIRE_MAX_ENTRIES),
     ...parseDiagnosticsRingEntries(hostRings, "host", DIAGNOSTICS_WIRE_MAX_ENTRIES),
   ].sort((a, b) => a.at - b.at);
-  const kept = merged.slice(-DIAGNOSTICS_WIRE_MAX_ENTRIES).map((entry) => ({
-    ...entry,
+  const kept = merged.slice(-DIAGNOSTICS_WIRE_MAX_ENTRIES).map((entry) => {
     // Defence in depth: the ring already refuses anything but an identifier,
     // but a compromised host can still choose an identifier-looking string.
     // A hostname/token smuggled into `type` is scrubbed here too.
-    channel: redact(entry.channel).slice(0, DIAGNOSTICS_MAX_FIELD_CHARS),
-    ...(entry.code !== undefined ? { code: redact(entry.code).slice(0, DIAGNOSTICS_MAX_FIELD_CHARS) } : {}),
-  }));
+    const before = anon.redactionCount();
+    const safe = {
+      ...entry,
+      channel: anon.text(entry.channel).slice(0, DIAGNOSTICS_MAX_FIELD_CHARS),
+      ...(entry.code !== undefined
+        ? { code: anon.text(entry.code).slice(0, DIAGNOSTICS_MAX_FIELD_CHARS) }
+        : {}),
+    };
+    ledger.set(safe, anon.redactionCount() - before);
+    return safe;
+  });
   return { entries: kept, byChannel: countByChannel(kept), truncated: merged.length > kept.length };
 }
 
@@ -768,9 +808,10 @@ export async function buildDiagnosticsBundle(deps: DiagnosticsExportDeps): Promi
   const now = deps.now ?? Date.now;
   const generatedAtMs = now();
   const anon = createDiagnosticsAnonymizer({ ...(deps.salt !== undefined ? { salt: deps.salt } : {}) });
+  const ledger: RedactionLedger = new WeakMap();
 
-  const telemetry = await readTelemetry(deps, anon);
-  const wire = buildWire(deps.rings ?? [], deps.hostRings, anon.text);
+  const telemetry = await readTelemetry(deps, anon, ledger);
+  const wire = buildWire(deps.rings ?? [], deps.hostRings, anon, ledger);
   const bundle: DiagnosticsBundle = {
     format: "anycode-diagnostics",
     version: 1,
@@ -783,7 +824,9 @@ export async function buildDiagnosticsBundle(deps: DiagnosticsExportDeps): Promi
       ...(deps.app.node !== undefined ? { node: deps.app.node } : {}),
     },
     // The salt is deliberately absent: it would make the id hashes reversible.
-    anonymization: { applied: true, saltIncluded: false, redactions: anon.redactionCount() },
+    // The count is provisional (everything projected so far) and is replaced
+    // with the archived total once fitting has decided what survives.
+    anonymization: { applied: true, saltIncluded: false, redactions: 0 },
     telemetry: {
       rootSession: telemetry.rootSession,
       filesRead: telemetry.filesRead,
@@ -800,7 +843,17 @@ export async function buildDiagnosticsBundle(deps: DiagnosticsExportDeps): Promi
     notes: [...telemetry.notes],
   };
 
+  // Fit against the PRE-trim total: it is an upper bound of the number that
+  // ends up in the archive, so replacing it later can never lengthen the JSON
+  // past `maxBytes` (the survivor count has no more digits than its bound).
+  bundle.anonymization.redactions = archivedRedactions(ledger, bundle);
   const fitted = fitBundle(bundle, maxBytes);
+
+  const archived = archivedRedactions(ledger, fitted.bundle);
+  if (archived !== fitted.bundle.anonymization.redactions) {
+    fitted.bundle.anonymization.redactions = archived;
+    fitted.json = JSON.stringify(fitted.bundle);
+  }
 
   const summary: DiagnosticsSummary = {
     generatedAt: fitted.bundle.generatedAt,
