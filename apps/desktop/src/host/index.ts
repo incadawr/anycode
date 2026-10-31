@@ -2937,6 +2937,13 @@ async function boot(): Promise<void> {
           apiKey: envConfig.apiKey,
           model: m,
           ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
+          // The connection's declared effort vocabulary (ANYCODE_EFFORT_LEVELS):
+          // the model port sends `output_config.effort` to a custom
+          // Anthropic-compatible endpoint only when that vocabulary named BOTH
+          // xhigh and max; without it the endpoint gets distinct thinking
+          // budgets and no field it never advertised. Conditional, so an
+          // undeclared connection keeps today's request bytes.
+          ...(envConfig.effortLevels !== undefined ? { declaredEffortLevels: envConfig.effortLevels } : {}),
           ...(resolveApiKey !== undefined ? { resolveApiKey } : {}),
           ...(includeUsage ? { includeUsage: true } : {}),
           // GitHub #15: forward the parsed prompt-cache policy into EVERY port
