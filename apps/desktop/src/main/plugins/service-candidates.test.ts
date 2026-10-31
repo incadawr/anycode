@@ -134,7 +134,7 @@ describe("listServiceCandidates (a)", () => {
   });
 });
 
-describe("listServiceCandidates secret refs ( part 0)", () => {
+describe("listServiceCandidates secret refs (part 0)", () => {
   const SECRET_SERVICES = [
     { name: "relay", command: "node", args: ["./relay.js"], env: { TOKEN: "${secret:BRIDGE_TOKEN}", USERS: "${secret:BRIDGE_USERS}" } },
   ];

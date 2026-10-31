@@ -119,7 +119,7 @@ export interface VaultLike {
   clearSecret(key: SecretKey): Promise<void>;
   getSecretValue(key: SecretKey): Promise<string | undefined>;
   /**
-   * Tri-state read (, design review B-08): distinguishes "no entry" from
+   * Tri-state read (design review B-08): distinguishes "no entry" from
    * "an entry that will not decrypt". Used by the legacy-import dedup, which may
    * not treat the two alike, and by the password-mutation compensation, which
    * has to be able to put the PREVIOUS value back.
@@ -133,7 +133,7 @@ export interface OAuthRunnerLike {
   startFlow(config: OAuthProviderConfig, connectionId: string, opts: { allowWeak: boolean }): Promise<OAuthOutcome>;
   cancel(providerId: string): void;
   /**
-   * Tombstones `connectionId` for the compensating clear ( W11-FIX2
+   * Tombstones `connectionId` for the compensating clear (W11-FIX2
    * #2) — REQUIRED (not optional): an optional custody hook is a hook that
    * gets forgotten to wire up. Returns a revert closure the caller MUST
    * invoke on every exit where the connection's metadata is NOT actually
@@ -174,7 +174,7 @@ export interface SettingsIpcDeps {
   genProxyProfileId?: () => string;
   /**
    * Refreshes main's in-memory plaintext proxy-password cache from the vault
-   * ( §5, design review H-01). Called after the vault write and BEFORE
+   * (§5, design review H-01). Called after the vault write and BEFORE
    * the mutation event, so the very first spawn that follows a save already
    * carries the new credential: the sync materialisation call sites read that
    * cache, and a mutation event that arrived first would let a spawn race the
@@ -184,7 +184,7 @@ export interface SettingsIpcDeps {
    */
   refreshProxySecrets?: () => void | Promise<void>;
   /**
-   * Fired after a successful secret write/clear, BEFORE onMutation (;
+   * Fired after a successful secret write/clear, BEFORE onMutation;
    * same ordering discipline as refreshProxySecrets): receives the written key
    * and the fresh settings so main can decide — without any vault read —
    * whether the recognizer selection's credential just moved and force the
@@ -192,13 +192,13 @@ export interface SettingsIpcDeps {
    */
   onSecretWritten?: (key: SecretKey, settings: AnycodeSettings) => void;
   /**
-   * True when a connection is pinned to a LIVE session ( W10 delete-guard).
+   * True when a connection is pinned to a LIVE session (W10 delete-guard).
    * Main injects `(id) => manager.pinnedConnectionIds().has(id)`. Absent = no live
    * sessions to protect (unit fixtures) so delete behaves as before.
    */
   connectionInUse?: (connectionId: string) => boolean;
   /**
-   *  W11: an optional free provider-specific probe for `connection-check`.
+   * W11: an optional free provider-specific probe for `connection-check`.
    * `handleConnectionCheck` calls this AT MOST once per invocation and NEVER
    * falls back to a billable generation request. Absent = the W9 scaffold
    * behaviour — `connection-check` validates the id and returns the current
@@ -208,7 +208,7 @@ export interface SettingsIpcDeps {
   /** Injectable ISO-timestamp clock for `lastHealth.at` (tests only; defaults to `new Date().toISOString()`). */
   now?: () => string;
   /**
-   * : returns the running app's version for `SettingsSnapshot.appVersion`.
+   * returns the running app's version for `SettingsSnapshot.appVersion`.
    * Injected (never `import { app } from "electron"` here) so this module keeps
    * the same DI discipline as automation/handlers.ts's `AppLike` and stays
    * unit-testable with a fake. main/index.ts wires `() => app.getVersion()`;
@@ -216,20 +216,20 @@ export interface SettingsIpcDeps {
    */
   getAppVersion?: () => string;
   /**
-   *  seam: realpath+stat of a binary the user asked to trust.
+   * seam: realpath+stat of a binary the user asked to trust.
    * Production: realpathSync -> statSync. Injectable so grant tests never
    * depend on live fs layout.
    */
   statBinaryForTrust?: (path: string) =>
     | { ok: true; resolvedPath: string; stat: { isFile: boolean; mode: number; uid: number; gid: number; size: number; mtimeMs: number } }
     | { ok: false; error: string };
-  /** : platform gate for the grant (win32 refuses — the unchecked path needs no consent). Defaults to process.platform. */
+  /** platform gate for the grant (win32 refuses — the unchecked path needs no consent). Defaults to process.platform. */
   platform?: NodeJS.Platform;
-  /**  fix wave (D-S4-13): the process uid the grant custody check judges file ownership against. Defaults to `process.getuid?.() ?? -1` (the -1 sentinel matches no real owner — fail-closed). */
+  /** fix wave (D-S4-13): the process uid the grant custody check judges file ownership against. Defaults to `process.getuid?.() ?? -1` (the -1 sentinel matches no real owner — fail-closed). */
   uid?: number;
 }
 
-/** Outcome of an explicit `connection-check` probe ( W11). */
+/** Outcome of an explicit `connection-check` probe (W11). */
 export type ConnectionProbeOutcome = { ok: true } | { ok: false; code: string };
 
 /** A fresh opaque connection id for a connection minted by main (`conn-<uuid>`). */
@@ -334,7 +334,7 @@ const ruleAddSchema: z.ZodType<PermissionRuleAddRequest> = z.object({
   pattern: z.string().optional(),
 });
 
-// : grant/revoke request payloads — {path} ONLY. The fingerprint is
+// grant/revoke request payloads — {path} ONLY. The fingerprint is
 // NEVER accepted from the caller; main computes it main-side from the live
 // filesystem (D-S4-5) via `statBinaryForTrust`.
 const binaryTrustGrantSchema = z.object({ path: z.string().min(1) });
@@ -345,7 +345,7 @@ function isPlainObjectLike(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// ── connection CRUD payload schemas ( W9) ──
+// ── connection CRUD payload schemas (W9) ──
 const transportEnum = z.enum(["anthropic-messages", "openai-chat-completions", "openai-responses"]);
 const reasoningEffortEnum = z.enum(["off", "low", "medium", "high", "xhigh", "max"]);
 // `.strict()` (custody, §6.5): a CRUD payload carrying a credential field
@@ -427,7 +427,7 @@ const connectionCreateSchema = z
     // HTTP(S) proxy. The strict `isProxyUrl` gate lives HERE, at the
     // trust boundary — the persisted schema stays lenient so one hand-edited
     // value can never corrupt the whole document (settings/schema.ts).
-    //  rework: a CREDENTIALED url is refused outright — a proxy
+    // rework: a CREDENTIALED url is refused outright — a proxy
     // password belongs in a registry profile (`login` + vault), never in the
     // 0644 settings.json. Existing legacy strings keep working (read-side
     // fail-soft; `proxyRef: "legacy"` converts them into a profile).
@@ -475,7 +475,7 @@ const connectionUpdateSchema = z
     baseUrl: z.string().optional(),
     // HTTP(S) proxy with the same `""` clear-sentinel convention as
     // `transport` above; a non-empty value must pass the strict `isProxyUrl`
-    // gate before it can reach disk.  rework: a CREDENTIALED url
+    // gate before it can reach disk. rework: a CREDENTIALED url
     // is refused outright (see the create schema's note) — the password home
     // is a registry profile + vault, never settings.json.
     proxyUrl: z.union([z.string().refine((value) => isProxyUrl(value) && !value.includes("@")), z.literal("")]).optional(),
@@ -498,7 +498,7 @@ const connectionUpdateSchema = z
     // Per-model context window with the same `""` clear sentinel as
     // `maxOutputTokens` above; a number sets tokens AND the server-derived binding.
     contextWindowTokens: z.union([contextWindowTokensSchema, z.literal("")]).optional(),
-    // Per-model image-input override with the same 
+    // Per-model image-input override with the same
     // `maxOutputTokens` clear-sentinel discipline: `""` clears BOTH keys
     // (override + binding), "on"/"off" persists the pair with a server-derived
     // binding, absent leaves them untouched.
@@ -621,31 +621,31 @@ const recognizerSetSchema = z
 export interface CatalogEntryShape {
   id: string;
   name: string;
-  /** : brand/mode fields for one-brand-one-card grouping; optional + `string`-typed to keep this module core-import-free. */
+  /** brand/mode fields for one-brand-one-card grouping; optional + `string`-typed to keep this module core-import-free. */
   brand?: string;
   modeLabel?: string;
   auth: { kind: string };
   baseUrl: string;
-  /** `reasoning`/`effortLevels`, `maxOutputTokens` and `imageInput` ride along for the draft-time effort picker / ceiling display / vision-model suggestions; `string[]`-typed to keep this module core-import-free. */
+  /** `reasoning`/`effortLevels` `maxOutputTokens` and `imageInput` ride along for the draft-time effort picker / ceiling display / vision-model suggestions; `string[]`-typed to keep this module core-import-free. */
   models: {
     id: string;
     name?: string;
     reasoning?: boolean;
     effortLevels?: readonly string[];
-    /** : the provider's documented default tier for this model, when the catalog records one; `string`-typed to keep this module core-import-free. */
+    /** the provider's documented default tier for this model, when the catalog records one; `string`-typed to keep this module core-import-free. */
     defaultEffort?: string;
     thinkingAlwaysOn?: boolean;
     maxOutputTokens?: number;
-    /** : the two window facts the drawer names in its context-window hint; the effective catalog window is their min. */
+    /** the two window facts the drawer names in its context-window hint; the effective catalog window is their min. */
     contextWindow?: number;
     usableContextWindow?: number;
     imageInput?: boolean;
   }[];
-  /** True for the literal `custom` sentinel ( W5-FIX); main supplies it from core's `isCustomProvider`. */
+  /** True for the literal `custom` sentinel (W5-FIX); main supplies it from core's `isCustomProvider`. */
   isCustom?: boolean;
   /** True when the endpoint serves both a pay-as-you-go key and a subscription key; projected only when declared. */
   sharedBillingEndpoint?: boolean;
-  /** Wire transport fields ( W5); `string`-typed to keep this module core-import-free. */
+  /** Wire transport fields (W5); `string`-typed to keep this module core-import-free. */
   defaultTransport?: string;
   supportedTransports?: readonly string[];
   authOptional?: boolean;
@@ -655,8 +655,8 @@ export interface CatalogEntryShape {
  * Projects the built-in catalog to the renderer-facing `CatalogSummary` (value
  * only — no baseUrl secret, no key). `needsBaseUrl` is set for an entry with an
  * empty baseUrl (e.g. the `custom`/`vllm` endpoints, whose baseUrl lives in
- * settings). `isCustom` ( W5-FIX) / `defaultTransport` /
- * `supportedTransports` / `authOptional` ( W5) — and each model's
+ * settings). `isCustom` (W5-FIX) / `defaultTransport` /
+ * `supportedTransports` / `authOptional` (W5) — and each model's
  * `maxOutputTokens` — are projected only when the source entry/model
  * declares them, so a legacy caller's plain
  * `{id,name,auth,baseUrl,models}` fixtures keep producing the exact same output
@@ -670,31 +670,31 @@ export function projectCatalogSummary(providers: readonly CatalogEntryShape[]): 
     models: entry.models.map((m) => ({
       id: m.id,
       ...(m.name !== undefined ? { name: m.name } : {}),
-      // : both only when declared, so a fixture's plain `{id,name}`
+      // both only when declared, so a fixture's plain `{id,name}`
       // model still projects to exactly `{id,name}`.
       ...(m.reasoning === true ? { reasoning: true } : {}),
       ...(m.effortLevels !== undefined ? { effortLevels: [...m.effortLevels] } : {}),
-      // : same conditional-spread rule — only a model whose
+      // same conditional-spread rule — only a model whose
       // provider documents a default carries it, so every legacy fixture
       // projects byte-identically.
       ...(m.defaultEffort !== undefined ? { defaultEffort: m.defaultEffort } : {}),
       ...(m.thinkingAlwaysOn === true ? { thinkingAlwaysOn: true } : {}),
-      // : same conditional-spread precedent — only when the catalog
+      // same conditional-spread precedent — only when the catalog
       // declares a ceiling, so legacy fixtures stay byte-identical.
       ...(m.maxOutputTokens !== undefined ? { maxOutputTokens: m.maxOutputTokens } : {}),
-      // : same conditional spread — the drawer's context-window hint
+      // same conditional spread — the drawer's context-window hint
       // needs both window facts, but a legacy fixture's plain `{id,name}` model
       // must still project byte-identically.
       ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
       ...(m.usableContextWindow !== undefined ? { usableContextWindow: m.usableContextWindow } : {}),
-      // : only the models the catalog MARKS as accepting image input,
+      // only the models the catalog MARKS as accepting image input,
       // matching core's own reading of the flag (absent = not marked, never
       // "unknown"): the Vision pane suggests these as recognizer models.
       ...(m.imageInput === true ? { imageInput: true } : {}),
     })),
     ...(entry.baseUrl === "" ? { needsBaseUrl: true } : { catalogBaseUrl: entry.baseUrl }),
     ...(entry.isCustom === true ? { isCustom: true } : {}),
-    // : only when declared, same conditional-spread
+    // only when declared, same conditional-spread
     // precedent as above — legacy fixtures stay byte-identical.
     ...(entry.brand !== undefined ? { brand: entry.brand } : {}),
     ...(entry.modeLabel !== undefined ? { modeLabel: entry.modeLabel } : {}),
@@ -711,7 +711,7 @@ export function projectCatalogSummary(providers: readonly CatalogEntryShape[]): 
 }
 
 /**
- * The credential key that gates readiness for the ACTIVE connection ( v2):
+ * The credential key that gates readiness for the ACTIVE connection (v2):
  * its own connection key (`provider.connection.<id>.{apiKey,oauth}`).
  * `undefined` when there is no active connection — `computeProviderReady` then
  * uses its legacy `provider.apiKey` default (unset on a fresh install).
@@ -741,13 +741,13 @@ function activeCredential(deps: SettingsIpcDeps, settings: AnycodeSettings): Sec
 }
 
 /**
- * Auth-policy + transport-guard inputs for `computeProviderReady` ( W5,
+ * Auth-policy + transport-guard inputs for `computeProviderReady` (W5,
  * cut Risk #3). Looks the selected id up in the already-projected
  * `deps.catalog` (this module stays core-free — no second catalog lookup
  * path). `authOptional` is true either statically (a catalog entry marked
  * `authOptional`, e.g. vLLM) or dynamically for `custom` once its resolved
  * transport is an OpenAI-family one (mirrors core's `loadEnvConfig`: a key is
- * only ever mandatory on `anthropic-messages`), or — since  — by the
+ * only ever mandatory on `anthropic-messages`), or — since — by the
  * ACTIVE CONNECTION's own `authOptional` declaration — but that
  * connection-level waiver is TRANSPORT-GATED the same way
  * (`acceptsKeylessTransport`, mirroring core's `loadEnvConfig`: no key only
@@ -774,7 +774,7 @@ function selectedTransportInfo(
 ): { authOptional: boolean; resolvedTransport?: string; supportedTransports?: readonly string[] } {
   const view = activeProviderView(settings);
   const id = view.id;
-  // : the active connection's own "no API key" declaration waives auth
+  // the active connection's own "no API key" declaration waives auth
   // — but TRANSPORT-GATED exactly like core's own rule (`acceptsKeylessTransport`):
   // only when the transport the host will actually get is OpenAI-family, never
   // on undefined or anthropic-messages (core's loadEnvConfig demands a key in
@@ -831,7 +831,7 @@ function selectedTransportInfo(
   }
   // Env-inclusive ladder (env > active-connection transport > catalog default)
   // so the readiness guard + the custom auth-waiver see the SAME transport the
-  // fork runs.  (b): the bare `custom` sentinel with authOptional and
+  // fork runs. (b): the bare `custom` sentinel with authOptional and
   // no higher rung resolves the keyless OpenAI-compatible default instead of
   // the entry's anthropic-messages default — mirroring `buildHostEnv`'s own
   // keyless-sentinel default rung, so the gate and the fork env agree. The
@@ -860,7 +860,7 @@ function selectedTransportInfo(
  * is written (§5.2). A bad enum/type is therefore refused `invalid` and NEVER
  * persisted; an unvalidated write would quarantine the WHOLE settings.json on
  * the next load (it is not "clamped to the schema"). `provider` is refined out
- * entirely upstream (`handleSet`,  W12) before this shape gate even runs.
+ * entirely upstream (`handleSet`, W12) before this shape gate even runs.
  */
 const patchSchema = z.record(z.string(), z.unknown());
 
@@ -872,7 +872,7 @@ const sessionLimitsSchema = z.object({
   childSessionsGlobalMax: z.number().int().min(SESSION_LIMIT_RANGES.childSessionsGlobalMax.min).max(SESSION_LIMIT_RANGES.childSessionsGlobalMax.max).optional(),
 }).strict();
 
-//  §3.5: strict shape gate for the `roles` section — the roles
+// §3.5: strict shape gate for the `roles` section — the roles
 // settings (role route chains + parallel-children cap) ride the generic patch
 // channel like `sessionLimits`, but a wrong-shaped section is refused loudly,
 // never persisted (a hand-edited file degrades fail-soft at READ time via the
@@ -889,7 +889,7 @@ const rolesPatchSchema = z.object({
 // ── snapshot projection ──
 
 /**
- * : pin of packages/core/src/types/config.ts's DEFAULT_MAX_OUTPUT_TOKENS
+ * pin of packages/core/src/types/config.ts's DEFAULT_MAX_OUTPUT_TOKENS
  * (32_768). This module sits on the IPC boundary beside shared/settings.ts, so
  * it must stay core-import-free — the default crosses to the renderer as this
  * literal (`SettingsSnapshot.defaultMaxOutputTokens`) instead of an import.
@@ -898,7 +898,7 @@ const rolesPatchSchema = z.object({
  */
 const DEFAULT_MAX_OUTPUT_TOKENS = 32_768;
 /**
- * : pins of packages/core/src/types/config.ts's
+ * pins of packages/core/src/types/config.ts's
  * DEFAULT_CONTEXT_WINDOW_TOKENS (200_000) and provider/capabilities.ts's
  * UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS (8_192). Same core-import-free rule as
  * the ceiling pin above — the drawer needs both numbers to NAME a blank/unknown
@@ -939,7 +939,7 @@ async function snapshotFrom(
     }),
   ]);
   return {
-    //  (design review H-02): the ONE place the settings document is
+    // (design review H-02): the ONE place the settings document is
     // handed to the renderer, and therefore the one place a legacy
     // `http://user:pass@proxy:3128` must lose its password. Everything computed
     // above reads the UNMASKED document (readiness, credentials, transport), and
@@ -953,11 +953,11 @@ async function snapshotFrom(
     envOverrides: envOverrides(deps.bootEnv),
     readOnly,
     ...(deps.catalog !== undefined ? { catalog: deps.catalog } : {}),
-    // : the fallback output ceiling a blank "Max output tokens"
+    // the fallback output ceiling a blank "Max output tokens"
     // resolves to for a model no catalog entry knows — projected so the
     // renderer can NAME the effective number without importing core.
     defaultMaxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
-    // : the two window numbers a blank/unknown context-window field
+    // the two window numbers a blank/unknown context-window field
     // resolves to, projected for the same reason as the ceiling above.
     defaultContextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
     unknownModelContextWindowTokens: UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS,
@@ -979,7 +979,7 @@ export async function handleGet(deps: SettingsIpcDeps): Promise<SettingsSnapshot
 
 /**
  * settings-set: deep-partial merge into settings.json. `provider` is refine-
- * rejected outright ( W12): the connection graph is CRUD-only
+ * rejected outright (W12): the connection graph is CRUD-only
  * (`connection-*` channels) — the pre-W12 v1-patch compat shim that folded a
  * legacy `provider` sub-patch onto the active connection is retired now that
  * the renderer writes connections directly. Refuses `read_only` (a
@@ -997,7 +997,7 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
   if ("provider" in rawPatch) {
     return { ok: false, reason: "invalid" };
   }
-  //  custody: consent records are written ONLY by the dedicated
+  // custody: consent records are written ONLY by the dedicated
   // grant/revoke channels — main computes the fingerprint from the live
   // filesystem. A generic merge carrying them is refused loudly, never
   // silently stripped (a buggy caller must not believe it persisted).
@@ -1005,7 +1005,7 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
   if (isPlainObjectLike(securityPatch) && "trustedBinaries" in securityPatch) {
     return { ok: false, reason: "invalid" };
   }
-  //  custody (design review B-04): the proxy registry and every scope
+  // custody (design review B-04): the proxy registry and every scope
   // ref are written ONLY by their dedicated handlers, and a generic patch
   // carrying one is refused loudly rather than silently stripped (a buggy caller
   // must not believe it persisted). Without this the whole slice's invariants
@@ -1018,7 +1018,7 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
   if (patchTouchesProxy(rawPatch)) {
     return { ok: false, reason: "invalid" };
   }
-  // : `settings.recognizer` is written ONLY by its dedicated
+  // `settings.recognizer` is written ONLY by its dedicated
   // `recognizer-set` channel — a generic patch carrying it is refused loudly
   // rather than silently stripped (a buggy caller must not believe it
   // persisted). Unlike the two refusals above, this one is not (only) about
@@ -1031,7 +1031,7 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
   if ("recognizer" in rawPatch) {
     return { ok: false, reason: "invalid" };
   }
-  // : `settings.communication` (the Sessions API block) is owned by
+  // `settings.communication` (the Sessions API block) is owned by
   // the dedicated `anycode:communication-*` channels (main/communication-ipc.ts),
   // which own the per-session switch, the folder boundary and the server lifecycle.
   if ("communication" in rawPatch) {
@@ -1047,7 +1047,7 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
     }
   }
 
-  //  §3.5: `roles` rides the generic patch channel under the same
+  // §3.5: `roles` rides the generic patch channel under the same
   // discipline — wrong shape is refused loudly, never persisted. The per-role
   // route configs are validated by rolesSchema at the whole-document gate.
   if ("roles" in rawPatch) {
@@ -1098,7 +1098,7 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
 }
 
 /**
- * Compare-and-set of `settings.codex.binaryPath`: repoints it to
+ * Compare-and-set of `settings.codex.binaryPath` repoints it to
  * `next` only while it still equals `expected`, the comparison and the write
  * inside ONE settings-lock critical section. The managed-Codex upgrade reads
  * the path, then spends a download + doctor pass before writing; a user who
@@ -1153,7 +1153,7 @@ function patchTouchesProxy(patch: Record<string, unknown>): boolean {
 const CONNECTION_SECRET_KEY_RE = /^provider\.connection\.([^.]+)\.(apiKey|oauth)$/;
 
 /**
- * secret-set: store a value in the vault (design §1).  W12: the renderer
+ * secret-set: store a value in the vault (design §1). W12: the renderer
  * writes a connection-scoped key DIRECTLY (`provider.connection.<id>.*`) —
  * connection metadata is always created first via `connection-create`, so this
  * handler never mints or activates a connection itself; a legacy-shaped key
@@ -1176,7 +1176,7 @@ export async function handleSetSecret(deps: SettingsIpcDeps, raw: unknown): Prom
     return { ok: false, reason: "invalid" };
   }
   if (isProxyProfileSecretKey(key)) {
-    //  (design review H-01): a proxy password is NOT settable here. It
+    // (design review H-01): a proxy password is NOT settable here. It
     // is one half of a profile's configuration and travels with the other half,
     // through `proxy-profile-upsert`'s `password` action, so that a login+
     // password edit lands as ONE mutation instead of two — and so that setting
@@ -1209,11 +1209,11 @@ export async function handleSetSecret(deps: SettingsIpcDeps, raw: unknown): Prom
     if (!result.ok) {
       return { ok: false, reason: result.reason };
     }
-    // : fired after the successful write, BEFORE onMutation (the same
+    // fired after the successful write, BEFORE onMutation (the same
     // ordering discipline as refreshProxySecrets) — main may force the next
     // recognizer live push from pure settings+key arithmetic.
     deps.onSecretWritten?.(key, loaded.settings);
-    //  W11: a stored/replaced credential has not yet been confirmed by a
+    // W11: a stored/replaced credential has not yet been confirmed by a
     // real request or explicit check — reset health to `unchecked` (never leave
     // a stale auth_invalid/etc. from a NOW-superseded key).
     let finalSettings = loaded.settings;
@@ -1222,7 +1222,7 @@ export async function handleSetSecret(deps: SettingsIpcDeps, raw: unknown): Prom
       at: (deps.now ?? defaultNowIso)(),
     });
     if (withHealth !== undefined) {
-      //  review: a replaced key invalidates the provider-reported
+      // review: a replaced key invalidates the provider-reported
       // quota exactly like it invalidates health — the line belongs to the
       // superseded key. Deleted (optional on disk), and any coalesced pending
       // observation from the old key is dropped so it cannot be written back.
@@ -1237,7 +1237,7 @@ export async function handleSetSecret(deps: SettingsIpcDeps, raw: unknown): Prom
 }
 
 /**
- * : drops one connection's persisted `lastQuota` (DELETED, not
+ * drops one connection's persisted `lastQuota` (DELETED, not
  * zeroed — the field is optional on disk). Used whenever the connection's key
  * is replaced or removed: the line was observed against the superseded key.
  */
@@ -1259,7 +1259,7 @@ function withoutConnectionQuota(settings: AnycodeSettings, connectionId: string)
 }
 
 /**
- * secret-clear: remove a value from the vault.  W12: only a
+ * secret-clear: remove a value from the vault. W12: only a
  * connection-scoped key is a valid clear target — a legacy-shaped key is
  * refused `invalid` (nothing ever writes one anymore). Existence of the
  * connection is NOT required (orphans remain removable). Blocked in read_only.
@@ -1315,11 +1315,11 @@ export async function handleClearSecret(deps: SettingsIpcDeps, raw: unknown): Pr
       return { ok: false, reason: "read_only" };
     }
     await deps.vault.clearSecret(key);
-    // : a cleared connection-scoped key is also a "secret write" —
+    // a cleared connection-scoped key is also a "secret write" —
     // fired right after the vault write, BEFORE onMutation, same as
     // handleSetSecret.
     deps.onSecretWritten?.(key, loaded.settings);
-    //  W11: a cleared credential resets health to `unchecked` too (cut
+    // W11: a cleared credential resets health to `unchecked` too (cut
     // §W11: "replace/clear key -> unchecked") — never leave a stale
     // auth_invalid/etc. pinned to a now-empty credential slot.
     let finalSettings = loaded.settings;
@@ -1328,7 +1328,7 @@ export async function handleClearSecret(deps: SettingsIpcDeps, raw: unknown): Pr
       at: (deps.now ?? defaultNowIso)(),
     });
     if (withHealth !== undefined) {
-      //  cross-review A3: "Remove key" is a key replacement too —
+      // cross-review A3: "Remove key" is a key replacement too —
       // the provider-reported quota line (and any coalesced pending observation)
       // belonged to the removed key, exactly as in handleSetSecret.
       finalSettings = withoutConnectionQuota(withHealth, connMatch[1] as string);
@@ -1377,7 +1377,7 @@ export async function handleAddRule(deps: SettingsIpcDeps, raw: unknown): Promis
 }
 
 /**
- * binary-trust-grant (, D-S4-5): the ONLY writer of
+ * binary-trust-grant (D-S4-5): the ONLY writer of
  * `settings.security.trustedBinaries`. The request carries `{path}` ONLY —
  * the fingerprint is computed HERE, main-side, from the live filesystem
  * (`deps.statBinaryForTrust`), never accepted from the renderer. Structural
@@ -1491,7 +1491,7 @@ type OAuthStartPrep =
 
  * the vault by the engine and only the SecretStatus changes.
  *
- *  W12-FIX §1: `connectionId` (additive, optional) scopes the sign-in
+ * W12-FIX §1: `connectionId` (additive, optional) scopes the sign-in
  * to ONE connection — a connection-scoped surface (tile, drawer) must persist
  * the token to the EXACT connection the user clicked, never a provider-bucket
  * guess that could silently land on a different same-provider connection's
@@ -1500,7 +1500,7 @@ type OAuthStartPrep =
  * called, nothing minted/activated). Absent: the pre-existing
  * findOrCreateConnectionByProvider/bucket semantics, unchanged.
  *
- * Support-precedence ( W12-FIX2 §4): `unsupported` (the provider's
+ * Support-precedence (W12-FIX2 §4): `unsupported` (the provider's
  * catalog auth kind is not oauth) is checked BEFORE `connectionId` is
  * resolved and dominates it — both are fail-closed, so a non-oauth
  * `providerId` refuses `unsupported` even when `connectionId` is bogus too.
@@ -1581,7 +1581,7 @@ export async function handleOAuthCancel(deps: SettingsIpcDeps, raw: unknown): Pr
   deps.oauth?.cancel(parsed.data.providerId);
 }
 
-// ── connection health ( W11, advisory — never a readiness source) ──
+// ── connection health (W11, advisory — never a readiness source) ──
 
 /** `lastHealth.at` clock; overridable via `deps.now` (tests only). */
 function defaultNowIso(): string {
@@ -1622,14 +1622,14 @@ const FAILURE_CODE_TO_HEALTH: Record<string, ProviderHealthStatus> = Object.assi
   unknown: "misconfigured",
 });
 
-/** Pure classification ( W11 gate: 401/429/timeout/bad-model all discriminate). */
+/** Pure classification (W11 gate: 401/429/timeout/bad-model all discriminate). */
 export function mapProviderFailureCodeToHealthStatus(code: string): ProviderHealthStatus {
   return FAILURE_CODE_TO_HEALTH[code] ?? "unreachable";
 }
 
 /**
  * Sanitizes a host-reported failure code at the untrusted main<->host process
- * boundary ( W11-FIX H1): `tabs.ts` casts the parentPort message to
+ * boundary (W11-FIX H1): `tabs.ts` casts the parentPort message to
  * `ProviderHealthEvent` with no runtime shape validation, so `code` can be any
  * string a regressed/compromised host writes (e.g. a leaked bearer token) —
  * `FAILURE_CODE_TO_HEALTH`'s keys already mirror core's `ProviderFailureCode`
@@ -1669,7 +1669,7 @@ function withConnectionHealth(
 }
 
 /**
- * Persists an advisory health signal for one connection ( W11): a
+ * Persists an advisory health signal for one connection (W11): a
  * runtime request outcome reported by a pinned core host (main/tabs.ts ->
  * main/index.ts), or a `connection-check` probe result. NEVER fires
  * `onMutation` — health is advisory (task doc §3: "not a runtime-readiness
@@ -1707,7 +1707,7 @@ export async function applyConnectionHealthEvent(
   });
 }
 
-// ── connection CRUD handlers ( W9, main-authoritative) ──
+// ── connection CRUD handlers (W9, main-authoritative) ──
 
 /**
  * The ONE durable commit point for a provider-settings mutation (W11-FIX3):
@@ -1739,7 +1739,7 @@ async function persistProvider(
   return { ok: true, snapshot };
 }
 
-/** Same as `persistProvider`, plus the authoritative minted id ( W12-FIX2 §1, connection-create only). */
+/** Same as `persistProvider`, plus the authoritative minted id (W12-FIX2 §1, connection-create only). */
 async function persistProviderWithCreatedId(
   deps: SettingsIpcDeps,
   settings: AnycodeSettings,
@@ -1754,7 +1754,7 @@ async function persistProviderWithCreatedId(
  * connection-create: mint a new connection. `providerId` must be a catalog entry
  * (trust boundary). `setActive` — or being the first connection — makes it the
  * default for new sessions. Read-only settings refuse. The success arm carries
- * `createdConnectionId` ( W12-FIX2 §1) — the authoritative minted id, so
+ * `createdConnectionId` (W12-FIX2 §1) — the authoritative minted id, so
  * a caller never has to diff the snapshot to guess which entry is new.
  */
 export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown): Promise<SettingsMutationResult> {
@@ -1800,7 +1800,7 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
     ) {
       return { ok: false, reason: "invalid" };
     }
-    // : the  context-window rule verbatim — a non-empty
+    // the context-window rule verbatim — a non-empty
     // override needs a nonblank effective model to bind to, rejected before
     // saving rather than silently dropped.
     const createImageInputModel = req.model?.trim();
@@ -1823,7 +1823,7 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
       ...(req.proxyRef !== undefined ? { proxyRef: req.proxyRef } : {}),
       ...(req.promptCache !== undefined ? { promptCache: req.promptCache } : {}),
       ...(req.maxOutputTokens !== undefined ? { maxOutputTokens: req.maxOutputTokens } : {}),
-      // : value+binding travel together (the context-window pair
+      // value+binding travel together (the context-window pair
       // discipline); the binding is server-derived, never renderer-supplied.
       ...(req.imageInputOverride !== undefined
         ? { imageInputOverride: req.imageInputOverride, imageInputModel: req.model?.trim() }
@@ -1860,7 +1860,7 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
 
 /**
  * connection-update: patch a connection's metadata (never its credential).
- * `not_found` for an unknown id.  W11: a real edit to model/transport/
+ * `not_found` for an unknown id. W11: a real edit to model/transport/
  * baseUrl resets `lastHealth` to `unchecked` (a label-only edit or a resend of
  * the SAME value leaves it untouched).
  */
@@ -1883,10 +1883,10 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     // baseUrl/model `""`-convention on this same channel) — normalize BEFORE
     // comparing/persisting so `""` never lands on disk as a value.
     const normalizedTransport = req.transport === "" ? undefined : req.transport;
-    // : same `""`-sentinel normalization as `transport`, for the same
+    // same `""`-sentinel normalization as `transport`, for the same
     // reason — `""` never lands on disk as a value.
     const normalizedProxyUrl = req.proxyUrl === "" ? undefined : req.proxyUrl;
-    // : the ref request is resolved BEFORE the connection is rebuilt,
+    // the ref request is resolved BEFORE the connection is rebuilt,
     // because a `"legacy"` conversion writes into the REGISTRY section and the
     // resulting id is what the connection then references. `draft` is a shallow
     // copy — `importLegacyProxy` assigns a fresh `network` object onto it, so
@@ -1914,7 +1914,7 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
         normalizedProxyRef = req.proxyRef;
       }
     }
-    //  §3 (Фаза 3): editing a significant ENDPOINT field invalidates the
+    // §3 (Фаза 3): editing a significant ENDPOINT field invalidates the
     // last observed health — a health status confirmed against the OLD
     // model/transport/baseUrl must not linger under the new one. A label-only
     // edit (or a no-op resend of the same value) leaves health untouched.
@@ -1963,7 +1963,7 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
       if (req.pricing === "") delete updatedConnection.pricing;
       else updatedConnection.pricing = req.pricing;
     }
-    //  follow-up: a re-point invalidates the provider-reported
+    // follow-up: a re-point invalidates the provider-reported
     // quota line the same way it invalidates `lastHealth` above — a quota
     // observed against the OLD endpoint/key must not linger under the new
     // one (same `endpointChanged` set, so a label-only edit keeps the line).
@@ -2092,7 +2092,7 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     if (baseUrlChanged) {
       delete updatedConnection.models;
       delete updatedConnection.modelsFetchedAt;
-      // : capabilities belong to the origin that declared them —
+      // capabilities belong to the origin that declared them —
       // a re-pointed connection must not keep the old endpoint's live map.
       delete updatedConnection.modelCapabilities;
     }
@@ -2151,7 +2151,7 @@ export async function handleConnectionSetActive(deps: SettingsIpcDeps, raw: unkn
  * orphan secret). Idempotent: deleting an already-gone connection succeeds. If
  * the deleted connection was active, the active id is cleared.
  *
- *  W10:
+ * W10:
  *  - delete-guard (EARLY): a connection pinned to a LIVE session refuses
  *    `connection_in_use` and touches nothing (no secret cleared, no metadata
  *    removed). This zero-touch guarantee holds ONLY for the early check.
@@ -2189,7 +2189,7 @@ export async function handleConnectionDelete(deps: SettingsIpcDeps, raw: unknown
     if (target !== undefined && target.providerId !== "") {
       deps.oauth?.cancel(target.providerId);
     }
-    //  W11-FIX2 #2: tombstone this connectionId BEFORE the vault-clears
+    // W11-FIX2 #2: tombstone this connectionId BEFORE the vault-clears
     // below, so a same-connection oauth write that settles AFTER this delete's
     // clears (superseded-but-deleted) is still compensated instead of skipped
     // (W11-FIX M6's supersede-skip is for a SURVIVING connection only).
@@ -2254,7 +2254,7 @@ export async function handleConnectionDelete(deps: SettingsIpcDeps, raw: unknown
 }
 
 /**
- * connection-check ( W11 wires the probe over the W9 scaffold): runs
+ * connection-check (W11 wires the probe over the W9 scaffold): runs
  * `deps.probeConnection` AT MOST once, NEVER as a fallback billable request —
  * absent (the default) this behaves byte-identically to the W9 scaffold (id
  * validated, current snapshot returned, no network call at all). A connection
@@ -2376,15 +2376,15 @@ function resetHealthForProfileConsumers(draft: AnycodeSettings, profileId: strin
 
 /**
  * Resets `lastHealth` to `unchecked` on every connection whose EFFECTIVE proxy
- * path moved between `before` and the draft ( §7) — the direct
- * continuation of 's "the path changed ⇒ the health reading is stale".
+ * path moved between `before` and the draft (§7) — the direct
+ * continuation of's "the path changed ⇒ the health reading is stale".
  *
  * Fingerprinted per connection over ITS OWN ladder (connection rung, then app),
  * so editing the profile an app default points at also stales every connection
  * that INHERITS that default, while a rename — which changes no path — stales
  * nothing. Engine `lastCheck` is deliberately untouched: it records disk facts
  * (binary found, version, signed-in), and no proxy change can stale those
- * ( §4).
+ * (§4).
  */
 function resetHealthForMovedProxyPaths(before: AnycodeSettings, draft: AnycodeSettings, at: string): void {
   for (const connection of draft.provider.connections) {
@@ -2744,7 +2744,7 @@ export function registerSettingsIpc(deps: Omit<SettingsIpcDeps, "vault"> & { vau
   ipcMain.handle(BINARY_TRUST_REVOKE_CHANNEL, (_event, raw: unknown) => handleBinaryTrustRevoke(deps, raw));
   ipcMain.handle(OAUTH_START_CHANNEL, (_event, raw: unknown) => handleOAuthStart(deps, raw));
   ipcMain.handle(OAUTH_CANCEL_CHANNEL, (_event, raw: unknown) => handleOAuthCancel(deps, raw));
-  // Connection CRUD ( W9): main-authoritative, additive channels.
+  // Connection CRUD (W9): main-authoritative, additive channels.
   ipcMain.handle(CONNECTION_CREATE_CHANNEL, (_event, raw: unknown) => handleConnectionCreate(deps, raw));
   ipcMain.handle(CONNECTION_UPDATE_CHANNEL, (_event, raw: unknown) => handleConnectionUpdate(deps, raw));
   ipcMain.handle(CONNECTION_SET_ACTIVE_CHANNEL, (_event, raw: unknown) => handleConnectionSetActive(deps, raw));
@@ -2758,7 +2758,7 @@ export function registerSettingsIpc(deps: Omit<SettingsIpcDeps, "vault"> & { vau
   ipcMain.handle(PROXY_PROFILE_UPSERT_CHANNEL, (_event, raw: unknown) => handleProxyProfileUpsert(deps, raw));
   ipcMain.handle(PROXY_PROFILE_DELETE_CHANNEL, (_event, raw: unknown) => handleProxyProfileDelete(deps, raw));
   ipcMain.handle(PROXY_REF_SET_CHANNEL, (_event, raw: unknown) => handleProxyRefSet(deps, raw));
-  // : the vision-fallback recognizer's dedicated write channel — the
+  // the vision-fallback recognizer's dedicated write channel — the
   // only path that can DELETE `settings.recognizer` (see handleRecognizerSet).
   ipcMain.handle(RECOGNIZER_SET_CHANNEL, (_event, raw: unknown) => handleRecognizerSet(deps, raw));
 }

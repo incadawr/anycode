@@ -551,9 +551,9 @@ describe("service supervisor — misc", () => {
   });
 });
 
-//  part 0: `${secret:NAME}` in service env (values resolved by the candidate source).
+// part 0: `${secret:NAME}` in service env (values resolved by the candidate source).
 
-describe("service supervisor — secret refs ( part 0)", () => {
+describe("service supervisor — secret refs (part 0)", () => {
   const SECRET_VALUE = "SECRET-VALUE-XYZ-9731";
 
   it("service env resolves secret refs at spawn", async () => {

@@ -1,5 +1,5 @@
 /**
- * Production-wiring test for  (part 1): proves that main/index.ts
+ * Production-wiring test for (part 1): proves that main/index.ts
  * boots the PERIODIC manifest-refresh schedule and the refresh-before-refusal
  * helper on the profiles-root cache file, that a CHANGED periodic tick
  * re-triggers the doctor recheck, and that a self-check boot gets NONE of the
@@ -53,7 +53,7 @@ class FakeHostProcess {
 
 class FakeBrowserWindow {
   // `isDestroyed` on both the window and its webContents models a LIVE window
-  // (sendToMainWindow asks before touching `.webContents` — ).
+  // (sendToMainWindow asks before touching `.webContents`).
   webContents = {
     on: vi.fn(),
     send: vi.fn((channel: string) => {

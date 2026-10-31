@@ -1,5 +1,5 @@
 /**
- * MCP secrets IPC (, part C): write-only handlers. Every return value
+ * MCP secrets IPC (part C): write-only handlers. Every return value
  * and every console call is checked so a submitted value can never come back out.
  * The vault is an in-memory fake; no safeStorage, no real files.
  */
@@ -58,7 +58,7 @@ function expectNoLeak(value: unknown, spies: Array<ReturnType<typeof vi.spyOn>>,
   }
 }
 
-describe("MCP secrets IPC — write-only contract (, C-14)", () => {
+describe("MCP secrets IPC — write-only contract (C-14)", () => {
   it("C-14: set returns names only; the value is absent from the result and from every console call", async () => {
     const logSpies = [vi.spyOn(console, "log"), vi.spyOn(console, "warn"), vi.spyOn(console, "error"), vi.spyOn(console, "info")];
     const { deps, store } = fakeDeps();
@@ -88,7 +88,7 @@ describe("MCP secrets IPC — write-only contract (, C-14)", () => {
   });
 });
 
-describe("MCP secrets IPC — boundary validation (, C-15)", () => {
+describe("MCP secrets IPC — boundary validation (C-15)", () => {
   it("C-15: an invalid name is rejected before anything is written", async () => {
     const { deps, store } = fakeDeps();
     for (const name of ["a-b", "1x", "", "x".repeat(65)]) {
@@ -124,7 +124,7 @@ describe("MCP secrets IPC — boundary validation (, C-15)", () => {
   });
 });
 
-describe("MCP secrets IPC — weak storage consent (, C-16)", () => {
+describe("MCP secrets IPC — weak storage consent (C-16)", () => {
   it("C-16: weak storage without consent => weak_storage_needs_consent and nothing written", async () => {
     const { deps, store } = fakeDeps({ weak: true, allowWeak: false });
     const result = await handleMcpSecretSet(deps, { name: "GITHUB_TOKEN", value: SECRET });
@@ -142,7 +142,7 @@ describe("MCP secrets IPC — weak storage consent (, C-16)", () => {
   });
 });
 
-describe("MCP secrets IPC — delete and refresh (, C-17)", () => {
+describe("MCP secrets IPC — delete and refresh (C-17)", () => {
   it("C-17: delete is idempotent and returns the remaining names", async () => {
     const { deps } = fakeDeps();
     await handleMcpSecretSet(deps, { name: "A_TOKEN", value: "aaaa-value" });

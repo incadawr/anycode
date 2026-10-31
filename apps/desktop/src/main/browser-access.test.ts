@@ -1,5 +1,5 @@
 /**
- * Per-session "Full browser access" store ( owner amendment): brief
+ * Per-session "Full browser access" store (owner amendment): brief
  * tests 39-41. Copies the case shape of communication-sessions.test.ts.
  */
 import { mkdirSync } from "node:fs";

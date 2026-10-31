@@ -1,5 +1,5 @@
 /**
- *  S3 — the incremental Profile-stats cache (plan
+ * S3 — the incremental Profile-stats cache (plan
  * `working-docs/build/task187-plan.md`, decisions D-1/D-2/D-5/D-6; aggregator
  * semantics: `working-docs/build/task187-aggregator-semantics.md`).
  *
@@ -584,7 +584,7 @@ function stripTrailingSep(base: string): string {
 
 /**
  * `ts` of a sink file's earliest event, read off its first JSONL line only
- *: telemetry JSONL is append-ordered, so line 1 is always the
+ * telemetry JSONL is append-ordered, so line 1 is always the
  * oldest record. Fail-soft `null` on anything that is not a JSON object with
  * a finite `ts`.
  */

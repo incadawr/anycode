@@ -1,5 +1,5 @@
 /**
- * Network control-plane IPC ( §6): the handler behind
+ * Network control-plane IPC (§6): the handler behind
  * `PROXY_CHECK_CHANNEL`, which answers "does this profile actually carry traffic
  * to this target?" by materialising the profile and SPAWNING one probe child
  * (main/proxy-probe.ts).
@@ -231,7 +231,7 @@ function isProbeTarget(value: string): boolean {
 }
 
 /**
- * Resolves which URL the probe hits ( §6 as reshaped by review B-11):
+ * Resolves which URL the probe hits (§6 as reshaped by review B-11):
  * the request's explicit target, else the named connection's `baseUrl`, else the
  * ACTIVE connection's, else the default endpoint.
  *

@@ -6,7 +6,7 @@
  * `once` in memory for this app run, and restarts that tab's host so the boot
  * re-decides. The store file is written tmp+rename with mode 0600.
  *
- *  adds Settings → Permissions list/forget: list returns ONLY
+ * adds Settings → Permissions list/forget: list returns ONLY
  * `{ key, decision, decidedAt }` rows (never the hash); forget takes a `key`
  * main itself listed and treats it as an opaque lookup handle into the
  * freshly-read store (never a path). Folder keys are realpath-canonical
@@ -63,7 +63,7 @@ export interface WorkspaceTrustTabs {
   ): { workspace: string; hash: string } | "unknown_tab" | "no_pending";
   clearWorkspaceTrustPending(tabId: string): void;
   /**
-   *  xfix D3: async since the restart now performs the graceful
+   * xfix D3: async since the restart now performs the graceful
    * shutdown handshake (post HOST_SHUTDOWN, await exit, force-kill on
    * timeout) before returning — never a bare kill.
    */
@@ -82,7 +82,7 @@ export interface WorkspaceTrustIpcDeps {
   now?: () => string;
   logger?: { error(message: string): void };
   /**
-   * : canonical folder keys are realpath-canonical when this is
+   * canonical folder keys are realpath-canonical when this is
    * present. Defaults to `node:fs`'s realpathSync in production; tests inject
    * a fake. Must stay SYNCHRONOUS — `workspaceTrustOnceFor` runs on the tab
    * fork path.
@@ -132,7 +132,7 @@ export async function handleWorkspaceTrustDecide(
     return { ok: false, reason: "no_pending" };
   }
 
-  // : canonicalise BEFORE the write and BEFORE keying the
+  // canonicalise BEFORE the write and BEFORE keying the
   // once-approval, so a symlinked workspace and its target share one record.
   const key = canonicalWorkspaceKey(pending.workspace, deps.realpathSync);
 

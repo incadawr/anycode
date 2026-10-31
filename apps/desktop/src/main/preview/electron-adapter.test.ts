@@ -1,6 +1,6 @@
 /**
  * Unit tests for the production Electron adapter (night-track wave-1 cut
- * §2.5,  96-A). `electron` is mocked with a hand-written
+ * §2.5, 96-A). `electron` is mocked with a hand-written
  * `FakeBrowserWindow` (there is no Electron runtime under vitest — same
  * "mocked electron module" precedent as window-ipc.test.ts /
  * index.appVersion-wiring.test.ts), so this proves the ACTUAL wiring: the
@@ -30,17 +30,17 @@ interface FakeDebugger {
   sendCommandCalls: string[];
   detachCalls: number;
   messageListeners: Array<(event: unknown, method: string, params: unknown) => void>;
-  /** : when true, `attach` throws (DevTools already holds the target). */
+  /** when true, `attach` throws (DevTools already holds the target). */
   attachThrows: boolean;
-  /** : when true, `sendCommand` never settles (a hung CDP command). */
+  /** when true, `sendCommand` never settles (a hung CDP command). */
   hangSend: boolean;
-  /** : `sendCommand` method -> the params it was called with. */
+  /** `sendCommand` method -> the params it was called with. */
   sendParams: Array<{ method: string; params: unknown }>;
   attach(version: string): void;
   on(event: string, listener: (event: unknown, ...args: unknown[]) => void): void;
   sendCommand(method: string, params?: unknown): Promise<unknown>;
   detach(): void;
-  /** : fire a debugger event (e.g. "detach") to its listeners. */
+  /** fire a debugger event (e.g. "detach") to its listeners. */
   emit(event: string, ...args: unknown[]): void;
 }
 
@@ -88,7 +88,7 @@ type OnBeforeRequestListener = (
 
 class FakeWebContents extends EventEmitter {
   loadURLCalls: string[] = [];
-  /**  stage 4: reload() passthrough recorder. */
+  /** stage 4: reload() passthrough recorder. */
   reloadCalls = 0;
   executeJavaScriptCalls: string[] = [];
   backgroundThrottlingCalls: boolean[] = [];
@@ -115,7 +115,7 @@ class FakeWebContents extends EventEmitter {
   };
   debugger = fakeDebugger();
   destroyedFlag = false;
-  /** : what the page reports as its title / URL. */
+  /** what the page reports as its title / URL. */
   pageTitle = "";
   pageUrl = "";
   getTitle(): string {
@@ -141,7 +141,7 @@ class FakeWebContents extends EventEmitter {
     this.loadURLCalls.push(url);
     return Promise.resolve();
   }
-  /**  stage 4: plain counter — reload() takes no arguments. */
+  /** stage 4: plain counter — reload() takes no arguments. */
   reload(): Promise<void> {
     this.reloadCalls += 1;
     return Promise.resolve();
@@ -776,13 +776,13 @@ describe("createElectronPanelView — WebContentsView construction (panel-track 
 });
 
 /**
- *  stage 4 ( «Этап 4»): preview windows open
+ * stage 4 («Этап 4»): preview windows open
  * always-on-top, and `wrapWebContents` maps the live-reload `reload()` onto
  * the real webContents. The frozen security webPreferences/partition stay
  * byte-identical (pinned again here — an alwaysOnTop addition must not
  * disturb them).
  */
-describe("createElectronPreviewWindow —  stage 4", () => {
+describe("createElectronPreviewWindow — stage 4", () => {
   it("constructs the window with alwaysOnTop: true", () => {
     createElectronPreviewWindow({ previewId: "aot-1" });
     const win = latestWindow();
@@ -810,7 +810,7 @@ describe("createElectronPreviewWindow —  stage 4", () => {
   });
 });
 
-describe("createElectronPreviewWindow — browser-control CDP access (, Phase A)", () => {
+describe("createElectronPreviewWindow — browser-control CDP access (Phase A)", () => {
   // Test 35
   it("cdp.send rejects with 'debugger unavailable' when the attach fails, and re-attaches after a detach event", async () => {
     const win = createElectronPreviewWindow({ previewId: "cdp-1" });

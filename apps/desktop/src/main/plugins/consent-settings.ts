@@ -1,5 +1,6 @@
 /**
- * settings.json `plugins.mcpConsent` writers for the main process ( xfix H1(c)).
+ * settings.json `plugins.mcpConsent` writers for the main process (
+ * 4732 xfix H1(c)).
  *
  * Two writers, two semantics:
  *  - `setPluginsMcpConsent` is the USER-facing writer (install-time "allow",

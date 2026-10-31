@@ -1,5 +1,5 @@
 /**
- * Tests for the plugins IPC surface ( S1-B, design §7): zod
+ * Tests for the plugins IPC surface (S1-B, design §7): zod
  * payload validation, two-phase install token flow (prepare → preview →
  * commit; wrong source / expired token refused), path custody (renderer
  * never sends paths; reveal takes a NAME), refusal reasons on the wire,
@@ -455,7 +455,7 @@ describe("mutations push plugins-changed", () => {
   });
 });
 
-// ──  xfix: IPC hardening (H1, H2, H3, H4, M1, M4, M7, L3) ──
+// ── xfix: IPC hardening (H1, H2, H3, H4, M1, M4, M7, L3) ──
 
 const STATE = "/home/tester/.anycode/plugins/state.json";
 const ENTRY = { source: { kind: "official" }, trust: "official", active: "1.0.0", enabled: true, pinned: false, capabilities: [] };

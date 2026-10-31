@@ -1,6 +1,6 @@
 /**
  * Production Electron adapter for the PANEL container (panel-track CUT.md
- * §2.2/§3 96-P1,  stages 2+3): the second (and only other) file that
+ * §2.2/§3 96-P1, stages 2+3): the second (and only other) file that
  * touches real Electron primitives for previews. A `WebContentsView` is an
  * embeddable "view" attached to a `BrowserWindow`'s `contentView` — there is
  * no native top-level window here, so unlike `createElectronPreviewWindow`

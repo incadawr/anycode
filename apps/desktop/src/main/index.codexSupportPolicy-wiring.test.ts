@@ -1,5 +1,5 @@
 /**
- * Production-wiring test for : proves that main/index.ts really stamps
+ * Production-wiring test for: proves that main/index.ts really stamps
  * the ACTIVE Codex version-support policy into every host fork's env, and that
  * the policy it stamps is the one the Settings card and the Doctor judge by —
  * the manifest ranges plus `settings.codex.riskAcceptedVersions`.
@@ -7,7 +7,7 @@
  * This is the half no unit test can reach. `codexSupportPolicyFor` /
  * `encodeCodexSupportPolicy` are pure and pinned in their own suites; the fact
  * under test here is that the `engineEnv` overlay CALLS them, off the live
- * module-scope policy, at fork time. Before  nothing carried the
+ * module-scope policy, at fork time. Before nothing carried the
  * policy across the process boundary at all, so the host judged codex versions
  * by a compile-time constant while the screen judged by the manifest (issue
  * #4: Settings said "Supported range >=0.144.0 <0.152.0", Doctor said `ready`,

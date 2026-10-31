@@ -106,7 +106,7 @@ const HOST_SHUTDOWN_MESSAGE_TYPE = "shutdown";
 
 /**
  * Model-visible rejection/terminal texts for the child-session admission path
- * ( CUT-S2 §2.6.4/§2.7/§10.8.2). Every text below is now VERBATIM-
+ * (CUT-S2 §2.6.4/§2.7/§10.8.2). Every text below is now VERBATIM-
  * frozen by a cut authority — review checks byte-for-byte equality, not
  * paraphrase: recursion/the provider-not-ready
  * template/closing/spawn_failed/the crash text are §2.7's own wording (the
@@ -126,7 +126,7 @@ const CHILD_RECURSION_MESSAGE = 'Agent: a child session cannot spawn its own chi
 const CHILD_CLOSING_MESSAGE = "Agent: the child session could not be started (host is closing).";
 const CHILD_SPAWN_FAILED_MESSAGE = "Agent: the child session failed to start.";
 const CHILD_HOST_EXITED_MESSAGE = "Agent: the child session host exited before completing.";
-/** TASK 4239: a ChildTerminal that failed fail-closed parsing — the run is finalized, never left running. */
+/** a ChildTerminal that failed fail-closed parsing — the run is finalized, never left running. */
 const CHILD_MALFORMED_TERMINAL_MESSAGE =
   "Agent: the child session reported a malformed terminal message and was shut down; its result could not be trusted. Retry the task.";
 /**
@@ -138,7 +138,7 @@ const CHILD_MALFORMED_TERMINAL_MESSAGE =
 const CHILD_ENGINE_NOT_READY_MESSAGE =
   'Agent: the core engine is not available in this host, so a child session could not be started. Use tier "inline".';
 /**
- *  CUT-S4 §3.2 п.2: the core text above stays byte-identical (it is
+ * CUT-S4 §3.2 п.2: the core text above stays byte-identical (it is
  * ratified §10.8.2 п.1 wording), so a non-core engine gets its OWN not_ready
  * text that actually names the engine — the core text's "the core engine" is
  * simply false for a claude/codex child.
@@ -163,23 +163,23 @@ function childCodexAccountNotReadyMessage(): string {
   return 'Agent: the default Codex account is not available (it may have been removed or signed out). Pick an account in Settings → Codex, or use tier "inline".';
 }
 /**
- *  CUT-S4 §3.2 п.3: main never trusts payload identity (file header)
+ * CUT-S4 §3.2 п.3: main never trusts payload identity (file header)
  * — an engine child is core-side already refused a `provider` (tools/agent.ts
  * §2.2 п.1), and main refuses it independently here rather than resolving it.
  */
 const CHILD_ENGINE_PROVIDER_MESSAGE =
   'Agent: "provider" is not valid for an engine child — it runs on its own CLI account, not an AnyCode provider connection.';
-/** : an explicit exact-connection selection is core-only, same rationale as provider above. */
+/** an explicit exact-connection selection is core-only, same rationale as provider above. */
 const CHILD_ENGINE_CONNECTION_MESSAGE =
   'Agent: a connection selection is not valid for an engine child — it runs on its own CLI account, not an AnyCode provider connection.';
-/** : both selectors on one spawn name the same thing twice — refused before anything forks. */
+/** both selectors on one spawn name the same thing twice — refused before anything forks. */
 const CHILD_PROVIDER_CONNECTION_CONFLICT_MESSAGE =
   'Agent: "provider" and "connectionId" are mutually exclusive on one spawn; the profile selects its own connection — omit "provider".';
-/** : a profile-declared exact connection id is unknown in this host. */
+/** a profile-declared exact connection id is unknown in this host. */
 function childConnectionNotReadyMessage(connectionId: string): string {
   return `Agent: connection "${connectionId}" declared by this profile is not available in this host. Fix or remove the profile's "connection:" frontmatter.`;
 }
-/** : the connection existed but could not be prepared (deleted mid-spawn, or its fork env is unavailable). */
+/** the connection existed but could not be prepared (deleted mid-spawn, or its fork env is unavailable). */
 function childConnectionPrepareFailedMessage(connectionId: string): string {
   return `Agent: connection "${connectionId}" could not be prepared for this child (deleted or its fork env is unavailable). Retry, or pick another connection.`;
 }
@@ -203,7 +203,7 @@ const CHILD_CANCELLED_MESSAGE = "Agent: the child session was cancelled.";
 const CHILD_UNREAPED_MESSAGE =
   "Agent: the child session was cancelled; its host process did not exit and was abandoned.";
 /**
- * §10.8.2 п.4 — ratified verbatim as-is.  CUT-S2 §10.5 п.3's
+ * §10.8.2 п.4 — ratified verbatim as-is. CUT-S2 §10.5 п.3's
  * in-flight admission-time dedup of a `(parentSessionId, spawnToolCallId)`
  * pair (see `childSpawnKeys` below). Reuses the existing `spawn_failed`
  * reason (§10.5 п.3 names it explicitly) rather than minting a new
@@ -225,7 +225,7 @@ const CHILD_RESUME_BUSY_MESSAGE =
 const CHILD_RESUME_OVERRIDE_MESSAGE =
   "Agent: a continued child keeps its own connection and model; omit provider/model when continuing.";
 /**
- *  /  wire: `ChildRunSend` refusals. The not-yours text
+ * wire: `ChildRunSend` refusals. The not-yours text
  * deliberately covers both a foreign parent's child and a CHILD tab trying
  * to send at all (recursion lock #3 symmetry: a child tab has `childOf` set,
  * so it can never pass the sender check regardless of the target).
@@ -238,7 +238,7 @@ const CHILD_SEND_STARTING_MESSAGE =
   "Agent: that child session is still starting and is not running yet; retry the send in a moment.";
 const CHILD_SEND_HOST_UNREACHABLE_MESSAGE =
   "Agent: the child session host could not be reached for delivery; the message was not delivered.";
-/** Core-only slice ( out-of-scope #2): engine children are not addressable yet. */
+/** Core-only slice (out-of-scope #2): engine children are not addressable yet. */
 const CHILD_SEND_ENGINE_MESSAGE =
   "Agent: running engine children are not addressable yet; only AnyCode (core) children accept a running follow-up.";
 /** Bound on the finished-children memory below; the oldest entries are forgotten first. */
@@ -252,7 +252,7 @@ function childProviderNotReadyMessage(provider: string): string {
 
 /**
  * Composite in-flight-dedup key for a `(parentSessionId, spawnToolCallId)`
- * pair ( CUT-S2 §10.5 п.3). `\u0000` (NUL) is a safe join
+ * pair (CUT-S2 §10.5 п.3). `\u0000` (NUL) is a safe join
  * character: `shared/child-sessions.ts`'s `isIdString` forbids C0 control
  * characters (including NUL) anywhere inside an id-shaped string, so
  * neither `parentSessionId` (main-minted via `genId()`) nor a well-formed
@@ -304,7 +304,7 @@ const DRAIN_CHILDREN_DEADLINE_MULTIPLIER = 5;
 
 /**
  * Synchronous refcount of pinned connections a resume has RESERVED but not yet
- * registered a live tab for ( W10-FIX F3, layer a). `resolveResumePin`
+ * registered a live tab for (W10-FIX F3, layer a). `resolveResumePin`
  * reserves a pin BEFORE the first await of its env-prime and releases it once
  * `manager.createTab` has registered the tab (or on any failure), so the pin is
  * continuously "in use" — reserved OR registered — with no TOCTOU gap a
@@ -349,7 +349,7 @@ const MAX_ENGINE_ARG_LENGTH = 128;
  * An id-shaped argv value, or null. This is a SHAPE guard, not a validation: main
  * has no catalog and no preset table, and must not pretend to — an id that
  * survives this is still checked by the host against the live catalog/table
- * (host-authoritative,  DoD-4). It only refuses values that could not be
+ * (host-authoritative, DoD-4). It only refuses values that could not be
  * an id at all (empty, oversized, whitespace-bearing) so junk never reaches argv.
  */
 function argvId(value: string | undefined): string | null {
@@ -405,7 +405,7 @@ export interface TabHost {
   activityState?: SessionActivityState;
   lastCommunicationStatus?: Record<string, unknown>;
   /**
-   * The provider connection pinned to this session ( W10, core engine
+   * The provider connection pinned to this session (W10, core engine
    * only). Fixed at createTab from the active connection (new) or the session's
    * stored connectionId (resume), and retained across every respawn — a respawn
    * never silently follows a default-switch to another account. Absent = a
@@ -434,7 +434,7 @@ export interface TabHost {
   engine: EngineId;
   /**
    * The draft (pre-session) engine model/preset choice, forwarded to the host as
-   * argv on the FIRST spawn of a NEW session only (, cut §3.8). Never on a
+   * argv on the FIRST spawn of a NEW session only (cut §3.8). Never on a
    * resume or a respawn: from then on the session row is the authority, and
    * re-imposing a stale draft would silently undo a mid-session change the user
    * made. Both are opaque ids here — main validates NOTHING; the host checks them
@@ -451,7 +451,7 @@ export interface TabHost {
   engineEffort: string | null;
   /**
    * The resolved Codex account-profile argv (codex-profiles cut §3.3,
-   * ): READY values from main's profile registry (lane A resolves the
+   * READY values from main's profile registry (lane A resolves the
    * renderer's opaque `codexProfileId`; tabs.ts only forwards). Unlike
    * `engineModel`/`enginePreset` above this rides argv on EVERY spawn —
    * respawns included — because `CODEX_HOME` is frozen into the session (cut
@@ -473,7 +473,7 @@ export interface TabHost {
   /** Consecutive rapid (sub-healthy-uptime) crashes; reset by any healthy run. */
   rapidRespawns: number;
   /**
-   * : the undecided/changed workspace-trust hash the CURRENT host
+   * the undecided/changed workspace-trust hash the CURRENT host
    * reported on the control channel. The decide handler keys its answer on this
    * (never on anything the renderer sends). Cleared on every fork.
    */
@@ -486,7 +486,7 @@ export interface TabHost {
    */
   initialResume: boolean;
   /**
-   * Present ONLY on a child-session tab ( CUT-S2 §2.6.4): the whole
+   * Present ONLY on a child-session tab (CUT-S2 §2.6.4): the whole
    * non-recursion lock #3 and the cascade/quota machinery key off this field's
    * presence, never off anything in an inbound message's payload. `requestId`
    * correlates this tab's OWN control-plane messages (ChildReady/Progress/
@@ -504,7 +504,7 @@ export interface TabHost {
     requestId: string;
     permissionMode: PermissionMode;
     /**
-     * : the CREATING spawn's turn budget (from the profile's
+     * the CREATING spawn's turn budget (from the profile's
      * frontmatter, req.maxTurns). Populated only for a FRESH child — a
      * follow-up (resumed) child never carries one. Rides argv once, as
      * `--child-max-turns <n>`, with the child linkage arguments.
@@ -515,7 +515,7 @@ export interface TabHost {
 
 /**
  * One admitted (or starting) child-session run, keyed by `requestId` in
- * `TabHostManager.childRuns` ( CUT-S2 §2.6.4). Its mere PRESENCE in
+ * `TabHostManager.childRuns` (CUT-S2 §2.6.4). Its mere PRESENCE in
  * that map is the quota reservation — `state` distinguishes "still occupies
  * the slot" (starting/running/cancelling, cut §0.7) from "gone" (removed by
  * `finalizeChildRun`, exactly once, freeing the slot). `prompt` is held here
@@ -555,7 +555,7 @@ interface ResumableChild {
 }
 
 /**
- * One spawn request parked past the per-parent/global cap ( срез 1),
+ * One spawn request parked past the per-parent/global cap (срез 1),
  * keyed by `requestId` in `TabHostManager.childSpawnWaiters` and ordered by
  * `childSpawnQueue`. Unlike `ChildRunLedgerEntry`, a waiter never held a fork
  * — it is pure bookkeeping for a request `spawnChild` has neither accepted
@@ -573,7 +573,7 @@ interface ChildSpawnWaiter {
   spawnKey: string;
   req: ChildSpawnRequest;
   /**
-   * : the ORIGINAL sending host, captured so a queued request's
+   * the ORIGINAL sending host, captured so a queued request's
    * generation can be re-checked after its preparation await — a respawn while
    * it waited must never let a stale sender fork.
    */
@@ -671,7 +671,7 @@ export interface TabHostManagerDeps {
    */
   diagnosticsRing?: DiagnosticsRing;
   /**
-   * : called once a tab (root or child) is registered, so main can
+   * called once a tab (root or child) is registered, so main can
    * ensure its per-session Sessions API switch exists (a child inherits its
    * parent's). Absent in legacy tests.
    */
@@ -693,25 +693,25 @@ export interface TabHostManagerDeps {
    */
   workspaceMissing?: (workspace: string) => boolean;
   /**
-   * : the in-memory "trust once" hash approved for a workspace in this
+   * the in-memory "trust once" hash approved for a workspace in this
    * app run (never persisted). Stamped into the fork env as
    * ANYCODE_WORKSPACE_TRUST_ONCE; absent/undefined = no approval.
    */
   workspaceTrustOnce?: (workspace: string) => string | undefined;
   /**
-   *  part C: the JSON `{NAME: value}` of the MCP secrets this
+   * part C: the JSON `{NAME: value}` of the MCP secrets this
    * workspace's configs reference, prepared by main (mcp-secret-fork-cache.ts) before
    * the tab is created. Synchronous by design: spawnTabHost cannot await. Absent or
    * undefined => the var is not set.
    */
   mcpSecretsEnv?: (workspace: string) => string | undefined;
   /**
-   * : the tab's EFFECTIVE "Full browser access" value at fork time.
+   * the tab's EFFECTIVE "Full browser access" value at fork time.
    * ON stamps ANYCODE_BROWSER_FULL_ACCESS=1; OFF stamps nothing. main deletes any
    * inherited value from its own env at startup, so an OFF host never sees one.
    */
   browserFullAccess?: (tabId: string) => boolean;
-  /** : the host reported a trust question for this tab (its effective browser access just dropped to OFF). */
+  /** the host reported a trust question for this tab (its effective browser access just dropped to OFF). */
   onWorkspaceTrustPending?: (tabId: string) => void;
   /** Resolved host entry script path. */
   hostEntry: string;
@@ -724,13 +724,13 @@ export interface TabHostManagerDeps {
    * its current host env so a key rotation persisted to the vault is picked up by
    * the next respawn without a manager restart. Defaults to `() => process.env`.
    *
-   *  W10: main resolves the env for a SPECIFIC pinned connection id when
+   * W10: main resolves the env for a SPECIFIC pinned connection id when
    * given one (a resumed non-active connection, or a tab whose default has since
    * changed), falling back to the active-connection env for `undefined`. Called
    * at every spawn/respawn with `tab.connectionId`, so a mutation-refreshed
    * per-connection env (fresh key after a replace) is picked up on respawn.
    *
-   *  W10-FIX F3 (layer c, fail-closed fork): returns `undefined` for a
+   * W10-FIX F3 (layer c, fail-closed fork): returns `undefined` for a
    * pinned NON-active connection whose per-connection env is unavailable (its
    * connection was deleted out from under a mid-flight resume). The spawn path
    * REFUSES to fork on `undefined` rather than falling back to the active
@@ -747,7 +747,7 @@ export interface TabHostManagerDeps {
   providerReady?: () => boolean;
   /**
    * Availability of a reviewed non-core engine; defaults fail-closed. Codex
-   * readiness is per PROFILE (codex-profiles cut §4.2, ): the optional
+   * readiness is per PROFILE (codex-profiles cut §4.2): the optional
    * `codexProfileId` is the profile the spawn will actually run under — the
    * draft's pick on a new tab, the persisted meta pick on a resume — so the gate
    * answers about THAT account, not merely the active one. Absent id = the
@@ -780,13 +780,13 @@ export interface TabHostManagerDeps {
    * carries no `apiKey` and the host falls back to its fork's static env key.
    * Only oauth-mode hosts ever send a request; api_key hosts never do.
    *
-   *  W10: called with the requesting tab's pinned `connectionId` so the
+   * W10: called with the requesting tab's pinned `connectionId` so the
    * fresh oauth token is minted for THAT connection, not merely the current
    * active one (a resumed session stays on its own account).
    */
   resolveCredential?: (connectionId?: string) => Promise<string | undefined>;
   /**
-   * A core host's real request outcome for its pinned connection ( W11:
+   * A core host's real request outcome for its pinned connection (W11:
    * runtime auth failure/rate limit/network-server error/successful generation).
    * Called ONLY for a tab with a `connectionId` — an unpinned (legacy) tab has no
    * saved plaquette to paint, so its event is dropped here rather than forwarded
@@ -795,7 +795,7 @@ export interface TabHostManagerDeps {
   onProviderHealthEvent?: (connectionId: string, event: ProviderHealthEvent) => void;
   /**
    * A core host's provider-reported quota observation for its pinned
-   * connection (: response-header quota the model port parsed).
+   * connection (response-header quota the model port parsed).
    * Same custody rule as `onProviderHealthEvent` above — called ONLY for a
    * tab with a `connectionId` (the RAW message; main/connection-quota.ts
    * validates the payload at the process boundary before anything reaches
@@ -804,7 +804,7 @@ export interface TabHostManagerDeps {
   onProviderQuotaEvent?: (connectionId: string, message: unknown) => void;
   /**
    * Resolves the immutable providerId of a pinned connection for the tab-port
-   * envelope ( W10-FIX F2): main injects `(id) => connectionById(...)?.providerId`.
+   * envelope (W10-FIX F2): main injects `(id) => connectionById(...)?.providerId`.
    * Absent OR returning undefined -> the envelope omits BOTH pin fields (an
    * unpinned/legacy tab, or a since-deleted connection), and the renderer's
    * ModelPill falls back to the active connection's catalog + write-target.
@@ -812,7 +812,7 @@ export interface TabHostManagerDeps {
   describeConnection?: (connectionId: string) => { providerId: string } | undefined;
   /**
    * Resolves an EXPLICIT `Agent(tier:"session", provider:…)` request's provider
-   * id to a live connection id ( CUT-S2 §2.6.4), called synchronously
+   * id to a live connection id (CUT-S2 §2.6.4), called synchronously
    * from inside the admission section — main already holds the connections
    * registry in memory (the same fact `env(connectionId)` relies on), so this
    * never needs to be async. Returning `undefined` (unknown/deleted provider
@@ -836,7 +836,7 @@ export interface TabHostManagerDeps {
   /** Reject a core model override before creating a child or sending a request. */
   validateChildModel?: (model: string, connectionId: string | undefined) => void;
   /**
-   * Preview control-plane delegate (night-track wave-1 cut §2.3/§2.5, 
+   * Preview control-plane delegate (night-track wave-1 cut §2.3/§2.5,
    * 96-A): main routes a host's `PREVIEW_REQUEST_TYPE`/`PREVIEW_ARTIFACTS_TYPE`
    * control-plane messages here unchanged, tabId-scoped — `main/index.ts` binds
    * both to the same `PreviewHost` instance (`preview/preview-host.ts`). Neither
@@ -857,9 +857,9 @@ export interface TabHostManagerDeps {
   onTabClosed?: (tabId: string) => void;
   /** a: fires after a tab is registered (the service supervisor reconciles on it). Absent = no-op. */
   onTabOpened?: (tabId: string) => void;
-  /** : accepted handle pinned as the agent tab title. */
+  /** accepted handle pinned as the agent tab title. */
   agentTitleOf?: (sessionId: string) => string | undefined;
-  /** : stamps `openedByAgent` on root tab-port envelopes. Absent = never. */
+  /** stamps `openedByAgent` on root tab-port envelopes. Absent = never. */
   isAgentOpenedSession?: (sessionId: string) => boolean;
   now?: () => number;
   genId?: () => string;
@@ -971,7 +971,7 @@ export interface TabSummary {
   engine?: EngineId;
   pid: number | null;
   /**
-   * Present only for a child-session tab ( CUT-S2 §2.6.4's "listTabs()
+   * Present only for a child-session tab (CUT-S2 §2.6.4's "listTabs()
    * — добавить childOf-проекцию"), for the automation `/state` projection
    * (S2d, not this slice) — never surfaced to the ordinary renderer, which
    * only ever sees root tabs via the port-envelope/tab-registry path.
@@ -980,7 +980,7 @@ export interface TabSummary {
 }
 
 /**
- * Read-only projection of one admitted child-session run ( CUT-S2
+ * Read-only projection of one admitted child-session run (CUT-S2
  * §2.6.4 S2d, `automation/handlers.ts`'s `GET /state` `childRuns`): a
  * field-for-field read of the manager's private `childRuns` ledger entry,
  * excluding what does not belong outside the manager (the held `prompt`,
@@ -1026,7 +1026,7 @@ export class TabHostManager {
   private readonly bindings = new Map<string, string>();
   /**
    * parentTabId -> the set of that parent's currently-tracked child tabIds
-   * ( CUT-S2 §2.6.4). A childTabId lives in this set for EXACTLY the
+   * (CUT-S2 §2.6.4). A childTabId lives in this set for EXACTLY the
    * same span it lives in `childRuns` under its own requestId (added
    * together at admission, removed together by `finalizeChildRun`) — this is
    * the per-parent quota index AND the drain-cascade's iteration surface.
@@ -1036,7 +1036,7 @@ export class TabHostManager {
   private readonly childRuns = new Map<string, ChildRunLedgerEntry>();
   /**
    * `childSpawnKey(parentSessionId, spawnToolCallId)` -> the one live
-   * requestId currently holding that pair ( CUT-S2 §10.5 п.3). The
+   * requestId currently holding that pair (CUT-S2 §10.5 п.3). The
    * SQLite v13 unique index (`idx_sessions_parent_spawn`) only guards the
    * DURABLE row once a child session has actually been persisted — it
    * cannot see a second spawn for the SAME pair racing the first inside
@@ -1048,7 +1048,7 @@ export class TabHostManager {
    * pair can never outlive the run it names, on ANY of the terminal paths
    * (completed/error/cancelled/crash/start-deadline) that lead there.
    *
-   *  срез 1 amendment: `spawnChild` now reserves a pair's entry HERE
+   * срез 1 amendment: `spawnChild` now reserves a pair's entry HERE
    * the moment the dedup check passes — one step BEFORE it is known whether
    * the request will admit immediately or park in `childSpawnQueue` — rather
    * than only once `childRuns`/`childrenByParentTab` are also written. A
@@ -1066,7 +1066,7 @@ export class TabHostManager {
    */
   private readonly followUpAliases = new Map<string, string>();
   /**
-   * FIFO arrival order of currently-queued `requestId`s ( срез 1) —
+   * FIFO arrival order of currently-queued `requestId`s (срез 1) —
    * one manager-wide queue, not one per parent: a slot freed by ANY parent's
    * `finalizeChildRun` can admit a waiter belonging to a DIFFERENT parent
    * (it was blocked on the GLOBAL cap, not its own per-parent one), so
@@ -1074,7 +1074,7 @@ export class TabHostManager {
    * only the freed parent's own backlog. Bounded by `CHILD_SPAWN_QUEUE_MAX`.
    */
   private readonly childSpawnQueue: string[] = [];
-  /** requestId -> the parked spawn request `childSpawnQueue` orders ( срез 1); see `ChildSpawnWaiter`'s own doc for why this is not simply folded into `childRuns`. */
+  /** requestId -> the parked spawn request `childSpawnQueue` orders (срез 1); see `ChildSpawnWaiter`'s own doc for why this is not simply folded into `childRuns`. */
   private readonly childSpawnWaiters = new Map<string, ChildSpawnWaiter>();
   /**
    * Parent tabIds with a `drainChildren` pass currently in flight, refcounted
@@ -1109,7 +1109,7 @@ export class TabHostManager {
   /**
    * `UtilityProcess` references whose `shutdownTabHost` call hit its
    * `exitDeadlineMs` timeout and force-killed rather than seeing a real exit
-   * ( fix-wave F2), mapped to whatever `tab.engineProcess`
+   * (fix-wave F2), mapped to whatever `tab.engineProcess`
    * registration existed for that tab AT THE MOMENT of the force-kill (`null`
    * if none) — review T3's snapshot, taken before `shutdownTabHost` nulls
    * `tab.proc` and before any later respawn could reset `tab.engineProcess`
@@ -1141,7 +1141,7 @@ export class TabHostManager {
   /** Fork count within the current storm window; reset by any healthy run. */
   private stormForks = 0;
   /**
-   * : utility processes killed on purpose to apply a trust decision.
+   * utility processes killed on purpose to apply a trust decision.
    * Their exit re-forks WITHOUT rapid-respawn or storm accounting (restartTabHost).
    */
   private readonly deliberateRestarts = new Set<UtilityProcess>();
@@ -1162,7 +1162,7 @@ export class TabHostManager {
   }
 
   /**
-   * Number of live ROOT tabs ( CUT-S2 §2.6.4: "atCapacity()/count()
+   * Number of live ROOT tabs (CUT-S2 §2.6.4: "atCapacity()/count()
    * — только roots"). A child session is not an application "tab" from
    * MAX_TABS's perspective — it never counted against it, and never will.
    */
@@ -1274,7 +1274,7 @@ export class TabHostManager {
 
   /**
    * Read-only snapshot of every live admitted child-session run (design
-   * §3.1/§4.1,  CUT-S2 §2.6.4 S2d), for the automation server's
+   * §3.1/§4.1, CUT-S2 §2.6.4 S2d), for the automation server's
    * `GET /state` `childRuns` projection — the ledger's own admission
    * `state` ("starting"|"running"|"cancelling"), not a tab's breaker
    * `state` ("running"|"crash_looped"|"closing").
@@ -1318,7 +1318,7 @@ export class TabHostManager {
       : clampSessionLimit("maxTabs", configured) ?? this.limits.maxTabs;
   }
 
-  /** : capacity facts for the refusal copy. */
+  /** capacity facts for the refusal copy. */
   capacity(): { open: number; max: number } {
     return { open: this.rootCount(), max: this.effectiveMaxTabs() };
   }
@@ -1353,7 +1353,7 @@ export class TabHostManager {
   }
 
   /**
-   * The set of provider connection ids pinned to a LIVE session ( W10).
+   * The set of provider connection ids pinned to a LIVE session (W10).
    * Main reads it to (a) keep each pinned connection's fork-env fresh across a
    * settings mutation, and (b) refuse deleting a connection an open session still
    * depends on (delete-guard). Excludes legacy/unpinned tabs (no connectionId).
@@ -1671,7 +1671,7 @@ export class TabHostManager {
     // against, so only it may be rolled back to keep the caller's draft.
     const newSession = !resume;
     const args = resume ? ["--resume", tab.sessionId] : ["--session", tab.sessionId];
-    // : the draft choice rides argv only on the spawn that CREATES the
+    // the draft choice rides argv only on the spawn that CREATES the
     // session. Every later spawn is a `--resume`, where the persisted session row
     // is the authority — replaying the draft there would resurrect it over a
     // mid-session change. argv is an array (no shell), and the ids were bounded
@@ -1681,7 +1681,7 @@ export class TabHostManager {
       if (tab.enginePreset !== null) args.push("--engine-preset", tab.enginePreset);
       if (tab.engineEffort !== null) args.push("--engine-effort", tab.engineEffort);
     }
-    // Codex-profiles  (cut §2.6.4): the profile rides EVERY spawn —
+    // Codex-profiles (cut §2.6.4): the profile rides EVERY spawn —
     // resume and respawn included — because CODEX_HOME is frozen into the
     // session and no session row records it; a respawn without these flags
     // would resume the thread against the ambient (wrong) account. Values go
@@ -1691,7 +1691,7 @@ export class TabHostManager {
       if (tab.codexProfile.home !== undefined) args.push("--codex-home", tab.codexProfile.home);
       if (tab.codexProfile.authLink !== undefined) args.push("--codex-auth-link", tab.codexProfile.authLink);
     }
-    //  CUT-S2 §2.6.2/§2.6.4: a child session's ONE spawn (children
+    // CUT-S2 §2.6.2/§2.6.4: a child session's ONE spawn (children
     // never respawn, cut §0.6) carries its parent linkage + inherited
     // permission-mode snapshot as argv, for the child host's boot
     // (`parseHostArgs`/`resolveBootSession`, S2b/B4) to create its session row
@@ -1705,7 +1705,7 @@ export class TabHostManager {
         "--child-mode",
         tab.childOf.permissionMode,
       );
-      // : the creating spawn's turn budget rides argv only when the
+      // the creating spawn's turn budget rides argv only when the
       // child has one (fresh child of a profile with a budget). Follow-up
       // children and ordinary tabs never get it; children never respawn, so
       // it is stamped exactly once.
@@ -1713,7 +1713,7 @@ export class TabHostManager {
         args.push("--child-max-turns", String(tab.childOf.maxTurns));
       }
     }
-    //  W10-FIX F3 (layer c): resolve the pinned base env BEFORE forking. A
+    // W10-FIX F3 (layer c): resolve the pinned base env BEFORE forking. A
     // `undefined` here means the tab is pinned to a connection whose per-connection
     // env is no longer available (deleted mid-resume). Refuse to fork rather than
     // silently fall back to the active connection's env while still stamping this
@@ -1799,7 +1799,7 @@ export class TabHostManager {
       this.notifyHostExited(tab.tabId);
       return false;
     }
-    //  S4 gate-fix (F4, latent): resolve the engine env overlay BEFORE
+    // S4 gate-fix (F4, latent): resolve the engine env overlay BEFORE
     // forking, same layer as the baseEnv check above. registry.ts's
     // `selectEnginePlugin` treats an absent ANYCODE_ENGINE as core, SILENTLY —
     // an `engineEnv` dep that is absent or omits it would otherwise fork a
@@ -1945,7 +1945,7 @@ export class TabHostManager {
       return;
     }
     if (data.type === PROVIDER_HEALTH_EVENT_TYPE) {
-      //  W11: bind to THIS proc's pinned connectionId — never the active
+      // W11: bind to THIS proc's pinned connectionId — never the active
       // one, never a sibling tab's. No pin (legacy/env-override boot) -> nothing
       // to paint, the event is dropped.
       if (tab.connectionId !== undefined) {
@@ -1954,7 +1954,7 @@ export class TabHostManager {
       return;
     }
     if (data.type === PROVIDER_QUOTA_EVENT_TYPE) {
-      // : identical targeting rule to health above — the quota
+      // identical targeting rule to health above — the quota
       // belongs to THIS proc's pinned connection (its key + endpoint), never
       // to a sibling on the same host. An unpinned tab has no connection
       // record to persist onto, so the event is dropped here.
@@ -1963,7 +1963,7 @@ export class TabHostManager {
       }
       return;
     }
-    //  CUT-S2 §2.6.4: the child-session control plane. Every parser
+    // CUT-S2 §2.6.4: the child-session control plane. Every parser
     // below is fail-closed (shared/child-sessions.ts) — a malformed message is
     // silently dropped, same discipline as every other as-yet-unrecognized
     // control-plane type on this channel. `spawnChild`/the handlers do their
@@ -1984,7 +1984,7 @@ export class TabHostManager {
       return;
     }
     if (data.type === CHILD_RUN_SEND_TYPE) {
-      //  /  wire: a parent host's follow-up to its OWN
+      // wire: a parent host's follow-up to its OWN
       // RUNNING child. Same fail-closed discipline as the ops above; the
       // handler re-derives ownership from `childOf` (file header) — the
       // payload's `childSessionId` is only a lookup key, never an authority.
@@ -2056,7 +2056,7 @@ export class TabHostManager {
 
   /**
    * Pushes a fresh (or cleared) vision-fallback recognizer endpoint to every
-   * live ROOT core tab ( E1 §1.2) — filtered to `engine === "core"`
+   * live ROOT core tab (E1 §1.2) — filtered to `engine === "core"`
    * and no `childOf`: a child-session tab has no media/vision wiring of its
    * own (fallback is wired only in the core branch), and codex/claude engines
    * have no vision-fallback machinery to receive this at all. There is no
@@ -2082,7 +2082,7 @@ export class TabHostManager {
 
   /**
    * Admits, queues, or refuses a session-tier `Agent` spawn request from a
-   * root tab ( CUT-S2 §2.6.4,  срез 1). Everything from the
+   * root tab (CUT-S2 §2.6.4, срез 1). Everything from the
    * stale-sender check through either the fork attempt or the park decision
    * below is ONE synchronous section — no `await` anywhere in it — so that
    * two spawn requests processed back to back (the SAME parent issuing
@@ -2148,7 +2148,7 @@ export class TabHostManager {
     // `spawnToolCallId` is the only piece that comes from `req`, and it is
     // exactly the durable spawn identity §10.5 established. A second spawn
     // for a pair whose first run is still starting/running/cancelling — OR
-    // still QUEUED ( срез 1: `childSpawnKeys` is reserved the moment
+    // still QUEUED (срез 1: `childSpawnKeys` is reserved the moment
     // a waiter parks, below) — is refused HERE, synchronously, rather than
     // being left to the SQLite v13 unique index (which only fires once a
     // child session row exists) or the 30s start-deadline path.
@@ -2169,7 +2169,7 @@ export class TabHostManager {
         reject(capBlock.reason, capBlock.message);
         return;
       }
-      //  срез 1: the cap itself is unchanged (`childSpawnCapBlock`
+      // срез 1: the cap itself is unchanged (`childSpawnCapBlock`
       // runs the EXACT same two checks the pre-queue code ran inline here) —
       // only the RESPONSE to hitting it changes, from an immediate reject to
       // a park, UNLESS the queue itself is already full, in which case this
@@ -2205,7 +2205,7 @@ export class TabHostManager {
   }
 
   /**
-   * The per-parent/global cap check ( срез 1 extraction — byte-
+   * The per-parent/global cap check (срез 1 extraction — byte-
    * identical to the two checks `spawnChild` ran inline before this task):
    * shared by `spawnChild`'s own immediate admission and by
    * `pumpChildSpawnQueue`'s per-waiter check, so a queued request is
@@ -2261,7 +2261,7 @@ export class TabHostManager {
       });
     };
 
-    //  — generation custody at entry, before resolution or
+    // generation custody at entry, before resolution or
     // reservation. Both callers check synchronously just before this, but a
     // stale sender or a replaced/missing parent has no reachable live host to
     // reply to, so drop silently (mirrors spawnChild's own stale-sender
@@ -2275,7 +2275,7 @@ export class TabHostManager {
       return;
     }
 
-    //  CUT-S4 §3.2 п.1-2: `req.engine` chooses which readiness
+    // CUT-S4 §3.2 п.1-2: `req.engine` chooses which readiness
     // authority gates this spawn — the SAME `isEngineReady` a root tab's
     // `createTab` consults, never a second authority. Absent = core, byte-
     // compatible with every S2 producer.
@@ -2344,7 +2344,7 @@ export class TabHostManager {
         return;
       }
     }
-    // : two ways to name one connection on one spawn is refused
+    // two ways to name one connection on one spawn is refused
     // before anything is resolved (defensive — the wire parser and the host
     // port already reject it; a direct caller must not slip through).
     if (req.provider !== undefined && req.connectionId !== undefined) {
@@ -2377,7 +2377,7 @@ export class TabHostManager {
       }
       connectionId = resolved;
     } else if (req.connectionId !== undefined) {
-      // : the profile declared an EXACT connection id; resolve it
+      // the profile declared an EXACT connection id; resolve it
       // against the live registry. Unknown/deleted ⇒ an honest not_ready naming
       // the connection, never a silent fallback to the parent's connection.
       const resolved = this.deps.resolveChildConnection?.(req.connectionId);
@@ -2401,7 +2401,7 @@ export class TabHostManager {
     // attempted — the slot exists from this point regardless of whether the
     // fork below succeeds (a throw rolls it back explicitly). `spawnKey`
     // itself is NOT (re-)written here — the caller already holds it, from
-    // before this request was even known to fit under cap ( срез 1).
+    // before this request was even known to fit under cap (срез 1).
     const childTabId = this.genId();
     const childSessionId = req.resumeChildSessionId ?? this.genId();
     const modelOverride = resumable !== undefined ? resumable.modelOverride : req.model;
@@ -2427,7 +2427,7 @@ export class TabHostManager {
     const rollback = (): void => {
       this.childRuns.delete(req.requestId);
       this.childSpawnKeys.delete(spawnKey);
-      // : a previously captured `siblings` set may have been
+      // a previously captured `siblings` set may have been
       // REPLACED during a preparation await (the parent's set deleted and
       // recreated by another spawn). Touch only the CURRENT set, and only this
       // entry's own childTabId — never another request's reservations.
@@ -2545,7 +2545,7 @@ export class TabHostManager {
     // never the ambient `~/.codex` one. A core parent carries no profile (core
     // owns no Codex account), so its codex child takes the DEFAULT account —
     // resolved before the readiness gate above, so gate and argv agree.
-    //  + 4820 F1: the CREATING spawn's stamped budget (only a fresh
+    // + 4820 F1: the CREATING spawn's stamped budget (only a fresh
     // child carries one) — minted once here, used both for the argv stamp
     // (childOf.maxTurns, below) and for the accepted event's effective-cap
     // carry (4820 F1, at admit).
@@ -2580,14 +2580,14 @@ export class TabHostManager {
         spawnToolCallId: req.spawnToolCallId,
         requestId: req.requestId,
         permissionMode: req.permissionMode,
-        // : only the CREATING spawn carries a budget; a follow-up
+        // only the CREATING spawn carries a budget; a follow-up
         // (resumable) child keeps whatever its session started with.
         ...(stampedMaxTurns !== undefined ? { maxTurns: stampedMaxTurns } : {}),
       },
     };
 
     // ── Fork and registration ──
-    // : the prepared connection's pin is held through `tabs.set`;
+    // the prepared connection's pin is held through `tabs.set`;
     // after that the registered tab protects it via `pinnedConnectionIds`. The
     // `finally` runs `releasePrepared` exactly once (idempotent) on every exit —
     // a throwing fork, a null child proc, or successful registration.
@@ -2636,7 +2636,7 @@ export class TabHostManager {
       }
 
       this.tabs.set(childTabId, childTab);
-      // : a child session registers with its parent's Sessions API switch.
+      // a child session registers with its parent's Sessions API switch.
       this.deps.onSessionRegistered?.({ sessionId: childSessionId, parentSessionId: parentTab.sessionId });
       if (resumable !== undefined) {
         this.followUpAliases.set(spawnKey, childSessionId);
@@ -2644,7 +2644,7 @@ export class TabHostManager {
           this.followUpAliases.delete(this.followUpAliases.keys().next().value as string);
         }
       }
-      //  срез 1: this timer starts HERE, at the REAL fork, whether the
+      // срез 1: this timer starts HERE, at the REAL fork, whether the
       // request forked immediately or spent time queued first — never at
       // park/enqueue time. A long wait therefore never eats into the window a
       // child gets to answer `child-ready` once it actually starts.
@@ -2657,7 +2657,7 @@ export class TabHostManager {
       // machinery all stay intact (a later startup failure is terminal; no
       // contradictory rejected event may follow an accepted one).
       const effectiveMaxTurns = engine === "core" ? this.resolveAcceptedChildMaxTurns(stampedMaxTurns, this.env(connectionId)) : undefined;
-      //  S4 gate-fix (L1): connectionId is "Never consulted for a
+      // S4 gate-fix (L1): connectionId is "Never consulted for a
       // non-core engine" (§1249's own law) — an engine child's omitted model
       // reports the SAME placeholder describeChildModel falls back to, never
       // the parent connection's ANYCODE_MODEL (describeChildModel(connectionId)
@@ -2691,7 +2691,7 @@ export class TabHostManager {
 
   /**
    * Tries to admit as many queued spawn requests as currently fit, in FIFO
-   * arrival order ( срез 1) — called from `finalizeChildRun`, the
+   * arrival order (срез 1) — called from `finalizeChildRun`, the
    * ONLY honest slot-release point. A single freed slot can unblock a waiter
    * belonging to a DIFFERENT parent than the one whose child just finished
    * (the waiter was blocked on the GLOBAL cap, not its own per-parent one),
@@ -2702,7 +2702,7 @@ export class TabHostManager {
    * admission consumes exactly the capacity it needed, updating the very
    * maps `childSpawnCapBlock` reads, so a later waiter's check in the SAME
    * pass automatically reflects it — no separate "how many slots freed"
-   * bookkeeping is needed. Caps are read live ( с2) at each waiter's
+   * bookkeeping is needed. Caps are read live (с2) at each waiter's
    * check; lowering one never cancels admitted runs.
    */
   private pumpChildSpawnQueue(): void {
@@ -2761,7 +2761,7 @@ export class TabHostManager {
   /**
    * Rejects (reason `closing`, the existing verbatim text) and releases
    * every currently-queued spawn request belonging to `parentTabId` — or, if
-   * omitted, every queued request application-wide ( срез 1's
+   * omitted, every queued request application-wide (срез 1's
    * "Отменяемость": a waiter must die with its parent, exactly like a
    * running/starting child already does via the cascade below it). Called
    * from `drainChildren`'s own synchronous prefix (so it runs before ANY of
@@ -2824,7 +2824,7 @@ export class TabHostManager {
   }
 
   /**
-   *  review F1: the EFFECTIVE core-child turn cap to carry on the
+   * review F1: the EFFECTIVE core-child turn cap to carry on the
    * run's `accepted` event — `undefined` (field omitted) when neither source
    * set one, in which case the child host internally falls back to core's
    * DEFAULT_MAX_TURNS and the PARENT-side budget latch falls back to the SAME
@@ -2869,7 +2869,7 @@ export class TabHostManager {
   }
 
   /**
-   *  /  wire: delivers a follow-up to the sender's OWN
+   * wire: delivers a follow-up to the sender's OWN
    * STILL-RUNNING core child (`ChildRunSend`). Never spawns, never resumes —
    * the message rides the EXISTING `receiveAgentMessage`/`agentInbox` path as
    * an `AgentEnvelope` (mode "next_turn", sender `parent-session:<id>`), so a
@@ -2994,7 +2994,7 @@ export class TabHostManager {
     if (childTab.state === "closing") {
       // Already shutting down (a second cancel, or the drain loop revisiting
       // a child it already reached) — do not re-send the shutdown message.
-      //  fix-wave F1: this must NOT settle on a bare microtask. A
+      // fix-wave F1: this must NOT settle on a bare microtask. A
       // bare `Promise.resolve()` here fed straight back into `drainChildren`'s
       // `for(;;)` loop turns a revisit into a self-sustaining chain of
       // already-settled microtasks: the loop reschedules itself before the
@@ -3028,7 +3028,7 @@ export class TabHostManager {
    * §0.7's carve-out: this is the one place a `cancelling` slot is released
    * without a real process reap ever landing.
    *
-   *  срез 1: also purges `parentTab`'s own queued (not yet
+   * срез 1: also purges `parentTab`'s own queued (not yet
    * admitted) spawn requests, synchronously, as the very first thing this
    * function does — before the loop below, before this call's own first
    * `await`. A waiter is not a running child (it has no host to cancel), so
@@ -3133,7 +3133,7 @@ export class TabHostManager {
    * never holds a live utilityProcess (cut §0's "Завершённый ребёнок НЕ
    * держит utilityProcess").
    *
-   *  срез 1: this is also the ONE honest slot-release point the
+   * срез 1: this is also the ONE honest slot-release point the
    * queue wakes up on — `pumpChildSpawnQueue` runs at the very end, after
    * every map above has already reached its new steady state, so the
    * waiter(s) it may admit see the SAME freed capacity a caller reading the
@@ -3152,7 +3152,7 @@ export class TabHostManager {
       activitySuppressed?: number;
       /** Present only when the child's final turn_end carried finishReason "length" (output-token ceiling cut). */
       finalTurnFinishReason?: "length";
-      /** Additive (TASK 4149); present only when true. */
+      /** Additive; present only when true. */
       declaredDoneAtCeiling?: boolean;
       /** Additive; the child host's active session model, relayed verbatim when present. */
       model?: string;
@@ -3189,7 +3189,7 @@ export class TabHostManager {
       });
     }
 
-    //  fix-wave F3: tell the renderer THIS tab's host is done, same
+    // fix-wave F3: tell the renderer THIS tab's host is done, same
     // channel `handleExit` uses for a root — without it, a finished child's
     // `ChildRelation.live` flag in the UI never flips false (no root-tab
     // path ever sends this for a child; the only other caller of this
@@ -3344,7 +3344,7 @@ export class TabHostManager {
       return;
     }
     const requestId = tab.childOf.requestId;
-    //  fix-wave F6: a self-reported ChildTerminal can race an
+    // fix-wave F6: a self-reported ChildTerminal can race an
     // in-flight `child-run-cancel` — the child's own turn finished (or was
     // already computing its result) right as main told it to stop. Once the
     // ledger has moved to `cancelling`, main already committed to cancelling
@@ -3368,12 +3368,12 @@ export class TabHostManager {
       ...(msg.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: msg.finalTurnFinishReason } : {}),
       // A cancel-race overrides status, so the "done at ceiling" claim no longer applies.
       ...(msg.declaredDoneAtCeiling === true && !cancelling ? { declaredDoneAtCeiling: true } : {}),
-      // : verbatim passthrough of the child's own model facts.
+      // verbatim passthrough of the child's own model facts.
       ...(msg.model !== undefined ? { model: msg.model } : {}),
       ...(msg.responseModel !== undefined ? { responseModel: msg.responseModel } : {}),
       // /4055: verbatim passthrough of the child's own ceiling summary.
       ...(msg.ceiling !== undefined ? { ceiling: msg.ceiling } : {}),
-      // N1 ( re-review #3): the redacted safe error descriptor
+      // N1 (re-review #3): the redacted safe error descriptor
       // rides verbatim to the parent host's infra classifier (R2). A
       // cancel-race turns the terminal into "cancelled", which has no
       // descriptor, so it is dropped there.
@@ -3382,7 +3382,7 @@ export class TabHostManager {
   }
 
   /**
-   * TASK 4239: a child tab's ChildTerminal failed fail-closed parsing
+   * a child tab's ChildTerminal failed fail-closed parsing
    * (malformed KNOWN field — unknown additive keys are stripped by the
    * parser and never land here). Leaving the run "running" on a terminal we
    * cannot trust would leak the ledger slot until app quit; instead warn
@@ -3426,7 +3426,7 @@ export class TabHostManager {
       // Stale-generation exit from an already-superseded reference — UNLESS
       // this is the late, real exit of a process `shutdownTabHost`'s own
       // timeout branch force-killed and pre-emptively nulled `tab.proc` for
-      // ( fix-wave F2). A child tab never respawns, so `forceKilled`
+      // (fix-wave F2). A child tab never respawns, so `forceKilled`
       // is the ONLY legitimate reason `tab.proc` can differ from `child`
       // here while this is still the exit we are waiting on.
       return;
@@ -3459,7 +3459,7 @@ export class TabHostManager {
   }
 
   /**
-   * Re-binds a running tab to another provider connection ( cut-2 §D1):
+   * Re-binds a running tab to another provider connection (cut-2 §D1):
    * the provider is baked into the fork env (base env, `ANYCODE_API_KEY`,
    * `ANYCODE_MODEL`, the proxy family — / measured that mutating
    * a live process's env does NOT take effect), so the only honest switch is the
@@ -3585,7 +3585,7 @@ export class TabHostManager {
       this.logger.warn(`[main] rejected stale or malformed worktree transition for tab ${tab.tabId}`);
       return;
     }
-    //  fix-wave F5 / cut §0.6: a rehost is, from the CHILD's point of
+    // fix-wave F5 / cut §0.6: a rehost is, from the CHILD's point of
     // view, exactly as terminal as a graceful close or a crash — the master
     // is about to run at a different workspace/branch entirely, so any
     // in-flight child must be cancelled first (`closeTab` and the crashed-
@@ -3619,7 +3619,7 @@ export class TabHostManager {
    */
   private handleExit(tab: TabHost, child: UtilityProcess, code: number, startupStderr: string, signal?: string): void {
     const deliberate = this.deliberateRestarts.delete(child);
-    //  fix-wave F2 / review T3: read the snapshot BEFORE deleting —
+    // fix-wave F2 / review T3: read the snapshot BEFORE deleting —
     // consumed once, regardless of root/child. A root never needed the F2
     // half (its own `state === "closing"` guard below already short-circuits
     // before any staleness check), but must not leave a stale entry behind
@@ -3629,7 +3629,7 @@ export class TabHostManager {
     const forceKilled = this.forceKilledExits.delete(child);
     this.reapEngineProcess(tab, child, forceKilledRegistration);
     if (tab.childOf !== undefined) {
-      //  CUT-S2 §2.6.4: a child tab's exit is never a respawn
+      // CUT-S2 §2.6.4: a child tab's exit is never a respawn
       // decision — it is caught (and finalized) here unconditionally,
       // regardless of `quitting`/`state`, since there is no "unexpected
       // respawn" to guard against for a tab that never respawns.
@@ -3661,7 +3661,7 @@ export class TabHostManager {
     }
 
     if (deliberate) {
-      // : a restart we asked for (a trust decision was recorded). Not a
+      // a restart we asked for (a trust decision was recorded). Not a
       // crash: no rapid-respawn or storm accounting, and the same resume path re-forks.
       void this.drainChildren(tab);
       this.notifyHostExited(tab.tabId);
@@ -3675,7 +3675,7 @@ export class TabHostManager {
       return;
     }
 
-    //  CUT-S2 §0.6: a dead root cannot resume its children's
+    // CUT-S2 §0.6: a dead root cannot resume its children's
     // sync-join ("sync-join невосстановим") — cancel them before any
     // respawn attempt, whether respawn actually happens or the breaker gives
     // up below. Fire-and-forget: an async function's synchronous PREFIX
@@ -3858,7 +3858,7 @@ export class TabHostManager {
     if (tab.proc !== null) {
       tab.proc.postMessage({ type: HOST_INIT_MESSAGE_TYPE }, [channel.port1]);
     }
-    //  W10-FIX F2: additive control-plane pin metadata. Both fields ride
+    // W10-FIX F2: additive control-plane pin metadata. Both fields ride
     // together or not at all — a since-deleted pin (describeConnection -> undefined)
     // omits both so the renderer falls back to the active connection rather than
     // targeting a dead one. This is NOT the session-stream (protocol.ts untouched).
@@ -3874,7 +3874,7 @@ export class TabHostManager {
         ...(tab.connectionId !== undefined && pin !== undefined
           ? { connectionId: tab.connectionId, providerId: pin.providerId }
           : {}),
-        //  CUT-S2 §2.5: stamped ONLY for a child-session tab — this is
+        // CUT-S2 §2.5: stamped ONLY for a child-session tab — this is
         // what lets `tab-registry.registerPort` (S2c) classify the port as a
         // child and skip ordinary root-tab registration (no addTab, no
         // Sidebar/StartScreen/CommandPalette visibility, §0.4's skip-hide
@@ -3905,7 +3905,7 @@ export class TabHostManager {
     // its whole delivery (the UI envelope above) and has no PTY to attach.
     if (tab.proc === null) return;
     if (tab.childOf !== undefined) {
-      //  CUT-S2 §2.5: "Терминальный порт ребёнку НЕ доставляется" — a
+      // CUT-S2 §2.5: "Терминальный порт ребёнку НЕ доставляется" — a
       // child session has no PTY-backed tab surface, so main simply never
       // sends this second channel for one (mirrors how every other
       // as-yet-unwired control-plane message is just not sent).
@@ -3977,7 +3977,7 @@ export class TabHostManager {
         this.logger.error(
           `[main] tab ${tab.tabId} host did not exit within ${this.limits.exitDeadlineMs}ms; force killing`,
         );
-        //  fix-wave F2 / review T3: `tab.proc` is about to be nulled
+        // fix-wave F2 / review T3: `tab.proc` is about to be nulled
         // below even though `child` has not actually exited yet — record the
         // reference so its late, real "exit" is still recognized as current
         // (not stale) by `handleChildExit` when it eventually lands, paired
@@ -4012,7 +4012,7 @@ export class TabHostManager {
    */
   async closeTab(tabId: string): Promise<CloseTabResult> {
     const tab = this.tabs.get(tabId);
-    //  CUT-S2 §2.6.4: a child session is not externally addressable —
+    // CUT-S2 §2.6.4: a child session is not externally addressable —
     // closing one by id reads as "no such tab" to the public API, exactly
     // like a genuinely-unknown id (children are invisible outside the
     // manager, §0.4's skip-hide contract extended to the close path).
@@ -4054,7 +4054,7 @@ export class TabHostManager {
    * same ~2s wall-clock as one, because each host aborts its own turn and runs
    * its own SIGTERM->SIGKILL child chain from t=0. Called by before-quit.
    *
-   *  срез 1: also purges EVERY queued spawn request application-wide
+   * срез 1: also purges EVERY queued spawn request application-wide
    * (no `parentTabId` filter — the whole app is going down), synchronously,
    * before any of the `shutdownTabHost` calls below even start their async
    * work — unlike a single tab's `drainChildren`, this function never visits
@@ -4068,7 +4068,7 @@ export class TabHostManager {
   }
 
   /**
-   *  FIX-A dev-only smoke lever: force-kills the tab's current host
+   * FIX-A dev-only smoke lever: force-kills the tab's current host
    * child WITHOUT marking it "closing" first, so `handleExit`'s normal
    * unexpected-exit path runs unmodified — the exact respawn (breaker
    * accounting, fresh port pair, `--resume`) a real crash triggers. Deliberately
@@ -4079,11 +4079,11 @@ export class TabHostManager {
    * already in flight.
    */
   /**
-   * : deliberately restarts a root tab's host so the boot re-decides
+   * deliberately restarts a root tab's host so the boot re-decides
    * the workspace trust gate after the user answered. Not a crash: the exit is
    * re-forked with the resume path and no rapid-respawn or storm accounting.
    *
-   *  xfix D3: the stop is the SAME graceful shutdown handshake
+   * xfix D3: the stop is the SAME graceful shutdown handshake
    * `shutdownTabHost` uses — post HOST_SHUTDOWN (the host aborts its turn and
    * starts core's SIGTERM->SIGKILL child kill-chain at t=0), await exit within
    * `exitDeadlineMs`, force-kill on timeout — instead of a bare `child.kill()`
@@ -4132,7 +4132,7 @@ export class TabHostManager {
     return { ok: true };
   }
 
-  /** : the trust question the tab's current host reported, or why there is none. */
+  /** the trust question the tab's current host reported, or why there is none. */
   workspaceTrustPendingFor(
     tabId: string,
   ): { workspace: string; hash: string } | "unknown_tab" | "no_pending" {
@@ -4142,7 +4142,7 @@ export class TabHostManager {
     return { workspace: tab.workspace, hash: tab.workspaceTrustPending.hash };
   }
 
-  /** : forgets the reported question once the user answered it. */
+  /** forgets the reported question once the user answered it. */
   clearWorkspaceTrustPending(tabId: string): void {
     const tab = this.tabs.get(tabId);
     if (tab !== undefined) delete tab.workspaceTrustPending;
@@ -4156,7 +4156,7 @@ export class TabHostManager {
     this.deps.onWorkspaceTrustPending?.(tab.tabId);
   }
 
-  /** : stamps the flag only when the tab's effective switch is on. */
+  /** stamps the flag only when the tab's effective switch is on. */
   private browserFullAccessEnv(tabId: string): NodeJS.ProcessEnv {
     return this.deps.browserFullAccess?.(tabId) === true ? { [BROWSER_FULL_ACCESS_ENV]: "1" } : {};
   }

@@ -54,7 +54,7 @@ export function createMdPreviewWindow(
   const win = new BrowserWindow({
     width: DEFAULT_WIDTH,
     height: DEFAULT_HEIGHT,
-    //  stage 4 ( «Этап 4»: always-on-top для
+    // stage 4 («Этап 4»: always-on-top для
     // превью-окон): a dom-md window is the same passive artifact viewer as
     // electron-adapter.ts's preview window — same constructor option, same
     // rationale ('floating' above the main window without fighting focus).

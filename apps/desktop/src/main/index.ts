@@ -79,7 +79,7 @@ const { autoUpdater } = electronUpdater;
 import { SqlitePersistenceAdapter } from "@anycode/core/persistence";
 import { NodeExecutionAdapter } from "@anycode/core/node-execution";
 import { NodeGitAdapter } from "@anycode/core/node-git";
-// : value imports from the core ROOT barrel (main
+// value imports from the core ROOT barrel (main
 // deliberately avoids whole-runtime subpaths elsewhere; the root barrel is the
 // sanctioned route for these two symbols — see core/src/index.ts).
 import { ARTIFACT_MAX_AGE_MS, NodeArtifactStore } from "@anycode/core";
@@ -107,7 +107,7 @@ import { spawnServiceProcess } from "./plugins/service-process.js";
 import { isWorkspaceTrustedFor, listServiceCandidates } from "./plugins/service-candidates.js";
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import { activeConnection, activeProviderView, connectionById, resolveProviderConnection } from "../shared/settings.js";
-// : `create_session {engine:"core", model}` resolves to a provider
+// `create_session {engine:"core", model}` resolves to a provider
 // CONNECTION (the core engine has no engine-model argv), never a silent fallback.
 import { primeNewSessionPin } from "./session-pin.js";
 import { createSessionForAgent as createSessionForAgentImpl, type CreateSessionByAgentDeps } from "./create-session-by-agent.js";
@@ -170,14 +170,14 @@ import { registerScopeWorkspacesIpc } from "./scope-workspaces-ipc.js";
 import { registerPathRootsIpc } from "./path-roots-ipc.js";
 import { McpSecretForkCache } from "./mcp-secret-fork-cache.js";
 import { registerMcpSecretsIpc } from "./mcp-secrets-ipc.js";
-// : Settings → Language servers control plane (same deps-bag shape
+// Settings → Language servers control plane (same deps-bag shape
 // as the MCP registration above; detection is existence-only, nothing spawns).
 import { NodeLspConfigFs, registerLspConfigIpc } from "./lsp-config-ipc.js";
 import { NodeProfileFs, registerProfileIpc, resolveProfileDir } from "./profile-ipc.js";
 import { registerDiagnosticsIpc, writeDiagnosticsFile } from "./diagnostics-ipc.js";
 import { buildDiagnosticsBundle, collectHostRingEntries } from "./diagnostics-export.js";
 import { createDiagnosticsRing } from "../shared/diagnostics-ring.js";
-//  (old ): telemetry-directory retention sweep.
+// (old): telemetry-directory retention sweep.
 import { startTelemetryRetention, type TelemetryRetentionHandle } from "./telemetry-retention.js";
 import { NodeSkillsFs, registerSkillsIpc } from "./skills-ipc.js";
 import { NodePluginsFs } from "./plugins-fs.js";
@@ -203,14 +203,14 @@ import {
   resolveContainedPath,
   type ArtifactsIpcDeps,
 } from "./artifacts-ipc.js";
-// night-track wave-1 cut §2.5 ( 96-A): PreviewHost is the main-side half
+// night-track wave-1 cut §2.5 (96-A): PreviewHost is the main-side half
 // of the host<->main preview control plane (shared/preview.ts §2.3); the
 // electron-adapter is the ONLY file that touches real Electron primitives, so
 // preview-host.ts itself stays unit-testable off plain fakes.
 import { registerPreviewHost, type PreviewHostHandle } from "./preview/preview-host.js";
 import { createElectronPreviewWindow, wrapCapturedImage } from "./preview/electron-adapter.js";
 import { createElectronPanelView } from "./preview/panel-adapter.js";
-//  M3 (CUT.md GAP 1): the md-preview WINDOW container adapter — a
+// M3 (CUT.md GAP 1): the md-preview WINDOW container adapter — a
 // second real BrowserWindow loading the SAME trusted renderer bundle under a
 // `?view=md-preview` query route (loadMdPreviewWindow below is the
 // "renderer-URL/query construction closed over at the wiring site" half
@@ -218,7 +218,7 @@ import { createElectronPanelView } from "./preview/panel-adapter.js";
 import { createMdPreviewWindow } from "./preview/md-window-adapter.js";
 import { registerPreviewPanelIpc } from "./preview/panel-ipc.js";
 import { PREVIEW_CHANGED_CHANNEL } from "../shared/preview-panel.js";
-//  M1: native DOM markdown preview's doc-read IPC (CUT.md CONTRACTS) —
+// M1: native DOM markdown preview's doc-read IPC (CUT.md CONTRACTS) —
 // registered right next to registerPreviewPanelIpc, closing over the SAME
 // live `previewHost` handle via `getMdDocRef`.
 import { registerMdDocIpc } from "./preview/md-doc-ipc.js";
@@ -246,7 +246,7 @@ import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from ".
 import { ENV_CLAUDE_BIN } from "../shared/engines.js";
 import { readSessionLimits, resolveChildSessionsPerParentMax } from "../shared/session-limits.js";
 import { resolveProfileRoles } from "../shared/role-profiles.js";
-//  F1: `stripEngineProxyCarriers` keeps an AMBIENT carrier out of main's
+// F1: `stripEngineProxyCarriers` keeps an AMBIENT carrier out of main's
 // own live env, so main stays the sole author of that namespace. The carrier
 // NAMES are no longer needed here — the doctor/login deps below read their value
 // through `engineProxyCarrierValue`, which is also where shell-wins is decided.
@@ -284,7 +284,7 @@ import {
   startCodexManifestRefreshSchedule,
   type CodexManifestRefreshScheduleHandle,
 } from "./codex-manifest.js";
-// : the main->host carrier for the version-support policy; shared/ so
+// the main->host carrier for the version-support policy; shared/ so
 // the host side can read it without importing main/**.
 import { ENV_CODEX_SUPPORT_POLICY, encodeCodexSupportPolicy } from "../shared/codex-version-policy.js";
 import { closeAllCodexChildren, installCodexChildExitGuard, liveCodexChildCount } from "./codex-children.js";
@@ -307,14 +307,14 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-//  W11-FIX (W13 live-dogfood finding): push-only, no payload — the
+// W11-FIX (W13 live-dogfood finding): push-only, no payload — the
 // renderer re-fetches via `settings.get()` (settings-store.ts's
 // `subscribeProviderHealth`). Duplicated literal, not a `shared/**` export
 // (preload/index.ts holds the byte-identical copy) — same "duplicated on
 // purpose" precedent as `ENGINES_CHANGED_CHANNEL`.
 const PROVIDER_HEALTH_CHANGED_CHANNEL = "anycode:provider-health-changed";
 /**
- * : payload-less push fired after a `lastQuota` write lands (the
+ * payload-less push fired after a `lastQuota` write lands (the
  * `PROVIDER_HEALTH_CHANGED_CHANNEL` precedent — quota writes deliberately
  * never fire the settings `onMutation` broadcast). The renderer's listener
  * re-invokes `settings.get()` and repaints from the persisted document.
@@ -324,7 +324,7 @@ const PROVIDER_QUOTA_CHANGED_CHANNEL = "anycode:provider-quota-changed";
 /**
  * Normalizes a raw host-reported `ProviderHealthEvent` into the shape
  * `applyConnectionHealthEvent` accepts, or `undefined` to drop it entirely
- * ( W11-FIX H1). `tabs.ts` casts the parentPort message to
+ * (W11-FIX H1). `tabs.ts` casts the parentPort message to
  * `ProviderHealthEvent` with NO runtime shape validation, so at the process
  * boundary `kind` can be any string despite the type-level `"success" |
  * "failure"` union (only a first-party host is the real producer, but the
@@ -557,12 +557,12 @@ let manager: TabHostManager | null = null;
  * app's lifetime and costs O(1) per message.
  */
 const mainDiagnosticsRing = createDiagnosticsRing({ scope: "main" });
-/** : the Sessions API live controller and its per-session switch store (boot-wired). */
+/** the Sessions API live controller and its per-session switch store (boot-wired). */
 let communicationController: CommunicationController | null = null;
 let communicationSessions: SessionAccessStore | null = null;
-/** : per-session External approvals switch (default OFF, never inherited by a fresh root tab). */
+/** per-session External approvals switch (default OFF, never inherited by a fresh root tab). */
 let communicationApprovals: SessionAccessStore | null = null;
-/** : per-project "Allow agents to open tasks here" switch (default OFF everywhere) and the sessions an agent opened (drives the "agent" marker). */
+/** per-project "Allow agents to open tasks here" switch (default OFF everywhere) and the sessions an agent opened (drives the "agent" marker). */
 let communicationAgentProjects: AgentProjectsStore | null = null;
 const agentOpenedSessions = new Set<string>();
 /**
@@ -605,7 +605,7 @@ const agentTitleRecovery: AgentTitleRecoveryDeps = createAgentTitleRecoveryDeps(
   pushes: agentTitlePushes,
   warn: (message, error) => console.warn(message, error),
 });
-// : the per-session "Full browser access" switch and the notifier that pushes
+// the per-session "Full browser access" switch and the notifier that pushes
 // each tab's EFFECTIVE value (renderer + host flag) exactly once per change.
 let browserAccessStore: BrowserAccessStore | null = null;
 let browserAccessNotifier: BrowserAccessNotifier | null = null;
@@ -627,10 +627,10 @@ function browserAccessEffectiveTab(tabId: string) {
   const deps = browserAccessIpcDeps();
   return deps === null ? undefined : effectiveTabState(deps, tabId);
 }
-// : "trust once" approvals for this app run only (folder -> hash). Never persisted.
+// "trust once" approvals for this app run only (folder -> hash). Never persisted.
 const workspaceTrustOnceApprovals = new Map<string, string>();
 /**
- *  (old ): telemetry-directory retention handle. Boot
+ * (old): telemetry-directory retention handle. Boot
  * wires it right after registerProfileIpc (skipped under self-check); quit
  * stops both timers via `shutdownEverything`.
  */
@@ -645,7 +645,7 @@ let previewHost: PreviewHostHandle | null = null;
  * Critical) — `before-quit`/`will-quit` below await `shutdown()`.
  */
 let codexOnboarding: CodexOnboardingController | null = null;
-/** : the periodic manifest-refresh schedule handle (boot wires it; shutdown stops it). */
+/** the periodic manifest-refresh schedule handle (boot wires it; shutdown stops it). */
 let codexManifestRefreshSchedule: CodexManifestRefreshScheduleHandle | null = null;
 /**
  * Claude onboarding control plane (SLICE-CC A3, cut §1.2 mirror of
@@ -663,18 +663,18 @@ let lastClaudeSnapshot: ClaudeOnboardingSnapshot | undefined;
 /** Set once quit begins, to gate the before-quit handler's second pass. */
 let quitting = false;
 /**
- * : the resolved settings path (null until boot finishes) so the
+ * the resolved settings path (null until boot finishes) so the
  * before-quit teardown can flush the quota persister's pending trailing
  * values against the SAME file every runtime write used — never a raw
  * `defaultSettingsPath()` re-derivation, which a dev profile override would
  * silently diverge from.
  */
 let settingsPathForQuitFlush: string | null = null;
-/** Auto-updater controller ( W15) — held module-level so before-quit can clear its armed schedule timer. Null until boot registers it. */
+/** Auto-updater controller (W15) — held module-level so before-quit can clear its armed schedule timer. Null until boot registers it. */
 let updaterController: UpdaterController | null = null;
-/**  S1-B: the plugins control-plane handle (shutdown cancel + snapshot push). */
+/** S1-B: the plugins control-plane handle (shutdown cancel + snapshot push). */
 let pluginsIpc: PluginsIpc | undefined;
-/**  S1-B: the periodic official-index check scheduler (cancelled at quit). */
+/** S1-B: the periodic official-index check scheduler (cancelled at quit). */
 let pluginsScheduler: PluginsScheduler | undefined;
 /** a: supervised plugin background services (stopped at quit). */
 let serviceSupervisor: ServiceSupervisor | undefined;
@@ -697,7 +697,7 @@ let settings: AnycodeSettings | null = null;
 /** Current readiness = apiKey(env|vault) && model(env|settings); gates host spawns. */
 let providerReady = false;
 /**
- * Codex onboarding state (, cut §2(g)): `codexBinaryPath` is the
+ * Codex onboarding state (cut §2(g)): `codexBinaryPath` is the
  * discovery ladder's last winning candidate (informational — its mere
  * presence no longer implies readiness), updated by codex-ipc's `onSnapshot`
  * callback, fired after every recheck/pick-binary/login-success, so a Codex
@@ -719,7 +719,7 @@ const hostEnvSettings = new WeakMap<NodeJS.ProcessEnv, { settings: AnycodeSettin
 let providerRefreshEpoch = 0;
 let currentHostEnvEpoch = -1;
 /**
- * Per-pinned-connection host env ( W10). A tab pinned to a connection that
+ * Per-pinned-connection host env (W10). A tab pinned to a connection that
  * is NOT the current active one (a resumed non-active connection, or one whose
  * default has since changed) forks with the env resolved for ITS connection, so
  * a default-switch never retargets a live session's account. Rebuilt on every
@@ -729,7 +729,7 @@ let currentHostEnvEpoch = -1;
  */
 let hostEnvByConnection = new Map<string, NodeJS.ProcessEnv>();
 /**
- * In-flight pinned-connection reservations ( W10-FIX F3, layer a). A resume
+ * In-flight pinned-connection reservations (W10-FIX F3, layer a). A resume
  * synchronously reserves its pin BEFORE priming the env and releases it once the
  * tab is registered (or on failure), so the delete-guard's `connectionInUse` sees
  * the pin as in-use across the whole window — registered ∪ pending — closing the
@@ -764,7 +764,7 @@ function resolveRendererIndex(): string {
 }
 
 /**
- *  M3 (CUT.md GAP 1): loads the md-preview WINDOW's `BrowserWindow`
+ * M3 (CUT.md GAP 1): loads the md-preview WINDOW's `BrowserWindow`
  * with the SAME renderer bundle `createWindow()` loads for the main window,
  * under a `?view=md-preview&tabId=...&previewId=...` query route —
  * `main.tsx` branches on that query BEFORE mounting `<App/>`. Dev mirrors
@@ -981,7 +981,7 @@ function createWindow(): void {
 /** Vault decrypt accessor; null vault (pre-boot) yields no value. */
 let vault: Vault | null = null;
 /**
- *  part C: the MCP secret values each workspace's configs reference,
+ * part C: the MCP secret values each workspace's configs reference,
  * prepared before a tab is created (tab-ipc `primeMcpSecrets`) and refreshed on
  * every secret mutation. spawnTabHost reads it synchronously. Only names that are
  * referenced AND set are included; nothing here is logged.
@@ -1031,7 +1031,7 @@ function authKindFor(id: string): "api_key" | "oauth" | undefined {
 }
 
 /**
- * The active connection's credential key ( v2): its own connection key.
+ * The active connection's credential key (v2): its own connection key.
  * `{}` when no connection is active.
  *
  * FX4: a `custom:*` providerId routes at the custom provider's OWN shared
@@ -1071,14 +1071,14 @@ const getAccessTokenFor = (connectionId: string, providerId: string): Promise<st
   tokenBroker === null ? Promise.resolve(undefined) : tokenBroker.getAccessToken(connectionId, providerId);
 
 /**
- * Auth-policy + transport-guard inputs for `computeProviderReady` ( W5,
+ * Auth-policy + transport-guard inputs for `computeProviderReady` (W5,
  * cut Risk #3) — the core-aware counterpart of settings-ipc.ts's own
  * `selectedTransportInfo` (that module stays core-free, so it re-derives the
  * same thing off the projected `CatalogSummary` instead of `findCatalogEntry`).
  * `authOptional` is true either statically (a catalog entry marked
  * `authOptional`, e.g. vLLM) or dynamically for `custom` once its resolved
  * transport is an OpenAI-family one (mirrors core's `loadEnvConfig`), or —
- * since  — by the ACTIVE CONNECTION's own `authOptional` declaration
+ * since — by the ACTIVE CONNECTION's own `authOptional` declaration
  * — but that connection-level waiver is TRANSPORT-GATED the same way
  * (`acceptsKeylessTransport`, mirroring core's `loadEnvConfig`: no key only
  * on OpenAI-family transports, never on undefined or anthropic-messages, so
@@ -1105,7 +1105,7 @@ function selectedTransportInfo(current: AnycodeSettings): {
 } {
   const view = activeProviderView(current);
   const id = view.id;
-  // : the active connection's own "no API key" declaration waives auth
+  // the active connection's own "no API key" declaration waives auth
   // — but TRANSPORT-GATED exactly like core's own rule (`acceptsKeylessTransport`):
   // only when the transport the host will actually get is OpenAI-family, never
   // on undefined or anthropic-messages (core's loadEnvConfig demands a key in
@@ -1162,7 +1162,7 @@ function selectedTransportInfo(current: AnycodeSettings): {
   }
   // Env-inclusive ladder (env > active-connection transport > catalog default)
   // so the readiness guard + the custom auth-waiver see the SAME transport the
-  // fork runs.  (b): the bare `custom` sentinel with authOptional and
+  // fork runs. (b): the bare `custom` sentinel with authOptional and
   // no higher rung resolves the keyless OpenAI-compatible default instead of
   // the entry's anthropic-messages default — mirroring `buildHostEnv`'s own
   // keyless-sentinel default rung, so the gate and the fork env agree. The
@@ -1205,7 +1205,7 @@ function currentSettings(): AnycodeSettings {
 const RECOGNIZER_FORCE_PUSH = Symbol("recognizer-force-push");
 
 /**
- * Last recognizer fingerprint pushed to hosts ( E1 §1.2/§7) —
+ * Last recognizer fingerprint pushed to hosts (E1 §1.2/§7) —
  * undefined means "never pushed yet" AND "fallback currently off", so the
  * first push after boot only fires once a recognizer is actually configured.
  * Comparing against this (rather than recomputing from settings alone) is
@@ -1230,7 +1230,7 @@ function noteRecognizerSecretWrite(key: SecretKey, fresh: AnycodeSettings): void
  * Recomputes the vision-fallback recognizer's resolved endpoint after a
  * settings/connection/custom-provider mutation and pushes it to every live
  * root core tab WHEN — and only when — its fingerprint actually changed
- * ( E1 §1.2, finding #7: a resolved secret must never ride an
+ * (E1 §1.2, finding #7: a resolved secret must never ride an
  * unrelated mutation's wire). Called from BOTH `onMutation` hooks below
  * (settings-ipc's generic-patch + connection-CRUD path, AND provider-ipc's
  * custom-provider CRUD path) — either can change what `settings.recognizer`
@@ -1259,7 +1259,7 @@ async function refreshRecognizerFallback(): Promise<void> {
  * The allow-list `isKnownSecretKey`/`Vault.statuses` (via settingsIpcDeps)
  * check a `provider.<id>.{apiKey,oauth}` vault key against: every builtin
  * catalog id, unioned with every custom-provider id currently in `current`
- * (, host-env.ts's `customProviderIds` seam). Recomputed — not a
+ * (host-env.ts's `customProviderIds` seam). Recomputed — not a
  * boot-time snapshot — so a custom provider created/renamed/deleted after
  * boot is reflected on its very next settings/provider IPC call.
  */
@@ -1269,7 +1269,7 @@ function catalogIdsFor(current: AnycodeSettings): string[] {
 
 /**
  * The two main-side caches the SYNCHRONOUS proxy call sites read through
- * ( §4/§5): the last Chromium answer for a `mode:"system"` profile, and
+ * (§4/§5): the last Chromium answer for a `mode:"system"` profile, and
  * the plaintext password of a profile (the vault is async; `engineEnv` and the
  * doctor stubs are not).
  *
@@ -1308,7 +1308,7 @@ const systemProxyDelegate: SystemProxyResolver = {
 const proxyMaterialization: ProxyMaterializationDeps = {
   systemProxy: systemProxyDelegate,
   proxyPassword: (profileId) => proxyPasswords.get(profileId),
-  //  rework: main's per-upstream relay REGISTRY lookup. Engine
+  // rework: main's per-upstream relay REGISTRY lookup. Engine
   // carriers materialised through these deps swap a credentialed url for the
   // relay OF THAT VALUE (blocker B2: a relay fronting a different upstream
   // would silently re-route the child's traffic) — fail-closed to `direct`
@@ -1319,7 +1319,7 @@ const proxyMaterialization: ProxyMaterializationDeps = {
 };
 
 /**
- *  rework: the relay URL for ONE credentialed upstream, from the
+ * rework: the relay URL for ONE credentialed upstream, from the
  * core registry (`@anycode/core/proxy-relay`). SYNC by necessity — the engine
  * carriers materialise on the spawn path — so it answers only relays the
  * prewarm already started; `prewarmProxyRelays` is the async half that keeps
@@ -1333,7 +1333,7 @@ function relayUrlForUpstream(upstreamUrl: string): string | undefined {
 }
 
 /**
- *  rework: starts relays for every credentialed upstream the
+ * rework: starts relays for every credentialed upstream the
  * CURRENT settings + boot env can materialise, BEFORE any spawn reads the
  * registry through `relayUrlForUpstream`. Distinct upstreams (a profile's
  * proxy and a shell proxy, or two profiles on two scopes) each get their own
@@ -1389,7 +1389,7 @@ async function prewarmProxyRelays(current: AnycodeSettings): Promise<void> {
 }
 
 /**
- *  rework: the relay URL the doctor/login children's env builder
+ * rework: the relay URL the doctor/login children's env builder
  * swaps a credentialed proxy for. Their source env is `bootEnv` (the engine
  * carrier, when one applies, is already de-credentialised through
  * `relayFor` before it ever reaches them), so the value being swapped is the
@@ -1403,7 +1403,7 @@ function doctorRelayUrl(): string | undefined {
 
 /**
  * Reloads the plaintext proxy-password cache `proxyMaterialization.proxyPassword`
- * answers from ( §5, design review H-01).
+ * answers from (§5, design review H-01).
  *
  * Wired into `settingsIpcDeps.refreshProxySecrets`, which every proxy mutation
  * calls after its vault write and BEFORE the mutation event — so the first spawn
@@ -1442,7 +1442,7 @@ function proxyMaterializationFor(targetUrl: string | undefined): ProxyMaterializ
   return targetUrl === undefined ? proxyMaterialization : { ...proxyMaterialization, targetUrl };
 }
 
-// : main's own provider requests ride per-credential partition
+// main's own provider requests ride per-credential partition
 // sessions via net.request (per-request `login` = proxy auth), never env
 // mutation.
 const proxyRequestFactory: ProxyRequestFactory = ({ url, method, headers, partition, redirect }) =>
@@ -1456,7 +1456,7 @@ const fetchForProxyChain = createProxyChainFetch({
 });
 const connectionProxyFetch = (connectionId: string) => fetchForProxyChain(hostForkProxyChain(connectionId));
 
-// : updater routing — decided at REQUEST time (beforeNetwork), never
+// updater routing — decided at REQUEST time (beforeNetwork), never
 // at boot only. No setFeedURL wiring exists anywhere in main (verified by
 // grep): the feed is electron-builder's `publish` config surfaced through
 // app-update.yml, so no feed URL is ever fabricated here.
@@ -1505,7 +1505,7 @@ const updaterBeforeNetwork = async (): Promise<void> => {
     }
   };
   /**
-   * Sanitized session flush ( defect 3): closeAllConnections /
+   * Sanitized session flush (defect 3): closeAllConnections /
    * clearAuthCache rejections propagate as FIXED messages — a raw session
    * error could quote the authenticated proxy URL. Fail-closed: the gate
    * still rejects, so no updater request rides a stale/failed flush.
@@ -1617,8 +1617,8 @@ function engineProxyTargetUrl(current: AnycodeSettings): string | undefined {
 
 /**
  * The effective engine proxy for the codex children MAIN itself spawns — the
- * doctor, `codex login`, and the post-install gate doctor ( §2 case
- * (e),  §2 case (f)). Read back out of the ONE authority that also
+ * doctor, `codex login`, and the post-install gate doctor (§2 case
+ * (e), §2 case (f)). Read back out of the ONE authority that also
  * decides shell-wins, rather than re-reading the setting behind a second copy of
  * that gate. Fresh per call for the same reason `readBinaryPathSetting` is: an
  * edited proxy applies to the next spawn, with no cache to invalidate.
@@ -1643,7 +1643,7 @@ function claudeEngineProxyUrl(): string | undefined {
 
 /**
  * A copy of `current` with the active connection overridden to `connectionId`
- * ( W10): routes every existing active-connection resolver
+ * (W10): routes every existing active-connection resolver
  * (resolveProviderSelection / activeCredential / activeProviderView) at the
  * PINNED connection without duplicating any of that logic. Used to build a fork
  * env for a session pinned to a non-active connection (resume / post-switch).
@@ -1671,15 +1671,15 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
     getSecret,
     resolveSelection,
     resolveActiveCredential: resolveActiveCredential(current),
-    // : this is the ASYNC path, so it is the one place lane B awaits a
+    // this is the ASYNC path, so it is the one place lane B awaits a
     // FRESH `session.resolveProxy` before composing the env (§4); the sync call
     // sites below can only read the cache these deps expose.
     proxy: proxyMaterialization,
-    //  E1: host-env stays core-free, so the catalog auth-kind lookup
+    // E1: host-env stays core-free, so the catalog auth-kind lookup
     // for the recognizer's OWN (separate) connection is injected the same way
     // as every other catalog-backed dep on this call.
     recognizerAuthKindFor: authKindFor,
-    // Live-run fix ( follow-up): the recognizer's baseUrl/transport
+    // Live-run fix (follow-up): the recognizer's baseUrl/transport
     // fallback for a CATALOG connection is the SAME projection the primary
     // provider ladder above already resolves through — no second catalog dep.
     recognizerCatalogFor: resolveCatalog,
@@ -1694,7 +1694,7 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
   // longer exists by construction.
   applyCodexProfilesHomeOverride(env, codexProfilesHome ?? null);
   env.ANYCODE_DIAGNOSTICS_DIR = hostDiagnosticsDir();
-  //  S1-B (design §7): the app-version carrier for the host's
+  // S1-B (design §7): the app-version carrier for the host's
   // plugin engines gating — app.getVersion() stamped into every fork env.
   env[ENV_APP_VERSION] = app.getVersion();
   const connection = activeConnection(current);
@@ -1720,7 +1720,7 @@ function hostDiagnosticsDir(): string {
 /**
  * Recomputes the host fork env + readiness from the current settings/vault so a
  * scrub never changes the outcome. Also rebuilds the per-pinned-connection env
- * cache ( W10) for every connection a live tab is pinned to that is NOT
+ * cache (W10) for every connection a live tab is pinned to that is NOT
  * the active one, so a resumed/pinned session keeps its own account and a
  * key-replace on that connection is honoured on its next respawn.
  */
@@ -1736,7 +1736,7 @@ function refreshProviderState(): Promise<void> {
 async function rebuildProviderState(): Promise<void> {
   const current = currentSettings();
   const epoch = providerRefreshEpoch;
-  //  §4/§5: the system-resolve and password caches
+  // §4/§5: the system-resolve and password caches
   // `proxyMaterialization` exposes are refreshed HERE, before the env below is
   // composed and — since every mutating handler calls this through `onMutation`
   // — before the renderer is told the mutation landed. Refreshing after would
@@ -1746,7 +1746,7 @@ async function rebuildProviderState(): Promise<void> {
   // about, or a vault read that fails, must leave the app running on its last
   // good answer rather than leaving `currentHostEnv` stale forever.
   await refreshProxyPasswordCache().catch(() => undefined);
-  //  rework: prewarm the per-upstream relay registry before the
+  // rework: prewarm the per-upstream relay registry before the
   // env below is composed, so the engine carriers `buildHostEnv` materialises
   // through `relayFor` find their relays already started (the sync lookup
   // answers only started relays). Fail-soft per upstream: a refusal (https://,
@@ -1799,11 +1799,11 @@ async function rebuildProviderState(): Promise<void> {
 }
 
 /**
- * The fork base env for a tab pinned to `connectionId` ( W10). Active pin
+ * The fork base env for a tab pinned to `connectionId` (W10). Active pin
  * (or none) -> the always-fresh `currentHostEnv`; a non-active pin -> its cached
  * per-connection env.
  *
- *  W10-FIX F3 (layer c, fail-closed): a cache-MISS for a pinned non-active
+ * W10-FIX F3 (layer c, fail-closed): a cache-MISS for a pinned non-active
  * id returns `undefined` — NEVER `currentHostEnv`. The only way a live-pinned
  * non-active connection is absent from the cache is that its connection was
  * deleted (`refreshProviderState` drops deleted pins), so falling back to the
@@ -1842,12 +1842,12 @@ async function ensurePinnedEnv(connectionId: string): Promise<void> {
 }
 
 /**
- * Resolves a resumed session's pinned connection ( W10 resume matrix):
+ * Resolves a resumed session's pinned connection (W10 resume matrix):
  *  - no pin (legacy session) -> ok, no connection id (resume on current default);
  *  - pin still exists -> reserve + prime its env + ok with the id;
  *  - pin deleted -> refusal carrying the missing id (renderer replacement flow).
  *
- *  W10-FIX F3 (layer a): the existence check and the reservation are done
+ * W10-FIX F3 (layer a): the existence check and the reservation are done
  * SYNCHRONOUSLY (before the first `await`, one microtask — JS atomicity), so a
  * concurrent `handleConnectionDelete` either sees the reservation and refuses
  * `connection_in_use`, or has already removed the connection so this refuses
@@ -1875,7 +1875,7 @@ async function resolveResumePin(meta: {
     pinReservations.release(pinnedId);
     throw error;
   }
-  //  W11-FIX M4-narrowing: `ensurePinnedEnv`'s vault reads are the
+  // W11-FIX M4-narrowing: `ensurePinnedEnv`'s vault reads are the
   // longest await in this path, so a concurrent `handleConnectionDelete` can
   // finish entirely (including its `onMutation` refresh, which drops this
   // pin from `hostEnvByConnection`) while priming was in flight. Re-checking
@@ -1999,7 +1999,7 @@ async function startInitialTab(opts: {
   let workspace: string;
   let sessionId: string;
   let resume: boolean;
-  //  W10: the initial tab pins to a connection too. A resume re-pins to
+  // W10: the initial tab pins to a connection too. A resume re-pins to
   // the session's stored connection (a deleted pin is NOT silently switched to
   // the default — the tab is skipped so the picker surfaces the replacement); a
   // new session pins to the current active connection.
@@ -2054,7 +2054,7 @@ async function startInitialTab(opts: {
     console.log(`[main] workspace: ${workspace}`);
   }
 
-  //  part C: the hand-off for this workspace is ready before the fork.
+  // part C: the hand-off for this workspace is ready before the fork.
   await mcpSecretCache.prime(workspace);
   try {
     const created = manager.createTab({
@@ -2079,7 +2079,7 @@ async function startInitialTab(opts: {
 }
 
 void app.whenReady().then(async () => {
-  //  §4: the system-proxy cache can only be built now — `resolveProxy`
+  // §4: the system-proxy cache can only be built now — `resolveProxy`
   // lives on a session, and no session exists before `whenReady`. Everything
   // that read `proxyMaterialization.systemProxy` before this point got
   // `unresolved` (⇒ direct), which is the named first-spawn window.
@@ -2110,7 +2110,7 @@ void app.whenReady().then(async () => {
   // gate) stay in the live env.
   bootEnv = snapshotBootEnv(process.env);
   scrubSecretEnv(process.env);
-  //  F1: the engine-proxy carriers are main's private main→child
+  // F1: the engine-proxy carriers are main's private main→child
   // transport, so an ambient one from the owner's shell is deleted from the LIVE
   // env too — `snapshotBootEnv` above already dropped it from the snapshot, and
   // this closes the second door: the doctor/login child-env builders fall back
@@ -2129,18 +2129,18 @@ void app.whenReady().then(async () => {
   // the host writers.
   const dbPath = resolveDbPath();
   persistence = new SqlitePersistenceAdapter(dbPath);
-  // Maintenance selection ( S2a §2.4): a physical read that forces
+  // Maintenance selection (S2a §2.4): a physical read that forces
   // open()+migrate() to run now, not a UX selection — the boot-critical part
   // is ANY query reaching the adapter (migrate() runs inside open() before
   // this or any other statement executes, regardless of which query
   // triggered it), not that this specific query returns every row. `limit:1`
-  // ( S2 review MINOR, opus) keeps the probe O(1) at startup instead
+  // (S2 review MINOR, opus) keeps the probe O(1) at startup instead
   // of pulling and projecting the whole sessions table — which grows with
   // every child session S2 introduces — on every launch.
   await persistence.listSessionsForMaintenance({ limit: 1 });
   console.log(`[main] persistence opened + migrated: ${dbPath}`);
 
-  // : age-based GC of spilled artifacts, once per app
+  // age-based GC of spilled artifacts, once per app
   // start, fire-and-forget — never blocks the first window. This — not any
   // per-session removeSession — is the collector that holds: crashed sessions
   // never reach a cleanup path. Mirrors cli/main.ts's boot sweep.
@@ -2194,14 +2194,14 @@ void app.whenReady().then(async () => {
   const loaded = await loadSettings(settingsPath, fileLogger);
   settings = loaded.settings;
   vault = new Vault({ safeStorage: selfCheckProfile === undefined ? safeStorage : selfCheckStorage, secretsPath, logger: fileLogger });
-  // Boot-time scrub of stale v1 provider secrets ( W9 §2): W9′ keys every
+  // Boot-time scrub of stale v1 provider secrets (W9 §2): W9′ keys every
   // credential by connection, so a leftover legacy `provider.apiKey` /
   // `provider.<id>.{apiKey,oauth}` would lie to readiness/status projections.
   // Deletes ONLY the two exact legacy forms (enumerate-good — connection keys and
   // unrecognized keys are untouched), idempotent + fail-soft internally. It
   // touches secrets.json, not settings.json, so no read_only gate is needed.
   await vault.scrubLegacyProviderKeys(catalogProviderIds());
-  //  boot-time legacy migration: every CREDENTIALED legacy
+  // boot-time legacy migration: every CREDENTIALED legacy
   // `proxyUrl` string (connection / codex / claude) becomes a registry profile
   // with the password in the vault — the string keeps working, but the secret
   // stops living in a 0644 settings.json. Fail-soft overall (a corrupt proxy
@@ -2228,7 +2228,7 @@ void app.whenReady().then(async () => {
   };
   // A newer-than-CURRENT settings.json loads read-only: this binary must never
   // rewrite it (the IPC writers refuse `read_only` the same way), so the
-  // migration — which saves — is skipped entirely ( review).
+  // migration — which saves — is skipped entirely (review).
   const migration = loaded.readOnly ? undefined : await migrateLegacyProxyUrls(settings!, legacyMigrationDeps).catch(() => undefined);
   if (migration?.changed) {
     await withSettingsFileLock(settingsPath, () => saveSettings(settingsPath, settings!));
@@ -2258,7 +2258,7 @@ void app.whenReady().then(async () => {
   // PreviewHost's `resolveArtifact` — the SAME allowed-roots policy governs
   // both what bytes the chat-artifact reader may return and what a preview
   // window may load/navigate to.
-  // -A: per-tab, per-path consent grants (in-memory, main-side — never
+  // per-tab, per-path consent grants (in-memory, main-side — never
   // the renderer, never persisted; see artifacts-ipc.ts's threat-model
   // comment). A grant must not outlive the tab it was given to: cleared via
   // the manager's `onTabClosed` hook below, which fires only on a REAL close,
@@ -2291,7 +2291,7 @@ void app.whenReady().then(async () => {
     // Opening OUTSIDE the allowed roots is permitted, but only through this
     // modal: `cancelId`/`defaultId` both point at Cancel, so a stray Return or
     // a dismissed sheet reads as "no". The full path is spelled out — the
-    // location is the whole reason we are asking. -A: this modal is
+    // location is the whole reason we are asking. this modal is
     // skipped entirely (deps.consent checked in artifacts-ipc.ts) once the
     // SAME resolved path already has an Allow grant from the blocked-chip.
     confirmOpen: async (path) => {
@@ -2331,7 +2331,7 @@ void app.whenReady().then(async () => {
     // half — a real WebContentsView attached to the SAME main window,
     // byte-identical frozen webPreferences/partition scheme (D2/D3).
     createPanelView: (opts) => createElectronPanelView(opts, { getWindow: () => win }),
-    //  M3 (CUT.md GAP 1/CONTRACTS): the md-preview window container —
+    // M3 (CUT.md GAP 1/CONTRACTS): the md-preview window container —
     // SAME preload path as the main window (resolvePreloadPath()), dev/
     // packaged URL construction closed over via loadMdPreviewWindow above.
     createMdWindow: (opts) => createMdPreviewWindow(opts, { preloadPath: resolvePreloadPath(), loadRenderer: loadMdPreviewWindow }),
@@ -2339,7 +2339,7 @@ void app.whenReady().then(async () => {
     // openForTab creates a NEW record. Absent -> "panel" (task decision),
     // same absent-default posture as autoOpenEnabled below.
     displayMode: () => settings?.preview?.displayMode ?? "panel",
-    // : LIVE read at every decision (never cached on a record). Trust-gated; child sessions inherit only an ON parent.
+    // LIVE read at every decision (never cached on a record). Trust-gated; child sessions inherit only an ON parent.
     fullAccess: (tabId) => browserAccessEffectiveTab(tabId)?.fullAccess === true,
     // D7: pushes the tab's current preview set to the renderer on every
     // record-set mutation (open-settle, status change, select, close, tab
@@ -2352,7 +2352,7 @@ void app.whenReady().then(async () => {
       sendToMainWindow(win, PREVIEW_CHANGED_CHANNEL, payload);
     },
     resolveArtifact: (tabId, path) => resolveContainedPath(artifactsIpcDeps, tabId, path),
-    //  M4 (CUT.md GAP 2): the SAME `fsStat`/`NodeArtifactsFs.readFileNoFollow`
+    // M4 (CUT.md GAP 2): the SAME `fsStat`/`NodeArtifactsFs.readFileNoFollow`
     // primitives registerMdDocIpc's own `MdDocDeps` below binds for the
     // renderer's MD_PREVIEW_READ/Reload channel — one fs implementation, two
     // binding sites, so BrowserRead's dom-md branch (preview-host.ts's
@@ -2366,7 +2366,7 @@ void app.whenReady().then(async () => {
       }
     },
     readMdSourceNoFollow: (realPath) => artifactsIpcDeps.fs.readFileNoFollow(realPath),
-    //  M4 (CUT.md GAP 2): a panel-container dom-md screenshot has no
+    // M4 (CUT.md GAP 2): a panel-container dom-md screenshot has no
     // `webContents` of its own to capture — `capturePage(rect)` of the MAIN
     // window over the host's own `panelBounds` is the only capture surface.
     // `null` (no live main window) mirrors every other `win?.…` optional-
@@ -2378,7 +2378,7 @@ void app.whenReady().then(async () => {
       return wrapCapturedImage(await win.webContents.capturePage(rect));
     },
     autoOpenEnabled: () => settings?.preview?.autoOpen ?? true,
-    //  stage 4: live read, same posture as autoOpenEnabled above.
+    // stage 4: live read, same posture as autoOpenEnabled above.
     liveReloadEnabled: () => settings?.preview?.liveReload ?? true,
     // Raw fs.watch: rename/change both schedule a debounced reload; watcher
     // loss (ENOENT mid-save, unlink) degrades to a disarmed watcher, never
@@ -2420,7 +2420,7 @@ void app.whenReady().then(async () => {
   // uses. SET_CONTAINER's handler is NOT registered until 96-P3.
   registerPreviewPanelIpc({ host: previewHost });
 
-  //  M1: native DOM markdown preview's MD_PREVIEW_READ handler
+  // M1: native DOM markdown preview's MD_PREVIEW_READ handler
   // (CUT.md CONTRACTS) — `getRecordRef` closes over the SAME live
   // `previewHost`; `resolveArtifact` re-runs the exact allowed-roots
   // containment policy every other preview/artifact surface uses, mapped to
@@ -2428,7 +2428,7 @@ void app.whenReady().then(async () => {
   // `resolveArtifactPath`'s own richer `{realPath, contained}` shape;
   // `stat`/`readFileNoFollow` reuse the SAME O_NOFOLLOW read primitive
   // artifacts-ipc.ts's `NodeArtifactsFs` uses for chat-artifact images.
-  //  M5: pulled into a NAMED variable (not inlined into the
+  // M5: pulled into a NAMED variable (not inlined into the
   // `registerMdDocIpc` call below) so the automation-only navigate route
   // (main/automation/server.ts + handlers.ts, dev-gated) can drive the
   // EXACT SAME `navigateMdDoc` chain the renderer's MdLink click uses,
@@ -2447,13 +2447,13 @@ void app.whenReady().then(async () => {
       return { size: s.size, isFile: s.isFile(), mtimeMs: s.mtimeMs };
     },
     readFileNoFollow: (path) => artifactsIpcDeps.fs.readFileNoFollow(path),
-    //  M2: NAVIGATE's record-mutation half — closes over the SAME
+    // M2: NAVIGATE's record-mutation half — closes over the SAME
     // live `previewHost` the READ lookup above does.
     commitNavigate: (tabId, previewId, fields) => previewHost?.commitMdNavigate(tabId, previewId, fields),
   };
   registerMdDocIpc(mdDocDeps);
 
-  // : the per-session Sessions API switch (main-owned, 0600 beside
+  // the per-session Sessions API switch (main-owned, 0600 beside
   // the user data) and the live controller that owns the one communication server.
   communicationSessions = createSessionAccessStore({
     file: join(app.getPath("userData"), "communication-sessions.json"),
@@ -2469,7 +2469,7 @@ void app.whenReady().then(async () => {
     file: join(app.getPath("userData"), "communication-agent-projects.json"),
     realpathSync,
   });
-  // : an inherited ANYCODE_BROWSER_FULL_ACCESS must never reach a tab host;
+  // an inherited ANYCODE_BROWSER_FULL_ACCESS must never reach a tab host;
   // the host flag is only ever stamped by main (tabs.ts) from the live switch.
   delete process.env.ANYCODE_BROWSER_FULL_ACCESS;
   browserAccessStore = createBrowserAccessStore({
@@ -2488,7 +2488,7 @@ void app.whenReady().then(async () => {
       }
     },
   });
-  // : OS connectivity hints (net online, resume, unlock-screen) reach
+  // OS connectivity hints (net online, resume, unlock-screen) reach
   // every tab host, where a turn parked waiting for the network re-probes at once.
   // Persistent `.on` listeners registered once here (never `once`: a hint can fire
   // many times over the app's life).
@@ -2591,7 +2591,7 @@ void app.whenReady().then(async () => {
         if (browserAdded) browserAccessStore?.remove(info.sessionId);
       };
     },
-    // : the fork env carries the EFFECTIVE flag ("1"/"0"); the seed keeps the notifier's last-sent value in step.
+    // the fork env carries the EFFECTIVE flag ("1"/"0"); the seed keeps the notifier's last-sent value in step.
     browserFullAccess: (tabId) => {
       const on = browserAccessEffectiveTab(tabId)?.fullAccess === true;
       browserAccessNotifier?.seed(tabId, on);
@@ -2625,7 +2625,7 @@ void app.whenReady().then(async () => {
     childRunsGlobalMax: () => readSessionLimits(settings?.sessionLimits).childSessionsGlobalMax,
 
 
-    //  W10: fork env resolved for the tab's PINNED connection (session
+    // W10: fork env resolved for the tab's PINNED connection (session
     // pinning), not merely the current active one.
     env: (connectionId) => hostEnvForConnection(connectionId),
     waitForHostEnv: (connectionId) => (currentHostEnvSettings !== currentSettings() || currentHostEnvEpoch !== providerRefreshEpoch) ? (async () => {
@@ -2639,7 +2639,7 @@ void app.whenReady().then(async () => {
     // breaker give-up after repeated exits) still gets a safe cause recorded in
     // the same per-session diagnostics file the host writes its own into.
     recordHostFailure: (sessionId, reason, exitCode, stderr, signal) => recordHostFailure(hostDiagnosticsDir(), sessionId, reason, exitCode, stderr, signal),
-    //  W10-FIX F2: the pinned connection's immutable providerId for the
+    // W10-FIX F2: the pinned connection's immutable providerId for the
     // tab-port envelope, so the renderer's ModelPill targets the PINNED
     // connection's catalog + write-target. Undefined for a since-deleted pin.
     describeConnection: (connectionId) => {
@@ -2647,7 +2647,7 @@ void app.whenReady().then(async () => {
       const connection = connectionById(settings, connectionId);
       return connection === undefined ? undefined : { providerId: connection.providerId };
     },
-    //  CUT-S2 §10.9.3 (F4): an EXPLICIT `Agent(tier:"session",
+    // CUT-S2 §10.9.3 (F4): an EXPLICIT `Agent(tier:"session",
     // provider:…)` request's provider-id -> connection-id resolution, wired
     // to the pure policy in shared/settings.ts. This dep was previously
     // ABSENT here, so every explicit cross-connection child spawn was
@@ -2665,12 +2665,12 @@ void app.whenReady().then(async () => {
     },
     resolveProviderConnection: (provider) =>
       settings === null ? undefined : resolveProviderConnection(settings, provider)?.id,
-    // : a profile's EXACT `connection:` id, checked against the live
+    // a profile's EXACT `connection:` id, checked against the live
     // registry (the same snapshot the other deps read). Identity on success so
     // main/tabs.ts can keep the frozen resolved id; undefined ⇒ not_ready.
     resolveChildConnection: (connectionId) =>
       settings === null || connectionById(settings, connectionId) === undefined ? undefined : connectionId,
-    // : prepares ONE already-resolved connection id for a child
+    // prepares ONE already-resolved connection id for a child
     // fork — resolveResumePin's exact protocol (extracted, see
     // ./child-connection-preparation.ts): a SYNCHRONOUS existence check + pin
     // reservation (one microtask, JS atomicity), then awaited env priming, then
@@ -2689,7 +2689,7 @@ void app.whenReady().then(async () => {
     providerReady: () => providerReady,
     // Codex has no dependency on AnyCode's provider settings. Its main-plane
     // readiness fact is the codex-doctor-CONFIRMED status (version-compatible
-    // AND signed in,  п.2/п.3) — a merely-discovered-but-unchecked or
+    // AND signed in, п.2/п.3) — a merely-discovered-but-unchecked or
     // stale-cached path is never enough to let a tab spawn. Readiness is
     // per PROFILE (codex-profiles cut §4.2): the tab layer threads the profile
     // the spawn will run under as the optional second argument (S3-1 — the
@@ -2717,7 +2717,7 @@ void app.whenReady().then(async () => {
     // doctor-confirmed path (`!== null`) — an unconfigured engine simply never
     // gets a key, same fail-soft posture as before this widened from
     // engine-conditional to unconditional.
-    // : both engine-proxy carriers ride every fork for exactly the
+    // both engine-proxy carriers ride every fork for exactly the
     // reason the two binary paths above do — a subagent of the OTHER engine can
     // be spawned from any tab. The overlay is rebuilt per spawn off the live
     // module-scope `settings`, so a respawn picks up an edited proxy with no
@@ -2728,7 +2728,7 @@ void app.whenReady().then(async () => {
       [ENV_HOST_GENERATION]: String(generation),
       ...(codexBinaryPath !== null ? { [ENV_CODEX_BIN]: codexBinaryPath } : {}),
       ...(claudeBinaryPath !== null ? { [ENV_CLAUDE_BIN]: claudeBinaryPath } : {}),
-      // : the ACTIVE codex version-support policy — the same manifest
+      // the ACTIVE codex version-support policy — the same manifest
       // ranges Settings displays and the same `riskAcceptedVersions` the "use
       // it anyway" button writes. Without it the host preflight judged by a
       // compile-time constant and refused versions this app itself installed
@@ -2746,7 +2746,7 @@ void app.whenReady().then(async () => {
         : engineProxyCarriers(settings, bootEnv, proxyMaterializationFor(engineProxyTargetUrl(settings)))),
     }),
     reapEngineProcess: createEngineProcessReaper(),
-    // Credential channel (slice 2.5 §3.3 +  W10): an oauth-mode host asks
+    // Credential channel (slice 2.5 §3.3 + W10): an oauth-mode host asks
     // main for a fresh access token per attempt; resolve it for the tab's PINNED
     // connection (its own account across a default-switch), falling back to the
     // active one for an unpinned/legacy tab. Undefined for api_key / legacy ->
@@ -2762,7 +2762,7 @@ void app.whenReady().then(async () => {
       }
       return getAccessTokenFor(connection.id, connection.providerId);
     },
-    //  W11: a core host's real request outcome for its pinned connection.
+    // W11: a core host's real request outcome for its pinned connection.
     // `settingsIpcDeps` is declared further below in this SAME function scope —
     // this callback only ever fires long after boot() has finished (the next
     // agent_event/finish on a live tab), by which point it is long since
@@ -2780,7 +2780,7 @@ void app.whenReady().then(async () => {
         console.warn(`[main] dropping malformed provider-health event (kind=${JSON.stringify(event.kind)})`);
         return;
       }
-      //  W11-FIX (W13 live-dogfood finding): `applyConnectionHealthEvent`
+      // W11-FIX (W13 live-dogfood finding): `applyConnectionHealthEvent`
       // deliberately never fires the normal `onMutation` broadcast (health
       // must not trigger the readiness/host-env/auto-tab cascade a real
       // settings mutation does) — but that also meant zero renderer push at
@@ -2799,7 +2799,7 @@ void app.whenReady().then(async () => {
           console.error(`[main] failed to record connection health`, error);
         });
     },
-    //  follow-up: a core host's provider-reported quota for its
+    // follow-up: a core host's provider-reported quota for its
     // pinned connection. `settingsIpcDeps` closes over the same deps bag as
     // health above (same forward-reference precedent); the persister
     // (connection-quota.ts) validates the raw parentPort payload itself,
@@ -2828,7 +2828,7 @@ void app.whenReady().then(async () => {
     },
     // Respawn is NOT a close (design §2.2) — this fires only from a REAL
     // `closeTab`, so preview windows never outlive the tab that owned them,
-    // and neither do the tab's artifact consent grants (-A).
+    // and neither do the tab's artifact consent grants.
     onTabClosed: (tabId) => {
       const liveSessions = new Set(manager?.listTabs().map((tab) => tab.sessionId));
       for (const id of agentOpenedSessions) {
@@ -2872,9 +2872,9 @@ void app.whenReady().then(async () => {
     manager,
     persistence,
     dialog,
-    //  part C: prime the MCP secret hand-off before the tab is created.
+    // part C: prime the MCP secret hand-off before the tab is created.
     primeMcpSecrets: (workspace) => mcpSecretCache.prime(workspace),
-    // : best-effort removal of hard-deleted sessions'
+    // best-effort removal of hard-deleted sessions'
     // artifact directories (removeSession per id — never throws by contract).
     removeSessionArtifacts: async (ids) => {
       await Promise.all(ids.map((id) => artifactStore.removeSession(id)));
@@ -2892,20 +2892,20 @@ void app.whenReady().then(async () => {
         supportedTransports: transport.supportedTransports,
       });
     },
-    //  W10: a NEW core session pins to the active connection; a RESUMED
+    // W10: a NEW core session pins to the active connection; a RESUMED
     // one re-pins to its stored connection (or refuses `connection_missing`).
     activeConnectionId: () => settings?.provider.activeConnectionId,
-    //  cut-1 stage A: the New Session picker's explicit connection
+    // cut-1 stage A: the New Session picker's explicit connection
     // pick is validated against this live registry BEFORE tab-ipc trusts it
     // (same source `connectionById` every other connection-identity check in
     // this file already reads).
     connectionExists: (id) => settings !== null && connectionById(settings, id) !== undefined,
-    //  cut-1 review fix (P1, owner live smoke): primes the fork env for
+    // cut-1 review fix (P1, owner live smoke): primes the fork env for
     // an explicit New Session connection pick — the same function the resume
     // path (`resolveResumePin` above) already uses to prime a stored pin, so a
     // non-active pick is no longer the only pin path that skips priming.
     ensureConnectionEnv: ensurePinnedEnv,
-    //  cut-2 (design doc §D3/D5): the model the TARGET connection is
+    // cut-2 (design doc §D3/D5): the model the TARGET connection is
     // currently configured with — handleTabRebind stamps it over the session
     // row together with the new pin, so the row answers the posture the
     // re-bound host actually boots (the core resume boot reads its model off
@@ -2931,7 +2931,7 @@ void app.whenReady().then(async () => {
     peekPendingImportModel: (sessionId) => peekImportModel?.(sessionId),
     resolveResumePin,
     resolveCodexProfile: resolveCodexProfileForTab,
-    // : the boot-time Codex recheck is fire-and-forget, so a session
+    // the boot-time Codex recheck is fire-and-forget, so a session
     // clicked before its first doctor snapshot lands (or pinned to a profile
     // nobody diagnosed since boot) would read the fail-closed default as "not
     // configured". The gate splits that UNKNOWN from a KNOWN not-ready and
@@ -2946,7 +2946,7 @@ void app.whenReady().then(async () => {
       (engine === "core" ? true : engine === "codex" && (codexOnboarding?.hasVerdictFor(codexProfileId) ?? false)),
     hydrateEngineReady: async (engine, codexProfileId) => {
       if (engine === "codex" && codexOnboarding !== null) {
-        // : resolve UNKNOWN through the ONE TTL-guarded path. If the boot
+        // resolve UNKNOWN through the ONE TTL-guarded path. If the boot
         // prime already landed a fresh verdict for this profile the doctor does
         // NOT re-run (cache hit); if the boot run is still in flight the same
         // per-profile coalescence shares it — at most one doctor inside the TTL.
@@ -2958,11 +2958,11 @@ void app.whenReady().then(async () => {
         await claudeOnboarding.recheck();
       }
     },
-    // : read-only access to the doctor's cached verdict so a
+    // read-only access to the doctor's cached verdict so a
     // not_ready refusal can carry the exact status. Closure over the nullable
     // holder — registration happens before codex onboarding initialization.
     latestCodexReport: (codexProfileId) => codexOnboarding?.lastReportFor(codexProfileId),
-    //  spawn-freshness guard: re-validate a KNOWN-READY codex
+    // spawn-freshness guard: re-validate a KNOWN-READY codex
     // verdict against the binary's current {size, mtimeMs} stamp before the
     // spawn may proceed. Absent controller (pre-boot) = allow (legacy).
     verifyCodexSpawn: async (codexProfileId) => codexOnboarding?.verifySpawnFreshness(codexProfileId) ?? true,
@@ -3054,10 +3054,10 @@ void app.whenReady().then(async () => {
     settingsPath,
     logger: fileLogger,
     // Slice 2.5: catalog allow-list + projection + oauth wiring (additive).
-    // : unioned with custom-provider ids so their vault keys are
+    // unioned with custom-provider ids so their vault keys are
     // recognized too; kept in sync post-boot by both onMutation hooks below.
     catalogIds: catalogIdsFor(currentSettings()),
-    // Carry `isCustom` ( W5-FIX #2/#5): core has no literal field, so it
+    // Carry `isCustom` (W5-FIX #2/#5): core has no literal field, so it
     // is derived per entry from `isCustomProvider` and folded into the projected
     // summary the renderer consumes for credential-slot + fallback decisions.
     catalog: projectCatalogSummary(
@@ -3065,23 +3065,23 @@ void app.whenReady().then(async () => {
     ),
     authKindFor,
     isCustom: isCustomProvider,
-    // : dev = apps/desktop/package.json's version, packaged = the bundled version.
+    // dev = apps/desktop/package.json's version, packaged = the bundled version.
     getAppVersion: () => app.getVersion(),
     oauth: oauthEngine,
     oauthConfigFor: (id) => oauthConfigFromEntry(findCatalogEntry(id)),
-    //  W10 delete-guard: refuse deleting a connection an open session is
+    // W10 delete-guard: refuse deleting a connection an open session is
     // pinned to (it still resolves that connection's credential on every respawn).
     // W10-FIX F3: "in use" is registered ∪ pending — a resume that has RESERVED a
     // pin but not yet registered its tab counts too, closing the resume/delete race.
     connectionInUse: (connectionId) =>
       (manager?.pinnedConnectionIds().has(connectionId) ?? false) ||
       pinReservations.has(connectionId) ||
-      //  E1: the recognizer's own connection is also "in use" — its
+      // E1: the recognizer's own connection is also "in use" — its
       // credential/baseUrl is resolved on demand from THIS connection, so
       // deleting it out from under a stable `connectionId` would silently
       // turn the fallback off rather than refusing the delete with a reason.
       currentSettings().recognizer?.connectionId === connectionId,
-    //  (D-S4-5): the grant handler's fingerprint seam — main
+    // (D-S4-5): the grant handler's fingerprint seam — main
     // computes it from the LIVE filesystem at grant time, synchronously
     // (realpathSync -> statSync), never accepting one from the renderer.
     statBinaryForTrust: (path: string) => {
@@ -3099,19 +3099,19 @@ void app.whenReady().then(async () => {
     },
     platform: process.platform,
     uid: process.getuid?.() ?? -1,
-    //  §5 / design review H-01: refreshed after the vault write and
+    // §5 / design review H-01: refreshed after the vault write and
     // before the renderer hears about the mutation.
     refreshProxySecrets: refreshProxyPasswordCache,
-    // : fired after a successful secret write/clear, BEFORE onMutation
+    // fired after a successful secret write/clear, BEFORE onMutation
     // (same ordering discipline as refreshProxySecrets just above).
     onSecretWritten: noteRecognizerSecretWrite,
     onMutation: async () => {
       settings = (await loadSettings(settingsPath, fileLogger)).settings;
-      // : `provider.custom` is schema-reachable through this generic
+      // `provider.custom` is schema-reachable through this generic
       // patch channel too, so re-derive the union defensively here as well
       // (not just from registerProviderIpc's own onMutation below).
       settingsIpcDeps.catalogIds = catalogIdsFor(settings);
-      //  E1: covers both a direct `recognizer` patch AND a connection
+      // E1: covers both a direct `recognizer` patch AND a connection
       // CRUD mutation (settings-ipc.ts owns both channels) that changes what
       // an EXISTING recognizer selection resolves to.
       await refreshRecognizerFallback();
@@ -3128,9 +3128,9 @@ void app.whenReady().then(async () => {
     },
   };
   registerSettingsIpc(settingsIpcDeps);
-  // : the per-tab workspace-trust answer. Main resolves folder + hash
+  // the per-tab workspace-trust answer. Main resolves folder + hash
   // from the tab's own record; the renderer sends a tab id and a decision only.
-  // : folder keys are realpath-canonical (symlink and target share
+  // folder keys are realpath-canonical (symlink and target share
   // one record) and the store mutators (decide/forget/migrate) are serialised
   // through one queue inside the module.
   registerWorkspaceTrustIpc({
@@ -3154,7 +3154,7 @@ void app.whenReady().then(async () => {
     // a: a trust decision moves project-tier services in or out of scope.
     onDecided: () => reconcileServices(),
   });
-  // : one-shot migration of legacy non-realpath keys to real
+  // one-shot migration of legacy non-realpath keys to real
   // keys. Best-effort and inside the module's serialisation queue: errors are
   // logged and ignored, and the read-side legacy fallback keeps old keys
   // working either way.
@@ -3172,7 +3172,7 @@ void app.whenReady().then(async () => {
       );
     });
 
-  //  §6: "Check connection" for a proxy profile. The probe is a SPAWNED
+  // §6: "Check connection" for a proxy profile. The probe is a SPAWNED
   // child (`process.execPath` + ELECTRON_RUN_AS_NODE=1), never a fetch from
   // main: main's own network stack is Chromium's and obeys neither the env
   // proxy family nor NO_PROXY, so a fetch here would answer a question nobody
@@ -3200,7 +3200,7 @@ void app.whenReady().then(async () => {
     shellOwnsProxyFamily,
   });
 
-  //  срез E2: the Vision panel's "Probe" button. Same spawned-child
+  // срез E2: the Vision panel's "Probe" button. Same spawned-child
   // canon as the proxy probe just above (`process.execPath` +
   // ELECTRON_RUN_AS_NODE=1), but the candidate is resolved through
   // `resolveRecognizerConfig` (the SAME ladder the live recognizer fork-env
@@ -3220,7 +3220,7 @@ void app.whenReady().then(async () => {
     spawn: spawnRecognizerProbeChild,
   });
 
-  // Custom OpenAI-compatible model-provider control plane (, cut
+  // Custom OpenAI-compatible model-provider control plane (cut
   // §9.2/§13.1): CRUD for `settings.provider.custom[]` + the guarded
   // `/v1/models` preview fetch, behind its own four invoke channels. Mirrors
   // settingsIpcDeps.onMutation immediately above — provider-ipc.ts already
@@ -3240,15 +3240,15 @@ void app.whenReady().then(async () => {
         ? undefined
         : { id: entry.id, baseUrl: entry.baseUrl, defaultTransport: entry.defaultTransport };
     },
-    // : same hook as settingsIpcDeps's — a custom-record key write
+    // same hook as settingsIpcDeps's — a custom-record key write
     // must be able to force the recognizer push before onMutation runs.
     onSecretWritten: noteRecognizerSecretWrite,
     onMutation: async (fresh) => {
       settings = fresh;
       settingsIpcDeps.catalogIds = catalogIdsFor(fresh);
-      //  E1 §1.2: wired here too (both mutation hooks).
+      // E1 §1.2: wired here too (both mutation hooks).
       //
-      //  fixed: the fingerprint now carries the custom record's
+      // fixed: the fingerprint now carries the custom record's
       // baseUrl, and a secret write targeting the recognizer's key (either
       // channel, via `onSecretWritten`) force-pushes past the comparison —
       // still no vault read on the fingerprint path.
@@ -3266,7 +3266,7 @@ void app.whenReady().then(async () => {
     },
   });
 
-  // Codex onboarding control plane (, cut §2(g)): discovery ladder +
+  // Codex onboarding control plane (cut §2(g)): discovery ladder +
   // bounded doctor + native login, behind four invoke channels + one push.
   // `writeCodexSettings` routes through settings-ipc's own `handleSet` (same
   // zod validation / deep-partial merge / read_only guard as every other
@@ -3287,23 +3287,23 @@ void app.whenReady().then(async () => {
   // byte-identical to before this lever existed; a malformed value under
   // automation never reaches here (module-top boot refusal).
   const codexManifestCacheFile = join(codexProfilesRoot(codexProfilesHome), "manifest.json");
-  // : self-check profiles get NO new automatic networking — not the
+  // self-check profiles get NO new automatic networking — not the
   // periodic schedule, not the refusal-path forced refresh.
   const codexRefusalRefresh = selfCheckProfile === undefined ? createCodexManifestRefusalRefresh({ cacheFile: codexManifestCacheFile }) : null;
   codexOnboarding = registerCodexIpc({
     bootEnv,
     ...(selfCheckProfile !== undefined ? { fs: selfCheckBinaryFs } : {}),
     onDeviceCode: (progress) => sendToMainWindow(win, CODEX_LOGIN_PROGRESS_CHANNEL, progress),
-    // : the doctor and `codex login` are children main spawns itself, so
+    // the doctor and `codex login` are children main spawns itself, so
     // they get the engine proxy through the same carrier the tab children use.
     engineProxyUrl: codexEngineProxyUrl,
-    //  rework: the same children get a credentialed shell proxy
+    // rework: the same children get a credentialed shell proxy
     // swapped for THAT value's relay (`doctorRelayUrl` — B2: never a relay
     // fronting a different upstream); fail-closed drop without one.
     relayUrl: doctorRelayUrl,
     ...(codexProfilesHome !== undefined ? { home: codexProfilesHome } : {}),
     readBinaryPathSetting: async () => settings?.codex?.binaryPath,
-    // : fresh read of settings.security.trustedBinaries per gate
+    // fresh read of settings.security.trustedBinaries per gate
     // check — mirror of readBinaryPathSetting's dep shape.
     readTrustedBinaries: () => readTrustedBinaryConsentsSync(settingsPath),
     // The profile registry's settings slice (codex-profiles cut §2.3), read
@@ -3325,7 +3325,7 @@ void app.whenReady().then(async () => {
     onProfilesChanged: () => {
       sendToMainWindow(win, ENGINES_CHANGED_CHANNEL);
     },
-    //  (refresh-before-refuse): one rate-limited forced manifest
+    // (refresh-before-refuse): one rate-limited forced manifest
     // refresh before an update_required refusal is cached. Absent (self-check)
     // = legacy behavior.
     ...(codexRefusalRefresh !== null ? { refreshPolicyBeforeRefusal: () => codexRefusalRefresh.refreshBeforeRefusal() } : {}),
@@ -3347,13 +3347,13 @@ void app.whenReady().then(async () => {
     );
   });
 
-  // Kick off the first discovery+doctor pass in the background ( п.1:
+  // Kick off the first discovery+doctor pass in the background (п.1:
   // a compatible CLI on PATH must be found with no env var and no user
   // action). Never awaited here — a slow or hung Codex CLI must not delay
   // the window from appearing; `engineReady("codex")` simply stays false
   // (its safe default) until this resolves.
-  // : prime EVERY profile's readiness at boot, not just the active one
-  // ( п.1: a compatible CLI must be found with no env var and no user
+  // prime EVERY profile's readiness at boot, not just the active one
+  // (п.1: a compatible CLI must be found with no env var and no user
   // action), so a Codex tab — or a resume pinned to a non-active profile —
   // opens without a trip to Settings: the tab gate then reads a warm verdict
   // instead of the fail-closed UNKNOWN default. SEQUENTIAL ("не N параллельных
@@ -3386,17 +3386,17 @@ void app.whenReady().then(async () => {
   claudeOnboarding = registerClaudeIpc({
     bootEnv,
     ...(selfCheckProfile !== undefined ? { fs: selfCheckBinaryFs } : {}),
-    // : mirror of the codex dep above. The claude doctor makes no network
+    // mirror of the codex dep above. The claude doctor makes no network
     // call of its own, so this buys parity rather than function — but the doctor
     // env builder declares itself a mirror of the session child's builder, and
     // that declaration has to stay true.
     engineProxyUrl: claudeEngineProxyUrl,
-    //  rework: mirror of the codex dep above — the doctor
+    // rework: mirror of the codex dep above — the doctor
     // child's env builder swaps a credentialed shell proxy for THAT value's
     // relay (`doctorRelayUrl`).
     relayUrl: doctorRelayUrl,
     readBinaryPathSetting: async () => settings?.claude?.binaryPath,
-    // : fresh read of settings.security.trustedBinaries per gate
+    // fresh read of settings.security.trustedBinaries per gate
     // check — mirror of readBinaryPathSetting's dep shape.
     readTrustedBinaries: () => readTrustedBinaryConsentsSync(settingsPath),
     writeClaudeSettings: (patch) => handleSet(settingsIpcDeps, { claude: patch }),
@@ -3431,7 +3431,7 @@ void app.whenReady().then(async () => {
     console.warn("[main] initial Claude check failed", error);
   });
 
-  // Codex install/version control plane (, cut §7): download-with-
+  // Codex install/version control plane (cut §7): download-with-
   // integrity + risk acceptance behind IPC; the version policy is seeded from
   // settings, then advisorily refreshed from the git manifest — fail-closed
   // on the bundled manifest for ANY refresh failure (404 until the file
@@ -3439,7 +3439,7 @@ void app.whenReady().then(async () => {
   // supported range).
   registerCodexInstallIpc({
     ...(codexProfilesHome !== undefined ? { home: codexProfilesHome } : {}),
-    //  F4: the post-install gate doctor is a main-spawned codex probe
+    // F4: the post-install gate doctor is a main-spawned codex probe
     // like every other one, so it reads through the SAME source env — the shared
     // `codexDoctorSourceEnv`, not a second composition. Without it that one
     // probe would fall back to main's live `process.env`, where a carrier never
@@ -3451,14 +3451,14 @@ void app.whenReady().then(async () => {
     writeCodexSettings: (patch) => handleSet(settingsIpcDeps, { codex: patch }),
     onChanged: () => {
       sendToMainWindow(win, ENGINES_CHANGED_CHANNEL);
-      // : an install / risk-acceptance changed the binary or its support
+      // an install / risk-acceptance changed the binary or its support
       // verdict, so the cached doctor result is stale — force past the TTL.
       void codexOnboarding?.recheck(undefined, { force: true }).catch(() => {});
     },
   });
   setActiveCodexVersionPolicy({ riskAcceptedVersions: settings?.codex?.riskAcceptedVersions ?? [] });
   const recheckOnPolicyChange = (): void => {
-    // : the supported-version policy moved, so a cached verdict may now
+    // the supported-version policy moved, so a cached verdict may now
     // be wrong — force. (Active profile only, same shape as onChanged above.)
     void codexOnboarding?.recheck(undefined, { force: true }).catch(() => {});
   };
@@ -3469,7 +3469,7 @@ void app.whenReady().then(async () => {
         // identical manifest (the common case: cache hit, no-op refresh)
         // leaves whatever readiness the boot-time recheck already established.
         if (setActiveCodexVersionPolicy({ manifest: result.manifest })) recheckOnPolicyChange();
-        // : with the freshest policy in hand (the awaited initial refresh above), move a previously MANAGED
+        // with the freshest policy in hand (the awaited initial refresh above), move a previously MANAGED
         // install (settings.codex.binaryPath inside ~/.anycode/codex/bin/) up
         // to the manifest's recommended version — the app-upgrade path the
         // 0.144.3 incident showed was missing. Runs only when a managed binary
@@ -3503,7 +3503,7 @@ void app.whenReady().then(async () => {
           });
       })
       .catch(() => {});
-    // : periodic advisory refresh on the cache-TTL interval.
+    // periodic advisory refresh on the cache-TTL interval.
     // The schedule applies the policy ONCE itself; `changed` arrives here —
     // index only decides whether to re-trigger the doctor recheck.
     codexManifestRefreshSchedule = startCodexManifestRefreshSchedule({
@@ -3512,7 +3512,7 @@ void app.whenReady().then(async () => {
     });
   }
 
-  // Rollout import control plane (, cut §8): list/preview/import a
+  // Rollout import control plane (cut §8): list/preview/import a
   // profile's Codex rollouts into OUR history format. Sessions live inside
   // that profile's CODEX_HOME (§1.3); the system pseudo-profile reads the
   // ambient home (env override or ~/.codex), matching what a codex spawned
@@ -3540,7 +3540,7 @@ void app.whenReady().then(async () => {
   // double gate (W5-FIX, finding 5 — `resolveMcpImportHome` refuses it in a
   // packaged production build), else the real homedir; `workspaceForTab` reads
 
-  // : the Settings scope dropdown's workspace list + the resolver
+  // the Settings scope dropdown's workspace list + the resolver
   // behind the `ws_…` scope references the four config panes accept. The
   // renderer never supplies a path: the registry lists open tabs and recent
   // root sessions main-side, and `resolve` honours only ids from its own cache.
@@ -3563,7 +3563,7 @@ void app.whenReady().then(async () => {
     home: () => (selfCheckProfile ?? resolveMcpImportHome(process.env, app.isPackaged)) ?? homedir(),
     workspaceForTab: (ref) => scopeRegistry.resolve(ref, (tabId) => manager?.getTab(tabId)?.workspace),
     fs: new NodeMcpConfigFs(),
-    //  xfix H1: the plugin-server rows consent state from the
+    // xfix H1: the plugin-server rows consent state from the
     // SAME settings.json cell the host runtime + Plugins pane read/write.
     readMcpConsent: async () => {
       try {
@@ -3575,7 +3575,7 @@ void app.whenReady().then(async () => {
     },
   });
 
-  //  part C: the write-only MCP secret store. The weak-storage consent
+  // part C: the write-only MCP secret store. The weak-storage consent
   // is read from the same settings flag provider keys use, at call time.
   registerMcpSecretsIpc({
     vault: {
@@ -3590,7 +3590,7 @@ void app.whenReady().then(async () => {
       listMcpSecretNames: () => (vault === null ? Promise.resolve([]) : vault.listMcpSecretNames()),
     },
     allowWeak: async () => (await loadSettings(settingsPath, fileLogger)).settings.security.allowWeakSecretStorage,
-    //  part 0: a saved or deleted secret may unblock or block a plugin service.
+    // part 0: a saved or deleted secret may unblock or block a plugin service.
     onMutation: async () => {
       await mcpSecretCache.refreshAll();
       reconcileServices();
@@ -3602,7 +3602,7 @@ void app.whenReady().then(async () => {
   // rides the SAME once-approval map workspace-trust-ipc uses (never a second
   // store); detection reads the live PATH over node:fs — existence only, the
   // app never installs or executes a server binary.
-  // : the Sessions API control plane. Folders come only from the native
+  // the Sessions API control plane. Folders come only from the native
   // dialog below; the renderer never sends a path. The stdio adapter is copied to
   // userData so an external client config survives app updates.
   // Refreshed on every start, unconditionally: an MCP client config copied before
@@ -3647,7 +3647,7 @@ void app.whenReady().then(async () => {
     });
   }
 
-  // : the per-session "Full browser access" switch. Only the main window's
+  // the per-session "Full browser access" switch. Only the main window's
   // webContents may call it (the handler checks the sender).
   if (browserAccessStore !== null) {
     registerBrowserAccessIpc({
@@ -3748,7 +3748,7 @@ void app.whenReady().then(async () => {
   // testable off a plain deps bag.
   registerArtifactsIpc(artifactsIpcDeps);
 
-  //  S1-B (design §5/§7): the plugins control plane. IPC
+  // S1-B (design §5/§7): the plugins control plane. IPC
   // registers synchronously; the maintenance passes — staging wipe (crash
   // residue), store GC (versions outside {active, previous}), legacy MCP
   // grandfathering (one-shot consent for pre-S1 user-dir MCP plugins) — run
@@ -3766,7 +3766,7 @@ void app.whenReady().then(async () => {
       appVersion: app.getVersion(),
       isPackaged: app.isPackaged,
       fs: pluginsFs,
-      //  xfix M6: the pane scans the live tab workspace (a project
+      // xfix M6: the pane scans the live tab workspace (a project
       // plugin in `<repo>/.anycode/plugins/` is runtime-loaded and must show
       // here), resolved per scan; home when no tab exists.
       workspace: pluginsHome,
@@ -3792,7 +3792,7 @@ void app.whenReady().then(async () => {
           settings = (await loadSettings(settingsPath, fileLogger)).settings;
         },
         setMcpConsent: async (entries) => {
-          //  xfix H1(c): the user-facing consent writer (install
+          // xfix H1(c): the user-facing consent writer (install
           // "allow", Approve MCP, re-approval) — never a no-op once an array
           // exists. See main/plugins/consent-settings.ts.
           await setPluginsMcpConsent(settingsPath, entries, fileLogger);
@@ -3849,7 +3849,7 @@ void app.whenReady().then(async () => {
               workspace,
               workspaceTrustOnceFor(workspaceTrustOnceApprovals, workspace, realpathSync),
             ),
-          //  part 0: the same vault store MCP `${secret:}` reads; values stay in memory only.
+          // part 0: the same vault store MCP `${secret:}` reads; values stay in memory only.
           resolveSecrets: (names) => (vault === null ? Promise.resolve({}) : vault.getMcpSecretValues(names)),
         }),
       spawn: spawnServiceProcess,
@@ -3963,7 +3963,7 @@ void app.whenReady().then(async () => {
     },
   });
 
-  //  (old ): retention for the telemetry directory —
+  // (old): retention for the telemetry directory —
   // first sweep 2 min after boot, then daily. It sweeps EXACTLY the directory
   // Profile reads (resolveProfileDir inside), skips self-check runs (an
   // isolated automation profile must not delete anything), protects sessions
@@ -4011,10 +4011,10 @@ void app.whenReady().then(async () => {
     return;
   }
 
-  // Auto-updater (design/slice-2.6-cut.md §6;  W15 adds the auto-check
+  // Auto-updater (design/slice-2.6-cut.md §6; W15 adds the auto-check
   // schedule + darwin honest-manual-path): additive register — gated
   // internally on app.isPackaged, so a dev run never touches autoUpdater.
-  // `platform`/`openExternal` drive  defect 2 (darwin has no
+  // `platform`/`openExternal` drive defect 2 (darwin has no
   // Developer ID yet, so Squirrel.Mac would reject a downloaded update —
   // `openReleasesPage()` opens the fixed GitHub Releases URL instead).
   updaterController = registerUpdater({
@@ -4026,7 +4026,7 @@ void app.whenReady().then(async () => {
     openExternal: (url) => shell.openExternal(url),
     beforeNetwork: updaterBeforeNetwork,
   });
-  // : app-scope proxy auth for the updater (public API — verified
+  // app-scope proxy auth for the updater (public API — verified
   // emit at electron-updater/out/AppUpdater.js ~206). Connection credentials
   // NEVER land here: the handler reads the app-scope creds captured by the
   // last updaterBeforeNetwork decision, and answers only challenges for the
@@ -4048,7 +4048,7 @@ void app.whenReady().then(async () => {
     console.log("[main] opening window with zero tabs");
   }
 
-  // : the Sessions API is enabled from Settings (no env var needed).
+  // the Sessions API is enabled from Settings (no env var needed).
   // The live controller applies the saved block now; ANYCODE_COMMUNICATION_CONFIG
   // still wins inside it. Changes apply immediately through the IPC; a hand edit of
   // settings.json is picked up at the next launch. A failed start never blocks boot.
@@ -4072,7 +4072,7 @@ void app.whenReady().then(async () => {
         getWindow: () => win,
         manager: automationManager,
         app,
-        //  W10 (W13 live-dogfood finding): same source `registerTabIpc`'s
+        // W10 (W13 live-dogfood finding): same source `registerTabIpc`'s
         // `handleCreate` pins a real "new" tab from — without this, every
         // automation-created tab silently spawned unpinned regardless of the
         // active connection.
@@ -4081,12 +4081,12 @@ void app.whenReady().then(async () => {
         // PreviewHost handle constructed above — a model-free smoke of 96-A's
         // open/console/screenshot ops over the automation channel.
         previewHost,
-        //  M5 (CUT.md M5 scope item 3): the SAME `MdDocDeps` bag
+        // M5 (CUT.md M5 scope item 3): the SAME `MdDocDeps` bag
         // `registerMdDocIpc` above uses — the dev-only navigate route drives
         // `navigateMdDoc` directly over it (main-side chain only; the
         // renderer-side MdLink click behavior stays unit-covered).
         mdDocDeps,
-        //  S2d D1 (CUT-S2 §2.4/§4.1 additive `/child-runs`): the SAME
+        // S2d D1 (CUT-S2 §2.4/§4.1 additive `/child-runs`): the SAME
         // persistence adapter opened at boot — absent, `/child-runs` degrades
         // to `{ok:false, error:"persistence unavailable"}` rather than throwing.
         persistence: persistence ?? undefined,
@@ -4112,11 +4112,11 @@ app.on("window-all-closed", () => {
  * write-behind queue.
  */
 async function shutdownEverything(): Promise<void> {
-  // : stop the retention timers first — synchronous, ahead of the
+  // stop the retention timers first — synchronous, ahead of the
   // awaited teardown below, so no sweep can start mid-shutdown.
   telemetryRetention?.stop();
   telemetryRetention = null;
-  //  S1-B: cancel the plugins update scheduler's armed check.
+  // S1-B: cancel the plugins update scheduler's armed check.
   pluginsScheduler?.stop();
   pluginsScheduler = undefined;
   // a: stop every plugin service (tree kill, 5 s hard deadline) before the hosts go.
@@ -4128,24 +4128,24 @@ async function shutdownEverything(): Promise<void> {
   const activeOnboarding = codexOnboarding;
   // SLICE-CC A3 (cut §1.2): mirrors `activeOnboarding` above.
   const activeClaudeOnboarding = claudeOnboarding;
-  //  W15: clear the armed auto-check timer, if any — synchronous,
+  // W15: clear the armed auto-check timer, if any — synchronous,
   // ahead of the awaited teardown below (nothing here depends on it).
   updaterController?.stop();
-  // : stop the periodic manifest-refresh schedule — synchronous,
+  // stop the periodic manifest-refresh schedule — synchronous,
   // ahead of the awaited teardown below.
   codexManifestRefreshSchedule?.stop();
   codexManifestRefreshSchedule = null;
   // Preview windows (cut §2.5): synchronous destroy, no write-behind queue to
   // drain — closed ahead of the awaited teardown below, same as the updater.
   previewHost?.closeAll();
-  //  cross-review F3: every relay THIS process minted dies with
+  // cross-review F3: every relay THIS process minted dies with
   // it. The relays answer on 127.0.0.1 with the upstream credential attached
   // to every hop — a listener that outlived the app (until the OS reaped the
   // process) had no owner and no path to teardown. Idempotent, so the
   // `will-quit` backstop below can repeat it for a quit that never routed
   // through `before-quit`.
   closeProxyRelay();
-  //  follow-up: flush the quota persister's pending trailing
+  // follow-up: flush the quota persister's pending trailing
   // values (a coalesced observation up to 29 s fresher than what is on disk)
   // BEFORE the hosts/persistence finish tearing down — after quit there is
   // no timer left to fire. Bounded to ~200 ms internally
@@ -4189,7 +4189,7 @@ app.on("will-quit", () => {
   // Backstop alongside the codex-children one below (cut §2.5): idempotent,
   // so a completed `before-quit`/window-closed pass finds nothing to do here.
   previewHost?.closeAll();
-  //  cross-review F3: same idempotence argument for the proxy
+  // cross-review F3: same idempotence argument for the proxy
   // relays — the `shutdownEverything` pass already closed them; a quit that
   // skipped that pass still must not leave a credential-forwarding listener
   // to the OS's process reaper.

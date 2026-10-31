@@ -769,7 +769,7 @@ describe("session handles and wait_for_result (b)", () => {
     expect(sessions.every((s) => !("handle" in s))).toBe(true);
   });
 
-  it("tools list has 11 tools in order (close_session last; )", async () => {
+  it("tools list has 11 tools in order (close_session last;)", async () => {
     const f = await waitFixture();
     expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "list_pending_approvals", "answer_approval", "cancel_turn", "create_session", "close_session"]);
   });
@@ -1276,7 +1276,7 @@ describe("Sessions API create_session", () => {
     expect(tool.description).toContain("invalid_model");
   });
 
-  it("create_session: refused creations do not consume the 5/min budget (, review F2)", async () => {
+  it("create_session: refused creations do not consume the 5/min budget (review F2)", async () => {
     let refusedLeft = 5;
     let successes = 0;
     const f = await createFixture({ creator: async () => {
@@ -1331,7 +1331,7 @@ describe("Sessions API create_session", () => {
     expect(value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } })).sessionId).toBe("agent-9");
   });
 
-  it("create_session: two concurrent calls at the alive cap cannot both create (, review F4)", async () => {
+  it("create_session: two concurrent calls at the alive cap cannot both create (review F4)", async () => {
     const clock = { now: 0 };
     let creatorCalls = 0;
     let successes = 0;
@@ -1848,7 +1848,7 @@ describe("Sessions API create_session", () => {
     expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(0);
   });
 
-  it("create_session: firstMessage to a session outside the folders list is an explicit error, not a silent messageId omit (, review F1)", async () => {
+  it("create_session: firstMessage to a session outside the folders list is an explicit error, not a silent messageId omit (review F1)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "anycode-create-f1a-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
     const other = await mkdtemp(join(tmpdir(), "anycode-create-f1b-")); cleanups.push(() => rm(other, { recursive: true, force: true }));
     const discoveryFile = join(dir, "communication.json");

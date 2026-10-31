@@ -1,5 +1,5 @@
 /**
- * Unit tests for md-doc.ts's `readMdDoc`/`navigateMdDoc` ( CUT.md
+ * Unit tests for md-doc.ts's `readMdDoc`/`navigateMdDoc` (CUT.md
  * CONTRACTS — M1 READ, M2 NAVIGATE) — exercised against a REAL node fs in
  * scratch tmpdirs (no Electron), mirroring artifacts-ipc.test.ts's own "real
  * fs, fake containment resolver" pattern. `getRecordRef`/`resolveArtifact`/

@@ -1,5 +1,5 @@
 /**
- * : the scope workspace list handler accepts only an empty strict
+ * the scope workspace list handler accepts only an empty strict
  * payload and returns an allow-listed projection (no raw path field).
  */
 import { describe, expect, it } from "vitest";

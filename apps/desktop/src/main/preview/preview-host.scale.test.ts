@@ -1,5 +1,5 @@
 /**
- *  slice G: CSS-viewport-size (DIP) threading tests for PreviewHost's
+ * slice G: CSS-viewport-size (DIP) threading tests for PreviewHost's
  * three screenshot capture legs — `screenshotFor` (web preview,
  * window.innerWidth/innerHeight via executeJavaScript), `screenshotMdWindow`
  * (dom-md window leg, MdPreviewWindowLike.getContentSize), and
@@ -43,7 +43,7 @@ async function flush(): Promise<void> {
 
 /** Minimal full `PreviewWebContentsLike` — only `executeJavaScript` is exercised by these tests. */
 class FakeWebContents implements PreviewWebContentsLike {
-  /** : scriptable CDP surface (browser control); tests drive it via `cdp`. */
+  /** scriptable CDP surface (browser control); tests drive it via `cdp`. */
   cdp = fakeCdp();
   goToOffsetCalls: Array<-1 | 1> = [];
   goToOffset(offset: -1 | 1): Promise<void> {
@@ -57,7 +57,7 @@ class FakeWebContents implements PreviewWebContentsLike {
   loadURL(): Promise<void> {
     return Promise.resolve();
   }
-  /**  stage 4: reload() is on the interface; not exercised here. */
+  /** stage 4: reload() is on the interface; not exercised here. */
   reload(): Promise<void> {
     return Promise.resolve();
   }
@@ -215,7 +215,7 @@ function makeRig(opts: { displayMode: "panel" | "window" }): Rig {
       return rig.captureMainWindowRectImpl(rect);
     },
     autoOpenEnabled: () => true,
-    //  stage 4: live-reload is not exercised by these tests —
+    // stage 4: live-reload is not exercised by these tests —
     // honest additive defaults so the PreviewHostDeps shape keeps compiling.
     liveReloadEnabled: () => true,
     watchFile: () => ({ close: () => {} }),
@@ -227,7 +227,7 @@ function makeRig(opts: { displayMode: "panel" | "window" }): Rig {
   return rig;
 }
 
-describe("PreviewHost —  slice G, web preview leg (screenshotFor)", () => {
+describe("PreviewHost — slice G, web preview leg (screenshotFor)", () => {
   async function readyRig(): Promise<{ rig: Rig; previewId: string }> {
     const rig = makeRig({ displayMode: "window" });
     const opened = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
@@ -310,7 +310,7 @@ describe("PreviewHost —  slice G, web preview leg (screenshotFor)", () => {
   });
 });
 
-describe("PreviewHost —  slice G, dom-md WINDOW leg (screenshotMdWindow)", () => {
+describe("PreviewHost — slice G, dom-md WINDOW leg (screenshotMdWindow)", () => {
   async function openedRig(mdWindow: MdPreviewWindowLike): Promise<{ rig: Rig; previewId: string }> {
     const rig = makeRig({ displayMode: "window" });
     rig.nextMdWindow = () => mdWindow;
@@ -356,7 +356,7 @@ describe("PreviewHost —  slice G, dom-md WINDOW leg (screenshotMdWindow)", () 
   });
 });
 
-describe("PreviewHost —  slice G, dom-md PANEL leg (screenshotMdPanel)", () => {
+describe("PreviewHost — slice G, dom-md PANEL leg (screenshotMdPanel)", () => {
   const BOUNDS: PreviewPanelBounds = { x: 10, y: 20, width: 550, height: 400 };
 
   it("forwards the host's own panelBounds (already documented as CSS px) as cssWidth/cssHeight", async () => {

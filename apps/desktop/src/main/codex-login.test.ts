@@ -62,7 +62,7 @@ describe("runCodexLogin", () => {
       timeoutMs: 150,
     });
     expect(outcome).toMatchObject({ ok: false, reason: "timeout" });
-    // : a timeout now says WHICH bound expired and for how long.
+    // a timeout now says WHICH bound expired and for how long.
     expect(outcome.ok === false && outcome.detail).toContain("login did not complete");
   });
 
@@ -80,13 +80,13 @@ describe("runCodexLogin", () => {
       timeoutMs: 5_000,
     });
     expect(outcome).toMatchObject({ ok: false, reason: "failed" });
-    // : the transport error is no longer swallowed — it is the
+    // the transport error is no longer swallowed — it is the
     // breadcrumb that says WHY the handshake died.
     expect(outcome.ok === false && outcome.detail).toContain("timed out");
   });
 });
 
-describe("runCodexLogin + profiles ( п.2 — login INTO a profile home)", () => {
+describe("runCodexLogin + profiles (п.2 — login INTO a profile home)", () => {
   const PROFILE: ResolvedCodexProfile = {
     id: "acc1",
     codexHome: "/home/dev/.anycode/codex/profile-acc1",
@@ -173,7 +173,7 @@ describe("Codex device-code login", () => {
     expect(openExternal).not.toHaveBeenCalled();
   });
   /**
-   *  — the live defect, reproduced at the unit level.
+   * the live defect, reproduced at the unit level.
    *
    * `account/login/start` is the ONE login RPC that is a real NETWORK round
    * trip: the server mints loginId/userCode/authUrl before answering. Measured

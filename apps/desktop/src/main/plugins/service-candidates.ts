@@ -6,7 +6,7 @@
  *    rows, each gated by that workspace's trust decision.
  * The service command/args/env VALUES are read here from the manifest and
  * handed only to the supervisor; no renderer-facing type ever carries them.
- * `${secret:NAME}` references ( part 0) are resolved here too, for
+ * `${secret:NAME}` references (part 0) are resolved here too, for
  * services that are enabled, consented and eligible for a folder; an unset name
  * is reported as missing and blocks the spawn.
  */

@@ -1,5 +1,5 @@
 /**
- * Native DOM markdown-preview: doc read + navigate ( CUT.md
+ * Native DOM markdown-preview: doc read + navigate (CUT.md
  * CONTRACTS, M1 READ / M2 NAVIGATE). Pure handlers over a deps bag —
  * mirrors artifacts-ipc.ts's own handler-over-deps-bag shape
  * (unit-testable without ipcMain) — closed over a `getRecordRef` lookup

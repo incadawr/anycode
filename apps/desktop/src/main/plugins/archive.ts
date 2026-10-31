@@ -1,5 +1,5 @@
 /**
- * In-house `.tgz` extractor ( S1-B, design §4): ustar reader over
+ * In-house `.tgz` extractor (S1-B, design §4): ustar reader over
  * `zlib.gunzipSync`, NO new npm deps, with the full extraction-hardening cap
  * set. The threat model is a malicious archive: every structural surprise is
  * a REFUSAL, never a best-effort skip.
@@ -198,7 +198,7 @@ function stripSingleTopDir(members: ArchiveEntry[]): ArchiveEntry[] {
  * Full pipeline: cap the compressed bytes → gunzip → parse tar → strip an
  * optional single top-level dir → verify the manifest member exists.
  *
- *  xfix M2: decompression is bounded DURING expansion (see
+ * xfix M2: decompression is bounded DURING expansion (see
  * gunzipCapped) — the uncompressed cap is enforced by zlib, not after a full
  * materialization.
  */
@@ -229,7 +229,7 @@ export function extractTgz(
 }
 
 /**
- * Bounded gunzip ( xfix M2). `maxOutputLength` makes zlib abort
+ * Bounded gunzip (xfix M2). `maxOutputLength` makes zlib abort
  * the inflate as soon as the output crosses the uncompressed cap, so a
  * decompression bomb (zeros compress ~1000x: a 20 MB compressed cap admitted
  * ~20 GB of attempted expansion) never materializes. Node raises

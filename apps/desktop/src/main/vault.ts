@@ -237,7 +237,7 @@ export class Vault {
 
   /**
    * Persists a connection's OAuth token blob as ONE encrypted value under
-   * `provider.connection.<connectionId>.oauth` (design §3.3 + : the blob
+   * `provider.connection.<connectionId>.oauth` (design §3.3 + the blob
    * is keyed by CONNECTION id so two accounts of the same OAuth provider never
    * collide; the OAuth CONFIG stays keyed by providerId in the broker). Same
    * weak-storage consent gate as any other secret.
@@ -256,7 +256,7 @@ export class Vault {
   }
 
   /**
-   * Boot-time scrub of stale legacy provider secrets ( W9 §2). W9′ keys
+   * Boot-time scrub of stale legacy provider secrets (W9 §2). W9′ keys
    * every credential by connection (`provider.connection.<id>.*`); a leftover
    * v1-shaped key would otherwise LIE to readiness/status projections
    * (`computeProviderReady`'s `provider.apiKey` default, `statusKeys`' bare
@@ -309,7 +309,7 @@ export class Vault {
    * value so a present-but-undecryptable entry reads source "none" while still
    * `set`. NEVER carries a value (custody invariant).
    *
-   * PROXY-PROFILE PASSWORDS ( §5, design review B-09) ride this exact
+   * PROXY-PROFILE PASSWORDS (§5, design review B-09) ride this exact
    * projection, and it is the ONLY way the renderer learns anything about them:
    *  - a profile WITH a password has `proxy.profile.<id>.password` in this list
    *    with `set: true`. The editor's `passwordSet` placeholder is that boolean
@@ -401,7 +401,7 @@ export class Vault {
     effective: string | undefined,
     bootEnv: NodeJS.ProcessEnv,
   ): SecretSource {
-    // : a proxy-profile password has no env materialisation at all — it
+    // a proxy-profile password has no env materialisation at all — it
     // is composed into a proxy URL in main and rides the HTTP(S)_PROXY family,
     // never a `SECRET_ENV_KEY`. Asking `secretEnvFor` for its var would be a
     // category error (it refuses such a key fail-closed), and answering "env"

@@ -241,19 +241,19 @@ export interface AutomationServerDeps {
    * when the renderer never settles.
    */
   facadeTimeoutMs?: number;
-  /** Forwarded to `HandlerDeps.activeConnectionId` ( W10, `createTabNew`'s pin). */
+  /** Forwarded to `HandlerDeps.activeConnectionId` (W10, `createTabNew`'s pin). */
   activeConnectionId?: () => string | undefined;
   /** Forwarded to `HandlerDeps.previewHost` (night-track wave-1 cut §2.8, 96-E preview probes/driver). */
   previewHost?: PreviewHostHandle;
   /**
-   *  M5 (CUT.md M5 scope item 3): forwarded to `HandlerDeps.mdDocDeps`
+   * M5 (CUT.md M5 scope item 3): forwarded to `HandlerDeps.mdDocDeps`
    * — the SAME deps bag `main/index.ts` binds `registerMdDocIpc` with, so the
    * dev-only navigate route below drives `navigateMdDoc` (md-doc.ts) over the
    * identical live `previewHost`, not a second copy of the wiring.
    */
   mdDocDeps?: MdDocDeps;
   /**
-   * Forwarded to `HandlerDeps.persistence` ( S2d D1 `/child-runs`,
+   * Forwarded to `HandlerDeps.persistence` (S2d D1 `/child-runs`,
    * widened by S2d D3 for `/sessions/:id/delete-tree`, CUT-S2 §4.2 п.12).
    * Absent -> both routes degrade to `PERSISTENCE_UNAVAILABLE`, never throw.
    */
@@ -272,7 +272,7 @@ export interface AutomationServerHandle {
 
 const promptBody = z.object({ text: z.string() });
 /**
- *  live-smoke facade extension: only `POST /tabs/:tabId/prompt` gets
+ * live-smoke facade extension: only `POST /tabs/:tabId/prompt` gets
  * `images` — `/start-screen/prompt` and `/queue/prompt` keep the plain
  * `promptBody` above untouched. `images` is a list of ABSOLUTE on-disk paths
  * (never base64 over the wire — handlers.ts's `sendPrompt` reads and encodes
@@ -286,11 +286,11 @@ const permissionBody = z.object({
   requestId: z.string().min(1).optional(),
 });
 const modeBody = z.object({ mode: z.string() });
-//  §3.7 (part B): the Orchestrate toggle's body.
+// §3.7 (part B): the Orchestrate toggle's body.
 const orchestrateBody = z.object({ enabled: z.boolean() });
-//  §3.7 (part B): the named-row click driver's body.
+// §3.7 (part B): the named-row click driver's body.
 const modeMenuRowBody = z.object({ name: z.string() });
-//  §3.9 (part B): the RolePickerDialog preset click body.
+// §3.9 (part B): the RolePickerDialog preset click body.
 const rolePickerPresetBody = z.object({ presetId: z.string() });
 const emptyBody = z.object({}).passthrough();
 const createTabBody = z.discriminatedUnion("kind", [
@@ -298,7 +298,7 @@ const createTabBody = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("resume"),
     sessionId: z.string().min(1),
-    //  W10-FIX F1 (W13 live-dogfood finding): mirrors tab-ipc.ts's own
+    // W10-FIX F1 (W13 live-dogfood finding): mirrors tab-ipc.ts's own
     // `createTabRequestSchema` bounds-only optional re-pin target.
     replacementConnectionId: z.string().min(1).max(128).optional(),
   }),
@@ -344,7 +344,7 @@ const gitIntentBody = z.object({
 });
 const gitPanelBody = z.object({ open: z.boolean() });
 const gitViewBody = z.object({ view: z.enum(["changes", "history", "diff"]) });
-//  `POST /window/size`: bounded int px (400–4000) — the dock
+// `POST /window/size`: bounded int px (400–4000) — the dock
 // smoke's drawer/column threshold legs live inside this range on any display.
 const windowSizeBody = z.object({ width: z.number().int().min(400).max(4000), height: z.number().int().min(400).max(4000) });
 
@@ -369,7 +369,7 @@ const startScreenWorkspaceBody = z.object({ workspace: z.string().min(1).max(409
 const startScreenModelBody = z.object({ model: z.string().min(1).max(256).nullable() }).strict();
 const startScreenProjectMenuBody = z.object({ open: z.boolean() }).strict();
 
-// ── model-menu grouped picker bodies ( cut-1): `open` mirrors
+// ── model-menu grouped picker bodies (cut-1): `open` mirrors
 // startScreenProjectMenuBody's plain binary-toggle shape; `select`'s body
 // carries both axes of the pair (§ above) — `connectionId`/`modelId` bound
 // the same way `queueTabIdBody`'s fields do (a bare non-empty id, no format
@@ -377,7 +377,7 @@ const startScreenProjectMenuBody = z.object({ open: z.boolean() }).strict();
 const startScreenModelMenuBody = z.object({ open: z.boolean() }).strict();
 const startScreenModelMenuSelectBody = z.object({ connectionId: z.string().min(1).max(256), modelId: z.string().min(1).max(256) }).strict();
 
-// ── engine selection body (codex-fixes , cut §3.7): `engineId` is a
+// ── engine selection body (codex-fixes, cut §3.7): `engineId` is a
 // bare string here (not the shared `EngineId` enum) — same "server.ts owns
 // zod, not the shared vocabulary" posture as `skillsNameBody`/`shortcutsActionBody`
 // above; the facade's own `isEngineId` guard is the actual membership check,
@@ -410,18 +410,18 @@ const modelPillPickBody = z.discriminatedUnion("kind", [
 // single binary toggle (unlike the model-pill's multi-kind pick union). ──
 const ctxPopoverOpenBody = z.object({ open: z.boolean() }).strict();
 
-// : the workflow-map toggle body rides the same `{open: boolean}`
+// the workflow-map toggle body rides the same `{open: boolean}`
 // shape as the ctx-popover body above — the map driver is the same kind of
 // idempotent binary (a re-run smoke must not collapse a map it wanted open),
 // with `tabId`/`toolCallId` in the path as everywhere else.
 const workflowMapToggleBody = z.object({ open: z.boolean() }).strict();
 
-//  S2d D1: `tabId` (the ROOT tab whose pane switches) rides in the
+// S2d D1: `tabId` (the ROOT tab whose pane switches) rides in the
 // path (`/tabs/:tabId/child/open`), same posture as the ctx-popover body
 // above — a single required field naming which child.
 const childOpenBody = z.object({ spawnToolCallId: z.string().min(1) }).strict();
 
-// ── replay bodies ( §3.2/§5 S5): `tabId` rides in the path
+// ── replay bodies (§3.2/§5 S5): `tabId` rides in the path
 // (`/tabs/:tabId/replay/*`) for every one of these, same posture as the
 // child-open body above — none of them repeats it in the body. `target`
 // names which timeline (the root tab, or a named child by
@@ -456,7 +456,7 @@ const settingsPermissionRemoveBody = z.object({
   pattern: z.string().max(4096).optional(),
 });
 
-// ── provider connections grid/drawer bodies ( W12): global (app-level)
+// ── provider connections grid/drawer bodies (W12): global (app-level)
 // routes, no `:tabId` segment — same posture as the settings bodies above,
 // the provider pane is not per-tab. `action` mirrors the frozen
 // `ProviderMenuAction` union (automation.ts); every drawer-set field is
@@ -476,12 +476,12 @@ const providerDrawerSetBody = z
     model: z.string().max(256).optional(),
     transport: z.string().max(64).optional(),
     baseUrl: z.string().max(4096).optional(),
-    //  "Max output tokens": a STRING, mirroring what the drawer's own
+    // "Max output tokens": a STRING, mirroring what the drawer's own
     // `<input type="number">` holds — the driver must be able to type a
     // deliberately malformed value ("500", "abc") to exercise the field's
     // client-side refusal, which a `z.number()` here would make untestable.
     maxOutputTokens: z.string().max(32).optional(),
-    //  slice 3: a preset chip is addressed BY LABEL, so the driver
+    // slice 3: a preset chip is addressed BY LABEL, so the driver
     // exercises the chip's own click path instead of the value it happens to
     // write — a chip wired to the wrong number stays visible to a smoke.
     maxOutputTokensPreset: z.string().max(32).optional(),
@@ -550,7 +550,7 @@ const subagentsNameBody = z.object({ name: z.string().min(1).max(64) });
 // not the shared vocabulary" posture as `skillsImportApplyBody.scope` above. ──
 const profilePeriodBody = z.object({ period: z.enum(["today", "7d", "30d", "all"]) }).strict();
 
-// ── Vision pane bodies ( срез E2c): global (app-level) routes, no
+// ── Vision pane bodies (срез E2c): global (app-level) routes, no
 // `:tabId` segment — same posture as the Profile bodies above. `connectionId`
 // shares the same 256-char cap `startScreenModelMenuSelectBody` already uses
 // for the identical field, min 1 (the empty string names no real connection —
@@ -647,12 +647,12 @@ const previewOpenBody = z
   })
   .strict();
 
-//  M3 (CUT.md M3 scope item 7): `/tabs/:tabId/previews/:previewId/container`
+// M3 (CUT.md M3 scope item 7): `/tabs/:tabId/previews/:previewId/container`
 // POST body — a model-free driver for D14 transfer, mirroring
 // PREVIEW_SET_CONTAINER_CHANNEL's own zod enum (panel-ipc.ts) verbatim.
 const previewContainerBody = z.object({ target: z.enum(["panel", "window"]) }).strict();
 
-//  M5 (CUT.md M5 scope item 3): `/tabs/:tabId/previews/:previewId/navigate`
+// M5 (CUT.md M5 scope item 3): `/tabs/:tabId/previews/:previewId/navigate`
 // POST body — a model-free driver for MD_PREVIEW_NAVIGATE, mirroring
 // md-doc-ipc.ts's own `navigateSchema.shape.href` bound verbatim (same 4096
 // cap), needed by the M5 smoke DoD's md->md link-replace leg.
@@ -675,7 +675,7 @@ const codexImportOpenBody = z.object({ open: z.boolean() }).strict();
 const codexImportProfileBody = z.object({ profileId: z.string().min(1).max(64) }).strict();
 const codexImportRolloutBody = z.object({ index: z.number().int().nonnegative().max(500) }).strict();
 const codexImportModelBody = z.object({ model: z.string().min(1).max(256) }).strict();
-//  (CUT-S4.md §3.8): the binary-trust dialog resolve + the
+// (CUT-S4.md §3.8): the binary-trust dialog resolve + the
 // trusted-binaries revoke bodies — same `.strict()` discipline as every
 // other route body above.
 const binaryTrustDialogResolveBody = z.object({ accept: z.boolean() }).strict();
@@ -816,13 +816,13 @@ async function route(
   if (method === "GET" && pathname === "/sessions") {
     return getSessions(deps);
   }
-  //  S2d D1 (CUT-S2 §2.4/§4.1 additive): dev-only maintenance list of
+  // S2d D1 (CUT-S2 §2.4/§4.1 additive): dev-only maintenance list of
   // every DURABLE child-session row — see `listChildRunsMaintenance`'s own
   // doc for how this differs from `/state`'s in-memory `childRuns`.
   if (method === "GET" && pathname === "/child-runs") {
     return listChildRunsMaintenance(deps);
   }
-  //  S2d D3 (CUT-S2 §4.2 п.12): dev-only direct cascade-delete —
+  // S2d D3 (CUT-S2 §4.2 п.12): dev-only direct cascade-delete —
   // see `deleteSessionTreeMaintenance`'s own doc for why this exists (no
   // production delete-session UI yet, CUT-S2 §6 names automation as the
   // interim caller). `parts` shape mirrors `/child-runs` above one level
@@ -859,13 +859,13 @@ async function route(
   if (method === "GET" && parts[0] === "tabs" && parts.length === 3 && parts[2] === "slash-menu") {
     return slashMenuState(deps, decodeURIComponent(parts[1]!));
   }
-  //  / : composer queue-affordance probe — same
+  // /composer queue-affordance probe — same
   // `/tabs/:tabId/<probe>` shape as the model-pill/slash-menu GET routes.
   if (method === "GET" && parts[0] === "tabs" && parts.length === 3 && parts[2] === "composer-queue") {
     return composerQueueState(deps, decodeURIComponent(parts[1]!));
   }
   // Checkpoint timeline probe (design slice-P7.26-R2-ratification.md §1 W3;
-  //  rework — no DOM panel anymore, the facade requests a fresh
+  // rework — no DOM panel anymore, the facade requests a fresh
   // checkpoint list over the tab's send port): same
   // `/tabs/:tabId/<probe>` shape as the model-pill/ctx-popover/
   // slash-menu GET routes above.
@@ -886,12 +886,12 @@ async function route(
   if (method === "GET" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "agent-card") {
     return agentCardState(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
   }
-  // Try-again button probe ( W8-FIX #2): `/tabs/:tabId/try-again-button/:blockId`
+  // Try-again button probe (W8-FIX #2): `/tabs/:tabId/try-again-button/:blockId`
   // — same per-block-scoped GET shape as the agent-card probe above.
   if (method === "GET" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "try-again-button") {
     return tryAgainButtonState(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
   }
-  // Workflow-steps checklist probe ( slice S4): `/tabs/:tabId/agent-card/:toolCallId/workflow-steps`
+  // Workflow-steps checklist probe (slice S4): `/tabs/:tabId/agent-card/:toolCallId/workflow-steps`
   // — one segment deeper than the agent-card GET probe above (a per-card,
   // per-checklist read, not a per-tab singleton), same
   // decodeURIComponent-both-segments posture.
@@ -933,7 +933,7 @@ async function route(
   ) {
     return workflowTicksState(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
   }
-  // Child-layout probe ( S3c, CUT-S3 §6.2): `/tabs/:tabId/child/layout`
+  // Child-layout probe (S3c, CUT-S3 §6.2): `/tabs/:tabId/child/layout`
   // — read-only counterpart of `POST .../child/open` below, same
   // `parts.length === 4` shape as the try-again-button/agent-card GET probes
   // above. Every layout TRANSITION stays a real DOM click in the smoke
@@ -961,7 +961,7 @@ async function route(
   if (method === "GET" && parts[0] === "tabs" && parts.length === 5 && parts[2] === "previews" && parts[4] === "screenshot") {
     return previewScreenshot(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
   }
-  // `POST /tabs/:tabId/previews/:previewId/container {target}` ( M3,
+  // `POST /tabs/:tabId/previews/:previewId/container {target}` (M3,
   // CUT.md M3 scope item 7): D14 transfer driver, same `parts.length === 5`
   // depth as the console/screenshot GET probes above, needed by M5's smoke
   // DoD ("open in window -> back") and this slice's own live verification.
@@ -969,7 +969,7 @@ async function route(
     const body = parseBody(rawBody, previewContainerBody);
     return previewSetContainer(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!), body.target);
   }
-  // `POST /tabs/:tabId/previews/:previewId/navigate {href}` ( M5,
+  // `POST /tabs/:tabId/previews/:previewId/navigate {href}` (M5,
   // CUT.md M5 scope item 3): dev-only driver for MD_PREVIEW_NAVIGATE, same
   // `parts.length === 5` depth as the container route above, needed by M5's
   // smoke DoD ("md->md link replaces").
@@ -980,7 +980,7 @@ async function route(
   if (method === "GET" && pathname === "/start-screen") {
     return startScreenState(deps);
   }
-  // Model-menu grouped picker probe ( cut-1): a DEDICATED route, same
+  // Model-menu grouped picker probe (cut-1): a DEDICATED route, same
   // "GET /start-screen stays byte-untouched" posture as the settings/mcp/skills
   // dedicated-route precedent below — this is a DOM probe of the popover's
   // rendered groups, not a new field on startScreenState's own shape.
@@ -1017,7 +1017,7 @@ async function route(
   if (method === "GET" && pathname === "/settings/subagents") {
     return subagentsPaneState(deps);
   }
-  // : the Settings scope dropdown probe — a DEDICATED read-only route;
+  // the Settings scope dropdown probe — a DEDICATED read-only route;
   // `GET /settings` and the pane probes above stay byte-untouched.
   if (method === "GET" && pathname === "/settings/scope") {
     return scopeState(deps);
@@ -1029,13 +1029,13 @@ async function route(
   if (method === "GET" && pathname === "/settings/profile") {
     return profilePaneState(deps);
   }
-  // Vision pane probe ( срез E2c): a DEDICATED route — every prior
+  // Vision pane probe (срез E2c): a DEDICATED route — every prior
   // `/settings*` probe above stays byte-untouched (§4 custody), same "own
   // probe, no widening" posture as the Profile pane probe.
   if (method === "GET" && pathname === "/settings/vision") {
     return visionPaneState(deps);
   }
-  // Settings geometry probe ( S5): a DEDICATED route — every prior
+  // Settings geometry probe (S5): a DEDICATED route — every prior
   // `/settings*` probe above stays byte-untouched, same "own probe, no
   // widening" posture. Not pane-scoped on purpose: `.settings-pane` is the
   // scroll port of every pane, so one reading covers all fourteen.
@@ -1070,7 +1070,7 @@ async function route(
   if (method === "GET" && pathname === "/settings/shortcuts") {
     return shortcutsPaneState(deps);
   }
-  // Provider connections pane probe ( W12): a DEDICATED route — every
+  // Provider connections pane probe (W12): a DEDICATED route — every
   // prior `/settings*` probe above stays byte-untouched (§4 custody), same
   // "own probe, no widening" posture as the Profile/Shortcuts pane probes.
   if (method === "GET" && pathname === "/settings/provider") {
@@ -1095,7 +1095,7 @@ async function route(
   if (method === "GET" && pathname === "/start-screen/codex-profile") {
     return codexProfileChipState(deps);
   }
-  // Generic focus probe ( W12-smoke): a DEDICATED route — no pane
+  // Generic focus probe (W12-smoke): a DEDICATED route — no pane
   // above is widened to carry this, `document.activeElement` is shell-level,
   // not owned by any one pane/screen.
   if (method === "GET" && pathname === "/focus") {
@@ -1156,7 +1156,7 @@ async function route(
     const body = parseBody(rawBody, startScreenModelBody);
     return startScreenSetModel(deps, body.model);
   }
-  // Engine selection (codex-fixes , cut §3.7): mirrors the SAME
+  // Engine selection (codex-fixes, cut §3.7): mirrors the SAME
   // tabs-store `setDraftEngine` draft action the (future) start-screen engine
   // picker will call, through the facade's thin wrapper — no second path.
   // Read-back rides GET /start-screen (`engine`/`availableEngines`), same
@@ -1169,7 +1169,7 @@ async function route(
     const body = parseBody(rawBody, startScreenProjectMenuBody);
     return startScreenToggleProjectMenu(deps, body.open);
   }
-  // Model-menu grouped picker driver ( cut-1): mirrors the
+  // Model-menu grouped picker driver (cut-1): mirrors the
   // project-menu driver above one for one — `/model-menu` toggles the
   // popover open/closed, `/model-menu/select` drives a real click on the
   // row matching {connectionId, modelId} (auto-opening the popover first if
@@ -1229,7 +1229,7 @@ async function route(
     const body = parseBody(rawBody, settingsPermissionRemoveBody);
     return settingsPermissionRemove(deps, body.toolName, body.pattern);
   }
-  // Provider connections grid/drawer routes ( W12): mirror the SAME DOM
+  // Provider connections grid/drawer routes (W12): mirror the SAME DOM
   // paths ConnectionTile/ConnectionDrawer themselves use (the "+ Add
   // connection" tile, a tile's select button, its overflow menu's four
   // actions, the drawer's own fields/buttons), through the facade's thin
@@ -1284,13 +1284,13 @@ async function route(
     parseBody(rawBody, emptyBody);
     return codexPaneRefreshManifest(deps);
   }
-  //  (D-S4-6/D-S4-8): a real click on the pane's own "Trust this
+  // (D-S4-6/D-S4-8): a real click on the pane's own "Trust this
   // binary…" button — opens BinaryTrustDialog.tsx, no other IPC.
   if (method === "POST" && pathname === "/settings/codex/trust") {
     parseBody(rawBody, emptyBody);
     return codexPaneTrustOpen(deps);
   }
-  //  (CUT-S4.md §3.8): the binary-trust consent dialog probe/driver —
+  // (CUT-S4.md §3.8): the binary-trust consent dialog probe/driver —
   // GET reads the real `<dialog>`'s state, POST fires a real click on
   // Accept (`accept:true`) or Cancel (`accept:false`).
   if (method === "GET" && pathname === "/settings/binary-trust-dialog") {
@@ -1300,7 +1300,7 @@ async function route(
     const body = parseBody(rawBody, binaryTrustDialogResolveBody);
     return binaryTrustDialogResolve(deps, body.accept);
   }
-  //  (D-S4-7): the Permissions pane's "Trusted binaries" section
+  // (D-S4-7): the Permissions pane's "Trusted binaries" section
   // probe/driver — GET reads the rendered rows, POST fires a real click on
   // the named row's Revoke button.
   if (method === "GET" && pathname === "/settings/trusted-binaries") {
@@ -1424,14 +1424,14 @@ async function route(
     parseBody(rawBody, emptyBody);
     return profileRefresh(deps);
   }
-  //  S5: the footer's cache-rebuild gesture. Unary like the routes
+  // S5: the footer's cache-rebuild gesture. Unary like the routes
   // above — the facade drives BOTH steps of the in-pane arm/confirm pair, so
   // there is no "arm" route to call separately and no body to send.
   if (method === "POST" && pathname === "/settings/profile/rebuild") {
     parseBody(rawBody, emptyBody);
     return profileRebuild(deps);
   }
-  // Vision pane routes ( срез E2c): mirror the SAME DOM paths
+  // Vision pane routes (срез E2c): mirror the SAME DOM paths
   // VisionPane.tsx itself uses (the connection `<select>`, the model
   // `<input>`, Save/Probe, and the "Turn off" -> "Really turn off?" two-step
   // gesture), through the facade's thin wrappers — no second path.
@@ -1532,14 +1532,14 @@ async function route(
       }
       case "mode":
         return setMode(deps, tabId, parseBody(rawBody, modeBody).mode);
-      //  §3.7 (part B): the Orchestrate row's driver — same
+      // §3.7 (part B): the Orchestrate row's driver — same
       // `{tabId,…}` body discipline as "mode" above, through the facade's
       // `setOrchestrate` (one wire message: set_orchestrate).
       case "orchestrate": {
         const body = parseBody(rawBody, orchestrateBody);
         return setOrchestrate(deps, tabId, body.enabled);
       }
-      //  §3.7 (part B): read-only ModeMenu popover probe (the
+      // §3.7 (part B): read-only ModeMenu popover probe (the
       // smoke asserts the rendered rows — five modes + Orchestrate — and
       // their checked state).
       case "mode-menu":
@@ -1658,7 +1658,7 @@ async function route(
     const body = parseBody(rawBody, composerKeyBody);
     return composerKey(deps, tabId, body.key);
   }
-  //  §3.7 (part B): ModeMenu popover DOM click drivers — same
+  // §3.7 (part B): ModeMenu popover DOM click drivers — same
   // `parts.length === 4` shape as the slash-menu routes above; the smoke's
   // Orchestrate toggle goes through the REAL rendered row, not a store poke.
   if (method === "POST" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "mode-menu" && parts[3] === "click-chip") {
@@ -1671,7 +1671,7 @@ async function route(
     const body = parseBody(rawBody, modeMenuRowBody);
     return modeMenuClickRow(deps, tabId, body.name);
   }
-  //  §3.9 (part B): RolePickerDialog probe + drivers — same
+  // §3.9 (part B): RolePickerDialog probe + drivers — same
   // shape as the mode-menu routes above.
   if (method === "POST" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "role-picker" && parts[3] === "state") {
     const tabId = decodeURIComponent(parts[1]!);
@@ -1693,7 +1693,7 @@ async function route(
     parseBody(rawBody, emptyBody);
     return rolePickerClickSkip(deps, tabId);
   }
-  //  S2d D1 (CUT-S2 §4.2 п.5): `/tabs/:tabId/child/open` — same
+  // S2d D1 (CUT-S2 §4.2 п.5): `/tabs/:tabId/child/open` — same
   // `parts.length === 4` shape as the slash-menu routes above, just with
   // `child`/`open` in the `parts[2]`/`parts[3]` slots.
   if (method === "POST" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "child" && parts[3] === "open") {
@@ -1701,14 +1701,14 @@ async function route(
     const body = parseBody(rawBody, childOpenBody);
     return childOpen(deps, tabId, body.spawnToolCallId);
   }
-  //  S8.3: `/tabs/:tabId/child/close` — the write-side counterpart of
+  // S8.3: `/tabs/:tabId/child/close` — the write-side counterpart of
   // `child/open` above, one route family, same shape; no body (which child is
   // open is the tab's own state, not the caller's to name).
   if (method === "POST" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "child" && parts[3] === "close") {
     parseBody(rawBody, emptyBody);
     return childCloseClick(deps, decodeURIComponent(parts[1]!));
   }
-  //  S9.4: `/tabs/:tabId/child/split` — same route family and same
+  // S9.4: `/tabs/:tabId/child/split` — same route family and same
   // no-body shape as `child/close` above, entering the split layout instead
   // of leaving the child pane. It exists so a smoke can reach the layout in
   // which an exhausted child releases the root by itself.
@@ -1716,7 +1716,7 @@ async function route(
     parseBody(rawBody, emptyBody);
     return childSplitClick(deps, decodeURIComponent(parts[1]!));
   }
-  // Dev-only host-kill lever ( FIX-A): `/tabs/:tabId/host/kill` — same
+  // Dev-only host-kill lever (FIX-A): `/tabs/:tabId/host/kill` — same
   // `parts.length === 4` shape as the model-pill pick / ctx-popover open /
   // slash-menu routes above, forces the tab's real host child to exit so the
   // existing crash-respawn machinery (tabs.ts) runs for a discriminating
@@ -1756,7 +1756,7 @@ async function route(
     parseBody(rawBody, emptyBody);
     return agentCardCollapse(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
   }
-  // Try-again button click driver ( W8-FIX #2):
+  // Try-again button click driver (W8-FIX #2):
   // `/tabs/:tabId/try-again-button/:blockId/click` — one segment deeper than
   // the try-again-button GET probe above, same `parts.length === 5` shape as
   // the agent-card expand route. Fires a REAL DOM click on the button, not
@@ -1772,7 +1772,7 @@ async function route(
     parseBody(rawBody, emptyBody);
     return tryAgainButtonClick(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
   }
-  // Workflow-step click driver ( slice S4):
+  // Workflow-step click driver (slice S4):
   // `/tabs/:tabId/agent-card/:toolCallId/workflow-steps/:stepId/click` — one
   // segment deeper than the workflow-steps GET probe above (which is itself
   // one segment deeper than the agent-card GET probe), same
@@ -1816,13 +1816,13 @@ async function route(
     return workflowMapToggle(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!), body.open);
   }
 
-  // Replay driver + probe ( §3.2/§5 S5, for scenario smoke): the
+  // Replay driver + probe (§3.2/§5 S5, for scenario smoke): the
   // read-only probe sits at `/tabs/:tabId/replay` itself (`parts.length ===
   // 3`, same depth as `/tabs/:tabId/checkpoints`/`/rewind` above); every
   // action is one segment deeper (`parts.length === 4`, `parts[2] ===
   // "replay"`), same shape as the child/host-kill routes above with
   // `parts[3]` naming the action. `tabId` is decoded and FORWARDED for every
-  // action route below ( S8.1): until S8 only `replayArm` used it and
+  // action route below (S8.1): until S8 only `replayArm` used it and
   // the rest acted on "whatever is armed", which made a stale id in the URL a
   // hijack — a `disarm` for a dead tab tore down a live tab's replay (§11
   // finding B). The GET probe alone still ignores it: one pult, one global

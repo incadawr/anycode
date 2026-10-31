@@ -1,5 +1,5 @@
 /**
- * PreviewHost (night-track wave-1 cut §2.5,  96-A, the keystone slice):
+ * PreviewHost (night-track wave-1 cut §2.5, 96-A, the keystone slice):
  * owns every live "browser preview" window for every tab, the security
  * invariants that make loading an agent-authored HTML/markdown file or a
  * localhost/remote URL safe in a real BrowserWindow, and the main-side half
@@ -73,7 +73,7 @@
 import { randomUUID } from "node:crypto";
 import { basename, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-// M4 ( CUT.md GAP 2): the single source of truth for the dom-md
+// M4 (CUT.md GAP 2): the single source of truth for the dom-md
 // read cap — reused, not re-declared, so `readForTab`'s dom-md branch and
 // md-doc.ts's own MD_PREVIEW_READ handler (the renderer's Reload channel)
 // can never drift apart. md-doc.ts is itself Electron-free (node:path
@@ -118,7 +118,7 @@ export interface PreviewCapturedImage {
 export interface PreviewWebContentsLike {
   loadURL(url: string): Promise<void>;
   /**
-   *  stage 4 live-reload: reverts the page to its current URL's
+   * stage 4 live-reload: reverts the page to its current URL's
    * on-disk bytes (`wc.reload()` in the adapter); the subsequent
    * did-finish-load settles the record "ready" exactly like an ordinary load.
    */
@@ -173,17 +173,17 @@ export interface PreviewWebContentsLike {
    */
   restoreNavigationHistory(state: { entries: Array<{ url: string; title: string }>; index: number }): Promise<void>;
   /**
-   * : Chromium DevTools protocol access for the browser-control
+   * Chromium DevTools protocol access for the browser-control
    * driver. The adapter reuses the single `debugger.attach("1.3")` that
    * pageerror capture already performs; `send` re-attaches once if the debugger
    * was detached and rejects with an Error when that is impossible.
    */
   cdp: PreviewCdpLike;
-  /** : back (-1) / forward (+1) through the history (`navigationHistory.goToOffset`). */
+  /** back (-1) / forward (+1) through the history (`navigationHistory.goToOffset`). */
   goToOffset(offset: -1 | 1): Promise<void>;
 }
 
-/** : the narrow CDP surface the browser-control driver is allowed to use. */
+/** the narrow CDP surface the browser-control driver is allowed to use. */
 export interface PreviewCdpLike {
   send(method: string, params?: object): Promise<unknown>;
   onEvent(listener: (method: string, params: unknown) => void): void;
@@ -201,7 +201,7 @@ export interface PreviewWindowLike {
 }
 
 /**
- * Panel extension over the existing seam (panel-track CUT.md §2.2, 
+ * Panel extension over the existing seam (panel-track CUT.md §2.2,
  * 96-P1). `PreviewWindowLike` above is UNCHANGED; a panel container
  * implements it plus this. `show()`/`showInactive()` map to `setVisible(true)`
  * in the adapter (panel-adapter.ts) — the host's panel paths never call them
@@ -215,7 +215,7 @@ export interface PreviewPanelViewLike extends PreviewWindowLike {
 }
 
 /**
- * M1 ( CUT.md CONTRACTS): the slim window-like surface a dom-md
+ * M1 (CUT.md CONTRACTS): the slim window-like surface a dom-md
  * "Open in window" container will need — declared now so `MdDomPreviewRecord`
  * can carry a typed `mdWindow?` field, but nothing constructs one until M3
  * wires `PreviewHostDeps.createMdWindow` (`md-window-adapter.ts`). Deliberately
@@ -232,7 +232,7 @@ export interface MdPreviewWindowLike {
   capturePage(): Promise<PreviewCapturedImage>;
   setBackgroundThrottling(enabled: boolean): void;
   /**
-   *  slice G: the window's content area size in DIP (CSS px) —
+   * slice G: the window's content area size in DIP (CSS px) —
    * Electron's `BrowserWindow.getContentSize()` already returns device-
    * independent pixels, so no further conversion is needed at the call site.
    * Optional (unlike every other member here) so that `preview-host.test.ts`'s
@@ -279,7 +279,7 @@ export interface PreviewHostDeps {
   /** Live read of the persisted auto-open setting (cut §1(e)/§2.7; default ON). */
   autoOpenEnabled(): boolean;
   /**
-   * Live read of `settings.preview?.liveReload ?? true` (, stage
+   * Live read of `settings.preview?.liveReload ?? true` (stage
    * 4): whether a file-backed preview reverts to on-disk bytes automatically
    * when its artifact file changes on disk. Live read (not boot-time), same
    * posture as autoOpenEnabled above — a SettingsScreen toggle takes effect
@@ -287,7 +287,7 @@ export interface PreviewHostDeps {
    */
   liveReloadEnabled(): boolean;
   /**
-   *  stage 4: watch ONE file for the live-reload loop. Bound at
+   * stage 4: watch ONE file for the live-reload loop. Bound at
    * the wiring site (main/index.ts) to `fs.watch` — a raw dep so
    * preview-host.test.ts drives change/rename/error events from a
    * hand-written fake, no real fs and no chokidar. REQUIRED for exactly one
@@ -308,7 +308,7 @@ export interface PreviewHostDeps {
   /** Real `WebContentsView`-backed container (panel-adapter.ts's `createElectronPanelView`), injected the same way `createWindow` is. */
   createPanelView(opts: CreateWindowOpts): PreviewPanelViewLike;
   /**
-   * M3 ( CUT.md CONTRACTS): a second real `BrowserWindow` loading the
+   * M3 (CUT.md CONTRACTS): a second real `BrowserWindow` loading the
    * SAME trusted renderer bundle under a `?view=md-preview` query route
    * (`main/preview/md-window-adapter.ts`'s `createMdPreviewWindow`) —
    * renderer-URL/query construction is closed over at the wiring site
@@ -317,7 +317,7 @@ export interface PreviewHostDeps {
    */
   createMdWindow(opts: { previewId: string; tabId: string }): MdPreviewWindowLike;
   /**
-   * M4 ( CUT.md GAP 2): stats a dom-md preview's freshly-resolved
+   * M4 (CUT.md GAP 2): stats a dom-md preview's freshly-resolved
    * REALPATH for BrowserRead's re-read — bound (main/index.ts) to the SAME
    * `fsStat` primitive md-doc.ts's own `MdDocDeps.stat` uses for the
    * renderer's MD_PREVIEW_READ channel (one fs implementation, two binding
@@ -336,7 +336,7 @@ export interface PreviewHostDeps {
    */
   readMdSourceNoFollow(realPath: string): Promise<Buffer>;
   /**
-   * M4 ( CUT.md GAP 2): `capturePage(rect)` of the MAIN window — NOT a
+   * M4 (CUT.md GAP 2): `capturePage(rect)` of the MAIN window — NOT a
    * preview's own container — for a panel-container dom-md screenshot. A
    * dom-md record owns no `webContents`/container of its own in a panel
    * (CUT.md CONTRACTS: "no panelView"), so the only way to capture its
@@ -353,7 +353,7 @@ export interface PreviewHostDeps {
    */
   displayMode(): "panel" | "window";
   /**
-   * : live "Full browser access" read for a tab. Absent = always
+   * live "Full browser access" read for a tab. Absent = always
    * off (every interaction needs the approval path). Read at decision time
    * only, never cached on a record (Phase B wires the real store).
    */
@@ -374,9 +374,9 @@ export interface PreviewSummary {
   dropped: number;
   /** panel-track CUT.md §3 96-P4 gate fix: which container this preview lives in (panel vs window) — was missing from the 96-E automation probe shape, so a 96-P4 smoke could never assert on it. */
   container: PreviewContainerKind;
-  /** M1 ( CUT.md CONTRACTS): which record kind this is — 96-E probes assert on it. */
+  /** M1 (CUT.md CONTRACTS): which record kind this is — 96-E probes assert on it. */
   viewKind: "web" | "dom-md";
-  /** M5 ( CUT.md M5 smoke DoD): dom-md refetch key, absent for "web" — lets an automation probe assert a NAVIGATE mutation actually propagated to the live record, not just echoed back by the navigate call itself. */
+  /** M5 (CUT.md M5 smoke DoD): dom-md refetch key, absent for "web" — lets an automation probe assert a NAVIGATE mutation actually propagated to the live record, not just echoed back by the navigate call itself. */
   docVersion?: number;
 }
 
@@ -488,7 +488,7 @@ const BASE_WINDOW_X = 96;
 const BASE_WINDOW_Y = 96;
 /** Chromium's `-3` `ERR_ABORTED`: superseded by a subsequent navigation (e.g. our own reuse-navigate) — never a real failure on its own. */
 const ERR_ABORTED = -3;
-/** : coalesce a burst of save-events into one reload (editors write 1-3 events per save). */
+/** coalesce a burst of save-events into one reload (editors write 1-3 events per save). */
 export const LIVE_RELOAD_DEBOUNCE_MS = 150;
 /** Hard cap on any page-controlled string crossing into main (cut §1.3/F3): bounded BEFORE the structured clone leaves the page (in-script `.slice`), and re-enforced main-side in case a hostile page monkey-patches its own DOM getters to dodge that cap. */
 export const READ_RESULT_MAX_CHARS = 200_000;
@@ -550,25 +550,25 @@ interface WebPreviewRecord {
   settleWaiters: Array<() => void>;
   destroyed: boolean;
   /**
-   *  stage 4: the live-reload watcher for this record's
+   * stage 4: the live-reload watcher for this record's
    * `realSourcePath` (file-backed records only — `kind:"file"` web records
    * and every dom-md record). Undefined while disarmed (setting off, error
    * degradation, or a not-yet-armed fresh record); `armWatcher`/
    * `disarmWatcher` are the only mutators.
    */
   watch?: { path: string; handle: { close(): void }; timer?: ReturnType<typeof setTimeout>; renamed?: boolean };
-  /** : bumped on every main-frame navigation; refs minted under an older epoch are stale. */
+  /** bumped on every main-frame navigation; refs minted under an older epoch are stale. */
   navEpoch: number;
-  /** : lazily created browser-control driver for this record (dropped on destroy). */
+  /** lazily created browser-control driver for this record (dropped on destroy). */
   controller?: BrowserController;
-  /** : serializes control actions on this record (no interleaved clicks). */
+  /** serializes control actions on this record (no interleaved clicks). */
   controlQueue: Promise<unknown>;
   /** Panel records only: what the last `applyPanel()` decided (view shown with real bounds). Window records are always "shown". */
   panelShown: boolean;
 }
 
 /**
- * M1/M3 ( CUT.md CONTRACTS): a `.md` preview rendered natively in the
+ * M1/M3 (CUT.md CONTRACTS): a `.md` preview rendered natively in the
  * renderer's own DOM (chat's `Markdown.tsx`, reused) — owns no `PreviewWindowLike`/
  * `PreviewWebContentsLike` at all in a panel container (nothing to secure:
  * there is no executeJavaScript/capturePage surface, no `webContents`,
@@ -600,7 +600,7 @@ interface MdDomPreviewRecord {
   createdAt: number;
   lastOpenedAt: number;
   destroyed: boolean;
-  /**  stage 4: same live-reload watcher shape as the web record — every dom-md record is file-backed. */
+  /** stage 4: same live-reload watcher shape as the web record — every dom-md record is file-backed. */
   watch?: { path: string; handle: { close(): void }; timer?: ReturnType<typeof setTimeout>; renamed?: boolean };
 }
 
@@ -629,7 +629,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- *  slice G: narrows an arbitrary size-shaped value to a CSS viewport
+ * slice G: narrows an arbitrary size-shaped value to a CSS viewport
  * size that can actually be used.
  *
  * The CSS size is only ever consumed as a DIVISOR — `vision/recognizer.ts`'s
@@ -871,7 +871,7 @@ class PreviewHost implements PreviewHostHandle {
         }
       }
       if (existing !== undefined && existing.viewKind === "dom-md") {
-        //  stage 4: the map entry below REPLACES this record —
+        // stage 4: the map entry below REPLACES this record —
         // disarm its artifact watcher so no FSWatcher outlives its record
         // (its scheduleLiveReload liveness guard would no-op anyway).
         this.disarmWatcher(existing);
@@ -950,7 +950,7 @@ class PreviewHost implements PreviewHostHandle {
         record.errorMessage ?? "preview failed to load",
       );
     }
-    //  stage 4: the record is now live AND settled — arm the
+    // stage 4: the record is now live AND settled — arm the
     // artifact watcher (no-op for localhost/remote: no file to watch). Reuse-
     // navigate is covered here too: armWatcher re-arms on the NEW realpath.
     this.armWatcher(record);
@@ -971,7 +971,7 @@ class PreviewHost implements PreviewHostHandle {
   }
 
   /**
-   * M1/M3 ( CUT.md Gap 3 + CONTRACTS): a `.md` open/reuse-navigate
+   * M1/M3 (CUT.md Gap 3 + CONTRACTS): a `.md` open/reuse-navigate
    * never touches a `PreviewWindowLike` (the old tmpdir HTML-render pipeline
    * was deleted outright in M5 — CUT.md Gap 3) — it
    * settles SYNCHRONOUSLY once containment resolves, tolerating a
@@ -1017,7 +1017,7 @@ class PreviewHost implements PreviewHostHandle {
             this.deps.logger.warn(`[preview] failed to destroy old container for ${existing.previewId} during md flip`, error);
           }
         }
-        //  stage 4: same disarm-before-replace rationale as
+        // stage 4: same disarm-before-replace rationale as
         // openWebTarget's own dom-md->web flip — no FSWatcher may outlive
         // the record whose map entry is about to be replaced.
         this.disarmWatcher(existing);
@@ -1041,7 +1041,7 @@ class PreviewHost implements PreviewHostHandle {
       this.visiblePanelPreviewId.set(tabId, record.previewId);
       this.applyPanel();
     }
-    //  stage 4: ONE arm call covers both branches above (reuse-
+    // stage 4: ONE arm call covers both branches above (reuse-
     // navigate re-pointed at the new realpath, brand-new record's first
     // arm) — every dom-md record is file-backed by construction.
     this.armWatcher(record);
@@ -1104,7 +1104,7 @@ class PreviewHost implements PreviewHostHandle {
       );
     }
     if (record.viewKind === "dom-md") {
-      // M4 ( CUT.md GAP 2): a dom-md preview has no page to run
+      // M4 (CUT.md GAP 2): a dom-md preview has no page to run
       // `executeJavaScript` against, so a selector op can never be
       // fulfilled — an honest, explicit refusal rather than a silent
       // no-match. Wording is CUT-mandated verbatim.
@@ -1188,7 +1188,7 @@ class PreviewHost implements PreviewHostHandle {
   }
 
   /**
-   * M4 ( CUT.md GAP 2): re-reads a LIVE dom-md record's CURRENT
+   * M4 (CUT.md GAP 2): re-reads a LIVE dom-md record's CURRENT
    * source for BrowserRead — SAME custody as md-doc.ts's own MD_PREVIEW_READ
    * handler (fresh containment via `deps.resolveArtifact` — the identical
    * dep `resolveFileTarget`/`openMarkdownTarget` already use for the web/md
@@ -1420,7 +1420,7 @@ class PreviewHost implements PreviewHostHandle {
         }
       }
       const { width, height } = image.getSize();
-      //  slice G (Decision 3): capturePage() captures the visible
+      // slice G (Decision 3): capturePage() captures the visible
       // viewport only, never the full scrollable page, so window.inner{Width,
       // Height} — the CSS-px size of that SAME visible region — pairs
       // correctly with the pixel size just captured above. A future
@@ -1457,7 +1457,7 @@ class PreviewHost implements PreviewHostHandle {
   }
 
   /**
-   *  slice G helper: best-effort CSS viewport read shared by the web
+   * slice G helper: best-effort CSS viewport read shared by the web
    * preview screenshot leg. Never throws — any executeJavaScript rejection
    * (unresponsive page, mid-navigation, destroyed webContents) or a
    * malformed/non-numeric result degrades to `undefined`, which callers treat
@@ -1477,7 +1477,7 @@ class PreviewHost implements PreviewHostHandle {
   }
 
   /**
-   * M4 ( CUT.md GAP 2), window-container leg: the md window's own
+   * M4 (CUT.md GAP 2), window-container leg: the md window's own
    * `MdPreviewWindowLike` IS a real captureable surface (unlike the panel
    * leg below) — `showInactive()` + `setBackgroundThrottling(false)` +
    * `capturePage()`, mirroring the web window branch's semantics above
@@ -1501,7 +1501,7 @@ class PreviewHost implements PreviewHostHandle {
         image = await win.capturePage();
       }
       const { width, height } = image.getSize();
-      //  slice G: getContentSize() is optional on the interface (see
+      // slice G: getContentSize() is optional on the interface (see
       // its doc comment) and best-effort here too, guarded the same way as
       // the web-preview leg — a window mid-teardown between the
       // isDestroyed() check above and this call must not fail the
@@ -1532,7 +1532,7 @@ class PreviewHost implements PreviewHostHandle {
   }
 
   /**
-   * M4 ( CUT.md GAP 2), panel-container leg: a dom-md panel record
+   * M4 (CUT.md GAP 2), panel-container leg: a dom-md panel record
    * owns no `webContents`/`panelView` of its own (CUT.md CONTRACTS) — the
    * only capture surface is `deps.captureMainWindowRect(rect)`, a rect-scoped
    * capture of the MAIN window over the host's own current `panelBounds`.
@@ -1586,7 +1586,7 @@ class PreviewHost implements PreviewHostHandle {
       return this.fail("unavailable", HIDDEN_REFUSAL);
     }
     const { width, height } = image.getSize();
-    //  slice G: `bounds` (shared/preview-panel.ts's PreviewPanelBounds)
+    // slice G: `bounds` (shared/preview-panel.ts's PreviewPanelBounds)
     // is already documented as "panel body rect in CSS px" — the exact rect
     // `captureMainWindowRect` just captured — so it is the CSS-px pairing for
     // this capture with no extra read needed, unlike the other two legs.
@@ -1702,7 +1702,7 @@ class PreviewHost implements PreviewHostHandle {
   }
 
   /**
-   * Live "Full browser access" read for a tab ( amendment). Read at
+   * Live "Full browser access" read for a tab (amendment). Read at
    * every decision point, never cached on a record.
    */
   private fullAccessFor(tabId: string): boolean {
@@ -1837,7 +1837,7 @@ class PreviewHost implements PreviewHostHandle {
     if (record.destroyed) {
       return;
     }
-    //  stage 4: disarm the live-reload watcher FIRST — runs for
+    // stage 4: disarm the live-reload watcher FIRST — runs for
     // web close, md close, tab close, closeAll, setContainer old-container
     // teardown, and the onClosed path alike (one copy, all teardown routes).
     this.disarmWatcher(record);
@@ -2133,7 +2133,7 @@ class PreviewHost implements PreviewHostHandle {
       record.window.show();
     }
 
-    //  stage 4: a transferred-in preview keeps its artifact file
+    // stage 4: a transferred-in preview keeps its artifact file
     // — re-arm on the record's unchanged realpath (no-op if still armed for
     // it; the OLD container owns no watcher of its own, so no double-watch).
     this.armWatcher(record);
@@ -2142,7 +2142,7 @@ class PreviewHost implements PreviewHostHandle {
   }
 
   /**
-   * M3 ( CUT.md CONTRACTS, GAP 1): the dom-md half of D14 transfer —
+   * M3 (CUT.md CONTRACTS, GAP 1): the dom-md half of D14 transfer —
    * simpler than the web path's `setContainer` body because a dom-md record
    * has no `webContents`/navigation history to capture-and-restore and
    * settles synchronously (no `waitForSettle`). `panel->window` creates the
@@ -2170,7 +2170,7 @@ class PreviewHost implements PreviewHostHandle {
       }
       this.applyPanel();
       record.mdWindow.show();
-      //  stage 4: the record keeps its artifact file across the
+      // stage 4: the record keeps its artifact file across the
       // transfer — re-arm on the unchanged realpath (no-op if still armed).
       this.armWatcher(record);
       this.pushChanged(tabId);
@@ -2195,7 +2195,7 @@ class PreviewHost implements PreviewHostHandle {
     // (mirrors the web path's own container === "panel" branch).
     this.visiblePanelPreviewId.set(tabId, record.previewId);
     this.applyPanel();
-    //  stage 4: same re-arm-on-transfer rationale as the window
+    // stage 4: same re-arm-on-transfer rationale as the window
     // branch above — the artifact file never changed.
     this.armWatcher(record);
     this.pushChanged(tabId);
@@ -2203,7 +2203,7 @@ class PreviewHost implements PreviewHostHandle {
   }
 
   /**
-   *  stage 4 live-reload (96-R): arm the artifact watcher for a
+   * stage 4 live-reload (96-R): arm the artifact watcher for a
    * record whose bytes live on disk. File-backed records only (`realSourcePath`
    * defined, `kind:"file"` for web records — localhost/remote URLs have no
    * artifact file). No-op when liveReloadEnabled() is false or a watcher is
@@ -2481,7 +2481,7 @@ class PreviewHost implements PreviewHostHandle {
   // ── md doc navigate commit (M2: md-doc.ts's navigate handler closes over this) ──
 
   /**
-   * M2 ( CUT.md CONTRACTS): mutates a LIVE dom-md record in place —
+   * M2 (CUT.md CONTRACTS): mutates a LIVE dom-md record in place —
    * replace semantics, no history stack. Called ONLY after `navigateMdDoc`'s
    * own fresh containment/read has already succeeded, so this method itself
    * does no validation beyond re-confirming the record is still the SAME
@@ -2510,7 +2510,7 @@ class PreviewHost implements PreviewHostHandle {
     record.renderedFrom = fields.sourcePath;
     record.docVersion += 1;
     record.lastOpenedAt = this.now();
-    //  stage 4: realpath changed -> re-arm on the NEW file; same
+    // stage 4: realpath changed -> re-arm on the NEW file; same
     // path -> no-op (armWatcher's own same-path short-circuit).
     this.armWatcher(record);
     this.pushChanged(tabId);
@@ -2675,7 +2675,7 @@ class PreviewHost implements PreviewHostHandle {
     // (subframes, images, scripts, fetch/XHR, WebSocket) that will-navigate
     // never sees, and every redirect hop besides.
     wc.setRequestGate(this.makeRequestGate(record));
-    // : refs die on a main-frame navigation (Page.frameNavigated
+    // refs die on a main-frame navigation (Page.frameNavigated
     // without parentId; subframe navigations leave them valid) and on a
     // debugger detach. Page.enable is sent lazily by the controller, so an
     // untouched preview keeps today's attach behaviour.
@@ -2716,7 +2716,7 @@ class PreviewHost implements PreviewHostHandle {
   }
 
   /**
-   * M3 ( CUT.md CONTRACTS): wires a freshly-created `mdWindow`'s ONE
+   * M3 (CUT.md CONTRACTS): wires a freshly-created `mdWindow`'s ONE
    * listener — a native/user-initiated close (red-x, Cmd+W, `window.close()`
    * from the renderer's own header Close button) destroys the record,
    * mirroring `wireWindow`'s own `onClosed`-driven cleanup for a web record

@@ -1,5 +1,5 @@
 /**
- * Main-owned per-session Sessions API switch ( owner amendment).
+ * Main-owned per-session Sessions API switch (owner amendment).
  * The unit of exposure is the SESSION: only sessions switched on appear in
  * `list_sessions` and accept messages. State is keyed by the durable sessionId
  * (so it survives restart and resume), stored in a 0600 file beside the

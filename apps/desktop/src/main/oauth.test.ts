@@ -16,7 +16,7 @@ import { hostForkProxyChain } from "../shared/proxy.js";
 import type { AnycodeSettings } from "../shared/settings.js";
 import type { OAuthTokenBlob } from "./vault.js";
 
-/** In-memory OAuthTokenStore: records what the engine persists (keyed by CONNECTION id,  §4.3). */
+/** In-memory OAuthTokenStore: records what the engine persists (keyed by CONNECTION id, §4.3). */
 class FakeStore implements OAuthTokenStore {
   saved: Array<{ connectionId: string; blob: OAuthTokenBlob; allowWeak: boolean }> = [];
   setResult: { ok: boolean } = { ok: true };
@@ -142,7 +142,7 @@ describe("OAuthEngine.startFlow — happy path (fake-IdP + simulated browser)", 
     expect(body.client_secret).toBeUndefined();
 
     // The persisted blob carries the tokens + a computed expiry, keyed by the
-    // CONNECTION id threaded from settings-ipc ( §4.3), NOT the providerId.
+    // CONNECTION id threaded from settings-ipc (§4.3), NOT the providerId.
     expect(store.saved).toHaveLength(1);
     expect(store.saved[0]?.connectionId).toBe("conn-acme");
     expect(store.saved[0]?.blob).toEqual({
@@ -481,7 +481,7 @@ describe("oauthConfigFromEntry", () => {
   });
 });
 
-// ── : the production proxy helper inside the real flow (only the
+// ── the production proxy helper inside the real flow (only the
 // Electron net boundary is faked) ──
 
 function proxiedSettings(connectionId: string, over: { proxyUrl?: string } = {}): AnycodeSettings {
@@ -505,7 +505,7 @@ function proxiedSettings(connectionId: string, over: { proxyUrl?: string } = {})
   } as AnycodeSettings;
 }
 
-describe("OAuthEngine.startFlow —  production proxy helper", () => {
+describe("OAuthEngine.startFlow — production proxy helper", () => {
   it("exchanges the code through the proxied token endpoint", async () => {
     const store = new FakeStore();
     const dispatches: ProxyDispatchRequest[] = [];

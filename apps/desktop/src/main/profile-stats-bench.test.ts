@@ -1,5 +1,5 @@
 /**
- *  S3 before/after benchmark on a REAL telemetry directory.
+ * S3 before/after benchmark on a REAL telemetry directory.
  *
  * Opt-in only — without `ANYCODE_BENCH_DIR` the single case is skipped, so
  * the normal gate never touches a 60 000-file directory:
@@ -65,7 +65,7 @@ function mib(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
 }
 
-describe(" S3 — Profile stats benchmark (opt-in)", () => {
+describe("S3 — Profile stats benchmark (opt-in)", () => {
   it.runIf(BENCH_DIR.length > 0)(
     "measures the pre-S3 path against the incremental cache on a real directory",
     async () => {

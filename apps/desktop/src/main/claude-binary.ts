@@ -8,7 +8,7 @@
  * by shell interpolation (no `which`/`where`, no `shell: true` spawn anywhere
  * in this file or its main/claude-doctor.ts consumer).
  *
- * NO "installed" rung: unlike Codex (, `~/.anycode/codex/bin/**`),
+ * NO "installed" rung: unlike Codex (`~/.anycode/codex/bin/**`),
  * AnyCode does not download/manage a Claude Code binary in this track
  * (OG-CC-2, licensing — cut §1.2 "НЕ делаем").
  *
@@ -117,7 +117,7 @@ function ancestorDirectories(resolvedFile: string, originalPath: string): string
   return ordered;
 }
 
-/** The path-gate outcome ( fix wave, D-S4-14/18). `null` = pass.
+/** The path-gate outcome (fix wave, D-S4-14/18). `null` = pass.
  *  `missing` = the realpath/stat threw — the file is GONE; NEVER an offerable
  *  refusal (D-S4-18). `refused` carries the shared classification plus the
  *  REALPATH the gate judged — the only path a `trustRefusal` may ever name. */

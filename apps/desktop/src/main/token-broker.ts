@@ -44,7 +44,7 @@ export interface TokenBrokerDeps {
   /** Weak-storage consent for the rotated-blob write (read fresh from settings). */
   allowWeak: () => boolean;
   fetchFn?: FetchLike;
-  /** : per-connection refresh fetch (proxy routing); wins over `fetchFn` when set. */
+  /** per-connection refresh fetch (proxy routing); wins over `fetchFn` when set. */
   fetchFor?: (connectionId: string) => FetchLike;
   /** ms before expiry to trigger a refresh (default 60s). */
   skewMs?: number;
@@ -86,7 +86,7 @@ export class TokenBroker {
   }
 
   /**
-   * The current valid access token for a CONNECTION (design §3.3 + ). The
+   * The current valid access token for a CONNECTION (design §3.3 +). The
    * token blob is keyed by `connectionId` (two accounts of the same OAuth
    * provider never collide) while the OAuth CONFIG is looked up by `providerId`.
    * Returns the cached token while it is live; otherwise runs (or joins) a
@@ -182,16 +182,16 @@ export interface CatalogSelectionInfo {
   isCustom: boolean;
   /**
    * True when this entry's OWN baseUrl is empty and settings.provider.baseUrl
-   * must be substituted ( W5) — the `vllm` template entry needs this
+   * must be substituted (W5) — the `vllm` template entry needs this
    * even though it is NOT `isCustom` (it keeps its own per-provider vault key
    * and catalog defaults, unlike the `custom` sentinel, which bypasses to the
    * fully legacy path above). Optional/undefined behaves like `isCustom` did
    * before W5 (only the literal custom sentinel needed base-url substitution).
    */
   needsBaseUrl?: boolean;
-  /** Transport used when neither env nor `settings.provider.transport` pick one ( W5). */
+  /** Transport used when neither env nor `settings.provider.transport` pick one (W5). */
   defaultTransport?: string;
-  /** Every transport this endpoint is known to speak ( W5). */
+  /** Every transport this endpoint is known to speak (W5). */
   supportedTransports?: readonly string[];
 }
 
@@ -236,7 +236,7 @@ export async function resolveProviderSelection(
     return undefined;
   }
   const model = connection.model;
-  // Carry the catalog entry's RAW defaultTransport ( W5-FIX). The full
+  // Carry the catalog entry's RAW defaultTransport (W5-FIX). The full
   // ladder (env > active-connection transport > this default, with the
   // anthropic-family suppression) is applied by buildHostEnv's single
   // `resolveEffectiveTransport` authority.

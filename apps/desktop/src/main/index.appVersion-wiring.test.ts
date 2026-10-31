@@ -120,7 +120,7 @@ vi.mock("electron", () => ({
     handle: (channel: string, listener: IpcHandler): void => {
       ipcHandlers.set(channel, listener);
     },
-    // panel-track CUT.md D9 ( 96-P1): registerPreviewPanelIpc's
+    // panel-track CUT.md D9 (96-P1): registerPreviewPanelIpc's
     // SET_BOUNDS channel is the first main-process user of `ipcMain.on`
     // (one-way, no reply) — this file's real-index.ts boot reaches it too,
     // so the mock needs a harmless no-op capture, not just `.handle`.
@@ -234,7 +234,7 @@ describe("main/index.ts — getAppVersion production wiring", () => {
   });
 });
 
-describe("main/index.ts — custom-provider IPC production wiring (, FX2-4)", () => {
+describe("main/index.ts — custom-provider IPC production wiring (FX2-4)", () => {
   it("wires registerProviderIpc so anycode:custom-provider-create is actually reachable", async () => {
     await import("./index.js");
 

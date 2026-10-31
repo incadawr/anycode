@@ -1,8 +1,8 @@
 /**
- * Unit tests for the Vision panel's "Probe" button ( срез E2). Every
+ * Unit tests for the Vision panel's "Probe" button (срез E2). Every
  * scenario runs over an INJECTED spawner (`RecognizerProbeSpawner`) — no test
  * here starts a process, reads a vault, or touches Electron, matching
- * proxy-probe.test.ts's own discipline for the sibling  §6 probe.
+ * proxy-probe.test.ts's own discipline for the sibling §6 probe.
  *
  * `settings()`/`noSecret`/`vaultSecret` mirror host-env.test.ts's own
  * fixtures byte-for-byte (same shapes, same names) rather than importing that
@@ -81,7 +81,7 @@ function baseDeps(overrides: Partial<RecognizerProbeDeps>): RecognizerProbeDeps 
     childEntry: "/out/main/recognizer-probe-child.js",
     env: { PATH: "/usr/bin" },
     spawn: spawnerThatMustNotRun(),
-    // : the production handler falls back to defaultResolveTelemetryDir
+    // the production handler falls back to defaultResolveTelemetryDir
     // (the real machine's ~/.anycode/config.json) — every pre-existing test
     // here must stay isolated from that, so the default deps carry an explicit
     // "telemetry disabled" resolver.
@@ -162,7 +162,7 @@ describe("handleRecognizerProbeRequest — success", () => {
     expect(calls).toHaveLength(1);
 
     const call = calls[0]!;
-    // Requirement (coordinator,  срез E2): args carries NOTHING but the
+    // Requirement (coordinator, срез E2): args carries NOTHING but the
     // child entry path — the api key must never be visible in `ps` to any
     // other process on the machine.
     expect(call.args).toEqual(["/out/main/recognizer-probe-child.js"]);
@@ -403,7 +403,7 @@ describe("spawnRecognizerProbeChild — the real spawner's stream wiring", () =>
   });
 });
 
-// ── : telemetry rides the probe's stdin ──
+// ── telemetry rides the probe's stdin ──
 
 /** A deps bag with the vision connection resolved, for the telemetry describes below. */
 function depsWithVision(spawn: RecognizerProbeSpawner, overrides: Partial<RecognizerProbeDeps> = {}): RecognizerProbeDeps {

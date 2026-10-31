@@ -186,7 +186,7 @@ describe("buildClaudeDoctorChildEnv — engine proxy carrier", () => {
   };
 
   // Byte-identity, asserted over the WHOLE child env rather than selected keys.
-  it("without a carrier the doctor child env is byte-identical to the pre- build", () => {
+  it("without a carrier the doctor child env is byte-identical to the pre-build", () => {
     const env = buildClaudeDoctorChildEnv({ HOME: "/home/me", PATH: "/usr/bin" }, undefined, "linux");
     expect(env).toEqual({ HOME: "/home/me", PATH: AUGMENTED_PATH, ...HYGIENE });
   });
@@ -252,8 +252,8 @@ describe("buildClaudeDoctorChildEnv — engine proxy carrier", () => {
     expect(env.HTTPS_PROXY).toBe(ENGINE_PROXY);
   });
 
-  // ── : a credentialed proxy never reaches the doctor CLI ──
-  describe(": credentialed family swapped for main's relay URL", () => {
+  // ── a credentialed proxy never reaches the doctor CLI ──
+  describe("credentialed family swapped for main's relay URL", () => {
     const RELAY = "http://127.0.0.1:47557/AbCdEf1234567890_-XyZ";
     const CREDENTIALED_SOURCE: NodeJS.ProcessEnv = {
       HOME: "/home/me",
@@ -390,7 +390,7 @@ describe("runClaudeDoctor — status discrimination against a fake CLI", () => {
       spawnImpl: fakeSpawn(),
       profileDir: freshProfileDir(),
     });
-    // : the report now additionally carries a structured
+    // the report now additionally carries a structured
     // trustRefusal — see the "consent threading" describe below,
     // whose own test pins this shape directly. Extended here (not appended
     // as a new test) because this is a strict toEqual against the trust-gate

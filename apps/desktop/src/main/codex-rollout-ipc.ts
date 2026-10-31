@@ -1,5 +1,5 @@
 /**
- * Rollout import IPC (cut §8.8,  lane D): the three endpoints behind
+ * Rollout import IPC (cut §8.8, lane D): the three endpoints behind
  * "Settings -> Codex -> Import a Codex session" — list a profile's rollouts,
  * preview one (full `RolloutImportReport`, nothing persisted), and import one
  * (persist a NEW core session + its converted history, ready for the
@@ -309,7 +309,7 @@ export async function handleCodexRolloutImport(deps: CodexRolloutIpcDeps, raw: u
   // S4-1 arm 1 (W4-F1): pin the NEW session to the connection active at apply
   // time. `undefined` (no active connection) ⇒ no pin field, byte-as-today.
   const connectionId = deps.activeConnectionId?.();
-  // : an imported session otherwise lands with no title at all (this
+  // an imported session otherwise lands with no title at all (this
   // handler never passed one) — derived the same way a live session's first
   // turn titles itself, off the imported conversation's own first user
   // message. `deriveSessionTitle` is the ONE unwrapping rule (agent envelope,

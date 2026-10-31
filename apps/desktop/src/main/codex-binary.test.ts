@@ -21,7 +21,7 @@ interface FakeEntry {
   mode?: number;
   uid?: number;
   gid?: number;
-  /**  fingerprint fields — optional so every pre-existing fixture keeps typechecking untouched. */
+  /** fingerprint fields — optional so every pre-existing fixture keeps typechecking untouched. */
   size?: number;
   mtimeMs?: number;
 }
@@ -298,7 +298,7 @@ describe("discoverCodexBinary", () => {
       platform: "darwin",
       identity: ME,
     });
-    // : /usr/local/bin/codex (path rung) also resolves — carried
+    // /usr/local/bin/codex (path rung) also resolves — carried
     // as an alternate, never as the winner.
     expect(result).toEqual({
       path: "/env/codex",
@@ -380,7 +380,7 @@ describe("discoverCodexBinary", () => {
       arch: "arm64",
       identity: ME,
     });
-    // : the older installed copy is the single alternate.
+    // the older installed copy is the single alternate.
     expect(result).toEqual({
       path: newest,
       source: "installed",
@@ -398,7 +398,7 @@ describe("discoverCodexBinary", () => {
       arch: "arm64",
       identity: ME,
     });
-    // : the installed copy remains an alternate under the PATH winner.
+    // the installed copy remains an alternate under the PATH winner.
     expect(result).toEqual({
       path: "/usr/local/bin/codex",
       source: "path",
@@ -446,7 +446,7 @@ describe("installedCodexCandidates", () => {
   });
 });
 
-//  — consent threading through resolveCodexBinary/discoverCodexBinary.
+// consent threading through resolveCodexBinary/discoverCodexBinary.
 const FILE_SIZE = 4096;
 const FILE_MTIME = 1_700_000_000_000;
 
@@ -663,7 +663,7 @@ describe("BG8 explicit-rung hard-stop (D-S4-22)", () => {
       identity: ME,
       consents: [consentFor("/env/codex")],
     });
-    // : consent lifted the wall, and the settings rung (which
+    // consent lifted the wall, and the settings rung (which
     // resolves) rides along as an alternate.
     expect(result).toEqual({
       path: "/env/codex",
@@ -717,7 +717,7 @@ describe("BG8 explicit-rung hard-stop (D-S4-22)", () => {
   });
 });
 
-//  — alternate-binary candidates on the discovery
+// alternate-binary candidates on the discovery
 // result. The ladder's first-match semantics are pinned by every test above;
 // this block pins ONLY the new additive field: what it lists, in what order,
 // what it excludes, and how far it caps.
