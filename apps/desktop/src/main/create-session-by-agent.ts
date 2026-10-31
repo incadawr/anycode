@@ -131,7 +131,7 @@ export async function createSessionForAgent(
    * here, never trusted as an id. An unmatched or ambiguous value is
    * `invalid_account` carrying the complete candidate list. With no
    * `account`, the session starts on the DEFAULT account; before that
-   * existed, every API-created Codex tab silently ran on the owner's
+   * existed, every API-created Codex tab silently ran on the user's
    * personal `~/.codex` plan.
    */
   let codexProfileId: string | undefined;

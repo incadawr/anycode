@@ -3828,7 +3828,7 @@ export class Session {
         // the start/end pair from the ring buffer exactly like a real turn's
         // events do — a fresh renderer attach should never see a half-open
         // "Compacting…" toast with no matching end.
-        this.outbound.emit({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: this.recordCompactionOutcome(sanitizeAgentEvent(event)) });
+        this.outbound.emit({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: this.recordCompactionOutcome(sanitizeAgentEvent(event, this.engine.id)) });
         // TASK.117 supervisor correction defect 2: the manual compaction's
         // post-swap context_usage is the LATEST session-scoped reading — fold
         // it into the emission-time checkpoint exactly like runTurn's loop
@@ -4060,7 +4060,7 @@ export class Session {
     // journal frames are only ever read as history, never as live-stream
     // deltas, so a stable non-null id is enough (renderer groups by turnId).
     const turnId = this.turnId ?? ENGINE_SWITCH_TURN_ID;
-    const wireEvent = sanitizeAgentEvent(event);
+    const wireEvent = sanitizeAgentEvent(event, this.engine.id);
     if (this.turnId !== null) this.presentationJournal.record(turnId, wireEvent, this.currentStep, this.currentAttempt);
     this.outbound.emit({ type: "agent_event", turnId, event: wireEvent });
   }
@@ -4746,7 +4746,7 @@ export class Session {
         this.childSafeError = undefined;
         break;
       case "error": {
-        const wire = sanitizeAgentEvent(event);
+        const wire = sanitizeAgentEvent(event, this.engine.id);
         if (wire.type === "error") this.childSafeError = wire.error.message;
         if (event.safe?.code === "engine_dead") this.childEngineDead = true;
         break;
@@ -5119,7 +5119,7 @@ export class Session {
         // GitHub #36: the durable record is written (and its id stamped on the
         // event) BEFORE journaling/emitting, so the live row and the replayed
         // one are the same row.
-        const wireEvent = this.recordCompactionOutcome(sanitizeAgentEvent(event));
+        const wireEvent = this.recordCompactionOutcome(sanitizeAgentEvent(event, this.engine.id));
         // TASK.117: track the inner request ordinal (core's turn_start.turn,
         // reset per outer turn) and stamp it onto the envelope for core
         // turns — the renderer's fold checkpoint keys events and durable

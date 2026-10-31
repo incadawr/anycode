@@ -1362,9 +1362,10 @@ export function Composer() {
   const engine = useTabStore((state) => state.engine);
   // which Codex account THIS tab runs on, for the context
   // popover's account line. Main owns the answer (tab's own resolved profile +
-  // registry label); the renderer only asks. Read once per tab/engine — an
-  // account cannot change under a live tab (a switch re-forks the host, which
-  // re-delivers the port and remounts this surface).
+  // registry label); the renderer only asks. The ACCOUNT cannot change under a
+  // live tab, but `isDefault` can (Settings → "Make default" while this tab is
+  // open), so the read is repeated on every `engines-changed` push — the same
+  // signal the rest of the app uses for "the Codex registry moved".
   const composerTabId = useContext(TabContext)?.tabId ?? null;
   const [codexTabAccount, setCodexTabAccount] = useState<CodexTabAccountResult | null>(null);
   const codexEngineActive = engine?.id === "codex";
@@ -1376,14 +1377,19 @@ export function Composer() {
     const api = window.anycode?.codex;
     if (typeof api?.tabAccount !== "function") return;
     let cancelled = false;
-    void api
-      .tabAccount(composerTabId)
-      .then((result) => {
-        if (!cancelled) setCodexTabAccount(result);
-      })
-      .catch(() => {});
+    const load = (): void => {
+      void api
+        .tabAccount(composerTabId)
+        .then((result) => {
+          if (!cancelled) setCodexTabAccount(result);
+        })
+        .catch(() => {});
+    };
+    load();
+    const unsubscribe = window.anycode?.onEnginesChanged?.(load);
     return () => {
       cancelled = true;
+      unsubscribe?.();
     };
   }, [codexEngineActive, composerTabId]);
   const codexAccountLine = describeCodexAccountLine(codexTabAccount);

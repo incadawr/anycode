@@ -2457,10 +2457,16 @@ export class TabHostManager {
     // CORE child keeps every S2 field byte-identical (modelOverride,
     // connectionId inherited); an ENGINE child instead carries its model as
     // `engineModel` (rides `--engine-model` on the child's one, always-first
-    // spawn) and NEVER an `enginePreset`/`codexProfile`/`connectionId` — the
-    // preset comes from `--child-mode` (§4.2, host-side), the account is
-    // ambient (RS4-0-4), and `connectionId` is "Never consulted for a
-    // non-core engine" (tab-ipc law).
+    // spawn) and NEVER an `enginePreset`/`connectionId` — the preset comes
+    // from `--child-mode` (§4.2, host-side), and `connectionId` is "Never
+    // consulted for a non-core engine" (tab-ipc law).
+    //
+    // A CODEX child INHERITS its parent tab's resolved profile: the account is
+    // part of the tab's identity, so a subagent must spend the same
+    // subscription the user chose (and the same default the tab resolved),
+    // never the ambient `~/.codex` one. A core parent carries no profile (core
+    // owns no Codex account), so a codex child of a core tab keeps the ambient
+    // behaviour it always had.
     // TASK.180 + 4820 F1: the CREATING spawn's stamped budget (only a fresh
     // child carries one) — minted once here, used both for the argv stamp
     // (childOf.maxTurns, below) and for the accepted event's effective-cap
@@ -2480,7 +2486,9 @@ export class TabHostManager {
       // Engine children carry the profile's declared effort VERBATIM (xhigh
       // included); the core path keeps its existing effortOverride gate above.
       engineEffort: engine !== "core" ? (req.effort ?? null) : null,
-      codexProfile: null,
+      // The parent tab's resolved profile (id + home + auth link) verbatim —
+      // the same account, byte-for-byte, on the child's one spawn.
+      codexProfile: engine === "codex" ? parentTab.codexProfile : null,
       proc: null,
       hostGeneration: 0,
       engineProcess: null,

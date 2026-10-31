@@ -56,7 +56,7 @@ import {
   type CommunicationRegenerateResult,
 } from "../shared/communication-config.js";
 import { SCOPE_WORKSPACES_LIST_CHANNEL, SCOPE_WORKSPACES_RESOLVE_CHANNEL, type ScopeWorkspacesListResult } from "../shared/scope-workspaces.js";
-import type { CodexTabAccountResult } from "../shared/codex-account.js";
+import type { CodexContinueResult, CodexTabAccountResult } from "../shared/codex-account.js";
 import {
   BROWSER_ACCESS_CHANGED_CHANNEL,
   BROWSER_ACCESS_GET_CHANNEL,
@@ -356,6 +356,8 @@ const CODEX_PROFILE_SET_ACTIVE_CHANNEL = "anycode:codex-profile-set-active";
 const CODEX_PROFILE_REPAIR_LINK_CHANNEL = "anycode:codex-profile-repair-link";
 /** Read-only "which Codex account is this tab on" (main/codex-tab-account.ts is the byte-identical source of truth). */
 const CODEX_TAB_ACCOUNT_CHANNEL = "anycode:codex-tab-account";
+/** "Continue this thread on another account" (main/codex-continue.ts is the byte-identical source of truth). */
+const CODEX_CONTINUE_CHANNEL = "anycode:codex-continue";
 // TASK.53 (codex-profiles cut §7, amended §A4): the binary/manifest control
 // plane — main/codex-install.ts holds the byte-identical source of truth.
 const CODEX_INSTALL_CHANNEL = "anycode:codex-install";
@@ -860,6 +862,11 @@ contextBridge.exposeInMainWorld("anycode", {
     // a path (main resolves it from its own live tab/registry state).
     tabAccount: (tabId: string): Promise<CodexTabAccountResult> =>
       ipcRenderer.invoke(CODEX_TAB_ACCOUNT_CHANNEL, tabId) as Promise<CodexTabAccountResult>,
+    // The usage-limit banner's action: copy the thread's rollout into the
+    // target account's home and open a NEW tab resuming it there. Never swaps
+    // the live tab's account. Refusals carry a user-facing `detail`.
+    continueOnAccount: (tabId: string, accountId: string): Promise<CodexContinueResult> =>
+      ipcRenderer.invoke(CODEX_CONTINUE_CHANNEL, { tabId, accountId }) as Promise<CodexContinueResult>,
     // TASK.53 (cut §7, amended §A4): the binary/manifest control plane.
     install: (version?: string): Promise<CodexInstallResult> =>
       ipcRenderer.invoke(CODEX_INSTALL_CHANNEL, version ? { version } : undefined) as Promise<CodexInstallResult>,

@@ -27,7 +27,7 @@ export function formatCodexAccountCandidate(account: CodexAccountOption): string
 /**
  * Resolves what a caller typed (`create_session`'s `account`) to exactly ONE
  * registry id. Accepted spellings: an id, or a label. Both comparisons are
- * case-insensitive and trimmed, because the owner types labels, not ids.
+ * case-insensitive and trimmed, because people type labels, not ids.
  * Anything else — including a label two profiles share — is refused with the
  * complete candidate list, never guessed: picking an account is choosing whose
  * subscription gets spent, so ambiguity must be resolved by the caller.
@@ -51,3 +51,12 @@ export function selectCodexAccount(query: string, accounts: readonly CodexAccoun
 export type CodexTabAccountResult =
   | { ok: true; accountId: string; label: string; isDefault: boolean }
   | { ok: false; reason: "unknown_tab" | "not_codex" };
+
+/**
+ * The usage-limit banner's "continue on another account" reply. On success the
+ * session row and tab already exist; a refusal always carries a sentence the
+ * banner can show as-is (no codes in the UI).
+ */
+export type CodexContinueResult =
+  | { ok: true; sessionId: string; tabId: string }
+  | { ok: false; reason: string; detail: string };

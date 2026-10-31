@@ -2784,6 +2784,46 @@ describe("TabHostManager — engine-aware spawnChild (TASK.102 CUT-S4 §3.2)", (
     expect(childEnv).not.toHaveProperty("ANYCODE_CONNECTION_ID");
   });
 
+  it("a codex child inherits its parent tab's resolved profile verbatim — the child's fork carries the same --codex-profile/--codex-auth-link, and a claude child of the same tab carries none", async () => {
+    const { hosts } = shutdownableForkRig();
+    const forkSpy = vi.fn<HostForkFn>((_entry, _args, opts) => {
+      const host = new FakeHost();
+      hosts.push(host);
+      queueMicrotask(() => host.emit("spawn"));
+      host.postMessage.mockImplementation((msg: unknown) => {
+        if ((msg as { type?: unknown }).type === "shutdown") queueMicrotask(() => host.emit("exit", 0));
+      });
+      return host as unknown as UtilityProcess;
+    });
+    const { window } = windowRig();
+    const manager = childManager(forkSpy, window, { engineReady: () => true });
+    const root = manager.createTab({
+      workspace: "/ws",
+      sessionId: "root-codex-child-profile",
+      resume: false,
+      engine: "codex",
+      codexProfile: { id: "account-a", authLink: "/Users/x/.codex/auth.json" },
+    });
+    expect(root.ok).toBe(true);
+    // The parent's own spawn proves the fixture really describes the tab.
+    expect(forkSpy.mock.calls[0]?.[1]).toEqual(
+      expect.arrayContaining(["--codex-profile", "account-a", "--codex-auth-link", "/Users/x/.codex/auth.json"]),
+    );
+
+    hosts[0]!.emit("message", spawnRequest({ requestId: "codex-child-profile", engine: "codex" }));
+
+    const codexChildArgs = forkSpy.mock.calls[1]?.[1] ?? [];
+    expect(codexChildArgs).toEqual(
+      expect.arrayContaining(["--codex-profile", "account-a", "--codex-auth-link", "/Users/x/.codex/auth.json"]),
+    );
+
+    hosts[0]!.emit("message", spawnRequest({ requestId: "claude-child-profile", engine: "claude" }));
+
+    const claudeChildArgs = forkSpy.mock.calls[2]?.[1] ?? [];
+    expect(claudeChildArgs).not.toContain("--codex-profile");
+    expect(claudeChildArgs).not.toContain("--codex-auth-link");
+  });
+
   // TASK.102 S4 gate-fix (L1): tabs.ts:1249 states connectionId is "Never
   // consulted for a non-core engine" — an omitted req.model must NOT fall
   // back to describeChildModel(connectionId), which reads the PARENT

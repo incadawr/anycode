@@ -236,7 +236,7 @@ import type { ProviderHealthEvent } from "../shared/provider-health.js";
 import { TabHostManager, createPinReservations, workspaceMissing } from "./tabs.js";
 import { createChildConnectionPreparer } from "./child-connection-preparation.js";
 import { TokenBroker, resolveProviderSelection, type CatalogSelectionInfo } from "./token-broker.js";
-import { registerTabIpc, type ResolveCodexProfileResult } from "./tab-ipc.js";
+import { handleCreate, registerTabIpc, type ResolveCodexProfileResult, type TabIpcDeps } from "./tab-ipc.js";
 import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from "../shared/engines.js";
 // SLICE-CC A1 (cut §1.2): new import line — ENV_CLAUDE_BIN mirrors ENV_CODEX_BIN above.
 import { ENV_CLAUDE_BIN } from "../shared/engines.js";
@@ -267,6 +267,7 @@ import {
 import { SYSTEM_PROFILE_ID, codexProfilesRoot, resolveCodexProfile } from "./codex-profiles.js";
 import { SYSTEM_CODEX_ACCOUNT, type CodexAccountOption } from "../shared/codex-account.js";
 import { CODEX_TAB_ACCOUNT_CHANNEL, handleCodexTabAccount } from "./codex-tab-account.js";
+import { CODEX_CONTINUE_CHANNEL, handleCodexContinueOnAccount } from "./codex-continue.js";
 import { registerCodexRolloutIpc } from "./codex-rollout-ipc.js";
 import { registerCodexInstallIpc } from "./codex-install.js";
 import { runCodexManagedUpgrade } from "./codex-managed-upgrade.js";
@@ -1893,6 +1894,30 @@ function listCodexAccounts(): CodexAccountOption[] {
 }
 
 /**
+ * WHERE an account keeps its native Codex state: the `sessions/` directory of
+ * its `CODEX_HOME`. `system` is the ambient home (`$CODEX_HOME` when the shell
+ * exported one, else `~/.codex`); a saved profile is its own managed or linked
+ * home, derived here through the SAME W4-F0-aware resolver the registry uses.
+ * `null` = the id names no account we can place on disk.
+ *
+ * One function, two readers: the "Import a session" picker and the
+ * "continue on another account" rollout copy must agree on the tree — asking a
+ * different path is how a thread appears importable but not continuable.
+ */
+function codexSessionsDirForAccount(accountId: string): string | null {
+  if (accountId === SYSTEM_PROFILE_ID) {
+    const ambient = process.env.CODEX_HOME;
+    const systemHome = ambient !== undefined && ambient !== "" ? ambient : join(homedir(), ".codex");
+    return join(systemHome, "sessions");
+  }
+  const record = settings?.codex?.profiles?.find((profile) => profile.id === accountId);
+  if (record === undefined) return null;
+  const resolution = resolveCodexProfile(record, codexProfilesHome);
+  if (!resolution.ok || resolution.profile.codexHome === undefined) return null;
+  return join(resolution.profile.codexHome, "sessions");
+}
+
+/**
  * Resolves an opaque Codex profile id — a new tab's draft pick, or a resumed
  * session's persisted `codexProfileId` — against the profile registry
  * (codex-profiles cut §3.3, W3-F) into the argv facts main/tabs.ts forwards.
@@ -1906,9 +1931,10 @@ function listCodexAccounts(): CodexAccountOption[] {
  * `undefined` asks for the DEFAULT account (`settings.codex.activeProfileId`,
  * set by Settings → Codex's "Make default", else `system`). This is the one
  * resolution every pick-less Codex session — the start screen and the Sessions
- * API — goes through, so "no explicit pick" can never again mean "the owner's
- * ambient ~/.codex plan". A Codex subagent inherits its tab's account, so it
- * follows the same default without a separate path.
+ * API — goes through, so "no explicit pick" can no longer mean "the user's
+ * ambient ~/.codex plan". A Codex subagent's tab inherits its parent tab's
+ * resolved profile verbatim (main/tabs.ts), so a child follows the account its
+ * tab was opened on rather than resolving anything of its own.
  */
 async function resolveCodexProfileForTab(profileId: string | undefined): Promise<ResolveCodexProfileResult> {
   const wanted = profileId ?? settings?.codex?.activeProfileId ?? SYSTEM_PROFILE_ID;
@@ -2823,7 +2849,10 @@ void app.whenReady().then(async () => {
   // L4·1 peek-then-confirm: the resume path PEEKS the pick (read-only) to stamp
   // the override, then consumes it (holder above) only after createTab commits.
   let peekImportModel: ((sessionId: string) => string | undefined) | undefined;
-  registerTabIpc({
+  // Named rather than inlined: the "continue on another account" handler below
+  // re-uses this exact deps bag to open the new tab through tab-ipc's own
+  // resume path (same priming, same readiness gate, same argv resolution).
+  const tabIpcDeps: TabIpcDeps = {
     manager,
     persistence,
     dialog,
@@ -2944,6 +2973,39 @@ void app.whenReady().then(async () => {
         return false;
       }
     },
+  };
+  registerTabIpc(tabIpcDeps);
+
+  // "Continue this Codex thread on another account" (`codex-continue.ts`): the
+  // usage-limit banner's action. The target account is validated here, the
+  // thread's rollout is copied into that account's own `CODEX_HOME`, and the
+  // new tab goes through tab-ipc's resume path — the same gate (readiness,
+  // capacity, argv resolution) a tab reopened from the session list takes.
+  // The exhausted tab is untouched: its account cannot change under a live host.
+  ipcMain.handle(CODEX_CONTINUE_CHANNEL, async (_event, raw: unknown) => {
+    if (raw === null || typeof raw !== "object") return { ok: false, reason: "unknown_tab", detail: "malformed request" };
+    const value = raw as { tabId?: unknown; accountId?: unknown };
+    if (typeof value.tabId !== "string" || value.tabId === "" || typeof value.accountId !== "string" || value.accountId === "") {
+      return { ok: false, reason: "unknown_tab", detail: "malformed request" };
+    }
+    const store = persistence;
+    if (store === null) return { ok: false, reason: "unknown_session", detail: "storage is not ready yet" };
+    return handleCodexContinueOnAccount(
+      {
+        tab: (tabId) => manager?.getTab(tabId),
+        session: (sessionId) => store.getRootSession(sessionId),
+        accounts: async () => listCodexAccounts(),
+        sessionsDir: async (accountId) => codexSessionsDirForAccount(accountId),
+        createSession: (meta) => store.createSession(meta),
+        deleteSession: (sessionId) => store.deleteSession(sessionId),
+        openResumeTab: async (sessionId) => {
+          const created = await handleCreate(tabIpcDeps, { kind: "resume", sessionId });
+          return created.ok ? { ok: true, tabId: created.tabId } : { ok: false, reason: created.reason };
+        },
+        randomUUID,
+      },
+      { tabId: value.tabId, accountId: value.accountId },
+    );
   });
 
   // Window control plane (design/ui-track custom-titlebar §4): the four caption
@@ -3433,21 +3495,10 @@ void app.whenReady().then(async () => {
       // S4-1 arm 1 (W4-F1): pin an imported session to the connection active at
       // apply time (same source as registerTabIpc's `activeConnectionId` above).
       activeConnectionId: () => settings?.provider.activeConnectionId,
-      resolveProfileSessionsDir: async (profileId) => {
-        if (profileId === SYSTEM_PROFILE_ID) {
-          const ambient = process.env.CODEX_HOME;
-          const systemHome = ambient !== undefined && ambient !== "" ? ambient : join(homedir(), ".codex");
-          return join(systemHome, "sessions");
-        }
-        const record = settings?.codex?.profiles?.find((profile) => profile.id === profileId);
-        if (record === undefined) return null;
-        // This resolver derives a profile home OUTSIDE the registry, so the
-        // W4-F0 lever must reach it too — else an isolated smoke's import
-        // dialog would list rollouts from the owner's REAL profile tree.
-        const resolution = resolveCodexProfile(record, codexProfilesHome);
-        if (!resolution.ok || resolution.profile.codexHome === undefined) return null;
-        return join(resolution.profile.codexHome, "sessions");
-      },
+      // The W4-F0 lever (`codexProfilesHome`) reaches this resolver through the
+      // one shared helper, so an isolated smoke's import dialog neither lists
+      // nor copies rollouts from the user's REAL profile tree.
+      resolveProfileSessionsDir: async (profileId) => codexSessionsDirForAccount(profileId),
     });
     // S4-1 arm 2: hand the import model plane's consume-once reader to tab-ipc's
     // resume path (captured in the holder wired above registerTabIpc).

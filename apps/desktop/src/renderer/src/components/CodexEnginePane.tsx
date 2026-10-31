@@ -269,7 +269,7 @@ export function hasMainAuthLinkProfile(profiles: readonly CodexProfileRecord[]):
 /**
  * Settings → Codex per-row default state: `settings.codex.activeProfileId`
  * and its IPC existed with no UI, so a pick-less tab (start screen,
- * Sessions API) always ran on `system` — the owner's personal plan.
+ * Sessions API) always ran on `system` — the user's personal plan.
  * The active id IS the default, `system` included: "use the ambient ~/.codex"
  * is a real choice, not an absence of one, so the System row can carry the
  * marker too.
@@ -280,6 +280,25 @@ export function codexDefaultAccountAction(
 ): { isDefault: boolean; showMakeDefault: boolean } {
   const isDefault = profileId === activeProfileId;
   return { isDefault, showMakeDefault: !isDefault };
+}
+
+/**
+ * Whether the System pseudo-row is on screen, and whether "use System again"
+ * must be offered separately.
+ *
+ * The System row collapses into a profile that mirrors the same signed-in
+ * account (TASK.57 — no duplicate cards). That collapse must not hide the
+ * DEFAULT: while `system` IS the default the row stays, so its "Default" pill
+ * remains visible; and while a collapsed System row is hidden (the default is
+ * a profile), the pane offers a "Use the System account" action instead, so
+ * the ambient account is never unreachable.
+ */
+export function codexSystemRowVisibility(
+  plan: CodexAccountRowPlan,
+  activeProfileId: string,
+): { showSystemRow: boolean; offerMakeSystemDefault: boolean } {
+  if (activeProfileId === SYSTEM_PROFILE_ID) return { showSystemRow: true, offerMakeSystemDefault: false };
+  return { showSystemRow: plan.showSystemRow, offerMakeSystemDefault: !plan.showSystemRow };
 }
 
 export interface CodexAccountRowPlan {
@@ -1026,6 +1045,9 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
   const binaryActions = deriveBinaryActions(binaryReport, support);
   const atProfileLimit = profiles.length >= MAX_CODEX_PROFILES;
   const accountRows = resolveAccountRows(binaryReport, profiles, reportsById);
+  // The collapse into a matching profile must not hide the Default marker (and
+  // must leave the ambient account reachable): see codexSystemRowVisibility.
+  const systemRow = codexSystemRowVisibility(accountRows, activeProfileId);
   // TASK.103 (D-S4-6): the consent card source — the structured field only,
   // never a string-match on `binaryStatus.detail`.
   const trustRefusal = binaryTrustRefusalOf(binarySnapshot?.report);
@@ -1165,9 +1187,14 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
           account marked Default. */}
       <div className="settings-mcp-detail codex-default-account-hint">
         New sessions start on the account marked Default.
+        {systemRow.offerMakeSystemDefault && (
+          <button type="button" className="settings-button" disabled={busy} onClick={() => void makeDefault(SYSTEM_PROFILE_ID)}>
+            Use the System account instead
+          </button>
+        )}
       </div>
       <ul className="settings-mcp-list codex-profile-grid">
-        {accountRows.showSystemRow && (
+        {systemRow.showSystemRow && (
           <CodexProfileRow
             label="System (current environment)"
             isDefault={codexDefaultAccountAction(SYSTEM_PROFILE_ID, activeProfileId).isDefault}

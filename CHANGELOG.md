@@ -10,7 +10,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Xiaomi MiMo pay-as-you-go API is available as a provider (mimo-v2.6-pro and mimo-v2.6-flash, with per-token cost tracking).
-- Settings → Codex marks which account is the default and offers “Make default” on the others; a new session that does not pick an account itself starts on that default instead of the owner’s personal `~/.codex` plan.
+- Settings → Codex marks which account is the default and offers “Make default” on the others; a new session that does not pick an account itself starts on that default instead of your personal `~/.codex` plan, and a Codex subagent runs on the same account as the tab that started it.
 - `create_session` accepts `account` (a Codex profile id or its label) and refuses an unknown or ambiguous one with `invalid_account` plus the candidate list; omitting it uses the default account.
 - A session’s context popover names the Codex account it runs on (and whether it is the default).
 
@@ -19,7 +19,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
 - Choosing No thinking for Xiaomi MiMo models now turns their reasoning off.
 - Xiaomi MiMo Token Plan sessions show a pay-as-you-go list-price cost estimate instead of “price unknown”.
-- Hitting a Codex usage limit now offers “Continue on another account” right in the banner, opening the accounts list where the default can be changed.
+- Hitting a Codex usage limit is now recognised as such: the banner offers “Continue on another account”, which copies the conversation into the chosen account’s own Codex home and opens a new tab resuming the same thread there (the tab that ran out keeps its account).
 
 ## [0.0.55] — 2026-10-30
 

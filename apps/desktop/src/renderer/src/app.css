@@ -2996,6 +2996,42 @@ body {
   opacity: 0.82;
 }
 
+/* The account picker behind that action: one quiet row per other account,
+   plus the reason when continuing failed. Deliberately not a modal — the
+   exhausted tab stays visible behind it. */
+.usage-limit-account-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+.usage-limit-account-choice {
+  padding: 0.15rem var(--sp-3);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 999px;
+  background: none;
+  font: inherit;
+  font-weight: var(--w-medium);
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.usage-limit-account-choice:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.usage-limit-account-choice:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.usage-limit-account-hint {
+  flex: 1 1 100%;
+  white-space: normal;
+  color: var(--text-3);
+}
+
 /* Turn-end: a quiet centered divider (hairlines either side of the label)
    rather than a boxed banner. */
 .message-loop-end {
