@@ -728,6 +728,14 @@ declare global {
       // identifies by `name` alone (path custody, design §4).
       // `onPluginsChanged` returns an unsubscribe, same shape as
       // `updates.onUpdateStatus`.
+      accountSources: {
+        get(): Promise<{ snapshot: import("../../shared/account-sources.js").AccountSourcesSnapshot; candidates: import("../../shared/account-sources.js").AccountSourceCandidateView[] }>;
+        preview(key: import("../../shared/account-sources.js").AccountSourceKey, connectionId: string): Promise<import("../../shared/account-sources.js").AccountSourcePreviewResult>;
+        bind(token: string): Promise<boolean>;
+        unbind(key: import("../../shared/account-sources.js").AccountSourceKey): Promise<void>;
+        refresh(key: import("../../shared/account-sources.js").AccountSourceKey): Promise<void>;
+        onChanged(callback: (snapshot: import("../../shared/account-sources.js").AccountSourcesSnapshot) => void): () => void;
+      };
       plugins: {
         list(req?: PluginsListRequest): Promise<PluginsSnapshot>;
         checkUpdates(req?: PluginsCheckUpdatesRequest): Promise<PluginsCheckUpdatesResult>;

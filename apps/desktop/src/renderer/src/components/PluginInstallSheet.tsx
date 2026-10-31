@@ -228,6 +228,14 @@ export function InstallDialogBody({
               <span>{stage.preview.capabilities.length === 0 ? "none" : stage.preview.capabilities.join(", ")}</span>
             </div>
 
+            {(stage.preview.accountSources ?? []).map((source) => (
+              <div className="plugins-mcp-consent" key={source.id}>
+                <div className="settings-field-label">Account source: {source.displayName}</div>
+                <p className="mcp-row-hint">Gateway: {source.gatewayBaseUrl}<br />Account API: {source.apiBaseUrl}</p>
+                <p className="mcp-row-hint">With your approval, this source can read the model catalog and shared budget and update the linked connection's models.</p>
+              </div>
+            ))}
+
             {sheetHasMcpServers(stage.preview) ? (
               <div className="plugins-mcp-consent">
                 <div className="settings-field-label">MCP servers this plugin would start</div>

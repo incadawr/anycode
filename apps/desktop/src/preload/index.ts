@@ -18,6 +18,7 @@
  */
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { isRendererUrl } from "../main/main-navigation.js";
+import { ACCOUNT_SOURCES_BIND_CHANNEL, ACCOUNT_SOURCES_CHANGED_CHANNEL, ACCOUNT_SOURCES_GET_CHANNEL, ACCOUNT_SOURCES_PREVIEW_CHANNEL, ACCOUNT_SOURCES_REFRESH_CHANNEL, ACCOUNT_SOURCES_UNBIND_CHANNEL, type AccountSourceKey, type AccountSourcePreviewResult, type AccountSourcesSnapshot, type AccountSourceCandidateView } from "../shared/account-sources.js";
 import { TAB_CLOSED_ENVELOPE_TYPE, HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE, type PortEnvelope } from "../shared/envelopes.js";
 import {
   MCP_CONFIG_DELETE_CHANNEL,
@@ -966,6 +967,18 @@ contextBridge.exposeInMainWorld("anycode", {
   // rule as skills/subagents: the renderer sends NAMEs and_KIND sources only
   // — never filesystem paths (path custody, design §4). install is two-phase:
   // prepare returns a preview + token; commit sends the token back.
+  accountSources: {
+    get: (): Promise<{ snapshot: AccountSourcesSnapshot; candidates: AccountSourceCandidateView[] }> => ipcRenderer.invoke(ACCOUNT_SOURCES_GET_CHANNEL),
+    preview: (key: AccountSourceKey, connectionId: string): Promise<AccountSourcePreviewResult> => ipcRenderer.invoke(ACCOUNT_SOURCES_PREVIEW_CHANNEL, { key, connectionId }),
+    bind: (token: string): Promise<boolean> => ipcRenderer.invoke(ACCOUNT_SOURCES_BIND_CHANNEL, token),
+    unbind: (key: AccountSourceKey): Promise<void> => ipcRenderer.invoke(ACCOUNT_SOURCES_UNBIND_CHANNEL, key),
+    refresh: (key: AccountSourceKey): Promise<void> => ipcRenderer.invoke(ACCOUNT_SOURCES_REFRESH_CHANNEL, key),
+    onChanged: (callback: (snapshot: AccountSourcesSnapshot) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, snapshot: AccountSourcesSnapshot) => callback(snapshot);
+      ipcRenderer.on(ACCOUNT_SOURCES_CHANGED_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(ACCOUNT_SOURCES_CHANGED_CHANNEL, listener);
+    },
+  },
   plugins: {
     list: (): Promise<PluginsSnapshot> =>
       ipcRenderer.invoke(PLUGINS_LIST_CHANNEL) as Promise<PluginsSnapshot>,

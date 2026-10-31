@@ -562,6 +562,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
           capabilities: preview.capabilities,
           mcpServers: preview.mcpServers,
           services: servicePreviewOf(preview.manifest.services),
+          accountSources: (preview.manifest.accountSources ?? []).map((s) => ({ id: s.id, displayName: s.displayName, gatewayBaseUrl: s.gateway.baseUrl, apiBaseUrl: s.apiBaseUrl })),
           hasHooks: preview.capabilities.includes("hooks"),
           engines: preview.manifest.engines?.anycode,
           // xfix L4: compute the real compat verdict with rangeMatches — the
@@ -615,6 +616,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
           capabilities: preview.capabilities,
           mcpServers: preview.mcpServers,
           services: servicePreviewOf(preview.manifest.services),
+          accountSources: (preview.manifest.accountSources ?? []).map((s) => ({ id: s.id, displayName: s.displayName, gatewayBaseUrl: s.gateway.baseUrl, apiBaseUrl: s.apiBaseUrl })),
           hasHooks: preview.capabilities.includes("hooks"),
         },
       };
@@ -687,6 +689,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
         capabilities: capabilityList.sort(),
         mcpServers,
         services: servicePreviewOf(manifest.services),
+        accountSources: (manifest.accountSources ?? []).map((s) => ({ id: s.id, displayName: s.displayName, gatewayBaseUrl: s.gateway.baseUrl, apiBaseUrl: s.apiBaseUrl })),
         hasHooks: caps.hooks,
         ...(manifest.engines?.anycode !== undefined
           ? {

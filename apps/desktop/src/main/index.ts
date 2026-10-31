@@ -242,6 +242,7 @@ import { OAuthEngine, oauthConfigFromEntry } from "./oauth.js";
 import { guardedIpcHandle, setIpcGuardMainWindow } from "./ipc-guard.js";
 import { registerSetupIpc } from "./setup-ipc.js";
 import { registerProviderIpc } from "./provider-ipc.js";
+import { registerAccountSourcesIpc } from "./account-sources/ipc.js";
 import { flushPendingConnectionQuota, handleProviderQuotaMessage } from "./connection-quota.js";
 import {
   applyConnectionHealthEvent,
@@ -3133,6 +3134,7 @@ void app.whenReady().then(async () => {
   // are started after a readiness flip. Named (not inlined) so codex-ipc's
   // `writeCodexSettings` below can reuse the EXACT SAME deps bag through
   // settings-ipc's own exported `handleSet` — one settings.json writer.
+  let accountSources: ReturnType<typeof registerAccountSourcesIpc> | undefined;
   const settingsIpcDeps: Omit<SettingsIpcDeps, "vault"> & { vault: Vault } = {
     vault,
     bootEnv,
@@ -3192,9 +3194,10 @@ void app.whenReady().then(async () => {
     systemProxy: systemProxyDelegate,
     // fired after a successful secret write/clear, BEFORE onMutation
     // (same ordering discipline as refreshProxySecrets just above).
-    onSecretWritten: noteRecognizerSecretWrite,
+    onSecretWritten: (key, fresh) => { noteRecognizerSecretWrite(key, fresh); void accountSources?.reconcile(true); },
     onMutation: async () => {
       settings = (await loadSettings(settingsPath, fileLogger)).settings;
+      void accountSources?.reconcile();
       // `provider.custom` is schema-reachable through this generic
       // patch channel too, so re-derive the union defensively here as well
       // (not just from registerProviderIpc's own onMutation below).
@@ -3356,9 +3359,10 @@ void app.whenReady().then(async () => {
     },
     // same hook as settingsIpcDeps's — a custom-record key write
     // must be able to force the recognizer push before onMutation runs.
-    onSecretWritten: noteRecognizerSecretWrite,
+    onSecretWritten: (key, fresh) => { noteRecognizerSecretWrite(key, fresh); void accountSources?.reconcile(true); },
     onMutation: async (fresh) => {
       settings = fresh;
+      void accountSources?.reconcile();
       settingsIpcDeps.catalogIds = catalogIdsFor(fresh);
       // E1 §1.2: wired here too (both mutation hooks).
       //
@@ -3868,6 +3872,13 @@ void app.whenReady().then(async () => {
   if (selfCheckProfile === undefined) {
     const pluginsHome = resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir();
     const pluginsFs = new NodePluginsFs();
+    accountSources = registerAccountSourcesIpc({
+      home: pluginsHome, fs: pluginsFs, appVersion: app.getVersion(), settingsPath,
+      getSecret, fetchFor: connectionProxyFetch,
+      publish: (channel, value) => { for (const window of BrowserWindow.getAllWindows()) window.webContents.send(channel, value); },
+      settingsChanged: (fresh) => { settings = fresh; },
+    });
+    app.on("before-quit", () => accountSources?.dispose());
     let localPluginsIpc: PluginsIpc | undefined;
     pluginsIpc = registerPluginsIpc({
       home: pluginsHome,
@@ -3912,8 +3923,8 @@ void app.whenReady().then(async () => {
           settings = (await loadSettings(settingsPath, fileLogger)).settings;
         },
       },
-      // every plugins mutation (install, enable, consent, ...) re-reconciles services.
-      onChanged: () => reconcileServices(),
+      // Every plugin mutation re-reconciles services and account sources.
+      onChanged: () => { reconcileServices(); void accountSources?.reconcile(true); },
       services: {
         snapshot: () => serviceSupervisor?.snapshot() ?? [],
         logs: (plugin, name) => serviceSupervisor?.logs(plugin, name) ?? [],
