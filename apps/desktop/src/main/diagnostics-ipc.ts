@@ -22,7 +22,7 @@ import {
   type DiagnosticsPreviewResult,
   type DiagnosticsSaveResult,
 } from "../shared/diagnostics.js";
-import { renderDiagnosticsPreview, type DiagnosticsBuild } from "./diagnostics-export.js";
+import type { DiagnosticsBuild } from "./diagnostics-export.js";
 
 export interface DiagnosticsWriteResult {
   saved: boolean;
@@ -127,7 +127,7 @@ export async function handleDiagnosticsPreview(
   return {
     ok: true,
     summary: built.build.summary,
-    preview: renderDiagnosticsPreview(built.build.json),
+    preview: built.build.json,
   };
 }
 
@@ -182,7 +182,7 @@ export function createDiagnosticsIpcSession(
       return {
         ok: true,
         summary: built.build.summary,
-        preview: renderDiagnosticsPreview(built.build.json),
+        preview: built.build.json,
       };
     },
     async save(raw: unknown) {

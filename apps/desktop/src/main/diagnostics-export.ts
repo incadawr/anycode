@@ -80,7 +80,6 @@ export const DIAGNOSTICS_TELEMETRY_MAX_TOTAL_BYTES = 8 * 1024 * 1024;
 export const DIAGNOSTICS_TELEMETRY_MAX_SESSIONS = 50;
 export const DIAGNOSTICS_TELEMETRY_MAX_RECORDS_PER_SESSION = 2_000;
 export const DIAGNOSTICS_WIRE_MAX_ENTRIES = 1_024;
-export const DIAGNOSTICS_PREVIEW_MAX_CHARS = 8_000;
 /** Longest identifier-shaped string carried into the bundle (tool/status/model names). */
 export const DIAGNOSTICS_MAX_FIELD_CHARS = 128;
 
@@ -830,12 +829,6 @@ export async function buildDiagnosticsBundle(deps: DiagnosticsExportDeps): Promi
   };
 
   return { bundle: fitted.bundle, json: fitted.json, summary };
-}
-
-/** The anonymised text a person can review before saving. */
-export function renderDiagnosticsPreview(json: string, maxChars = DIAGNOSTICS_PREVIEW_MAX_CHARS): string {
-  if (json.length <= maxChars) return json;
-  return `${json.slice(0, maxChars)}\n… preview truncated (${byteLength(json)} bytes total)`;
 }
 
 /** One live tab's host, as far as ring collection needs it. */
