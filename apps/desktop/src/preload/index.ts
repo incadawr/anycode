@@ -976,7 +976,7 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(PLUGINS_REMOVE_CHANNEL, { name }) as Promise<PluginsMutationResult>,
     approveMcp: (name: string): Promise<PluginsMutationResult> =>
       ipcRenderer.invoke(PLUGINS_APPROVE_MCP_CHANNEL, { name }) as Promise<PluginsMutationResult>,
-    // Taskana 4750a: services consent + supervised state, logs and restart. Every payload is a name only.
+    // services consent + supervised state, logs and restart. Every payload is a name only.
     approveServices: (name: string): Promise<PluginsMutationResult> =>
       ipcRenderer.invoke(PLUGINS_APPROVE_SERVICES_CHANNEL, { name }) as Promise<PluginsMutationResult>,
     services: (): Promise<PluginServiceView[]> =>
