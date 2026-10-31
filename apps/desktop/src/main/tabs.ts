@@ -1,4 +1,5 @@
 import { hostFailure } from "./host-failure.js";
+import { noteWireMessage, type DiagnosticsRing } from "../shared/diagnostics-ring.js";
 import type { HostFailure } from "../shared/host-failure.js";
 import type { AgentDelivery, SessionActivityState } from "../shared/communication.js";
 /**
@@ -664,6 +665,12 @@ export interface TabLogger {
 
 export interface TabHostManagerDeps {
   /**
+   * GitHub #18: bounded control-plane ring for the diagnostics export. Fed
+   * with message SHAPES only (`type`/`kind`), never payloads. Absent in
+   * legacy tests.
+   */
+  diagnosticsRing?: DiagnosticsRing;
+  /**
    * Taskana 4747: called once a tab (root or child) is registered, so main can
    * ensure its per-session Sessions API switch exists (a child inherits its
    * parent's). Absent in legacy tests.
@@ -1185,7 +1192,12 @@ export class TabHostManager {
     return () => { this.communicationListeners.delete(listener); };
   }
 
-  /** Narrow production RPC; pins both tab and process generation at dispatch. */
+  /**
+   * Narrow production RPC; pins both tab and process generation at dispatch.
+   * `allowNonRunning` (GitHub #18) is for read-only diagnostics reads that
+   * must also work on a host that is still starting or whose boot failed:
+   * without it, an export could not ask the very host it needs to describe.
+   */
   communicationRequest(
     sessionId: string,
     operation: string,
@@ -1193,10 +1205,11 @@ export class TabHostManager {
     expectedWorkspace?: string,
     // Optional per-request bound (session preparation must never outlive its
     // own deadline by a single request's default timeout).
-    requestOptions?: { timeoutMs?: number },
+    requestOptions?: { timeoutMs?: number; allowNonRunning?: boolean },
   ): Promise<unknown> {
     const tab = [...this.tabs.values()].find((t) => t.sessionId === sessionId);
-    if (!tab?.proc || tab.state !== "running" || (expectedWorkspace !== undefined && tab.workspace !== expectedWorkspace)) return Promise.reject(new Error("Session host unavailable"));
+    const stateOk = tab !== undefined && (requestOptions?.allowNonRunning === true || tab.state === "running");
+    if (!tab?.proc || !stateOk || (expectedWorkspace !== undefined && tab.workspace !== expectedWorkspace)) return Promise.reject(new Error("Session host unavailable"));
     const proc = tab.proc;
     const requestId = randomUUID();
     const timeoutMs = requestOptions?.timeoutMs !== undefined ? Math.max(1, requestOptions.timeoutMs) : 20000;
@@ -1897,6 +1910,9 @@ export class TabHostManager {
       return;
     }
     const data = message as { type?: unknown; requestId?: unknown };
+    // GitHub #18: record the wire SHAPE (type/kind only) for the diagnostics
+    // export. Never the payload — noteWireMessage reads those two fields.
+    noteWireMessage(this.deps.diagnosticsRing, "in", message);
     if (data.type === "session_activity") {
       const state = (message as { state?: unknown }).state;
       if (tab.proc === child && (state === "idle" || state === "running" || state === "waiting_approval" || state === "closing")) tab.activityState = state;
@@ -2030,6 +2046,7 @@ export class TabHostManager {
     if (tab.proc === null) {
       return;
     }
+    noteWireMessage(this.deps.diagnosticsRing, "out", event);
     try {
       tab.proc.postMessage(event);
     } catch (error) {

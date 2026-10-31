@@ -1893,6 +1893,24 @@ body {
   font-size: var(--fs-xs);
 }
 
+/* GitHub #18: the anonymised diagnostics preview inside the environment menu. */
+.environment-menu-diagnostics-preview {
+  margin: 0 0 var(--sp-2);
+  padding: var(--sp-2);
+  max-height: 16rem;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-inset);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
 .session-header-connection {
   display: inline-flex;
   align-items: center;
