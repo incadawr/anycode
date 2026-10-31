@@ -13,7 +13,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Turning Orchestrate on from the mode menu now asks for roles on the first run and the mode chip and session header say "Orchestrate", instead of the chip still reading the permission mode and the click looking like a no-op.
+- Turning Orchestrate on from the mode menu now asks for roles on the first run and the mode chip and session header say "Orchestrate", instead of the chip still reading the permission mode and the click looking like a no-op; skipping that role picker once is enough, so the next Send starts the task instead of asking again.
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
 - Choosing No thinking for Xiaomi MiMo models now turns their reasoning off.
 - Xiaomi MiMo Token Plan sessions show a pay-as-you-go list-price cost estimate instead of “price unknown”.
