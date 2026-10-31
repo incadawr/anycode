@@ -18,7 +18,7 @@ describe("reload smoke isolation", () => {
     launchReloadSmoke(spawn, { HOME: "/owner", ANYCODE_PROFILE_HOME: "/owner", GIT_CONFIG_GLOBAL: "/owner/config", BASH_ENV: "/owner/hooks", NODE_OPTIONS: "--require=/owner/hook", PYTHONPATH: "/owner/modules", ANYCODE_API_KEY: "fixture" }, "/tmp/profile", "/tmp/profile/workspace", 1234, "/tmp/profile/unavailable");
     const [command, args, options] = spawn.mock.calls[0]!;
     expect(command).toBe("pnpm");
-    expect(args).toEqual(["--filter", "@anycode/desktop", "dev"]);
+    expect(args).toEqual(["--filter", "@anycode/desktop", "dev", "--", "--use-mock-keychain", "--no-sandbox", "--disable-gpu"]);
     expect(options.env.HOME).toBe("/tmp/profile");
     expect(options.env.ANYCODE_PROFILE_HOME).toBe("/tmp/profile");
     expect(options.env.GIT_CONFIG_GLOBAL).toBeUndefined();

@@ -53,6 +53,10 @@
  */
 
 import { smokeProviderProfile, activeSmokeConnection } from "./smoke-provider-profile.mjs";
+// Shared launcher: a dev Electron spawned from an agent shell blocks in
+// SecItemAdd and dies on the GPU process unless the automation switches
+// (mock keychain, no sandbox, no GPU) reach the app through electron-vite.
+import { launchSmokeElectron } from "./smoke-electron-launch.mjs";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -511,7 +515,7 @@ async function step1LaunchApp(ctx) {
     env.ANYCODE_AUTOMATION_PORT = String(FLAGS.port);
   }
 
-  const child = spawn("pnpm", ["--filter", "@anycode/desktop", "dev"], {
+  const child = launchSmokeElectron(spawn, {
     cwd: repoRoot,
     env,
     stdio: ["ignore", "inherit", "inherit"],

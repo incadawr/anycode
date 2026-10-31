@@ -88,10 +88,12 @@ describe("channel-echo example plugin (Taskana 4750b)", () => {
     const child = spawn(process.execPath, [join(exampleDir, "service.mjs")], { env: { PATH: process.env.PATH ?? "" }, stdio: ["ignore", "pipe", "pipe"] });
     children.push(child);
     const out = output(child);
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    // Event-driven: wait for the hint line itself (poll interval bounds the
+    // latency; the 15 s deadline tolerates a loaded CI runner) instead of a
+    // blind sleep that races node startup under load.
+    await vi.waitFor(() => expect(out.read()).toContain("Sessions API is off; enable it in Settings -> Sessions API"), { timeout: 15_000, interval: 50 });
     expect(child.exitCode).toBeNull();
     expect(child.signalCode).toBeNull();
-    expect(out.read()).toContain("Sessions API is off; enable it in Settings -> Sessions API");
     child.kill("SIGTERM");
   }, 20000);
 });

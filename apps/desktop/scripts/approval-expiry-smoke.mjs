@@ -1,6 +1,7 @@
 /** Development-only approval expiry smoke using a loopback provider and isolated profile. */
 import assert from "node:assert/strict";
 import { buildSmokeEnv } from "./model-overrides-smoke-env.mjs";
+import { launchSmokeElectron } from "./smoke-electron-launch.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,7 +53,7 @@ writeFileSync(join(profile, "settings.json"), JSON.stringify({
   version: 2, provider: { activeConnectionId: "conn-smoke", custom: [{ id: "custom:smoke", name: "Smoke", baseUrl: fixtureUrl, kind: "openai-compatible", models: ["a"] }], connections: [{ id: "conn-smoke", providerId: "custom:smoke", label: "Approval smoke", model: "a", models: ["a"], transport: "openai-chat-completions", baseUrl: fixtureUrl, authOptional: true }] },
   tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "dark" }, security: { allowWeakSecretStorage: false },
 }));
-const app = spawn("pnpm", ["--filter", "@anycode/desktop", "dev", ...(process.env.ANYCODE_SMOKE_NO_SANDBOX === "1" ? ["--noSandbox"] : [])], { env, stdio: ["ignore", "inherit", "inherit"], detached: true });
+const app = launchSmokeElectron(spawn, { env, detached: true });
 let ws;
 const pending = new Map();
 let nextId = 0;

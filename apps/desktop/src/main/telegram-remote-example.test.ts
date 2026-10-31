@@ -248,8 +248,8 @@ async function harness(opts: { env?: Record<string, string | undefined>; bridge?
   return h;
 }
 
-async function waitFor(check: () => boolean, timeout = 6000): Promise<void> {
-  await vi.waitFor(() => expect(check()).toBe(true), { timeout, interval: 10 });
+async function waitFor(check: () => boolean, timeout = 15_000): Promise<void> {
+  await vi.waitFor(() => expect(check()).toBe(true), { timeout, interval: 25 });
 }
 
 function texts(h: Harness): string[] {

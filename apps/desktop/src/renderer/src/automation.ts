@@ -25,6 +25,10 @@
  * zero DOM/Electron — same isolation discipline as tab-registry.test.ts.
  */
 import type { ImageAttachment, ImageMediaType, PermissionMode, ReasoningEffort } from "@anycode/core";
+import {
+  PROFILE_PANE_SETTLE_DEADLINE_MS as PROFILE_PANE_SETTLE_DEADLINE_MS_SHARED,
+  VISION_PANE_PROBE_DEADLINE_MS as VISION_PANE_PROBE_DEADLINE_MS_SHARED,
+} from "../../shared/automation-deadlines.js";
 import { flushSync } from "react-dom";
 import type {
   ConnectionPhase,
@@ -6175,7 +6179,7 @@ const PROFILE_PANE_COMMIT_DEADLINE_MS = 500;
  * click, and the rebuild row arming — so a genuinely dead click still fails
  * in half a second instead of a minute.
  */
-const PROFILE_PANE_SETTLE_DEADLINE_MS = 60_000;
+const PROFILE_PANE_SETTLE_DEADLINE_MS = PROFILE_PANE_SETTLE_DEADLINE_MS_SHARED;
 
 /**
  * Whether the Profile pane currently has ANY pass outstanding (TASK.187 S5).
@@ -6346,7 +6350,7 @@ const VISION_PANE_APPLY_DEADLINE_MS = 10_000;
  * of this route is most likely to be exercising on purpose. Sized with
  * headroom above the true ceiling rather than flush against it.
  */
-const VISION_PANE_PROBE_DEADLINE_MS = 65_000;
+const VISION_PANE_PROBE_DEADLINE_MS = VISION_PANE_PROBE_DEADLINE_MS_SHARED;
 
 /** Deadline for `shortcutsStartRecord`'s post-click settle poll (design/slice-P7.24-cut.md §4 W4) — local React `useState`, no IPC round-trip, same rationale as `MODEL_PILL_COMMIT_DEADLINE_MS`. */
 const SHORTCUTS_PANE_COMMIT_DEADLINE_MS = 500;

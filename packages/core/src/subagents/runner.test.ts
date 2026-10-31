@@ -1914,6 +1914,29 @@ describe("subagent activitySuppressed (TASK.102 slice S1 W2)", () => {
     expect(endEvents[0] && "activitySuppressed" in endEvents[0]).toBe(false);
   });
 
+  it("the kind:end progress carries the run's exact toolCalls (the settle, not the last progress frame)", async () => {
+    let step = 0;
+    const model = new ScriptedModelPort(() => {
+      step += 1;
+      return step === 1
+        ? multiToolStep([
+            { id: "tc-1", name: "TodoRead", input: {} },
+            { id: "tc-2", name: "TodoRead", input: {} },
+          ])
+        : textStep("child done");
+    });
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+    const progress: SubagentProgress[] = [];
+
+    const outcome = await runner.run({ ...REQ, agentType: "general-purpose" }, {
+      onProgress: (p) => progress.push(p),
+    });
+
+    expect(outcome.status).toBe("completed");
+    expect(outcome.toolCalls).toBe(2);
+    expect(endOf(progress).toolCalls).toBe(2);
+  });
+
   it("invalid_input child tool calls count toward NEITHER emitted activity NOR activitySuppressed", async () => {
     // Fill the activity cap exactly with valid calls, THEN propose more calls
     // that are invalid (SDK-level parse failure, ProposedToolCall.invalid) —

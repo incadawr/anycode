@@ -2936,6 +2936,63 @@ describe("desktop store — subagent_end.responseModel forwarding (TASK.161 slic
     });
   });
 
+  // A finished child's tool-call count must be the TERMINAL one: the session
+  // tier's progress frames cross a leading-edge 1000 ms throttle (and inline
+  // frames can equally predate the last call), so the card's own count could
+  // stay one short forever once the run settled.
+  it("subagent_end carrying toolCalls settles the exact count, overriding the last (throttled) progress count", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-tc");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId: "call-tc", agentType: "explore", description: "d" },
+    });
+    // The throttled stream's last word: one call.
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_progress", toolCallId: "call-tc", turns: 1, toolCalls: 1, lastTool: "Bash" },
+    });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_end", toolCallId: "call-tc", status: "completed", turns: 1, durationMs: 100, toolCalls: 2 },
+    });
+
+    const block = findByToolCallId(store, "call-tc");
+    expect(block).toMatchObject({ subagent: { turns: 1, toolCalls: 2, lastTool: "Bash", final: { status: "completed" } } });
+  });
+
+  it("subagent_end without toolCalls (legacy replay / no measurement) keeps the last progress count", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-tc-legacy");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId: "call-tc-legacy", agentType: "explore", description: "d" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_progress", toolCallId: "call-tc-legacy", turns: 1, toolCalls: 3 },
+    });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_end", toolCallId: "call-tc-legacy", status: "completed", turns: 1, durationMs: 100 },
+    });
+
+    const block = findByToolCallId(store, "call-tc-legacy");
+    expect(block).toMatchObject({ subagent: { toolCalls: 3, final: { status: "completed" } } });
+  });
+
   it("subagent_end without ceiling leaves the key absent on final", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
