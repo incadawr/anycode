@@ -103,6 +103,26 @@ const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\
 const PREFIXED_ID_RE = /\b(?:sess|session|tab|msg|message|call|tool_call|turn|conn|connection|run|req|request|spawn|host|proc|pid)_[A-Za-z0-9-]{6,}\b/gi;
 const LONG_HEX_ID_RE = /\b[0-9a-f]{16,}\b/gi;
 
+/**
+ * ONE replacement made by `textWithRedactions()`, positioned in the text it
+ * returns. The id identifies the REPLACEMENT (never the value), so a caller
+ * that carries the same source string into two places can report the event
+ * once, and a caller that throws part of a field away can tell which events
+ * went with it.
+ */
+export interface DiagnosticsRedaction {
+  /** Unique within one anonymiser, i.e. one export. */
+  id: number;
+  /** Offset of the replacement inside the returned text. */
+  start: number;
+}
+
+export interface DiagnosticsScrubbedText {
+  text: string;
+  /** One entry per replacement, ordered by position. */
+  redactions: readonly DiagnosticsRedaction[];
+}
+
 export interface DiagnosticsAnonymizer {
   /**
    * Deterministic, salted replacement for one raw id. Deliberately a method
@@ -112,6 +132,12 @@ export interface DiagnosticsAnonymizer {
   id(raw: string): string;
   /** Removes paths, URLs/hosts, e-mails, secrets and raw ids from free text. */
   text(raw: string): string;
+  /**
+   * `text()` plus WHERE it made each replacement. Callers that keep only a
+   * prefix of the result (the bundle truncates every carried field) use this
+   * to count the replacements their saved copy still holds.
+   */
+  textWithRedactions(raw: string): DiagnosticsScrubbedText;
   /** Recursive, whitelist-shaped projection for values that escaped a record whitelist. */
   value(input: unknown): unknown;
   /** How many replacements `text()`/`value()` have made (diagnostics only). */
@@ -136,6 +162,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function createDiagnosticsAnonymizer(options?: DiagnosticsAnonymizerOptions): DiagnosticsAnonymizer {
   const salt = options?.salt ?? randomBytes(16).toString("hex");
   let redactions = 0;
+  let nextRedactionId = 0;
 
   function hash(raw: string): string {
     return createHmac("sha256", salt).update(raw, "utf8").digest("hex").slice(0, HASH_CHARS);
@@ -145,43 +172,90 @@ export function createDiagnosticsAnonymizer(options?: DiagnosticsAnonymizerOptio
     return `${HASH_PREFIX}${hash(raw)}`;
   }
 
-  function replaceAll(input: string, pattern: RegExp, replacement: string | ((match: string) => string)): string {
-    // Patterns are global; using String#replace only counts when something matched.
-    return input.replace(pattern, (match: string, ...args: unknown[]) => {
+  /**
+   * Applies ONE pattern and keeps every earlier replacement's position valid in
+   * the rewritten text: a replacement before a match does not move, one after
+   * it moves by the accumulated length delta, and one the match swallowed is discarded because it no longer survives.
+   */
+  function applyPattern(
+    state: { text: string; redactions: DiagnosticsRedaction[] },
+    pattern: RegExp,
+    replacement: string | ((match: string) => string),
+  ): void {
+    const input = state.text;
+    const prior = state.redactions;
+    const next: DiagnosticsRedaction[] = [];
+    let out = "";
+    let cursor = 0;
+    let shift = 0;
+    let index = 0;
+    pattern.lastIndex = 0;
+    for (let match = pattern.exec(input); match !== null; match = pattern.exec(input)) {
+      const matched = match[0];
+      if (matched.length === 0) {
+        // A zero-width match would never advance the cursor.
+        pattern.lastIndex += 1;
+        continue;
+      }
+      const start = match.index;
+      const end = start + matched.length;
+      out += input.slice(cursor, start);
+      for (; index < prior.length && prior[index]!.start < end; index += 1) {
+        const event = prior[index]!;
+        if (event.start < start) next.push({ id: event.id, start: event.start + shift });
+        else redactions -= 1;
+      }
+      next.push({ id: nextRedactionId, start: out.length });
+      nextRedactionId += 1;
       redactions += 1;
-      return typeof replacement === "function" ? replacement(match) : replacement;
-    });
+      const replaced = typeof replacement === "function" ? replacement(matched) : replacement;
+      out += replaced;
+      shift += replaced.length - matched.length;
+      cursor = end;
+    }
+    for (; index < prior.length; index += 1) {
+      next.push({ id: prior[index]!.id, start: prior[index]!.start + shift });
+    }
+    state.text = out + input.slice(cursor);
+    state.redactions = next;
   }
 
-  function text(raw: string): string {
-    let out = raw.length > DIAGNOSTICS_MAX_TEXT_CHARS ? raw.slice(0, DIAGNOSTICS_MAX_TEXT_CHARS) : raw;
-    if (out.length === 0) return out;
+  function textWithRedactions(raw: string): DiagnosticsScrubbedText {
+    const state = {
+      text: raw.length > DIAGNOSTICS_MAX_TEXT_CHARS ? raw.slice(0, DIAGNOSTICS_MAX_TEXT_CHARS) : raw,
+      redactions: [] as DiagnosticsRedaction[],
+    };
+    if (state.text.length === 0) return { text: state.text, redactions: state.redactions };
 
     // Credentials and identity tokens first: later rules must not split them.
     for (const pattern of SECRET_PATTERNS) {
-      out = replaceAll(out, pattern, "<secret>");
+      applyPattern(state, pattern, "<secret>");
     }
-    out = replaceAll(out, EMAIL_RE, "<email>");
-    out = replaceAll(out, URL_RE, (match) => `${match.split("://")[0]}://<host>`);
+    applyPattern(state, EMAIL_RE, "<email>");
+    applyPattern(state, URL_RE, (match) => `${match.split("://")[0]}://<host>`);
     for (const pattern of PATH_PATTERNS) {
-      out = replaceAll(out, pattern, "<path>");
+      applyPattern(state, pattern, "<path>");
     }
-    out = replaceAll(out, IPV4_RE, "<ip>");
+    applyPattern(state, IPV4_RE, "<ip>");
     for (const pattern of HOST_PATTERNS) {
-      out = replaceAll(out, pattern, "<host>");
+      applyPattern(state, pattern, "<host>");
     }
-    out = replaceAll(out, UUID_RE, (match) => id(match));
-    out = replaceAll(out, PREFIXED_ID_RE, (match) => id(match));
-    out = replaceAll(out, LONG_HEX_ID_RE, (match) => id(match));
+    applyPattern(state, UUID_RE, (match) => id(match));
+    applyPattern(state, PREFIXED_ID_RE, (match) => id(match));
+    applyPattern(state, LONG_HEX_ID_RE, (match) => id(match));
 
     // Key=value env-style assignments keep the NAME (useful for diagnosis) and
     // lose the value. Runs last so it cannot eat an already-replaced marker.
-    out = replaceAll(out, /\b([A-Z][A-Z0-9_]{2,})=([^\s"'<][^\s"']*)/g, (_match) => {
+    applyPattern(state, /\b([A-Z][A-Z0-9_]{2,})=([^\s"'<][^\s"']*)/g, (_match) => {
       const name = /^[A-Z][A-Z0-9_]{2,}/.exec(_match)?.[0] ?? "VAR";
       return `${name}=<value>`;
     });
 
-    return out;
+    return { text: state.text, redactions: state.redactions };
+  }
+
+  function text(raw: string): string {
+    return textWithRedactions(raw).text;
   }
 
   function value(input: unknown, depth = 0): unknown {
@@ -208,6 +282,7 @@ export function createDiagnosticsAnonymizer(options?: DiagnosticsAnonymizerOptio
   return {
     id,
     text,
+    textWithRedactions,
     value: (input) => value(input),
     redactionCount: () => redactions,
     salt,
