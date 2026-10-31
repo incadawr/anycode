@@ -539,6 +539,19 @@ const serviceConsentEntrySchema = z
   })
   .strict();
 
+const accountSourceBindingSchema = z.object({
+  plugin: z.string().min(1), source: z.string().min(1),
+  descriptorHash: z.string().regex(/^[a-f0-9]{64}$/),
+  connectionId: z.string().min(1), accountId: z.string().min(1),
+  ownership: z.record(z.string(), z.object({
+    model: z.object({ value: z.literal(true), overridden: z.boolean().optional() }).optional(),
+    pricing: z.object({ value: tokenRatesSchema, overridden: z.boolean().optional() }).optional(),
+    contextWindowTokens: z.object({ value: z.number().int().min(1024).max(1_000_000), overridden: z.boolean().optional() }).optional(),
+    pricingOverride: z.literal(true).optional(),
+    contextWindowTokensOverride: z.literal(true).optional(),
+  })),
+});
+
 // The `plugins` settings block. `autoUpdateOfficial` absent = false (the
 // scheduler never auto-installs without it); `officialIndexUrl` is a
 // dev/automation override never written by the app; `mcpConsent` undefined =
@@ -551,6 +564,7 @@ const pluginsSettingsSchema = z
     // (undefined still means "not yet migrated" for mcpConsent).
     mcpConsent: z.array(mcpConsentEntrySchema).optional(),
     serviceConsent: z.array(serviceConsentEntrySchema).optional(),
+    accountSources: z.array(accountSourceBindingSchema).optional().catch(undefined),
   })
   .strict()
   .optional()

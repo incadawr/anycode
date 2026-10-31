@@ -258,6 +258,23 @@ export interface ModelOverrides {
   reasoningSupported?: boolean;
 }
 
+/** Source-owned values; explicit user edits are marked even when equal. */
+export interface AccountSourceModelOwnership {
+  model?: { value: true; overridden?: boolean };
+  pricing?: { value: TokenRates; overridden?: boolean };
+  contextWindowTokens?: { value: number; overridden?: boolean };
+  pricingOverride?: true;
+  contextWindowTokensOverride?: true;
+}
+export interface AccountSourceBinding {
+  plugin: string;
+  source: string;
+  descriptorHash: string;
+  connectionId: string;
+  accountId: string;
+  ownership: Record<string, AccountSourceModelOwnership>;
+}
+
 export interface ProviderConnection {
   openRouterProviders?: string[];
   /** User choices keyed by exact model id; independent of fetched capabilities. */
@@ -874,6 +891,7 @@ export interface AnycodeSettings {
     mcpConsent?: { plugin: string; serversHash: string; grantedAt: string }[];
     /** per-plugin service grants keyed by servicesHash; absent = none granted (fail closed). */
     serviceConsent?: { plugin: string; servicesHash: string; grantedAt: string }[];
+    accountSources?: AccountSourceBinding[];
   };
   /**
    * Sessions API; additive-optional, version NOT bumped). Owned

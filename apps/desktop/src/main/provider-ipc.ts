@@ -60,6 +60,7 @@ import { z } from "zod";
 import { findCatalogEntry } from "@anycode/core/catalog";
 import type { FileIoLogger } from "../settings/files.js";
 import { loadSettings, normalizeActiveConnection, saveSettings, settingsWriteEpoch, withSettingsFileLock } from "../settings/files.js";
+import { markOverride } from "./account-sources/sync.js";
 import { isHttpsOrLocalhostUrl, isLoopbackUrl, settingsSchema } from "../settings/schema.js";
 import type { AnycodeSettings, CustomProviderRecord, ProviderConnection, SecretKey } from "../shared/settings.js";
 import { mergeModelIds, normalizeModelId } from "../shared/settings.js";
@@ -702,6 +703,14 @@ export async function handleCustomProviderUpdate(deps: ProviderIpcDeps, raw: unk
       ...loaded.settings,
       provider: { ...loaded.settings.provider, custom, connections },
     };
+    if (req.models !== undefined && loaded.settings.plugins?.accountSources) {
+      const accountSources = structuredClone(loaded.settings.plugins.accountSources);
+      const connectionIds = new Set(connections.filter((connection) => connection.providerId === req.id).map((connection) => connection.id));
+      for (const binding of accountSources.filter((entry) => connectionIds.has(entry.connectionId))) {
+        for (const model of existing.models) if (!req.models.includes(model)) markOverride(binding.ownership, model, "model");
+      }
+      merged.plugins = { ...loaded.settings.plugins, accountSources };
+    }
     if (!settingsSchema.safeParse(merged).success) {
       return { ok: false, reason: "invalid" };
     }

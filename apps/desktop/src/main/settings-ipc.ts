@@ -31,6 +31,7 @@ import { CLAUDE_CONTEXT_WINDOW_MAX, CLAUDE_CONTEXT_WINDOW_MIN } from "../shared/
 import { SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
 import type { FileIoLogger } from "../settings/files.js";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
+import { markOverride } from "./account-sources/sync.js";
 import { keybindingsSchema, mergeSettings, settingsSchema, roleProfilesWriteSchema } from "../settings/schema.js";
 import { RECOGNIZER_SET_CHANNEL } from "../shared/recognizer.js";
 import type { RecognizerSetRequest } from "../shared/recognizer.js";
@@ -1974,6 +1975,15 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     // `loaded.settings` stays the untouched "before" the health diff compares
     // against. `undefined` = the field was not sent; `null` = clear it.
     const draft: AnycodeSettings = { ...loaded.settings };
+    if (loaded.settings.plugins?.accountSources) {
+      const accountSources = structuredClone(loaded.settings.plugins.accountSources);
+      for (const binding of accountSources.filter((entry) => entry.connectionId === req.id)) {
+        for (const model of Object.keys(req.modelPricing ?? {})) markOverride(binding.ownership, model, "pricing");
+        const target = (req.modelOverrideModel ?? (req.model !== undefined ? req.model : existing.model))?.trim();
+        if (target && req.contextWindowTokens !== undefined) markOverride(binding.ownership, target, "contextWindowTokens");
+      }
+      draft.plugins = { ...loaded.settings.plugins, accountSources };
+    }
     let normalizedProxyRef: string | null | undefined;
     let importedPassword: string | undefined;
     if (req.proxyRef !== undefined) {

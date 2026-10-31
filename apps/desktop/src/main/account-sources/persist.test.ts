@@ -1,0 +1,28 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
+import { accountCatalogSchema } from "@anycode/core/plugins-admin";
+import { cloneDefaults } from "../../settings/schema.js";
+import { loadSettings, saveSettings } from "../../settings/files.js";
+import { persistCatalog } from "./persist.js";
+
+let dir: string | undefined;
+afterEach(async () => { if (dir) await rm(dir, { recursive: true, force: true }); });
+it("persists one authorized catalog atomically, suppressing no-ops and stale responses", async () => {
+  dir = await mkdtemp(join(tmpdir(), "account-sync-"));
+  const path = join(dir, "settings.json");
+  const settings = cloneDefaults();
+  settings.provider.connections = [{ id: "conn", providerId: "custom:corp" }];
+  settings.provider.custom = [{ id: "custom:corp", name: "Corp", baseUrl: "https://gateway.example.com/v1", kind: "openai-compatible", models: [] }];
+  const expected = { plugin: "company", source: "cluster", descriptorHash: "a".repeat(64), connectionId: "conn", accountId: "employee", gatewayBaseUrl: "https://gateway.example.com/v1", gatewayKind: "openai-compatible" as const };
+  settings.plugins = { accountSources: [{ plugin: expected.plugin, source: expected.source, descriptorHash: expected.descriptorHash, connectionId: expected.connectionId, accountId: expected.accountId, ownership: {} }] };
+  await saveSettings(path, settings);
+  const catalog = accountCatalogSchema.parse({ schemaVersion: "anycode.account-catalog.v1", accountId: "employee", revision: "1", complete: true, models: [{ id: "m", billing: "free" }] });
+  const notify = vi.fn();
+  expect(await persistCatalog(path, expected, catalog, () => true, notify)).toBe("changed");
+  expect((await loadSettings(path)).settings.provider.custom?.[0]?.models).toEqual(["m"]);
+  expect(await persistCatalog(path, expected, catalog, () => true, notify)).toBe("unchanged");
+  expect(await persistCatalog(path, expected, catalog, () => false, notify)).toBe("stale");
+  expect(notify).toHaveBeenCalledTimes(1);
+});
