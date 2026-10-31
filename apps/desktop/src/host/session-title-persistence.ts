@@ -22,7 +22,7 @@ import type { SessionPersistence } from "./session.js";
 
 /** The one method these seams use; `SqlitePersistenceAdapter` satisfies it. */
 export interface SessionTitleStore {
-  touchSession(id: string, patch: { title?: string; mode?: PermissionMode; model?: string; codexFast?: boolean }): Promise<void>;
+  touchSession(id: string, patch: { title?: string; mode?: PermissionMode; model?: string; codexFast?: boolean | null }): Promise<void>;
 }
 
 export interface SessionTitlePersistenceDeps {

@@ -682,7 +682,7 @@ export interface SessionPersistence {
    * is a plain TEXT column — no migration, cut §2(k).4). The host maps it to
    * that column at the persistence boundary, where the cast is visible.
    */
-  touch(patch: { title?: string; mode?: PermissionMode; model?: string; enginePreset?: string; codexFast?: boolean }): void | Promise<void>;
+  touch(patch: { title?: string; mode?: PermissionMode; model?: string; enginePreset?: string; codexFast?: boolean | null }): void | Promise<void>;
   /**
    * Writes a title whose caller must be able to CONFIRM it — the Sessions API
    * `set_agent_title` acknowledgement promises the next boot reads this title
@@ -5861,7 +5861,7 @@ export class Session {
         this.persistence?.touch({ model: result.model });
       }
       if (intent.fast !== undefined) this.persistence?.touch({ codexFast: intent.fast });
-      else if (result.resetFast) this.persistence?.touch({ codexFast: false });
+      else if (result.resetFast) this.persistence?.touch({ codexFast: null });
       if (intent.presetId !== undefined) {
         this.persistence?.touch({ enginePreset: result.activePresetId });
       }

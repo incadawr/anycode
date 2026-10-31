@@ -1,6 +1,6 @@
 import { bindCodexUsage } from "../../native-usage.js";
-import { createHarness } from "../../test-harness.js";
-import { summarizeProviderUsage } from "../../session.js";
+import { createHarness, MemFs } from "../../test-harness.js";
+import { summarizeProviderUsage, Session, Outbound } from "../../session.js";
 import { readFileSync } from "node:fs";
 import * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { describe, beforeEach, afterEach, expect, it, vi } from "vitest";
 import type { AgentEvent, SessionSubagentPort } from "@anycode/core";
-import { NodeFileSystemAdapter, SqlitePersistenceAdapter } from "@anycode/core";
+import { NodeFileSystemAdapter, SqlitePersistenceAdapter, SessionPermissionRules } from "@anycode/core";
 import type { HostToUiMessage } from "../../../shared/protocol.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
 import { CodexApprovalBridge } from "./approval-bridge.js";
@@ -4159,52 +4159,37 @@ describe("Codex service tier", () => {
           server.threadEcho.model = "gpt-5.6-sol";
           server.threadEcho.serviceTier = tier;
           const { engine } = await createNativeCodexSession(server, "/work");
-          if (choice !== undefined) engine.selectFast(choice);
-          engine.selectModel(unsupported ? "gpt-5.4-mini" : "gpt-5.6-sol");
+          const db = new SqlitePersistenceAdapter(":memory:");
+          await db.createSession({ id: "speed", workspace: "/work", model: "gpt-5.6-sol", mode: "build" });
+          const outbound = new Outbound();
+          const writes: Promise<void>[] = [];
+          const session = new Session({ outbound, engine, engineSettings: engine,
+            broker: new IpcPermissionBroker(message => outbound.emit(message)), fs: new MemFs(),
+            workspace: "/work", model: "gpt-5.6-sol", sessionId: "speed", rules: new SessionPermissionRules(),
+            persistence: { touch: patch => { writes.push(db.touchSession("speed", patch)); } } });
+          if (choice !== undefined) await session.communicationSetFast(choice);
+          expect(await session.communicationSetModel({ model: unsupported ? "gpt-5.4-mini" : "gpt-5.6-sol" })).toMatchObject({ ok: true });
+          await Promise.all(writes);
           await runTurn(server, engine);
-          const expected = unsupported ? undefined : choice ?? (tier === "priority" || tier === "fast" ? true : false);
+          const expected = unsupported ? undefined : choice ?? (tier === "priority" || tier === "fast" ? true : tier === "default" || tier === null ? false : undefined);
           expect(engine.snapshot().fast).toBe(expected);
           const override = server.turnStartParams().at(-1)?.serviceTier;
-          if (unsupported || choice === false || (choice === undefined && (tier === "flex" || tier === undefined))) expect(override).toBe("default");
-          else if (choice === true) expect(override).toBe("fast");
+          if (!unsupported && choice === false) expect(override).toBe("default");
+          else if (!unsupported && choice === true) expect(override).toBe("fast");
           else expect(override).toBeUndefined();
           const nextServer = new FakeAppServer();
           nextServer.threadEcho.model = unsupported ? "gpt-5.4-mini" : "gpt-5.6-sol";
           nextServer.threadEcho.serviceTier = override ?? tier;
+          const row = (await db.getRootSession("speed"))!;
           const resumed = await resumeNativeCodexSession(nextServer, "/work", "persisted-thread", undefined, undefined,
-            { model: nextServer.threadEcho.model as string, ...(expected !== undefined ? { fast: expected } : {}), origin: "persisted" });
+            { model: row.model, ...(row.codexFast !== undefined ? { fast: row.codexFast } : {}), origin: "persisted" });
           await runTurn(nextServer, resumed.engine);
           expect(resumed.engine.snapshot().fast).toBe(expected);
-          if (expected !== undefined) expect(nextServer.turnStartParams().at(-1)?.serviceTier).toBe(expected ? "fast" : "default");
+          expect(nextServer.turnStartParams().at(-1)?.serviceTier).toBe(!unsupported && choice !== undefined ? (choice ? "fast" : "default") : undefined);
         }
       }
     },
   );
-  it.each([true, false])("restores stored speed %s and clears it on an unsupported model", async (fast) => {
-    const db = new SqlitePersistenceAdapter(":memory:");
-    await db.createSession({ id: "speed", workspace: "/work", model: "gpt-5.6-sol", mode: "build" });
-    const first = new FakeAppServer();
-    first.threadEcho.model = "gpt-5.6-sol";
-    const original = await createNativeCodexSession(first, "/work");
-    expect(original.engine.selectFast(fast)).toMatchObject({ ok: true });
-    await db.touchSession("speed", { codexFast: fast });
-    const row = (await db.getRootSession("speed"))!;
-    const server = new FakeAppServer();
-    server.threadEcho.model = "gpt-5.6-sol";
-    const resumed = await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, { model: row.model, fast: row.codexFast, origin: "persisted" });
-    await runTurn(server, resumed.engine);
-    expect(server.turnStartParams().at(-1)?.serviceTier).toBe(fast ? "fast" : "default");
-    expect(resumed.engine.selectModel("gpt-5.4-mini")).toMatchObject({ ok: true, resetFast: true });
-    await db.touchSession("speed", { model: "gpt-5.4-mini", codexFast: false });
-    const switched = (await db.getRootSession("speed"))!;
-    const nextServer = new FakeAppServer();
-    nextServer.threadEcho.model = "gpt-5.4-mini";
-    const next = await resumeNativeCodexSession(nextServer, "/work", "persisted-thread", undefined, undefined, { model: switched.model, fast: switched.codexFast, origin: "persisted" });
-    await runTurn(nextServer, next.engine);
-    expect(nextServer.turnStartParams().at(-1)?.serviceTier).not.toBe("fast");
-    expect(next.engine.snapshot().fast).not.toBe(true);
-  });
-
   it("restores a persisted override and sends it on the first resumed turn", async () => {
     const server = new FakeAppServer();
     server.threadEcho.serviceTier = "priority";

@@ -382,7 +382,6 @@ function buildSettings(
     effortsByModel,
     ...(catalog.get(model)?.supportsFast && (["priority", "fast", "default"].includes(result.serviceTier as string) || result.serviceTier === null) ? { fast: result.serviceTier === "priority" || result.serviceTier === "fast" } : {}),
     ...(requestedFast !== undefined && catalog.get(model)?.supportsFast ? { fast: requestedFast, speedOverride: requestedFast } : {}),
-    ...(!catalog.get(model)?.supportsFast && (requestedFast === true || result.serviceTier === "priority" || result.serviceTier === "fast") ? { speedOverride: false } : {}),
     ...(excludeTmpRoots !== undefined ? { excludeTmpRoots } : {}),
     ...(childTempDir !== undefined ? { childTempDir } : {}),
     notices,
@@ -1105,10 +1104,7 @@ export class CodexEngine implements SessionEngine {
     settings.model = id;
     if (!settings.catalog.get(id)?.supportsFast) {
       delete settings.fast;
-      settings.speedOverride = false;
-    } else if (settings.fast === undefined) {
-      settings.fast = false;
-      settings.speedOverride = false;
+      delete settings.speedOverride;
     }
     // Each model keeps its own remembered effort. Switching restores that
     // model's last valid choice (or its catalog default).
