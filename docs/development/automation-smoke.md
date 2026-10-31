@@ -57,7 +57,7 @@ profile-ui-smoke, prompt-cache-ui-smoke, provider-connections-ui-smoke,
 provider-dogfood-w13-smoke, queue-smoke, reasoning-ui-smoke, retry-ui-smoke,
 rewind-ui-smoke, settings-ui-smoke, sidebar-rowcut-smoke, sidebar-ui-smoke,
 skills-ui-smoke, slash-menu-ui-smoke, start-screen-smoke,
-subagent-card-smoke, subagents-ui-smoke, task106-model-picker-smoke,
+model-picker-smoke, subagent-card-smoke, subagents-ui-smoke,
 todo-panel-smoke, todo-subagent-smoke, transcript-follow-smoke,
 workflow-map-smoke
 ```
