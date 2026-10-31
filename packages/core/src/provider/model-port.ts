@@ -942,7 +942,12 @@ export class AiSdkModelPort implements ModelPort {
       try {
         const model = await this.buildAttemptModel(attemptIncludeUsage, onResponseActivity);
         const requestStartedAt = performance.now();
-        let firstEventAt: number | undefined;
+        // Generation speed is measured from the FIRST OUTPUT TOKEN — text,
+        // reasoning or tool content — never from the first stream event. A
+        // metadata chunk (`start-step`, a raw `message_start`) can arrive
+        // seconds before the model produces anything; counting that wait as
+        // generation would understate t/s and shrink time-to-first-token.
+        let firstOutputAt: number | undefined;
         const result = streamText({
           model,
           // System prompt goes out-of-band: ai@7 rejects system-role messages
@@ -989,11 +994,6 @@ export class AiSdkModelPort implements ModelPort {
             break;
           }
 
-          // The SDK emits `start` before the provider responds. `start-step`
-          // is emitted on the first provider chunk; other chunks cover ports
-          // that do not emit that marker. Capture even untranslated raw events.
-          if (firstEventAt === undefined && outcome.value.type !== "start") firstEventAt = performance.now();
-
           // Provenance capture runs before translation because `raw` parts
           // have no core-vocabulary counterpart and are dropped by
           // `translateStreamPart` (its default arm). Last write wins: across a
@@ -1007,7 +1007,10 @@ export class AiSdkModelPort implements ModelPort {
 
           if (reasoningTextRecovery !== undefined) {
             for (const recovered of reasoningTextRecovery.observe(outcome.value)) {
-              if (isModelOutputEvent(recovered)) hadModelOutput = true;
+              if (isModelOutputEvent(recovered)) {
+                hadModelOutput = true;
+                firstOutputAt ??= performance.now();
+              }
               yield recovered;
             }
           }
@@ -1021,10 +1024,17 @@ export class AiSdkModelPort implements ModelPort {
           if (event === null) {
             continue;
           }
-          // The first provider event can precede visible reasoning or text.
-          if (event.type === "finish" && event.finishReason !== "error" && firstEventAt !== undefined) {
+          // Output may begin with reasoning or a tool block, not text; any of
+          // them opens the generation window. `finish` itself is not a token,
+          // so a step that produced billed output but never streamed any is
+          // honestly left without a measurement (the popover shows a dash)
+          // instead of reporting an infinite/understated rate.
+          if (firstOutputAt === undefined && event.type !== "finish" && isModelOutputEvent(event)) {
+            firstOutputAt = performance.now();
+          }
+          if (event.type === "finish" && event.finishReason !== "error" && firstOutputAt !== undefined) {
             const finishedAt = performance.now();
-            event = { ...event, timeToFirstEventMs: Math.max(0, firstEventAt - requestStartedAt), generationDurationMs: Math.max(0, finishedAt - firstEventAt) };
+            event = { ...event, timeToFirstEventMs: Math.max(0, firstOutputAt - requestStartedAt), generationDurationMs: Math.max(0, finishedAt - firstOutputAt) };
           }
           if (event.type === "error") event = { ...event, error: contextualizeNetworkFailure(event.error, this.config.baseUrl) };
           // Drop provider chunk-parse artifacts that are safe to ignore (a

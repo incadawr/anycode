@@ -18,6 +18,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Custom (non-catalog) Anthropic-compatible endpoints can now distinguish the xhigh and max thinking levels by their thinking budget, and by the effort value as well when the connection declares both levels; catalog providers and strict endpoints keep their previous request bytes.
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
+- Generation speed in the context popover is measured from the first output token instead of the first stream chunk, so a slow first response no longer shows up as slower generation, and a step that streamed no output shows a dash instead of a made-up rate.
 - DeepSeek costs now follow the provider's peak/off-peak tariff: steps outside the peak windows (01:00–04:00 and 06:00–10:00 UTC on weekdays) are estimated at half rate, and the context popover labels its estimate "peak" or "off-peak".
 - Choosing No thinking for Xiaomi MiMo models now turns their reasoning off.
 - Xiaomi MiMo Token Plan sessions show a pay-as-you-go list-price cost estimate instead of “price unknown”.

@@ -772,7 +772,7 @@ function rowToCodexShadowCommandItem(row: CodexThreadItemRow): CodexShadowComman
 export interface ProviderUsageRecord {
   subagentId?: string;
   generationDurationMs?: number;
-  /** Time from request start to first provider event (stored in the legacy-named column). */
+  /** Time from request start to the first output token (stored in the legacy-named column); absent when the step never streamed one. */
   timeToFirstEventMs?: number;
   sessionId: string;
   turnId: string;
