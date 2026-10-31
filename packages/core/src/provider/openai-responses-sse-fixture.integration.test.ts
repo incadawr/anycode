@@ -131,7 +131,9 @@ describe("AiSdkModelPort over a real @ai-sdk/openai Responses SSE stream (TASK.4
     expect(events.filter((e) => e.type === "error")).toEqual([]);
     expect(events.find((e) => e.type === "finish")).toEqual({
       type: "finish", finishReason: "stop",
-      timeToFirstEventMs: expect.any(Number), generationDurationMs: expect.any(Number),
+      // No output token is streamed here (only response.created +
+      // response.completed), so there is no generation window to report: the
+      // timing fields are honestly absent rather than measured off metadata.
       usage: { inputTokens: 500, outputTokens: 10, totalTokens: 510,
         ...(cached !== undefined ? { cachedInputTokens: cached } : {}) },
     });
