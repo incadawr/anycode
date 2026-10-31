@@ -9,6 +9,11 @@ import { classifyNetworkConfigurationFailure } from "./network-failure.js";
 import type { ModelStreamEvent } from "../types/events.js";
 import { isQuotaExhaustion, isRetryableStreamError, USAGE_LIMIT_PATTERN, matchesFailureText } from "./retry.js";
 
+/** A locally identified billing failure, carrying no credential material. */
+export class MiniMaxBalanceFailure extends Error {
+  constructor(readonly original: unknown) { super("MiniMax balance exhausted"); }
+}
+
 /** True when `e` is model-generated output (content/reasoning/tool/finish), false for `start`/`error`/`stream_retry`. */
 export function isModelOutputEvent(e: ModelStreamEvent): boolean {
   switch (e.type) {
@@ -186,6 +191,10 @@ function isNetworkFailure(error: unknown, message: string): boolean {
  * These divergences are pinned in failure.test.ts (double-assert pins).
  */
 export function classifyProviderFailure(error: unknown): ProviderFailureClassification {
+  if (error instanceof MiniMaxBalanceFailure) {
+    const result = classifyProviderFailure(error.original);
+    return { ...result, safe: { ...result.safe, message: `${result.safe.message}. This is a pay-as-you-go key; for the M Plan subscription use a key starting with sk-cp-.` } };
+  }
   const statusCode = extractStatusCode(error);
   const message = extractMessage(error);
 

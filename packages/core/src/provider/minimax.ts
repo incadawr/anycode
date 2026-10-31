@@ -1,3 +1,5 @@
+import { MiniMaxBalanceFailure } from "./failure.js";
+
 /**
  * MiniMax wire-mapping helpers.
  *
@@ -67,4 +69,18 @@ export function isMiniMaxModel(providerName?: string, modelId?: string): boolean
  */
 export function isMiniMaxEffortModel(providerName?: string, modelId?: string): boolean {
   return isMiniMaxProvider(providerName) && modelId === MINIMAX_EFFORT_MODEL;
+}
+
+/** Identify a balance error locally without exposing the key or provider body. */
+export function contextualizeMiniMaxBalance(error: unknown, providerName: string | undefined, apiKey: string | undefined): unknown {
+  if (!isMiniMaxProvider(providerName) || !apiKey?.startsWith("sk-api-")) return error;
+  if (!error || typeof error !== "object") return error;
+  const candidate = error as { message?: unknown; responseBody?: unknown; data?: unknown };
+  const values = [candidate.message, candidate.responseBody, candidate.data];
+  for (const value of values) {
+    let text: string;
+    try { text = typeof value === "string" ? value : JSON.stringify(value) ?? ""; } catch { continue; }
+    if (/insufficient_balance_error|\b1008\b/i.test(text)) return new MiniMaxBalanceFailure(error);
+  }
+  return error;
 }

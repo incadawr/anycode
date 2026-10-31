@@ -82,3 +82,18 @@ function getBuiltinCatalogNamesForMiniMax(): string[] {
     .map((id) => findCatalogEntry(id)?.name)
     .filter((name): name is string => name !== undefined);
 }
+
+describe("balance failure hint", () => {
+  it("adds a fixed hint only for a MiniMax pay-as-you-go balance failure", async () => {
+    const { contextualizeMiniMaxBalance } = await import("./minimax.js");
+    const { classifyProviderFailure } = await import("./failure.js");
+    const error = { statusCode: 400, responseBody: '{"error":{"type":"insufficient_balance_error","code":1008}}' };
+    const hint = classifyProviderFailure(contextualizeMiniMaxBalance(error, "MiniMax", "sk-api-example")).safe.message;
+    expect(hint).toContain("pay-as-you-go");
+    expect(hint).toContain("sk-cp-");
+    expect(hint).not.toContain("sk-api-example");
+    for (const [provider, key, failure] of [["MiniMax", "sk-cp-example", error], ["Other", "sk-api-example", error], ["MiniMax", "sk-api-example", { statusCode: 400, message: "other failure" }]] as const) {
+      expect(classifyProviderFailure(contextualizeMiniMaxBalance(failure, provider, key)).safe.message).not.toContain("pay-as-you-go");
+    }
+  });
+});
