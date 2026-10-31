@@ -18,6 +18,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Settings → Codex marks which account is the default and offers “Make default” on the others; a new session that does not pick an account itself starts on that default instead of your personal `~/.codex` plan, and a Codex subagent runs on the same account as the tab that started it (a Claude or core tab’s Codex subagent uses that default account).
 - `create_session` accepts `account` (a Codex profile id or its label) and refuses an unknown or ambiguous one with `invalid_account` plus the candidate list; omitting it uses the default account.
 - A session’s context popover names the Codex account it runs on (and whether it is the default).
+- The session's Environment menu can export an anonymised diagnostics bundle for THAT session and its subagent sessions (telemetry, tool-call shapes and the host↔main wire log), with a preview before saving; prompts, model output, file paths, hostnames, keys and raw ids are removed, ids are salted per export, and no other session's data is included (GitHub #18).
 
 ### Fixed
 

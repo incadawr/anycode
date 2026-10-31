@@ -204,6 +204,16 @@ import type {
   ProxyRefSetRequest,
 } from "../shared/proxy.js";
 import { RECOGNIZER_PROBE_CHANNEL, RECOGNIZER_SET_CHANNEL } from "../shared/recognizer.js";
+// GitHub #18: Environment menu -> "Export diagnostics…". The only value that
+// crosses this bridge is the session id whose tree is exported; main builds,
+// anonymises and saves the bundle.
+import {
+  DIAGNOSTICS_PREVIEW_CHANNEL,
+  DIAGNOSTICS_SAVE_CHANNEL,
+  type DiagnosticsExportRequest,
+  type DiagnosticsPreviewResult,
+  type DiagnosticsSaveResult,
+} from "../shared/diagnostics.js";
 import {
   WORKSPACE_TRUST_DECIDE_CHANNEL,
   WORKSPACE_TRUST_FORGET_CHANNEL,
@@ -752,6 +762,17 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(WORKSPACE_TRUST_LIST_CHANNEL) as Promise<WorkspaceTrustListResult>,
     forget: (request: WorkspaceTrustForgetRequest): Promise<WorkspaceTrustForgetResult> =>
       ipcRenderer.invoke(WORKSPACE_TRUST_FORGET_CHANNEL, request) as Promise<WorkspaceTrustForgetResult>,
+  },
+  // GitHub #18: the anonymised diagnostics bundle of ONE session tree.
+  // Preview returns the already-scrubbed text; save opens the native dialog
+  // in main.
+  // The only thing the renderer names is the session whose TREE is exported;
+  // main resolves the directory, builds, anonymises and writes it.
+  diagnostics: {
+    preview: (request: DiagnosticsExportRequest): Promise<DiagnosticsPreviewResult> =>
+      ipcRenderer.invoke(DIAGNOSTICS_PREVIEW_CHANNEL, request) as Promise<DiagnosticsPreviewResult>,
+    save: (request: DiagnosticsExportRequest): Promise<DiagnosticsSaveResult> =>
+      ipcRenderer.invoke(DIAGNOSTICS_SAVE_CHANNEL, request) as Promise<DiagnosticsSaveResult>,
   },
   tabBootstrap: (): Promise<TabBootstrap> => ipcRenderer.invoke(TAB_BOOTSTRAP_CHANNEL) as Promise<TabBootstrap>,
   selectTab: (tabId: string): void => ipcRenderer.send(TAB_SELECT_CHANNEL, tabId),

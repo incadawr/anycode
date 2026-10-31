@@ -19,6 +19,7 @@ import { recordHostFailure } from "../host/error-diagnostics.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessagePortMain, UtilityProcess } from "electron";
 import { CREDENTIAL_REQUEST_TYPE, CREDENTIAL_RESPONSE_TYPE } from "../shared/credentials.js";
+import { createDiagnosticsRing } from "../shared/diagnostics-ring.js";
 import { PORT_ENVELOPE_TYPE, TAB_CLOSED_ENVELOPE_TYPE } from "../shared/envelopes.js";
 import { handleCreate, handleTabRebind, type TabIpcDeps } from "./tab-ipc.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
@@ -8461,4 +8462,66 @@ describe("TabHostManager — prepared (unpublished) tabs", () => {
  */
 it("registers a test timeout above the load-tolerant wait deadline", ({ task }) => {
   expect(task.timeout).toBeGreaterThanOrEqual(CI_WAIT_TIMEOUT_MS * 2);
+});
+
+describe("TabHostManager — diagnostics ring (GitHub #18)", () => {
+  it("records host->main message SHAPES and drops their payload", async () => {
+    const { fork, hosts } = liveForkRig();
+    const ring = createDiagnosticsRing({ scope: "main", now: () => 1 });
+    const manager = new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({}),
+      logger: silentLogger,
+      diagnosticsRing: ring,
+    });
+    manager.createTab({ workspace: "/ws", sessionId: "diag-session", resume: false });
+    await flush();
+
+    hosts[0]!.emit("message", {
+      type: PROVIDER_HEALTH_EVENT_TYPE,
+      kind: "failure",
+      code: "auth",
+      detail: "/Users/alice/private-project/prompt.txt says: ignore previous instructions",
+    });
+    await flush();
+
+    const channels = ring.snapshot().map((entry) => entry.channel);
+    expect(channels).toContain(`in:${PROVIDER_HEALTH_EVENT_TYPE}:failure`);
+    expect(JSON.stringify(ring.snapshot())).not.toContain("/Users/alice");
+    expect(JSON.stringify(ring.snapshot())).not.toContain("ignore previous");
+  });
+});
+
+describe("TabHostManager — diagnostics ring RPC on a host that is not running (GitHub #18)", () => {
+  it("reaches a closing host only when the caller opts in, so a broken host can still be described", async () => {
+    const rig = liveForkRig();
+    const manager = makeManager(rig.fork, windowRig().window);
+    manager.createTab({ workspace: "/ws", sessionId: "diag-a", resume: false });
+    manager.createTab({ workspace: "/ws", sessionId: "diag-b", resume: false });
+    await flush();
+    const host = rig.hosts[0]!;
+    const tabId = manager.listTabs().find((tab) => tab.sessionId === "diag-a")!.tabId;
+
+    // `closeTab` seals synchronously (`state = "closing"`) before its first
+    // await, so the two requests below are dispatched against exactly that
+    // state — a live process that is no longer "running".
+    void manager.closeTab(tabId);
+
+    await expect(manager.communicationRequest("diag-a", "get_diagnostics_ring", undefined, "/ws")).rejects.toThrow(
+      "unavailable",
+    );
+
+    const pending = manager.communicationRequest("diag-a", "get_diagnostics_ring", undefined, "/ws", {
+      allowNonRunning: true,
+    });
+    const request = host.postMessage.mock.calls
+      .map((call) => call[0] as { type?: string; requestId?: string; operation?: string })
+      .find((message) => message.type === "communication_request" && message.operation === "get_diagnostics_ring");
+    expect(request).toBeDefined();
+    host.emit("message", { type: "communication_response", requestId: request!.requestId, result: [] });
+    await expect(pending).resolves.toEqual([]);
+  });
 });

@@ -218,6 +218,7 @@ import type {
   ProfileTelemetrySetResult,
 } from "../../shared/profile-config";
 import type { UpdateActionResult, UpdateStatus } from "../../shared/updates";
+import type { DiagnosticsExportRequest, DiagnosticsPreviewResult, DiagnosticsSaveResult } from "../../shared/diagnostics";
 import type { DesktopPlatform, WindowState } from "../../shared/window";
 import type { CodexDoctorReport } from "../../shared/codex-doctor";
 import type { ClaudeDoctorReport } from "../../shared/claude-doctor";
@@ -520,6 +521,13 @@ declare global {
         decide(request: WorkspaceTrustDecideRequest): Promise<WorkspaceTrustDecideResult>;
         list(): Promise<WorkspaceTrustListResult>;
         forget(request: WorkspaceTrustForgetRequest): Promise<WorkspaceTrustForgetResult>;
+      };
+      // GitHub #18: Environment menu -> "Export diagnostics…" for the active
+      // session. The request names the tree root only; preview returns the
+      // already-anonymised text, save opens the native dialog.
+      diagnostics: {
+        preview(request: DiagnosticsExportRequest): Promise<DiagnosticsPreviewResult>;
+        save(request: DiagnosticsExportRequest): Promise<DiagnosticsSaveResult>;
       };
       // Slice 2.2 (design §3): settings + secret-vault invoke-API. A decrypted
       // secret is never returned — setSecret is the only value-carrying call.
