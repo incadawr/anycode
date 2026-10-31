@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- *  S1-B (design §4/§9.14): ed25519 keypair generator for the
+ * S1-B (design §4/§9.14): ed25519 keypair generator for the
  * official plugin index — `node scripts/plugins/keygen.mjs [--test]`.
  *
  * `--test` mints a TEST key (id `test-YYYY-N`): usable in non-packaged
