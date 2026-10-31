@@ -41,6 +41,7 @@ export function createOpenAICompatibleLanguageModel(config: EndpointConfig): Lan
   const provider = createOpenAICompatible({
     name: OPENAI_COMPATIBLE_PROVIDER_NAME,
     baseURL: normalizeExplicitBaseUrl(config.baseUrl),
+    ...(new URL(config.baseUrl).hostname === "openrouter.ai" ? { transformRequestBody: (body) => ({ ...body, usage: { include: true } }) } : {}),
     ...(config.apiKey !== undefined ? { apiKey: config.apiKey } : {}),
     ...(config.headers !== undefined ? { headers: config.headers } : {}),
     ...(config.includeUsage === true ? { includeUsage: true } : {}),

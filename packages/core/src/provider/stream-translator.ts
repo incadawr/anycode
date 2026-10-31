@@ -61,6 +61,7 @@ function normalizeFinishReason(sdkReason: string): FinishReason {
 interface StreamTranslationContext {
   transport?: string;
   stepRawUsage?: unknown;
+  openRouter?: boolean;
 }
 
 function cacheReadTokensReported(
@@ -120,10 +121,12 @@ export function translateStreamPart(
       const cachedInputTokens = cacheReadTokensReported(
         part.totalUsage.inputTokenDetails?.cacheReadTokens, context,
       );
+      const cost = context.openRouter && context.stepRawUsage && typeof context.stepRawUsage === "object" ? (context.stepRawUsage as Record<string, unknown>).cost : undefined;
       return {
         type: "finish",
         finishReason: normalizeFinishReason(part.finishReason),
         usage: {
+          ...(typeof cost === "number" && Number.isFinite(cost) && cost >= 0 ? { costUsd: cost } : {}),
           inputTokens: part.totalUsage.inputTokens,
           ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
           ...(part.totalUsage.inputTokenDetails?.cacheWriteTokens !== undefined ? { cacheWriteTokens: part.totalUsage.inputTokenDetails.cacheWriteTokens } : {}),

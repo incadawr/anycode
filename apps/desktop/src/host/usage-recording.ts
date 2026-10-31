@@ -28,6 +28,7 @@ import { calculateUsageCost, catalogRateFor, declaredPricingMode, pricingSnapsho
 
 /** Provider-reported token counts of one finished step. */
 export interface UsageTokens {
+  costUsd?: number;
   inputTokens?: number;
   cachedInputTokens?: number;
   cacheWriteTokens?: number;
@@ -74,7 +75,9 @@ export function priceUsageStep(
   const createdAt = pricing.finishedAt ?? (pricing.now ?? Date.now)();
   const price = pricing.baseUrl === undefined ? pricing.price : catalogRateFor(pricing.catalogEntry, pricing.baseUrl, pricing.model, declaredPricingMode(pricing.pricingRaw));
   const override = resolveUsagePrice(pricing.pricingRaw, pricing.model ?? "", price);
-  const cost = override?.subscription
+  const cost = typeof usage.costUsd === "number" && Number.isFinite(usage.costUsd) && usage.costUsd >= 0
+    ? { costUsd: usage.costUsd, priceBasisId: "provider" }
+    : override?.subscription
     ? { priceBasisId: "subscription" }
     : calculateUsageCost(usage, override?.price, createdAt);
   return { createdAt, cost };
@@ -82,7 +85,7 @@ export function priceUsageStep(
 
 /** The main session sink's row: what the host hands `recordProviderUsage`. */
 export function sessionUsageRow(
-  record: Omit<ProviderUsageRecord, "sessionId" | "createdAt" | "costUsd" | "cacheSavingsUsd" | "priceBasisId">,
+  record: Omit<ProviderUsageRecord, "sessionId" | "createdAt" | "cacheSavingsUsd" | "priceBasisId">,
   pricing: StepPricing,
   sessionId: string,
 ): ProviderUsageRecord {

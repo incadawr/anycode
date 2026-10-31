@@ -195,3 +195,8 @@ it("prices MiniMax keys using the derived snapshot for a custom endpoint", async
   expect(row("sk-api-example", JSON.stringify({ fallback: { mode: "subscription" } })).priceBasisId).toBe("subscription");
   expect(row("sk-cp-example", JSON.stringify({ fallback: { mode: "catalog" } })).costUsd).toBeGreaterThan(0);
 });
+
+ it("uses provider-reported cost in preference to estimated rates", async () => {
+  const { priceUsageStep } = await import("./usage-recording.js");
+  expect(priceUsageStep({ costUsd: 0.42 }, { pricingRaw: undefined, now: () => 1 }).cost).toEqual({ costUsd: 0.42, priceBasisId: "provider" });
+});
