@@ -363,7 +363,7 @@ export type AgentEvent =
       /**
        * REQUESTED child model id (request override, else the persona's own
        * `model:`) — what we put in the request, not the constructed port's
-       * own identity (reverses's port-identity readback:
+       * own identity (reversing the previous port-identity readback;
        * see `subagent_end.model` below for the same field on the other end
        * of a run). Absent ⇒ the child inherited the parent's model.
        */

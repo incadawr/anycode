@@ -3789,7 +3789,7 @@ describe("run() — child capabilities resolved for the child's own model", () =
   });
 });
 
-describe("start progress — requested id is authoritative (reverses)", () => {
+describe("start progress — requested id is authoritative (reverses port-identity readback)", () => {
   it("reports the REQUESTED string even when the constructed port's modelId differs", async () => {
     // Owner's ruling: "модель никогда не ответит, главное какие
     // запросы мы шлем" — the request is what we control and can prove; a

@@ -2528,7 +2528,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
 
     expect(await runPromise).toBe(0);
     const text = getText();
-    // changed this: an unknown model no longer omits loopConfig.context
+    // The fallback change means an unknown model no longer omits loopConfig.context
     // and no longer boots at DEFAULT_CONTEXT_WINDOW_TOKENS. It resolves the
     // explicit assumed fallback (8192), and the degraded-window budget engages:
     // effectiveWindow = max(8192 - min(24000, 8192), ceil(8192*0.25)) = 2048,
