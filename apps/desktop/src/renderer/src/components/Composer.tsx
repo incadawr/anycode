@@ -2223,7 +2223,7 @@ export function Composer() {
           )}
           {engine?.id === "codex" && engine.model?.available.find((model) => model.id === (pendingEngineChange?.model ?? engine.model?.current))?.supportsFast && (
             <button type="button" className="model-pill-chip" aria-label="Codex speed" disabled={engineControlDisabled(turn.status, queueInFlight, ready)} title="Fast is quicker but consumes your usage limit faster. Changes apply on the next turn." onClick={() => sendToHost({ type: "set_engine_fast", fast: !(pendingEngineChange?.fast ?? engine.fast) })}>
-              {engine.fast ? "Fast" : "Standard"}{pendingEngineChange?.fast !== undefined ? ` → ${pendingEngineChange.fast ? "Fast" : "Standard"} (next turn)` : ""}
+              {engine.fast === undefined ? "Speed" : engine.fast ? "Fast" : "Standard"}{pendingEngineChange?.fast !== undefined ? ` → ${pendingEngineChange.fast ? "Fast" : "Standard"} (next turn)` : ""}
             </button>
           )}
           {supportsImages && (
