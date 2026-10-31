@@ -22,6 +22,16 @@ suite, and the desktop production build. A targeted run helps the development
 loop but does not replace this gate. Coordinate full-suite runs with other local
 sessions to avoid contention and misleading timeout failures.
 
+`scripts/public-reference-gate.test.ts` guards the public tree against tracker
+card references. It scans tracked files under `apps`, `packages`, `docs`,
+`CHANGELOG.md`, `scripts`, `examples` and `.github`, in bodies and in file names
+alike, and fails with `path: token` for every reference that is not covered by
+its documented allowlist. The allowlist covers shapes that only look like cards
+(internal background-task ids, worktree ids, session-name fragments) and the
+captured engine payloads under `codex-rollout-fixtures/` plus the pinned engine
+contract, where references were renamed rather than deleted. Add a new shape
+there only with a reason; do not broaden an existing one.
+
 Typecheck stores incremental state in this worktree's
 `node_modules/.cache/tsc/`. To force a cold check, remove that directory and
 rerun `pnpm run typecheck`.
