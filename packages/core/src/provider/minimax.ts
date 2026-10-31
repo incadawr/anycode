@@ -74,13 +74,22 @@ export function isMiniMaxEffortModel(providerName?: string, modelId?: string): b
 /** Identify a balance error locally without exposing the key or provider body. */
 export function contextualizeMiniMaxBalance(error: unknown, providerName: string | undefined, apiKey: string | undefined): unknown {
   if (!isMiniMaxProvider(providerName) || !apiKey?.startsWith("sk-api-")) return error;
-  if (!error || typeof error !== "object") return error;
-  const candidate = error as { message?: unknown; responseBody?: unknown; data?: unknown };
-  const values = [candidate.message, candidate.responseBody, candidate.data];
-  for (const value of values) {
-    let text: string;
-    try { text = typeof value === "string" ? value : JSON.stringify(value) ?? ""; } catch { continue; }
-    if (/insufficient_balance_error|\b1008\b/i.test(text)) return new MiniMaxBalanceFailure(error);
+  const queue: unknown[] = [error];
+  const seen = new Set<unknown>();
+  while (queue.length > 0 && seen.size < 24) {
+    const value = queue.shift();
+    if (!value || typeof value !== "object" || seen.has(value)) continue;
+    seen.add(value);
+    const candidate = value as { type?: unknown; code?: unknown; error?: unknown; data?: unknown; responseBody?: unknown };
+    if (candidate.type === "insufficient_balance_error" || candidate.code === "insufficient_balance_error" || candidate.code === 1008 || candidate.code === "1008") {
+      return new MiniMaxBalanceFailure(error);
+    }
+    queue.push(candidate.error, candidate.data);
+    if (typeof candidate.responseBody === "string") {
+      try { queue.push(JSON.parse(candidate.responseBody)); } catch { /* not a structured response */ }
+    } else {
+      queue.push(candidate.responseBody);
+    }
   }
   return error;
 }

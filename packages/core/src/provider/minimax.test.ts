@@ -84,6 +84,17 @@ function getBuiltinCatalogNamesForMiniMax(): string[] {
 }
 
 describe("balance failure hint", () => {
+  it("matches structured billing identifiers, never incidental text", async () => {
+    const { contextualizeMiniMaxBalance } = await import("./minimax.js");
+    const { MiniMaxBalanceFailure } = await import("./failure.js");
+    for (const error of [{ type: "insufficient_balance_error" }, { code: 1008 }, { data: { error: { code: "1008" } } }]) {
+      expect(contextualizeMiniMaxBalance(error, "MiniMax", "sk-api-example")).toBeInstanceOf(MiniMaxBalanceFailure);
+    }
+    for (const error of [{ message: "Read 1008 bytes" }, { responseBody: "1008" }, { data: { message: "insufficient_balance_error" } }]) {
+      expect(contextualizeMiniMaxBalance(error, "MiniMax", "sk-api-example")).toBe(error);
+    }
+  });
+
   it("adds a fixed hint only for a MiniMax pay-as-you-go balance failure", async () => {
     const { contextualizeMiniMaxBalance } = await import("./minimax.js");
     const { classifyProviderFailure } = await import("./failure.js");
