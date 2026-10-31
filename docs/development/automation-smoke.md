@@ -147,7 +147,7 @@ Screenshots and the disposable profile stay in the printed temp directory.
 
 ## Running workflow-map smoke
 
-For the Workflow run map + collapsed tick strip (Taskana 4161), run:
+For the Workflow run map + collapsed tick strip, run:
 
 ```bash
 node apps/desktop/scripts/workflow-map-smoke.mjs
@@ -229,7 +229,7 @@ version 1 are separate tests and should retain their old fixtures.
 literal owner home path (`/Users/<owner>`). When a smoke script needs a per-user default,
 derive it from `os.homedir()` / `os.tmpdir()` at runtime (see `apps/desktop/scripts/profile-ui-smoke.mjs`);
 when a doc or fixture needs an example path, use the placeholder `/Users/<user>`.
-History scrubbing of already-pushed commits is out of scope (see Taskana 4163).
+History scrubbing of already-pushed commits is out of scope (see).
 
 
 ## Codex manual compaction smoke
