@@ -100,8 +100,6 @@
 }
 
 .connection-drawer-advanced {
-  display: grid;
-  gap: var(--sp-3);
   border-top: 1px solid var(--border);
   padding-top: var(--sp-3);
 }
@@ -114,6 +112,59 @@
 
 .connection-drawer-advanced:not([open]) > summary {
   margin-bottom: 0;
+}
+
+/* The disclosure's field column. The grid lives HERE, not on the <details>
+   element: Chromium wraps a details' contents in `::details-content`, so a
+   grid on details stopped spacing the fields at all and every label sat
+   flush against the control above it. */
+.connection-drawer-advanced-body {
+  display: grid;
+  gap: var(--sp-3);
+  align-content: start;
+}
+
+.connection-drawer-advanced-body > p {
+  margin: 0;
+}
+
+/* Pricing = Custom rates: the connection-wide fallback rates, then the
+   per-model overrides. Both group fields the same way the body does. */
+.connection-drawer-rate-grid,
+.connection-drawer-model-rates {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.connection-drawer-model-rates > fieldset {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+  margin: 0;
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.connection-drawer-model-rates > fieldset > legend {
+  padding: 0 var(--sp-1);
+}
+
+/* The rate inputs are plain type="number" fields; without this they render as
+   native light-bordered spinboxes next to the drawer's dark text inputs. */
+.connection-drawer-rate-grid .settings-field-input,
+.connection-drawer-model-rates .settings-field-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Short-lived confirmation beside Save (a successful save used to be silent). */
+.connection-drawer-saved {
+  align-self: center;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
 }
 
 /* R21 brand mark (slice-R21-cut §A): the app icon at splash scale. The svg
