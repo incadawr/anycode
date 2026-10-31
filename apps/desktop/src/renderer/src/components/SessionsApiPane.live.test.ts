@@ -82,7 +82,7 @@ function drain(): Array<() => void> {
   while (h.pending.length > 0) {
     const cleanup = h.pending.shift()!();
     if (typeof cleanup === "function") {
-      cleanups.push(cleanup);
+      cleanups.push(cleanup as () => void);
     }
   }
   return cleanups;
