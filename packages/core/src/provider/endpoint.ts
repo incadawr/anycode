@@ -9,7 +9,7 @@ import type { ProviderTransport } from "./catalog.js";
 import type { ProviderQuotaUpdate } from "./quota.js";
 import type { NetworkWaiter } from "./network-waiter.js";
 import type { RetryPolicy } from "./retry.js";
-import type { ImplicitPromptCache } from "../types/config.js";
+import type { ImplicitPromptCache, ReasoningEffort } from "../types/config.js";
 
 export interface EndpointConfig {
   /**
@@ -85,6 +85,18 @@ export interface EndpointConfig {
    * transport is the outer branch — provider name never selects a wire protocol.
    */
   providerName?: string;
+  /**
+   * Effort tiers THIS connection declared it supports — the same vocabulary
+   * the CLI reads from ANYCODE_EFFORT_LEVELS and validates the selected tier
+   * against. The generic anthropic-messages path uses it as the ONLY
+   * authorisation to put `output_config.effort` on the wire: declaring BOTH
+   * `xhigh` and `max` is the connection asserting that its endpoint
+   * distinguishes those tiers itself, which on this transport can only mean
+   * the effort enum. Absent ⇒ never sent, so a strict Anthropic-compatible
+   * server that only understands `thinking.budget_tokens` never sees an
+   * unknown field; the tier distinction still reaches it as distinct budgets.
+   */
+  declaredEffortLevels?: readonly ReasoningEffort[];
   /**
    * Optional response-header quota observer (Taskana 4090): when set, the
    * transport factories wrap the SDK fetch so every response's headers are

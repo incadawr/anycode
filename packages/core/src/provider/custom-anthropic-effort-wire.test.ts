@@ -1,7 +1,8 @@
 /**
  * Wire-byte proof that a custom Anthropic-compatible endpoint can observe the
  * difference between the `xhigh` and `max` effort tiers (GitHub #2 review of
- * the xhigh mapping).
+ * the xhigh mapping) — WITHOUT an endpoint that does not understand
+ * `output_config.effort` ever being sent that field.
  *
  * The unit coverage in model-port.test.ts only asserts the pure
  * `reasoningRequestOptions` options object; it never drives a real request
@@ -9,7 +10,14 @@
  * fix, the generic anthropic-messages path collapsed both tiers to the SAME
  * thinking budget (high's 24_576) and sent no effort field at all, so a
  * custom endpoint declaring both `xhigh` and `max` could never distinguish
- * them.
+ * them. The first fix then sent the effort enum to EVERY custom endpoint,
+ * which a strict server that only knows `thinking.budget_tokens` rejects —
+ * so the gate is now the connection's own declaration:
+ *
+ *  - no declared effort vocabulary  ⇒ distinct thinking budgets only, no
+ *    `output_config` key at all (byte-safe for a strict server);
+ *  - declared `xhigh` AND `max`     ⇒ distinct budgets AND the matching
+ *    effort enum, the only on-wire way this transport can express them.
  *
  * Harness (zero sockets/network, mirrors deepseek-reasoning-wire.test.ts):
  * the installed SDK's default fetch is `globalThis.fetch`, so a stubbed
@@ -69,19 +77,23 @@ describe("custom Anthropic-compatible endpoint distinguishes xhigh vs max on the
   }
 
   /**
-   * A custom (user-added, non-catalog) Anthropic-compatible endpoint
-   * declaring both `xhigh` and `max` tiers. The wiring layer
-   * (buildCliEndpointConfig) sets providerName ONLY from a catalog entry, so
-   * a custom connection carries none — that absence is the gate for the
-   * xhigh/max wire distinction. No named branch matches either, so the
-   * request exercises the generic anthropic-messages mapping.
+   * A custom (user-added, non-catalog) Anthropic-compatible endpoint. The
+   * wiring layer (buildCliEndpointConfig) sets providerName ONLY from a
+   * catalog entry, so a custom connection carries none — and no named branch
+   * matches either, so the request exercises the generic anthropic-messages
+   * mapping. `declaredEffortLevels` is the connection's own declaration
+   * (`ANYCODE_EFFORT_LEVELS`); only a connection that declared BOTH tiers
+   * authorises the effort enum on the wire.
    */
-  function customPort(): { port: AiSdkModelPort; requestFor: (effort: "xhigh" | "max") => ModelRequest } {
+  function customPort(
+    declaredEffortLevels?: readonly ("low" | "high" | "xhigh" | "max")[],
+  ): { port: AiSdkModelPort; requestFor: (effort: "xhigh" | "max") => ModelRequest } {
     const config: AnthropicEndpointConfig = {
       transport: "anthropic-messages",
       baseUrl: "http://127.0.0.1:9", // never dialed — the stub intercepts
       apiKey: "test-key",
       model: "custom-reasoner-1",
+      ...(declaredEffortLevels !== undefined ? { declaredEffortLevels } : {}),
       retry: { maxRetries: 0, stallTimeoutMs: 0 },
     };
     return {
@@ -124,7 +136,7 @@ describe("custom Anthropic-compatible endpoint distinguishes xhigh vs max on the
     };
   }
 
-  it("xhigh and max produce different bodies: distinct effort enums AND distinct thinking budgets", async () => {
+  it("an endpoint that never declared the effort enum gets distinct budgets and no output_config field", async () => {
     stubFetch();
     const { port, requestFor } = customPort();
 
@@ -136,31 +148,81 @@ describe("custom Anthropic-compatible endpoint distinguishes xhigh vs max on the
     const xhighBody = captured[0]!.body;
     const maxBody = captured[1]!.body;
 
-    // The effort enum rides the wire for both tiers (serialized by
-    // @ai-sdk/anthropic from providerOptions.anthropic.effort).
-    expect(xhighBody.output_config).toMatchObject({ effort: "xhigh" });
-    expect(maxBody.output_config).toMatchObject({ effort: "max" });
+    // No declaration ⇒ the request carries no field the endpoint never
+    // advertised: a strict server that only knows thinking.budget_tokens
+    // accepts the body unchanged (pinned by the rejecting stub below too).
+    expect(xhighBody.output_config).toBeUndefined();
+    expect(maxBody.output_config).toBeUndefined();
 
-    // Even for an endpoint that ignores output_config, the thinking budgets
-    // differ, so the requests are never byte-equal on the reasoning fields.
+    // The tiers still differ: xhigh keeps high's 24_576, max gets a strictly
+    // larger budget, so the requests are never byte-equal on the reasoning
+    // fields even for a budget-only endpoint.
     expect(xhighBody.thinking).toMatchObject({ type: "enabled", budget_tokens: 24_576 });
     expect(maxBody.thinking).toMatchObject({ type: "enabled", budget_tokens: 32_000 });
     expect(JSON.stringify(xhighBody)).not.toBe(JSON.stringify(maxBody));
-  });
-
-  it("xhigh keeps high's budget and max_tokens accounting holds for both tiers", async () => {
-    stubFetch();
-    const { port, requestFor } = customPort();
-
-    await drain(port.streamText(requestFor("xhigh")));
-    await drain(port.streamText(requestFor("max")));
 
     // The SDK serializes max_tokens = maxOutputTokens + budgetTokens; with
     // maxOutputTokens floored at budget + 1024, xhigh keeps the pre-fix wire
     // bytes (24_576 + 25_600) while max strictly exceeds it.
-    expect(captured[0]!.body.max_tokens).toBe(24_576 + 25_600);
-    expect(captured[1]!.body.max_tokens).toBe(32_000 + 33_024);
-    expect(captured[1]!.body.max_tokens as number).toBeGreaterThan(captured[0]!.body.max_tokens as number);
+    expect(xhighBody.max_tokens).toBe(24_576 + 25_600);
+    expect(maxBody.max_tokens).toBe(32_000 + 33_024);
+  });
+
+  it("a connection that declared both tiers gets the matching effort enum alongside distinct budgets", async () => {
+    stubFetch();
+    const { port, requestFor } = customPort(["xhigh", "max"]);
+
+    await drain(port.streamText(requestFor("xhigh")));
+    await drain(port.streamText(requestFor("max")));
+
+    // The effort enum rides the wire (serialized by @ai-sdk/anthropic from
+    // providerOptions.anthropic.effort) exactly because the connection
+    // declared it distinguishes both tiers itself.
+    expect(captured[0]!.body.output_config).toMatchObject({ effort: "xhigh" });
+    expect(captured[1]!.body.output_config).toMatchObject({ effort: "max" });
+    expect(captured[0]!.body.thinking).toMatchObject({ type: "enabled", budget_tokens: 24_576 });
+    expect(captured[1]!.body.thinking).toMatchObject({ type: "enabled", budget_tokens: 32_000 });
+  });
+
+  it("a strict server that rejects output_config never sees the field unless the connection declared it", async () => {
+    // The rejecting stub is the server the reviewer worried about: ANY body
+    // carrying output_config is a 400. It proves both halves of the gate.
+    captured.length = 0;
+    const rejected: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      "fetch",
+      async (_input: unknown, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        captured.push({ body });
+        if (body.output_config !== undefined) {
+          rejected.push(body);
+          return new Response(
+            JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "output_config: unknown field" } }),
+            { status: 400, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response(serializeSse(RESPONSE_CHUNKS), {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+    );
+
+    // Undeclared: both tiers pass through the strict server untouched.
+    const strict = customPort();
+    for (const effort of ["xhigh", "max"] as const) {
+      const events = await drain(strict.port.streamText(strict.requestFor(effort)));
+      expect(events.filter((e) => e.type === "error")).toEqual([]);
+    }
+    expect(rejected).toEqual([]);
+
+    // Declared: the same server rejects the added field — the gate is what
+    // keeps it off the wire above, not a permissive server.
+    const declared = customPort(["xhigh", "max"]);
+    const declaredEvents = await drain(declared.port.streamText(declared.requestFor("max")));
+    expect(declaredEvents.filter((e) => e.type === "error")).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]!.output_config).toMatchObject({ effort: "max" });
   });
 
   it("catalog Kimi/MiMo-class providers keep their exact pre-fix bytes for max: high's budget, no effort field", async () => {
