@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Taskana 4732 S1-B (design §4): verifies a signed index exactly the way
+ * S1-B (design §4): verifies a signed index exactly the way
  * the shipped client does — `node scripts/plugins/verify-index.mjs <index.json> [index.json.sig] [--key <pub.pem>]...`.
  *
  * Default key source: the compiled-in anchors in
