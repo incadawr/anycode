@@ -362,6 +362,11 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     expect(result).toEqual({ ok: true, models: [{ id: "vendor/model", contextWindow: 1048576, maxOutputTokens: 524288, pricing: { input: 0.075, cachedInput: 0.075, output: 0.3 }, reasoning: true, effortLevels: ["off", "low", "medium", "high", "xhigh"] }] });
   });
 
+  it("omits catalog prices with conditional overrides", async () => {
+    const result = await fetchCustomProviderModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl: async () => new Response(JSON.stringify({ data: [{ id: "vendor/model", context_length: 1000, pricing: { prompt: "0.1", completion: "0.2", overrides: [{ prompt: "0.3" }] } }] })) });
+    expect(result).toEqual({ ok: true, models: [{ id: "vendor/model", contextWindow: 1000 }] });
+  });
+
   it("exposes effort controls when a model declares reasoning_effort", async () => {
     const { origin } = await listen((_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });

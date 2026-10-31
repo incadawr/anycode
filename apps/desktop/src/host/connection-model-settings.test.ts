@@ -316,3 +316,10 @@ it("uses cached OpenRouter limits and rates while preserving manual overrides", 
   expect(settings.entryFor(model)?.models.find(row => row.id === model)).toMatchObject({ contextWindow: 1048576, maxOutputTokens: 524288 });
   expect(settings.pricingSnapshot()?.models[model]).toEqual({ input: 1, cachedInput: 1, output: 2 });
 });
+
+
+it("keeps manual connection rates ahead of live catalog rates", () => {
+  const manual = { mode: "rates" as const, input: 2, cachedInput: 1, output: 3 };
+  const settings = createConnectionModelSettings({ connection: { pricing: manual, modelCapabilities: { a: { pricing: { input: 9, cachedInput: 9, output: 9 } } }, modelOverrides: { b: { pricing: { input: 4, cachedInput: 4, output: 4 } } } }, liveCapabilitiesFor: () => undefined });
+  expect(settings.pricingSnapshot()).toEqual({ fallback: manual, models: { b: { input: 4, cachedInput: 4, output: 4 } } });
+});

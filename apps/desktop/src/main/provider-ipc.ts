@@ -291,7 +291,7 @@ const liveCapsSchema = z.object({
     .catch(undefined),
   context_length: z.number().int().positive().optional().catch(undefined),
   top_provider: z.object({ max_completion_tokens: z.number().int().positive().nullish() }).optional().catch(undefined),
-  pricing: z.object({ prompt: z.string(), completion: z.string(), input_cache_read: z.string().optional() }).optional().catch(undefined),
+  pricing: z.object({ prompt: z.string(), completion: z.string(), input_cache_read: z.string().optional(), overrides: z.unknown().optional() }).optional().catch(undefined),
   architecture: z
     .object({
       input_modalities: z.array(z.string()).optional().catch(undefined),
@@ -371,7 +371,7 @@ function extractModelIds(
     const contextWindow = openrouter ? meta.data.context_length : undefined;
     const maxOutputTokens = openrouter ? meta.data.top_provider?.max_completion_tokens ?? undefined : undefined;
     const rawPrice = openrouter ? meta.data.pricing : undefined;
-    const rates = rawPrice && [rawPrice.prompt, rawPrice.input_cache_read ?? rawPrice.prompt, rawPrice.completion].map(Number);
+    const rates = rawPrice && rawPrice.overrides === undefined && [rawPrice.prompt, rawPrice.input_cache_read ?? rawPrice.prompt, rawPrice.completion].map(Number);
     const pricing = rates && rates.every(n => Number.isFinite(n) && n >= 0) ? { input: rates[0]! * 1e6, cachedInput: rates[1]! * 1e6, output: rates[2]! * 1e6 } : undefined;
     if ((!reasoning && !imageInput && !contextWindow && !maxOutputTokens && !pricing) || maybe.id.length > MODEL_CAPABILITY_ID_MAX) {
       models.push({ id: maybe.id });
@@ -942,7 +942,7 @@ async function handleConnectionFetchModels(
           ...prev,
           ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
           ...(m.maxOutputTokens !== undefined ? { maxOutputTokens: m.maxOutputTokens } : {}),
-          ...(m.pricing !== undefined ? { pricing: m.pricing } : {}),
+          ...(new URL(resolved.baseUrl).hostname === "openrouter.ai" ? { pricing: m.pricing } : m.pricing !== undefined ? { pricing: m.pricing } : {}),
           ...(reasoning !== undefined ? { reasoning } : {}),
           ...(effortLevels !== undefined ? { effortLevels } : {}),
           ...(imageInput !== undefined ? { imageInput } : {}),
