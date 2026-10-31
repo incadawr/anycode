@@ -274,8 +274,11 @@ it("still appends a model the catalog does not offer, so a manual id stays durab
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
 
-it("shows the matched model, hides complex prices and saves the opt-out", async () => {
-  const connection = { id:"c", providerId:"custom:test", model:"vendor/glm-5.3-fp8" };
+it.each([
+  ["vendor/glm-5.3-fp8", "GLM-5.3", "1.4", "0.26", "1.4", "4.4"],
+  ["vendor/glm-5.3-flash-fp8", "GLM-5.3 Flash", "0.15", "0.03", "0.15", "0.5"],
+])("shows all reference rates for %s and saves the opt-out", async (model, name, input, cached, write, output) => {
+  const connection = { id:"c", providerId:"custom:test", model };
   const snapshot = { settings: cloneDefaults(), readOnly:false, secrets:[], envOverrides:[], providerReady:true, catalog:[] };
   const update = vi.fn().mockResolvedValue({ok:true, snapshot});
   const store = createStore(() => ({snapshot, oauthPendingProviderId:null, connectionUpdate:update, load:vi.fn()})) as unknown as SettingsStoreApi;
@@ -283,10 +286,11 @@ it("shows the matched model, hides complex prices and saves the opt-out", async 
   const root = createRoot(container);
   try {
     await act(async () => root.render(createElement(ConnectionDrawerFields, {mode:"edit", editConnection:connection, catalog:[], connections:[connection], secrets:[], readOnly:false, store})));
-    expect(container.textContent).toContain("Recognized as GLM-5.3");
-    expect(container.textContent).not.toContain("Catalog reference for GLM-5.3");
+    expect(container.textContent).toContain(`Recognized as ${name}`);
+    expect(container.textContent).toContain(`Catalog reference for ${name}: input $${input}, cached input $${cached}, cache write $${write}, output $${output} per million tokens.`);
     const check = [...container.querySelectorAll("input[type=checkbox]")].find(c => c.parentElement?.textContent?.includes("Recognized as")) as HTMLInputElement;
     await act(async () => check.click());
+    expect(container.textContent).not.toContain(`Catalog reference for ${name}`);
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
     expect(update).toHaveBeenCalledWith(expect.objectContaining({id:"c", catalogMatchDisabled:true}));
   } finally { await act(async () => root.unmount()); container.remove(); }
