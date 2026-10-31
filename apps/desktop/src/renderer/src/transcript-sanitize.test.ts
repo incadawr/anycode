@@ -14,7 +14,7 @@ describe("stripReminderBlocks", () => {
     expect(stripReminderBlocks("hello\n<plan-mode-reminder>ignored</plan-mode-reminder>")).toBe("hello");
   });
 
-  it("strips a single orchestrate-reminder block (Taskana 4704)", () => {
+  it("strips a single orchestrate-reminder block", () => {
     expect(stripReminderBlocks("hello\n<orchestrate-reminder>ignored</orchestrate-reminder>")).toBe("hello");
   });
 

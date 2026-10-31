@@ -45,12 +45,12 @@ function ctx(overrides: Partial<SlashMenuCtx> = {}): SlashMenuCtx {
     running: false,
     ready: true,
     modelDisabled: false,
-    // TASK.40 §2(f): default to core-shaped (every capability enabled) so
+    // §2(f): default to core-shaped (every capability enabled) so
     // every pre-existing test — none of which cares about gating — keeps
     // seeing the full registry.
     supportsCorePermissions: true,
     supportsModelSelection: true,
-    // TASK.92: default mirrors core — the Compact row is visible by default.
+    // default mirrors core — the Compact row is visible by default.
     supportsManualCompact: true,
     shellGitReadOnly: true,
     shellTerminal: true,
@@ -203,7 +203,7 @@ describe("filterSlashItems", () => {
     const build = buildItems.find((item) => item.name === "Plan mode")!;
     expect(build.description).toBe("Turn plan mode on");
 
-    // TASK.37 (D-S3-13): a running turn no longer gates the plan-mode toggle
+    // (D-S3-13): a running turn no longer gates the plan-mode toggle
     // (MR4 pins the mid-turn arc); not-ready is the sole surviving gate.
     const notReadyItems = filterSlashItems(SLASH_COMMANDS, [], "", ctx({ ready: false }));
     const notReadyPlan = notReadyItems.find((item) => item.name === "Plan mode")!;
@@ -226,14 +226,14 @@ describe("filterSlashItems", () => {
     expect(enabledItems.find((item) => item.name === "Model")!.disabled).toBe(false);
   });
 
-  it("TASK.146: /co resolves to Compact alone, rank 0, highlighted over the prefix", () => {
+  it("/co resolves to Compact alone, rank 0, highlighted over the prefix", () => {
     const items = filterSlashItems(SLASH_COMMANDS, [], "co", ctx());
     expect(items.map((item) => item.name)).toEqual(["Compact"]);
     expect(items[0]!.ranges).toEqual([[0, 2]]);
   });
 
-  it("TASK.146: /c ranks Compact (prefix) above Git changes (word boundary) above MCP (substring)", () => {
-    // Taskana 4704 §3.8: "Orchestrate" matches "c" as a SUBSTRING ("Or[c]hestrate")
+  it("/c ranks Compact (prefix) above Git changes (word boundary) above MCP (substring)", () => {
+    // §3.8: "Orchestrate" matches "c" as a SUBSTRING ("Or[c]hestrate")
     // at the same rank 2 as MCP but sits EARLIER in registry order (index 1 vs
     // 9), so it now takes the third slot — an intended, pinned consequence of
     // the row's mandated position right after plan-mode, not a ranking change.
@@ -241,12 +241,12 @@ describe("filterSlashItems", () => {
     expect(items.map((item) => item.name).slice(0, 4)).toEqual(["Compact", "Git changes", "Orchestrate", "MCP"]);
   });
 
-  it("TASK.146: the new row does not disturb the /mod pins — Compact does not match 'mod' at all", () => {
+  it("the new row does not disturb the /mod pins — Compact does not match 'mod' at all", () => {
     const items = filterSlashItems(SLASH_COMMANDS, [], "mod", ctx());
     expect(items.map((item) => item.name)).toEqual(["Mode", "Model", "Plan mode"]);
   });
 
-  it("MR4 (TASK.37): the plan-mode command is enabled while running; not-ready still gates it", () => {
+  it("MR4: the plan-mode command is enabled while running; not-ready still gates it", () => {
     const planModeCommand = SLASH_COMMANDS.find((command) => command.id === "plan-mode")!;
     expect(planModeCommand.enabled(ctx({ running: true, ready: true }))).toBe(true);
     expect(planModeCommand.enabled(ctx({ running: false, ready: false }))).toBe(false);
@@ -382,7 +382,7 @@ describe("SLASH_COMMANDS registry invariants", () => {
   it("has the exact §2 name/order pinned", () => {
     expect(SLASH_COMMANDS.map((c) => c.name)).toEqual([
       "Plan mode",
-      // Taskana 4704 §3.8: /orchestrate sits right after plan-mode (the
+      // §3.8: /orchestrate sits right after plan-mode (the
       // orchestration posture's nearest neighbor).
       "Orchestrate",
       "Mode",
@@ -394,18 +394,18 @@ describe("SLASH_COMMANDS registry invariants", () => {
       "Terminal",
       "MCP",
       "Skills",
-      // Taskana 4704 §3.9: /roles deep-links to the Roles settings pane.
+      // §3.9: /roles deep-links to the Roles settings pane.
       "Roles",
       "Plugins",
       "Settings",
     ]);
   });
 
-  it("Taskana 4704: the Orchestrate row sits at index 1 — after plan-mode, before Mode", () => {
+  it("the Orchestrate row sits at index 1 — after plan-mode, before Mode", () => {
     expect(SLASH_COMMANDS[1]!.id).toBe("orchestrate");
     expect(SLASH_COMMANDS[1]!.run).toEqual({ kind: "orchestrate_submit" });
     expect(SLASH_COMMANDS[1]!.description(ctx())).toBe("Delegate <task> to child agents in the background");
-    // Same not-ready gate as plan-mode (TASK.37 posture: the host silently
+    // Same not-ready gate as plan-mode (posture: the host silently
     // drops a busy/absent toggle; ready is the sole renderer gate).
     expect(SLASH_COMMANDS[1]!.enabled(ctx({ ready: false }))).toBe(false);
     expect(SLASH_COMMANDS[1]!.enabled(ctx({ ready: true }))).toBe(true);
@@ -414,13 +414,13 @@ describe("SLASH_COMMANDS registry invariants", () => {
     expect(SLASH_COMMANDS[1]!.visible(ctx({ supportsCorePermissions: false }))).toBe(false);
   });
 
-  it("TASK.146: the Compact row sits at index 4 — last in the core cluster, before the common one", () => {
+  it("the Compact row sits at index 4 — last in the core cluster, before the common one", () => {
     // The module doc declares this array's order LAW ("rank ties among
     // commands break by this array's order"), so the index is the pin.
-    // Taskana 4704 §3.8 moved it one slot down (Orchestrate inserted at 1).
+    // §3.8 moved it one slot down (Orchestrate inserted at 1).
     expect(SLASH_COMMANDS[4]!.id).toBe("compact");
     expect(SLASH_COMMANDS[4]!.name).toBe("Compact");
-    // TASK.92: routed through the engine's own native compactNow (Claude has
+    // routed through the engine's own native compactNow (Claude has
     // one now — the allowlisted /compact passthrough), not a core-only control.
     expect(SLASH_COMMANDS[4]!.source).toBe("engine");
     expect(SLASH_COMMANDS[4]!.run).toEqual({ kind: "compact_now" });
@@ -431,14 +431,14 @@ describe("SLASH_COMMANDS registry invariants", () => {
     expect(SLASH_COMMANDS[5]!.id).toBe("new-task");
   });
 
-  it("TASK.92: the Compact row is visible iff supportsManualCompact (Claude yes, codex no), enabled still keyed to modelDisabled", () => {
+  it("the Compact row is visible iff supportsManualCompact (Claude yes, codex no), enabled still keyed to modelDisabled", () => {
     const compact = SLASH_COMMANDS.find((command) => command.id === "compact")!;
     // Visible for core-shaped ctx (default) and Claude (capability true)...
     expect(compact.visible(ctx())).toBe(true);
     expect(compact.visible(ctx({ supportsManualCompact: true }))).toBe(true);
     // ...hidden for a codex-shaped ctx (no user-triggerable compaction pinned).
     expect(compact.visible(ctx({ supportsManualCompact: false }))).toBe(false);
-    // The enabled predicate is untouched by TASK.92.
+    // The enabled predicate is untouched by.
     expect(compact.enabled(ctx({ modelDisabled: true }))).toBe(false);
     expect(compact.enabled(ctx({ modelDisabled: false }))).toBe(true);
     // And the full filter path hides the row entirely when the capability is off.
@@ -448,7 +448,7 @@ describe("SLASH_COMMANDS registry invariants", () => {
     expect(shown.find((item) => item.name === "Compact")).toBeDefined();
   });
 
-  it("TASK.146: the Compact row is gray for exactly the Model row's not-truly-idle window", () => {
+  it("the Compact row is gray for exactly the Model row's not-truly-idle window", () => {
     const compact = SLASH_COMMANDS.find((command) => command.id === "compact")!;
     expect(compact.enabled(ctx({ modelDisabled: true }))).toBe(false);
     expect(compact.enabled(ctx({ modelDisabled: false }))).toBe(true);
@@ -459,9 +459,9 @@ describe("SLASH_COMMANDS registry invariants", () => {
     expect(enabled.find((item) => item.name === "Compact")!.disabled).toBe(false);
   });
 
-  // Taskana 4895: the Model row is live mid-turn on core, so Compact can no
+  // the Model row is live mid-turn on core, so Compact can no
   // longer borrow `modelDisabled` — it reads the truly-idle `idle` flag.
-  it("Taskana 4895: Compact stays gray while a core turn runs even though the Model row is live", () => {
+  it("Compact stays gray while a core turn runs even though the Model row is live", () => {
     const compact = SLASH_COMMANDS.find((command) => command.id === "compact")!;
     const model = SLASH_COMMANDS.find((command) => command.id === "model")!;
     const midTurn = ctx({ modelDisabled: false, idle: false });
@@ -531,10 +531,10 @@ describe("SLASH_COMMANDS registry invariants", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// Capability gating — no dead actions (design TASK.40 §2(f))
+// Capability gating — no dead actions (design §2(f))
 // ─────────────────────────────────────────────────────────────────────────
 
-describe("SLASH_COMMANDS capability gating — no dead actions (design TASK.40 §2(f))", () => {
+describe("SLASH_COMMANDS capability gating — no dead actions (design §2(f))", () => {
   /** Every named gate false — mirrors a Codex session before B2 wires model selection. */
   const codexShapedCtx = ctx({
     supportsCorePermissions: false,
@@ -570,9 +570,9 @@ describe("SLASH_COMMANDS capability gating — no dead actions (design TASK.40 �
     expect(filterSlashItems(SLASH_COMMANDS, [], "co", codexShapedCtx)).toEqual([]);
   });
 
-  it("TASK.92: supportsManualCompact is the gate on Compact — supportsCorePermissions off (a Claude boot) still SHOWS it", () => {
+  it("supportsManualCompact is the gate on Compact — supportsCorePermissions off (a Claude boot) still SHOWS it", () => {
     // A Claude session: no core permissions, but a real native compactNow —
-    // the row must be there (that is the whole TASK.92 change).
+    // the row must be there (that is the whole change).
     const corePermissionsOff = filterSlashItems(SLASH_COMMANDS, [], "", ctx({ supportsCorePermissions: false })).map(
       (item) => item.name,
     );
@@ -592,7 +592,7 @@ describe("SLASH_COMMANDS capability gating — no dead actions (design TASK.40 �
     expect(manualCompactOff).not.toContain("Compact");
   });
 
-  it("shows the full registry once every named capability is available (core-shaped ctx, the pre-TASK.40 default)", () => {
+  it("shows the full registry once every named capability is available (core-shaped ctx, the pre-default)", () => {
     expect(filterSlashItems(SLASH_COMMANDS, [], "", ctx())).toHaveLength(SLASH_COMMANDS.length);
   });
 
@@ -619,7 +619,7 @@ describe("SLASH_COMMANDS capability gating — no dead actions (design TASK.40 �
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// openSettingsAddConnection — the shared empty-menu action (Taskana 4237)
+// openSettingsAddConnection — the shared empty-menu action
 // ─────────────────────────────────────────────────────────────────────────
 
 describe("openSettingsAddConnection", () => {
@@ -653,9 +653,9 @@ describe("openSettingsAddConnection", () => {
   });
 });
 
-// ── Taskana 4732 S1-C: /plugins opens Settings → Plugins ──
+// ── S1-C: /plugins opens Settings → Plugins ──
 
-describe("/plugins command (Taskana 4732 S1-C)", () => {
+describe("/plugins command (S1-C)", () => {
   it("exists, is common-gated, and routes to the plugins settings pane", () => {
     const command = SLASH_COMMANDS.find((c) => c.id === "plugins");
     expect(command).toBeDefined();

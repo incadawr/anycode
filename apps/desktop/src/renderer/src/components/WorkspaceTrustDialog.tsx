@@ -1,5 +1,5 @@
 /**
- * Project-trust dialog (Taskana 4736). Shown when the host reports that a
+ * Project-trust dialog. Shown when the host reports that a
  * folder's own spawn declarations (project MCP servers, hooks, LSP servers,
  * project-tier plugin MCP) are waiting for a decision. Copy follows
  * BinaryTrustDialog: a native controlled <dialog>, Esc writes nothing.

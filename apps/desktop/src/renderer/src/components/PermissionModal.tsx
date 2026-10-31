@@ -31,7 +31,7 @@
  * with no argument (checkbox unchecked) is byte-identical to the pre-2.2
  * behavior.
  *
- * TASK.27 adds ONE presentation special case, `describePermissionAsk`: an
+ * adds ONE presentation special case, `describePermissionAsk`: an
  * ExitPlanMode ask renders the plan as markdown with action-shaped buttons
  * (Approve plan / Keep planning) and no "Always allow". Nothing about the
  * transport changes — the tool reaches this modal through the same
@@ -54,7 +54,7 @@ import { Markdown } from "./Markdown.js";
 import { X } from "./icons.js";
 import { commandBinary, isCommandLineTool, sanitizeBashPattern } from "../permission-pattern.js";
 import { classifyBashCommandLine, formatScopedRunnerPattern, recognizeScopedRunnerCommand } from "@anycode/core/permissions/safe-command";
-// Taskana 4070: the classification-to-plaque mapping moved to core (shared
+// the classification-to-plaque mapping moved to core (shared
 // with the CLI terminal broker and the Codex commandExecution approvals);
 // imported here for describePermissionAsk and re-exported below for every
 // existing import from this module. Cross-review D1: imported through the
@@ -111,7 +111,7 @@ const RISK_LABELS: Record<RiskLevel, string> = {
 };
 
 /**
- * Taskana 4070: the NEUTRAL badge text shown when the classifier proves the
+ * the NEUTRAL badge text shown when the classifier proves the
  * command line read-only yet the ask's metadata still says high/destructive —
  * core's Bash metadata is static (`riskLevel:"high", destructive:true` for
  * every command), so without this the header would scream "High risk /
@@ -182,7 +182,7 @@ export function formatPermissionTitle(toolName: string): PermissionTitle {
 }
 
 /**
- * Visible cap for a plan body (TASK.27), mirroring the CLI's own
+ * Visible cap for a plan body, mirroring the CLI's own
  * CLI_PLAN_PREVIEW_MAX_CHARS (terminal-broker.ts). The scroll well is CSS; this
  * only stops a pathological multi-MB plan from being handed to the markdown
  * lexer on every render. Counted in UTF-16 code units, exactly like the slice
@@ -204,10 +204,10 @@ export interface PermissionAskPresentation {
   denyLabel: string;
   /** One-line explanation of what approving actually does; null for generic asks. */
   hint: string | null;
-  /** Taskana 4070: per-command risk note for a Bash ask (read-only pipeline /
+  /** per-command risk note for a Bash ask (read-only pipeline /
    * named write-capable binary / unknown binary); null for everything else. */
   plaque: string | null;
-  /** Taskana 4070: neutral badge text when the classifier proves the command
+  /** neutral badge text when the classifier proves the command
    * read-only yet the metadata header would otherwise say "High risk" (+
    * "Destructive") — core's static Bash metadata grades every command high.
    * Null keeps the ordinary metadata-driven badge. */
@@ -216,13 +216,13 @@ export interface PermissionAskPresentation {
   canRemember: boolean;
 }
 
-/** TASK.35: the honest reason line for a Bash ask caused by unprovable shell
+/** the honest reason line for a Bash ask caused by unprovable shell
  * syntax, as opposed to a plainly high-risk single command. Exported for the
  * copy-pinning test. */
 export const UNKNOWN_SHELL_HINT =
   "Unknown shell expression — AnyCode can't prove this command is read-only, so it's asking. Unproven is not necessarily dangerous; review the command before allowing.";
 
-/** Resolves the TASK.35 hint for a generic ask; null for everything that is
+/** Resolves the hint for a generic ask; null for everything that is
  * not a Bash shell-expression ask (fail-closed presentation: no command
  * string, or a plain single command, or a proven read-only line → no hint). */
 function bashUnknownShellHint(toolName: string, input: unknown): string | null {
@@ -238,7 +238,7 @@ function bashUnknownShellHint(toolName: string, input: unknown): string | null {
   return verdict.class === "unknown" && verdict.shellExpression ? UNKNOWN_SHELL_HINT : null;
 }
 
-/** Taskana 4070: re-exports of the shared plaque API (see the import above) —
+/** re-exports of the shared plaque API (see the import above) —
  * the desktop modal is where the plaque was born (7d633a64/4ebfbe12); these
  * keep every existing import from this module working unchanged. */
 export {
@@ -250,7 +250,7 @@ export {
 };
 export type { BashRiskFacts, BashRiskPlaque };
 
-/** Taskana 4070: neutralises the header badge IFF the ask's command line is
+/** neutralises the header badge IFF the ask's command line is
  * classifier-PROVEN read-only while the static metadata still grades it
  * "High risk" (or flags it destructive) — exactly the mixed message core's
  * static Bash metadata produces for `git status`. The badge then shows the
@@ -270,7 +270,7 @@ export function neutralRiskLabelFor(
 }
 
 /**
- * Resolves how an ask should be presented (TASK.27). The plan branch is a
+ * Resolves how an ask should be presented. The plan branch is a
  * PRESENTATION special case only — the tool reached this modal through the
  * ordinary permission tract, and the outgoing allow/deny messages are
  * unchanged.
@@ -289,7 +289,7 @@ export function neutralRiskLabelFor(
 export function describePermissionAsk(
   toolName: string,
   input: unknown,
-  /** Taskana 4070: the ask's live metadata, when the caller has it — drives
+  /** the ask's live metadata, when the caller has it — drives
    * the header neutralisation (a static-high core Bash ask whose command the
    * classifier proves read-only). Absent → no neutralisation (fail-closed to
    * today's metadata-driven badge). */
@@ -355,7 +355,7 @@ function capPreviewLines(text: string, maxLines: number): CappedPreview {
 
  * for a non-command tool, or a command call with no `command` string, means
  * the checkbox produces a bare `{toolName}` rule with no pattern field shown.
- * TASK.144: "command tool" is `isCommandLineTool`, so a Codex session's
+ * "command tool" is `isCommandLineTool`, so a Codex session's
  * `CodexExec` ask gets the same suggestion + editable pattern field a `Bash`
  * ask does — without it, checking the box in a Codex session could only ever
  * mint a patternless allow-every-command rule.
@@ -382,7 +382,7 @@ export function suggestAlwaysAllowPattern(toolName: string, input: unknown, work
   return token ? `${token} *` : undefined;
 }
 
-/** TASK.36: label tracks what will really be saved. Scoped text only while the
+/** label tracks what will really be saved. Scoped text only while the
  * pattern field still equals the scoped proposal; any hand edit (or a cleared
  * field) falls back to the generic wording, so the label never lies. */
 export function alwaysAllowCheckboxText(
@@ -532,7 +532,7 @@ export function PermissionModal({
   const suggestedPattern = suggestAlwaysAllowPattern(request.toolName, request.input, workspace);
   const title = formatPermissionTitle(request.toolName);
   const platform = window.anycode?.platform ?? "darwin";
-  // TASK.27: an ExitPlanMode ask is presented as a plan review — markdown body,
+  // an ExitPlanMode ask is presented as a plan review — markdown body,
   // action-shaped buttons, no Always-allow. `showRemember` folds the engine
   // capability and the per-ask verdict into ONE flag used by both the checkbox
   // and fireAllow, so a plan can never carry a `remember` even if the checkbox
@@ -611,7 +611,7 @@ export function PermissionModal({
           with the risk badge as a slightly deeper soft-pill sitting on top. */}
       <div className={`permission-modal-header permission-modal-header-${request.metadata.riskLevel}`}>
         <div className="permission-modal-header-text">
-          {/* TASK.27: a plan review is not an "Allow <Tool>?" question — the
+          {/* a plan review is not an "Allow <Tool>?" question — the
               risk badge is dropped too (a read-only mode switch has no risk
               worth grading; the consequence is stated in words below). */}
           <span className="permission-modal-title">
@@ -669,7 +669,7 @@ export function PermissionModal({
           const seconds = Math.max(0, Math.ceil((request.deadline - now) / 1000));
           return <p><span aria-hidden="true">Automatically denied in {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")} if unanswered.</span><span className="visually-hidden" role="status">This request will be automatically denied if unanswered.</span></p>;
         })()}
-        {/* TASK.27: the plan IS the payload — rendered as markdown through the
+        {/* the plan IS the payload — rendered as markdown through the
             same lexer-only renderer the transcript uses (no innerHTML), instead
             of the generic JSON `Input` dump, which is unreadable for prose. */}
         {isPlan && presentation.plan !== null ? (
@@ -763,7 +763,7 @@ export function PermissionModal({
             </div>
           )}
 
-        {/* TASK.27: for a plan, the consequence of approving is the actual
+        {/* for a plan, the consequence of approving is the actual
             information the user needs; "Mode: plan" is the state they can
             already see on the composer chip. */}
         {isPlan ? (
@@ -849,7 +849,7 @@ export function PermissionModal({
  * Core's absent presentation retains remember; an engine needs approvals it can
  * actually answer.
  *
- * TASK.144 dropped the second conjunct, `supportsCorePermissions`. That flag
+ * dropped the second conjunct, `supportsCorePermissions`. That flag
  * means "core's permission engine drives this session" — it gates the ModeMenu
  * and `/mode`, and it was ALSO gating remember on the reasoning that a rule
  * stored by a session with no RuleAwarePermissionEngine would never be read
@@ -857,7 +857,7 @@ export function PermissionModal({
  * consulted by the IpcPermissionBroker itself (host/permission-broker.ts), so
  * the rule is honoured on the very next ask and after every restart. Hiding the
  * checkbox left the owner of a Claude/Codex session with no in-app way to stop
- * being asked the same question — the wall TASK.144 was filed for.
+ * being asked the same question — the wall was filed for.
  *
  * `supportsInteractiveApprovals` stays, and is the correct gate on its own: it
  * is false exactly when the engine has no approval bridge, and Session drops a

@@ -1,5 +1,5 @@
 /**
- * Pure-logic tests for the PluginsPane + PluginInstallSheet wiring (Taskana
+ * Pure-logic tests for the PluginsPane + PluginInstallSheet wiring (
  * 4732 S1-C). Same no-jsdom rationale as McpServersPane.test.ts: this
  * package's vitest config runs `environment: "node"`, so hook-bearing
  * components can't mount — instead the pane's hook-FREE presentational

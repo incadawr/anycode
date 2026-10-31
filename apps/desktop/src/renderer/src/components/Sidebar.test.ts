@@ -68,7 +68,7 @@ function session(overrides: Partial<SessionSummary> & Pick<SessionSummary, "id" 
 }
 
 describe("buildSidebarGroups", () => {
-  it("marks engine rows via engineId: open tab from a codex session, claude resumable, absent/core get none (TASK.119 п.5)", () => {
+  it("marks engine rows via engineId: open tab from a codex session, claude resumable, absent/core get none (п.5)", () => {
     const groups = buildSidebarGroups(
       [tab({ tabId: "t1", workspace: "/ws" })],
       [
@@ -341,7 +341,7 @@ describe("filterSidebarGroups", () => {
   });
 });
 
-describe("limitGroupRows (TASK.125)", () => {
+describe("limitGroupRows", () => {
   function rows(spec: readonly ("open" | "resumable")[]): FilteredSidebarRow[] {
     return spec.map((kind, i) => ({
       row:
@@ -397,7 +397,7 @@ describe("limitGroupRows (TASK.125)", () => {
   });
 });
 
-describe("tabsSessionKey (TASK.125 — real session-set membership)", () => {
+describe("tabsSessionKey (real session-set membership)", () => {
   it("identity-only mutations keep the key: title/flag flips", () => {
     const base = tab({ tabId: "t1", workspace: "/w", sessionId: "s1" });
     const flipped = { ...base, title: "B", hostExited: true, terminalOpen: true };
@@ -419,7 +419,7 @@ describe("tabsSessionKey (TASK.125 — real session-set membership)", () => {
   });
 });
 
-describe("capSessionPage (TASK.125)", () => {
+describe("capSessionPage", () => {
   it("a probe page at or under the limit passes through whole, hasMore false", () => {
     const page = summaries(SIDEBAR_SESSIONS_LIMIT);
     expect(capSessionPage(page)).toEqual({ page, hasMore: false });
@@ -432,7 +432,7 @@ describe("capSessionPage (TASK.125)", () => {
   });
 });
 
-describe("SessionIndexController (TASK.125 — fetch discipline; the hook delegates here)", () => {
+describe("SessionIndexController (fetch discipline; the hook delegates here)", () => {
   function rig(rows: readonly SessionSummary[]) {
     const fetchList = vi.fn(async (limit?: number): Promise<readonly SessionSummary[]> => {
       if (limit === undefined && rows.length > SIDEBAR_SESSIONS_LIMIT) {
@@ -506,7 +506,7 @@ describe("SessionIndexController (TASK.125 — fetch discipline; the hook delega
   });
 });
 
-describe("focus refetch removal (TASK.125)", () => {
+describe("focus refetch removal", () => {
   it("Sidebar.tsx no longer subscribes to window focus — no fetch path may hang off it", async () => {
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
@@ -601,9 +601,9 @@ describe("clampMenuLeft", () => {
   });
 });
 
-// TASK.114: session-delete message/verdict helpers (pure, node-env — same
+// session-delete message/verdict helpers (pure, node-env — same
 // discipline as buildSidebarGroups above).
-describe("isRowDeletable (TASK.114)", () => {
+describe("isRowDeletable", () => {
   it("offers delete only on resumable rows", () => {
     expect(isRowDeletable("resumable", false)).toBe(true);
     expect(isRowDeletable("open", false)).toBe(false);
@@ -618,13 +618,13 @@ describe("isRowDeletable (TASK.114)", () => {
   });
 });
 
-describe("singleDeleteConfirm (TASK.114)", () => {
+describe("singleDeleteConfirm", () => {
   it("names the task and states irreversibility", () => {
     expect(singleDeleteConfirm("Fix login")).toBe("Delete “Fix login” permanently? This cannot be undone.");
   });
 });
 
-describe("parseOlderThanDays (TASK.114)", () => {
+describe("parseOlderThanDays", () => {
   it("accepts whole days within 1..3650 (main's zod bounds)", () => {
     expect(parseOlderThanDays("30")).toBe(30);
     expect(parseOlderThanDays(" 7 ")).toBe(7);
@@ -643,17 +643,17 @@ describe("parseOlderThanDays (TASK.114)", () => {
   });
 });
 
-describe("bulkDeleteConfirm (TASK.114)", () => {
+describe("bulkDeleteConfirm", () => {
   it("quotes the exact candidate count before anything is deleted (decision 5)", () => {
     expect(bulkDeleteConfirm(1, 30)).toBe("Permanently delete 1 task older than 30 days? This cannot be undone.");
     expect(bulkDeleteConfirm(42, 1)).toBe("Permanently delete 42 tasks older than 1 day? This cannot be undone.");
   });
 });
 
-// TASK.126: the ConfirmDialog copy per pending confirm — must reuse the exact
+// the ConfirmDialog copy per pending confirm — must reuse the exact
 // singleDeleteConfirm / bulkDeleteConfirm text the old window.confirm calls
 // quoted (their own tests above stay authoritative for that text).
-describe("sidebarConfirmCopy (TASK.126)", () => {
+describe("sidebarConfirmCopy", () => {
   it("single: 'Delete task' title, singleDeleteConfirm body, 'Delete' verb", () => {
     expect(sidebarConfirmCopy({ kind: "delete-session", sessionId: "s1", title: "Fix login" })).toEqual({
       title: "Delete task",
@@ -679,7 +679,7 @@ describe("sidebarConfirmCopy (TASK.126)", () => {
   });
 });
 
-describe("deleteOlderNotice (TASK.114)", () => {
+describe("deleteOlderNotice", () => {
   it("reports the deleted count", () => {
     expect(deleteOlderNotice(3, 0)).toBe("Deleted 3 tasks.");
   });
@@ -695,7 +695,7 @@ describe("deleteOlderNotice (TASK.114)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// REVIEW 15.08 (TASK.114 defect 1) + TASK.126 — THE NATIVE DIALOG GUARD.
+// REVIEW 15.08 (defect 1) + — THE NATIVE DIALOG GUARD.
 // window.prompt is NOT supported by Electron: it THROWS "prompt() is not
 // supported" the moment it is called. window.confirm/alert are blocking and
 // freeze the renderer behind a dialog the WebContentsView overlay can't hide.
@@ -705,7 +705,7 @@ describe("deleteOlderNotice (TASK.114)", () => {
 // blocking native dialog. Pure-fn tests around handlers can never catch this
 // class of bug.
 
-describe("renderer native-dialog guard (TASK.114 review 15.08, TASK.126)", () => {
+describe("renderer native-dialog guard (review 15.08)", () => {
   it("no renderer production source calls confirm/alert/prompt — window., globalThis. or bare (Electron blocks/freezes them)", async () => {
     const { readdir, readFile } = await import("node:fs/promises");
     const { join, extname } = await import("node:path");
@@ -775,7 +775,7 @@ describe("renderer native-dialog guard (TASK.114 review 15.08, TASK.126)", () =>
   });
 });
 
-describe("agent-open project switch (Taskana 4768)", () => {
+describe("agent-open project switch", () => {
   it("project menu renders the fourth checkable item reflecting the bridge state and flipping it", () => {
     expect(PROJECT_MENU_ITEM_COUNT).toBe(4);
     expect(agentProjectMenuItem(false)).toEqual({ role: "menuitemcheckbox", checked: false, label: AGENT_PROJECT_SWITCH_LABEL, next: true });

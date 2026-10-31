@@ -1,5 +1,5 @@
 /**
- * port.ts tests (TASK.102 CUT-S2 §2.5, slice S2c C2). Scoped narrowly to
+ * port.ts tests (CUT-S2 §2.5, slice S2c C2). Scoped narrowly to
  * `parseChildEnvelopeField`, the one pure function this slice adds here —
  * `onHostPort`/`onTerminalPort`/`onHostExited` themselves reach into
  * `window.addEventListener`, which does not exist under this package's
@@ -13,7 +13,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { startConnectionManager, parseChildEnvelopeField } from "./port.js";
 
-describe("port — parseChildEnvelopeField (TASK.102 CUT-S2 §2.5)", () => {
+describe("port — parseChildEnvelopeField (CUT-S2 §2.5)", () => {
   it("passes through a well-formed child field untouched", () => {
     const child = {
       parentTabId: "root-1",
@@ -59,7 +59,7 @@ describe("port — parseChildEnvelopeField (TASK.102 CUT-S2 §2.5)", () => {
 });
 
 
-describe("main tab-close notification (Taskana 4880)", () => {
+describe("main tab-close notification", () => {
   it("disposes the renderer tab and forwards its pinned handle on port delivery", () => {
     const listeners = new Set<(event: unknown) => void>();
     vi.stubGlobal("window", {

@@ -1,5 +1,5 @@
 /**
- * Tests for the S5 persisted workflow-card decode/project pair (TASK.191
+ * Tests for the S5 persisted workflow-card decode/project pair (
  * slice S5). `decodeWorkflowCardSnapshot` is the LAST line of defense before
  * a persisted `presentation.workflow` blob (parsed by `loadHistory` with an
  * unchecked `JSON.parse`, sqlite-persistence.ts) reaches the store — it must
@@ -197,7 +197,7 @@ describe("decodeWorkflowCardSnapshot — malformed payloads never throw and deco
     ["final.durationMs is negative", { ...VALID_SNAPSHOT, final: { status: "failed", durationMs: -1 } }],
     ["final.durationMs is a float", { ...VALID_SNAPSHOT, final: { status: "failed", durationMs: 1.5 } }],
     ["final.durationMs is NaN", { ...VALID_SNAPSHOT, final: { status: "failed", durationMs: Number.NaN } }],
-    // TASK.193: a malformed failure/unlaunched field fails the WHOLE decode
+    // a malformed failure/unlaunched field fails the WHOLE decode
     // (same fail-soft posture as every field above), never a silently
     // dropped field.
     [
@@ -263,7 +263,7 @@ describe("decodeWorkflowCardSnapshot — malformed payloads never throw and deco
   }
 });
 
-describe("decodeWorkflowCardSnapshot — failure/unlaunched (TASK.193)", () => {
+describe("decodeWorkflowCardSnapshot — failure/unlaunched", () => {
   it("accepts a step's failure record by field and its unlaunched:true marker, round-tripped unchanged when both fit under the byte cap", () => {
     const withFailure: WorkflowCardSnapshotV1 = {
       ...VALID_SNAPSHOT,
@@ -363,7 +363,7 @@ describe("decodeWorkflowCardSnapshot — failure/unlaunched (TASK.193)", () => {
   });
 });
 
-describe("constant parity — WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES (TASK.193)", () => {
+describe("constant parity — WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES", () => {
   it("the local byte cap equals the real @anycode/core export", () => {
     expect(WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES).toBe(CORE_WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES);
   });
@@ -517,7 +517,7 @@ describe("projectWorkflowCard", () => {
     });
   });
 
-  it("copies a step's failure/unlaunched onto its projected final (TASK.193); a step with neither carries neither key on final", () => {
+  it("copies a step's failure/unlaunched onto its projected final; a step with neither carries neither key on final", () => {
     const withFailure: WorkflowCardSnapshotV1 = {
       ...VALID_SNAPSHOT,
       steps: [

@@ -1,5 +1,5 @@
 /**
- * TASK.131 — pure decision logic for the New Session model picker.
+ * pure decision logic for the New Session model picker.
  *
  * The picker's FORM is a drill-down (owner decision 17.08, replacing the
  * two-pane rail and the horizontal tab row that preceded it): the root level
@@ -38,7 +38,7 @@ export function effortCatalogProviderId(connection: ProviderConnection | undefin
 // ── D4: catalog-first ordering ──
 
 /**
- * The display order for one connection's offered models (TASK.131 D4): the
+ * The display order for one connection's offered models (D4): the
  * provider catalog's own order — deliberately curated fresh-first
  * (`catalog-data.ts` lays `glm-5.3` before `glm-4.6`) — is authoritative;
  * live-fetched ids the catalog doesn't know append AFTER it, in the
@@ -96,7 +96,7 @@ export interface StartModelMenuGroup {
   /** Group row text — `connectionDisplayName`'s auto-naming, the SAME label Settings/Welcome already show. */
   label: string;
   /**
-   * TASK.131 D2: a muted disambiguator for connections whose auto-label
+   * D2: a muted disambiguator for connections whose auto-label
    * collides (two unlabeled `custom` connections both named "Custom") — the
    * connection's own baseUrl host, or `undefined` when the label is already
    * unique or the connection declares no baseUrl. Rendered beside the label,
@@ -119,7 +119,7 @@ export interface StartModelMenuItem {
 }
 
 /**
- * TASK.131 D1 (owner live smoke 16.08): the group set and ORDER.
+ * D1 (owner live smoke 16.08): the group set and ORDER.
  * Filtering: a connection whose offered list resolves EMPTY is excluded — the
  * smoke showed three 0-model connections occupying the TOP of the list, each
  * clicking into a blank pane. (The current pair's connection survives with its
@@ -197,7 +197,7 @@ export function buildStartModelGroups(
 }
 
 /**
- * TASK.131 D2: the host part of a connection's baseUrl, for the muted
+ * D2: the host part of a connection's baseUrl, for the muted
  * disambiguator two connections with colliding auto-labels carry. `undefined`
  * for a malformed URL (the raw string is never shown — it can carry a path or
  * credentials). Exported for unit testing.
@@ -226,7 +226,7 @@ export interface StartModelPopularRow {
 export const START_MODEL_RECENT_WINDOW = 30;
 
 /**
- * The model ids of the user's most recent sessions, newest first (TASK.131
+ * The model ids of the user's most recent sessions, newest first (
  * D6). "Popular" is measured from the user's OWN history rather than a
  * curated constant in code — the constant was what made the strip disappear
  * for a user whose providers it did not happen to name (owner live smoke
@@ -245,7 +245,7 @@ export function deriveRecentModelIds(
 }
 
 /**
- * TASK.131 D6 + owner decision 17.08 ("топ 3 популярных"): the root level's
+ * D6 + owner decision 17.08 ("топ 3 популярных"): the root level's
  * three quick picks. Ranked by how often the model appears in the recent
  * session window (ties → the more recently used one), each mapped to a group
  * that actually offers it — the CURRENT connection's group when it does, so a
@@ -320,7 +320,7 @@ export function buildStartModelPopularRows(
 export const START_MODEL_DEFAULT_EFFORTS: readonly string[] = ["off", "low", "medium", "high"];
 
 /**
- * TASK.131 (owner decision 17.08: «effort у разных моделей по-разному
+ * (owner decision 17.08: «effort у разных моделей по-разному
  * определяется»): the effort levels ONE model accepts, or `undefined` when it
  * accepts none and the picker must not show an effort level at all.
  *
@@ -334,7 +334,7 @@ export const START_MODEL_DEFAULT_EFFORTS: readonly string[] = ["off", "low", "me
  * fails closed on anything else).
  *
  * A model the catalog does not know has no declared vocabulary — UNLESS the
- * connection's live-fetched `modelCapabilities` map declares one (Taskana
+ * connection's live-fetched `modelCapabilities` map declares one (
  * 4118). That rule is duplicated from core's `resolveEffortLevels` +
  * `liveEffortLevels` ON PURPOSE (the renderer never imports core, same
  * discipline as `START_MODEL_DEFAULT_EFFORTS` above): on a catalog miss,
@@ -357,7 +357,7 @@ export function startModelEffortLevels(
     ?.models.find((model) => model.id === modelId);
   if (manualLevels !== undefined) return (matched?.thinkingAlwaysOn ?? liveCaps?.thinkingAlwaysOn) ? manualLevels.filter((level) => level !== "off") : manualLevels;
   if (matched === undefined) {
-    // Taskana 4118: catalog miss ⇒ consult the connection's live caps.
+    // catalog miss ⇒ consult the connection's live caps.
     if (liveCaps?.reasoning !== true) {
       return undefined;
     }
@@ -376,11 +376,11 @@ export function startModelEffortLevels(
   return matched.effortLevels ?? START_MODEL_DEFAULT_EFFORTS;
 }
 
-/** The closed effort vocabulary a live-declared level must map to by exact name (Taskana 4118). */
+/** The closed effort vocabulary a live-declared level must map to by exact name. */
 const START_MODEL_EFFORT_VOCABULARY: readonly string[] = ["off", "low", "medium", "high", "xhigh", "max"];
 
 /**
- * The provider's own default effort tier for a model (Taskana 4894), or
+ * The provider's own default effort tier for a model, or
  * `undefined` when none is recorded.
  *
  * Only the catalog can answer this: a live `/models` fetch declares a
@@ -430,7 +430,7 @@ export function startModelDefaultEffort(
 }
 
 /**
- * The effort a draft should carry after its model changed (TASK.131): the
+ * The effort a draft should carry after its model changed: the
  * previous pick when the NEW model's vocabulary also contains it, else
  * `undefined` — "no explicit pick", which lets the connection's own persisted
  * effort stand. Never silently coerces to another level: a pick the new model
@@ -448,10 +448,10 @@ export function carryDraftEffort(
 
 /**
  * The effort the picker DISPLAYS for the pair it is about to start
- * (TASK.131): the draft's own pick when it has one, else the effort the
+ * the draft's own pick when it has one, else the effort the
  * target connection already persists (`ProviderConnection.reasoningEffort` —
  * what the session would boot with if the user never opened this level), else
- * the model's recorded provider default (`modelDefaultEffort`, Taskana 4894),
+ * the model's recorded provider default (`modelDefaultEffort`),
  * else the vocabulary's own first level. `undefined` only when the model
  * declares no vocabulary, which is exactly when no effort level is rendered.
  *
@@ -508,7 +508,7 @@ export const START_MODEL_MENU_MARGIN_PX = 12;
 
 /**
  * A level's rendered height in px, from its row and divider counts
- * (TASK.131). Used only as the DEMAND side of the flip decision — the
+ * . Used only as the DEMAND side of the flip decision — the
  * popover is never given this as a fixed height, so an estimate that is a
  * pixel or two off can at worst flip a popover that had exactly one row of
  * slack. Exported for unit testing.
@@ -518,7 +518,7 @@ export function startModelLevelHeightPx(rowCount: number, dividerCount = 0): num
 }
 
 /**
- * Whether the popover hangs ABOVE the chip instead of below it (TASK.131).
+ * Whether the popover hangs ABOVE the chip instead of below it.
  * Down is the default (the popover's anchor grammar); it flips up only when
  * the space below the chip cannot hold the tallest level the user can reach
  * while the space above holds more. The decision is made ONCE per open,

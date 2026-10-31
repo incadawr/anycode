@@ -235,7 +235,7 @@ describe("hasMainAuthLinkProfile", () => {
   });
 });
 
-// ── resolveAccountRows (TASK.57: dedupe the "System" pseudo-row against a saved profile mirroring the same signed-in account) ──
+// ── resolveAccountRows (dedupe the "System" pseudo-row against a saved profile mirroring the same signed-in account) ──
 
 describe("resolveAccountRows", () => {
   function readyReport(email: string | null): CodexDoctorReport {
@@ -303,7 +303,7 @@ describe("loginFailureMessage", () => {
     expect(loginFailureMessage("cancelled")).toBeNull();
   });
 
-  // Taskana 4884: the pane must not swallow main's explanation — the generic
+  // the pane must not swallow main's explanation — the generic
   // "Try again" line made every distinct failure look identical.
   it("shows main's own failure detail instead of the generic line", () => {
     expect(loginFailureMessage("failed", "the login request failed: codex doctor request timed out: account/login/start")).toContain(
@@ -538,7 +538,7 @@ describe("isCodexVersionWithinSupportedRange", () => {
     expect(isCodexVersionWithinSupportedRange("0.144.3", "garbage")).toBe(false);
   });
 
-  it("supports the explicit =, <=, and > comparators the shared grammar allows (TASK.213)", () => {
+  it("supports the explicit =, <=, and > comparators the shared grammar allows", () => {
     expect(isCodexVersionWithinSupportedRange("0.144.0", "=0.144.0")).toBe(true);
     expect(isCodexVersionWithinSupportedRange("0.144.1", "=0.144.0")).toBe(false);
     expect(isCodexVersionWithinSupportedRange("0.145.0", ">=0.144.0 <=0.145.0")).toBe(true);
@@ -605,7 +605,7 @@ describe("deriveBinaryActions", () => {
   });
 });
 
-// TASK.103 (CUT-S4.md §12 step 8, row 36): pins the WIRING between this
+// (CUT-S4.md §12 step 8, row 36): pins the WIRING between this
 // pane's own report/snapshot shapes and BinaryTrustDialog.tsx's shared pure
 // reader — not a re-test of binaryTrustRefusalOf itself (BinaryTrustDialog.
 // test.ts's BU1 already covers that), but confirmation that a real
@@ -614,7 +614,7 @@ describe("deriveBinaryActions", () => {
 // `describeCodexReportStatus` needs ZERO change to render a trust-refused
 // report correctly (D-S4-6: the detail is the policy reason verbatim,
 // already named by `unsafeReason` — no new branch, no string-matching).
-describe("binary-trust wiring (TASK.103)", () => {
+describe("binary-trust wiring", () => {
   it("a CodexOnboardingSnapshot carrying trustRefusal is read correctly by the shared dialog helper", () => {
     const snapshot: CodexOnboardingSnapshot = {
       report: {
@@ -661,16 +661,16 @@ describe("binary-trust wiring (TASK.103)", () => {
   });
 });
 
-// ── Taskana 4092 (TASK.85): typed 127 verdict + alternate binary choices ──
+// ── typed 127 verdict + alternate binary choices ──
 
-describe("Taskana 4092 — 127 diagnosis + alternate binary choices", () => {
+describe("— 127 diagnosis + alternate binary choices", () => {
   const nodeUnavailableReport: CodexDoctorReport = {
     status: "error",
     error: "Codex version check exited with code 127",
     nodeUnavailable: { binaryPath: "/b", exitCode: 127, hint: "HINT" },
   };
 
-  describe("useBinaryFailureMessage (Taskana 4092 follow-up — Use restricted to listed candidates)", () => {
+  describe("useBinaryFailureMessage (follow-up — Use restricted to listed candidates)", () => {
     it("explains the unlisted refusal: the offered list moved on, recheck or pick instead", () => {
       expect(useBinaryFailureMessage("unlisted")).toMatch(/no longer one of the listed candidates/);
     });

@@ -1,5 +1,5 @@
 /**
- * TASK.131 — unit tests for the New Session model picker's pure decision
+ * unit tests for the New Session model picker's pure decision
  * logic (start-model-picker.ts). Same discipline as StartScreen.test.ts:
  * this package's vitest runs `environment: "node"`, so only plain functions
  * are exercised — the popover's JSX consumes them verbatim.
@@ -54,7 +54,7 @@ const CATALOG: CatalogSummary = [
   },
 ];
 
-describe("orderModelsByCatalog (TASK.131 D4 — catalog order, not the provider's alphabet)", () => {
+describe("orderModelsByCatalog (D4 — catalog order, not the provider's alphabet)", () => {
   it("re-orders a live list that covers catalog ids back into the catalog's curated (fresh-first) order", () => {
     // z.ai /v1/models answers alphabetically; the catalog is fresh-first.
     const ordered = orderModelsByCatalog(CATALOG[0]!.models, [{ id: "glm-4.7" }, { id: "glm-5.3" }, { id: "glm-5.2" }]);
@@ -72,7 +72,7 @@ describe("orderModelsByCatalog (TASK.131 D4 — catalog order, not the provider'
   });
 });
 
-describe("connectionOfferedModels (TASK.131 D4)", () => {
+describe("connectionOfferedModels (D4)", () => {
   it("resolves via providerModelsFor (connection ids UNIONED with catalog hints) and orders catalog-first", () => {
     const conn = connection({ id: "c1", providerId: "z-ai", models: ["glm-4.7", "glm-5.3"] });
     expect(connectionOfferedModels(conn, CATALOG, undefined)?.map((m) => m.id)).toEqual(["glm-5.3", "glm-5.2", "glm-4.7"]);
@@ -91,7 +91,7 @@ describe("connectionOfferedModels (TASK.131 D4)", () => {
   });
 });
 
-describe("buildStartModelGroups (TASK.131 D1 — empty connections out, current first, count desc)", () => {
+describe("buildStartModelGroups (D1 — empty connections out, current first, count desc)", () => {
   it("D1: connections offering zero models leave the rail entirely (the smoke's leading 0-model rows)", () => {
     const connections = [
       connection({ id: "conn-empty-1", providerId: "mystery", label: "test" }),
@@ -163,7 +163,7 @@ describe("buildStartModelGroups (TASK.131 D1 — empty connections out, current 
   });
 });
 
-describe("connectionBaseUrlHost (TASK.131 D2)", () => {
+describe("connectionBaseUrlHost (D2)", () => {
   it("extracts the host", () => {
     expect(connectionBaseUrlHost("https://api.example.com/v1")).toBe("api.example.com");
   });
@@ -173,7 +173,7 @@ describe("connectionBaseUrlHost (TASK.131 D2)", () => {
   });
 });
 
-describe("deriveRecentModelIds (TASK.131 D6 — popularity is measured, not curated)", () => {
+describe("deriveRecentModelIds (D6 — popularity is measured, not curated)", () => {
   function session(over: Partial<SessionSummary> & { id: string; model: string; updatedAt: number }): SessionSummary {
     return { workspace: "/w", mode: "auto", createdAt: over.updatedAt, ...over };
   }
@@ -194,7 +194,7 @@ describe("deriveRecentModelIds (TASK.131 D6 — popularity is measured, not cura
   });
 });
 
-describe("buildStartModelPopularRows (TASK.131 D6 + owner decision 17.08 — top 3)", () => {
+describe("buildStartModelPopularRows (D6 + owner decision 17.08 — top 3)", () => {
   const groups = buildStartModelGroups(
     [
       connection({ id: "conn-glm", providerId: "z-ai", label: "GLM" }),
@@ -239,7 +239,7 @@ describe("buildStartModelPopularRows (TASK.131 D6 + owner decision 17.08 — top
   });
 });
 
-describe("startModelEffortLevels (TASK.131 — the vocabulary belongs to the MODEL)", () => {
+describe("startModelEffortLevels (the vocabulary belongs to the MODEL)", () => {
   const EFFORT_CATALOG: CatalogSummary = [
     {
       id: "z-ai",
@@ -268,7 +268,7 @@ describe("startModelEffortLevels (TASK.131 — the vocabulary belongs to the MOD
     expect(startModelEffortLevels("z-ai", "glm-5.2", undefined)).toBeUndefined();
   });
 
-  // ── Taskana 4118: live caps supplement the catalog (renderer rule mirrors core) ──
+  // ── live caps supplement the catalog (renderer rule mirrors core) ──
 
   it("Catalog-unknown id retains recognized live effort levels", () => {
     expect(
@@ -279,14 +279,14 @@ describe("startModelEffortLevels (TASK.131 — the vocabulary belongs to the MOD
     ).toEqual(["high", "xhigh"]);
   });
 
-  it("Taskana 4118: live reasoning without effortLevels gets the legacy four; non-reasoning live stays undefined", () => {
+  it("live reasoning without effortLevels gets the legacy four; non-reasoning live stays undefined", () => {
     expect(startModelEffortLevels("z-ai", "live-only-id", EFFORT_CATALOG, { reasoning: true })).toEqual(
       START_MODEL_DEFAULT_EFFORTS,
     );
     expect(startModelEffortLevels("z-ai", "live-only-id", EFFORT_CATALOG, { effortLevels: ["high"] })).toBeUndefined();
   });
 
-  it("Taskana 4118: a catalog-known model ignores conflicting live meta — the catalog list wins (D-Priority)", () => {
+  it("a catalog-known model ignores conflicting live meta — the catalog list wins (D-Priority)", () => {
     expect(
       startModelEffortLevels("z-ai", "glm-5.2", EFFORT_CATALOG, { reasoning: true, effortLevels: ["low"] }),
     ).toEqual(["off", "high", "max"]);
@@ -294,12 +294,12 @@ describe("startModelEffortLevels (TASK.131 — the vocabulary belongs to the MOD
     expect(startModelEffortLevels("z-ai", "glm-4.6", EFFORT_CATALOG, { reasoning: true })).toBeUndefined();
   });
 
-  it("Taskana 4118: no live ⇒ undefined for a catalog-unknown id (pre-4118 shape unchanged)", () => {
+  it("no live ⇒ undefined for a catalog-unknown id (pre-4118 shape unchanged)", () => {
     expect(startModelEffortLevels("z-ai", "live-only-id", EFFORT_CATALOG, undefined)).toBeUndefined();
   });
 });
 
-describe("effort carry/resolve (TASK.131)", () => {
+describe("effort carry/resolve", () => {
   it("carryDraftEffort: kept when the new model also declares it, dropped otherwise — never coerced", () => {
     expect(carryDraftEffort("high", ["off", "high", "max"])).toBe("high");
     expect(carryDraftEffort("medium", ["off", "high", "max"])).toBeUndefined();
@@ -321,7 +321,7 @@ describe("effort carry/resolve (TASK.131)", () => {
     expect(resolveStartModelEffort("high", "high", [])).toBeUndefined();
   });
 
-  // Taskana 4894: the level SHOWN for a pair with no explicit pick is the
+  // the level SHOWN for a pair with no explicit pick is the
   // model's documented provider default, not the vocabulary's first entry.
   it("resolveStartModelEffort: the model's recorded default beats the vocabulary's first level", () => {
     // DeepSeek: levels low/high/max, documented default high.
@@ -340,9 +340,9 @@ describe("effort carry/resolve (TASK.131)", () => {
   });
 });
 
-// ── Taskana 4894: the per-model default effort comes from the catalog ──
+// ── the per-model default effort comes from the catalog ──
 
-describe("startModelDefaultEffort (Taskana 4894)", () => {
+describe("startModelDefaultEffort", () => {
   const CATALOG: CatalogSummary = [
     {
       id: "deepseek",
@@ -381,7 +381,7 @@ describe("startModelDefaultEffort (Taskana 4894)", () => {
   });
 });
 
-describe("popover geometry (TASK.131 — the popover MOVES, it never grows a scrollbar)", () => {
+describe("popover geometry (the popover MOVES, it never grows a scrollbar)", () => {
   it("startModelLevelHeightPx: rows×30 + dividers×9 + the popover's own padding", () => {
     expect(startModelLevelHeightPx(9)).toBe(9 * START_MODEL_ROW_HEIGHT_PX + START_MODEL_MENU_PADDING_PX);
     expect(startModelLevelHeightPx(5, 2)).toBe(
@@ -417,9 +417,9 @@ describe("popover geometry (TASK.131 — the popover MOVES, it never grows a scr
   });
 });
 
-// ── TASK.183: per-connection manual model ids in the New Session picker ──
+// ── per-connection manual model ids in the New Session picker ──
 
-describe("connectionOfferedModels / buildStartModelGroups (TASK.183 — manual ids are per connection)", () => {
+describe("connectionOfferedModels / buildStartModelGroups (manual ids are per connection)", () => {
   const TWO_KIMI: ProviderConnection[] = [
     connection({ id: "conn-a", providerId: "kimi", models: ["manual-a"] }),
     connection({ id: "conn-b", providerId: "kimi", models: ["manual-b"] }),

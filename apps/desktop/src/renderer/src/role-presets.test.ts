@@ -1,5 +1,5 @@
 /**
- * Taskana 4704 §3.9 (part B) — preset derivation pins. Pure-function tests
+ * §3.9 (part B) — preset derivation pins. Pure-function tests
  * over deriveRolePresets/presetApplicable/autoSelectPreset
  * (the dialog JSX renders what these return; this package's vitest is node,
  * no jsdom).

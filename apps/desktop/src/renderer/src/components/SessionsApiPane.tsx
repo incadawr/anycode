@@ -1,5 +1,5 @@
 /**
- * Settings → Sessions API pane (Taskana 4747): enable the local MCP that lets an
+ * Settings → Sessions API pane: enable the local MCP that lets an
  * external agent (Claude Code, Codex) list and message the sessions the user
  * switches on. Everything is main-authoritative: folders come only from the
  * native dialog (`addWorkspace` takes no arguments), the token never reaches

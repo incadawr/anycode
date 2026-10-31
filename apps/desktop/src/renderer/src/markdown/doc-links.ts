@@ -1,5 +1,5 @@
 /**
- * Pure doc-relative href helpers for the native DOM markdown preview (TASK.99
+ * Pure doc-relative href helpers for the native DOM markdown preview (
  * CUT.md CONTRACTS, M2). `renderer: plain web target, zero Node`
  * (electron.vite.config.ts) - neither function may import `node:path`; both
  * are hand-rolled string math so this module works unmodified in the browser
@@ -101,7 +101,7 @@ function joinRelative(docDir: string, relPath: string): string {
 
 /**
  * Resolves a markdown href against the document's own directory - the
- * renderer-side half of TASK.99 M2's image custody chain: the caller joins
+ * renderer-side half of M2's image custody chain: the caller joins
  * FIRST, then hands the result to the EXISTING `api.readImage(tabId, absPath)`
  * containment channel unchanged (this function does no filesystem work and
  * makes no containment claim of its own).

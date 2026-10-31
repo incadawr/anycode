@@ -1,5 +1,5 @@
 /**
- * Taskana 4704 §3.9 (part B) — pure preset derivation for the first-run
+ * §3.9 (part B) — pure preset derivation for the first-run
  * RolePickerDialog and the Settings Roles pane. Same discipline as
  * slash-menu.ts/vision-pane-model.ts: this package's vitest runs
  * `environment: "node"` (no jsdom), so every decision the dialog needs is a

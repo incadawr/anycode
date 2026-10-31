@@ -27,7 +27,7 @@ import type { CommunicationMutationReason, CommunicationStatus } from "../../../
 const listening: CommunicationStatus = { state: "listening", url: "http://127.0.0.1:4310/mcp", port: 4310, workspaces: 0, sessions: 1 };
 const off: CommunicationStatus = { state: "off", workspaces: 0, sessions: 0 };
 
-describe("Sessions API pane model (Taskana 4747)", () => {
+describe("Sessions API pane model", () => {
   it("exposes the pane id and label the search and rail use", () => {
     expect(SESSIONS_API_PANE_ID).toBe("sessions-api");
     expect(SESSIONS_API_LABEL).toBe("Sessions API");

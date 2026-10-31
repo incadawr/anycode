@@ -120,7 +120,7 @@ export async function submitPermissionAdd(
 }
 
 // ---------------------------------------------------------------------------
-// Taskana 4730: the ask-zone classifier control (default OFF). Pure builders,
+// the ask-zone classifier control (default OFF). Pure builders,
 // unit-tested in PermissionsEditor.test.ts like every other helper here — the
 // pane's vitest config is node-environment, no DOM rendering.
 // ---------------------------------------------------------------------------
@@ -180,7 +180,7 @@ export function PermissionsEditor({ store = useSettingsStore }: PermissionsEdito
   const snapshot = useStore(store, (s) => s.snapshot);
   const [toolInput, setToolInput] = useState("");
   const [patternInput, setPatternInput] = useState("");
-  // Taskana 4730: classifier control state — initialized from the stored
+  // classifier control state — initialized from the stored
   // record, kept as plain strings, submitted through setPatch on Save.
   const storedClassifier = snapshot?.settings.permissions.classifier;
   const [classifierEnabled, setClassifierEnabled] = useState(storedClassifier?.enabled ?? false);

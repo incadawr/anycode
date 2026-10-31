@@ -1,5 +1,5 @@
 /**
- * Taskana 4704 §3.9 (part B) — pure editable-draft model for the role editor
+ * §3.9 (part B) — pure editable-draft model for the role editor
  * shared by RolePickerDialog (first run) and the Settings Roles pane. Same
  * discipline as role-presets.ts: every list mutation is a plain exported
  * function over a draft, so the node-env vitest covers the behavior without

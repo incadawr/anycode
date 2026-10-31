@@ -1,5 +1,5 @@
 /**
- * Pure state machine for MarkdownPreviewView (TASK.99 CUT.md CONTRACTS — M1
+ * Pure state machine for MarkdownPreviewView (CUT.md CONTRACTS — M1
  * shipped READ, M2 adds NAVIGATE) — ALL view logic lives here (RISK
  * REGISTER §5: vitest collects only `*.test.ts`, node env, no jsdom, so a
  * React component must stay a logic-free shell). Mirrors overlay-flag.ts /
@@ -86,7 +86,7 @@ export function eventForReadResult(result: MdDocReadResult): MdViewEvent {
 }
 
 /**
- * TASK.99 M3 (CUT.md GAP 1/CONTRACTS): the md-preview WINDOW's own bootstrap
+ * M3 (CUT.md GAP 1/CONTRACTS): the md-preview WINDOW's own bootstrap
  * target — `location.search` carries `tabId`/`previewId` (main's
  * `loadMdPreviewWindow` query, main/index.ts), never the whole record (the
  * window fetches its own doc via `mdPreview.read`, custody-preserving).
@@ -104,7 +104,7 @@ export function parseMdWindowTarget(search: string): { tabId: string; previewId:
 }
 
 /**
- * TASK.99 M3: the md-preview window has no reactive `preview-store` feed (no
+ * M3: the md-preview window has no reactive `preview-store` feed (no
  * `PREVIEW_CHANGED` push reaches a second `BrowserWindow` — see
  * MdPreviewWindowApp.tsx's own doc comment) — it hydrates `sourcePath` ONCE
  * from a `previewPanel.list` snapshot at mount, the same boot-time-read

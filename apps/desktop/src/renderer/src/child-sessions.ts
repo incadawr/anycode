@@ -1,5 +1,5 @@
 /**
- * Renderer-side child-session relation registry (TASK.102 CUT-S2 §2.5, slice
+ * Renderer-side child-session relation registry (CUT-S2 §2.5, slice
  * S2c C1). Two independent concerns live here:
  *
  *  - `classifyPortEnvelope` decides, for an incoming port-delivery envelope
@@ -206,7 +206,7 @@ export const childRelationStore = createChildRelationStore();
 
 /**
  * Whether an Agent tool_call card should show the session-child BADGE and
- * Open ACTION (TASK.102 CUT-S2 §2.5's full visibility rule, ratified in
+ * Open ACTION (CUT-S2 §2.5's full visibility rule, ratified in
  * final normative form by §10.8.1 point 3): true iff EITHER
  *  - a relation exists (live or not — an already-gone child still resolves
  *    through the same map, §0's "reap immediately" doc on `ChildRelation.live`),
@@ -260,7 +260,7 @@ export function spawnToolCallIdForChild(
 }
 
 /**
- * TASK.218: predicate telling `openChild` whether an EXISTING split-row id
+ * predicate telling `openChild` whether an EXISTING split-row id
  * belongs to the same logical child as the id being opened (a
  * continue_session continuation registers a NEW spawn id for the SAME
  * childSessionId). True for every spawn id this parent registered under that

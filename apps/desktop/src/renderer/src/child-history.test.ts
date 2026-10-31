@@ -1,5 +1,5 @@
 /**
- * child-history.ts tests (TASK.102 CUT-S2 §10.8.1 point 4/6d, slice S2c C4):
+ * child-history.ts tests (CUT-S2 §10.8.1 point 4/6d, slice S2c C4):
  * the pure CHILD_HISTORY_CHANNEL response -> view-state mapper, in isolation
  * from the IPC call itself (main/tab-ipc.ts, tested separately) and from the
  * JSX layer (App.tsx, untestable — vitest does not collect `.tsx`).

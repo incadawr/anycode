@@ -63,8 +63,8 @@ describe("canRememberPermission", () => {
     expect(canRememberPermission(null)).toBe(true);
   });
 
-  it("TASK.144: an engine with a live approval bridge may remember despite supportsCorePermissions:false", () => {
-    // The whole point of TASK.144: codex/claude both report
+  it("an engine with a live approval bridge may remember despite supportsCorePermissions:false", () => {
+    // The whole point of: codex/claude both report
     // supportsCorePermissions:false, and hiding the checkbox on that flag left
     // those sessions with no in-app way to stop being asked. Their rule store is
     // now read by IpcPermissionBroker itself, so a remembered rule is honoured.
@@ -265,7 +265,7 @@ describe("formatPermissionTitle", () => {
 });
 
 /**
- * TASK.27 — the ExitPlanMode special case. The permission engine already
+ * the ExitPlanMode special case. The permission engine already
  * escalates the tool into the ordinary `permission_request` tract, so the modal
  * renders it with no wiring change; what these pin is the PRESENTATION, which
  * is the whole point of the special case:
@@ -279,7 +279,7 @@ describe("formatPermissionTitle", () => {
  *    rendering an empty plan well (mirror of the CLI's own fallback in
  *    terminal-broker.ts).
  */
-describe("describePermissionAsk — plan approval (TASK.27)", () => {
+describe("describePermissionAsk — plan approval", () => {
   it("recognizes a well-formed ExitPlanMode ask and carries the plan verbatim", () => {
     const plan = "## Plan\n\n1. do the thing\n2. test it\n";
     const presentation = describePermissionAsk("ExitPlanMode", { plan });
@@ -352,7 +352,7 @@ describe("canRememberPermission x plan ask", () => {
   });
 });
 
-describe("describePermissionAsk — Bash unknown shell expression (TASK.35)", () => {
+describe("describePermissionAsk — Bash unknown shell expression", () => {
   it("UM1: a Bash pipeline that cannot be proven read-only carries the hint, generic kind, remember allowed", () => {
     const presentation = describePermissionAsk("Bash", { command: "git status | cat" });
     expect(presentation.hint).toBe(UNKNOWN_SHELL_HINT);
@@ -395,7 +395,7 @@ describe("describePermissionAsk — Bash unknown shell expression (TASK.35)", ()
 });
 
 /**
- * Taskana 4070 (TASK.105 §2): the per-command risk plaque, derived from the
+ * (§2): the per-command risk plaque, derived from the
  * SAME lexical classifier that powers auto-allow. Presentation only — no
  * engine decision reads this. The three-way split among ASKS:
  *   (a) provably read-only pipelines → readOnly plaque,
@@ -404,7 +404,7 @@ describe("describePermissionAsk — Bash unknown shell expression (TASK.35)", ()
  * A shell expression stays UNKNOWN_SHELL_HINT's case alone (no plaque), and
  * plan asks never carry one.
  */
-describe("describePermissionAsk — Bash risk plaque (Taskana 4070)", () => {
+describe("describePermissionAsk — Bash risk plaque", () => {
   it("read-only pipeline → readOnly plaque, no hint, generic kind", () => {
     const presentation = describePermissionAsk("Bash", { command: "ls | wc -l" });
     expect(presentation.plaque).toBe(BASH_RISK_PLAQUE.readOnly);
@@ -425,7 +425,7 @@ describe("describePermissionAsk — Bash risk plaque (Taskana 4070)", () => {
     expect(presentation.hint).toBeNull();
   });
 
-  it("shell expression keeps TASK.35's hint alone — plaque is null (never co-occur)", () => {
+  it("shell expression keeps's hint alone — plaque is null (never co-occur)", () => {
     const presentation = describePermissionAsk("Bash", { command: "cat f | tee out" });
     expect(presentation.hint).toBe(UNKNOWN_SHELL_HINT);
     expect(presentation.plaque).toBeNull();
@@ -477,12 +477,12 @@ describe("describePermissionAsk — Bash risk plaque (Taskana 4070)", () => {
 });
 
 /**
- * TASK.144: the three rule-birth points treat `CodexExec` as the command-line
+ * the three rule-birth points treat `CodexExec` as the command-line
  * tool it is. Without this a Codex session's "Always allow" checkbox had no
  * pattern field at all, so the only rule it could mint was a patternless
  * allow-EVERY-command one.
  */
-describe("CodexExec always-allow birth points (TASK.144)", () => {
+describe("CodexExec always-allow birth points", () => {
   it("suggests a binary pattern for a CodexExec command", () => {
     expect(suggestAlwaysAllowPattern("CodexExec", { command: "git status" })).toBe("git *");
   });
@@ -511,12 +511,12 @@ describe("CodexExec always-allow birth points (TASK.144)", () => {
 const SCOPED_PNPM_TEST = 'scoped-runner:{"workspace":"/ws/proj","runner":"pnpm","verb":"test"}';
 
 /**
- * TASK.36 — the modal's scoped proposal: `cd <workspace> && <runner> <verb>
+ * the modal's scoped proposal: `cd <workspace> && <runner> <verb>
  * [inert args]` against the active tab's canonical workspace. The recognizer is
  * core's (reached through the safe-command subpath) so create and match cannot
  * drift; here we pin the proposal side and its fail-closed edges.
  */
-describe("suggestAlwaysAllowPattern — scoped project-runner proposal (TASK.36)", () => {
+describe("suggestAlwaysAllowPattern — scoped project-runner proposal", () => {
   it("proposes the scoped pattern for the exact form against the workspace", () => {
     expect(suggestAlwaysAllowPattern("Bash", { command: "cd /ws/proj && pnpm test" }, "/ws/proj")).toBe(
       SCOPED_PNPM_TEST,
@@ -653,7 +653,7 @@ describe("suggestAlwaysAllowPattern — scoped project-runner proposal (TASK.36)
   });
 });
 
-describe("alwaysAllowCheckboxText (TASK.36)", () => {
+describe("alwaysAllowCheckboxText", () => {
   it("scoped command with the untouched scoped pattern -> project-scoped label", () => {
     expect(
       alwaysAllowCheckboxText("Bash", { command: "cd /ws/proj && pnpm test" }, "/ws/proj", SCOPED_PNPM_TEST),
@@ -707,7 +707,7 @@ describe("alwaysAllowCheckboxText (TASK.36)", () => {
   });
 });
 
-describe("scoped pattern survives the generic sanitizers untouched (TASK.36)", () => {
+describe("scoped pattern survives the generic sanitizers untouched", () => {
   it("buildAlwaysAllowRule is a no-op on the scoped pattern (single token, first token has '{')", () => {
     expect(buildAlwaysAllowRule("Bash", SCOPED_PNPM_TEST)).toEqual({ toolName: "Bash", pattern: SCOPED_PNPM_TEST });
   });
@@ -747,14 +747,14 @@ describe("scoped pattern survives the generic sanitizers untouched (TASK.36)", (
 });
 
 /**
- * Taskana 4070 follow-up: the plaque now covers a CodexExec ask (the Codex
+ * follow-up: the plaque now covers a CodexExec ask (the Codex
  * bridge's name for a `commandExecution` approval), and a core-engine Bash
  * ask whose command the classifier PROVES read-only gets a NEUTRAL header
  * instead of the static "High risk"/"Destructive" badge — the plaque and the
  * header must never contradict each other. Presentation only: the metadata
  * object, the decision and the wire are untouched.
  */
-describe("describePermissionAsk — CodexExec plaque (Taskana 4070)", () => {
+describe("describePermissionAsk — CodexExec plaque", () => {
   it("a read-only Codex command carries the readOnly plaque", () => {
     expect(describePermissionAsk("CodexExec", { command: "git status" }).plaque).toBe(BASH_RISK_PLAQUE.readOnly);
   });
@@ -780,7 +780,7 @@ describe("describePermissionAsk — CodexExec plaque (Taskana 4070)", () => {
   });
 });
 
-describe("describePermissionAsk — header neutralisation (Taskana 4070)", () => {
+describe("describePermissionAsk — header neutralisation", () => {
   const HIGH_DESTRUCTIVE = { riskLevel: "high" as const, destructive: true };
   const LOW_SAFE = { riskLevel: "low" as const, destructive: false };
 

@@ -1,5 +1,5 @@
 /**
- * Plugins pane (Settings → Plugins; design 4732 §6, Taskana 4732 S1-C,
+ * Plugins pane (Settings → Plugins; design 4732 §6, S1-C,
  * reconciled to the S1-B wire contract).
  *
  * DATA: the pane fetches a `PluginsSnapshot` via `window.anycode.plugins`
@@ -245,7 +245,7 @@ export function PluginsPane({
   const rows = snapshot ? filterPluginRows(snapshot.plugins, searchQuery) : [];
   const emptyKind = pluginsEmptyKind(snapshot?.plugins.length ?? 0, rows.length, searchQuery);
   const indexHeader = snapshot ? pluginIndexStatusText(snapshot.index.status) : null;
-  // Taskana 4732 xfix M5: the default is FALSE everywhere (schema, main,
+  // xfix M5: the default is FALSE everywhere (schema, main,
   // scheduler, docs) — the old `?? true` rendered the toggle ON while the
   // scheduler's gate evaluated false: nothing ever auto-updated.
   const autoUpdate = snapshot?.settings.autoUpdateOfficial ?? false;
@@ -351,7 +351,7 @@ export function PluginsPane({
     }
     try {
       // CUSTODY: the wire carries the token + the ORIGINAL source only —
-      // never a path or hash; `allowMcp` is the consent checkbox (Taskana
+      // never a path or hash; `allowMcp` is the consent checkbox (
       // 4732 xfix H1(b): main records the grant for the previewed command
       // lines when true; unchecked = servers stay off until Approve MCP).
       const result = await bridge.installCommit(token, pendingSource, allowMcp, allowServices);

@@ -1,5 +1,5 @@
 /**
- * Persisted workflow card decode + projection (TASK.191 slice S5). Mirror of
+ * Persisted workflow card decode + projection (slice S5). Mirror of
  * subagent-card.ts's decode/project pair, adapted for a DAG run rather than
  * one child: two pure functions, no I/O.
  *
@@ -36,7 +36,7 @@
  * constants below, nor the nested card types). The nested shapes are
  * therefore derived locally via indexed-access types off the one exported
  * interface (`WorkflowCardStepT` etc. below) rather than imported by name.
- * This is a gap in TASK.191 S5's core half, not a design choice here — see
+ * This is a gap in S5's core half, not a design choice here — see
  * this file's sibling test for the parity coverage this gap leaves out.
  *
  * The five cap constants below are re-declared locally for the same
@@ -133,7 +133,7 @@ function capCodePoints(text: string, maxChars: number): string {
  * on a payload that never needed truncating at all. A trailing U+FFFD is
  * stripped ONLY when truncation actually happened — an untouched string's
  * own genuine U+FFFD character must not be eaten. Used ONLY for
- * `failure.text` (a BYTE cap, TASK.193) — never for the code-point caps
+ * `failure.text` (a BYTE cap) — never for the code-point caps
  * above, which are a different unit entirely.
  */
 function capUtf8BytesLocal(text: string, maxBytes: number): { text: string; truncated: boolean } {
@@ -186,7 +186,7 @@ function decodeStepResult(raw: unknown): WorkflowCardStepResultT | null {
     usage = decoded;
   }
 
-  // TASK.193: `failure` is present only for a step that did not complete.
+  // `failure` is present only for a step that did not complete.
   // Any structural mismatch on this field fails the WHOLE decode (same
   // fail-soft posture as `usage` above), never a silently dropped field.
   let failure: { kind: "error" | "degenerate" | "max_turns"; text: string; truncated: boolean } | undefined;
@@ -201,7 +201,7 @@ function decodeStepResult(raw: unknown): WorkflowCardStepResultT | null {
     // `truncated` is the DISJUNCTION of the incoming bit and this local
     // re-cap's own bit: a record that already arrived marked truncated must
     // never be reported whole just because it also fits under the local cap
-    // (TASK.193 review blocker — a hostile payload claiming `truncated:
+    // (review blocker — a hostile payload claiming `truncated:
     // false` on an over-length text must not be believed).
     const local = capUtf8BytesLocal(text, WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES);
     failure = {
@@ -400,8 +400,8 @@ export function decodeWorkflowCardSnapshot(
  *   terminal for a step that never launched at all (fail-fast/cancellation
  *   froze it before its dependencies were ever satisfied), so it must read
  *   the same as "never started" — exactly what the live card already shows
- *   before `workflow_step_start` ever arrives (TASK.191 slice S3).
- *   `started` and `final.unlaunched` (TASK.193) answer DIFFERENT questions
+ *   before `workflow_step_start` ever arrives (slice S3).
+ *   `started` and `final.unlaunched` answer DIFFERENT questions
  *   and are not a contradiction when both are `true`: `started` asks "did
  *   the engine ever take this step off the graph and begin working it"
  *   (live: a `step_start` was observed; hydrated: it settled to something
@@ -439,7 +439,7 @@ export function decodeWorkflowCardSnapshot(
  *   future change that breaks it fails a test, not just this comment.
  * - Step `final` is `{ status, durationMs }` off `step.result` when present,
  *   else `null`, plus `failure`/`unlaunched` copied through EXPLICITLY by
- *   field (TASK.193) when the decoded result carries them — `decodeStepResult`
+ *   field when the decoded result carries them — `decodeStepResult`
  *   already validated and byte-re-capped `failure.text` on the way in, so
  *   this hop is a straight pass-through, never a second decode.
  * - Run `final.completedSteps` has no snapshot field to copy: `final` (run)

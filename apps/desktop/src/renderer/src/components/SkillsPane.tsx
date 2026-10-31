@@ -327,11 +327,11 @@ export function skillImportResultText(item: SkillsImportApplyResultItem): string
 // ── component ──
 
 export interface SkillsPaneProps {
-  /** Scope reference (Taskana 4758): a tab id or a workspace id `ws_…`, resolved main-side; omit for the pre-tab case (user-scope only). */
+  /** Scope reference: a tab id or a workspace id `ws_…`, resolved main-side; omit for the pre-tab case (user-scope only). */
   tabId?: string;
   /** Injectable for tests / isolation; defaults to `window.anycode.skills` (same DI ethic as SettingsBridge/McpConfigBridge). */
   bridge?: SkillsBridge;
-  /** Taskana 4758: reports the pane's count for the scope chip (null while loading). */
+  /** reports the pane's count for the scope chip (null while loading). */
   onCountChange?: (count: number | null) => void;
 }
 
@@ -351,7 +351,7 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills, onCountChang
   const [importSelection, setImportSelection] = useState<Record<string, boolean>>({});
   const [importResults, setImportResults] = useState<SkillsImportApplyResultItem[] | null>(null);
 
-  // Taskana 4706: the pane's WRITE target follows the header scope bar — a
+  // the pane's WRITE target follows the header scope bar — a
   // tabId present means the bar resolved Project mode (SettingsScreen passes
   // the chosen tab); absent means Global. The create dialog and the import
   // wizard no longer carry their own scope radios; they seed from this mode
@@ -374,7 +374,7 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills, onCountChang
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridge, tabId]);
 
-  // Taskana 4758: the scope chip's count (null while the snapshot loads).
+  // the scope chip's count (null while the snapshot loads).
   const rowCount = snapshot ? snapshot.rows.length : null;
   useEffect(() => {
     onCountChange?.(rowCount);
@@ -416,7 +416,7 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills, onCountChang
   function openCreate(): void {
     setCreateError(null);
     setCreatedRow(null);
-    // Taskana 4706: seeded from the pane's resolved write target — the blank
+    // seeded from the pane's resolved write target — the blank
     // helper's "user" default is just the pre-override scaffold.
     setCreateFields({ ...blankSkillCreateFields(), scope: scopeMode });
     setCreateOpen(true);
@@ -584,7 +584,7 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills, onCountChang
                     onClick={() => {
                       // Same pane-select seam the slash-menu commands use:
                       // open Settings and land on the Plugins pane, where the
-                      // plugin's tier, version, and actions live (Taskana 4732 S1-C).
+                      // plugin's tier, version, and actions live (S1-C).
                       window.dispatchEvent(new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" }));
                       window.dispatchEvent(new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: "plugins" }));
                     }}
@@ -726,7 +726,7 @@ interface SkillCreateDialogProps {
   fields: SkillCreateFields;
   error: string | null;
   createdRow: SkillRowView | null;
-  /** Taskana 4706: the pane's resolved write target (header scope bar) — displayed as a hint, no longer a radio. */
+  /** the pane's resolved write target (header scope bar) — displayed as a hint, no longer a radio. */
   scopeMode: SkillScope;
   onChange: (fields: SkillCreateFields) => void;
   onCancel: () => void;
@@ -799,7 +799,7 @@ function SkillCreateDialog({ fields, error, createdRow, scopeMode, onChange, onC
                 onChange={(e) => set("description", e.target.value)}
               />
             </label>
-            {/* Taskana 4706: the scope radio is gone — the write target is the
+            {/* the scope radio is gone — the write target is the
                 pane's header scope bar (ScopeSwitcher), restated here as a
                 hint so the dialog itself names where the scaffold will land.
                 `fields.scope` still carries the seeded mode into the request. */}
@@ -829,7 +829,7 @@ function SkillCreateDialog({ fields, error, createdRow, scopeMode, onChange, onC
 interface SkillImportDialogProps {
   scan: SkillsImportScanResult | null;
   selection: Record<string, boolean>;
-  /** Taskana 4706: the pane's resolved write target (header scope bar) — displayed as a hint, no longer a radio. */
+  /** the pane's resolved write target (header scope bar) — displayed as a hint, no longer a radio. */
   scopeMode: SkillScope;
   results: SkillsImportApplyResultItem[] | null;
   onToggleRow: (id: string) => void;
@@ -916,7 +916,7 @@ function SkillImportDialog({ scan, selection, scopeMode, results, onToggleRow, o
               </div>
             ))}
 
-            {/* Taskana 4706: the "Import into" radio is gone — the write target
+            {/* the "Import into" radio is gone — the write target
                 is the pane's header scope bar (ScopeSwitcher), restated here as
                 a hint so the dialog itself names where imports will land. */}
             <div className="mcp-import-scope">

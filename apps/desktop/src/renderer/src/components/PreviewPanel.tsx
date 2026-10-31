@@ -1,11 +1,11 @@
 /**
- * ONE preview's body region inside the dock (Taskana 4703, was the panel-
+ * ONE preview's body region inside the dock (was the panel-
  * track CUT.md §2.4/D12 single visible-slot column): the dock tab strip is
  * the picker now, so this component renders exactly the preview its
  * `previewId` prop names — resolved from `usePreviewStore`, no visible-slot
  * fallback, no `<select>`. Everything the main-side contract needs is kept
  * byte-identical: the D9 rAF-coalesced bounds publisher over
- * `.preview-panel-body`, `MarkdownPreviewView`'s unified header (TASK.99
+ * `.preview-panel-body`, `MarkdownPreviewView`'s unified header (
  * owner smoke-test fix), the web header's "Open in window" (D14) and close,
  * and the `onToast` threading. A preview that vanishes from the store
  * renders the neutral empty state — the App.tsx tab-derivation effect is
@@ -18,7 +18,7 @@ import { usePreviewStore } from "../preview/preview-store.js";
 import { useOverlayOpenSnapshot } from "../preview/overlay-flag.js";
 import { PREVIEW_TRANSFERRED_TEXT, type ToastKind } from "../toasts.js";
 import { X } from "./icons.js";
-// TASK.99 M1: the native DOM markdown preview view — rendered inside this
+// M1: the native DOM markdown preview view — rendered inside this
 // panel's body slot when the preview's viewKind is "dom-md" (CUT.md
 // CONTRACTS); bounds publisher below stays untouched, main just never
 // positions a WebContentsView for that record.
@@ -110,7 +110,7 @@ export function PreviewPanel({ tabId: _dockTabId, previewId, onToast, publishBou
       .setContainer(tabId, target, "window")
       .then((result) => {
         if (!result.ok) {
-          // M1 interim (TASK.99 CUT.md Gap 3): a dom-md preview's "Open in
+          // M1 interim (CUT.md Gap 3): a dom-md preview's "Open in
           // window" honestly refuses until M3 wires the second renderer
           // window — surfaced here (not just console) so the refusal is not
           // silent to the user.

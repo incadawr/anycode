@@ -1,5 +1,5 @@
 /**
- * Pane render tests (Taskana 4747). The renderer package runs in node with no DOM
+ * Pane render tests. The renderer package runs in node with no DOM
  * (same rationale as LanguageServersPane.test.ts), so the presentational body is
  * rendered to static markup and the container's wiring is pinned through a fake bridge.
  */
@@ -59,7 +59,7 @@ function chip(html: string): { className: string; text: string } {
   return { className: match[1] ?? "", text: match[2] ?? "" };
 }
 
-describe("SessionsApiPaneView (Taskana 4747)", () => {
+describe("SessionsApiPaneView", () => {
   it("the status chip reads Off (muted) while the API is off", () => {
     const c = chip(render(props()));
     expect(c.text).toBe("Off");
@@ -202,7 +202,7 @@ describe("SessionsApiPaneView (Taskana 4747)", () => {
   });
 });
 
-describe("SessionsApiPane wiring (Taskana 4747)", () => {
+describe("SessionsApiPane wiring", () => {
   it("the container calls addWorkspace with NO arguments and never builds a path client-side", () => {
     const source = readFileSync(new URL("./SessionsApiPane.tsx", import.meta.url), "utf8");
     expect(source).toMatch(/bridge\.addWorkspace\(\)/);
@@ -211,7 +211,7 @@ describe("SessionsApiPane wiring (Taskana 4747)", () => {
   });
 });
 
-describe("SessionsApiPaneView agent projects (Taskana 4768)", () => {
+describe("SessionsApiPaneView agent projects", () => {
   it("Advanced lists agent-allowed projects with working Off buttons", () => {
     const empty = render(props());
     expect(empty).toContain("No project allows agents to open tasks yet");
@@ -267,7 +267,7 @@ function cssRule(css: string, selector: string): string {
   return match[1] ?? "";
 }
 
-describe("SessionsApiPane step layout (Taskana 4897)", () => {
+describe("SessionsApiPane step layout", () => {
   // Regression: after "Copy config", the notice was the step's 4th grid child. The
   // step was `grid-template-columns: auto 1fr` and `::before` spanned exactly 3
   // rows, so that 4th child auto-placed into column 1 — under the step number —

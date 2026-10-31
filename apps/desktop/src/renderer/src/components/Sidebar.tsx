@@ -112,9 +112,9 @@ export interface SidebarRow {
   sessionId?: string;
   /** Persistent non-color worktree state; full identity is exposed by tooltip. */
   worktree?: { id: string; branch: string; path: string };
-  /** TASK.119 п.5: "codex"/"claude" for engine-backed rows; absent on core rows. */
+  /** п.5: "codex"/"claude" for engine-backed rows; absent on core rows. */
   engineId?: string;
-  /** Taskana 4768: open rows only — a Sessions API agent opened this tab. */
+  /** open rows only — a Sessions API agent opened this tab. */
   openedByAgent?: true;
 }
 
@@ -168,7 +168,7 @@ export function buildSidebarGroups(
 ): SidebarGroup[] {
   const liveTabIds = new Set(tabs.map((t) => t.tabId));
 
-  // TASK.119 п.5: derive open-tab engines from the deduped persisted sessions
+  // п.5: derive open-tab engines from the deduped persisted sessions
   // (no wire change — SessionSummary.engineId).
   const engineByOpenTab = new Map<string, string>();
   for (const s of sessions ?? []) {
@@ -301,14 +301,14 @@ export function filterSidebarGroups(groups: readonly SidebarGroup[], query: stri
   return out;
 }
 
-/** Rows a group draws before the "Show N more" cut (TASK.125). */
+/** Rows a group draws before the "Show N more" cut. */
 export const SIDEBAR_GROUP_ROW_LIMIT = 5;
 
 /**
- * Per-group render cut (TASK.125). The limit is on DRAWING, never on the query:
+ * Per-group render cut. The limit is on DRAWING, never on the query:
  * the full row list stays in memory and the filter still sees every row, so a
  * row cut from view is one keystroke away rather than unreachable (and, through
- * TASK.114's live-tab guard, undeletable).
+ * 's live-tab guard, undeletable).
  *
  * Two rules shape the cut:
  *  - open rows are never hidden — they are live work carrying status
@@ -331,10 +331,10 @@ export function limitGroupRows(
   return hidden < 2 ? { shown: rows, hidden: 0 } : { shown: rows.slice(0, cut), hidden };
 }
 
-/** TASK.125: sessions in the sidebar's default (unfiltered) wire page. */
+/** sessions in the sidebar's default (unfiltered) wire page. */
 export const SIDEBAR_SESSIONS_LIMIT = 50;
 
-/** TASK.125: apply the default wire cap to a probe page fetched at LIMIT+1.
+/** apply the default wire cap to a probe page fetched at LIMIT+1.
  *  Over-limit ⇒ cut to the limit and flag `hasMore` — "Show all tasks" and
  *  any search query both reach the full list. */
 export function capSessionPage(
@@ -347,7 +347,7 @@ export function capSessionPage(
 }
 
 /**
- * TASK.125: refetch key = the SET of sessionIds bound to live tabs (sorted,
+ * refetch key = the SET of sessionIds bound to live tabs (sorted,
  * deduped). The tabs store replaces its array on ANY mutation (title,
  * hostExited, terminal flips); only a real membership change may refetch:
  *  - a tab's sessionId null→id (host bound) ADDS a member;
@@ -370,7 +370,7 @@ export function tabsSessionKey(tabs: readonly TabInfo[]): string {
 export type SessionListFetch = (limit?: number) => Promise<readonly SessionSummary[]>;
 
 /**
- * TASK.125: fetch discipline for the persisted-session index, as a plain
+ * fetch discipline for the persisted-session index, as a plain
  * controller the hook delegates to (node-testable — this package's vitest has
  * no jsdom, same discipline as the exported pure functions above).
  *  - `sync` is KEY-GUARDED: it fetches only when the membership key (or the
@@ -455,13 +455,13 @@ export function clampMenuLeft(triggerLeft: number, menuWidth: number, viewportWi
 }
 
 // ---------------------------------------------------------------------------
-// TASK.114: session delete. Pure message/verdict helpers (unit-tested in
+// session delete. Pure message/verdict helpers (unit-tested in
 // Sidebar.test.ts, same discipline as buildSidebarGroups above); the IPC
 // calls live in the component below. Hard delete, never an archive — the
 // confirm dialogs are the irreversibility brake (task decisions 1/4/5).
 
 /**
- * TASK.114 gate (decision 4, narrowed after the owner's live smoke 15.08):
+ * gate (decision 4, narrowed after the owner's live smoke 15.08):
  * a resumable row offers delete unless THAT session is open in a live tab —
  * the same question main's `isSessionActive` asks, so the renderer never
  * offers an action main would refuse. Open rows carry no delete at all (they
@@ -482,13 +482,13 @@ export function singleDeleteConfirm(title: string): string {
   return `Delete “${title}” permanently? This cannot be undone.`;
 }
 
-// TASK.126: the pending Sidebar confirm. A discriminated union (not a loose
+// the pending Sidebar confirm. A discriminated union (not a loose
 // object) so the Confirm handler dispatches to exactly one performer.
 export type SidebarConfirm =
   | { kind: "delete-session"; sessionId: string; title: string }
   | { kind: "delete-older"; workspace: string; days: number; count: number };
 
-/** Copy for the ConfirmDialog per pending confirm (TASK.126). */
+/** Copy for the ConfirmDialog per pending confirm. */
 export function sidebarConfirmCopy(confirm: SidebarConfirm): { title: string; body: string; confirmLabel: string } {
   switch (confirm.kind) {
     case "delete-session":
@@ -507,7 +507,7 @@ export function sidebarConfirmCopy(confirm: SidebarConfirm): { title: string; bo
 }
 
 /**
- * TASK.114 (review 15.08, defect 1): `window.prompt` is NOT supported by
+ * (review 15.08, defect 1): `window.prompt` is NOT supported by
  * Electron — it throws "prompt() is not supported" the moment it is called.
  * The bulk-delete flow therefore takes its day count from an in-app submenu
  * of preset horizons instead of a prompt. Never call `window.prompt` in the
@@ -548,7 +548,7 @@ export function deleteOlderNotice(deleted: number, skippedActive: number): strin
 /** The project menu's four items (New task / Remove / Delete old tasks / Allow agents) — the roving-focus modulus. */
 export const PROJECT_MENU_ITEM_COUNT = 4;
 
-/** Taskana 4768: the fourth project-menu item, a checkable switch ("Allow agents to open tasks here"). Pure so the contract is testable without a DOM. */
+/** the fourth project-menu item, a checkable switch ("Allow agents to open tasks here"). Pure so the contract is testable without a DOM. */
 export function agentProjectMenuItem(enabled: boolean): { role: "menuitemcheckbox"; checked: boolean; label: string; next: boolean } {
   return { role: "menuitemcheckbox", checked: enabled, label: AGENT_PROJECT_SWITCH_LABEL, next: !enabled };
 }
@@ -570,7 +570,7 @@ const PROJECT_MENU_WIDTH = 224;
 
 /**
  * Fetches the persisted-session index for the sidebar (design §2.3).
- * TASK.125: default view is a capped probe page (LIMIT+1 — one extra row says
+ * default view is a capped probe page (LIMIT+1 — one extra row says
  * "more exist" without a count query); `full` (active search or Show-all)
  * fetches uncapped, so the filter and old-session deletion always see every
  * row. Refetch triggers: mount, a REAL session-set change (tabsSessionKey via
@@ -631,7 +631,7 @@ export function Sidebar({
   onToggleCollapsed,
 }: SidebarProps) {
   const [query, setQuery] = useState("");
-  const [showAllTasks, setShowAllTasks] = useState(false); // TASK.125: not persisted — the cap is the default view every launch
+  const [showAllTasks, setShowAllTasks] = useState(false); // not persisted — the cap is the default view every launch
   const full = query !== "" || showAllTasks;
   const { sessions, error, hasMore, refetch: refetchSessions } = useSessionIndex(tabs, full);
   // R10: one subscription to the whole mirror map. Its identity changes ONLY
@@ -649,7 +649,7 @@ export function Sidebar({
   // R9 filter state. `query !== ""` = filter active: groups force-expand,
   // chevrons hide, zero-match empty state arms Enter-to-create.
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(readCollapsedGroups);
-  // TASK.125: groups the user expanded past the row limit. Deliberately NOT
+  // groups the user expanded past the row limit. Deliberately NOT
   // persisted — the cut is the default view every launch; an expansion is a
   // look, not a preference.
   const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(() => new Set());
@@ -664,9 +664,9 @@ export function Sidebar({
   // REVIEW 15.08 DEFECT 1: preset submenu (7/30/90 days) replaces window.prompt.
   const [deleteOlderSubmenuFor, setDeleteOlderSubmenuFor] = useState<string | null>(null);
   const [menuFocusIndex, setMenuFocusIndex] = useState(0);
-  // Taskana 4768: the menu's project is allowed for agents (null = not read yet). Main canonicalises; we only send the workspace identity.
+  // the menu's project is allowed for agents (null = not read yet). Main canonicalises; we only send the workspace identity.
   const [agentAllowed, setAgentAllowed] = useState<boolean | null>(null);
-  // TASK.126: pending destructive-confirm request for the shared ConfirmDialog
+  // pending destructive-confirm request for the shared ConfirmDialog
   // (replaces the two blocking window.confirm calls below).
   const [confirm, setConfirm] = useState<SidebarConfirm | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -707,7 +707,7 @@ export function Sidebar({
           // W10-FIX F1: explicit re-pin target (only ever set by the notice button).
           ...(replacementConnectionId !== undefined ? { replacementConnectionId } : {}),
         });
-        // TASK.64: forward the session's engine so a `not_ready` refusal on a
+        // forward the session's engine so a `not_ready` refusal on a
         // Codex session surfaces the sign-in copy, not the core provider copy.
         // Unknown/legacy engine ids fall through to undefined (historical copy).
         const engine = isEngineId(session.engineId) ? session.engineId : undefined;
@@ -782,7 +782,7 @@ export function Sidebar({
   }, []);
 
   // -------------------------------------------------------------------------
-  // TASK.114: session delete (decisions 1–5 in working-docs/tasks/TASK.114.md).
+  // session delete (decisions 1–5 in working-docs/tasks/TASK.114.md).
   // Both paths hard-delete through main's one-transaction cascade; the active
   // gate is main's (`isSessionActive` in main/tab-ipc.ts) — the renderer only
   // gates the AFFORDANCE and surfaces refusals as notices.
@@ -836,14 +836,14 @@ export function Sidebar({
         setNoticeAction(null);
         return;
       }
-      // TASK.126: stage the destructive intent — the shared ConfirmDialog
+      // stage the destructive intent — the shared ConfirmDialog
       // (not a blocking window.confirm) performs it only on Confirm.
       setConfirm({ kind: "delete-older", workspace, days, count });
     },
     [],
   );
 
-  /** The committed bulk delete (TASK.126): the ConfirmDialog's Confirm path. */
+  /** The committed bulk delete: the ConfirmDialog's Confirm path. */
   const performDeleteOlder = useCallback(
     async (workspace: string, days: number) => {
       try {
@@ -864,7 +864,7 @@ export function Sidebar({
     [refetchSessions],
   );
 
-  /** Trash-row delete (TASK.126): stage the single-delete confirm. */
+  /** Trash-row delete: stage the single-delete confirm. */
   const askDeleteSession = useCallback((sessionId: string, title: string) => {
     setConfirm({ kind: "delete-session", sessionId, title });
   }, []);
@@ -1139,7 +1139,7 @@ export function Sidebar({
           // Active filter force-expands (matches must be visible); the
           // persisted set is untouched and reasserts when the filter clears.
           const expanded = filtering || !collapsedGroups.has(group.workspace);
-          // TASK.125: an active filter also lifts the row cut — a query must be
+          // an active filter also lifts the row cut — a query must be
           // able to reach every row it matched, exactly as it force-expands
           // collapsed groups.
           const cut = limitGroupRows(group.rows);
@@ -1239,7 +1239,7 @@ export function Sidebar({
                         )}
                         {row.age && <span className="sidebar-row-age">{row.age}</span>}
                       </button>
-                      {/* TASK.114: hard-delete affordance. Same hover-reveal +
+                      {/* hard-delete affordance. Same hover-reveal +
                           disabled-inert pattern as the open row's close (×):
                           while the project has ANY live tab, main would refuse
                           the delete (`isSessionActive`) — keep the button in
@@ -1258,7 +1258,7 @@ export function Sidebar({
                   );
                 })}
 
-              {/* TASK.125: the cut's toggle. Never carries `.sidebar-row` — R9
+              {/* the cut's toggle. Never carries `.sidebar-row` — R9
                   arrow-nav queries that class and would treat this as a task
                   row. Hidden while filtering, like the group chevron: the cut
                   itself is lifted there, so the button has nothing to toggle. */}
@@ -1276,7 +1276,7 @@ export function Sidebar({
           );
         })}
 
-        {/* TASK.125: escape hatch from the default capped page. Reuses
+        {/* escape hatch from the default capped page. Reuses
             `.sidebar-group-more` styling — no CSS edit; carries no
             `.sidebar-row` class, so R9 arrow navigation ignores it. After the
             uncapped load `hasMore` is false, so the button disappears. */}
@@ -1460,7 +1460,7 @@ export function Sidebar({
         </div>
       )}
 
-      {/* TASK.126: the Sidebar's single shared destructive-confirm dialog. */}
+      {/* the Sidebar's single shared destructive-confirm dialog. */}
       <ConfirmDialog
         request={confirm === null ? null : sidebarConfirmCopy(confirm)}
         onConfirm={handleConfirm}

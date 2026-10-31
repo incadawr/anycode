@@ -1,5 +1,5 @@
 /**
- * Pure-logic tests for the Plugins pane model (Taskana 4732 S1-C, design 4732
+ * Pure-logic tests for the Plugins pane model (S1-C, design 4732
  * §6; reconciled to the S1-B wire contract). Same `.test.ts`-only, no-jsdom
  * rationale as McpServersPane.test.ts (this package's vitest config runs
  * `environment: "node"`) — chips, action gating per tier/status, index

@@ -60,13 +60,13 @@ interface CopyState {
 const CopyContext = createContext<CopyState>({ linkTarget: null, copyLink: () => {} });
 
 /**
- * TASK.72: the active tab's id, needed by the artifact IPC (main scopes
+ * the active tab's id, needed by the artifact IPC (main scopes
  * containment to THAT tab's workspace). Read off the same TabContext
  * MessageList uses; `null` outside a tab (tests, Storybook-ish mounts) —
  * every artifact surface degrades to the plain copy-link in that case.
  */
 /**
- * Exported (TASK.112 slice 2) for the same "SSR can't reach an effect-derived
+ * Exported (slice 2) for the same "SSR can't reach an effect-derived
  * value" reason as `BlockTokens`/`InlineTokens`: `MdLink`'s adornment row is
  * gated on a tab being present, so a static render can only exercise the
  * adorned-vs-bare distinction by supplying this context explicitly.
@@ -74,7 +74,7 @@ const CopyContext = createContext<CopyState>({ linkTarget: null, copyLink: () =>
 export const MarkdownTabContext = createContext<string | null>(null);
 
 /**
- * TASK.99 M2 (CUT.md CONTRACTS): parameterizes `Markdown` for the native
+ * M2 (CUT.md CONTRACTS): parameterizes `Markdown` for the native
  * md-doc preview WITHOUT forking the component. Default `null` IS the chat
  * path and is a HARD invariant (risk register #6): every read of this
  * context below is additive-only, gated behind `!== null`, and never changes
@@ -96,7 +96,7 @@ export const MdDocContext = createContext<MdDocContextValue | null>(null);
 const EMPTY_PATH_SET: ReadonlySet<string> = new Set();
 
 /**
- * TASK.112 slice 2: the set of prose/codespan path candidates THIS render's
+ * slice 2: the set of prose/codespan path candidates THIS render's
  * `Markdown` instance has confirmed real (existing, in-bounds, previewable-
  * extension) via `artifacts.previewable`. Default `EMPTY_PATH_SET` is a HARD
  * invariant, same posture as `MdDocContext` above: every read below is
@@ -260,7 +260,7 @@ function extensionOfHref(href: string): string {
 }
 
 /**
- * TASK.72: is this link target a local filesystem path the artifact IPC can
+ * is this link target a local filesystem path the artifact IPC can
  * act on (vs a URL — http/mailto/any scheme — or an anchor)? Absolute POSIX
  * (`/…`), absolute win32 (`C:\…` / `C:/…`), home-anchored (`~/…`), and
  * bare relative paths (`out/icon.png`, `./icon.png`, `../x.png`) all
@@ -314,7 +314,7 @@ export const Markdown = memo(function Markdown({ text, breaks = true }: { text: 
     [],
   );
 
-  // TASK.112 slice 2: candidates come off the SAME `tokens` streaming already
+  // slice 2: candidates come off the SAME `tokens` streaming already
   // memoizes on `text` — no separate re-lex. `candidateKey` (not `candidates`
   // itself) is what the effect below keys on: during an actively-streaming
   // tail message `tokens` gets a fresh array identity on every rAF tick even
@@ -399,7 +399,7 @@ export const Markdown = memo(function Markdown({ text, breaks = true }: { text: 
  * Block-token array → elements. `default:` renders raw text in a `.md-p` —
  * unknown/future kinds never throw.
  *
- * Exported (TASK.112 slice 2, same rationale as ToolCallCard's `AgentCardBody`/
+ * Exported (slice 2, same rationale as ToolCallCard's `AgentCardBody`/
  * `ToolCallHeaderRow`): `Markdown`'s own `PathLinkContext` value is derived
  * from an effect (the `artifacts.previewable` probe), and effects never run
  * during `renderToStaticMarkup` — a static render has no path from
@@ -510,7 +510,7 @@ export function BlockTokens({ tokens }: { tokens: Token[] }) {
  * Inline-token array → elements. `default:` renders decoded raw text —
  * unknown/future kinds never throw.
  *
- * `linkify` (TASK.112 slice 2, default `true`): whether a `text`/`codespan`
+ * `linkify` (slice 2, default `true`): whether a `text`/`codespan`
  * leaf here may become a `PathLinkContext`-verified click-to-open link.
  * `false` ONLY inside a `link` token's own children (the "link" case below
  * sets it, and every other recursive call in this function propagates
@@ -582,7 +582,7 @@ export function InlineTokens({ tokens, linkify = true }: { tokens: Token[]; link
             // as literal source, so it is rendered raw — decoding here would
             // wrongly collapse an author's literal `&lt;`/`&amp;` in inline code.
             const codespanText = (token as Tokens.Codespan).text;
-            // TASK.112 slice 2: verified against the TRIMMED text (matching
+            // slice 2: verified against the TRIMMED text (matching
             // `collectPathCandidates`' own whole-content rule) — a codespan's
             // padding whitespace is presentational, never part of the path
             // main resolved and confirmed.
@@ -620,7 +620,7 @@ export function InlineTokens({ tokens, linkify = true }: { tokens: Token[]; link
           }
           case "image": {
             const t = token as Tokens.Image;
-            // TASK.72: a LOCAL image (`![alt](/path/in/workspace.png)`)
+            // a LOCAL image (`![alt](/path/in/workspace.png)`)
             // renders the real inline preview (main-side containment-checked
             // read). A remote/URL image keeps the honest alt-text label —
             // CSP blocks remote loads, and a broken-image glyph is worse
@@ -739,7 +739,7 @@ function Table({ table }: { table: Tokens.Table }) {
  * links in the browser is a parked main-side follow-up (`setWindowOpenHandler`
  * + `shell.openExternal`); this behavior stays correct even after that lands.
  *
- * TASK.99 M2: inside a native md-doc preview (`MdDocContext` set), a LOCAL
+ * M2: inside a native md-doc preview (`MdDocContext` set), a LOCAL
  * `.md` link REPLACES this preview's content in place (MD_PREVIEW_NAVIGATE)
  * instead of opening a NEW preview via `artifacts.preview` — every other
  * link (remote, `.html`/`.htm`, non-md local) keeps the exact chat behavior
@@ -748,7 +748,7 @@ function Table({ table }: { table: Tokens.Table }) {
  * identical to pre-M2.
  */
 /**
- * `adorned` (TASK.112 slice 2, default `true`): whether this link carries its
+ * `adorned` (slice 2, default `true`): whether this link carries its
  * sibling affordances — the copy-link button, the "Copied" hint, and the
  * inline preview / "Reveal in folder" row. `false` for a link MINTED from
  * prose or inline code by the path scan, where the anchor sits mid-sentence:
@@ -806,7 +806,7 @@ function MdLink({ href, children, adorned = true }: { href: string; children: Re
   );
 }
 
-// ── TASK.72: chat-artifact preview (inline thumbnail + open/reveal) ──
+// ── chat-artifact preview (inline thumbnail + open/reveal) ──
 
 type ArtifactState =
   | { status: "idle" }
@@ -837,7 +837,7 @@ function formatBytes(bytes: number): string {
  * execution-capable open itself. Without a tab context (or without the
  * preload API in a test mount) it renders nothing — the link alone stays.
  *
- * TASK.99 M2: inside a native md-doc preview, `path` (the AUTHORED href) is
+ * M2: inside a native md-doc preview, `path` (the AUTHORED href) is
  * resolved against `MdDocContext.docDir` BEFORE it reaches any IPC call
  * below — the existing containment/size-cap/data:-URI custody chain
  * (`api.readImage` et al.) is reused completely unchanged, only the STRING
@@ -855,7 +855,7 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
   // Open/Reveal failures are reported beside the buttons rather than through
   // `state`: the preview above may be perfectly fine while the action is refused.
   const [actionError, setActionError] = useState<string | null>(null);
-  // TASK.77-A: bumped after a successful Allow grant to re-run the read below
+  // bumped after a successful Allow grant to re-run the read below
   // for the SAME path — the grant itself lives main-side; this is only the
   // renderer's retry trigger.
   const [attempt, setAttempt] = useState(0);
@@ -897,7 +897,7 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
     return () => {
       cancelled = true;
     };
-    // `attempt` is a deliberate re-fetch trigger (TASK.77-A's Allow retry) —
+    // `attempt` is a deliberate re-fetch trigger ('s Allow retry) —
     // its value is never read, only its change matters.
   }, [tabId, api, resolvedPath, shouldLoad, attempt]);
 
@@ -911,7 +911,7 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
   };
   const open = () => void runAction("open");
   const reveal = () => void runAction("reveal");
-  // TASK.77-A: an explicit click on this ONE path is the consent the OS
+  // an explicit click on this ONE path is the consent the OS
   // "open outside the workspace" modal exists to collect — main widens WHERE
   // (never WHAT: the extension/size gates are untouched) for this realPath,
   // then the read is retried so a successful grant renders the real preview.
@@ -929,7 +929,7 @@ function ArtifactPreview({ path, alt }: { path: string; alt?: string }) {
   // night-track wave-1 fix cut §1.8 (F7): a model-authored `alt` may only ever
   // title a successfully rendered image — every other state names the
   // resolved path so a friendly `alt` can never mask what location is being
-  // asked about (consent legibility; TASK.99 M2 — the RESOLVED path is the
+  // asked about (consent legibility; M2 — the RESOLVED path is the
   // actual location, more informative than the authored doc-relative href).
   const label = state.status === "ready" ? alt || resolvedPath : resolvedPath;
   const openable = OPENABLE_IMAGE_EXTENSIONS.has(extensionOfHref(resolvedPath));

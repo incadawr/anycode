@@ -70,7 +70,7 @@ const SUBAGENT_FINAL_LABELS: Record<NonNullable<SubagentSubStatus["final"]>["sta
  * "budget too small" (e.g. grant_budget_exhausted with work still flowing)
  * from a hard stop (e.g. stalled — the round made no productive tool calls).
  *
- * TASK.4055 follow-up: the refusal renders as SHORT HUMAN TEXT
+ * follow-up: the refusal renders as SHORT HUMAN TEXT
  * (ceilingRefusalLabel), never the raw enum — "stopped: stalled" said
  * nothing to a reader. The raw value survives in the line's title
  * attribute (tooltip), so diagnosis keeps the exact wire word.
@@ -90,7 +90,7 @@ function formatSubagentCeiling(
 }
 
 /**
- * TASK.4055 follow-up: short human text per refusal reason. The store types
+ * follow-up: short human text per refusal reason. The store types
  * lastRefusal as a plain string (store.ts deliberately keeps the renderer
  * independent of @anycode/core's enum), so the map is keyed by string and an
  * unknown/future value fails VISIBLE — the raw enum is shown rather than a
@@ -113,7 +113,7 @@ export function ceilingRefusalLabel(reason: string): string {
 }
 
 /**
- * TASK.102 CUT-S2 §2.5 (slice S2c C3): the session-tier child badge's label,
+ * CUT-S2 §2.5 (slice S2c C3): the session-tier child badge's label,
  * one per `childBadgeKind` outcome. `waiting_permission` is the badge's whole
  * reason to exist — `block.status` (the outer Agent tool_call's own status,
  * STATUS_LABELS above) stays "Running" the entire time a child session is
@@ -129,7 +129,7 @@ const CHILD_BADGE_LABELS: Record<ChildBadgeKind, string> = {
 };
 
 /**
- * TASK.120: whether the session-child badge is an ACTION (a real `<button>`
+ * whether the session-child badge is an ACTION (a real `<button>`
  * firing `onOpen`, the same handler the Open button uses) rather than a
  * static status chip. Only `waiting_permission` is actionable — the other
  * three kinds are outcomes, and their card already carries the Open button.
@@ -143,7 +143,7 @@ export function isClickableChildBadge(badge: ChildBadgeKind, onOpen: (() => void
   return badge === "waiting_permission" && onOpen !== undefined;
 }
 
-/** Badge title when it acts as the TASK.120 open-on-request action; states the
+/** Badge title when it acts as the open-on-request action; states the
  *  effect of the click, since the visible label itself carries only state. */
 const CHILD_BADGE_ACTION_TITLE = "Open the subagent session on its permission request";
 
@@ -151,7 +151,7 @@ const CHILD_BADGE_ACTION_TITLE = "Open the subagent session on its permission re
  * The session-child badge's single render site for both mounts (the
  * always-visible header row and `SubagentStatus`'s expanded child row):
  * `isClickableChildBadge` decides the element. Non-actionable states render
- * the plain `<span>` byte-identical to pre-TASK.120 markup; the actionable
+ * the plain `<span>` byte-identical to pre-markup; the actionable
  * state renders a real `<button>` on the same `onOpen` the Open button uses.
  * The `-action` modifier class carries ONLY the interactive affordances
  * (cursor, hover) so the static form keeps none of them.
@@ -177,7 +177,7 @@ function ChildBadge({ badge, onOpen }: { badge: ChildBadgeKind; onOpen?: () => v
  * testing (this package's renderer tests are pure-logic only — no jsdom, see
  * ToolCallCard.test.ts).
  *
- * Engine-aware (TASK.97 R5, wave2-cut §1.4): `subagent.engine` is null for
+ * Engine-aware (R5, wave2-cut §1.4): `subagent.engine` is null for
  * an in-process child AND for a legacy transcript replayed from before
  * `subagent_start` carried the field — both render exactly as before this
  * slice (byte-identical, no prefix, turns segment always present). While
@@ -198,7 +198,7 @@ function formatCardDuration(durationMs: number): string {
 }
 
 /**
- * Quiet stall note (TASK.148 live-presentation slice): "stalled · silent 4m"
+ * Quiet stall note (live-presentation slice): "stalled · silent 4m"
  * plus, when the detector supplied one, " · last <lastActivity>" naming what
  * the child last did. Mirrors `formatCardDuration`'s duration conventions —
  * tenths under a minute, whole minutes above (the stall threshold is minutes,
@@ -220,7 +220,7 @@ export function stallNoteText(subagent: SubagentSubStatus): string | null {
 export function formatSubagentCounters(subagent: SubagentSubStatus): string {
   const prefix = subagent.engine ? `${subagent.engine} · ` : "";
   if (subagent.final === null) {
-    // TASK.95: a Codex child reports no measurements at all (no turn marker,
+    // a Codex child reports no measurements at all (no turn marker,
     // and no observed tool call yet). Rendering "0 tool calls" would invent a
     // measured count — show the bare engine label instead. Genuine positive
     // counters (and every non-codex engine) keep the current display.
@@ -249,7 +249,7 @@ export function formatSubagentCounters(subagent: SubagentSubStatus): string {
  * TASK.240/4055: a settled child's ceiling budget line (empty when the child
  * never tripped the ceiling or the field predates this feature) — rendered as
  * its own line under the final-status line so "budget too small" is visually
- * distinct from the outcome itself. TASK.4055 follow-up: returns the line's
+ * distinct from the outcome itself. follow-up: returns the line's
  * TEXT plus the raw refusal reason for the title attribute.
  */
 export function formatSubagentBudgetLine(subagent: SubagentSubStatus): {
@@ -346,7 +346,7 @@ const WORKFLOW_FINAL_LABELS: Record<NonNullable<WorkflowSubStatus["final"]>["sta
  * or is merely queued behind the shared semaphore. Once settled:
  * "<label> · completed/total steps · D.Ds".
  *
- * TASK.191 slice S3: `steps` is now prefilled with every step of the run
+ * slice S3: `steps` is now prefilled with every step of the run
  * (pending ones included) rather than only the ones that have started, so
  * `steps.length` can no longer stand in for "how many have started" — `i`
  * counts the `started` flag instead, and the in-flight lookup additionally
@@ -370,7 +370,7 @@ export function formatWorkflowCounters(workflow: WorkflowSubStatus): string {
 
 /**
  * Union of every sub-status outcome across subagent/step/run vocabularies,
- * plus synthetic "running". `queued`/`pending` (TASK.191 slice S3) exist ONLY
+ * plus synthetic "running". `queued`/`pending` (slice S3) exist ONLY
  * for a workflow STEP row (`workflowStepKind`) — a run's own status and a
  * subagent's never produce them, since `substatusKind` below can only ever
  * return one of the wire's settled statuses or "running".
@@ -404,7 +404,7 @@ export function substatusKind(
 }
 
 /**
- * Phase for one workflow step row (TASK.191 slice S3): "pending" before its
+ * Phase for one workflow step row (slice S3): "pending" before its
  * `workflow_step_start` lands (blocked on `dependsOn`, or launches are frozen
  * by fail-fast/cancellation and it will never start), "queued" once
  * `step_start` lands but `step_running` hasn't (parked behind the shared
@@ -423,7 +423,7 @@ export function workflowStepKind(step: WorkflowStepStatus): SubStatusKind {
 /** Header line 2. final !== null → formatWorkflowCounters(workflow) (delegation
  *  keeps the frozen export rendered); else `step ${started}/${totalSteps}` —
  *  the bare aggregate, so the header never duplicates the per-step ticker
- *  rendered in the row directly below it. TASK.191 slice S3: `started` counts
+ *  rendered in the row directly below it. slice S3: `started` counts
  *  the `started` flag, not `steps.length` — prefilled pending steps must not
  *  inflate this count (see formatWorkflowCounters's own note). */
 export function workflowRunLabel(workflow: WorkflowSubStatus): string {
@@ -443,7 +443,7 @@ const WORKFLOW_STEP_FINAL_LABELS: Record<"error" | "max_turns" | "cancelled", st
   cancelled: "Cancelled",
 };
 
-/** A failed step's own reason (TASK.193), read off `step.final.failure` — `null`
+/** A failed step's own reason, read off `step.final.failure` — `null`
  *  for a step with no `final` yet, or one that completed/was skipped/was
  *  cancelled (none of those carry a `failure` record, see store.ts's doc
  *  comment on the field). */
@@ -454,7 +454,7 @@ export function workflowStepFailure(
 }
 
 /**
- * Human-readable labels for a step-failure record's `kind` (TASK.193). These
+ * Human-readable labels for a step-failure record's `kind`. These
  * are NOT the Agent tool's own verbatim wording (`INCOMPLETE_RESULT_LABEL`,
  * which rides inside `text` itself for max_turns/degenerate) — this is the
  * card's own short heading above that text, plainly saying what kind of
@@ -475,7 +475,7 @@ export function workflowStepFailureLabel(kind: "error" | "degenerate" | "max_tur
  *  suffix omitted when null — re-implemented inline, frozen body untouched).
  *  Settled: completed → duration only; error/max_turns/cancelled → "<label> ·
  *  D.Ds"; skipped → "Skipped" (durationMs of a skipped step is scheduling
- *  noise — omitted). TASK.191 slice S3: a `final === null` step is no longer
+ *  noise — omitted). slice S3: a `final === null` step is no longer
  *  necessarily running — "Not started"/"Queued" cover the two phases the
  *  prefilled graph can now sit in before it ever reaches the ticker. */
 export function workflowStepMeta(step: WorkflowStepStatus): string {
@@ -497,7 +497,7 @@ export function workflowStepMeta(step: WorkflowStepStatus): string {
   if (step.final.status === "completed") {
     return `${seconds}s`;
   }
-  // TASK.193: a step whose terminal was reached without the engine ever
+  // a step whose terminal was reached without the engine ever
   // calling subagents.run (predeclared agentType / template-render throw)
   // never ran for any span of time — "· 0.0s" would misreport a real
   // duration it never had. "not launched" replaces the number rather than
@@ -511,7 +511,7 @@ export function workflowStepMeta(step: WorkflowStepStatus): string {
 /** Full row sentence for the li's aria-label (the glyph is the only visual
  *  status carrier on completed/running rows — AT must not lose it). Running
  *  and completed inject the status word; every other case (settled
- *  error/max_turns/cancelled/skipped, TASK.191 slice S3's not-started/queued)
+ *  error/max_turns/cancelled/skipped, slice S3's not-started/queued)
  *  relies on `workflowStepMeta` already leading with the label. */
 export function workflowStepAria(step: WorkflowStepStatus): string {
   const meta = workflowStepMeta(step);
@@ -526,7 +526,7 @@ export function workflowStepAria(step: WorkflowStepStatus): string {
 
 /**
  * Orders workflow steps for display by dependency level rather than the raw
- * array order the store holds (TASK.191 slice S3). `WorkflowStepStatus`'s own
+ * array order the store holds (slice S3). `WorkflowStepStatus`'s own
  * doc comment carries the warning this fixes: post-prefill the array is
  * `workflow_start`'s DEFINITION order, and a definition is free to declare a
  * step before the steps it depends on — schema.ts's structural pass rejects
@@ -570,7 +570,7 @@ export function orderStepsByDependency(steps: readonly WorkflowStepStatus[]): Wo
   return ordered;
 }
 
-/* ── Run map (TASK.191 slice S6) ──────────────────────────────────────────
+/* ── Run map (slice S6) ──────────────────────────────────────────
  * Owner 30.08, asked twice: "а где красивый граф?". The flat reordered list
  * above stays — it is the record — and the map is a second VIEW of the same
  * steps and the same selection, opened on demand.
@@ -738,7 +738,7 @@ const SUBSTATUS_WORD: Record<SubStatusKind, string> = {
 
 /** Shared status glyph cell: one shape per outcome, color supplied by the
  *  parent's `substatus-*` class (error/failed/cancelled all fall through to X).
- *  `queued` (TASK.191 slice S3) reuses the Spinner shape WITHOUT `.icon-spin`
+ *  `queued` (slice S3) reuses the Spinner shape WITHOUT `.icon-spin`
  *  — a paused version of "about to run", distinct from both the spinning
  *  "running" glyph and the empty "pending" cell. `pending` renders no icon at
  *  all (nothing has happened yet) — same empty-cell posture the old
@@ -765,7 +765,7 @@ function StatusGlyph({ kind }: { kind: SubStatusKind }) {
 }
 
 /**
- * The run's total token spend (TASK.191 slice S2): the sum over the steps the
+ * The run's total token spend (slice S2): the sum over the steps the
  * card is already holding, computed on read rather than stored. A second
  * mutable aggregate beside `steps` would be a second source of truth that a
  * dropped or reordered event could desynchronize; a selector cannot drift from
@@ -829,14 +829,14 @@ export function formatWorkflowUsage(usage: TokenUsage | null): string | null {
 }
 
 /**
- * Row list for the workflow run's single activity lane (TASK.191 slice S1) —
+ * Row list for the workflow run's single activity lane (slice S1) —
  * `activityRows`' sibling, same honest-overflow leading row, same oldest-first
  * order. The one difference is the `stepId` prefix on every row: this lane is
  * shared by every concurrent step of the DAG, so without it a reader cannot
  * tell which step produced a line. The prefix costs nothing on the wire —
  * `stepId` has to ride along anyway for the store to attribute the row.
  *
- * TASK.191 slice S4: `selectedStepId` filters the lane to one step's rows
+ * slice S4: `selectedStepId` filters the lane to one step's rows
  * (clicking a step row in `WorkflowStepsBody`). `activityDropped` is a
  * RUN-WIDE count — a dropped row carried no surviving `stepId` once evicted
  * from the ring, so which step(s) it belonged to is genuinely unknown. Two
@@ -877,7 +877,7 @@ export function workflowActivityRows(workflow: WorkflowSubStatus, selectedStepId
 /** The workflow run's live activity lane — same well, same auto-scroll
  *  behaviour and same CSS as the Agent card's `ActivityFeed`, reading the
  *  run-wide ring instead of one child's. Rendered while running and after
- *  settle: the trail is the post-mortem, not just the live view. TASK.191
+ *  settle: the trail is the post-mortem, not just the live view.
  *  slice S4: `selectedStepId` threads straight through to
  *  `workflowActivityRows` — this component owns no selection state itself,
  *  `WorkflowStatus` does. */
@@ -908,7 +908,7 @@ function WorkflowActivityFeed({ workflow, selectedStepId }: { workflow: Workflow
 }
 
 /**
- * Pure toggle for the step-selection click (TASK.191 slice S4): re-clicking
+ * Pure toggle for the step-selection click (slice S4): re-clicking
  * the already-selected step clears the selection rather than being a one-way
  * ratchet. Without this, once a step is examined the only way back to the
  * unfiltered view would be picking a DIFFERENT step — a state with no exit of
@@ -921,7 +921,7 @@ export function toggleWorkflowStepSelection(current: string | null, stepId: stri
 
 /**
  * The checklist + activity lane, given an explicit `selectedStepId` rather
- * than owning the selection itself (TASK.191 slice S4). Split out of
+ * than owning the selection itself (slice S4). Split out of
  * `WorkflowStatus` — which owns the real `useState` — so
  * ToolCallCard.test.ts can render the "step selected" markup directly via
  * `renderToStaticMarkup`: a real click can't be simulated under SSR, but a
@@ -1062,7 +1062,7 @@ export function WorkflowStepsBody({
   // A map is only worth offering once there is a shape to see — a single step
   // has none, so the toggle stays absent rather than opening onto one box.
   const mapWorthOffering = workflow.steps.length > 1;
-  // TASK.193: the selected step's own failure record, revealed by the SAME
+  // the selected step's own failure record, revealed by the SAME
   // click that already selects a step for the activity feed (F9) — no new
   // selection state of its own, just a second thing gated on the existing
   // `selectedStepId`. `null` for no selection, a completed/skipped/cancelled
@@ -1126,17 +1126,17 @@ export function WorkflowStepsBody({
 /**
  * Sub-status region mounted below the input summary when `block.workflow` is
  * set (Workflow tool only). A run header (glyph · workflow name · aggregate)
- * above a flat vertical checklist, with the run-wide activity lane (TASK.191
+ * above a flat vertical checklist, with the run-wide activity lane (
  * slice S1) below both.
  *
- * TASK.191 slice S3: the checklist now renders EVERY step of the run's graph
+ * slice S3: the checklist now renders EVERY step of the run's graph
  * — `workflow_start` prefills all N of them, so there is no longer a
  * separate lump "N steps not started" trailer row; each not-yet-started step
  * is a real row with its own id/agentType, honestly labeled "Not started" or
  * "Queued" (`workflowStepKind`/`workflowStepMeta`). Ordered by
  * `orderStepsByDependency`, not raw store order.
  *
- * TASK.191 slice S4: owns the selected-step `useState` — view-only state that
+ * slice S4: owns the selected-step `useState` — view-only state that
  * lives and dies with this card's mount, never the store (a dropped or
  * reordered event cannot desync something the store never held). The
  * checklist/feed rendering itself lives in `WorkflowStepsBody` above.
@@ -1163,7 +1163,7 @@ function WorkflowStatus({ workflow }: { workflow: WorkflowSubStatus }) {
 }
 
 /**
- * TASK.102 CUT-S2 §2.5 (slice S2c C3), Open-gate widened by §10.8.1
+ * CUT-S2 §2.5 (slice S2c C3), Open-gate widened by §10.8.1
  * (slice C4): an Agent card's session-child badge + Open action, or
  * `undefined` for every card that isn't one — inline subagents (the
  * overwhelming common case), every non-Agent tool, and any Agent card
@@ -1201,7 +1201,7 @@ function useChildSessionAction(
       ? state.getRelation(parentSessionId, block.toolCallId)
       : undefined,
   );
-  // TASK.218: the raw relations map for the Open-path same-child fold —
+  // the raw relations map for the Open-path same-child fold —
   // opening a continuation of a child already on the split stack retargets
   // that row instead of appending a second one.
   const relations = childRelationStore((state) => state.relations);
@@ -1284,7 +1284,7 @@ export function childActionBadge(
  * as "the delegated work is done"; "Dispatched" says what actually happened,
  * and the child badge beside it carries the child's live state.
  *
- * TASK.229: an Agent call whose child has not actually started is shown as
+ * an Agent call whose child has not actually started is shown as
  * "Queued" rather than "Running". `proposed` is inherently pre-dispatch, and a
  * `running` card with NO subagent telemetry (`subagent` null or omitted) means
  * no `subagent_start` has landed yet — the child is still waiting behind the
@@ -1313,7 +1313,7 @@ export function statusLabel(
 
 /**
  * Pure projection of the provider's response-model claim onto a display note
- * (TASK.161 slice C1). `null` when no claim was ever observed — absence
+ * (slice C1). `null` when no claim was ever observed — absence
  * renders as absence, never a fallback to the requested model (a filled
  * field that is really a guess would look sighted). `mismatch: true` is the
  * only informative case: the provider echoed an id different from what was
@@ -1323,7 +1323,7 @@ export function statusLabel(
  */
 export function subagentResponseModelNote(sub: {
   model: string | null;
-  /** TASK.4057: the live claim from progress; the settled `final` value wins once present. */
+  /** the live claim from progress; the settled `final` value wins once present. */
   responseModel?: string;
   final: { responseModel?: string } | null;
 }): { text: string; mismatch: boolean } | null {
@@ -1335,7 +1335,7 @@ export function subagentResponseModelNote(sub: {
 }
 
 /**
- * Quiet stall note (TASK.148 live-presentation slice): a subdued inline span
+ * Quiet stall note (live-presentation slice): a subdued inline span
  * rendered in BOTH the collapsed Agent row and the expanded Agent body while
  * the live subagent carries `stalled`. Reuses the activity feed's muted row
  * styling; leaves run status, spinner, permission actions, and terminal
@@ -1354,9 +1354,9 @@ function StallNote({ subagent }: { subagent: SubagentSubStatus }) {
  *  persona (mono anchor) · model (the child's own, else the parent's marked
  *  inherited) · description, then the frozen counters line. A THIRD line — the session-
  *  child badge (+ Open button, only when the child is still live) — mounts
- *  only when `child` is set (TASK.102 CUT-S2 §2.5 C3); every inline-subagent
+ *  only when `child` is set (CUT-S2 §2.5 C3); every inline-subagent
  *  card (the default `child` prop, `undefined`) renders byte-identically to
- *  before this slice. TASK.120: while the child waits on a permission ask the
+ *  before this slice. while the child waits on a permission ask the
  *  badge itself is an action (ChildBadge) firing the same `onOpen` as the
  *  Open button beside it. */
 function SubagentStatus({
@@ -1422,7 +1422,7 @@ function SubagentStatus({
       <div className="tool-call-subagent-counters">{formatSubagentCounters(subagent)}</div>
       {/* TASK.240/4055: the adaptive-budget line — only when the settled card
           actually carries a ceiling summary (a child that never tripped the
-          turn ceiling renders nothing extra). TASK.4055 follow-up: the title
+          turn ceiling renders nothing extra). follow-up: the title
           keeps the RAW refusal reason on the tooltip while the visible text
           carries the human label. */}
       {(() => {
@@ -1622,7 +1622,7 @@ export function AgentCardBody({
   block: ToolCallBlock;
   promptExpanded: boolean;
   onTogglePrompt: () => void;
-  /** TASK.102 CUT-S2 §2.5 (C3): passed straight through to SubagentStatus — see its own doc comment. Omitted by ToolCallCard.test.ts's direct SSR renders, same as today. */
+  /** CUT-S2 §2.5 (C3): passed straight through to SubagentStatus — see its own doc comment. Omitted by ToolCallCard.test.ts's direct SSR renders, same as today. */
   child?: { badge: ChildBadgeKind; onOpen: (() => void) | undefined };
   /** Parent session identity, passed straight through to SubagentStatus as plain props (same static-render rationale as `child`). */
   parentModel?: string | null | undefined;
@@ -1809,7 +1809,7 @@ export function summarizeInput(toolName: string, input: unknown): string {
 }
 
 /**
- * TASK.112: `Read`/`Write`/`Edit`'s `file_path` when it names a document the
+ * `Read`/`Write`/`Edit`'s `file_path` when it names a document the
  * PreviewHost window can render, else `null`. This card is the ONE place in
  * the transcript where the path of a file the agent just touched is known
  * machine-side; the other click-to-open affordance (a markdown link in the
@@ -1963,7 +1963,7 @@ function diffPath(block: ToolCallBlock): string {
   return typeof record.file_path === "string" ? record.file_path : block.toolName;
 }
 
-/* ── Collapsed tick strip (TASK.191 slice S7) ────────────────────────
+/* ── Collapsed tick strip (slice S7) ────────────────────────
  * The plan's collapsed state, `task191/PLAN.md:184` verbatim: "Свёрнутое
  * состояние — полоса засечек по числу шагов, карточка не растёт против
  * сегодняшней". One tick per step, in dependency order, coloured from the same
@@ -2029,7 +2029,7 @@ export function WorkflowCollapsedTicks({ workflow }: { workflow: WorkflowSubStat
 }
 
 /**
- * The card's header row (TASK.120): the disclosure toggle, plus — while a
+ * The card's header row: the disclosure toggle, plus — while a
  * session-tier child is blocked on a permission ask — the actionable child
  * badge riding BESIDE the toggle (a `<button>` cannot nest in the toggle
  * `<button>`). Every non-actionable card renders exactly one child here (the
@@ -2059,7 +2059,7 @@ export function ToolCallHeaderRow({
   bodyId: string;
   onToggleExpanded: () => void;
   childAction?: { badge: ChildBadgeKind; onOpen: (() => void) | undefined };
-  /** TASK.112: resolved by ToolCallCard, passed as a plain prop for the same reason `childAction` is — a static render can see a prop, never a hook. */
+  /** resolved by ToolCallCard, passed as a plain prop for the same reason `childAction` is — a static render can see a prop, never a hook. */
   previewAction?: ArtifactPreviewAction;
   /** Parent session identity, resolved by ToolCallCard and passed as plain props (same static-render rationale as `childAction`). */
   parentModel?: string | null | undefined;
@@ -2070,7 +2070,7 @@ export function ToolCallHeaderRow({
     isAgent && block.subagent !== null
       ? resolveSubagentIdentity(block.subagent.model, block.subagent.engine, parentModel, parentEngine)
       : null;
-  // TASK.120: an actionable badge (waiting for permission + onOpen) cannot
+  // an actionable badge (waiting for permission + onOpen) cannot
   // render inside the toggle <button> — nested buttons are invalid HTML — so
   // it is hoisted out into this row wrapper; every other kind keeps its
   // original in-toggle placement, byte-identical markup.
@@ -2125,20 +2125,20 @@ export function ToolCallHeaderRow({
             )}
           </>
         )}
-        {/* TASK.191 slice S7: the run's shape while the card is folded. Guarded
+        {/* slice S7: the run's shape while the card is folded. Guarded
             on a non-empty `steps` so a card seeded before `workflow_start`
             lands renders no empty strip. */}
         {block.workflow !== null && !expanded && block.workflow.steps.length > 0 && (
           <WorkflowCollapsedTicks workflow={block.workflow} />
         )}
         <span className="tool-call-status-badge">{statusLabel(block)}</span>
-        {/* TASK.102 CUT-S2 §2.5 (C3): the session-child badge lives in the
+        {/* CUT-S2 §2.5 (C3): the session-child badge lives in the
             ALWAYS-visible toggle row, not just the expanded body below — an
             Agent card defaults to COLLAPSED in every status
             (defaultExpanded above), so a "waiting for permission" signal
             that only showed once expanded would be invisible in practice
             (the owner's live-smoke checklist, CUT-S2 §8 point 4, checks the
-            badge on the — by default collapsed — master card). TASK.120:
+            badge on the — by default collapsed — master card).
             while the child is blocked on a permission ask the badge is
             hoisted out of this button (see headerBadgeActionable above). */}
         {childAction !== undefined && !headerBadgeActionable && (
@@ -2152,12 +2152,12 @@ export function ToolCallHeaderRow({
           </span>
         )}
       </button>
-      {/* TASK.120: the actionable badge — same onOpen as the Open button,
+      {/* the actionable badge — same onOpen as the Open button,
           riding at the row's end, clear of the toggle's own click target. */}
       {childAction !== undefined && headerBadgeActionable && (
         <ChildBadge badge={childAction.badge} onOpen={childAction.onOpen} />
       )}
-      {/* TASK.112: the open-in-preview control for a document this card
+      {/* the open-in-preview control for a document this card
           wrote/read. It rides HERE, in the always-visible row, and not on the
           path text itself, for two reasons: the path lives inside the toggle
           <button> (nested buttons are invalid HTML — the same constraint that
@@ -2202,7 +2202,7 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
   const [promptExpanded, setPromptExpanded] = useState(false);
   // R17 a11y: bind the disclosure toggle to the body it controls.
   const bodyId = useId();
-  // TASK.102 CUT-S2 §2.5 (C3): undefined for every card but a session-tier
+  // CUT-S2 §2.5 (C3): undefined for every card but a session-tier
   // child's — see the hook's own doc comment.
   const childAction = useChildSessionAction(block);
   // Parent identity for Agent-card model/engine display: this card's OWN tab
@@ -2249,7 +2249,7 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
       className={`tool-call-card tool-call-status-${block.status}${enter ? " message-enter" : ""}`}
       data-tool-call-id={block.toolCallId}
     >
-      {/* TASK.120: the toggle gains a row wrapper because an actionable child
+      {/* the toggle gains a row wrapper because an actionable child
           badge rides BESIDE it, not inside it — a <button> cannot nest in the
           toggle <button>. Every non-actionable card renders exactly one child
           here (the toggle itself), so its layout is unchanged. */}

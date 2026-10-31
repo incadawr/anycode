@@ -1,5 +1,5 @@
 /**
- * TASK.145 срез 2 (spec §4 point 3): renders a detached child's terminal
+ * срез 2 (spec §4 point 3): renders a detached child's terminal
  * report as a compact, collapsed-by-default system card instead of the
  * normal user-message bubble — MessageList.tsx routes here whenever a
  * `user_text` block carries `origin === "system"`. The MODEL-facing role of

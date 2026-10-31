@@ -1,5 +1,5 @@
 /**
- * TASK.126 — tests for the presentational ConfirmDialog. Same jsdom-free
+ * tests for the presentational ConfirmDialog. Same jsdom-free
  * discipline as ToolCallStack.test.ts: `react-dom/server`'s
  * `renderToStaticMarkup` walks the React tree to an HTML string, so it works
  * under this package's plain "node" vitest environment. For the event-prop

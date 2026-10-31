@@ -77,25 +77,25 @@ describe("computeSendDisabledReason (§3-D3)", () => {
     expect(computeSendDisabledReason({ workspace: "/ws/a", prompt: "hello", engine: "core", model: null, mode: "build" })).toBeUndefined();
   });
 
-  it("TASK.81: an attached image alone (no imageCount arg) still requires text — pre-existing single-arg call sites keep their exact behavior", () => {
+  it("an attached image alone (no imageCount arg) still requires text — pre-existing single-arg call sites keep their exact behavior", () => {
     expect(computeSendDisabledReason({ workspace: "/ws/a", prompt: "", engine: "core", model: null, mode: "build" })).toBe(
       "Type a message to send",
     );
   });
 
-  it("TASK.81: enabled once an image is attached, even with a blank prompt (Composer.tsx's hasSendableDraft parity)", () => {
+  it("enabled once an image is attached, even with a blank prompt (Composer.tsx's hasSendableDraft parity)", () => {
     expect(
       computeSendDisabledReason({ workspace: "/ws/a", prompt: "", engine: "core", model: null, mode: "build" }, 1),
     ).toBeUndefined();
   });
 
-  it("TASK.81: 'Type a message to send' still applies with zero images and a blank prompt", () => {
+  it("'Type a message to send' still applies with zero images and a blank prompt", () => {
     expect(
       computeSendDisabledReason({ workspace: "/ws/a", prompt: "   ", engine: "core", model: null, mode: "build" }, 0),
     ).toBe("Type a message to send");
   });
 
-  it("TASK.81: 'Choose a project first' wins over an attached image with no workspace", () => {
+  it("'Choose a project first' wins over an attached image with no workspace", () => {
     expect(
       computeSendDisabledReason({ workspace: null, prompt: "", engine: "core", model: null, mode: "build" }, 1),
     ).toBe("Choose a project first");
@@ -287,7 +287,7 @@ describe("computeModelChipDisplay (§3-D3)", () => {
     });
   });
 
-  // Taskana 4237: an unresolved model (no draft pick AND no provider default)
+  // an unresolved model (no draft pick AND no provider default)
   // is a call to action, not a blank label — while modelId/isDefault are kept
   // untouched so the call sites' existing logic still sees them.
   it("returns the 'Add a model' placeholder for an empty resolved model id", () => {
@@ -307,12 +307,12 @@ describe("computeModelChipDisplay (§3-D3)", () => {
   });
 });
 
-describe("CODEX_DRAFT_PRESETS / DEFAULT_CODEX_DRAFT_PRESET (TASK.39, cut §2(d)/§3.8)", () => {
+describe("CODEX_DRAFT_PRESETS / DEFAULT_CODEX_DRAFT_PRESET (cut §2(d)/§3.8)", () => {
   it("mirrors host/engines/codex/presets.ts's three ids, in the same order", () => {
     expect(CODEX_DRAFT_PRESETS.map((p) => p.id)).toEqual(["ask", "approve-for-me", "full-access"]);
   });
 
-  // Taskana 4078 cross-review finding 3: the duplicate table is deliberate
+  // cross-review finding 3: the duplicate table is deliberate
   // (no host exists at draft time), but the old test pinned only ids/order —
   // the honest "ask" description (114 chars, names /tmp and $TMPDIR) could
   // silently drift between the two copies on any future edit while the
@@ -340,7 +340,7 @@ describe("CODEX_DRAFT_PRESETS / DEFAULT_CODEX_DRAFT_PRESET (TASK.39, cut §2(d)/
   });
 });
 
-describe("resolveCodexDraftModel (TASK.39 — cross-engine draft.model leakage guard)", () => {
+describe("resolveCodexDraftModel (cross-engine draft.model leakage guard)", () => {
   const codexModels = [{ id: "gpt-5.6-terra" }, { id: "gpt-5.6-mini" }];
 
   it("trusts an explicit draft pick that IS a member of the fetched Codex catalog", () => {
@@ -351,7 +351,7 @@ describe("resolveCodexDraftModel (TASK.39 — cross-engine draft.model leakage g
     expect(resolveCodexDraftModel(null, codexModels)).toBe("gpt-5.6-terra");
   });
 
-  it("TASK.241: a STALE id renders VERBATIM — preserved intent, the refusal happens at submit (no hidden fallback)", () => {
+  it("a STALE id renders VERBATIM — preserved intent, the refusal happens at submit (no hidden fallback)", () => {
     expect(resolveCodexDraftModel("claude-opus", codexModels)).toBe("claude-opus");
   });
 
@@ -360,7 +360,7 @@ describe("resolveCodexDraftModel (TASK.39 — cross-engine draft.model leakage g
   });
 });
 
-describe("draftModelEfforts (TASK.81)", () => {
+describe("draftModelEfforts", () => {
   const models = [
     { id: "gpt-5.6-terra", label: "Terra", efforts: ["low", "high"] },
     { id: "gpt-5.6-mini", label: "Mini" },
@@ -383,7 +383,7 @@ describe("draftModelEfforts (TASK.81)", () => {
   });
 });
 
-describe("resolveDraftEngineEffort (TASK.81)", () => {
+describe("resolveDraftEngineEffort", () => {
   const efforts = ["low", "high"];
 
   it("trusts an explicit draft pick that IS a member of the current model's effort vocabulary", () => {
@@ -543,7 +543,7 @@ function connection(over: Partial<ProviderConnection> & { id: string; providerId
   return over;
 }
 
-describe("buildStartModelMenuGroups (TASK.106 cut-1 stage B, re-exported from start-model-picker.ts by TASK.131 — grouped New Session model popover)", () => {
+describe("buildStartModelMenuGroups (cut-1 stage B, re-exported from start-model-picker.ts by — grouped New Session model popover)", () => {
   const catalog: CatalogSummary = [
     {
       id: "anthropic",
@@ -600,14 +600,14 @@ describe("buildStartModelMenuGroups (TASK.106 cut-1 stage B, re-exported from st
       modelId: "kimi-k2",
     });
 
-    // TASK.131 D1 ordering: the current pair's connection leads the rail, so
+    // D1 ordering: the current pair's connection leads the rail, so
     // the settings-order-second `conn-api` is groups[0] here.
     expect(groups.map((g) => g.connectionId)).toEqual(["conn-api", "conn-sub"]);
     expect(groups[0]?.items.find((i) => i.id === "kimi-k2")?.current).toBe(true);
     expect(groups[1]?.items.find((i) => i.id === "kimi-k2")?.current).toBe(false);
   });
 
-  it("TASK.131 D1: a connection offering nothing (unknown provider, no live list) leaves the rail entirely", () => {
+  it("D1: a connection offering nothing (unknown provider, no live list) leaves the rail entirely", () => {
     const connections = [
       connection({ id: "conn-empty", providerId: "mystery", label: "Mystery" }),
       connection({ id: "conn-a", providerId: "anthropic", label: "Anthropic" }),
@@ -636,7 +636,7 @@ describe("buildStartModelMenuGroups (TASK.106 cut-1 stage B, re-exported from st
     expect(groups[1]?.items.some((i) => i.current)).toBe(false);
   });
 
-  it("TASK.106 §6 rail form: every group carries its connection's providerId (the Popular strip's provider-keyed match)", () => {
+  it("§6 rail form: every group carries its connection's providerId (the Popular strip's provider-keyed match)", () => {
     const connections = [
       connection({ id: "conn-a", providerId: "anthropic", label: "Anthropic" }),
       connection({ id: "conn-b", providerId: "kimi", label: "Kimi" }),
@@ -651,7 +651,7 @@ describe("buildStartModelMenuGroups (TASK.106 cut-1 stage B, re-exported from st
   });
 });
 
-describe("TASK.106 cut-1 P2 fix: model chip label resolves against the PINNED connection's catalog, not always the active one", () => {
+describe("cut-1 P2 fix: model chip label resolves against the PINNED connection's catalog, not always the active one", () => {
   const catalog: CatalogSummary = [
     {
       id: "anthropic",
@@ -690,7 +690,7 @@ describe("TASK.106 cut-1 P2 fix: model chip label resolves against the PINNED co
   });
 });
 
-describe("startModelRowConnectionId (TASK.106 cut-1 stage B, §3 item 3)", () => {
+describe("startModelRowConnectionId (cut-1 stage B, §3 item 3)", () => {
   it("normalizes the active connection's own row to undefined (SessionDraft.connectionId's 'unset ⇒ active' convention)", () => {
     expect(startModelRowConnectionId("conn-a", "conn-a")).toBeUndefined();
   });
@@ -704,7 +704,7 @@ describe("startModelRowConnectionId (TASK.106 cut-1 stage B, §3 item 3)", () =>
   });
 });
 
-describe("selectStartModelRow (TASK.106 cut-1 stage B — grouped row click sets both axes of the pair)", () => {
+describe("selectStartModelRow (cut-1 stage B — grouped row click sets both axes of the pair)", () => {
   function makeDeps(): { deps: ModelPickDeps; tabsStore: ReturnType<typeof createTabsStore> } {
     const tabsStore = createTabsStore();
     return { deps: { tabsStore }, tabsStore };
@@ -774,7 +774,7 @@ describe("shouldShowClaudeEngineButton (SLICE-CC A4, cut §1.2 DoD-3)", () => {
   });
 });
 
-describe("decideCodexDraftModel (TASK.241)", () => {
+describe("decideCodexDraftModel", () => {
   const catalog = [{ id: "gpt-5.6-sol" }, { id: "luna" }];
 
   it("an explicit pick present in the catalog is sent verbatim", () => {
@@ -800,7 +800,7 @@ describe("decideCodexDraftModel (TASK.241)", () => {
   });
 });
 
-describe("TASK.241 — catalog refresh invalidation", () => {
+describe("— catalog refresh invalidation", () => {
   /** Deferred recheck fixture: a controllable promise per refresh call. */
   function deferred<T>() {
     let resolve!: (value: T) => void;

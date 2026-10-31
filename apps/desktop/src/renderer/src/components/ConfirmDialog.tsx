@@ -1,5 +1,5 @@
 /**
- * TASK.126 — fully controlled presentational confirm dialog (native
+ * fully controlled presentational confirm dialog (native
  * `<dialog>`, GitConfirmDialog's `.git-confirm-*` CSS verbatim). The caller
  * owns the pending request state; this component only renders and reports
  * Confirm/Cancel. Cancel is the initially focused button (fail-closed, the

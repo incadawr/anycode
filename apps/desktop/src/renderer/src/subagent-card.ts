@@ -1,5 +1,5 @@
 /**
- * Persisted subagent card decode + projection (TASK.102 slice S1 W4,
+ * Persisted subagent card decode + projection (slice S1 W4,
  * CUT-S1 §3 W4). Two pure functions, no I/O:
  *
  * - `decodeSubagentCardSnapshot` is the LAST line of defense on the read
@@ -289,7 +289,7 @@ export function decodeSubagentHandoff(
 /**
  * Straight 1:1 field mapping onto `SubagentSubStatus` (store.ts) — `attention`
  * is S2-reserved and never projected (CUT-S1 §0.3 vердикт 3, §3 W4).
- * `sessionChild` (TASK.102 CUT-S2 §10.8.1 vердикт 1) is the one exception:
+ * `sessionChild` (CUT-S2 §10.8.1 vердикт 1) is the one exception:
  * presence-encoded, set ONLY when `snapshot.target.kind === "session"`. This
  * is a DISCRIMINANT, not the target itself — the three ids on a `"session"`
  * target (childSessionId/parentSessionId/spawnToolCallId) deliberately never

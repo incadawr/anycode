@@ -1,5 +1,5 @@
 /**
- * Codex onboarding Settings pane (TASK.41, design/slice-codex-fixes-cut.md
+ * Codex onboarding Settings pane (design/slice-codex-fixes-cut.md
  * §2(g)/§5.5; redesigned for TASK.50/53, codex-profiles cut §2/§4/§5/§7,
  * amended §A1/§A4): the Settings-owned surface for the Codex engine.
  *
@@ -51,7 +51,7 @@ export interface CodexOnboardingSnapshot {
   binaryPath: string | null;
   source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none";
   checkedAt: string;
-  /** Taskana 4092 (TASK.85): alternate-binary candidates the error card may offer — absent when the ladder found none. */
+  /** alternate-binary candidates the error card may offer — absent when the ladder found none. */
   alternates?: Array<{ path: string; source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none" }>;
 }
 
@@ -66,7 +66,7 @@ export type CodexUseBinaryResult =
 export type CodexLoginStartResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
   /**
-   * Taskana 4884: `detail` is a short, non-secret explanation of a `failed`
+   * `detail` is a short, non-secret explanation of a `failed`
    * outcome (which branch refused, and why) — it exists so the UI can say
    * something more useful than "Sign-in failed. Try again.", and so the main
    * log carries a breadcrumb. Never a token/credential; absent when there is
@@ -155,7 +155,7 @@ export function describeCodexReportStatus(report: CodexDoctorReport | undefined)
     case "not_installed":
       return { headline: "Not installed", detail: "No Codex CLI was found on PATH or in common install locations.", tone: "muted" };
     case "error":
-      // Taskana 4092 (TASK.85): the typed 127/node-shebang diagnosis carries
+      // the typed 127/node-shebang diagnosis carries
       // its own hint — rendered from the STRUCTURED field, never from
       // string-matching `error` (the same D-S4-6 rule the trust card follows).
       return {
@@ -207,7 +207,7 @@ export function canSignIn(report: CodexDoctorReport | undefined, profile?: Codex
 }
 
 /**
- * Taskana 4092 follow-up: the notice for a refused "Use <path>" click. Main
+ * follow-up: the notice for a refused "Use <path>" click. Main
  * admits only a path it itself listed as an alternate in the latest doctor
  * report — `unlisted` means the offered list moved on (a recheck or another
  * Use replaced it), so the right next step is a recheck or the picker, not a
@@ -311,7 +311,7 @@ export interface CodexAccountRowPlan {
 /**
  * Collapses the "System (current environment)" pseudo-row into a matching
  * saved profile's own card when the two report the SAME signed-in account
- * (TASK.57 — owner: "когда мы даём системному аккаунту профиль, то он должен
+ * (owner: "когда мы даём системному аккаунту профиль, то он должен
  * иметь это имя и не дублироваться"). Identity is compared off
  * `describeAccountEmailLine`'s already-custody-cleared email (trimmed,
  * case-insensitive) since no stable account id exists on the wire. A `null`
@@ -345,7 +345,7 @@ export function pickBinaryFailureMessage(reason: "cancelled" | "invalid"): strin
 }
 
 /**
- * Taskana 4884: a failed sign-in carries main's own non-secret `detail` (which
+ * a failed sign-in carries main's own non-secret `detail` (which
  * branch refused and why). When it is there, SHOW it — the generic "Try again"
  * line told the user nothing and made every distinct failure look identical.
  */
@@ -394,7 +394,7 @@ export function shouldAutoSignIn(request: CodexProfileCreateRequest): boolean {
  * `supportedRange` is the same grammar the shared policy evaluates
  * (`>= <= > < =` conjunctions, `||`-joined disjunctions — the exact join
  * `manifestSupportedRange` produces; the parser now lives in
- * `shared/codex-version-policy.ts`, TASK.213). Fails closed (`false`, i.e.
+ * `shared/codex-version-policy.ts`). Fails closed (`false`, i.e.
  * "still needs the banner") on anything unparsable — it only ever narrows
  * which risk-accepted versions are treated as no-longer-untested, never
  * silently drops a real warning.
@@ -415,7 +415,7 @@ export function isCodexVersionWithinSupportedRange(version: string, supportedRan
  * below never claims risk-acceptance saved a version main will refuse
  * unconditionally. Fails closed like `isCodexVersionWithinSupportedRange`:
  * unparsable input is never treated as below-floor. Parsing/comparison come
- * from the shared policy module (TASK.213) — the same code main runs.
+ * from the shared policy module — the same code main runs.
  */
 function isCodexVersionBelowCompileTimeFloor(version: string): boolean {
   const parsed = parseCodexSemver(version);
@@ -561,10 +561,10 @@ export async function diagnoseProfilesSequentially(
 
 /** Subset of `window.anycode.codex` this pane drives, injectable so tests never touch a real `window`. */
 export interface CodexBridge {
-  /** TASK.65: `force` bypasses main's doctor TTL cache (the explicit "Recheck all"); a mount-time refresh omits it so a re-check inside the TTL reuses the cached verdict. */
+  /** `force` bypasses main's doctor TTL cache (the explicit "Recheck all"); a mount-time refresh omits it so a re-check inside the TTL reuses the cached verdict. */
   recheck(profileId?: string, force?: boolean): Promise<CodexOnboardingSnapshot>;
   pickBinary(): Promise<CodexPickBinaryResult>;
-  /** Taskana 4092 (TASK.85): adopt a path main itself listed as an alternate in its latest doctor report — the error card's "Use <path>" buttons. A user gesture per switch; never a silent substitution. */
+  /** adopt a path main itself listed as an alternate in its latest doctor report — the error card's "Use <path>" buttons. A user gesture per switch; never a silent substitution. */
   useBinary(binaryPath: string): Promise<CodexUseBinaryResult>;
   loginStart(profileId?: string, mode?: CodexLoginMode): Promise<CodexLoginStartResult>;
   onLoginProgress?(callback: (progress: CodexDeviceCodeProgress) => void): () => void;
@@ -585,7 +585,7 @@ export interface CodexBridge {
   acceptRisk(version: string): Promise<{ ok: boolean; error?: string }>;
   supportStatus(): Promise<CodexSupportStatusResult>;
   manifestRefresh(): Promise<CodexManifestRefreshResult>;
-  /** TASK.103 (D-S4-8): grants a per-path binary-trust consent. `path` ONLY — the fingerprint is computed entirely main-side. */
+  /** (D-S4-8): grants a per-path binary-trust consent. `path` ONLY — the fingerprint is computed entirely main-side. */
   trustBinary(path: string): Promise<SettingsMutationResult>;
 }
 
@@ -594,7 +594,7 @@ export interface CodexEnginePaneProps {
   /** Injectable for tests / isolation; defaults to the app's real `window.anycode.codex` bridge. */
   bridge?: CodexBridge;
   /**
-   * Closes the WHOLE Settings dialog (TASK.57) — `SettingsScreen`'s own
+   * Closes the WHOLE Settings dialog — `SettingsScreen`'s own
    * `onClose`, forwarded down through this pane to
    * `CodexRolloutImportDialog`. Fired only once "Import & open" has actually
    * landed the user on the freshly-imported tab; a failed import/open leaves
@@ -608,7 +608,7 @@ export interface CodexEnginePaneProps {
 interface CodexProfileRowProps {
   label: string;
   profile?: CodexProfileRecord;
-  /** Muted parenthetical shown next to the label (TASK.57) — currently only "current environment", for the profile `resolveAccountRows` matched to the collapsed System row. */
+  /** Muted parenthetical shown next to the label — currently only "current environment", for the profile `resolveAccountRows` matched to the collapsed System row. */
   annotation?: string;
   /**
    * This account is the DEFAULT for new sessions (`settings.codex.activeProfileId`,
@@ -726,9 +726,9 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
   const [newLabel, setNewLabel] = useState("");
   const [signingInId, setSigningInId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  // TASK.103 (D-S4-8): the binary-trust consent dialog's open state.
+  // (D-S4-8): the binary-trust consent dialog's open state.
   const [trustDialogOpen, setTrustDialogOpen] = useState(false);
-  // TASK.52 (cut §8.8, lane W3-H): this pane is ONLY the entry point for the
+  // (cut §8.8, lane W3-H): this pane is ONLY the entry point for the
   // rollout-import wizard — all of its own logic/state lives in
   // CodexRolloutImportDialog.tsx.
   const [importOpen, setImportOpen] = useState(false);
@@ -752,7 +752,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
   // Every row diagnosed SEQUENTIALLY (cut §4.3: "не N параллельных
   // app-server'ов") — `system` first (it always exists), then every
   // registered profile in registry order.
-  // TASK.65: `force` defaults TRUE so every explicit trigger (the "Recheck all"
+  // `force` defaults TRUE so every explicit trigger (the "Recheck all"
   // button, a post-mutation refresh) still gets a fresh doctor pass exactly as
   // before the TTL existed; ONLY the mount effect below passes `false`, so a
   // Settings re-entry inside the TTL reuses main's cached verdict instead of
@@ -795,14 +795,14 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
   }, [bridge]);
 
   useEffect(() => {
-    // TASK.65: mount refresh is TTL-guarded (force=false) — re-opening Settings
+    // mount refresh is TTL-guarded (force=false) — re-opening Settings
     // inside the doctor TTL window reuses the cached verdict, no re-spawn.
     void refreshAll(false);
     void bridge.supportStatus().then(setSupport);
   }, [refreshAll, bridge]);
   useEffect(() => bridge.onLoginProgress?.(setDeviceCode), [bridge]);
 
-  // Shell-wide re-check-without-restart (TASK.41 п.5): unrelated to this
+  // Shell-wide re-check-without-restart (п.5): unrelated to this
   // pane's own row refresh above — only keeps the tabs-store's
   // `availableEngines` in sync, the same listener every onboarding surface
   // has always registered. Goes through the shared request ticket: this
@@ -825,9 +825,9 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
     }
   }
 
-  // Taskana 4092 (TASK.85): adopt one of the snapshot's alternate candidates.
+  // adopt one of the snapshot's alternate candidates.
   // An EXPLICIT user gesture per click — never a silent substitution (the
-  // TASK.85 trust invariant): main persists it as source "picker", the same
+  // trust invariant): main persists it as source "picker", the same
   // rung a file-dialog choice lands on.
   async function useAlternate(path: string): Promise<void> {
     setNotice(null);
@@ -880,7 +880,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
   }
 
   /**
-   * TASK.103 (D-S4-8, §4 step 4): Accept ⇒ grant IPC (path only — main
+   * (D-S4-8, §4 step 4): Accept ⇒ grant IPC (path only — main
    * computes the fingerprint) ⇒ on `ok` the pane fires its existing recheck
    * so the card resolves through the SAME path every other pane action uses
    * (the `pick()`/`installBinary()` precedent above: set the fresh binary
@@ -991,7 +991,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
       if (!result.ok) {
         setNotice(result.reason);
       } else {
-        // TASK.65: the re-link just changed the credential, so force past the
+        // the re-link just changed the credential, so force past the
         // TTL for a genuinely fresh verdict rather than a moments-old cache hit.
         const fresh = await bridge.recheck(id, true);
         setReportsById((prev) => ({ ...prev, [id]: fresh.report }));
@@ -1048,7 +1048,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
   // The collapse into a matching profile must not hide the Default marker (and
   // must leave the ambient account reachable): see codexSystemRowVisibility.
   const systemRow = codexSystemRowVisibility(accountRows, activeProfileId);
-  // TASK.103 (D-S4-6): the consent card source — the structured field only,
+  // (D-S4-6): the consent card source — the structured field only,
   // never a string-match on `binaryStatus.detail`.
   const trustRefusal = binaryTrustRefusalOf(binarySnapshot?.report);
 
@@ -1164,7 +1164,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
             type="button"
             className="settings-button"
             disabled={busy}
-            // TASK.103: structured facts for the automation facade
+            // structured facts for the automation facade
             // (`realCodexPaneDom().trust()`) — never read by string-matching
             // the rendered reason text (D-S4-6's "no string-matching" carried
             // into the automation surface too).

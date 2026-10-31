@@ -1,5 +1,5 @@
 /**
- * Pure geometry + tab-set algebra for the right-side dock (Taskana 4703,
+ * Pure geometry + tab-set algebra for the right-side dock (
  * docs/development/dock.md). One tabbed column replaces the old stacked
  * fixed-width columns (git / preview / subagents), so the conversation keeps
  * a real floor and there is exactly ONE persisted width.
@@ -15,7 +15,7 @@ export const DOCK_WIDTH_STORAGE_KEY = "anycode.dock.width";
 export const DOCK_WIDTH_DEFAULT = 640;
 export const DOCK_WIDTH_MIN = 320;
 export const DOCK_WIDTH_MAX = 960;
-/** Taskana 4703 requirement: the conversation column keeps ~420px minimum. */
+/** requirement: the conversation column keeps ~420px minimum. */
 export const CONVERSATION_MIN_PX = 420;
 export const DOCK_HANDLE_PX = 8;
 

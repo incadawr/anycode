@@ -1,5 +1,5 @@
 /**
- * Tests for the S1 persisted-card decode/project pair (TASK.102 slice S1 W4,
+ * Tests for the S1 persisted-card decode/project pair (slice S1 W4,
  * CUT-S1 §3 W4). `decodeSubagentCardSnapshot` is the LAST line of defense
  * before a persisted `presentation.subagent` blob (parsed by `loadHistory`
  * with an unchecked `JSON.parse`, sqlite-persistence.ts) reaches the store —
@@ -86,7 +86,7 @@ describe("decodeSubagentCardSnapshot — valid payload", () => {
     expect(decodeSubagentCardSnapshot(withAttention, CTX)).toEqual(withAttention);
   });
 
-  it("round-trips final.responseModel when present (TASK.161 slice C1)", () => {
+  it("round-trips final.responseModel when present (slice C1)", () => {
     const withResponseModel: SubagentCardSnapshotV1 = {
       ...VALID_SNAPSHOT,
       final: { ...VALID_SNAPSHOT.final, responseModel: "glm-5.3" },
@@ -94,13 +94,13 @@ describe("decodeSubagentCardSnapshot — valid payload", () => {
     expect(decodeSubagentCardSnapshot(withResponseModel, CTX)).toEqual(withResponseModel);
   });
 
-  it("a valid final with no responseModel decodes with the key absent — never a fabricated fallback (TASK.161 slice C1)", () => {
+  it("a valid final with no responseModel decodes with the key absent — never a fabricated fallback (slice C1)", () => {
     const decoded = decodeSubagentCardSnapshot(VALID_SNAPSHOT, CTX);
     expect(decoded !== null && "responseModel" in decoded.final).toBe(false);
   });
 });
 
-describe("decodeSubagentCardSnapshot — final.responseModel is best-effort, never a rejection reason (TASK.161 slice C1)", () => {
+describe("decodeSubagentCardSnapshot — final.responseModel is best-effort, never a rejection reason (slice C1)", () => {
   it("a wrong-typed final.responseModel is treated as absent without rejecting the otherwise-valid snapshot", () => {
     const malformed = { ...VALID_SNAPSHOT, final: { ...VALID_SNAPSHOT.final, responseModel: 12345 } };
     const decoded = decodeSubagentCardSnapshot(malformed, CTX);
@@ -330,7 +330,7 @@ describe("projectSubagentCard", () => {
     expect(projectSubagentCard(VALID_SNAPSHOT)).toMatchObject({ model: "claude-sonnet", engine: "claude" });
   });
 
-  it("copies final.responseModel through the projection unchanged (TASK.161 slice C1)", () => {
+  it("copies final.responseModel through the projection unchanged (slice C1)", () => {
     const withResponseModel: SubagentCardSnapshotV1 = {
       ...VALID_SNAPSHOT,
       final: { ...VALID_SNAPSHOT.final, responseModel: "glm-5.3" },
@@ -372,7 +372,7 @@ describe("projectSubagentCard", () => {
   });
 });
 
-describe("projectSubagentCard — sessionChild discriminant (TASK.102 CUT-S2 §10.8.1)", () => {
+describe("projectSubagentCard — sessionChild discriminant (CUT-S2 §10.8.1)", () => {
   const SESSION_SNAPSHOT: SubagentCardSnapshotV1 = {
     ...VALID_SNAPSHOT,
     target: { kind: "session", childSessionId: "child-1", parentSessionId: "parent-1", spawnToolCallId: CTX.toolCallId },

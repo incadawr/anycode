@@ -20,7 +20,7 @@ function notificationText(fields: { subagentType: string; status: string; summar
   ].join("\n");
 }
 
-describe("parseChildReportText (TASK.145 срез 2 §4 point 3)", () => {
+describe("parseChildReportText (срез 2 §4 point 3)", () => {
   it("extracts subagentType, status, and summary from a well-formed notification", () => {
     const text = notificationText({ subagentType: "explore", status: "completed", summary: "Found 3 files." });
     const parsed = parseChildReportText(text);
@@ -101,7 +101,7 @@ describe("childReportCardLabel", () => {
   });
 });
 
-describe("user-initiated stop (cancelledBy) — TASK.240", () => {
+describe("user-initiated stop (cancelledBy) —", () => {
   it("parses <cancelled-by>user</cancelled-by> into cancelledBy", () => {
     const text = notificationText({ subagentType: "explore", status: "cancelled", summary: "s" }).replace(
       "  <status>cancelled</status>",

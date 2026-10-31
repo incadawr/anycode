@@ -1,5 +1,5 @@
 /**
- * Cross-review D1 guard (Taskana 4070): renderer PRODUCTION code must never
+ * Cross-review D1 guard: renderer PRODUCTION code must never
  * VALUE-import the `@anycode/core` package ROOT — the root barrel re-exports
  * core's whole module graph (NodeExecutionAdapter, node:fs, node:child_process,
  * node:sqlite, …), and the renderer is a plain web target (electron.vite.config.ts:

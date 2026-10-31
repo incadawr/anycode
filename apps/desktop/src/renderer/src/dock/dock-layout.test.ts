@@ -1,5 +1,5 @@
 /**
- * Pure-logic tests for the dock geometry/tab algebra (Taskana 4703,
+ * Pure-logic tests for the dock geometry/tab algebra (
  * docs/development/dock.md). `.test.ts`-only, node env — no jsdom in this
  * package's vitest config (App.test.ts header precedent): every case passes
  * plain numbers / plain objects / a Map-backed storage shim.
@@ -217,7 +217,7 @@ describe("canSplit (Stage 2)", () => {
   });
 });
 
-describe("background open + split eligibility (Taskana 4703 cross-review D1/D3)", () => {
+describe("background open + split eligibility (cross-review D1/D3)", () => {
   const MD = { id: "preview:md", kind: "preview" as const, title: "doc.md" };
   const GIT = { id: "git", kind: "git" as const, title: "Review" };
 

@@ -491,17 +491,17 @@ describe("buildImportApplyRequest (forced-disabled import flow, consent off/on)"
     expect(request).toEqual({ tabId: "tab-1", scope: "project", ids: ["a", "b"], includeEnvValues: true });
   });
 
-  // ── Taskana 4706: the scope radios are gone from the dialog — the pane now
+  // ── the scope radios are gone from the dialog — the pane now
   // feeds the resolved scope-bar mode straight into the builder. Both write
   // targets pinned: Global mode (no tabId ⇒ scopeMode "user") writes the USER
   // config; Project mode (tabId present ⇒ "project") writes the project's. ──
 
-  it("Taskana 4706 Global mode: no tabId + 'user' scope — the write goes to the user (global) config", () => {
+  it("Global mode: no tabId + 'user' scope — the write goes to the user (global) config", () => {
     const request = buildImportApplyRequest(undefined, "user", { a: true }, false);
     expect(request).toEqual({ tabId: undefined, scope: "user", ids: ["a"], includeEnvValues: false });
   });
 
-  it("Taskana 4706 Project mode: tabId + 'project' scope — the write goes to the chosen tab's project config", () => {
+  it("Project mode: tabId + 'project' scope — the write goes to the chosen tab's project config", () => {
     const request = buildImportApplyRequest("t1", "project", { a: true }, false);
     expect(request).toEqual({ tabId: "t1", scope: "project", ids: ["a"], includeEnvValues: false });
   });
@@ -519,13 +519,13 @@ describe("buildImportApplyRequest (forced-disabled import flow, consent off/on)"
   });
 });
 
-// ── Taskana 4706: Global mode degradation — what the pane renders when
+// ── Global mode degradation — what the pane renders when
 // SettingsScreen passes `servers: []` (Global mode, or a non-active project
 // tab chosen). No new harness: the pure join/partition helpers ARE the
 // render's data path, so exercising them with an empty status list pins
 // exactly what the rows show. ──
 
-describe("Global mode degradation (Taskana 4706)", () => {
+describe("Global mode degradation", () => {
   it("an enabled project entry with no runtime statuses renders neutral — 'applies to newly started tasks', never another tab's live dots", () => {
     const rows = joinMcpRows([entry({ name: "ozon", source: "project", enabled: true })], []);
     expect(rows).toHaveLength(1);
@@ -551,7 +551,7 @@ describe("Global mode degradation (Taskana 4706)", () => {
   });
 });
 
-// ── Taskana 4732 S1-C: read-only plugin-contributed rows (design 4732 §6) ──
+// ── S1-C: read-only plugin-contributed rows (design 4732 §6) ──
 
 /** Renders a plugin row's element tree to flat text+classes (direct-call idiom, no jsdom). */
 function pluginRowText(server: Partial<McpPluginServerView>): string {
@@ -580,7 +580,7 @@ function pluginRowText(server: Partial<McpPluginServerView>): string {
   return parts.join(" ");
 }
 
-describe("McpPluginRowItem (read-only plugin row, Taskana 4732 S1-C)", () => {
+describe("McpPluginRowItem (read-only plugin row, S1-C)", () => {
   it("renders the runtime name, plugin badge, and command line — with NO toggle/edit/delete controls", () => {
     const text = pluginRowText({});
     expect(text).toContain("plugin_ozon-tools_api");
@@ -601,10 +601,10 @@ describe("McpPluginRowItem (read-only plugin row, Taskana 4732 S1-C)", () => {
   });
 });
 
-// Taskana 4752 part C: the write-only secrets panel. Static render: the names are
+// part C: the write-only secrets panel. Static render: the names are
 // listed as copyable references, the value input is a password field, and no value
 // is ever part of the markup (C-22).
-describe("McpSecretsPanel — write-only markup (Taskana 4752, C-22)", () => {
+describe("McpSecretsPanel — write-only markup (C-22)", () => {
   const noop = async () => {};
   const render = (names: string[], error: string | null = null) =>
     renderToStaticMarkup(
@@ -641,7 +641,7 @@ describe("McpSecretsPanel — write-only markup (Taskana 4752, C-22)", () => {
   });
 });
 
-describe("McpFormDialog — the env hint names both references (Taskana 4752, part C)", () => {
+describe("McpFormDialog — the env hint names both references (part C)", () => {
   it("the env section hint mentions ${secret:NAME} and ${env:NAME}, and no value is rendered", () => {
     const html = renderToStaticMarkup(
       createElement(McpFormDialog, {

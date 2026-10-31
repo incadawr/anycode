@@ -1,5 +1,5 @@
 /**
- * Taskana 4758: pure-model tests for the Settings scope dropdown. The renderer
+ * pure-model tests for the Settings scope dropdown. The renderer
  * package runs vitest in node, so behaviour is pinned through these helpers.
  */
 import { describe, expect, it } from "vitest";
@@ -26,7 +26,7 @@ const entry = (overrides: Partial<ScopeWorkspaceEntry> & { id: string; name: str
 
 const USER: ScopeSelection = { kind: "user" };
 
-describe("scope model (Taskana 4758)", () => {
+describe("scope model", () => {
   it("userScopeLabel is 'User · This computer' and the machine label lives in one constant", () => {
     expect(userScopeLabel()).toBe("User · This computer");
     expect(SCOPE_MACHINE_LABEL).toBe("This computer");

@@ -1,5 +1,5 @@
 /**
- * "Full browser access" row and chip (Taskana 4759): brief tests 50 and 51. Node env,
+ * "Full browser access" row and chip: brief tests 50 and 51. Node env,
  * no DOM: the markup is checked with renderToStaticMarkup, and the confirm/apply/push
  * logic is exercised through the pure helpers the component is built from.
  */
@@ -22,7 +22,7 @@ const neverBridge = {
   onChanged: () => () => {},
 };
 
-describe("BrowserAccessRow (Taskana 4759) — test 50", () => {
+describe("BrowserAccessRow — test 50", () => {
   it("shows OFF by default, labelled as its own group with the environment action selector", () => {
     const html = renderToStaticMarkup(createElement(BrowserAccessRow, { bridge: neverBridge }));
     expect(html).toContain('aria-label="Full browser access"');
@@ -70,7 +70,7 @@ describe("BrowserAccessRow (Taskana 4759) — test 50", () => {
   });
 });
 
-describe("browser access chip (Taskana 4759) — test 51", () => {
+describe("browser access chip — test 51", () => {
   it("is visible iff the effective value is ON, and disappears on the push that turns it OFF", () => {
     const on = { tabId: "t", fullAccess: true };
     expect(browserAccessChipVisible(on)).toBe(true);

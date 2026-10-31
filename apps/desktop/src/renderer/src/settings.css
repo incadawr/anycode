@@ -273,7 +273,7 @@
   color: var(--text-2);
 }
 
-/* ── TASK.68 connection switcher: compact list of saved connections + "Add
+/* ── connection switcher: compact list of saved connections + "Add
    another provider", the onboarding escape hatch from a locked edit form
    (WelcomeScreen.tsx's `resolveWelcomeView`). Reuses `.connection-tile-status*`
    (below) for the per-row credential/health badge, unchanged. ── */
@@ -492,7 +492,7 @@
   overflow-y: auto;              /* nineteen items in five groups today; never traps on a tiny window */
 }
 
-/* Taskana 4767: one group per rail section — a non-focusable title over its tabs. */
+/* one group per rail section — a non-focusable title over its tabs. */
 .settings-nav-group {
   display: flex;
   flex-direction: column;
@@ -809,7 +809,7 @@
   color: var(--text-2);
 }
 
-/* Fourth tone (TASK.45 W12): a DISCRIMINATED credential failure (auth_invalid/
+/* Fourth tone (W12): a DISCRIMINATED credential failure (auth_invalid/
    forbidden) only — distinct from the amber "warn" tone (429/timeout/5xx/bad
    model), which must never paint red (task §3 table). */
 .settings-secret-status-danger {
@@ -817,7 +817,7 @@
   color: var(--danger);
 }
 
-/* ── TASK.198 срез E2a: Vision panel's on/off state badge, same soft-pill
+/* ── срез E2a: Vision panel's on/off state badge, same soft-pill
    idiom as .settings-secret-status above (neutral at rest, --success once
    the fallback actually resolves — never a hard border, matching the rest of
    this file's status-pill vocabulary) ── */
@@ -864,7 +864,7 @@
   font-style: italic;
 }
 
-/* ── Provider connections grid + tile (TASK.45 W12, cut §"Компактная сетка подключений") ── */
+/* ── Provider connections grid + tile (W12, cut §"Компактная сетка подключений") ── */
 
 .connection-env-banner {
   display: flex;
@@ -1032,7 +1032,7 @@
   font-size: var(--fs-xs);
 }
 
-/* Provider-reported subscription quota line (Taskana 4090 / TASK.71):
+/* Provider-reported subscription quota line:
    rendered only when the provider last reported something. */
 .connection-quota {
   color: var(--text-muted, inherit);
@@ -1209,7 +1209,7 @@
   justify-content: flex-start;
 }
 
-/* ── Connection add/edit drawer (TASK.45 W12, cut §"Add/Edit flow") ── */
+/* ── Connection add/edit drawer (W12, cut §"Add/Edit flow") ── */
 
 .connection-drawer {
   width: min(28rem, 92vw);
@@ -1270,7 +1270,7 @@
   border-top: 1px solid var(--border);
 }
 
-/* TASK.58: the drawer's new custom-endpoint record fields (create form) and
+/* the drawer's new custom-endpoint record fields (create form) and
    the custom-provider model-fetch step both group several fields, so they need
    the same column gap the flex body applies to its own direct children. */
 .connection-drawer-custom-fields,
@@ -1643,7 +1643,7 @@
   font-size: var(--fs-sm);
 }
 
-/* TASK.198 срез E2a: a successful Vision-panel probe answer is informational,
+/* срез E2a: a successful Vision-panel probe answer is informational,
    not a failure — it must not read in the same danger tint `.settings-notice`
    carries for every other notice in this file. Wraps long model answers. */
 .settings-notice-ok {
@@ -3049,7 +3049,7 @@
 
 /* ── Codex accounts (TASK.50/53, codex-profiles cut §5): per-profile rows reuse .settings-mcp-list/.settings-mcp-row/.settings-mcp-name/.settings-mcp-detail; these three are new. ── */
 
-/* TASK.57: compact tiles instead of full-width stacked rows — a grid so
+/* compact tiles instead of full-width stacked rows — a grid so
    cards sit side by side when space allows. Compound selector (rather than
    a bare .codex-profile-grid) so it reliably overrides the shared
    .settings-mcp-list's flex-column layout regardless of rule order; every
@@ -3065,7 +3065,7 @@
   row-gap: 0.3rem;
 }
 
-/* Muted "(current environment)" parenthetical (TASK.57) next to a profile's
+/* Muted "(current environment)" parenthetical next to a profile's
    own label, once resolveAccountRows has matched it to the collapsed System
    row — same secondary tone as the email/quota lines below, but inline
    rather than its own full-width line. */
@@ -3119,7 +3119,7 @@
   flex-basis: 100%;
 }
 
-/* ── Codex rollout-import dialog (TASK.52, cut §8.8): reuses .mcp-form-dialog/.mcp-dialog-* chrome + .settings-mcp-list/.settings-mcp-row rows verbatim; these are the wizard-specific additions only. ── */
+/* ── Codex rollout-import dialog (cut §8.8): reuses .mcp-form-dialog/.mcp-dialog-* chrome + .settings-mcp-list/.settings-mcp-row rows verbatim; these are the wizard-specific additions only. ── */
 
 .codex-rollout-dialog {
   width: min(92vw, 34rem);
@@ -3150,7 +3150,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* TASK.57: the timestamp demoted to a secondary line once the row's PRIMARY
+/* the timestamp demoted to a secondary line once the row's PRIMARY
    label became the human-readable name (deriveRolloutRowLabel). */
 .codex-rollout-timestamp {
   flex-basis: 100%;
@@ -3176,11 +3176,11 @@
   color: var(--text-2);
 }
 
-/* Taskana 4706: explicit global-vs-project scope bar for Skills/MCP/Subagents panes. */
+/* explicit global-vs-project scope bar for Skills/MCP/Subagents panes. */
 .settings-scope-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
 .settings-scope-bar .settings-field-select { max-width: 260px; }
 
-/* Taskana 4758: the single scope dropdown (ScopeSwitcher.tsx). Reuses the
+/* the single scope dropdown (ScopeSwitcher.tsx). Reuses the
    settings field look for the trigger and the menu/search idioms; colours come
    from the theme tokens only. */
 .scope-dropdown { position: relative; display: flex; flex-direction: column; gap: 6px; flex: 1 1 260px; max-width: 360px; }
@@ -3216,7 +3216,7 @@
 .scope-count { flex: none; font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; }
 .scope-hint { margin: 0; font-size: var(--fs-xs); color: var(--text-3); }
 
-/* ── Taskana 4732 S1-C: Plugins pane + install sheet (design 4732 §6) ── */
+/* ── S1-C: Plugins pane + install sheet (design 4732 §6) ── */
 
 .plugins-pane-toolbar {
   display: flex;
@@ -3278,11 +3278,11 @@
 }
 .plugins-manage-link:hover { opacity: 0.8; }
 
-/* Taskana 4732 S1-C: plugin MCP rows in the MCP pane (read-only, consent-gated). */
+/* S1-C: plugin MCP rows in the MCP pane (read-only, consent-gated). */
 .mcp-row-plugin .mcp-row-name { color: var(--text-2); }
 .plugins-mcp-approve { color: var(--warning); }
 
-/* Taskana 4743: Settings → Language servers pane. Reuses the MCP pane's row
+/* Settings → Language servers pane. Reuses the MCP pane's row
    grammar (.mcp-row/.mcp-badge/.mcp-row-hint) plus a few LSP-specific bits. */
 .lsp-pane-notices {
   display: flex;

@@ -27,7 +27,7 @@ export interface TabInfo {
   worktree?: WorktreeProjection;
   /** Bound once `host_ready.sessionId` lands for this tab (§3.3); null before the handshake completes. */
   sessionId: string | null;
-  /** Taskana 4768: a Sessions API agent opened this tab (drives the "agent" marker in the sidebar row and header). */
+  /** a Sessions API agent opened this tab (drives the "agent" marker in the sidebar row and header). */
   openedByAgent?: true;
   /**
    * Session title, if known. Unset in this slice: title derivation lives on
@@ -56,7 +56,7 @@ export interface TabInfo {
   lspPanelOpen: boolean;
   /** Whether this tab's read-only command-hooks drawer is open. */
   hooksPanelOpen: boolean;
-  /** Whether this tab's background-tasks drawer is open (TASK.91 / Taskana 4097). */
+  /** Whether this tab's background-tasks drawer is open. */
   tasksPanelOpen: boolean;
 }
 
@@ -72,7 +72,7 @@ export interface SessionDraft {
   mode: PermissionMode;
   /**
    * Codex-only permission-preset pick for a new session's first turn (W3
-   * join, TASK.39 wire-up). Absent until the user actually touches the
+   * join, wire-up). Absent until the user actually touches the
    * Codex draft's preset picker — mirrors `TabInfo.title`'s "unset in this
    * slice" convention rather than `model`'s always-present `null` sentinel,
    * since there is no analogous "explicit clear" affordance for a preset.
@@ -88,7 +88,7 @@ export interface SessionDraft {
    */
   codexProfileId?: string;
   /**
-   * Core-only provider-connection pin for a new session (TASK.106 cut-1
+   * Core-only provider-connection pin for a new session (cut-1
    * stage A): an opaque connection id from main's live registry, set when
    * the New Session model picker's chosen model belongs to a connection
    * other than the active one. Absent until the user picks a cross-connection
@@ -100,7 +100,7 @@ export interface SessionDraft {
    */
   connectionId?: string;
   /**
-   * Image attachments for the first turn (TASK.81, Composer.tsx parity —
+   * Image attachments for the first turn (Composer.tsx parity —
    * `attachedImages`, projected through the SAME `QueuedPromptImage` shape a
    * queued prompt's images already use so `queueInitialPrompt`/
    * `dispatchInitialPrompt` in tab-registry.ts can forward them without a
@@ -114,7 +114,7 @@ export interface SessionDraft {
    */
   images?: readonly QueuedPromptImage[];
   /**
-   * The draft's reasoning-effort pick for the first turn (TASK.81,
+   * The draft's reasoning-effort pick for the first turn (
    * Composer.tsx parity — `handleEngineEffortPick`/`EngineModelMenu`'s
    * `effort` prop). A free-form per-model string, never core's
    * `ReasoningEffort` enum (codex/claude advertise their own vocabulary —
@@ -124,7 +124,7 @@ export interface SessionDraft {
    * `enginePreset`/`codexProfileId`'s "unset in this slice" convention, and
    * absent means "whatever the connection already persists", never "off".
    *
-   * TASK.131: a CORE draft carries it too now. Its vocabulary comes from the
+   * a CORE draft carries it too now. Its vocabulary comes from the
    * model itself — `CatalogSummaryEntry.models[].effortLevels`, which main
    * projects for exactly this reason (it used to strip them, which is why
    * the core draft had no effort control at all) — and it is delivered as
@@ -149,12 +149,12 @@ export interface TabsState {
   activeTabId: string | null;
   /** At most one parked New Session draft (§4.1) — never a `TabInfo` row, so the automation snapshot stays byte-identical. */
   draft: SessionDraft | null;
-  /** Codex draft model catalog (TASK.241): [] = unloaded/invalidated; submit refuses rather than guess. */
+  /** Codex draft model catalog: [] = unloaded/invalidated; submit refuses rather than guess. */
   codexModels: readonly EngineModelChoice[];
   /** Invariant: `draftActive` implies `draft !== null`. Whether the start screen is the thing currently shown. */
   draftActive: boolean;
   /**
-   * Engine ids main has confirmed spawnable right now (TASK.41, design/
+   * Engine ids main has confirmed spawnable right now (design/
    * slice-codex-fixes-cut.md §2(g)/§5.5). This store is a passive setter, not
    * a fetcher — the New Session UI still reads `listAvailableEngines()` on
    * its own mount; `setAvailableEngines` exists so any caller can push a
@@ -190,7 +190,7 @@ export interface TabsState {
   setDraftEngine(engine: EngineId): void;
   /** No-op while `draft === null`. `null` clears back to "provider default" (slice F5#1b, D3). */
   setDraftModel(model: string | null): void;
-  /** TASK.241: full replace of the codex draft model catalog ([] = unloaded/invalidated). */
+  /** full replace of the codex draft model catalog ([] = unloaded/invalidated). */
   setCodexModels(models: readonly EngineModelChoice[]): void;
   /** No-op while `draft === null`. The selected mode is applied before the first message. */
   setDraftMode(mode: PermissionMode): void;
@@ -208,7 +208,7 @@ export interface TabsState {
   setDraftCodexProfileId(profileId: string | undefined): void;
   /**
    * No-op while `draft === null`. Core-only pin (mirrors
-   * `setDraftCodexProfileId`, TASK.106 cut-1 stage A). `undefined` clears
+   * `setDraftCodexProfileId`, cut-1 stage A). `undefined` clears
    * back to the active-connection default.
    */
   setDraftConnectionId(connectionId: string | undefined): void;
@@ -426,7 +426,7 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
     },
 
     setDraftEngine(engine): void {
-      // TASK.131: the effort pick belongs to a MODEL's vocabulary, and every
+      // the effort pick belongs to a MODEL's vocabulary, and every
       // engine offers an entirely different set of models — so a switch drops
       // the pick rather than carrying a level the new engine may not even
       // have a name for. (Now that a Core draft forwards its own effort too,

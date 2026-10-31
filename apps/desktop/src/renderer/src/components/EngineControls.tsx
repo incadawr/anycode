@@ -1,6 +1,6 @@
 /**
  * Native model + permission-preset controls for a non-core engine session
- * (Codex today — TASK.39, cut §3.1/§3.3/§5.3). Chip+popover mechanics mirror
+ * (Codex today — cut §3.1/§3.3/§5.3). Chip+popover mechanics mirror
  * ModeMenu.tsx/ModelPill.tsx byte-for-byte (roving focus via the shared
  * `nextRovingIndex`, outside-mousedown close, Esc close, fixed-position
  * anchor via the shared `clampMenuLeft` — the same `.composer-footer-left`
@@ -88,7 +88,7 @@ export function engineModelItems(
  * Chip label: the ACTIVE value's display name, with the pending target (if
  * any) appended as an explicit "-> X (next turn)" suffix — the active value
  * always reads first, so a queued-but-not-yet-applied change can never look
- * like it is already in effect (cut §2(k).3, TASK.39 DoD "pending must not
+ * like it is already in effect (cut §2(k).3, DoD "pending must not
  * look active"). Exported for unit testing.
  */
 export function engineChipLabel(activeLabel: string, pendingLabel: string | undefined): string {
@@ -261,7 +261,7 @@ export function activeEnginePreset(
 /**
  * Tooltip text for the preset chip: the ACTIVE preset's own host-provided
  * plain-language boundary description (never a hardcoded/renderer-invented
- * one — TASK.39 item 2's "engine-specific tooltip"), with a queued-change
+ * one — item 2's "engine-specific tooltip"), with a queued-change
  * sentence appended while a different preset is pending. Exported for unit
  * testing.
  */

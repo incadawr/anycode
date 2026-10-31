@@ -1,5 +1,5 @@
 /**
- * TASK.198 срез E2a — pure decision logic for the Vision settings panel: which
+ * срез E2a — pure decision logic for the Vision settings panel: which
  * connection may act as the fallback recognizer, what its proxy path actually
  * is, which models to suggest, and whether the fallback currently reads as
  * "on". Same discipline as start-model-picker.ts/ProxyRefPicker.ts: this
