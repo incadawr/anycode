@@ -3877,7 +3877,7 @@ void app.whenReady().then(async () => {
       allowLoopback: __ANYCODE_DEV_AUTOMATION__ && !app.isPackaged && process.env.ANYCODE_AUTOMATION === "1",
       getSecret, fetchFor: connectionProxyFetch,
       publish: (channel, value) => { for (const window of BrowserWindow.getAllWindows()) window.webContents.send(channel, value); },
-      settingsChanged: (fresh) => { settings = fresh; },
+      settingsChanged: async () => { settings = await withSettingsFileLock(settingsPath, async () => (await loadSettings(settingsPath, fileLogger)).settings); },
     });
     app.on("before-quit", () => accountSources?.dispose());
     let localPluginsIpc: PluginsIpc | undefined;
@@ -3926,6 +3926,7 @@ void app.whenReady().then(async () => {
       },
       // Every plugin mutation re-reconciles services and account sources.
       onChanged: () => { reconcileServices(); void accountSources?.reconcile(true); },
+      onRemoved: async (name) => { await accountSources?.removePlugin(name); },
       services: {
         snapshot: () => serviceSupervisor?.snapshot() ?? [],
         logs: (plugin, name) => serviceSupervisor?.logs(plugin, name) ?? [],

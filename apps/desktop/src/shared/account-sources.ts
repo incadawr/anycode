@@ -6,6 +6,7 @@ export const ACCOUNT_SOURCES_UNBIND_CHANNEL = "anycode:account-sources-unbind";
 export const ACCOUNT_SOURCES_CHANGED_CHANNEL = "anycode:account-sources-changed";
 export const ACCOUNT_SOURCES_CATALOG_CHANGED_CHANNEL = "anycode:account-sources-catalog-changed";
 export const ACCOUNT_SOURCES_PREVIEW_CHANNEL = "anycode:account-sources-preview";
+export const ACCOUNT_SOURCES_RESET_CHANNEL = "anycode:account-sources-reset";
 
 export interface AccountSourceKey { plugin: string; source: string }
 export interface AccountBudgetWindow {

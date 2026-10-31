@@ -1037,6 +1037,10 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
   if (isPlainObjectLike(securityPatch) && "trustedBinaries" in securityPatch) {
     return { ok: false, reason: "invalid" };
   }
+  const pluginsPatch = rawPatch.plugins;
+  if (isPlainObjectLike(pluginsPatch) && "accountSources" in pluginsPatch) {
+    return { ok: false, reason: "invalid" };
+  }
   // custody (design review B-04): the proxy registry and every scope
   // ref are written ONLY by their dedicated handlers, and a generic patch
   // carrying one is refused loudly rather than silently stripped (a buggy caller
@@ -2040,6 +2044,9 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     // Normalized comparison: `""` and absent both mean "catalog default".
     const baseUrlChanged =
       req.baseUrl !== undefined && req.baseUrl.trim() !== (existing.baseUrl ?? "").trim();
+    if ((baseUrlChanged || (req.transport !== undefined && normalizedTransport !== existing.transport)) && draft.plugins?.accountSources) {
+      draft.plugins.accountSources = draft.plugins.accountSources.filter((binding) => binding.connectionId !== req.id);
+    }
     const updatedConnection: ProviderConnection = {
       ...existing,
       ...(req.label !== undefined ? { label: req.label } : {}),
@@ -2363,7 +2370,9 @@ export async function handleConnectionDelete(deps: SettingsIpcDeps, raw: unknown
       // (snapshot/emit) must NOT revert the tombstone — the metadata is
       // already gone from disk, so reverting here would strand an OAuth blob
       // in the vault under the just-deleted id (reopens fix #2's own DoD).
-      const updated = await saveProviderSettings(deps, loaded.settings, provider);
+      const sourceBindings = loaded.settings.plugins?.accountSources;
+      const beforeSave = sourceBindings ? { ...loaded.settings, plugins: { ...loaded.settings.plugins, accountSources: sourceBindings.filter((binding) => binding.connectionId !== id) } } : loaded.settings;
+      const updated = await saveProviderSettings(deps, beforeSave, provider);
       committed = true;
       const snapshot = await snapshotFrom(deps, updated, false);
       await emitMutation(deps, snapshot);

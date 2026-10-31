@@ -140,7 +140,8 @@ export interface PluginsIpcDeps {
   logger?: { warn(message: string, ...args: unknown[]): void };
   /** called after every plugins mutation (the supervisor reconciles on it). */
   onChanged?(reason: string): void;
-  /** the service supervisor's read model + restart (absent = no services wiring). */
+  onRemoved?(name: string): Promise<void>;
+  /** The service supervisor's read model + restart (absent = no services wiring). */
   services?: {
     snapshot(): PluginServiceView[];
     logs(plugin: string, name: string): string[];
@@ -946,6 +947,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     const result = await storeRemovePlugin(storeOpts(), parsed.data.name, isDefault);
     if (!result.ok) return refusal(result.reason, result.detail);
     notifyChanged("remove");
+    await deps.onRemoved?.(parsed.data.name);
     return { ok: true };
   });
 

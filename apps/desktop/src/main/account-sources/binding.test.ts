@@ -31,4 +31,17 @@ it("requires a matching dedicated connection and a fresh single-use preview", as
   if (!next.ok) throw new Error("preview failed");
   key = "synthetic replacement";
   expect(await service.bind(next.token)).toBe(false);
+  const again = await service.preview({ plugin: "company", source: "cluster" }, "conn");
+  if (!again.ok) throw new Error("preview failed");
+  service.invalidate();
+  expect(await service.bind(again.token)).toBe(false);
+  const stored = (await loadSettings(path)).settings;
+  stored.plugins!.accountSources![0]!.ownership = { removed: { model: { value: true, overridden: true } } };
+  await saveSettings(path, stored);
+  await service.reset({ plugin: "company", source: "cluster" });
+  const restored = (await loadSettings(path)).settings;
+  expect(restored.provider.custom![0]!.models).toContain("removed");
+  expect(restored.plugins!.accountSources![0]!.ownership.removed?.model).toEqual({ value: true });
+  await service.removePlugin("company");
+  expect((await loadSettings(path)).settings.plugins?.accountSources).toEqual([]);
 });

@@ -25,4 +25,12 @@ it("persists one authorized catalog atomically, suppressing no-ops and stale res
   expect(await persistCatalog(path, expected, catalog, () => true, notify)).toBe("unchanged");
   expect(await persistCatalog(path, expected, catalog, () => false, notify)).toBe("stale");
   expect(notify).toHaveBeenCalledTimes(1);
+  const shared = (await loadSettings(path)).settings;
+  shared.provider.connections.push({ id: "other", providerId: "custom:corp" });
+  await saveSettings(path, shared);
+  expect(await persistCatalog(path, expected, catalog, () => true, notify)).toBe("stale");
+  shared.provider.connections.pop();
+  shared.provider.custom![0]!.baseUrl = "https://other.example.com/v1";
+  await saveSettings(path, shared);
+  expect(await persistCatalog(path, expected, catalog, () => true, notify)).toBe("stale");
 });

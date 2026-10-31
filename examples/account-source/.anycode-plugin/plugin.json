@@ -1,0 +1,16 @@
+{
+  "manifestVersion": 1,
+  "name": "example-company",
+  "version": "1.0.0",
+  "displayName": "Example company",
+  "skills": [],
+  "agents": [],
+  "workflows": [],
+  "accountSources": [{
+    "id": "cluster",
+    "protocol": "anycode.account.v1",
+    "displayName": "Example cluster",
+    "gateway": { "name": "Example gateway", "baseUrl": "https://gateway.example.com/v1", "kind": "openai-compatible" },
+    "apiBaseUrl": "https://gateway.example.com/anycode/account/v1/"
+  }]
+}

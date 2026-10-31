@@ -33,4 +33,13 @@ describe("catalog ownership reconciliation", () => {
     expect(next.connection.modelOverrides?.free?.pricing?.input).toBe(0);
     expect(next.connection.modelOverrides?.free?.contextWindowTokens).toBeUndefined();
   });
+  it("reimports a server-removed model if it returns", () => {
+    const entry = { id: "source-model", billing: "free" };
+    const first = reconcileCatalog(custom, connection, {}, catalog([entry]));
+    const removed = reconcileCatalog(first.custom, first.connection, first.ownership, catalog([]));
+    expect(removed.custom.models).not.toContain(entry.id);
+    const returned = reconcileCatalog(removed.custom, removed.connection, removed.ownership, catalog([entry]));
+    expect(returned.custom.models).toContain(entry.id);
+    expect(returned.connection.modelOverrides?.[entry.id]?.pricing?.input).toBe(0);
+  });
 });

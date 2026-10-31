@@ -6,8 +6,8 @@ import { ConnectionDrawer } from "./ConnectionDrawer.js";
 
 function money(value: string): string {
   const amount = BigInt(value);
-  const cents = (amount + 5000n) / 10000n;
-  return `$${cents / 100n}.${String(cents % 100n).padStart(2, "0")}`;
+  const fraction = String(amount % 1_000_000n).padStart(6, "0").replace(/0+$/, "").padEnd(2, "0");
+  return `$${amount / 1_000_000n}.${fraction}`;
 }
 function sameUrl(a: string, b: string): boolean { try { return new URL(a).href === new URL(b).href; } catch { return false; } }
 function rate(value: string): string { const n = BigInt(value); const f = String(n % 1_000_000n).padStart(6, "0").replace(/0+$/, ""); return `$${n / 1_000_000n}${f ? `.${f}` : ""}`; }
@@ -47,7 +47,7 @@ export function AccountBudgetCard({ collapsed, onSettings }: { collapsed: boolea
         {source.budget?.windows.map((w) => <div key={w.kind}>{w.kind === "day" ? "Today" : "Month"}: {money(w.spent)} / {money(w.limit)}{open && <small> Remaining {money(w.remaining)}{w.reserved !== undefined ? ` · Reserved ${money(w.reserved)}` : ""} · Resets {new Date(w.resetsAt).toLocaleString()}</small>}</div>)}
         {source.status === "ready" && source.budget?.windows.some((w) => BigInt(w.remaining) === 0n) && <small>Budget exhausted. Free models remain available; metered models may be unavailable.</small>}
         {source.status !== "ready" && <span>{source.status.replaceAll("_", " ")}</span>}
-        {open && <><small>Employee spending, independent of this chat.{source.budget ? ` Observed ${new Date(source.budget.observedAt).toLocaleString()}` : ""}</small><button type="button" onClick={() => void window.anycode.accountSources.refresh(source.key)}>Refresh</button><button type="button" onClick={() => void window.anycode.accountSources.unbind(source.key)}>Disconnect</button></>}
+        {open && <><small>Employee spending, independent of this chat.{source.budget ? ` Observed ${new Date(source.budget.observedAt).toLocaleString()}` : ""}</small><button type="button" onClick={() => void window.anycode.accountSources.refresh(source.key)}>Refresh</button><button type="button" onClick={() => void window.anycode.accountSources.reset(source.key)}>Restore source settings</button><button type="button" onClick={() => void window.anycode.accountSources.unbind(source.key)}>Disconnect</button></>}
       </div>)}
       {open && <><button type="button" onClick={onSettings}>Connections</button>{candidates.map((item) => <button type="button" key={`${item.key.plugin}/${item.key.source}`} onClick={() => { setCandidate(item); setConnectionId(""); setPreview(null); }}>Set up {item.displayName}</button>)}</>}
       {open && candidate && <div className="account-budget-setup"><strong>{candidate.displayName}</strong><small>Gateway: {candidate.gatewayBaseUrl}<br />Account API: {candidate.apiBaseUrl}</small><label>Connection <select value={connectionId} onChange={(e) => setConnectionId(e.target.value)}><option value="">Choose a connection</option>{eligible.map((c) => <option key={c.id} value={c.id}>{c.label || c.providerId}</option>)}</select></label><button type="button" onClick={() => setCreating(true)}>Create dedicated connection</button><button type="button" disabled={!connectionId || busy} onClick={() => void showPreview()}>Preview catalog</button>

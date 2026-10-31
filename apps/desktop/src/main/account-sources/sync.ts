@@ -33,7 +33,17 @@ export function reconcileCatalog(custom: CustomProviderRecord, connection: Provi
   const incoming = new Map(catalog.models.map((model) => [model.id, model]));
   for (const [id, owned] of Object.entries(ownership)) {
     if (owned.model && !models.has(id)) owned.model.overridden = true;
-    if (!incoming.has(id) && owned.model && !owned.model.overridden) models.delete(id);
+    if (!incoming.has(id)) {
+      if (owned.model && !owned.model.overridden) { models.delete(id); delete owned.model; }
+      const override = resultConnection.modelOverrides && Object.hasOwn(resultConnection.modelOverrides, id) ? resultConnection.modelOverrides[id] : undefined;
+      if (override) {
+        if (owned.pricing && !owned.pricing.overridden && !owned.pricingOverride && same(override.pricing, owned.pricing.value)) { delete override.pricing; delete owned.pricing; }
+        if (owned.contextWindowTokens && !owned.contextWindowTokens.overridden && !owned.contextWindowTokensOverride && same(override.contextWindowTokens, owned.contextWindowTokens.value)) { delete override.contextWindowTokens; delete owned.contextWindowTokens; }
+        if (!Object.keys(override).length) delete resultConnection.modelOverrides![id];
+      }
+      const current = resultConnection.modelCapabilities && Object.hasOwn(resultConnection.modelCapabilities, id) ? resultConnection.modelCapabilities[id] : undefined;
+      if (owned.capabilities && !owned.capabilities.overridden && same(current, owned.capabilities.value)) { delete resultConnection.modelCapabilities![id]; delete owned.capabilities; }
+    }
   }
   for (const model of catalog.models) {
     if (!Object.hasOwn(ownership, model.id)) Object.defineProperty(ownership, model.id, { value: {}, writable: true, configurable: true, enumerable: true });
@@ -58,7 +68,8 @@ export function reconcileCatalog(custom: CustomProviderRecord, connection: Provi
       const prev = owned[key];
       const currentValue = current[key];
       if (prev && !same(currentValue, prev.value)) prev.overridden = true;
-      if (owned[`${key}Override`] || prev?.overridden || (!prev && currentValue !== undefined)) continue;
+      if (!prev && currentValue !== undefined) owned[`${key}Override`] = true;
+      if (owned[`${key}Override`] || prev?.overridden) continue;
       const next = values[key];
       if (key === "pricing") {
         if (next === undefined) { delete current.pricing; delete owned.pricing; }

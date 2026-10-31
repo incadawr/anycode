@@ -733,6 +733,7 @@ declare global {
         preview(key: import("../../shared/account-sources.js").AccountSourceKey, connectionId: string): Promise<import("../../shared/account-sources.js").AccountSourcePreviewResult>;
         bind(token: string): Promise<boolean>;
         unbind(key: import("../../shared/account-sources.js").AccountSourceKey): Promise<void>;
+        reset(key: import("../../shared/account-sources.js").AccountSourceKey): Promise<void>;
         refresh(key: import("../../shared/account-sources.js").AccountSourceKey): Promise<void>;
         onCatalogChanged(callback: () => void): () => void;
         onChanged(callback: (snapshot: import("../../shared/account-sources.js").AccountSourcesSnapshot) => void): () => void;

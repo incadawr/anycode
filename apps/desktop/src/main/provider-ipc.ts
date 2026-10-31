@@ -711,6 +711,10 @@ export async function handleCustomProviderUpdate(deps: ProviderIpcDeps, raw: unk
       }
       merged.plugins = { ...loaded.settings.plugins, accountSources };
     }
+    if (((req.baseUrl !== undefined && req.baseUrl !== existing.baseUrl) || (req.kind !== undefined && req.kind !== existing.kind)) && merged.plugins?.accountSources) {
+      const ids = new Set(connections.filter((connection) => connection.providerId === req.id).map((connection) => connection.id));
+      merged.plugins = { ...merged.plugins, accountSources: merged.plugins.accountSources.filter((binding) => !ids.has(binding.connectionId)) };
+    }
     if (!settingsSchema.safeParse(merged).success) {
       return { ok: false, reason: "invalid" };
     }
@@ -773,6 +777,10 @@ export async function handleCustomProviderDelete(deps: ProviderIpcDeps, raw: unk
     await deps.vault.clearSecret(customProviderSecretKey(parsed.data.id));
     const custom = existing.filter((p) => p.id !== parsed.data.id);
     const merged: AnycodeSettings = { ...loaded.settings, provider: { ...loaded.settings.provider, custom } };
+    if (loaded.settings.plugins?.accountSources) {
+      const ids = new Set(loaded.settings.provider.connections.filter((c) => c.providerId === parsed.data.id).map((c) => c.id));
+      merged.plugins = { ...loaded.settings.plugins, accountSources: loaded.settings.plugins.accountSources.filter((binding) => !ids.has(binding.connectionId)) };
+    }
     await saveSettings(deps.settingsPath, merged);
     await deps.onMutation?.(merged);
     return { ok: true, providers: custom };
