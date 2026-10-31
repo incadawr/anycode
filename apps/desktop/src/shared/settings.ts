@@ -771,7 +771,12 @@ export interface AnycodeSettings {
   /** Named, serializable orchestration role sets and project selections. */
   roleProfiles?: {
     profiles: Array<{ id: string; name: string; roles: NonNullable<AnycodeSettings["roles"]> }>;
-    activeId: string;
+    /**
+     * The active global profile. `""` (or an absent/dangling id) means the
+     * built-in roles are in effect — the built-ins have no id of their own,
+     * so they can never collide with a saved profile's id.
+     */
+    activeId?: string;
     projects: Array<{ projectRoot: string; profileId: string }>;
   };
   /**
