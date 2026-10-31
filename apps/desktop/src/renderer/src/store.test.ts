@@ -6896,6 +6896,22 @@ describe("desktop store — engine_settings_changed / pendingEngineChange (Codex
     expect(store.getState().pendingEngineChange).toBeNull();
   });
 
+  it("clears speed from pending and applied snapshots when the model has no speed", () => {
+    const store = createDesktopStore();
+    const ready = codexHostReady();
+    if (ready.type !== "host_ready" || !ready.engine) throw new Error("missing engine");
+    ready.engine.fast = true;
+    store.getState().applyHostMessage(ready);
+    store.getState().applyHostMessage({ type: "engine_settings_changed", model: "gpt-5.6-terra", fast: false, state: "pending", appliesFrom: "next_turn" });
+    store.getState().applyHostMessage({ type: "engine_settings_changed", model: "gpt-5.6-mini", state: "pending", appliesFrom: "next_turn" });
+    expect(store.getState().pendingEngineChange).toEqual({ model: "gpt-5.6-mini" });
+    store.getState().applyHostMessage({ type: "engine_settings_changed", model: "gpt-5.6-mini", state: "applied", appliesFrom: "next_turn" });
+    expect(store.getState().engine?.fast).toBeUndefined();
+    expect(store.getState().pendingEngineChange).toBeNull();
+    store.getState().applyHostMessage({ type: "engine_settings_changed", model: "gpt-5.6-terra", fast: false, state: "pending", appliesFrom: "next_turn" });
+    expect(store.getState().pendingEngineChange).toEqual({ model: "gpt-5.6-terra", fast: false });
+  });
+
   it("reasserts newer effort after an older acknowledgement and rolls it back without losing other choices", () => {
     const store = createDesktopStore();
     const ready = codexHostReady();
