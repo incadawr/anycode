@@ -31,7 +31,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
 - Choosing No thinking for Xiaomi MiMo models now turns their reasoning off.
 - Xiaomi MiMo Token Plan sessions show a pay-as-you-go list-price cost estimate instead of “price unknown”.
-- An unknown slash command (`/foo`, `/help`, or a command left doubled in the draft) gets a local “Unknown command” notice instead of being sent to the model as a prompt; file paths that start with `/` still send.
+- An unknown slash command (`/foo`, `/help`, or a command left doubled in the draft) gets a local “Unknown command” notice instead of being sent to the model as a prompt; absolute paths such as `/tmp`, `/etc` or `/Users` are checked against the filesystem root and still send.
 - Session titles no longer repeat the instruction verb (“Title a code reading session” becomes “A code reading session”).
 - The model chip says “next turn” only after a pick that actually waits for the turn boundary, not for every running turn.
 - The document preview's console no longer lists Electron's own security warning as if the page had logged it.

@@ -72,6 +72,7 @@ import {
   type SlashRunIntent,
   type SlashSkill,
 } from "../slash-menu.js";
+import { slashPathRootNames } from "../slash-path-roots.js";
 
 /**
  * Enqueue-vs-direct-send decision for `handleSend` (F15 prompt queue). A send
@@ -1631,7 +1632,9 @@ export function Composer() {
       // "I don't recognize /foo". Foreign engines keep their own slash surface
       // (Claude's allowlisted frames, Codex's own commands), so the guard is
       // core-only — the same engine-null test the skills menu uses.
-      const unknown = skillsSupported ? unknownSlashCommandNotice(outgoing) : null;
+      const unknown = skillsSupported
+        ? unknownSlashCommandNotice(outgoing, { pathRoots: slashPathRootNames() })
+        : null;
       if (unknown !== null) {
         tabStore.getState().setNotice({ kind: "slash_command_rejected", text: unknown });
         return true;

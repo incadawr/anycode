@@ -56,6 +56,7 @@ import {
   type CommunicationRegenerateResult,
 } from "../shared/communication-config.js";
 import { SCOPE_WORKSPACES_LIST_CHANNEL, SCOPE_WORKSPACES_RESOLVE_CHANNEL, type ScopeWorkspacesListResult } from "../shared/scope-workspaces.js";
+import { PATH_ROOTS_CHANNEL, type PathRootsResult } from "../shared/path-roots.js";
 import {
   BROWSER_ACCESS_CHANGED_CHANNEL,
   BROWSER_ACCESS_GET_CHANNEL,
@@ -1290,6 +1291,12 @@ contextBridge.exposeInMainWorld("anycode", {
   platform: (["darwin", "win32", "linux"].includes(process.platform)
     ? process.platform
     : "linux") as DesktopPlatform,
+  // Entry NAMES under the filesystem root, for the composer's slash guard: it
+  // is what tells an absolute path (`/tmp`, `/Users`) from a mistyped command
+  // (`/foo`). No argument is sent and no path comes back (main/path-roots-ipc.ts).
+  paths: {
+    roots: (): Promise<PathRootsResult> => ipcRenderer.invoke(PATH_ROOTS_CHANNEL) as Promise<PathRootsResult>,
+  },
   // TASK.72: `artifacts.*` — the chat-artifact control plane. The renderer
   // supplies only tabId + the model-authored path from the transcript; main
   // (main/artifacts-ipc.ts) re-checks containment (workspace / ~/.anycode /
