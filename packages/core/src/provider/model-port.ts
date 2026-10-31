@@ -1094,7 +1094,6 @@ export class AiSdkModelPort implements ModelPort {
             const finishedAt = performance.now();
             event = { ...event, timeToFirstEventMs: Math.max(0, firstOutputAt - requestStartedAt), generationDurationMs: Math.max(0, finishedAt - firstOutputAt) };
           }
-          if (event.type === "error") event = { ...event, error: contextualizeNetworkFailure(contextualizeMiniMaxBalance(event.error, this.config.providerName, attemptKey), this.config.baseUrl) };
           // Drop provider chunk-parse artifacts that are safe to ignore (a
           // server tool block from a foreign backend, e.g. z.ai `webReader`
           // result, that isn't in the SDK's closed chunk union): the stream
@@ -1109,6 +1108,7 @@ export class AiSdkModelPort implements ModelPort {
             }
             continue;
           }
+          if (event.type === "error") event = { ...event, error: contextualizeNetworkFailure(contextualizeMiniMaxBalance(event.error, this.config.providerName, attemptKey), this.config.baseUrl) };
           // TASK.168: this pass IS a probe retry (started by a previous
           // pass) — defer this failure's fate to the resolution block after
           // the try/catch instead of classifying it here, regardless of
