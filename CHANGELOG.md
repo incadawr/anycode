@@ -72,6 +72,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Markdown preview tables have framed cells, and the dock tab split control is a proper icon rather than a stray divider glyph.
 - The background-tasks and terminal header toggles have distinct icons, and only the current sidebar tab wears the accent bar (other open tabs keep a quieter marker).
 - Kimi price records now cite the platform's pricing page (platform.kimi.ai/docs/pricing/chat) instead of the site root, and the newly published Kimi K2.7 Code / K2.7 Code Highspeed / K2.6 rates are included, so those models show a cost estimate instead of “price unknown”.
+- `/compact` supports idle Codex sessions and cancellation and updates the context meter from Codex’s replacement estimate and subsequent usage (GitHub #24)
 
 ## [0.0.55] — 2026-10-30
 

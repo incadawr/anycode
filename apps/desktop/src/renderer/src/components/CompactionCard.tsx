@@ -86,6 +86,11 @@ export function compactionRowText(block: CompactionBlock): string {
     }
     return `Compaction not applied: ${block.error ?? "unknown error"}`;
   }
+  // A host that reports only the pre-reading (native Codex compaction) gets
+  // the "before:" wording instead of a "N → ? tokens" half-arrow.
+  if (block.preTokens !== undefined && block.postTokens === undefined) {
+    return `Conversation compacted (before: ${block.preTokens} tokens)`;
+  }
   if (block.preTokens === undefined && block.postTokens === undefined) {
     return "Conversation compacted earlier — summary available";
   }

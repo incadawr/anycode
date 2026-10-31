@@ -1430,6 +1430,7 @@ export function Composer() {
   // the ModelPill chip itself, so the slash menu's "Model" row is enabled iff
   // picking a model would actually do something.
   const slashCtx: SlashMenuCtx = {
+    engineId: engine?.id ?? "core",
     mode: mode ?? "plan",
     model: model ?? "",
     running,

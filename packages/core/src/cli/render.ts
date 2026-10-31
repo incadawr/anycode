@@ -576,7 +576,7 @@ export function renderEvent(
     case "compaction_end":
       write(
         event.ok
-          ? `\n[compaction: ${event.preTokens} → ${event.postTokens ?? "?"} tokens in ${event.durationMs}ms]\n`
+          ? `\n[compaction: ${event.preTokens ?? "?"} → ${event.postTokens ?? "?"} tokens in ${event.durationMs}ms]\n`
           : // A structural skip already reads as a sentence of its own
             // ("Nothing to compact yet — …"); only a real failure needs the
             // skipped/failed framing (UI audit v0.0.49 §C3).

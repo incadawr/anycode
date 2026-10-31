@@ -6,7 +6,7 @@
 
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
-import { dirname, isAbsolute } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { proxyRelayLookup } from "@anycode/core/proxy-relay";
 import { proxyValueCarriesCredential } from "@anycode/core/child-env";
@@ -512,8 +512,8 @@ export class AppServerClient {
    * signal storm.
    */
   close(): Promise<void> {
-    if (this.child === null) return Promise.resolve();
-    this.closePromise ??= this.teardown(this.child);
+    this.closing = true;
+    this.closePromise ??= this.child === null ? Promise.resolve() : this.teardown(this.child);
     return this.closePromise;
   }
 

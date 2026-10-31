@@ -386,7 +386,7 @@ function keyDown(overrides: Partial<{ key: string; shiftKey: boolean; isComposin
 }
 
 const BUSY_COMPACT_TEXT = "Cannot compact while this session is busy. Try again after this turn.";
-const UNSUPPORTED_COMPACT_TEXT = "Manual compaction is not available in this session.";
+const UNSUPPORTED_COMPACT_TEXT = "Manual compaction is unavailable for this Codex app-server. Update Codex and start a new session.";
 
 describe("Composer slash-submit wiring (GitHub #14)", () => {
   beforeEach(() => {
@@ -398,6 +398,21 @@ describe("Composer slash-submit wiring (GitHub #14)", () => {
       slot.cleanup?.();
       slot.cleanup = undefined;
     }
+  });
+
+  it.each(["Enter", "Send", "menu"])("submits supported Codex compact once through Enter Send and the menu: %s", action => {
+    const engine = { ...CODEX_ENGINE, capabilities: { ...CODEX_ENGINE.capabilities, supportsManualCompact: true } };
+    seed("/compact", 8, makeStoreState({ engine })); const tree = mountComposer();
+    if (action === "Enter") (findTextarea(tree)!.props.onKeyDown as (event: ReturnType<typeof keyDown>) => void)(keyDown());
+    else if (action === "Send") (findByAria(tree, "Send")!.props.onClick as () => void)();
+    else (findSlashMenu(tree)!.props.onSelect as (index: number) => void)(0);
+    expect(harness.sendToHost).toHaveBeenCalledExactlyOnceWith({ type: "compact_request" }); expect(harness.state["composer"]?.[0]).toBe("");
+    expect(harness.apiMethods.appendUserText).not.toHaveBeenCalled(); expect(harness.apiMethods.enqueuePrompt).not.toHaveBeenCalled(); expect(harness.apiMethods.recordPendingSteer).not.toHaveBeenCalled();
+  });
+  it.each(["Enter", "Send"])("retains unsupported Codex compact drafts with engine-specific copy: %s", action => {
+    seed("/compact", 8, makeStoreState({ engine: CODEX_ENGINE })); const tree = mountComposer();
+    if (action === "Enter") (findTextarea(tree)!.props.onKeyDown as (event: ReturnType<typeof keyDown>) => void)(keyDown()); else (findByAria(tree, "Send")!.props.onClick as () => void)();
+    expect(harness.sendToHost).not.toHaveBeenCalled(); expect(harness.state["composer"]?.[0]).toBe("/compact"); expect(harness.apiMethods.setNotice).toHaveBeenCalledWith({ kind: "slash_command_rejected", text: UNSUPPORTED_COMPACT_TEXT });
   });
 
   it("Enter consumes a trailing-space /compact without any user, steer, or queue write", () => {
@@ -489,7 +504,7 @@ describe("Composer slash-submit wiring (GitHub #14)", () => {
     expect(harness.state["composer"]?.[0]).toBe("/compact ");
   });
 
-  it("menu Compact rechecks availability before sending (child surface refuses, no compact_request)", () => {
+  it("retains the child compact restriction with child-specific copy", () => {
     seed("/compact", 8, makeStoreState({ childSurface: true }));
     const tree = mountComposer();
 
@@ -501,7 +516,7 @@ describe("Composer slash-submit wiring (GitHub #14)", () => {
 
     expect(harness.apiMethods.setNotice).toHaveBeenCalledWith({
       kind: "slash_command_rejected",
-      text: UNSUPPORTED_COMPACT_TEXT,
+      text: "Manual compaction is not available in child sessions.",
     });
     expect(harness.sendToHost).not.toHaveBeenCalled();
     expect(harness.apiMethods.appendUserText).not.toHaveBeenCalled();
