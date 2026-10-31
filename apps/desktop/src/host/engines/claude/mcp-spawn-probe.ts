@@ -30,6 +30,13 @@ import { redactSecrets, sensitiveEnvValues } from "@anycode/core";
 export const MCP_SPAWN_PROBE_TIMEOUT_MS = 10_000;
 /** Grace period for our own SIGTERM before the probe escalates to SIGKILL. */
 export const MCP_SPAWN_PROBE_KILL_GRACE_MS = 500;
+/**
+ * Cap on how long the probe waits for the child's stderr to drain after
+ * "exit" before settling. Node can emit "exit" BEFORE the stderr pipe is
+ * drained, so settling there loses the tail; but a grandchild that inherited
+ * the stderr fd can hold the pipe open indefinitely, so the wait is capped.
+ */
+export const MCP_SPAWN_PROBE_STDERR_DRAIN_CAP_MS = 200;
 /** Hard cap on buffered stderr, so a chatty crasher cannot grow the buffer. */
 const STDERR_BUFFER_CAP = 64 * 1024;
 /** How much of that tail may reach a status row. */
@@ -123,16 +130,49 @@ export async function probeMcpServerSpawn(
         // Still alive: the launcher runs; Claude's refusal has another cause.
         finish({ ok: true });
       }, options.timeoutMs ?? MCP_SPAWN_PROBE_TIMEOUT_MS);
+      let stderrClosed = child.stderr === null;
+      let drainCap: NodeJS.Timeout | undefined;
+      const settleExit = (code: number | null, signal: string | null): void => {
+        finish({ ok: false, detail: formatMcpSpawnProbeFailure({ kind: "exit", code, signal }, stderr, spec.secretValues ?? [], mergedEnv) });
+      };
       child.stderr?.on("data", (chunk: Buffer) => {
         if (stderr.length < STDERR_BUFFER_CAP) stderr += chunk.toString("utf8").slice(0, STDERR_BUFFER_CAP);
       });
+      // "exit" can fire before the stderr pipe is drained, so the exit path
+      // below defers to these; a grandchild holding the fd is cut off by the cap.
+      child.stderr?.on("close", () => {
+        stderrClosed = true;
+        if (drainCap !== undefined && !settled) {
+          clearTimeout(drainCap);
+          drainCap = undefined;
+          const pending = pendingExit;
+          pendingExit = undefined;
+          if (pending !== undefined) settleExit(pending.code, pending.signal);
+        }
+      });
+      let pendingExit: { code: number | null; signal: string | null } | undefined;
       child.on("error", (error: NodeJS.ErrnoException) => {
         finish({ ok: false, detail: formatMcpSpawnProbeFailure({ kind: "spawn-error", message: error.message }, stderr, spec.secretValues ?? [], mergedEnv) });
       });
       child.on("exit", (code, signal) => {
         // our own finish() SIGTERM/SIGKILL racing the event; anything else is the server's own death
         if (settled && (signal === "SIGKILL" || signal === "SIGTERM")) return;
-        finish({ ok: false, detail: formatMcpSpawnProbeFailure({ kind: "exit", code, signal }, stderr, spec.secretValues ?? [], mergedEnv) });
+        if (stderrClosed) {
+          settleExit(code, signal);
+          return;
+        }
+        // Defer until stderr drains (or the cap): "exit" may precede the pipe's tail.
+        // The launcher is dead, so the main timer's "still alive => ok" verdict
+        // no longer applies — clear it, only the drain path may settle now.
+        clearTimeout(timer);
+        pendingExit = { code, signal };
+        drainCap = setTimeout(() => {
+          if (settled) return;
+          drainCap = undefined;
+          const pending = pendingExit;
+          pendingExit = undefined;
+          if (pending !== undefined) settleExit(pending.code, pending.signal);
+        }, MCP_SPAWN_PROBE_STDERR_DRAIN_CAP_MS);
       });
     });
   } catch {
