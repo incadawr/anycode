@@ -46,7 +46,7 @@ export function applyModelReasoningOverride(live: ModelCapabilitiesDto | undefin
 }
 
 export function modelCapabilitiesFor(
-  connection: (ConnectionOverrides & Pick<ProviderConnection, "modelCapabilities" | "providerId">) | undefined,
+  connection: (ConnectionOverrides & Pick<ProviderConnection, "modelCapabilities" | "providerId"> & Partial<Pick<ProviderConnection, "reasoningEffort">>) | undefined,
   model: string,
 ): ModelCapabilitiesDto | undefined {
   const live = connection?.modelCapabilities !== undefined && Object.hasOwn(connection.modelCapabilities, model)
@@ -55,7 +55,7 @@ export function modelCapabilitiesFor(
   const provider = connection?.providerId;
   const eligible = provider === "" || provider === "custom" || provider === "vllm" || provider === "openrouter" || provider?.startsWith("custom:");
   const known = eligible && !override?.catalogMatchDisabled ? findKnownModel(model) : undefined;
-  const defaults: ModelCapabilitiesDto | undefined = known ? { reasoning: known.reasoning, effortLevels: known.effortLevels, defaultEffort: known.defaultEffort, thinkingAlwaysOn: (override?.reasoningEffort === "off" || override?.effortLevels?.includes("off")) ? false : known.thinkingAlwaysOn, ...(known.imageInput ? { imageInput: true as const } : {}) } : undefined;
+  const defaults: ModelCapabilitiesDto | undefined = known ? { reasoning: known.reasoning, effortLevels: known.effortLevels, defaultEffort: known.defaultEffort, thinkingAlwaysOn: ((override?.reasoningEffort ?? connection?.reasoningEffort) === "off" || override?.effortLevels?.includes("off")) ? false : known.thinkingAlwaysOn, ...(known.imageInput ? { imageInput: true as const } : {}) } : undefined;
   const effective = defaults ? { ...live, ...defaults } : live;
   if (override?.effortLevels !== undefined) return { ...effective, reasoning: true, effortLevels: override.effortLevels };
   return applyModelReasoningOverride(effective, override?.reasoningSupported === true);

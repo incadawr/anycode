@@ -45,10 +45,14 @@ export function createConnectionModelSettings(deps: {
   function entryFor(model: string) {
     const override = modelOverrideFor(connection, model);
     const entry = modelDictionaryEntry(model, deps.catalogEntry, override?.catalogMatchDisabled === true);
-    // An explicit off declaration on a gateway is stronger than the original
-    // vendor's always-on hint; the gateway may expose a different policy.
-    if (entry !== deps.catalogEntry && entry && (override?.reasoningEffort === "off" || override?.effortLevels?.includes("off"))) {
-      return { ...entry, models: entry.models.map((row) => row.id === model ? { ...row, thinkingAlwaysOn: false, supportsExplicitOff: true } : row) };
+    if (entry !== deps.catalogEntry && entry) {
+      const off = (override?.reasoningEffort ?? connection?.reasoningEffort) === "off" || override?.effortLevels?.includes("off");
+      const supported = override?.reasoningSupported === true;
+      if (off || supported) return { ...entry, models: entry.models.map((row) => row.id !== model ? row : {
+        ...row,
+        ...(supported && !row.reasoning ? { reasoning: true, effortLevels: ["off", "low", "medium", "high", "xhigh", "max"] as ReasoningEffort[] } : {}),
+        ...(off ? { thinkingAlwaysOn: false, supportsExplicitOff: true, effortLevels: row.effortLevels?.includes("off") ? row.effortLevels : ["off" as const, ...(row.effortLevels ?? [])] } : {}),
+      }) };
     }
     return entry;
   }
