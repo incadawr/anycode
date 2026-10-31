@@ -10,7 +10,7 @@
  * `role + "primary" | fallbackIndex`.
  */
 import type { RoleConfig, RoleRouteEntry } from "../../shared/settings.js";
-import type { PresetRole } from "./role-presets.js";
+import { ROLE_PRESET_ROLES, sameRoleRoutes, type PresetRole } from "./role-presets.js";
 
 export const ROLE_EFFORT_LEVELS = ["", "off", "low", "medium", "high", "xhigh", "max"] as const;
 
@@ -116,6 +116,39 @@ export function fromDraft(draft: RolesDraft): { roles: Partial<Record<PresetRole
     roles[role] = config;
   }
   return { roles };
+}
+
+function customFlag(entry: DraftEntry): boolean {
+  return entry.customModel === true;
+}
+
+/**
+ * Same user-visible CHOICE between two drafts. Route equality alone is not
+ * enough: `customModel` is UI-only and `fromDraft` drops it, so a draft whose
+ * model select sits on "Custom…" with nothing typed yet compares equal to its
+ * seed. The first-run dialog must treat that as an edit (the input is open on
+ * purpose), otherwise a readiness change replaces the draft and closes it.
+ */
+export function sameDraftChoice(a: RolesDraft, b: RolesDraft): boolean {
+  if (!sameRoleRoutes(fromDraft(a).roles, fromDraft(b).roles)) {
+    return false;
+  }
+  for (const role of ROLE_PRESET_ROLES) {
+    if (customFlag(a[role].primary) !== customFlag(b[role].primary)) {
+      return false;
+    }
+    const aFallbacks = a[role].fallbacks;
+    const bFallbacks = b[role].fallbacks;
+    if (aFallbacks.length !== bFallbacks.length) {
+      return false;
+    }
+    for (let index = 0; index < aFallbacks.length; index += 1) {
+      if (customFlag(aFallbacks[index]!) !== customFlag(bFallbacks[index]!)) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 // ── per-entry list mutations (the dialog's add/remove/move) ──

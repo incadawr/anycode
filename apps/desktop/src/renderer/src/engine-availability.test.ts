@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { watchExternalEngines } from "./engine-availability.js";
+import { refreshEngineAvailability, watchExternalEngines } from "./engine-availability.js";
 import { useTabsStore } from "./tabs-store.js";
 import type { EngineId } from "../../shared/engines.js";
 
@@ -73,5 +73,55 @@ describe("first-run engine readiness", () => {
     expect(useTabsStore.getState().availableEngines).toEqual(["core", "claude"]);
     stop();
     useTabsStore.setState({ availableEngines: ["core"] });
+  });
+
+  it("a competing publisher's newer verdict survives an older request resolving late", async () => {
+    // Two surfaces ask main for the same list (the shell watcher and the Codex
+    // pane's re-check listener). The second request is issued later, so when
+    // the first one's answer lands afterwards it must not restore "no engines"
+    // — that is exactly the stale verdict that marked a ready engine "not
+    // connected" and re-selected an outdated preset.
+    const older = deferred();
+    const newer = deferred();
+    useTabsStore.setState({ availableEngines: ["core"] });
+    const stopShell = watchExternalEngines({
+      listAvailableEngines: vi.fn().mockReturnValueOnce(older.promise),
+      onEnginesChanged: () => () => {},
+    }, () => {});
+    const stopPane = watchExternalEngines({
+      listAvailableEngines: vi.fn().mockReturnValueOnce(newer.promise),
+      onEnginesChanged: () => () => {},
+    }, () => {});
+
+    newer.resolve({ engineIds: ["core", "claude"] });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useTabsStore.getState().availableEngines).toEqual(["core", "claude"]);
+
+    older.resolve({ engineIds: ["core"] });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useTabsStore.getState().availableEngines).toEqual(["core", "claude"]);
+    stopShell();
+    stopPane();
+    useTabsStore.setState({ availableEngines: ["core"] });
+  });
+
+  it("a failed competing request publishes an empty list, and a newer verdict still wins afterwards", async () => {
+    const failed = deferred();
+    const newer = deferred();
+    useTabsStore.setState({ availableEngines: ["core", "claude"] });
+    refreshEngineAvailability({ listAvailableEngines: vi.fn().mockReturnValueOnce(failed.promise) });
+    refreshEngineAvailability({ listAvailableEngines: vi.fn().mockReturnValueOnce(newer.promise) });
+    failed.reject(new Error("IPC unavailable"));
+    await Promise.resolve();
+    await Promise.resolve();
+    // The failure is superseded by the newer request, so it must not even
+    // publish: the store keeps the last confirmed list until the answer lands.
+    expect(useTabsStore.getState().availableEngines).toEqual(["core", "claude"]);
+    newer.resolve({ engineIds: ["core", "codex"] });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useTabsStore.getState().availableEngines).toEqual(["core", "codex"]);
   });
 });

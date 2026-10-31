@@ -247,12 +247,66 @@ function signalGroupOrChild(child: ChildProcess, signal: NodeJS.Signals): void {
 }
 
 /**
+ * Words that make a KEY secret-shaped. Keys are split on camelCase and on
+ * punctuation first, so `accessToken`, `ANTHROPIC_API_KEY`, `client-secret` and
+ * `apikey` all resolve to words a human would call secret.
+ */
+function keyWords(key: string): string[] {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[^A-Za-z0-9]+/)
+    .map((word) => word.toLowerCase())
+    .filter((word) => word !== "");
+}
+
+/** True when a key NAME announces a credential, regardless of the value's shape. */
+function looksSecretKey(key: string): boolean {
+  return keyWords(key).some((word) =>
+    word.includes("token") ||
+    word.includes("secret") ||
+    word.includes("password") ||
+    word.includes("passwd") ||
+    word.includes("credential") ||
+    word.includes("cookie") ||
+    word.includes("session") ||
+    word === "auth" ||
+    word === "authorization" ||
+    word.endsWith("auth") ||
+    // `monkey`/`keyword`-style collisions over-redact, which is the safe side.
+    word.endsWith("key"),
+  );
+}
+
+/**
+ * A secret-named key followed by `=` or `:` and a value. The key may be quoted
+ * (`{"accessToken":"…"}`, `'client_secret': '…'`) and the value may be a quoted
+ * JSON string, a quoted single-token string, a `Bearer`/`Basic`/`Token`-prefixed
+ * credential, or a bare run. The WHOLE pair is replaced: a diagnostic that
+ * names `ANTHROPIC_API_KEY` next to a value is as telling as the value.
+ * Group 1 is the `key:` / `key=` prefix, group 2 the value.
+ */
+const SECRET_ASSIGNMENT =
+  /((?:"|')?[A-Za-z_][A-Za-z0-9_.-]{0,40}(?:"|')?\s*[=:]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|(?:(?:Bearer|Basic|Token)\s+)?[^\s,;}\]]+)/g;
+
+/** The key NAME inside a matched `key:` / `key=` prefix. */
+function assignmentKey(prefix: string): string {
+  return prefix.replace(/[=:]\s*$/, "").replace(/^["']/, "");
+}
+
+/**
  * Credential-shaped spans in text that came from OUTSIDE this process (a
  * wrapper script's stderr). The doctor's own env is an allowlist, but nothing
  * stops a broken wrapper from echoing its environment into its last line — and
  * that line ends up in `ClaudeDoctorReport.error`, which crosses IPC into
- * Settings. Everything a token is normally shaped like is replaced before the
- * text is bounded, so a truncated fragment cannot survive either.
+ * Settings.
+ *
+ * Redaction is structural, not a handful of vendor shapes: (1) any
+ * `key=value` / `"key": value` pair whose KEY reads secret, whatever the value
+ * looks like; (2) well-known token prefixes, bearer credentials and JWTs, for
+ * values that appear on their own; (3) e-mail addresses (account data the
+ * report must never carry); (4) long opaque runs with no known prefix. The
+ * masked text is what gets bounded afterwards, so a truncated fragment cannot
+ * survive either.
  */
 const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // Provider-style keys: sk-…, sk-ant-…, rk-…, pk-…
@@ -265,13 +319,26 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // Bearer credentials and JWTs
   /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi,
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
-  // `KEY=value` / `token: value` assignments for anything that reads secret-like
-  /\b(?:[A-Z0-9_]*?(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Z0-9_]*)\s*[=:]\s*\S+/gi,
+  // Account data: any e-mail address, quoted or bare.
+  /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
+  // A long, opaque, unquoted run: a token no prefix announced. Paths are not
+  // matched (`/` and `.` break the run), so a module path stays readable.
+  /\b[A-Za-z0-9+_-]{32,}={0,2}\b/g,
 ];
 
 /** Replaces credential-shaped spans with `<redacted>`. Exported for the plain-text gate. */
 export function maskCredentials(text: string): string {
-  return CREDENTIAL_PATTERNS.reduce((acc, pattern) => acc.replace(pattern, "<redacted>"), text);
+  const masked = text.replace(SECRET_ASSIGNMENT, (match: string, prefix: string, value: string) => {
+    if (looksSecretKey(assignmentKey(prefix))) {
+      return "<redacted>";
+    }
+    // An ORDINARY key must not shield a secret in its value: `info:
+    // {"accessToken":"…"}` is one pair on the surface and another inside, and
+    // the value is shorter, so this recursion terminates.
+    const inner = maskCredentials(value);
+    return inner === value ? match : `${prefix}${inner}`;
+  });
+  return CREDENTIAL_PATTERNS.reduce((acc, pattern) => acc.replace(pattern, "<redacted>"), masked);
 }
 
 interface PreflightResult {

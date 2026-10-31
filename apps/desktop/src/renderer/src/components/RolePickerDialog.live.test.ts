@@ -187,3 +187,39 @@ describe("the active connection changes while the dialog is open", () => {
     expect(activeChip()).toBe("role-preset-this-connection");
   });
 });
+
+describe("an in-progress Custom model pick is the user's answer", () => {
+  it("keeps the open Custom input when readiness changes before anything is typed", async () => {
+    await mount({ engines: { claudeReady: false, codexReady: false } });
+    const row = container.querySelector('[data-testid="role-picker-role-planner"]');
+    const modelSelect = row?.querySelector<HTMLSelectElement>('select[aria-label="Primary model"]');
+    act(() => {
+      modelSelect!.value = "custom";
+      modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(container.querySelector('input[aria-label="Primary custom model"]')).not.toBeNull();
+
+    await rerender({ engines: { claudeReady: true, codexReady: true } });
+
+    // The persisted routes of the seed and this draft are identical (the empty
+    // model is dropped), so route comparison alone would re-seed over it.
+    expect(container.querySelector('input[aria-label="Primary custom model"]')).not.toBeNull();
+    expect(activeChip()).toBe("role-preset-this-connection");
+  });
+});
+
+describe("opening the dialog in the same commit as a readiness change", () => {
+  it("still follows later readiness changes instead of treating the fresh seed as an edit", async () => {
+    // The caller keeps this mounted closed; opening it while readiness flips
+    // runs both effects on one commit. The seed installed by the open effect
+    // must not be compared with the pre-open draft (that called it an edit and
+    // froze the dialog for its whole life).
+    await mount({ open: false, engines: { claudeReady: true, codexReady: true } });
+    await rerender({ open: true, engines: { claudeReady: false, codexReady: false } });
+    expect(orchestratorRoute()).toBe("connection:conn-1");
+
+    await rerender({ open: true, engines: { claudeReady: true, codexReady: true } });
+    expect(orchestratorRoute()).toBe("engine:claude");
+    expect(activeChip()).toBe("role-preset-claude-leads-codex-builds");
+  });
+});
