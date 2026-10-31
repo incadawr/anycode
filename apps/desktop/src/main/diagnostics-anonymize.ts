@@ -64,11 +64,25 @@ const EMAIL_RE = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
 
 const URL_RE = /\b(https?|wss?|ftp):\/\/[^\s"'`<>\\]+/gi;
 
-/** Absolute POSIX / Windows / home-relative paths. */
+/**
+ * Absolute POSIX / Windows / home-relative paths.
+ *
+ * The last two patterns are deliberately ROOT-AGNOSTIC: a workspace, a model
+ * file or a log can live under any mount (`/data/models/...`, `/srv2/...`),
+ * so an allowlist of well-known roots would let a real path through whenever
+ * a user (or a container) keeps their data somewhere else. A slash that
+ * STARTS a token is a path; a slash inside a token (`anthropic/claude-x`) is
+ * not touched. `//` is left alone because the URL rule has already replaced
+ * every scheme+host by the time these run.
+ */
 const PATH_PATTERNS: RegExp[] = [
   /~\/[^\s"'`<>|]*/g,
   /\/(?:Users|home|root|tmp|private|var|opt|mnt|srv|Volumes|Applications|Library|etc|usr|bin|sbin|lib)\b\/?[^\s"'`<>|]*/g,
   /\b[A-Za-z]:[\\/][^\s"'`<>|]*/g,
+  // Any other absolute POSIX path: `/` at the start of a token.
+  /(?<=^|[\s"'`=([{,;])\/(?!\/)[^\s"'`<>|,;)\]]{2,}/g,
+  // Explicitly relative paths: `./x`, `../x`.
+  /(?<=^|[\s"'`=([{,;])(?:\.\.?\/)[^\s"'`<>|,;)\]]+/g,
 ];
 
 const IPV4_RE = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;

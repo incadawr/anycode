@@ -10,10 +10,10 @@
  * renderer.
  */
 
-/** Renderer -> main: build the anonymised bundle and return its preview. */
+/** Renderer -> main: build the session-tree bundle and return its preview. */
 export const DIAGNOSTICS_PREVIEW_CHANNEL = "anycode:diagnostics-preview";
 
-/** Renderer -> main: write the anonymised bundle to a user-chosen file. */
+/** Renderer -> main: write the session-tree bundle to a user-chosen file. */
 export const DIAGNOSTICS_SAVE_CHANNEL = "anycode:diagnostics-save";
 
 /**
@@ -22,6 +22,16 @@ export const DIAGNOSTICS_SAVE_CHANNEL = "anycode:diagnostics-save";
  * this value, so an export can never produce a larger file.
  */
 export const DIAGNOSTICS_MAX_BUNDLE_BYTES = 5 * 1024 * 1024;
+
+/**
+ * The ONE thing the renderer may ask for: the session whose TREE is exported.
+ * `sessionId` is the tab's own session id (the tree root); the bundle then
+ * contains that session plus its children and nothing else. It is an opaque
+ * id — validated in main as an id shape, never a path.
+ */
+export interface DiagnosticsExportRequest {
+  sessionId: string;
+}
 
 /** One section's size/record counts, safe to show in the UI. */
 export interface DiagnosticsSectionSummary {
@@ -41,7 +51,12 @@ export interface DiagnosticsSummary {
   redactions: number;
 }
 
-export type DiagnosticsFailureReason = "build_failed" | "too_large" | "write_failed" | "canceled";
+export type DiagnosticsFailureReason =
+  | "invalid_request"
+  | "build_failed"
+  | "too_large"
+  | "write_failed"
+  | "canceled";
 
 export type DiagnosticsPreviewResult =
   | { ok: true; summary: DiagnosticsSummary; preview: string }

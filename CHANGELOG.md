@@ -10,7 +10,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Xiaomi MiMo pay-as-you-go API is available as a provider (mimo-v2.6-pro and mimo-v2.6-flash, with per-token cost tracking).
-- Settings → Environment can export an anonymised diagnostics bundle (telemetry, tool-call shapes and the host↔main wire log) with a preview before saving; prompts, model output, file paths, hostnames, keys and raw ids are removed and ids are salted per export (GitHub #18).
+- The session's Environment menu can export an anonymised diagnostics bundle for THAT session and its subagent sessions (telemetry, tool-call shapes and the host↔main wire log), with a preview before saving; prompts, model output, file paths, hostnames, keys and raw ids are removed, ids are salted per export, and no other session's data is included (GitHub #18).
 
 ### Fixed
 

@@ -1173,7 +1173,12 @@ export class TabHostManager {
     return () => { this.communicationListeners.delete(listener); };
   }
 
-  /** Narrow production RPC; pins both tab and process generation at dispatch. */
+  /**
+   * Narrow production RPC; pins both tab and process generation at dispatch.
+   * `allowNonRunning` (GitHub #18) is for read-only diagnostics reads that
+   * must also work on a host that is still starting or whose boot failed:
+   * without it, an export could not ask the very host it needs to describe.
+   */
   communicationRequest(
     sessionId: string,
     operation: string,
@@ -1181,10 +1186,11 @@ export class TabHostManager {
     expectedWorkspace?: string,
     // Optional per-request bound (session preparation must never outlive its
     // own deadline by a single request's default timeout).
-    requestOptions?: { timeoutMs?: number },
+    requestOptions?: { timeoutMs?: number; allowNonRunning?: boolean },
   ): Promise<unknown> {
     const tab = [...this.tabs.values()].find((t) => t.sessionId === sessionId);
-    if (!tab?.proc || tab.state !== "running" || (expectedWorkspace !== undefined && tab.workspace !== expectedWorkspace)) return Promise.reject(new Error("Session host unavailable"));
+    const stateOk = tab !== undefined && (requestOptions?.allowNonRunning === true || tab.state === "running");
+    if (!tab?.proc || !stateOk || (expectedWorkspace !== undefined && tab.workspace !== expectedWorkspace)) return Promise.reject(new Error("Session host unavailable"));
     const proc = tab.proc;
     const requestId = randomUUID();
     const timeoutMs = requestOptions?.timeoutMs !== undefined ? Math.max(1, requestOptions.timeoutMs) : 20000;
