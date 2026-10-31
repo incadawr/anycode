@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { DiagnosticsExportRow } from "./DiagnosticsExportSection.js";
 import type { DiagnosticsSummary } from "../../../shared/diagnostics.js";
 
@@ -28,7 +28,7 @@ afterEach(async () => {
   document.body.replaceChildren();
 });
 
-async function mount(sessionId: string | null, bridge: { preview: typeof vi.fn; save: typeof vi.fn }) {
+async function mount(sessionId: string | null, bridge: { preview: Mock; save: Mock }) {
   (window as unknown as { anycode: unknown }).anycode = { diagnostics: bridge };
   root = createRoot(container);
   await act(async () => root!.render(createElement(DiagnosticsExportRow, { sessionId })));
