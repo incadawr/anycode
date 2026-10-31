@@ -2,7 +2,7 @@
  * `ClaudeMcpBridge` tests, unit-level like `approval-bridge.test.ts` (direct
  * `InboundControlRequest`/`ControlRequestResponder` construction — no spawned
  * child, no `ClaudeClient`). Wire shapes below are copied from the live
- * captures in `working-docs/tasks/.probes.md` (P0/P1/P3, CLI
+ * captures (P0/P1/P3, CLI
  * 2.1.261) — never invented.
  */
 
