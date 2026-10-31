@@ -8,7 +8,6 @@ import {
   buildDiagnosticsBundle,
   collectHostRingEntries,
   projectTelemetryRecord,
-  renderDiagnosticsPreview,
   HOST_RING_REQUEST_TIMEOUT_MS,
   HOST_RING_TOTAL_BUDGET_MS,
   type DiagnosticsFs,
@@ -556,13 +555,6 @@ describe("diagnostics bundle (GitHub #18)", () => {
     if (start.kind !== "record") return;
     expect(start.record.fallbackReason).toBeUndefined();
     expect(JSON.stringify(start.record)).not.toContain("qwen-secret");
-  });
-
-  it("previews are cut to a bounded, already-anonymised slice", () => {
-    const long = JSON.stringify({ text: "a".repeat(20_000) });
-    const preview = renderDiagnosticsPreview(long, 100);
-    expect(preview.length).toBeLessThan(200);
-    expect(preview).toContain("preview truncated");
   });
 });
 

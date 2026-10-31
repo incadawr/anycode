@@ -93,4 +93,40 @@ describe("diagnostics export row (GitHub #18)", () => {
     expect(container.textContent).toContain("The bundle could not be written.");
     expect(container.textContent).not.toContain("Waiting for the save dialog");
   });
+
+  it("shows a long bundle in pages with the hidden amount stated, and can reveal all of it", async () => {
+    const json = JSON.stringify({ format: "anycode-diagnostics", filler: "a".repeat(20_000), tail: "LAST-RECORD" });
+    const preview = vi.fn(async () => ({ ok: true, summary: SUMMARY, preview: json }));
+    const save = vi.fn(async () => ({ ok: true, saved: true }));
+    await mount("sess_root_0001", { preview, save });
+
+    await act(async () => button("diagnostics-preview")!.click());
+    const pre = () => container.querySelector(".environment-menu-diagnostics-preview")?.textContent ?? "";
+    const hidden = () => container.querySelector(".environment-menu-note.environment-menu-row-detail-wrap")?.textContent ?? "";
+    expect(pre()).toHaveLength(8_000);
+    expect(pre()).not.toContain("LAST-RECORD");
+    expect(hidden()).toContain("Showing the first 8,000 of " + json.length.toLocaleString("en-US") + " characters");
+    expect(hidden()).toContain("The saved file contains all of them.");
+
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-environment-action="diagnostics-show-more"]')!.click());
+    expect(pre()).toHaveLength(16_000);
+    expect(pre()).not.toContain("LAST-RECORD");
+
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-environment-action="diagnostics-show-all"]')!.click());
+    expect(pre()).toBe(json);
+    expect(pre()).toContain("LAST-RECORD");
+    expect(container.querySelector('[data-environment-action="diagnostics-show-all"]')).toBeNull();
+
+    // The save still writes the same bundle the reviewer just read.
+    await act(async () => button("diagnostics-save")!.click());
+    expect(save).toHaveBeenCalledWith({ sessionId: "sess_root_0001" });
+  });
+
+  it("does not offer paging for a bundle that fits in one page", async () => {
+    const preview = vi.fn(async () => ({ ok: true, summary: SUMMARY, preview: "{}" }));
+    await mount("sess_root_0001", { preview, save: vi.fn() });
+    await act(async () => button("diagnostics-preview")!.click());
+    expect(container.querySelector('[data-environment-action="diagnostics-show-more"]')).toBeNull();
+    expect(container.querySelector('[data-environment-action="diagnostics-show-all"]')).toBeNull();
+  });
 });
