@@ -3,7 +3,7 @@
  * user configures ONCE, plus the one-string reference every scope holds instead
  * of its own copy of the configuration.
  *
- * The whole slice rests on one inversion of /139: a scope (the app, a
+ * The whole slice rests on one inversion of a scope (the app, a
  * connection, an engine) no longer carries proxy CONFIGURATION — it carries a
  * `proxyRef`, and every knob (mode, host/port, exemptions, credentials) lives on
  * the profile that ref names. Three states of a scope are therefore three values

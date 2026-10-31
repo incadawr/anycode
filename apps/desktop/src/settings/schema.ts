@@ -502,7 +502,7 @@ const mcpConsentEntrySchema = z.object({
   grantedAt: z.string(),
 });
 
-// a: per-plugin service consent, keyed by servicesHash. Absent =
+// per-plugin service consent, keyed by servicesHash. Absent =
 // nobody consented (fail closed; services are new, so no grandfathering).
 const serviceConsentEntrySchema = z
   .object({

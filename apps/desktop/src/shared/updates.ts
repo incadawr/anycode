@@ -1,6 +1,6 @@
 /**
  * Auto-updater control-plane contract (design/slice-2.6-cut.md §6; extended
- * by W15, working-docs/tasks/.md). Same value-only shape as
+ * by W15). Same value-only shape as
  * shared/tabs.ts / shared/settings.ts: channel name constants + types only,
  * ZERO runtime imports, so it is safe to import from preload (sandboxed
  * CJS), the renderer web bundle, AND main alike — none of them may drag
