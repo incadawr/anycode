@@ -77,7 +77,7 @@ export function pricingSnapshotWithKeyDefault(raw: string | undefined, entry: Ca
   if (value !== undefined && (value === null || typeof value !== "object" || Array.isArray(value))) return raw;
   const object = (value ?? {}) as Record<string, unknown>;
   if (Object.hasOwn(object, "mode")) return raw;
-  return JSON.stringify({ ...object, fallback: { mode } });
+  return JSON.stringify({ ...object, fallback: { mode, keyDerived: true } });
 }
 
 /** Read the connection snapshot passed by main; malformed overrides stay unknown. */
@@ -101,7 +101,7 @@ export function resolveUsagePrice(raw: string | undefined, model: string, catalo
   const envelope = Object.hasOwn(object, "fallback") || Object.hasOwn(object, "models");
   const fallback = envelope ? object.fallback : object;
   const fallbackPrice = connectionPricing(fallback === undefined ? undefined : JSON.stringify(fallback));
-  if (fallbackPrice?.subscription) return fallbackPrice;
+  if (fallbackPrice?.subscription && !(fallback && typeof fallback === "object" && (fallback as Record<string, unknown>).keyDerived === true)) return fallbackPrice;
   const models = object.models;
   if (envelope && models !== null && typeof models === "object" && !Array.isArray(models) && Object.hasOwn(models, model)) {
     const candidate = (models as Record<string, unknown>)[model];
