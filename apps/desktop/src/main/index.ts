@@ -43,7 +43,7 @@ import { assertChildModel } from "../shared/child-model.js";
 import { randomUUID } from "node:crypto";
 import { CODEX_LOGIN_PROGRESS_CHANNEL } from "../shared/codex-login.js";
 import { existsSync, mkdirSync, realpathSync, statSync, watch as fsWatch } from "node:fs";
-import { access, realpath as fsRealpath, stat as fsStat } from "node:fs/promises";
+import { access, realpath as fsRealpath, stat as fsStat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import {
   nodeTrustStoreFs,
@@ -171,7 +171,10 @@ import { registerMcpSecretsIpc } from "./mcp-secrets-ipc.js";
 // Taskana 4743: Settings → Language servers control plane (same deps-bag shape
 // as the MCP registration above; detection is existence-only, nothing spawns).
 import { NodeLspConfigFs, registerLspConfigIpc } from "./lsp-config-ipc.js";
-import { NodeProfileFs, registerProfileIpc } from "./profile-ipc.js";
+import { NodeProfileFs, registerProfileIpc, resolveProfileDir } from "./profile-ipc.js";
+import { registerDiagnosticsIpc } from "./diagnostics-ipc.js";
+import { buildDiagnosticsBundle, collectHostRingEntries } from "./diagnostics-export.js";
+import { createDiagnosticsRing } from "../shared/diagnostics-ring.js";
 // Taskana 4109 (old TASK.122): telemetry-directory retention sweep.
 import { startTelemetryRetention, type TelemetryRetentionHandle } from "./telemetry-retention.js";
 import { NodeSkillsFs, registerSkillsIpc } from "./skills-ipc.js";
@@ -543,6 +546,12 @@ let win: BrowserWindow | null = null;
 let persistence: SqlitePersistenceAdapter | null = null;
 /** Multi-host lifecycle manager (§2.2); null until boot wires it. */
 let manager: TabHostManager | null = null;
+/**
+ * GitHub #18: bounded main-process control-plane ring (message shapes only,
+ * no payloads) — one of the sources of the diagnostics export. Lives for the
+ * app's lifetime and costs O(1) per message.
+ */
+const mainDiagnosticsRing = createDiagnosticsRing({ scope: "main" });
 /** Taskana 4747: the Sessions API live controller and its per-session switch store (boot-wired). */
 let communicationController: CommunicationController | null = null;
 let communicationSessions: SessionAccessStore | null = null;
@@ -2506,6 +2515,7 @@ void app.whenReady().then(async () => {
     createSessionForAgentImpl(request, createSessionDeps);
 
   manager = new TabHostManager({
+    diagnosticsRing: mainDiagnosticsRing,
     agentTitleOf: (sessionId) => agentSessionTitles.get(sessionId),
     // Every spawn, respawn and resume delivers a fresh port: that is the moment a
     // title push that lost its host gets another chance.
@@ -3787,6 +3797,47 @@ void app.whenReady().then(async () => {
     fs: new NodeProfileFs(),
     reveal: (path) => shell.showItemInFolder(path),
     env: process.env,
+  });
+
+  // GitHub #18: Settings -> Environment -> "Export diagnostics…". Main builds
+  // the already-anonymised bundle (telemetry whitelist + wire shapes), the
+  // renderer only ever receives its preview, and saving goes through the
+  // native dialog as a 0600 file. The builder is Electron-free so its privacy
+  // properties are unit-tested through the production path.
+  registerDiagnosticsIpc({
+    build: async () => {
+      const home = (selfCheckProfile ?? resolveProfileHome(process.env, app.isPackaged)) ?? homedir();
+      const fs = new NodeProfileFs();
+      const resolved = await resolveProfileDir({ home: () => home, fs, env: process.env, reveal: () => undefined });
+      const hostRings = manager !== null ? await collectHostRingEntries(manager) : [];
+      return buildDiagnosticsBundle({
+        fs,
+        telemetryDir: resolved.dir,
+        rings: mainDiagnosticsRing.snapshot(),
+        hostRings,
+        app: {
+          version: app.getVersion(),
+          platform: process.platform,
+          arch: process.arch,
+          ...(process.versions.electron !== undefined ? { electron: process.versions.electron } : {}),
+          ...(process.versions.node !== undefined ? { node: process.versions.node } : {}),
+        },
+      });
+    },
+    save: async ({ defaultFileName, content }) => {
+      const options = {
+        title: "Export diagnostics",
+        defaultPath: join(app.getPath("downloads"), defaultFileName),
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      };
+      const parent = BrowserWindow.getFocusedWindow() ?? win;
+      const result = parent !== null ? await dialog.showSaveDialog(parent, options) : await dialog.showSaveDialog(options);
+      if (result.canceled || result.filePath === undefined || result.filePath.length === 0) {
+        return { saved: false };
+      }
+      await writeFile(result.filePath, content, { encoding: "utf8", mode: 0o600 });
+      return { saved: true, path: result.filePath };
+    },
   });
 
   // Taskana 4109 (old TASK.122): retention for the telemetry directory —

@@ -113,6 +113,7 @@ import { SkillsPane } from "./SkillsPane.js";
 import { SubagentsPane } from "./SubagentsPane.js";
 import { RolesPane } from "./RolesPane.js";
 import { PluginsPane } from "./PluginsPane.js";
+import { DiagnosticsExportSection } from "./DiagnosticsExportSection.js";
 import { ScopeDropdown } from "./ScopeSwitcher.js";
 import {
   countLabel,
@@ -2055,6 +2056,10 @@ export function SettingsScreen({
                   <div className="settings-mcp-empty">Status unavailable for this tab.</div>
                 </section>
               )}
+              {/* GitHub #18: the export action lives here because this pane is
+                  already the "what does the app collect" page. The bundle is
+                  anonymised in main and previewed before it can be saved. */}
+              <DiagnosticsExportSection />
             </>
           )}
 

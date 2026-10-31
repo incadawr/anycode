@@ -202,6 +202,14 @@ import type {
   ProxyRefSetRequest,
 } from "../shared/proxy.js";
 import { RECOGNIZER_PROBE_CHANNEL, RECOGNIZER_SET_CHANNEL } from "../shared/recognizer.js";
+// GitHub #18: Settings -> Environment -> "Export diagnostics…". No payload
+// crosses this bridge; main builds, anonymises and saves the bundle.
+import {
+  DIAGNOSTICS_PREVIEW_CHANNEL,
+  DIAGNOSTICS_SAVE_CHANNEL,
+  type DiagnosticsPreviewResult,
+  type DiagnosticsSaveResult,
+} from "../shared/diagnostics.js";
 import {
   WORKSPACE_TRUST_DECIDE_CHANNEL,
   WORKSPACE_TRUST_FORGET_CHANNEL,
@@ -746,6 +754,14 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(WORKSPACE_TRUST_LIST_CHANNEL) as Promise<WorkspaceTrustListResult>,
     forget: (request: WorkspaceTrustForgetRequest): Promise<WorkspaceTrustForgetResult> =>
       ipcRenderer.invoke(WORKSPACE_TRUST_FORGET_CHANNEL, request) as Promise<WorkspaceTrustForgetResult>,
+  },
+  // GitHub #18: the anonymised diagnostics bundle. Preview returns the
+  // already-scrubbed text; save opens the native dialog in main.
+  diagnostics: {
+    preview: (): Promise<DiagnosticsPreviewResult> =>
+      ipcRenderer.invoke(DIAGNOSTICS_PREVIEW_CHANNEL) as Promise<DiagnosticsPreviewResult>,
+    save: (): Promise<DiagnosticsSaveResult> =>
+      ipcRenderer.invoke(DIAGNOSTICS_SAVE_CHANNEL) as Promise<DiagnosticsSaveResult>,
   },
   tabBootstrap: (): Promise<TabBootstrap> => ipcRenderer.invoke(TAB_BOOTSTRAP_CHANNEL) as Promise<TabBootstrap>,
   selectTab: (tabId: string): void => ipcRenderer.send(TAB_SELECT_CHANNEL, tabId),

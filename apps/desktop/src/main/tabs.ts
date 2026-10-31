@@ -1,4 +1,5 @@
 import { hostFailure } from "./host-failure.js";
+import { noteWireMessage, type DiagnosticsRing } from "../shared/diagnostics-ring.js";
 import type { HostFailure } from "../shared/host-failure.js";
 import type { AgentDelivery, SessionActivityState } from "../shared/communication.js";
 /**
@@ -655,6 +656,12 @@ export interface TabLogger {
 }
 
 export interface TabHostManagerDeps {
+  /**
+   * GitHub #18: bounded control-plane ring for the diagnostics export. Fed
+   * with message SHAPES only (`type`/`kind`), never payloads. Absent in
+   * legacy tests.
+   */
+  diagnosticsRing?: DiagnosticsRing;
   /**
    * Taskana 4747: called once a tab (root or child) is registered, so main can
    * ensure its per-session Sessions API switch exists (a child inherits its
@@ -1878,6 +1885,9 @@ export class TabHostManager {
       return;
     }
     const data = message as { type?: unknown; requestId?: unknown };
+    // GitHub #18: record the wire SHAPE (type/kind only) for the diagnostics
+    // export. Never the payload — noteWireMessage reads those two fields.
+    noteWireMessage(this.deps.diagnosticsRing, "in", message);
     if (data.type === "session_activity") {
       const state = (message as { state?: unknown }).state;
       if (tab.proc === child && (state === "idle" || state === "running" || state === "waiting_approval" || state === "closing")) tab.activityState = state;
@@ -2011,6 +2021,7 @@ export class TabHostManager {
     if (tab.proc === null) {
       return;
     }
+    noteWireMessage(this.deps.diagnosticsRing, "out", event);
     try {
       tab.proc.postMessage(event);
     } catch (error) {
