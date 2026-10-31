@@ -20,6 +20,7 @@ import {
   slashMenuReduce,
   slashQueryAt,
   SLASH_COMMANDS,
+  unknownSlashCommandNotice,
   type SlashMenuCtx,
   type SlashMenuState,
   type SlashRunIntent,
@@ -750,5 +751,43 @@ describe("resolveBareSlashSubmit (GitHub #14)", () => {
     expect(resolveBareSlashSubmit("/compact.txt", ctx(), 0, false)).toEqual({ kind: "text" });
     expect(resolveBareSlashSubmit("/unknown", ctx(), 0, false)).toEqual({ kind: "text" });
     expect(resolveBareSlashSubmit("please /compact", ctx(), 0, false)).toEqual({ kind: "text" });
+  });
+});
+
+describe("unknownSlashCommandNotice (audit C4 — a non-command slash draft is not a model turn)", () => {
+  const roots = new Set(["tmp", "etc", "Users", "usr", "private", "custom-root"]);
+
+  it("answers a bare unknown command locally", () => {
+    expect(unknownSlashCommandNotice("/foo")).toBe("Unknown command: /foo. Type / to see the available commands.");
+    expect(unknownSlashCommandNotice("/help")).toContain("Unknown command: /help.");
+  });
+
+  it("keeps an absolute path at the filesystem root going to the model", () => {
+    for (const draft of ["/tmp", "/etc", "/Users", "/usr", "/private", "/custom-root"]) {
+      expect(unknownSlashCommandNotice(draft, { pathRoots: roots })).toBeNull();
+    }
+  });
+
+  it("still answers an unknown command when no root entry has that name", () => {
+    expect(unknownSlashCommandNotice("/tmp", { pathRoots: new Set(["etc"]) })).toContain("Unknown command: /tmp.");
+  });
+
+  it("keeps multi-segment paths going to the model", () => {
+    expect(unknownSlashCommandNotice("/usr/local/bin/node")).toBeNull();
+    expect(unknownSlashCommandNotice("/tmp/no-such-file")).toBeNull();
+  });
+
+  it("answers a known command id repeated (a refused-command retype)", () => {
+    expect(unknownSlashCommandNotice("/compact/compact")).toContain("Unknown command: /compact/compact.");
+  });
+
+  it("never touches a known command, prose, a skill, or a draft not starting with a slash", () => {
+    expect(unknownSlashCommandNotice("/compact")).toBeNull();
+    expect(unknownSlashCommandNotice("hello /foo")).toBeNull();
+    expect(unknownSlashCommandNotice("./foo")).toBeNull();
+    expect(unknownSlashCommandNotice("$code-review")).toBeNull();
+    expect(unknownSlashCommandNotice("/foo.txt")).toBeNull();
+    expect(unknownSlashCommandNotice("/foo:bar")).toBeNull();
+    expect(unknownSlashCommandNotice("/")).toBeNull();
   });
 });

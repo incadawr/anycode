@@ -578,6 +578,20 @@ describe("Composer slash-submit wiring (GitHub #14)", () => {
     expect(harness.sendToHost).toHaveBeenCalledTimes(1);
   });
 
+  // The `/foo` and `/tmp` shapes are identical, so the guard asks the root
+  // listing which names are real directories: a one-segment path like `/tmp`
+  // or `/Users` is the user's message, not a mistyped command.
+  it.each(["/tmp", "/etc", "/Users"])("still sends the root-level path %s instead of answering it", (draft) => {
+    seed(draft, draft.length);
+    const tree = mountComposer();
+
+    (findTextarea(tree)!.props.onKeyDown as (event: ReturnType<typeof keyDown>) => void)(keyDown());
+
+    expect(harness.apiMethods.setNotice).not.toHaveBeenCalled();
+    expect(harness.apiMethods.appendUserText).toHaveBeenCalledWith(expect.any(String), draft, undefined);
+    expect(harness.sendToHost).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves slash text to a foreign engine's own surface", () => {
     seed("/clear", 6, makeStoreState({ engine: CODEX_ENGINE }));
     const tree = mountComposer();
