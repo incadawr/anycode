@@ -94,20 +94,53 @@ export class ClaudeSettingsSeam implements EngineSettingsSeam {
     return claudeQuotaToWire(this.engine.quotaSnapshot());
   }
 
+  /**
+   * Maps a requested id onto the catalog value this session can run — `haiku`
+   * and the CLI's full `claude-haiku-5-5` both name the same entry, and only
+   * the value can go on the wire (`models.ts` `resolveId`). null = the account
+   * offers nothing under that id.
+   */
+  resolveModelId(requested: string): string | null {
+    return this.engine.resolveModelId(requested);
+  }
+
   selectModel(id: string): EngineSettingsChange {
     const available = this.engine.models();
     if (available.length === 0) {
       return { ok: false, reason: "Claude could not read its model list; start a new session to retry." };
     }
-    if (!available.some((choice) => choice.id === id)) {
+    const resolved = this.resolveModelId(id);
+    if (resolved === null) {
       return { ok: false, reason: `Claude model "${id}" is not available for this account.` };
     }
     const current = this.engine.snapshot();
-    const next: SettingsSnapshot = { model: id, activePresetId: current.activePresetId, ...(current.effort !== undefined ? { effort: current.effort } : {}) };
-    const change = this.beginPending(next, () => this.engine.selectModel(id));
+    const next: SettingsSnapshot = { model: resolved, activePresetId: current.activePresetId, ...(current.effort !== undefined ? { effort: current.effort } : {}) };
+    const change = this.beginPending(next, () => this.engine.selectModel(resolved));
     this.modelChanges.add(change);
     void change.finally(() => this.modelChanges.delete(change));
     return { ok: true, ...next };
+  }
+
+  /**
+   * The ACKNOWLEDGED form (host/session.ts `set_session_model`): same
+   * validation, same `beginPending` machinery, but the promise is awaited so a
+   * caller learns whether the CLI actually adopted the model. This is what
+   * keeps `create_session` honest — a model that is merely "requested" must not
+   * be reported as the running one, and a rejected control request must be a
+   * refusal rather than a silent default.
+   */
+  async selectModelAndWait(id: string): Promise<EngineSettingsChange> {
+    const available = this.engine.models();
+    if (available.length === 0) {
+      return { ok: false, reason: "Claude could not read its model list; start a new session to retry." };
+    }
+    const resolved = this.resolveModelId(id);
+    if (resolved === null) {
+      return { ok: false, reason: `Claude model "${id}" is not available for this account.` };
+    }
+    const current = this.engine.snapshot();
+    const next: SettingsSnapshot = { model: resolved, activePresetId: current.activePresetId, ...(current.effort !== undefined ? { effort: current.effort } : {}) };
+    return this.beginPending(next, () => this.engine.selectModel(resolved));
   }
 
   async waitForModelChanges(): Promise<void> {
