@@ -1,5 +1,5 @@
 /**
- * Per-session Sessions API switch (Taskana 4747 owner amendment), shown as rows
+ * Per-session Sessions API switch, shown as rows
  * in the tab's environment dropdown. The unit of exposure is the session: the
  * switch toggles only THIS tab, by tabId; main resolves the session and owns the
  * state. Disabled under the env override or when the tab is unknown.
@@ -25,7 +25,7 @@ export interface SessionAccessBridge {
 }
 
 /**
- * Taskana 4763: the External approvals row. Presentational: the caller decides
+ * The External approvals row. Presentational: the caller decides
  * when it is shown (only while the session is shared and the row is not
  * disabled). The long caption is the row's secondary line and wraps in full.
  */
