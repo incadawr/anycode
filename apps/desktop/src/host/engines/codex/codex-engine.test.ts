@@ -4151,6 +4151,35 @@ describe("Codex manual compaction", () => {
 
 
 describe("Codex service tier", () => {
+  it.each(["priority", "fast", "default", null, "flex", undefined])(
+    "keeps model selection and respawn consistent for server tier %s", async tier => {
+      for (const choice of [undefined, true, false]) {
+        for (const unsupported of [false, true]) {
+          const server = new FakeAppServer();
+          server.threadEcho.model = "gpt-5.6-sol";
+          server.threadEcho.serviceTier = tier;
+          const { engine } = await createNativeCodexSession(server, "/work");
+          if (choice !== undefined) engine.selectFast(choice);
+          engine.selectModel(unsupported ? "gpt-5.4-mini" : "gpt-5.6-sol");
+          await runTurn(server, engine);
+          const expected = unsupported ? undefined : choice ?? (tier === "priority" || tier === "fast" ? true : false);
+          expect(engine.snapshot().fast).toBe(expected);
+          const override = server.turnStartParams().at(-1)?.serviceTier;
+          if (unsupported || choice === false || (choice === undefined && (tier === "flex" || tier === undefined))) expect(override).toBe("default");
+          else if (choice === true) expect(override).toBe("fast");
+          else expect(override).toBeUndefined();
+          const nextServer = new FakeAppServer();
+          nextServer.threadEcho.model = unsupported ? "gpt-5.4-mini" : "gpt-5.6-sol";
+          nextServer.threadEcho.serviceTier = override ?? tier;
+          const resumed = await resumeNativeCodexSession(nextServer, "/work", "persisted-thread", undefined, undefined,
+            { model: nextServer.threadEcho.model as string, ...(expected !== undefined ? { fast: expected } : {}), origin: "persisted" });
+          await runTurn(nextServer, resumed.engine);
+          expect(resumed.engine.snapshot().fast).toBe(expected);
+          if (expected !== undefined) expect(nextServer.turnStartParams().at(-1)?.serviceTier).toBe(expected ? "fast" : "default");
+        }
+      }
+    },
+  );
   it.each([true, false])("restores stored speed %s and clears it on an unsupported model", async (fast) => {
     const db = new SqlitePersistenceAdapter(":memory:");
     await db.createSession({ id: "speed", workspace: "/work", model: "gpt-5.6-sol", mode: "build" });
