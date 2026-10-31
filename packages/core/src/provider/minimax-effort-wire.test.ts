@@ -265,9 +265,10 @@ describe("MiniMax reasoning-effort mapping over the real @ai-sdk/anthropic wire"
 
   it("keeps every other catalog provider's bytes unchanged", async () => {
     stubFetch();
-    // The GLM / DeepSeek / Anthropic / Kimi / MiMo branches and the generic
-    // tail are untouched by the MiniMax branch: each of these keeps the
-    // bytes it had before, pinned here by their own shape.
+    // The GLM / DeepSeek / Anthropic / Kimi branches and the generic tail are
+    // untouched by the MiniMax branch: each of these keeps the bytes it had
+    // before, pinned here by their own shape. MiMo has its own (measured)
+    // effort-enum branch too — it never reaches this mapping.
     const cases: { providerName: string; model: string; body: Record<string, unknown> }[] = [
       // GLM: its own effort enum PLUS a thinking budget.
       { providerName: "Z.AI (GLM)", model: "glm-5.3", body: { output_config: { effort: "max" }, thinking: { type: "enabled", budget_tokens: 32_000 } } },
@@ -277,14 +278,18 @@ describe("MiniMax reasoning-effort mapping over the real @ai-sdk/anthropic wire"
       { providerName: "Anthropic", model: "claude-opus-5-5", body: { output_config: { effort: "max" }, thinking: { type: "adaptive" } } },
       // Kimi (no branch): the generic tail's budget only, no enum.
       { providerName: "Kimi (kimi.com subscription)", model: "k3", body: { thinking: { type: "enabled", budget_tokens: 24_576 } } },
-      // MiMo (no branch): the generic tail's budget only, no enum.
-      { providerName: "Xiaomi MiMo API", model: "mimo-v2.6-pro", body: { thinking: { type: "enabled", budget_tokens: 24_576 } } },
+      // MiMo: its own branch — the measured enum only, no budget. `max` is
+      // unmeasured and collapses onto `high`.
+      { providerName: "Xiaomi MiMo API", model: "mimo-v2.6-pro", body: { output_config: { effort: "high" } } },
     ];
     for (const testCase of cases) {
       captured.length = 0;
       const { port, requestFor } = minimaxPort(testCase.providerName, testCase.model);
       await drain(port.streamText(requestFor("max")));
       expect(captured[0]!.body, testCase.providerName).toMatchObject(testCase.body);
+      if (testCase.providerName.startsWith("Xiaomi MiMo")) {
+        expect(captured[0]!.body.thinking, "MiMo sends no thinking key").toBeUndefined();
+      }
     }
   });
 });

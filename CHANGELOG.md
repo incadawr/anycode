@@ -11,6 +11,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - A connected Claude Code or Codex session keeps reaching AnyCode after the app restarts on a new port with a new token, without reconnecting the MCP client, and an outdated copy of the stdio adapter in the user-data directory is replaced on the next app start.
 - `create_session` with `engine: "claude"` no longer silently runs the default model when `model` is a full model id such as `claude-haiku-5-5`: the alias (`haiku`) and the full id now both reach the engine, and the new session is confirmed to be running it before it is shared. A value the account does not offer is refused with `invalid_model` and the list of ids it does offer, for Codex too, instead of quietly falling back to the engine default.
+- Xiaomi MiMo models now receive only the chosen effort level, without a thinking budget, so low really reasons less than high. Before, every level sent a budget MiMo ignores, and the model reasoned the same amount whichever level you picked. Measured MiMo levels are low and high; medium, xhigh and max send high, and a session with no level still sends thinking disabled.
 
 ## [0.0.58] — 2026-10-31
 

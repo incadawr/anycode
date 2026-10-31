@@ -135,6 +135,52 @@ describe("reasoningRequestOptions", () => {
     });
   });
 
+  // Xiaomi MiMo ignores `thinking.budget_tokens` (measured: low 22.6k ≈ high
+  // 20.1k output tokens on the old bytes) but honours the effort enum
+  // (`low` 28.7k vs `high` 48.0k with no budget). The wire therefore carries
+  // the enum and no thinking key, and maxOutputTokens is left alone — the SDK
+  // only adds a budget to max_tokens when one exists.
+  it("maps MiMo reasoning levels to the measured effort enum, with no thinking budget", () => {
+    const mimoRequest = (reasoningEffort: "low" | "medium" | "high" | "xhigh" | "max" | "off" | undefined) =>
+      reasoningRequestOptions(
+        { ...baseRequest, maxOutputTokens: 512, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) },
+        "Xiaomi MiMo API",
+        undefined,
+        undefined,
+        "mimo-v2.6-pro",
+      );
+
+    expect(mimoRequest("low")).toEqual({ maxOutputTokens: 512, providerOptions: { anthropic: { effort: "low" } } });
+    expect(mimoRequest("high")).toEqual({ maxOutputTokens: 512, providerOptions: { anthropic: { effort: "high" } } });
+
+    // Only low and high are measured, and MiMo documents no effort
+    // vocabulary: every other level collapses onto `high` instead of inventing
+    // an enum value the endpoint may reject.
+    for (const level of ["medium", "xhigh", "max"] as const) {
+      expect(mimoRequest(level), level).toEqual({ maxOutputTokens: 512, providerOptions: { anthropic: { effort: "high" } } });
+    }
+
+    // No level selected keeps its pre-fix bytes: the picker's "No thinking".
+    for (const level of [undefined, "off"] as const) {
+      expect(mimoRequest(level), String(level)).toEqual({
+        maxOutputTokens: 512,
+        providerOptions: { anthropic: { thinking: { type: "disabled" } } },
+      });
+    }
+
+    // The token-plan regions resolve to the same mapping (the helper matches
+    // the catalog display names, not the base URL).
+    expect(
+      reasoningRequestOptions(
+        { ...baseRequest, maxOutputTokens: 512, reasoningEffort: "low" },
+        "Xiaomi MiMo Token Plan (SGP)",
+        undefined,
+        undefined,
+        "mimo-v2.6-flash",
+      ),
+    ).toEqual({ maxOutputTokens: 512, providerOptions: { anthropic: { effort: "low" } } });
+  });
+
   it("provider isolation: the same request maps differently on Anthropic vs Z.AI (GLM) vs DeepSeek (TASK 4241)", () => {
     const request = { ...baseRequest, maxOutputTokens: 512, reasoningEffort: "high" } as const;
     const anthropic = reasoningRequestOptions({ ...request }, "Anthropic");
@@ -199,7 +245,7 @@ describe("reasoningRequestOptions", () => {
 
   // Catalog providers are NOT custom endpoints: a declaration must never
   // change what GLM, DeepSeek or a catalog Anthropic-compatible provider
-  // (Kimi, MiMo) puts on the wire.
+  // (Kimi) puts on the wire.
   it("a declared vocabulary does not change the catalog providers' mapping", () => {
     const declared = ["low", "medium", "high", "xhigh", "max"] as const;
     for (const providerName of ["Anthropic", "Z.AI (GLM)", "DeepSeek", "Kimi (kimi.com subscription)"]) {
