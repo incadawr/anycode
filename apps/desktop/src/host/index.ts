@@ -466,6 +466,7 @@ import { ENV_CLAUDE_BIN } from "../shared/engines.js";
 import { resolveClaudeConfigDir } from "../shared/claude-config-dir.js";
 import { resumeClaudeEngine, startClaudeEngine, type ClaudeInitMcpServerStatus } from "./engines/claude/claude-engine.js";
 import { prepareEngineMcpForward, missingForwardedMcpServerNames } from "./engines/mcp-forward-boot.js";
+import { createMcpSpawnProbeScheduler, probeMcpServerSpawn } from "./engines/claude/mcp-spawn-probe.js";
 import { parseClaudeEngineArgs } from "./engines/claude/draft-args.js";
 import { bridgeCallableCatalog, catalogFromProfiles } from "./engines/claude/bridge-catalog.js";
 import { createBridgePresentationStamp } from "./engines/claude/bridge-presentation-stamp.js";
@@ -2324,6 +2325,19 @@ async function bootClaudeSession(
   // re-emits init on EVERY turn, so this rides `onEverySystemInit`: a server
   // that connected on the first turn and died later must stop reading as
   // connected in the pane (the first-init latch below would freeze it there).
+  // GitHub #3 follow-up: the CLI's init names a failed server but never a
+  // reason. ONCE PER BOOT per failed stdio server, run the launch command
+  // ourselves (same env/PATH) and publish the definitive cause — spawn error,
+  // exit code, redacted stderr tail. The scheduler's done/in-flight sets live
+  // at boot scope (init re-fires on EVERY turn — see mcp-spawn-probe.ts), so a
+  // persistently failed server is never re-spawned per turn and overlapping
+  // inits never double-probe one name. The probe's timeout means "the command
+  // runs", which produces no detail (the row's fallback pointer stands); a
+  // server that recovers later re-inits without this name and never probes
+  // again.
+  const claudeMcpProbeScheduler = createMcpSpawnProbeScheduler((spec) =>
+    probeMcpServerSpawn(spec, { loginPath: hostMcpLoginPath }),
+  );
   claudeEngine.onEverySystemInit((init) => {
     engineMcpStatuses = claudeMcpStatuses(
       init.mcpServerStatuses,
@@ -2331,6 +2345,23 @@ async function bootClaudeSession(
       mcpForward.specs,
     );
     publishEngineMcpStatuses();
+    const failedNow = [
+      ...init.mcpServerStatuses.filter((item) => item.status === "failed").map((item) => item.name),
+      ...missingForwardedMcpServerNames(init.mcpServerNames, mcpForward.claudeNames, false),
+    ];
+    for (const name of failedNow) {
+      const spec = mcpForward.specs.find((candidate) => candidate.name === name && candidate.kind === "stdio");
+      if (!spec || spec.kind !== "stdio") continue;
+      claudeMcpProbeScheduler.probe(spec, (outcome) => {
+        if (outcome.ok || outcome.detail === undefined) return;
+        const existing = engineMcpStatuses.find((row) => row.name === name);
+        if (existing === undefined || existing.state !== "failed") return;
+        // The probe is redacted at the source; only a winning init updates
+        // engineMcpStatuses after this.
+        existing.error = outcome.detail;
+        publishEngineMcpStatuses();
+      });
+    }
   });
 
   // The first turn-scoped `system/init` is the earliest proof the native

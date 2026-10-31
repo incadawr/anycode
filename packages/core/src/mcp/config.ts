@@ -255,7 +255,7 @@ const SENSITIVE_ENV_NAME_RE = /TOKEN|KEY|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIAL|
  * text such as exit codes and paths — so a short inherited credential can still
  * appear verbatim in a failure diagnostic. Kept as a documented trade-off.
  */
-function sensitiveEnvValues(env: Record<string, string>): string[] {
+export function sensitiveEnvValues(env: Record<string, string>): string[] {
   const values: string[] = [];
   for (const [name, value] of Object.entries(env)) {
     if (SENSITIVE_ENV_NAME_RE.test(name)) values.push(value);

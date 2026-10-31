@@ -13,6 +13,7 @@ export type { McpInstructionEntry } from "./instructions-section.js";
 export {
   collectSecretRefs,
   loadMcpServerSpecs,
+  sensitiveEnvValues,
   mcpConfigFileSchema,
   mcpServerEntrySchema,
   resolveMcpServerEntries,
