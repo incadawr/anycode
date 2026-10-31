@@ -266,7 +266,7 @@ export interface SubagentSubStatus {
     /** Present only when the child's final turn_end carried finishReason "length" (output-token ceiling cut). */
     finalTurnFinishReason?: "length";
     /**
-     * TASK.240/4055: the child's turn-ceiling summary (rounds granted, turns
+     * the child's turn-ceiling summary (rounds granted, turns
      * granted, and the refusal reason that ended the ladder when it ended on
      * one). Lets the UI tell "budget too small" from a hard stop. Absent on
      * legacy replays and runs that never tripped the ceiling.
@@ -3036,7 +3036,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       // start values.
       model?: string,
       engine?: "codex" | "claude",
-      // TASK.240/4055: the child's ceiling ladder summary (numbers + closed
+      // the child's ceiling ladder summary (numbers + closed
       // refusal reason) — verbatim passthrough onto the settled card.
       ceiling?: {
         rounds: number;
@@ -4558,7 +4558,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // server's effective posture on resume came back weaker than the
         // persisted preset claims — surfaced honestly via the existing
         // one-slot toast channel ("surface it, don't swallow it"; the
-        // transcript/automation snapshot shape is untouched). TASK.42/B5-eng
+        // transcript/automation snapshot shape is untouched).
         // may additionally give warning/retry/info notices a dedicated
         // transcript line later — additive on top of this, not a
         // replacement.
@@ -5772,7 +5772,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // (no subagent_start was ever emitted for it), so the card is
             // synthesized from the block's own input, mirroring App.tsx's
             // fallbackCardFromInput.
-            // TASK.240/4055 cross-review F2: the ceiling summary is patched by
+            // cross-review F2: the ceiling summary is patched by
             // the same branch (it is the detached child's only terminal channel).
             const childTerminal = message.childTerminal;
             // a cancelled terminal patches too — the card must read

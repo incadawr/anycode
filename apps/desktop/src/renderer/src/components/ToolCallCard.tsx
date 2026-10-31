@@ -64,7 +64,7 @@ const SUBAGENT_FINAL_LABELS: Record<NonNullable<SubagentSubStatus["final"]>["sta
 };
 
 /**
- * TASK.240/4055: the adaptive-budget line for a settled child that tripped
+ * the adaptive-budget line for a settled child that tripped
  * the turn ceiling — grants spent, over how many rounds, and the refusal
  * reason that ended the ladder when it ended on one. Lets the user tell
  * "budget too small" (e.g. grant_budget_exhausted with work still flowing)
@@ -246,7 +246,7 @@ export function formatSubagentCounters(subagent: SubagentSubStatus): string {
 }
 
 /**
- * TASK.240/4055: a settled child's ceiling budget line (empty when the child
+ * a settled child's ceiling budget line (empty when the child
  * never tripped the ceiling or the field predates this feature) — rendered as
  * its own line under the final-status line so "budget too small" is visually
  * distinct from the outcome itself. follow-up: returns the line's
@@ -1420,7 +1420,7 @@ function SubagentStatus({
         <span className="tool-call-subagent-desc">{subagent.description}</span>
       </div>
       <div className="tool-call-subagent-counters">{formatSubagentCounters(subagent)}</div>
-      {/* TASK.240/4055: the adaptive-budget line — only when the settled card
+      {/* the adaptive-budget line — only when the settled card
           actually carries a ceiling summary (a child that never tripped the
           turn ceiling renders nothing extra). follow-up: the title
           keeps the RAW refusal reason on the tooltip while the visible text

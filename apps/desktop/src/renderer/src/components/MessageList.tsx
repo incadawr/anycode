@@ -104,7 +104,7 @@ export function formatLoopEndLine(
  * the projection is a view-time transform only, computed each render. A
  * single-tool run is just a special case of this rule.
  *
- * Invariants (TASK.31.md §DoD):
+ * Invariants (§DoD):
  *  - adjacency, ANY toolName: every neighbouring terminal `tool_call` stacks,
  *    regardless of tool name. Any other kind, or a gap, closes the stack.
  *  - terminal-only: `proposed`/`running` cards never stack (active work must

@@ -127,7 +127,7 @@ describe("Sessions API pane discoverability copy (audit D9)", () => {
   });
 });
 
-describe("session handle wording (Taskana 4750b)", () => {
+describe("session handle wording", () => {
   it("invalid and duplicate handles show their inline message", () => {
     expect(handleErrorText("invalid")).toBe("Use lowercase letters, digits and - _ . @, up to 64.");
     expect(handleErrorText("duplicate")).toBe("Another live session already uses this handle.");

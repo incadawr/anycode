@@ -731,11 +731,11 @@ declare global {
         setEnabled(req: PluginsSetEnabledRequest): Promise<PluginsMutationResult>;
         remove(req: PluginsRemoveRequest): Promise<PluginsMutationResult>;
         approveMcp(req: PluginsApproveMcpRequest): Promise<PluginsMutationResult>;
-        /** Taskana 4750a: name only — main computes the current servicesHash itself. */
+        /** name only — main computes the current servicesHash itself. */
         approveServices(name: string): Promise<PluginsMutationResult>;
-        /** Taskana 4750a: supervised state per declared service (no argv, env, or paths). */
+        /** supervised state per declared service (no argv, env, or paths). */
         services(): Promise<PluginServiceView[]>;
-        /** Taskana 4750a: bounded plain-text log, newest last. */
+        /** bounded plain-text log, newest last. */
         serviceLogs(plugin: string, name: string): Promise<string[]>;
         serviceRestart(plugin: string, name: string): Promise<PluginsMutationResult>;
         reveal(req: PluginsRevealRequest): Promise<PluginsRevealResult>;

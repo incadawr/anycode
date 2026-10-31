@@ -110,7 +110,7 @@ export interface InstallDialogBodyProps {
   stage: InstallDialogStage;
   urlValue: string;
   allowMcp: boolean;
-  /** Taskana 4750a: the background-services consent checkbox. */
+  /** the background-services consent checkbox. */
   allowServices: boolean;
   onUrlValueChange: (value: string) => void;
   onAllowMcpChange: (checked: boolean) => void;

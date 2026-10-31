@@ -44,7 +44,7 @@ const MODE_MENU_POPOVER_WIDTH = 240;
  * (packages/core/src/permissions/engine.ts): plan denies all writes; build
  * asks before every side-effecting tool; edit allows Write/Edit inside the
  * workspace without asking and asks for everything else side-effecting
- * ; auto asks only on high-risk tools; yolo never asks.
+ * auto asks only on high-risk tools; yolo never asks.
  */
 export const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
   plan: "Read-only planning",

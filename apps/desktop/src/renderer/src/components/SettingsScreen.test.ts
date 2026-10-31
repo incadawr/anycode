@@ -743,7 +743,7 @@ describe("Settings rail sections (the flat rail grouped into five sections)", ()
   });
 });
 
-describe("shouldShowAppVersion (TASK.49/W14-fix — About pane version line)", () => {
+describe("shouldShowAppVersion (About pane version line)", () => {
   it("renders when main supplied a version string", () => {
     expect(shouldShowAppVersion({ appVersion: "1.2.3" })).toBe(true);
   });

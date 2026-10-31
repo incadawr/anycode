@@ -750,7 +750,7 @@ export function showsManualUpdateLink(status: UpdateStatus): boolean {
 }
 
 /**
- * TASK.49/W14-fix: whether the About pane should render the running app's
+ * whether the About pane should render the running app's
  * version line — extracted into a pure, exported gate (same pattern as
  * `shouldShowUpdateBanner`/`showsManualUpdateLink` above) because this
  * package's tests run with no DOM/jsdom (SettingsScreen.test.ts's own
@@ -1652,7 +1652,7 @@ export function SettingsScreen({
   const readOnly = snapshot.readOnly;
 
   async function saveTools(): Promise<void> {
-    // TASK.119/TASK.147-с2: validate the sessionLimits fields FIRST — a bad
+    // validate the sessionLimits fields FIRST — a bad
     // value refuses the whole save (nothing written) with a field-naming error.
     const limits = buildSessionLimitsPatch(sessionMaxTabs, sessionPerParent, sessionGlobal);
     if ("error" in limits) {
@@ -2015,7 +2015,7 @@ export function SettingsScreen({
             <McpServersPane servers={mcpLive ? mcpServers : []} tabId={scopeRef} onCountChange={setPaneCount} />
           )}
 
-          {/* Taskana 4743/4758: language servers take the same scope; the live
+          {/* language servers take the same scope; the live
               section needs a real tab, so it gets the folder's open tab (if any). */}
           {activePane === "language-servers" && (
             <LanguageServersPane

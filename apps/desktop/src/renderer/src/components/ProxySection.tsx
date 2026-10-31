@@ -13,7 +13,7 @@
  * could be wrong (draft↔wire conversion, host/port composition and its inverse,
  * the password action, verdict text) lives in a function the test calls
  * directly, and the JSX below is reduced to wiring. The rendered behaviour is
- * proven live instead, the same standard TASK.132/139 held.
+ * proven live instead, the same standard held.
  *
  * CUSTODY: the password is write-only in both directions. Main never returns
  * it — the editor learns only `passwordSet: boolean`, derived from the

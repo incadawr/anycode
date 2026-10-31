@@ -262,7 +262,7 @@ export interface VisionModelHint {
  * `providerModelsFor`, which REPLACES the catalog list wholesale the moment a
  * live list is non-empty (`if (connectionModels !== undefined &&
  * connectionModels.length > 0) { return connectionModels.map(...) }`) — the
- * live TASK.106/131 defect where a working model vanishes from a picker
+ * live defect where a working model vanishes from a picker
  * because the live fetch did not happen to include it. Here, a catalog model
  * already known to support vision NEVER disappears just because the
  * connection's live list is non-empty and does not happen to repeat it.

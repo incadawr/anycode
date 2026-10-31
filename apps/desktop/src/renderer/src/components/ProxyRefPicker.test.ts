@@ -6,7 +6,7 @@
  * This file is ALSO where the deleted `EngineProxyField.test.ts`'s invariants
  * live on. They are migrated by name, not by accident: initial value per scope,
  * the empty/clear sentinel, the two engines' hints differing, the Claude/Codex
- * subagent asymmetry (TASK.139-F3), the saved-notice binding (TASK.139-F5), and
+ * subagent asymmetry the saved-notice binding and
  * `proxy` surviving in both engine panes' search index. Each carries its
  * original task tag so the provenance is greppable.
  */
@@ -320,13 +320,13 @@ describe("proxyScopeHint; migrates's per-engine hint invariants)", () => {
 });
 
 /**
- * MIGRATED from EngineProxyField.test.ts (TASK.139-F5): the "Saved." notice
+ * MIGRATED from EngineProxyField.test.ts the "Saved." notice
  * must belong to the exact value that was persisted, not to a bare "a save
  * succeeded at some point" flag — otherwise a save of value A that resolves
  * after the control has moved on to B renders a notice next to B, which was
  * never sent.
  */
-describe("proxySavedNoticeVisible; migrates TASK.139-F5's notice binding)", () => {
+describe("proxySavedNoticeVisible migrates notice binding", () => {
   it("is hidden when nothing has ever saved successfully", () => {
     expect(proxySavedNoticeVisible(null, PROXY_REF_INHERIT)).toBe(false);
     expect(proxySavedNoticeVisible(null, "proxy-1")).toBe(false);

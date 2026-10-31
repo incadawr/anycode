@@ -80,9 +80,9 @@ export interface PluginsBridge {
   setEnabled(name: string, value: boolean): Promise<PluginsMutationResult>;
   remove(name: string): Promise<PluginsMutationResult>;
   approveMcp(name: string): Promise<PluginsMutationResult>;
-  /** Taskana 4750a: consent for the plugin's current services definition. */
+  /** consent for the plugin's current services definition. */
   approveServices?(name: string): Promise<PluginsMutationResult>;
-  /** Taskana 4750a: supervised service states (polled while the pane is open). */
+  /** supervised service states (polled while the pane is open). */
   services?(): Promise<PluginServiceView[]>;
   serviceLogs?(plugin: string, name: string): Promise<string[]>;
   serviceRestart?(plugin: string, name: string): Promise<PluginsMutationResult>;
@@ -114,7 +114,7 @@ export function isPluginsServiceUnavailable(state: PluginsLoadState, snapshot: P
 export interface PluginsPaneProps {
   /** Injectable for tests / isolation; defaults to `window.anycode.plugins`. */
   bridge?: PluginsBridge;
-  /** Taskana 4750a: the Sessions-API state for the services hint; defaults to `communication.get()`. */
+  /** the Sessions-API state for the services hint; defaults to `communication.get()`. */
   sessionsApiStateOf?: () => Promise<SessionsApiState>;
 }
 
@@ -136,7 +136,7 @@ export function PluginsPane({
   // another window); our own mutations refetch immediately, so the banner
   // is informational — "applies to newly started tasks" — and self-dismisses.
   const [changedNotice, setChangedNotice] = useState<string | null>(null);
-  // Taskana 4750a: service read model (polled), the Sessions-API state for the hint,
+  // service read model (polled), the Sessions-API state for the hint,
   // and the one open log (plain text, key = plugin/name).
   const [services, setServices] = useState<PluginServiceView[]>([]);
   const [sessionsState, setSessionsState] = useState<SessionsApiState>("off");
@@ -525,7 +525,7 @@ export interface PluginsPaneBodyProps {
   onPin: (row: PluginRowView) => void;
   onRemove: (row: PluginRowView) => void;
   onApproveMcp: (row: PluginRowView) => void;
-  /** Taskana 4750a: services consent (name-only request). */
+  /** services consent (name-only request). */
   onApproveServices: (row: PluginRowView) => void;
   services: readonly PluginServiceView[];
   sessionsState: SessionsApiState;

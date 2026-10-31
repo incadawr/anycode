@@ -145,7 +145,7 @@ export function signInButtonDisabled(checking: boolean, busy: boolean, signingIn
 // a separate AnyCode account or a separate usage pool, and using a
 // subscription through a third-party UI sits in a gray area of Anthropic's
 // terms even though no enforcement precedent against as-is CLI wrappers is
-// known (see TASK.76.md's verdict for the source citations).
+// known ('s verdict for the source citations).
 export const CLAUDE_SUBSCRIPTION_RISK_NOTE =
   "AnyCode spawns the official Claude Code CLI as-is and signs in with your own Claude Code login — we never read or store your tokens. " +
   "This usage shares the same subscription quota as claude.ai and the terminal, not a separate pool. " +

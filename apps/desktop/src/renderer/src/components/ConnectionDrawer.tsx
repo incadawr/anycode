@@ -1758,7 +1758,7 @@ export function ConnectionDrawerFields({
           ...(createModel !== undefined ? { model: createModel } : {}),
           ...(label.trim() ? { label: label.trim() } : {}),
           ...(transport ? { transport } : {}),
-          // TASK.132/TASK.141: the proxy control is rendered in this pre-create
+          // the proxy control is rendered in this pre-create
           // state too, so its value has to travel on THIS create as well —
           // omitting it here silently dropped the choice for every new custom
           // endpoint.

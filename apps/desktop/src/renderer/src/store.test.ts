@@ -2915,7 +2915,7 @@ describe("desktop store — subagent_end.responseModel forwarding (slice C1)", (
     expect(block).toMatchObject({ subagent: { final: { status: "completed", durationMs: 100, finalTurnFinishReason: "length" } } });
   });
 
-  // TASK.240/4055: the child's ceiling ladder summary settles onto the card
+  // the child's ceiling ladder summary settles onto the card
   // verbatim (final.ceiling), and — like every terminal field — is frozen by
   // the existing settled-guard: a replayed end can never rewrite it.
   it("subagent_end with ceiling settles final.ceiling verbatim; a replayed end never overwrites it", () => {

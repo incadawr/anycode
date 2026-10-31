@@ -203,7 +203,7 @@ describe("formatSubagentCounters — settled (final set)", () => {
   });
 });
 
-// TASK.240/4055 + follow-up: the ceiling budget line — grants/rounds in the
+// + follow-up: the ceiling budget line — grants/rounds in the
 // text, the refusal as SHORT HUMAN TEXT with the RAW enum kept in the title
 // attribute (the card previously rendered "stopped: stalled" verbatim).
 describe("formatSubagentBudgetLine — ceiling summary", () => {

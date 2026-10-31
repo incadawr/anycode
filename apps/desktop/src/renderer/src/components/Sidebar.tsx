@@ -782,7 +782,7 @@ export function Sidebar({
   }, []);
 
   // -------------------------------------------------------------------------
-  // session delete (decisions 1–5 in working-docs/tasks/TASK.114.md).
+  // session delete (decisions 1–5).
   // Both paths hard-delete through main's one-transaction cascade; the active
   // gate is main's (`isSessionActive` in main/tab-ipc.ts) — the renderer only
   // gates the AFFORDANCE and surfaces refusals as notices.

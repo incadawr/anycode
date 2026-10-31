@@ -1,6 +1,6 @@
 /**
  * Codex onboarding Settings pane (design/slice-codex-fixes-cut.md
- * §2(g)/§5.5; redesigned for TASK.50/53, codex-profiles cut §2/§4/§5/§7,
+ * §2(g)/§5.5; redesigned for codex-profiles cut §2/§4/§5/§7,
  * amended §A1/§A4): the Settings-owned surface for the Codex engine.
  *
  * Readiness is now a function of (binary, profile) rather than one global

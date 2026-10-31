@@ -103,7 +103,7 @@ export function serviceSecretNamesOf(row: PluginRowView): string[] {
   return [...names].sort();
 }
 
-/** Whether the plugin declares background services that lack consent for their current definition (Taskana 4750a). */
+/** Whether the plugin declares background services that lack consent for their current definition. */
 export function servicesNeedApproval(row: PluginRowView): boolean {
   return row.serviceNames.length > 0 && row.servicesConsentGranted !== true;
 }
@@ -123,7 +123,7 @@ export function sessionsApiHint(rowHasServices: boolean, communicationState: Ses
   return undefined;
 }
 
-/** The chip for one supervised service (Taskana 4750a). Plain display mapping of main's view. */
+/** The chip for one supervised service. Plain display mapping of main's view. */
 export function serviceChip(view: PluginServiceView): PluginChip {
   switch (view.state) {
     case "running":
@@ -398,7 +398,7 @@ export function mcpServerCommandLine(server: PluginInstallPreview["mcpServers"][
   return [server.command, ...server.args].join(" ");
 }
 
-/** Whether the sheet shows background services and offers the services consent (Taskana 4750a). */
+/** Whether the sheet shows background services and offers the services consent. */
 export function sheetHasServices(preview: PluginInstallPreview): boolean {
   return (preview.services?.length ?? 0) > 0;
 }
