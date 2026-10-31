@@ -5,9 +5,9 @@
 
  */
 
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { CatalogProviderEntry } from "./catalog.js";
-import { assertBrandContract, assertTransportContract, resolveEndpoint } from "./catalog.js";
+import { assertBrandContract, assertTransportContract, resolveEndpoint, tariffAt } from "./catalog.js";
 import {
   CUSTOM_PROVIDER_ID,
   catalogProviderIds,
@@ -257,7 +257,7 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
     expect(deepseek?.models.find((m) => m.id === "deepseek-v4-pro")?.todoReminderEvery).toBe(20);
     expect(flash).toEqual({
       id: "deepseek-flash",
-      pricing: { basisId: "deepseek-flash-deepseek-peak-2026-10-27", input: 0.3, cachedInput: 0.006, output: 1.2 },
+      pricing: { basisId: "deepseek-flash-deepseek-peak-2026-10-27", input: 0.3, cachedInput: 0.006, output: 1.2, tariff: { peakUtcDays: [1, 2, 3, 4, 5], peakUtcHours: [[1, 4], [6, 10]], offPeakMultiplier: 0.5 } },
       name: "DeepSeek-V4.1-Flash",
       contextWindow: 1_048_576,
       maxOutputTokens: 393_216,
@@ -270,7 +270,7 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
     const pro = deepseek?.models.find((m) => m.id === "deepseek-v4-pro");
     expect(pro).toEqual({
       id: "deepseek-v4-pro",
-      pricing: { basisId: "deepseek-v4-pro-deepseek-peak-2026-10-27", input: 1.32, cachedInput: 0.044, output: 3.96 },
+      pricing: { basisId: "deepseek-v4-pro-deepseek-peak-2026-10-27", input: 1.32, cachedInput: 0.044, output: 3.96, tariff: { peakUtcDays: [1, 2, 3, 4, 5], peakUtcHours: [[1, 4], [6, 10]], offPeakMultiplier: 0.5 } },
       name: "DeepSeek-V4-Pro",
       contextWindow: 1_048_576,
       maxOutputTokens: 393_216,
@@ -525,6 +525,22 @@ describe("model pricing", () => {
       // traceable back to the page and the day it was read.
       expect(pricing.basisId.startsWith(`${id}-`), `${label} basisId names the model: ${pricing.basisId}`).toBe(true);
       expect(pricing.basisId, `${label} basisId carries the check date`).toMatch(/-\d{4}-\d{2}-\d{2}$/);
+      // A declared time-of-day tariff must be a usable window: real weekdays,
+      // half-open integer hour pairs within the day, and a discount ≤ 1 (1
+      // would be a pointless tariff; anything above would bill above the
+      // listed ceiling).
+      if (pricing.tariff !== undefined) {
+        const { peakUtcDays, peakUtcHours, offPeakMultiplier } = pricing.tariff;
+        expect(peakUtcDays.length, `${label} tariff names peak days`).toBeGreaterThan(0);
+        for (const day of peakUtcDays) {
+          expect(Number.isInteger(day) && day >= 0 && day <= 6, `${label} tariff day ${day} is 0..6`).toBe(true);
+        }
+        for (const [start, end] of peakUtcHours) {
+          expect(Number.isInteger(start) && Number.isInteger(end), `${label} tariff hours are integers`).toBe(true);
+          expect(start >= 0 && start < end && end <= 24, `${label} tariff window [${start}, ${end}) is half-open within the day`).toBe(true);
+        }
+        expect(Number.isFinite(offPeakMultiplier) && offPeakMultiplier > 0 && offPeakMultiplier <= 1, `${label} tariff multiplier is in (0, 1]`).toBe(true);
+      }
     }
   });
 
@@ -593,13 +609,60 @@ describe("model pricing", () => {
       expect(pricing?.output).toBeGreaterThan(pricing?.input ?? 0);
     }
     // Off-peak is exactly half of peak (DeepSeek's own note), and the recorded
-    // rate is the peak ceiling of the pair.
+    // rate is the peak ceiling of the pair — the tariff says which hours pay it.
     expect(findCatalogEntry("deepseek")?.models.find((model) => model.id === "deepseek-v4-pro")?.pricing).toEqual({
       basisId: "deepseek-v4-pro-deepseek-peak-2026-10-27",
       input: 1.32,
       cachedInput: 0.044,
       output: 3.96,
+      tariff: { peakUtcDays: [1, 2, 3, 4, 5], peakUtcHours: [[1, 4], [6, 10]], offPeakMultiplier: 0.5 },
     });
+  });
+});
+
+describe("tariff windows (DeepSeek peak/off-peak)", () => {
+  // The declared DeepSeek window: 01:00–04:00 and 06:00–10:00 UTC on weekdays.
+  const tariff = { peakUtcDays: [1, 2, 3, 4, 5], peakUtcHours: [[1, 4], [6, 10]] as [number, number][], offPeakMultiplier: 0.5 };
+
+  // The window is defined in UTC, so this block runs where the local clock is
+  // NOT UTC — otherwise a `getHours()`/`getDay()` implementation would pass by
+  // accident on a UTC machine. New York is UTC-4 in October 2026: 02:30 UTC
+  // Wednesday is 22:30 Tuesday local, and 10:00 UTC Friday is 06:00 local, so
+  // a local-clock implementation gets these wrong in opposite directions.
+  let previousTz: string | undefined;
+  beforeAll(() => {
+    previousTz = process.env.TZ;
+    process.env.TZ = "America/New_York";
+  });
+  afterAll(() => {
+    if (previousTz === undefined) delete process.env.TZ;
+    else process.env.TZ = previousTz;
+  });
+
+  it("reads the window in UTC and half-open hours", () => {
+    const peakInstant = Date.UTC(2026, 9, 28, 2, 30);
+    expect(new Date(peakInstant).getHours(), "the non-UTC guard is active").not.toBe(new Date(peakInstant).getUTCHours());
+    expect(new Date(peakInstant).getDay(), "the non-UTC guard shifts the day too").not.toBe(new Date(peakInstant).getUTCDay());
+    // 2026-10-28 is a Wednesday.
+    expect(tariffAt(tariff, peakInstant)).toBe("peak");
+    expect(tariffAt(tariff, Date.UTC(2026, 9, 28, 0, 59, 59, 999))).toBe("off-peak");
+    expect(tariffAt(tariff, Date.UTC(2026, 9, 28, 1, 0))).toBe("peak");
+    expect(tariffAt(tariff, Date.UTC(2026, 9, 28, 3, 59, 59, 999))).toBe("peak");
+    expect(tariffAt(tariff, Date.UTC(2026, 9, 28, 4, 0))).toBe("off-peak");
+    expect(tariffAt(tariff, Date.UTC(2026, 9, 28, 5, 59, 59, 999))).toBe("off-peak");
+    expect(tariffAt(tariff, Date.UTC(2026, 9, 28, 6, 0))).toBe("peak");
+    expect(tariffAt(tariff, Date.UTC(2026, 9, 28, 9, 59, 59, 999))).toBe("peak");
+    // 10:00 UTC Friday ends the peak window in UTC while the local clock reads
+    // 06:00 — a local-clock implementation would call this one peak.
+    expect(tariffAt(tariff, Date.UTC(2026, 9, 30, 10, 0))).toBe("off-peak");
+    expect(tariffAt(tariff, Date.UTC(2026, 9, 28, 20, 0))).toBe("off-peak");
+  });
+
+  it("is off-peak all weekend even inside peak hours", () => {
+    expect(tariffAt(tariff, Date.UTC(2026, 9, 31, 2, 30))).toBe("off-peak");
+    expect(tariffAt(tariff, Date.UTC(2026, 10, 1, 8, 0))).toBe("off-peak");
+    expect(tariffAt(tariff, Date.UTC(2026, 9, 30, 2, 30))).toBe("peak");
+    expect(tariffAt(tariff, Date.UTC(2026, 10, 2, 8, 0))).toBe("peak");
   });
 });
 

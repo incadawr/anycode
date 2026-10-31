@@ -658,12 +658,19 @@ export function formatUsageCostLedger(
     showsEstimate = true;
   }
   const bases = totals?.priceBasisIds ?? [];
+  // The band a step was billed at rides in its basis id: a time-of-day tariff
+  // snapshot keeps its `-peak-` basis and appends `+off-peak` when the step
+  // fell outside the peak windows, so both bands can appear in one session.
+  const tariffPeak = bases.some((id) => id.includes("-peak-") && !id.endsWith("+off-peak"));
+  const tariffOffPeak = bases.some((id) => id.endsWith("+off-peak"));
   if (bases.some((id) => id.includes("-openai-") || id.startsWith("claude-haiku-5-5-anthropic-"))) {
     parts.push("short-context rate estimates");
   }
-  if (bases.some((id) => id.includes("-peak-"))) parts.push("peak-rate estimates");
+  if (tariffPeak && tariffOffPeak) parts.push("peak & off-peak rate estimates");
+  else if (tariffOffPeak) parts.push("off-peak-rate estimates");
+  else if (tariffPeak) parts.push("peak-rate estimates");
   if (bases.some((id) => id.startsWith("connection:"))) parts.push("connection-rate estimates");
-  if (bases.some((id) => id !== "claude-cli-reported" && !id.startsWith("connection:") && !id.includes("-openai-") && !id.includes("-peak-") && !id.startsWith("claude-haiku-5-5-anthropic-"))) parts.push("standard-rate estimates");
+  if (bases.some((id) => id !== "claude-cli-reported" && !id.startsWith("connection:") && !id.includes("-openai-") && !id.includes("-peak-") && !id.endsWith("+off-peak") && !id.startsWith("claude-haiku-5-5-anthropic-"))) parts.push("standard-rate estimates");
   if (showsEstimate && bases.length === 0) parts.push("estimated rates");
 
   return { total, qualifier: qualifiers.length > 0 ? qualifiers.join(" · ") : null, subagentSuffix, footnote: parts.length > 0 ? parts.join(" · ") : null };

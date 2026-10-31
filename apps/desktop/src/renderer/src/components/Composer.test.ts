@@ -531,6 +531,17 @@ describe("formatUsageCostLedger (one session total, one footnote)", () => {
     expect(formatUsageCostLedger({ ...base, costUsd: 1, priceBasisIds: ["gpt-6.1-sol-openai-2026-10-27"] }, null).footnote).toContain("short-context rate estimates");
     expect(formatUsageCostLedger({ ...base, costUsd: 1, priceBasisIds: ["claude-cli-reported"] }, null).footnote).toBeNull();
     expect(formatUsageCostLedger({ ...base, costUsd: 1, priceBasisIds: ["deepseek-v4-pro-deepseek-peak-2026-10-27"] }, null).footnote).toContain("peak-rate estimates");
+    // The tariff band rides in the basis id, so an off-peak session is labelled
+    // as such — and a session that spans both bands says both. These are
+    // exact strings on purpose: "off-peak-rate estimates" contains the
+    // substring "peak-rate estimates".
+    expect(formatUsageCostLedger({ ...base, costUsd: 1, priceBasisIds: ["deepseek-v4-pro-deepseek-peak-2026-10-27+off-peak"] }, null).footnote)
+      .toBe("off-peak-rate estimates");
+    expect(formatUsageCostLedger({
+      ...base,
+      costUsd: 1,
+      priceBasisIds: ["deepseek-v4-pro-deepseek-peak-2026-10-27", "deepseek-flash-deepseek-peak-2026-10-27+off-peak"],
+    }, null).footnote).toBe("peak & off-peak rate estimates");
   });
 
   it("shows an honest unknown instead of inventing a price", () => {
