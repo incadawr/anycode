@@ -269,3 +269,18 @@ it("lets a gateway's explicit off setting override an always-on catalog hint", (
   expect(resolveEffortLevels(model, settings.entryFor(model), undefined, settings.effortLevelsFor(model))).toEqual(["off", "high"]);
   expect(resolveReasoningEffort(model, settings.entryFor(model), "off", undefined, settings.effortLevelsFor(model))).toBe("off");
 });
+
+it("honors manual reasoning support over a gateway dictionary denial", () => {
+  const model = "vendor/MiniMax-M3-local";
+  const settings = createConnectionModelSettings({ connection: { modelOverrides: { [model]: { reasoningSupported: true, reasoningEffort: "high" } } }, liveCapabilitiesFor: () => undefined });
+  expect(resolveEffortLevels(model, settings.entryFor(model), settings.capabilitiesFor(model))).toContain("high");
+  expect(resolveReasoningEffort(model, settings.entryFor(model), "high", settings.capabilitiesFor(model))).toBe("high");
+});
+
+it.each(["connection", "model"] as const)("honors %s off over a gateway always-on hint", (level) => {
+  const model = "minimax-m3.1-flash-local";
+  const connection = level === "connection" ? { reasoningEffort: "off" as const } : { modelOverrides: { [model]: { reasoningEffort: "off" as const } } };
+  const settings = createConnectionModelSettings({ connection, liveCapabilitiesFor: () => undefined });
+  expect(resolveReasoningEffort(model, settings.entryFor(model), settings.effortFor(model))).toBe("off");
+  expect(settings.switchEffort("other", model, "high")).toBe("off");
+});
