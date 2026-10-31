@@ -56,6 +56,14 @@ const REASONING_BUDGET_TOKENS = { low: 4_096, medium: 12_288, high: 24_576 } as 
 /** GLM-5.2 thinking budgets per supported effort tier. */
 const GLM_BUDGET_TOKENS = { high: 16_000, max: 32_000 } as const;
 
+/**
+ * Generic-path thinking budget for the `max` effort tier on CUSTOM
+ * (non-catalog) Anthropic-compatible endpoints — strictly larger than
+ * high/xhigh's 24_576 so `xhigh` and `max` are always distinguishable on the
+ * wire even for an endpoint that ignores the effort enum.
+ */
+const GENERIC_MAX_BUDGET_TOKENS = 32_000;
+
 /** Z.AI's documented max_tokens ceiling for the GLM-5/4.6 family. */
 const GLM_MAX_TOKENS = 131_072;
 
@@ -328,10 +336,29 @@ export function reasoningRequestOptions(
   }
 
   // Default / real Anthropic (Claude): budgetTokens is the canonical extended-thinking format.
+  // xhigh vs max MUST stay distinguishable on the wire (GitHub #2 review) — but
+  // ONLY for custom (non-catalog) Anthropic-compatible endpoints, which is the
+  // card's scope. The gate is `providerName === undefined`: the wiring layer
+  // sets it from the catalog entry's name only for catalog providers, so
+  // catalog anthropic-transport providers WITHOUT a dedicated branch above
+  // (Kimi, Xiaomi MiMo, …) keep their exact pre-fix request bytes for every
+  // effort — including max (same high budget, no effort field) — rather than
+  // suddenly receiving an `output_config.effort` key and a larger budget a
+  // strict proxy could reject. Custom connections get the fix: both tiers ride
+  // the effort enum (the SDK serializes providerOptions.anthropic.effort to
+  // output_config.effort — same transport the GLM/DeepSeek branches use) AND
+  // get distinct budgets (high's 24_576 vs a strictly larger 32_000 for max),
+  // so even an endpoint that ignores output_config still sees a different
+  // thinking.budget_tokens.
+  const customAnthropicEndpoint = providerName === undefined;
   const budgetTokens =
-    effort === "max" || effort === "xhigh"
-      ? REASONING_BUDGET_TOKENS.high
-      : REASONING_BUDGET_TOKENS[effort as "low" | "medium" | "high"];
+    effort === "max" && customAnthropicEndpoint
+      ? GENERIC_MAX_BUDGET_TOKENS
+      : effort === "max" || effort === "xhigh"
+        ? REASONING_BUDGET_TOKENS.high
+        : REASONING_BUDGET_TOKENS[effort as "low" | "medium" | "high"];
+  const wireEffort =
+    customAnthropicEndpoint && (effort === "max" || effort === "xhigh") ? effort : undefined;
   let maxOutputTokens = Math.max(request.maxOutputTokens ?? 0, budgetTokens + 1_024);
   // The SDK adds the thinking budget to max_tokens on the wire.
   if (isMiMoModel(providerName, modelId)) {
@@ -339,7 +366,12 @@ export function reasoningRequestOptions(
   }
   return {
     maxOutputTokens,
-    providerOptions: { anthropic: { thinking: { type: "enabled", budgetTokens } } },
+    providerOptions: {
+      anthropic: {
+        thinking: { type: "enabled", budgetTokens },
+        ...(wireEffort !== undefined ? { effort: wireEffort } : {}),
+      },
+    },
   };
 }
 
