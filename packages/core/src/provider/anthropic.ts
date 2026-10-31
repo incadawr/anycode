@@ -78,11 +78,20 @@ export function createAnthropicLanguageModel(
   if (isMiMoModel(config.providerName, config.model)) {
     const fetchWithQuota = fetchForProvider;
     // The SDK accepts disabled thinking but omits it from the serialized body.
-    // MiMo enables thinking by default, so restore the omitted field.
+    // MiMo enables thinking by default, so restore the omitted field — but
+    // ONLY for the "No thinking" request, which is exactly the one that carries
+    // no effort enum. A request WITH `output_config.effort` is a reasoning
+    // level: MiMo's tier rides the enum and the request must carry no thinking
+    // key at all (a thinking budget is a field the endpoint ignores, and
+    // `disabled` would turn the level's reasoning off). Deciding this from the
+    // serialized body is deliberate: the port's providerOptions and this fetch
+    // hook are the two halves of one request, and the body is the only place
+    // both halves meet.
     fetchForProvider = (input, init) => {
       if (typeof init?.body !== "string") return fetchWithQuota(input, init);
       const body = JSON.parse(init.body) as Record<string, unknown>;
-      if (body.thinking === undefined) body.thinking = { type: "disabled" };
+      const effort = (body.output_config as { effort?: unknown } | undefined)?.effort;
+      if (body.thinking === undefined && effort === undefined) body.thinking = { type: "disabled" };
       return fetchWithQuota(input, { ...init, body: JSON.stringify(body) });
     };
   }
