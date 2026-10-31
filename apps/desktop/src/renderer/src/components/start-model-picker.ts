@@ -355,7 +355,7 @@ export function startModelEffortLevels(
   const matched = catalog
     ?.find((entry) => entry.id === providerId)
     ?.models.find((model) => model.id === modelId);
-  if (manualLevels !== undefined) return matched?.thinkingAlwaysOn ? manualLevels.filter((level) => level !== "off") : manualLevels;
+  if (manualLevels !== undefined) return (matched?.thinkingAlwaysOn ?? liveCaps?.thinkingAlwaysOn) ? manualLevels.filter((level) => level !== "off") : manualLevels;
   if (matched === undefined) {
     // Taskana 4118: catalog miss ⇒ consult the connection's live caps.
     if (liveCaps?.reasoning !== true) {
@@ -408,17 +408,17 @@ export function startModelDefaultEffort(
   const matched = catalog
     ?.find((entry) => entry.id === providerId)
     ?.models.find((model) => model.id === modelId);
-  const recorded = matched?.defaultEffort;
+  const recorded = matched?.defaultEffort ?? liveCaps?.defaultEffort;
   if (recorded === undefined) {
     return undefined;
   }
-  if (matched?.reasoning !== true) {
+  if ((matched?.reasoning ?? liveCaps?.reasoning) !== true) {
     return undefined;
   }
   const efforts = startModelEffortLevels(providerId, modelId, catalog, liveCaps, overrideLevels);
   if (efforts === undefined) return undefined;
   if (efforts.includes(recorded)) return recorded;
-  if (matched?.thinkingAlwaysOn !== true) return undefined;
+  if ((matched?.thinkingAlwaysOn ?? liveCaps?.thinkingAlwaysOn) !== true) return undefined;
   // The recorded default is outside the offered vocabulary ⇒ the highest
   // offered level takes its place (never `off`: an explicit "no reasoning" is
   // a choice, not a fallback).

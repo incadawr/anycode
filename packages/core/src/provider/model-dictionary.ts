@@ -1,5 +1,5 @@
 import { getBuiltinCatalog } from "./catalog-data.js";
-import type { CatalogModel } from "./catalog.js";
+import type { CatalogModel, CatalogProviderEntry } from "./catalog.js";
 
 /** Normalize a gateway model ID without discarding model-variant suffixes. */
 export function normalizeModelId(id: string): string {
@@ -21,4 +21,14 @@ export function findKnownModel(id: string): CatalogModel | undefined {
   // Refuse ambiguous facts instead of depending on catalog ordering.
   const first = matches[0]!;
   return matches.every((model) => JSON.stringify(model) === JSON.stringify(first)) ? first : undefined;
+}
+
+/** Supply capability defaults to gateways without applying their catalog prices. */
+export function modelDictionaryEntry(id: string, entry: CatalogProviderEntry | undefined, disabled = false): CatalogProviderEntry | undefined {
+  if (disabled || (entry !== undefined && !["custom", "openrouter", "vllm"].includes(entry.id) && !entry.id.startsWith("custom:"))) return entry;
+  if (entry?.models.some((model) => model.id === id) || entry?.retiredModels?.some((model) => model.id === id)) return entry;
+  const model = findKnownModel(id);
+  if (!model) return entry;
+  const { pricing: _pricing, ...capabilities } = model;
+  return { ...(entry ?? { id: "custom", name: "Custom", baseUrl: "", defaultTransport: "openai-chat-completions", supportedTransports: ["openai-chat-completions"], auth: { kind: "api_key" } }), models: [...(entry?.models ?? []), { ...capabilities, id }] };
 }

@@ -199,6 +199,8 @@ export type ReasoningEffort = "off" | "low" | "medium" | "high" | "xhigh" | "max
  * the closed enum happens fail-closed at resolution, never at parse time.
  */
 export interface ModelCapabilitiesDto {
+  defaultEffort?: ReasoningEffort;
+  thinkingAlwaysOn?: boolean;
   reasoning?: boolean;
   effortLevels?: string[];
   /** 4088-on-4118 integration: live `architecture.input_modalities` image fact; `true` only. */
@@ -244,6 +246,7 @@ export type ConnectionPricing =
   | ({ mode: "rates" } & TokenRates);
 
 export interface ModelOverrides {
+  catalogMatchDisabled?: true;
   effortLevels?: ReasoningEffort[];
   pricing?: TokenRates;
   contextWindowTokens?: number;
@@ -1247,6 +1250,7 @@ export type SettingsPatch = Omit<DeepPartial<AnycodeSettings>, "provider">;
 // ── connection CRUD request payloads (companions to the connection-* channels) ──
 
 export interface ConnectionCreateRequest {
+  catalogMatchDisabled?: true;
   effortLevels?: ReasoningEffort[];
   modelPricing?: Record<string, TokenRates>;
   reasoningSupported?: true;
@@ -1341,6 +1345,7 @@ export interface ConnectionUpdateRequest {
   reasoningEffort?: ReasoningEffort | "";
   /** Target of a model override; does not change the connection's default model. */
   modelOverrideModel?: string;
+  catalogMatchDisabled?: true | "";
   effortLevels?: ReasoningEffort[] | "";
   reasoningSupported?: true | "";
   /**

@@ -42,6 +42,7 @@ export interface ChildModelSettings {
 export function buildChildModelSettingsResolver(deps: {
   catalogEntry: CatalogProviderEntry | undefined;
   envMaxOutputTokens: number | undefined;
+  catalogEntryFor?: (modelId: string) => CatalogProviderEntry | undefined;
   envContextWindow: number | undefined;
   envContextWindowModel?: string;
   /** Connection-specific model overrides shared with the desktop parent resolver. */
@@ -55,10 +56,11 @@ export function buildChildModelSettingsResolver(deps: {
   const { catalogEntry, envMaxOutputTokens, envContextWindow, envContextWindowModel, onClamp, onStubFallback, liveCapabilitiesFor } = deps;
   return (modelId, selectedTier) => {
     try {
+      const effectiveEntry = deps.catalogEntryFor?.(modelId) ?? catalogEntry;
       return {
-        maxOutputTokens: resolveMaxOutputTokens(modelId, catalogEntry, envMaxOutputTokens, onClamp, onStubFallback),
-        reasoningEffort: resolveChildReasoningEffort(modelId, catalogEntry, selectedTier, liveCapabilitiesFor?.(modelId), deps.effortLevelsFor?.(modelId)),
-        contextWindowTokens: deps.contextWindowFor?.(modelId) ?? resolveContextWindow(modelId, catalogEntry, envContextWindow, envContextWindowModel),
+        maxOutputTokens: resolveMaxOutputTokens(modelId, envMaxOutputTokens === undefined ? effectiveEntry : catalogEntry, envMaxOutputTokens, onClamp, onStubFallback),
+        reasoningEffort: resolveChildReasoningEffort(modelId, effectiveEntry, selectedTier, liveCapabilitiesFor?.(modelId), deps.effortLevelsFor?.(modelId)),
+        contextWindowTokens: deps.contextWindowFor?.(modelId) ?? resolveContextWindow(modelId, effectiveEntry, envContextWindow, envContextWindowModel),
       };
     } catch {
       // Degrades to the same conservative unknown-model shape a catalog-miss

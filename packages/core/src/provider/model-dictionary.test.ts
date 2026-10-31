@@ -14,3 +14,15 @@ describe("model dictionary", () => {
     expect(findKnownModel("company/glm-5.30-fp8")).toBeUndefined();
   });
 });
+
+it("supplies defaults without prices and respects opt-out and provider boundaries", async () => {
+  const { modelDictionaryEntry } = await import("./model-dictionary.js");
+  const { resolveImageInput, resolveMaxOutputTokens } = await import("./capabilities.js");
+  const id = "vendor/glm-5.3-flash-fp8";
+  const entry = modelDictionaryEntry(id, undefined);
+  expect(resolveImageInput(id, entry, undefined)).toBe(true);
+  expect(resolveImageInput(id, entry, "off")).toBe(false);
+  expect(resolveMaxOutputTokens(id, entry, undefined)).toBe(131_072);
+  expect(entry?.models[0]?.pricing).toBeUndefined();
+  expect(modelDictionaryEntry(id, undefined, true)).toBeUndefined();
+});

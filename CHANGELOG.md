@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Recognize known models on custom and gateway endpoints, with per-model opt-out and catalog reference prices.
+
 ### Fixed
 
 - A connected Claude Code or Codex session keeps reaching AnyCode after the app restarts on a new port with a new token, without reconnecting the MCP client, and an outdated copy of the stdio adapter in the user-data directory is replaced on the next app start.

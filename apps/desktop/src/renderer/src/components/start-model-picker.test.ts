@@ -496,3 +496,14 @@ it("resolves custom connections by base URL for always-on effort", async () => {
   expect(levels).toEqual(["low", "high"]);
   expect(displayedStartEffort(undefined, conn.reasoningEffort, levels, fallback, true)).toBe("high");
 });
+
+it("offers gateway dictionary efforts and default while honoring the per-model opt-out", async () => {
+  const { modelCapabilitiesFor } = await import("../../../shared/model-overrides.js");
+  const model = "vendor/glm-5.3-fp8";
+  const connection = { id: "c", providerId: "custom:local" };
+  const caps = modelCapabilitiesFor(connection, model);
+  expect(startModelEffortLevels(connection.providerId, model, [], caps)).toEqual(["low", "high", "max"]);
+  expect(startModelDefaultEffort(connection.providerId, model, [], caps)).toBe("max");
+  const disabled = modelCapabilitiesFor({ ...connection, modelOverrides: { [model]: { catalogMatchDisabled: true } } }, model);
+  expect(startModelEffortLevels(connection.providerId, model, [], disabled)).toBeUndefined();
+});

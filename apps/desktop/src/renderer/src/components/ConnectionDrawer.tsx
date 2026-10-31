@@ -28,6 +28,7 @@
  */
 import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
+import { findKnownModel } from "@anycode/core/model-dictionary";
 import type {
   CatalogSummary,
   CatalogSummaryEntry,
@@ -1406,6 +1407,8 @@ export function ConnectionDrawerFields({
   const [reasoningSupported, setReasoningSupported] = useState(() =>
     modelOverrideFor(editConnection, editConnection?.model ?? "")?.reasoningSupported === true,
   );
+  const [catalogMatchDisabled, setCatalogMatchDisabled] = useState(() => modelOverrideFor(editConnection, editConnection?.model ?? "")?.catalogMatchDisabled === true);
+  const [catalogMatchDirty, setCatalogMatchDirty] = useState(false);
   const [effortLevels, setEffortLevels] = useState<ReasoningEffort[]>(() => modelOverrideFor(editConnection, editConnection?.model ?? "")?.effortLevels ?? []);
   const [effortLevelsDirty, setEffortLevelsDirty] = useState(false);
   const [modelEffort, setModelEffort] = useState<ReasoningEffort | "">(() =>
@@ -1591,7 +1594,7 @@ export function ConnectionDrawerFields({
   // actually resolves to. Both read only state already in hand — the drawer's
   // own proxySnapshot and the projected catalog/snapshot.
   const motEnvHint = proxySnapshot === null ? null : maxOutputTokensEnvHint(proxySnapshot.envOverrides);
-  const motDefaultHint = maxOutputTokensEffectiveHint(
+  let motDefaultHint = maxOutputTokensEffectiveHint(
     selectedEntry,
     model.trim(),
     proxySnapshot?.defaultMaxOutputTokens,
@@ -1610,7 +1613,7 @@ export function ConnectionDrawerFields({
     simplified && createdConnectionId === null
       ? modelAfterCatalogPrefill(model, selectedEntry?.models ?? [])
       : model;
-  const cwDefaultHint = contextWindowEffectiveHint(
+  let cwDefaultHint = contextWindowEffectiveHint(
     selectedEntry,
     effectiveFormModel.trim(),
     proxySnapshot,
@@ -1619,19 +1622,27 @@ export function ConnectionDrawerFields({
   // Taskana 4088 hints for the Image-input select: what Auto resolves to for
   // the model this form will save (catalog mark, else the connection's live
   // image-modality list), and whether the live feed rides the env right now.
-  const imageInputHint = imageInputEffectiveHint(
+  let imageInputHint = imageInputEffectiveHint(
     selectedEntry,
     effectiveFormModel.trim(),
     targetConnection,
     imageInput,
   );
+  const dictionaryEligible = isNewCustomEndpoint || isCustomRecordConnection || ["", "custom", "openrouter", "vllm"].includes(effectiveProviderId);
+  const dictionaryMatch = dictionaryEligible ? findKnownModel(effectiveFormModel.trim()) : undefined;
   const knownCatalogModel = !effectiveProviderId.startsWith("custom:") &&
     catalog.find((entry) => entry.id === effectiveProviderId)?.models.some((entry) => entry.id === effectiveFormModel.trim()) === true;
   const reasoningLevels = startModelEffortLevels(
     effectiveProviderId, effectiveFormModel.trim(), catalog.filter((entry) => !entry.id.startsWith("custom:")),
     applyModelReasoningOverride(targetConnection?.modelCapabilities?.[effectiveFormModel.trim()], reasoningSupported),
   );
-  const effectiveReasoningLevels = effortLevels.length ? effortLevels : reasoningLevels;
+  const dictionaryActive = !catalogMatchDisabled ? dictionaryMatch : undefined;
+  if (dictionaryActive) {
+    if (!maxOutputTokens.trim() && dictionaryActive.maxOutputTokens !== undefined) motDefaultHint = `catalog: ${dictionaryActive.maxOutputTokens}`;
+    if (!contextWindow.raw.trim()) cwDefaultHint = `catalog: ${Math.min(dictionaryActive.contextWindow, dictionaryActive.usableContextWindow ?? dictionaryActive.contextWindow)}`;
+    if (dictionaryActive.imageInput && imageInput === "auto") imageInputHint = "catalog: vision";
+  }
+  const effectiveReasoningLevels = effortLevels.length ? effortLevels : (reasoningSupported ? reasoningLevels : (!catalogMatchDisabled && dictionaryMatch?.reasoning ? (dictionaryMatch.effortLevels ?? ["off", "low", "medium", "high"]) : reasoningLevels));
   const imageInputFeedHint = proxySnapshot === null ? null : imageInputEnvHint(proxySnapshot.envOverrides);
   // GitHub #1: shown only while ANYCODE_INCLUDE_USAGE overrides the rung.
   const usageEnvHintText = proxySnapshot === null ? null : usageEnvHint(proxySnapshot.envOverrides);
@@ -1655,6 +1666,8 @@ export function ConnectionDrawerFields({
     );
     if (force || contextWindow.model !== effective.trim()) {
       const target = force ? undefined : modelOverrideFor(saved, effective.trim());
+      setCatalogMatchDisabled(target?.catalogMatchDisabled === true);
+      setCatalogMatchDirty(false);
       setReasoningSupported(target?.reasoningSupported === true);
       setModelEffort(target?.reasoningEffort ?? "");
       setEffortLevels(target?.effortLevels ?? []);
@@ -1749,6 +1762,7 @@ export function ConnectionDrawerFields({
           // too, so its value has to travel on THIS create as well.
           ...(usageCreateValue !== undefined ? { includeUsage: usageCreateValue } : {}),
           ...(contextWindow.raw.trim() ? { contextWindowTokens: Number(contextWindow.raw) } : {}),
+          ...(catalogMatchDisabled ? { catalogMatchDisabled: true as const } : {}),
           ...(reasoningSupported ? { reasoningSupported: true as const } : {}),
           ...(effortLevels.length ? { effortLevels } : {}),
           ...(modelEffort !== "" ? { reasoningEffort: modelEffort } : {}),
@@ -1858,6 +1872,7 @@ export function ConnectionDrawerFields({
           ...(noAuth ? { authOptional: true } : {}),
           ...(mot.value !== "" ? { maxOutputTokens: mot.value } : {}),
           ...(cw.value !== "" ? { contextWindowTokens: cw.value } : {}),
+          ...(catalogMatchDisabled ? { catalogMatchDisabled: true as const } : {}),
           ...(reasoningSupported ? { reasoningSupported: true as const } : {}),
           ...(effortLevels.length ? { effortLevels } : {}),
           ...(modelEffort !== "" ? { reasoningEffort: modelEffort } : {}),
@@ -2000,7 +2015,7 @@ export function ConnectionDrawerFields({
           imageInput,
           promptCacheEnabled,
           usage: usageSelection,
-        }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty, effortLevelsDirty, effortLevels }), pricing, modelPricing },
+        }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty, effortLevelsDirty, effortLevels }), ...(catalogMatchDirty ? { catalogMatchDisabled: catalogMatchDisabled ? true as const : "" as const } : {}), pricing, modelPricing },
         selectedModelId !== null && shouldAppendModelToList(selectedModelId, catalogOfferedIds, isCustomRecordConnection)
           ? selectedModelId
           : null,
@@ -2365,6 +2380,10 @@ export function ConnectionDrawerFields({
         </div>
       )}
 
+      {dictionaryMatch && <div className="settings-field">
+        <label><input type="checkbox" disabled={readOnly} checked={!catalogMatchDisabled} onChange={(e) => { setCatalogMatchDisabled(!e.target.checked); setCatalogMatchDirty(true); }} /> Recognized as {dictionaryMatch.name ?? dictionaryMatch.id} — use catalog defaults</label>
+        {!catalogMatchDisabled && dictionaryMatch.pricing && <div className="settings-field-hint">Catalog reference for {dictionaryMatch.name ?? dictionaryMatch.id}: input ${dictionaryMatch.pricing.input}, cached input ${dictionaryMatch.pricing.cachedInput}, output ${dictionaryMatch.pricing.output} per million tokens. Your endpoint may charge differently.</div>}
+      </div>}
       {!knownCatalogModel && <label className="settings-field">
         <span className="settings-field-label">Reasoning support (this model)</span>
         <select className="settings-field-input" aria-label="Reasoning support" disabled={readOnly}

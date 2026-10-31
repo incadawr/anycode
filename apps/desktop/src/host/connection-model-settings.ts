@@ -1,4 +1,5 @@
 import {
+  modelDictionaryEntry,
   resolveContextWindowInfo,
   resolveEffortLevels,
   resolveReasoningEffort,
@@ -41,6 +42,17 @@ export function createConnectionModelSettings(deps: {
   const invalidated = new Set<string>();
   let adjustment: { from: ReasoningEffort; to: ReasoningEffort } | undefined;
 
+  function entryFor(model: string) {
+    const override = modelOverrideFor(connection, model);
+    const entry = modelDictionaryEntry(model, deps.catalogEntry, override?.catalogMatchDisabled === true);
+    // An explicit off declaration on a gateway is stronger than the original
+    // vendor's always-on hint; the gateway may expose a different policy.
+    if (entry !== deps.catalogEntry && entry && (override?.reasoningEffort === "off" || override?.effortLevels?.includes("off"))) {
+      return { ...entry, models: entry.models.map((row) => row.id === model ? { ...row, thinkingAlwaysOn: false, supportsExplicitOff: true } : row) };
+    }
+    return entry;
+  }
+
   function capabilitiesFor(model: string): LiveModelCapabilities | undefined {
     const map = connection?.modelCapabilities;
     const live = deps.readConnection !== undefined
@@ -82,6 +94,7 @@ export function createConnectionModelSettings(deps: {
 
   return {
     refresh,
+    entryFor,
     pricingSnapshot() { return hasReadConnection ? { fallback: connection?.pricing, models: Object.fromEntries(Object.entries(connection?.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => [id, value.pricing])) } : undefined; },
     hasReadConnection() { return hasReadConnection; },
     capabilitiesFor,
@@ -91,14 +104,14 @@ export function createConnectionModelSettings(deps: {
       const envApplies = (!deps.envContextWindowFromSettings || !hasReadConnection) && deps.envContextWindow !== undefined &&
         (deps.envContextWindowModel === undefined || deps.envContextWindowModel === model);
       const override = envApplies ? deps.envContextWindow : modelOverrideFor(connection, model)?.contextWindowTokens;
-      return resolveContextWindowInfo(model, deps.catalogEntry, override, model);
+      return resolveContextWindowInfo(model, entryFor(model), override, model);
     },
     remember(model: string, effort: ReasoningEffort) {
       selected.set(model, effort);
       invalidated.delete(model);
     },
     normalize(model: string, tier: ReasoningEffort): ReasoningEffort {
-      return nearestSupportedEffort(tier, resolveEffortLevels(model, deps.catalogEntry, capabilitiesFor(model), modelOverrideFor(connection, model)?.effortLevels));
+      return nearestSupportedEffort(tier, resolveEffortLevels(model, entryFor(model), capabilitiesFor(model), modelOverrideFor(connection, model)?.effortLevels));
     },
     takeAdjustment() { const value = adjustment; adjustment = undefined; return value; },
     switchEffort(from: string, to: string, tier: ReasoningEffort, explicit = false): ReasoningEffort {
@@ -106,9 +119,9 @@ export function createConnectionModelSettings(deps: {
       // A new persisted choice must not be replaced by Session's previous tier.
       if (!explicit && !invalidated.has(from)) selected.set(from, tier);
       const declaredLevels = modelOverrideFor(connection, to)?.effortLevels;
-      const levels = resolveEffortLevels(to, deps.catalogEntry, capabilitiesFor(to), declaredLevels);
+      const levels = resolveEffortLevels(to, entryFor(to), capabilitiesFor(to), declaredLevels);
       const candidate = explicit ? tier : effortFor(to) ??
-        resolveReasoningEffort(to, deps.catalogEntry, undefined, capabilitiesFor(to), declaredLevels) ?? (levels?.length ? tier : "off");
+        resolveReasoningEffort(to, entryFor(to), undefined, capabilitiesFor(to), declaredLevels) ?? (levels?.length ? tier : "off");
       const next = nearestSupportedEffort(candidate, levels);
       adjustment = next !== candidate ? { from: candidate, to: next } : undefined;
       selected.set(to, next);

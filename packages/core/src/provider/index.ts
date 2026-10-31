@@ -67,4 +67,4 @@ export type { ImageModalityLookup } from "./capabilities.js";
 export { buildChildModelSettingsResolver } from "./child-model-settings.js";
 export type { ChildModelSettings } from "./child-model-settings.js";
 
-export { findKnownModel, normalizeModelId } from "./model-dictionary.js";
+export { findKnownModel, normalizeModelId, modelDictionaryEntry } from "./model-dictionary.js";

@@ -244,3 +244,28 @@ it("refreshes manual vocabularies without borrowing a sibling's levels", () => {
   settings.refresh();
   expect(settings.effortLevelsFor("a")).toEqual(["xhigh"]);
 });
+
+it("resolves gateway catalog defaults per model and honors explicit overrides and opt-out", () => {
+  const id = "vendor/glm-5.3-fp8";
+  const makeSettings = (modelOverrides = {}) => createConnectionModelSettings({ connection: { modelOverrides }, liveCapabilitiesFor: () => undefined });
+  const defaults = makeSettings();
+  expect(defaults.contextFor(id)).toEqual({ tokens: 300_000, source: "catalog" });
+  expect(resolveEffortLevels(id, defaults.entryFor(id))).toEqual(["low", "high", "max"]);
+  expect(resolveReasoningEffort(id, defaults.entryFor(id), undefined)).toBe("max");
+  expect(defaults.entryFor(id)?.models.find(m => m.id === id)?.pricing).toBeUndefined();
+  const manual = makeSettings({ [id]: { contextWindowTokens: 64_000, effortLevels: ["low"] } });
+  expect(manual.contextFor(id).tokens).toBe(64_000);
+  expect(resolveEffortLevels(id, manual.entryFor(id), undefined, manual.effortLevelsFor(id))).toEqual(["low"]);
+  const disabled = makeSettings({ [id]: { catalogMatchDisabled: true } });
+  expect(disabled.contextFor(id).source).toBe("assumed");
+  expect(resolveEffortLevels(id, disabled.entryFor(id))).toBeUndefined();
+  expect(defaults.entryFor("vendor/glm-5.3-flash-fp8")?.models[0]?.imageInput).toBe(true);
+  expect(defaults.entryFor("vendor/glm-5.3-fp8")?.models[0]?.imageInput).not.toBe(true);
+});
+
+it("lets a gateway's explicit off setting override an always-on catalog hint", () => {
+  const model = "minimax-m3.1-flash-local";
+  const settings = createConnectionModelSettings({ connection: { modelOverrides: { [model]: { reasoningEffort: "off", effortLevels: ["off", "high"] } } }, liveCapabilitiesFor: () => undefined });
+  expect(resolveEffortLevels(model, settings.entryFor(model), undefined, settings.effortLevelsFor(model))).toEqual(["off", "high"]);
+  expect(resolveReasoningEffort(model, settings.entryFor(model), "off", undefined, settings.effortLevelsFor(model))).toBe("off");
+});
