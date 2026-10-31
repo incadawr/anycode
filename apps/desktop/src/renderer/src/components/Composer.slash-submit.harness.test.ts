@@ -592,6 +592,22 @@ describe("Composer slash-submit wiring (GitHub #14)", () => {
     expect(harness.sendToHost).toHaveBeenCalledTimes(1);
   });
 
+  it("answers an unknown command that carries arguments locally, instead of spending a turn", () => {
+    const draft = "/foo argument";
+    seed(draft, draft.length);
+    const tree = mountComposer();
+
+    (findTextarea(tree)!.props.onKeyDown as (event: ReturnType<typeof keyDown>) => void)(keyDown());
+
+    expect(harness.apiMethods.setNotice).toHaveBeenCalledWith({
+      kind: "slash_command_rejected",
+      text: "Unknown command: /foo. Type / to see the available commands.",
+    });
+    expect(harness.sendToHost).not.toHaveBeenCalled();
+    expect(harness.apiMethods.appendUserText).not.toHaveBeenCalled();
+    expect(harness.state["composer"]?.[0]).toBe(draft);
+  });
+
   it("leaves slash text to a foreign engine's own surface", () => {
     seed("/clear", 6, makeStoreState({ engine: CODEX_ENGINE }));
     const tree = mountComposer();

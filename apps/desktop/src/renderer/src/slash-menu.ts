@@ -512,8 +512,9 @@ export function resolveBareSlashSubmit(
  * and cost a whole turn to answer "I don't recognize that".
  *
  * Deliberately narrow, because a leading `/` is also how a user writes a path:
- * only a WHOLE draft (whitespace-free, so prose never matches) shaped like a
- * command is considered, and only two shapes count —
+ * only a draft whose FIRST word is a command token is considered (so prose never
+ * matches and `/foo argument` is answered rather than sent), and only two
+ * shapes count —
  *   - a single `/name` whose `name` is not a registry id (`/foo`, `/help`), or
  *   - a token built from one KNOWN id repeated (`/compact/compact`), which is
  *     never a plausible path and is exactly what a refused command retyped
@@ -537,10 +538,13 @@ export function unknownSlashCommandNotice(
   options: UnknownSlashCommandOptions = {},
 ): string | null {
   const trimmed = text.trim();
-  if (!trimmed.startsWith("/") || /\s/.test(trimmed)) {
+  if (!trimmed.startsWith("/")) {
     return null;
   }
-  const segments = trimmed.slice(1).split("/");
+  // Only the FIRST word is the command token; the words after it (`/foo arg`)
+  // are what the user meant to pass the command, not a new sentence.
+  const token = trimmed.split(/\s/, 1)[0] ?? "";
+  const segments = token.slice(1).split("/");
   const first = segments[0] ?? "";
   // A command id is a word; anything else (`.`/`:`/`%`/empty) is not a command
   // the menu could ever have offered, so it is far more likely a path or prose.
@@ -548,8 +552,8 @@ export function unknownSlashCommandNotice(
     return null;
   }
   // An absolute path names an entry of the filesystem root: `/tmp`, `/etc`,
-  // `/Users`, or any other real top-level directory. Such a draft is the
-  // user's message, not a command.
+  // `/Users`, or any other real top-level directory. Such a draft — with or
+  // without words after it — is the user's message, not a command.
   if (segments.length === 1 && options.pathRoots?.has(first) === true) {
     return null;
   }
@@ -557,7 +561,7 @@ export function unknownSlashCommandNotice(
   const unknownSingle = segments.length === 1 && !isKnown(first);
   const unknownDoubled = segments.length > 1 && segments.every((segment) => segment === first) && isKnown(first);
   return unknownSingle || unknownDoubled
-    ? `Unknown command: ${trimmed}. Type / to see the available commands.`
+    ? `Unknown command: ${token}. Type / to see the available commands.`
     : null;
 }
 
