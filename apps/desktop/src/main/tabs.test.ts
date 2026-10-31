@@ -175,12 +175,23 @@ function codexManager(fork: HostForkFn) {
 }
 
 /**
- * vi.waitFor wrapper with a deadline sized for a loaded CI runner (the vitest
- * default of 1 s flakes when the event loop is saturated) — see the CLI
- * integration wait fix for the same rationale.
+ * Deadline for the load-tolerant waits below, sized for a saturated CI
+ * runner (the vitest 1 s waitFor default flakes when the event loop is
+ * busy) — see the CLI integration wait fix for the same rationale.
  */
+const CI_WAIT_TIMEOUT_MS = 15_000;
+
+/**
+ * The waits below may legitimately run for CI_WAIT_TIMEOUT_MS, and a test can
+ * cross more than one of them, so the enclosing test timeout is raised above
+ * them: with the stock 5 s test timeout a slow wait would fail the test
+ * before its own deadline ever elapsed. The guard test at the end of this
+ * file pins the relation.
+ */
+vi.setConfig({ testTimeout: CI_WAIT_TIMEOUT_MS * 2 });
+
 async function waitForCi(check: () => void): Promise<void> {
-  await vi.waitFor(check, { timeout: 15_000, interval: 25 });
+  await vi.waitFor(check, { timeout: CI_WAIT_TIMEOUT_MS, interval: 25 });
 }
 
 /** Drains the microtask exit-chain (bounded by the breakers). */
@@ -8283,4 +8294,15 @@ describe("TabHostManager — prepared (unpublished) tabs", () => {
     expect(finished).toBe(true);
     expect(r.hosts).toHaveLength(1);
   });
+});
+
+/**
+ * Guard for the load-tolerant waits above: the enclosing test timeout this
+ * file registers must stay ABOVE the wait deadline, otherwise a slow (but
+ * still passing) wait fails the test at the vitest default before its own
+ * deadline. Reading the resolved timeout from the test context makes the
+ * relation checkable here instead of living in a comment.
+ */
+it("registers a test timeout above the load-tolerant wait deadline", ({ task }) => {
+  expect(task.timeout).toBeGreaterThanOrEqual(CI_WAIT_TIMEOUT_MS * 2);
 });
