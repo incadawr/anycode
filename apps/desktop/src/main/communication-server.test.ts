@@ -1933,6 +1933,47 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     expect(seen[1]).not.toHaveProperty("effort");
   });
 
+  // ── create_session account (Sessions API) ───────────────────────────────
+  it("forwards create_session account unchanged — main is the one that judges the registry id", async () => {
+    const seen: CreateSessionRequest[] = [];
+    const f = await createFixture({
+      creator: async (input) => {
+        seen.push(input);
+        return { ok: true, sessionId: "acct-1", tabId: "tab-1" };
+      },
+    });
+    const tool = (await f.client.listTools()).tools.find((t) => t.name === "create_session")!;
+    expect(tool.inputSchema).toMatchObject({
+      properties: { account: { type: "string" } },
+      additionalProperties: false,
+    });
+
+    const created = value(
+      await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, engine: "codex", account: "account-a" } }),
+    );
+    expect(created.sessionId).toBe("acct-1");
+    expect(seen[0]).toMatchObject({ engine: "codex", account: "account-a" });
+
+    // Omitting it stays an omission: main resolves the account marked Default.
+    value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, engine: "codex" } }));
+    expect(seen[1]).not.toHaveProperty("account");
+  });
+
+  it("returns invalid_account with main's candidate list verbatim", async () => {
+    const detail = 'no Codex account "ghost"; known accounts: System (system), Account A (account-a)';
+    const f = await createFixture({ creator: async () => ({ ok: false, reason: "invalid_account", detail }) });
+    const result = await f.client.callTool({
+      name: "create_session",
+      arguments: { workspace: f.dir, engine: "codex", account: "ghost" },
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    // The complete text: a client corrects itself from the candidate list.
+    expect(errorText(result)).toBe(
+      `create_session invalid_account: the requested Codex account does not name exactly one configured account (pass a profile id or its label from Settings → Codex; omitting it uses the default account) — ${detail}`,
+    );
+  });
+
   it("returns invalid_effort with allowed levels verbatim", async () => {
     const detail = 'engine=codex; model="gpt-6.1-terra"; effort="turbo"; allowed=["low","medium","high","xhigh"]; reason=not_advertised';
     const f = await createFixture({ creator: async () => ({ ok: false, reason: "invalid_effort", detail }) });

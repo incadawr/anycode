@@ -1,4 +1,6 @@
 import { modelSettingsTarget } from "../model-settings-target.js";
+import { describeCodexAccountLine } from "../codex-account-line.js";
+import type { CodexTabAccountResult } from "../../../shared/codex-account.js";
 import { resolveProfileRoles, rolesPatch } from "../../../shared/role-profiles.js";
 /**
  * Message input + turn controls (design §5, restructured in UI-5). Sends
@@ -1000,6 +1002,7 @@ function CtxPopover({
   tint,
   supportsContextBreakdown,
   contextWindowAssumed,
+  codexAccountLine,
 }: {
   contextUsage: ContextUsage | null;
   contextBreakdown: WireContextBreakdown | null;
@@ -1019,6 +1022,8 @@ function CtxPopover({
   supportsContextBreakdown: boolean;
   /** Taskana 4127: the window is the assumed unknown-model fallback — show the hint. */
   contextWindowAssumed: boolean;
+  /** "Codex account: <label> (default)" for a Codex session; null hides the line (core/Claude, or unknown). */
+  codexAccountLine: string | null;
 }) {
   const sendToHost = useTabSend();
   const latestTurnId = useTabStore((state) => state.latestTurnId);
@@ -1263,6 +1268,11 @@ function CtxPopover({
                 {quotaView.creditsLine !== null && <div className="ctx-popover-session">{quotaView.creditsLine}</div>}
               </>
             )}
+            {/* the quota above belongs to THIS account — name it,
+                so a session's spend is never a mystery again. */}
+            {codexAccountLine !== null && (
+              <div className="ctx-popover-session ctx-popover-codex-account">{codexAccountLine}</div>
+            )}
           </div>
         </div>
       )}
@@ -1374,6 +1384,39 @@ export function Composer() {
   const usageAudit = useTabStore((state) => state.usageAudit);
   const quota = useTabStore((state) => state.quota);
   const engine = useTabStore((state) => state.engine);
+  // which Codex account THIS tab runs on, for the context
+  // popover's account line. Main owns the answer (tab's own resolved profile +
+  // registry label); the renderer only asks. The ACCOUNT cannot change under a
+  // live tab, but `isDefault` can (Settings → "Make default" while this tab is
+  // open), so the read is repeated on every `engines-changed` push — the same
+  // signal the rest of the app uses for "the Codex registry moved".
+  const composerTabId = useContext(TabContext)?.tabId ?? null;
+  const [codexTabAccount, setCodexTabAccount] = useState<CodexTabAccountResult | null>(null);
+  const codexEngineActive = engine?.id === "codex";
+  useEffect(() => {
+    if (!codexEngineActive || composerTabId === null) {
+      setCodexTabAccount(null);
+      return;
+    }
+    const api = window.anycode?.codex;
+    if (typeof api?.tabAccount !== "function") return;
+    let cancelled = false;
+    const load = (): void => {
+      void api
+        .tabAccount(composerTabId)
+        .then((result) => {
+          if (!cancelled) setCodexTabAccount(result);
+        })
+        .catch(() => {});
+    };
+    load();
+    const unsubscribe = window.anycode?.onEnginesChanged?.(load);
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [codexEngineActive, composerTabId]);
+  const codexAccountLine = describeCodexAccountLine(codexTabAccount);
   const pendingEngineChange = useTabStore((state) => state.pendingEngineChange);
   const shell = useTabStore((state) => state.shell);
   // Taskana 4110 (TASK.123): the engine's live steering verdict — true means
@@ -2225,20 +2268,22 @@ export function Composer() {
           {hintText}
         </span>
         <div className="composer-footer-right">
-          {supportsContextUsage && (ctxPercent !== null || usageAudit.totals !== null || sessionTokens !== null) && (
-            <CtxPopover
-              contextUsage={contextUsage}
-              contextBreakdown={contextBreakdown}
-              sessionTokens={sessionTokens}
-              usageAudit={usageAudit}
-              turnStatus={turn.status}
-              quota={quota}
-              percent={ctxPercent}
-              tint={ctxTint}
-              supportsContextBreakdown={supportsContextBreakdown}
-              contextWindowAssumed={contextWindowAssumed === true}
-            />
-          )}
+          {supportsContextUsage &&
+            (ctxPercent !== null || usageAudit.totals !== null || sessionTokens !== null || codexAccountLine !== null) && (
+              <CtxPopover
+                contextUsage={contextUsage}
+                contextBreakdown={contextBreakdown}
+                sessionTokens={sessionTokens}
+                usageAudit={usageAudit}
+                turnStatus={turn.status}
+                quota={quota}
+                percent={ctxPercent}
+                tint={ctxTint}
+                supportsContextBreakdown={supportsContextBreakdown}
+                contextWindowAssumed={contextWindowAssumed === true}
+                codexAccountLine={codexAccountLine}
+              />
+            )}
           {running ? (
             <>
               {hasSendableDraft(text, attachedImages.length) && (

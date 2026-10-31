@@ -59,6 +59,25 @@ describe("sanitizeAgentEvent", () => {
     });
   });
 
+  it("attaches a Codex usage-limit notice for a real-shaped codex turn failure, and only for the codex engine", () => {
+    // What the app-server actually carries up as the turn error: a plain
+    // message with the structured code as text (`TurnError.codexErrorInfo`).
+    const event: AgentEvent = {
+      type: "error",
+      error: new Error("turn failed: usageLimitExceeded (HTTP 429 Too Many Requests)"),
+      safe: { code: "quota", message: "quota exhausted" },
+    };
+    expect(sanitizeAgentEvent(event, "codex")).toMatchObject({
+      type: "error",
+      notice: { kind: "usage_limit", code: 429, engine: "codex" },
+    });
+    // The same failure on any other engine is NOT a Codex notice: a Claude or
+    // core quota error must never offer the Codex account remedy.
+    expect(sanitizeAgentEvent(event, "claude")).not.toHaveProperty("notice");
+    expect(sanitizeAgentEvent(event, "core")).not.toHaveProperty("notice");
+    expect(sanitizeAgentEvent(event)).not.toHaveProperty("notice");
+  });
+
   it("forwards TASK.33 W7b retry metadata onto the wire error event unchanged", () => {
     const event: AgentEvent = {
       type: "error",

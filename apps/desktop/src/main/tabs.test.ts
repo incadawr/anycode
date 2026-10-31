@@ -951,7 +951,7 @@ describe("TabHostManager — per-tab circuit breaker", () => {
       sessionId: "sess-L",
       resume: false,
       engine: "codex",
-      codexProfile: { id: "acc2", home: "/Users/x/.codex-accounts/acc2" },
+      codexProfile: { id: "account-b", home: "/Users/x/.codex-accounts/account-b" },
     });
     await flush();
 
@@ -959,9 +959,9 @@ describe("TabHostManager — per-tab circuit breaker", () => {
       "--session",
       "sess-L",
       "--codex-profile",
-      "acc2",
+      "account-b",
       "--codex-home",
-      "/Users/x/.codex-accounts/acc2",
+      "/Users/x/.codex-accounts/account-b",
     ]);
   });
 
@@ -2802,6 +2802,162 @@ describe("TabHostManager — engine-aware spawnChild (TASK.102 CUT-S4 §3.2)", (
     expect(childArgs).not.toContain("--engine-preset");
     const childEnv = forkSpy.mock.calls[1]?.[2]?.env ?? {};
     expect(childEnv).not.toHaveProperty("ANYCODE_CONNECTION_ID");
+  });
+
+  it("a codex child inherits its parent tab's resolved profile verbatim — the child's fork carries the same --codex-profile/--codex-auth-link, and a claude child of the same tab carries none", async () => {
+    const { hosts } = shutdownableForkRig();
+    const forkSpy = vi.fn<HostForkFn>((_entry, _args, opts) => {
+      const host = new FakeHost();
+      hosts.push(host);
+      queueMicrotask(() => host.emit("spawn"));
+      host.postMessage.mockImplementation((msg: unknown) => {
+        if ((msg as { type?: unknown }).type === "shutdown") queueMicrotask(() => host.emit("exit", 0));
+      });
+      return host as unknown as UtilityProcess;
+    });
+    const { window } = windowRig();
+    const manager = childManager(forkSpy, window, { engineReady: () => true });
+    const root = manager.createTab({
+      workspace: "/ws",
+      sessionId: "root-codex-child-profile",
+      resume: false,
+      engine: "codex",
+      codexProfile: { id: "account-a", authLink: "/Users/x/.codex/auth.json" },
+    });
+    expect(root.ok).toBe(true);
+    // The parent's own spawn proves the fixture really describes the tab.
+    expect(forkSpy.mock.calls[0]?.[1]).toEqual(
+      expect.arrayContaining(["--codex-profile", "account-a", "--codex-auth-link", "/Users/x/.codex/auth.json"]),
+    );
+
+    hosts[0]!.emit("message", spawnRequest({ requestId: "codex-child-profile", engine: "codex" }));
+
+    const codexChildArgs = forkSpy.mock.calls[1]?.[1] ?? [];
+    expect(codexChildArgs).toEqual(
+      expect.arrayContaining(["--codex-profile", "account-a", "--codex-auth-link", "/Users/x/.codex/auth.json"]),
+    );
+
+    hosts[0]!.emit("message", spawnRequest({ requestId: "claude-child-profile", engine: "claude" }));
+
+    const claudeChildArgs = forkSpy.mock.calls[2]?.[1] ?? [];
+    expect(claudeChildArgs).not.toContain("--codex-profile");
+    expect(claudeChildArgs).not.toContain("--codex-auth-link");
+  });
+
+  it("a codex child of a core tab runs on the DEFAULT Codex account, and the gate asks about that same account", async () => {
+    const { hosts } = shutdownableForkRig();
+    const forkSpy = vi.fn<HostForkFn>((_entry, _args) => {
+      const host = new FakeHost();
+      hosts.push(host);
+      queueMicrotask(() => host.emit("spawn"));
+      host.postMessage.mockImplementation((msg: unknown) => {
+        if ((msg as { type?: unknown }).type === "shutdown") queueMicrotask(() => host.emit("exit", 0));
+      });
+      return host as unknown as UtilityProcess;
+    });
+    const { window } = windowRig();
+    const engineReady = vi.fn((_engine: EngineId, _codexProfileId?: string) => true);
+    const resolveDefaultCodexProfile = vi.fn(async () => ({
+      ok: true as const,
+      codexProfile: { id: "account-b", home: "/Users/x/.codex-accounts/account-b" },
+    }));
+    const manager = childManager(forkSpy, window, { engineReady, resolveDefaultCodexProfile });
+    expect(manager.createTab({ workspace: "/ws", sessionId: "root-core-default-codex", resume: false }).ok).toBe(true);
+
+    hosts[0]!.emit("message", spawnRequest({ requestId: "core-codex-default", engine: "codex" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const args = forkSpy.mock.calls[1]?.[1] ?? [];
+    expect(args).toEqual(
+      expect.arrayContaining(["--codex-profile", "account-b", "--codex-home", "/Users/x/.codex-accounts/account-b"]),
+    );
+    expect(resolveDefaultCodexProfile).toHaveBeenCalledTimes(1);
+    expect(engineReady).toHaveBeenLastCalledWith("codex", "account-b");
+  });
+
+  it("a codex child of a SYSTEM-account tab stays on System even though a default profile exists", async () => {
+    const { hosts } = shutdownableForkRig();
+    const forkSpy = vi.fn<HostForkFn>((_entry, _args) => {
+      const host = new FakeHost();
+      hosts.push(host);
+      queueMicrotask(() => host.emit("spawn"));
+      host.postMessage.mockImplementation((msg: unknown) => {
+        if ((msg as { type?: unknown }).type === "shutdown") queueMicrotask(() => host.emit("exit", 0));
+      });
+      return host as unknown as UtilityProcess;
+    });
+    const { window } = windowRig();
+    const resolveDefaultCodexProfile = vi.fn(async () => ({
+      ok: true as const,
+      codexProfile: { id: "account-b" },
+    }));
+    const manager = childManager(forkSpy, window, { engineReady: () => true, resolveDefaultCodexProfile });
+    expect(
+      manager.createTab({ workspace: "/ws", sessionId: "root-codex-system", resume: false, engine: "codex" }).ok,
+    ).toBe(true);
+
+    hosts[0]!.emit("message", spawnRequest({ requestId: "system-codex-child", engine: "codex" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const args = forkSpy.mock.calls[1]?.[1] ?? [];
+    expect(args).not.toContain("--codex-profile");
+    expect(resolveDefaultCodexProfile).not.toHaveBeenCalled();
+  });
+
+  it("a codex child's readiness gate asks about the tab's OWN account, not the default one", async () => {
+    const { hosts } = shutdownableForkRig();
+    const forkSpy = vi.fn<HostForkFn>((_entry, _args) => {
+      const host = new FakeHost();
+      hosts.push(host);
+      queueMicrotask(() => host.emit("spawn"));
+      host.postMessage.mockImplementation((msg: unknown) => {
+        if ((msg as { type?: unknown }).type === "shutdown") queueMicrotask(() => host.emit("exit", 0));
+      });
+      return host as unknown as UtilityProcess;
+    });
+    const { window } = windowRig();
+    // Only the explicit profile answers "ready"; the default (undefined) does not.
+    const engineReady = vi.fn((_engine: EngineId, codexProfileId?: string) => codexProfileId === "account-a");
+    const manager = childManager(forkSpy, window, { engineReady });
+    const root = manager.createTab({
+      workspace: "/ws",
+      sessionId: "root-codex-own-account",
+      resume: false,
+      engine: "codex",
+      codexProfile: { id: "account-a" },
+    });
+    expect(root.ok).toBe(true);
+
+    hosts[0]!.emit("message", spawnRequest({ requestId: "codex-own-account", engine: "codex" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const args = forkSpy.mock.calls[1]?.[1] ?? [];
+    expect(args).toEqual(expect.arrayContaining(["--codex-profile", "account-a"]));
+    expect(engineReady).toHaveBeenLastCalledWith("codex", "account-a");
+  });
+
+  it("a codex child of a core tab is refused when the DEFAULT account cannot be resolved", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, {
+      engineReady: () => true,
+      resolveDefaultCodexProfile: async () => ({ ok: false as const }),
+    });
+    expect(manager.createTab({ workspace: "/ws", sessionId: "root-core-no-default", resume: false }).ok).toBe(true);
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "core-codex-no-default", engine: "codex" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "core-codex-no-default")).toMatchObject({
+      kind: "rejected",
+      reason: "not_ready",
+    });
+    expect(hosts).toHaveLength(1);
   });
 
   // TASK.102 S4 gate-fix (L1): tabs.ts:1249 states connectionId is "Never

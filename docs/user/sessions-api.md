@@ -16,7 +16,7 @@ send them a message. It is a local MCP endpoint that runs while AnyCode is open.
 | `wait_for_result` | Waits (up to 120 s per call) until the turn that took your message finishes, then returns its answer. Returns `pending` on timeout; call it again. |
 | `cancel_turn` | Stops the running turn of a shared session, like the Stop button. Queued messages are rejected and parked approvals are denied. An idle session answers `cancelled: false`, which is not an error. |
 | `close_session` | Closes a shared tab opened by `create_session`; stop a running turn with `cancel_turn` first. |
-| `create_session` | Opens a new tab in a project where you switched on **Allow agents to open tasks here**, optionally with a validated reasoning effort. See "Let agents open tasks" below. |
+| `create_session` | Opens a new tab in a project where you switched on **Allow agents to open tasks here**, optionally with a validated reasoning effort and — for a Codex session — a chosen Codex account. See "Let agents open tasks" below. |
 | `list_pending_approvals` | Lists tool requests waiting for an answer. Only sessions with **External approvals** on. See below. |
 | `answer_approval` | Allows or denies one pending request of a session with **External approvals** on. See below. |
 
@@ -215,7 +215,14 @@ Rules and limits:
   its effort), `invalid_model` (`model` does not select exactly one provider
   connection; the text lists the candidates), `invalid_effort` (the requested
   effort is not one the selected model advertises; the text lists the allowed
-  values).
+  values), `invalid_account` (the requested Codex account names no configured
+  account, or a label two accounts share; the text lists the candidates).
+- `account` (optional, `engine: "codex"` only) picks the Codex account the new
+  session runs on: a profile id or its label from **Settings → Codex**. Omit it
+  to start on the account marked **Default** there; an unknown or ambiguous
+  value is refused `invalid_account` instead of guessing, because the choice
+  decides whose subscription is spent. Sending `account` with any other engine
+  is refused `invalid_account` too — there is no Codex account to select there.
 - Tabs an agent opened carry an **agent** marker in the sidebar row and in the
   session header. Agent-opened marking is in memory: after an app restart,
   restored tabs have no agent marker and cannot be closed by agents
@@ -341,6 +348,7 @@ Services that bridge an outside channel use the same tools. See the
 | `create_session` says `rate_limited` or `too_many` | At most 5 per minute and 8 agent-opened tabs alive. Wait, or close some. |
 | `create_session` says `invalid_model` | The `model` value matches no configured provider connection, or more than one. The error lists the connections; retry with a connection id, its label, `<providerId>/<model>`, or omit `model`. |
 | `create_session` says `invalid_effort` | The selected model does not advertise that effort. The error lists the allowed values for that engine and model; retry with one of them, or omit `effort` to use the engine default. |
+| `create_session` says `invalid_account` | The `account` value names no configured Codex account, a label two accounts share, or it was sent for an engine other than `codex`. The error lists the accounts as `label (id)`; retry with the id, omit `account` to use the default, or drop it for a non-Codex session. |
 | Copy buttons are disabled | The endpoint is not listening. Fix the status first. |
 | Copied config says the adapter was not found | This build does not include the adapter. Install an official build. |
 | `401` after you regenerate the token | Check that the discovery file is private and current, then retry the call or restart the MCP connection. |

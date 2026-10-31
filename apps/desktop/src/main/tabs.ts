@@ -154,6 +154,14 @@ function childEngineNotReadyMessage(engine: EngineId): string {
   return `Agent: the "${engine}" engine is not available in this host, so a child session could not be started. Use tier "inline".`;
 }
 /**
+ * A codex child of a tab with no profile of its own runs on the DEFAULT Codex
+ * account; when that account cannot be resolved there is nothing honest to
+ * spawn, and the ambient `~/.codex` plan is never the fallback.
+ */
+function childCodexAccountNotReadyMessage(): string {
+  return 'Agent: the default Codex account is not available (it may have been removed or signed out). Pick an account in Settings → Codex, or use tier "inline".';
+}
+/**
  * TASK.102 CUT-S4 §3.2 п.3: main never trusts payload identity (file header)
  * — an engine child is core-side already refused a `provider` (tools/agent.ts
  * §2.2 п.1), and main refuses it independently here rather than resolving it.
@@ -739,6 +747,17 @@ export interface TabHostManagerDeps {
    * active profile answers (today's single-profile behaviour; no symmetry).
    */
   engineReady?: (engine: EngineId, codexProfileId?: string) => boolean;
+  /**
+   * Resolves the DEFAULT Codex account (`settings.codex.activeProfileId`) for a
+   * codex child whose parent tab carries no profile of its own — a core or
+   * claude tab spawning a Codex subagent. The child must spend the same account
+   * a pick-less tab would, never the ambient `~/.codex` plan. Absent = such a
+   * child stays ambient. `{ ok: false }` refuses the spawn instead of falling
+   * back silently.
+   */
+  resolveDefaultCodexProfile?: () => Promise<
+    { ok: true; codexProfile?: { id?: string; home?: string; authLink?: string } } | { ok: false }
+  >;
   /** Fresh, engine-specific host-env overlay. It must contain no credentials. */
   engineEnv?: (engine: EngineId, generation: number) => NodeJS.ProcessEnv;
   /**
@@ -2244,7 +2263,49 @@ export class TabHostManager {
     // `createTab` consults, never a second authority. Absent = core, byte-
     // compatible with every S2 producer.
     const engine: EngineId = req.engine ?? "core";
-    if (!this.isEngineReady(engine)) {
+    // A Codex child's account, resolved ONCE: the parent tab's own profile
+    // verbatim — a tab on the System account keeps System, default profile or
+    // not — or, for a parent that has no Codex account at all (core/claude),
+    // the DEFAULT account a pick-less tab would get. Both the readiness gate
+    // below and the child's argv read this one value.
+    let childCodexProfile: { id?: string; home?: string; authLink?: string } | null = null;
+    if (engine === "codex") {
+      if (parentTab.engine === "codex") {
+        childCodexProfile = parentTab.codexProfile;
+      } else if (this.deps.resolveDefaultCodexProfile !== undefined) {
+        let resolved: { ok: true; codexProfile?: { id?: string; home?: string; authLink?: string } } | { ok: false };
+        try {
+          resolved = await this.deps.resolveDefaultCodexProfile();
+        } catch {
+          resolved = { ok: false };
+        }
+        // Generation custody after the await: a closed/replaced parent, a quit,
+        // or a request another funnel already settled must not fork.
+        if (this.childSpawnKeys.get(spawnKey) !== req.requestId) return;
+        if (
+          this.tabs.get(parentTab.tabId) !== parentTab ||
+          parentTab.proc !== sender ||
+          parentTab.state !== "running" ||
+          this.quitting
+        ) {
+          this.childSpawnKeys.delete(spawnKey);
+          return;
+        }
+        if (!resolved.ok) {
+          reject("not_ready", childCodexAccountNotReadyMessage());
+          return;
+        }
+        childCodexProfile = resolved.codexProfile ?? null;
+      }
+    }
+    // The profile id is passed only when there is one: an ambient/system child
+    // keeps the single-argument call every non-Codex spawn already makes.
+    const codexChildProfileId = childCodexProfile?.id;
+    const engineSpawnable =
+      codexChildProfileId === undefined
+        ? this.isEngineReady(engine)
+        : this.isEngineReady(engine, codexChildProfileId);
+    if (!engineSpawnable) {
       reject("not_ready", childEngineNotReadyMessage(engine));
       return;
     }
@@ -2457,10 +2518,16 @@ export class TabHostManager {
     // CORE child keeps every S2 field byte-identical (modelOverride,
     // connectionId inherited); an ENGINE child instead carries its model as
     // `engineModel` (rides `--engine-model` on the child's one, always-first
-    // spawn) and NEVER an `enginePreset`/`codexProfile`/`connectionId` — the
-    // preset comes from `--child-mode` (§4.2, host-side), the account is
-    // ambient (RS4-0-4), and `connectionId` is "Never consulted for a
-    // non-core engine" (tab-ipc law).
+    // spawn) and NEVER an `enginePreset`/`connectionId` — the preset comes
+    // from `--child-mode` (§4.2, host-side), and `connectionId` is "Never
+    // consulted for a non-core engine" (tab-ipc law).
+    //
+    // A CODEX child INHERITS its parent tab's resolved profile: the account is
+    // part of the tab's identity, so a subagent must spend the same
+    // subscription the user chose (and the same default the tab resolved),
+    // never the ambient `~/.codex` one. A core parent carries no profile (core
+    // owns no Codex account), so its codex child takes the DEFAULT account —
+    // resolved before the readiness gate above, so gate and argv agree.
     // TASK.180 + 4820 F1: the CREATING spawn's stamped budget (only a fresh
     // child carries one) — minted once here, used both for the argv stamp
     // (childOf.maxTurns, below) and for the accepted event's effective-cap
@@ -2480,7 +2547,9 @@ export class TabHostManager {
       // Engine children carry the profile's declared effort VERBATIM (xhigh
       // included); the core path keeps its existing effortOverride gate above.
       engineEffort: engine !== "core" ? (req.effort ?? null) : null,
-      codexProfile: null,
+      // The account resolved above (parent's own, or the default for a
+      // profile-less parent) — the same value the readiness gate judged.
+      codexProfile: engine === "codex" ? childCodexProfile : null,
       proc: null,
       hostGeneration: 0,
       engineProcess: null,

@@ -25,6 +25,7 @@ import {
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageList } from "./MessageList.js";
+import type { CodexContinueController } from "../codex-continue.js";
 import { createDesktopStore, type ErrorRetryMeta, type RetryOffer, type ToolCallBlock, type TranscriptBlock } from "../store.js";
 import { agentMessageText, type AgentEnvelope } from "../../../shared/communication.js";
 
@@ -836,5 +837,51 @@ describe("topmostVisibleUserIndex (TASK.48 minimap scroll-spy core, 4086 follow-
   it("a single bubble above the midpoint is index 0", () => {
     expect(spy([200], 100, 500)).toBe(0);
     expect(spy([900], 100, 500)).toBe(null);
+  });
+});
+
+describe("usage limit — Codex account escape hatch", () => {
+  const blocks = (): TranscriptBlock[] => [
+    { kind: "usage_limit", id: "usage-1", notice: { kind: "usage_limit", code: 1308, resetAt: Date.UTC(2026, 10, 1, 0, 0, 0) } },
+  ];
+  const base = {
+    blocks: blocks(),
+    turn: { status: "idle" as const, turnId: null, requestId: null },
+    workspace: null,
+    connection: "ready" as const,
+    retry: null,
+    onTryAgain: () => {},
+    continueOffer: null,
+    onContinue: () => {},
+    promptQueueLength: 0,
+  };
+  const controller = (): CodexContinueController => ({
+    accounts: async () => [{ id: "work", label: "Work" }],
+    continueOn: async () => ({ ok: true }),
+  });
+
+  it("offers \"Continue on another account\" on a Codex session", () => {
+    const html = renderToStaticMarkup(
+      createElement(MessageList, { ...base, codexContinue: controller() }),
+    );
+    expect(html).toContain("Continue on another account");
+  });
+
+  it("never offers it where the surface did not arm a Codex account switch (core/Claude quota errors)", () => {
+    const html = renderToStaticMarkup(createElement(MessageList, base));
+    expect(html).not.toContain("Continue on another account");
+  });
+
+  it("a notice without a reset time renders without the \"Resets at\" clause (Codex 429 need not carry one)", () => {
+    const html = renderToStaticMarkup(
+      createElement(MessageList, {
+        ...base,
+        blocks: [
+          { kind: "usage_limit", id: "usage-2", notice: { kind: "usage_limit", code: 429, engine: "codex" } },
+        ],
+      }),
+    );
+    expect(html).toContain("Provider quota is exhausted.");
+    expect(html).not.toContain("Resets at");
   });
 });

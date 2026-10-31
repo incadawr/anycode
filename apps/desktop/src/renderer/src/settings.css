@@ -3074,6 +3074,28 @@
   color: var(--text-3);
 }
 
+/* the account new sessions start on. A small accent pill — it is
+   a standing state, not a status sentence, so it reads at a glance next to
+   the label rather than competing with the doctor detail below. */
+.codex-profile-default {
+  padding: 0.05rem var(--sp-2);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  line-height: 1.5;
+}
+
+/* One-line explanation under the "Accounts" heading: the default is a choice,
+   and this is what it governs. */
+.codex-default-account-hint {
+  flex: 1 1 100%;
+  max-width: none;
+  white-space: normal;
+  color: var(--text-3);
+}
+
 /* The base .settings-mcp-detail is tuned for a short single-line MCP status;
    a Codex doctor sentence runs longer and must stay fully readable. */
 .codex-profile-row .settings-mcp-detail {

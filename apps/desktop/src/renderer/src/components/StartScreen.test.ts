@@ -23,6 +23,7 @@ import {
   deriveRecentWorkspaces,
   draftModelEfforts,
   guardedSubmit,
+  codexAccountMenuOptions,
   isDraftCodexProfileIdStale,
   isSendKeydown,
   pickFolderForDraft,
@@ -437,6 +438,25 @@ describe("computeCodexProfileChipLabel (codex-profiles cut §3.3/W3-F)", () => {
 
   it("falls back to 'System' for a picked id no longer in the catalog — never claims an account createStartTabRequest would not actually submit", () => {
     expect(computeCodexProfileChipLabel("removed-profile", profiles)).toBe("System");
+  });
+
+  // with no explicit pick the submission starts on the DEFAULT
+  // account, so the chip must name that account, not "System".
+  it("names the configured default (with a marker) when the draft has no pick", () => {
+    expect(computeCodexProfileChipLabel(undefined, profiles, "personal")).toBe("Personal (default)");
+  });
+
+  it("stays 'System' when the default IS system or is unset", () => {
+    expect(computeCodexProfileChipLabel(undefined, profiles, "system")).toBe("System");
+    expect(computeCodexProfileChipLabel(undefined, profiles, undefined)).toBe("System");
+  });
+
+  it("an explicit pick wins over the default and drops the marker", () => {
+    expect(computeCodexProfileChipLabel("work", profiles, "personal")).toBe("Work");
+  });
+
+  it("a default pointing at a profile that left the catalog degrades to 'System' (the true submitted account)", () => {
+    expect(computeCodexProfileChipLabel(undefined, profiles, "removed-profile")).toBe("System");
   });
 });
 
@@ -946,5 +966,27 @@ describe("start-screen Orchestrate row (orchestrate-start.ts → ModeMenu)", () 
   it("Codex and Claude: no Orchestrate row (no aria-pressed on the chip)", () => {
     expect(startModeMenuMarkup("codex")).not.toContain("aria-pressed");
     expect(startModeMenuMarkup("claude")).not.toContain("aria-pressed");
+  });
+});
+
+describe("codexAccountMenuOptions (R1 fix: the ambient account stays pickable)", () => {
+  it("lists `system` FIRST, then the saved profiles", () => {
+    expect(
+      codexAccountMenuOptions([
+        { id: "account-a", label: "Account A", disabled: false },
+        { id: "account-b", label: "Account B", disabled: true },
+      ]),
+    ).toEqual([
+      { id: "system", label: "System", disabled: false },
+      { id: "account-a", label: "Account A", disabled: false },
+      { id: "account-b", label: "Account B", disabled: true },
+    ]);
+  });
+});
+
+describe("isDraftCodexProfileIdStale — `system` is a real pick", () => {
+  it("never treats an explicit `system` pick as stale, with or without profiles", () => {
+    expect(isDraftCodexProfileIdStale("system", [])).toBe(false);
+    expect(isDraftCodexProfileIdStale("system", [{ id: "account-a", label: "Account A", disabled: false }])).toBe(false);
   });
 });

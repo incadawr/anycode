@@ -467,6 +467,16 @@ declare global {
         deleteProfile(id: string): Promise<CodexProfileGuardResult>;
         setActiveProfile(id: string): Promise<CodexProfileGuardResult>;
         repairProfileLink(id: string): Promise<CodexProfileGuardResult>;
+        // Session account line (context popover): the account THIS tab runs on
+        // — registry id + label + whether it is the default for new sessions.
+        // Read-only presentation data; never a credential or a path.
+        tabAccount(tabId: string): Promise<import("../../shared/codex-account.js").CodexTabAccountResult>;
+        /**
+         * Usage-limit escape hatch: copy this thread's rollout into `accountId`'s
+         * own Codex home and open a NEW tab resuming the thread there. The
+         * current tab keeps its account. `detail` is a sentence to show as-is.
+         */
+        continueOnAccount(tabId: string, accountId: string): Promise<import("../../shared/codex-account.js").CodexContinueResult>;
         // TASK.53 (cut §7, amended §A4): the binary/manifest control plane.
         install(version?: string): Promise<CodexInstallResult>;
         acceptRisk(version: string): Promise<{ ok: boolean; error?: string }>;

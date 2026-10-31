@@ -200,8 +200,11 @@ export type CreateTabRequest =
       /**
        * Codex account-profile pick (codex-profiles cut §3.3, amended §A1.1
        * closing note): an opaque profile id from main's registry — never a
-       * path. Absent ⇒ the `system` pseudo-profile (byte-identical to
-       * today's ambient-`CODEX_HOME` behavior). Main resolves this id to
+       * path. Absent ⇒ the DEFAULT account: main resolves
+       * `settings.codex.activeProfileId` (Settings → Codex "Make default"),
+       * and that is the `system` pseudo-profile only when no
+       * account was ever made default — no longer an unconditional ambient
+       * `CODEX_HOME`. Main resolves this id to
        * the concrete `--codex-profile`/`--codex-home`/`--codex-auth-link`
        * argv the host receives (main/tabs.ts, W2 lane A) — never forwarded
        * to the host verbatim. Only read on the session-CREATING spawn, same

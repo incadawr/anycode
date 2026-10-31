@@ -208,8 +208,15 @@ export interface TabIpcDeps {
    * resolution disabled (legacy wiring / unit fixtures); a request/session
    * carrying a profile id then REFUSES fail-closed (see handleCreate) rather
    * than silently spawning on the ambient account.
+   *
+   * `undefined` is the DEFAULT account: the registry's configured
+   * `settings.codex.activeProfileId` (Settings → Codex "Make default"), or
+   * the `system` pseudo-profile when nothing is chosen. Every session born
+   * without an explicit pick — the start screen, the Sessions API — resolves
+   * through this one call, which is what closes the
+   * "missing codexProfileId ⇒ system" gap.
    */
-  resolveCodexProfile?(profileId: string): Promise<ResolveCodexProfileResult>;
+  resolveCodexProfile?(profileId: string | undefined): Promise<ResolveCodexProfileResult>;
   /**
    * Reads WITHOUT deleting the model a rollout import pinned for a session (S4-1
    * arm 2, W4-F1; L4·1 peek-then-confirm). The FIRST resume of an imported session
@@ -672,8 +679,17 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     // reasoning as the atCapacity guard below). A profile id with no resolver
     // wired, or one the registry refuses, is a fail-closed "not_ready" — NEVER
     // a silent fallback onto the ambient (`system`) account.
+    //
+    // A request WITHOUT a pick on the Codex engine resolves to the DEFAULT
+    // account (Settings → Codex "Make default"; `resolveCodexProfile(undefined)`),
+    // never to the ambient `~/.codex` one. That is the whole point of the
+    // default: the start screen and the Sessions API both reach
+    // this line with no id, and before it existed every one of them silently
+    // spent the user's personal plan.
     let codexProfile: { id?: string; home?: string; authLink?: string } | undefined;
-    if (req.codexProfileId !== undefined) {
+    const resolvesCodexProfile =
+      req.codexProfileId !== undefined || (engine === "codex" && deps.resolveCodexProfile !== undefined);
+    if (resolvesCodexProfile) {
       if (deps.resolveCodexProfile === undefined) {
         return { ok: false, reason: "not_ready" };
       }

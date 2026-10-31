@@ -266,6 +266,41 @@ export function hasMainAuthLinkProfile(profiles: readonly CodexProfileRecord[]):
   return profiles.some((profile) => profile.authLink === MAIN_AUTH_LINK_TARGET);
 }
 
+/**
+ * Settings → Codex per-row default state: `settings.codex.activeProfileId`
+ * and its IPC existed with no UI, so a pick-less tab (start screen,
+ * Sessions API) always ran on `system` — the user's personal plan.
+ * The active id IS the default, `system` included: "use the ambient ~/.codex"
+ * is a real choice, not an absence of one, so the System row can carry the
+ * marker too.
+ */
+export function codexDefaultAccountAction(
+  profileId: string,
+  activeProfileId: string,
+): { isDefault: boolean; showMakeDefault: boolean } {
+  const isDefault = profileId === activeProfileId;
+  return { isDefault, showMakeDefault: !isDefault };
+}
+
+/**
+ * Whether the System pseudo-row is on screen, and whether "use System again"
+ * must be offered separately.
+ *
+ * The System row collapses into a profile that mirrors the same signed-in
+ * account, so the pane never shows two cards for one account. That collapse
+ * must not hide the DEFAULT: while `system` IS the default the row stays, so
+ * its "Default" pill remains visible; and while a collapsed System row is hidden
+ * (the default is a profile), the pane offers a "Use the System account" action
+ * instead, so the ambient account is never unreachable.
+ */
+export function codexSystemRowVisibility(
+  plan: CodexAccountRowPlan,
+  activeProfileId: string,
+): { showSystemRow: boolean; offerMakeSystemDefault: boolean } {
+  if (activeProfileId === SYSTEM_PROFILE_ID) return { showSystemRow: true, offerMakeSystemDefault: false };
+  return { showSystemRow: plan.showSystemRow, offerMakeSystemDefault: !plan.showSystemRow };
+}
+
 export interface CodexAccountRowPlan {
   /** False once a saved profile has been confirmed to mirror the same signed-in account — the pseudo-row would otherwise be an exact duplicate. */
   showSystemRow: boolean;
@@ -537,6 +572,12 @@ export interface CodexBridge {
   /** Opens the verification page of the pending device-code login (main holds the URL). */
   loginOpenDevicePage?(): Promise<void>;
   listProfiles(): Promise<CodexProfilesSnapshot>;
+  /**
+   * writes `settings.codex.activeProfileId` — the account every
+   * pick-less new session starts on. The IPC existed long before the UI did;
+   * "Make default" is its first wired caller.
+   */
+  setActiveProfile(id: string): Promise<CodexProfileGuardResult>;
   createProfile(request: CodexProfileCreateRequest): Promise<CodexProfileCreateResult>;
   deleteProfile(id: string): Promise<CodexProfileGuardResult>;
   repairProfileLink(id: string): Promise<CodexProfileGuardResult>;
@@ -569,6 +610,15 @@ interface CodexProfileRowProps {
   profile?: CodexProfileRecord;
   /** Muted parenthetical shown next to the label (TASK.57) — currently only "current environment", for the profile `resolveAccountRows` matched to the collapsed System row. */
   annotation?: string;
+  /**
+   * This account is the DEFAULT for new sessions (`settings.codex.activeProfileId`,
+   * the IPC that previously existed with no UI). New tabs without an explicit
+   * pick — start screen, Sessions API — start on it, so the
+   * marker is the answer to "which account is my next tab going to spend".
+   */
+  isDefault?: boolean;
+  /** Wired on every NON-default row; "Make default" writes `activeProfileId` through `codex-profile-set-active`. */
+  onMakeDefault?: () => void;
   report: CodexDoctorReport | undefined;
   checking: boolean;
   signingIn: boolean;
@@ -594,6 +644,7 @@ function CodexProfileRow(props: CodexProfileRowProps) {
   return (
     <li className="settings-mcp-row codex-profile-row">
       <span className="settings-mcp-name">{props.label}</span>
+      {props.isDefault === true && <span className="codex-profile-default" title="New sessions start on this account">Default</span>}
       {props.annotation && <span className="codex-profile-annotation">({props.annotation})</span>}
       <span className={`settings-secret-status settings-secret-status-${status.tone}`}>{status.headline}</span>
       <div className="settings-mcp-detail">{status.detail}</div>
@@ -632,6 +683,11 @@ function CodexProfileRow(props: CodexProfileRowProps) {
         {showRepair && (
           <button type="button" className="settings-button" disabled={props.busy} onClick={props.onRepairLink}>
             Re-link credential
+          </button>
+        )}
+        {props.onMakeDefault !== undefined && props.isDefault !== true && (
+          <button type="button" className="settings-button" disabled={props.busy} onClick={props.onMakeDefault}>
+            Make default
           </button>
         )}
         {props.profile !== undefined &&
@@ -961,11 +1017,37 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
     }
   }
 
+  /**
+   * "Make default" — writes `settings.codex.activeProfileId`
+   * through the profile IPC that already existed but had no UI. From then on
+   * every pick-less tab (start screen, Sessions API) starts on
+   * this account. The marker moves immediately; the per-row diagnoses are
+   * untouched (the TTL-guarded refresh re-reads the registry only).
+   */
+  async function makeDefault(id: string): Promise<void> {
+    setNotice(null);
+    setBusy(true);
+    try {
+      const result = await bridge.setActiveProfile(id);
+      if (!result.ok) {
+        setNotice(result.reason);
+      } else {
+        setActiveProfileId(id);
+        await refreshAll(false);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const binaryReport = reportsById[SYSTEM_PROFILE_ID];
   const binaryStatus = describeCodexReportStatus(checkingIds.has(SYSTEM_PROFILE_ID) ? undefined : binaryReport);
   const binaryActions = deriveBinaryActions(binaryReport, support);
   const atProfileLimit = profiles.length >= MAX_CODEX_PROFILES;
   const accountRows = resolveAccountRows(binaryReport, profiles, reportsById);
+  // The collapse into a matching profile must not hide the Default marker (and
+  // must leave the ambient account reachable): see codexSystemRowVisibility.
+  const systemRow = codexSystemRowVisibility(accountRows, activeProfileId);
   // TASK.103 (D-S4-6): the consent card source — the structured field only,
   // never a string-match on `binaryStatus.detail`.
   const trustRefusal = binaryTrustRefusalOf(binarySnapshot?.report);
@@ -1100,10 +1182,23 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
       </div>
 
       <div className="settings-section-title">Accounts</div>
+      {/* the default is a visible, changeable choice. New tabs
+          without an explicit pick (start screen, Sessions API) start on the
+          account marked Default. */}
+      <div className="settings-mcp-detail codex-default-account-hint">
+        New sessions start on the account marked Default.
+        {systemRow.offerMakeSystemDefault && (
+          <button type="button" className="settings-button" disabled={busy} onClick={() => void makeDefault(SYSTEM_PROFILE_ID)}>
+            Use the System account instead
+          </button>
+        )}
+      </div>
       <ul className="settings-mcp-list codex-profile-grid">
-        {accountRows.showSystemRow && (
+        {systemRow.showSystemRow && (
           <CodexProfileRow
             label="System (current environment)"
+            isDefault={codexDefaultAccountAction(SYSTEM_PROFILE_ID, activeProfileId).isDefault}
+            onMakeDefault={() => void makeDefault(SYSTEM_PROFILE_ID)}
             report={reportsById[SYSTEM_PROFILE_ID]}
             checking={checkingIds.has(SYSTEM_PROFILE_ID)}
             signingIn={signingInId === SYSTEM_PROFILE_ID}
@@ -1126,6 +1221,8 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
             key={profile.id}
             label={profile.label}
             profile={profile}
+            isDefault={codexDefaultAccountAction(profile.id, activeProfileId).isDefault}
+            onMakeDefault={() => void makeDefault(profile.id)}
             annotation={accountRows.currentEnvironmentProfileId === profile.id ? "current environment" : undefined}
             report={reportsById[profile.id]}
             checking={checkingIds.has(profile.id)}

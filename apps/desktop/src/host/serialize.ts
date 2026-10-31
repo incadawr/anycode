@@ -11,7 +11,7 @@
 
 import type { AgentEvent } from "@anycode/core";
 import type { SerializedError, WireAgentEvent } from "../shared/protocol.js";
-import { parseUsageLimitNotice } from "../shared/usage-limit.js";
+import { parseUsageLimitNoticeForEngine } from "../shared/usage-limit.js";
 import { classifyEngineFailure } from "./safe-failure.js";
 
 /** Short human-readable description of an arbitrary thrown value (for fatal/diagnostic text). */
@@ -70,10 +70,15 @@ function redactedWireError(
  * RAW message here (host-side) and attached — the renderer can no longer parse
  * it off the redacted wire message (W7b-FIX #2 feature migration). Every other
  * variant is already structured-clone-safe and passes through unchanged.
+ *
+ * `engine` is what makes the Codex half of that parse possible: a Codex turn's
+ * usage limit arrives as a plain Error message, so the callers that know the
+ * engine pass its id and only then is the Codex spelling recognised. Omitted
+ * (legacy calls, tests of the core path) keeps the previous behaviour exactly.
  */
-export function sanitizeAgentEvent(event: AgentEvent): WireAgentEvent {
+export function sanitizeAgentEvent(event: AgentEvent, engine?: string): WireAgentEvent {
   if (event.type === "error") {
-    const notice = parseUsageLimitNotice(describeError(event.error));
+    const notice = parseUsageLimitNoticeForEngine(describeError(event.error), engine);
     return {
       type: "error",
       error: redactedWireError(event.safe ?? classifyEngineFailure(event.error), event.safe === undefined ? "AgentError" : "ProviderError"),
