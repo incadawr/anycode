@@ -21,8 +21,9 @@
  *  5. tab close → previews list drops it (D5 round-trip)
  *  6. window 760×600 → drawer mode, conversation ≥400; back to 1600×900 →
  *     column mode, dock re-clamped
- *  7. (Stage 2) split leg at 1800 → split pinned, or the documented
- *     split_refused refusal recorded as expected; at 900 → auto-merged
+ *  7. (Stage 2) split leg at 1800 → split pinned (a persistent refusal,
+ *     including one whose preconditions never held, FAILS); at 900 →
+ *     auto-merged
  *
  * Every assertion is PASS/FAIL recorded, never silently assumed.
  * Plain node >=22, ZERO npm deps. Usage:
