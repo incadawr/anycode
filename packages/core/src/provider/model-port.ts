@@ -43,7 +43,7 @@ import type { ImplicitPromptCache, ReasoningEffort } from "../types/config.js";
 import { blocksAutomaticReplay, classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
 import { ResponsesReasoningTextRecovery } from "./responses-reasoning-text.js";
 import { isMiMoModel } from "./mimo.js";
-import { isMiniMaxEffortModel, isMiniMaxModel } from "./minimax.js";
+import { contextualizeMiniMaxBalance, isMiniMaxEffortModel, isMiniMaxModel } from "./minimax.js";
 import { createLanguageModel } from "./language-model.js";
 import type { ProviderQuotaUpdate } from "./quota.js";
 import type { NetworkWaiter } from "./network-waiter.js";
@@ -816,11 +816,12 @@ export class AiSdkModelPort implements ModelPort {
    * `includeUsage: undefined` key the pre-TASK.168 shape never carried.
    */
   // The factory receives exactly one argument when the activity hook is absent.
-  private async buildAttemptModel(includeUsage: boolean | undefined, onResponseActivity?: () => void): Promise<LanguageModel> {
+  private async buildAttemptModel(includeUsage: boolean | undefined, onResponseActivity?: () => void, onKey?: (key: string | undefined) => void): Promise<LanguageModel> {
     const create = (cfg: EndpointConfig): LanguageModel => onResponseActivity === undefined ? createLanguageModel(cfg) : createLanguageModel(cfg, onResponseActivity);
     const { resolveApiKey } = this.config;
     const usageOverridden = includeUsage !== this.config.includeUsage;
     if (resolveApiKey === undefined) {
+      onKey?.(this.config.apiKey);
       return create(usageOverridden ? { ...this.config, includeUsage } : this.config);
     }
     let apiKey = this.config.apiKey;
@@ -832,6 +833,7 @@ export class AiSdkModelPort implements ModelPort {
     } catch {
       // Fall back to the static key: a refresh hiccup must not kill the attempt.
     }
+    onKey?.(apiKey);
     return create(
       usageOverridden ? { ...this.config, apiKey, includeUsage } : { ...this.config, apiKey },
     );
@@ -994,8 +996,9 @@ export class AiSdkModelPort implements ModelPort {
         ? linkAbortSignal(request.abortSignal, attemptController)
         : () => {};
 
+      let attemptKey: string | undefined;
       try {
-        const model = await this.buildAttemptModel(attemptIncludeUsage, onResponseActivity);
+        const model = await this.buildAttemptModel(attemptIncludeUsage, onResponseActivity, (key) => { attemptKey = key; });
         const requestStartedAt = performance.now();
         // Generation speed is measured from the FIRST OUTPUT TOKEN — text,
         // reasoning or tool content — never from the first stream event. A
@@ -1091,7 +1094,6 @@ export class AiSdkModelPort implements ModelPort {
             const finishedAt = performance.now();
             event = { ...event, timeToFirstEventMs: Math.max(0, firstOutputAt - requestStartedAt), generationDurationMs: Math.max(0, finishedAt - firstOutputAt) };
           }
-          if (event.type === "error") event = { ...event, error: contextualizeNetworkFailure(event.error, this.config.baseUrl) };
           // Drop provider chunk-parse artifacts that are safe to ignore (a
           // server tool block from a foreign backend, e.g. z.ai `webReader`
           // result, that isn't in the SDK's closed chunk union): the stream
@@ -1106,6 +1108,7 @@ export class AiSdkModelPort implements ModelPort {
             }
             continue;
           }
+          if (event.type === "error") event = { ...event, error: contextualizeNetworkFailure(contextualizeMiniMaxBalance(event.error, this.config.providerName, attemptKey), this.config.baseUrl) };
           // TASK.168: this pass IS a probe retry (started by a previous
           // pass) — defer this failure's fate to the resolution block after
           // the try/catch instead of classifying it here, regardless of
@@ -1170,7 +1173,7 @@ export class AiSdkModelPort implements ModelPort {
           }
         }
       } catch (rawError) {
-        const error = contextualizeNetworkFailure(rawError, this.config.baseUrl);
+        const error = contextualizeNetworkFailure(contextualizeMiniMaxBalance(rawError, this.config.providerName, attemptKey), this.config.baseUrl);
         // TASK.168: mirror of the error-part branch above, for a failure that
         // surfaced as a THROWN exception (e.g. a synchronous validation
         // error, or a rejection from `fullStream` iteration before any part

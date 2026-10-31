@@ -286,7 +286,7 @@ import {
   type RoleRouteResolution,
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
-import { sessionUsageRow, subagentUsageRow } from "./usage-recording.js";
+import { pricingSnapshotWithKeyDefault, sessionUsageRow, subagentUsageRow } from "./usage-recording.js";
 import { summarizeWithChildren } from "./usage-summary.js";
 import { claudeNativeChildrenFromHistory } from "./claude-usage.js";
 import { bindClaudeUsage, bindCodexUsage } from "./native-usage.js";
@@ -3277,7 +3277,7 @@ async function boot(): Promise<void> {
       envReasoningEffortFromSettings: Boolean(process.env.ANYCODE_REASONING_EFFORT_MODEL?.trim()),
       liveCapabilitiesFor: (id) => liveCapsMap !== undefined && Object.hasOwn(liveCapsMap, id) ? liveCapsMap[id] : undefined,
     });
-    const currentPricingRaw = () => connectionModelSettings.hasReadConnection() ? JSON.stringify(connectionModelSettings.pricingSnapshot()) : process.env.ANYCODE_CONNECTION_PRICING;
+    const currentPricingRaw = () => pricingSnapshotWithKeyDefault(connectionModelSettings.hasReadConnection() ? JSON.stringify(connectionModelSettings.pricingSnapshot()) : process.env.ANYCODE_CONNECTION_PRICING, catalogEntry, envConfig.apiKey);
     let turnPricingRaw = currentPricingRaw();
     const liveCapsFor = (id: string): LiveModelCapabilities | undefined => connectionModelSettings.capabilitiesFor(id);
     const effortLevelsFor = (id: string) => envConfig.effortLevels ?? connectionModelSettings.effortLevelsFor(id);

@@ -12,6 +12,7 @@
  */
 
 import { APICallError } from "ai";
+import { unwrapMiniMaxFailure } from "./minimax-failure.js";
 import { classifyNetworkConfigurationFailure } from "./network-failure.js";
 import { DEFAULT_RETRY_AFTER_CAP_MS, DEFAULT_STREAM_STALL_TIMEOUT_MS } from "../types/config.js";
 
@@ -82,6 +83,7 @@ const RETRYABLE_NETWORK_CODES = new Set([
  * and auth errors cannot ride the network retry budget.
  */
 export function isTransientNetworkError(error: unknown): boolean {
+  error = unwrapMiniMaxFailure(error);
   if (classifyNetworkConfigurationFailure(error) !== undefined) return false;
   if (extractStatusCode(error) !== undefined) return false;
   if (!(error instanceof Error)) return false;
@@ -99,6 +101,7 @@ export function isTransientNetworkError(error: unknown): boolean {
  * status set and pound an exhausted account.
  */
 export function isRetryableStreamError(error: unknown): boolean {
+  error = unwrapMiniMaxFailure(error);
   if (isQuotaExhaustion(error)) return false;
   if (classifyNetworkConfigurationFailure(error) !== undefined) return false;
   if (APICallError.isInstance(error)) {
@@ -156,6 +159,7 @@ export function matchesFailureText(error: unknown, message: string, pattern: Reg
  * Retry-After header. The explicit z.ai code 1308 always counts as quota.
  */
 export function isQuotaExhaustion(error: unknown): boolean {
+  error = unwrapMiniMaxFailure(error);
   const statusCode = extractStatusCode(error);
   if (statusCode !== undefined && statusCode !== 429 && statusCode !== 403) return false;
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
@@ -213,6 +217,7 @@ function extractErrorCode(value: unknown): string | undefined {
  * `attempt` is 0-indexed (0 = delay before the first retry).
  */
 export function retryDelayMs(attempt: number, error: unknown, policy: RetryPolicy): number {
+  error = unwrapMiniMaxFailure(error);
   const retryAfterMs = extractRetryAfterMs(error);
   if (retryAfterMs !== undefined) {
     return Math.min(Math.max(0, retryAfterMs), policy.retryAfterCapMs);

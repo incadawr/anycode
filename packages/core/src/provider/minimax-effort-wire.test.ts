@@ -40,6 +40,7 @@ import { AiSdkModelPort } from "./model-port.js";
 import { findCatalogEntry, getBuiltinCatalog } from "./catalog-data.js";
 import { matchCatalogEntryByBaseUrl } from "../cli/model.js";
 import { resolveReasoningEffort } from "./capabilities.js";
+import { classifyProviderFailure } from "./failure.js";
 import type { AnthropicEndpointConfig } from "./anthropic.js";
 
 /** Minimal valid anthropic SSE so the AiSdkModelPort stream finishes cleanly. */
@@ -114,6 +115,42 @@ describe("MiniMax reasoning-effort mapping over the real @ai-sdk/anthropic wire"
       }),
     };
   }
+
+  it("surfaces a safe billing hint for a real provider error", async () => {
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ type: "error", error: { type: "insufficient_balance_error", message: "insufficient balance", code: 1008 } }), { status: 400, headers: { "content-type": "application/json" } }));
+    for (const [key, shouldHint] of [["sk-api-example", true], ["sk-cp-example", false]] as const) {
+      const port = new AiSdkModelPort({ transport: "anthropic-messages", baseUrl: "https://api.minimax.io/anthropic", apiKey: key, providerName: "MiniMax", model: "MiniMax-M3.1-Flash", retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+      const events = await drain(port.streamText({ messages: [{ role: "user", content: "hi" }], tools: [], maxOutputTokens: 100 }));
+      const failure = events.find((event) => event.type === "error");
+      expect(failure?.type).toBe("error");
+      if (failure?.type === "error") expect(classifyProviderFailure(failure.error).safe.message.includes("pay-as-you-go")).toBe(shouldHint);
+    }
+  });
+
+  it("surfaces the billing hint for an error in an SSE stream", async () => {
+    vi.stubGlobal("fetch", async () => new Response(serializeSse([
+      RESPONSE_CHUNKS[0]!,
+      { type: "error", error: { type: "insufficient_balance_error", message: "insufficient balance" } },
+    ]), { status: 200, headers: { "content-type": "text/event-stream" } }));
+    for (const [key, shouldHint] of [["sk-api-example", true], ["sk-cp-example", false]] as const) {
+      const port = new AiSdkModelPort({ transport: "anthropic-messages", baseUrl: "http://127.0.0.1:9", apiKey: key, providerName: "MiniMax", model: "MiniMax-M3.1-Flash", retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+      const events = await drain(port.streamText({ messages: [{ role: "user", content: "hi" }], tools: [], maxOutputTokens: 100 }));
+      const failure = events.find((event) => event.type === "error");
+      expect(failure?.type).toBe("error");
+      if (failure?.type === "error") expect(classifyProviderFailure(failure.error).safe.message.includes("pay-as-you-go")).toBe(shouldHint);
+    }
+  });
+
+  it("ignores unsupported stream artifacts containing a numeric byte count for both billing modes", async () => {
+    for (const key of ["sk-api-example", "sk-cp-example"]) {
+      const chunks = [RESPONSE_CHUNKS[0]!, { type: "content_block_start", index: 1, content_block: { type: "tool_result", tool_use_id: "tool_1", content: "Read 1008 bytes" } }, ...RESPONSE_CHUNKS.slice(1)];
+      vi.stubGlobal("fetch", async () => new Response(serializeSse(chunks), { status: 200, headers: { "content-type": "text/event-stream" } }));
+      const port = new AiSdkModelPort({ transport: "anthropic-messages", baseUrl: "http://127.0.0.1:9", apiKey: key, providerName: "MiniMax", model: "MiniMax-M3.1-Flash", retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+      const events = await drain(port.streamText({ messages: [{ role: "user", content: "hi" }], tools: [], maxOutputTokens: 100 }));
+      expect(events.filter((event) => event.type === "error")).toEqual([]);
+      expect(events.some((event) => event.type === "finish" && event.finishReason !== "error")).toBe(true);
+    }
+  });
 
   it("every tier rides the effort enum, and no tier sends a thinking key", async () => {
     stubFetch();
