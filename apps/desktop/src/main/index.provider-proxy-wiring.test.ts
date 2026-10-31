@@ -1,5 +1,5 @@
 /**
- * TASK.133 / Taskana 4117 — production-wiring regression test for the
+ * production-wiring regression test for the
  * per-connection proxy fetch + updater session routing in main/index.ts.
  *
  * Same rig family as index.appVersion-wiring.test.ts (scratch dev-profile
@@ -47,7 +47,7 @@ const { ipcHandlers, captured, fakeSessions, netRequests, electronRefs } = vi.ho
   const electronRefs = {
     appIsPackaged: { current: false as boolean },
     /**
-     * Per-partition injectable failures (TASK.133 defect 3 regression rig).
+     * Per-partition injectable failures (defect 3 regression rig).
      * The PRODUCTION wiring obtains its session object from
      * `session.fromPartition` below, whose methods consult this shared
      * backing — so an injected failure is guaranteed to be the one
@@ -374,7 +374,7 @@ function seedSettings(over: Record<string, unknown>): void {
   );
 }
 
-describe("main/index.ts — TASK.133 proxy wiring", () => {
+describe("main/index.ts — proxy wiring", () => {
   it("wires the production per-connection fetch into all three seams", async () => {
     await import("./index.js");
     await waitForHandler(PROXY_REF_SET_CHANNEL).catch(() => undefined);

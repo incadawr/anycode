@@ -1,6 +1,6 @@
 /**
  * Codex account-profile registry + CODEX_HOME resolution (codex-profiles cut
- * §2, amended §A1/§A2, TASK.50). A profile is an isolated
+ * §2, amended §A1/§A2). A profile is an isolated
  * `CODEX_HOME = ~/.anycode/codex/profile-<id>/` (mode 0700) that AnyCode
  * itself sets on every spawn (doctor / login / app-server resolve), so the
  * account a session runs under is a per-tab choice, not a machine-global one.

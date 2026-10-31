@@ -20,7 +20,7 @@ beforeEach(async () => {
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 const store = () => createAgentProjectsStore({ file, realpathSync });
 
-describe("per-project agent-open switch (Taskana 4768)", () => {
+describe("per-project agent-open switch", () => {
   it("is off everywhere by default", () => {
     const s = store();
     expect(s.isAllowed(project)).toBe(false);

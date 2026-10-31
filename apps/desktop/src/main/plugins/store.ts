@@ -1,5 +1,5 @@
 /**
- * Managed plugin STORE (Taskana 4732 S1-B, design §3/§5): download → verify
+ * Managed plugin STORE (S1-B, design §3/§5): download → verify
  * (sha256+size) → extract → validate manifest → atomic rename into
  * `.store/<name>/<version>/` → rewrite `state.json` (tmp+rename). Also:
  * rollback (swap active/previous + pin), remove (tombstone for defaults),
@@ -113,7 +113,7 @@ export function statePath(home: string): string {
 }
 
 /**
- * Taskana 4732 xfix L7/concurrency: every state.json read-modify-write runs
+ * xfix L7/concurrency: every state.json read-modify-write runs
  * under one per-state-file queue. Two overlapping mutations (an install and a
  * remove, a pin and an update pass) used to read the same snapshot and the
  * later write silently dropped the earlier change. Serialization is in-process
@@ -443,7 +443,7 @@ export async function installFromIndex(
   };
 }
 
-/** Shared version ordering (newest first) — the ONE sort every surface uses (Taskana 4732 xfix M3). */
+/** Shared version ordering (newest first) — the ONE sort every surface uses (xfix M3). */
 export function compareVersionsDesc(a: string, b: string): number {
   const pa = a.split(".").map(Number);
   const pb = b.split(".").map(Number);
@@ -456,7 +456,7 @@ export function compareVersionsDesc(a: string, b: string): number {
 
 /**
  * Installs from raw bytes (a picked .tgz file, or the bytes a URL preview
- * already downloaded — path custody lives in ipc). `expectedSha256` (Taskana
+ * already downloaded — path custody lives in ipc). `expectedSha256` (
  * 4732 xfix H3) pins the EXACT previewed bytes: a mismatch refuses, so commit
  * can never install content the user did not see on the sheet.
  */
@@ -743,7 +743,7 @@ export function selectUpdate(
 ): UpdateCandidate | undefined {
   const entry = index.plugins.find((p) => p.name === current.name);
   if (entry === undefined || current.pinned) return undefined;
-  // Taskana 4732 xfix M3: SORT before picking — the index schema does not
+  // xfix M3: SORT before picking — the index schema does not
   // enforce version ordering, and `candidates[0]` on an ascending list
   // picked the OLDEST compatible version (the IPC surface sorts; this
   // sibling did not, so the scheduler could auto-install a lower version
@@ -930,7 +930,7 @@ export async function legacyMcpGrandfathering(
 // ── default archive fetch (production) ──
 
 /**
- * Taskana 4732 xfix M2: the artifact download is BOUNDED while streaming.
+ * xfix M2: the artifact download is BOUNDED while streaming.
  * The old implementation buffered the entire response (`arrayBuffer()`)
  * before any size check — a malicious URL could push gigabytes into main
  * memory (the 20 MB compressed cap only ran after the full download). Now:

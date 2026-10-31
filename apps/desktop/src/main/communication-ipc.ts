@@ -1,5 +1,5 @@
 /**
- * Sessions API control-plane IPC (Taskana 4747): the Settings → Sessions API
+ * Sessions API control-plane IPC: the Settings → Sessions API
  * pane's only write path. Exported pure handlers over a deps bag (unit-testable
  * without ipcMain), zod `.strict()` on every payload, and the renderer NEVER
  * supplies a filesystem path: folders come only from the native dialog owned by
@@ -67,7 +67,7 @@ export interface CommunicationIpcDeps {
   logger: { warn(message: string): void; error(message: string): void };
   controller: CommunicationControllerLike;
   sessions: SessionAccessStore;
-  /** Taskana 4763: per-session External approvals switch. Only this module writes it. */
+  /** per-session External approvals switch. Only this module writes it. */
   approvals: SessionAccessStore;
   /** Live tab list (root and child). Only tabId and sessionId are read here. */
   tabs(): ReadonlyArray<{ tabId: string; sessionId: string }>;
@@ -78,7 +78,7 @@ export interface CommunicationIpcDeps {
   /** Stable userData copy of the stdio adapter, or null when this build does not carry it. */
   stdioScriptPath(): string | null;
   realpath(path: string): Promise<string>;
-  /** Taskana 4768: per-project agent-open switch. Only this module writes it (and main's create_session hook reads it). */
+  /** per-project agent-open switch. Only this module writes it (and main's create_session hook reads it). */
   agentProjects: AgentProjectsStore;
   /** Synchronous realpath used only to canonicalise the sidebar's workspace identity. */
   realpathSync(path: string): string;
@@ -296,14 +296,14 @@ export async function handleSetSessionAccess(deps: CommunicationIpcDeps, raw: un
   if (deps.env() !== undefined && deps.env() !== "") return { ok: false, reason: "env_controlled" };
   const tab = deps.tabs().find((candidate) => candidate.tabId === parsed.data.tabId);
   if (!tab || !deps.sessions.set(tab.sessionId, parsed.data.enabled)) return { ok: false, reason: "not_found" };
-  // Sharing off also clears External approvals, so re-sharing never silently re-enables them (Taskana 4763).
+  // Sharing off also clears External approvals, so re-sharing never silently re-enables them.
   if (!parsed.data.enabled) deps.approvals.set(tab.sessionId, false);
   const loaded = await loadSettings(deps.settingsPath, deps.logger);
   return { ok: true, view: await viewOf(deps, blockOf(loaded.settings)) };
 }
 
 /**
- * Taskana 4763: the per-session External approvals switch. It can be turned ON
+ * the per-session External approvals switch. It can be turned ON
  * only while the session is shared (access ON), and it is never set by any
  * Sessions API tool, host message or plugin: this handler is its only writer.
  */

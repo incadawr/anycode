@@ -1,5 +1,5 @@
 /**
- * TASK.187 S3 — the incremental Profile-stats cache (plan
+ * S3 — the incremental Profile-stats cache (plan
  * `working-docs/build/task187-plan.md`, decisions D-1/D-2/D-5/D-6; aggregator
  * semantics: `working-docs/build/task187-aggregator-semantics.md`).
  *
@@ -140,7 +140,7 @@ interface FileFingerprint {
 
 interface CachedFileEntry extends FileFingerprint {
   /** `ts` of the file's FIRST parseable record — the honest lower bound of
-   *  what the oldest included file covers (TASK.169). `null` when its first
+   *  what the oldest included file covers. `null` when its first
    *  line carries no usable `ts`; the caller then falls back to `mtimeMs`. */
   firstLineTs: number | null;
   partial: ProfileFilePartial;
@@ -197,7 +197,7 @@ interface EncodedDay {
   c?: number;
   g?: number;
   l?: Record<string, number>;
-  /** Prompt-cache counters (TASK.111): reported input, cached input. */
+  /** Prompt-cache counters: reported input, cached input. */
   p?: number;
   h?: number;
 }
@@ -584,7 +584,7 @@ function stripTrailingSep(base: string): string {
 
 /**
  * `ts` of a sink file's earliest event, read off its first JSONL line only
- * (TASK.169): telemetry JSONL is append-ordered, so line 1 is always the
+ * telemetry JSONL is append-ordered, so line 1 is always the
  * oldest record. Fail-soft `null` on anything that is not a JSON object with
  * a finite `ts`.
  */

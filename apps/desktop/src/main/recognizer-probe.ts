@@ -1,5 +1,5 @@
 /**
- * The Vision panel's "Probe" button (TASK.198 срез E2): "does THIS
+ * The Vision panel's "Probe" button (срез E2): "does THIS
  * connection/model pair, resolved the exact way a live run would resolve it,
  * actually answer a vision question?" — answered by spawning a real child
  * process that calls the SAME `ask()` primitive a live host uses
@@ -14,7 +14,7 @@
  * in-process here would make this ONE feature the reason main's bundle
  * carries the whole provider/model-port graph. A spawned child
  * (`process.execPath` + `ELECTRON_RUN_AS_NODE=1`, same canon as
- * proxy-probe.ts's TASK.141 §6 probe) sidesteps that for free: the child is
+ * proxy-probe.ts's §6 probe) sidesteps that for free: the child is
  * its OWN bundled entry point (electron.vite.config.ts's third main-target
  * input), so only ITS process pays for loading core's model layer.
  *
@@ -25,7 +25,7 @@
  * a live run's fork-env and its live config push both go through — it already
  * carries the connection -> catalog baseUrl fallback, the transport ladder and
  * the oauth/dangling/blank-address refusals, and a real defect in that ladder
- * (TASK.198 follow-up) cost a whole extra live-run cycle to find. A probe that
+ * (follow-up) cost a whole extra live-run cycle to find. A probe that
  * resolved its candidate any other way could go green on a connection the
  * real path would refuse, which is worse than no probe at all. The candidate
  * is not necessarily SAVED to `settings.recognizer` yet — the caller hands a
@@ -34,7 +34,7 @@
  * so "try before you save" costs nothing extra in the resolver itself.
  *
  * `toRecognizerEndpoint` below mirrors host/index.ts's own
- * `recognizerEndpointFromFields` (TASK.198 срез C) FIELD FOR FIELD — same
+ * `recognizerEndpointFromFields` (срез C) FIELD FOR FIELD — same
  * transport allow-list, same "anthropic-messages" default for an absent
  * transport, same empty-string-drop for apiKey/providerName. That function is
  * private to host/index.ts (not exported, and host/index.ts is out of this
@@ -68,10 +68,10 @@ import type {
   RecognizerWireConfig,
 } from "../shared/recognizer.js";
 
-// ── the embedded probe image (TASK.69's two-square probe, partially closed) ──
+// ── the embedded probe image ('s two-square probe, partially closed) ──
 
 /**
- * Fixed question the probe always asks — TASK.69's own two-square wording,
+ * Fixed question the probe always asks —'s own two-square wording,
  * unchanged so this probe partially closes that task's original ask. Never
  * user-editable: the point of the button is "does the ROUND TRIP work",
  * which a fixed, known-answer question tests more honestly than a free-form
@@ -95,7 +95,7 @@ export const RECOGNIZER_PROBE_IMAGE_BASE64 =
 // ── candidate resolution (production path, never a second ladder) ──
 
 /**
- * Mirrors host/index.ts's own `RECOGNIZER_TRANSPORT_VALUES` (TASK.198 срез C)
+ * Mirrors host/index.ts's own `RECOGNIZER_TRANSPORT_VALUES` (срез C)
  * verbatim — literal copy, not imported, for the same cross-layer reason
  * every other host/main mirror in this codebase gives (main never imports
  * from `../host/`, host never imports from `../main/`).
@@ -180,7 +180,7 @@ export interface RecognizerProbeChildInput {
   question: string;
   timeoutMs: number;
   /**
-   * TASK.203: present ONLY when telemetry resolved as enabled for this click —
+   * present ONLY when telemetry resolved as enabled for this click —
    * the child instantiates its sink from it and never sees telemetry at all
    * otherwise. `dir` is the resolved absolute sink directory, `session` the
    * vision-probe session id (the child's JSONL file name, minus `.jsonl`).
@@ -188,7 +188,7 @@ export interface RecognizerProbeChildInput {
   telemetry?: { dir: string; session: string };
 }
 
-// ── telemetry resolution (TASK.203: the SAME user-scope rule Profile uses) ──
+// ── telemetry resolution (the SAME user-scope rule Profile uses) ──
 
 /**
  * A minimal `FileSystemPort` over node:fs/promises — exactly the surface
@@ -355,7 +355,7 @@ export function classifyRecognizerProbeOutput(raw: RecognizerProbeRawOutput): Re
 
 /**
  * The recognizer probe's own secret-scrub — same split/join idiom
- * proxy-probe.ts's `maskProxyCredentials` uses (canon, TASK.141 §6), simpler
+ * proxy-probe.ts's `maskProxyCredentials` uses (canon, §6), simpler
  * because there is no proxy-URL userinfo form to also catch here: a
  * recognizer endpoint carries a bare api key, never a credentialed URL.
  * `secret` is always THIS candidate's own freshly-resolved key, never a
@@ -448,7 +448,7 @@ export interface RecognizerProbeDeps {
   env: NodeJS.ProcessEnv;
   spawn: RecognizerProbeSpawner;
   /**
-   * TASK.203: resolves the enabled telemetry sink directory for this click
+   * resolves the enabled telemetry sink directory for this click
    * (the same user-scope rule Profile uses), or undefined when telemetry is
    * disabled. Optional so existing wiring/tests without it keep compiling —
    * the handler falls back to `defaultResolveTelemetryDir(deps.env)`.
@@ -514,7 +514,7 @@ export async function handleRecognizerProbeRequest(deps: RecognizerProbeDeps, ra
     }
     secret = endpoint.apiKey;
     const timeoutMs = deps.timeoutMs ?? RECOGNIZER_PROBE_TIMEOUT_MS;
-    // TASK.203: telemetry resolves ONLY after a usable endpoint exists (a
+    // telemetry resolves ONLY after a usable endpoint exists (a
     // refused probe writes nothing), and a resolution failure must never fail
     // the probe — omit telemetry and probe on.
     let telemetry: { dir: string; session: string } | undefined;

@@ -62,7 +62,7 @@ describe("runCodexLogin", () => {
       timeoutMs: 150,
     });
     expect(outcome).toMatchObject({ ok: false, reason: "timeout" });
-    // Taskana 4884: a timeout now says WHICH bound expired and for how long.
+    // a timeout now says WHICH bound expired and for how long.
     expect(outcome.ok === false && outcome.detail).toContain("login did not complete");
   });
 
@@ -80,13 +80,13 @@ describe("runCodexLogin", () => {
       timeoutMs: 5_000,
     });
     expect(outcome).toMatchObject({ ok: false, reason: "failed" });
-    // Taskana 4884: the transport error is no longer swallowed — it is the
+    // the transport error is no longer swallowed — it is the
     // breadcrumb that says WHY the handshake died.
     expect(outcome.ok === false && outcome.detail).toContain("timed out");
   });
 });
 
-describe("runCodexLogin + profiles (TASK.50 п.2 — login INTO a profile home)", () => {
+describe("runCodexLogin + profiles (п.2 — login INTO a profile home)", () => {
   const PROFILE: ResolvedCodexProfile = {
     id: "acc1",
     codexHome: "/home/dev/.anycode/codex/profile-acc1",
@@ -173,7 +173,7 @@ describe("Codex device-code login", () => {
     expect(openExternal).not.toHaveBeenCalled();
   });
   /**
-   * Taskana 4884 — the live defect, reproduced at the unit level.
+   * the live defect, reproduced at the unit level.
    *
    * `account/login/start` is the ONE login RPC that is a real NETWORK round
    * trip: the server mints loginId/userCode/authUrl before answering. Measured
@@ -186,7 +186,7 @@ describe("Codex device-code login", () => {
    *
    * The device code appears 3.5s late here; the flow must survive it.
    */
-  it("waits past the doctor's 3s RPC bound for a slow device-code mint (Taskana 4884)", async () => {
+  it("waits past the doctor's 3s RPC bound for a slow device-code mint", async () => {
     const controller = new AbortController();
     const onDeviceCode = vi.fn(() => controller.abort());
     const startedAt = Date.now();
@@ -207,7 +207,7 @@ describe("Codex device-code login", () => {
     expect(outcome).toEqual({ ok: false, reason: "cancelled" });
   }, 20_000);
 
-  it("carries the server's own rejection reason into the failure detail (Taskana 4884)", async () => {
+  it("carries the server's own rejection reason into the failure detail", async () => {
     const outcome = await runCodexLogin("/fake/codex", {
       mode: "device",
       trust: TRUSTED,

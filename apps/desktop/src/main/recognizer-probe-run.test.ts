@@ -1,5 +1,5 @@
 /**
- * TASK.203: tests for the probe child's ACTUAL write path — the same
+ * tests for the probe child's ACTUAL write path — the same
  * `runRecognizerProbe` helper recognizer-probe-child.ts's main() calls, with
  * an injected ask function and the REAL `JsonlTelemetrySink` against a
  * temporary directory. Nothing here re-implements the record shapers; every

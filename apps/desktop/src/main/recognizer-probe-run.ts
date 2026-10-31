@@ -1,5 +1,5 @@
 /**
- * TASK.203: the recognizer-probe child's EXECUTION helper — the one function
+ * the recognizer-probe child's EXECUTION helper — the one function
  * (`runRecognizerProbe`) both the real child entry (recognizer-probe-child.ts)
  * and this slice's tests call, so "what a probe click writes to telemetry" is
  * tested against the SAME write path production uses, never a parallel

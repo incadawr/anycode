@@ -1,5 +1,5 @@
 /**
- * Taskana 4732 xfix H1(c): the consent writers against a REAL settings.json in
+ * xfix H1(c): the consent writers against a REAL settings.json in
  * a temp dir. The user-facing writer must land every write (the old main
  * closure silently dropped every grant after the first); the grandfathering
  * writer keeps its keep-the-winner guard.

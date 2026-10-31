@@ -1,5 +1,5 @@
 /**
- * Pure helpers for the popped-out preview window (Taskana 4778): its title and
+ * Pure helpers for the popped-out preview window: its title and
  * the "Return to AnyCode" affordances. No Electron imports, so the logic is
  * unit-testable; `createElectronPreviewWindow` wires them to the real window.
  */

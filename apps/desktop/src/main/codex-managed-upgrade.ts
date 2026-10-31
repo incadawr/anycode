@@ -1,5 +1,5 @@
 /**
- * Managed-Codex upgrade path (TASK.237): when a previously installed MANAGED
+ * Managed-Codex upgrade path: when a previously installed MANAGED
  * Codex CLI (AnyCode's own `~/.anycode/codex/bin/<version>/…`, recorded in
  * `settings.codex.binaryPath`) is older than the manifest's `recommended`
  * version, an app upgrade must move the user to a manifest-supported version
@@ -142,12 +142,12 @@ export interface CodexManagedUpgradeDeps {
    */
   swapBinaryPath: (expected: string, next: string) => Promise<CodexBinaryPathSwapResult>;
   /**
-   * The doctor source env for the post-upgrade gate (TASK.139 §2 case (e)):
+   * The doctor source env for the post-upgrade gate (§2 case (e)):
    * main wires the identical `codexDoctorSourceEnv` every other main-spawned
    * probe reads through, so the gate honours `settings.codex.proxyUrl`.
    */
   doctorSourceEnv?: () => NodeJS.ProcessEnv;
-  /** Taskana 4685: MAIN's own relay URL, threaded to the post-upgrade doctor (fail-closed drop when absent). */
+  /** MAIN's own relay URL, threaded to the post-upgrade doctor (fail-closed drop when absent). */
   relayUrl?: () => string | undefined;
   /** Fired after a successful upgrade so main pushes ENGINES_CHANGED and rechecks. */
   onChanged?: () => void;

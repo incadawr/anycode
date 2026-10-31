@@ -1,5 +1,5 @@
 /**
- * Live lifecycle of the Sessions API (Taskana 4747). Owns at most ONE running
+ * Live lifecycle of the Sessions API. Owns at most ONE running
  * communication server and is driven by the `communication` settings block
  * (or by the legacy env override, which wins and makes the UI read-only).
  *
@@ -35,9 +35,9 @@ export interface CommunicationControllerDeps {
   isSessionExposed(sessionId: string): boolean;
   /** Session handle for `list_sessions` (main-owned). */
   handleOf?(sessionId: string): string | undefined;
-  /** Taskana 4763: per-session External approvals switch (main-owned). Absent = no approvals anywhere. The env-file mode never gets it. */
+  /** per-session External approvals switch (main-owned). Absent = no approvals anywhere. The env-file mode never gets it. */
   isExternalApprovalEnabled?(sessionId: string): boolean;
-  /** Taskana 4768: opens a tab for `create_session`. Absent = create_session always refuses. Settings mode only; the env-file mode never gets it. */
+  /** opens a tab for `create_session`. Absent = create_session always refuses. Settings mode only; the env-file mode never gets it. */
   createSessionByAgent?(request: CreateSessionRequest): Promise<CreateSessionOutcome>;
   agentOpenedSessions?: Set<string>;
   closeSessionByAgent?(sessionId: string): Promise<CloseSessionOutcome>;

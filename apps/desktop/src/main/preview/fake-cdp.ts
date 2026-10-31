@@ -1,5 +1,5 @@
 /**
- * Test helper (Taskana 4759): a scriptable stand-in for `PreviewCdpLike`. Records
+ * Test helper: a scriptable stand-in for `PreviewCdpLike`. Records
  * every `send`, answers per method from a script (value, function or Error),
  * and lets a test fire CDP events into the listeners the driver registered.
  */

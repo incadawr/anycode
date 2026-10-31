@@ -32,7 +32,7 @@ Numbers refer to the coverage checklist (1 = plain chat, 2 = `exec_command` call
 
 All 11 checklist items are covered; ≥8 fixtures were requested, 9 were produced.
 
-## Amendment (TASK.52, lane D): tier-2 default-skip fixture
+## Amendment (lane D): tier-2 default-skip fixture
 
 AMENDMENT-1 §A5 (post-W0-R3) requires a three-tiered default-skip in the importer: an
 unrecognized top-level record type (tier 1 — covered above by
@@ -139,7 +139,7 @@ instruction ("synthetic MINIMAL fixture ... if none is found in the existing cor
   — plus the `tool_search_call`/`_output` exotic pair. One `function_call_output` (38 KB, a long
   `rg`/`find`-style command dump) was truncated by `scrub.mjs`'s generic >4000-char leaf cap;
   structure (still one `function_call_output` record) is unchanged.
-- **Taskana 4163 scrub:** the source session discussed private infrastructure of another
+- ** scrub:** the source session discussed private infrastructure of another
   project, so every free-text payload (the workspace AGENTS.md body, the user prompt, the
   agent messages, the `exec_command` `cmd` strings and the `function_call_output` bodies) was
   replaced with synthetic placeholder text, and `session_meta.git.commit_hash` was zeroed.

@@ -89,14 +89,14 @@ missing/bad token → `401`.
 | Method / path | Returns |
 |---|---|
 | `GET /health` | `{ok, pid, version, tabs}` |
-| `GET /state?tail=N` | `{snapshot:{tabs, activeTabId, states, childStates}, tabs:[{tabId, workspace, sessionId, state, pid}]}` — `tail` slices each transcript to the last N blocks. `childStates` (Taskana 4265) is keyed by childTabId: per-tab state plus `child{parentTabId, parentSessionId, spawnToolCallId, childSessionId}` — answer a child's pending ask with `POST /tabs/<childTabId>/permission {behavior, requestId}` |
+| `GET /state?tail=N` | `{snapshot:{tabs, activeTabId, states, childStates}, tabs:[{tabId, workspace, sessionId, state, pid}]}` — `tail` slices each transcript to the last N blocks. `childStates` is keyed by childTabId: per-tab state plus `child{parentTabId, parentSessionId, spawnToolCallId, childSessionId}` — answer a child's pending ask with `POST /tabs/<childTabId>/permission {behavior, requestId}` |
 | `GET /state/:tabId?tail=N` | same, narrowed to one tab: a root tabId also returns its children in `childStates`; a child tabId returns just itself there |
 | `GET /sessions` | `SessionSummary[]` |
 | `GET /screenshot` | `{png:"<base64>"}` — window capture (evidence / calibration) |
 | `GET /transcript/scroll?tabId=` | `{ok:true, scrollTop, scrollHeight, clientHeight, atBottom, jumpVisible}` \| `{ok:false, reason}` — see below |
 | `GET /tabs/:tabId/todo-panel` | `{ok:true, visible, header, panelCollapsed, completedRow, items:[{glyph, content}]}` \| `{ok:false, reason}` — see below |
 | `GET /tabs/:tabId/agent-card/:toolCallId` | `{ok:true, expanded, promptCollapsed, feedRowCount, resultRendered}` \| `{ok:false, reason}` — see below |
-| `GET /sidebar/groups` | `[{workspace, label, expanded, rowTitles:[…], more:{label, expanded}\|null}]` — the sidebar as DRAWN (TASK.125). `rowTitles` lists only mounted rows, so a group under its row cut reports the short list; `more` is the cut's toggle (`null` when the group takes no cut) |
+| `GET /sidebar/groups` | `[{workspace, label, expanded, rowTitles:[…], more:{label, expanded}\|null}]` — the sidebar as DRAWN. `rowTitles` lists only mounted rows, so a group under its row cut reports the short list; `more` is the cut's toggle (`null` when the group takes no cut) |
 
 ### Action plane
 
@@ -105,7 +105,7 @@ missing/bad token → `401`.
 
 | Method / path | Body | Returns |
 |---|---|---|
-| `POST /tabs/:tabId/prompt` | `{text, images?}` | `{ok:true, requestId}` \| `{ok:false, reason:"image_not_found"\|"image_too_many"\|"image_unsupported_type"\|"image_too_large"\|"images_unsupported"}` — `images` (TASK.198 live-smoke facade) is a list of ABSOLUTE on-disk paths, never base64 over the wire. handlers.ts (main, the only side with fs access) reads + base64-encodes each path, failing closed on ANY unreadable/non-absolute path with `image_not_found` before the facade is even called. The renderer facade then runs the SAME validation a live drag-drop does: `sniffComposerImageMediaType` (content, never the extension) against `image_too_large`/`image_unsupported_type`, `COMPOSER_IMAGE_MAX_PER_MESSAGE` against `image_too_many`, and the TASK.56 W3-FIX `isSendBlockedByModelImages` gate — a blind model with no configured recognizer fallback (TASK.198 срез D) refuses the whole send as `images_unsupported`, same reason `/tabs/:tabId/retry` already reports, rather than silently stripping the images |
+| `POST /tabs/:tabId/prompt` | `{text, images?}` | `{ok:true, requestId}` \| `{ok:false, reason:"image_not_found"\|"image_too_many"\|"image_unsupported_type"\|"image_too_large"\|"images_unsupported"}` — `images` (live-smoke facade) is a list of ABSOLUTE on-disk paths, never base64 over the wire. handlers.ts (main, the only side with fs access) reads + base64-encodes each path, failing closed on ANY unreadable/non-absolute path with `image_not_found` before the facade is even called. The renderer facade then runs the SAME validation a live drag-drop does: `sniffComposerImageMediaType` (content, never the extension) against `image_too_large`/`image_unsupported_type`, `COMPOSER_IMAGE_MAX_PER_MESSAGE` against `image_too_many`, and the W3-FIX `isSendBlockedByModelImages` gate — a blind model with no configured recognizer fallback (срез D) refuses the whole send as `images_unsupported`, same reason `/tabs/:tabId/retry` already reports, rather than silently stripping the images |
 | `POST /tabs/:tabId/permission` | `{behavior:"allow"\|"deny", requestId?}` | `{ok:true}` |
 | `POST /tabs/:tabId/mode` | `{mode}` | `{ok:true}` |
 | `POST /tabs/:tabId/orchestrate` | `{enabled}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"\|"not_ready"}` |
@@ -117,16 +117,16 @@ missing/bad token → `401`.
 | `POST /tabs/:tabId/role-picker/save` | — | `{ok:true}` \| `{ok:false, reason:"tab_not_active"\|"unknown_tab"\|"not_present"}` |
 | `POST /tabs/:tabId/role-picker/skip` | — | `{ok:true}` \| `{ok:false, reason:"tab_not_active"\|"unknown_tab"\|"not_present"}` |
 | `POST /tabs/:tabId/stop` | `{}` | `{ok:true}` |
-| `POST /tabs/:tabId/retry` | `{}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"\|"no_retry_offer"\|"not_ready"\|"images_unsupported"}` — clicks the one-shot Try-again offer (TASK.33 W8) by calling `dispatchTryAgain` directly (a facade shortcut, NOT a DOM click — see the try-again-button probe/driver below for that); `GET /state`'s per-tab `retryOffer` (null when nothing is offered) mirrors the store's `retry` field. `images_unsupported` (TASK.56 W3-FIX) is the entry gate refusing an image-bearing offer against the live model's `imageInput:false` verdict; the offer stays armed (still visible in `retryOffer`) and the store raises a `retry_blocked` notice |
+| `POST /tabs/:tabId/retry` | `{}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"\|"no_retry_offer"\|"not_ready"\|"images_unsupported"}` — clicks the one-shot Try-again offer (W8) by calling `dispatchTryAgain` directly (a facade shortcut, NOT a DOM click — see the try-again-button probe/driver below for that); `GET /state`'s per-tab `retryOffer` (null when nothing is offered) mirrors the store's `retry` field. `images_unsupported` (W3-FIX) is the entry gate refusing an image-bearing offer against the live model's `imageInput:false` verdict; the offer stays armed (still visible in `retryOffer`) and the store raises a `retry_blocked` notice |
 | `POST /tabs/:tabId/select` | `{}` | `{ok:true}` |
 | `POST /tabs/:tabId/close` | `{}` | `{ok:true}` |
 | `POST /tabs/:tabId/child/open` | `{spawnToolCallId}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"}` — switches the root tab's pane onto that child (the same call ToolCallCard's Open button makes) |
-| `POST /tabs/:tabId/child/close` | `{}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"\|"not_active"\|"not_open"}` (TASK.188 S8.3) — returns the tab from its child pane to the master by a REAL `.click()` on the control an operator uses (layout B's master breadcrumb, or the split pane's close button), never by poking the layout store: CUT-S3 §6.1 keeps every layout TRANSITION a real click. `not_active` because only the active tab is mounted; `not_open` when the tab already shows the master view, or no such control is rendered |
-| `POST /tabs/:tabId/child/split` | `{}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"\|"not_active"\|"not_open"}` (TASK.188 S9.4) — puts an open child pane into the SPLIT layout by a REAL `.click()` on layout B's own "Split" breadcrumb button, same posture and same refusals as `child/close` above. Split is the only layout in which the root transcript is on screen, and so the only one in which a finished child hands playback back to the root by itself (see the replay probe below) |
+| `POST /tabs/:tabId/child/close` | `{}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"\|"not_active"\|"not_open"}` (S8.3) — returns the tab from its child pane to the master by a REAL `.click()` on the control an operator uses (layout B's master breadcrumb, or the split pane's close button), never by poking the layout store: CUT-S3 §6.1 keeps every layout TRANSITION a real click. `not_active` because only the active tab is mounted; `not_open` when the tab already shows the master view, or no such control is rendered |
+| `POST /tabs/:tabId/child/split` | `{}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"\|"not_active"\|"not_open"}` (S9.4) — puts an open child pane into the SPLIT layout by a REAL `.click()` on layout B's own "Split" breadcrumb button, same posture and same refusals as `child/close` above. Split is the only layout in which the root transcript is on screen, and so the only one in which a finished child hands playback back to the root by itself (see the replay probe below) |
 | `POST /tabs` | `{kind:"new", workspace}` | `{ok:true, tabId, sessionId, workspace}` (bypasses the native open dialog) |
 | `POST /tabs` | `{kind:"resume", sessionId}` | `{ok:true, tabId, workspace}` |
-| `POST /wait` | `{tabId, until:{connection?, turnStatus?, permissionPending?, transcriptIncludes?, gitStatusKnown?, gitPendingEmpty?}, timeoutMs?}` | `{matched, elapsedMs, state}` — polls every 150 ms; default 60 s, cap 300 s; `tabId` may be a childTabId (Taskana 4265 — child state is read from `childStates`) |
-| `POST /sidebar/groups/more` | `{workspace}` | `{ok:true}` \| `{ok:false, reason:"unknown_workspace"\|"no_cut"\|"did_not_commit"}` — a real `.click()` on that group's row-cut toggle (TASK.125); returns only after the drawn row count actually moves |
+| `POST /wait` | `{tabId, until:{connection?, turnStatus?, permissionPending?, transcriptIncludes?, gitStatusKnown?, gitPendingEmpty?}, timeoutMs?}` | `{matched, elapsedMs, state}` — polls every 150 ms; default 60 s, cap 300 s; `tabId` may be a childTabId (child state is read from `childStates`) |
+| `POST /sidebar/groups/more` | `{workspace}` | `{ok:true}` \| `{ok:false, reason:"unknown_workspace"\|"no_cut"\|"did_not_commit"}` — a real `.click()` on that group's row-cut toggle; returns only after the drawn row count actually moves |
 | `POST /sidebar/filter` | `{query}` | `{ok:true}` \| `{ok:false, reason:"no_search_input"\|"did_not_commit"}` — types into the real filter input (`""` clears it). An active filter LIFTS the row cut, which is why the driver exists |
 | `POST /quit` | `{}` | `{ok:true}` — graceful shutdown (kills hosts, unlinks discovery file) |
 
@@ -287,7 +287,7 @@ closed (`design/slice-F5-1b-cut.md` §2-D4). Every POST route goes through the
 SAME tabs-store draft actions / `submitStartDraft` the real UI calls — no
 second path, no new `SnapshotJson` field.
 
-`engine`/`availableEngines` (codex-fixes TASK.42, cut §3.7) are the ONE
+`engine`/`availableEngines` (codex-fixes, cut §3.7) are the ONE
 exception to "no new `SnapshotJson` field" — the draft's current engine pick
 and the compiled-in engine catalog (`shared/engines.ts` `ENGINE_IDS`, e.g.
 `["core","codex"]`), read the same draft-scoped way as `workspace`/`prompt`/
@@ -326,7 +326,7 @@ curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/model-menu/select -d '{"connect
 curl "${A[@]}" "${J[@]}" -X POST $B/start-screen/submit -d '{}'
 ```
 
-Model-menu (TASK.106 cut-1; §6 rail form): mirrors the New Session model
+Model-menu (cut-1; §6 rail form): mirrors the New Session model
 popover (`buildStartModelMenuGroups`, `StartScreen.tsx`) — since §6 the
 popover is two-pane (a connection rail on the left, the rail-selected
 connection's models on the right, a Popular chip strip on top), and the
@@ -349,7 +349,7 @@ rows aren't rendered yet (the §6 rail form renders one group at a time),
 then the row; it opens the popover first if it isn't already open, so a
 caller never has to sequence an explicit open before selecting.
 
-#### Engine metadata on the tab snapshot (codex-fixes TASK.42, cut §3.7)
+#### Engine metadata on the tab snapshot (codex-fixes, cut §3.7)
 
 `GET /state[/:tabId]`'s per-tab snapshot gains an additive, optional `engine`
 field: `{id, model?, activePresetId?}`, mirroring host_ready.engine's own
@@ -419,7 +419,7 @@ curl "${A[@]}" "$B/state/$TAB" | jq '.snapshot.states[$TAB].promptQueue'
 curl "${A[@]}" "${J[@]}" -X POST $B/queue/resume -d "{\"tabId\":\"$TAB\"}"
 ```
 
-### Composer queue probe (Taskana 4087 / TASK.55)
+### Composer queue probe
 
 `GET /tabs/:tabId/composer-queue` reports the composer's running-turn queue
 affordances in one read, mirroring `Composer.tsx` exactly: `enqueueWouldFire`
@@ -430,7 +430,7 @@ are read off the REAL `.composer-textarea` node (`null` when unmounted — a
 valid reading, not an error; only the connection gate disables the textarea,
 a running turn never does), and `queueLength`/`paused`/`draining` come
 straight off the live store. This closes the observability gap behind
-TASK.55's "needs a live repro": type via `composerType`, press Enter via
+'s "needs a live repro": type via `composerType`, press Enter via
 `composerKey(tabId, "Enter")`, then read this probe + `GET /state`'s
 `promptQueue` to watch the item land and drain FIFO.
 
@@ -589,7 +589,7 @@ curl "${A[@]}" "$B/tabs/$TAB/agent-card/$TOOL_CALL_ID"
 curl "${A[@]}" "${J[@]}" -X POST $B/tabs/$TAB/agent-card/$TOOL_CALL_ID/expand -d '{}'
 ```
 
-### Workflow map / ticks probes + toggle & collapse drivers (Taskana 4161)
+### Workflow map / ticks probes + toggle & collapse drivers
 
 Two DOM probes and two DOM drivers for the Workflow tool card's run map and
 collapsed-header tick strip, same "no mirrored state" discipline as the
@@ -648,7 +648,7 @@ card to read the tick strip mid-run (mixed kinds), expands back to verify the
 map's nodes/edges, round-trips the toggle, and asserts every node terminal on
 settle — dev-only, never in the release path.
 
-### Try-again button probe/driver (TASK.33 W8-FIX #2)
+### Try-again button probe/driver (W8-FIX #2)
 
 `POST /tabs/:tabId/retry` above (the pre-existing route) calls
 `dispatchTryAgain` directly — a facade shortcut that proves the resend logic
@@ -673,7 +673,7 @@ button there" and "more than one" — a caller wanting the "exactly one"
 guarantee asserts on the GET probe's `count` first. `{ok:true}` from the
 click route means the click was DELIVERED, not that a retry was DISPATCHED
 (fable-task56-w3fix-codex-ruling.md finding 1): a delivered click can still
-be refused by `dispatchTryAgain`'s TASK.56 W3-FIX entry gate, in which case
+be refused by `dispatchTryAgain`'s W3-FIX entry gate, in which case
 the outcome shows up in the store (`retryOffer` stays armed, a
 `retry_blocked` notice), not in this return value.
 
@@ -687,7 +687,7 @@ curl "${A[@]}" "$B/tabs/$TAB/try-again-button/$LOOP_END_BLOCK_ID"
 curl "${A[@]}" "${J[@]}" -X POST $B/tabs/$TAB/try-again-button/$LOOP_END_BLOCK_ID/click -d '{}'
 ```
 
-### Host-kill lever (TASK.33 FIX-A)
+### Host-kill lever (FIX-A)
 
 The Try-again offer surviving `store.ts`'s host-restart reset only proves the
 *state* layer survives a respawn — it says nothing about whether the button
@@ -901,7 +901,7 @@ of the real machine's `~`, with zero production code path reading it (the
 production default is always the real `os.homedir()`). See
 `apps/desktop/scripts/subagents-ui-smoke.mjs` for the reference wiring.
 
-### Profile pane probe/driver (slice P7.22 F19, W4; period/models/refresh added TASK.172)
+### Profile pane probe/driver (slice P7.22 F19, W4; period/models/refresh added)
 
 Mirrors `ProfilePane.tsx` (the Settings "Profile" usage-stats page,
 `design/slice-P7.22-cut.md` §1/§4 W3/W4) — a DOM probe/driver, same "no
@@ -926,8 +926,8 @@ is exactly "how many days in the 12-month window have tokens").
 `banner` branch (data present + disabled — "Telemetry is off — stats are
 frozen").
 
-TASK.172 widened this SAME dedicated route (an additive shape change, same
-posture as `GET /state`'s `engine` field) with everything TASK.158 slice 2
+widened this SAME dedicated route (an additive shape change, same
+posture as `GET /state`'s `engine` field) with everything slice 2
 shipped and the original W4 probe never picked up: `period` is which
 `.profile-period-button` currently reads `aria-pressed="true"`, mapped back
 to a `ProfilePeriod` purely by DOM POSITION — `PeriodControl` renders
@@ -1010,7 +1010,7 @@ curl "${A[@]}" "${J[@]}" -X POST $B/settings/profile/rebuild -d '{}'
 curl "${A[@]}" "$B/settings/layout"
 ```
 
-**TASK.187 S5 — why `refresh` grew three more refusals.** Before TASK.187 the
+**S5 — why `refresh` grew three more refusals.** Before the
 Refresh button was always enabled, so a delivered `.click()` was proof the
 gesture happened. It no longer is: the button is held (`disabled`) for the
 length of every pass, including the automatic catch-up chain that runs while
@@ -1029,7 +1029,7 @@ counters), so a caller can watch a pass instead of inferring it.
 pass left unread) and `pendingExactSessions` (cross-file sessions whose exact
 activity pass has not converged) are read straight off the pane root's
 `data-profile-backlog` / `data-profile-pending-exact` — NOT parsed out of the
-rendered "N files left" copy, which TASK.187 reworded three times and whose
+rendered "N files left" copy, which reworded three times and whose
 next rewording would have turned the probe's reading into a silent `0`. The
 pane is done only when BOTH are `0`: the automatic catch-up chain continues
 while either is non-zero, so a caller polling the backlog alone stops one pass
@@ -1056,7 +1056,7 @@ Electron configuration, so a dialog-guarded action would be dead in
 production with a green gate — and this single route performs both clicks,
 cancelling the armed state again if the confirm cannot be delivered.
 
-**`GET /settings/layout`** is the geometry probe TASK.187 defect 1 needed and
+**`GET /settings/layout`** is the geometry probe defect 1 needed and
 no route had: `scrollbarGap` is `container.right - pane.right`, the dead space
 to the right of the scroll port. It is a property of `.settings-pane`, the
 scroll port shared by every settings pane, so one reading covers all of them.
@@ -1073,7 +1073,7 @@ per-tab workspace concept at all — this is the ONLY home lever the pane
 needs (unlike skills/subagents, which also take a `workspaceForTab`). See
 `apps/desktop/scripts/profile-ui-smoke.mjs` for the reference wiring.
 
-### Vision pane probe/driver (TASK.198 срез E2c)
+### Vision pane probe/driver (срез E2c)
 
 Mirrors `VisionPane.tsx` (the Settings "Vision" recognizer-fallback page) — a
 DOM probe/driver, same "no mirrored state" discipline as the Profile pane
@@ -1270,7 +1270,7 @@ The persisted override lands at the SAME `ANYCODE_SETTINGS_PATH`-overridable
 its own. See `apps/desktop/scripts/keybindings-ui-smoke.mjs` for the
 reference wiring.
 
-### Provider connections pane probe/driver (TASK.45 W12)
+### Provider connections pane probe/driver (W12)
 
 Mirrors the Settings dialog's Provider pane (`ConnectionTile`/
 `ConnectionDrawer.tsx`) — a DEDICATED route, every prior `/settings*` probe
@@ -1282,7 +1282,7 @@ isn't rendered, `drawer.open:false` when neither embed is. `rows[].statusTone`
 is the tile's own `connection-tile-status-<tone>` class suffix (never a
 re-derived guess); `drawer.stage` is `"template"` before a connection exists
 yet or `"credential"` once metadata is minted and the credential section has
-activated (add/edit sequencing, TASK.45's own cut).
+activated (add/edit sequencing,'s own cut).
 
 `POST .../provider/add` clicks the trailing "+ Add connection" tile.
 `POST .../provider/tile` clicks a tile's own select button (make-default for
@@ -1350,7 +1350,7 @@ untested-version warning) — the assert surface for S2's offline degradation.
 The three POST drivers fire REAL clicks on the pane's own buttons — the
 "Install …"/"Update to …" primary, "Recheck all", "Refresh manifest" — so
 each runs the exact `bridge.install`/`recheck`/`manifestRefresh` controller
-call the button's own onClick makes (one product path; the TASK.53 IPC
+call the button's own onClick makes (one product path; the IPC
 channels are never re-invoked from the channel). All three are
 fire-and-return (no built-in settle wait, `shortcutsPressChord` posture):
 install downloads a real artifact and recheck runs sequential doctor passes —
@@ -1543,7 +1543,7 @@ before a single mkdir of any plane) instead of silently falling back to the
 owner's real `~/.anycode/codex` behind a green-looking smoke run; a PACKAGED
 build never reads the var at all — it neither honors nor throws on it.
 
-### Generic focus probe (TASK.45 W12-smoke)
+### Generic focus probe (W12-smoke)
 
 A DEDICATED, shell-level route — no pane above is widened to carry this.
 `document.activeElement` is read directly, so it works regardless of which
@@ -1580,7 +1580,7 @@ their empty defaults, not an error. `servers[].state` is the raw
 "disposed"`), read off the row's own `lsp-state-<state>` CSS class —
 byte-parity with the on-screen badge, not a re-derived guess.
 `groups[].event` is a real `HookEvent` string (`HooksPanel.tsx`'s
-`formatHookEvent` labels are byte-identical to the enum values). Since Taskana
+`formatHookEvent` labels are byte-identical to the enum values). Since
 4711 removed the header toggle buttons, the toggle routes drive REAL clicks on
 the Environment menu's Details actions: when a panel is open its own close
 button is clicked; otherwise the `.environment-trigger` dropdown opens and its
@@ -1605,12 +1605,12 @@ See `apps/desktop/scripts/lsp-hooks-ui-smoke.mjs` for the reference wiring,
 including the live-push proof (polling `GET /panels/lsp` for an unsolicited
 server-state transition with no Refresh/driver action in between).
 
-### Checkpoint timeline / rewind probe+driver (slice P7.26/R2, W3; Taskana 4742 rework)
+### Checkpoint timeline / rewind probe+driver (slice P7.26/R2, W3; rework)
 
 Reads the tab store's checkpoint slice (`design/slice-P7.26-R2-ratification.md`
 §1 W3), same "no mirrored state" discipline as the LSP/hooks panel probes
 above; `ok:false` is reserved for the shared `tab_not_active` refusal. The
-old TimelinePanel DOM panel is gone (Taskana 4742: rewind moved into the
+old TimelinePanel DOM panel is gone (rewind moved into the
 transcript tick rail's popover), so unlike the LSP/hooks panels — whose data
 streams in continuously — the checkpoint list is fetched ON DEMAND only (no
 live push): `GET /tabs/:tabId/checkpoints` requests a fresh checkpoint list
@@ -1648,7 +1648,7 @@ See `apps/desktop/scripts/rewind-ui-smoke.mjs` for the reference wiring
 (checkpoint capture -> list -> rewind -> transcript-truncation proof ->
 rewind-then-continue).
 
-### Preview probes/driver (night-track wave-1 cut §2.8, TASK.96 96-E)
+### Preview probes/driver (night-track wave-1 cut §2.8, 96-E)
 
 Unlike every probe/driver above, these four routes do **not** go through the
 renderer facade at all — they call `PreviewHost` (`main/preview/preview-host.ts`,
@@ -1687,8 +1687,8 @@ the panel. Purely additive; every other field is unchanged.
 | `GET /tabs/:tabId/previews/:previewId/console?tail=N` | — | `{entries:[{level, message, at}], dropped}` \| `{error}` |
 | `GET /tabs/:tabId/previews/:previewId/screenshot` | — | `{png:"<base64>"}` \| `PreviewResult` failure shape (`{ok:false, error, errorKind}`) |
 | `POST /tabs/:tabId/previews` | `{path?, url?}` | `PreviewResult<PreviewOpenSuccess>` — `{ok:true, value:{previewId, url, title?, kind, renderedFrom?}}` \| `{ok:false, error, errorKind}` |
-| `POST /tabs/:tabId/previews/:previewId/container` | `{target:"panel"\|"window"}` | `PreviewSetContainerResult` — `{ok:true, reloaded:boolean}` \| `{ok:false, error}` (TASK.99 M3: D14 transfer driver, viewKind-agnostic — works for both `web` and `dom-md` records) |
-| `POST /tabs/:tabId/previews/:previewId/navigate` | `{href:string}` | `MdDocReadResult` — `{ok:true, doc:{previewId, sourcePath, realSourcePath, docDir, sourceText, sizeBytes, mtimeMs, docVersion}}` \| `{ok:false, reason:"no_preview"\|"not_md"\|"not_found"\|"outside_roots"\|"too_large"\|"io_error"}` (TASK.99 M5: dev-only driver for `MD_PREVIEW_NAVIGATE` over a `dom-md` record — the SAME `navigateMdDoc` chain a real `.md` link click uses; `dom-md`-only — a `web`-kind previewId (or none) is the honest `no_preview` refusal) |
+| `POST /tabs/:tabId/previews/:previewId/container` | `{target:"panel"\|"window"}` | `PreviewSetContainerResult` — `{ok:true, reloaded:boolean}` \| `{ok:false, error}` (M3: D14 transfer driver, viewKind-agnostic — works for both `web` and `dom-md` records) |
+| `POST /tabs/:tabId/previews/:previewId/navigate` | `{href:string}` | `MdDocReadResult` — `{ok:true, doc:{previewId, sourcePath, realSourcePath, docDir, sourceText, sizeBytes, mtimeMs, docVersion}}` \| `{ok:false, reason:"no_preview"\|"not_md"\|"not_found"\|"outside_roots"\|"too_large"\|"io_error"}` (M5: dev-only driver for `MD_PREVIEW_NAVIGATE` over a `dom-md` record — the SAME `navigateMdDoc` chain a real `.md` link click uses; `dom-md`-only — a `web`-kind previewId (or none) is the honest `no_preview` refusal) |
 
 ```bash
 PORT=$(jq -r .port ~/.anycode/automation.json)
@@ -1708,7 +1708,7 @@ See `apps/desktop/scripts/preview-live-smoke.mjs` for the reference wiring
 mechanical probes; also the sole live exercise of the `preview.autoOpen`
 setting and the darwin `/tmp` artifact root, 77-B).
 
-### Replay probe/driver (TASK.188 §3.2/§5 S5)
+### Replay probe/driver (§3.2/§5 S5)
 
 Drives the renderer's "cinematic" transcript replay (a recorded session
 played back block-by-block, for a scenario smoke or for capturing a demo
@@ -1718,7 +1718,7 @@ the child-open/checkpoint routes above, and every ACTION route forwards it to
 the facade, which refuses (`unknown_tab` / `not_armed` / `not_armed_for_tab`)
 unless it names the tab actually armed, `unknown_child` when a `target` names a
 child that replay has not accepted, and — for the commands that move the
-film — `off_screen` unless that tab is the surface on screen (see below). TASK.188 S8.1 — before it, seven of
+film — `off_screen` unless that tab is the surface on screen (see below). S8.1 — before it, seven of
 the eight routes dropped the id and acted on "whatever is armed", so a stale
 id was silently honoured: `POST /tabs/<dead-uuid>/replay/disarm` answered `ok`
 and tore down the replay running on a LIVE tab. The read-only
@@ -1748,13 +1748,13 @@ verbatim as a partial `ReplayParams` patch, unvalidated at this boundary
 `.../seek` is a non-negative integer (a negative or absent one is `400`
 before the facade is ever called). A `{"child": …}` must name a child the
 replay has ACCEPTED — one whose pane is mounted — or the answer is
-`unknown_child` (TASK.188 S13); the check runs on every command, `pause`
+`unknown_child` (S13); the check runs on every command, `pause`
 included, and before the frame gate, because an address is wrong whatever the
 command is. Until S13 an unknown `spawnToolCallId` came back `ok` with nothing
 moved, which is exactly the shape of the stale-tabId defect S8.1 cured one
 level up.
 
-Two refinements from the second live pass (TASK.188 S9). `.../replay/disarm`
+Two refinements from the second live pass (S9). `.../replay/disarm`
 answers from the PULT's state alone — is anything armed, does the caller name
 it — and never from whether the tab still exists, so closing the armed tab can
 never strand the pult with an `armed` pointer nothing is able to clear (before
@@ -1766,7 +1766,7 @@ removes. And `.../replay/params` is armed-tab-only WHILE something is armed
 call from another live tab used to retune the film running on the armed one;
 with nothing armed any live tab may still set the film up in advance.
 
-`GET .../replay` also reports `rootOnScreen` (TASK.188 S8.2, widened in S10,
+`GET .../replay` also reports `rootOnScreen` (S8.2, widened in S10,
 made derived and fail-closed in S12): whether the root transcript is the
 surface currently drawn. It is DERIVED from what React has mounted — true iff
 a `SessionSurface` carrying the armed tab's id is up — so it is false in
@@ -1790,7 +1790,7 @@ take it off screen: the settings dialog is an overlay, not a replacement, so
 the root keeps playing behind it.
 
 A timeline sitting at its END is never `playing`, however it got there — its
-own clock, `End`, `step` or `seek` (TASK.188 S13). `Home` after `End` therefore
+own clock, `End`, `step` or `seek` (S13). `Home` after `End` therefore
 rewinds a STOPPED film and leaves it stopped; `Space` is what starts it. Before
 S13 only the clock switched playback off, so `End` left the root reading
 `382/382 playing:true` — a state nothing could leave, because past the last
@@ -1802,7 +1802,7 @@ that expects a seek to pause reads the following `Space` as "the key did
 nothing" — it toggled, off the value the seek carried over (measured live,
 seventh smoke).
 
-The opening frame is BLANK (TASK.188 S14): with a replay armed, an empty
+The opening frame is BLANK (S14): with a replay armed, an empty
 transcript on the armed tab — the root right after `arm` or `Home`, a child
 pane parked at 0 — is the film rewound, not an empty session, so the "What are
 we building?" onboarding and its composer-writing chips are not drawn there.
@@ -1810,7 +1810,7 @@ The list derives "am I a replay surface" from its own tab context
 (`isReplaySurface`), which is why layout B's child pane counts even though the
 root surface is unmounted. Off replay the product's empty state is unchanged.
 
-An explicit ORDER is held to the same rule (TASK.188 S11): `play`, `toggle`,
+An explicit ORDER is held to the same rule (S11): `play`, `toggle`,
 `step` and `seek` aimed at the root answer `off_screen` while `rootOnScreen`
 is false, and the `Space`/arrow/`Home`/`End` hotkeys — which address the armed
 tab, not the tab you are looking at — go with them, leaving the keystroke to
@@ -1825,13 +1825,13 @@ only while its pane is mounted. `GET .../replay` reports
 `rootPausedByChild` beside `rootOnScreen` so a driver can tell the two stops
 apart — a parked root starts itself again, a hand-stopped one never does, and
 both read `root.playing: false`. In split both surfaces are visible and the root resumes by itself — whether the child ran out under its own clock or was
-brought to the end by `End`, `step` or `seek` (TASK.188 S13: the hand-back is
+brought to the end by `End`, `step` or `seek` (S13: the hand-back is
 judged after every write to the replay store, not at the three events that
 used to be listed for it). For layout B, the `childDoneCloseMs` param (ms, default `1500`, `0` = off)
 closes a finished child's pane by the same real click `POST .../child/close`
 makes, after which the root resumes down its normal withdrawal path — and it
 counts a child finished by any of those routes, not only by its own clock. It is on
-by default (TASK.188 S9.3) because the effect is reachable only with a replay
+by default (S9.3) because the effect is reachable only with a replay
 armed, only in layout B and only past the end of a child's timeline — while
 shipping it off meant the film froze on every finished child until someone
 clicked. `POST .../child/split` drives the other branch: there the root is

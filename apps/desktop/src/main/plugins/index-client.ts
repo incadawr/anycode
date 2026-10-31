@@ -1,5 +1,5 @@
 /**
- * Signed official plugin index client (Taskana 4732 S1-B, design §3/§4):
+ * Signed official plugin index client (S1-B, design §3/§4):
  * fetches `index.json` + `index.json.sig` from the official repo, verifies
  * the ed25519 signature over the EXACT index bytes, enforces
  * anti-rollback (`serial` monotonicity against the caller-supplied floor)

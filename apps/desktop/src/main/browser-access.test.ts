@@ -1,5 +1,5 @@
 /**
- * Per-session "Full browser access" store (Taskana 4759 owner amendment): brief
+ * Per-session "Full browser access" store (owner amendment): brief
  * tests 39-41. Copies the case shape of communication-sessions.test.ts.
  */
 import { mkdirSync } from "node:fs";
@@ -23,7 +23,7 @@ afterEach(async () => {
 });
 const store = () => createBrowserAccessStore({ file, defaultOn: () => defaultOn });
 
-describe("browser access store (Taskana 4759) — test 39", () => {
+describe("browser access store — test 39", () => {
   it("a root session takes defaultOn(); a resumed session keeps its stored value", () => {
     defaultOn = true;
     const s = store();
@@ -79,7 +79,7 @@ describe("browser access store (Taskana 4759) — test 39", () => {
   });
 });
 
-describe("browser access store — child inheritance (Taskana 4759) — test 40", () => {
+describe("browser access store — child inheritance — test 40", () => {
   it("a child of an ON parent is ON", () => {
     const s = store();
     s.register({ sessionId: "parent" });
@@ -114,7 +114,7 @@ describe("browser access store — child inheritance (Taskana 4759) — test 40"
   });
 });
 
-describe("browser access default from settings (Taskana 4759) — test 41", () => {
+describe("browser access default from settings — test 41", () => {
   it("returns true only for browser.fullAccessDefault = on", async () => {
     const path = join(dir, "settings.json");
     await writeFile(path, JSON.stringify({ browser: { fullAccessDefault: "on" } }), "utf8");
@@ -142,7 +142,7 @@ describe("browser access default from settings (Taskana 4759) — test 41", () =
   });
 });
 
-describe("effective full access (Taskana 4759): trust gates the stored value", () => {
+describe("effective full access: trust gates the stored value", () => {
   it("is ON only when stored ON and the folder's trust is decided", () => {
     expect(effectiveFullAccess(true, "no_pending")).toBe(true);
     expect(effectiveFullAccess(true, { workspace: "/ws", hash: "a".repeat(64) })).toBe(false);

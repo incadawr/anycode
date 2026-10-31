@@ -8,7 +8,7 @@
  * by shell interpolation (no `which`/`where`, no `shell: true` spawn anywhere
  * in this file or its main/claude-doctor.ts consumer).
  *
- * NO "installed" rung: unlike Codex (TASK.53, `~/.anycode/codex/bin/**`),
+ * NO "installed" rung: unlike Codex (`~/.anycode/codex/bin/**`),
  * AnyCode does not download/manage a Claude Code binary in this track
  * (OG-CC-2, licensing — cut §1.2 "НЕ делаем").
  *
@@ -117,7 +117,7 @@ function ancestorDirectories(resolvedFile: string, originalPath: string): string
   return ordered;
 }
 
-/** The path-gate outcome (TASK.103 fix wave, D-S4-14/18). `null` = pass.
+/** The path-gate outcome (fix wave, D-S4-14/18). `null` = pass.
  *  `missing` = the realpath/stat threw — the file is GONE; NEVER an offerable
  *  refusal (D-S4-18). `refused` carries the shared classification plus the
  *  REALPATH the gate judged — the only path a `trustRefusal` may ever name. */
@@ -217,7 +217,7 @@ export interface ClaudeBinaryDiscovery {
   source: ClaudeBinarySource;
   /** The last rejection reason seen while walking the ladder (diagnostic only — the ladder still fails closed on `path:null`). */
   reason?: string;
-  /** The FIRST trust refusal seen while walking the ladder (TASK.103) — highest-priority rung, i.e. the binary the user most likely means. */
+  /** The FIRST trust refusal seen while walking the ladder — highest-priority rung, i.e. the binary the user most likely means. */
   trustRefusal?: { binaryPath: string; reason: string; staleConsent: boolean };
   /** The rung the carried `trustRefusal` came from — present iff `trustRefusal` is present (invariant tested by BG7). */
   trustRefusalSource?: ClaudeBinarySource;
@@ -278,7 +278,7 @@ export interface ClaudeDiscoveryInputs {
   platform?: NodeJS.Platform;
   /** Test seam; production reads the live process identity (uid + supplementary groups). */
   identity?: ClaudeIdentity;
-  /** Live per-path binary-trust consents (TASK.103); absent/default `[]` keeps today's wall byte-for-byte. */
+  /** Live per-path binary-trust consents; absent/default `[]` keeps today's wall byte-for-byte. */
   consents?: readonly BinaryTrustConsent[];
 }
 

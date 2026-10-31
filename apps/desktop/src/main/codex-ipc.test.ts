@@ -217,7 +217,7 @@ describe("createCodexOnboardingController.pickBinary", () => {
   });
 });
 
-describe("createCodexOnboardingController.useBinary (Taskana 4092 — Use restricted to listed candidates)", () => {
+describe("createCodexOnboardingController.useBinary (Use restricted to listed candidates)", () => {
   /** A deps bag whose discovery seam lists exactly the given alternates. */
   const depsListing = (alternates: Array<{ path: string; source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none" }>, overrides: Partial<CodexIpcDeps> = {}) =>
     makeDeps({ discoverAlternates: () => alternates, ...overrides });
@@ -377,7 +377,7 @@ describe("createCodexOnboardingController.loginStart / loginCancel", () => {
     expect(result).toEqual({ ok: false, reason: "timeout" });
   });
 
-  it("forwards the login outcome's own failure detail to the renderer and logs it (Taskana 4884)", async () => {
+  it("forwards the login outcome's own failure detail to the renderer and logs it", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const deps = makeDeps({
@@ -585,7 +585,7 @@ describe("custody", () => {
   });
 });
 
-describe("codex profiles control plane (TASK.50, cut §2/§4)", () => {
+describe("codex profiles control plane (cut §2/§4)", () => {
   /** A doctor fake that answers per-profile, echoing the profile it was run against — the shape the real runner produces. */
   function profileAwareDoctor(statusFor: (profileId: string) => CodexDoctorReport["status"] = () => "ready") {
     return vi.fn(async (_path: string, options?: { profile?: { id: string; codexHome?: string } }): Promise<CodexDoctorReport> => {
@@ -670,7 +670,7 @@ describe("codex profiles control plane (TASK.50, cut §2/§4)", () => {
     expect(controller.readyFor(undefined)).toBe(false);
   });
 
-  it("hasVerdictFor() splits never-diagnosed (unknown) from a landed verdict (TASK.64)", async () => {
+  it("hasVerdictFor() splits never-diagnosed (unknown) from a landed verdict", async () => {
     const runDoctor = profileAwareDoctor((id) => (id === "good" ? "ready" : "signed_out"));
     const deps = makeDeps({ runDoctor });
     const controller = createCodexOnboardingController(deps);
@@ -695,7 +695,7 @@ describe("codex profiles control plane (TASK.50, cut §2/§4)", () => {
     expect(controller.hasVerdictFor("no-such")).toBe(false);
   });
 
-  it("lastReportFor() returns the cached verdict without running the doctor (Taskana 4227)", async () => {
+  it("lastReportFor() returns the cached verdict without running the doctor", async () => {
     const runDoctor = profileAwareDoctor((id) => (id === "good" ? "ready" : "signed_out"));
     const deps = makeDeps({ runDoctor });
     const controller = createCodexOnboardingController(deps);
@@ -801,7 +801,7 @@ describe("codex profiles control plane (TASK.50, cut §2/§4)", () => {
   });
 });
 
-describe("doctor TTL cache (TASK.65)", () => {
+describe("doctor TTL cache", () => {
   /** A ready-verdict doctor whose spawn count makes a TTL reuse provable as "0 extra runs". */
   function countingReadyDoctor() {
     return vi.fn(async (): Promise<CodexDoctorReport> => ({
@@ -899,7 +899,7 @@ describe("doctor TTL cache (TASK.65)", () => {
   });
 });
 
-describe("createCodexOnboardingController — consent threading (TASK.103)", () => {
+describe("createCodexOnboardingController — consent threading", () => {
   const FILE_SIZE = 4096;
   const FILE_MTIME = 1_700_000_000_000;
 
@@ -1235,7 +1235,7 @@ describe("discoverAndCheck / loginStart — explicit-rung hard-stop (D-S4-22)", 
   });
 });
 
-describe("doctor/login source env — engine-proxy carrier custody (TASK.139)", () => {
+describe("doctor/login source env — engine-proxy carrier custody", () => {
   const ENGINE_PROXY = "http://user:pass@codex-proxy.example.com:3128";
   /** What a shell that happens to export the carrier name would inject. */
   const AMBIENT_PROXY = "http://ambient-carrier.invalid:9999";
@@ -1344,9 +1344,9 @@ it("loginOpenDevicePage opens only the pending device URL held by main, and noth
   expect(openExternal).toHaveBeenCalledTimes(1);
 });
 
-// ── Taskana 4230: refresh-before-refuse + spawn-freshness guard ──
+// ── refresh-before-refuse + spawn-freshness guard ──
 
-describe("createCodexOnboardingController — refresh-before-refuse (Taskana 4230)", () => {
+describe("createCodexOnboardingController — refresh-before-refuse", () => {
   it("re-runs the doctor once when a policy refresh un-blocks the version, caching the FRESH report", async () => {
     const runDoctor = vi
       .fn()
@@ -1394,7 +1394,7 @@ describe("createCodexOnboardingController — refresh-before-refuse (Taskana 423
   });
 });
 
-describe("createCodexOnboardingController.verifySpawnFreshness (Taskana 4230)", () => {
+describe("createCodexOnboardingController.verifySpawnFreshness", () => {
   it("known ready -> binary changed -> forced recheck whose refresh un-blocks the new version -> spawn allowed (the reviewer scenario)", async () => {
     // Supervisor #4: prime with an initially SUPPORTED version (0.161.0), then
     // the stamp changes, then the doctor says update_required for 0.162.1,
@@ -1511,7 +1511,7 @@ describe("createCodexOnboardingController.verifySpawnFreshness (Taskana 4230)", 
   });
 });
 
-describe("spawn-freshness integration — real refusal refresh + active policy judgment (Taskana 4230, supervisor #5, reject #2)", () => {
+describe("spawn-freshness integration — real refusal refresh + active policy judgment (supervisor #5, reject #2)", () => {
   it("ready 0.161.0 -> stamp change + 0.155.0 below old range -> forced network manifest widens -> ready and policy admits 0.155.0", async () => {
     const { mkdtempSync: mk, rmSync: rm, writeFileSync: wf } = await import("node:fs");
     const manifestModule = await import("./codex-manifest.js");

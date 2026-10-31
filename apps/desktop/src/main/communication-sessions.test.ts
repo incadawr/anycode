@@ -11,7 +11,7 @@ beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "anycode-sessions-")
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 const store = () => createSessionAccessStore({ file, defaultOn: () => defaultOn });
 
-describe("per-session Sessions API switch (Taskana 4747 owner amendment)", () => {
+describe("per-session Sessions API switch (owner amendment)", () => {
   it("an unknown session is not exposed (fail closed)", () => {
     expect(store().isExposed("never-seen")).toBe(false);
   });
@@ -288,7 +288,7 @@ describe("session handles (Taskana 4750b)", () => {
   });
 });
 
-describe("External approvals store (Taskana 4763)", () => {
+describe("External approvals store", () => {
   const approvalsFile = () => join(dir, "communication-approvals.json");
   const approvals = () => createSessionAccessStore({ file: approvalsFile(), defaultOn: () => false });
   it("T29 defaults off for a new root (even when sharing defaults on), inherits from the parent, persists across instances, and a corrupt file reads as all off", async () => {

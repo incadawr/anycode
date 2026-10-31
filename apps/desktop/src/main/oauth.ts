@@ -67,7 +67,7 @@ export interface OAuthTokenStore {
     opts: { allowWeak: boolean },
   ): Promise<{ ok: boolean }>;
   /**
-   * Removes the token blob for `connectionId` (TASK.45 W10-FIX F4): the
+   * Removes the token blob for `connectionId` (W10-FIX F4): the
    * compensating clear when a flow settles WHILE its own vault write is in flight
    * (main/vault.ts's `clearOAuthTokens` satisfies this structurally). Idempotent.
    */
@@ -88,7 +88,7 @@ export interface OAuthEngineDeps {
   openExternal: (url: string) => Promise<unknown> | unknown;
   /** Token-endpoint fetch (default: global fetch). */
   fetchFn?: FetchLike;
-  /** TASK.133: per-connection token-endpoint fetch (proxy routing); wins over `fetchFn` when set. */
+  /** per-connection token-endpoint fetch (proxy routing); wins over `fetchFn` when set. */
   fetchFor?: (connectionId: string) => FetchLike;
   /** Flow deadline in ms (default 5 min). */
   timeoutMs?: number;
@@ -102,18 +102,18 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
 interface CallbackContext {
   config: OAuthProviderConfig;
-  /** Vault connection id the token blob is persisted under (TASK.45 W9 §4.3). */
+  /** Vault connection id the token blob is persisted under (W9 §4.3). */
   connectionId: string;
   state: string;
   verifier: string;
   redirectUri: () => string;
   opts: { allowWeak: boolean };
   settle: (outcome: OAuthOutcome) => void;
-  /** Whether the flow already settled (cancelled/timed-out) — TASK.45 W10 §6.5 skip-persist guard. */
+  /** Whether the flow already settled (cancelled/timed-out) — W10 §6.5 skip-persist guard. */
   isSettled: () => boolean;
   /**
    * Whether this flow was settled by a SUPERSEDING `startFlow` call for the
-   * same providerId, as opposed to an explicit cancel/delete/timeout (TASK.45
+   * same providerId, as opposed to an explicit cancel/delete/timeout (
    * W11-FIX M6). A supersede must never trigger the post-write compensating
    * clear: connectionId lifecycle ownership passes to the new flow — for a
    * same-connection supersede, clearing would erase the new flow's own
@@ -135,7 +135,7 @@ export class OAuthEngine {
   /** In-flight flow per provider so `cancel` (and a superseding start) can settle it. */
   private readonly inFlight = new Map<string, { settle: (outcome: OAuthOutcome) => void; markSuperseded: () => void }>();
   /**
-   * Connection ids currently being deleted (TASK.45 W11-FIX2 #2). Connection
+   * Connection ids currently being deleted (W11-FIX2 #2). Connection
    * ids are uuids and never reused (§4.3), so membership here is permanently
    * correct for that id: ANY blob under it is garbage, and the post-write
    * compensation must clear it even if the flow that wrote it was superseded
@@ -160,7 +160,7 @@ export class OAuthEngine {
   }
 
   /**
-   * Tombstones `connectionId` (TASK.45 W11-FIX2 #2): the caller (settings-ipc's
+   * Tombstones `connectionId` (W11-FIX2 #2): the caller (settings-ipc's
    * `handleConnectionDelete`) MUST call this before its first vault-clear, so a
    * same-connection write that settles (superseded) AFTER the delete's own
    * clear still gets compensated instead of skipped. Returns a revert closure
@@ -179,7 +179,7 @@ export class OAuthEngine {
 
   /**
    * Supersedes any in-flight flow for `providerId` from a NEW `startFlow` call
-   * (TASK.45 W11-FIX M6). Settles it with the exact same public `OAuthOutcome`
+   * (W11-FIX M6). Settles it with the exact same public `OAuthOutcome`
    * as `cancel` — the public contract is unchanged — but additionally marks its
    * context `superseded` so the post-write compensating clear (`handleCallback`)
    * skips it, since ownership of the connectionId's lifecycle passes to this
@@ -193,7 +193,7 @@ export class OAuthEngine {
 
   /**
    * Runs the full loopback+PKCE flow for one provider. Resolves `{ok:true}` after
-   * the token blob is persisted (under `connectionId`, TASK.45 W9 §4.3), else a
+   * the token blob is persisted (under `connectionId`, W9 §4.3), else a
    * typed reason. A new flow for the same provider supersedes (cancels) any prior
    * in-flight one.
    */
@@ -332,7 +332,7 @@ export class OAuthEngine {
         ctx.settle({ ok: false, reason: "failed" });
         return;
       }
-      // TASK.45 W10-FIX F4: the pre-write guard above only catches a settle that
+      // W10-FIX F4: the pre-write guard above only catches a settle that
       // landed BEFORE the write. A cancel/timeout that fired WHILE setOAuthTokens
       // was in flight (e.g. the connection was deleted mid-write) would otherwise
       // strand a blob under a now-deleted connection id. Re-check after the write

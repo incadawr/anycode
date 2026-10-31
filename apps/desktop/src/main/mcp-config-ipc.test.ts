@@ -528,7 +528,7 @@ describe("W5-FIX finding 7 — reserved prototype-key names", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Taskana 4732 S1-C (design 4732 §6 "Elsewhere"): plugin-contributed rows.
+// S1-C (design 4732 §6 "Elsewhere"): plugin-contributed rows.
 // The snapshot's `pluginServers` ride the SAME discovery the runtime uses —
 // renames `plugin_<plugin>_<server>`, explicit config wins a name collision,
 // read-only rows only (no new channel, no consent re-derivation in stage 1:
@@ -544,7 +544,7 @@ function pluginManifestJson(mcpServers?: Record<string, unknown>): string {
   });
 }
 
-describe("handleMcpConfigGet pluginServers (Taskana 4732 S1-C)", () => {
+describe("handleMcpConfigGet pluginServers (S1-C)", () => {
   function pluginWorld(manifest: string): { deps: McpConfigIpcDeps } {
     const { deps } = makeDeps(
       { [`${USER_PLUGINS_ROOT}/ozon-tools/.anycode-plugin/plugin.json`]: manifest },
@@ -620,9 +620,9 @@ describe("handleMcpConfigGet pluginServers (Taskana 4732 S1-C)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Taskana 4758: a workspace scope reference (`ws_…`) resolves like a tab id.
+// a workspace scope reference (`ws_…`) resolves like a tab id.
 
-describe("mcp scope reference (Taskana 4758)", () => {
+describe("mcp scope reference", () => {
   const WS_REF = "ws_0123456789abcdef";
   const refDeps = (files: Record<string, string>, workspace: string | undefined): { deps: McpConfigIpcDeps; files: Record<string, string> } => {
     const built = makeDeps(files, { noTab: true });

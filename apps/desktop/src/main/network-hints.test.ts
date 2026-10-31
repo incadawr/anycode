@@ -1,5 +1,5 @@
 /**
- * attachNetworkHintForwarders (Taskana 4772): fake net/powerMonitor emitters
+ * attachNetworkHintForwarders: fake net/powerMonitor emitters
  * and a post spy; no Electron, no timers.
  */
 
@@ -7,7 +7,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { attachNetworkHintForwarders } from "./network-hints.js";
 
-describe("attachNetworkHintForwarders (Taskana 4772)", () => {
+describe("attachNetworkHintForwarders", () => {
   function setup() {
     const net = new EventEmitter();
     const powerMonitor = new EventEmitter();

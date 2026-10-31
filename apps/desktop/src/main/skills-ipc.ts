@@ -182,7 +182,7 @@ export interface SkillsIpcDeps {
    * problems in the Skills pane) nor the managed store the runtime loads.
    */
   pluginDiscoveryOptions?: (home: string, workspace: string) => Omit<ScanSkillsAdminOptions, "workspace" | "home">;
-  /** Scope reference resolver (Taskana 4758): a tab id (legacy) or a workspace id `ws_<16 hex>`, resolved main-side — never a renderer-supplied path. */
+  /** Scope reference resolver: a tab id (legacy) or a workspace id `ws_<16 hex>`, resolved main-side — never a renderer-supplied path. */
   workspaceForTab(tabId: string): string | undefined;
   fs: SkillsFs;
   /** Reveals a path in the OS file manager — injected so this module stays Electron-free in tests (production wiring: `shell.showItemInFolder`). */

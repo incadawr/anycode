@@ -1,5 +1,5 @@
 /**
- * Browser control driver (Taskana 4759, Phase A): accessibility snapshot,
+ * Browser control driver (Phase A): accessibility snapshot,
  * ref-based click/type, waitFor and history navigation over the Chromium
  * DevTools protocol. Electron-free: it talks only to the narrow `PreviewCdpLike`
  * surface and to a few callbacks PreviewHost supplies, so every behaviour is

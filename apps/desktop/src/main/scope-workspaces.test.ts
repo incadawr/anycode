@@ -1,5 +1,5 @@
 /**
- * Taskana 4758: unit tests for the Settings scope workspace registry, run off
+ * unit tests for the Settings scope workspace registry, run off
  * a fake deps bag (no disk, no persistence). The fake filesystem is a set of
  * existing directories plus a symlink map; realpath throws for missing paths
  * so canonicalWorkspaceKey takes its documented fallback.
@@ -52,7 +52,7 @@ const session = (workspace: string, updatedAt: number, extra: Partial<ScopeRecen
   ...extra,
 });
 
-describe("scope workspace registry (Taskana 4758)", () => {
+describe("scope workspace registry", () => {
   it("lists open-tab folders first, then recents by newest updatedAt, deduped", async () => {
     const { registry } = makeRegistry({
       dirs: ["/w/a", "/w/b", "/w/c"],

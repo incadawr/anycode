@@ -1,5 +1,5 @@
 /**
- * Unit tests for main/connection-quota.ts (Taskana 4090 / TASK.71 follow-up):
+ * Unit tests for main/connection-quota.ts (follow-up):
  * the throttled, sparse, locked `lastQuota` write that makes the provider
  * quota line survive a reload / snapshot refresh. Exercised off a scratch
  * settings.json (no Electron, no ipcMain) — the same fixture discipline as
@@ -226,7 +226,7 @@ describe("recordConnectionQuota — 30-second throttle with trailing flush", () 
     expect((await persistedLine())?.observedAt).toBe(observedAtAfterFlush);
   });
 
-  // Taskana 4090 cross-review A4: throttle state is per connection, so a write
+  // cross-review A4: throttle state is per connection, so a write
   // in flight for one connection must neither delay nor suppress a sibling's
   // observation landing in the same window.
   it("two connections inside the same window each persist their own observation", async () => {
@@ -272,7 +272,7 @@ describe("recordConnectionQuota — 30-second throttle with trailing flush", () 
   });
 });
 
-describe("flushPendingConnectionQuota — the quit flush (Taskana 4090 follow-up)", () => {
+describe("flushPendingConnectionQuota — the quit flush (follow-up)", () => {
   beforeEach(async () => {
     await writeSettingsFixture({ connections: [{ id: "c1", providerId: "zai" }] });
   });

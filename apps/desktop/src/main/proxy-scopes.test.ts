@@ -1,5 +1,5 @@
 /**
- * Unit tests for the scope-binding registry and the legacy importer (TASK.141
+ * Unit tests for the scope-binding registry and the legacy importer (
  * §3/§1). These are the two pieces every proxy handler stands on: the bindings
  * decide where a ref lives, and the importer decides whether three scopes
  * sharing one corporate proxy string end up as one profile or three twins.
@@ -297,7 +297,7 @@ describe("importLegacyProxy — one profile per proxy, not per scope", () => {
     expect("network" in draft).toBe(false);
   });
 
-  // B-06: the registry's custody rule is stricter than TASK.132's legacy
+  // B-06: the registry's custody rule is stricter than's legacy
   // predicate. A legacy string carrying a path (a PAC url in the proxy field,
   // most likely) keeps working AS a legacy string, but converting it would have
   // to silently rewrite the endpoint — so the conversion is refused instead.
@@ -330,9 +330,9 @@ describe("uniqueProxyProfileName", () => {
   });
 });
 
-// ── Taskana 4685: boot-time migration of credentialed legacy proxyUrl strings ──
+// ── boot-time migration of credentialed legacy proxyUrl strings ──
 
-describe("migrateLegacyProxyUrls (Taskana 4685)", () => {
+describe("migrateLegacyProxyUrls", () => {
   /**
    * A recording fake for the vault write the migration performs — one that
    * MODELS the vault (a written password reads back), because the B-08 dedup
@@ -406,7 +406,7 @@ describe("migrateLegacyProxyUrls (Taskana 4685)", () => {
     expect(vault.writes.map((w) => w.value).sort()).toEqual(["cp", "lp"]);
   });
 
-  it("a scope that already carries a ref keeps it: the outranked credentialed string is stripped, never imported over the ref (Taskana 4685 review)", async () => {
+  it("a scope that already carries a ref keeps it: the outranked credentialed string is stripped, never imported over the ref (review)", async () => {
     const vault = recordingVault();
     const doc = withConnections([connectionFixture("conn-1", { proxyRef: "chosen", proxyUrl: "http://old:pw@stale:3128" })]);
     const result = await migrateLegacyProxyUrls(doc, { ...importDeps(ids("proxy-new")), ...vault.deps });

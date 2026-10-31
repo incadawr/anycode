@@ -140,7 +140,7 @@ export function buildClaudeDoctorChildEnv(
     const value = source[key];
     if (value !== undefined) env[key] = value;
   }
-  // Taskana 4685 rework: a credentialed proxy never reaches the doctor CLI —
+  // rework: a credentialed proxy never reaches the doctor CLI —
   // `relayUrl` is the relay of THIS source env's own credentialed upstream
   // (main's `doctorRelayUrl` resolves it per value — blocker B2), so the swap
   // never substitutes a relay fronting a different proxy. Fail-closed without
@@ -172,7 +172,7 @@ export function buildClaudeDoctorChildEnv(
   env.DISABLE_TELEMETRY = "1";
   env.DISABLE_ERROR_REPORTING = "1";
   env.CLAUDE_CODE_ENTRYPOINT = "anycode";
-  // TASK.139: the engine-level proxy, if main stamped its carrier into `source`.
+  // the engine-level proxy, if main stamped its carrier into `source`.
   // This probe makes no network call of its own, so the override is here for the
   // mirror claim in this function's header — the session child's builder applies
   // the same call, and a builder that declares itself a mirror has to stay one.
@@ -606,10 +606,10 @@ export interface RunClaudeDoctorOptions {
   profileDir?: string;
   versionTimeoutMs?: number;
   initTimeoutMs?: number;
-  /** Live per-path binary-trust consents (TASK.103), fed to the default `trust` closure; ignored when `trust` is explicitly injected. Absent/default `[]` keeps today's wall byte-for-byte. */
+  /** Live per-path binary-trust consents, fed to the default `trust` closure; ignored when `trust` is explicitly injected. Absent/default `[]` keeps today's wall byte-for-byte. */
   consents?: readonly BinaryTrustConsent[];
   /**
-   * Taskana 4685: MAIN's own credential-free relay URL. A credentialed proxy in
+   * MAIN's own credential-free relay URL. A credentialed proxy in
    * the source env is swapped for it in the child env (fail-closed drop when
    * absent) — the doctor CLI never sees `user:pass@`.
    */

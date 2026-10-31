@@ -1,5 +1,5 @@
 /**
- * Bounded "codex doctor" one-shot probe (TASK.41, cut §2(g)/§3.8): spawn ->
+ * Bounded "codex doctor" one-shot probe (cut §2(g)/§3.8): spawn ->
  * version preflight -> initialize -> account/read -> model/list (paginated)
  * -> bounded close. Answers "is a working, in-range, signed-in Codex CLI
  * reachable at this binary path" for the Settings onboarding card, before
@@ -82,13 +82,13 @@ function readHead(path: string): Buffer {
 }
 
 /**
- * Taskana 4092 (TASK.85): exit 127 on a node-shebang script means "the shim
+ * exit 127 on a node-shebang script means "the shim
  * ran but `env: node` was not found in the child PATH" — the Finder-launchd
  * PATH hole augmentPathForGui closes for THIS app, but a user shell or a
  * non-standard node location can still reproduce it. Distinguishing it from
  * other nonzero exits is diagnosis, not repair: the doctor never edits PATH
  * beyond the fixed well-known list (deterministic, no user rc execution —
- * TASK.85's own alternative note).
+ * 's own alternative note).
  */
 export function isNodeShebangUnavailable(
   binaryPath: string,
@@ -159,7 +159,7 @@ export function buildDoctorChildEnv(
     const value = source[key];
     if (value !== undefined) env[key] = value;
   }
-  // Taskana 4685 rework: a credentialed proxy never reaches the doctor/login
+  // rework: a credentialed proxy never reaches the doctor/login
   // CLI. `relayUrl` is the relay of THIS source env's own credentialed
   // upstream (main's `doctorRelayUrl` resolves it per value — blocker B2),
   // so the swap never substitutes a relay fronting a different proxy.
@@ -172,16 +172,16 @@ export function buildDoctorChildEnv(
     }
   }
   // The relay fronts only the HTTP(S)_PROXY upstream: a credentialed
-  // ALL_PROXY/all_proxy is dropped (Taskana 4685 review).
+  // ALL_PROXY/all_proxy is dropped (review).
   for (const name of ["ALL_PROXY", "all_proxy"] as const) {
     if (typeof env[name] === "string" && proxyValueCarriesCredential(env[name]!)) delete env[name];
   }
   env.PATH = augmentPathForGui(env.PATH, platform);
-  // TASK.139: the engine-level proxy, if main stamped its carrier into `source`.
+  // the engine-level proxy, if main stamped its carrier into `source`.
   // `codex login` is the reason this belongs on the DOCTOR builder and not only
   // on the session child's: the login flow is a real OAuth round trip and it
   // builds its env right here (main/codex-login.ts). With no carrier this is a
-  // no-op and the env is byte-identical to the pre-TASK.139 build.
+  // no-op and the env is byte-identical to the pre-build.
   applyEngineProxyOverride(env, source, ENV_CODEX_PROXY_URL);
   return env;
 }
@@ -237,7 +237,7 @@ function raceExitOrTimeout(exited: Promise<void>, ms: number): Promise<boolean> 
 
 /**
  * The minimal JSON-RPC line client itself. Exported so main/codex-login.ts
- * (the native login flow, TASK.41 п.3) can reuse the exact same spawn/
+ * (the native login flow, п.3) can reuse the exact same spawn/
  * request/notify/close machinery — one teardown implementation for every
  * main-side Codex child, not two independently drifting ones.
  */
@@ -767,10 +767,10 @@ export interface RunCodexDoctorOptions {
    * deps surface. Explicit here for tests.
    */
   versionPolicy?: CodexVersionPolicy;
-  /** Live per-path binary-trust consents (TASK.103), fed to the default `trust` closure; ignored when `trust` is explicitly injected. Absent/default `[]` keeps today's wall byte-for-byte. */
+  /** Live per-path binary-trust consents, fed to the default `trust` closure; ignored when `trust` is explicitly injected. Absent/default `[]` keeps today's wall byte-for-byte. */
   consents?: readonly BinaryTrustConsent[];
   /**
-   * Taskana 4685: MAIN's own credential-free relay URL. A credentialed proxy in
+   * MAIN's own credential-free relay URL. A credentialed proxy in
    * the source env is swapped for it in the child env (fail-closed drop when
    * absent) — the doctor/login CLI never sees `user:pass@`.
    */

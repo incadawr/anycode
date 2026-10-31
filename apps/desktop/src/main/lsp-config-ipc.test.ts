@@ -1,5 +1,5 @@
 /**
- * Unit tests for the LSP config-management IPC handler logic (Taskana 4743),
+ * Unit tests for the LSP config-management IPC handler logic,
  * exercised as the exported handle* functions off a fake in-memory fs + deps
  * bag (no Electron ipcMain, no real disk) — the same style
  * mcp-config-ipc.test.ts established. Covers: the status snapshot (missing /
@@ -426,9 +426,9 @@ describe("normalizeLspExtension", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Taskana 4758: a workspace scope reference (`ws_…`) resolves like a tab id.
+// a workspace scope reference (`ws_…`) resolves like a tab id.
 
-describe("lsp scope reference (Taskana 4758)", () => {
+describe("lsp scope reference", () => {
   const WS_REF = "ws_0123456789abcdef";
   const refDeps = (workspace: string | undefined, files: Record<string, string> = {}) => {
     const built = makeDeps(files, { noTab: true });

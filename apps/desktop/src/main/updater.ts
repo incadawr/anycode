@@ -1,6 +1,6 @@
 /**
  * Main-process auto-updater wiring (design/slice-2.6-cut.md §6; extended by
- * TASK.47 W15 — working-docs/tasks/TASK.47.md defects 2/3), mirroring
+ * W15 — working-docs/tasks/TASK.47.md defects 2/3), mirroring
  * settings-ipc.ts's split: `createUpdaterController` holds all the testable
  * logic off an injected `AutoUpdaterLike` (so a vitest fake drives the whole
  * check->available->progress->downloaded->install chain with no Electron
@@ -15,7 +15,7 @@
  * electron-updater reads `app-update.yml` (present only in a packaged build)
  * the moment any of its methods run, so a dev build must never call into it.
  *
- * TASK.47 defect 3 (auto-check schedule): under `isPackaged`, a first check
+ * defect 3 (auto-check schedule): under `isPackaged`, a first check
  * fires ~10-30s after boot, then re-arms every ~4-6h (re-rolled each cycle —
  * the "jitter" keeps a fleet of installs from hammering the feed at the same
  * instant). The schedule ONLY ever calls `checkForUpdates()` — the identical
@@ -24,9 +24,9 @@
  * (`autoDownload=false` below is what actually enforces that; the schedule
  * simply never calls `downloadUpdate()` either way).
  *
- * TASK.47 defect 2 (darwin honest path): an ad-hoc-signed darwin build has no
+ * defect 2 (darwin honest path): an ad-hoc-signed darwin build has no
  * Developer ID yet, so Squirrel.Mac would reject any downloaded update's
- * signature mismatch (real fix tracked by TASK.46). Rather than let a user
+ * signature mismatch (real fix tracked by). Rather than let a user
  * hit a silent "Update check failed" or a broken install, darwin's
  * `update-available` event is decorated with `manualOnly: true` (renderer
  * hides Download/Install and shows a link to GitHub Releases instead — see
@@ -82,7 +82,7 @@ export interface UpdaterWindowLike {
 }
 
 /**
- * Auto-check schedule knobs (TASK.47 defect 3), all optional — production
+ * Auto-check schedule knobs (defect 3), all optional — production
  * defaults (`DEFAULT_STARTUP_DELAY_RANGE_MS`/`DEFAULT_PERIODIC_INTERVAL_RANGE_MS`
  * below) apply when omitted. Tests override the ranges (e.g. to a few
  * milliseconds) and inject a deterministic `random`/`setTimer`/`clearTimer`
@@ -110,7 +110,7 @@ export interface UpdaterDeps {
   getWindow: () => UpdaterWindowLike | null;
   logger?: { warn(message: string, err?: unknown): void };
   /**
-   * TASK.47 defect 2: drives the darwin honest-manual-path gate. Defaults to
+   * defect 2: drives the darwin honest-manual-path gate. Defaults to
    * `process.platform` — tests override it to exercise darwin/win32/linux
    * without touching the real OS.
    */
@@ -122,13 +122,13 @@ export interface UpdaterDeps {
    */
   openExternal?: (url: string) => unknown;
   /**
-   * TASK.133: awaited before EVERY autoUpdater network call; a rejection
+   * awaited before EVERY autoUpdater network call; a rejection
    * (e.g. misconfigured app proxy) fails the check/download honestly — the
    * same throw path transport errors already take. Covers manual check,
    * download, and the armed schedule (which routes through `check()`).
    */
   beforeNetwork?: () => Promise<void>;
-  /** Auto-check schedule overrides (TASK.47 defect 3); see `UpdaterScheduleDeps`. */
+  /** Auto-check schedule overrides (defect 3); see `UpdaterScheduleDeps`. */
   schedule?: UpdaterScheduleDeps;
 }
 
@@ -138,16 +138,16 @@ export interface UpdaterController {
   check(): Promise<UpdateActionResult>;
   download(): Promise<UpdateActionResult>;
   install(): UpdateActionResult;
-  /** TASK.47 defect 2: opens `UPDATE_RELEASES_URL` in the system browser (darwin honest-manual-path action). */
+  /** defect 2: opens `UPDATE_RELEASES_URL` in the system browser (darwin honest-manual-path action). */
   openReleasesPage(): UpdateActionResult;
   /** Clears the armed auto-check timer, if any (idempotent). Not wired to any IPC channel — main/index.ts calls it on shutdown for hygiene. */
   stop(): void;
 }
 
-/** Default startup-check delay (TASK.47 defect 3): ~10-30s after boot. */
+/** Default startup-check delay (defect 3): ~10-30s after boot. */
 export const DEFAULT_STARTUP_DELAY_RANGE_MS: readonly [number, number] = [10_000, 30_000];
 
-/** Default periodic-check interval (TASK.47 defect 3): re-rolled ~4-6h, every cycle. */
+/** Default periodic-check interval (defect 3): re-rolled ~4-6h, every cycle. */
 export const DEFAULT_PERIODIC_INTERVAL_RANGE_MS: readonly [number, number] = [4 * 60 * 60_000, 6 * 60 * 60_000];
 
 /** Uniform pick within `[min, max)`; `max <= min` degenerates to `min` (guards a misconfigured/zero-width test range). */
@@ -168,7 +168,7 @@ function pickDelayMs(range: readonly [number, number], random: () => number): nu
 export function createUpdaterController(deps: UpdaterDeps): UpdaterController {
   let status: UpdateStatus = { kind: "idle" };
   const platform = deps.platform ?? process.platform;
-  // TASK.47 defect 2: the ONE gate every darwin-specific branch below reads.
+  // defect 2: the ONE gate every darwin-specific branch below reads.
   const manualOnlyPlatform = platform === "darwin";
 
   const scheduleDeps = deps.schedule ?? {};
@@ -273,7 +273,7 @@ export function createUpdaterController(deps: UpdaterDeps): UpdaterController {
     deps.autoUpdater.on("update-downloaded", (info) => emit({ kind: "downloaded", version: info.version }));
     deps.autoUpdater.on("error", (error) => emit({ kind: "error", message: error.message }));
 
-    // TASK.47 defect 3: arm the auto-check schedule. Only ever calls
+    // defect 3: arm the auto-check schedule. Only ever calls
     // checkForUpdates() (via `check()`, the exact same path the renderer's
     // "Check for updates" button drives) — never downloadUpdate().
     scheduleNextCheck(pickDelayMs(startupRange, random));
@@ -295,7 +295,7 @@ export function createUpdaterController(deps: UpdaterDeps): UpdaterController {
 }
 
 /**
- * Wires the four frozen channels onto `ipcMain` (design §6; TASK.47 adds the
+ * Wires the four frozen channels onto `ipcMain` (design §6; adds the
  * fourth). Every handler takes ZERO parameters beyond the ipc event itself —
  * the renderer's invoke payload (if any) is never read, so there is no way
  * for a compromised renderer to redirect anything (`app-update.yml` /

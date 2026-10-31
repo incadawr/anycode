@@ -1,5 +1,5 @@
 /**
- * lsp-detect tests (Taskana 4743): found-in-PATH, found only in the extra
+ * lsp-detect tests: found-in-PATH, found only in the extra
  * dirs, found only in `<workspace>/node_modules/.bin` (the catalog `nodeBin`
  * case — main passes a workspace ONLY for those entries), win32 suffixes,
  * empty/absent PATH, directory-not-file, non-executable file, and the

@@ -1,6 +1,6 @@
 /**
  * Custom OpenAI-compatible model-provider IPC (owner-decision #6, cut §9.2,
- * TASK.54). Two concerns:
+ * . Two concerns:
  *
  *  1. CRUD for `settings.provider.custom[]` — additive-optional records the
  *     user builds from a base URL + API key + a curated subset of that
@@ -87,17 +87,17 @@ export type FetchModelsFailureReason =
   | "timeout"
   | "network_error"
   | "invalid_response"
-  // TASK.113: Z.AI's anthropic-compatible /v1/models answers an auth failure
+  // Z.AI's anthropic-compatible /v1/models answers an auth failure
   // with HTTP 200 + {"success":false,"code":1001,...} (measured live 2026-08-15;
   // the sibling paas routes send an honest 401 for the same condition). `ok`
   // alone cannot gate that — the BODY must be inspected before trusting it.
   | "error_payload"
-  // TASK.113: a well-formed {data:[]} is a real, distinct outcome — the endpoint
+  // a well-formed {data:[]} is a real, distinct outcome — the endpoint
   // answered and lists zero models (no key on plan, no access). Returning it as
   // a silent "success with nothing" hides the problem; flagging it as a generic
   // error overstates it. It gets its own reason so the copy can say both.
   | "empty_models"
-  // TASK.183: the settings file (or a newer-version file this binary refuses to
+  // the settings file (or a newer-version file this binary refuses to
   // write) is read-only — a manual model addition cannot be persisted.
   | "read_only";
 
@@ -191,7 +191,7 @@ export async function fetchCustomProviderModels(params: FetchModelsParams): Prom
   }
 
   if (!response.ok) {
-    // 404/405 (TASK.67): the route itself is missing/unsupported, not a
+    // 404/405: the route itself is missing/unsupported, not a
     // rejected request — live curl against Moonshot's Anthropic-compatible
     // proxy confirmed `GET /v1/models` 404s `url.not_found` while
     // `POST /v1/messages` 401s (base path is right, the models-list route
@@ -217,7 +217,7 @@ export async function fetchCustomProviderModels(params: FetchModelsParams): Prom
   } catch {
     return { ok: false, reason: "invalid_response" };
   }
-  // TASK.113: check the body for an error BEFORE trusting its shape as a models
+  // check the body for an error BEFORE trusting its shape as a models
   // list — a 200 with {"success":false,"code":...} is a refused request wearing
   // a success status, and must not degrade into `invalid_response`'s "wasn't a
   // recognizable models list" (let alone a silent empty success).
@@ -271,7 +271,7 @@ async function readBodyCapped(response: Response, maxBytes: number): Promise<str
 }
 
 /**
- * Taskana 4118: per-item meta fields we keep from a models-list entry. A plain
+ * per-item meta fields we keep from a models-list entry. A plain
  * `z.object` (NOT `.strict()` — bodies carry many legitimate siblings we do
  * not model) that picks only the known fields; unknown keys are ignored.
  * 4088-on-4118 integration: `architecture.input_modalities` joins the schema
@@ -301,7 +301,7 @@ const liveCapsSchema = z.object({
 });
 
 /**
- * Taskana 4118 cross-review F2: `modelCapabilities` is persisted as a
+ * cross-review F2: `modelCapabilities` is persisted as a
  * `z.record(z.string().max(256), …)` key (settings/schema.ts) whose
  * `.catch(undefined)` is WHOLE-map — one longer, endpoint-controlled id with
  * reasoning meta would make every later `loadSettings` drop the connection's
@@ -313,7 +313,7 @@ const MODEL_CAPABILITY_ID_MAX = 256;
 
 /**
  * `{data:[{id}...]}` -> `{id, reasoning?, effortLevels?, imageInput?}[]`;
- * undefined for any other shape (fail-closed, never throws). Taskana 4118:
+ * undefined for any other shape (fail-closed, never throws).
  * per-item reasoning meta is kept ONLY when the endpoint declares reasoning —
  * `supported_parameters` contains `"reasoning"` OR `reasoning.supported_efforts`
  * is a non-empty array (either signal suffices; OpenRouter sends both) — and
@@ -325,7 +325,7 @@ const MODEL_CAPABILITY_ID_MAX = 256;
  * (the caps filter is per field, never reasoning-only). An absent/non-array
  * modality field (or one not containing "image") contributes NOTHING: not
  * every `/v1/models` speaks modalities, and a silent absence must never read
- * as "text-only" (the TASK.197 asymmetry — live facts may promote, never
+ * as "text-only" (the asymmetry — live facts may promote, never
  * demote). Garbage meta on an item (wrong types, over-long entries) drops
  * ONLY that item's meta via safeParse failure; the id survives. An
  * OpenAI-style `{id, object, created, owned_by}` body parses to plain ids.
@@ -391,7 +391,7 @@ function extractModelIds(
 }
 
 /**
- * TASK.113: does this parsed 200-body carry an error instead of a models list?
+ * does this parsed 200-body carry an error instead of a models list?
  * Fail-closed, never throws. Two signals, either suffices:
  *  - `success === false` (strict boolean — Z.AI's anthropic-compat /v1/models
  *    auth failure: 200 + {"code":1001,"msg":"...","success":false});
@@ -447,7 +447,7 @@ export interface ProviderIpcDeps {
   now?: () => string;
   /** The guarded fetch (tests inject a fake; default `fetchCustomProviderModels`). */
   fetchModels?: (params: FetchModelsParams) => Promise<FetchModelsOutcome>;
-  /** TASK.133: per-connection fetch (proxy routing); supplied by main/index.ts. */
+  /** per-connection fetch (proxy routing); supplied by main/index.ts. */
   connectionFetch?: (connectionId: string) => FetchLike;
   /**
    * Catalog lookup for the connection-scoped fetch (`{connectionId}` request
@@ -463,7 +463,7 @@ export interface ProviderIpcDeps {
   onMutation?: (settings: AnycodeSettings) => void | Promise<void>;
   /**
    * Fired after a successful custom-record key write, BEFORE onMutation
-   * (TASK.202) — same contract as settings-ipc.ts's `onSecretWritten` (see
+   * same contract as settings-ipc.ts's `onSecretWritten` (see
    * that dep's doc there).
    */
   onSecretWritten?: (key: SecretKey, settings: AnycodeSettings) => void;
@@ -496,7 +496,7 @@ export function customProviderSecretKey(id: string): SecretKey {
 
 // `.strict()` (custody, mirrors settings-ipc.ts's connection-create schema):
 // an unexpected field on this metadata+credential channel is refused rather
-// than silently ignored. TASK.58: `apiKey` is OPTIONAL — a keyless local
+// than silently ignored. `apiKey` is OPTIONAL — a keyless local
 // endpoint (LM Studio/ollama) is declared via `authOptional: true` instead.
 const createSchema = z
   .object({
@@ -517,7 +517,7 @@ const createSchema = z
  * must leave ZERO trace, not a keyless record the user has to notice and
  * re-key).
  *
- * KEYLESS (TASK.58): a record is EITHER keyed (a non-empty `apiKey`) OR
+ * KEYLESS: a record is EITHER keyed (a non-empty `apiKey`) OR
  * explicitly keyless (`authOptional: true` with no key) — an endpoint that is
  * neither is refused `invalid`. A non-empty key is AUTHORITATIVE: if one is
  * present the record is keyed regardless of the flag (the client disables the
@@ -565,7 +565,7 @@ export async function handleCustomProviderCreate(deps: ProviderIpcDeps, raw: unk
       if (!secretResult.ok) {
         return { ok: false, reason: secretResult.reason };
       }
-      // TASK.202: keyed create — a vault write landed; fired BEFORE onMutation
+      // keyed create — a vault write landed; fired BEFORE onMutation
       // (settings-ipc.ts's `onSecretWritten` ordering discipline).
       deps.onSecretWritten?.(customProviderSecretKey(id), merged);
     }
@@ -582,7 +582,7 @@ const updateSchema = z
     baseUrl: z.string().optional(),
     kind: kindSchema.optional(),
     apiKey: z.string().optional(),
-    // TASK.58: `true` declares the record keyless, `false` clears the flag —
+    // `true` declares the record keyless, `false` clears the flag —
     // same only-truthy-on-disk discipline as ConnectionUpdateRequest.
     authOptional: z.boolean().optional(),
     models: z.array(z.string()).optional(),
@@ -635,7 +635,7 @@ export async function handleCustomProviderUpdate(deps: ProviderIpcDeps, raw: unk
     // Origin-rebind custody guard (see the handler doc). Both URLs are
     // already policy-validated (request: the isAllowedCustomProviderUrl gate
     // above; existing: settings/schema.ts on load), so `new URL` cannot throw.
-    // TASK.58: a KEYLESS record that STAYS keyless has no stored key to decrypt
+    // a KEYLESS record that STAYS keyless has no stored key to decrypt
     // and re-POST to a new origin, so it may rebind without a fresh key — the
     // same "nothing can leak" rationale as the loopback→loopback waiver. Only a
     // keyed record (or one becoming keyed) still needs the fresh key.
@@ -663,11 +663,11 @@ export async function handleCustomProviderUpdate(deps: ProviderIpcDeps, raw: unk
       delete updatedRecord.authOptional;
     }
     const custom = (loaded.settings.provider.custom ?? []).map((p) => (p.id === req.id ? updatedRecord : p));
-    // Taskana 4875 (GitHub #10): a credential change on this record (a fresh
+    // (GitHub #10): a credential change on this record (a fresh
     // key, a keyed→keyless transition, or a base URL change) resets every connection
     // POINTING at the record — `lastHealth` to `unchecked` and the quota line
     // dropped — mirroring what a connection-key replace/clear does in
-    // settings-ipc's handleSetSecret/handleClearSecret (TASK.45 W11): health
+    // settings-ipc's handleSetSecret/handleClearSecret (W11): health
     // and quota observed against the superseded key or URL must never linger.
     // `merged` is built from this projection so both write paths below persist it.
     const credentialChanged = hasFreshKey || (willBeKeyless && !existingKeyless)
@@ -700,7 +700,7 @@ export async function handleCustomProviderUpdate(deps: ProviderIpcDeps, raw: unk
       if (!secretResult.ok) {
         return { ok: false, reason: secretResult.reason };
       }
-      // TASK.202: a key rotation through update — fired BEFORE onMutation (the
+      // a key rotation through update — fired BEFORE onMutation (the
       // keyed→keyless `clearSecret` branch below needs nothing: that update
       // also rewrites `merged`, and the record's baseUrl is in the fingerprint).
       deps.onSecretWritten?.(customProviderSecretKey(req.id), merged);
@@ -711,7 +711,7 @@ export async function handleCustomProviderUpdate(deps: ProviderIpcDeps, raw: unk
       await deps.vault.clearSecret(customProviderSecretKey(req.id));
     }
     if (credentialChanged) {
-      // Taskana 4875: any coalesced quota observation from the OLD key must
+      // any coalesced quota observation from the OLD key must
       // not be written back by the throttle's trailing timer.
       for (const connection of loaded.settings.provider.connections) {
         if (connection.providerId === req.id) {
@@ -759,7 +759,7 @@ export async function handleCustomProviderDelete(deps: ProviderIpcDeps, raw: unk
 }
 
 const fetchModelsSchema = z.union([
-  // TASK.183: manual addition of connection-scoped model ids. Listed BEFORE the
+  // manual addition of connection-scoped model ids. Listed BEFORE the
   // plain `{connectionId}` member so a request carrying `addModels` is
   // dispatched to `handleConnectionAddModels`, never to the network fetch.
   z.object({ connectionId: z.string().min(1), addModels: z.array(z.string()).min(1) }).strict(),
@@ -769,7 +769,7 @@ const fetchModelsSchema = z.union([
 ]);
 
 /**
- * Connection-scoped MANUAL model addition (TASK.183, the `{connectionId,
+ * Connection-scoped MANUAL model addition (the `{connectionId,
  * addModels}` request shape): appends user-entered model ids to the target
  * connection's own `models[]`, so a manually typed id becomes a durable list
  * entry rather than a single `connection.model` value that the next picker
@@ -917,13 +917,13 @@ async function handleConnectionFetchModels(
       return;
     }
     const fetchedIds = outcome.models.map((m) => m.id);
-    // Taskana 4118 (+4088 integration): live per-model capabilities the
+    // (+4088 integration): live per-model capabilities the
     // endpoint declared, keyed by model id. Fail-closed like `models` above:
     // an outcome with zero capable models leaves the stored map untouched
     // (never deleted on empty). Caps are merged PER FIELD (not a whole-record
     // spread): a fetch that no longer declares a field keeps the previously
     // stored one — a stale/shorter live answer must never blind a fact an
-    // earlier fetch recorded (the TASK.197 asymmetry). The 4088 imageInput
+    // earlier fetch recorded (the asymmetry). The 4088 imageInput
     // fact now lives in this map instead of a separate imageInputModels list.
     const caps: NonNullable<ProviderConnection["modelCapabilities"]> = {};
     for (const m of outcome.models) {
@@ -954,7 +954,7 @@ async function handleConnectionFetchModels(
       : target.modelCapabilities;
     const updated: ProviderConnection = {
       ...target,
-      // TASK.183: fetched ids first, then the connection's previously stored
+      // fetched ids first, then the connection's previously stored
       // ids (manual additions and earlier fetches), deduped case-sensitively —
       // so the merge can never replace a manual addition.
       models: mergeModelIds(fetchedIds, target.models ?? []),
@@ -1025,7 +1025,7 @@ export async function handleCustomProviderFetchModels(deps: ProviderIpcDeps, raw
   return fetchModels({ baseUrl: parsed.data.baseUrl, apiKey: parsed.data.apiKey, kind: parsed.data.kind });
 }
 
-// ── external settings-file watcher (TASK.183) ──
+// ── external settings-file watcher ──
 
 /** Debounce window (ms) coalescing a burst of directory events into one read. */
 export const SETTINGS_WATCH_DEBOUNCE_MS = 150;
@@ -1050,7 +1050,7 @@ export function settingsWatchEventMatchesTarget(filename: string | Buffer | null
  * replaces the target by `rename`, so a file watch would be attached to a
  * stale inode) for EXTERNAL edits — a hand-edit of `settings.json` while the
  * host is running — and reports each schema-valid change through
- * `onExternalChange`. This is TASK.183 work item 4's minimum permitted route:
+ * `onExternalChange`. This is work item 4's minimum permitted route:
  * an in-boundary notification, NOT a new public CLI API, and no preload/main
  * index change.
  *
@@ -1229,7 +1229,7 @@ export function registerProviderIpc(deps: ProviderIpcDeps): ProviderIpcHandle {
   ipcMain.handle(CUSTOM_PROVIDER_FETCH_MODELS_CHANNEL, (_event, raw: unknown) =>
     handleCustomProviderFetchModels(deps, raw),
   );
-  // TASK.183: notify the running host of schema-valid EXTERNAL settings edits
+  // notify the running host of schema-valid EXTERNAL settings edits
   // through the existing `onMutation` hook. Only wired when a hook exists —
   // without one there is nothing to notify. A failed startup degrades to a
   // no-op close (see `startSettingsFileWatcher`) rather than crashing IPC.

@@ -1,5 +1,5 @@
 /**
- * Unit tests for the system-proxy resolver (TASK.141 §4, design review B-10 and
+ * Unit tests for the system-proxy resolver (§4, design review B-10 and
  * M-01). Two halves, both without Electron: the PURE candidate parser, over the
  * list shapes Chromium and hand-written PAC scripts actually emit, and the
  * target-keyed cache, over an injected fake `resolveProxy`.

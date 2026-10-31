@@ -1,5 +1,5 @@
 /**
- * Network control-plane IPC (TASK.141 §6): the handler behind
+ * Network control-plane IPC (§6): the handler behind
  * `PROXY_CHECK_CHANNEL`, which answers "does this profile actually carry traffic
  * to this target?" by materialising the profile and SPAWNING one probe child
  * (main/proxy-probe.ts).
@@ -27,7 +27,7 @@
  *
  * The fourth case does spawn but is equally not about the profile: when the boot
  * env owns the proxy family, the child goes out through the SHELL's proxy no
- * matter what the profile says (TASK.132's law, gated in main/host-env.ts). The
+ * matter what the profile says ('s law, gated in main/host-env.ts). The
  * result then carries `shellOverride: true` and `proxyUsed: false`, and the
  * detail says so in words.
  */
@@ -231,7 +231,7 @@ function isProbeTarget(value: string): boolean {
 }
 
 /**
- * Resolves which URL the probe hits (TASK.141 §6 as reshaped by review B-11):
+ * Resolves which URL the probe hits (§6 as reshaped by review B-11):
  * the request's explicit target, else the named connection's `baseUrl`, else the
  * ACTIVE connection's, else the default endpoint.
  *

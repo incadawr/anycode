@@ -563,7 +563,7 @@ describe("driver source guard", () => {
   });
 });
 
-describe("BrowserController console (Taskana 4759, Phase B)", () => {
+describe("BrowserController console (Phase B)", () => {
   const entry = (level: "log" | "warn" | "error" | "pageerror", message: string, index = 0) => ({
     level,
     message,
@@ -655,7 +655,7 @@ describe("BrowserController console (Taskana 4759, Phase B)", () => {
   });
 });
 
-describe("BrowserController password typing under Full browser access (Taskana 4759 amendment)", () => {
+describe("BrowserController password typing under Full browser access (amendment)", () => {
   it("refuses a password field when the switch is off and types into it when on; the value is never echoed", async () => {
     const build = () => {
       const cdp = fakeCdp();
@@ -709,7 +709,7 @@ describe("BrowserController password typing under Full browser access (Taskana 4
   });
 });
 
-describe("BrowserController hard limits while Full browser access is on (Taskana 4759, brief 44)", () => {
+describe("BrowserController hard limits while Full browser access is on (brief 44)", () => {
   it("file inputs stay refused and password values never appear in a snapshot, even with the switch on", async () => {
     const cdp = fakeCdp();
     cdp.respond("Accessibility.getFullAXTree", axTree([
@@ -758,9 +758,9 @@ describe("BrowserController hard limits while Full browser access is on (Taskana
   });
 });
 
-// Taskana 4778: a CDP await that never resolves (input to a view that is not painting)
+// a CDP await that never resolves (input to a view that is not painting)
 // must become a clear tool error, never a forever-"Running" card.
-describe("BrowserController hung CDP and hidden view (Taskana 4778)", () => {
+describe("BrowserController hung CDP and hidden view", () => {
   const tree = () => axTree([
     { nodeId: "1", role: "RootWebArea", childIds: ["2"] },
     { nodeId: "2", role: "button", name: "Go", backendDOMNodeId: 11 },

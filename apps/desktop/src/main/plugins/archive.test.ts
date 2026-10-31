@@ -1,5 +1,5 @@
 /**
- * Tests for the in-house tgz extractor (Taskana 4732 S1-B, design §4):
+ * Tests for the in-house tgz extractor (S1-B, design §4):
  * happy path, symlink, hardlink, `../` escape, absolute path, drive letter,
  * oversize compressed/uncompressed/per-file, entry cap, gzip bomb, missing
  * manifest, name/version mismatch is the STORE's check (tested there). All

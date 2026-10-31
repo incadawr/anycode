@@ -1,12 +1,12 @@
 import { TUNNEL_STATUS_RE, isTlsCode } from "@anycode/core/network-failure";
 /**
- * The proxy spawn-probe (TASK.141 §6): "does this profile actually carry traffic
+ * The proxy spawn-probe (§6): "does this profile actually carry traffic
  * to this target?", answered the only way it can be answered honestly — by
  * SPAWNING a child with the profile's materialised env and letting it make one
  * real request.
  *
  * Main cannot answer it with its own `fetch`. `NODE_USE_ENV_PROXY` is read once
- * at bootstrap (measured, TASK.132), so main's global fetch ignores every proxy
+ * at bootstrap (measured), so main's global fetch ignores every proxy
  * env assigned afterwards: a probe done in-process would go straight out, get a
  * 401 from the provider, and report a dead proxy as healthy. The child is
  * `process.execPath` with `ELECTRON_RUN_AS_NODE=1` — the same runtime, the same
@@ -35,7 +35,7 @@ import type { ProxyCheckVerdict } from "../shared/proxy.js";
 /** Marks the child's one result line on stdout. Anything else the runtime prints is ignored. */
 export const PROXY_PROBE_MARKER = "##anycode-proxy-probe##";
 
-/** Default budget for the whole probe: one request, ~10 s, zero retries (TASK.141 §6). */
+/** Default budget for the whole probe: one request, ~10 s, zero retries (§6). */
 export const PROXY_PROBE_TIMEOUT_MS = 10_000;
 
 /**
@@ -440,7 +440,7 @@ export interface ProxyProbeOutcome {
 /**
  * Runs the probe once. ONE spawn, one request, zero retries — a retry would turn
  * a "dead proxy" answer into a multi-second wait and would be the beginning of
- * the retry storm TASK.134 exists to fix, not a kindness.
+ * the retry storm exists to fix, not a kindness.
  *
  * `ELECTRON_RUN_AS_NODE=1` is forced here rather than expected from the caller:
  * without it `process.execPath` boots a full Electron app, which would open a
