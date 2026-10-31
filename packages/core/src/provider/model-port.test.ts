@@ -154,7 +154,7 @@ describe("reasoningRequestOptions", () => {
   // custom Anthropic-compatible endpoint, but `output_config.effort` may only
   // be sent where the connection DECLARED the endpoint understands it. The
   // budgets always differ; the enum is opt-in.
-  it("custom Anthropic endpoint: distinct budgets always, effort enum only when both tiers were declared", () => {
+  it("custom Anthropic endpoint: distinct budgets always, effort enum only when the level was declared", () => {
     const undeclaredXhigh = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "xhigh" }, undefined);
     const undeclaredMax = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "max" }, undefined);
     expect(undeclaredXhigh.providerOptions!.anthropic).toEqual({ thinking: { type: "enabled", budgetTokens: 24_576 } });
@@ -165,11 +165,50 @@ describe("reasoningRequestOptions", () => {
     expect(declaredXhigh.providerOptions!.anthropic).toEqual({ thinking: { type: "enabled", budgetTokens: 24_576 }, effort: "xhigh" });
     expect(declaredMax.providerOptions!.anthropic).toEqual({ thinking: { type: "enabled", budgetTokens: 32_000 }, effort: "max" });
 
-    // A declaration naming only ONE tier is not enough: the enum is only
-    // authorised when the endpoint claimed BOTH, which is the claim that it
-    // distinguishes them itself.
+    // A declaration naming only ONE tier authorises only that tier: the enum
+    // rides the wire for the level the connection named, and stays off for
+    // every level it did not.
     const oneTier = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "max" }, undefined, undefined, undefined, undefined, ["max"]);
-    expect(oneTier.providerOptions!.anthropic).toEqual({ thinking: { type: "enabled", budgetTokens: 32_000 } });
+    expect(oneTier.providerOptions!.anthropic).toEqual({ thinking: { type: "enabled", budgetTokens: 32_000 }, effort: "max" });
+    const undeclaredTier = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "xhigh" }, undefined, undefined, undefined, undefined, ["max"]);
+    expect(undeclaredTier.providerOptions!.anthropic).toEqual({ thinking: { type: "enabled", budgetTokens: 24_576 } });
+  });
+
+  // The whole point of the declaration: an endpoint that switches its
+  // reasoning tier on the effort enum (MiniMax and other effort-enum
+  // endpoints) ignores `thinking.budget_tokens` and keeps its own default —
+  // the maximum — when no enum is sent. So EVERY declared level, low
+  // included, must ride the wire.
+  it("custom Anthropic endpoint: every DECLARED level rides the effort enum, low included", () => {
+    const declared = ["low", "medium", "high", "xhigh", "max"] as const;
+    for (const level of declared) {
+      const options = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: level }, undefined, undefined, undefined, undefined, declared);
+      expect(options.providerOptions!.anthropic).toMatchObject({ effort: level });
+    }
+
+    // The budgets stay distinct per tier — the enum is an addition, not a
+    // replacement, so an endpoint that ignores it still sees a different
+    // `thinking.budget_tokens` (xhigh vs max remain distinguishable).
+    const budgets = declared.map((level) => {
+      const options = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: level }, undefined, undefined, undefined, undefined, declared);
+      return (options.providerOptions!.anthropic.thinking as { type: "enabled"; budgetTokens: number }).budgetTokens;
+    });
+    expect(budgets).toEqual([4_096, 12_288, 24_576, 24_576, 32_000]);
+    expect(new Set(budgets).size).toBeGreaterThan(1);
+  });
+
+  // Catalog providers are NOT custom endpoints: a declaration must never
+  // change what GLM, DeepSeek or a catalog Anthropic-compatible provider
+  // (Kimi, MiMo) puts on the wire.
+  it("a declared vocabulary does not change the catalog providers' mapping", () => {
+    const declared = ["low", "medium", "high", "xhigh", "max"] as const;
+    for (const providerName of ["Anthropic", "Z.AI (GLM)", "DeepSeek", "Kimi (kimi.com subscription)"]) {
+      for (const level of declared) {
+        const withDeclaration = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: level }, providerName, undefined, undefined, undefined, declared);
+        const without = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: level }, providerName);
+        expect(withDeclaration).toEqual(without);
+      }
+    }
   });
 });
 
