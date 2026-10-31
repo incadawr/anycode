@@ -1,4 +1,4 @@
-import { findKnownModel } from "@anycode/core/model-dictionary";
+import { findKnownModel, isGatewayProvider } from "@anycode/core/model-dictionary";
 import type { ModelCapabilitiesDto, ModelOverrides, ProviderConnection } from "./settings.js";
 
 type ConnectionOverrides = Pick<ProviderConnection, "modelOverrides" | "contextWindowTokens" | "contextWindowModel">;
@@ -53,10 +53,17 @@ export function modelCapabilitiesFor(
     ? connection.modelCapabilities[model] : undefined;
   const override = modelOverrideFor(connection, model);
   const provider = connection?.providerId;
-  const eligible = provider === "" || provider === "custom" || provider === "vllm" || provider === "openrouter" || provider?.startsWith("custom:");
+  const eligible = provider !== undefined && isGatewayProvider(provider);
   const known = eligible && !override?.catalogMatchDisabled ? findKnownModel(model) : undefined;
-  const defaults: ModelCapabilitiesDto | undefined = known ? { reasoning: known.reasoning, effortLevels: known.effortLevels, defaultEffort: known.defaultEffort, thinkingAlwaysOn: ((override?.reasoningEffort ?? connection?.reasoningEffort) === "off" || override?.effortLevels?.includes("off")) ? false : known.thinkingAlwaysOn, ...(known.imageInput ? { imageInput: true as const } : {}) } : undefined;
-  const effective = defaults ? { ...live, ...defaults } : live;
+  const defaults: ModelCapabilitiesDto | undefined = known ? {
+    ...(known.reasoning !== undefined ? { reasoning: known.reasoning } : {}),
+    ...(known.effortLevels !== undefined ? { effortLevels: known.effortLevels } : {}),
+    ...(known.defaultEffort !== undefined ? { defaultEffort: known.defaultEffort } : {}),
+    ...(known.thinkingAlwaysOn !== undefined ? { thinkingAlwaysOn: known.thinkingAlwaysOn } : {}),
+    ...(known.imageInput ? { imageInput: true as const } : {}),
+  } : undefined;
+  const effective = defaults ? { ...defaults, ...live } : live;
+  if (effective && ((override?.reasoningEffort ?? connection?.reasoningEffort) === "off" || override?.effortLevels?.includes("off"))) effective.thinkingAlwaysOn = false;
   if (override?.effortLevels !== undefined) return { ...effective, reasoning: true, effortLevels: override.effortLevels };
   return applyModelReasoningOverride(effective, override?.reasoningSupported === true);
 }

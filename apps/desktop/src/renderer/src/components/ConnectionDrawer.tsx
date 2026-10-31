@@ -28,7 +28,7 @@
  */
 import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
-import { findKnownModel } from "@anycode/core/model-dictionary";
+import { findKnownModel, isGatewayProvider } from "@anycode/core/model-dictionary";
 import type {
   CatalogSummary,
   CatalogSummaryEntry,
@@ -1628,7 +1628,7 @@ export function ConnectionDrawerFields({
     targetConnection,
     imageInput,
   );
-  const dictionaryEligible = isNewCustomEndpoint || isCustomRecordConnection || ["", "custom", "openrouter", "vllm"].includes(effectiveProviderId);
+  const dictionaryEligible = isNewCustomEndpoint || isCustomRecordConnection || isGatewayProvider(effectiveProviderId);
   const dictionaryMatch = dictionaryEligible ? findKnownModel(effectiveFormModel.trim()) : undefined;
   const knownCatalogModel = !effectiveProviderId.startsWith("custom:") &&
     catalog.find((entry) => entry.id === effectiveProviderId)?.models.some((entry) => entry.id === effectiveFormModel.trim()) === true;
@@ -2382,7 +2382,7 @@ export function ConnectionDrawerFields({
 
       {dictionaryMatch && <div className="settings-field">
         <label><input type="checkbox" disabled={readOnly} checked={!catalogMatchDisabled} onChange={(e) => { setCatalogMatchDisabled(!e.target.checked); setCatalogMatchDirty(true); }} /> Recognized as {dictionaryMatch.name ?? dictionaryMatch.id} — use catalog defaults</label>
-        {!catalogMatchDisabled && dictionaryMatch.pricing && <div className="settings-field-hint">Catalog reference for {dictionaryMatch.name ?? dictionaryMatch.id}: input ${dictionaryMatch.pricing.input}, cached input ${dictionaryMatch.pricing.cachedInput}, output ${dictionaryMatch.pricing.output} per million tokens. Your endpoint may charge differently.</div>}
+        {!catalogMatchDisabled && dictionaryMatch.pricing && dictionaryMatch.pricing.cacheWrite === undefined && dictionaryMatch.pricing.tariff === undefined && <div className="settings-field-hint">Catalog reference for {dictionaryMatch.name ?? dictionaryMatch.id}: input ${dictionaryMatch.pricing.input}, cached input ${dictionaryMatch.pricing.cachedInput}, output ${dictionaryMatch.pricing.output} per million tokens. Your endpoint may charge differently.</div>}
       </div>}
       {!knownCatalogModel && <label className="settings-field">
         <span className="settings-field-label">Reasoning support (this model)</span>

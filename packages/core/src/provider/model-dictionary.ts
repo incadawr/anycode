@@ -23,9 +23,13 @@ export function findKnownModel(id: string): CatalogModel | undefined {
   return matches.every((model) => JSON.stringify(model) === JSON.stringify(first)) ? first : undefined;
 }
 
+export function isGatewayProvider(id: string): boolean {
+  return id === "" || id === "custom" || id === "openrouter" || id === "vllm" || id.startsWith("custom:");
+}
+
 /** Supply capability defaults to gateways without applying their catalog prices. */
 export function modelDictionaryEntry(id: string, entry: CatalogProviderEntry | undefined, disabled = false): CatalogProviderEntry | undefined {
-  if (disabled || (entry !== undefined && !["custom", "openrouter", "vllm"].includes(entry.id) && !entry.id.startsWith("custom:"))) return entry;
+  if (disabled || (entry !== undefined && !isGatewayProvider(entry.id))) return entry;
   if (entry?.models.some((model) => model.id === id) || entry?.retiredModels?.some((model) => model.id === id)) return entry;
   const model = findKnownModel(id);
   if (!model) return entry;

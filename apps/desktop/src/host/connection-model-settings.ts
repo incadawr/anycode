@@ -1,5 +1,6 @@
 import {
   modelDictionaryEntry,
+  mapForeignEffortLevels,
   resolveContextWindowInfo,
   resolveEffortLevels,
   resolveReasoningEffort,
@@ -46,11 +47,14 @@ export function createConnectionModelSettings(deps: {
     const override = modelOverrideFor(connection, model);
     const entry = modelDictionaryEntry(model, deps.catalogEntry, override?.catalogMatchDisabled === true);
     if (entry !== deps.catalogEntry && entry) {
+      const live = capabilitiesFor(model);
       const off = (override?.reasoningEffort ?? connection?.reasoningEffort) === "off" || override?.effortLevels?.includes("off");
       const supported = override?.reasoningSupported === true;
-      if (off || supported) return { ...entry, models: entry.models.map((row) => row.id !== model ? row : {
+      if (off || supported || live) return { ...entry, models: entry.models.map((row) => row.id !== model ? row : {
         ...row,
-        ...(supported && !row.reasoning ? { reasoning: true, effortLevels: ["off", "low", "medium", "high", "xhigh", "max"] as ReasoningEffort[] } : {}),
+        ...(live?.reasoning !== undefined ? { reasoning: live.reasoning } : {}),
+        ...(live?.effortLevels !== undefined ? { effortLevels: mapForeignEffortLevels(live.effortLevels) } : {}),
+        ...(supported && !(live?.reasoning ?? row.reasoning) ? { reasoning: true, effortLevels: ["off", "low", "medium", "high", "xhigh", "max"] as ReasoningEffort[] } : {}),
         ...(off ? { thinkingAlwaysOn: false, supportsExplicitOff: true, effortLevels: row.effortLevels?.includes("off") ? row.effortLevels : ["off" as const, ...(row.effortLevels ?? [])] } : {}),
       }) };
     }
