@@ -2363,7 +2363,7 @@ describe("Codex engine-child history flush write primitive", () => {
  * in this file.
  */
 describe("host recognizer env parsing (срез C)", () => {
-  // Live-run fix (task150-output-ceiling session, follow-up):
+  // Live-run fix:
   // `recognizerEndpointFromFields` is the ONE construction point both
   // `parseRecognizerEnv` (the boot-env snapshot below) AND main's live
   // RECOGNIZER_CONFIG_CHANGED push (index.ts's parentPort message handler,
@@ -2741,7 +2741,7 @@ describe("host InspectImage registration gate + instance lifetime (срез C, p
   });
 
   /**
-   * Coordinator requirement (task198-state.md "НАХОДКА B2"): the per-image
+   * Coordinator requirement ("НАХОДКА B2"): the per-image
    * question counter/transcript live in the FACTORY's closure
    * (tools/inspect-image.ts) — this proves they survive the SAME
    * unregister->re-register boundary a live recognizer-config push or a

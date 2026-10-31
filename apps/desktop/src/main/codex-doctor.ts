@@ -88,7 +88,7 @@ function readHead(path: string): Buffer {
  * non-standard node location can still reproduce it. Distinguishing it from
  * other nonzero exits is diagnosis, not repair: the doctor never edits PATH
  * beyond the fixed well-known list (deterministic, no user rc execution —
- * 's own alternative note).
+ * alternative note).
  */
 export function isNodeShebangUnavailable(
   binaryPath: string,
@@ -181,7 +181,7 @@ export function buildDoctorChildEnv(
   // `codex login` is the reason this belongs on the DOCTOR builder and not only
   // on the session child's: the login flow is a real OAuth round trip and it
   // builds its env right here (main/codex-login.ts). With no carrier this is a
-  // no-op and the env is byte-identical to the pre-build.
+  // no-op and the env is byte-identical to the build.
   applyEngineProxyOverride(env, source, ENV_CODEX_PROXY_URL);
   return env;
 }

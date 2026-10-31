@@ -257,7 +257,7 @@ const connectionSchema = z.object({
   // `proxyUrl` above is lenient: `connections` is a plain `z.array` with no
   // per-element tolerance, so a hand-edited `"lots"` here would fail the whole
   // document and reset every other section to defaults. A rejected value reads
-  // back as "no explicit ceiling", which is the pre-behaviour.
+  // back as "no explicit ceiling", which is the behaviour.
   // Strictness lives at the IPC boundary (main/settings-ipc.ts).
   openRouterProviders: z.array(z.string().trim().min(1).max(128)).max(20).optional().catch(undefined),
   maxOutputTokens: z.number().int().positive().optional().catch(undefined),
@@ -879,7 +879,7 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     // and drop the user through `parseSettings`'s corrupt→defaults path, wiping
     // every other section. The failure direction is fail-soft in the required
     // sense — no registry and no app ref means every ladder falls through to
-    // "no proxy", exactly where a pre-settings.json already sits. The
+    // "no proxy", exactly where a settings.json already sits. The
     // registry's own per-element tolerance (above) means it takes a
     // wrong-SHAPED `network` value, not one bad profile, to reach this catch.
     network: z

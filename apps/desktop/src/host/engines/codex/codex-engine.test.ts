@@ -1942,7 +1942,7 @@ describe("— resume (cut §2(k).2/.4)", () => {
     });
   });
 
-  it("treats a pre-session row (mode='build') as the default preset, silently", async () => {
+  it("treats a session row (mode='build') as the default preset, silently", async () => {
     const server = new FakeAppServer();
     const connected = await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, {
       model: "gpt-resumed",

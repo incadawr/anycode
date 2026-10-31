@@ -2128,7 +2128,7 @@ describe("ToolCallCard (SSR) — header-row badge", () => {
     }
   });
 
-  it("a waiting badge without onOpen stays a static span inside the toggle (pre-markup)", () => {
+  it("a waiting badge without onOpen stays a static span inside the toggle", () => {
     const block = mkAgentBlock({ status: "running", subagent: mkSubagent({ waiting: true }) });
     const html = renderToStaticMarkup(
       createElement(ToolCallHeaderRow, {
@@ -2810,7 +2810,7 @@ describe("workflow step failure block (render)", () => {
   });
 });
 
-// slice S7 — the plan's collapsed state (`task191/PLAN.md:184`):
+// slice S7 — the plan's collapsed state:
 // "Свёрнутое состояние — полоса засечек по числу шагов, карточка не растёт
 // против сегодняшней". The three pins below are the ones that had to be
 // proven red by mutation before this suite was allowed to pass: one tick per

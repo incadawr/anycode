@@ -112,7 +112,7 @@ export interface ClaudeSpawnArgsOptions {
   /**
    * absolute path of the private 0600 `--mcp-config` document
    * materialized by the host boot (mcp-forward-boot.ts). Omitted entirely
-   * when undefined — the argv is byte-identical to the pre-spawn.
+   * when undefined — the argv is byte-identical to the spawn.
    */
   mcpConfigPath?: string;
   /**
@@ -192,7 +192,7 @@ export const CLAUDE_AGENT_BRIDGE_PROMPT =
  * optional `--mcp-config <path>` pair rides IMMEDIATELY BEFORE
  * `--strict-mcp-config`, so only our configured servers (plus the in-band
  * anycode bridge, announced via `sdkMcpServers`) apply; absent, the argv is
- * unchanged (the pre-finding "strict-mcp-config alone yields
+ * unchanged (the finding "strict-mcp-config alone yields
  * `mcp_servers: []`" now carries our document instead of nothing).
  * `--append-system-prompt
  * <CLAUDE_GUI_SURFACE_PROMPT>` is mandatory-always-on for the same
@@ -698,7 +698,7 @@ export class ClaudeClient {
    * `extra` (S3, probes.md P0) merges in caller-supplied fields —
    * `{sdkMcpServers:["anycode"]}` from `ClaudeMcpBridge.announceOn`, in
    * production — WITHOUT this method knowing anything about MCP itself; an
-   * omitted `extra` reproduces the pre-empty body byte-for-byte.
+   * omitted `extra` reproduces the empty body byte-for-byte.
    * The CLI drives its own MCP handshake as `mcp_message` control_requests
    * INSIDE this call, before it answers ours (P0 correction #1) — nothing
    * here waits for or depends on that; the door just has to already be

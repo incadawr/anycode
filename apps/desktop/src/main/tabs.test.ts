@@ -2256,7 +2256,7 @@ describe("TabHostManager — child-session admission is ATOMIC (CUT-S2 B3)", () 
     // Free a slot on PARENT 0 (`p0-0`, the first of the 8 children forked
     // above, at hosts[3]) — a DIFFERENT parent than the one the parked
     // request belongs to. The global cap is what was blocking it, and a
-    // global slot just freed no matter WHOSE child released it ('s
+ // global slot just freed no matter WHOSE child released it (
     // own "заявка могла ждать из-за ГЛОБАЛЬНОГО кэпа, а освободился слот у
     // ДРУГОГО родителя — такую тоже надо будить").
     hosts[3]!.emit("message", childTerminalMsg({ status: "completed" }));
@@ -2621,7 +2621,7 @@ describe("TabHostManager — session-spawn queue (срез 1)", () => {
     expect(childRunEvents(rootHost).filter((e) => e.kind === "rejected")).toHaveLength(0);
 
     // One more, past the queue's own bound: refused outright, with the SAME
-    // frozen text a cap-exceeding spawn always got pre-the
+    // frozen text a cap-exceeding spawn always got the
     // "Границы решения" texts stay reachable exactly on this path.
     rootHost.emit("message", spawnRequest({ requestId: "overflow" }));
     expect(childRunEvents(rootHost).find((e) => e.requestId === "overflow")).toEqual({
@@ -3239,7 +3239,7 @@ describe("TabHostManager — spawn around a root's close: seal + cascade drain (
 
     // The waiter never forked (closing purges it before it could) and gets
     // the SAME `rejected closing` reply a spawn arriving after the seal
-    // already gets ('s "отвечай существующим CHILD_CLOSING_MESSAGE
+ // already gets ("отвечай существующим CHILD_CLOSING_MESSAGE
     // через тот же rejected-путь").
     expect(hosts).toHaveLength(hostsBeforeClose);
     expect(childRunEvents(rootHost).find((e) => e.requestId === "close-queued")).toEqual({

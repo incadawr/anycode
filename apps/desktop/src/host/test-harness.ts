@@ -378,7 +378,7 @@ export interface HarnessOptions {
    * срез C: live verdict for the vision fallback, mirroring
    * `imageInputEnabled`'s own boolean/function/omitted shapes. Omitted ->
    * `SessionOptions.imageFallbackAvailable` is absent (byte-identical to
-   * pre-for every existing test — the turn-accept gate falls back
+   * for every existing test — the turn-accept gate falls back
    * to `imageInputEnabled` alone).
    */
   imageFallbackAvailable?: boolean | (() => boolean);

@@ -5,7 +5,7 @@
  * (`appendUserText(..., images)`) and render thumbnails instead of this badge.
  * `imageAttachmentBadge`/`transcriptTextWithImages` remain for the prompt-QUEUE
  * pill/preview (queue items are not yet sent; the pill shows the count) and
- * 's blocked-path notice. Kept in a tiny standalone module (not
+ * blocked-path notice. Kept in a tiny standalone module (not
  * store.ts) so tab-registry never has to import a React component to reach it.
  */
 

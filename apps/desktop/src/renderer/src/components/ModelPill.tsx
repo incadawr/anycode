@@ -606,7 +606,7 @@ export function ModelPill() {
     tabId,
     pin: pinnedConnection,
   });
-  // The tab the per-pick slots below were filled in: a pending pick
+  // The tab the per-pick slots below were filled: a pending pick
   // or effort reset belongs to the tab it was made in and is dropped, not
   // replayed into the next tab, when the pill is re-rendered for another tab.
   const slotsTabRef = useRef<string | undefined>(tabId);

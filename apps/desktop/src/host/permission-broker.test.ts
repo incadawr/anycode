@@ -500,7 +500,7 @@ describe("unattended latch", () => {
  *  2. AFTER expiry (the detached-child case): the ask expired unseen in the
  *     hidden child tab (a detached run has no live card), the latch
  *     armed, and the owner then opens the tab and answers the EXPIRED ask.
- *     The click still routes through `handleResponse` —'s own law is
+ * The click still routes through `handleResponse` — law is
  *     "a click is proof of a human — even for an unknown/already-settled
  *     requestId, since the click happened either way" — so the latch MUST
  *     disarm there too, and asking must resume.
@@ -556,7 +556,7 @@ describe("unattended latch — owner recovery after expiry (finding 1)", () => {
  * the always-allow seam the two ENGINE boots pass and the core boot
  * deliberately does not (see PermissionRuleMatcher's header). These assert both
  * halves: a matching rule is answered without ever reaching the UI, and a
- * broker constructed without the seam is byte-identical to every pre-
+ * broker constructed without the seam is byte-identical to every
  * one — which is what makes the core path's hook-can-still-ask invariant safe.
  */
 describe("IpcPermissionBroker always-allow rules", () => {

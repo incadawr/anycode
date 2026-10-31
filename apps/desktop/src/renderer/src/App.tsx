@@ -187,7 +187,7 @@ export function shouldSuppressEscForDraft(draftActive: boolean): boolean {
  * engine's tool-mutation capability — the Review panel is AnyCode chrome,
  * independent of which agent is running. `undefined` (core, or a
  * not-yet-wired engine) defaults to `true`, byte-identical to core's
- * pre-behavior (the panel was previously gated on
+ * behavior (the panel was previously gated on
  * `engine?.capabilities.supportsGitMutations ?? true`, which likewise always
  * fell back to `true` for a null-engine core session). Exported for unit
  * testing.
@@ -250,7 +250,7 @@ export type TryAgainOutcome = "sent" | "queued" | "blocked_images" | "not_ready"
  * `showStandaloneRetry`) is what makes that true at the UI level too, once
  * `host_ready`'s hydration has dropped the anchored button's `loop_end` block.
  *
- * W3-FIX (fable-task56-w3-codex-ruling.md finding 2 §(c)): an entry
+ * W3-FIX (finding 2 §(c)): an entry
  * gate runs BEFORE `consumeRetry`, ahead of the enqueue-vs-direct-send
  * branch, so it covers both. `dispatchTryAgain` was the one W3-gated send
  * site the cut missed (Composer blocks upfront, the drainer is a deliberate

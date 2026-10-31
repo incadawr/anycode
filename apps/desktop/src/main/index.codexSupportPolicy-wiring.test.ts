@@ -1,5 +1,5 @@
 /**
- * Production-wiring test for: proves that main/index.ts really stamps
+ * Production-wiring test: proves that main/index.ts really stamps
  * the ACTIVE Codex version-support policy into every host fork's env, and that
  * the policy it stamps is the one the Settings card and the Doctor judge by —
  * the manifest ranges plus `settings.codex.riskAcceptedVersions`.

@@ -140,7 +140,7 @@ describe("computeGitPanelOpen (design §2(f)) — shell-owned, not engine.capabi
     expect(computeGitPanelOpen(true, false)).toBe(false);
   });
 
-  it("defaults to open when requested and shell is undefined — byte-identical to core's pre-behavior (no engine gating at all)", () => {
+  it("defaults to open when requested and shell is undefined — byte-identical to core's behavior (no engine gating at all)", () => {
     expect(computeGitPanelOpen(true, undefined)).toBe(true);
   });
 });
@@ -317,14 +317,14 @@ describe("dispatchContinue (one-shot Continue on a max_turns stop)", () => {
   });
 });
 
-// W3-FIX (fable-task56-w3-codex-ruling.md finding 2): `dispatchTryAgain`
+// W3-FIX (finding 2): `dispatchTryAgain`
 // was the one W3-gated send site the cut missed — a click on an armed
 // image-bearing offer, after the live model verdict swings to non-vision,
 // used to consume the offer and lose the images with no restore path (the
 // direct-send branch has no `queueInFlight` to key a `turn_rejected` restore
 // off). §(d)'s tests T1-T5 close that gap; T6 (tab-registry.test.ts) PINs
 // finding 1's NOT-A-BUG ruling (the drainer keeps sending, by design).
-describe("dispatchTryAgain — W3-FIX entry gate against the live model image verdict (fable-task56-w3-codex-ruling.md finding 2 §(c))", () => {
+describe("dispatchTryAgain — W3-FIX entry gate against the live model image verdict (finding 2 §(c))", () => {
   const IMAGE = { name: "shot.png", sizeBytes: 42, attachment: { mediaType: "image/png" as const, data: "AA==" } };
 
   /**

@@ -1235,7 +1235,7 @@ describe("automation facade — tryAgain (design W8)", () => {
     expect(port.sent.filter((m) => (m as { type: string }).type !== "ui_ready")).toHaveLength(1);
   });
 
-  // T5 (fable-task56-w3-codex-ruling.md finding 2 §(d)): facade-layer PIN — a
+  // T5 (finding 2 §(d)): facade-layer PIN — a
   // rollback of the reason mapping below would have this test assert on a
   // lying {ok:true} (dispatchTryAgain still refuses to send, but the facade
   // wouldn't say so), the exact "lying facade could mask a real regression"
@@ -7855,7 +7855,7 @@ describe("automation facade — tryAgainButtonState/tryAgainButtonClick (W8-FIX 
       expect(facade.tryAgainButtonClick(tabId, "loop_end:t1")).toEqual({ ok: false, reason: "not_present" });
     });
 
-    // PIN (fable-task56-w3fix-codex-ruling.md finding 1 §(b)): a click DELIVERED
+    // PIN (finding 1 §(b)): a click DELIVERED
     // to the real button (tryAgainButtonDom.click returns true, same as
     // "fires a REAL click..." above) can still be refused by dispatchTryAgain's
     // entry gate (W3-FIX) — the facade still reports {ok:true} because
@@ -9428,7 +9428,7 @@ describe("automation facade — codexPaneState / drivers (W4-F0, findings S1-1 p
 describe("automation facade — binaryTrustDialogState / Resolve, trustedBinariesState / Revoke (CUT-S4.md §6c BU6-BU7)", () => {
   /**
    * `createAutomationFacade`'s positional-parameter list is 28 long
-   * (registry .. trustedBinariesSectionDom,'s two additions
+ * (registry.. trustedBinariesSectionDom,two additions
    * appended at the END — see the factory's own comment on why). Every
    * describe block in this file builds its OWN thin wrapper rather than
    * sharing one, same convention as `buildFacade` above and every other

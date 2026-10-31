@@ -68,10 +68,10 @@ import type {
   RecognizerWireConfig,
 } from "../shared/recognizer.js";
 
-// ── the embedded probe image ('s two-square probe, partially closed) ──
+// ── the embedded probe image (two-square probe, partially closed) ──
 
 /**
- * Fixed question the probe always asks —'s own two-square wording,
+ * Fixed question the probe always asks — two-square wording,
  * unchanged so this probe partially closes that task's original ask. Never
  * user-editable: the point of the button is "does the ROUND TRIP work",
  * which a fixed, known-answer question tests more honestly than a free-form

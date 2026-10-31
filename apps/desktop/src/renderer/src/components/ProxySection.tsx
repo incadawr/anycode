@@ -20,7 +20,7 @@
  * snapshot's `SecretStatus` list — the draft never seeds the field from
  * anything, and no verdict/error string this file builds can carry it (every
  * URL that reaches text goes through `maskProxyUrl`). The in-env half is
- * 's scrub: the engines and the model connection still receive the
+ * scrub: the engines and the model connection still receive the
  * composed `user:pass@` URL (they need it), while the agent's shell commands,
  * the terminal and language servers do not receive a proxy URL that contains
  * credentials at all — the hint states exactly that split.
@@ -83,7 +83,7 @@ export interface ProxyCheckOutcome {
  * The editor's local shape. Deliberately NOT `ProxyProfile`: the persisted form
  * stores one `url` string, while the editor shows the three controls JetBrains'
  * dialog shows (host, port, "HTTPS proxy") — that decomposition is the whole
- * reason the scheme-less-`host:port` typo class ('s `proxyUrlSaveBlocked`)
+ * reason the scheme-less-`host:port` typo class (`proxyUrlSaveBlocked`)
  * cannot exist here: the user never types a scheme, the checkbox picks it.
  */
 export interface ProxyProfileDraft {
@@ -361,7 +361,7 @@ const PROXY_VERDICT_TEXT: Record<ProxyVerdict, string> = {
 
 /**
  * The named caveat of §6: a shell-exported proxy owns the whole family
- * atomically ('s law), so a profile can probe green while every real
+ * atomically (law), so a profile can probe green while every real
  * child still leaves through the shell's proxy. The verdict has to say so —
  * without this line a green Check is an actively misleading measurement.
  */

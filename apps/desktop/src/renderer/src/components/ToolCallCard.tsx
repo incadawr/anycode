@@ -151,7 +151,7 @@ const CHILD_BADGE_ACTION_TITLE = "Open the subagent session on its permission re
  * The session-child badge's single render site for both mounts (the
  * always-visible header row and `SubagentStatus`'s expanded child row):
  * `isClickableChildBadge` decides the element. Non-actionable states render
- * the plain `<span>` byte-identical to pre-markup; the actionable
+ * the plain `<span>` byte-identical to markup; the actionable
  * state renders a real `<button>` on the same `onOpen` the Open button uses.
  * The `-action` modifier class carries ONLY the interactive affordances
  * (cursor, hover) so the static form keeps none of them.
@@ -545,7 +545,7 @@ export function workflowStepAria(step: WorkflowStepStatus): string {
  * facts: this list carries ORDER, the map carries DEPENDENCY.
  *
  * [CORRECTED] An earlier revision of this comment claimed the plan left
- * "strip vs. graph" to the builder. It did not: `task191/PLAN.md` §S3 states
+ * "strip vs. graph" to the builder. It did not: §S3 states
  * "раскрытие — граф по уровням зависимостей" as a requirement and leaves open
  * only WHICH OF THE TWO IS THE DEFAULT. Slice S6 is therefore the repair of an
  * under-delivered S3, not an extra. (Slice S4 turned each row into a real
@@ -1964,7 +1964,7 @@ function diffPath(block: ToolCallBlock): string {
 }
 
 /* ── Collapsed tick strip (slice S7) ────────────────────────
- * The plan's collapsed state, `task191/PLAN.md:184` verbatim: "Свёрнутое
+ * The plan's collapsed state, verbatim: "Свёрнутое
  * состояние — полоса засечек по числу шагов, карточка не растёт против
  * сегодняшней". One tick per step, in dependency order, coloured from the same
  * `substatus-<kind>` vocabulary the checklist rows and the map already speak.

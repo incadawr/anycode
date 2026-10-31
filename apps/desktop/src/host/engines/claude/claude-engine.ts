@@ -498,7 +498,7 @@ export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bo
    * its OWN mcp handshake INSIDE our outbound `initialize`, before it answers
    * ours). Absent for a claude CHILD boot and for a tab whose profile catalog
    * came back empty (the door is never announced at all — plan §5 S4 p.7's
-   * switch); `connectClaudeEngine` below reproduces the pre-
+   * switch); `connectClaudeEngine` below reproduces the
    * `initialize()` body byte-for-byte in both cases.
    */
   mcpBridge?: ClaudeMcpBridge;
@@ -640,8 +640,8 @@ async function connectClaudeEngine(
     // `announceOn` (S4) is the ONLY source of `sdkMcpServers` on the
     // wire; a tab with no bridge (child boot, or an empty profile catalog —
     // see `mcpBridge`'s own doc above) calls `initialize(undefined)`, the
-    // exact pre-empty body (claude-client.ts's own `initialize`
-    // doc: "an omitted `extra` reproduces the pre-empty body
+    // exact empty body (claude-client.ts's own `initialize`
+    // doc: "an omitted `extra` reproduces the empty body
     // byte-for-byte").
     const initialized = await client.initialize(options.mcpBridge?.announceOn());
     if (!isClaudeSignedIn(initialized.account)) {
@@ -1756,7 +1756,7 @@ export class ClaudeEngine implements SessionEngine {
    * `applyModel` is set (the FINAL read only — a mid-turn refresh must never
    * patch `liveModel` from a reading whose turn may already be closed), a
    * string `usage.model` is applied to `liveModel` BEFORE the numeric gate,
-   * exactly the pre-final-read ordering. Invalid numbers return
+   * exactly the final-read ordering. Invalid numbers return
    * `null`; the caller decides whether that is silent (mid-turn) or logged
    * (final, fail-soft).
    */

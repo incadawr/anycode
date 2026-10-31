@@ -1867,7 +1867,7 @@ export function SettingsScreen({
                 registry, not a URL field — one instance of the same picker the
                 connection drawer and the Network pane's app rung use. Stacked
                 after the pane it belongs to, not patched into CodexEnginePane
-                itself ('s reasoning, unchanged). */}
+ itself (reasoning, unchanged). */}
             {activePane === "codex" && <ProxyRefPicker scope={{ kind: "engine", engine: "codex" }} store={store} />}
 
             {activePane === "claude" && <ClaudeEnginePane />}

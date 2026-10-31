@@ -2489,7 +2489,7 @@ describe("ClaudeEngine.compactNow — allowlisted /compact passthrough", () => {
     });
     const engine = engineWith(transport);
     // A first owner turn flushes the constructor frames and hands the stream
-    // back to the idle reader ('s between-turns window).
+ // back to the idle reader (between-turns window).
     await collect(engine.runTurn("first", { signal: new AbortController().signal }));
     expect(transport.sent).toEqual(["first"]);
 

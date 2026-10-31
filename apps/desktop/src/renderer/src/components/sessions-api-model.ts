@@ -1,6 +1,6 @@
 /**
  * Pure view-model for the Settings → Sessions API pane and the per-tab switch
- * . Labels, the status chip, button enablement, port parsing and
+ * Labels, the status chip, button enablement, port parsing and
  * the mutation-refusal wording live here so they are unit-testable without a DOM.
  * Everything rendered is PLAIN TEXT; nothing here carries a token or a path that
  * the renderer did not already receive from main.

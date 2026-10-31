@@ -148,7 +148,7 @@ describe("buildDoctorChildEnv — engine proxy carrier", () => {
   // Byte-identity, asserted over the WHOLE child env rather than selected keys:
   // the guarantee is that an unconfigured engine proxy changes nothing at all.
   // The shell's own proxy still rides the passthrough list exactly as before.
-  it("without a carrier the doctor child env is byte-identical to the pre-build", () => {
+  it("without a carrier the doctor child env is byte-identical to the build", () => {
     const env = buildDoctorChildEnv({ HOME: "/home/dev", PATH: "/usr/bin", HTTPS_PROXY: SHELL_PROXY }, "linux");
     expect(env).toEqual({ HOME: "/home/dev", PATH: AUGMENTED_PATH, HTTPS_PROXY: SHELL_PROXY });
   });

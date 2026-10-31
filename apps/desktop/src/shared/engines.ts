@@ -253,7 +253,7 @@ export const LOOPBACK_NO_PROXY = "localhost,127.0.0.1,[::1],::1";
 
 /**
  * Applies an engine-level proxy carrier onto an ALREADY-BUILT child env
- * . `env` is what the engine's own child-env builder assembled;
+ * `env` is what the engine's own child-env builder assembled;
  * `source` is the env the builder read from (the host fork's env for a session
  * child, main's `bootEnv` overlay for a doctor/login probe).
  *

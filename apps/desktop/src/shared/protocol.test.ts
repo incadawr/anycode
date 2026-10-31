@@ -52,7 +52,7 @@ describe("set_model protocol (slice P7.15 · F14)", () => {
 
   // W2: `imageInput` is additive + optional on both hello and
   // model_changed. The two `satisfies` blocks ABOVE (and the host_ready ones
-  // below) are the compile-time proof that pre-message snapshots
+  // below) are the compile-time proof that message snapshots
   // WITHOUT the field remain valid; this test covers the field-present shape.
   it("carries the additive imageInput model verdict as structured-clone-safe data", () => {
     const changed = {

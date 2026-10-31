@@ -116,7 +116,7 @@ describe("handleProfileStatsGet", () => {
     const home = await tmp();
     const telemetryDir = join(home, ".anycode/telemetry");
     await seedTelemetryDir(telemetryDir);
-    // Explicit `dir` ('s fail-closed VITEST gate in core/telemetry/
+ // Explicit `dir` (fail-closed VITEST gate in core/telemetry/
     // config.ts refuses to resolve an `enabled:true` section onto the DEFAULT
     // dir under a test runner — a test must always name its sink explicitly,
     // even though it happens to equal the default here).
@@ -484,7 +484,7 @@ describe("handleProfileRevealDir", () => {
   it("reveals the resolved scan directory", async () => {
     const home = await tmp();
     const telemetryDir = join(home, ".anycode/telemetry");
-    // Explicit `dir` ('s fail-closed VITEST gate in core/telemetry/
+ // Explicit `dir` (fail-closed VITEST gate in core/telemetry/
     // config.ts refuses to resolve an `enabled:true` section onto the DEFAULT
     // dir under a test runner — a test must always name its sink explicitly,
     // even though it happens to equal the default here). Same idiom as the

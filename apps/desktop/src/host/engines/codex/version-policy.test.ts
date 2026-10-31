@@ -67,7 +67,7 @@ describe("resolveHostCodexVersionPolicy", () => {
   ])("falls back to the compiled wire pin for %s — absence of policy is not absence of a check", (_label, env) => {
     const policy = resolveHostCodexVersionPolicy(env as NodeJS.ProcessEnv);
     expect(policy.supportedRange).toBe(SUPPORTED_CODEX_VERSION);
-    // Byte-for-byte the pre-predicate: a bare ceiling, no floor.
+    // Byte-for-byte the predicate: a bare ceiling, no floor.
     expect(policy.allows(version("0.154.0"))).toBe(true);
     expect(policy.allows(version("0.166.0"))).toBe(true);
     expect(policy.allows(version("0.167.0"))).toBe(false);

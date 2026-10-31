@@ -430,7 +430,7 @@ are read off the REAL `.composer-textarea` node (`null` when unmounted — a
 valid reading, not an error; only the connection gate disables the textarea,
 a running turn never does), and `queueLength`/`paused`/`draining` come
 straight off the live store. This closes the observability gap behind
-'s "needs a live repro": type via `composerType`, press Enter via
+"needs a live repro": type via `composerType`, press Enter via
 `composerKey(tabId, "Enter")`, then read this probe + `GET /state`'s
 `promptQueue` to watch the item land and drain FIFO.
 
@@ -672,7 +672,7 @@ yet, or carries no such button (no armed offer, or a different block).
 button there" and "more than one" — a caller wanting the "exactly one"
 guarantee asserts on the GET probe's `count` first. `{ok:true}` from the
 click route means the click was DELIVERED, not that a retry was DISPATCHED
-(fable-task56-w3fix-codex-ruling.md finding 1): a delivered click can still
+(finding 1): a delivered click can still
 be refused by `dispatchTryAgain`'s W3-FIX entry gate, in which case
 the outcome shows up in the store (`retryOffer` stays armed, a
 `retry_blocked` notice), not in this return value.
@@ -1282,7 +1282,7 @@ isn't rendered, `drawer.open:false` when neither embed is. `rows[].statusTone`
 is the tile's own `connection-tile-status-<tone>` class suffix (never a
 re-derived guess); `drawer.stage` is `"template"` before a connection exists
 yet or `"credential"` once metadata is minted and the credential section has
-activated (add/edit sequencing,'s own cut).
+activated (add/edit sequencing).
 
 `POST .../provider/add` clicks the trailing "+ Add connection" tile.
 `POST .../provider/tile` clicks a tile's own select button (make-default for

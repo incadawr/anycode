@@ -326,7 +326,7 @@ export function connectionSecretKey(connectionId: string, authKind: "api_key" | 
  * only ever recognized by `isKnownSecretKey`/`Vault.statuses` when its id is
  * present in the `catalogIds` array those callers are given — main is
  * expected to union this with `catalogProviderIds()` (mirrors the existing
- * `catalogProviderIds() ∪ custom[].id` seam described in) before
+ * `catalogProviderIds() ∪ custom[].id` seam described) before
  * passing `catalogIds` down, the same way it already includes every builtin
  * catalog id.
  */
@@ -645,7 +645,7 @@ export function shellOwnsProxyFamily(bootEnv: NodeJS.ProcessEnv): boolean {
 }
 
 /**
- * Materialises the fork's resolved proxy ('s connection field,
+ * Materialises the forkresolved proxy (connection field,
  * generalised to the ladder) into a host fork's env as the
  * HTTP(S)_PROXY family + the loopback `NO_PROXY` exemption +
  * `NODE_USE_ENV_PROXY=1`. The host's own global fetch honours it through
@@ -674,7 +674,7 @@ export function shellOwnsProxyFamily(bootEnv: NodeJS.ProcessEnv): boolean {
  * already owns.
  *
  * With no (or an unparseable) proxy this emits NOTHING either, so a fork's env
- * stays byte-identical to pre-in every case. A value that fails
+ * stays byte-identical in every case. A value that fails
  * `isProxyUrl` is fail-soft for the same reason a hand-edited settings.json must
  * not break every request: it degrades to "no proxy", never to a broken env.
  */
@@ -1055,7 +1055,7 @@ export interface HostEnvParams {
    */
   recognizerAuthKindFor?: (providerId: string) => "api_key" | "oauth" | undefined;
   /**
-   * Live-run fix (task150-output-ceiling session, follow-up): the
+   * Live-run fix: the
    * catalog projection `resolveRecognizerConfig` needs to fall back to when a
    * CATALOG (non-custom) recognizer connection's OWN baseUrl/transport are
    * blank/absent — real settings.json connections for `z-ai`/`kimi` carry
@@ -1205,7 +1205,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // "catalog-default" with a NON-anthropic value, so `transportToEmit` emits
   // it and core boots keyless. Env and explicit settings transports still win
   // by ladder construction; connections WITHOUT the flag keep `undefined` —
-  // byte-identical env to pre-.
+  // byte-identical env.
   const keylessSentinelDefault =
     view.id === CUSTOM_SENTINEL_ID && view.authOptional === true
       ? customKindDefaultTransport("openai-compatible") // "openai-chat-completions"
@@ -1424,8 +1424,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
  * PRIMARY path's own handling of `"unset"` EXACTLY: `transportToEmit`
  * (below) emits nothing for it there either, and core's `loadEnvConfig`
  * applies the implicit anthropic default downstream. Refusing the whole
- * recognizer on `"unset"` was tried and reverted (task150-output-ceiling
- * session): it made the SAME ladder value mean two different things on its
+ * recognizer on `"unset"` was tried and reverted: it made the SAME ladder value mean two different things on its
  * two consumers — contradicting the ladder's own "can never disagree"
  * contract — and it silently disabled a real, explicitly-supported case (a
  * bare connection, `providerId === ""`, with a genuine hand-typed address
@@ -1474,8 +1473,8 @@ export async function resolveRecognizerConfig(
   // baseUrl AND credential live on the CustomProviderRecord, never on the
   // connection itself (a connection only POINTS at the record via its
   // providerId) — reading `connection.baseUrl`/a connection-scoped vault key
-  // here left both blank for every custom-provider recognizer (task198-state.md
-  // "Хвост от E1"). A missing record (deleted while a connection still
+  // here left both blank for every custom-provider recognizer
+  // ("Хвост от E1"). A missing record (deleted while a connection still
   // references it) is FAIL-CLOSED exactly like the primary branch: neither
   // field falls back to the connection-scoped key/baseUrl. Its transport is
   // untouched by the catalog ladder below — a `custom:` id has no catalog

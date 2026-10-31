@@ -159,7 +159,7 @@ describe("applyEngineProxyOverride — a valid carrier", () => {
   });
 
   // The children proxy natively (codex is Rust; the claude CLI reads the env
-  // itself — measured in). NODE_USE_ENV_PROXY switches node's own
+  // itself — measured). NODE_USE_ENV_PROXY switches node's own
   // global fetch and has no business in a child env.
   it("never sets NODE_USE_ENV_PROXY", () => {
     const env: NodeJS.ProcessEnv = { HOME: "/home/me" };

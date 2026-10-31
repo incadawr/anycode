@@ -1,6 +1,6 @@
 /**
  * Custom OpenAI-compatible model-provider IPC (owner-decision #6, cut §9.2,
- * . Two concerns:
+ * Two concerns:
  *
  *  1. CRUD for `settings.provider.custom[]` — additive-optional records the
  *     user builds from a base URL + API key + a curated subset of that

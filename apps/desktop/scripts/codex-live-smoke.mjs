@@ -4,7 +4,7 @@
  * HTTP channel (`main/automation/*`, automation/README.md) against a REAL
  * `codex` CLI binary (no fakes, no mocks) — the executable GUI smoke the
  * merged Codex engine has never had (cut: "the channel's start-screen
- * contract currently has no engine field/route ⇒'s release gate is
+ * contract currently has no engine field/route ⇒ release gate is
  * not real yet").
  *
  * Exercises, in order: programmatic Codex engine selection on the start

@@ -1417,7 +1417,7 @@ export interface ProfilePaneTileState {
   value: string;
 }
 export interface ProfilePaneInsightsState {
-  /** "Tokens in period" row, compact-formatted (e.g. "1.1bn") — the value the period switch's own DoD is anchored on: distinct from `tokens` anywhere else in this file, this one is re-sliced by the currently selected period, never the lifetime total the tiles row carries. */
+  /** "Tokens in period" row, compact-formatted (e.g. "1.1bn") — the value the period switch's own DoD is anchored: distinct from `tokens` anywhere else in this file, this one is re-sliced by the currently selected period, never the lifetime total the tiles row carries. */
   tokensInPeriod: string;
   totalSessions: number;
   totalRuns: number;
@@ -1561,7 +1561,7 @@ export interface SettingsLayoutRect {
 }
 
 /**
- * `settingsLayoutState()`'s shape (S5, build/task187-plan.md §S5) —
+ * `settingsLayoutState()`'s shape (S5, §S5) —
  * the probe defect 1 never had. The scrollbar's position was invisible to
  * every existing route because no route measured geometry at all: the bug
  * (`max-width` and `overflow-y` on the SAME element, so the scroll port is
@@ -7575,8 +7575,7 @@ export function createAutomationFacade(
       // facade shortcuts above): a delivered click can still be refused by
       // `dispatchTryAgain`'s W3-FIX entry gate (`blocked_images`) — that
       // outcome is read off the state plane (`retryOffer`/`notice`/
-      // `tryAgainButtonState`), not this return (fable-task56-w3fix-codex-ruling.md
-      // finding 1).
+      // `tryAgainButtonState`), not this return (finding 1).
       const clicked = tryAgainButtonDom.click(tabId, blockId);
       return clicked ? { ok: true } : { ok: false, reason: "not_present" };
     },
@@ -9480,7 +9479,7 @@ export function createAutomationFacade(
         // §S7 item 4) — a valid refusal, not an internal error.
         return { ok: false, reason: "control_not_present" };
       }
-      // A real click on the target button ('s own "no reinvented
+ // A real click on the target button ("no reinvented
       // vocabulary" boundary) — `PeriodControl`'s local `setPeriod` is a pure
       // client-side re-render, no IPC round trip, same posture as
       // `modelsExpanded` below.

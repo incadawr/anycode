@@ -1,7 +1,5 @@
 /**
- * S3 — the incremental Profile-stats cache (plan
- * `working-docs/build/task187-plan.md`, decisions D-1/D-2/D-5/D-6; aggregator
- * semantics: `working-docs/build/task187-aggregator-semantics.md`).
+ * S3 — the incremental Profile-stats cache.
  *
  * WHY THIS EXISTS: the pre-S3 scan opened EVERY sink file on every request —
  * 58 763 opens / ~16 s on the owner's directory, 90 % of it spent in `open`

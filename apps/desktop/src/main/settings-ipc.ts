@@ -1591,7 +1591,7 @@ function defaultNowIso(): string {
 /**
  * Maps core's `ProviderFailureCode` (provider/failure.ts, relayed verbatim over
  * the host<->main wire as a plain string — see shared/provider-health.ts) onto
- * 's `ProviderHealthStatus` table. `quota` collapses into `rate_limited`
+ * `ProviderHealthStatus` table. `quota` collapses into `rate_limited`
  * (both a 429-class limit; neither marks the credential itself invalid).
  * `unknown` (an unclassified failure, e.g. a 400 "bad model" request) maps to
  * `misconfigured` — DELIBERATELY never `auth_invalid`: a bad model/schema
