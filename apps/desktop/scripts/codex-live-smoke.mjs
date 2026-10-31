@@ -1,6 +1,5 @@
 /**
- * Live GUI smoke for (design/build/design/slice-codex-fixes-cut.md
- * §5.6 B5-auto): drives a REAL Electron dev instance over the automation
+ * Live GUI smoke for the Codex engine: drives a REAL Electron dev instance over the automation
  * HTTP channel (`main/automation/*`, automation/README.md) against a REAL
  * `codex` CLI binary (no fakes, no mocks) — the executable GUI smoke the
  * merged Codex engine has never had (cut: "the channel's start-screen

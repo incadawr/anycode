@@ -461,7 +461,7 @@ export interface ProviderSettingsV2 {
   /**
    * Custom OpenAI-compatible/Anthropic model-provider endpoints for AnyCode's
    * OWN engine (owner-decision #6, cut §9.2) — additive-optional, dedicated
- * array independent of `connections` (connection graph). A
+   * array independent of `connections` (connection graph). A
    * malformed entry validates INDEPENDENTLY at the zod boundary (same
    * per-element `.catch` discipline as `codex.profiles`, cut §2.3).
    */
