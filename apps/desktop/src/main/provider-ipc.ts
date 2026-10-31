@@ -354,7 +354,8 @@ function extractModelIds(
       continue;
     }
     const declared = meta.data.reasoning?.supported_efforts;
-    const reasoning = meta.data.supported_parameters?.includes("reasoning") === true
+    const supportsEffort = meta.data.supported_parameters?.includes("reasoning_effort") === true;
+    const reasoning = supportsEffort || meta.data.supported_parameters?.includes("reasoning") === true
       || (Array.isArray(declared) && declared.length > 0);
     // Cross-review F2: ids the settings schema cannot accept as capability
     // keys degrade to the bare id — keeping their meta would poison the whole
@@ -370,7 +371,7 @@ function extractModelIds(
     models.push({
       id: maybe.id,
       ...(reasoning ? { reasoning: true } : {}),
-      ...(reasoning && declared !== undefined && declared.length > 0 ? { effortLevels: [...declared] } : {}),
+      ...(reasoning && declared !== undefined && declared.length > 0 ? { effortLevels: [...declared] } : supportsEffort ? { effortLevels: ["off", "low", "medium", "high", "xhigh"] } : {}),
       ...(imageInput ? { imageInput: true } : {}),
     });
   }
