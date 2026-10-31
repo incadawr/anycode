@@ -269,3 +269,38 @@ it("lets a gateway's explicit off setting override an always-on catalog hint", (
   expect(resolveEffortLevels(model, settings.entryFor(model), undefined, settings.effortLevelsFor(model))).toEqual(["off", "high"]);
   expect(resolveReasoningEffort(model, settings.entryFor(model), "off", undefined, settings.effortLevelsFor(model))).toBe("off");
 });
+
+it("honors manual reasoning support over a gateway dictionary denial", () => {
+  const model = "vendor/MiniMax-M3-local";
+  const settings = createConnectionModelSettings({ connection: { modelOverrides: { [model]: { reasoningSupported: true, reasoningEffort: "high" } } }, liveCapabilitiesFor: () => undefined });
+  expect(resolveEffortLevels(model, settings.entryFor(model), settings.capabilitiesFor(model))).toContain("high");
+  expect(resolveReasoningEffort(model, settings.entryFor(model), "high", settings.capabilitiesFor(model))).toBe("high");
+});
+
+it.each(["connection", "model"] as const)("honors %s off over a gateway always-on hint", (level) => {
+  const model = "minimax-m3.1-flash-local";
+  const connection = level === "connection" ? { reasoningEffort: "off" as const } : { modelOverrides: { [model]: { reasoningEffort: "off" as const } } };
+  const settings = createConnectionModelSettings({ connection, liveCapabilitiesFor: () => undefined });
+  expect(resolveReasoningEffort(model, settings.entryFor(model), settings.effortFor(model))).toBe("off");
+  expect(settings.switchEffort("other", model, "high")).toBe("off");
+});
+
+it("prefers gateway endpoint capabilities to dictionary facts in the host", () => {
+  const model = "vendor/glm-5-fp8";
+  const settings = createConnectionModelSettings({ connection: {}, liveCapabilitiesFor: () => ({ reasoning: true, effortLevels: ["low", "high"] }) });
+  expect(resolveEffortLevels(model, settings.entryFor(model), settings.capabilitiesFor(model))).toEqual(["low", "high"]);
+  expect(resolveReasoningEffort(model, settings.entryFor(model), "high", settings.capabilitiesFor(model))).toBe("high");
+});
+
+it("keeps live effort levels when manual off extends the vocabulary", () => {
+  const model = "vendor/glm-5-fp8";
+  const settings = createConnectionModelSettings({ connection: { reasoningEffort: "off" }, liveCapabilitiesFor: () => ({ reasoning: true, effortLevels: ["low", "high"] }) });
+  expect(resolveEffortLevels(model, settings.entryFor(model), settings.capabilitiesFor(model))).toEqual(["off", "low", "high"]);
+});
+
+it("suppresses catalog and live reasoning when manually disabled", () => {
+  const model = "vendor/glm-5.3-fp8";
+  const settings = createConnectionModelSettings({ connection: { modelOverrides: { [model]: { reasoningSupported: false, effortLevels: ["high"] } } }, liveCapabilitiesFor: () => ({ reasoning: true, effortLevels: ["high"] }) });
+  expect(resolveEffortLevels(model, settings.entryFor(model), settings.capabilitiesFor(model), settings.effortLevelsFor(model))).toBeUndefined();
+  expect(settings.switchEffort("other", model, "high")).toBe("off");
+});
