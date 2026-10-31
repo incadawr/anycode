@@ -1177,6 +1177,14 @@ body {
   white-space: nowrap;
 }
 
+/* The tab-level orchestrate flag: same badge shape as `agent`, accent-tinted
+   so it reads as the tab's mode rather than metadata about how it was opened. */
+.session-header-orchestrate {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: var(--accent-soft);
+}
+
 .sidebar-row-worktree {
   flex-shrink: 1;
   min-width: 0;

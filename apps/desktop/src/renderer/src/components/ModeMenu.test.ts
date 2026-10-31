@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import {
   modeChangeDisabled,
+  modeChipLabel,
   modeIndexForDigit,
   MODE_DESCRIPTIONS,
   nextRovingIndex,
@@ -117,5 +118,13 @@ describe("Orchestrate row (Taskana 4704)", () => {
     // cannot silently break the End->ArrowDown wrap onto the toggle.
     expect(nextRovingIndex(5, 1, 6)).toBe(0);
     expect(nextRovingIndex(0, -1, 6)).toBe(5);
+  });
+
+  it("O4: the chip reads Orchestrate while the flag is on — the tab's state is visible without opening the menu", () => {
+    // Host-side truth: enabling orchestrate moves the session to plan, and
+    // leaving plan turns it off, so the label never hides a different mode.
+    expect(modeChipLabel("plan", false)).toBe("plan");
+    expect(modeChipLabel("build", false)).toBe("build");
+    expect(modeChipLabel("plan", true)).toBe("Orchestrate");
   });
 });

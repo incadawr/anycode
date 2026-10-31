@@ -158,6 +158,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
   const title = tab?.title ?? (workspace ? basename(workspace) : "—");
   const worktree = tab?.worktree;
   const openedByAgent = tab?.openedByAgent === true;
+  const orchestrateActive = useTabStore((state) => state.orchestrateActive);
   const externalEngine = engine !== null;
   // TASK.91: core-only drawer gate — `engine` is null before host_ready ⇒
   // default true; claude/codex advertise supportsTasks:false so the toggle
@@ -272,6 +273,15 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
       <span className={sessionHeaderTitleClass(title)} title={title}>{title}</span>
 
       {openedByAgent && <span className="session-header-agent" title="Opened by an agent">agent</span>}
+
+      {/* The tab's orchestration flag, readable without opening the mode menu
+          (the chip spells it too, but the header is where a user looks to see
+          what a tab IS). */}
+      {orchestrateActive && (
+        <span className="session-header-agent session-header-orchestrate" data-testid="session-header-orchestrate" title="Orchestrating: child agents do the work">
+          Orchestrate
+        </span>
+      )}
 
       {worktree && (
         <span className="session-header-worktree" title={worktree.path} aria-label={`Worktree: ${worktree.branch}`}>
