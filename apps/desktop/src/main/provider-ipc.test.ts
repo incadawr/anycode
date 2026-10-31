@@ -357,6 +357,16 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     });
   });
 
+  it("exposes effort controls when a model declares reasoning_effort", async () => {
+    const { origin } = await listen((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "model", supported_parameters: ["reasoning_effort"] }] }));
+    });
+    expect(await fetchCustomProviderModels({ baseUrl: origin })).toEqual({
+      ok: true, models: [{ id: "model", reasoning: true, effortLevels: ["off", "low", "medium", "high", "xhigh"] }],
+    });
+  });
+
   it(": an OpenRouter-shaped item with input_modalities [image,text] yields imageInput:true; [text] does not", async () => {
     const { origin } = await listen((req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
