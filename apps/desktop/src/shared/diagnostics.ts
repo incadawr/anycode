@@ -47,7 +47,10 @@ export interface DiagnosticsSummary {
   sections: DiagnosticsSectionSummary[];
   /** True when a cap dropped data (see the bundle's own `notes`). */
   truncated: boolean;
-  /** How many secret/path/host/id-shaped fragments the anonymiser replaced. */
+  /**
+   * How many secret/path/host/id-shaped fragments the anonymiser replaced IN
+   * THE SAVED ARCHIVE — data trimmed to fit the size cap no longer counts.
+   */
   redactions: number;
 }
 
