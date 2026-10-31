@@ -196,6 +196,23 @@ describe("generateSessionTitle", () => {
     expect(title).toBe("Fix the login bug");
   });
 
+  // Audit C5: the reply echoed the instruction's own verb instead of writing a
+  // title ("Title a code reading session").
+  it("drops the word Title when the model echoes it as the instruction's verb", async () => {
+    const port = new ScriptedModelPort(textScript("Title a code reading session"));
+    expect(await generateSessionTitle({ modelPort: port, text: "x" })).toBe("A code reading session");
+  });
+
+  it("drops a Title: label from the reply, even when quoted and punctuated", async () => {
+    const port = new ScriptedModelPort(textScript(`"Title: Fix the login bug."`));
+    expect(await generateSessionTitle({ modelPort: port, text: "x" })).toBe("Fix the login bug");
+  });
+
+  it("keeps a real title that merely starts with the word Title", async () => {
+    const port = new ScriptedModelPort(textScript("Title IX at the university"));
+    expect(await generateSessionTitle({ modelPort: port, text: "x" })).toBe("Title IX at the university");
+  });
+
   it("strips single-quote wrapping", async () => {
     const port = new ScriptedModelPort(textScript(`'Refactor auth module'`));
     const title = await generateSessionTitle({ modelPort: port, text: "x" });

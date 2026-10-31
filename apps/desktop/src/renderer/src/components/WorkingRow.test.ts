@@ -46,7 +46,7 @@ describe("workingVerb", () => {
     expect(workingVerb(11)).toBe("Working");
     expect(workingVerb(12)).toBe("Thinking");
     expect(workingVerb(24)).toBe("Reviewing");
-    expect(workingVerb(36)).toBe("Checking");
+    expect(workingVerb(36)).toBe("Waiting");
   });
 
   it("wraps back to Working after the fourth band", () => {
@@ -58,7 +58,7 @@ describe("workingVerb", () => {
   });
 
   it("keeps the rotation constant and the band width consistent", () => {
-    expect(WORKING_VERBS).toEqual(["Working", "Thinking", "Reviewing", "Checking"]);
+    expect(WORKING_VERBS).toEqual(["Working", "Thinking", "Reviewing", "Waiting"]);
     expect(VERB_ROTATE_SECONDS).toBe(12);
   });
 });

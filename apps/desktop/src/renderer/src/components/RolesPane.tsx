@@ -214,7 +214,10 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
   async function save(): Promise<void> {
     if (!parseRoleChildLimitInput(cap).valid) { setNotice({ ok: false, message: ROLE_CHILD_LIMIT_INVALID_MESSAGE }); return; }
     const converted = fromDraft(draft).roles;
-    const id = selected?.id ?? (projectRoot || registry.profiles.some((p) => p.id === "default") ? crypto.randomUUID() : "default");
+    // The built-ins have no profile of their own: saving from them always
+    // creates a fresh unique profile, never the legacy "default" id that a
+    // saved file may already own.
+    const id = selected?.id ?? crypto.randomUUID();
     const ok = await write((current) => {
       const existing = current.profiles.find((p) => p.id === id);
       const roles = existing ? { ...existing.roles } : {};
@@ -223,8 +226,8 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
       }
       const built = buildRoleProfileRoles(roles, cap);
       if (!built.valid) return current;
-      const profile = { id, name: existing?.name ?? "Default", roles: built.roles };
-      return { ...current, profiles: existing ? current.profiles.map((p) => p.id === id ? profile : p) : [...current.profiles, profile], activeId: projectRoot ? current.activeId : id, ...(!selected && projectRoot ? { projects: [...current.projects.filter((p) => p.projectRoot !== projectRoot), { projectRoot, profileId: id }] } : {}) };
+      const profile = { id, name: existing?.name ?? createProfileName("", current.profiles.map((p) => p.name)), roles: built.roles };
+      return { ...current, profiles: existing ? current.profiles.map((p) => p.id === id ? profile : p) : [...current.profiles, profile], ...(projectRoot ? {} : { activeId: id }), ...(!selected && projectRoot ? { projects: [...current.projects.filter((p) => p.projectRoot !== projectRoot), { projectRoot, profileId: id }] } : {}) };
     }, "Roles saved.");
     if (ok) { setBaseline(draft); setBaselineCap(cap); }
   }
@@ -233,12 +236,11 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
     {busy && <p className="settings-field-hint" role="status">Saving…</p>}
     <div className="roles-header"><span>Profile:</span>
       {registry.profiles.length ? <select className="settings-field-select" aria-label="Role profile" title={selected?.name ?? "Default"} value={projectRoot ? mapped?.id ?? "" : selected?.id ?? ""} disabled={busy} onChange={(e) => selectProfile(e.target.value)}>
-        {projectRoot ? <option value="">{`Use global (${registry.profiles.find((p) => p.id === registry.activeId)?.name ?? "Default"})`}</option> : !selected && <option value="">Default</option>}{registry.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-      </select> : <strong>Default</strong>}
+        {projectRoot ? <option value="">{`Use global (${registry.profiles.find((p) => p.id === registry.activeId)?.name ?? "Built-in roles"})`}</option> : <option value="">Built-in roles</option>}{registry.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}      </select> : <strong>Built-in roles</strong>}
       {title && <span className="settings-field-hint">({title})</span>}
       <details className="roles-menu"><summary className="settings-button" aria-label="Profile actions">⋯</summary><div className="roles-menu-items">
         {(["new", "duplicate", "rename"] as const).map((action) => <button className="settings-button" type="button" key={action} disabled={busy || (action === "rename" && !selected)} onClick={() => { setNameAction(action); setName(action === "rename" ? selected?.name ?? "" : ""); }}>{action === "new" ? "New" : action === "duplicate" ? "Duplicate" : "Rename"}</button>)}
-        <button className="settings-button" type="button" disabled={busy || !selected} onClick={() => { if (!selected) return; guard(() => setPending({ title: `Delete ${selected.name}?`, body: `Project mappings to ${selected.name} will be removed and will use the global profile.`, confirmLabel: "Delete", action: () => { void write((current) => { const profiles = current.profiles.filter((p) => p.id !== selected.id); return { profiles, activeId: current.activeId === selected.id ? profiles[0]?.id ?? "default" : current.activeId, projects: current.projects.filter((p) => p.profileId !== selected.id) }; }); } })); }}>Delete</button>
+        <button className="settings-button" type="button" disabled={busy || !selected} onClick={() => { if (!selected) return; guard(() => setPending({ title: `Delete ${selected.name}?`, body: `Project mappings to ${selected.name} will be removed and will use the global profile.`, confirmLabel: "Delete", action: () => { void write((current) => { const profiles = current.profiles.filter((p) => p.id !== selected.id); return { profiles, activeId: current.activeId === selected.id ? "" : current.activeId, projects: current.projects.filter((p) => p.profileId !== selected.id) }; }); } })); }}>Delete</button>
       </div></details>
       <select className="settings-field-select roles-preset" aria-label="Apply preset" value="" disabled={busy} onChange={(e) => { const preset = deriveRolePresets(engines, activeConnectionId ?? "").find((p) => p.id === e.target.value); if (preset) guard(() => { setDraft(toDraft(preset.roles)); setCap(baselineCap); }); }}><option value="">Apply preset…</option>{deriveRolePresets(engines, activeConnectionId ?? "").map((p) => <option key={p.id} value={p.id} disabled={!presetApplicable(p, engines)}>{p.label}</option>)}</select>
     </div>

@@ -1,4 +1,5 @@
-import { SLASH_COMMANDS } from "./slash-menu.js";
+import { SLASH_COMMANDS, unknownSlashCommandNotice } from "./slash-menu.js";
+import { slashPathRootNames } from "./slash-path-roots.js";
 import { resolveProfileRoles } from "../../shared/role-profiles.js";
 /**
  * New Session draft submission (slice P7.12 §4.3): the single shared
@@ -118,6 +119,17 @@ export async function submitStartDraft(
   }
   if (SLASH_COMMANDS.some((command) => prompt.trim() === `/${command.id}`) && prompt.trim() !== "/orchestrate") {
     return { ok: false, message: "Wait for this session to connect before running a command." };
+  }
+  // A slash-shaped draft that names NO command is answered locally, exactly as
+  // the live composer does: creating a session and spending a model turn on
+  // "I don't recognize /foo" is not a send. Core engine only — Codex and Claude
+  // drafts keep their own slash surfaces. Paths (`/tmp`, `/usr/local/bin/node`)
+  // are not commands and still go through.
+  const unknownSlash = engine === "core"
+    ? unknownSlashCommandNotice(prompt, { pathRoots: slashPathRootNames() })
+    : null;
+  if (unknownSlash !== null) {
+    return { ok: false, message: unknownSlash };
   }
   // `/orchestrate <task>` (orchestrate-start.ts) turns orchestrate on for this
   // send and sends only the task as the first message.

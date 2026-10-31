@@ -13,9 +13,31 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The Environment menu's Sessions API, External approvals, handle and Full browser access rows now match the Workspace/Branch/Changes rows: an icon, a title with a readable second line, and the switch or field on the right. Hints are no longer cut off.
+- Settings → Sessions API now marks an allowed folder that is missing on disk ("Missing on disk") and explains that it grants nothing until the folder is back; the mark follows the disk while the pane stays open — it appears when a folder disappears and clears when it returns, without a restart or reopening Settings.
+
+- Turn-end footer reads "2 turns · 2m 12s · at 00:02" — the clock time is labelled, so it no longer looks like a second, unit-less duration.
+- Long tab titles — single words like paths and filenames as well as multi-word ones — wrap in the session header instead of being cut mid-word by the ellipsis, capped at two lines so any title length still fits the fixed header height.
+- The disabled "Remove project from list" sidebar menu item shows its reason ("Close this project's open tasks first.") as visible text instead of a hover-only tooltip.
+- Settings → Sessions API explains how sessions become shareable (the session's ⋯ environment menu) rather than only counting them, and the Advanced heading matches the pane's other section labels.
+- Settings → Sessions API also says that agents can open new tasks in a project only while that project's "Allow agents to open tasks here" switch (sidebar project ⋯ menu) is on.
+- The preview console no longer swallows a page's own warning or error just because its text mentions "Electron Security Warning"; only Electron's internal banner is hidden, so the page's diagnostics reach the transcript.
+- The working-row verb rotation no longer shows "Checking…", which stacked on the auto-check toasts; the fourth band reads "Waiting…".
+- Notifications no longer cover the message box while they matter most: the toast stack now sits above the composer, clear of Stop, Send and the context meter, at both narrow and wide window sizes.
+- Compacting a short conversation now says “Nothing to compact yet — the conversation is too short” once, in the transcript, instead of showing internal jargon twice (a toast on top of the message box and a red row).
+- Roles: the global profile selector always offers "Built-in roles", so you can return to the built-in defaults even with a saved profile active; saving from the built-ins now creates a fresh uniquely-named profile instead of overwriting a profile named "default", and deleting the active profile returns to the built-ins.
+- Turning Orchestrate on from the mode menu now asks for roles on the first run and the mode chip and session header say "Orchestrate", instead of the chip still reading the permission mode and the click looking like a no-op.
+- Turning Orchestrate on from the mode menu now asks for roles on the first run and the mode chip and session header say "Orchestrate", instead of the chip still reading the permission mode and the click looking like a no-op; skipping that role picker once is enough, so the next Send starts the task instead of asking again.
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
 - Choosing No thinking for Xiaomi MiMo models now turns their reasoning off.
 - Xiaomi MiMo Token Plan sessions show a pay-as-you-go list-price cost estimate instead of “price unknown”.
+- An unknown slash command (`/foo`, `/help`, or a command left doubled in the draft) gets a local “Unknown command” notice instead of being sent to the model as a prompt; absolute paths such as `/tmp`, `/etc` or `/Users` are checked against the filesystem root and still send; a command followed by words (`/foo argument`) and an unknown command typed on the Start screen are answered locally too, so neither opens a session or costs a turn.
+- Session titles no longer repeat the instruction verb (“Title a code reading session” becomes “A code reading session”).
+- The model chip says “next turn” only after a pick that actually waits for the turn boundary, not for every running turn.
+- The document preview's console no longer lists Electron's own security warning as if the page had logged it.
+- Model names in the composer footer use the available width instead of being cut off next to empty space.
+- Markdown preview tables have framed cells, and the dock tab split control is a proper icon rather than a stray divider glyph.
+- The background-tasks and terminal header toggles have distinct icons, and only the current sidebar tab wears the accent bar (other open tabs keep a quieter marker).
 
 ## [0.0.55] — 2026-10-30
 

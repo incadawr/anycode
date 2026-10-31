@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import {
   needsRolePicker,
+  orchestrateToggleNeedsRolePicker,
   parseOrchestrateSlash,
   resolveStartOrchestrate,
   startDraftOrchestrateRowProps,
@@ -131,5 +132,16 @@ describe("startDraftOrchestrateRowProps (the start-screen Orchestrate row wiring
   it("Codex and Claude drafts get no row props at all (the row is hidden, as in-tab)", () => {
     expect(startDraftOrchestrateRowProps("codex", true, () => {})).toBeUndefined();
     expect(startDraftOrchestrateRowProps("claude", undefined, () => {})).toBeUndefined();
+  });
+});
+
+describe("orchestrateToggleNeedsRolePicker (the mode-menu toggle's first-run gate)", () => {
+  it("turning orchestrate ON with no roles configured asks for roles", () => {
+    expect(orchestrateToggleNeedsRolePicker(true, undefined)).toBe(true);
+  });
+
+  it("a configured role set, or turning it OFF, never asks", () => {
+    expect(orchestrateToggleNeedsRolePicker(true, { planner: {} })).toBe(false);
+    expect(orchestrateToggleNeedsRolePicker(false, undefined)).toBe(false);
   });
 });

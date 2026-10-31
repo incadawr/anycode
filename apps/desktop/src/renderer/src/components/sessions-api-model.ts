@@ -6,6 +6,7 @@
  * the renderer did not already receive from main.
  */
 import type { CommunicationHandleResult, CommunicationMutationReason, CommunicationStatus } from "../../../shared/communication-config.js";
+import { AGENT_PROJECT_SWITCH_LABEL } from "./project-agent-switch.js";
 
 export const SESSIONS_API_PANE_ID = "sessions-api" as const;
 export const SESSIONS_API_LABEL = "Sessions API";
@@ -26,6 +27,10 @@ export const SESSIONS_API_FOOTER =
 export const SESSIONS_API_FOLDER_HINT = "Empty = any folder; only sessions you switch on are shared.";
 export const SESSIONS_API_FOLDER_NOTE =
   "Optional. When empty, only the sessions you switch on are shared. When set, a session must also be inside one of these exact folders (subfolders are not included; symlinks are resolved).";
+/** The mark on a listed folder that is not on disk right now (a danger chip). */
+export const SESSIONS_API_FOLDER_MISSING_LABEL = "Missing on disk";
+/** One plain-text sentence under the chip: what the mark means for the user. */
+export const SESSIONS_API_FOLDER_MISSING_NOTE = "This folder grants nothing until the folder is back; agents calling with it get folder_not_found. It is allowed again automatically once it exists — no restart needed.";
 
 /** The Advanced row that lists projects where agents may open tasks (view, plus a Turn off action; turning one on is the sidebar project menu). */
 export const SESSIONS_API_AGENT_PROJECTS_LABEL = "Agents may open tasks here";
@@ -35,6 +40,16 @@ export const SESSIONS_API_AGENT_PROJECT_ON = "On";
 export const SESSIONS_API_AGENT_PROJECT_TURN_OFF = "Turn off";
 export const SESSIONS_API_AGENT_PROJECTS_EMPTY = "No project allows agents to open tasks yet. Use the project ⋯ menu in the sidebar.";
 export const SESSIONS_API_AGENT_PROJECTS_HINT = "Off by default. Turn one on in the sidebar project ⋯ menu; trusted folders only.";
+/**
+ * The step-1 hint: says WHERE a session is switched on (the session's own ⋯
+ * environment menu) before the live count, so the pane explains per-session
+ * sharing instead of only listing "Currently shared: 4". It also names the
+ * second, project-level switch — agents may open new tasks in a project only
+ * when that switch is on — using the sidebar menu's own label.
+ */
+export const SESSIONS_API_SHARE_HINT =
+  "Open a session's ⋯ environment menu and turn on Sessions API; only sessions you switch on are shared. Currently shared: {count}. " +
+  `Agents may open new tasks in a project only when that project's “${AGENT_PROJECT_SWITCH_LABEL}” switch is on (sidebar project ⋯ menu).`;
 
 export type SessionsApiTone = "ok" | "danger" | "muted";
 
@@ -110,9 +125,11 @@ export function mutationRefusalText(reason: CommunicationMutationReason): string
   }
 }
 
-/** Per-tab switch wording: the switch is disabled with a reason under the env override or for an unknown tab. */
-export function sessionSwitchLabel(enabled: boolean): string {
-  return enabled ? "Sessions API: shared with external agents" : "Sessions API: not shared";
+/** Per-tab switch wording: a short row title plus the state on its secondary line. */
+export const SESSION_SWITCH_TITLE = "Sessions API";
+
+export function sessionSwitchDetail(enabled: boolean): string {
+  return enabled ? "Shared with external agents" : "Not shared";
 }
 
 export function sessionSwitchDisabledReason(envControlled: boolean, hasTab: boolean): string | null {
@@ -131,6 +148,8 @@ export function sessionApprovalsLabel(enabled: boolean): string {
 
 export const SESSION_HANDLE_LABEL = "Handle (optional)";
 export const SESSION_HANDLE_PLACEHOLDER = "Name for agents (optional)";
+/** The row's secondary line; the full explanation stays on the field's tooltip. */
+export const SESSION_HANDLE_DETAIL = "Name external agents see in list_sessions";
 /** Tooltip on the handle field: what the name is for. */
 export const SESSION_HANDLE_HINT = "A short name external agents see in list_sessions to find this session, e.g. build-bot. Leave empty to show only the session id.";
 

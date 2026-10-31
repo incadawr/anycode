@@ -244,6 +244,16 @@ export type AgentEvent =
       postTokens?: number;
       durationMs: number;
       error?: string;
+      /**
+       * True when the cycle was a structural NO-OP — nothing to compact (an
+       * empty prefix, or an already fully summarized one). Not a failure: no
+       * model call happened and the history is untouched, and `error` states
+       * the reason in plain words for a reader. Consumers use this to say so
+       * once and plainly instead of framing it as a refusal (UI audit v0.0.49
+       * §C3: the headline sentence, not "Compaction not applied: compaction
+       * skipped: …", and not a second toast beside the transcript row).
+       */
+      skipped?: true;
       /** Model-visible summary installed as the new history head (success only). */
       summary?: string;
       /** Id of the `compact_summary` history item that holds `summary`. */

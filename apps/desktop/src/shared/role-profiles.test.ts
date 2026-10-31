@@ -32,6 +32,32 @@ describe("role profiles", () => {
     // A per-project profile still wins over it.
     expect(resolveProfileRoles({ roleProfiles: { ...saved, projects: [{ projectRoot: "/project", profileId: "builtin" }] } }, "/project")).toEqual(other);
   });
+  it("treats an absent activeId as the built-in defaults (no id to collide with)", () => {
+    const builtin = { profiles: [{ id: "a", name: "A", roles: legacy }, { id: "b", name: "B", roles: other }], activeId: undefined, projects: [] };
+    // The whole document passes both gates the app reads and writes through.
+    expect(roleProfilesWriteSchema.safeParse(builtin).success).toBe(true);
+    expect(roleProfilesSchema.safeParse(builtin).success).toBe(true);
+    expect(settingsSchema.safeParse(mergeSettings(cloneDefaults(), { roleProfiles: builtin })).success).toBe(true);
+    // With no active profile the built-ins apply (undefined roles), and a
+    // per-project mapping still wins.
+    expect(resolveProfileRoles({ roleProfiles: builtin }, "/other")).toBeUndefined();
+    expect(resolveProfileRoles({ roleProfiles: { ...builtin, projects: [{ projectRoot: "/project", profileId: "b" }] } }, "/project")).toEqual(other);
+  });
+  it("first-run save from the built-ins never touches a saved `default` profile", () => {
+    // Built-ins active (dangling active id), a pre-fix file owns id "default":
+    // the first-run save must create a fresh unique profile, not overwrite it.
+    const saved = { profiles: [{ id: "default", name: "Saved", roles: legacy }], activeId: "missing", projects: [] };
+    const patch = rolesPatch({ roleProfiles: saved }, other);
+    const after = patch.roleProfiles!;
+    expect(after.profiles.find((p) => p.id === "default")?.roles).toEqual(legacy);
+    expect(after.profiles).toHaveLength(2);
+    const fresh = after.profiles.find((p) => p.id !== "default")!;
+    expect(fresh.roles).toEqual(other);
+    expect(after.activeId).toBe(fresh.id);
+    expect(fresh.id).not.toBe("default");
+    expect(after.profiles.map((p) => p.name)).toEqual(["Saved", "Profile 1"]);
+    expect(roleProfilesWriteSchema.safeParse(after).success).toBe(true);
+  });
   it("first-run saves the project profile without changing the global profile", () => {
     const patch = rolesPatch({ roleProfiles: registry }, { planner: { primary: { model: "project-model" } } }, "/project");
     expect(patch.roleProfiles?.activeId).toBe("a");

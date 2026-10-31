@@ -1,6 +1,70 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { computePreviewMenuVisible, derivePreviewMenuItems, worktreeExitControlState } from "./SessionHeader.js";
+import {
+  computePreviewMenuVisible,
+  derivePreviewMenuItems,
+  SESSION_HEADER_TITLE_LINE_LIMIT,
+  sessionHeaderTitleClass,
+  worktreeExitControlState,
+} from "./SessionHeader.js";
 import type { PreviewChangedPayload, PreviewPanelInfo } from "../../../shared/preview-panel.js";
+
+describe("sessionHeaderTitleClass (audit D12 — long titles cut mid-word)", () => {
+  const WRAP = "session-header-title session-header-title-wrap";
+
+  it("wraps a multi-word title, so the reported mid-word cut (…outside.txt conta) cannot happen", () => {
+    // The one-line ellipsis cut the LAST visible word at a character boundary;
+    // a title with any number of words must wrap like the single-token case.
+    expect(sessionHeaderTitleClass("please read outside.txt and fix the header")).toBe(WRAP);
+    expect(sessionHeaderTitleClass("Fix the bug")).toBe(WRAP);
+  });
+
+  it("wraps a single unbroken token (path/filename), which ellipsis would cut mid-word", () => {
+    expect(sessionHeaderTitleClass("…outside.txt")).toBe(WRAP);
+  });
+
+  it("never returns the bare ellipsis class for ANY title", () => {
+    for (const title of ["a", "two words", "an outside.txt file", "/Users/x/very/long/path"]) {
+      expect(sessionHeaderTitleClass(title)).toBe(WRAP);
+    }
+  });
+});
+
+describe("session-header title-wrap clamp (audit D12 regression: the header has a fixed height)", () => {
+  const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
+
+  /** The declared body of `selector`; throws when the rule is missing. */
+  function cssRule(selector: string): string {
+    const clean = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const match = clean.match(new RegExp(`(?:^|\\n)${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{([^}]*)\\}`));
+    if (!match) throw new Error(`no CSS rule ${selector}`);
+    return match[1] ?? "";
+  }
+
+  it("the wrap rule clamps to SESSION_HEADER_TITLE_LINE_LIMIT lines, so no title length can grow the header", () => {
+    const rule = cssRule(".session-header-title-wrap");
+    // A clamp needs ALL three: the box layout, the limit, and overflow hidden
+    // (without hidden the box grows past the clamp in Chromium).
+    expect(rule).toMatch(/display:\s*-webkit-box/);
+    expect(rule).toMatch(new RegExp(`-webkit-line-clamp:\\s*${SESSION_HEADER_TITLE_LINE_LIMIT}`));
+    expect(rule).toMatch(/-webkit-box-orient:\s*vertical/);
+    expect(rule).toMatch(/overflow:\s*hidden/);
+    // The mid-word break the wrap exists for still happens at the edge.
+    expect(rule).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+
+  it("the wrap rule cancels the base class's one-line ellipsis, which cut multi-word titles mid-word", () => {
+    // `.session-header-title` sets nowrap + ellipsis; if the wrap rule did not
+    // override both, a multi-word title would keep being cut at a character
+    // boundary instead of breaking between words.
+    const rule = cssRule(".session-header-title-wrap");
+    expect(rule).toMatch(/white-space:\s*normal/);
+    expect(rule).toMatch(/text-overflow:\s*clip/);
+    const base = cssRule(".session-header-title");
+    expect(base).toMatch(/white-space:\s*nowrap/);
+    expect(sessionHeaderTitleClass("fix the header bug")).toBe("session-header-title session-header-title-wrap");
+  });
+});
 
 describe("worktreeExitControlState", () => {
   it("disables Exit with an accessible running-turn explanation", () => {

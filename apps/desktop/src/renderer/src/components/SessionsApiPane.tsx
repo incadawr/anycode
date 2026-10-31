@@ -20,12 +20,15 @@ import {
   SESSIONS_API_ENABLE_LABEL,
   SESSIONS_API_ENV_NOTE,
   SESSIONS_API_FOLDER_HINT,
+  SESSIONS_API_FOLDER_MISSING_LABEL,
+  SESSIONS_API_FOLDER_MISSING_NOTE,
   SESSIONS_API_FOLDER_NOTE,
   SESSIONS_API_FOOTER,
   SESSIONS_API_NODE_HINT,
   SESSIONS_API_PORT_HINT,
   SESSIONS_API_REGENERATE_CONFIRM,
   SESSIONS_API_REGENERATE_HINT,
+  SESSIONS_API_SHARE_HINT,
   copyConfigEnabled,
   mutationRefusalText,
   parsePortInput,
@@ -43,6 +46,7 @@ import type {
   CommunicationRegenerateResult,
   CommunicationView,
 } from "../../../shared/communication-config.js";
+import { startSessionsApiRefresh } from "./sessions-api-refresh.js";
 
 /** Subset of `window.anycode.communication` this pane drives (injectable for tests). */
 export interface CommunicationBridge {
@@ -139,7 +143,7 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
             <li className="sessions-api-step">
               <div className="sessions-api-step-body">
                 <div className="sessions-api-step-title">Choose which sessions to share</div>
-                <p className="settings-field-hint">{`Open a session's ⋯ environment menu and turn on Sessions API. Currently shared: ${shared}.`}</p>
+                <p className="settings-field-hint">{SESSIONS_API_SHARE_HINT.replace("{count}", String(shared))}</p>
               </div>
             </li>
             <li className="sessions-api-step">
@@ -187,7 +191,7 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
       )}
 
       <details className="connection-drawer-advanced sessions-api-advanced">
-        <summary>Advanced</summary>
+        <summary className="settings-section-title">Advanced</summary>
 
         <div className="sessions-api-row sessions-api-folders">
           <div className="sessions-api-row-main">
@@ -198,12 +202,21 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
           </div>
           {view.workspaces.length > 0 && (
             <ul className="sessions-api-folder-list">
-              {view.workspaces.map((workspace) => (
-                <li key={workspace}>
-                  <span className="sessions-api-folder-path">{workspace}</span>
-                  <button type="button" className="settings-button" disabled={!editable} onClick={() => props.onRemoveFolder(workspace)}>Remove</button>
-                </li>
-              ))}
+              {view.workspaces.map((workspace) => {
+                const missing = view.missingWorkspaces.includes(workspace);
+                return (
+                  <li key={workspace} className={missing ? "sessions-api-folder-missing" : undefined}>
+                    <span className="sessions-api-folder-path">{workspace}</span>
+                    {missing && (
+                      <span className="settings-secret-status settings-secret-status-danger sessions-api-folder-state">
+                        {SESSIONS_API_FOLDER_MISSING_LABEL}
+                      </span>
+                    )}
+                    <button type="button" className="settings-button" disabled={!editable} onClick={() => props.onRemoveFolder(workspace)}>Remove</button>
+                    {missing && <p className="settings-field-hint">{SESSIONS_API_FOLDER_MISSING_NOTE}</p>}
+                  </li>
+                );
+              })}
             </ul>
           )}
           <p className="settings-field-hint" title={SESSIONS_API_FOLDER_NOTE}>{SESSIONS_API_FOLDER_HINT}</p>
@@ -326,14 +339,25 @@ export function SessionsApiPane({ bridge = window.anycode.communication }: Sessi
 
   useEffect(() => {
     let cancelled = false;
-    void bridge.get().then((result) => {
+    // Every read lands here: the first one and the live refreshes (see
+    // sessions-api-refresh.ts), so a folder that disappears or returns while
+    // this pane stays open updates its mark without reopening Settings.
+    const apply = (result: CommunicationGetResult): void => {
       if (cancelled || !result.ok) return;
       setView(result.view);
       setEnvControlled(result.envControlled);
+    };
+    void bridge.get().then((result) => {
+      apply(result);
+      // The port FIELD is the user's draft (Apply commits it): only the first
+      // read seeds it, refreshes leave it alone while it is being edited.
+      if (cancelled || !result.ok) return;
       setPortText(portFieldValue(result.view.port));
     });
+    const stopRefresh = startSessionsApiRefresh({ get: () => bridge.get(), onView: apply });
     return () => {
       cancelled = true;
+      stopRefresh();
     };
   }, [bridge]);
 

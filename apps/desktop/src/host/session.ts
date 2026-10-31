@@ -5423,6 +5423,9 @@ export class Session {
       ...(event.postTokens !== undefined ? { postTokens: event.postTokens } : {}),
       durationMs: event.durationMs,
       ...(event.error !== undefined ? { error: event.error } : {}),
+      // UI audit v0.0.49 §C3: persisted with the reason so a reopened row keeps
+      // reading as a plain no-op statement rather than as a refusal.
+      ...(event.skipped === true ? { skipped: true as const } : {}),
       // A failed/native compaction has no summary to record — never invent one.
       ...(event.ok && event.summary !== undefined ? { summary: event.summary } : {}),
       ...(event.summaryItemId !== undefined ? { summaryItemId: event.summaryItemId } : {}),

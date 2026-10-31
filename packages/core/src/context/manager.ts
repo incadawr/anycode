@@ -53,7 +53,20 @@ export type RunCompactionResult =
   | {
       ok: false;
       preTokens: number;
+      /**
+       * The reason, already phrased for a human reader: this field is shown
+       * verbatim by the CLI line and the desktop row, so it must never carry
+       * internal vocabulary ("keep-recent window", "prefix").
+       */
       error: string;
+      /**
+       * True when nothing was ATTEMPTED — an empty prefix, or one that is
+       * already fully summarized. Not a failure: the model was never called
+       * and the history was never touched. Consumers render it as a plain
+       * statement of a deliberate no-op rather than as a refusal, and the
+       * desktop does not repeat it as a second surface (UI audit v0.0.49 §C3).
+       */
+      skipped?: true;
       /**
        * The instruction that WOULD have been / was sent. Carried on every
        * outcome (GitHub #36) so a refused or failed row can still show the
@@ -237,7 +250,8 @@ export class ContextManager {
       return {
         ok: false,
         preTokens,
-        error: "compaction skipped: no prefix before the keep-recent window",
+        error: "Nothing to compact yet — the conversation is too short",
+        skipped: true,
         prompt: COMPACTION_INSTRUCTION,
         ...(modelId !== undefined ? { model: modelId } : {}),
       };
@@ -249,7 +263,8 @@ export class ContextManager {
       return {
         ok: false,
         preTokens,
-        error: "compaction skipped: prefix already fully summarized",
+        error: "Nothing to compact yet — the earlier conversation is already summarized",
+        skipped: true,
         prompt: COMPACTION_INSTRUCTION,
         ...(modelId !== undefined ? { model: modelId } : {}),
       };

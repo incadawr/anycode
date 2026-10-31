@@ -425,6 +425,28 @@ export function Cube(props: IconProps) {
   );
 }
 
+/** TaskList — background-tasks toggle: a bulleted list, deliberately distinct
+ * from the terminal's `>_` frame (Audit C11 — the two header toggles shared
+ * one glyph). */
+export function TaskList(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M3.25 4.25h.01M3.25 8h.01M3.25 11.75h.01" strokeWidth={1.9} />
+      <path d="M5.75 4.25h7M5.75 8h7M5.75 11.75h7" />
+    </Icon>
+  );
+}
+
+/** Split — dock tab "split right" affordance: one pane divided into two. */
+export function Split(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <rect x="2.25" y="3.25" width="11.5" height="9.5" rx="1.5" />
+      <path d="M8 3.75v8.5" />
+    </Icon>
+  );
+}
+
 /** Stack — sessions affordance (P7.23/F24 W2: slash-menu "Sessions" row). */
 export function Stack(props: IconProps) {
   return (
